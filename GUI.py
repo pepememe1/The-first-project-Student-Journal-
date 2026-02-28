@@ -1,4 +1,6 @@
 import os
+import requests
+import json
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QBrush
 from core import GradeBook, Student, APP_VERSION
+OPENROUTER_API_KEY = "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"
 from datetime import datetime, timedelta
 
 GROUPS = ["к74/1", "к74/2", "к74/3", "к75/0"]
@@ -364,3 +367,92 @@ class MainAppWindow(QMainWindow):
                 self.stack.setCurrentWidget(self.teacher_widget)
         else:
             QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль!")
+    # ================= STUDENT AI =================
+    def student_ai(self):
+        # Запрос пользователя
+        text, ok = QInputDialog.getText(self, "ИИ Помощник", "Задайте вопрос (о вашем журнале и оценках):")
+        if not ok or not text.strip():
+            return
+
+        try:
+            answer = self.ask_ai(text)
+        except Exception as e:
+            answer = f"Ошибка запроса к ИИ: {e}"
+
+        QMessageBox.information(self, "ИИ Помощник", answer)
+
+    def ask_ai(self, query: str) -> str:
+        """
+        Отправляет запрос к OpenRouter AI с детальной расшифровкой оценок и пропусков.
+        """
+        student_context = ""
+        
+        for subj in SUBJECTS:
+            b = GradeBook(self.cur_stud['g'], subj)
+            s = next((x for x in b.spisok_stud if x.f == self.cur_stud['f']), None)
+            
+            if s:
+                grades = []       # Чисто оценки (2, 3, 4, 5)
+                absences = 0      # Пропуски (Н)
+                sick = 0          # Болезни (Б)
+                lates = 0         # Опоздания (О)
+                
+                for val in s.records.values():
+                    if val in ["2", "3", "4", "5"]:
+                        grades.append(int(val))
+                    elif val == "Н":
+                        absences += 1
+                    elif val == "Б":
+                        sick += 1
+                    elif val == "О":
+                        lates += 1
+                
+                # Логика: 2 опоздания = 1 пропуск (двойка)
+                extra_from_lates = lates // 2
+                total_n = absences + extra_from_lates
+                
+                # Считаем средний балл (с учетом того, что Н = 2)
+                # Берем все оценки + по двойке за каждую итоговую 'Н'
+                all_values_for_calc = grades + [2] * total_n
+                avg = sum(all_values_for_calc) / len(all_values_for_calc) if all_values_for_calc else 0.0
+
+                student_context += f"--- ПРЕДМЕТ: {subj} ---\n"
+                student_context += f"Оценки: {grades if grades else 'нет'}\n"
+                student_context += f"Пропуски (Н): {absences}\n"
+                student_context += f"Опоздания (О): {lates} (каждые два 'О' считаются как 'Н')\n"
+                student_context += f"Болезни (Б): {sick} (не влияют на балл)\n"
+                student_context += f"ИТОГО для расчета: {total_n} пропусков (с учетом опозданий).\n"
+                student_context += f"СРЕДНИЙ БАЛЛ: {avg:.2f}\n\n"
+
+        if not student_context:
+            student_context = "Данные в журнале отсутствуют."
+
+        # Формируем промпт с жесткими правилами
+        prompt = (
+            "Ты — ИИ-ассистент журнала ВСГУТУ. Твоя задача — анализировать успеваемость.\n"
+            "ПРАВИЛА ДЛЯ ТЕБЯ:\n"
+            "1. Говори ТОЛЬКО правду на основе данных ниже.\n"
+            "2. 'Н' (пропуск) всегда считается как оценка 2 при расчете балла.\n"
+            "3. 'Б' (болел) — это просто информация, на балл не влияет.\n"
+            "4. Если опозданий 'О' два и более, скажи студенту, что каждые два опоздания стали двойкой.\n"
+            "5. НЕ ПРИДУМЫВАЙ лишние оценки. Если их в списке 3 штуки, значит их 3.\n\n"
+            f"👤 Студент: {self.cur_stud['f']} {self.cur_stud['n']}\n"
+            f"📊 ДАННЫЕ ИЗ СИСТЕМЫ:\n{student_context}\n"
+            f"❓ Вопрос студента: {query}"
+        )
+
+        # Отправка (оставляем твой код запроса)
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "stepfun/step-3.5-flash:free",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1 # Снижаем температуру до минимума, чтобы ИИ перестал фантазировать
+        }
+
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
