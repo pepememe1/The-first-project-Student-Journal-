@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QBrush
 from core import GradeBook, Student, APP_VERSION
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
 from datetime import datetime, timedelta
 
 GROUPS = ["к74/1", "к74/2", "к74/3", "к75/0"]
