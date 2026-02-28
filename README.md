@@ -1,41 +1,37 @@
-# The-fisrt-project-Student-Journal-
-На русском языке
-Техническое описание GradeBook (версия альфа 1.0)
-В этом разделе описана внутренняя логика приложения и ключевые особенности реализации.
-Архитектура и логика данных
-Приложение разделено на два независимых модуля: ядро (core.py) и интерфейс (GUI.py). Это позволяет изменять логику расчетов без правки кода окон.
- * Данные студента хранятся в объектах Dataclass. Это упрощает работу с полями и позволяет быстро конвертировать данные в словари для сохранения.
- * Средний балл вычисляется динамически через свойство @property внутри класса Student, что исключает ошибки при обновлении оценок.
-Хранение и валидация
- * Данные сохраняются в формате JSON. При записи используется параметр ensure_ascii=False, чтобы кириллица в именах студентов отображалась корректно.
- * Встроена жесткая валидация: программа не примет оценки ниже 1 или выше 5, а также не позволит добавить студента, если количество его оценок не совпадает с настройками текущей таблицы.
-Работа с Excel
-Экспорт реализован через библиотеку openpyxl. Основные фишки:
- * Динамическое формирование колонок в зависимости от количества заданий.
- * Использование стилей (PatternFill, Border) для создания профессионального вида отчета.
- * Условное форматирование на уровне файла: правила для подсветки ячеек прописываются прямо в код Excel, поэтому цвета сохраняются при любом открытии файла.
-Особенности интерфейса
-Графическая оболочка написана на PySide6.
- * Таблица в GUI автоматически перестраивает заголовки при создании новой сессии.
- * Сортировка по среднему баллу реализована через метод sort в Python, после чего таблица полностью перерисовывается. Это работает быстрее, чем встроенная сортировка виджета при больших списках.
- * Контекстное меню позволяет редактировать данные любого студента «на лету» с автоматическим сохранением в файл.
-English
-Technical Overview (Alpha 1.0)
-This section explains how the GradeBook application works under the hood and highlights specific coding techniques.
-Architecture and Data Logic
-The project follows a clean separation between business logic (core.py) and the user interface (GUI.py).
- * Student records are managed using Python Dataclasses. This makes data handling efficient and allows for easy serialization into dictionaries.
- * The average score is calculated via a @property method within the Student class, ensuring the value is always up-to-date and consistent.
-Persistence and Validation
- * Data is stored locally in JSON format. The serialization process uses ensure_ascii=False to properly support Cyrillic characters.
- * Strict validation is implemented: the app rejects any grades outside the 1-5 range and ensures the number of grades matches the initial configuration of the group.
-Excel Generation Nuances
-The export functionality is powered by the openpyxl library:
- * Column headers are generated dynamically based on the number of assignments set by the user.
- * Professional styling: the code applies custom borders, fills, and alignment to the header row.
-* Native conditional formatting: rules for cell highlighting (green for high scores, red for low) are embedded directly into the Excel file, making the reports interactive.
-GUI Implementation
-The interface is built with PySide6 (Qt for Python):
- * The main table view is dynamic and updates its structure based on the current data model.
- * Sorting by average grade is handled via Python's built-in sorting on the student list, which provides better performance than standard UI-based sorting.
- * Context menus provide quick access to record editing, with changes being saved to the JSON database immediately.
+Student Journal (GradeBook) — Alpha 1.1
+Техническое описание (Версия 1.1)
+В этом разделе описана внутренняя логика приложения и ключевые обновления системы.
+Архитектура и хранение данных
+Проект сохраняет модульную структуру: ядро (core.py) и графическая оболочка (GUI.py).
+ * Динамическая база данных: Система автоматически генерирует локальные JSON-файлы для каждой пары «Группа — Предмет» (например, data_к74_1_Компьютерные_сети.json), что исключает конфликты данных.
+ * UUID Идентификация: Каждое занятие получает уникальный идентификатор uuid4. Это гарантирует стабильную связь между оценками и уроками даже при изменении дат или тем.
+Математическая модель и валидация
+ * Расчет среднего балла: Логика вычислений сфокусирована на занятиях типа «Практика».
+ * Учет пропусков: Введена система автоматического штрафа: отметка «Н» (неявка) приравнивается к баллу 2.0 при расчете успеваемости.
+ * Целостность: Реализован механизм автоматического сопоставления списка студентов с актуальным количеством уроков в базе данных.
+Система доступа и роли
+Реализована полноценная авторизация через внешний конфигурационный файл logins.txt.
+ * Роль «Учитель»: Позволяет добавлять студентов, создавать занятия («Лекция», «Практика»), выставлять оценки и сохранять изменения в БД.
+ * Роль «Ученик»: Предоставляет доступ к персональному дашборду для просмотра среднего балла и статистики по предметам.
+Модуль AI Assistant (Alpha)
+В интерфейс студента интегрирован прототип ИИ-помощника.
+ * Анализ запросов: Метод process_ai_query обрабатывает текстовые запросы пользователя.
+ * Сквозной поиск: Помощник умеет собирать данные о количестве оценок по всем доступным предметам одновременно, не требуя ручного переключения вкладок.
+Реализация интерфейса
+Графическая часть построена на PySide6 (Qt for Python).
+ * Управление состояниями: Использование QStackedWidget обеспечивает бесшовную навигацию между окном входа и рабочими панелями.
+ * Динамические таблицы: Поддержка контекстных меню для редактирования данных и автоматическое перестроение заголовков при смене группы.
+Technical Overview (Alpha 1.1)
+Architecture & Persistence
+ * Dynamic JSON Mapping: Data is separated into subject-specific JSON files to ensure isolation and scalability.
+ * UUID Tagging: All lesson objects are tracked via unique identifiers, preventing data corruption during record updates.
+Core Logic
+ * Weighted Grade Calculation: The engine specifically targets "Practice" sessions for GPA calculation.
+ * Attendance Impact: "Absent" (H) marks are programmatically weighted as a 2.0 grade to reflect academic standing accurately.
+Authentication & Roles
+ * RBAC System: Access levels are defined via logins.txt.
+ * Teacher Mode: Full CRUD operations on student records and session management.
+ * Student Mode: Read-only access to personal metrics and subject analytics.
+AI & UX Features
+ * Heuristic Query Engine: A built-in assistant that provides cross-subject statistics based on natural language keywords.
+ * Adaptive UI: Powered by PySide6, utilizing QStackedWidget for efficient screen transitions and the Fusion style for cross-platform consistency.
