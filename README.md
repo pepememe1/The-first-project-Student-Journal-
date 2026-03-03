@@ -1,45 +1,142 @@
-🎓 GradeBookAI (Альфа 1.1)
-Современное десктопное приложение для автоматизации работы преподавателей и удобного отслеживания успеваемости студентами. Приложение поддерживает разделение на роли и интеграцию с искусственным интеллектом для анализа данных.
-🚀 Возможности (Features)
-👨‍🏫 Кабинет преподавателя:
- * Удобный табличный интерфейс: Добавление студентов, лекций, практических занятий и назначение экзаменов в пару кликов.
- * Гибкая система учета: Поддержка классических оценок (2, 3, 4, 5) и отметок посещаемости: Н (отсутствовал), О (опоздал), Б (болел по уважительной причине), ✓ (присутствовал).
- * Редактирование на лету: Изменение дат и тем занятий прямо через контекстное меню таблицы (ПКМ).
- * Локальное хранение данных: Автоматическая генерация и сохранение баз данных в формате JSON для каждой группы и предмета (data_{группа}_{предмет}.json).
-👨‍🎓 Кабинет студента:
- * Персонализированный дашборд: Просмотр списка своих оценок по всем профильным предметам (Компьютерные сети, ООП, Базы данных и др.).
- * 🤖 Умный ИИ-помощник: Встроенный чат с ИИ (на базе OpenRouter API), который анализирует успеваемость конкретного студента.
- * Точный расчет балла: Внутренняя логика программы автоматически конвертирует пропуски (Н) в оценки «2», а каждые 2 опоздания (О) приравнивает к 1 пропуску для объективного расчета среднего балла.
-🌟 Плюсы и особенности (Advantages)
- * Защита от ИИ-галлюцинаций: Нейросеть работает с минимальной "температурой" (temperature: 0.1) и опирается только на жестко заданные данные из системы, что исключает выдумывание оценок.
- * Кроссплатформенный GUI: Современный графический интерфейс написан на мощном фреймворке PySide6 (привязка Qt для Python).
- * Автономность (Portable): Система не требует установки сторонних серверов (MySQL/PostgreSQL), работая с легковесными локальными файлами.
- * Масштабируемая архитектура: Код разделен на логические модули (core.py для логики и хранения, GUI.py для интерфейса), что позволяет легко дорабатывать проект командой.
-🛠 Технический стек (Tech Stack)
- * Язык: Python 3
- * Интерфейс: PySide6 (QtWidgets)
- * Хранение данных: JSON (встроенные библиотеки)
- * Нейросеть: Модель stepfun/step-3.5-flash (через OpenRouter API)
+# 📚 GradeBookAI — Электронный журнал успеваемости ВСГУТУ
 
-🎓 GradeBookAI (Alpha 1.1)
-A modern desktop application designed to automate teachers' workflows and provide students with a convenient way to track their academic progress. The app supports role-based access and features artificial intelligence integration for data analysis.
-🚀 Features
-👨‍🏫 Teacher's Dashboard:
- * User-friendly Tabular Interface: Add students, lectures, practical classes, and assign exams in just a few clicks.
- * Flexible Grading System: Supports standard grades (2, 3, 4, 5) as well as attendance marks: Н (absent), О (late), Б (sick leave), ✓ (present).
- * On-the-fly Editing: Modify dates and lesson topics directly via the table's context menu (Right-Click).
- * Local Data Storage: Automatic generation and saving of JSON databases for each group and subject (data_{group}_{subject}.json).
-👨‍🎓 Student's Dashboard:
- * Personalized Dashboard: View grades across all core subjects (Computer Networks, OOP, Database Design, etc.).
- * 🤖 Smart AI Assistant: Built-in AI chat (powered by OpenRouter API) that analyzes the specific student's academic performance.
- * Accurate GPA Calculation: The internal logic automatically converts absences (Н) into "2" (fail), and counts every 2 late arrivals (О) as 1 absence to ensure an objective average score calculation.
-🌟 Advantages & Peculiarities
- * AI Hallucination Protection: The neural network operates at a minimum temperature (temperature: 0.1) and relies strictly on hardcoded system data, completely eliminating the risk of made-up grades.
- * Cross-platform GUI: The modern graphical user interface is built on the powerful PySide6 framework (Qt binding for Python).
- * Autonomous (Portable): The system does not require third-party servers (like MySQL/PostgreSQL) and runs smoothly using lightweight local files.
- * Scalable Architecture: The code is divided into logical modules (core.py for logic and storage, GUI.py for the interface), making team collaboration and future development easy.
-🛠 Tech Stack
- * Language: Python 3
- * Interface: PySide6 (QtWidgets)
- * Data Storage: JSON (built-in libraries)
- * AI Engine: stepfun/step-3.5-flash model (via OpenRouter API)
+> **Pre-release 1.0** · Python · PySide6 · SQLite · OpenRouter AI
+
+Электронный журнал успеваемости для учебных заведений с встроенным ИИ-ассистентом. Разработан студентами ВСГУТУ специальности «Информационные системы и программирование».
+
+---
+
+## 🖥️ Скриншоты
+
+> _Скриншоты появятся после первого релиза_
+
+---
+
+## ✨ Возможности
+
+### 👨‍🏫 Для преподавателей
+- Ведение журнала посещаемости и оценок в разрезе групп и предметов
+- Поддержка типов занятий: **Лекция** (1-й и 2-й час), **Практика**, **Экзамен**
+- Автоматическое назначение дат пересдач при неудовлетворительных оценках
+- Добавление, удаление и редактирование студентов прямо в таблице
+- Импорт студентов из Excel-журналов колледжа (формат ВСГУТУ) и стандартных таблиц
+- Импорт данных из внешних SQLite баз
+- Экспорт журнала в Excel с форматированием
+- ИИ-ассистент для анализа успеваемости группы
+
+### 🎓 Для студентов
+- Просмотр собственных оценок и посещаемости по всем предметам
+- Вход по имени и фамилии без пароля
+- ИИ-помощник — задай вопрос о своих оценках и среднем балле
+
+### ⚙️ Для администратора
+- Управление преподавателями, студентами и группами
+- Назначение предметов группам и преподавателям
+- Привязка преподавателей к конкретным группам по предметам
+- Импорт студентов из Excel одним кликом
+- Установка API-ключа OpenRouter для работы ИИ
+- Перенос всей базы данных между компьютерами через зашифрованный `.enc` файл
+- Скрытый вход в панель администратора (5 кликов в левом нижнем углу)
+
+---
+
+## 🤖 ИИ-ассистент
+
+Программа интегрирована с [OpenRouter](https://openrouter.ai/) и использует модель `stepfun/step-3.5-flash`. ИИ работает в трёх режимах:
+
+| Режим | Что умеет |
+|---|---|
+| Студент | Рассказывает об оценках, посещаемости, среднем балле конкретного студента |
+| Преподаватель | Анализирует успеваемость группы, отвечает на вопросы по журналу |
+| Администратор | Предоставляет общую статистику по системе |
+
+Запросы выполняются в отдельном потоке — интерфейс не зависает во время ответа ИИ.
+
+---
+
+## 🔒 Безопасность
+
+- Все данные (преподаватели, студенты, группы, API-ключ) хранятся в **зашифрованном файле** `secure_data.enc`
+- Шифрование построено на пароле администратора — открыть файл вручную невозможно
+- Пароли преподавателей хранятся в зашифрованном хранилище
+- API-ключ OpenRouter никогда не отображается в открытом виде
+
+---
+
+## 🗂️ Структура проекта
+
+```
+GradeBookAI/
+├── main.py              # Точка входа
+├── GUI.py               # Главное окно и весь интерфейс (PySide6)
+├── core.py              # Логика журнала, модели данных, SQLite
+├── admin_panel.py       # Панель администратора
+├── security.py          # Шифрование и безопасное хранилище
+├── vsgutu_grades.db     # База оценок (создаётся автоматически)
+├── secure_data.enc      # Зашифрованные данные (создаётся автоматически)
+└── README.md
+```
+
+---
+
+## 🚀 Установка и запуск
+
+### Требования
+
+- Python 3.10+
+- Windows 10/11 (тестировалось), Linux
+
+### Установка зависимостей
+
+```bash
+pip install PySide6 openpyxl requests cryptography
+```
+
+### Запуск
+
+```bash
+python main.py
+```
+
+### Сборка EXE
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed --icon=icon.ico main.py
+```
+
+Готовый `.exe` появится в папке `dist/`. Все файлы данных (`secure_data.enc`, `vsgutu_grades.db`) будут создаваться рядом с исполняемым файлом.
+
+---
+
+## 📖 Первый запуск
+
+1. Запустите программу
+2. Войдите в панель администратора: **5 кликов** в левом нижнем углу окна
+3. Логин: `admin_vsgutu`, пароль задаётся при первом запуске
+4. Создайте группы и назначьте им предметы
+5. Добавьте преподавателей и назначьте им предметы и группы
+6. Добавьте студентов вручную или импортируйте из Excel
+7. (Опционально) Введите API-ключ OpenRouter для работы ИИ
+
+---
+
+## 🗺️ Планы развития
+
+- [ ] Графики успеваемости по группам
+- [ ] Уведомления о низкой успеваемости
+- [ ] Веб-версия интерфейса
+- [ ] Поддержка нескольких администраторов
+- [ ] Автоматическое резервное копирование
+
+---
+
+## 👥 Авторы
+
+Разработано студентами ВСГУТУ, специальность **«Информационные системы и программирование»**, Бурятия.
+
+---
+
+## 📄 Лицензия
+
+MIT License — свободное использование, модификация и распространение с сохранением указания авторов.
