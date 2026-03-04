@@ -17,11 +17,18 @@
 - Импорт данных из внешней базы SQLite
 - Экспорт журнала в Excel с форматированием
 - ИИ-ассистент для анализа успеваемости группы
+<img width="493" height="560" alt="image" src="https://github.com/user-attachments/assets/d276f74d-d926-43f0-ba5a-e1fa4980890c" />
+<img width="1919" height="1027" alt="image" src="https://github.com/user-attachments/assets/f7b317e5-8f29-4ef6-bece-2f17c7f52c3b" />
+
+
 
 ### 🎓 Для студентов
 - Просмотр оценок и посещаемости по всем предметам
 - Вход по имени и фамилии без пароля
 - ИИ-помощник — задай вопрос о своих оценках и среднем балле
+<img width="581" height="570" alt="image" src="https://github.com/user-attachments/assets/7ab3d5a4-61b0-4751-ab99-b9d1d1e6e4e8" />
+
+
 
 ### ⚙️ Для администратора
 - Управление преподавателями, студентами и группами
@@ -31,6 +38,7 @@
 - Установка API-ключа OpenRouter для работы ИИ
 - Перенос всей базы данных между компьютерами через зашифрованный `.enc`-файл
 - Скрытый вход в панель администратора (5 кликов по логотипу)
+<img width="1526" height="593" alt="image" src="https://github.com/user-attachments/assets/67dd5927-87ea-42d2-abe0-fe57ceaf8fe5" />
 
 ---
 
@@ -44,6 +52,9 @@
 | **Студент** | Рассказывает об оценках, посещаемости и среднем балле конкретного студента |
 | **Преподаватель** | Анализирует успеваемость группы, отвечает на вопросы по ведению журнала |
 | **Администратор** | Предоставляет сводную динамику по системе |
+<img width="1914" height="1031" alt="image" src="https://github.com/user-attachments/assets/6fc80274-5101-447a-9d75-17e584b96e22" />
+<img width="1919" height="1027" alt="image" src="https://github.com/user-attachments/assets/e5f5200c-bb9d-4447-ab69-7b249449ceb0" />
+
 
 > Запросы выполняются в отдельном потоке — интерфейс не зависает во время ответа ИИ.
 
@@ -77,6 +88,7 @@ GradeBookAI/
 ---
 
 ## 🚀 Установка и запуск
+<img width="497" height="384" alt="image" src="https://github.com/user-attachments/assets/a31b606d-5375-47c7-b7e5-12ae0ba57473" />
 
 **Требования:**
 - Python 3.10+
