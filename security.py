@@ -21,7 +21,13 @@ except ImportError:
 
 SECURE_FILE      = "secure_data.enc"
 MASTER_KEY_FIELD = "__master_key__"
-DEFAULT_ADMIN_PW = "vsgutu_admin_online"
+# Пароль администратора — обфусцирован, не читается как строка в exe
+import base64 as _b64
+def _get_default_pw() -> str:
+    """Восстанавливает встроенный пароль из обфусцированного вида."""
+    _k = __import__("hashlib").sha256(b"VSGUTU_GRADEBOOK_SALT_2024").digest()
+    _p = _b64.b64decode("U2bHG1yH" + "fhiDZJyA" + "OisYpdtI" + "8Q==")
+    return bytes(b ^ _k[i % len(_k)] for i, b in enumerate(_p)).decode()
 
 
 # ── Криптографические примитивы ───────────────────────────────
@@ -90,7 +96,7 @@ class SecureStorage:
         self.filepath    = filepath
         self._data: dict = {}
         self._master_key: bytes = b""
-        self._admin_pw   = DEFAULT_ADMIN_PW
+        self._admin_pw   = _get_default_pw()
         self._load()
 
     # ── Инициализация ─────────────────────────────────────────
@@ -107,20 +113,27 @@ class SecureStorage:
             self._init_new()
             return
 
-        self._admin_pw = self._data.get("__admin_pw_hint__", DEFAULT_ADMIN_PW)
+        self._admin_pw = _get_default_pw()
         locked = self._data.get(MASTER_KEY_FIELD, "")
         if locked:
+            # Пробуем текущий пароль
             self._master_key = _unlock_master_key(locked, self._admin_pw)
+            # Обратная совместимость: старые файлы с дефолтным паролем
+            if not self._master_key:
+                self._master_key = _unlock_master_key(locked, _get_default_pw())
+                if self._master_key:
+                    self._admin_pw = _get_default_pw()
         if not self._master_key:
             # Файл повреждён или от старой версии — создаём новый
             self._init_new()
 
     def _init_new(self):
         self._master_key = secrets.token_bytes(32)
-        self._admin_pw   = DEFAULT_ADMIN_PW
+        self._admin_pw   = _get_default_pw()
         self._data[MASTER_KEY_FIELD]    = _lock_master_key(self._master_key, self._admin_pw)
-        self._data["__admin_pw_hint__"] = self._admin_pw
         self._save()
+
+
 
     def _save(self):
         with open(self.filepath, "w", encoding="utf-8") as f:
@@ -130,7 +143,6 @@ class SecureStorage:
         """Перешифровывает мастер-ключ новым паролем. Данные не меняются."""
         self._admin_pw = new_password
         self._data[MASTER_KEY_FIELD]    = _lock_master_key(self._master_key, new_password)
-        self._data["__admin_pw_hint__"] = new_password
         self._save()
 
     # ── Базовые операции ─────────────────────────────────────
@@ -239,7 +251,7 @@ class SecureStorage:
                 "Убедитесь что файл создан через «📦 Перенос данных → Экспорт»."
             )
 
-        stored_pw = new_data.get("__admin_pw_hint__", DEFAULT_ADMIN_PW)
+        stored_pw = _get_default_pw()
         test_key  = _unlock_master_key(new_data[MASTER_KEY_FIELD], stored_pw)
         if not test_key:
             return False, "Не удалось расшифровать данные. Файл повреждён или изменён."
@@ -296,7 +308,7 @@ class SecureStorage:
         template = {
             "_comment": "Заполните и положите рядом с программой. При первом запуске зашифруется.",
             "api_key": "",
-            "admin_password": "vsgutu_admin_online",
+            "admin_password": "задайте_пароль_администратора",
             "teachers": {
                 "Иванов Иван": {
                     "password": "пароль_преподавателя",
@@ -309,6 +321,254 @@ class SecureStorage:
         }
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(template, f, ensure_ascii=False, indent=2)
+
+    # ══════════════════════════════════════════════════════════
+    #  ПОЛНЫЙ ЭКСПОРТ / ИМПОРТ (ZIP)
+    # ══════════════════════════════════════════════════════════
+
+    def export_full(self, filepath: str) -> tuple:
+        """Упаковывает secure_data.enc + vsgutu_grades.db + subjects.json в ZIP."""
+        try:
+            import zipfile
+            import shutil
+            from subjects import SUBJECTS_FILE
+            db_path = "vsgutu_grades.db"
+            with zipfile.ZipFile(filepath, "w", zipfile.ZIP_DEFLATED) as zf:
+                if os.path.exists(self.filepath):
+                    zf.write(self.filepath, "secure_data.enc")
+                if os.path.exists(db_path):
+                    zf.write(db_path, "vsgutu_grades.db")
+                if os.path.exists(SUBJECTS_FILE):
+                    zf.write(SUBJECTS_FILE, "subjects.json")
+                zf.writestr("_vsgutu_backup", "VSGUTU_FULL_BACKUP_V1")
+            with zipfile.ZipFile(filepath) as zf2:
+                count = len([n for n in zf2.namelist() if not n.startswith("_")])
+            return True, f"Бэкап сохранён: {os.path.basename(filepath)} ({count} файла)"
+        except Exception as e:
+            return False, str(e)
+
+    def analyze_import(self, filepath: str) -> tuple:
+        """
+        Анализирует ZIP перед импортом, возвращает diff без применения.
+        Возвращает: (ok, message, diff_dict)
+        """
+        try:
+            import zipfile
+            import tempfile
+            from subjects import load_subjects
+            with zipfile.ZipFile(filepath, "r") as zf:
+                if "_vsgutu_backup" not in zf.namelist():
+                    return False, "Файл не является резервной копией ВСГУТУ.", {}
+                with tempfile.TemporaryDirectory() as tmp:
+                    zf.extractall(tmp)
+                    tmp_enc  = os.path.join(tmp, "secure_data.enc")
+                    tmp_db   = os.path.join(tmp, "vsgutu_grades.db")
+                    tmp_subj = os.path.join(tmp, "subjects.json")
+                    diff = {}
+
+                    if os.path.exists(tmp_enc):
+                        with open(tmp_enc, "r", encoding="utf-8") as f:
+                            test_data = json.load(f)
+                        if MASTER_KEY_FIELD not in test_data:
+                            return False, "Файл secure_data.enc повреждён.", {}
+                        stored_pw = _get_default_pw()
+                        test_key  = _unlock_master_key(test_data[MASTER_KEY_FIELD], stored_pw)
+                        if not test_key:
+                            return False, "Не удалось расшифровать данные.", {}
+
+                        tmp_store             = SecureStorage.__new__(SecureStorage)
+                        tmp_store.filepath    = tmp_enc
+                        tmp_store._data       = test_data
+                        tmp_store._master_key = test_key
+                        tmp_store._admin_pw   = stored_pw
+
+                        def _norm(s):
+                            f = s.get("surname", "").strip().lower()
+                            n = s.get("name", "").strip().lower()
+                            return tuple(sorted([f, n]))
+
+                        cur_studs  = self.get_students()
+                        new_studs  = tmp_store.get_students()
+                        cur_keys   = {_norm(s) for s in cur_studs}
+                        diff["added_students"] = [s for s in new_studs if _norm(s) not in cur_keys]
+                        diff["dup_students"]   = [s for s in new_studs if _norm(s) in cur_keys]
+
+                        cur_t = self.get_teachers()
+                        new_t = tmp_store.get_teachers()
+                        diff["added_teachers"] = [n for n in new_t if n not in cur_t]
+                        diff["dup_teachers"]   = [n for n in new_t if n in cur_t]
+
+                        cur_g  = {g["name"] for g in self.get_groups()}
+                        new_g  = tmp_store.get_groups()
+                        diff["added_groups"] = [g["name"] for g in new_g if g["name"] not in cur_g]
+                        diff["dup_groups"]   = [g["name"] for g in new_g if g["name"] in cur_g]
+
+                        diff["_test_data"] = test_data
+                        diff["_test_key"]  = test_key
+
+                    if os.path.exists(tmp_db):
+                        import sqlite3 as _sq
+                        sc = _sq.connect(tmp_db)
+                        diff["db_lessons"] = sc.execute("SELECT COUNT(*) FROM lessons").fetchone()[0]
+                        diff["db_grades"]  = sc.execute("SELECT COUNT(*) FROM grades").fetchone()[0]
+                        diff["db_studs"]   = sc.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+                        sc.close()
+                        # Сохраняем путь (файл уже в tempdir — копируем рядом с zip)
+                        import shutil
+                        db_copy = filepath + ".tmpdb"
+                        shutil.copy2(tmp_db, db_copy)
+                        diff["_tmp_db"] = db_copy
+                    else:
+                        diff["_tmp_db"] = None
+
+                    if os.path.exists(tmp_subj):
+                        with open(tmp_subj, encoding="utf-8") as f:
+                            new_subj = json.load(f)
+                        cur_subj = load_subjects()
+                        diff["added_subjects"] = [s for s in new_subj if s not in cur_subj]
+                        diff["dup_subjects"]   = [s for s in new_subj if s in cur_subj]
+                        import shutil
+                        subj_copy = filepath + ".tmpsubj"
+                        shutil.copy2(tmp_subj, subj_copy)
+                        diff["_tmp_subj"] = subj_copy
+                    else:
+                        diff["_tmp_subj"] = None
+
+                    return True, "ok", diff
+        except Exception as e:
+            return False, str(e), {}
+
+    def apply_import(self, diff: dict, mode: str = "merge") -> tuple:
+        """
+        Применяет импорт после подтверждения.
+        mode: 'merge' — добавить новых, пропустить дубли
+              'replace' — полностью заменить
+        """
+        try:
+            import shutil
+            from subjects import load_subjects, save_subjects
+            restored = []
+
+            if "_test_data" in diff:
+                test_data = diff["_test_data"]
+                test_key  = diff["_test_key"]
+                stored_pw = _get_default_pw()
+
+                tmp_store             = SecureStorage.__new__(SecureStorage)
+                tmp_store._data       = test_data
+                tmp_store._master_key = test_key
+                tmp_store._admin_pw   = stored_pw
+
+                def _norm(s):
+                    f = s.get("surname", "").strip().lower()
+                    n = s.get("name", "").strip().lower()
+                    return tuple(sorted([f, n]))
+
+                if mode == "replace":
+                    self._data       = test_data
+                    self._master_key = test_key
+                    self._admin_pw   = stored_pw
+                    self._save()
+                    t = len(self.get_teachers())
+                    s = len(self.get_students())
+                    g = len(self.get_groups())
+                    restored.append(f"заменено: препод. {t}, студ. {s}, групп {g}")
+                else:
+                    cur_s   = self.get_students()
+                    cur_k   = {_norm(s) for s in cur_s}
+                    added_s = 0
+                    for s in tmp_store.get_students():
+                        if _norm(s) not in cur_k:
+                            cur_s.append(s); cur_k.add(_norm(s)); added_s += 1
+                    self.set_students(cur_s)
+
+                    cur_t   = self.get_teachers()
+                    added_t = 0
+                    for name, data in tmp_store.get_teachers().items():
+                        if name not in cur_t:
+                            cur_t[name] = data; added_t += 1
+                    self.set_teachers(cur_t)
+
+                    cur_g   = self.get_groups()
+                    cur_gk  = {g["name"] for g in cur_g}
+                    added_g = 0
+                    for g in tmp_store.get_groups():
+                        if g["name"] not in cur_gk:
+                            cur_g.append(g); cur_gk.add(g["name"]); added_g += 1
+                    self.set_groups(cur_g)
+                    restored.append(f"студ. +{added_s}, препод. +{added_t}, групп +{added_g}")
+
+            if diff.get("_tmp_db") and os.path.exists(diff["_tmp_db"]):
+                import sqlite3 as _sq
+                sc = _sq.connect(diff["_tmp_db"])
+                dc = _sq.connect("vsgutu_grades.db")
+                rows_l = sc.execute(
+                    "SELECT id,group_name,subject,type,number,topic,date,retake_date,hour FROM lessons"
+                ).fetchall()
+                dc.executemany("INSERT OR IGNORE INTO lessons VALUES(?,?,?,?,?,?,?,?,?)", rows_l)
+                rows_s = sc.execute("SELECT f,n,group_name FROM students").fetchall()
+                dc.executemany("INSERT OR IGNORE INTO students VALUES(?,?,?)", rows_s)
+                rows_g = sc.execute(
+                    "SELECT student_f,student_n,lesson_id,grade FROM grades"
+                ).fetchall()
+                dc.executemany(
+                    "INSERT OR IGNORE INTO grades(student_f,student_n,lesson_id,grade) VALUES(?,?,?,?)",
+                    rows_g
+                )
+                dc.commit(); sc.close(); dc.close()
+                try:
+                    os.remove(diff["_tmp_db"])
+                except Exception:
+                    pass
+                restored.append(f"занятий: {len(rows_l)}, оценок: {len(rows_g)}")
+
+            if diff.get("_tmp_subj") and os.path.exists(diff["_tmp_subj"]):
+                with open(diff["_tmp_subj"], encoding="utf-8") as f:
+                    new_subj = json.load(f)
+                cur_subj = load_subjects()
+                merged   = sorted(list(set(cur_subj) | set(new_subj)))
+                save_subjects(merged)
+                try:
+                    os.remove(diff["_tmp_subj"])
+                except Exception:
+                    pass
+                restored.append(f"предметов: {len(merged)}")
+
+            return True, "Применено: " + "; ".join(restored) if restored else "Изменений нет."
+        except Exception as e:
+            return False, str(e)
+
+    def export_subjects_json(self, filepath: str) -> tuple:
+        try:
+            import shutil
+            from subjects import SUBJECTS_FILE
+            if not os.path.exists(SUBJECTS_FILE):
+                return False, "Файл subjects.json не найден."
+            shutil.copy2(SUBJECTS_FILE, filepath)
+            with open(filepath, encoding="utf-8") as f:
+                count = len(json.load(f))
+            return True, f"Экспортировано {count} предметов."
+        except Exception as e:
+            return False, str(e)
+
+    def import_subjects_json(self, filepath: str) -> tuple:
+        """Возвращает (ok, msg, diff) для показа диалога подтверждения."""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return False, "Ожидается JSON-массив строк.", {}
+            subjects = [str(s).strip() for s in data if str(s).strip()]
+            if not subjects:
+                return False, "Файл не содержит предметов.", {}
+            from subjects import load_subjects
+            cur     = load_subjects()
+            added   = [s for s in subjects if s not in cur]
+            already = [s for s in subjects if s in cur]
+            return True, "ok", {"added": added, "already": already, "all": subjects}
+        except Exception as e:
+            return False, str(e), {}
+
 
 
 # Глобальный экземпляр

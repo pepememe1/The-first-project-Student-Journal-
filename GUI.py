@@ -746,7 +746,7 @@ class TransferWidget(QWidget):
 class MainAppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"GradeBookAI — {APP_VERSION}")
+        self.setWindowTitle(f"Журнал ВСГУТУ — {APP_VERSION}")
         self.resize(1300, 750)
         self.setStyleSheet(APP_STYLE)
 
@@ -1071,9 +1071,9 @@ class MainAppWindow(QMainWindow):
         self.teacher_widget = QWidget()
         layout = QVBoxLayout(self.teacher_widget)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
-        # Заголовок
+        # ── Заголовок ──────────────────────────────────────────
         header_row = QHBoxLayout()
         back_btn = make_btn("← Меню", BTN_BACK)
         back_btn.setFixedWidth(90)
@@ -1083,7 +1083,51 @@ class MainAppWindow(QMainWindow):
         header_row.addWidget(self._teacher_title_lbl, 1)
         layout.addLayout(header_row)
 
-        # Таблица
+        # ── Ползунки предмет / группа ──────────────────────────
+        sel_row = QHBoxLayout()
+        sel_row.setSpacing(8)
+
+        from PySide6.QtWidgets import QScrollArea as _SA
+
+        # Предмет
+        subj_box = QVBoxLayout()
+        subj_lbl = QLabel("Предмет:")
+        subj_lbl.setStyleSheet("font-size:11px;color:#a0aac0;")
+        subj_box.addWidget(subj_lbl)
+        self._subj_scroll = QScrollArea()
+        self._subj_scroll.setFixedHeight(70)
+        self._subj_scroll.setWidgetResizable(True)
+        self._subj_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._subj_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._subj_inner = QWidget()
+        self._subj_inner_layout = QHBoxLayout(self._subj_inner)
+        self._subj_inner_layout.setContentsMargins(4, 4, 4, 4)
+        self._subj_inner_layout.setSpacing(6)
+        self._subj_scroll.setWidget(self._subj_inner)
+        subj_box.addWidget(self._subj_scroll)
+        sel_row.addLayout(subj_box, 1)
+
+        # Группа
+        grp_box = QVBoxLayout()
+        grp_lbl = QLabel("Группа:")
+        grp_lbl.setStyleSheet("font-size:11px;color:#a0aac0;")
+        grp_box.addWidget(grp_lbl)
+        self._grp_scroll = QScrollArea()
+        self._grp_scroll.setFixedHeight(70)
+        self._grp_scroll.setWidgetResizable(True)
+        self._grp_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._grp_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._grp_inner = QWidget()
+        self._grp_inner_layout = QHBoxLayout(self._grp_inner)
+        self._grp_inner_layout.setContentsMargins(4, 4, 4, 4)
+        self._grp_inner_layout.setSpacing(6)
+        self._grp_scroll.setWidget(self._grp_inner)
+        grp_box.addWidget(self._grp_scroll)
+        sel_row.addLayout(grp_box, 1)
+
+        layout.addLayout(sel_row)
+
+        # ── Таблица ────────────────────────────────────────────
         self.t_table = QTableWidget()
         self.t_table.setStyleSheet(
             "QTableCornerButton::section{"
@@ -1093,7 +1137,7 @@ class MainAppWindow(QMainWindow):
         self.t_table.horizontalHeader().customContextMenuRequested.connect(self._header_context_menu)
         layout.addWidget(self.t_table, 1)
 
-        # Панель кнопок
+        # ── Панель кнопок ──────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
@@ -1102,10 +1146,10 @@ class MainAppWindow(QMainWindow):
             b.clicked.connect(fn)
             btn_row.addWidget(b)
 
-        add("Добавить студента",  "",        self._add_student)
+        add("Добавить студента",  "",         self._add_student)
         add("🗑 Удалить студента", BTN_DANGER, self._delete_student)
-        add("Добавить занятие",   "",        self._add_lesson)
-        add("Экзамен",            "",        self._add_exam)
+        add("Добавить занятие",   "",         self._add_lesson)
+        add("Экзамен",            "",         self._add_exam)
         add("💾 Сохранить",       BTN_SUCCESS, self._save_data)
         add("📊 Excel экспорт",   BTN_SUCCESS, self._export_excel)
         add("📥 Excel импорт",    BTN_INFO,    self._import_excel)
@@ -1115,6 +1159,93 @@ class MainAppWindow(QMainWindow):
 
         layout.addLayout(btn_row)
         self.stack.addWidget(self.teacher_widget)
+
+    # ── Обновление ползунков после входа ───────────────────────
+    def _refresh_teacher_selectors(self):
+        """Перестраивает кнопки предметов и групп для текущего преподавателя."""
+        name = getattr(self, "cur_teacher_name", "")
+        teachers = secure_store.get_teachers()
+        if name not in teachers:
+            return
+        subjects = teachers[name].get("subjects", [])
+
+        # Очищаем
+        for layout_obj in (self._subj_inner_layout, self._grp_inner_layout):
+            while layout_obj.count():
+                w = layout_obj.takeAt(0).widget()
+                if w:
+                    w.deleteLater()
+
+        # Кнопки предметов
+        BTN_SEL_ON  = "background:#2d4a7a;color:#fff;border:1px solid #5080c0;border-radius:4px;padding:4px 10px;"
+        BTN_SEL_OFF = "background:#1e2438;color:#a0aac0;border:1px solid #3d4460;border-radius:4px;padding:4px 10px;"
+
+        cur_subj = getattr(self, "cur_teacher_subj", "")
+        for subj in subjects:
+            btn = QPushButton(subj)
+            btn.setStyleSheet(BTN_SEL_ON if subj == cur_subj else BTN_SEL_OFF)
+            btn.setCheckable(True)
+            btn.setChecked(subj == cur_subj)
+            btn.clicked.connect(lambda _, s=subj: self._teacher_select_subject(s))
+            self._subj_inner_layout.addWidget(btn)
+        self._subj_inner_layout.addStretch()
+
+        # Кнопки групп для текущего предмета
+        self._refresh_group_buttons()
+
+    def _refresh_group_buttons(self):
+        """Перестраивает кнопки групп под текущий предмет."""
+        while self._grp_inner_layout.count():
+            w = self._grp_inner_layout.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+
+        cur_subj = getattr(self, "cur_teacher_subj", "")
+        cur_grp  = self.book.group if self.book else ""
+        groups   = [
+            g["name"] for g in secure_store.get_groups()
+            if cur_subj in g.get("subjects", [])
+        ]
+
+        BTN_SEL_ON  = "background:#2d4a7a;color:#fff;border:1px solid #5080c0;border-radius:4px;padding:4px 10px;"
+        BTN_SEL_OFF = "background:#1e2438;color:#a0aac0;border:1px solid #3d4460;border-radius:4px;padding:4px 10px;"
+
+        for grp in groups:
+            btn = QPushButton(grp)
+            btn.setStyleSheet(BTN_SEL_ON if grp == cur_grp else BTN_SEL_OFF)
+            btn.setCheckable(True)
+            btn.setChecked(grp == cur_grp)
+            btn.clicked.connect(lambda _, g=grp: self._teacher_select_group(g))
+            self._grp_inner_layout.addWidget(btn)
+        self._grp_inner_layout.addStretch()
+
+    def _teacher_select_subject(self, subj: str):
+        """Смена предмета — обновляем список групп, открываем журнал."""
+        self.cur_teacher_subj = subj
+        # Ищем первую доступную группу для этого предмета
+        groups = [
+            g["name"] for g in secure_store.get_groups()
+            if subj in g.get("subjects", [])
+        ]
+        new_grp = groups[0] if groups else (self.book.group if self.book else "")
+        self._teacher_open_journal(subj, new_grp)
+        self._refresh_teacher_selectors()
+
+    def _teacher_select_group(self, grp: str):
+        """Смена группы — открываем другой журнал."""
+        subj = getattr(self, "cur_teacher_subj", "")
+        self._teacher_open_journal(subj, grp)
+        self._refresh_group_buttons()
+
+    def _teacher_open_journal(self, subj: str, grp: str):
+        """Открывает журнал для данного предмета+группы."""
+        if not subj or not grp:
+            return
+        name = getattr(self, "cur_teacher_name", "")
+        self.cur_teacher_subj = subj
+        self.book = GradeBook(grp, subj)
+        self._teacher_title_lbl.setText(f"Журнал: {name}  •  {subj}  •  {grp}")
+        self._update_teacher_table()
 
     def _open_teacher_ai(self):
         book = self.book
@@ -1786,41 +1917,52 @@ class MainAppWindow(QMainWindow):
                     self._update_teacher_table()
 
     def _on_table_item_changed(self, item):
-        """Редактирование фамилии/имени студента двойным кликом."""
+        """Редактирование фамилии/имени студента двойным кликом в таблице."""
         row = item.row()
         col = item.column()
         if col not in (0, 1):
             return
-        if row >= len(self.book.spisok_stud):
+        if not self.book or row >= len(self.book.spisok_stud):
             return
-        student = self.book.spisok_stud[row]
-        new_val = item.text().strip()
+        student  = self.book.spisok_stud[row]
+        new_val  = item.text().strip()
         if not new_val:
             return
+        # Сохраняем старые значения ДО изменения
+        old_f = student.f
+        old_n = student.n
         import sqlite3 as _sq
         conn = _sq.connect(self.book.db_name)
         cur  = conn.cursor()
         if col == 0:  # Фамилия
-            old_f = student.f
-            cur.execute("UPDATE students SET f=? WHERE f=? AND n=?", (new_val, old_f, student.n))
+            if new_val == old_f:
+                conn.close(); return
+            cur.execute("UPDATE students SET f=? WHERE f=? AND n=? AND group_name=?",
+                        (new_val, old_f, old_n, self.book.group))
             cur.execute("UPDATE grades SET student_f=? WHERE student_f=? AND student_n=?",
-                        (new_val, old_f, student.n))
+                        (new_val, old_f, old_n))
             student.f = new_val
         elif col == 1:  # Имя
-            old_n = student.n
-            cur.execute("UPDATE students SET n=? WHERE f=? AND n=?", (new_val, student.f, old_n))
+            if new_val == old_n:
+                conn.close(); return
+            cur.execute("UPDATE students SET n=? WHERE f=? AND n=? AND group_name=?",
+                        (new_val, old_f, old_n, self.book.group))
             cur.execute("UPDATE grades SET student_n=? WHERE student_f=? AND student_n=?",
-                        (new_val, student.f, old_n))
+                        (new_val, old_f, old_n))
             student.n = new_val
         conn.commit(); conn.close()
-        # Обновляем в secure_store тоже
+        # Синхронизируем с secure_store
         try:
             store_studs = secure_store.get_students()
             for ss in store_studs:
-                if col == 1 and ss.get("surname","") == old_f and ss.get("name","") == student.n:
-                    ss["surname"] = new_val
-                elif col == 2 and ss.get("surname","") == student.f and ss.get("name","") == old_n:
-                    ss["name"] = new_val
+                if (ss.get("surname","") == old_f and
+                        ss.get("name","") == old_n and
+                        ss.get("group","") == self.book.group):
+                    if col == 0:
+                        ss["surname"] = new_val
+                    else:
+                        ss["name"] = new_val
+                    break
             secure_store.set_students(store_studs)
         except Exception:
             pass
@@ -1909,6 +2051,7 @@ class MainAppWindow(QMainWindow):
                     f"Журнал: {name}  •  {subj}  •  {g}"
                 )
                 self._update_teacher_table()
+                self._refresh_teacher_selectors()
                 self.stack.setCurrentWidget(self.teacher_widget)
             return
 
@@ -1930,6 +2073,7 @@ class MainAppWindow(QMainWindow):
                 self.book = GradeBook(g, subj)
                 self._teacher_title_lbl.setText(f"Журнал: {name}  •  {subj}  •  {g}")
                 self._update_teacher_table()
+                self._refresh_teacher_selectors()
                 self.stack.setCurrentWidget(self.teacher_widget)
         else:
             QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль.")

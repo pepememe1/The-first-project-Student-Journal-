@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
-APP_VERSION = "Pre-release 1.0"
+APP_VERSION = "Pre-release 1.5"
 
 @dataclass
 class Lesson:

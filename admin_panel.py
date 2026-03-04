@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from security import secure_store
+from subjects import load_subjects, save_subjects, rename_subject, delete_subject, add_subject
 
 ALL_SUBJECTS = [
     "Аварийно-спасательные работы на высоте",
@@ -119,6 +120,12 @@ def make_back_btn(callback) -> QPushButton:
     btn.setStyleSheet(STYLE_BTN)
     btn.clicked.connect(callback)
     return btn
+
+
+
+def get_all_subjects() -> list:
+    """Возвращает актуальный список предметов из subjects.json."""
+    return load_subjects()
 
 
 class SubjectSelector(QWidget):
@@ -329,16 +336,25 @@ class TeacherDetailPage(QWidget):
     def __init__(self, teacher_name: str, back_cb, parent=None):
         super().__init__(parent)
         self.teacher_name = teacher_name
+        self._back_cb = back_cb
         layout = QVBoxLayout(self)
         layout.addWidget(make_back_btn(back_cb))
 
         teachers = secure_store.get_teachers()
         data = teachers.get(teacher_name, {"password": "", "subjects": []})
 
-        title = QLabel(teacher_name)
-        title.setStyleSheet("font-size:18px; font-weight:bold;")
+        title = QLabel(f"Преподаватель: {teacher_name}")
+        title.setStyleSheet("font-size:16px; font-weight:bold;")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
+
+        # Редактирование имени
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Имя (ФИО):"))
+        self.name_edit = QLineEdit(teacher_name)
+        self.name_edit.setPlaceholderText("Фамилия Имя Отчество")
+        name_row.addWidget(self.name_edit)
+        layout.addLayout(name_row)
 
         layout.addWidget(QLabel("Предметы:"))
         self.subj_selector = SubjectSelector(data.get("subjects", []))
@@ -400,14 +416,28 @@ class TeacherDetailPage(QWidget):
 
     def _save(self):
         teachers = secure_store.get_teachers()
+        new_name = self.name_edit.text().strip()
+        if not new_name:
+            QMessageBox.warning(self, "Ошибка", "Имя преподавателя не может быть пустым.")
+            return
         assignments = {subj: sel.get_selected() for subj, sel in self.group_assignments.items()}
-        teachers[self.teacher_name] = {
+        new_data = {
             "password": self.pw_edit.text(),
             "subjects": self.subj_selector.get_selected(),
             "group_assignments": assignments
         }
+        # Если имя изменилось — переименовываем ключ
+        if new_name != self.teacher_name:
+            if new_name in teachers:
+                QMessageBox.warning(self, "Ошибка",
+                    f"Преподаватель «{new_name}» уже существует.")
+                return
+            teachers.pop(self.teacher_name, None)
+            self.teacher_name = new_name
+        teachers[new_name] = new_data
         secure_store.set_teachers(teachers)
-        QMessageBox.information(self, "Сохранено", "Данные преподавателя сохранены.")
+        QMessageBox.information(self, "Сохранено",
+            f"Данные преподавателя «{new_name}» сохранены.")
         self.saved.emit()
 
     def _delete(self):
@@ -453,6 +483,18 @@ class TeachersPage(QWidget):
         self.teacher_list = QListWidget()
         self.teacher_list.itemDoubleClicked.connect(self._open_teacher)
         layout.addWidget(self.teacher_list)
+
+        io_row = QHBoxLayout()
+        exp_btn = QPushButton("💾 Экспорт преподавателей (JSON)...")
+        exp_btn.setStyleSheet(STYLE_BTN_GREEN)
+        exp_btn.clicked.connect(self._export_teachers)
+        io_row.addWidget(exp_btn)
+        imp_btn = QPushButton("📂 Импорт преподавателей (JSON)...")
+        imp_btn.setStyleSheet(STYLE_BTN)
+        imp_btn.clicked.connect(self._import_teachers)
+        io_row.addWidget(imp_btn)
+        layout.addLayout(io_row)
+
         self._refresh()
 
     def _refresh(self):
@@ -472,6 +514,56 @@ class TeachersPage(QWidget):
             item = QListWidgetItem(name)
             self.teacher_list.addItem(item)
 
+    def _export_teachers(self):
+        from PySide6.QtWidgets import QFileDialog
+        import json
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт преподавателей", "teachers.json",
+            "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        teachers = secure_store.get_teachers()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(teachers, f, ensure_ascii=False, indent=2)
+        QMessageBox.information(self, "Экспорт выполнен",
+            f"✅ Экспортировано {len(teachers)} преподавателей.")
+
+    def _import_teachers(self):
+        from PySide6.QtWidgets import QFileDialog
+        import json
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт преподавателей", "", "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        try:
+            with open(path, encoding="utf-8") as f:
+                new_t = json.load(f)
+            if not isinstance(new_t, dict):
+                QMessageBox.warning(self, "Ошибка", "Файл должен быть словарём преподавателей."); return
+            cur   = secure_store.get_teachers()
+            added = [n for n in new_t if n not in cur]
+            dups  = [n for n in new_t if n in cur]
+            diff  = {"added_students":[], "dup_students":[],
+                     "added_teachers": added, "dup_teachers": dups,
+                     "added_groups":[], "dup_groups":[],
+                     "_new_teachers": new_t}
+            dlg = ImportConfirmDialog("👨‍🏫 Импорт преподавателей", diff, self)
+            dlg.confirmed.connect(lambda _: self._apply_teachers_import(added, new_t, dlg))
+            dlg.cancelled.connect(dlg.close)
+            dlg.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _apply_teachers_import(self, added, new_t, dlg):
+        dlg.close()
+        if not added:
+            QMessageBox.information(self, "Импорт", "Нет новых преподавателей."); return
+        cur = secure_store.get_teachers()
+        for name in added:
+            cur[name] = new_t[name]
+        secure_store.set_teachers(cur)
+        self._refresh()
+        QMessageBox.information(self, "Импорт выполнен",
+            f"✅ Добавлено новых преподавателей: {len(added)}")
+
     def _open_teacher(self, item):
         name = item.text()
         detail = TeacherDetailPage(name, lambda: self.stack.setCurrentWidget(self))
@@ -488,16 +580,26 @@ class StudentDetailPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(make_back_btn(back_cb))
 
-        name = f"{student_data.get('name', '')} {student_data.get('surname', '')}"
-        title = QLabel(name)
+        title = QLabel(f"Студент: {student_data.get('surname','')} {student_data.get('name','')}")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size:18px; font-weight:bold;")
+        title.setStyleSheet("font-size:16px; font-weight:bold;")
         layout.addWidget(title)
 
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setSpacing(8)
         layout.addLayout(form)
 
-        form.addRow("Группа обучающегося:", QLabel())
+        # Редактирование ФИО
+        self.surname_edit = QLineEdit(student_data.get("surname", ""))
+        self.surname_edit.setPlaceholderText("Фамилия")
+        form.addRow("Фамилия:", self.surname_edit)
+
+        self.name_edit = QLineEdit(student_data.get("name", ""))
+        self.name_edit.setPlaceholderText("Имя / Инициалы")
+        form.addRow("Имя:", self.name_edit)
+
+        form.addRow("Группа:", QLabel())
         self.group_sel = GroupSelector(student_data.get("group", ""))
         form.addRow("", self.group_sel)
 
@@ -507,7 +609,7 @@ class StudentDetailPage(QWidget):
         layout.addWidget(self.subjects_label)
         self._update_subjects(student_data.get("group", ""))
 
-        save_btn = QPushButton("Сохранить")
+        save_btn = QPushButton("💾 Сохранить изменения")
         save_btn.setStyleSheet(STYLE_BTN_GREEN)
         save_btn.clicked.connect(self._save)
         layout.addWidget(save_btn)
@@ -546,17 +648,47 @@ class StudentDetailPage(QWidget):
         self.subjects_label.setText("—")
 
     def _save(self):
+        new_surname = self.surname_edit.text().strip()
+        new_name    = self.name_edit.text().strip()
+        new_group   = self.group_sel.get_selected()
+        if not new_surname:
+            QMessageBox.warning(self, "Ошибка", "Фамилия не может быть пустой.")
+            return
+        old_surname = self.student_data.get("surname", "")
+        old_name    = self.student_data.get("name", "")
+        old_group   = self.student_data.get("group", "")
         students = secure_store.get_students()
         idx = self.student_data.get("_idx", -1)
-        new_data = {
-            "name": self.student_data["name"],
-            "surname": self.student_data["surname"],
-            "group": self.group_sel.get_selected()
-        }
+        new_data = {"name": new_name, "surname": new_surname, "group": new_group}
         if 0 <= idx < len(students):
             students[idx] = new_data
             secure_store.set_students(students)
-            QMessageBox.information(self, "Сохранено", "Данные студента сохранены.")
+        # Обновляем SQLite если изменились фамилия/имя/группа
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect("vsgutu_grades.db")
+            cur  = conn.cursor()
+            if new_surname != old_surname or new_name != old_name:
+                cur.execute(
+                    "UPDATE students SET f=?, n=? WHERE f=? AND n=?",
+                    (new_surname, new_name, old_surname, old_name)
+                )
+                cur.execute(
+                    "UPDATE grades SET student_f=?, student_n=? WHERE student_f=? AND student_n=?",
+                    (new_surname, new_name, old_surname, old_name)
+                )
+            if new_group != old_group:
+                cur.execute(
+                    "UPDATE students SET group_name=? WHERE f=? AND n=?",
+                    (new_group, new_surname, new_name)
+                )
+            conn.commit(); conn.close()
+        except Exception as e:
+            pass  # SQLite может отсутствовать если журналов ещё нет
+        # Обновляем локальный кэш
+        self.student_data.update(new_data)
+        QMessageBox.information(self, "Сохранено",
+            f"Данные студента «{new_surname} {new_name}» сохранены.")
 
 
 class StudentsPage(QWidget):
@@ -585,6 +717,18 @@ class StudentsPage(QWidget):
         self.student_list = QListWidget()
         self.student_list.itemDoubleClicked.connect(self._open_student)
         layout.addWidget(self.student_list)
+
+        io_row = QHBoxLayout()
+        exp_btn = QPushButton("💾 Экспорт студентов (JSON)...")
+        exp_btn.setStyleSheet(STYLE_BTN_GREEN)
+        exp_btn.clicked.connect(self._export_students)
+        io_row.addWidget(exp_btn)
+        imp_btn = QPushButton("📂 Импорт студентов (JSON)...")
+        imp_btn.setStyleSheet(STYLE_BTN)
+        imp_btn.clicked.connect(self._import_students)
+        io_row.addWidget(imp_btn)
+        layout.addLayout(io_row)
+
         self._refresh()
 
     def _refresh(self):
@@ -601,6 +745,63 @@ class StudentsPage(QWidget):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, i)
             self.student_list.addItem(item)
+
+    def _export_students(self):
+        from PySide6.QtWidgets import QFileDialog
+        import json
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт студентов", "students.json",
+            "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        students = secure_store.get_students()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(students, f, ensure_ascii=False, indent=2)
+        QMessageBox.information(self, "Экспорт выполнен",
+            f"✅ Экспортировано {len(students)} студентов.")
+
+    def _import_students(self):
+        from PySide6.QtWidgets import QFileDialog
+        import json
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт студентов", "", "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        try:
+            with open(path, encoding="utf-8") as f:
+                new_list = json.load(f)
+            if not isinstance(new_list, list):
+                QMessageBox.warning(self, "Ошибка", "Файл должен быть массивом студентов."); return
+
+            def _norm(s):
+                f_ = s.get("surname","").strip().lower()
+                n_ = s.get("name","").strip().lower()
+                return tuple(sorted([f_, n_]))
+
+            cur   = secure_store.get_students()
+            cur_k = {_norm(s) for s in cur}
+            added = [s for s in new_list if _norm(s) not in cur_k]
+            dups  = [s for s in new_list if _norm(s) in cur_k]
+
+            diff = {"added_students": added, "dup_students": dups,
+                    "added_teachers": [], "dup_teachers": [],
+                    "added_groups": [], "dup_groups": [],
+                    "_new_students": new_list}
+            dlg = ImportConfirmDialog("🎓 Импорт студентов", diff, self)
+            dlg.confirmed.connect(lambda _: self._apply_students_import(added, dlg))
+            dlg.cancelled.connect(dlg.close)
+            dlg.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _apply_students_import(self, added, dlg):
+        dlg.close()
+        if not added:
+            QMessageBox.information(self, "Импорт", "Нет новых студентов."); return
+        cur = secure_store.get_students()
+        cur.extend(added)
+        secure_store.set_students(cur)
+        self._refresh()
+        QMessageBox.information(self, "Импорт выполнен",
+            f"✅ Добавлено новых студентов: {len(added)}")
 
     def _open_student(self, item):
         idx = item.data(Qt.UserRole)
@@ -642,7 +843,7 @@ class SubjectSelectorWithSearch(QWidget):
         self._inner_l = QVBoxLayout(self._inner)
         self._inner_l.setSpacing(2)
         self.checkboxes = []
-        for subj in ALL_SUBJECTS:
+        for subj in get_all_subjects():
             cb = QCheckBox(subj)
             cb.setChecked(subj in self._selected)
             cb.stateChanged.connect(self._update)
@@ -685,10 +886,18 @@ class GroupDetailPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(make_back_btn(back_cb))
 
-        title = QLabel(self.group_name)
+        title = QLabel(f"Группа: {self.group_name}")
         title.setStyleSheet("font-size:16px; font-weight:bold;")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
+
+        # Переименование группы
+        rename_row = QHBoxLayout()
+        rename_row.addWidget(QLabel("Название группы:"))
+        self.name_edit = QLineEdit(self.group_name)
+        self.name_edit.setPlaceholderText("Например: к74/1")
+        rename_row.addWidget(self.name_edit)
+        layout.addLayout(rename_row)
 
         # Студенты группы
         students = secure_store.get_students()
@@ -749,13 +958,45 @@ class GroupDetailPage(QWidget):
         self._back_cb()
 
     def _save(self):
+        new_name = self.name_edit.text().strip()
+        if not new_name:
+            QMessageBox.warning(self, "Ошибка", "Название группы не может быть пустым.")
+            return
         groups = secure_store.get_groups()
+        # Проверка дублирования при переименовании
+        if new_name != self.group_name:
+            if any(g["name"] == new_name for g in groups):
+                QMessageBox.warning(self, "Ошибка",
+                    f"Группа «{new_name}» уже существует.")
+                return
         for g in groups:
             if g["name"] == self.group_name:
+                g["name"]     = new_name
                 g["subjects"] = self.subj_selector.get_selected()
                 break
         secure_store.set_groups(groups)
-        QMessageBox.information(self, "Сохранено", f"Предметы группы {self.group_name} обновлены.")
+        # Обновляем студентов при переименовании
+        if new_name != self.group_name:
+            students = secure_store.get_students()
+            for s in students:
+                if s.get("group") == self.group_name:
+                    s["group"] = new_name
+            secure_store.set_students(students)
+            # Обновляем SQLite
+            try:
+                import sqlite3 as _sq
+                conn = _sq.connect("vsgutu_grades.db")
+                cur  = conn.cursor()
+                cur.execute("UPDATE students SET group_name=? WHERE group_name=?",
+                            (new_name, self.group_name))
+                cur.execute("UPDATE lessons SET group_name=? WHERE group_name=?",
+                            (new_name, self.group_name))
+                conn.commit(); conn.close()
+            except Exception:
+                pass
+            self.group_name = new_name
+        QMessageBox.information(self, "Сохранено",
+            f"Группа «{new_name}» обновлена.")
         self.saved.emit()
 
 
@@ -1039,6 +1280,265 @@ class AddDataPage(QWidget):
         self.g_name.clear()
 
 
+class SubjectsEditorPage(QWidget):
+    """
+    Редактор глобального списка ALL_SUBJECTS.
+    Позволяет добавлять, переименовывать и удалять предметы.
+    Изменения сохраняются в secure_store и применяются ко всем выборщикам.
+    """
+    saved = Signal()
+
+    def __init__(self, back_cb, parent=None):
+        super().__init__(parent)
+        self._back_cb = back_cb
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        layout.addWidget(make_back_btn(back_cb))
+
+        title = QLabel("📚 Редактор учебных предметов")
+        title.setStyleSheet("font-size:16px; font-weight:bold;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+
+        # ── Панель добавления нового предмета
+        add_row = QHBoxLayout()
+        self.new_subj_edit = QLineEdit()
+        self.new_subj_edit.setPlaceholderText("Название нового предмета...")
+        self.new_subj_edit.returnPressed.connect(self._add_subject)
+        add_row.addWidget(self.new_subj_edit)
+        add_btn = QPushButton("➕ Добавить")
+        add_btn.setStyleSheet(STYLE_BTN_GREEN)
+        add_btn.setFixedWidth(120)
+        add_btn.clicked.connect(self._add_subject)
+        add_row.addWidget(add_btn)
+        layout.addLayout(add_row)
+
+        # ── Поиск по списку
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("🔍 Поиск в списке...")
+        self.search_edit.textChanged.connect(self._filter)
+        layout.addWidget(self.search_edit)
+
+        lbl_count = QHBoxLayout()
+        self.count_lbl = QLabel()
+        self.count_lbl.setStyleSheet("color:#7eb8f7; font-size:11px;")
+        lbl_count.addWidget(self.count_lbl)
+        lbl_count.addStretch()
+        layout.addLayout(lbl_count)
+
+        # ── Список предметов
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet(
+            "QListWidget{background:#1a2035;border:1px solid #3d4460;border-radius:6px;}"
+            "QListWidget::item{padding:6px 8px;border-bottom:1px solid #2d3450;}"
+            "QListWidget::item:selected{background:#2d4a7a;}"
+        )
+        self.list_widget.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self.list_widget, 1)
+
+        # ── Кнопки действий над выбранным предметом
+        action_row = QHBoxLayout()
+        rename_btn = QPushButton("✏ Переименовать")
+        rename_btn.setStyleSheet(STYLE_BTN)
+        rename_btn.clicked.connect(self._rename_subject)
+        action_row.addWidget(rename_btn)
+
+        del_btn = QPushButton("🗑 Удалить выбранный")
+        del_btn.setStyleSheet(STYLE_BTN_RED)
+        del_btn.clicked.connect(self._delete_subject)
+        action_row.addWidget(del_btn)
+        layout.addLayout(action_row)
+
+        # ── Импорт / Экспорт ────────────────────────────────
+        sep = QLabel("── Импорт / Экспорт ──")
+        sep.setAlignment(Qt.AlignCenter)
+        sep.setStyleSheet("color:#6080a0;font-size:11px;margin-top:4px;")
+        layout.addWidget(sep)
+        io_row = QHBoxLayout()
+        exp_btn = QPushButton("💾 Экспорт в JSON...")
+        exp_btn.setStyleSheet(STYLE_BTN_GREEN)
+        exp_btn.clicked.connect(self._export_subjects)
+        io_row.addWidget(exp_btn)
+        imp_btn = QPushButton("📂 Импорт из JSON...")
+        imp_btn.setStyleSheet(STYLE_BTN)
+        imp_btn.clicked.connect(self._import_subjects)
+        io_row.addWidget(imp_btn)
+        layout.addLayout(io_row)
+
+        self._load_subjects()
+
+    def _get_subjects(self):
+        """Возвращает актуальный список предметов из subjects.json."""
+        return load_subjects()
+
+    def _save_subjects(self, subjects: list):
+        """Сохраняет список предметов в subjects.json."""
+        save_subjects(subjects)
+
+    def _export_subjects(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт предметов", "subjects.json",
+            "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        ok, msg = secure_store.export_subjects_json(path)
+        if ok:
+            QMessageBox.information(self, "Экспорт выполнен",
+                f"✅ {msg}\nФайл можно редактировать в любом текстовом редакторе.")
+        else:
+            QMessageBox.critical(self, "Ошибка", msg)
+
+    def _import_subjects(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт предметов", "", "JSON (*.json);;Все файлы (*)")
+        if not path: return
+        ok, msg, diff = secure_store.import_subjects_json(path)
+        if not ok:
+            QMessageBox.critical(self, "Ошибка", msg); return
+        dlg = ImportConfirmDialog("📚 Импорт предметов", diff, self)
+        dlg.confirmed.connect(lambda _: self._apply_subjects_import(diff, dlg))
+        dlg.cancelled.connect(dlg.close)
+        dlg.show()
+
+    def _apply_subjects_import(self, diff, dlg):
+        dlg.close()
+        from subjects import save_subjects, load_subjects
+        cur    = load_subjects()
+        merged = sorted(list(set(cur) | set(diff["all"])))
+        save_subjects(merged)
+        self._load_subjects()
+        QMessageBox.information(self, "Импорт выполнен",
+            f"✅ Добавлено: {len(diff['added'])}  |  Уже было: {len(diff['already'])}")
+
+    def _load_subjects(self):
+        self._subjects = load_subjects()
+        self._filter(self.search_edit.text())
+
+    def _filter(self, query: str):
+        self.list_widget.clear()
+        q = query.strip().lower()
+        shown = [s for s in self._subjects if q in s.lower()] if q else self._subjects
+        for s in shown:
+            self.list_widget.addItem(s)
+        self.count_lbl.setText(
+            f"Предметов: {len(self._subjects)} | показано: {len(shown)}"
+        )
+
+    def _add_subject(self):
+        name = self.new_subj_edit.text().strip()
+        if not name:
+            return
+        if not add_subject(name):
+            QMessageBox.warning(self, "Дубликат", f"Предмет «{name}» уже существует.")
+            return
+        self._subjects = load_subjects()
+        self.new_subj_edit.clear()
+        self._filter(self.search_edit.text())
+        QMessageBox.information(self, "Добавлено", f"Предмет «{name}» добавлен в subjects.json.")
+
+    def _rename_subject(self):
+        item = self.list_widget.currentItem()
+        if not item:
+            QMessageBox.warning(self, "Не выбрано", "Выберите предмет для переименования.")
+            return
+        old_name = item.text()
+        new_name, ok = QInputDialog.getText(
+            self, "Переименовать предмет",
+            "Новое название для: " + old_name,
+            text=old_name
+        )
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        if new_name == old_name:
+            return
+        current = load_subjects()
+        if new_name in current:
+            QMessageBox.warning(self, "Дубликат", f"Предмет «{new_name}» уже существует.")
+            return
+        # 1. Переименовываем в subjects.json
+        rename_subject(old_name, new_name)
+        # 2. Обновляем в памяти
+        self._subjects = load_subjects()
+        # 3. Каскадно обновляем группы
+        groups = secure_store.get_groups()
+        for g in groups:
+            subjs = g.get("subjects", [])
+            if old_name in subjs:
+                g["subjects"] = [new_name if s == old_name else s for s in subjs]
+        secure_store.set_groups(groups)
+        # 4. Каскадно обновляем преподавателей
+        teachers = secure_store.get_teachers()
+        for t_data in teachers.values():
+            subjs = t_data.get("subjects", [])
+            if old_name in subjs:
+                t_data["subjects"] = [new_name if s == old_name else s for s in subjs]
+            assignments = t_data.get("group_assignments", {})
+            if old_name in assignments:
+                assignments[new_name] = assignments.pop(old_name)
+        secure_store.set_teachers(teachers)
+        # 5. Обновляем SQLite — таблица lessons хранит subject текстом
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect("vsgutu_grades.db")
+            cur  = conn.cursor()
+            cur.execute(
+                "UPDATE lessons SET subject=? WHERE subject=?",
+                (new_name, old_name)
+            )
+            rows_updated = cur.rowcount
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            rows_updated = 0
+        # 6. Обновляем список на экране
+        self._filter(self.search_edit.text())
+        QMessageBox.information(self, "Переименовано",
+            f"«{old_name}» → «{new_name}»\n"
+            f"Обновлено в subjects.json, у групп, преподавателей "
+            f"и в базе данных ({rows_updated} занятий).")
+
+    def _delete_subject(self):
+        item = self.list_widget.currentItem()
+        if not item:
+            QMessageBox.warning(self, "Не выбрано", "Выберите предмет для удаления.")
+            return
+        name = item.text()
+        groups   = secure_store.get_groups()
+        teachers = secure_store.get_teachers()
+        used_in_groups   = [g["name"] for g in groups if name in g.get("subjects",[])]
+        used_in_teachers = [t for t,d in teachers.items() if name in d.get("subjects",[])]
+        warn = ""
+        if used_in_groups:
+            warn += f"\nГруппы: {', '.join(used_in_groups)}"
+        if used_in_teachers:
+            warn += f"\nПреподаватели: {', '.join(used_in_teachers)}"
+        msg = f"Удалить предмет «{name}» из общего списка?"
+        if warn:
+            msg += f"\n\nПредмет используется:{warn}\n\nОн будет удалён из всех списков."
+        confirm = QMessageBox.question(self, "Удаление предмета", msg,
+            QMessageBox.Yes | QMessageBox.No)
+        if confirm != QMessageBox.Yes:
+            return
+        # 1. Удаляем из subjects.json
+        delete_subject(name)
+        # 2. Обновляем в памяти
+        self._subjects = load_subjects()
+        # 3. Каскадно удаляем из групп и преподавателей
+        for g in groups:
+            g["subjects"] = [s for s in g.get("subjects",[]) if s != name]
+        secure_store.set_groups(groups)
+        for t_data in teachers.values():
+            t_data["subjects"] = [s for s in t_data.get("subjects",[]) if s != name]
+        secure_store.set_teachers(teachers)
+        self._filter(self.search_edit.text())
+        QMessageBox.information(self, "Удалено", f"Предмет «{name}» удалён из subjects.json.")
+
+
 class AdminLoginPage(QWidget):
     """Страница входа в аккаунт администратора."""
     login_success = Signal()
@@ -1084,140 +1584,242 @@ class AdminLoginPage(QWidget):
             self.error_label.setText("Неверный логин или пароль.")
 
 
+class ImportConfirmDialog(QWidget):
+    """
+    Диалог подтверждения импорта — показывает что будет добавлено/пропущено.
+    Используется для ZIP, JSON предметов, студентов и т.д.
+    """
+    confirmed = Signal(str)  # 'merge' или 'replace'
+    cancelled = Signal()
+
+    def __init__(self, title: str, diff: dict, parent=None):
+        super().__init__(parent, Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(520)
+        self.setMinimumHeight(400)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        lbl = QLabel(title)
+        lbl.setStyleSheet("font-size:14px;font-weight:bold;")
+        lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        il = QVBoxLayout(inner)
+        il.setSpacing(4)
+
+        def section(heading, items, color):
+            if not items:
+                return
+            h = QLabel(heading)
+            h.setStyleSheet(f"font-weight:bold;color:{color};font-size:12px;")
+            il.addWidget(h)
+            for item in items[:30]:
+                if isinstance(item, dict):
+                    txt = f"  • {item.get('surname','')} {item.get('name','')}  [{item.get('group','')}]"
+                else:
+                    txt = f"  • {item}"
+                il.addWidget(QLabel(txt))
+            if len(items) > 30:
+                il.addWidget(QLabel(f"  ... и ещё {len(items)-30}"))
+
+        section(f"✅ Будет добавлено студентов: {len(diff.get('added_students',[]))}",
+                diff.get("added_students", []), "#7dd87d")
+        section(f"⚠ Уже существуют (пропустим): {len(diff.get('dup_students',[]))}",
+                diff.get("dup_students", []), "#e8a87c")
+        section(f"✅ Будет добавлено преподавателей: {len(diff.get('added_teachers',[]))}",
+                diff.get("added_teachers", []), "#7dd87d")
+        section(f"⚠ Преподаватели-дубли: {len(diff.get('dup_teachers',[]))}",
+                diff.get("dup_teachers", []), "#e8a87c")
+        section(f"✅ Новых групп: {len(diff.get('added_groups',[]))}",
+                diff.get("added_groups", []), "#7dd87d")
+        section(f"✅ Новых предметов: {len(diff.get('added_subjects',[]))}",
+                diff.get("added_subjects", []), "#7dd87d")
+        section(f"⚠ Предметы-дубли: {len(diff.get('dup_subjects',[]))}",
+                diff.get("dup_subjects", []), "#e8a87c")
+
+        if "db_lessons" in diff:
+            il.addWidget(QLabel(
+                f"📊 База оценок: {diff['db_lessons']} занятий, "
+                f"{diff.get('db_grades',0)} оценок"
+            ))
+
+        if not any(diff.get(k) for k in
+                   ["added_students","added_teachers","added_groups",
+                    "added_subjects","db_lessons"]):
+            il.addWidget(QLabel("Нет новых данных для добавления."))
+
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, 1)
+
+        btn_row = QHBoxLayout()
+
+        merge_btn = QPushButton("✅ Добавить новые (рекомендуется)")
+        merge_btn.setStyleSheet(STYLE_BTN_GREEN)
+        merge_btn.clicked.connect(lambda: self.confirmed.emit("merge"))
+        btn_row.addWidget(merge_btn)
+
+        replace_btn = QPushButton("♻ Заменить всё")
+        replace_btn.setStyleSheet(STYLE_BTN_RED)
+        replace_btn.clicked.connect(lambda: self.confirmed.emit("replace"))
+        btn_row.addWidget(replace_btn)
+
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.setStyleSheet(STYLE_BTN)
+        cancel_btn.clicked.connect(self.cancelled.emit)
+        btn_row.addWidget(cancel_btn)
+
+        layout.addLayout(btn_row)
+
+
+
 class TransferPage(QWidget):
-    """
-    Страница переноса данных между ПК.
-    Экспорт: сохраняет secure_data.enc в выбранное место.
-    Импорт: загружает файл с другого ПК и заменяет текущие данные.
-    Файл читается только программой — открыть вручную невозможно.
-    """
+    """Перенос данных — полный ZIP-бэкап или только настройки."""
 
     def __init__(self, back_cb, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 16)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
         layout.addWidget(make_back_btn(back_cb))
 
-        title = QLabel("📦 Перенос данных между компьютерами")
+        title = QLabel("📦 Перенос данных")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size:16px; font-weight:bold;")
+        title.setStyleSheet("font-size:16px;font-weight:bold;")
         layout.addWidget(title)
 
-        # ── Пояснение ──────────────────────────────────────────
         info = QLabel(
-            "Данные шифруются паролем администратора.\n"
-            "Файл можно перенести на любой ПК — программа его расшифрует.\n"
-            "Открыть файл вручную невозможно."
+            "Полный бэкап содержит всё: преподавателей, студентов, группы,\n"
+            "оценки, посещаемость и предметы — в одном файле."
         )
         info.setWordWrap(True)
         info.setStyleSheet(
-            "background-color:#1e2d1e; border:1px solid #2d5a2d;"
-            "border-radius:6px; padding:10px; color:#7dd87d; font-size:12px;"
+            "background:#1e2d1e;border:1px solid #2d5a2d;"
+            "border-radius:6px;padding:10px;color:#7dd87d;font-size:12px;"
         )
         layout.addWidget(info)
 
-        # ── Экспорт ────────────────────────────────────────────
-        exp_frame = QFrame()
-        exp_frame.setStyleSheet(
-            "QFrame{background-color:#252b40;border:1px solid #3d4460;border-radius:8px;}"
-        )
-        exp_layout = QVBoxLayout(exp_frame)
-        exp_layout.setContentsMargins(16, 12, 16, 12)
+        layout.addWidget(self._section(
+            "⬆ Полный экспорт (все данные)",
+            "Упаковывает в .zip: настройки, оценки, предметы.",
+            "💾 Экспортировать всё...", STYLE_BTN_GREEN, self._export_full
+        ))
+        layout.addWidget(self._section(
+            "⬇ Полный импорт (все данные)",
+            "Восстанавливает из .zip. Показывает что будет добавлено.",
+            "📂 Импортировать из .zip...", STYLE_BTN, self._import_full, warn=True
+        ))
 
-        exp_title = QLabel("⬆ Экспорт (отправить данные на другой ПК)")
-        exp_title.setStyleSheet("font-weight:bold; color:#c5d0f0;")
-        exp_layout.addWidget(exp_title)
+        sep = QLabel("── Только настройки (без оценок) ──")
+        sep.setAlignment(Qt.AlignCenter)
+        sep.setStyleSheet("color:#6080a0;font-size:11px;margin-top:4px;")
+        layout.addWidget(sep)
 
-        exp_desc = QLabel(
-            "Сохраняет зашифрованный файл данных.\n"
-            "Передайте его на другой ПК и импортируйте там."
-        )
-        exp_desc.setStyleSheet("color:#a0aac0; font-size:12px;")
-        exp_desc.setWordWrap(True)
-        exp_layout.addWidget(exp_desc)
-
-        export_btn = QPushButton("💾 Экспортировать данные...")
-        export_btn.setStyleSheet(STYLE_BTN_GREEN)
-        export_btn.setMinimumHeight(38)
-        export_btn.clicked.connect(self._export)
-        exp_layout.addWidget(export_btn)
-
-        layout.addWidget(exp_frame)
-
-        # ── Импорт ────────────────────────────────────────────
-        imp_frame = QFrame()
-        imp_frame.setStyleSheet(
-            "QFrame{background-color:#252b40;border:1px solid #3d4460;border-radius:8px;}"
-        )
-        imp_layout = QVBoxLayout(imp_frame)
-        imp_layout.setContentsMargins(16, 12, 16, 12)
-
-        imp_title = QLabel("⬇ Импорт (принять данные с другого ПК)")
-        imp_title.setStyleSheet("font-weight:bold; color:#c5d0f0;")
-        imp_layout.addWidget(imp_title)
-
-        imp_desc = QLabel(
-            "Загружает файл экспорта и заменяет текущие данные.\n"
-            "Текущие данные будут перезаписаны!"
-        )
-        imp_desc.setStyleSheet("color:#e8a87c; font-size:12px;")
-        imp_desc.setWordWrap(True)
-        imp_layout.addWidget(imp_desc)
-
-        import_btn = QPushButton("📂 Импортировать данные...")
-        import_btn.setStyleSheet(STYLE_BTN)
-        import_btn.setMinimumHeight(38)
-        import_btn.clicked.connect(self._import)
-        imp_layout.addWidget(import_btn)
-
-        layout.addWidget(imp_frame)
+        row = QHBoxLayout()
+        for lbl, fn in [("💾 Экспорт настроек...", self._export_settings),
+                         ("📂 Импорт настроек...", self._import_settings)]:
+            b = QPushButton(lbl); b.setStyleSheet(STYLE_BTN)
+            b.clicked.connect(fn); row.addWidget(b)
+        layout.addLayout(row)
         layout.addStretch()
 
-    def _export(self):
+    def _section(self, title, desc, btn_text, btn_style, cb, warn=False):
+        f = QFrame()
+        f.setStyleSheet("QFrame{background:#252b40;border:1px solid #3d4460;border-radius:8px;}")
+        fl = QVBoxLayout(f); fl.setContentsMargins(16,12,16,12); fl.setSpacing(6)
+        t = QLabel(title); t.setStyleSheet("font-weight:bold;color:#c5d0f0;"); fl.addWidget(t)
+        d = QLabel(desc); d.setStyleSheet(f"color:{'#e8a87c' if warn else '#a0aac0'};font-size:12px;")
+        d.setWordWrap(True); fl.addWidget(d)
+        b = QPushButton(btn_text); b.setStyleSheet(btn_style)
+        b.setMinimumHeight(38); b.clicked.connect(cb); fl.addWidget(b)
+        return f
+
+    def _export_full(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить файл данных", "vsgutu_data.enc",
-            "Зашифрованные данные (*.enc);;Все файлы (*)"
-        )
-        if not path:
-            return
-        ok, msg = secure_store.export_portable(path)
+            self, "Сохранить полный бэкап", "vsgutu_backup.zip",
+            "ZIP-архив (*.zip);;Все файлы (*)")
+        if not path: return
+        ok, msg = secure_store.export_full(path)
         if ok:
-            QMessageBox.information(
-                self, "Экспорт выполнен",
-                f"✅ {msg}\n\nПередайте этот файл на другой ПК\nи импортируйте его там через эту же страницу."
-            )
+            QMessageBox.information(self, "Экспорт выполнен", f"✅ {msg}")
         else:
-            QMessageBox.critical(self, "Ошибка экспорта", msg)
+            QMessageBox.critical(self, "Ошибка", msg)
 
-    def _import(self):
+    def _import_full(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(
-            self, "Открыть файл данных", "",
-            "Зашифрованные данные (*.enc);;Все файлы (*)"
-        )
-        if not path:
-            return
-        confirm = QMessageBox.question(
-            self, "Подтверждение",
-            "Текущие данные будут заменены данными из файла.\n\n"
-            "Продолжить?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if confirm != QMessageBox.Yes:
-            return
-        ok, msg = secure_store.import_portable(path)
+            self, "Открыть бэкап", "", "ZIP-архив (*.zip);;Все файлы (*)")
+        if not path: return
+        ok, msg, diff = secure_store.analyze_import(path)
+        if not ok:
+            QMessageBox.critical(self, "Ошибка", msg); return
+        dlg = ImportConfirmDialog("📦 Подтверждение полного импорта", diff, self)
+        dlg.confirmed.connect(lambda mode: self._do_import(diff, mode, dlg))
+        dlg.cancelled.connect(dlg.close)
+        dlg.show()
+
+    def _do_import(self, diff, mode, dlg):
+        dlg.close()
+        ok, msg = secure_store.apply_import(diff, mode)
         if ok:
-            QMessageBox.information(
-                self, "Импорт выполнен",
-                f"✅ {msg}\n\nПерезапустите программу чтобы данные применились."
-            )
+            QMessageBox.information(self, "Импорт выполнен",
+                f"✅ {msg}\n\nПерезапустите программу чтобы данные применились.")
         else:
-            QMessageBox.critical(
-                self, "Ошибка импорта",
-                f"❌ {msg}\n\nУбедитесь что файл создан этой программой."
-            )
+            QMessageBox.critical(self, "Ошибка", f"❌ {msg}")
+
+    def _export_settings(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить настройки", "vsgutu_settings.enc",
+            "Зашифрованные данные (*.enc);;Все файлы (*)")
+        if not path: return
+        ok, msg = secure_store.export_portable(path)
+        if ok:
+            QMessageBox.information(self, "Экспорт настроек", f"✅ {msg}")
+        else:
+            QMessageBox.critical(self, "Ошибка", msg)
+
+    def _import_settings(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Открыть настройки", "",
+            "Зашифрованные данные (*.enc);;Все файлы (*)")
+        if not path: return
+        # Анализируем enc как diff
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                test_data = __import__("json").load(f)
+            from security import MASTER_KEY_FIELD, DEFAULT_ADMIN_PW, _unlock_master_key
+            stored_pw = test_data.get("__admin_pw_hint__", DEFAULT_ADMIN_PW)
+            test_key  = _unlock_master_key(test_data[MASTER_KEY_FIELD], stored_pw)
+            tmp_store = type(secure_store).__new__(type(secure_store))
+            tmp_store._data = test_data; tmp_store._master_key = test_key
+            tmp_store._admin_pw = stored_pw
+
+            def _norm(s):
+                return tuple(sorted([s.get("surname","").lower(), s.get("name","").lower()]))
+            cur_k = {_norm(s) for s in secure_store.get_students()}
+            diff = {
+                "added_students": [s for s in tmp_store.get_students() if _norm(s) not in cur_k],
+                "dup_students":   [s for s in tmp_store.get_students() if _norm(s) in cur_k],
+                "added_teachers": [n for n in tmp_store.get_teachers() if n not in secure_store.get_teachers()],
+                "dup_teachers":   [n for n in tmp_store.get_teachers() if n in secure_store.get_teachers()],
+                "added_groups":   [g["name"] for g in tmp_store.get_groups()
+                                   if g["name"] not in {gg["name"] for gg in secure_store.get_groups()}],
+                "dup_groups":     [],
+                "_test_data": test_data, "_test_key": test_key, "_stored_pw": stored_pw,
+                "_tmp_db": None, "_tmp_subj": None,
+            }
+            dlg = ImportConfirmDialog("⚙ Импорт настроек", diff, self)
+            dlg.confirmed.connect(lambda mode: self._do_import(diff, mode, dlg))
+            dlg.cancelled.connect(dlg.close)
+            dlg.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
 
 
 class AdminDashboard(QWidget):
@@ -1247,6 +1849,7 @@ class AdminDashboard(QWidget):
             ("👨‍🏫 Преподаватели", self._open_teachers),
             ("🎓 Студенты", self._open_students),
             ("👥 Группы", self._open_groups),
+            ("📚 Учебные предметы", self._open_subjects_editor),
             ("➕ Добавить данные", self._open_add),
             ("🔑 Ввести API ключ", self._open_api_key),
             ("📦 Перенос данных", self._open_transfer),
@@ -1287,6 +1890,11 @@ class AdminDashboard(QWidget):
 
     def _open_api_key(self):
         page = ApiKeyPage(lambda: self.stack.setCurrentWidget(self.main_page))
+        self.stack.addWidget(page)
+        self.stack.setCurrentWidget(page)
+
+    def _open_subjects_editor(self):
+        page = SubjectsEditorPage(lambda: self.stack.setCurrentWidget(self.main_page))
         self.stack.addWidget(page)
         self.stack.setCurrentWidget(page)
 
