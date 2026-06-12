@@ -30,7 +30,7 @@ def _get_default_pw() -> str:
     return bytes(b ^ _k[i % len(_k)] for i, b in enumerate(_p)).decode()
 
 
-# ── Криптографические примитивы ───────────────────────────────
+#Криптографические примитивы
 
 def _derive_key(password: str, salt: bytes) -> bytes:
     """PBKDF2-HMAC-SHA256: пароль → 32-байтный ключ."""
@@ -83,7 +83,7 @@ def _unlock_master_key(locked: str, admin_password: str) -> bytes:
         return b""
 
 
-# ── Хранилище ─────────────────────────────────────────────────
+#Хранилище
 
 class SecureStorage:
     """
@@ -99,7 +99,7 @@ class SecureStorage:
         self._admin_pw   = _get_default_pw()
         self._load()
 
-    # ── Инициализация ─────────────────────────────────────────
+    #Инициализация
 
     def _load(self):
         if not os.path.exists(self.filepath):
@@ -145,7 +145,7 @@ class SecureStorage:
         self._data[MASTER_KEY_FIELD]    = _lock_master_key(self._master_key, new_password)
         self._save()
 
-    # ── Базовые операции ─────────────────────────────────────
+    #Базовые операции
 
     def set(self, key: str, value: str):
         raw = value.encode("utf-8")
@@ -171,7 +171,7 @@ class SecureStorage:
     def has(self, key: str) -> bool:
         return key in self._data and not key.startswith("__")
 
-    # ── Управление паролем администратора ─────────────────────
+    #Управление паролем администратора
 
     def change_admin_password(self, new_password: str):
         self._relock(new_password)
@@ -182,7 +182,7 @@ class SecureStorage:
     def get_admin_password(self) -> str:
         return self._admin_pw
 
-    # ── Высокоуровневые методы ────────────────────────────────
+    #Высокоуровневые методы
 
     def set_teachers(self, teachers: dict):
         self.set("teachers_data", json.dumps(teachers, ensure_ascii=False))
@@ -220,7 +220,7 @@ class SecureStorage:
     def has_any_data(self) -> bool:
         return bool(self.get_teachers() or self.get_groups() or self.get_students())
 
-    # ── Перенос данных между ПК ───────────────────────────────
+    #Перенос данных между ПК
 
     def export_portable(self, filepath: str) -> tuple:
         """
@@ -322,9 +322,7 @@ class SecureStorage:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(template, f, ensure_ascii=False, indent=2)
 
-    # ══════════════════════════════════════════════════════════
     #  ПОЛНЫЙ ЭКСПОРТ / ИМПОРТ (ZIP)
-    # ══════════════════════════════════════════════════════════
 
     def export_full(self, filepath: str) -> tuple:
         """Упаковывает secure_data.enc + vsgutu_grades.db + subjects.json в ZIP."""
@@ -332,7 +330,8 @@ class SecureStorage:
             import zipfile
             import shutil
             from subjects import SUBJECTS_FILE
-            db_path = "vsgutu_grades.db"
+            from core import DB_NAME
+            db_path = DB_NAME
             with zipfile.ZipFile(filepath, "w", zipfile.ZIP_DEFLATED) as zf:
                 if os.path.exists(self.filepath):
                     zf.write(self.filepath, "secure_data.enc")
@@ -500,8 +499,9 @@ class SecureStorage:
 
             if diff.get("_tmp_db") and os.path.exists(diff["_tmp_db"]):
                 import sqlite3 as _sq
+                from core import DB_NAME
                 sc = _sq.connect(diff["_tmp_db"])
-                dc = _sq.connect("vsgutu_grades.db")
+                dc = _sq.connect(DB_NAME)
                 rows_l = sc.execute(
                     "SELECT id,group_name,subject,type,number,topic,date,retake_date,hour FROM lessons"
                 ).fetchall()
@@ -573,3 +573,117 @@ class SecureStorage:
 
 # Глобальный экземпляр
 secure_store = SecureStorage()
+
+
+# ─────────────────────────────────────────────────────────────
+#  Хеширование паролей пользователей (PBKDF2-HMAC-SHA256)
+#  Формат строки: pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>
+# ─────────────────────────────────────────────────────────────
+import hmac as _hmac
+
+_PW_ITERS = 200_000
+
+
+def hash_password(password: str) -> str:
+    """Возвращает безопасный хеш пароля для хранения в БД."""
+    if password is None:
+        password = ""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PW_ITERS)
+    return f"pbkdf2_sha256${_PW_ITERS}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Проверяет пароль против сохранённого хеша. Защита от timing-атак."""
+    if not stored or "$" not in stored:
+        return False
+    try:
+        algo, iters_s, salt_hex, hash_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        iters = int(iters_s)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+        dk = hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"), salt, iters)
+        return _hmac.compare_digest(dk, expected)
+    except Exception:
+        return False
+
+
+# ─────────────────────────────────────────────────────────────
+#  Шифрование данных «на диске» (ФИО, журналы, API-ключ)
+#  Ключ хранится в ОТДЕЛЬНОМ файле, а не в базе. Поэтому, если
+#  кто-то скопирует только файл базы — данные останутся нечитаемы.
+#
+#  ВАЖНО: при работе нескольких ПК с общим PostgreSQL файл ключа
+#  (data.key) должен быть ОДИНАКОВЫМ на всех ПК колледжа.
+# ─────────────────────────────────────────────────────────────
+import sys as _sys
+
+_ENC_PREFIX = "enc:"
+_DATA_KEY_CACHE = None
+
+
+def _data_key_path() -> str:
+    if _sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:
+        base = os.path.expanduser("~")
+    d = os.path.join(base, "GradeBookAI")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "data.key")
+
+
+def get_data_key() -> bytes:
+    """32-байтный ключ шифрования. Читается из файла или создаётся при первом запуске."""
+    global _DATA_KEY_CACHE
+    if _DATA_KEY_CACHE is not None:
+        return _DATA_KEY_CACHE
+    path = _data_key_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                raw = f.read().strip()
+            key = base64.urlsafe_b64decode(raw)
+            if len(key) == 32:
+                _DATA_KEY_CACHE = key
+                return key
+        except Exception:
+            pass
+    key = secrets.token_bytes(32)
+    try:
+        with open(path, "wb") as f:
+            f.write(base64.urlsafe_b64encode(key))
+    except Exception as e:
+        print(f"[Security] не удалось сохранить ключ: {e}")
+    _DATA_KEY_CACHE = key
+    return key
+
+
+def is_encrypted(value) -> bool:
+    return isinstance(value, str) and value.startswith(_ENC_PREFIX)
+
+
+def encrypt_value(plaintext: str) -> str:
+    """Шифрует строку. Возвращает 'enc:<base64>'."""
+    if plaintext is None:
+        plaintext = ""
+    try:
+        ct = _encrypt_bytes(plaintext.encode("utf-8"), get_data_key())
+        return _ENC_PREFIX + base64.urlsafe_b64encode(ct).decode("ascii")
+    except Exception as e:
+        print(f"[Security] ошибка шифрования: {e}")
+        return plaintext
+
+
+def decrypt_value(value: str) -> str:
+    """Расшифровывает 'enc:...'. Обычный текст (старые данные) возвращает как есть."""
+    if not is_encrypted(value):
+        return value
+    try:
+        ct = base64.urlsafe_b64decode(value[len(_ENC_PREFIX):].encode("ascii"))
+        pt = _decrypt_bytes(ct, get_data_key())
+        return pt.decode("utf-8")
+    except Exception as e:
+        print(f"[Security] ошибка расшифровки: {e}")
+        return ""

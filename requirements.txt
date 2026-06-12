@@ -1,0 +1,14 @@
+# ── Обязательные зависимости ──
+PySide6>=6.5          # GUI-фреймворк (Qt for Python)
+openpyxl>=3.1         # импорт/экспорт Excel (.xlsx)
+requests>=2.31        # HTTP-запросы (OpenRouter и пр.)
+cryptography>=41.0    # шифрование Fernet + защита мастер-ключа
+
+# ── Опциональные ──
+# PostgreSQL-синхронизация между ПК колледжа (общая база):
+#   pip install psycopg2-binary
+# psycopg2-binary>=2.9
+
+# ИИ-маскот «Вектор» через GigaChat (отечественная LLM, РФ-серверы, 152-ФЗ):
+#   pip install gigachat
+# gigachat>=0.1.30

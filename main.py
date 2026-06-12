@@ -1,42 +1,69 @@
+"""
+main.py — единая точка входа GradeBookAI (Release 2.2).
+Модульная архитектура: main_window.MainAppWindow.
+"""
 import sys
 import os
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
-from GUI import MainAppWindow
+
+from main_window import MainAppWindow
+
+
+def _get_app_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def get_icon() -> QIcon:
-    """
-    Ищет иконку в папке с программой.
-    Порядок приоритета: icon.ico → icon.png → icon.jpg
-    Работает и в режиме .py и после сборки PyInstaller в .exe
-    """
-    # При сборке PyInstaller ресурсы лежат в sys._MEIPASS
-    if getattr(sys, "frozen", False):
-        base_dir = sys._MEIPASS
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
+    base_dir = _get_app_dir()
     for name in ("icon.ico", "icon.png", "icon.jpg"):
         path = os.path.join(base_dir, name)
         if os.path.exists(path):
             return QIcon(path)
+    return QIcon()
 
-    return QIcon()  # пустая иконка если файл не найден
 
+def main():
+    # Инициализация базы данных (SQLite + опционально PostgreSQL)
+    from core import DBManager
+    if DBManager.init():
+        print("✅ Работаем с PostgreSQL")
+    else:
+        print("ℹ️  Работаем с локальным SQLite")
 
-if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
 
-    # ── Иконка приложения (панель задач + заголовок окна + .exe)
+    # Шрифты Syne + DM Sans (фирменный стиль Synapse)
+    try:
+        from fonts import load_fonts
+        load_fonts()
+    except Exception as e:
+        print(f"[Fonts] {e}")
+
     icon = get_icon()
-    app.setWindowIcon(icon)          # иконка в панели задач Windows
+    app.setWindowIcon(icon)
 
     window = MainAppWindow()
-    window.setWindowIcon(icon)       # иконка в заголовке окна
+    window.setWindowIcon(icon)
     window.show()
-
     window.raise_()
     window.activateWindow()
 
+    # Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
+    def _on_quit():
+        try:
+            from core import DBManager, _syncer
+            DBManager.backup(reason="on_exit")
+            _syncer.stop()
+        except Exception as _e:
+            print(f"[exit] {_e}")
+    app.aboutToQuit.connect(_on_quit)
+
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
