@@ -411,24 +411,11 @@ class DBManager:
                     cur.execute(f"ALTER TABLE grades ADD COLUMN {col} TEXT DEFAULT ''")
                 except Exception:
                     pass
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS secure_store (
-                    key_name TEXT PRIMARY KEY, value_enc TEXT NOT NULL,
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
             cur.execute("CREATE TABLE IF NOT EXISTS subjects (name TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW())")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS kv_store (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL,
                     updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS pc_keys (
-                    id SERIAL PRIMARY KEY, key_value TEXT NOT NULL,
-                    key_hash TEXT NOT NULL UNIQUE, pc_name TEXT DEFAULT '',
-                    active BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
             cur.execute("""
@@ -535,20 +522,6 @@ class DBManager:
             print(f"[DBManager] Синхронизировано из PostgreSQL: {len(rows)} занятий")
         except Exception as e:
             print(f"[DBManager] Ошибка загрузки из PG: {e}")
-
-    @classmethod
-    def sync_to_pg(cls, sql_sqlite: str, params: tuple, sql_pg: str = None, params_pg: tuple = None):
-        """
-        Выполняет SQL в SQLite немедленно.
-        Добавляет задачу в очередь для асинхронного выполнения в PostgreSQL.
-        """
-        if sql_pg is None:
-            # Конвертируем ? → %s для PostgreSQL
-            sql_pg = sql_sqlite.replace("?", "%s")
-        if params_pg is None:
-            params_pg = params
-        if cls._use_pg:
-            _syncer.push(sql_pg, params_pg)
 
     @classmethod
     def upsert_lesson(cls, cur, vals: tuple):
@@ -725,15 +698,15 @@ class GradeBook:
             )
             self.lessons.append(l)
 
-        # ── Синхронизация студентов из GitHub ─────────────────────────────
-        # Студенты управляются через GitHub (GradeBookGitHub.get_students).
-        # TeacherDashboard._sync_students_from_gh() добавляет их в SQLite.
-        # ВАЖНО: НЕ удаляем студентов из SQLite здесь — это приводило к тому,
-        # что студенты, добавленные администратором через GitHub, исчезали
-        # при каждой перезагрузке журнала.
+        # ── Синхронизация студентов из общего хранилища (data_store) ───────
+        # Студентами управляет администратор через data_store (kv_store →
+        # PostgreSQL/SQLite). Здесь мы лишь дозаполняем локальную таблицу
+        # students теми, кого ещё нет. ВАЖНО: НЕ удаляем студентов из SQLite —
+        # иначе добавленные администратором студенты исчезали бы при каждой
+        # перезагрузке журнала.
         try:
-            from data_store import get_store as get_gh_store
-            gh = get_gh_store()
+            from data_store import get_store
+            gh = get_store()
             if gh:
                 gh_students = gh.get_students()
                 existing = set()

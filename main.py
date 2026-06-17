@@ -36,7 +36,23 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # Шрифты Syne + DM Sans (фирменный стиль Synapse)
+    #Проверка криптографии: без пакета cryptography шифрование ПДн недоступно.
+    #Раньше приложение молча откатывалось на слабый самописный шифр — для боевой
+    #эксплуатации (152-ФЗ) это недопустимо, поэтому честно останавливаемся.
+    try:
+        from security import CRYPTO_AVAILABLE
+    except Exception:
+        CRYPTO_AVAILABLE = False
+    if not CRYPTO_AVAILABLE:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "Не установлен компонент защиты",
+            "Для работы с персональными данными требуется пакет «cryptography».\n\n"
+            "Установите его командой:\n    pip install cryptography\n\n"
+            "Без него запуск невозможен: данные нельзя зашифровать надёжно.")
+        sys.exit(1)
+
+    #Шрифты Syne + DM Sans (фирменный стиль Synapse)
     try:
         from fonts import load_fonts
         load_fonts()
@@ -52,7 +68,7 @@ def main():
     window.raise_()
     window.activateWindow()
 
-    # Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
+    #Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
     def _on_quit():
         try:
             from core import DBManager, _syncer

@@ -28,6 +28,7 @@ from PySide6.QtCore import QThread, Signal as QSignal
 from core import DBManager
 from subjects import load_subjects
 from data_store import get_store as get_gh_store
+from audit import log_event
 
 
 # ── Фоновый воркер для сетевых/долгих запросов ──────────────────────
@@ -311,6 +312,8 @@ class AdminDashboard(QWidget):
         ts = gh.get_teachers() if gh else {}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(ts, f, ensure_ascii=False, indent=2)
+        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        log_event("export_personal_data", "admin", f"teachers={len(ts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(ts)} преподавателей")
 
     def _import_teachers(self):
@@ -451,6 +454,8 @@ class AdminDashboard(QWidget):
         sts = gh.get_students() if gh else []
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sts, f, ensure_ascii=False, indent=2)
+        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        log_event("export_personal_data", "admin", f"students={len(sts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(sts)}")
 
     def _import_students(self):
@@ -816,9 +821,47 @@ class AdminDashboard(QWidget):
         info.setWordWrap(True)
         info.setStyleSheet(f"background:{C['green_glow']};border:1px solid {C['border']};border-radius:8px;padding:10px;")
         gl.addWidget(info)
-        lay.addWidget(gc); lay.addStretch()
+        lay.addWidget(gc)
+
+        # ── Карточка: смена пароля администратора ──────────────────
+        sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
+        sl.addWidget(section_lbl("🔐 Пароль администратора"))
+        self._adm_old = field_input("Текущий пароль", password=True)
+        self._adm_new = field_input("Новый пароль (мин. 8 символов)", password=True)
+        self._adm_new2 = field_input("Повтор нового пароля", password=True)
+        for lab, wdg in [("ТЕКУЩИЙ ПАРОЛЬ", self._adm_old),
+                         ("НОВЫЙ ПАРОЛЬ", self._adm_new),
+                         ("ПОВТОР", self._adm_new2)]:
+            sl.addWidget(lbl(lab, 10, C['text3'])); sl.addWidget(wdg)
+        chg = btn("💾 Сменить пароль", "green"); chg.clicked.connect(self._change_admin_pw)
+        srow = QHBoxLayout(); srow.addWidget(chg); srow.addStretch(); sl.addLayout(srow)
+        lay.addWidget(sc)
+
+        lay.addStretch()
         w.setWidget(inner)
         self.pages["pg"] = w; self.stack.addWidget(w)
+
+    def _change_admin_pw(self):
+        """Смена пароля администратора. Меняется в общем конфиге → синхронизируется
+        на все ПК через PostgreSQL."""
+        gh = get_gh_store()
+        if not gh:
+            QMessageBox.critical(self, "Ошибка", "Хранилище недоступно"); return
+        old = self._adm_old.text()
+        new = self._adm_new.text()
+        new2 = self._adm_new2.text()
+        if not gh.check_admin_password(old):
+            QMessageBox.warning(self, "Ошибка", "Текущий пароль неверен"); return
+        if len(new) < 8:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль должен быть не короче 8 символов"); return
+        if new != new2:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль и повтор не совпадают"); return
+        if gh.set_admin_password(new):
+            log_event("admin_password_changed", "admin")
+            self._adm_old.clear(); self._adm_new.clear(); self._adm_new2.clear()
+            QMessageBox.information(self, "Готово", "Пароль администратора изменён.")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить новый пароль")
 
     def _refresh_pg(self):
         def _fetch():

@@ -1,18 +1,19 @@
 """
-auth_pages.py — Страницы аутентификации (LoginPage, AdminLoginPage)
+auth_pages.py — Страница аутентификации (LoginPage).
+
+Вход единый: студент / преподаватель / администратор определяются по логину и
+паролю автоматически. При первом запуске на главном ПК, если пароль администратора
+ещё не задан, форма предложит его создать (см. _prompt_admin_setup).
 """
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-    QStackedWidget, QMessageBox, QFrame, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QMessageBox, QFrame, QInputDialog
 )
 
 from styles import C
-from widgets import lbl, badge, btn, field_input
 from ui_components import HexLogoWidget, AnimatedBackground
-from utils import parse_logins
-from data_store import get_store as get_gh_store
 
 
 #  LOGIN PAGE (STUDENT & TEACHER)
@@ -29,10 +30,6 @@ class LoginPage(QWidget):
         super().__init__(parent)
         self.teachers_db   = teachers_db
         self._role         = "student"
-        self._secret_cnt   = 0
-        self._secret_timer = QTimer()
-        self._secret_timer.setSingleShot(True)
-        self._secret_timer.timeout.connect(lambda: setattr(self, "_secret_cnt", 0))
 
         # Animated background
         self._bg = AnimatedBackground(self)
@@ -115,13 +112,6 @@ class LoginPage(QWidget):
 
         outer.addWidget(c)
 
-        # Secret trigger for admin (invisible corner button)
-        self._secret = QPushButton(self)
-        self._secret.setFixedSize(14, 14)
-        self._secret.setStyleSheet("QPushButton{background:transparent;border:none;}")
-        self._secret.clicked.connect(self._secret_click)
-        self._secret.raise_()
-
     # ── Helper methods
     def _mk_label(self, text: str) -> QLabel:
         l = QLabel(text)
@@ -169,7 +159,6 @@ class LoginPage(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._bg.setGeometry(0, 0, self.width(), self.height())
-        self._secret.move(4, self.height() - 18)
 
     def _show_err(self, msg):
         self.err_lbl.setText(msg)
@@ -183,9 +172,24 @@ class LoginPage(QWidget):
         if not login:
             self._show_err("Введите логин")
             return
+
+        from data_store import get_store, AccountLocked
+        store = get_store()
+
+        # Первый запуск на хост-ПК: пароль администратора ещё не задан. Просим
+        # администратора задать его прямо сейчас. На остальных ПК конфиг приходит
+        # из PostgreSQL уже с хешем, поэтому эта ветка там не сработает.
+        if login == store.get_admin_login() and not store.has_admin_password():
+            self._prompt_admin_setup(store)
+            return
+
         try:
-            from data_store import get_store
-            res = get_store().authenticate(login, pw)
+            res = store.authenticate(login, pw)
+        except AccountLocked as e:
+            mins = e.seconds // 60 + 1
+            self._show_err(f"Слишком много неверных попыток. "
+                           f"Повторите через {mins} мин.")
+            return
         except Exception as e:
             self._show_err(f"Ошибка входа: {e}")
             return
@@ -202,83 +206,37 @@ class LoginPage(QWidget):
         elif role == "student":
             self.login_student.emit(res["stud"])
 
-    def _secret_click(self):
-        """Зарезервировано. Вход администратора — через обычную форму (логин/пароль)."""
-        pass
+    def _prompt_admin_setup(self, store):
+        """Диалог первичной установки пароля администратора (только хост-ПК)."""
+        QMessageBox.information(
+            self, "Первый запуск",
+            "Пароль администратора ещё не задан. Сейчас нужно его создать — "
+            "это делается один раз на главном ПК. Остальные компьютеры получат "
+            "доступ автоматически после синхронизации.")
+        pw1, ok = QInputDialog.getText(
+            self, "Пароль администратора",
+            "Придумайте пароль (не менее 8 символов):", QLineEdit.Password)
+        if not ok:
+            return
+        if len(pw1) < 8:
+            self._show_err("Пароль должен быть не короче 8 символов")
+            return
+        pw2, ok = QInputDialog.getText(
+            self, "Подтверждение", "Повторите пароль:", QLineEdit.Password)
+        if not ok:
+            return
+        if pw1 != pw2:
+            self._show_err("Пароли не совпадают")
+            return
+        if store.setup_admin_password(pw1):
+            from audit import log_event
+            log_event("admin_password_created", store.get_admin_login())
+            self.login_inp.clear()
+            self.pass_inp.clear()
+            QMessageBox.information(self, "Готово", "Пароль администратора создан.")
+            self.login_admin.emit()
+        else:
+            self._show_err("Не удалось сохранить пароль (возможно, он уже задан)")
 
     def update_teachers(self, db):
         self.teachers_db = db
-
-
-#  ADMIN LOGIN PAGE
-
-class AdminLoginPage(QWidget):
-    """Страница входа администратора"""
-    
-    from PySide6.QtCore import Signal as QSignal
-    login_success = QSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        
-        from widgets import card
-        
-        outer = QVBoxLayout(self)
-        outer.setAlignment(Qt.AlignCenter)
-        
-        c = card()
-        c.setFixedWidth(400)
-        lay = QVBoxLayout(c)
-        lay.setContentsMargins(36, 32, 36, 32)
-        lay.setSpacing(14)
-        
-        # Emoji icon
-        emoji = QLabel("🔐")
-        emoji.setAlignment(Qt.AlignCenter)
-        emoji.setStyleSheet("font-size:42px;")
-        lay.addWidget(emoji)
-        
-        # Title
-        t = QLabel("Администратор")
-        t.setAlignment(Qt.AlignCenter)
-        t.setStyleSheet(f"font-size:22px;font-weight:800;color:{C['text']};")
-        lay.addWidget(t)
-        
-        lay.addWidget(lbl("Введите пароль администратора", 12, C['text3']))
-        
-        self.pw = field_input("Пароль", password=True)
-        self.pw.returnPressed.connect(self._login)
-        lay.addWidget(self.pw)
-        
-        self.err = lbl("", 12, C['red'])
-        self.err.hide()
-        lay.addWidget(self.err)
-        
-        b_row = QHBoxLayout()
-        back = btn("← Назад", "back")
-        back.clicked.connect(lambda: self.pw.clear() or self.err.hide())
-        go   = btn("Войти", "green")
-        go.clicked.connect(self._login)
-        self.back_btn = back
-        b_row.addWidget(back)
-        b_row.addWidget(go)
-        lay.addLayout(b_row)
-        
-        outer.addWidget(c)
-
-    def _login(self):
-        pw = self.pw.text()
-        ok = False
-        try:
-            from data_store import get_store
-            ok = get_store().check_admin_password(pw)
-        except Exception:
-            ok = False
-
-        if ok:
-            self.pw.clear()
-            self.err.hide()
-            self.login_success.emit()
-        else:
-            self.err.setText("Неверный пароль")
-            self.err.show()

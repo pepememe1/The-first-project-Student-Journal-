@@ -23,11 +23,6 @@ from ui_components import Sidebar
 from ai_module import AIWidget, AIRequestThread
 from utils import get_api_key, get_groups, get_subjects_for_group, clean_ai_text
 
-try:
-    from security import secure_store
-except ImportError:
-    secure_store = None
-
 
 # ══════════════════════════════════════════════════════════════
 #  STUDENT DASHBOARD

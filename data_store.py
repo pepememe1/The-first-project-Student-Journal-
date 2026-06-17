@@ -22,8 +22,18 @@ from core import DBManager, _syncer
 from security import hash_password, verify_password, encrypt_value, decrypt_value
 from styles import DEFAULT_GROUPS
 
-DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
-DEFAULT_ADMIN_LOGIN    = "admin"
+# Логин администратора не секрет (секрет — пароль). Дефолтного ПАРОЛЯ больше нет:
+# раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
+# первом входе — это был бэкдор. Теперь пароль администратора задаётся вручную
+# при первом запуске на хост-ПК (см. setup_admin_password / auth_pages).
+DEFAULT_ADMIN_LOGIN = "admin"
+
+
+class AccountLocked(Exception):
+    """Логин временно заблокирован из-за серии неверных попыток (анти-брутфорс)."""
+    def __init__(self, seconds_left: int):
+        super().__init__(f"Вход заблокирован, осталось {seconds_left} с")
+        self.seconds = seconds_left
 
 
 # ─────────────────────────────────────────────────────────────
@@ -127,25 +137,29 @@ class LocalStore:
     def get_admin_login(self) -> str:
         return self._config().get("admin_login", DEFAULT_ADMIN_LOGIN)
 
+    def has_admin_password(self) -> bool:
+        """True, если пароль администратора уже задан (хеш есть в конфиге).
+        На хост-ПК при первом запуске вернёт False → нужен first-run диалог.
+        На остальных ПК конфиг приходит из PostgreSQL уже с хешем → True."""
+        return bool(self._config().get("admin_password_hash"))
+
     def set_admin_password(self, pw: str) -> bool:
         cfg = self._config()
         cfg["admin_password_hash"] = hash_password(pw)
         return _kv_set("config", cfg)
 
-    def check_admin_password(self, pw: str) -> bool:
-        cfg = self._config()
-        h = cfg.get("admin_password_hash")
-        if h:
-            return verify_password(pw, h)
-        # Первый запуск: хеша ещё нет — принимаем дефолтный пароль и сразу хешируем
-        if pw == DEFAULT_ADMIN_PASSWORD:
-            self.set_admin_password(pw)
-            return True
-        return False
+    def setup_admin_password(self, pw: str) -> bool:
+        """Первичная установка пароля администратора (только если он ещё не задан).
+        Защищает от перезаписи уже настроенного пароля на клиентских ПК."""
+        if self.has_admin_password():
+            return False
+        return self.set_admin_password(pw)
 
-    # Совместимость со старым кодом
-    def get_admin_password(self) -> str:
-        return ""  # пароль больше не отдаётся в открытом виде; см. check_admin_password
+    def check_admin_password(self, pw: str) -> bool:
+        h = self._config().get("admin_password_hash")
+        if not h:
+            return False  # пароль ещё не задан — вход только через first-run установку
+        return verify_password(pw, h)
 
     # ── Аутентификация (логин + пароль) ───────────────────────
     def authenticate(self, login: str, password: str) -> Optional[dict]:
@@ -155,11 +169,35 @@ class LocalStore:
           {"role": "teacher", "name": <ФИО>, "data": {...}}
           {"role": "student", "stud": {"f":..,"n":..,"g":..}}
         или None, если логин/пароль неверны.
+        Бросает AccountLocked, если логин временно заблокирован за перебор.
+
+        Здесь же — журнал аудита и анти-брутфорс: фиксируем каждый вход и блокируем
+        логин после серии неверных попыток (152-ФЗ / приказ ФСТЭК №21).
         """
+        from audit import (is_locked, register_failure, register_success,
+                            log_event)
+
         login = (login or "").strip()
         if not login:
             return None
 
+        locked, left = is_locked(login)
+        if locked:
+            log_event("login_locked", login, f"осталось {left}s")
+            raise AccountLocked(left)
+
+        result = self._authenticate_inner(login, password)
+
+        if result is None:
+            register_failure(login)
+            log_event("login_failed", login)
+        else:
+            register_success(login)
+            log_event("login_success", login, result.get("role", ""))
+        return result
+
+    def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:
+        """Сама проверка логина/пароля без аудита и блокировок."""
         if login == self.get_admin_login() and self.check_admin_password(password):
             return {"role": "admin"}
 

@@ -9,10 +9,9 @@ from PySide6.QtWidgets import (
 from core import APP_VERSION
 from styles import APP_STYLE, COLLEGE_NAME
 from ui_components import HeaderBar
-from auth_pages import LoginPage, AdminLoginPage
+from auth_pages import LoginPage
 from dashboards import StudentDashboard
 from utils import parse_logins
-from data_store import get_store as get_gh_store
 
 # Импорты для Teacher и Admin Dashboard (создадим отдельно)
 try:
@@ -58,18 +57,14 @@ class MainAppWindow(QMainWindow):
         wl.addWidget(self._stack, 1)
         self.setCentralWidget(wrapper)
 
-        # Страница входа студента/учителя
+        # Единая страница входа: роль (студент / преподаватель / администратор)
+        # определяется по логину и паролю автоматически. Отдельной страницы для
+        # администратора больше нет — вход у всех через одну форму.
         self._login = LoginPage(self.teachers_db)
         self._login.login_student.connect(self._on_student_login)
         self._login.login_teacher.connect(self._on_teacher_login)
         self._login.login_admin.connect(self._on_admin_login)
         self._stack.addWidget(self._login)
-
-        # Страница входа администратора
-        self._admin_login = AdminLoginPage()
-        self._admin_login.login_success.connect(self._on_admin_login)
-        self._admin_login.back_btn.clicked.connect(lambda: self._stack.setCurrentWidget(self._login))
-        self._stack.addWidget(self._admin_login)
 
         # Начальное состояние — страница входа
         self._stack.setCurrentWidget(self._login)
@@ -100,10 +95,6 @@ class MainAppWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть журнал:\n{e}")
 
-    def _on_admin_trigger(self):
-        """Переключиться на страницу входа администратора (скрытый триггер)"""
-        self._stack.setCurrentWidget(self._admin_login)
-
     def _on_admin_login(self):
         """Обработать вход администратора"""
         try:
@@ -111,10 +102,7 @@ class MainAppWindow(QMainWindow):
                 QMessageBox.warning(self, "Ошибка", "Модуль AdminDashboard не загружен")
                 return
 
-            print("[DEBUG] Создание AdminDashboard...")
             dash = AdminDashboard(back_to_login_cb=self._logout)
-            print("[DEBUG] AdminDashboard создан успешно")
-
             self._stack.addWidget(dash)
             self._stack.setCurrentWidget(dash)
             self._header.set_role("Администратор", "Администратор")
@@ -126,12 +114,12 @@ class MainAppWindow(QMainWindow):
 
     def _logout(self):
         """Выход из системы"""
-        # Удалить все виджеты, кроме входа и админ входа
-        while self._stack.count() > 2:
+        # Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
+        while self._stack.count() > 1:
             w = self._stack.widget(self._stack.count() - 1)
             self._stack.removeWidget(w)
             w.deleteLater()
-        
+
         self._stack.setCurrentWidget(self._login)
         self._header.hide()
         
