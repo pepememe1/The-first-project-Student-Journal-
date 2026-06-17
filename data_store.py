@@ -28,6 +28,17 @@ from styles import DEFAULT_GROUPS
 # при первом запуске на хост-ПК (см. setup_admin_password / auth_pages).
 DEFAULT_ADMIN_LOGIN = "admin"
 
+# Старый скомпрометированный дефолтный пароль. Его мог записать в базу старый код.
+# Новый код считает такой пароль НЕ заданным: вход с ним запрещён, а при попытке
+# войти администратором запускается принудительная установка нового пароля.
+# Здесь он нужен ТОЛЬКО чтобы распознать и отвергнуть наследие — это не бэкдор.
+_LEGACY_DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
+
+
+def _is_legacy_default(stored_hash: str) -> bool:
+    """True, если сохранённый хеш — это старый дефолтный пароль (его надо отвергнуть)."""
+    return bool(stored_hash) and verify_password(_LEGACY_DEFAULT_ADMIN_PASSWORD, stored_hash)
+
 
 class AccountLocked(Exception):
     """Логин временно заблокирован из-за серии неверных попыток (анти-брутфорс)."""
@@ -138,12 +149,19 @@ class LocalStore:
         return self._config().get("admin_login", DEFAULT_ADMIN_LOGIN)
 
     def has_admin_password(self) -> bool:
-        """True, если пароль администратора уже задан (хеш есть в конфиге).
-        На хост-ПК при первом запуске вернёт False → нужен first-run диалог.
-        На остальных ПК конфиг приходит из PostgreSQL уже с хешем → True."""
-        return bool(self._config().get("admin_password_hash"))
+        """True, если задан ВАЛИДНЫЙ пароль администратора (хеш есть и это не старый
+        дефолт). На хост-ПК при первом запуске — False → нужен first-run диалог.
+        На остальных ПК конфиг приходит из PostgreSQL уже с хешем → True.
+        Старый дефолтный пароль считаем «не заданным», чтобы заставить сменить его."""
+        h = self._config().get("admin_password_hash")
+        if not h or _is_legacy_default(h):
+            return False
+        return True
 
     def set_admin_password(self, pw: str) -> bool:
+        # Не даём установить старый скомпрометированный дефолт — иначе бэкдор вернётся.
+        if pw == _LEGACY_DEFAULT_ADMIN_PASSWORD:
+            return False
         cfg = self._config()
         cfg["admin_password_hash"] = hash_password(pw)
         return _kv_set("config", cfg)
@@ -157,8 +175,8 @@ class LocalStore:
 
     def check_admin_password(self, pw: str) -> bool:
         h = self._config().get("admin_password_hash")
-        if not h:
-            return False  # пароль ещё не задан — вход только через first-run установку
+        if not h or _is_legacy_default(h):
+            return False  # пароль не задан или это старый дефолт — вход запрещён
         return verify_password(pw, h)
 
     # ── Аутентификация (логин + пароль) ───────────────────────
