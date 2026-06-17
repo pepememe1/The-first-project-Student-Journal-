@@ -425,6 +425,10 @@ class DBManager:
                     active BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            # Общий ключ шифрования организации (завёрнутый в пароль установки) —
+            # см. keyvault.py. Хранится один на всю установку.
+            cur.execute("CREATE TABLE IF NOT EXISTS app_secrets "
+                        "(name TEXT PRIMARY KEY, value TEXT NOT NULL)")
             conn.commit()
             conn.close()
         except Exception as e:

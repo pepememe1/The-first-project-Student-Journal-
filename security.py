@@ -179,6 +179,15 @@ def _save_data_key(key: bytes, path: str):
         print(f"[Security] не удалось сохранить ключ: {e}")
 
 
+def set_data_key(key: bytes):
+    """Подменяет активный ключ шифрования на переданный (общий ключ организации
+    из keyvault). После вызова encrypt_value/decrypt_value используют именно его.
+    Вызывается один раз при старте, до любых операций с данными."""
+    global _DATA_KEY_CACHE
+    if key and len(key) == 32:
+        _DATA_KEY_CACHE = key
+
+
 def is_encrypted(value) -> bool:
     return isinstance(value, str) and value.startswith(_ENC_PREFIX)
 
