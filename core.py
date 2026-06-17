@@ -20,7 +20,7 @@ from typing import List, Dict, Optional
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
-APP_VERSION = "Release 2.4.2"
+APP_VERSION = "Release 2.5"
 
 import os as _os
 import sys as _sys
