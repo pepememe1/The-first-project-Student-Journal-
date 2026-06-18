@@ -991,8 +991,19 @@ class AdminDashboard(QWidget):
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
+                self._current_key = key
         finally:
             self._switching = False
+
+    def refresh(self):
+        """Перерисовать текущую вкладку — вызывается после фоновой синхронизации,
+        чтобы свежие данные с сервера сразу появились на экране."""
+        key = getattr(self, "_current_key", "dash")
+        if key == "dash":     self._refresh_dash()
+        elif key == "teachers": self._render_teachers()
+        elif key == "students": self._render_students()
+        elif key == "groups":   self._render_groups()
+        elif key == "subjects": self._render_subjects()
 
     def _refresh_students_combo(self):
         """Обновить список групп в фильтре студентов (фоновая загрузка)."""

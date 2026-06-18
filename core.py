@@ -326,7 +326,7 @@ class DBManager:
             if not row:
                 conn.close(); return False
             f, n, lid = row
-            now = datetime.now().isoformat(timespec="seconds")
+            now = datetime.now().isoformat()
             cur.execute("INSERT OR REPLACE INTO grades "
                         "(student_f,student_n,lesson_id,grade,updated_at,device) "
                         "VALUES (?,?,?,?,?,?)", (f, n, lid, chosen_grade, now, DEVICE_ID))
@@ -481,7 +481,7 @@ class DBManager:
                 pgc.execute("SELECT student_f, student_n, lesson_id, grade FROM grades")
                 remote_rows = [(a, b, c, d, "", "") for (a, b, c, d) in pgc.fetchall()]
 
-            now_iso = datetime.now().isoformat(timespec="seconds")
+            now_iso = datetime.now().isoformat()
             for rf, rn, rlid, rgrade, rat, rdev in remote_rows:
                 lc.execute("SELECT grade, COALESCE(updated_at,'') FROM grades "
                            "WHERE student_f=? AND student_n=? AND lesson_id=?",
@@ -534,7 +534,7 @@ class DBManager:
     def upsert_lesson(cls, cur, vals: tuple):
         """INSERT OR REPLACE для занятия в SQLite. Асинхронно в PG.
         Проставляем updated_at — нужно для синхронизации через API (LWW)."""
-        now = datetime.now().isoformat(timespec="seconds")
+        now = datetime.now().isoformat()
         cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", tuple(vals[:9]) + (now,))
         if cls._use_pg:
             _syncer.push("""
@@ -560,7 +560,7 @@ class DBManager:
         детерминированной (newest-wins по времени, а не «как повезёт»).
         """
         f, n, lid, grade = vals[:4]
-        now = datetime.now().isoformat(timespec="seconds")
+        now = datetime.now().isoformat()
         cur.execute(
             "INSERT OR REPLACE INTO grades "
             "(student_f,student_n,lesson_id,grade,updated_at,device) "

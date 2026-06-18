@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
+from .config import ALLOWED_ORIGINS
 from .routers import auth, sync
 
 
@@ -24,10 +25,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan)
 
-# CORS: на время разработки открыто. Для сайта потом сузим до его домена.
+# CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

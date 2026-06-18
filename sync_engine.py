@@ -19,7 +19,16 @@ from datetime import datetime
 
 
 def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now().isoformat()   # с микросекундами (см. data_store._now_iso)
+
+
+def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
+    """LWW с tie-break: применяем, если входящая метка позже; при РАВНОЙ метке —
+    применяем только удаление (надгробие не должно «воскресать» из-за устаревшего
+    живого пуша с той же меткой)."""
+    if inc_ts > cur_ts:
+        return True
+    return inc_ts == cur_ts and bool(inc_deleted)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -217,13 +226,14 @@ def collect_local() -> dict:
     from subjects import load_subjects
     st = get_store()
     cfg = st._config()
-    users = students_to_users(st.get_students()) + teachers_to_users(st.get_teachers())
+    # raw — со «надгробиями», чтобы удаления тоже уезжали на сервер
+    users = students_to_users(st.get_students_raw()) + teachers_to_users(st.get_teachers_raw())
     admin = admin_user_from_config(cfg, st.get_admin_login())
     if admin:
         users.append(admin)
     return {
         "users": users,
-        "groups": groups_to_rows(st.get_groups()),
+        "groups": groups_to_rows(st.get_groups_raw()),
         "subjects": subjects_to_rows(load_subjects()),
         "config": config_to_rows(cfg),
         "lessons": _collect_lessons(),
@@ -233,56 +243,56 @@ def collect_local() -> dict:
 
 def _merge_by_key(local_list: list, remote_list: list, key_fn) -> list:
     """Слияние двух списков по ключу: побеждает запись с более поздним updated_at.
-    Удалённые (deleted) — выкидываем. Возвращает объединённый список без надгробий."""
+    Надгробия (deleted=True) СОХРАНЯЕМ — они должны храниться локально и дальше
+    распространяться, иначе удалённая запись «воскреснет» на других ПК."""
     m = {key_fn(r): r for r in local_list}
     for r in remote_list:
         k = key_fn(r)
         loc = m.get(k)
-        if loc is None or (r.get("updated_at", "") >= loc.get("updated_at", "")):
+        if loc is None or _should_apply(r.get("updated_at", ""),
+                                        loc.get("updated_at", ""), r.get("deleted")):
             m[k] = r
-    return [r for r in m.values() if not r.get("deleted")]
+    return list(m.values())
 
 
 def apply_remote(changes: dict):
     """Применяет пришедшие с сервера изменения в локальное хранилище (LWW-слияние).
     Пишем с stamp=False — сохраняем серверные метки, чтобы синк не зациклился."""
-    from data_store import get_store, _kv_set
+    from data_store import get_store, _kv_set, _student_key
     from subjects import load_subjects, save_subjects
     st = get_store()
     users = changes.get("users", []) or []
 
-    # Студенты
+    # Студенты (с надгробиями: deleted-записи переносим как есть для LWW-слияния)
     if users:
-        loc = st.get_students()
-        rem = users_to_students([u for u in users if u.get("role") == "student"])
-        # переносим updated_at в студент-словарь для корректного LWW
-        for s, u in zip(rem, [u for u in users if u.get("role") == "student"]):
-            s["updated_at"] = u.get("updated_at", "")
-        key = lambda r: (r.get("login") or
-                         f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}")
-        st.set_students(_merge_by_key(loc, rem, key), stamp=False)
+        rem_s = [{
+            "surname": u.get("surname", ""), "name": u.get("name", ""),
+            "group": u.get("group_name", ""), "login": u.get("login", ""),
+            "password_hash": u.get("password_hash", ""),
+            "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
+        } for u in users if u.get("role") == "student"]
+        merged_s = _merge_by_key(st.get_students_raw(), rem_s, _student_key)
+        st.set_students(merged_s, stamp=False)
 
-        # Преподаватели (dict → список для слияния → обратно в dict)
-        loc_t = [dict(v, full_name=k) for k, v in st.get_teachers().items()]
-        rem_t = []
-        for u in users:
-            if u.get("role") != "teacher":
-                continue
-            rem_t.append({
-                "full_name": u.get("full_name", ""), "login": u.get("login", ""),
-                "password_hash": u.get("password_hash", ""),
-                "subjects": u.get("subjects") or [],
-                "group_assignments": u.get("group_assignments") or {},
-                "updated_at": u.get("updated_at", ""), "deleted": u.get("deleted", False),
-            })
+        # Преподаватели (dict ↔ список для слияния)
+        loc_t = [dict(v, full_name=k) for k, v in st.get_teachers_raw().items()]
+        rem_t = [{
+            "full_name": u.get("full_name", ""), "login": u.get("login", ""),
+            "password_hash": u.get("password_hash", ""),
+            "subjects": u.get("subjects") or [],
+            "group_assignments": u.get("group_assignments") or {},
+            "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
+        } for u in users if u.get("role") == "teacher"]
         merged_t = _merge_by_key(loc_t, rem_t, lambda r: r.get("full_name", ""))
         teachers = {r.pop("full_name"): r for r in merged_t}
         st.set_teachers(teachers, stamp=False)
 
-    # Группы
+    # Группы (с надгробиями)
     if "groups" in changes:
-        merged_g = _merge_by_key(st.get_groups(), rows_to_groups(changes["groups"]),
-                                 lambda r: r.get("name", ""))
+        rem_g = [{"name": r.get("name", ""), "subjects": r.get("subjects") or [],
+                  "updated_at": r.get("updated_at", ""), "deleted": bool(r.get("deleted", False))}
+                 for r in changes["groups"]]
+        merged_g = _merge_by_key(st.get_groups_raw(), rem_g, lambda r: r.get("name", ""))
         st.set_groups(merged_g, stamp=False)
 
     # Предметы (объединение множеств)
@@ -313,7 +323,7 @@ def _merge_lessons(remote: list):
             continue
         cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (l["id"],))
         row = cur.fetchone()
-        if row is None or l.get("updated_at", "") >= (row[0] or ""):
+        if row is None or _should_apply(l.get("updated_at", ""), row[0] or "", False):
             cur.execute(
                 "INSERT OR REPLACE INTO lessons "
                 "(id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) "
@@ -336,7 +346,7 @@ def _merge_grades(remote: list):
         cur.execute("SELECT COALESCE(updated_at,'') FROM grades "
                     "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
         row = cur.fetchone()
-        if row is None or g.get("updated_at", "") >= (row[0] or ""):
+        if row is None or _should_apply(g.get("updated_at", ""), row[0] or "", False):
             cur.execute(
                 "INSERT OR REPLACE INTO grades "
                 "(student_f,student_n,lesson_id,grade,updated_at,device) "

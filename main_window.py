@@ -2,9 +2,16 @@
 main_window.py — Главное окно приложения
 """
 
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QMessageBox
 )
+
+
+class _SyncBridge(QObject):
+    """Мост из фонового потока синхронизации в UI-поток. Сигнал, испускаемый из
+    другого потока, Qt безопасно доставит в слот UI (очередью)."""
+    synced = Signal()
 
 from core import APP_VERSION
 from styles import APP_STYLE, COLLEGE_NAME
@@ -68,6 +75,24 @@ class MainAppWindow(QMainWindow):
 
         # Начальное состояние — страница входа
         self._stack.setCurrentWidget(self._login)
+
+        # Авто-обновление UI после фоновой синхронизации (если включён сервер).
+        self._sync_bridge = _SyncBridge()
+        self._sync_bridge.synced.connect(self._on_synced)
+        try:
+            from sync_runner import set_on_synced
+            set_on_synced(self._sync_bridge.synced.emit)
+        except Exception as e:
+            print(f"[sync] мост обновления UI не подключён: {e}")
+
+    def _on_synced(self):
+        """Пришли свежие данные с сервера — обновляем текущий экран, если умеет."""
+        w = self._stack.currentWidget()
+        if hasattr(w, "refresh"):
+            try:
+                w.refresh()
+            except Exception as e:
+                print(f"[sync] обновление экрана: {e}")
 
     def _on_student_login(self, stud: dict):
         """Обработать вход студента"""

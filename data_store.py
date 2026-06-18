@@ -106,7 +106,9 @@ def _safe_name(name: str) -> str:
 
 def _now_iso() -> str:
     from datetime import datetime
-    return datetime.now().isoformat(timespec="seconds")
+    # С микросекундами: создание и последующее удаление записи в одну секунду
+    # должны различаться по времени, иначе LWW не отличит их.
+    return datetime.now().isoformat()
 
 
 def _stamp_records(new_records, old_records, key_fn):
@@ -128,6 +130,35 @@ def _stamp_records(new_records, old_records, key_fn):
     return new_records
 
 
+def _student_key(r) -> str:
+    return (r.get("login") or
+            f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}")
+
+
+def _merge_list_tombstones(new_live, old_raw, key_fn):
+    """Возвращает «сырой» список со штампами и надгробиями: записи, которые БЫЛИ,
+    а в новом списке исчезли, помечаются deleted=True (а не пропадают) — чтобы
+    удаление доехало до других ПК. Существующие надгробия сохраняются."""
+    now = _now_iso()
+    old_map = {key_fn(r): r for r in old_raw}
+    old_live = [r for r in old_raw if not r.get("deleted")]
+    _stamp_records(new_live, old_live, key_fn)
+    out, new_keys = [], set()
+    for r in new_live:
+        r["deleted"] = False
+        new_keys.add(key_fn(r))
+        out.append(r)
+    for k, r in old_map.items():
+        if k in new_keys:
+            continue
+        if r.get("deleted"):
+            out.append(r)                       # уже надгробие — сохраняем
+        else:
+            t = dict(r); t["deleted"] = True; t["updated_at"] = now
+            out.append(t)                       # было живым, исчезло → надгробие
+    return out
+
+
 # ─────────────────────────────────────────────────────────────
 #  Высокоуровневый интерфейс (совместим с прежним GitHub-хранилищем)
 # ─────────────────────────────────────────────────────────────
@@ -139,31 +170,40 @@ class LocalStore:
     """
 
     # ── Студенты ──────────────────────────────────────────────
+    # get_* отдают только ЖИВЫЕ записи (UI не видит надгробий).
+    # get_*_raw отдают всё, включая надгробия — нужно синхронизации.
     def get_students(self) -> list:
+        return [s for s in _kv_get("students", []) if not s.get("deleted")]
+
+    def get_students_raw(self) -> list:
         return _kv_get("students", [])
 
     def set_students(self, students: list, stamp: bool = True) -> bool:
         records = [self._hash_record(s) for s in students]
-        # stamp=True — обычная правка в UI (помечаем изменённые «сейчас»).
-        # stamp=False — применение данных, пришедших с сервера: сохраняем их метку,
-        # иначе синк зациклится (применил → переотправил → снова применил).
+        # stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
+        #   надгробиями, изменённые — штампуются.
+        # stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
+        #   сохраняем как есть, чтобы синк не зациклился.
         if stamp:
-            _stamp_records(records, self.get_students(),
-                           lambda r: (r.get("login") or
-                                      f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}"))
+            records = _merge_list_tombstones(records, _kv_get("students", []), _student_key)
         return _kv_set("students", records)
 
     # ── Преподаватели ─────────────────────────────────────────
     def get_teachers(self) -> dict:
+        return {k: v for k, v in _kv_get("teachers", {}).items() if not v.get("deleted")}
+
+    def get_teachers_raw(self) -> dict:
         return _kv_get("teachers", {})
 
     def set_teachers(self, teachers: dict, stamp: bool = True) -> bool:
         out = {name: self._hash_record(data) for name, data in teachers.items()}
         if stamp:
-            old = self.get_teachers()
+            old_raw = _kv_get("teachers", {})
+            old_live = {k: v for k, v in old_raw.items() if not v.get("deleted")}
             now = _now_iso()
             for name, data in out.items():
-                prev = old.get(name)
+                data["deleted"] = False
+                prev = old_live.get(name)
                 changed = (prev is None or
                            {k: v for k, v in data.items() if k != "updated_at"} !=
                            {k: v for k, v in prev.items() if k != "updated_at"})
@@ -171,15 +211,28 @@ class LocalStore:
                     data["updated_at"] = now
                 elif not data.get("updated_at"):
                     data["updated_at"] = prev.get("updated_at", now)
+            # надгробия: были, в новом наборе исчезли
+            for name, prev in old_raw.items():
+                if name in out:
+                    continue
+                if prev.get("deleted"):
+                    out[name] = prev
+                else:
+                    t = dict(prev); t["deleted"] = True; t["updated_at"] = now
+                    out[name] = t
         return _kv_set("teachers", out)
 
     # ── Группы ────────────────────────────────────────────────
     def get_groups(self) -> list:
+        return [g for g in _kv_get("groups", []) if not g.get("deleted")]
+
+    def get_groups_raw(self) -> list:
         return _kv_get("groups", [])
 
     def set_groups(self, groups: list, stamp: bool = True) -> bool:
         if stamp:
-            _stamp_records(groups, self.get_groups(), lambda r: r.get("name", ""))
+            groups = _merge_list_tombstones(groups, _kv_get("groups", []),
+                                            lambda r: r.get("name", ""))
         return _kv_set("groups", groups)
 
     # ── Журналы ───────────────────────────────────────────────

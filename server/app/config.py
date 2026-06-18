@@ -35,3 +35,12 @@ DATABASE_URL = os.environ.get("GRADEBOOK_DB_URL", "sqlite:///./gradebook_server.
 JWT_SECRET = os.environ.get("GRADEBOOK_JWT_SECRET", "dev-secret-change-me")
 JWT_ALG = "HS256"
 JWT_TTL_MIN = int(os.environ.get("GRADEBOOK_JWT_TTL_MIN", "720"))  # 12 часов
+
+# CORS: какие сайты-источники могут обращаться к API из браузера.
+# Десктопу CORS не нужен (это не браузер). Для будущего сайта укажите его домен,
+# напр. GRADEBOOK_ALLOWED_ORIGINS="https://journal.vsgutu.ru". По умолчанию "*"
+# (удобно для разработки; для прод-сайта лучше сузить до конкретного домена).
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("GRADEBOOK_ALLOWED_ORIGINS", "*").split(",")
+    if o.strip()
+] or ["*"]

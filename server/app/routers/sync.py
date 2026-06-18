@@ -35,7 +35,15 @@ PUSH_SCOPE = {
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.utcnow().isoformat()   # с микросекундами (для корректного LWW)
+
+
+def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
+    """LWW с tie-break: при равной метке применяем только удаление (надгробие не
+    воскрешается устаревшим живым пушем)."""
+    if inc_ts > cur_ts:
+        return True
+    return inc_ts == cur_ts and bool(inc_deleted)
 
 
 def _row_to_dict(row, model) -> dict:
@@ -83,7 +91,7 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
                 count += 1
             else:
                 cur_ts = getattr(existing, "updated_at") or ""
-                if inc_ts >= cur_ts:   # последний по времени побеждает
+                if _should_apply(inc_ts, cur_ts, item.get("deleted")):
                     for k, v in item.items():
                         if k in cols and k != pk:
                             setattr(existing, k, v)

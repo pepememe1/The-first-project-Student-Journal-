@@ -18,7 +18,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.utcnow().isoformat()
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
