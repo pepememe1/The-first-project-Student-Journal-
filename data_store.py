@@ -57,6 +57,14 @@ def _ensure_kv(cur):
     )
 
 
+# Модель хранения kv_store (студенты, преподаватели, конфиг, пароль-хеш админа):
+#   • Локально в SQLite значение ЗАШИФРОВАНО ключом этого ПК (DPAPI-привязка к
+#     учётной записи Windows) — защищает данные на украденном/чужом компьютере,
+#     при этом ничего не спрашивает у пользователя.
+#   • В общую базу PostgreSQL значение кладётся ОТКРЫТЫМ текстом — так его читает
+#     любой ПК колледжа без всякого ключа. Безопасность общей базы обеспечивают:
+#     учётная запись PostgreSQL (её пароль на диске под DPAPI), TLS-канал и
+#     размещение сервера в РФ. Пароли пользователей в любом случае только хешами.
 def _kv_get(key: str, default):
     conn = DBManager.get_conn()
     cur = conn.cursor()
@@ -66,6 +74,7 @@ def _kv_get(key: str, default):
     conn.close()
     if row:
         try:
+            # decrypt_value прозрачно вернёт и открытый текст (на случай миграции).
             return json.loads(decrypt_value(row[0]))
         except Exception:
             return default
@@ -73,18 +82,20 @@ def _kv_get(key: str, default):
 
 
 def _kv_set(key: str, value) -> bool:
-    raw = encrypt_value(json.dumps(value, ensure_ascii=False))
+    plain = json.dumps(value, ensure_ascii=False)
+    local_blob = encrypt_value(plain)        # локально (SQLite) — шифруем
     conn = DBManager.get_conn()
     cur = conn.cursor()
     _ensure_kv(cur)
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, raw))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, local_blob))
     conn.commit()
     conn.close()
     if DBManager.use_pg():
+        # В общую базу — ОТКРЫТЫЙ текст, чтобы читалось на всех ПК без ключа.
         _syncer.push(
             "INSERT INTO kv_store (key, value) VALUES (%s, %s) "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            (key, raw),
+            (key, plain),
         )
     return True
 

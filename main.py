@@ -25,67 +25,6 @@ def get_icon() -> QIcon:
     return QIcon()
 
 
-def _bootstrap_org_key():
-    """Готовит общий ключ шифрования организации (DEK) при старте.
-
-    На одиночном ПК (PostgreSQL не настроен) ничего не спрашивает — работает
-    локальный ключ. При общей базе PostgreSQL запрашивает «пароль установки»:
-    на первом ПК — создаёт, на остальных — вводится один раз для получения ключа.
-    """
-    from PySide6.QtWidgets import QMessageBox, QInputDialog, QLineEdit
-    import keyvault
-    import security
-
-    def _prompt_create():
-        QMessageBox.information(
-            None, "Пароль установки",
-            "Это первый компьютер с общей базой. Придумайте «пароль установки» — "
-            "общий секрет для всех ПК колледжа. Его нужно будет ввести по одному "
-            "разу на каждом компьютере. Это НЕ пароль администратора.")
-        p1, ok = QInputDialog.getText(None, "Пароль установки",
-                                      "Придумайте пароль установки (мин. 8 символов):",
-                                      QLineEdit.Password)
-        if not ok or len(p1) < 8:
-            if ok:
-                QMessageBox.warning(None, "Слишком короткий",
-                                    "Пароль установки должен быть не короче 8 символов.")
-            return None
-        p2, ok = QInputDialog.getText(None, "Подтверждение",
-                                      "Повторите пароль установки:", QLineEdit.Password)
-        if not ok or p1 != p2:
-            if ok:
-                QMessageBox.warning(None, "Не совпадает", "Пароли не совпадают.")
-            return None
-        return p1
-
-    def _prompt_enter():
-        p, ok = QInputDialog.getText(
-            None, "Пароль установки",
-            "Введите «пароль установки» колледжа (задан на первом ПК):",
-            QLineEdit.Password)
-        return p if ok else None
-
-    try:
-        dek, mode = keyvault.ensure_dek(prompt_create=_prompt_create,
-                                        prompt_enter=_prompt_enter)
-    except Exception as e:
-        print(f"[org-key] ошибка: {e}")
-        dek, mode = None, "error"
-
-    if mode == "org" and dek:
-        security.set_data_key(dek)
-        print("🔑 Общий ключ организации загружен")
-    elif mode == "error":
-        QMessageBox.critical(
-            None, "Нет ключа шифрования",
-            "Не удалось получить общий ключ организации (нет связи с сервером, "
-            "отмена или неверный пароль установки).\n\nБез него работать с общей "
-            "базой нельзя — иначе данные на разных ПК рассинхронизируются.\n\n"
-            "Проверьте подключение к серверу и повторите запуск.")
-        sys.exit(1)
-    # mode == "local" — PostgreSQL не настроен, используется локальный ключ.
-
-
 def main():
     # Инициализация базы данных (SQLite + опционально PostgreSQL)
     from core import DBManager
@@ -112,10 +51,6 @@ def main():
             "Установите его командой:\n    pip install cryptography\n\n"
             "Без него запуск невозможен: данные нельзя зашифровать надёжно.")
         sys.exit(1)
-
-    # Общий ключ шифрования организации (для общей базы PostgreSQL на нескольких ПК).
-    # Если PostgreSQL не настроен — шаг тихо пропускается (используется локальный ключ).
-    _bootstrap_org_key()
 
     #Шрифты Syne + DM Sans (фирменный стиль Synapse)
     try:

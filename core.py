@@ -28,12 +28,10 @@ import shutil as _shutil
 import socket as _socket
 
 
-# ─────────────────────────────────────────────────────────────
 #  Где лежит локальная база.
 #  ВАЖНО: SQLite ВСЕГДА на локальном диске машины — никогда на сетевой шаре
 #  (иначе блокировки и порча файла при работе нескольких ПК). Общее состояние
 #  между ПК — только через PostgreSQL. Папка — в профиле пользователя.
-# ─────────────────────────────────────────────────────────────
 def _local_data_dir() -> str:
     if _sys.platform == "win32":
         base = _os.environ.get("LOCALAPPDATA") or _os.environ.get("APPDATA") \
@@ -160,9 +158,7 @@ class PGSyncer:
 _syncer = PGSyncer()
 
 
-# ─────────────────────────────────────────────────────────────
 #  Менеджер подключений
-# ─────────────────────────────────────────────────────────────
 class DBManager:
     _use_pg = False
 
@@ -200,9 +196,7 @@ class DBManager:
             pass
         return conn
 
-    # ─────────────────────────────────────────────────────────
     #  Авто-бэкапы локальной базы
-    # ─────────────────────────────────────────────────────────
     @classmethod
     def backup(cls, reason: str = "") -> str:
         """
@@ -425,10 +419,6 @@ class DBManager:
                     active BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            # Общий ключ шифрования организации (завёрнутый в пароль установки) —
-            # см. keyvault.py. Хранится один на всю установку.
-            cur.execute("CREATE TABLE IF NOT EXISTS app_secrets "
-                        "(name TEXT PRIMARY KEY, value TEXT NOT NULL)")
             conn.commit()
             conn.close()
         except Exception as e:
@@ -512,11 +502,15 @@ class DBManager:
                     (rf, rn, rlid, lgrade, rgrade, rdev, rat, now_iso))
                 # локальное значение НЕ трогаем — препод решит вручную
 
-            # KV-хранилище (студенты/учителя/группы/конфиг) — PG источник правды
+            # KV-хранилище (студенты/учителя/группы/конфиг) — PG источник правды.
+            # В PG значения лежат ОТКРЫТЫМ текстом (читаются на всех ПК), а локально
+            # в SQLite мы шифруем их ключом этого ПК (DPAPI) — см. data_store._kv_set.
             try:
+                from security import encrypt_value
                 pgc.execute("SELECT key, value FROM kv_store")
                 for k, v in pgc.fetchall():
-                    lc.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (k, v))
+                    lc.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+                               (k, encrypt_value(v)))
             except Exception as e:
                 print(f"[DBManager] kv_store pull: {e}")
 

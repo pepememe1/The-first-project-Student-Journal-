@@ -25,7 +25,7 @@ except ImportError:
     AdminDashboard = None
 
 
-#  MAIN APP WINDOW
+#MAIN APP WINDOW
 
 class MainAppWindow(QMainWindow):
     """Главное окно приложения GradeBookAI"""

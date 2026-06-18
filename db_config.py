@@ -187,12 +187,17 @@ def get_pg_connection(cfg: dict = None):
         )
     if cfg is None:
         cfg = load_pg_config()
+    # sslmode: шифрование канала к серверу (152-ФЗ — защита ПДн при передаче).
+    # По умолчанию "prefer" (использует TLS, если сервер поддерживает; иначе обычное
+    # соединение — не ломает локальные стенды). Для боевого сервера задайте "require"
+    # в pg_config.json, чтобы соединение без TLS было запрещено.
     conn = psycopg2.connect(
         host=cfg.get("host", "localhost"),
         port=int(cfg.get("port", 5432)),
         database=cfg.get("database", "vsgutu_grades"),
         user=cfg.get("user", ""),
         password=cfg.get("password", ""),
+        sslmode=cfg.get("sslmode", "prefer"),
         connect_timeout=5
     )
     return conn

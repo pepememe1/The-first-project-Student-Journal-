@@ -110,6 +110,14 @@ class LoginPage(QWidget):
         self.err_lbl.hide()
         lay.addWidget(self.err_lbl)
 
+        # Подсказка: студенты и преподаватели входят по выданным логину/паролю.
+        hint = QLabel("Студенты и преподаватели входят по логину и паролю, "
+                      "которые выдал администратор.")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet(f"color:{C['text3']};font-size:11px;margin-top:8px;")
+        lay.addWidget(hint)
+
         outer.addWidget(c)
 
     # ── Helper methods
