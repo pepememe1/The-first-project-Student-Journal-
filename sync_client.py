@@ -24,12 +24,17 @@ class SyncClient:
         self.token = token
 
     def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        # ngrok-skip-browser-warning — чтобы бесплатные туннели (ngrok и пр.) не
+        # подсовывали HTML-страницу-предупреждение вместо JSON ответа API.
+        h = {"ngrok-skip-browser-warning": "true"}
+        if self.token:
+            h["Authorization"] = f"Bearer {self.token}"
+        return h
 
     def health(self) -> bool:
         """True, если сервер отвечает. Не кидает исключений."""
         try:
-            r = requests.get(f"{self.base_url}/health", timeout=3)
+            r = requests.get(f"{self.base_url}/health", headers=self._headers(), timeout=3)
             return r.status_code == 200
         except Exception:
             return False
@@ -38,7 +43,7 @@ class SyncClient:
         """Возвращает {access_token, role, name} и запоминает токен."""
         r = requests.post(f"{self.base_url}/auth/login",
                           json={"login": login, "password": password},
-                          timeout=DEFAULT_TIMEOUT)
+                          headers=self._headers(), timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         self.token = data.get("access_token")
@@ -50,7 +55,7 @@ class SyncClient:
         r = requests.post(f"{self.base_url}/auth/bootstrap-admin",
                           json={"login": login, "password": password,
                                 "full_name": full_name},
-                          timeout=DEFAULT_TIMEOUT)
+                          headers=self._headers(), timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         data = r.json()
         self.token = data.get("access_token")
