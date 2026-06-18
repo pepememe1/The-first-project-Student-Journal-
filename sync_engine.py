@@ -170,3 +170,188 @@ def config_from_pull(config_rows: list, users: list, admin_login: str = "admin")
             cfg["admin_password_hash"] = u["password_hash"]
             break
     return cfg
+
+
+# ─────────────────────────────────────────────────────────────
+#  Сбор локальных данных в формат API (push) и применение (pull)
+#  Локальное хранилище — через data_store/DBManager (offline-first не ломаем).
+# ─────────────────────────────────────────────────────────────
+def _collect_lessons() -> list:
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id,group_name,subject,type,number,topic,date,"
+                "retake_date,hour,COALESCE(updated_at,'') FROM lessons")
+    rows = cur.fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "group_name": r[1], "subject": r[2], "type": r[3],
+            "number": r[4], "topic": r[5], "date": r[6], "retake_date": r[7],
+            "hour": r[8], "extra": {}, "updated_at": r[9] or _now(), "deleted": False,
+        })
+    return out
+
+
+def _collect_grades() -> list:
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT student_f,student_n,lesson_id,grade,"
+                "COALESCE(updated_at,''),COALESCE(device,'') FROM grades")
+    rows = cur.fetchall()
+    conn.close()
+    out = []
+    for f, n, lid, grade, uat, dev in rows:
+        out.append({
+            "id": f"{f}|{n}|{lid}", "student_f": f, "student_n": n, "lesson_id": lid,
+            "grade": grade, "device": dev, "updated_at": uat or _now(), "deleted": False,
+        })
+    return out
+
+
+def collect_local() -> dict:
+    """Читает всё локальное состояние и переводит в формат API (для push)."""
+    from data_store import get_store
+    from subjects import load_subjects
+    st = get_store()
+    cfg = st._config()
+    users = students_to_users(st.get_students()) + teachers_to_users(st.get_teachers())
+    admin = admin_user_from_config(cfg, st.get_admin_login())
+    if admin:
+        users.append(admin)
+    return {
+        "users": users,
+        "groups": groups_to_rows(st.get_groups()),
+        "subjects": subjects_to_rows(load_subjects()),
+        "config": config_to_rows(cfg),
+        "lessons": _collect_lessons(),
+        "grades": _collect_grades(),
+    }
+
+
+def _merge_by_key(local_list: list, remote_list: list, key_fn) -> list:
+    """Слияние двух списков по ключу: побеждает запись с более поздним updated_at.
+    Удалённые (deleted) — выкидываем. Возвращает объединённый список без надгробий."""
+    m = {key_fn(r): r for r in local_list}
+    for r in remote_list:
+        k = key_fn(r)
+        loc = m.get(k)
+        if loc is None or (r.get("updated_at", "") >= loc.get("updated_at", "")):
+            m[k] = r
+    return [r for r in m.values() if not r.get("deleted")]
+
+
+def apply_remote(changes: dict):
+    """Применяет пришедшие с сервера изменения в локальное хранилище (LWW-слияние).
+    Пишем с stamp=False — сохраняем серверные метки, чтобы синк не зациклился."""
+    from data_store import get_store, _kv_set
+    from subjects import load_subjects, save_subjects
+    st = get_store()
+    users = changes.get("users", []) or []
+
+    # Студенты
+    if users:
+        loc = st.get_students()
+        rem = users_to_students([u for u in users if u.get("role") == "student"])
+        # переносим updated_at в студент-словарь для корректного LWW
+        for s, u in zip(rem, [u for u in users if u.get("role") == "student"]):
+            s["updated_at"] = u.get("updated_at", "")
+        key = lambda r: (r.get("login") or
+                         f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}")
+        st.set_students(_merge_by_key(loc, rem, key), stamp=False)
+
+        # Преподаватели (dict → список для слияния → обратно в dict)
+        loc_t = [dict(v, full_name=k) for k, v in st.get_teachers().items()]
+        rem_t = []
+        for u in users:
+            if u.get("role") != "teacher":
+                continue
+            rem_t.append({
+                "full_name": u.get("full_name", ""), "login": u.get("login", ""),
+                "password_hash": u.get("password_hash", ""),
+                "subjects": u.get("subjects") or [],
+                "group_assignments": u.get("group_assignments") or {},
+                "updated_at": u.get("updated_at", ""), "deleted": u.get("deleted", False),
+            })
+        merged_t = _merge_by_key(loc_t, rem_t, lambda r: r.get("full_name", ""))
+        teachers = {r.pop("full_name"): r for r in merged_t}
+        st.set_teachers(teachers, stamp=False)
+
+    # Группы
+    if "groups" in changes:
+        merged_g = _merge_by_key(st.get_groups(), rows_to_groups(changes["groups"]),
+                                 lambda r: r.get("name", ""))
+        st.set_groups(merged_g, stamp=False)
+
+    # Предметы (объединение множеств)
+    if "subjects" in changes:
+        cur = set(load_subjects())
+        save_subjects(sorted(cur | set(rows_to_subjects(changes["subjects"]))))
+
+    # Конфиг (ключи) + хеш админа
+    if "config" in changes or users:
+        new_cfg = config_from_pull(changes.get("config", []), users, st.get_admin_login())
+        cfg = st._config()
+        cfg.update(new_cfg)
+        _kv_set("config", cfg)
+
+    # Занятия и оценки
+    if changes.get("lessons"):
+        _merge_lessons(changes["lessons"])
+    if changes.get("grades"):
+        _merge_grades(changes["grades"])
+
+
+def _merge_lessons(remote: list):
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    for l in remote:
+        if l.get("deleted"):
+            continue
+        cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (l["id"],))
+        row = cur.fetchone()
+        if row is None or l.get("updated_at", "") >= (row[0] or ""):
+            cur.execute(
+                "INSERT OR REPLACE INTO lessons "
+                "(id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (l["id"], l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
+                 l.get("number", 0), l.get("topic", ""), l.get("date", ""),
+                 l.get("retake_date", ""), l.get("hour", 0), l.get("updated_at", "")))
+    conn.commit()
+    conn.close()
+
+
+def _merge_grades(remote: list):
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    for g in remote:
+        if g.get("deleted"):
+            continue
+        f, n, lid = g.get("student_f"), g.get("student_n"), g.get("lesson_id")
+        cur.execute("SELECT COALESCE(updated_at,'') FROM grades "
+                    "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
+        row = cur.fetchone()
+        if row is None or g.get("updated_at", "") >= (row[0] or ""):
+            cur.execute(
+                "INSERT OR REPLACE INTO grades "
+                "(student_f,student_n,lesson_id,grade,updated_at,device) "
+                "VALUES (?,?,?,?,?,?)",
+                (f, n, lid, g.get("grade", ""), g.get("updated_at", ""), g.get("device", "")))
+    conn.commit()
+    conn.close()
+
+
+def sync_once(client) -> bool:
+    """Один цикл синхронизации: отправить локальные изменения, забрать серверные.
+    Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код."""
+    # 1. Отправляем то, что вправе отправлять (роль ограничивает на сервере).
+    client.push(collect_local())
+    # 2. Тянем всё (для простоты v1 — полный pull; дельту по last_sync добавим позже).
+    data = client.pull(since="")
+    apply_remote(data.get("changes", {}))
+    return True

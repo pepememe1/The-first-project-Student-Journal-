@@ -790,6 +790,20 @@ class AdminDashboard(QWidget):
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
         lay.addWidget(title_lbl("База данных"))
 
+        # ── Карточка: сервер синхронизации (API) — основной способ ────────
+        from app_settings import get_api_url
+        ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16); al.setSpacing(10)
+        al.addWidget(section_lbl("🌐 Сервер синхронизации (рекомендуется)"))
+        al.addWidget(lbl("Адрес сервера колледжа. Прописывается один раз на ПК; "
+                         "учителя и студенты просто входят, данные подтягиваются сами.",
+                         11, C['text3']))
+        self._api_url = field_input("http://10.0.0.5:8000"); self._api_url.setText(get_api_url())
+        al.addWidget(self._api_url)
+        arow = QHBoxLayout()
+        asave = btn("💾 Сохранить адрес", "green"); asave.clicked.connect(self._save_api_url)
+        arow.addWidget(asave); arow.addStretch(); al.addLayout(arow)
+        lay.addWidget(ac)
+
         cfg = load_pg_config()
         gc = card(); gl = QVBoxLayout(gc); gl.setContentsMargins(18, 16, 18, 16); gl.setSpacing(10)
         gl.addWidget(section_lbl("🐘 PostgreSQL (сервер колледжа)"))
@@ -840,6 +854,17 @@ class AdminDashboard(QWidget):
         lay.addStretch()
         w.setWidget(inner)
         self.pages["pg"] = w; self.stack.addWidget(w)
+
+    def _save_api_url(self):
+        from app_settings import set_api_url
+        url = self._api_url.text().strip()
+        if set_api_url(url):
+            QMessageBox.information(
+                self, "Сохранено",
+                "Адрес сервера сохранён.\n\nПерезапустите программу, чтобы включить "
+                "синхронизацию. Если поле пустое — программа работает только локально.")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить адрес сервера")
 
     def _change_admin_pw(self):
         """Смена пароля администратора. Меняется в общем конфиге → синхронизируется

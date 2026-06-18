@@ -114,6 +114,12 @@ class MainAppWindow(QMainWindow):
 
     def _logout(self):
         """Выход из системы"""
+        # Останавливаем фоновую синхронизацию текущего пользователя.
+        try:
+            from sync_runner import stop as _sync_stop
+            _sync_stop()
+        except Exception:
+            pass
         # Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
         while self._stack.count() > 1:
             w = self._stack.widget(self._stack.count() - 1)

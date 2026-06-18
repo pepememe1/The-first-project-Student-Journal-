@@ -104,6 +104,30 @@ def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
 
 
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _stamp_records(new_records, old_records, key_fn):
+    """Проставляет updated_at=now только тем записям, что появились или изменились
+    (сравнение с прошлой версией по ключу, без учёта самого updated_at). Неизменные
+    сохраняют свою метку. Так синхронизация шлёт только реальные изменения, а не
+    весь список заново — корректный LWW между ПК без лишнего «шума»."""
+    now = _now_iso()
+    old_map = {key_fn(r): r for r in old_records}
+    for r in new_records:
+        prev = old_map.get(key_fn(r))
+        changed = (prev is None or
+                   {k: v for k, v in r.items() if k != "updated_at"} !=
+                   {k: v for k, v in prev.items() if k != "updated_at"})
+        if changed:
+            r["updated_at"] = now
+        elif not r.get("updated_at"):
+            r["updated_at"] = prev.get("updated_at", now)
+    return new_records
+
+
 # ─────────────────────────────────────────────────────────────
 #  Высокоуровневый интерфейс (совместим с прежним GitHub-хранилищем)
 # ─────────────────────────────────────────────────────────────
@@ -118,22 +142,44 @@ class LocalStore:
     def get_students(self) -> list:
         return _kv_get("students", [])
 
-    def set_students(self, students: list) -> bool:
-        return _kv_set("students", [self._hash_record(s) for s in students])
+    def set_students(self, students: list, stamp: bool = True) -> bool:
+        records = [self._hash_record(s) for s in students]
+        # stamp=True — обычная правка в UI (помечаем изменённые «сейчас»).
+        # stamp=False — применение данных, пришедших с сервера: сохраняем их метку,
+        # иначе синк зациклится (применил → переотправил → снова применил).
+        if stamp:
+            _stamp_records(records, self.get_students(),
+                           lambda r: (r.get("login") or
+                                      f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}"))
+        return _kv_set("students", records)
 
     # ── Преподаватели ─────────────────────────────────────────
     def get_teachers(self) -> dict:
         return _kv_get("teachers", {})
 
-    def set_teachers(self, teachers: dict) -> bool:
+    def set_teachers(self, teachers: dict, stamp: bool = True) -> bool:
         out = {name: self._hash_record(data) for name, data in teachers.items()}
+        if stamp:
+            old = self.get_teachers()
+            now = _now_iso()
+            for name, data in out.items():
+                prev = old.get(name)
+                changed = (prev is None or
+                           {k: v for k, v in data.items() if k != "updated_at"} !=
+                           {k: v for k, v in prev.items() if k != "updated_at"})
+                if changed:
+                    data["updated_at"] = now
+                elif not data.get("updated_at"):
+                    data["updated_at"] = prev.get("updated_at", now)
         return _kv_set("teachers", out)
 
     # ── Группы ────────────────────────────────────────────────
     def get_groups(self) -> list:
         return _kv_get("groups", [])
 
-    def set_groups(self, groups: list) -> bool:
+    def set_groups(self, groups: list, stamp: bool = True) -> bool:
+        if stamp:
+            _stamp_records(groups, self.get_groups(), lambda r: r.get("name", ""))
         return _kv_set("groups", groups)
 
     # ── Журналы ───────────────────────────────────────────────
@@ -223,6 +269,13 @@ class LocalStore:
         else:
             register_success(login)
             log_event("login_success", login, result.get("role", ""))
+            # Запускаем фоновую синхронизацию с сервером (если задан адрес API).
+            # Офлайн / без сервера — внутри просто ничего не делает.
+            try:
+                from sync_runner import start as _sync_start
+                _sync_start(login, password, result.get("role", ""))
+            except Exception as e:
+                print(f"[sync] не удалось запустить: {e}")
         return result
 
     def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:

@@ -166,6 +166,18 @@ class DBManager:
     def init(cls):
         """Вызывается при старте. Определяет режим и загружает данные из PG в SQLite."""
         cls._init_sqlite_tables()
+        # Режим синхронизации через API (бэкенд на сервере ВСГУТУ): прямой
+        # PostgreSQL с клиента НЕ используем — обмен идёт через сервер (см.
+        # sync_runner). Offline-first сохраняется: прога работает на SQLite, синк
+        # подхватывается фоном при наличии сети.
+        try:
+            from app_settings import get_api_url
+            if get_api_url():
+                cls._use_pg = False
+                print("ℹ️  Режим синхронизации через сервер (API)")
+                return False
+        except Exception:
+            pass
         try:
             from db_config import is_pg_configured
             # Синхронизация включается, как только админ прописал адрес сервера и
@@ -344,7 +356,8 @@ class DBManager:
             (id TEXT PRIMARY KEY, group_name TEXT, subject TEXT,
              type TEXT, number INTEGER, topic TEXT, date TEXT,
              retake_date TEXT DEFAULT '', hour INTEGER DEFAULT 0)""")
-        for col, default in [("retake_date", "TEXT DEFAULT ''"), ("hour", "INTEGER DEFAULT 0")]:
+        for col, default in [("retake_date", "TEXT DEFAULT ''"), ("hour", "INTEGER DEFAULT 0"),
+                             ("updated_at", "TEXT DEFAULT ''")]:
             try:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
             except Exception:
@@ -519,8 +532,10 @@ class DBManager:
 
     @classmethod
     def upsert_lesson(cls, cur, vals: tuple):
-        """INSERT OR REPLACE для занятия в SQLite. Асинхронно в PG."""
-        cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour) VALUES (?,?,?,?,?,?,?,?,?)", vals[:9])
+        """INSERT OR REPLACE для занятия в SQLite. Асинхронно в PG.
+        Проставляем updated_at — нужно для синхронизации через API (LWW)."""
+        now = datetime.now().isoformat(timespec="seconds")
+        cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", tuple(vals[:9]) + (now,))
         if cls._use_pg:
             _syncer.push("""
                 INSERT INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour)
