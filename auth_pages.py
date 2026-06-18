@@ -184,9 +184,14 @@ class LoginPage(QWidget):
         from data_store import get_store, AccountLocked
         store = get_store()
 
-        # Первый запуск на хост-ПК: пароль администратора ещё не задан. Просим
-        # администратора задать его прямо сейчас. На остальных ПК конфиг приходит
-        # из PostgreSQL уже с хешем, поэтому эта ветка там не сработает.
+        # Свежий ПК (у друга / новая установка): локальных данных ещё нет. Прежде
+        # чем проверять вход, пробуем залогиниться на сервер этими же кредами и
+        # подтянуть данные — иначе войти было бы нечем (нет ни пользователей, ни
+        # пароля админа). Офлайн / неверные креды — тихо пропускаем.
+        self._online_bootstrap(login, pw)
+
+        # Первый запуск на хост-ПК: пароль администратора не задан НИГДЕ (и
+        # локально, и не подтянулся с сервера выше). Просим задать его.
         if login == store.get_admin_login() and not store.has_admin_password():
             self._prompt_admin_setup(store)
             return
@@ -213,6 +218,32 @@ class LoginPage(QWidget):
             self.login_teacher.emit(res["name"], res["data"])
         elif role == "student":
             self.login_student.emit(res["stud"])
+
+    def _online_bootstrap(self, login, pw):
+        """Если задан адрес сервера — логинимся к API этими кредами и тянем данные
+        в локальную базу. Позволяет ПЕРВЫЙ вход на чистом ПК: пользователей и хеш
+        пароля админа берём с сервера. Офлайн/неверные креды — тихо пропускаем,
+        дальше сработает обычная локальная проверка."""
+        try:
+            from app_settings import get_api_url
+            url = get_api_url()
+            if not url:
+                return
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt
+            from sync_client import SyncClient
+            import sync_engine
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                c = SyncClient(url)
+                if not c.health():        # быстрая проверка (3с): офлайн → выходим,
+                    return                # чтобы вход не висел на таймауте логина
+                c.login(login, pw)        # неверные креды → исключение
+                sync_engine.sync_once(c)  # подтянуть данные с сервера в SQLite
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as e:
+            print(f"[login] онлайн-подтягивание пропущено: {e}")
 
     def _prompt_admin_setup(self, store):
         """Диалог первичной установки пароля администратора (только хост-ПК)."""
