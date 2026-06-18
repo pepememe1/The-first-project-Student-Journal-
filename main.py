@@ -4,6 +4,28 @@ main.py — единая точка входа GradeBookAI (Release 2.2).
 """
 import sys
 import os
+
+
+# Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
+# консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу
+# (UnicodeEncodeError). По всему проекту есть такие print — делаем вывод
+# неубиваемым ОДИН раз здесь, до любых сообщений.
+def _safe_stream(stream):
+    if stream is None:
+        try:
+            return open(os.devnull, "w", encoding="utf-8")
+        except Exception:
+            return None
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    return stream
+
+
+sys.stdout = _safe_stream(sys.stdout)
+sys.stderr = _safe_stream(sys.stderr)
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 
