@@ -33,7 +33,6 @@ import sys
 import json
 import uuid
 import base64
-import hashlib
 
 CONFIG_FILE = "pg_config.json"
 KEY_FILE    = "install_key.txt"   # хранится в APPDATA для единого ключа на ПК
@@ -110,11 +109,6 @@ def get_install_key() -> str:
     except Exception:
         pass
     return key
-
-
-def get_key_hash(key: str) -> str:
-    """SHA-256 хэш ключа для хранения в БД (не сам ключ)."""
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 #  Конфигурация PostgreSQL
@@ -219,20 +213,3 @@ def test_connection(cfg: dict = None) -> tuple:
         return False, str(e)
 
 
-#  Проверка активации ключа
-def is_key_activated(cfg: dict = None) -> bool:
-    """Проверяет, активирован ли ключ этого ПК в PostgreSQL."""
-    try:
-        conn = get_pg_connection(cfg)
-        cur = conn.cursor()
-        key = get_install_key()
-        key_hash = get_key_hash(key)
-        cur.execute(
-            "SELECT active FROM install_keys WHERE key_hash = %s",
-            (key_hash,)
-        )
-        row = cur.fetchone()
-        conn.close()
-        return bool(row and row[0])
-    except Exception:
-        return False

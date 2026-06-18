@@ -167,8 +167,11 @@ class DBManager:
         """Вызывается при старте. Определяет режим и загружает данные из PG в SQLite."""
         cls._init_sqlite_tables()
         try:
-            from db_config import is_pg_configured, is_key_activated
-            if is_pg_configured() and is_key_activated():
+            from db_config import is_pg_configured
+            # Синхронизация включается, как только админ прописал адрес сервера и
+            # пользователя БД. Отдельной «активации ключа ПК» нет — доступ и так
+            # ограничен учётной записью PostgreSQL.
+            if is_pg_configured():
                 cls._use_pg = True
                 cls._ensure_pg_tables()
                 cls._pull_from_pg()   # загружаем данные из PG в локальный SQLite
@@ -410,13 +413,6 @@ class DBManager:
                 CREATE TABLE IF NOT EXISTS kv_store (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL,
                     updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS install_keys (
-                    id SERIAL PRIMARY KEY, key_value TEXT NOT NULL,
-                    key_hash TEXT NOT NULL UNIQUE, pc_name TEXT DEFAULT '',
-                    active BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
             conn.commit()
