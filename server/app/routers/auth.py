@@ -4,7 +4,6 @@ auth.py — Авторизация: создание первого админи
 Offline-first: пользователей заводит админ в десктоп-проге, они синхронизируются
 на сервер уже хешами паролей. Логин через API/сайт работает с теми же паролями.
 """
-import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,8 +32,11 @@ def bootstrap_admin(body: BootstrapIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Администратор уже создан")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Пароль не короче 8 символов")
+    login = body.login.strip()
+    # Детерминированный id (admin:<login>): когда десктоп позже пришлёт админа
+    # через /sync, он обновит ЭТУ же строку, а не создаст дубликат.
     u = User(
-        id=str(uuid.uuid4()), role="admin", login=body.login.strip(),
+        id=f"admin:{login}", role="admin", login=login,
         password_hash=hash_password(body.password), full_name=body.full_name,
         updated_at=_now(),
     )
