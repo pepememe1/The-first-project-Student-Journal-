@@ -1,22 +1,27 @@
+# ВАЖНО: git НЕ поддерживает комментарии в КОНЦЕ строки с шаблоном —
+# такой «# ...» становится частью шаблона и ломает игнор. Комментарии — только
+# на отдельных строках (как здесь).
+
 # ── Рантайм-данные и секреты (НИКОГДА не коммитим) ──
-secure_data.enc          # зашифрованный мастер-ключ
-pg_config.json           # параметры подключения к PostgreSQL (пароль БД!)
-api_config.json          # локальный адрес сервера синхронизации (per-PC)
-install_key.txt          # ключ установки ПК
-data.key                 # ключ шифрования ПДн (защищён DPAPI, но не в Git)
-audit.log                # журнал событий безопасности
-login_throttle.json      # состояние анти-брутфорса
-*.db                     # локальные базы SQLite (vsgutu_grades.db)
+secure_data.enc
+pg_config.json
+api_config.json
+install_key.txt
+data.key
+audit.log
+login_throttle.json
+backups/
+*.db
 *.db-journal
 *.db-wal
 *.db-shm
-backups/                 # авто-бэкапы базы
 *.bak
 
 # ── Конфигурация окружения ──
 .env
 .env.*
-!.env.example          # шаблон коммитим (реальные секреты — нет)
+# шаблон .env.example коммитим (реальные секреты — нет)
+!.env.example
 
 # ── Python ──
 __pycache__/
