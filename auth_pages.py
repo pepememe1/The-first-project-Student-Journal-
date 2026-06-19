@@ -270,6 +270,14 @@ class LoginPage(QWidget):
         if store.setup_admin_password(pw1):
             from audit import log_event
             log_event("admin_password_created", store.get_admin_login())
+            # ВАЖНО: этот путь идёт мимо authenticate(), поэтому фоновую
+            # синхронизацию запускаем здесь вручную — иначе созданные админом
+            # данные не уйдут на сервер (и не создастся серверный админ).
+            try:
+                from sync_runner import start as _sync_start
+                _sync_start(store.get_admin_login(), pw1, "admin")
+            except Exception as e:
+                print(f"[sync] не удалось запустить после first-run: {e}")
             self.login_inp.clear()
             self.pass_inp.clear()
             QMessageBox.information(self, "Готово", "Пароль администратора создан.")

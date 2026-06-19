@@ -97,6 +97,13 @@ def _kv_set(key: str, value) -> bool:
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             (key, plain),
         )
+    # Разбудить фоновую синхронизацию с сервером (API-режим), чтобы изменение
+    # ушло сразу, а не через интервал. Офлайн/нет сервера — это безвредный no-op.
+    try:
+        from sync_runner import trigger as _sync_trigger
+        _sync_trigger()
+    except Exception:
+        pass
     return True
 
 

@@ -16,7 +16,7 @@ from app_settings import get_api_url
 
 
 class SyncManager:
-    def __init__(self, interval_sec: int = 60):
+    def __init__(self, interval_sec: int = 30):
         self._thread = None
         self._running = False
         self._client = None
@@ -25,6 +25,12 @@ class SyncManager:
         self._role = ""
         self._interval = interval_sec
         self._on_synced = None   # колбэк после успешного цикла (для обновления UI)
+        self._wake = threading.Event()   # «будильник» для немедленного синка
+
+    def trigger(self):
+        """Разбудить синкер прямо сейчас (например, после сохранения данных),
+        чтобы изменения ушли на сервер без ожидания интервала."""
+        self._wake.set()
 
     def set_on_synced(self, cb):
         """Колбэк, вызываемый после успешной синхронизации. UI подключает сюда
@@ -82,11 +88,9 @@ class SyncManager:
                 # Сеть/токен/сервер недоступны — не критично, повторим позже.
                 self._client = None   # сбросим, чтобы перелогиниться
                 print(f"[sync] отложено: {e}")
-            # Ждём интервал, но быстро реагируем на stop().
-            for _ in range(self._interval):
-                if not self._running:
-                    break
-                time.sleep(1)
+            # Ждём интервал ИЛИ «будильник» (trigger при изменении данных).
+            self._wake.wait(timeout=self._interval)
+            self._wake.clear()
 
 
 # Глобальный менеджер на процесс.
@@ -103,3 +107,8 @@ def stop():
 
 def set_on_synced(cb):
     _manager.set_on_synced(cb)
+
+
+def trigger():
+    """Немедленно разбудить синкер (после изменения данных)."""
+    _manager.trigger()
