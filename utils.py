@@ -7,10 +7,10 @@ import re
 import sys
 
 from styles import DEFAULT_GROUPS, DEFAULT_SUBJECTS
-from data_store import get_store as get_gh_store
+from data_store import get_store
 
 
-#  AI TEXT PROCESSING
+#AI TEXT PROCESSING
 
 def clean_ai_text(text: str) -> str:
     """Очистить текст ИИ от markdown и спецсимволов"""
@@ -26,14 +26,14 @@ def clean_ai_text(text: str) -> str:
     return text.strip()
 
 
-#  DATA RETRIEVAL FROM GITHUB STORAGE
+# ДОСТУП К ДАННЫМ ЧЕРЕЗ ХРАНИЛИЩЕ (data_store: локальный SQLite + синк с сервером)
 
 def get_groups():
-    """Получить список групп из GitHub или значения по умолчанию"""
-    gh = get_gh_store()
-    if gh:
+    """Список групп из хранилища или значения по умолчанию."""
+    store = get_store()
+    if store:
         try:
-            stored = gh.get_groups()
+            stored = store.get_groups()
             return stored if stored else DEFAULT_GROUPS
         except Exception as e:
             print(f"[ERROR] get_groups: {e}")
@@ -41,11 +41,11 @@ def get_groups():
 
 
 def get_subjects_for_group(group_name: str):
-    """Получить предметы для группы"""
-    gh = get_gh_store()
-    if gh:
+    """Предметы для группы."""
+    store = get_store()
+    if store:
         try:
-            for g in gh.get_groups():
+            for g in store.get_groups():
                 if g.get("name") == group_name:
                     return g.get("subjects", DEFAULT_SUBJECTS)
         except Exception as e:
@@ -54,22 +54,22 @@ def get_subjects_for_group(group_name: str):
 
 
 def get_api_key() -> str:
-    """Получить API ключ из GitHub"""
-    gh = get_gh_store()
-    if gh:
+    """API-ключ из хранилища."""
+    store = get_store()
+    if store:
         try:
-            return gh.get_api_key()
+            return store.get_api_key()
         except Exception as e:
             print(f"[ERROR] get_api_key: {e}")
     return ""
 
 
 def parse_logins():
-    """Получить базу учителей из GitHub"""
-    gh = get_gh_store()
-    if gh:
+    """База преподавателей из хранилища."""
+    store = get_store()
+    if store:
         try:
-            t = gh.get_teachers()
+            t = store.get_teachers()
             if t:
                 return t, ""
         except Exception as e:
