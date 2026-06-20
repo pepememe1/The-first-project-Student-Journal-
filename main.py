@@ -48,12 +48,10 @@ def get_icon() -> QIcon:
 
 
 def main():
-    # Инициализация базы данных (SQLite + опционально PostgreSQL)
+    # Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
+    # (см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
     from core import DBManager
-    if DBManager.init():
-        print("✅ Работаем с PostgreSQL")
-    else:
-        print("ℹ️  Работаем с локальным SQLite")
+    DBManager.init()
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
