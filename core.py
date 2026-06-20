@@ -8,15 +8,14 @@ core.py — Журнал ВСГУТУ.
   - Оффлайн: работаем с SQLite, при восстановлении сети — автосинхронизация.
 """
 import sqlite3
-import os
 import uuid
 import re
 import threading
 import queue
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from datetime import datetime
+from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
@@ -26,27 +25,13 @@ import os as _os
 import sys as _sys
 import shutil as _shutil
 import socket as _socket
+import app_paths
 
 
 #  Где лежит локальная база.
 #  ВАЖНО: SQLite ВСЕГДА на локальном диске машины — никогда на сетевой шаре
-#  (иначе блокировки и порча файла при работе нескольких ПК). Общее состояние
-#  между ПК — только через PostgreSQL. Папка — в профиле пользователя.
-def _local_data_dir() -> str:
-    if _sys.platform == "win32":
-        base = _os.environ.get("LOCALAPPDATA") or _os.environ.get("APPDATA") \
-            or _os.path.expanduser("~")
-    elif _sys.platform == "darwin":
-        base = _os.path.join(_os.path.expanduser("~"), "Library", "Application Support")
-    else:
-        base = _os.environ.get("XDG_DATA_HOME") \
-            or _os.path.join(_os.path.expanduser("~"), ".local", "share")
-    d = _os.path.join(base, "GradeBookAI")
-    try:
-        _os.makedirs(d, exist_ok=True)
-    except Exception:
-        d = _os.getcwd()
-    return d
+#  (иначе блокировки и порча файла при работе нескольких ПК). Где именно лежит
+#  папка — решает app_paths: рядом с .exe (портативно) или в профиле (dev).
 
 
 def _is_network_path(path: str) -> bool:
@@ -64,7 +49,7 @@ def _is_network_path(path: str) -> bool:
     return False
 
 
-DATA_DIR = _local_data_dir()
+DATA_DIR = app_paths.data_dir()
 LOCAL_DB = _os.path.join(DATA_DIR, "vsgutu_grades.db")
 BACKUP_DIR = _os.path.join(DATA_DIR, "backups")
 DEVICE_ID = (_socket.gethostname() or "pc")[:64]   # имя ПК — для детекта конфликтов

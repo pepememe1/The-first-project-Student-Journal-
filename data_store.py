@@ -415,11 +415,6 @@ def reset_store():
     _store = None
 
 
-# Совместимость с прежними именами из github_storage
-get_gh_store = get_store
-reset_gh_store = reset_store
-
-
 def is_configured() -> bool:
     """Хранилище доступно всегда (локальный SQLite). PG — опционально."""
     return True

@@ -122,13 +122,22 @@ _DATA_KEY_CACHE = None
 
 
 def _data_key_path() -> str:
+    # Ключ держим там же, где базу (см. app_paths): рядом с .exe (портативно) или
+    # в профиле (dev). Раньше ключ уезжал в %APPDATA% (Roaming), а база — в
+    # %LOCALAPPDATA% (Local): данные растекались по двум каталогам. Теперь — вместе.
+    import app_paths
+    return app_paths.data_file("data.key")
+
+
+def _legacy_data_key_path() -> str:
+    """Старое расположение ключа: %APPDATA% (Roaming)/GradeBookAI/data.key.
+    Нужно для бесшовной миграции — ключ переехал в общую папку данных (app_paths).
+    Без переноса существующая база, зашифрованная старым ключом, стала бы нечитаемой."""
     if sys.platform == "win32":
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
     else:
         base = os.path.expanduser("~")
-    d = os.path.join(base, "GradeBookAI")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "data.key")
+    return os.path.join(base, "GradeBookAI", "data.key")
 
 
 def get_data_key() -> bytes:
@@ -157,6 +166,26 @@ def get_data_key() -> bytes:
                 _save_data_key(legacy, path)
                 _DATA_KEY_CACHE = legacy
                 return legacy
+        except Exception:
+            pass
+
+    # Миграция со старого расположения (ключ переехал из Roaming в общую папку).
+    # Переносим один раз; старый файл не трогаем — на случай отката.
+    old = _legacy_data_key_path()
+    if old != path and os.path.exists(old):
+        try:
+            with open(old, "rb") as f:
+                raw = f.read().strip()
+            key = os_unprotect(raw)
+            if len(key) != 32:
+                try:
+                    key = base64.urlsafe_b64decode(raw)
+                except Exception:
+                    key = b""
+            if len(key) == 32:
+                _save_data_key(key, path)
+                _DATA_KEY_CACHE = key
+                return key
         except Exception:
             pass
 

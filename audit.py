@@ -16,37 +16,20 @@ audit.py — Журнал событий безопасности и защит�
 вход в программу, поэтому всё обёрнуто в try/except и логируется молча.
 """
 
-import os
-import sys
 import json
 import time
 from datetime import datetime
+
+import app_paths
 
 # ── Порог и время блокировки при переборе ──────────────────────
 MAX_FAILS = 5            # сколько неверных попыток допускаем
 LOCK_SECONDS = 300       # на сколько блокируем логин после превышения (5 минут)
 
 
-def _data_dir() -> str:
-    """Профиль пользователя (тот же, что у локальной базы)."""
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") \
-            or os.path.expanduser("~")
-    elif sys.platform == "darwin":
-        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
-    else:
-        base = os.environ.get("XDG_DATA_HOME") \
-            or os.path.join(os.path.expanduser("~"), ".local", "share")
-    d = os.path.join(base, "GradeBookAI")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        d = os.getcwd()
-    return d
-
-
-_AUDIT_LOG = os.path.join(_data_dir(), "audit.log")
-_THROTTLE_FILE = os.path.join(_data_dir(), "login_throttle.json")
+# Папка та же, что у локальной базы (см. app_paths): рядом с .exe или в профиле.
+_AUDIT_LOG = app_paths.data_file("audit.log")
+_THROTTLE_FILE = app_paths.data_file("login_throttle.json")
 
 
 # ─────────────────────────────────────────────────────────────

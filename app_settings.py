@@ -12,8 +12,9 @@ app_settings.py — Локальные настройки ПК (НЕ синхр�
 штатный режим, не ошибка).
 """
 import os
-import sys
 import json
+
+import app_paths
 
 # ⚙️ Боевая сборка: впишите адрес сервера ВСГУТУ, напр. "http://10.0.0.5:8000".
 DEFAULT_API_URL = ""
@@ -21,16 +22,10 @@ DEFAULT_API_URL = ""
 API_CONFIG_FILE = "api_config.json"
 
 
-def _app_dir() -> str:
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 def get_api_url() -> str:
     """Адрес сервера синхронизации или '' (тогда — офлайн без сервера)."""
     try:
-        p = os.path.join(_app_dir(), API_CONFIG_FILE)
+        p = app_paths.app_file(API_CONFIG_FILE)
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8") as f:
                 url = (json.load(f) or {}).get("api_url", "")
@@ -47,7 +42,7 @@ def get_api_url() -> str:
 def set_api_url(url: str) -> bool:
     """Сохраняет адрес сервера в api_config.json рядом с программой."""
     try:
-        p = os.path.join(_app_dir(), API_CONFIG_FILE)
+        p = app_paths.app_file(API_CONFIG_FILE)
         with open(p, "w", encoding="utf-8") as f:
             json.dump({"api_url": (url or "").strip()}, f, ensure_ascii=False, indent=2)
         return True

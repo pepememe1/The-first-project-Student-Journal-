@@ -35,7 +35,7 @@ import uuid
 import base64
 
 CONFIG_FILE = "pg_config.json"
-KEY_FILE    = "install_key.txt"   # хранится в APPDATA для единого ключа на ПК
+KEY_FILE    = "install_key.txt"   # служебный, в папке данных (см. app_paths)
 
 
 # ── Защита пароля БД на диске (DPAPI) ───────────────────────────
@@ -63,26 +63,12 @@ def _decrypt_pw(enc: str) -> str:
         print(f"[db_config] не удалось расшифровать пароль БД: {e}")
         return ""
 
-#  Определение папок
-def _get_app_dir() -> str:
-    """Папка рядом с .exe / main.py — для pg_config.json."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+#  Расположение файлов — через единый app_paths (рядом с .exe или в профиле).
+import app_paths
 
-def _get_data_dir() -> str:
-    """Папка данных пользователя (APPDATA\\GradeBookAI) — для install_key.txt."""
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA", os.path.expanduser("~"))
-    else:
-        base = os.path.expanduser("~")
-    app_dir = os.path.join(base, "GradeBookAI")
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
-
-_APP_DIR = _get_app_dir()
-_CONFIG_PATH = os.path.join(_APP_DIR, CONFIG_FILE)
-_KEY_PATH    = os.path.join(_get_data_dir(), KEY_FILE)  # APPDATA\GradeBookAI\install_key.txt
+_APP_DIR = app_paths.app_dir()
+_CONFIG_PATH = app_paths.app_file(CONFIG_FILE)        # pg_config.json — правится руками
+_KEY_PATH    = app_paths.data_file(KEY_FILE)          # install_key.txt — служебный
 
 
 #  Ключ установки (уникален для каждого ПК)
