@@ -69,9 +69,7 @@ class LLMProvider:
         return True
 
 
-# ─────────────────────────────────────────────────────────────
-#  Офлайн-шаблонизатор (по умолчанию и как фолбэк)
-# ─────────────────────────────────────────────────────────────
+#Офлайн-шаблонизатор (по умолчанию и как фолбэк)
 class OfflineTemplateProvider(LLMProvider):
     """
     Никакой сети. Факты уже сформулированы человекочитаемо в intents (facts_text);
@@ -87,9 +85,7 @@ class OfflineTemplateProvider(LLMProvider):
         return friendly_wrap(intent or "average", facts_text, role)
 
 
-# ─────────────────────────────────────────────────────────────
-#  GigaChat (отечественная облачная LLM, scope B2B)
-# ─────────────────────────────────────────────────────────────
+#GigaChat (отечественная облачная LLM, scope B2B)
 class GigaChatProvider(LLMProvider):
     """
     Требует пакет gigachat (pip install gigachat) и ключ авторизации B2B.
@@ -150,9 +146,7 @@ class GigaChatProvider(LLMProvider):
         return resp.choices[0].message.content.strip()
 
 
-# ─────────────────────────────────────────────────────────────
-#  Локальная модель через ollama (ничего наружу не уходит)
-# ─────────────────────────────────────────────────────────────
+#Локальная модель через ollama (ничего наружу не уходит)
 class LocalModelProvider(LLMProvider):
     name = "local"
 
@@ -194,9 +188,7 @@ class LocalModelProvider(LLMProvider):
         return r.json()["message"]["content"].strip()
 
 
-# ─────────────────────────────────────────────────────────────
 #  Фабрика
-# ─────────────────────────────────────────────────────────────
 def get_provider(config: Optional[dict] = None) -> LLMProvider:
     """
     config (из настроек, хранится в kv_store['config']):

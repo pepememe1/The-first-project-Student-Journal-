@@ -18,14 +18,14 @@ from PySide6.QtWidgets import (
 
 from styles import C, BTN
 from widgets import (
-    lbl, title_lbl, section_lbl, btn, combo, card, separator, stat_card
+    lbl, title_lbl, section_lbl, btn, combo, card, separator, stat_card,
+    vector_unavailable_widget
 )
 from ui_components import Sidebar
-from ai_module import AIWidget
 from utils import get_groups
 
 from core import GradeBook, Student
-from data_store import get_store as get_gh_store
+from data_store import get_store
 
 
 class TeacherDashboard(QWidget):
@@ -59,7 +59,7 @@ class TeacherDashboard(QWidget):
         self.sidebar.set_active("journal")
         self._init_selectors()
 
-        # ── Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯) ──
+        #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
         try:
             from vector.widget import VectorPanel, VectorHost
             eng = getattr(self, "vector_engine", None)
@@ -84,7 +84,7 @@ class TeacherDashboard(QWidget):
     def _build_journal(self):
         w = QWidget()
         lay = QVBoxLayout(w); lay.setContentsMargins(20, 18, 20, 18); lay.setSpacing(10)
-        # Заголовок
+        #Заголовок
         hdr = QHBoxLayout()
         hdr.addWidget(title_lbl("Журнал преподавателя", 20), 1)
         self._subj_combo = combo(self.teacher_data.get("subjects", []))
@@ -96,7 +96,7 @@ class TeacherDashboard(QWidget):
         hdr.addWidget(lbl("Предмет:", 12, C['text3'])); hdr.addWidget(self._subj_combo)
         hdr.addWidget(lbl("Группа:",  12, C['text3'])); hdr.addWidget(self._group_combo)
         lay.addLayout(hdr)
-        # Кнопки
+        #Кнопки
         btn_row = QHBoxLayout(); btn_row.setSpacing(6)
         for txt, style, cb in [
             ("+ Лекция/Практика", "green",  self._add_lesson),
@@ -107,7 +107,7 @@ class TeacherDashboard(QWidget):
             ("📥 Импорт",         "ghost",  self._import_excel),
         ]:
             b = btn(txt, style); b.clicked.connect(cb); btn_row.addWidget(b)
-        # индикатор конфликтов синхронизации (виден, только если они есть)
+        #индикатор конфликтов синхронизации (виден, только если они есть)
         self._conflict_btn = btn("⚠ Конфликты", "blue")
         self._conflict_btn.clicked.connect(self._open_conflicts)
         self._conflict_btn.hide()
@@ -115,7 +115,7 @@ class TeacherDashboard(QWidget):
         btn_row.addStretch()
         lay.addLayout(btn_row)
         self._refresh_conflicts_badge()
-        # Таблица
+        #Таблица
         self.t_table = QTableWidget()
         self.t_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.t_table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
@@ -132,7 +132,7 @@ class TeacherDashboard(QWidget):
         if subjects:
             ga  = self.teacher_data.get("group_assignments", {})
             grp = ga.get(subjects[0], "")
-            # get_groups() может вернуть строки или dict — нормализуем
+            #get_groups() может вернуть строки или dict — нормализуем
             raw_groups = get_groups()
             group_names = [
                 g["name"] if isinstance(g, dict) else str(g)
@@ -159,24 +159,24 @@ class TeacherDashboard(QWidget):
         group = self._group_combo.currentText()
         if not subj or not group: return
         self.book = GradeBook(group, subj)
-        # Вектор отвечает по той группе/предмету, что открыты сейчас
+        #Вектор отвечает по той группе/предмету, что открыты сейчас
         if getattr(self, "vector_engine", None):
             self.vector_engine.scope.group = group
             self.vector_engine.scope.subject = subj
-        self._sync_students_from_gh()
+        self._sync_students_from_store()
         self._update_table()
 
-    def _sync_students_from_gh(self):
-        """Подтянуть студентов из GitHub и добавить недостающих в журнал."""
+    def _sync_students_from_store(self):
+        """Подтянуть студентов из общего хранилища и добавить недостающих в журнал."""
         if not self.book: return
-        gh = get_gh_store()
-        if not gh: return
+        store = get_store()
+        if not store: return
         try:
-            gh_students = gh.get_students()
+            known_students = store.get_students()
             group = self.book.group
             existing = {s.f.lower() for s in self.book.spisok_stud}
             added = False
-            for s in gh_students:
+            for s in known_students:
                 if s.get("group", "") != group: continue
                 surname = s.get("surname", "")
                 if surname.lower() not in existing:
@@ -187,7 +187,7 @@ class TeacherDashboard(QWidget):
             if added:
                 self.book.save_to_db()
         except Exception as e:
-            print(f"[GH sync students] {e}")
+            print(f"[sync students] {e}")
 
     def _update_table(self):
         if not self.book: return
@@ -201,15 +201,15 @@ class TeacherDashboard(QWidget):
                     col_defs.append((l, ri)); ri += 1
         self.t_table.setRowCount(len(students))
         self.t_table.setColumnCount(2 + len(col_defs))
-        # Тему в шапке показываем коротко (чтобы столбец не разъезжался), но
-        # полную тему кладём в подсказку — наведёшь мышь и прочитаешь целиком.
+        #Тему в шапке показываем коротко (чтобы столбец не разъезжался), но
+        #полную тему кладём в подсказку — наведёшь мышь и прочитаешь целиком.
         def _short(text: str, limit: int = 22) -> str:
             text = (text or "").strip()
             if len(text) <= limit:
                 return text
             cut = text[:limit].rstrip()
             sp = cut.rfind(" ")
-            if sp >= limit - 8:          # обрезаем по последнему пробелу, не посреди слова
+            if sp >= limit - 8:          #обрезаем по последнему пробелу, не посреди слова
                 cut = cut[:sp].rstrip()
             return cut + "…"
         headers = ["Фамилия", "Имя"]
@@ -228,7 +228,7 @@ class TeacherDashboard(QWidget):
                 headers.append(f"Практика {l.number}\n{l.date}\n{_short(l.topic)}")
                 tooltips.append(l.topic or "")
         self.t_table.setHorizontalHeaderLabels(headers)
-        # полная тема в подсказке заголовка
+        #полная тема в подсказке заголовка
         for c, tip in enumerate(tooltips):
             it = self.t_table.horizontalHeaderItem(c)
             if it is not None and tip:
@@ -258,14 +258,14 @@ class TeacherDashboard(QWidget):
                     self.t_table.setCellWidget(r, col, cb)
                 elif l.type == "Экзамен" or ri > 0:
                     rk_full = l.id + (f"_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
-                    # ── ФИКС БАГА: пересдача назначается не всем. ──
-                    # Ячейка пересдачи №ri активна только у студента, который
-                    # ЗАВАЛИЛ предыдущую попытку (2 / Н / «Не зачтено»).
-                    # Сдавшим — серый прочерк без редактирования.
+                    #ФИКС БАГА: пересдача назначается не всем.
+                    #Ячейка пересдачи №ri активна только у студента, который
+                    #ЗАВАЛИЛ предыдущую попытку (2 / Н / «Не зачтено»).
+                    #Сдавшим — серый прочерк без редактирования.
                     if ri > 0 and not self._needs_retake(s, l, ri):
                         it = QTableWidgetItem("—")
                         it.setTextAlignment(Qt.AlignCenter)
-                        it.setFlags(Qt.ItemIsEnabled)          # не редактируется
+                        it.setFlags(Qt.ItemIsEnabled)          #не редактируется
                         it.setForeground(QColor(C['text3']))
                         self.t_table.setItem(r, col, it)
                         continue
@@ -287,7 +287,7 @@ class TeacherDashboard(QWidget):
     def _set_val(self, student, key, val):
         student.records[key] = val
 
-    # ── конфликты синхронизации ───────────────────────────────
+    #конфликты синхронизации
     def _refresh_conflicts_badge(self):
         try:
             from core import DBManager
@@ -308,7 +308,7 @@ class TeacherDashboard(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Конфликты", f"Не удалось открыть: {e}")
 
-    # ── хелперы пересдач ──────────────────────────────────────
+    #хелперы пересдач
     @staticmethod
     def _attempt_key(lesson, ri: int) -> str:
         """Ключ записи попытки №ri: 0 — основной экзамен, 1 — _retake, 2+ — _retake_N."""
@@ -448,7 +448,7 @@ class TeacherDashboard(QWidget):
             QMessageBox.critical(self, "Не удалось добавить экзамен", str(e))
 
     def _add_student(self):
-        # Если журнал ещё не открыт — предупреждаем
+        #Если журнал ещё не открыт — предупреждаем
         if not self.book:
             QMessageBox.warning(
                 self, "Журнал не открыт",
@@ -464,7 +464,7 @@ class TeacherDashboard(QWidget):
             QMessageBox.information(self, "Уже есть", f"{sn} уже в списке"); return
         st = Student(nm, sn, self.book.group)
         self.book.add_student(st)
-        gh = get_gh_store()
+        gh = get_store()
         if gh:
             try:
                 ss = gh.get_students()
@@ -559,7 +559,7 @@ class TeacherDashboard(QWidget):
         if QMessageBox.question(self, "Удалить?", f"Удалить {f} {n}?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
         self.book.delete_student(f, n)
-        gh = get_gh_store()
+        gh = get_store()
         if gh:
             try:
                 ss = [x for x in gh.get_students()
@@ -612,7 +612,7 @@ class TeacherDashboard(QWidget):
         ]:
             sr.addWidget(stat_card(l, v, c))
         self._tstat_content.addLayout(sr)
-        # Распределение оценок
+        #Распределение оценок
         dc = card(); dl = QVBoxLayout(dc); dl.setContentsMargins(18, 16, 18, 16)
         dl.addWidget(section_lbl("Распределение оценок"))
         cols = {5: C['green'], 4: C['blue'], 3: C['yellow'], 2: C['red']}
@@ -626,7 +626,7 @@ class TeacherDashboard(QWidget):
             row.addWidget(lbl(f"{cnt} ({pct}%)", 12, C['text3']))
             dl.addLayout(row)
         self._tstat_content.addWidget(dc)
-        # Посещаемость
+        #Посещаемость
         ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16)
         al.addWidget(section_lbl("Посещаемость по студентам"))
         for f, att, avg_s in sorted(att_rows, key=lambda x: -x[1]):
@@ -640,10 +640,10 @@ class TeacherDashboard(QWidget):
             al.addLayout(row)
         self._tstat_content.addWidget(ac)
 
-    #ИИ
+    #ИИ помощник
 
     def _build_ai(self):
-        """Вкладка «ИИ Помощник» — теперь Вектор (вместо облачного чата)."""
+        """Вкладка «ИИ Помощник» — Вектор (офлайн / GigaChat / Ollama)."""
         try:
             from vector import VectorEngine, VectorScope, get_provider
             from vector.widget import VectorPanel
@@ -661,30 +661,8 @@ class TeacherDashboard(QWidget):
             ai = VectorPanel(self.vector_engine, docked=False)
         except Exception as _e:
             print(f"[Vector] вкладка не собралась (препод): {_e}")
-            ai = AIWidget(
-                role="teacher",
-                context_fn=lambda: self._teacher_context(),
-                back_fn=lambda: self.pages.get("journal"),
-                stack_ref=self.stack
-            )
+            ai = vector_unavailable_widget()
         self.pages["ai"] = ai; self.stack.addWidget(ai)
-
-    def _teacher_context(self):
-        if not self.book: return "Журнал не открыт."
-        students = self.book.spisok_stud
-        lines = [
-            f"Преподаватель: {self.teacher_name}",
-            f"Предмет: {self.book.subject}, группа: {self.book.group}",
-        ]
-        for s in students:
-            gs = []
-            for l in self.book.lessons:
-                if l.type in ("Практика", "Экзамен"):
-                    v = s.records.get(l.id, "")
-                    try: gs.append(int(v.split()[0]))
-                    except: pass
-            lines.append(f"{s.f}: {','.join(map(str, gs)) or 'оценок нет'}")
-        return "Ты ИИ-ассистент ВСГУТУ. Отвечай только на русском, кратко.\n" + "\n".join(lines)
 
     #Роутинг
 

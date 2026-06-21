@@ -16,7 +16,7 @@ from styles import C
 from ui_components import HexLogoWidget, AnimatedBackground
 
 
-#  LOGIN PAGE (STUDENT & TEACHER)
+#LOGIN PAGE (STUDENT & TEACHER)
 
 class LoginPage(QWidget):
     """Страница входа для студентов и учителей"""
@@ -31,16 +31,16 @@ class LoginPage(QWidget):
         self.teachers_db   = teachers_db
         self._role         = "student"
 
-        # Animated background
+        #Animated background
         self._bg = AnimatedBackground(self)
         self._bg.lower()
 
-        # Main layout
+        #Main layout
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignCenter)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # Card frame
+        #Card frame
         c = QFrame()
         c.setObjectName("loginCard")
         c.setFixedWidth(420)
@@ -55,7 +55,7 @@ class LoginPage(QWidget):
         lay.setContentsMargins(36, 30, 36, 30)
         lay.setSpacing(12)
 
-        # Logo
+        #Logo
         hex_w = HexLogoWidget(54)
         hex_w.setFixedSize(54, 54)
         hex_row = QHBoxLayout()
@@ -63,7 +63,7 @@ class LoginPage(QWidget):
         hex_row.addWidget(hex_w)
         lay.addLayout(hex_row)
 
-        # Title
+        #Title
         t_lbl = QLabel("GradeBookAI")
         t_lbl.setAlignment(Qt.AlignCenter)
         t_lbl.setStyleSheet(
@@ -83,7 +83,7 @@ class LoginPage(QWidget):
         lay.addWidget(sub_lbl)
         lay.addWidget(college_lbl)
 
-        # Поля входа: логин + пароль
+        #Поля входа: логин + пароль
         lay.addSpacing(6)
         lay.addWidget(self._mk_label("Логин"))
         self.login_inp = self._mk_input("Введите логин")
@@ -99,7 +99,7 @@ class LoginPage(QWidget):
         self.pass_inp.returnPressed.connect(self._do_login)
         lay.addWidget(b_go)
 
-        # Сообщение об ошибке
+        #Сообщение об ошибке
         self.err_lbl = QLabel("")
         self.err_lbl.setWordWrap(True)
         self.err_lbl.setStyleSheet(
@@ -110,7 +110,6 @@ class LoginPage(QWidget):
         self.err_lbl.hide()
         lay.addWidget(self.err_lbl)
 
-        # Подсказка: студенты и преподаватели входят по выданным логину/паролю.
         hint = QLabel("Студенты и преподаватели входят по логину и паролю, "
                       "которые выдал администратор.")
         hint.setWordWrap(True)
@@ -120,7 +119,7 @@ class LoginPage(QWidget):
 
         outer.addWidget(c)
 
-    # ── Helper methods
+    #Helper methods
     def _mk_label(self, text: str) -> QLabel:
         l = QLabel(text)
         l.setStyleSheet(
@@ -184,14 +183,14 @@ class LoginPage(QWidget):
         from data_store import get_store, AccountLocked
         store = get_store()
 
-        # Свежий ПК (у друга / новая установка): локальных данных ещё нет. Прежде
-        # чем проверять вход, пробуем залогиниться на сервер этими же кредами и
-        # подтянуть данные — иначе войти было бы нечем (нет ни пользователей, ни
-        # пароля админа). Офлайн / неверные креды — тихо пропускаем.
+        #Свежий ПК (у друга / новая установка): локальных данных ещё нет. Прежде
+        #чем проверять вход, пробуем залогиниться на сервер этими же кредами и
+        #подтянуть данные — иначе войти было бы нечем (нет ни пользователей, ни
+        #пароля админа). Офлайн / неверные креды — тихо пропускаем.
         self._online_bootstrap(login, pw)
 
-        # Первый запуск на хост-ПК: пароль администратора не задан НИГДЕ (и
-        # локально, и не подтянулся с сервера выше). Просим задать его.
+        #Первый запуск на хост-ПК: пароль администратора не задан НИГДЕ (и
+        #локально, и не подтянулся с сервера выше). Просим задать его.
         if login == store.get_admin_login() and not store.has_admin_password():
             self._prompt_admin_setup(store)
             return
@@ -236,10 +235,10 @@ class LoginPage(QWidget):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
                 c = SyncClient(url)
-                if not c.health():        # быстрая проверка (3с): офлайн → выходим,
-                    return                # чтобы вход не висел на таймауте логина
-                c.login(login, pw)        # неверные креды → исключение
-                sync_engine.sync_once(c)  # подтянуть данные с сервера в SQLite
+                if not c.health():        #быстрая проверка (3с): офлайн → выходим,
+                    return                #чтобы вход не висел на таймауте логина
+                c.login(login, pw)        #неверные креды → исключение
+                sync_engine.sync_once(c)  #подтянуть данные с сервера в SQLite
             finally:
                 QApplication.restoreOverrideCursor()
         except Exception as e:
@@ -270,9 +269,9 @@ class LoginPage(QWidget):
         if store.setup_admin_password(pw1):
             from audit import log_event
             log_event("admin_password_created", store.get_admin_login())
-            # ВАЖНО: этот путь идёт мимо authenticate(), поэтому фоновую
-            # синхронизацию запускаем здесь вручную — иначе созданные админом
-            # данные не уйдут на сервер (и не создастся серверный админ).
+            #ВАЖНО: этот путь идёт мимо authenticate(), поэтому фоновую
+            #синхронизацию запускаем здесь вручную — иначе созданные админом
+            #данные не уйдут на сервер (и не создастся серверный админ).
             try:
                 from sync_runner import start as _sync_start
                 _sync_start(store.get_admin_login(), pw1, "admin")

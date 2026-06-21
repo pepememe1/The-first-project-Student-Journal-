@@ -89,7 +89,7 @@ def check_host(host, port, what):
 def main():
     print("=== Диагностика GigaChat (расширенная) ===\n")
     try:
-        import gigachat  # noqa: F401
+        import gigachat  #noqa: F401
         print("[1] Пакет gigachat: установлен (ок)\n")
     except ImportError:
         print("[1] Пакет gigachat: НЕ установлен  ->  pip install gigachat\n")

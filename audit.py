@@ -22,19 +22,17 @@ from datetime import datetime
 
 import app_paths
 
-# ── Порог и время блокировки при переборе ──────────────────────
-MAX_FAILS = 5            # сколько неверных попыток допускаем
-LOCK_SECONDS = 300       # на сколько блокируем логин после превышения (5 минут)
+#Порог и время блокировки при переборе
+MAX_FAILS = 7            #сколько неверных попыток допускаем
+LOCK_SECONDS = 300       #на сколько блокируем логин после превышения (5 минут)
 
 
-# Папка та же, что у локальной базы (см. app_paths): рядом с .exe или в профиле.
+#Папка та же, что у локальной базы (см. app_paths): рядом с .exe или в профиле.
 _AUDIT_LOG = app_paths.data_file("audit.log")
 _THROTTLE_FILE = app_paths.data_file("login_throttle.json")
 
 
-# ─────────────────────────────────────────────────────────────
-#  Журнал аудита
-# ─────────────────────────────────────────────────────────────
+#Журнал аудита
 def log_event(event: str, actor: str = "", detail: str = ""):
     """
     Записывает строку в журнал: время | событие | кто | подробность.
@@ -43,14 +41,14 @@ def log_event(event: str, actor: str = "", detail: str = ""):
     """
     try:
         ts = datetime.now().isoformat(timespec="seconds")
-        # экранируем переводы строк, чтобы одна запись = одна строка
+        #экранируем переводы строк, чтобы одна запись = одна строка
         actor = (actor or "").replace("\n", " ").strip()
         detail = (detail or "").replace("\n", " ").strip()
         line = f"{ts}\t{event}\t{actor}\t{detail}\n"
         with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception as e:
-        # аудит не должен ломать работу приложения
+        #аудит не должен ломать работу приложения
         print(f"[audit] не удалось записать событие: {e}")
 
 
@@ -66,9 +64,7 @@ def read_events(limit: int = 200) -> list:
         return []
 
 
-# ─────────────────────────────────────────────────────────────
-#  Анти-брутфорс (лимит попыток + временная блокировка)
-# ─────────────────────────────────────────────────────────────
+#Анти-брутфорс (лимит попыток + временная блокировка)
 def _load_throttle() -> dict:
     try:
         with open(_THROTTLE_FILE, "r", encoding="utf-8") as f:
@@ -112,7 +108,7 @@ def register_failure(login: str):
         return
     data = _load_throttle()
     rec = data.get(login, {"fails": 0, "locked_until": 0})
-    # если прошлая блокировка истекла — счётчик начинаем заново
+    #если прошлая блокировка истекла — счётчик начинается заново
     if rec.get("locked_until", 0) and rec["locked_until"] < time.time():
         rec = {"fails": 0, "locked_until": 0}
     rec["fails"] = rec.get("fails", 0) + 1

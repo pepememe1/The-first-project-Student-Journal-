@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QFrame, QToolButton, QSizePolicy
 )
 
-# Цвета/виджеты проекта (фолбэк, если импорт не удался при изоляции)
+#Цвета/виджеты проекта (фолбэк, если импорт не удался при изоляции)
 try:
     from styles import C
 except Exception:
@@ -42,21 +42,21 @@ except Exception:
 
 PANEL_WIDTH = 320
 
-# ── настройки маскота ─────────────────────────────────────────
-ASSETS_DIR = "vector_assets"          # рядом с exe/main.py
-AVATAR_SIZE = 140                     # размер вывода спрайта, px
+#настройки маскота
+ASSETS_DIR = "vector_assets"          #рядом с exe/main.py
+AVATAR_SIZE = 140                     #размер вывода спрайта, px
 
-THINK_HOLD_AFTER_ANSWER_MS = 1000     # 1 c «дообдумывает» после ответа (по ТЗ)
-SPEAK_MIN_MS = 5000                   # речь минимум 5 c
-SPEAK_MAX_MS = 7000                   # речь максимум 7 c
-SPEAK_MS_PER_CHAR = 25                # +25 мс за символ ответа (между 5 и 7 c)
-AWAY_DELAY_MS = 2000                  # «ещё пару секунд» idle после ухода курсора
-FRAME_MS = 160                        # скорость листания кадров, если папка с кадрами
+THINK_HOLD_AFTER_ANSWER_MS = 1000     #1 c «дообдумывает» после ответа (по ТЗ)
+SPEAK_MIN_MS = 5000                   #речь минимум 5 c
+SPEAK_MAX_MS = 7000                   #речь максимум 7 c
+SPEAK_MS_PER_CHAR = 25                #+25 мс за символ ответа (между 5 и 7 c)
+AWAY_DELAY_MS = 2000                  #«ещё пару секунд» idle после ухода курсора
+FRAME_MS = 160                        #скорость листания кадров, если папка с кадрами
 
-# Состояния (имена = имена файлов/папок в vector_assets)
+#Состояния (имена = имена файлов/папок в vector_assets)
 ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY = "idle", "thinking", "speaking", "away"
 
-# Какие имена файлов ищем для каждого состояния (в порядке приоритета)
+#Какие имена файлов ищем для каждого состояния (в порядке приоритета)
 _STATE_FILES = {
     ST_IDLE:  ["1_idle.png", "idle.png", "1.png"],
     ST_THINK: ["2_thinking.png", "thinking.png", "2.png"],
@@ -64,7 +64,7 @@ _STATE_FILES = {
     ST_AWAY:  ["4_away.png", "away.png", "waiting.png", "4.png"],
 }
 
-# Заглушки, пока Арина не нарисовала арт
+#Заглушки, пока Арина не нарисовала арт
 _FALLBACK_FACE = {ST_IDLE: "🐯", ST_THINK: "🤔", ST_SPEAK: "🗣️", ST_AWAY: "😴"}
 _FALLBACK_MOUTH = {ST_IDLE: "•‿•", ST_THINK: "· · ·", ST_SPEAK: "▿", ST_AWAY: "︶"}
 
@@ -119,9 +119,7 @@ def speak_duration_ms(text: str) -> int:
                min(SPEAK_MAX_MS, SPEAK_MIN_MS + len(text or "") * SPEAK_MS_PER_CHAR))
 
 
-# ══════════════════════════════════════════════════════════════
-#  Аватар Вектора: спрайтовая машина состояний
-# ══════════════════════════════════════════════════════════════
+#Аватар Вектора: спрайтовая машина состояний
 class VectorAvatar(QWidget):
     """
     Переключает PNG-состояния маскота. Если PNG не найдены — эмодзи-заглушка.
@@ -140,14 +138,14 @@ class VectorAvatar(QWidget):
         self._frames = {s: _load_state_frames(base, s)
                         for s in (ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY)}
 
-        # Картинка/заглушка (позиционируется вручную — чтобы анимировать pos)
+        #Картинка/заглушка (позиционируется вручную — чтобы анимировать pos)
         self._face = QLabel(self)
         self._face.setAlignment(Qt.AlignCenter)
         self._face.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
         self._face.move((self.width() - AVATAR_SIZE) // 2, 4)
         self._face.setStyleSheet("font-size:64px;")
 
-        # Подпись-«рот» нужна только заглушке; при наличии PNG скрывается
+        #Подпись-«рот» нужна только заглушке; при наличии PNG скрывается
         self._mouth = QLabel(self)
         self._mouth.setAlignment(Qt.AlignCenter)
         self._mouth.setFixedWidth(self.width())
@@ -155,16 +153,16 @@ class VectorAvatar(QWidget):
         self._mouth.setStyleSheet(
             f"font-size:18px;color:{_MOOD_TINT['neutral']};font-weight:bold;")
 
-        # Покачивание (живость для thinking/speaking) и листание кадров
+        #Покачивание (живость для thinking/speaking) и листание кадров
         self._bob = QPropertyAnimation(self._face, b"pos")
         self._bob.setLoopCount(-1)
         self._bob.setEasingCurve(QEasingCurve.InOutSine)
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._next_frame)
 
-        self.set_state(ST_AWAY)   # по умолчанию курсор не над чатом
+        self.set_state(ST_AWAY)   #по умолчанию курсор не над чатом
 
-    # ── публичные хуки ────────────────────────────────────────
+    #публичные хуки
     def set_sprites(self, **kwargs):
         """
         Подключить арт из кода: set_sprites(idle="a.png", speaking=["1.png","2.png"]).
@@ -206,14 +204,14 @@ class VectorAvatar(QWidget):
 
         frames = self._frames[state]
         if len(frames) > 1:
-            self._frame_timer.start(FRAME_MS)   # анимация из папки с кадрами
+            self._frame_timer.start(FRAME_MS)   #анимация из папки с кадрами
         if state == ST_THINK:
             self._start_bob(amp=4, dur=420)
         elif state == ST_SPEAK:
             self._start_bob(amp=7, dur=620)
         self._apply_frame()
 
-    # ── внутреннее ────────────────────────────────────────────
+    #внутреннее
     def _apply_frame(self):
         frames = self._frames.get(self._state) or []
         if frames:
@@ -227,7 +225,7 @@ class VectorAvatar(QWidget):
                 Qt.SmoothTransformation))
             self._mouth.setText("")
         else:
-            # эмодзи-заглушка
+            #эмодзи-заглушка
             self._face.setPixmap(QPixmap())
             self._face.setText(_FALLBACK_FACE[self._state])
             self._mouth.setText(_FALLBACK_MOUTH[self._state])
@@ -248,9 +246,7 @@ class VectorAvatar(QWidget):
             self._apply_frame()
 
 
-# ══════════════════════════════════════════════════════════════
-#  Поток запроса к движку (не блокирует UI)
-# ══════════════════════════════════════════════════════════════
+#Поток запроса к движку (не блокирует UI)
 class VectorAskThread(QThread):
     answered = Signal(str, str, str)     # text, mood, intent
     failed = Signal(str)
@@ -268,28 +264,26 @@ class VectorAskThread(QThread):
             self.failed.emit(str(e))
 
 
-# ══════════════════════════════════════════════════════════════
-#  Панель Вектора (аватар + чат + меню команд + тулбар)
-# ══════════════════════════════════════════════════════════════
+#Панель Вектора (аватар + чат + меню команд + тулбар)
 class VectorPanel(QWidget):
-    move_side = Signal()       # просьба перенести влево/вправо
-    hide_me = Signal()         # просьба свернуть
+    move_side = Signal()       #просьба перенести влево/вправо
+    hide_me = Signal()         #просьба свернуть
 
     def __init__(self, engine, parent=None, docked=True):
         super().__init__(parent)
         self.engine = engine
         self._thread = None
         self.docked = docked
-        self._hovered = False          # курсор сейчас над панелью?
-        self._busy = False             # идёт обдумывание/речь?
+        self._hovered = False          #курсор сейчас над панелью?
+        self._busy = False             #идёт обдумывание/речь?
 
-        # Таймеры сценария маскота
-        self._away_timer = QTimer(self)          # idle → away после ухода курсора
+        #Таймеры сценария маскота
+        self._away_timer = QTimer(self)          #idle → away после ухода курсора
         self._away_timer.setSingleShot(True)
         self._away_timer.timeout.connect(self._go_away)
-        self._speak_start_timer = QTimer(self)   # 1 c thinking после ответа
+        self._speak_start_timer = QTimer(self)   #1 c thinking после ответа
         self._speak_start_timer.setSingleShot(True)
-        self._speak_end_timer = QTimer(self)     # конец речи через 5–7 c
+        self._speak_end_timer = QTimer(self)     #конец речи через 5–7 c
         self._speak_end_timer.setSingleShot(True)
         self._speak_end_timer.timeout.connect(self._finish_speaking)
 
@@ -298,17 +292,17 @@ class VectorPanel(QWidget):
             self.setStyleSheet(
                 f"background:{C['card']};border-right:1px solid {C['border']};")
         else:
-            # режим «во всю вкладку»: ширину не фиксируем
+            #режим «во всю вкладку»: ширину не фиксируем
             self.setStyleSheet(f"background:{C['card']};")
         self._build()
 
-    # ── сборка интерфейса ─────────────────────────────────────
+    #сборка интерфейса
     def _build(self):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(8)
 
-        # Тулбар: имя + перенос + свернуть
+        #Тулбар: имя + перенос + свернуть
         bar = QHBoxLayout()
         bar.setSpacing(4)
         name = QLabel("Вектор")
@@ -323,26 +317,26 @@ class VectorPanel(QWidget):
                 f"QToolButton{{color:{C['text3']};border:none;font-size:16px;"
                 f"padding:2px 6px;}}QToolButton:hover{{color:{C['green']};}}")
             bar.addWidget(b)
-            # во вкладке кнопки переноса/сворачивания не нужны
+            #во вкладке кнопки переноса/сворачивания не нужны
             if not self.docked:
                 b.hide()
         lay.addLayout(bar)
 
-        # Аватар-маскот
+        #Аватар-маскот
         self.avatar = VectorAvatar()
         lay.addWidget(self.avatar, 0, Qt.AlignHCenter)
 
-        # Чат
+        #Чат
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
         self.chat.setStyleSheet(
             f"background:{C['card2']};border:1px solid {C['border']};border-radius:10px;"
             f"padding:10px;font-size:12.5px;color:{C['text']};")
         lay.addWidget(self.chat, 1)
 
-        # ── МЕНЮ БЫСТРЫХ КОМАНД: ответ мгновенно и без ИИ ────
+        #МЕНЮ БЫСТРЫХ КОМАНД: ответ мгновенно и без ИИ ────
         lay.addLayout(self._build_quick_commands())
 
-        # Ввод
+        #Ввод
         row = QHBoxLayout(); row.setSpacing(6)
         self.inp = QLineEdit(); self.inp.setPlaceholderText("Спросить Вектора…")
         self.inp.setStyleSheet(
@@ -383,7 +377,7 @@ class VectorPanel(QWidget):
             grid.addWidget(b, i // 2, i % 2)
         return grid
 
-    # ── чат ───────────────────────────────────────────────────
+    #чат
     def _append(self, who, text):
         color = C["green"] if who == "Вектор" else C["blue"]
         safe = (text or "").replace("\n", "<br>")
@@ -408,7 +402,7 @@ class VectorPanel(QWidget):
         self.inp.clear()
         self.send_btn.setEnabled(False)
 
-        # ── маскот: вопрос отправлен → 2_thinking ──
+        #маскот: вопрос отправлен → 2_thinking
         self._busy = True
         self._away_timer.stop()
         self._speak_end_timer.stop()
@@ -423,10 +417,10 @@ class VectorPanel(QWidget):
         self.send_btn.setEnabled(True)
         self.avatar.set_mood(mood)
         self._append("Вектор", text)
-        # ── маскот: ответ отправлен, но ещё 1 c «дообдумывает» (по ТЗ),
-        #    затем 3_speaking на 5–7 c по длине ответа, затем 1_idle ──
+        #маскот: ответ отправлен, но ещё 1 c «дообдумывает» (по ТЗ),
+        #затем 3_speaking на 5–7 c по длине ответа, затем 1_idle -
         dur = speak_duration_ms(text)
-        # отвязываем прошлый слот без шумного RuntimeWarning
+        #отвязываем прошлый слот без шумного RuntimeWarning
         prev = getattr(self, "_speak_slot", None)
         if prev is not None:
             try:
@@ -466,7 +460,7 @@ class VectorPanel(QWidget):
         self._away_timer.stop()
         self._begin_speaking(speak_duration_ms(text))
 
-    # ── hover-логика маскота (1_idle ↔ 4_away) ────────────────
+    #hover-логика маскота (1_idle ↔ 4_away)
     def enterEvent(self, event):
         """Курсор над чатом → 1_idle (если Вектор не думает/не говорит)."""
         self._hovered = True
@@ -486,7 +480,7 @@ class VectorPanel(QWidget):
         if not self._hovered and not self._busy:
             self.avatar.set_state(ST_AWAY)
 
-    # ── зеркало при переносе панели ───────────────────────────
+    #зеркало при переносе панели
     def set_side(self, side: str):
         """Вызывается хостом: 'left' / 'right'. Справа — спрайт зеркалится."""
         self.avatar.set_mirrored(side == "right")
@@ -496,9 +490,7 @@ class VectorPanel(QWidget):
                 f"background:{C['card']};{border}:1px solid {C['border']};")
 
 
-# ══════════════════════════════════════════════════════════════
-#  Хост: вставляет панель в QHBoxLayout дашборда и рулит сторонами
-# ══════════════════════════════════════════════════════════════
+#Хост: вставляет панель в QHBoxLayout дашборда и рулит сторонами
 class VectorHost:
     """
     Управляет размещением Вектора в горизонтальном layout дашборда (тот самый
@@ -514,7 +506,7 @@ class VectorHost:
         self.body = body_layout
         self.panel = panel
         self.side = "left"
-        # Тонкая полоска для разворачивания, когда свёрнут
+        #Тонкая полоска для разворачивания, когда свёрнут
         self.restore = QToolButton()
         self.restore.setText("🐯")
         self.restore.setToolTip("Показать Вектора")
@@ -547,11 +539,11 @@ class VectorHost:
         self._insert(self.panel, self.side)
         self._insert(self.restore, self.side)
         self.restore.setVisible(not self.panel.isVisible())
-        # зеркалим маскота, когда панель справа (по ТЗ)
+        #зеркалим маскота, когда панель справа (по ТЗ)
         self.panel.set_side(self.side)
 
     def hide_panel(self):
-        # картинки маскота скрываются вместе со всей панелью (по ТЗ)
+        #картинки маскота скрываются вместе со всей панелью (по ТЗ)
         self.panel.hide()
         self.restore.show()
 

@@ -4,9 +4,7 @@
 
 # ── Рантайм-данные и секреты (НИКОГДА не коммитим) ──
 secure_data.enc
-pg_config.json
 api_config.json
-install_key.txt
 data.key
 audit.log
 login_throttle.json
@@ -16,6 +14,7 @@ backups/
 *.db-wal
 *.db-shm
 *.bak
+*.pid
 
 # ── Конфигурация окружения ──
 .env

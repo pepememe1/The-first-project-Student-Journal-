@@ -1,13 +1,12 @@
 """
-data_store.py — Хранилище данных GradeBookAI на PostgreSQL + SQLite.
+data_store.py — Локальное хранилище данных GradeBookAI (SQLite).
 
-Заменяет github_storage.py. Никаких обращений в интернет.
+Никаких обращений в интернет напрямую отсюда нет.
 
-Архитектура (как и просили — PostgreSQL на сервере колледжа в локальной сети):
+Архитектура (offline-first):
   - Рабочее чтение/запись идёт в локальный SQLite (мгновенно, без блокировки UI).
-  - Если PostgreSQL настроен, запись дублируется в PG асинхронно (через PGSyncer).
-  - При старте данные подтягиваются из PG в SQLite (DBManager._pull_from_pg).
-  - Все ПК колледжа работают с одной общей базой PostgreSQL.
+  - Обмен с общей базой колледжа идёт через REST API-сервер ВСГУТУ отдельным
+    фоновым потоком (см. sync_runner) — прямого подключения к серверной БД нет.
 
 Данные хранятся в таблице kv_store (ключ → JSON):
   students, teachers, groups, config, journal:<группа>__<предмет>
@@ -18,20 +17,20 @@ data_store.py — Хранилище данных GradeBookAI на PostgreSQL + 
 import json
 from typing import Optional
 
-from core import DBManager, _syncer
+from core import DBManager
 from security import hash_password, verify_password, encrypt_value, decrypt_value
 from styles import DEFAULT_GROUPS
 
-# Логин администратора не секрет (секрет — пароль). Дефолтного ПАРОЛЯ больше нет:
-# раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
-# первом входе — это был бэкдор. Теперь пароль администратора задаётся вручную
-# при первом запуске на хост-ПК (см. setup_admin_password / auth_pages).
+#Логин администратора не секрет (секрет — пароль). Дефолтного ПАРОЛЯ больше нет:
+#раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
+#первом входе — это был бэкдор. Теперь пароль администратора задаётся вручную
+#при первом запуске на хост-ПК (см. setup_admin_password / auth_pages).
 DEFAULT_ADMIN_LOGIN = "admin"
 
-# Старый скомпрометированный дефолтный пароль. Его мог записать в базу старый код.
-# Новый код считает такой пароль НЕ заданным: вход с ним запрещён, а при попытке
-# войти администратором запускается принудительная установка нового пароля.
-# Здесь он нужен ТОЛЬКО чтобы распознать и отвергнуть наследие — это не бэкдор.
+#Старый скомпрометированный дефолтный пароль. Его мог записать в базу старый код.
+#Новый код считает такой пароль НЕ заданным: вход с ним запрещён, а при попытке
+#войти администратором запускается принудительная установка нового пароля.
+#Здесь он нужен ТОЛЬКО чтобы распознать и отвергнуть наследие — это не бэкдор.
 _LEGACY_DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
 
 
@@ -47,9 +46,7 @@ class AccountLocked(Exception):
         self.seconds = seconds_left
 
 
-# ─────────────────────────────────────────────────────────────
-#  Низкоуровневый key-value доступ (SQLite + async PG)
-# ─────────────────────────────────────────────────────────────
+#Низкоуровневый key-value доступ (SQLite + async PG)
 def _ensure_kv(cur):
     cur.execute(
         "CREATE TABLE IF NOT EXISTS kv_store "
@@ -57,14 +54,13 @@ def _ensure_kv(cur):
     )
 
 
-# Модель хранения kv_store (студенты, преподаватели, конфиг, пароль-хеш админа):
-#   • Локально в SQLite значение ЗАШИФРОВАНО ключом этого ПК (DPAPI-привязка к
-#     учётной записи Windows) — защищает данные на украденном/чужом компьютере,
-#     при этом ничего не спрашивает у пользователя.
-#   • В общую базу PostgreSQL значение кладётся ОТКРЫТЫМ текстом — так его читает
-#     любой ПК колледжа без всякого ключа. Безопасность общей базы обеспечивают:
-#     учётная запись PostgreSQL (её пароль на диске под DPAPI), TLS-канал и
-#     размещение сервера в РФ. Пароли пользователей в любом случае только хешами.
+#Модель хранения kv_store (студенты, преподаватели, конфиг, пароль-хеш админа):
+#Локально в SQLite значение ЗАШИФРОВАНО ключом этого ПК (DPAPI-привязка к
+#учётной записи Windows) — защищает данные на украденном/чужом компьютере,
+#при этом ничего не спрашивает у пользователя.
+#В общую базу колледжа эти данные попадают через API-сервер ВСГУТУ (см.
+#sync_runner); канал защищён TLS, сервер размещается в РФ (152-ФЗ). Пароли
+#пользователей в любом случае хранятся только хешами.
 def _kv_get(key: str, default):
     conn = DBManager.get_conn()
     cur = conn.cursor()
@@ -74,7 +70,7 @@ def _kv_get(key: str, default):
     conn.close()
     if row:
         try:
-            # decrypt_value прозрачно вернёт и открытый текст (на случай миграции).
+            #decrypt_value прозрачно вернёт и открытый текст (на случай миграции).
             return json.loads(decrypt_value(row[0]))
         except Exception:
             return default
@@ -90,15 +86,8 @@ def _kv_set(key: str, value) -> bool:
     cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, local_blob))
     conn.commit()
     conn.close()
-    if DBManager.use_pg():
-        # В общую базу — ОТКРЫТЫЙ текст, чтобы читалось на всех ПК без ключа.
-        _syncer.push(
-            "INSERT INTO kv_store (key, value) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            (key, plain),
-        )
-    # Разбудить фоновую синхронизацию с сервером (API-режим), чтобы изменение
-    # ушло сразу, а не через интервал. Офлайн/нет сервера — это безвредный no-op.
+    #Разбудить фоновую синхронизацию с сервером (API-режим), чтобы изменение
+    #ушло сразу, а не через интервал. Офлайн/нет сервера — это безвредный no-op.
     try:
         from sync_runner import trigger as _sync_trigger
         _sync_trigger()
@@ -112,10 +101,11 @@ def _safe_name(name: str) -> str:
 
 
 def _now_iso() -> str:
-    from datetime import datetime
-    # С микросекундами: создание и последующее удаление записи в одну секунду
-    # должны различаться по времени, иначе LWW не отличит их.
-    return datetime.now().isoformat()
+    from datetime import datetime, timezone
+    #Время в UTC и с микросекундами. UTC — чтобы метки разных ПК сравнивались
+    #честно, без зависимости от часового пояса/перевода часов (LWW по строке).
+    #Микросекунды — чтобы создание и удаление в одну секунду различались.
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _stamp_records(new_records, old_records, key_fn):
@@ -165,20 +155,17 @@ def _merge_list_tombstones(new_live, old_raw, key_fn):
             out.append(t)                       # было живым, исчезло → надгробие
     return out
 
-
-# ─────────────────────────────────────────────────────────────
-#  Высокоуровневый интерфейс (совместим с прежним GitHub-хранилищем)
-# ─────────────────────────────────────────────────────────────
+#  Высокоуровневый интерфейс к локальному хранилищу
 class LocalStore:
     """
-    API полностью совместим с прежним GradeBookGitHub, поэтому остальной код
-    (admin_dashboard, teacher_dashboard и т.д.) не требует переписывания —
-    меняется только источник данных: вместо GitHub — PostgreSQL/SQLite.
+    Единая точка доступа к данным приложения (студенты, преподаватели, группы,
+    конфиг). Данные лежат в локальном SQLite (kv_store); обмен с общей базой
+    колледжа идёт через API-сервер (см. sync_runner).
     """
 
-    # ── Студенты ──────────────────────────────────────────────
-    # get_* отдают только ЖИВЫЕ записи (UI не видит надгробий).
-    # get_*_raw отдают всё, включая надгробия — нужно синхронизации.
+    #Студенты
+    #get_* отдают только ЖИВЫЕ записи (UI не видит надгробий).
+    #get_*_raw отдают всё, включая надгробия — нужно синхронизации.
     def get_students(self) -> list:
         return [s for s in _kv_get("students", []) if not s.get("deleted")]
 
@@ -187,15 +174,15 @@ class LocalStore:
 
     def set_students(self, students: list, stamp: bool = True) -> bool:
         records = [self._hash_record(s) for s in students]
-        # stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
-        #   надгробиями, изменённые — штампуются.
-        # stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
-        #   сохраняем как есть, чтобы синк не зациклился.
+        #stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
+        # надгробиями, изменённые — штампуются.
+        #stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
+        # сохраняем как есть, чтобы синк не зациклился.
         if stamp:
             records = _merge_list_tombstones(records, _kv_get("students", []), _student_key)
         return _kv_set("students", records)
 
-    # ── Преподаватели ─────────────────────────────────────────
+    #Преподаватели
     def get_teachers(self) -> dict:
         return {k: v for k, v in _kv_get("teachers", {}).items() if not v.get("deleted")}
 
@@ -218,7 +205,7 @@ class LocalStore:
                     data["updated_at"] = now
                 elif not data.get("updated_at"):
                     data["updated_at"] = prev.get("updated_at", now)
-            # надгробия: были, в новом наборе исчезли
+            #надгробия: были, в новом наборе исчезли
             for name, prev in old_raw.items():
                 if name in out:
                     continue
@@ -229,7 +216,7 @@ class LocalStore:
                     out[name] = t
         return _kv_set("teachers", out)
 
-    # ── Группы ────────────────────────────────────────────────
+    #Группы
     def get_groups(self) -> list:
         return [g for g in _kv_get("groups", []) if not g.get("deleted")]
 
@@ -242,26 +229,18 @@ class LocalStore:
                                             lambda r: r.get("name", ""))
         return _kv_set("groups", groups)
 
-    # ── Журналы ───────────────────────────────────────────────
+    #Журналы
     def get_journal(self, group: str, subject: str) -> Optional[dict]:
         return _kv_get(f"journal:{_safe_name(group)}__{_safe_name(subject)}", None)
 
     def set_journal(self, group: str, subject: str, data: dict) -> bool:
         return _kv_set(f"journal:{_safe_name(group)}__{_safe_name(subject)}", data)
 
-    # ── API-ключ и конфиг ─────────────────────────────────────
+    #Конфиг приложения
     def _config(self) -> dict:
         return _kv_get("config", {})
 
-    def get_api_key(self) -> str:
-        return self._config().get("openrouter_api_key", "")
-
-    def set_api_key(self, key: str) -> bool:
-        cfg = self._config()
-        cfg["openrouter_api_key"] = key
-        return _kv_set("config", cfg)
-
-    # ── Пароль администратора (хранится только хеш) ───────────
+    #Пароль администратора (хранится только хеш)
     def get_admin_login(self) -> str:
         return self._config().get("admin_login", DEFAULT_ADMIN_LOGIN)
 
@@ -276,7 +255,7 @@ class LocalStore:
         return True
 
     def set_admin_password(self, pw: str) -> bool:
-        # Не даём установить старый скомпрометированный дефолт — иначе бэкдор вернётся.
+        #Не даём установить старый скомпрометированный дефолт — иначе бэкдор вернётся.
         if pw == _LEGACY_DEFAULT_ADMIN_PASSWORD:
             return False
         cfg = self._config()
@@ -293,10 +272,10 @@ class LocalStore:
     def check_admin_password(self, pw: str) -> bool:
         h = self._config().get("admin_password_hash")
         if not h or _is_legacy_default(h):
-            return False  # пароль не задан или это старый дефолт — вход запрещён
+            return False  #пароль не задан или это старый дефолт — вход запрещён
         return verify_password(pw, h)
 
-    # ── Аутентификация (логин + пароль) ───────────────────────
+    #Аутентификация (логин + пароль)
     def authenticate(self, login: str, password: str) -> Optional[dict]:
         """
         Единая точка входа. Возвращает:
@@ -329,8 +308,8 @@ class LocalStore:
         else:
             register_success(login)
             log_event("login_success", login, result.get("role", ""))
-            # Запускаем фоновую синхронизацию с сервером (если задан адрес API).
-            # Офлайн / без сервера — внутри просто ничего не делает.
+            #Запускается фоновая синхронизация с сервером (если задан адрес API).
+            #Офлайн / без сервера — внутри просто ничего не делает.
             try:
                 from sync_runner import start as _sync_start
                 _sync_start(login, password, result.get("role", ""))
@@ -359,16 +338,11 @@ class LocalStore:
                 return None
         return None
 
-    # ── Проверка соединения (для админ-панели) ────────────────
+    #Проверка соединения (для админ-панели)
     def test_connection(self) -> tuple:
-        if DBManager.use_pg():
-            try:
-                from db_config import test_connection as pg_test
-                ok, msg = pg_test()
-                return (True, f"✅ PostgreSQL: {str(msg)[:60]}") if ok else (False, str(msg))
-            except Exception as e:
-                return False, str(e)
-        return True, "✅ Локальный SQLite (PostgreSQL не настроен)"
+        """Локальное хранилище доступно всегда. Состояние синхронизации с
+        сервером ВСГУТУ проверяется отдельно во вкладке «Сервер» (API)."""
+        return True, "✅ Локальный SQLite доступен"
 
     def init_repo(self) -> tuple:
         # Таблицы создаются в DBManager; здесь просто гарантируем дефолты
@@ -376,7 +350,7 @@ class LocalStore:
             self.set_groups([{"name": g, "subjects": []} for g in DEFAULT_GROUPS])
         return True, "✅ Хранилище инициализировано"
 
-    # ── Внутреннее ────────────────────────────────────────────
+    #Внутреннее
     @staticmethod
     def _hash_record(rec: dict) -> dict:
         """Если в записи есть открытый пароль — заменяем на хеш."""
@@ -391,14 +365,12 @@ class LocalStore:
         h = rec.get("password_hash")
         if h:
             return verify_password(pw, h)
-        if rec.get("password"):           # старые записи в открытом виде
+        if rec.get("password"):           #старые записи в открытом виде
             return rec["password"] == pw
-        return (pw or "") == ""           # пароль не задан → вход без пароля
+        return (pw or "") == ""           #пароль не задан → вход без пароля
 
 
-# ─────────────────────────────────────────────────────────────
-#  Singleton
-# ─────────────────────────────────────────────────────────────
+#Singleton
 _store: Optional[LocalStore] = None
 
 

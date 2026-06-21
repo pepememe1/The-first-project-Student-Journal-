@@ -17,9 +17,9 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 
-# ВАЖНО: Вектор обязан читать ТУ ЖЕ базу, что и приложение. После переноса базы
-# в локальную папку пользователя (core.LOCAL_DB) относительный путь сломался бы —
-# поэтому берём путь из core.
+#ВАЖНО: Вектор обязан читать ТУ ЖЕ базу, что и приложение. После переноса базы
+#в локальную папку пользователя (core.LOCAL_DB) относительный путь сломался бы —
+#поэтому берём путь из core.
 try:
     from core import LOCAL_DB as DEFAULT_DB
 except Exception:
@@ -28,31 +28,27 @@ except Exception:
 PRACTICE_VALUES = {"2", "3", "4", "5"}
 
 
-# ─────────────────────────────────────────────────────────────
-#  Контекст доступа
-# ─────────────────────────────────────────────────────────────
+#Контекст доступа
 @dataclass
 class VectorScope:
-    role: str = "student"                 # student / teacher / admin
+    role: str = "student"                 #student / teacher / admin
     group: str = ""
-    subject: Optional[str] = None         # None = все предметы группы
-    student_f: str = ""                   # для роли student — своя фамилия
-    student_n: str = ""                   # для роли student — своё имя
+    subject: Optional[str] = None         #None = все предметы группы
+    student_f: str = ""                   #для роли student — своя фамилия
+    student_n: str = ""                   #для роли student — своё имя
     db_path: str = DEFAULT_DB
 
 
 @dataclass
 class Facts:
     intent: str
-    facts_text: str                       # нейтральное текстовое представление
-    names: List[str] = field(default_factory=list)   # реальные имена в тексте
-    data: Dict = field(default_factory=dict)          # структурно (для карточек)
-    mood_value: Optional[float] = None    # средний балл для настроения, если есть
+    facts_text: str                       #нейтральное текстовое представление
+    names: List[str] = field(default_factory=list)   #реальные имена в тексте
+    data: Dict = field(default_factory=dict)          #структурно (для карточек)
+    mood_value: Optional[float] = None    #средний балл для настроения, если есть
 
 
-# ─────────────────────────────────────────────────────────────
-#  Низкоуровневые помощники
-# ─────────────────────────────────────────────────────────────
+#Низкоуровневые помощники
 def _conn(scope: VectorScope) -> sqlite3.Connection:
     return sqlite3.connect(scope.db_path)
 
@@ -143,9 +139,7 @@ def _count_absences(lessons: List[tuple], records: Dict[str, str]) -> Dict[str, 
     return res
 
 
-# ─────────────────────────────────────────────────────────────
-#  Хендлеры интентов  (каждый возвращает Facts)
-# ─────────────────────────────────────────────────────────────
+#Хендлеры интентов  (каждый возвращает Facts)
 def _resolve_student(scope: VectorScope, asked_name: str) -> Optional[Tuple[str, str]]:
     """
     Кого спрашивают. Студент всегда видит только себя (privacy). Преподаватель/админ
@@ -155,7 +149,7 @@ def _resolve_student(scope: VectorScope, asked_name: str) -> Optional[Tuple[str,
         return (scope.student_f, scope.student_n)
     if not asked_name:
         return None
-    # SQLite LOWER() не понижает кириллицу — сравниваем в Python.
+    #SQLite LOWER() не понижает кириллицу — сравниваем в Python.
     conn = _conn(scope)
     cur = conn.cursor()
     cur.execute("SELECT f, n FROM students WHERE group_name=?", (scope.group,))
@@ -182,7 +176,7 @@ def intent_average(scope: VectorScope, asked_name: str = "") -> Facts:
                else f"{name}: оценок по практикам пока нет.")
         return Facts("average", txt, names=[name, f],
                      data={"student": name, "average": avg}, mood_value=avg or None)
-    # групповой средний
+    #групповой средний
     studs = _students(conn, scope.group)
     avgs = []
     for f, n in studs:
@@ -356,22 +350,25 @@ def intent_groups(scope: VectorScope, asked_name: str = "") -> Facts:
 
 
 def intent_teachers(scope: VectorScope, asked_name: str = "") -> Facts:
-    """Список преподавателей. Имена не секрет, но полный список — для админа/препода."""
+    """Список преподавателей колледжа — ТОЛЬКО для администратора.
+
+    Просмотр кадрового состава — задача администрации. Преподавателю Вектор
+    больше не показывает других преподавателей (это не его зона ответственности),
+    а студенту — тем более. И тому и другому даём вежливый редирект; полный
+    список с предметами видит лишь роль admin."""
+    if scope.role != "admin":
+        return Facts("teachers", "Список преподавателей ведёт администрация — "
+                                 "за полным перечнем обратись к администратору. "
+                                 "Кто ведёт конкретные предметы, смотри в расписании.")
     try:
         teachers = _store().get_teachers() or {}
     except Exception:
         teachers = {}
     names = list(teachers.keys())
-    if scope.role == "student":
-        if names:
-            return Facts("teachers", f"Преподаватели колледжа: {', '.join(names)}. "
-                                     f"Кто ведёт твои предметы — смотри в расписании.")
-        return Facts("teachers", "Список преподавателей ведёт администрация; "
-                                 "уточни в деканате или расписании.")
     if not names:
         return Facts("teachers", "Преподаватели пока не заведены — добавьте их "
                                  "во вкладке «Преподаватели».")
-    # для препода/админа можно показать и предметы
+    #админу показываем преподавателей вместе с их предметами
     lines = []
     for nm in names:
         subj = teachers.get(nm, {}).get("subjects", []) if isinstance(teachers.get(nm), dict) else []
@@ -422,14 +419,12 @@ def intent_unknown(scope: VectorScope, asked_name: str = "") -> Facts:
     return Facts("unknown", unknown_offline_text(scope.role))
 
 
-# ─────────────────────────────────────────────────────────────
-#  Классификатор намерения (локальный, без сети).
-#  Само сопоставление вынесено в faq.py: нормализация текста + словарь
-#  основ-синонимов. Благодаря этому «у кого хвосты», «кто завалил экзамен»
-#  и «у кого долги» дают ОДИН И ТОТ ЖЕ ответ без всякой LLM.
-#  Если суммарный вес совпадений ниже порога — интент «unknown», и engine
-#  передаёт вопрос живой ИИ-модели (если она подключена).
-# ─────────────────────────────────────────────────────────────
+#Классификатор намерения (локальный, без сети).
+#Само сопоставление вынесено в faq.py: нормализация текста + словарь
+#основ-синонимов. Благодаря этому «у кого хвосты», «кто завалил экзамен»
+#и «у кого долги» дают ОДИН И ТОТ ЖЕ ответ без всякой LLM.
+#Если суммарный вес совпадений ниже порога — интент «unknown», и engine
+#передаёт вопрос живой ИИ-модели (если она подключена).
 def classify(question: str, known_surnames: List[str]) -> Tuple[str, str]:
     """
     Возвращает (intent_name, asked_surname). Чисто локально, без сети.
@@ -443,7 +438,7 @@ def classify(question: str, known_surnames: List[str]) -> Tuple[str, str]:
         if not surname:
             continue
         s = surname.lower().replace("ё", "е")
-        # сначала точное вхождение, затем основа (для склонений: Петрова, Сидоровой)
+        #сначала точное вхождение, затем основа (для склонений: Петрова, Сидоровой)
         if s in q:
             asked = surname
             break

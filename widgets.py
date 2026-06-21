@@ -4,14 +4,14 @@ widgets.py — Переиспользуемые фабрики для созда
 """
 
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout
+    QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout, QWidget
 )
 from PySide6.QtCore import Qt
 
 from styles import C, BTN, SB_NORMAL, FONT_TITLE, FONT_BODY
 
 
-#  CARD & FRAME FACTORIES
+#CARD & FRAME FACTORIES
 
 def card(parent=None) -> QFrame:
     """Создать основную карточку (card)"""
@@ -29,7 +29,7 @@ def card2(parent=None) -> QFrame:
     return f
 
 
-#  LABEL FACTORIES
+#LABEL FACTORIES
 
 def lbl(text="", size=13, color=None, bold=False, parent=None) -> QLabel:
     """Создать стилизованный лейбл (DM Sans)"""
@@ -55,6 +55,21 @@ def title_lbl(text, size=22) -> QLabel:
         f"font-family:{FONT_TITLE};"
     )
     return l
+
+
+def vector_unavailable_widget(parent=None) -> QWidget:
+    """Заглушка на случай, если панель Вектора не смогла собраться.
+    Раньше при сбое подключался отдельный облачный чат — его убрали, поэтому теперь
+    просто показываем понятное сообщение, а не пустой экран."""
+    w = QWidget(parent)
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(24, 24, 24, 24)
+    lay.setSpacing(8)
+    lay.addWidget(title_lbl("🐯  Вектор временно недоступен", 18))
+    lay.addWidget(lbl("Не удалось запустить ИИ-помощника. Перезапустите приложение, "
+                      "а если не помогло — сообщите администратору.", 13, C['text3']))
+    lay.addStretch()
+    return w
 
 
 def section_lbl(text) -> QLabel:
@@ -86,7 +101,7 @@ def badge(text, color="green") -> QLabel:
     return l
 
 
-#  BUTTON FACTORIES
+#BUTTON FACTORIES
 
 def btn(text, style="ghost", parent=None) -> QPushButton:
     """Создать кнопку с определённым стилем"""
@@ -107,7 +122,7 @@ def sb_btn(icon, text, parent=None) -> QPushButton:
     return b
 
 
-#  INPUT FACTORIES
+#INPUT FACTORIES
 
 def field_input(placeholder="", password=False) -> QLineEdit:
     """Создать стилизованное поле ввода"""
@@ -134,7 +149,7 @@ def combo(items=None) -> QComboBox:
     return c
 
 
-#  SEPARATOR FACTORIES
+#SEPARATOR FACTORIES
 
 def separator() -> QFrame:
     """Создать горизонтальный разделитель"""
@@ -152,7 +167,7 @@ def vline() -> QFrame:
     return f
 
 
-#  STAT CARD FACTORY
+#STAT CARD FACTORY
 
 def stat_card(label: str, value: str, color="text") -> QFrame:
     """Создать статистическую карточку (число — Syne, текст — DM Sans)"""
@@ -169,14 +184,14 @@ def stat_card(label: str, value: str, color="text") -> QFrame:
     lay.setContentsMargins(16, 14, 16, 14)
     lay.setSpacing(4)
 
-    # Метка — DM Sans uppercase
+    #Метка — DM Sans uppercase
     lbl_w = QLabel(label.upper())
     lbl_w.setStyleSheet(
         f"font-size:10px;color:{C['text2']};font-family:{FONT_BODY};"
     )
     lay.addWidget(lbl_w)
 
-    # Значение — Syne Bold (как цифры на сайте)
+    #Значение — Syne Bold (как цифры на сайте)
     val_w = QLabel(value)
     val_w.setStyleSheet(
         f"font-size:28px;font-weight:800;color:{c_val};"

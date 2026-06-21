@@ -17,11 +17,11 @@ from .intents import VectorScope
 
 @dataclass
 class InsightCard:
-    severity: str          # "info" | "warn" | "alert"
+    severity: str          #"info" | "warn" | "alert"
     icon: str
     title: str
     detail: str
-    action: str = ""       # предлагаемый шаг
+    action: str = ""       #предлагаемый шаг
 
 
 def mood_from_average(avg: float) -> str:

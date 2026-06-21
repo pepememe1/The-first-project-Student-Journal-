@@ -48,7 +48,7 @@ class ConflictDialog(QDialog):
         self._reload()
 
     def _reload(self):
-        # очистить
+        #очистить
         while self._vbox.count():
             it = self._vbox.takeAt(0)
             w = it.widget()

@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 PRACTICE_VALUES = {"2", "3", "4", "5"}
 
-# Дефолты методики (прежнее поведение: Н=2.0, экзамены не входят)
+#Дефолты методики (прежнее поведение: Н=2.0, экзамены не входят)
 DEFAULTS = {
     "avg_absence_weight": 2.0,
     "avg_count_absence": True,

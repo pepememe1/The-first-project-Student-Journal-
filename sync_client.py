@@ -24,8 +24,8 @@ class SyncClient:
         self.token = token
 
     def _headers(self) -> dict:
-        # ngrok-skip-browser-warning — чтобы бесплатные туннели (ngrok и пр.) не
-        # подсовывали HTML-страницу-предупреждение вместо JSON ответа API.
+        #ngrok-skip-browser-warning — чтобы бесплатные туннели (ngrok и пр.) не
+        #подсовывали HTML-страницу-предупреждение вместо JSON ответа API.
         h = {"ngrok-skip-browser-warning": "true"}
         if self.token:
             h["Authorization"] = f"Bearer {self.token}"

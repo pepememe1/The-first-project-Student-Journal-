@@ -3,7 +3,7 @@ dashboards.py — Панели управления для студентов, �
 """
 
 from datetime import datetime, timedelta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal as QSignal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QTableWidget, QTableWidgetItem,
@@ -17,16 +17,64 @@ from subjects import load_subjects
 from styles import C, BTN
 from widgets import (
     lbl, title_lbl, section_lbl, btn, stat_card, card, card2,
-    field_input, combo, separator, badge
+    field_input, combo, separator, badge, vector_unavailable_widget
 )
 from ui_components import Sidebar
-from ai_module import AIWidget, AIRequestThread
-from utils import get_api_key, get_groups, get_subjects_for_group, clean_ai_text
+from utils import get_subjects_for_group
 
 
-# ══════════════════════════════════════════════════════════════
-#  STUDENT DASHBOARD
-# ══════════════════════════════════════════════════════════════
+class VectorTipThread(QThread):
+    """Готовит «умный совет» студенту силами Вектора — по фактам из журнала.
+
+    Раньше совет генерировал облачный ИИ-чат; теперь его считает сам Вектор
+    (через свои интенты в vector/intents.py), поэтому фича работает офлайн и не
+    шлёт ничего наружу. Запускаем в фоне, чтобы не подвешивать интерфейс."""
+    finished = QSignal(str)
+    error    = QSignal(str)
+
+    def __init__(self, stud: dict):
+        super().__init__()
+        self._stud = dict(stud or {})
+
+    def run(self):
+        try:
+            from vector import VectorScope
+            from vector import intents as vintents
+
+            scope = VectorScope(
+                role="student",
+                group=self._stud.get("g", ""),
+                student_f=self._stud.get("f", ""),
+                student_n=self._stud.get("n", ""),
+            )
+            #Цифры берём строго из журнала — как и весь Вектор: средний балл,
+            #незакрытые долги и пропуски по всем предметам группы.
+            avg     = vintents.intent_average(scope).data.get("average") or 0
+            debtors = vintents.intent_debtors(scope).data.get("debtors", [])
+            absc    = vintents.intent_absences(scope).data.get("всего", 0)
+
+            parts = []
+            if avg:
+                parts.append(f"Твой средний балл — {avg}.")
+            else:
+                parts.append("Оценок по практикам пока нет — самое время начать "
+                             "набирать.")
+            if debtors:
+                reasons = debtors[0].get("reasons", [])
+                parts.append("Есть незакрытые долги: " + "; ".join(reasons) + ". "
+                             "Загляни к преподавателю и договорись о пересдаче.")
+            else:
+                parts.append("Долгов нет — так держать!")
+            if absc:
+                parts.append(f"Пропусков накопилось {absc} ч — старайся не "
+                             f"пропускать занятия.")
+
+            self.finished.emit("🐯 " + " ".join(parts))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+#STUDENT DASHBOARD
 
 class StudentDashboard(QWidget):
     """Панель студента с журналом, статистикой и ИИ помощником"""
@@ -71,7 +119,7 @@ class StudentDashboard(QWidget):
 
         self.sidebar.set_active("dash")
 
-        # ── Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯) ──
+        #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
         try:
             from vector.widget import VectorPanel, VectorHost
             eng = getattr(self, "vector_engine", None)
@@ -103,7 +151,7 @@ class StudentDashboard(QWidget):
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(16)
 
-        # Заголовок
+        #Заголовок
         hdr = QHBoxLayout()
         col = QVBoxLayout()
         col.addWidget(title_lbl(f"{self.cur_stud['f']} {self.cur_stud['n']}", 22))
@@ -116,7 +164,7 @@ class StudentDashboard(QWidget):
         lay.addLayout(hdr)
         lay.addWidget(separator())
 
-        # Совет карточка
+        #Совет карточка
         tip = QFrame()
         tip.setStyleSheet(
             f"background:rgba(14,98,113,0.06);border:1px solid rgba(20,124,139,0.15);border-radius:12px;"
@@ -144,7 +192,7 @@ class StudentDashboard(QWidget):
         tip_lay.addWidget(self._tip_lbl)
         lay.addWidget(tip)
 
-        # Статистика
+        #Статистика
         stats_row = QHBoxLayout()
         stats_row.setSpacing(10)
         subjects = get_subjects_for_group(self.cur_stud['g'])
@@ -159,7 +207,7 @@ class StudentDashboard(QWidget):
             stats_row.addWidget(sc)
         lay.addLayout(stats_row)
 
-        # Список предметов
+        #Список предметов
         lay.addWidget(section_lbl("Мои предметы"))
         self._subj_list_lay = QVBoxLayout()
         self._subj_list_lay.setSpacing(8)
@@ -198,7 +246,7 @@ class StudentDashboard(QWidget):
         avg = f"{sum(total_g) / len(total_g):.1f}" if total_g else "—"
         att = f"{int(lec_p / lec_t * 100)}%" if lec_t else "—%"
         
-        # Обновить карточки статистики
+        #Обновить карточки статистики
         for c_frame in self._stat_cards.values():
             lay = c_frame.layout()
             lbl_text = lay.itemAt(0).widget().text()
@@ -210,7 +258,7 @@ class StudentDashboard(QWidget):
             elif lbl_text == "ОЦЕНОК":
                 val_w.setText(str(len(total_g)))
 
-        # Список предметов
+        #Список предметов
         while self._subj_list_lay.count():
             item = self._subj_list_lay.takeAt(0)
             if item.widget():
@@ -263,42 +311,12 @@ class StudentDashboard(QWidget):
             self._load_journal()
 
     def _load_tip(self):
-        """Загрузить умный совет от ИИ"""
-        api = get_api_key()
-        if not api:
-            self._tip_lbl.setText("Умный совет недоступен — API ключ не установлен.")
-            return
-        
+        """Умный совет от Вектора — по фактам из журнала, офлайн и без сети."""
         self._tip_lbl.setText("⏳ Загрузка совета...")
-        
-        subjects = get_subjects_for_group(self.cur_stud['g'])
-        lines = []
-        for subj in subjects:
-            book = GradeBook(self.cur_stud['g'], subj)
-            s = next((x for x in book.spisok_stud if x.f.lower() == self.cur_stud['f'].lower()), None)
-            if not s:
-                continue
-            
-            gs, misses = [], 0
-            for l in book.lessons:
-                if l.type in ("Практика", "Экзамен"):
-                    v = s.records.get(l.id, "")
-                    try:
-                        gs.append(int(v.split()[0]))
-                    except:
-                        pass
-                elif l.type == "Лекция" and s.records.get(l.id, "") == "Н":
-                    misses += 1
-            
-            lines.append(f"{subj}: оценки {','.join(map(str, gs)) or 'нет'}, пропусков: {misses}")
-        
-        prompt = (f"Ты дружелюбный помощник студента {self.cur_stud['n']}.\n"
-                  "Напиши ОДИН короткий совет (2-4 предложения). Только русский, без markdown.\n"
-                  f"Данные:\n" + "\n".join(lines or ["Данных пока нет"]))
-        
-        self._tip_thread = AIRequestThread(api, "", prompt)
-        self._tip_thread.finished.connect(lambda t: self._tip_lbl.setText(clean_ai_text(t)))
-        self._tip_thread.error.connect(lambda e: self._tip_lbl.setText("Не удалось загрузить совет."))
+        self._tip_thread = VectorTipThread(self.cur_stud)
+        self._tip_thread.finished.connect(self._tip_lbl.setText)
+        self._tip_thread.error.connect(
+            lambda _e: self._tip_lbl.setText("Совет сейчас недоступен."))
         self._tip_thread.start()
 
     def _build_journal(self):
@@ -369,8 +387,8 @@ class StudentDashboard(QWidget):
             rk = l.id + ("_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
             val = s.records.get(rk if ri > 0 else l.id, "")
 
-            # Пересдача касается только заваливших предыдущую попытку.
-            # Если студент сдал — в его строке прочерк, а не пустая ячейка.
+            #Пересдача касается только заваливших предыдущую попытку.
+            #Если студент сдал — в его строке прочерк, а не пустая ячейка.
             if ri > 0 and not val:
                 prev_key = l.id if ri == 1 else (
                     l.id + ("_retake" if ri - 1 == 1 else f"_retake_{ri - 1}"))
@@ -455,7 +473,7 @@ class StudentDashboard(QWidget):
         avg = f"{sum(k * v for k, v in dist.items()) / all_g:.1f}" if all_g else "—"
         att = f"{int(att_pres / att_total * 100)}%" if att_total else "—"
         
-        # Статистика строка
+        #Статистика строка
         sr = QHBoxLayout()
         sr.setSpacing(10)
         for lbl_t, val, col in [("Средний балл", avg, "blue"), ("Посещаемость", att, "text"),
@@ -463,7 +481,7 @@ class StudentDashboard(QWidget):
             sr.addWidget(stat_card(lbl_t, val, col))
         self._stats_content.addLayout(sr)
         
-        # По предметам
+        #По предметам
         c_subj = card()
         cl = QVBoxLayout(c_subj)
         cl.setContentsMargins(18, 16, 18, 16)
@@ -508,45 +526,9 @@ class StudentDashboard(QWidget):
             ai = VectorPanel(self.vector_engine, docked=False)
         except Exception as _e:
             print(f"[Vector] вкладка не собралась (студент): {_e}")
-            ai = AIWidget(
-                role="student",
-                context_fn=lambda: self._build_student_context(),
-                back_fn=lambda: self.pages.get("dash"),
-                stack_ref=self.stack
-            )
+            ai = vector_unavailable_widget()
         self.pages["ai"] = ai
         self.stack.addWidget(ai)
-
-    def _build_student_context(self):
-        """Построить контекст для ИИ"""
-        subjects = get_subjects_for_group(self.cur_stud['g'])
-        lines = []
-        
-        for subj in subjects:
-            book = GradeBook(self.cur_stud['g'], subj)
-            s = next((x for x in book.spisok_stud if x.f.lower() == self.cur_stud['f'].lower()), None)
-            if not s:
-                continue
-            
-            gs, miss = [], 0
-            for l in book.lessons:
-                if l.type in ("Практика", "Экзамен"):
-                    v = s.records.get(l.id, "")
-                    try:
-                        gs.append(f"{l.type} №{l.number}: {int(v.split()[0])}")
-                    except:
-                        pass
-                elif l.type == "Лекция" and s.records.get(l.id, "") == "Н":
-                    miss += 1
-            
-            lines.append(f"Предмет: {subj}\n" + ("\n".join(gs) or "  оценок нет") + f"\n  пропусков: {miss}")
-        
-        return (
-            f"Ты ИИ-ассистент электронного журнала.\n"
-            f"Студент: {self.cur_stud['f']} {self.cur_stud['n']}, группа {self.cur_stud['g']}.\n"
-            "Обращайся на 'ты'. Только русский язык, без markdown, кратко.\n\n"
-            "ДАННЫЕ СТУДЕНТА:\n" + "\n\n".join(lines)
-        )
 
     def _switch(self, key):
         """Переключиться между вкладками"""

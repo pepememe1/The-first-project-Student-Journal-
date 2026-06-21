@@ -22,11 +22,11 @@ import os
 
 import app_paths
 
-# subjects.json ВСЕГДА рядом с программой (см. app_paths.app_dir): его можно
-# свободно править в любом текстовом редакторе. В .exe НЕ упаковывается.
+#subjects.json ВСЕГДА рядом с программой (см. app_paths.app_dir): его можно
+#свободно править в любом текстовом редакторе. В .exe НЕ упаковывается.
 SUBJECTS_FILE = app_paths.app_file("subjects.json")
 
-# Встроенный список по умолчанию — используется если subjects.json не существует
+#Встроенный список по умолчанию — используется если subjects.json не существует
 _BUILTIN_SUBJECTS = [
     "Аварийно-спасательное, газоспасательное и пожарное оборудование и инструменты",
     "Аварийно-спасательные работы на высоте",
@@ -110,7 +110,7 @@ def load_subjects() -> list:
             return sorted([str(s).strip() for s in data if str(s).strip()])
     except (json.JSONDecodeError, OSError):
         pass
-    # Файл повреждён — восстанавливаем из встроенного
+    #Файл повреждён — восстанавливаем из встроенного
     subjects = sorted(_BUILTIN_SUBJECTS)
     save_subjects(subjects)
     return subjects

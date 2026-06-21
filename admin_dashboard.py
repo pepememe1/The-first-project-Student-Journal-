@@ -18,24 +18,23 @@ from PySide6.QtWidgets import (
 from styles import C, BTN
 from widgets import (
     lbl, title_lbl, section_lbl, btn, combo, card, field_input,
-    separator, stat_card
+    separator, stat_card, vector_unavailable_widget
 )
 from ui_components import Sidebar
-from ai_module import AIWidget
 
 from PySide6.QtCore import QThread, Signal as QSignal
 
 from core import DBManager
 from subjects import load_subjects
-from data_store import get_store as get_gh_store
+from data_store import get_store
 from audit import log_event
 
 
-# ── Фоновый воркер для сетевых/долгих запросов ──────────────────────
-class _GHWorker(QThread):
+#Фоновый воркер для сетевых/долгих запросов
+class _BgWorker(QThread):
     """Выполняет fn() в фоновом потоке, возвращает результат через сигнал."""
-    done  = QSignal(object)   # успех — данные
-    error = QSignal(str)      # ошибка
+    done  = QSignal(object)   #успех — данные
+    error = QSignal(str)      #ошибка
 
     def __init__(self, fn):
         super().__init__()
@@ -76,7 +75,7 @@ class AdminDashboard(QWidget):
     def __init__(self, back_to_login_cb, parent=None):
         super().__init__(parent)
         self._back_cb = back_to_login_cb
-        self._workers = []   # держим ссылки чтобы GC не убил потоки
+        self._workers = []   #держим ссылки чтобы GC не убил потоки
         self._build()
 
     def _build(self):
@@ -89,7 +88,7 @@ class AdminDashboard(QWidget):
             ("groups",   "🏫",  "Группы"),
             ("subjects", "📚",  "Предметы"),
             ("__label__", "", "Система"),
-            ("api",  "🔑",  "API Ключ"),
+            ("api",  "🐯",  "Настройки ИИ"),
             ("pg",   "🌐", "Сервер"),
             ("ai",   "🤖",  "ИИ Помощник"),
         ]
@@ -110,7 +109,7 @@ class AdminDashboard(QWidget):
         self._build_ai()
         self.sidebar.set_active("dash")
 
-        # ── Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯) ──
+        #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
         try:
             from vector.widget import VectorPanel, VectorHost
             eng = getattr(self, "vector_engine", None)
@@ -130,7 +129,7 @@ class AdminDashboard(QWidget):
 
     def _run_bg(self, fn, on_done, on_error=None):
         """Запустить fn() в фоновом потоке; on_done(result) вызовется в UI-потоке."""
-        w = _GHWorker(fn)
+        w = _BgWorker(fn)
         self._workers.append(w)
         w.done.connect(on_done)
         w.done.connect(lambda _: self._workers.remove(w) if w in self._workers else None)
@@ -140,7 +139,7 @@ class AdminDashboard(QWidget):
             w.error.connect(lambda e: print(f"[BG] фоновая ошибка: {e}"))
         w.start()
 
-    # Дашборд
+    #Дашборд
 
     def _build_dash(self):
         w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
@@ -153,7 +152,7 @@ class AdminDashboard(QWidget):
             ("students", "👥",   "Студенты",      "Список и пароли"),
             ("groups",   "🏫",   "Группы",         "Группы и предметы"),
             ("subjects", "📚",   "Предметы",       "Каталог предметов"),
-            ("api",      "🔑",   "API Ключ",       "OpenRouter AI"),
+            ("api",      "🐯",   "Настройки ИИ",   "Озвучка Вектора"),
             ("pg",       "🌐",   "Сервер",         "Адрес и пароль"),
         ]
         grid = QGridLayout(); grid.setSpacing(12)
@@ -172,7 +171,7 @@ class AdminDashboard(QWidget):
 
     def _refresh_dash(self):
         def _fetch():
-            gh = get_gh_store()
+            gh = get_store()
             try: t = len(gh.get_teachers()) if gh else 0
             except: t = 0
             try: s = len(gh.get_students()) if gh else 0
@@ -198,7 +197,7 @@ class AdminDashboard(QWidget):
 
         self._run_bg(_fetch, _apply)
 
-    # Преподаватели
+    #Преподаватели
 
     def _build_teachers(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
@@ -222,7 +221,7 @@ class AdminDashboard(QWidget):
     def _render_teachers(self):
         q = self._t_search.text().lower()
         def _fetch():
-            gh = get_gh_store()
+            gh = get_store()
             return gh.get_teachers() if gh else {}
         def _apply(teachers):
             self._t_list.clear()
@@ -234,7 +233,7 @@ class AdminDashboard(QWidget):
         self._run_bg(_fetch, _apply)
 
     def _open_teacher(self, name):
-        gh = get_gh_store()
+        gh = get_store()
         teachers = gh.get_teachers() if gh else {}
         data = teachers.get(name, {})
         d = QDialog(self); d.setWindowTitle(f"Преподаватель: {name}"); d.resize(420, 520)
@@ -249,7 +248,7 @@ class AdminDashboard(QWidget):
         btns  = QHBoxLayout()
         del_b = btn("🗑 Удалить", "red")
         def _del():
-            gh = get_gh_store()
+            gh = get_store()
             ts = gh.get_teachers() if gh else {}
             ts.pop(name, None)
             if gh: gh.set_teachers(ts)
@@ -257,7 +256,7 @@ class AdminDashboard(QWidget):
         del_b.clicked.connect(_del)
         save_b = btn("Сохранить", "green")
         def _save():
-            gh       = get_gh_store()
+            gh       = get_store()
             ts       = gh.get_teachers() if gh else {}
             new_name = nm_edit.text().strip()
             nd       = dict(ts.get(name, {}))
@@ -291,7 +290,7 @@ class AdminDashboard(QWidget):
         def _add():
             n = nm.text().strip(); p = pw.text().strip()
             if not n: QMessageBox.warning(d, "Ошибка", "Введите ФИО"); return
-            gh = get_gh_store()
+            gh = get_store()
             ts = gh.get_teachers() if gh else {}
             if not lg.text().strip():
                 QMessageBox.warning(d, "Ошибка", "Введите логин"); return
@@ -308,11 +307,11 @@ class AdminDashboard(QWidget):
     def _export_teachers(self):
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт преподавателей", "teachers.json", "JSON (*.json)")
         if not path: return
-        gh = get_gh_store()
+        gh = get_store()
         ts = gh.get_teachers() if gh else {}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(ts, f, ensure_ascii=False, indent=2)
-        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        #Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
         log_event("export_personal_data", "admin", f"teachers={len(ts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(ts)} преподавателей")
 
@@ -323,7 +322,7 @@ class AdminDashboard(QWidget):
             with open(path, encoding="utf-8") as f: new_t = json.load(f)
             if not isinstance(new_t, dict):
                 QMessageBox.warning(self, "Ошибка", "Неверный формат"); return
-            gh = get_gh_store()
+            gh = get_store()
             cur   = gh.get_teachers() if gh else {}
             added = [n for n in new_t if n not in cur]
             for n in added: cur[n] = new_t[n]
@@ -333,7 +332,7 @@ class AdminDashboard(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
-    # Студенты 
+    #Студенты 
 
     def _build_students(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
@@ -348,7 +347,7 @@ class AdminDashboard(QWidget):
         lay.addLayout(hdr)
         fltr = QHBoxLayout()
         self._s_search = field_input("Поиск..."); self._s_search.textChanged.connect(self._render_students)
-        gh = get_gh_store()
+        gh = get_store()
         self._s_grp_filter = combo(
             ["Все группы"] + [g["name"] for g in (gh.get_groups() if gh else [])]
         )
@@ -364,7 +363,7 @@ class AdminDashboard(QWidget):
         q   = self._s_search.text().lower()
         grp = self._s_grp_filter.currentText()
         def _fetch():
-            gh = get_gh_store()
+            gh = get_store()
             return gh.get_students() if gh else []
         def _apply(students):
             self._s_list.clear()
@@ -378,7 +377,7 @@ class AdminDashboard(QWidget):
         self._run_bg(_fetch, _apply)
 
     def _open_student(self, idx):
-        gh = get_gh_store()
+        gh = get_store()
         students = gh.get_students() if gh else []
         if idx >= len(students): return
         s = students[idx]
@@ -437,7 +436,7 @@ class AdminDashboard(QWidget):
             s = sn.text().strip(); n = nm.text().strip()
             if not s or not n:
                 QMessageBox.warning(d, "Ошибка", "Введите фамилию и имя"); return
-            gh = get_gh_store()
+            gh = get_store()
             sts = gh.get_students() if gh else []
             if not lg.text().strip():
                 QMessageBox.warning(d, "Ошибка", "Введите логин"); return
@@ -450,11 +449,11 @@ class AdminDashboard(QWidget):
     def _export_students(self):
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт", "students.json", "JSON (*.json)")
         if not path: return
-        gh = get_gh_store()
+        gh = get_store()
         sts = gh.get_students() if gh else []
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sts, f, ensure_ascii=False, indent=2)
-        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        #Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
         log_event("export_personal_data", "admin", f"students={len(sts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(sts)}")
 
@@ -465,7 +464,7 @@ class AdminDashboard(QWidget):
             with open(path, encoding="utf-8") as f: new_s = json.load(f)
             if not isinstance(new_s, list):
                 QMessageBox.warning(self, "Ошибка", "Неверный формат"); return
-            gh = get_gh_store()
+            gh = get_store()
             cur   = gh.get_students() if gh else []
             added = [s for s in new_s
                      if not any(x.get("surname") == s.get("surname")
@@ -477,7 +476,7 @@ class AdminDashboard(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
-    # Группы 
+    #Группы 
 
     def _build_groups(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
@@ -496,7 +495,7 @@ class AdminDashboard(QWidget):
 
     def _render_groups(self):
         def _fetch():
-            gh = get_gh_store()
+            gh = get_store()
             return gh.get_groups() if gh else []
         def _apply(groups):
             self._g_table.setRowCount(len(groups))
@@ -525,24 +524,24 @@ class AdminDashboard(QWidget):
         def _add():
             n = nm.text().strip()
             if not n: QMessageBox.warning(d, "Ошибка", "Введите название"); return
-            _gh = get_gh_store()
-            gs = _gh.get_groups() if _gh else []
+            store = get_store()
+            gs = store.get_groups() if store else []
             if any(g["name"] == n for g in gs):
                 QMessageBox.warning(d, "Ошибка", "Группа уже есть"); return
             gs.append({"name": n, "subjects": _get_checked(sj)})
-            if _gh: _gh.set_groups(gs)
+            if store: store.set_groups(gs)
             d.accept(); self._render_groups(); self._refresh_dash()
         save.clicked.connect(_add); lay.addLayout(btns); d.exec()
 
     def _del_group(self, name):
         if QMessageBox.question(self, "Удалить?", f"Удалить группу {name}?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
-        _gh = get_gh_store()
-        gs = [g for g in (_gh.get_groups() if _gh else []) if g["name"] != name]
-        if _gh: _gh.set_groups(gs)
+        store = get_store()
+        gs = [g for g in (store.get_groups() if store else []) if g["name"] != name]
+        if store: store.set_groups(gs)
         self._render_groups(); self._refresh_dash()
 
-    # Предметы
+    #Предметы
 
     def _build_subjects(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
@@ -582,24 +581,13 @@ class AdminDashboard(QWidget):
         for it in items: delete_subject(it.text())
         self._render_subjects()
 
-    # API ключ
+    #API ключ
 
     def _build_api(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
-        lay.addWidget(title_lbl("API Ключ OpenRouter"))
-        c = card(); cl = QVBoxLayout(c); cl.setContentsMargins(20, 18, 20, 18); cl.setSpacing(10)
-        cl.addWidget(section_lbl("🔑 OpenRouter AI"))
-        self._api_status = lbl("", 12); cl.addWidget(self._api_status)
-        cl.addWidget(lbl("ВВЕДИТЕ НОВЫЙ КЛЮЧ", 10, C['text3']))
-        self._api_inp = field_input("sk-or-v1-...", password=True); cl.addWidget(self._api_inp)
-        btn_row = QHBoxLayout()
-        save_b = btn("💾 Сохранить", "green"); del_b = btn("🗑 Удалить", "red")
-        save_b.clicked.connect(self._save_api); del_b.clicked.connect(self._del_api)
-        btn_row.addWidget(save_b); btn_row.addWidget(del_b); btn_row.addStretch()
-        cl.addLayout(btn_row)
-        lay.addWidget(c)
+        lay.addWidget(title_lbl("Настройки ИИ-помощника «Вектор»"))
 
-        # ── Карточка: ИИ-помощник «Вектор» (офлайн / GigaChat / ollama) ──
+        #Карточка: ИИ-помощник «Вектор» (офлайн / GigaChat / ollama)
         from PySide6.QtWidgets import QComboBox as _QC, QCheckBox as _QCB
         vc = card(); vl = QVBoxLayout(vc); vl.setContentsMargins(20, 18, 20, 18); vl.setSpacing(10)
         vl.addWidget(section_lbl("🐯 ИИ-помощник «Вектор»"))
@@ -612,7 +600,7 @@ class AdminDashboard(QWidget):
         self._vec_provider.currentIndexChanged.connect(self._toggle_vec_blocks)
         vl.addWidget(self._vec_provider)
 
-        # — GigaChat —
+        #GigaChat
         self._vec_giga_box = QWidget(); gbl = QVBoxLayout(self._vec_giga_box)
         gbl.setContentsMargins(0, 0, 0, 0); gbl.setSpacing(6)
         gbl.addWidget(lbl("Ключ авторизации GigaChat", 10, C['text3']))
@@ -636,7 +624,7 @@ class AdminDashboard(QWidget):
                           "Нужен пакет: pip install gigachat", 10, C['text3']))
         vl.addWidget(self._vec_giga_box)
 
-        # — ollama —
+        #ollama
         self._vec_local_box = QWidget(); lbx = QVBoxLayout(self._vec_local_box)
         lbx.setContentsMargins(0, 0, 0, 0); lbx.setSpacing(6)
         lbx.addWidget(lbl("Модель ollama", 10, C['text3']))
@@ -654,65 +642,12 @@ class AdminDashboard(QWidget):
 
         lay.addStretch()
         self.pages["api"] = w; self.stack.addWidget(w)
-        self._refresh_api()
         self._refresh_vector_cfg()
 
-    def _refresh_api(self):
-        def _fetch():
-            gh = get_gh_store()
-            if not gh: return None
-            try: return gh.get_api_key()
-            except: return None
-
-        def _apply(k):
-            gh = get_gh_store()
-            if not gh:
-                self._api_status.setText("❌ Ключ не задан")
-                self._api_status.setStyleSheet(f"font-size:12px;color:{C['red']};")
-                return
-            if k:
-                masked = k[:8] + "..." + k[-4:] if len(k) > 12 else "***"
-                self._api_status.setText(f"✅ Ключ установлен: {masked}")
-                self._api_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
-                self._api_inp.setText(k)
-            else:
-                self._api_status.setText("❌ Ключ не установлен — ИИ не будет работать")
-                self._api_status.setStyleSheet(f"font-size:12px;color:{C['red']};")
-                self._api_inp.clear()
-
-        self._run_bg(_fetch, _apply)
-
-    def _save_api(self):
-        k = self._api_inp.text().strip()
-        if not k: 
-            QMessageBox.warning(self, "Ошибка", "Введите ключ")
-            return
-        gh = get_gh_store()
-        if not gh:
-            QMessageBox.critical(self, "Ошибка", "Хранилище недоступно")
-            return
-        if gh.set_api_key(k):
-            self._refresh_api()
-            QMessageBox.information(self, "Сохранено", "API ключ сохранён.")
-        else:
-            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить ключ")
-
-    def _del_api(self):
-        if QMessageBox.question(self, "Удалить?", "Удалить API ключ?",
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: 
-            return
-        gh = get_gh_store()
-        if gh:
-            if gh.set_api_key(""):
-                self._refresh_api()
-                QMessageBox.information(self, "Удалено", "API ключ удалён.")
-            else:
-                QMessageBox.critical(self, "Ошибка", "Не удалось удалить ключ")
-
-    # ── ИИ-помощник «Вектор»: провайдер озвучки ──────────────
+    #ИИ-помощник «Вектор»: провайдер озвучки
     def _vec_cfg(self) -> dict:
         try:
-            return dict(get_gh_store()._config() or {})
+            return dict(get_store()._config() or {})
         except Exception:
             return {}
 
@@ -780,7 +715,7 @@ class AdminDashboard(QWidget):
 
         self._run_bg(_check, _ok, _err)
 
-    # Сервер синхронизации (адрес API + пароль администратора)
+    #Сервер синхронизации (адрес API + пароль администратора)
 
     def _build_pg(self):
         from app_settings import get_api_url
@@ -788,9 +723,9 @@ class AdminDashboard(QWidget):
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
         lay.addWidget(title_lbl("Сервер синхронизации"))
 
-        # ── Карточка: адрес сервера колледжа (API) ────────────────────────
-        # Десктоп общается с сервером по сети (HTTP). Адрес обычно уже вшит в
-        # сборку; здесь его можно переопределить, если сервер переехал.
+        #Карточка: адрес сервера колледжа (API)
+        #Десктоп общается с сервером по сети (HTTP). Адрес обычно уже вшит в
+        #сборку; здесь его можно переопределить, если сервер переехал.
         ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16); al.setSpacing(10)
         al.addWidget(section_lbl("🌐 Адрес сервера"))
         al.addWidget(lbl("Адрес сервера колледжа. Обычно уже задан в программе — менять "
@@ -804,7 +739,67 @@ class AdminDashboard(QWidget):
         arow.addWidget(asave); arow.addStretch(); al.addLayout(arow)
         lay.addWidget(ac)
 
-        # ── Карточка: смена пароля администратора ──────────────────
+        #Карточка: ЭТОТ ПК как сервер (хостинг сервера синхронизации)
+        #Нужна только на ОДНОМ ПК — том, который будет сервером. На клиентских
+        #машинах её просто не трогают (там хватает «Адреса сервера» выше).
+        from PySide6.QtWidgets import QComboBox as _QC, QCheckBox as _QCB
+        hc = card(); hl = QVBoxLayout(hc); hl.setContentsMargins(18, 16, 18, 16); hl.setSpacing(10)
+        hl.addWidget(section_lbl("🖥️ Этот ПК как сервер"))
+        hl.addWidget(lbl("Запустить сервер синхронизации прямо на этом компьютере. "
+                         "Нужно только на ОДНОМ ПК колледжа (он станет сервером). "
+                         "Клиентам затем укажите его адрес в поле выше.", 11, C['text3']))
+
+        hl.addWidget(lbl("ДВИЖОК БАЗЫ ДАННЫХ СЕРВЕРА", 10, C['text3']))
+        self._srv_engine = _QC()
+        self._srv_engine.addItem("SQLite — без установки, для небольшого колледжа", "sqlite")
+        self._srv_engine.addItem("PostgreSQL — для многих ПК и нагрузки", "postgres")
+        self._srv_engine.currentIndexChanged.connect(self._toggle_pg_fields)
+        hl.addWidget(self._srv_engine)
+
+        #Блок реквизитов PostgreSQL (виден только при выборе PostgreSQL)
+        self._pg_box = QWidget(); pgl = QVBoxLayout(self._pg_box)
+        pgl.setContentsMargins(0, 0, 0, 0); pgl.setSpacing(6)
+        self._pg_host = field_input("localhost")
+        self._pg_port = field_input("5432")
+        self._pg_db   = field_input("vsgutu_grades")
+        self._pg_user = field_input("vsgutu_user")
+        self._pg_pass = field_input("пароль БД", password=True)
+        for lab, wdg in [("ХОСТ", self._pg_host), ("ПОРТ", self._pg_port),
+                         ("БАЗА", self._pg_db), ("ПОЛЬЗОВАТЕЛЬ", self._pg_user),
+                         ("ПАРОЛЬ", self._pg_pass)]:
+            pgl.addWidget(lbl(lab, 10, C['text3'])); pgl.addWidget(wdg)
+        show_pg = _QCB("Показать пароль")
+        show_pg.toggled.connect(lambda on: self._pg_pass.setEchoMode(
+            QLineEdit.Normal if on else QLineEdit.Password))
+        pgl.addWidget(show_pg)
+        test_pg = btn("Проверить подключение", "blue"); test_pg.clicked.connect(self._test_pg_conn)
+        pgl.addWidget(test_pg)
+        self._pg_status = lbl("", 12); self._pg_status.setWordWrap(True)
+        pgl.addWidget(self._pg_status)
+        hl.addWidget(self._pg_box)
+
+        dbrow = QHBoxLayout()
+        dbsave = btn("💾 Сохранить настройки БД", "green"); dbsave.clicked.connect(self._save_server_db)
+        dbrow.addWidget(dbsave); dbrow.addStretch(); hl.addLayout(dbrow)
+
+        hl.addWidget(separator())
+        prow = QHBoxLayout()
+        prow.addWidget(lbl("ПОРТ СЕРВЕРА", 10, C['text3']))
+        self._srv_port = field_input("8000"); self._srv_port.setFixedWidth(90)
+        self._srv_port.setText("8000")
+        prow.addWidget(self._srv_port); prow.addStretch()
+        hl.addLayout(prow)
+
+        btnrow = QHBoxLayout()
+        self._srv_start = btn("▶ Запустить сервер", "green"); self._srv_start.clicked.connect(self._start_server)
+        self._srv_stop  = btn("■ Остановить", "red"); self._srv_stop.clicked.connect(self._stop_server)
+        btnrow.addWidget(self._srv_start); btnrow.addWidget(self._srv_stop); btnrow.addStretch()
+        hl.addLayout(btnrow)
+        self._srv_status = lbl("", 12); self._srv_status.setWordWrap(True)
+        hl.addWidget(self._srv_status)
+        lay.addWidget(hc)
+
+        #Карточка: смена пароля администратора
         sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
         sl.addWidget(section_lbl("🔐 Пароль администратора"))
         self._adm_old = field_input("Текущий пароль", password=True)
@@ -821,6 +816,149 @@ class AdminDashboard(QWidget):
         lay.addStretch()
         w.setWidget(inner)
         self.pages["pg"] = w; self.stack.addWidget(w)
+        self._refresh_server_cfg()
+        self._refresh_server_status()
+
+    #ЭТОТ ПК как сервер: настройка движка БД и запуск
+    def _toggle_pg_fields(self, *_):
+        """Поля PostgreSQL видны только при выбранном движке PostgreSQL."""
+        self._pg_box.setVisible(self._srv_engine.currentData() == "postgres")
+
+    def _refresh_server_cfg(self):
+        """Подтягивает текущие настройки server/.env в форму."""
+        try:
+            import server_control
+        except Exception:
+            return
+        is_pg = server_control.is_postgres()
+        self._srv_engine.setCurrentIndex(1 if is_pg else 0)
+        if is_pg:
+            #Разбираем строку подключения, чтобы заполнить поля (без пароля — он
+            #остаётся в .env; пустое поле = «не менять» при сохранении).
+            try:
+                from urllib.parse import urlparse, unquote
+                u = urlparse(server_control.get_db_url())
+                self._pg_host.setText(u.hostname or "localhost")
+                self._pg_port.setText(str(u.port or 5432))
+                self._pg_db.setText((u.path or "/vsgutu_grades").lstrip("/"))
+                self._pg_user.setText(unquote(u.username or ""))
+            except Exception:
+                pass
+        self._toggle_pg_fields()
+
+    def _refresh_server_status(self):
+        """Показывает, запущен ли сервер на этом ПК, и блокирует кнопки по месту."""
+        try:
+            import server_control
+        except Exception:
+            self._srv_status.setText("Модуль управления сервером недоступен.")
+            return
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+
+        def _check():
+            return server_control.server_running(port)
+
+        def _apply(running):
+            if running:
+                self._srv_status.setText(f"✅ Сервер запущен на порту {port}.")
+                self._srv_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+            else:
+                self._srv_status.setText("⏹ Сервер на этом ПК не запущен.")
+                self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+            self._srv_start.setEnabled(not running)
+            self._srv_stop.setEnabled(running)
+
+        self._run_bg(_check, _apply)
+
+    def _test_pg_conn(self):
+        import server_control
+        self._pg_status.setText("⏳ Проверяю подключение...")
+        self._pg_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+        host, port = self._pg_host.text(), self._pg_port.text()
+        db, user, pw = self._pg_db.text(), self._pg_user.text(), self._pg_pass.text()
+
+        def _check():
+            return server_control.test_postgres(host, port, db, user, pw)
+
+        def _apply(res):
+            ok, msg = res
+            if ok:
+                self._pg_status.setText(f"✓ Подключение успешно: {str(msg)[:60]}")
+                self._pg_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+            else:
+                self._pg_status.setText("✗ " + str(msg))
+                self._pg_status.setStyleSheet("font-size:12px;color:#b9772b;")
+
+        self._run_bg(_check, _apply)
+
+    def _save_server_db(self):
+        import server_control
+        engine = self._srv_engine.currentData()
+        if engine == "postgres":
+            pw = self._pg_pass.text()
+            if not pw:
+                #Пустой пароль при уже настроенном PG — оставить прежний из .env.
+                from urllib.parse import urlparse, unquote
+                try:
+                    u = urlparse(server_control.get_db_url())
+                    pw = unquote(u.password or "") if server_control.is_postgres() else ""
+                except Exception:
+                    pw = ""
+            ok = server_control.use_postgres(self._pg_host.text(), self._pg_port.text(),
+                                             self._pg_db.text(), self._pg_user.text(), pw)
+        else:
+            ok = server_control.use_sqlite()
+        if ok:
+            QMessageBox.information(
+                self, "Сохранено",
+                "Настройки БД сервера сохранены в server/.env.\n\n"
+                "Чтобы сменить движок БД (SQLite ⇄ PostgreSQL), перезапустите "
+                "программу — затем нажмите «Запустить сервер».")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить настройки сервера")
+
+    def _start_server(self):
+        import server_control
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+        self._srv_status.setText("⏳ Запускаю сервер...")
+        self._srv_start.setEnabled(False)
+
+        def _do():
+            return server_control.start_server(port)
+
+        def _apply(res):
+            ok, msg = res
+            if not ok:
+                QMessageBox.critical(self, "Сервер", msg)
+            self._refresh_server_status()
+
+        self._run_bg(_do, _apply)
+
+    def _stop_server(self):
+        import server_control
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+        self._srv_status.setText("⏳ Останавливаю сервер...")
+        self._srv_stop.setEnabled(False)
+
+        def _do():
+            return server_control.stop_server(port)
+
+        def _apply(res):
+            ok, msg = res
+            if not ok:
+                QMessageBox.warning(self, "Сервер", msg)
+            self._refresh_server_status()
+
+        self._run_bg(_do, _apply)
 
     def _save_api_url(self):
         from app_settings import set_api_url
@@ -836,7 +974,7 @@ class AdminDashboard(QWidget):
     def _change_admin_pw(self):
         """Смена пароля администратора. Меняется в общем конфиге → синхронизируется
         на все ПК через сервер (API)."""
-        gh = get_gh_store()
+        gh = get_store()
         if not gh:
             QMessageBox.critical(self, "Ошибка", "Хранилище недоступно"); return
         old = self._adm_old.text()
@@ -855,15 +993,14 @@ class AdminDashboard(QWidget):
         else:
             QMessageBox.critical(self, "Ошибка", "Не удалось сохранить новый пароль")
 
-    # ИИ
+    #ИИ
 
     def _build_ai(self):
-        """Вкладка «ИИ Помощник» — теперь Вектор (вместо облачного чата)."""
+        """Вкладка «ИИ Помощник» — Вектор (офлайн / GigaChat / Ollama)."""
         try:
             from vector import VectorEngine, VectorScope, get_provider
             from vector.widget import VectorPanel
             try:
-                from data_store import get_store
                 _cfg = get_store()._config()
             except Exception:
                 _cfg = {}
@@ -871,27 +1008,8 @@ class AdminDashboard(QWidget):
             ai = VectorPanel(self.vector_engine, docked=False)
         except Exception as _e:
             print(f"[Vector] вкладка не собралась (админ): {_e}")
-            ai = AIWidget(
-                role="admin",
-                context_fn=self._admin_context,
-                back_fn=lambda: self.pages.get("dash"),
-                stack_ref=self.stack
-            )
+            ai = vector_unavailable_widget()
         self.pages["ai"] = ai; self.stack.addWidget(ai)
-
-    def _admin_context(self):
-        gh = get_gh_store()
-        try: t = len(gh.get_teachers()) if gh else 0
-        except: t = 0
-        try: s = len(gh.get_students()) if gh else 0
-        except: s = 0
-        try: g = len(gh.get_groups()) if gh else 0
-        except: g = 0
-        return (
-            f"Ты ИИ-ассистент системы ВСГУТУ для администратора.\n"
-            f"Преподавателей: {t}, Студентов: {s}, Групп: {g}.\n"
-            "Отвечай только на русском, кратко и по делу."
-        )
 
     #Роутинг
 
@@ -905,7 +1023,8 @@ class AdminDashboard(QWidget):
             if key == "students": self._refresh_students_combo(); self._render_students()
             if key == "groups":   self._render_groups()
             if key == "subjects": self._render_subjects()
-            if key == "api":      self._refresh_api()
+            if key == "api":      self._refresh_vector_cfg()
+            if key == "pg":       self._refresh_server_status()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
@@ -926,7 +1045,7 @@ class AdminDashboard(QWidget):
     def _refresh_students_combo(self):
         """Обновить список групп в фильтре студентов (фоновая загрузка)."""
         def _fetch():
-            gh = get_gh_store()
+            gh = get_store()
             return ["Все группы"] + [g["name"] for g in (gh.get_groups() if gh else [])]
         def _apply(groups):
             current = self._s_grp_filter.currentText()

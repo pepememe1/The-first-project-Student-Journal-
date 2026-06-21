@@ -20,7 +20,7 @@ from auth_pages import LoginPage
 from dashboards import StudentDashboard
 from utils import parse_logins
 
-# Импорты для Teacher и Admin Dashboard (создадим отдельно)
+#Импорты для Teacher и Admin Dashboard (создадим отдельно)
 try:
     from teacher_dashboard import TeacherDashboard
 except ImportError:
@@ -44,18 +44,18 @@ class MainAppWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.setStyleSheet(APP_STYLE)
 
-        # Загрузить базу учителей
+        #Загрузить базу учителей
         self.teachers_db, _ = parse_logins()
-        
-        # Стек виджетов для переключения между страницами
+    
+        #Стек виджетов для переключения между страницами
         self._stack = QStackedWidget()
 
-        # Верхняя панель (скрыта на странице входа)
+        #Верхняя панель (скрыта на странице входа)
         self._header = HeaderBar()
         self._header.logout_clicked.connect(self._logout)
         self._header.hide()
 
-        # Обёртка (заголовок + содержимое)
+        #Обёртка (заголовок + содержимое)
         wrapper = QWidget()
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(0, 0, 0, 0)
@@ -64,19 +64,19 @@ class MainAppWindow(QMainWindow):
         wl.addWidget(self._stack, 1)
         self.setCentralWidget(wrapper)
 
-        # Единая страница входа: роль (студент / преподаватель / администратор)
-        # определяется по логину и паролю автоматически. Отдельной страницы для
-        # администратора больше нет — вход у всех через одну форму.
+        #Единая страница входа: роль (студент / преподаватель / администратор)
+        #определяется по логину и паролю автоматически. Отдельной страницы для
+        #администратора больше нет — вход у всех через одну форму.
         self._login = LoginPage(self.teachers_db)
         self._login.login_student.connect(self._on_student_login)
         self._login.login_teacher.connect(self._on_teacher_login)
         self._login.login_admin.connect(self._on_admin_login)
         self._stack.addWidget(self._login)
 
-        # Начальное состояние — страница входа
+        #Начальное состояние — страница входа
         self._stack.setCurrentWidget(self._login)
 
-        # Авто-обновление UI после фоновой синхронизации (если включён сервер).
+        #Авто-обновление UI после фоновой синхронизации (если включён сервер).
         self._sync_bridge = _SyncBridge()
         self._sync_bridge.synced.connect(self._on_synced)
         try:
@@ -139,13 +139,13 @@ class MainAppWindow(QMainWindow):
 
     def _logout(self):
         """Выход из системы"""
-        # Останавливаем фоновую синхронизацию текущего пользователя.
+        #Останавливаем фоновую синхронизацию текущего пользователя.
         try:
             from sync_runner import stop as _sync_stop
             _sync_stop()
         except Exception:
             pass
-        # Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
+        #Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
         while self._stack.count() > 1:
             w = self._stack.widget(self._stack.count() - 1)
             self._stack.removeWidget(w)
@@ -154,6 +154,6 @@ class MainAppWindow(QMainWindow):
         self._stack.setCurrentWidget(self._login)
         self._header.hide()
         
-        # Обновить базу учителей
+        #Обновить базу учителей
         self.teachers_db, _ = parse_logins()
         self._login.update_teachers(self.teachers_db)

@@ -6,10 +6,10 @@ import sys
 import os
 
 
-# Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
-# консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу
-# (UnicodeEncodeError). По всему проекту есть такие print — делаем вывод
-# неубиваемым ОДИН раз здесь, до любых сообщений.
+#Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
+#консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу
+#(UnicodeEncodeError). По всему проекту есть такие print — делаем вывод
+#неубиваемым ОДИН раз здесь, до любых сообщений.
 def _safe_stream(stream):
     if stream is None:
         try:
@@ -48,8 +48,8 @@ def get_icon() -> QIcon:
 
 
 def main():
-    # Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
-    # (см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
+    #Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
+    #(см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
     from core import DBManager
     DBManager.init()
 
@@ -88,12 +88,11 @@ def main():
     window.raise_()
     window.activateWindow()
 
-    #Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
+    #Авто-бэкап локальной базы при выходе
     def _on_quit():
         try:
-            from core import DBManager, _syncer
+            from core import DBManager
             DBManager.backup(reason="on_exit")
-            _syncer.stop()
         except Exception as _e:
             print(f"[exit] {_e}")
     app.aboutToQuit.connect(_on_quit)

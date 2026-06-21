@@ -16,7 +16,7 @@ import sys
 from PySide6.QtGui import QFontDatabase, QFont
 from PySide6.QtWidgets import QApplication
 
-# Институциональный системный стек (приоритет — Windows/Segoe UI)
+#Институциональный системный стек (приоритет — Windows/Segoe UI)
 _BODY_CANDIDATES  = ["Segoe UI", "PT Sans", "Arial", "Helvetica", "sans-serif"]
 _TITLE_CANDIDATES = ["Segoe UI Semibold", "Segoe UI", "PT Sans", "Arial", "sans-serif"]
 

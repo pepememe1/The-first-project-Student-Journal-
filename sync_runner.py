@@ -1,8 +1,8 @@
 """
 sync_runner.py — Фоновая синхронизация десктопа с сервером (через API).
 
-Работает в отдельном потоке-демоне (как PGSyncer в core), чтобы не блокировать
-интерфейс. Запускается после входа пользователя, ЕСЛИ задан адрес сервера
+Работает в отдельном потоке-демоне, чтобы не блокировать интерфейс.
+Запускается после входа пользователя, ЕСЛИ задан адрес сервера
 (app_settings.get_api_url). Нет сети/сервера — тихо ждёт и повторяет позже:
 offline-first сохраняется, прога продолжает работать на локальном SQLite.
 
@@ -24,8 +24,8 @@ class SyncManager:
         self._password = ""
         self._role = ""
         self._interval = interval_sec
-        self._on_synced = None   # колбэк после успешного цикла (для обновления UI)
-        self._wake = threading.Event()   # «будильник» для немедленного синка
+        self._on_synced = None   #колбэк после успешного цикла (для обновления UI)
+        self._wake = threading.Event()   #«будильник» для немедленного синка
 
     def trigger(self):
         """Разбудить синкер прямо сейчас (например, после сохранения данных),
@@ -41,7 +41,7 @@ class SyncManager:
         """Запустить фоновую синхронизацию для вошедшего пользователя."""
         url = get_api_url()
         if not url:
-            return   # офлайн-режим без сервера — синк не нужен
+            return   #офлайн-режим без сервера — синк не нужен
         self._login, self._password, self._role = login, password, role
         if self._running:
             return
@@ -81,19 +81,19 @@ class SyncManager:
                     sync_engine.sync_once(self._client)
                     if self._on_synced:
                         try:
-                            self._on_synced()   # сигнал «данные обновились» в UI
+                            self._on_synced()   #сигнал «данные обновились» в UI
                         except Exception:
                             pass
             except Exception as e:
-                # Сеть/токен/сервер недоступны — не критично, повторим позже.
+                #Сеть/токен/сервер недоступны — не критично, повторим позже.
                 self._client = None   # сбросим, чтобы перелогиниться
                 print(f"[sync] отложено: {e}")
-            # Ждём интервал ИЛИ «будильник» (trigger при изменении данных).
+            #Ждём интервал ИЛИ «будильник» (trigger при изменении данных).
             self._wake.wait(timeout=self._interval)
             self._wake.clear()
 
 
-# Глобальный менеджер на процесс.
+#Глобальный менеджер на процесс.
 _manager = SyncManager()
 
 

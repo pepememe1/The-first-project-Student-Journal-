@@ -22,8 +22,8 @@ class Anonymizer:
     """
 
     def __init__(self):
-        self._fwd: Dict[str, str] = {}     # имя -> плейсхолдер
-        self._rev: Dict[str, str] = {}     # плейсхолдер -> имя
+        self._fwd: Dict[str, str] = {}     #имя -> плейсхолдер
+        self._rev: Dict[str, str] = {}     #плейсхолдер -> имя
         self._n = 0
 
     def placeholder_for(self, real_name: str) -> str:

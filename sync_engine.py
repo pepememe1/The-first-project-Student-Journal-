@@ -15,11 +15,13 @@ sync_client. Любая сетевая ошибка не критична: си�
 прогонкой round-trip через сервер. Класс SyncEngine связывает их с локальным
 хранилищем и клиентом (его проводка в жизненный цикл приложения — отдельный шаг).
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _now() -> str:
-    return datetime.now().isoformat()   # с микросекундами (см. data_store._now_iso)
+    #UTC + микросекунды (единый формат с сервером и data_store._now_iso) —
+    #чтобы LWW-сравнение строк не зависело от часового пояса клиента.
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
@@ -31,9 +33,7 @@ def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
     return inc_ts == cur_ts and bool(inc_deleted)
 
 
-# ─────────────────────────────────────────────────────────────
-#  Стабильные идентификаторы сущностей (нужны для upsert на сервере)
-# ─────────────────────────────────────────────────────────────
+#Стабильные идентификаторы сущностей (нужны для upsert на сервере)
 def _student_id(s: dict) -> str:
     login = (s.get("login") or "").strip()
     if login:
@@ -46,9 +46,7 @@ def _teacher_id(fullname: str, data: dict) -> str:
     return f"teach:{login}" if login else f"teach:{fullname}"
 
 
-# ─────────────────────────────────────────────────────────────
-#  Студенты  ↔  users(role=student)
-# ─────────────────────────────────────────────────────────────
+#Студенты  <->  users(role=student)
 def students_to_users(students: list) -> list:
     out = []
     for s in students:
@@ -78,9 +76,7 @@ def users_to_students(users: list) -> list:
     return out
 
 
-# ─────────────────────────────────────────────────────────────
-#  Преподаватели (dict {ФИО: data})  ↔  users(role=teacher)
-# ─────────────────────────────────────────────────────────────
+#Преподаватели (dict {ФИО: data})  ↔  users(role=teacher)
 def teachers_to_users(teachers: dict) -> list:
     out = []
     for fullname, d in teachers.items():
@@ -110,9 +106,7 @@ def users_to_teachers(users: list) -> dict:
     return out
 
 
-# ─────────────────────────────────────────────────────────────
-#  Группы (list)  ↔  groups
-# ─────────────────────────────────────────────────────────────
+#  Группы (list)  <->  groups
 def groups_to_rows(groups: list) -> list:
     return [{
         "id": f"grp:{g.get('name','')}", "name": g.get("name", ""),
@@ -129,9 +123,7 @@ def rows_to_groups(rows: list) -> list:
     } for r in rows if not r.get("deleted") and r.get("name")]
 
 
-# ─────────────────────────────────────────────────────────────
-#  Предметы (list имён)  ↔  subjects
-# ─────────────────────────────────────────────────────────────
+#Предметы (list имён)  <->  subjects
 def subjects_to_rows(names: list) -> list:
     return [{"id": f"subj:{n}", "name": n, "updated_at": _now(), "deleted": False}
             for n in names if n]
@@ -142,10 +134,9 @@ def rows_to_subjects(rows: list) -> list:
                    if not r.get("deleted") and r.get("name")})
 
 
-# ─────────────────────────────────────────────────────────────
-#  Конфиг + админ
-#  admin_password_hash уезжает как пользователь role=admin; остальные ключи — в config.
-# ─────────────────────────────────────────────────────────────
+#Конфиг + админ
+#admin_password_hash уезжает как пользователь role=admin; остальные ключи — в config.
+
 def admin_user_from_config(cfg: dict, admin_login: str = "admin") -> dict:
     h = cfg.get("admin_password_hash")
     if not h:
@@ -162,7 +153,7 @@ def admin_user_from_config(cfg: dict, admin_login: str = "admin") -> dict:
 def config_to_rows(cfg: dict) -> list:
     rows = []
     for k, v in cfg.items():
-        if k == "admin_password_hash":   # уезжает как admin-пользователь
+        if k == "admin_password_hash":   #уезжает как admin-пользователь
             continue
         rows.append({"key": k, "value": v, "updated_at": _now(), "deleted": False})
     return rows
@@ -181,10 +172,9 @@ def config_from_pull(config_rows: list, users: list, admin_login: str = "admin")
     return cfg
 
 
-# ─────────────────────────────────────────────────────────────
-#  Сбор локальных данных в формат API (push) и применение (pull)
-#  Локальное хранилище — через data_store/DBManager (offline-first не ломаем).
-# ─────────────────────────────────────────────────────────────
+#Сбор локальных данных в формат API (push) и применение (pull)
+#Локальное хранилище — через data_store/DBManager (offline-first не ломаем).
+
 def _collect_lessons() -> list:
     from core import DBManager
     conn = DBManager.get_conn()
@@ -226,7 +216,7 @@ def collect_local() -> dict:
     from subjects import load_subjects
     st = get_store()
     cfg = st._config()
-    # raw — со «надгробиями», чтобы удаления тоже уезжали на сервер
+    #raw — со «надгробиями», чтобы удаления тоже уезжали на сервер
     users = students_to_users(st.get_students_raw()) + teachers_to_users(st.get_teachers_raw())
     admin = admin_user_from_config(cfg, st.get_admin_login())
     if admin:
@@ -263,7 +253,7 @@ def apply_remote(changes: dict):
     st = get_store()
     users = changes.get("users", []) or []
 
-    # Студенты (с надгробиями: deleted-записи переносим как есть для LWW-слияния)
+    #Студенты (с надгробиями: deleted-записи переносим как есть для LWW-слияния)
     if users:
         rem_s = [{
             "surname": u.get("surname", ""), "name": u.get("name", ""),
@@ -274,7 +264,7 @@ def apply_remote(changes: dict):
         merged_s = _merge_by_key(st.get_students_raw(), rem_s, _student_key)
         st.set_students(merged_s, stamp=False)
 
-        # Преподаватели (dict ↔ список для слияния)
+        #Преподаватели (dict <-> список для слияния)
         loc_t = [dict(v, full_name=k) for k, v in st.get_teachers_raw().items()]
         rem_t = [{
             "full_name": u.get("full_name", ""), "login": u.get("login", ""),
@@ -287,7 +277,7 @@ def apply_remote(changes: dict):
         teachers = {r.pop("full_name"): r for r in merged_t}
         st.set_teachers(teachers, stamp=False)
 
-    # Группы (с надгробиями)
+    #Группы (с надгробиями)
     if "groups" in changes:
         rem_g = [{"name": r.get("name", ""), "subjects": r.get("subjects") or [],
                   "updated_at": r.get("updated_at", ""), "deleted": bool(r.get("deleted", False))}
@@ -295,19 +285,19 @@ def apply_remote(changes: dict):
         merged_g = _merge_by_key(st.get_groups_raw(), rem_g, lambda r: r.get("name", ""))
         st.set_groups(merged_g, stamp=False)
 
-    # Предметы (объединение множеств)
+    #Предметы (объединение множеств)
     if "subjects" in changes:
         cur = set(load_subjects())
         save_subjects(sorted(cur | set(rows_to_subjects(changes["subjects"]))))
 
-    # Конфиг (ключи) + хеш админа
+    #Конфиг (ключи) + хеш админа
     if "config" in changes or users:
         new_cfg = config_from_pull(changes.get("config", []), users, st.get_admin_login())
         cfg = st._config()
         cfg.update(new_cfg)
         _kv_set("config", cfg)
 
-    # Занятия и оценки
+    #Занятия и оценки
     if changes.get("lessons"):
         _merge_lessons(changes["lessons"])
     if changes.get("grades"):
@@ -336,22 +326,54 @@ def _merge_lessons(remote: list):
 
 
 def _merge_grades(remote: list):
+    """Слияние оценок с сервера. Оценки — чувствительные данные, поэтому здесь НЕ
+    слепой LWW, а детектор конфликтов: если серверное значение оценки расходится
+    с локальным и локальное не новее — расхождение пишем в sync_conflicts и НЕ
+    затираем работу преподавателя (он решит вручную через conflict_dialog).
+    Если значения совпали или локальное новее — конфликта нет."""
     from core import DBManager
     conn = DBManager.get_conn()
     cur = conn.cursor()
+    #Таблица конфликтов нужна гарантированно (на случай, если init не отработал).
+    cur.execute("CREATE TABLE IF NOT EXISTS sync_conflicts ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "student_f TEXT, student_n TEXT, lesson_id TEXT,"
+                "local_grade TEXT, remote_grade TEXT, remote_device TEXT,"
+                "remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)")
+    now_iso = _now()
     for g in remote:
         if g.get("deleted"):
             continue
         f, n, lid = g.get("student_f"), g.get("student_n"), g.get("lesson_id")
-        cur.execute("SELECT COALESCE(updated_at,'') FROM grades "
+        rgrade = g.get("grade", "")
+        rat = g.get("updated_at", "")
+        rdev = g.get("device", "")
+        cur.execute("SELECT grade, COALESCE(updated_at,'') FROM grades "
                     "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
-        row = cur.fetchone()
-        if row is None or _should_apply(g.get("updated_at", ""), row[0] or "", False):
+        local = cur.fetchone()
+        if local is None:
+            #Локально такой оценки нет — просто принимаем серверную.
             cur.execute(
                 "INSERT OR REPLACE INTO grades "
                 "(student_f,student_n,lesson_id,grade,updated_at,device) "
-                "VALUES (?,?,?,?,?,?)",
-                (f, n, lid, g.get("grade", ""), g.get("updated_at", ""), g.get("device", "")))
+                "VALUES (?,?,?,?,?,?)", (f, n, lid, rgrade, rat, rdev))
+            continue
+        lgrade, lat = local
+        if (lgrade or "") == (rgrade or ""):
+            continue   #значения совпали — менять нечего
+        if lat and rat and lat > rat:
+            continue   #локальная правка новее — оставляем, она уедет на сервер
+        #Значения разошлись, и серверное не старше локального → НАСТОЯЩИЙ конфликт.
+        #Локальное значение НЕ трогаем; фиксируем расхождение для ручного решения.
+        cur.execute("SELECT 1 FROM sync_conflicts WHERE student_f=? AND student_n=? "
+                    "AND lesson_id=? AND resolved=0", (f, n, lid))
+        if cur.fetchone() is None:   #не плодим дубли по одной и той же оценке
+            cur.execute(
+                "INSERT INTO sync_conflicts "
+                "(student_f,student_n,lesson_id,local_grade,remote_grade,"
+                "remote_device,remote_at,detected_at,resolved) "
+                "VALUES (?,?,?,?,?,?,?,?,0)",
+                (f, n, lid, lgrade, rgrade, rdev, rat, now_iso))
     conn.commit()
     conn.close()
 
@@ -359,9 +381,9 @@ def _merge_grades(remote: list):
 def sync_once(client) -> bool:
     """Один цикл синхронизации: отправить локальные изменения, забрать серверные.
     Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код."""
-    # 1. Отправляем то, что вправе отправлять (роль ограничивает на сервере).
+    #1. Отправляем то, что вправе отправлять (роль ограничивает на сервере).
     client.push(collect_local())
-    # 2. Тянем всё (для простоты v1 — полный pull; дельту по last_sync добавим позже).
+    #2. Тянем всё (для простоты v1 — полный pull; дельту по last_sync добавим позже).
     data = client.pull(since="")
     apply_remote(data.get("changes", {}))
     return True

@@ -5,11 +5,11 @@ security.py — Криптографический слой GradeBookAI.
   • hash_password / verify_password — PBKDF2-HMAC-SHA256 для паролей пользователей
     (хранится только хеш, никогда не открытый пароль).
   • encrypt_value / decrypt_value — симметричное шифрование ПДн «на диске»
-    (ФИО, журналы, ключи API) через Fernet (AES-128-CBC + HMAC).
+    (ФИО, журналы) через Fernet (AES-128-CBC + HMAC).
   • get_data_key — 32-байтный ключ шифрования. На диске он НЕ лежит открытым:
     защищён Windows DPAPI (CryptProtectData) и привязан к учётной записи Windows.
-  • os_protect / os_unprotect — обёртки DPAPI. Используются и здесь, и в db_config
-    для защиты пароля PostgreSQL.
+  • os_protect / os_unprotect — обёртки DPAPI для защиты секретов «на диске»
+    (например, ключа шифрования данных).
 
 ⚠️ 152-ФЗ / приказ ФСТЭК России №21:
   Для боевой эксплуатации пакет `cryptography` ОБЯЗАТЕЛЕН. Раньше при его
@@ -43,12 +43,10 @@ def _require_crypto():
         )
 
 
-# ─────────────────────────────────────────────────────────────
-#  Защита секретов на диске через Windows DPAPI
-#  DPAPI шифрует данные ключом, производным от учётной записи Windows. Файл,
-#  скопированный на другой ПК или другому пользователю, расшифровать нельзя —
-#  именно это свойство и нужно для ключа шифрования и пароля БД.
-# ─────────────────────────────────────────────────────────────
+#Защита секретов на диске через Windows DPAPI
+#DPAPI шифрует данные ключом, производным от учётной записи Windows. Файл,
+#скопированный на другой ПК или другому пользователю, расшифровать нельзя —
+#именно это свойство и нужно для ключа шифрования данных.
 def _dpapi(data: bytes, unprotect: bool) -> bytes:
     """Вызов CryptProtectData/CryptUnprotectData через ctypes (только Windows)."""
     import ctypes
@@ -63,7 +61,7 @@ def _dpapi(data: bytes, unprotect: bool) -> bytes:
     out_blob = DATA_BLOB()
     func = (ctypes.windll.crypt32.CryptUnprotectData if unprotect
             else ctypes.windll.crypt32.CryptProtectData)
-    # сигнатура: (pDataIn, szDescr, pEntropy, reserved, pPrompt, flags, pDataOut)
+    #сигнатура: (pDataIn, szDescr, pEntropy, reserved, pPrompt, flags, pDataOut)
     ok = func(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob))
     if not ok:
         raise ctypes.WinError()
@@ -77,9 +75,9 @@ def os_protect(data: bytes) -> bytes:
     """Защищает байты для хранения на диске. На Windows — DPAPI, иначе — как есть."""
     if sys.platform == "win32":
         return _dpapi(data, unprotect=False)
-    # На не-Windows DPAPI нет. Целевая ОС проекта — Windows; на прочих платформах
-    # полагаемся на права доступа к файлу (см. _data_key_path). Это компромисс,
-    # задокументированный осознанно, а не молчаливое ослабление.
+    #На не-Windows DPAPI нет. Целевая ОС проекта — Windows; на прочих платформах
+    #полагаемся на права доступа к файлу (см. _data_key_path). Это компромисс,
+    #задокументированный осознанно, а не молчаливое ослабление.
     return data
 
 
@@ -93,9 +91,7 @@ def os_unprotect(blob: bytes) -> bytes:
     return blob
 
 
-# ─────────────────────────────────────────────────────────────
-#  Симметричное шифрование значений (Fernet)
-# ─────────────────────────────────────────────────────────────
+#Симметричное шифрование значений (Fernet)
 def _encrypt_bytes(plaintext: bytes, key32: bytes) -> bytes:
     _require_crypto()
     return Fernet(base64.urlsafe_b64encode(key32)).encrypt(plaintext)
@@ -106,25 +102,22 @@ def _decrypt_bytes(ciphertext: bytes, key32: bytes) -> bytes:
     try:
         return Fernet(base64.urlsafe_b64encode(key32)).decrypt(ciphertext)
     except InvalidToken:
-        # Чужой ключ, повреждение или данные старого формата (XOR) — не наши.
+        #Чужой ключ, повреждение или данные старого формата (XOR) — не наши.
         return b""
 
 
-# ─────────────────────────────────────────────────────────────
-#  Ключ шифрования данных «на диске»
-#  Ключ хранится в профиле пользователя и защищён DPAPI. При работе нескольких
-#  ПК с общим PostgreSQL источником правды является PG (значения kv_store уже
-#  зашифрованы), а ключ у каждого ПК свой — поэтому ПДн в общей базе шифруются
-#  единообразно: см. примечание в data_store о хранении.
-# ─────────────────────────────────────────────────────────────
+#Ключ шифрования данных «на диске»
+#Ключ хранится рядом с базой (см. app_paths) и защищён DPAPI — у каждого ПК
+#он свой. ПДн в локальном SQLite шифруются этим ключом; обмен с общей базой
+#колледжа идёт через API-сервер по TLS (см. data_store, sync_client).
 _ENC_PREFIX = "enc:"
 _DATA_KEY_CACHE = None
 
 
 def _data_key_path() -> str:
-    # Ключ держим там же, где базу (см. app_paths): рядом с .exe (портативно) или
-    # в профиле (dev). Раньше ключ уезжал в %APPDATA% (Roaming), а база — в
-    # %LOCALAPPDATA% (Local): данные растекались по двум каталогам. Теперь — вместе.
+    #Ключ держим там же, где базу (см. app_paths): рядом с .exe (портативно) или
+    #в профиле (dev). Раньше ключ уезжал в %APPDATA% (Roaming), а база — в
+    #%LOCALAPPDATA% (Local): данные растекались по двум каталогам. Теперь — вместе.
     import app_paths
     return app_paths.data_file("data.key")
 
@@ -151,13 +144,13 @@ def get_data_key() -> bytes:
         try:
             with open(path, "rb") as f:
                 raw = f.read().strip()
-            # Основной путь — ключ под DPAPI.
+            #Основной путь — ключ под DPAPI.
             key = os_unprotect(raw)
             if len(key) == 32:
                 _DATA_KEY_CACHE = key
                 return key
-            # Миграция: старый ключ лежал base64 открытым текстом. Читаем его и
-            # тут же перешифровываем под DPAPI, чтобы открытого ключа не осталось.
+            #Миграция: старый ключ лежал base64 открытым текстом. Читаем его и
+            #тут же перешифровываем под DPAPI, чтобы открытого ключа не осталось.
             try:
                 legacy = base64.urlsafe_b64decode(raw)
             except Exception:
@@ -169,8 +162,8 @@ def get_data_key() -> bytes:
         except Exception:
             pass
 
-    # Миграция со старого расположения (ключ переехал из Roaming в общую папку).
-    # Переносим один раз; старый файл не трогаем — на случай отката.
+    #Миграция со старого расположения (ключ переехал из Roaming в общую папку).
+    #Переносим один раз; старый файл не трогаем — на случай отката.
     old = _legacy_data_key_path()
     if old != path and os.path.exists(old):
         try:
@@ -199,7 +192,7 @@ def _save_data_key(key: bytes, path: str):
     try:
         with open(path, "wb") as f:
             f.write(os_protect(key))
-        # Сужаем права доступа к файлу ключа (особенно важно вне Windows/DPAPI).
+        #Сужаем права доступа к файлу ключа (особенно важно вне Windows/DPAPI).
         try:
             os.chmod(path, 0o600)
         except Exception:
@@ -233,10 +226,8 @@ def decrypt_value(value: str) -> str:
         return ""
 
 
-# ─────────────────────────────────────────────────────────────
-#  Хеширование паролей пользователей (PBKDF2-HMAC-SHA256)
-#  Формат строки: pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>
-# ─────────────────────────────────────────────────────────────
+#Хеширование паролей пользователей (PBKDF2-HMAC-SHA256)
+#Формат строки: pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>
 _PW_ITERS = 200_000
 
 

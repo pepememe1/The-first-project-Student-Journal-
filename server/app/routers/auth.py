@@ -4,7 +4,7 @@ auth.py — Авторизация: создание первого админи
 Offline-first: пользователей заводит админ в десктоп-проге, они синхронизируются
 на сервер уже хешами паролей. Логин через API/сайт работает с теми же паролями.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -18,7 +18,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    #UTC + смещение (+00:00) — единый формат меток с клиентом, чтобы LWW-сравнение
+    #строк было корректным независимо от часового пояса.
+    return datetime.now(timezone.utc).isoformat()
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
@@ -33,8 +35,8 @@ def bootstrap_admin(body: BootstrapIn, db: Session = Depends(get_db)):
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Пароль не короче 8 символов")
     login = body.login.strip()
-    # Детерминированный id (admin:<login>): когда десктоп позже пришлёт админа
-    # через /sync, он обновит ЭТУ же строку, а не создаст дубликат.
+    #Детерминированный id (admin:<login>): когда десктоп позже пришлёт админа
+    #через /sync, он обновит ЭТУ же строку, а не создаст дубликат.
     u = User(
         id=f"admin:{login}", role="admin", login=login,
         password_hash=hash_password(body.password), full_name=body.full_name,

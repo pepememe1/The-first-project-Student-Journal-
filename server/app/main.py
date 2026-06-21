@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan)
 
-# CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
+#CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

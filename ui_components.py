@@ -14,7 +14,7 @@ from styles import C, SB_NORMAL, SB_ACTIVE
 from widgets import lbl, sb_btn, vline
 
 
-#  SIDEBAR WIDGET
+#SIDEBAR WIDGET
 
 class Sidebar(QFrame):
     """Боковая панель навигации с кнопками вкладок"""
@@ -41,12 +41,12 @@ class Sidebar(QFrame):
         for item in items:
             key, icon, text = item
             if key == "__label__":
-                # Это метка секции
+                #Это метка секции
                 l = lbl(text.upper(), 10, C['text2'])
                 l.setStyleSheet(l.styleSheet() + "padding:14px 10px 4px 10px;")
                 lay.addWidget(l)
             else:
-                # Это кнопка
+                #Это кнопка
                 b = sb_btn(icon, text)
                 b.clicked.connect(lambda checked, k=key: self._activate(k))
                 self._buttons[key] = b
@@ -67,7 +67,7 @@ class Sidebar(QFrame):
         self._activate(key)
 
 
-#  HEADER BAR
+#HEADER BAR
 
 class HeaderBar(QFrame):
     """Верхняя панель с логотипом, инфо о пользователе и кнопкой выхода"""
@@ -86,7 +86,7 @@ class HeaderBar(QFrame):
         lay.setContentsMargins(20, 0, 20, 0)
         lay.setSpacing(10)
 
-        # Logo box (GB)
+        #Logo box (GB)
         hex_lbl = QLabel()
         hex_lbl.setFixedSize(32, 32)
         hex_lbl.setText("GB")
@@ -115,7 +115,7 @@ class HeaderBar(QFrame):
         lay.addLayout(logo_box)
         lay.addStretch()
 
-        # User info
+        #User info
         from widgets import badge
         self.role_badge = badge("", "green")
         self.role_badge.setStyleSheet(
@@ -130,7 +130,7 @@ class HeaderBar(QFrame):
         sep.setFixedHeight(20)
         lay.addWidget(sep)
 
-        # Logout button
+        #Logout button
         logout = QPushButton("Выйти")
         logout.setStyleSheet(
             "QPushButton{background:rgba(255,255,255,0.15);color:#FFFFFF;"
@@ -147,7 +147,7 @@ class HeaderBar(QFrame):
         self.user_lbl.setText(user_text)
 
 
-#  HEX LOGO WIDGET
+#HEX LOGO WIDGET
 
 class HexLogoWidget(QWidget):
     """Логотип-шестиугольник (как на сайте Synapse)"""
@@ -166,7 +166,7 @@ class HexLogoWidget(QWidget):
         cy = self._size / 2
         r = self._size * 0.46
         
-        # Внешний шестиугольник
+        #Внешний шестиугольник
         pts = QPolygonF([
             QPointF(cx + r * math.cos(math.radians(a - 90)), 
                    cy + r * math.sin(math.radians(a - 90)))
@@ -176,7 +176,7 @@ class HexLogoWidget(QWidget):
         p.setBrush(QBrush(QColor(20, 124, 139, 10)))
         p.drawPolygon(pts)
         
-        # Внутренний шестиугольник
+        #Внутренний шестиугольник
         r2 = r * 0.72
         pts2 = QPolygonF([
             QPointF(cx + r2 * math.cos(math.radians(a - 90)), 
@@ -187,7 +187,7 @@ class HexLogoWidget(QWidget):
         p.setBrush(QBrush(QColor(20, 124, 139, 18)))
         p.drawPolygon(pts2)
         
-        # Текст "GB"
+        #Текст "GB"
         p.setPen(QPen(QColor("#147C8B")))
         f = QFont("Segoe UI", int(self._size * 0.22), QFont.Bold)
         p.setFont(f)
@@ -195,7 +195,7 @@ class HexLogoWidget(QWidget):
         p.end()
 
 
-#  ANIMATED BACKGROUND
+#ANIMATED BACKGROUND
 
 class AnimatedBackground(QWidget):
     """Чистый статичный институциональный фон ВСГУТУ.
@@ -213,13 +213,13 @@ class AnimatedBackground(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         W, H = self.width(), self.height()
 
-        # Мягкий вертикальный градиент: светлый фон → чуть теплее книзу
+        #Мягкий вертикальный градиент: светлый фон -> чуть теплее книзу
         grad = QLinearGradient(0, 0, 0, H)
         grad.setColorAt(0.0, QColor("#EDF2F3"))
         grad.setColorAt(1.0, QColor("#E6EEEF"))
         p.fillRect(0, 0, W, H, QBrush(grad))
 
-        # Едва заметная бирюзовая сетка (институциональный, спокойный акцент)
+        #Едва заметная бирюзовая сетка (институциональный, спокойный акцент)
         p.setPen(QPen(QColor(20, 124, 139, 8), 1))
         step = 64
         for x in range(0, W, step):

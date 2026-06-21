@@ -23,7 +23,7 @@ from .prompts import GREETINGS
 @dataclass
 class VectorResponse:
     text: str
-    mood: str = "neutral"            # happy / neutral / sad
+    mood: str = "neutral"            #happy / neutral / sad
     intent: str = "help"
     facts: Optional[Facts] = None
 
@@ -34,7 +34,7 @@ class VectorEngine:
         self.llm = llm or OfflineTemplateProvider()
         self._mood = "neutral"
 
-    # ── известные фамилии (для классификатора и анонимайзера) ──
+    #известные фамилии (для классификатора и анонимайзера)
     def _known_surnames(self) -> List[str]:
         try:
             conn = sqlite3.connect(self.scope.db_path)
@@ -47,13 +47,13 @@ class VectorEngine:
         except Exception:
             return []
 
-    # ── основной вызов ─────────────────────────────────────────
+    #основной вызов
     def ask(self, question: str) -> VectorResponse:
         surnames = self._known_surnames()
         intent, asked = intents.classify(question, surnames)
 
-        # ВОПРОС НЕ ИЗ ПУЛА → свободный чат с LLM (если она подключена).
-        # В чистом офлайне free_chat честно подскажет, что умеет Вектор.
+        #ВОПРОС НЕ ИЗ ПУЛА -> свободный чат с LLM (если она подключена).
+        #В чистом офлайне free_chat честно подскажет, что умеет Вектор.
         if intent == "unknown":
             q_for_llm = question
             anon: Optional[Anonymizer] = None
@@ -64,8 +64,8 @@ class VectorEngine:
                 text = self.llm.free_chat(q_for_llm, role=self.scope.role)
             except Exception as e:
                 print(f"[Vector] free_chat не удался, офлайн-фолбэк: {e}")
-                # Если это сетевая проблема GigaChat/ollama — честно скажем об этом,
-                # вместо общего «вопрос вне моих данных».
+                #Если это сетевая проблема GigaChat/ollama — честно скажем об этом,
+                #вместо общего «вопрос вне моих данных».
                 net = ""
                 if getattr(self.llm, "name", "offline") in ("gigachat", "local"):
                     try:
@@ -86,17 +86,17 @@ class VectorEngine:
 
         facts = intents.run_intent(intent, self.scope, asked)
 
-        # настроение по среднему баллу, если интент его дал
+        #настроение по среднему баллу, если интент его дал
         if facts.mood_value is not None:
             self._mood = mood_from_average(facts.mood_value)
 
-        # Заготовленные ответы (приветствие/спасибо/помощь + справка о ВСГУТУ/
-        # колледже) отдаём как есть — они уже дружелюбные, точные и не требуют LLM.
+        #Заготовленные ответы (приветствие/спасибо/помощь + справка о ВСГУТУ/
+        #колледже) отдаём как есть — они уже дружелюбные, точные и не требуют LLM.
         if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college"):
             return VectorResponse(text=facts.facts_text, mood=self._mood,
                                   intent=intent, facts=facts)
 
-        # озвучка. Для облачных провайдеров — сначала обезличиваем.
+        #озвучка. Для облачных провайдеров — сначала обезличиваем.
         facts_for_llm = facts.facts_text
         anon: Optional[Anonymizer] = None
         if getattr(self.llm, "name", "offline") in ("gigachat", "local") and facts.names:
@@ -122,7 +122,7 @@ class VectorEngine:
         return VectorResponse(text=voiced, mood=self._mood,
                               intent=intent, facts=facts)
 
-    # ── проактивные карточки (для teacher/admin дашборда) ──────
+    #проактивные карточки (для teacher/admin дашборда)
     def insights(self) -> List[InsightCard]:
         return compute_insights(self.scope)
 
