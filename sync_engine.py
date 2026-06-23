@@ -262,7 +262,9 @@ def apply_remote(changes: dict):
             "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
         } for u in users if u.get("role") == "student"]
         merged_s = _merge_by_key(st.get_students_raw(), rem_s, _student_key)
-        st.set_students(merged_s, stamp=False)
+        #wake=False: это применение серверных данных, не локальная правка — будить
+        #синк не нужно (иначе apply_remote зациклил бы синхронизацию сам на себя).
+        st.set_students(merged_s, stamp=False, wake=False)
 
         #Преподаватели (dict <-> список для слияния)
         loc_t = [dict(v, full_name=k) for k, v in st.get_teachers_raw().items()]
@@ -275,7 +277,7 @@ def apply_remote(changes: dict):
         } for u in users if u.get("role") == "teacher"]
         merged_t = _merge_by_key(loc_t, rem_t, lambda r: r.get("full_name", ""))
         teachers = {r.pop("full_name"): r for r in merged_t}
-        st.set_teachers(teachers, stamp=False)
+        st.set_teachers(teachers, stamp=False, wake=False)
 
     #Группы (с надгробиями)
     if "groups" in changes:
@@ -283,7 +285,7 @@ def apply_remote(changes: dict):
                   "updated_at": r.get("updated_at", ""), "deleted": bool(r.get("deleted", False))}
                  for r in changes["groups"]]
         merged_g = _merge_by_key(st.get_groups_raw(), rem_g, lambda r: r.get("name", ""))
-        st.set_groups(merged_g, stamp=False)
+        st.set_groups(merged_g, stamp=False, wake=False)
 
     #Предметы (объединение множеств)
     if "subjects" in changes:
@@ -295,7 +297,7 @@ def apply_remote(changes: dict):
         new_cfg = config_from_pull(changes.get("config", []), users, st.get_admin_login())
         cfg = st._config()
         cfg.update(new_cfg)
-        _kv_set("config", cfg)
+        _kv_set("config", cfg, wake=False)   #серверные данные — синк не будим
 
     #Занятия и оценки
     if changes.get("lessons"):
@@ -378,12 +380,34 @@ def _merge_grades(remote: list):
     conn.close()
 
 
+#Флаг «первый синк этой сессии». На старте процесса делаем ОДИН полный pull
+#(since=""), даже если метка уже есть: так лечится возможный дрейф — редкая потеря
+#пограничной записи из-за гонки «коммит против взятия метки». Дальше в течение
+#сессии тянем только дельту. Поток синка один, поэтому простого флага достаточно.
+_session_full_pull_done = False
+
+
 def sync_once(client) -> bool:
     """Один цикл синхронизации: отправить локальные изменения, забрать серверные.
     Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код."""
+    global _session_full_pull_done
+    from data_store import get_sync_watermark, set_sync_watermark
+
     #1. Отправляем то, что вправе отправлять (роль ограничивает на сервере).
+    #Push — полный снимок и идемпотентен: сервер применит только реально изменённое.
     client.push(collect_local())
-    #2. Тянем всё (для простоты v1 — полный pull; дельту по last_sync добавим позже).
-    data = client.pull(since="")
+
+    #2. Тянем ДЕЛЬТУ: только изменения позже метки last_sync — это снимает главный
+    #тормоз (раньше каждый цикл качал всю базу). Первый pull сессии — полный
+    #(since=""), для самоизлечения; последующие — по сохранённой метке.
+    since = "" if not _session_full_pull_done else get_sync_watermark()
+    data = client.pull(since=since)
     apply_remote(data.get("changes", {}))
+
+    #3. Сдвигаем метку на server_time этого pull. Сервер берёт её ДО выборки, поэтому
+    #следующая дельта не пропустит записи, появившиеся во время текущего запроса.
+    server_time = data.get("server_time", "")
+    if server_time:
+        set_sync_watermark(server_time)
+    _session_full_pull_done = True
     return True

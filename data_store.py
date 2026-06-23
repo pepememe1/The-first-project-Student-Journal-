@@ -77,7 +77,7 @@ def _kv_get(key: str, default):
     return default
 
 
-def _kv_set(key: str, value) -> bool:
+def _kv_set(key: str, value, wake: bool = True) -> bool:
     plain = json.dumps(value, ensure_ascii=False)
     local_blob = encrypt_value(plain)        # локально (SQLite) — шифруем
     conn = DBManager.get_conn()
@@ -88,12 +88,34 @@ def _kv_set(key: str, value) -> bool:
     conn.close()
     #Разбудить фоновую синхронизацию с сервером (API-режим), чтобы изменение
     #ушло сразу, а не через интервал. Офлайн/нет сервера — это безвредный no-op.
-    try:
-        from sync_runner import trigger as _sync_trigger
-        _sync_trigger()
-    except Exception:
-        pass
+    #wake=False нужен для служебных записей (например, метки last_sync), которые сами
+    #по себе НЕ являются данными для отправки — иначе их запись будила бы синк, а тот
+    #опять писал бы метку: получился бы бесконечный цикл «синк → метка → синк».
+    if wake:
+        try:
+            from sync_runner import trigger as _sync_trigger
+            _sync_trigger()
+        except Exception:
+            pass
     return True
+
+
+#Метка последней синхронизации (граница дельта-pull). ЛОКАЛЬНАЯ и устройство-
+#зависимая: на сервер НЕ уходит (collect_local не собирает этот ключ) и не будит
+#синк (wake=False). Хранит server_time последнего успешного pull — следующий pull
+#просит у сервера только изменения позже неё (не качаем всю базу каждый цикл).
+_SYNC_WATERMARK_KEY = "_sync_watermark"
+
+
+def get_sync_watermark() -> str:
+    """Метка времени последнего успешного pull ('' — синхронизаций ещё не было)."""
+    val = _kv_get(_SYNC_WATERMARK_KEY, "")
+    return val if isinstance(val, str) else ""
+
+
+def set_sync_watermark(server_time: str):
+    """Сохраняет границу дельты молча (без пробуждения синка)."""
+    _kv_set(_SYNC_WATERMARK_KEY, server_time or "", wake=False)
 
 
 def _safe_name(name: str) -> str:
@@ -172,15 +194,17 @@ class LocalStore:
     def get_students_raw(self) -> list:
         return _kv_get("students", [])
 
-    def set_students(self, students: list, stamp: bool = True) -> bool:
+    def set_students(self, students: list, stamp: bool = True, wake: bool = True) -> bool:
         records = [self._hash_record(s) for s in students]
         #stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
         # надгробиями, изменённые — штампуются.
         #stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
         # сохраняем как есть, чтобы синк не зациклился.
+        #wake=False идёт в паре со stamp=False: запись серверных данных НЕ должна
+        # будить синк (иначе apply_remote → wake → синк → apply_remote — busy-loop).
         if stamp:
             records = _merge_list_tombstones(records, _kv_get("students", []), _student_key)
-        return _kv_set("students", records)
+        return _kv_set("students", records, wake=wake)
 
     #Преподаватели
     def get_teachers(self) -> dict:
@@ -189,7 +213,7 @@ class LocalStore:
     def get_teachers_raw(self) -> dict:
         return _kv_get("teachers", {})
 
-    def set_teachers(self, teachers: dict, stamp: bool = True) -> bool:
+    def set_teachers(self, teachers: dict, stamp: bool = True, wake: bool = True) -> bool:
         out = {name: self._hash_record(data) for name, data in teachers.items()}
         if stamp:
             old_raw = _kv_get("teachers", {})
@@ -214,7 +238,7 @@ class LocalStore:
                 else:
                     t = dict(prev); t["deleted"] = True; t["updated_at"] = now
                     out[name] = t
-        return _kv_set("teachers", out)
+        return _kv_set("teachers", out, wake=wake)
 
     #Группы
     def get_groups(self) -> list:
@@ -223,11 +247,11 @@ class LocalStore:
     def get_groups_raw(self) -> list:
         return _kv_get("groups", [])
 
-    def set_groups(self, groups: list, stamp: bool = True) -> bool:
+    def set_groups(self, groups: list, stamp: bool = True, wake: bool = True) -> bool:
         if stamp:
             groups = _merge_list_tombstones(groups, _kv_get("groups", []),
                                             lambda r: r.get("name", ""))
-        return _kv_set("groups", groups)
+        return _kv_set("groups", groups, wake=wake)
 
     #Журналы
     def get_journal(self, group: str, subject: str) -> Optional[dict]:

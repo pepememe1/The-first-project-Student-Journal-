@@ -78,13 +78,20 @@ def _row_to_dict(row, model) -> dict:
 def pull(since: str = "", user: User = Depends(get_current_user),
          db: Session = Depends(get_db)):
     """Отдать изменения позже метки since (пусто — отдать всё)."""
+    #Метку времени фиксируем ДО выборки, а не после. Клиент сохранит её как новую
+    #границу дельты (следующий pull попросит since=server_time). Если взять метку
+    #ПОСЛЕ выборки, запись, попавшая в БД между выборкой и взятием метки, не вошла
+    #бы в этот ответ и была бы пропущена следующим pull. Беря метку раньше, мы в
+    #худшем случае повторно отдадим пограничную запись (применение идемпотентно),
+    #но НЕ потеряем её.
+    server_time = _now()
     changes = {}
     for name, model in SYNC_MODELS.items():
         q = db.query(model)
         if since:
             q = q.filter(model.updated_at > since)
         changes[name] = [_row_to_dict(r, model) for r in q.all()]
-    return {"server_time": _now(), "changes": changes}
+    return {"server_time": server_time, "changes": changes}
 
 
 @router.post("/push")

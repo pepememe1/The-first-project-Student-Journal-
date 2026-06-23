@@ -217,7 +217,7 @@ async def _main():
                     await get_tok(l)
             await asyncio.gather(*(_w(l) for l in (students + teachers)))
 
-        #Фаза B — конкурентный PULL (чтение; полный pull = поведение клиента v1).
+        #Фаза B — конкурентный ПОЛНЫЙ pull (since="") = старое поведение клиента.
         async def do_pull(c, login):
             tok = tokens.get(login)
             if not tok:
@@ -225,8 +225,25 @@ async def _main():
             r = await c.get("/sync/pull",
                             headers={"Authorization": f"Bearer {tok}"})
             return r.status_code == 200
-        await _run_phase("Фаза B: PULL (синхронизация-чтение всех)",
+        await _run_phase("Фаза B: ПОЛНЫЙ PULL (since='', старое поведение)",
                          base, do_pull, students + teachers)
+
+        #Фаза B2 — конкурентный ДЕЛЬТА-pull (since=server_time) = новое поведение.
+        #Берём свежую метку; с этого момента изменений нет, поэтому дельта пуста и
+        #запрос должен возвращаться почти мгновенно — это и есть выигрыш Фазы 2.
+        async with httpx.AsyncClient(base_url=base, timeout=60) as c:
+            wm = (await c.get("/sync/pull", headers={
+                "Authorization": f"Bearer {next(iter(tokens.values()))}"})).json()["server_time"]
+
+        async def do_pull_delta(c, login):
+            tok = tokens.get(login)
+            if not tok:
+                return False
+            r = await c.get("/sync/pull", params={"since": wm},
+                            headers={"Authorization": f"Bearer {tok}"})
+            return r.status_code == 200
+        await _run_phase("Фаза B2: ДЕЛЬТА-PULL (since=метка, новое поведение)",
+                         base, do_pull_delta, students + teachers)
 
         #Фаза C — конкурентный PUSH оценок преподавателями (запись; контеншн БД).
         #item = (login, n) — уникальный id на каждую попытку, чтобы измерять именно

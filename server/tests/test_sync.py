@@ -90,3 +90,16 @@ def test_delta_pull_returns_only_newer(client):
     #с момента server_time изменений не было — дельта пуста
     later = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
     assert all(not v for v in later["changes"].values()), "после метки изменений быть не должно"
+
+
+def test_delta_pull_brings_new_changes_after_watermark(client):
+    """Сценарий дельты двух ПК: один ставит метку, второй пушит новое занятие —
+    дельта-pull по метке приносит ТОЛЬКО новое занятие, без старых."""
+    h = make_admin(client)
+    _push(client, h, lessons=[_LESSON])
+    server_time = client.get("/sync/pull", headers=h).json()["server_time"]
+    #появилось новое занятие уже ПОСЛЕ взятой метки
+    _push(client, h, lessons=[dict(_LESSON, id="L2", topic="Новое")])
+    delta = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
+    ids = [l["id"] for l in delta["changes"]["lessons"]]
+    assert ids == ["L2"], f"дельта должна вернуть только новое занятие, а не {ids}"
