@@ -6,13 +6,14 @@ Offline-first: пользователей заводит админ в деск�
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import User
 from ..schemas import LoginIn, TokenOut, BootstrapIn
 from ..security import hash_password, verify_password, create_token
+from .. import throttle
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -49,12 +50,32 @@ def bootstrap_admin(body: BootstrapIn, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenOut)
-def login(body: LoginIn, db: Session = Depends(get_db)):
-    """Вход по логину и паролю. Роль — внутри токена."""
+def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    """Вход по логину и паролю. Роль — внутри токена.
+
+    Анти-брутфорс: до сверки пароля проверяем, не заблокирован ли этот источник за
+    серию неверных попыток (см. throttle). Блокировка по паре (IP, логин) — чтобы
+    атакующий не мог запереть вход настоящему пользователю. Неудача увеличивает
+    счётчик, удачный вход его сбрасывает."""
+    login_str = body.login.strip()
+    ip = throttle.client_ip(request)
+
+    left = throttle.seconds_until_unlocked(ip, login_str)
+    if left > 0:
+        #429 + Retry-After — стандартный сигнал «слишком много попыток, подожди».
+        raise HTTPException(
+            status_code=429,
+            detail=f"Слишком много неудачных попыток. Повторите через {left} с.",
+            headers={"Retry-After": str(left)},
+        )
+
     u = db.query(User).filter(
-        User.login == body.login.strip(), User.deleted == False  # noqa: E712
+        User.login == login_str, User.deleted == False  # noqa: E712
     ).first()
     if not u or not verify_password(body.password, u.password_hash):
+        throttle.register_failure(ip, login_str)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    throttle.register_success(ip, login_str)
     name = u.full_name or f"{u.surname} {u.name}".strip()
     return TokenOut(access_token=create_token(u.login, u.role), role=u.role, name=name)

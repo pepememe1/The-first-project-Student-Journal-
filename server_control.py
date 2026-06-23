@@ -24,9 +24,11 @@ server_control.py — Управление сервером синхрониза
 права на него сужаем. Не копируйте server/.env на чужие машины.
 """
 import os
+import re
 import sys
 import socket
 import threading
+import subprocess
 
 #Папка сервера лежит рядом с клиентскими модулями (репозиторий) — и в dev, и при
 #запуске из исходников. Берём абсолютный путь относительно этого файла.
@@ -41,6 +43,13 @@ SQLITE_URL = "sqlite:///./gradebook_server.db"
 #был отдельный Python — одна кнопка «Запустить» в админке и всё работает.
 _server = None     #uvicorn.Server текущего запуска
 _thread = None     #поток, в котором крутится сервер
+
+#Туннель «доступ из интернета» (ssh -R на serveo.net). Поднимается отдельной
+#кнопкой в админке: сервер крутится на этом ПК, а туннель показывает его наружу,
+#чтобы коллеги с других сетей могли подключиться. Внешний ssh уже встроен в
+#Windows 10/11, ставить ничего не нужно.
+_tunnel_proc = None    #subprocess.Popen запущенного ssh
+_tunnel_url = ""       #публичный адрес, который выдал serveo (https://…)
 
 
 #Чтение/запись server/.env (простой формат KEY=VALUE)
@@ -248,3 +257,120 @@ def stop_server(port: int = DEFAULT_PORT) -> tuple:
         return True, "Сервер остановлен."
     return False, ("Сервер ещё отвечает. Если его запускали другим способом — "
                    "остановите тот процесс вручную.")
+
+
+#Туннель «доступ из интернета» (ssh -R на serveo.net)
+#Зачем отдельно от сервера: сервер слушает только локальную сеть (0.0.0.0), а
+#коллеги с ДРУГИХ интернетов так его не увидят. Туннель пробрасывает локальный
+#порт на публичный адрес serveo, который виден из любой точки.
+
+#Имя поддомена храним в server/.env, чтобы адрес был ПОСТОЯННЫМ между запусками
+#(serveo закрепляет занятое имя за этим ПК) — иначе он менялся бы каждый раз и
+#api_config друзьям пришлось бы обновлять.
+def get_tunnel_name() -> str:
+    return read_env().get("GRADEBOOK_TUNNEL_NAME", "").strip()
+
+
+def set_tunnel_name(name: str) -> bool:
+    env = read_env()
+    env["GRADEBOOK_TUNNEL_NAME"] = (name or "").strip()
+    return _write_env(env)
+
+
+def tunnel_running() -> bool:
+    """True, если ssh-туннель ещё жив."""
+    return _tunnel_proc is not None and _tunnel_proc.poll() is None
+
+
+def tunnel_url() -> str:
+    """Текущий публичный адрес туннеля ('' — туннель не поднят)."""
+    return _tunnel_url if tunnel_running() else ""
+
+
+def _read_tunnel_output(proc, evt):
+    """В фоне дочитывает вывод ssh: ловит строку с публичным адресом и держит
+    трубу пустой (иначе ssh подвис бы на заполненном буфере). Нить-демон —
+    завершится сама, когда ssh закроется."""
+    global _tunnel_url
+    pat = re.compile(r"Forwarding\s+HTTP\s+traffic\s+from\s+(https?://\S+)")
+    try:
+        for line in proc.stdout:
+            m = pat.search(line)
+            if m:
+                _tunnel_url = m.group(1).rstrip("/")
+                evt.set()
+    except Exception:
+        pass
+    finally:
+        evt.set()   #процесс закрылся — разбудим ожидающего, даже если адреса нет
+
+
+def start_tunnel(port: int = DEFAULT_PORT, name: str = "") -> tuple:
+    """Поднимает ssh-туннель к serveo.net и возвращает публичный адрес.
+    (True, 'https://…') либо (False, причина).
+
+    Важно: форвардим на 127.0.0.1 (IPv4), а НЕ на localhost. На чистом IPv4
+    (типично для РФ) localhost резолвится сначала в IPv6 ::1, куда сервер не
+    слушает — и туннель отдавал бы 502. Явный 127.0.0.1 это снимает."""
+    global _tunnel_proc, _tunnel_url
+    if tunnel_running():
+        return True, (_tunnel_url or "Туннель уже запущен.")
+
+    name = (name or "").strip()
+    #С именем — постоянный адрес name.serveo.net; без имени — случайный каждый раз.
+    remote = f"{name}:80:127.0.0.1:{port}" if name else f"80:127.0.0.1:{port}"
+    cmd = [
+        "ssh", "-R", remote, "serveo.net",
+        #accept-new — не зависаем на вопросе про host-key при первом подключении;
+        #ServerAlive — держим соединение; ExitOnForwardFailure — падаем сразу,
+        #если порт занять не удалось (а не висим молча).
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ServerAliveInterval=60",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "ExitOnForwardFailure=yes",
+    ]
+    #На Windows прячем чёрное окно консоли ssh (иначе оно всплывает поверх UI).
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        _tunnel_url = ""
+        _tunnel_proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, creationflags=flags)
+    except FileNotFoundError:
+        return False, ("Не найден ssh. Он встроен в Windows 10/11 — включите "
+                       "компонент «Клиент OpenSSH» (Параметры → Приложения → "
+                       "Дополнительные компоненты).")
+    except Exception as e:
+        return False, f"Не удалось запустить туннель: {e}"
+
+    evt = threading.Event()
+    threading.Thread(target=_read_tunnel_output, args=(_tunnel_proc, evt),
+                     daemon=True).start()
+    #Ждём, пока serveo выдаст адрес (обычно 2–5 c). Если ssh сразу умер или адрес
+    #не пришёл — честно сообщаем, а не оставляем «висящий» туннель.
+    if evt.wait(timeout=20) and _tunnel_url:
+        return True, _tunnel_url
+    if _tunnel_proc.poll() is not None:
+        return False, ("ssh-туннель сразу завершился. Проверьте интернет и что "
+                       "serveo.net доступен (он бывает перегружен — попробуйте "
+                       "ещё раз через минуту).")
+    return False, "Туннель не выдал адрес за 20 секунд — попробуйте ещё раз."
+
+
+def stop_tunnel() -> tuple:
+    """Останавливает ssh-туннель."""
+    global _tunnel_proc, _tunnel_url
+    proc = _tunnel_proc
+    _tunnel_proc = None
+    _tunnel_url = ""
+    if proc is None or proc.poll() is not None:
+        return True, "Туннель остановлен."
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    except Exception as e:
+        return False, f"Не удалось остановить туннель: {e}"
+    return True, "Туннель остановлен."

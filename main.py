@@ -95,6 +95,14 @@ def main():
             DBManager.backup(reason="on_exit")
         except Exception as _e:
             print(f"[exit] {_e}")
+        #Туннель — это внешний процесс ssh: сам он при закрытии программы не
+        #умрёт (Windows не убивает потомков), поэтому гасим его явно, чтобы не
+        #висел в фоне и не держал занятым имя на serveo.
+        try:
+            import server_control
+            server_control.stop_tunnel()
+        except Exception as _e:
+            print(f"[exit] туннель: {_e}")
     app.aboutToQuit.connect(_on_quit)
 
     sys.exit(app.exec())

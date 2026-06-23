@@ -799,6 +799,55 @@ class AdminDashboard(QWidget):
         hl.addWidget(self._srv_status)
         lay.addWidget(hc)
 
+        #Карточка: доступ из интернета (туннель для коллег с других сетей)
+        #Сервер выше виден только в локальной сети. Чтобы коллега с ДРУГОГО
+        #интернета подключился, прокидываем сервер наружу через ssh-туннель и
+        #получаем публичный адрес — его и раздаём.
+        tc = card(); tl = QVBoxLayout(tc); tl.setContentsMargins(18, 16, 18, 16); tl.setSpacing(10)
+        tl.addWidget(section_lbl("🌍 Доступ из интернета"))
+        tl.addWidget(lbl("Открывает сервер для коллег из других сетей одной кнопкой "
+                         "(порты и команды настраивать не нужно). Сначала запустите "
+                         "сервер выше, затем нажмите «Открыть доступ».", 11, C['text3']))
+        tl.addWidget(lbl("⚠️ Туннель идёт через зарубежный сервис — только для теста на "
+                         "выдуманных данных. Реальные данные студентов так передавать "
+                         "нельзя (152-ФЗ).", 11, "#b9772b"))
+
+        tl.addWidget(lbl("ПОСТОЯННОЕ ИМЯ (необязательно)", 10, C['text3']))
+        self._tun_name = field_input("напр. vsgutu — адрес станет vsgutu.serveo.net")
+        try:
+            import server_control
+            self._tun_name.setText(server_control.get_tunnel_name())
+        except Exception:
+            pass
+        tl.addWidget(self._tun_name)
+        tl.addWidget(lbl("С именем адрес постоянный и не меняется между запусками — "
+                         "api_config другу делаете один раз. Пусто — адрес случайный "
+                         "каждый раз.", 11, C['text3']))
+
+        tbtnrow = QHBoxLayout()
+        self._tun_start = btn("🌍 Открыть доступ", "green"); self._tun_start.clicked.connect(self._start_tunnel)
+        self._tun_stop  = btn("■ Закрыть доступ", "red"); self._tun_stop.clicked.connect(self._stop_tunnel)
+        tbtnrow.addWidget(self._tun_start); tbtnrow.addWidget(self._tun_stop); tbtnrow.addStretch()
+        tl.addLayout(tbtnrow)
+
+        tl.addWidget(lbl("ПУБЛИЧНЫЙ АДРЕС", 10, C['text3']))
+        self._tun_url = field_input("появится после «Открыть доступ»")
+        self._tun_url.setReadOnly(True)
+        tl.addWidget(self._tun_url)
+        urow = QHBoxLayout()
+        tcopy = btn("📋 Скопировать адрес", "blue"); tcopy.clicked.connect(self._copy_tunnel_url)
+        texport = btn("💾 Сохранить api_config.json для друга", "blue"); texport.clicked.connect(self._export_api_config)
+        urow.addWidget(tcopy); urow.addWidget(texport); urow.addStretch()
+        tl.addLayout(urow)
+        self._tun_status = lbl("", 12); self._tun_status.setWordWrap(True)
+        tl.addWidget(self._tun_status)
+        lay.addWidget(tc)
+        #Боевой профиль: туннель serveo скрыт (ПДн через иностранный сервис — нельзя,
+        #152-ФЗ). Карточка видна только в dev/demo при GRADEBOOK_ENABLE_TUNNEL=1.
+        #Боевой доступ из интернета — домен + Caddy/HTTPS (server/DEPLOY.md, 7.6).
+        from app_settings import dev_tunnel_enabled
+        tc.setVisible(dev_tunnel_enabled())
+
         #Карточка: смена пароля администратора
         sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
         sl.addWidget(section_lbl("🔐 Пароль администратора"))
@@ -818,6 +867,7 @@ class AdminDashboard(QWidget):
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
+        self._refresh_tunnel_status()
 
     #ЭТОТ ПК как сервер: настройка движка БД и запуск
     def _toggle_pg_fields(self, *_):
@@ -959,6 +1009,116 @@ class AdminDashboard(QWidget):
             self._refresh_server_status()
 
         self._run_bg(_do, _apply)
+
+    #Доступ из интернета: туннель и раздача api_config
+    def _start_tunnel(self):
+        import server_control
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+        name = self._tun_name.text().strip()
+        #Имя поддомена запоминаем, чтобы адрес был постоянным между запусками.
+        try:
+            server_control.set_tunnel_name(name)
+        except Exception:
+            pass
+        #Туннель без сервера бессмысленен — за ним была бы пустота (502).
+        if not server_control.server_running(port):
+            QMessageBox.warning(
+                self, "Сначала сервер",
+                "Сервер на этом ПК не запущен. Нажмите «Запустить сервер» выше, "
+                "затем открывайте доступ.")
+            return
+        self._tun_status.setText("⏳ Открываю доступ (подключаюсь к serveo)...")
+        self._tun_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+        self._tun_start.setEnabled(False)
+
+        def _do():
+            return server_control.start_tunnel(port, name)
+
+        def _apply(res):
+            ok, msg = res
+            if ok:
+                self._tun_url.setText(msg)
+            else:
+                QMessageBox.critical(self, "Доступ из интернета", msg)
+            self._refresh_tunnel_status()
+
+        self._run_bg(_do, _apply)
+
+    def _stop_tunnel(self):
+        import server_control
+        self._tun_status.setText("⏳ Закрываю доступ...")
+        self._tun_stop.setEnabled(False)
+
+        def _do():
+            return server_control.stop_tunnel()
+
+        def _apply(_res):
+            self._tun_url.setText("")
+            self._refresh_tunnel_status()
+
+        self._run_bg(_do, _apply)
+
+    def _refresh_tunnel_status(self):
+        """Показывает, открыт ли доступ из интернета, и блокирует кнопки по месту."""
+        try:
+            import server_control
+        except Exception:
+            return
+        running = server_control.tunnel_running()
+        url = server_control.tunnel_url()
+        if running and url:
+            self._tun_url.setText(url)
+            self._tun_status.setText("✅ Доступ открыт. Раздайте адрес или api_config.json.")
+            self._tun_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+        else:
+            self._tun_status.setText("⏹ Доступ из интернета закрыт.")
+            self._tun_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+        self._tun_start.setEnabled(not running)
+        self._tun_stop.setEnabled(running)
+
+    def _copy_tunnel_url(self):
+        url = self._tun_url.text().strip()
+        if not url:
+            QMessageBox.information(self, "Адрес пуст",
+                                    "Сначала откройте доступ — появится публичный адрес.")
+            return
+        QApplication.clipboard().setText(url)
+        self._tun_status.setText("📋 Адрес скопирован в буфер обмена.")
+        self._tun_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+
+    def _export_api_config(self):
+        """Сохраняет api_config.json с публичным адресом — для передачи коллеге."""
+        #Приоритет — поднятый туннель (публичный адрес), иначе поле «Адрес сервера».
+        #Локальные адреса другу бесполезны, поэтому отсекаем их с пояснением.
+        import server_control
+        url = server_control.tunnel_url() or self._api_url.text().strip()
+        if not url:
+            QMessageBox.information(
+                self, "Нет адреса",
+                "Сначала откройте доступ из интернета (или впишите адрес сервера выше).")
+            return
+        if "localhost" in url or "127.0.0.1" in url:
+            QMessageBox.warning(
+                self, "Локальный адрес",
+                "Этот адрес локальный — он работает только на этом ПК. Для коллег "
+                "сначала откройте доступ из интернета и сохраните публичный адрес.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить api_config.json для друга", "api_config.json", "JSON (*.json)")
+        if not path:
+            return
+        from app_settings import write_api_config
+        if write_api_config(path, url):
+            QMessageBox.information(
+                self, "Готово",
+                f"Файл сохранён:\n{path}\n\nОтдайте его коллеге — пусть положит рядом "
+                "с программой (GradeBookAI.exe). После запуска программа подключится "
+                "к вашему серверу автоматически.")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить файл.")
 
     def _save_api_url(self):
         from app_settings import set_api_url
