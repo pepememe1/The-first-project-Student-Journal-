@@ -1,0 +1,37 @@
+"""
+conftest.py — Фикстуры для тестов КЛИЕНТА (логика без GUI: core, sync_engine, data_store).
+
+Главное: подменяем папку данных на временную ДО импорта клиентских модулей. core.py
+вычисляет путь к локальной базе на этапе импорта (app_paths.data_dir() читает
+LOCALAPPDATA), поэтому переменную окружения задаём в самом верху, пока ни один
+модуль приложения ещё не импортирован — тесты не трогают рабочую базу разработчика.
+
+Fixture fresh_db даёт чистую базу на каждый тест: удаляем файл БД и пере-инициализируем
+таблицы, плюс сбрасываем сессионный флаг дельта-синка.
+"""
+import os
+import glob
+import tempfile
+
+#Временная папка данных — строго до импорта core/data_store/sync_engine.
+_DATA = tempfile.mkdtemp(prefix="gbai_client_tests_")
+os.environ["LOCALAPPDATA"] = _DATA
+
+import pytest
+
+from core import DBManager, LOCAL_DB
+
+
+@pytest.fixture()
+def fresh_db():
+    """Чистая локальная база на каждый тест (файл БД + WAL/SHM удаляем, таблицы заново)."""
+    for f in glob.glob(LOCAL_DB + "*"):     #.db, -wal, -shm
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    DBManager.init()
+    #Сбрасываем «первый полный pull сессии», чтобы тесты дельты не влияли друг на друга.
+    import sync_engine
+    sync_engine._session_full_pull_done = False
+    yield

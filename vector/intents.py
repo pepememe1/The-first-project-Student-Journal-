@@ -55,16 +55,19 @@ def _conn(scope: VectorScope) -> sqlite3.Connection:
 
 def _lessons(conn, group: str, subject: Optional[str]) -> List[tuple]:
     cur = conn.cursor()
+    #COALESCE(deleted,0)=0 — Вектор не должен ссылаться на удалённые (надгробия) занятия.
     if subject:
         cur.execute(
             "SELECT id, type, number, topic, date FROM lessons "
-            "WHERE group_name=? AND subject=? ORDER BY type, number, hour",
+            "WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0 "
+            "ORDER BY type, number, hour",
             (group, subject),
         )
     else:
         cur.execute(
             "SELECT id, type, number, topic, date FROM lessons "
-            "WHERE group_name=? ORDER BY subject, type, number, hour",
+            "WHERE group_name=? AND COALESCE(deleted,0)=0 "
+            "ORDER BY subject, type, number, hour",
             (group,),
         )
     return cur.fetchall()
@@ -73,7 +76,7 @@ def _lessons(conn, group: str, subject: Optional[str]) -> List[tuple]:
 def _records(conn, f: str, n: str) -> Dict[str, str]:
     cur = conn.cursor()
     cur.execute("SELECT lesson_id, grade FROM grades "
-                "WHERE student_f=? AND student_n=?", (f, n))
+                "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0", (f, n))
     return {row[0]: row[1] for row in cur.fetchall()}
 
 

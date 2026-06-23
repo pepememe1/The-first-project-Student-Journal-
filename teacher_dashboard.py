@@ -286,6 +286,29 @@ class TeacherDashboard(QWidget):
 
     def _set_val(self, student, key, val):
         student.records[key] = val
+        self._persist_grade(student, key, val)
+
+    def _persist_grade(self, student, key, val):
+        """Пишем оценку в локальную БД СРАЗУ (offline-first: каждое действие → диск).
+
+        Раньше оценка жила только в памяти до нажатия «Сохранить»; при переключении
+        группы/предмета (журнал перезагружается из БД) или закрытии программы
+        несохранённое терялось. Теперь правка не пропадёт. После записи будим
+        фоновую синхронизацию, чтобы оценка ушла на сервер без ожидания интервала."""
+        try:
+            from core import DBManager
+            conn = DBManager.get_conn()
+            cur = conn.cursor()
+            DBManager.upsert_grade(cur, (student.f, student.n, key, val))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[journal] не удалось сохранить оценку: {e}")
+        try:
+            from sync_runner import trigger
+            trigger()
+        except Exception:
+            pass
 
     #конфликты синхронизации
     def _refresh_conflicts_badge(self):
@@ -361,6 +384,7 @@ class TeacherDashboard(QWidget):
         else:
             full = val
         student.records[key] = full
+        self._persist_grade(student, key, full)   #сразу на диск (offline-first)
         self._update_table()
 
     def _header_ctx(self, pos):
@@ -401,8 +425,9 @@ class TeacherDashboard(QWidget):
     def _delete_lesson(self, lesson_id):
         if QMessageBox.question(self, "Удалить занятие?", "Удалить этот столбец?",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
-        self.book.lessons = [l for l in self.book.lessons if l.id != lesson_id]
-        self.book.save_to_db(); self._update_table()
+        #delete_lesson ставит надгробие в БД (а не просто убирает из списка) —
+        #раньше столбец возвращался после перезагрузки и не удалялся на других ПК.
+        self.book.delete_lesson(lesson_id); self._update_table()
 
     def _journal_ready(self) -> bool:
         """Журнал открыт (выбраны предмет и группа)? Если нет — self.book пуст, и

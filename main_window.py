@@ -2,7 +2,7 @@
 main_window.py — Главное окно приложения
 """
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QMessageBox
 )
@@ -84,6 +84,23 @@ class MainAppWindow(QMainWindow):
             set_on_synced(self._sync_bridge.synced.emit)
         except Exception as e:
             print(f"[sync] мост обновления UI не подключён: {e}")
+
+        #Авто-бэкап по расписанию. Раньше бэкап делался только «на выходе» — при
+        #аварийном завершении (зависание/выключение ПК) данные за сессию терялись бы.
+        #Таймер тикает чаще интервала, а backup_if_due троттлит до раза в 30 минут.
+        #Работает независимо от сервера (защищает локальную базу в любом режиме).
+        self._backup_timer = QTimer(self)
+        self._backup_timer.timeout.connect(self._auto_backup)
+        self._backup_timer.start(10 * 60 * 1000)        #тик раз в 10 минут
+        QTimer.singleShot(5000, self._auto_backup)       #и один бэкап вскоре после старта
+
+    def _auto_backup(self):
+        """Периодический бэкап локальной базы (троттлится по времени в DBManager)."""
+        try:
+            from core import DBManager
+            DBManager.backup_if_due()
+        except Exception as e:
+            print(f"[backup] авто-бэкап: {e}")
 
     def _on_synced(self):
         """Пришли свежие данные с сервера — обновляем текущий экран, если умеет."""

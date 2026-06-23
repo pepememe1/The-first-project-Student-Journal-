@@ -45,6 +45,19 @@ def test_server_stamps_timestamp_not_client(client):
     assert not g["updated_at"].startswith("1999"), "клиентская метка не должна сохраняться"
 
 
+def test_tombstone_roundtrips_through_server(client):
+    """Надгробие (deleted=True) переживает push→pull: удаление доезжает до других ПК,
+    а не теряется. Без этого удалённое занятие/оценка воскресали бы при синхронизации."""
+    h = make_admin(client)
+    _push(client, h, lessons=[dict(_LESSON, deleted=True)],
+          grades=[dict(_GRADE, deleted=True)])
+    ch = client.get("/sync/pull", headers=h).json()["changes"]
+    lesson = [x for x in ch["lessons"] if x["id"] == _LESSON["id"]]
+    grade = [x for x in ch["grades"] if x["id"] == _GRADE["id"]]
+    assert lesson and lesson[0]["deleted"] is True, "надгробие занятия должно вернуться"
+    assert grade and grade[0]["deleted"] is True, "надгробие оценки должно вернуться"
+
+
 def test_pull_requires_auth(client):
     assert client.get("/sync/pull").status_code == 401
 

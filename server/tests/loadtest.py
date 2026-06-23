@@ -191,31 +191,18 @@ async def _main():
 
         print(f"\n=== НАГРУЗКА: {N_USERS} пользователей, конкурентность {CONCURRENCY} ===")
 
-        #Фаза A — конкурентный LOGIN (CPU: PBKDF2 на каждый вход).
+        #Фаза A — конкурентный LOGIN (CPU: PBKDF2 на каждый вход). Токены сохраняем
+        #прямо здесь — чтобы не логиниться повторно ещё раз (на больших N это вдвое
+        #дольше). Дальше фазы B/C берут токены отсюда.
+        tokens = {}
         async def do_login(c, login):
             r = await c.post("/auth/login", json={"login": login, "password": PASSWORD})
-            return r.status_code == 200
+            if r.status_code == 200:
+                tokens[login] = r.json()["access_token"]
+                return True
+            return False
         await _run_phase("Фаза A: LOGIN (вход всех пользователей)",
                          base, do_login, students + teachers)
-
-        #Готовим токены для чтения/записи (по одному входу на пользователя).
-        print("\nполучаю токены для фаз B/C ...")
-        tokens = {}
-        limits = httpx.Limits(max_connections=CONCURRENCY)
-        async with httpx.AsyncClient(base_url=base, timeout=60, limits=limits) as c:
-            async def get_tok(login):
-                try:
-                    r = await c.post("/auth/login",
-                                     json={"login": login, "password": PASSWORD})
-                    if r.status_code == 200:
-                        tokens[login] = r.json()["access_token"]
-                except Exception:
-                    pass
-            sem = asyncio.Semaphore(CONCURRENCY)
-            async def _w(l):
-                async with sem:
-                    await get_tok(l)
-            await asyncio.gather(*(_w(l) for l in (students + teachers)))
 
         #Фаза B — конкурентный ПОЛНЫЙ pull (since="") = старое поведение клиента.
         async def do_pull(c, login):
@@ -225,8 +212,13 @@ async def _main():
             r = await c.get("/sync/pull",
                             headers={"Authorization": f"Bearer {tok}"})
             return r.status_code == 200
-        await _run_phase("Фаза B: ПОЛНЫЙ PULL (since='', старое поведение)",
-                         base, do_pull, students + teachers)
+        #Полный pull при тысячах пользователей патологически тяжёл (таблица users
+        #целиком в КАЖДОМ ответе) — это и есть причина перехода на дельту. Чтобы
+        #прогон не шёл часами, замеряем старое поведение на ВЫБОРКЕ до 500 запросов;
+        #login/дельта/push гоняем на всех пользователях.
+        full_sample = (students + teachers)[:120]
+        await _run_phase(f"Фаза B: ПОЛНЫЙ PULL (since='', старое поведение, выборка {len(full_sample)})",
+                         base, do_pull, full_sample)
 
         #Фаза B2 — конкурентный ДЕЛЬТА-pull (since=server_time) = новое поведение.
         #Берём свежую метку; с этого момента изменений нет, поэтому дельта пуста и

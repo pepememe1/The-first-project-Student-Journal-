@@ -50,7 +50,8 @@ DATA_DIR = app_paths.data_dir()
 LOCAL_DB = _os.path.join(DATA_DIR, "vsgutu_grades.db")
 BACKUP_DIR = _os.path.join(DATA_DIR, "backups")
 DEVICE_ID = (_socket.gethostname() or "pc")[:64]   #имя ПК — для детекта конфликтов
-MAX_BACKUPS = 30                                    #сколько бэкапов держим
+MAX_BACKUPS = 48                                    #сколько бэкапов держим (~сутки при цикле 30 мин)
+AUTO_BACKUP_INTERVAL_SEC = 30 * 60                  #не чаще одного авто-бэкапа в 30 минут
 
 if _is_network_path(LOCAL_DB):
     print("[DBManager] ВНИМАНИЕ: локальная база на сетевом пути — это вызывает "
@@ -95,7 +96,9 @@ class DBManager:
             if not _os.path.exists(LOCAL_DB):
                 return ""
             _os.makedirs(BACKUP_DIR, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            #Микросекунды (%f) в имени — чтобы два бэкапа в одну и ту же секунду
+            #(например, авто-бэкап и «перед восстановлением») не затирали друг друга.
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             tag = ("_" + "".join(ch for ch in reason if ch.isalnum())[:16]) if reason else ""
             dst = _os.path.join(BACKUP_DIR, f"vsgutu_grades_{ts}{tag}.db")
             #WAL: гарантируем, что данные на диске, затем копируем
@@ -110,6 +113,23 @@ class DBManager:
             return dst
         except Exception as e:
             print(f"[DBManager] бэкап не удался: {e}")
+            return ""
+
+    @classmethod
+    def backup_if_due(cls, min_interval_sec: int = AUTO_BACKUP_INTERVAL_SEC,
+                      reason: str = "auto") -> str:
+        """Бэкап ПО РАСПИСАНИЮ: делает копию, только если с последнего бэкапа прошло
+        не меньше min_interval_sec (или бэкапов ещё нет). Вызывается по таймеру из UI,
+        поэтому таймер может тикать чаще — лишних копий не наплодим. Защищает от
+        потери данных при аварийном завершении (не дождались бэкапа «на выходе»)."""
+        try:
+            import time as _time
+            backups = cls.list_backups()      #свежие первыми, элемент = (имя,путь,размер,mtime)
+            if backups and (_time.time() - backups[0][3]) < min_interval_sec:
+                return ""                     #ещё рано — последний бэкап свежий
+            return cls.backup(reason=reason)
+        except Exception as e:
+            print(f"[DBManager] backup_if_due: {e}")
             return ""
 
     @classmethod
@@ -199,8 +219,8 @@ class DBManager:
             f, n, lid = row
             now = datetime.now(timezone.utc).isoformat()
             cur.execute("INSERT OR REPLACE INTO grades "
-                        "(student_f,student_n,lesson_id,grade,updated_at,device) "
-                        "VALUES (?,?,?,?,?,?)", (f, n, lid, chosen_grade, now, DEVICE_ID))
+                        "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
+                        "VALUES (?,?,?,?,?,?,0)", (f, n, lid, chosen_grade, now, DEVICE_ID))
             cur.execute("UPDATE sync_conflicts SET resolved=1 WHERE id=?", (conflict_id,))
             conn.commit(); conn.close()
             return True
@@ -220,8 +240,10 @@ class DBManager:
             (id TEXT PRIMARY KEY, group_name TEXT, subject TEXT,
              type TEXT, number INTEGER, topic TEXT, date TEXT,
              retake_date TEXT DEFAULT '', hour INTEGER DEFAULT 0)""")
+        #deleted — «надгробие»: удалённое занятие НЕ стираем, а помечаем, чтобы
+        #удаление доехало до других ПК (иначе занятие воскресало бы при pull).
         for col, default in [("retake_date", "TEXT DEFAULT ''"), ("hour", "INTEGER DEFAULT 0"),
-                             ("updated_at", "TEXT DEFAULT ''")]:
+                             ("updated_at", "TEXT DEFAULT ''"), ("deleted", "INTEGER DEFAULT 0")]:
             try:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
             except Exception:
@@ -238,6 +260,11 @@ class DBManager:
                 cur.execute(f"ALTER TABLE grades ADD COLUMN {col} TEXT DEFAULT ''")
             except Exception:
                 pass
+        #deleted у оценок — то же надгробие (удалённая оценка не должна воскресать).
+        try:
+            cur.execute("ALTER TABLE grades ADD COLUMN deleted INTEGER DEFAULT 0")
+        except Exception:
+            pass
         cur.execute("""CREATE TABLE IF NOT EXISTS sync_conflicts
             (id INTEGER PRIMARY KEY AUTOINCREMENT,
              student_f TEXT, student_n TEXT, lesson_id TEXT,
@@ -253,7 +280,9 @@ class DBManager:
         """INSERT OR REPLACE для занятия в SQLite.
         Проставляем updated_at — нужно для синхронизации через API (LWW)."""
         now = datetime.now(timezone.utc).isoformat()
-        cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)", tuple(vals[:9]) + (now,))
+        #deleted=0 — это сохранение АКТИВНОГО занятия (в т.ч. «воскрешает» ранее
+        #удалённое, если занятие создали заново с тем же id — на практике id новый).
+        cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", tuple(vals[:9]) + (now,))
 
     @classmethod
     def upsert_student(cls, cur, vals: tuple):
@@ -268,10 +297,12 @@ class DBManager:
         """
         f, n, lid, grade = vals[:4]
         now = datetime.now(timezone.utc).isoformat()
+        #deleted=0 — выставление оценки делает запись активной (снимает прежнее
+        #надгробие, если оценку ставят заново после удаления).
         cur.execute(
             "INSERT OR REPLACE INTO grades "
-            "(student_f,student_n,lesson_id,grade,updated_at,device) "
-            "VALUES (?,?,?,?,?,?)", (f, n, lid, grade, now, DEVICE_ID))
+            "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
+            "VALUES (?,?,?,?,?,?,0)", (f, n, lid, grade, now, DEVICE_ID))
 
 
 #Датаклассы 
@@ -318,8 +349,29 @@ class GradeBook:
         ]
         conn = DBManager.get_conn()
         cur  = conn.cursor()
-        cur.execute("DELETE FROM grades WHERE student_f=? AND student_n=?", (surname, name))
+        #Оценки удаляем НЕ физически, а надгробием (deleted=1 + свежий updated_at):
+        #так удаление доедет до других ПК через синхронизацию, а не «воскреснет» при
+        #следующем pull. Физическое удаление оставило бы серверную копию живой.
+        now = datetime.now(timezone.utc).isoformat()
+        cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? "
+                    "WHERE student_f=? AND student_n=?", (now, DEVICE_ID, surname, name))
         cur.execute("DELETE FROM students WHERE f=? AND n=?", (surname, name))
+        conn.commit()
+        conn.close()
+
+    def delete_lesson(self, lesson_id: str):
+        """Удаляет занятие НАДГРОБИЕМ (deleted=1), а не физически — иначе удаление не
+        доезжало бы до других ПК и занятие воскресало бы при следующем pull. Раньше
+        занятие лишь убиралось из списка в памяти, а строка в SQLite оставалась —
+        и при перезагрузке журнала столбец возвращался. Заодно надгробим оценки
+        этого занятия, чтобы они не висели «осиротевшими» и тоже удалились везде."""
+        self.lessons = [l for l in self.lessons if l.id != lesson_id]
+        conn = DBManager.get_conn()
+        cur  = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cur.execute("UPDATE lessons SET deleted=1, updated_at=? WHERE id=?", (now, lesson_id))
+        cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? WHERE lesson_id=?",
+                    (now, DEVICE_ID, lesson_id))
         conn.commit()
         conn.close()
 
@@ -378,9 +430,11 @@ class GradeBook:
         conn = DBManager.get_conn()
         cur  = conn.cursor()
 
+        #deleted=0 — удалённые (надгробия) занятия в журнал не показываем.
         cur.execute(
             "SELECT id, type, number, topic, date, retake_date, hour "
-            "FROM lessons WHERE group_name=? AND subject=? ORDER BY type, number, hour",
+            "FROM lessons WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0 "
+            "ORDER BY type, number, hour",
             (self.group, self.subject)
         )
         self.lessons = []
@@ -424,7 +478,9 @@ class GradeBook:
         self.spisok_stud = []
         for f, n, g in cur.fetchall():
             student = Student(n, f, g)
-            cur.execute("SELECT lesson_id, grade FROM grades WHERE student_f=? AND student_n=?", (f, n))
+            #deleted=0 — удалённые (надгробия) оценки в журнал/расчёт не берём.
+            cur.execute("SELECT lesson_id, grade FROM grades "
+                        "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0", (f, n))
             student.records = {row[0]: row[1] for row in cur.fetchall()}
             self.spisok_stud.append(student)
         conn.close()

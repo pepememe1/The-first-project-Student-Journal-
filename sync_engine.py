@@ -179,8 +179,10 @@ def _collect_lessons() -> list:
     from core import DBManager
     conn = DBManager.get_conn()
     cur = conn.cursor()
+    #Шлём ВСЕ занятия, включая надгробия (deleted=1) — иначе удаление не доедет до
+    #других ПК и занятие воскреснет на следующем pull.
     cur.execute("SELECT id,group_name,subject,type,number,topic,date,"
-                "retake_date,hour,COALESCE(updated_at,'') FROM lessons")
+                "retake_date,hour,COALESCE(updated_at,''),COALESCE(deleted,0) FROM lessons")
     rows = cur.fetchall()
     conn.close()
     out = []
@@ -188,7 +190,8 @@ def _collect_lessons() -> list:
         out.append({
             "id": r[0], "group_name": r[1], "subject": r[2], "type": r[3],
             "number": r[4], "topic": r[5], "date": r[6], "retake_date": r[7],
-            "hour": r[8], "extra": {}, "updated_at": r[9] or _now(), "deleted": False,
+            "hour": r[8], "extra": {}, "updated_at": r[9] or _now(),
+            "deleted": bool(r[10]),
         })
     return out
 
@@ -197,15 +200,18 @@ def _collect_grades() -> list:
     from core import DBManager
     conn = DBManager.get_conn()
     cur = conn.cursor()
+    #Шлём ВСЕ оценки, включая надгробия (deleted=1) — чтобы удаление оценки
+    #распространилось, а не «воскресло» при следующем pull.
     cur.execute("SELECT student_f,student_n,lesson_id,grade,"
-                "COALESCE(updated_at,''),COALESCE(device,'') FROM grades")
+                "COALESCE(updated_at,''),COALESCE(device,''),COALESCE(deleted,0) FROM grades")
     rows = cur.fetchall()
     conn.close()
     out = []
-    for f, n, lid, grade, uat, dev in rows:
+    for f, n, lid, grade, uat, dev, deleted in rows:
         out.append({
             "id": f"{f}|{n}|{lid}", "student_f": f, "student_n": n, "lesson_id": lid,
-            "grade": grade, "device": dev, "updated_at": uat or _now(), "deleted": False,
+            "grade": grade, "device": dev, "updated_at": uat or _now(),
+            "deleted": bool(deleted),
         })
     return out
 
@@ -311,18 +317,26 @@ def _merge_lessons(remote: list):
     conn = DBManager.get_conn()
     cur = conn.cursor()
     for l in remote:
-        if l.get("deleted"):
+        lid = l.get("id")
+        if not lid:
             continue
-        cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (l["id"],))
+        rdel = bool(l.get("deleted"))
+        cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (lid,))
         row = cur.fetchone()
-        if row is None or _should_apply(l.get("updated_at", ""), row[0] or "", False):
-            cur.execute(
-                "INSERT OR REPLACE INTO lessons "
-                "(id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (l["id"], l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
-                 l.get("number", 0), l.get("topic", ""), l.get("date", ""),
-                 l.get("retake_date", ""), l.get("hour", 0), l.get("updated_at", "")))
+        #LWW с tie-break: применяем, если входящая метка позже (или при равной —
+        #если это удаление). Так удаление с сервера тоже применяется к локали.
+        if not (row is None or _should_apply(l.get("updated_at", ""), row[0] or "", rdel)):
+            continue
+        #deleted переносим как есть: 1 — занятие становится надгробием (исчезнет из
+        #журнала, фильтр deleted=0 в load_from_db), 0 — обычное активное занятие.
+        cur.execute(
+            "INSERT OR REPLACE INTO lessons "
+            "(id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (lid, l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
+             l.get("number", 0), l.get("topic", ""), l.get("date", ""),
+             l.get("retake_date", ""), l.get("hour", 0), l.get("updated_at", ""),
+             1 if rdel else 0))
     conn.commit()
     conn.close()
 
@@ -344,23 +358,50 @@ def _merge_grades(remote: list):
                 "remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)")
     now_iso = _now()
     for g in remote:
-        if g.get("deleted"):
-            continue
         f, n, lid = g.get("student_f"), g.get("student_n"), g.get("lesson_id")
         rgrade = g.get("grade", "")
         rat = g.get("updated_at", "")
         rdev = g.get("device", "")
-        cur.execute("SELECT grade, COALESCE(updated_at,'') FROM grades "
+        rdel = bool(g.get("deleted"))
+        cur.execute("SELECT grade, COALESCE(updated_at,''), COALESCE(deleted,0) FROM grades "
                     "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
         local = cur.fetchone()
+
+        #Удаление с сервера (надгробие). Применяем по LWW (новее побеждает); диалог
+        #конфликтов для удалений не заводим — это не «два разных балла», а явное
+        #удаление. Если локальная правка новее — оставляем её (уедет на сервер).
+        if rdel:
+            if local is None:
+                continue                       #нечего удалять
+            lgrade, lat, ldel = local
+            if ldel:
+                continue                       #уже удалено
+            if lat and rat and lat > rat:
+                continue                       #локальная правка новее — оставляем
+            cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? "
+                        "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                        (rat, rdev, f, n, lid))
+            continue
+
+        #Активная оценка с сервера.
         if local is None:
             #Локально такой оценки нет — просто принимаем серверную.
             cur.execute(
                 "INSERT OR REPLACE INTO grades "
-                "(student_f,student_n,lesson_id,grade,updated_at,device) "
-                "VALUES (?,?,?,?,?,?)", (f, n, lid, rgrade, rat, rdev))
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
+                "VALUES (?,?,?,?,?,?,0)", (f, n, lid, rgrade, rat, rdev))
             continue
-        lgrade, lat = local
+        lgrade, lat, ldel = local
+        if ldel:
+            #Локально оценка была удалена, а с сервера пришла активная (её
+            #восстановили на другом ПК). Применяем, если серверная не старше нашего
+            #надгробия — иначе наше удаление новее и уедет на сервер.
+            if not (lat and rat and lat > rat):
+                cur.execute(
+                    "INSERT OR REPLACE INTO grades "
+                    "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
+                    "VALUES (?,?,?,?,?,?,0)", (f, n, lid, rgrade, rat, rdev))
+            continue
         if (lgrade or "") == (rgrade or ""):
             continue   #значения совпали — менять нечего
         if lat and rat and lat > rat:
