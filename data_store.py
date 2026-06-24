@@ -118,6 +118,22 @@ def set_sync_watermark(server_time: str):
     _kv_set(_SYNC_WATERMARK_KEY, server_time or "", wake=False)
 
 
+#Локальные настройки ПК (НЕ синхронизируются): адрес сервера API и т.п.
+#Лежат в том же kv_store, но под служебным префиксом "_local:" и пишутся с
+#wake=False. collect_local их не собирает (на сервер уходят только
+#users/groups/subjects/config/lessons/grades), поэтому на чужие ПК они не
+#уезжают и синк не будят. Идея: локальная настройка живёт «в программе» (в её
+#БД), а не в отдельном json-файле рядом с exe, который правят руками.
+def local_get(key: str, default=None):
+    """Читает локальную настройку этого ПК ('' / default — если не задана)."""
+    return _kv_get(f"_local:{key}", default)
+
+
+def local_set(key: str, value) -> bool:
+    """Сохраняет локальную настройку этого ПК (молча, без пробуждения синка)."""
+    return _kv_set(f"_local:{key}", value, wake=False)
+
+
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
 

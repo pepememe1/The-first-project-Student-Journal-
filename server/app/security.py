@@ -16,7 +16,11 @@ from jose import jwt, JWTError
 
 from .config import JWT_SECRET, JWT_ALG, JWT_TTL_MIN
 
-_PW_ITERS = 200_000
+#Совпадает с десктопом (security._PW_ITERS): 600 000 итераций (OWASP 2023).
+#Подъём со 200k обратносовместим — verify_password берёт число итераций из самого
+#хеша, поэтому старые хеши (200k) проверяются по-прежнему. Большинство пользовательских
+#хешей приходит с клиента; здесь хешируется в основном админ из bootstrap-admin.
+_PW_ITERS = 600_000
 
 
 def hash_password(password: str) -> str:

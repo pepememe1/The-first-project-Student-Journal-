@@ -742,21 +742,49 @@ class AdminDashboard(QWidget):
         #Карточка: ЭТОТ ПК как сервер (хостинг сервера синхронизации)
         #Нужна только на ОДНОМ ПК — том, который будет сервером. На клиентских
         #машинах её просто не трогают (там хватает «Адреса сервера» выше).
+        #Одна кнопка «Запустить сервер» делает всё: ставит движок БД, поднимает сам
+        #сервер (API) и — для Serveo — открывает доступ из интернета, после чего
+        #публичный адрес сам записывается в программу.
         from PySide6.QtWidgets import QComboBox as _QC, QCheckBox as _QCB
         hc = card(); hl = QVBoxLayout(hc); hl.setContentsMargins(18, 16, 18, 16); hl.setSpacing(10)
         hl.addWidget(section_lbl("🖥️ Этот ПК как сервер"))
         hl.addWidget(lbl("Запустить сервер синхронизации прямо на этом компьютере. "
                          "Нужно только на ОДНОМ ПК колледжа (он станет сервером). "
-                         "Клиентам затем укажите его адрес в поле выше.", 11, C['text3']))
+                         "Адрес для клиентов появится ниже после запуска.", 11, C['text3']))
 
-        hl.addWidget(lbl("ДВИЖОК БАЗЫ ДАННЫХ СЕРВЕРА", 10, C['text3']))
-        self._srv_engine = _QC()
-        self._srv_engine.addItem("SQLite — без установки, для небольшого колледжа", "sqlite")
-        self._srv_engine.addItem("PostgreSQL — для многих ПК и нагрузки", "postgres")
-        self._srv_engine.currentIndexChanged.connect(self._toggle_pg_fields)
-        hl.addWidget(self._srv_engine)
+        #Тип сервера: способ доступа + движок БД одним выбором.
+        hl.addWidget(lbl("ТИП СЕРВЕРА", 10, C['text3']))
+        #Данные пунктов — строки "доступ|движок": Qt возвращает Python-кортеж как
+        #список, и сравнение со строкой надёжнее (без сюрпризов сериализации).
+        self._srv_type = _QC()
+        self._srv_type.addItem("Serveo.net · SQLite3 — доступ из интернета", "serveo|sqlite")
+        self._srv_type.addItem("ВСГУТУ Сервер · SQLite3 — локальная сеть", "direct|sqlite")
+        self._srv_type.addItem("ВСГУТУ Сервер · PostgreSQL — нагрузка/много ПК", "direct|postgres")
+        self._srv_type.currentIndexChanged.connect(self._toggle_server_fields)
+        hl.addWidget(self._srv_type)
 
-        #Блок реквизитов PostgreSQL (виден только при выборе PostgreSQL)
+        #Блок Serveo: постоянное имя поддомена + предупреждение 152-ФЗ.
+        #Виден только для типа «Serveo.net».
+        self._serveo_box = QWidget(); sbl = QVBoxLayout(self._serveo_box)
+        sbl.setContentsMargins(0, 0, 0, 0); sbl.setSpacing(6)
+        sbl.addWidget(lbl("⚠️ Serveo — туннель через зарубежный сервис: только для теста "
+                          "на выдуманных данных. Реальные данные студентов так передавать "
+                          "нельзя (152-ФЗ). Боевой доступ — свой домен + HTTPS.",
+                          11, "#b9772b"))
+        sbl.addWidget(lbl("ПОСТОЯННОЕ ИМЯ (необязательно)", 10, C['text3']))
+        self._tun_name = field_input("напр. vsgutu — адрес станет vsgutu.serveo.net")
+        try:
+            import server_control
+            self._tun_name.setText(server_control.get_tunnel_name())
+        except Exception:
+            pass
+        sbl.addWidget(self._tun_name)
+        sbl.addWidget(lbl("С именем адрес постоянный между запусками. Пусто — адрес "
+                          "случайный каждый раз (тогда клиенты вводят новый при входе).",
+                          11, C['text3']))
+        hl.addWidget(self._serveo_box)
+
+        #Блок реквизитов PostgreSQL (виден только для типа «ВСГУТУ · PostgreSQL»)
         self._pg_box = QWidget(); pgl = QVBoxLayout(self._pg_box)
         pgl.setContentsMargins(0, 0, 0, 0); pgl.setSpacing(6)
         self._pg_host = field_input("localhost")
@@ -778,10 +806,6 @@ class AdminDashboard(QWidget):
         pgl.addWidget(self._pg_status)
         hl.addWidget(self._pg_box)
 
-        dbrow = QHBoxLayout()
-        dbsave = btn("💾 Сохранить настройки БД", "green"); dbsave.clicked.connect(self._save_server_db)
-        dbrow.addWidget(dbsave); dbrow.addStretch(); hl.addLayout(dbrow)
-
         hl.addWidget(separator())
         prow = QHBoxLayout()
         prow.addWidget(lbl("ПОРТ СЕРВЕРА", 10, C['text3']))
@@ -798,55 +822,6 @@ class AdminDashboard(QWidget):
         self._srv_status = lbl("", 12); self._srv_status.setWordWrap(True)
         hl.addWidget(self._srv_status)
         lay.addWidget(hc)
-
-        #Карточка: доступ из интернета (туннель для коллег с других сетей)
-        #Сервер выше виден только в локальной сети. Чтобы коллега с ДРУГОГО
-        #интернета подключился, прокидываем сервер наружу через ssh-туннель и
-        #получаем публичный адрес — его и раздаём.
-        tc = card(); tl = QVBoxLayout(tc); tl.setContentsMargins(18, 16, 18, 16); tl.setSpacing(10)
-        tl.addWidget(section_lbl("🌍 Доступ из интернета"))
-        tl.addWidget(lbl("Открывает сервер для коллег из других сетей одной кнопкой "
-                         "(порты и команды настраивать не нужно). Сначала запустите "
-                         "сервер выше, затем нажмите «Открыть доступ».", 11, C['text3']))
-        tl.addWidget(lbl("⚠️ Туннель идёт через зарубежный сервис — только для теста на "
-                         "выдуманных данных. Реальные данные студентов так передавать "
-                         "нельзя (152-ФЗ).", 11, "#b9772b"))
-
-        tl.addWidget(lbl("ПОСТОЯННОЕ ИМЯ (необязательно)", 10, C['text3']))
-        self._tun_name = field_input("напр. vsgutu — адрес станет vsgutu.serveo.net")
-        try:
-            import server_control
-            self._tun_name.setText(server_control.get_tunnel_name())
-        except Exception:
-            pass
-        tl.addWidget(self._tun_name)
-        tl.addWidget(lbl("С именем адрес постоянный и не меняется между запусками — "
-                         "api_config другу делаете один раз. Пусто — адрес случайный "
-                         "каждый раз.", 11, C['text3']))
-
-        tbtnrow = QHBoxLayout()
-        self._tun_start = btn("🌍 Открыть доступ", "green"); self._tun_start.clicked.connect(self._start_tunnel)
-        self._tun_stop  = btn("■ Закрыть доступ", "red"); self._tun_stop.clicked.connect(self._stop_tunnel)
-        tbtnrow.addWidget(self._tun_start); tbtnrow.addWidget(self._tun_stop); tbtnrow.addStretch()
-        tl.addLayout(tbtnrow)
-
-        tl.addWidget(lbl("ПУБЛИЧНЫЙ АДРЕС", 10, C['text3']))
-        self._tun_url = field_input("появится после «Открыть доступ»")
-        self._tun_url.setReadOnly(True)
-        tl.addWidget(self._tun_url)
-        urow = QHBoxLayout()
-        tcopy = btn("📋 Скопировать адрес", "blue"); tcopy.clicked.connect(self._copy_tunnel_url)
-        texport = btn("💾 Сохранить api_config.json для друга", "blue"); texport.clicked.connect(self._export_api_config)
-        urow.addWidget(tcopy); urow.addWidget(texport); urow.addStretch()
-        tl.addLayout(urow)
-        self._tun_status = lbl("", 12); self._tun_status.setWordWrap(True)
-        tl.addWidget(self._tun_status)
-        lay.addWidget(tc)
-        #Боевой профиль: туннель serveo скрыт (ПДн через иностранный сервис — нельзя,
-        #152-ФЗ). Карточка видна только в dev/demo при GRADEBOOK_ENABLE_TUNNEL=1.
-        #Боевой доступ из интернета — домен + Caddy/HTTPS (server/DEPLOY.md, 7.6).
-        from app_settings import dev_tunnel_enabled
-        tc.setVisible(dev_tunnel_enabled())
 
         #Карточка: смена пароля администратора
         sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
@@ -867,24 +842,46 @@ class AdminDashboard(QWidget):
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
-        self._refresh_tunnel_status()
 
-    #ЭТОТ ПК как сервер: настройка движка БД и запуск
-    def _toggle_pg_fields(self, *_):
-        """Поля PostgreSQL видны только при выбранном движке PostgreSQL."""
-        self._pg_box.setVisible(self._srv_engine.currentData() == "postgres")
+    #ЭТОТ ПК как сервер: выбор типа, запуск/остановка
+    def _current_type(self):
+        """(access, engine) из выбранного пункта. Данные хранятся строкой
+        'доступ|движок' — разбираем её здесь в одном месте."""
+        data = self._srv_type.currentData() or "direct|sqlite"
+        access, _, engine = str(data).partition("|")
+        return access or "direct", engine or "sqlite"
+
+    def _toggle_server_fields(self, *_):
+        """Показываем поля по выбранному типу: блок Serveo — для доступа из
+        интернета, реквизиты PostgreSQL — только для PostgreSQL."""
+        access, engine = self._current_type()
+        self._serveo_box.setVisible(access == "serveo")
+        self._pg_box.setVisible(engine == "postgres")
+
+    def _server_type_index(self, access: str, engine: str) -> int:
+        """Индекс пункта комбобокса по паре (доступ, движок)."""
+        target = f"{access}|{engine}"
+        for i in range(self._srv_type.count()):
+            if self._srv_type.itemData(i) == target:
+                return i
+        return 0
 
     def _refresh_server_cfg(self):
-        """Подтягивает текущие настройки server/.env в форму."""
+        """Подтягивает сохранённый тип сервера и реквизиты PostgreSQL из server/.env."""
         try:
             import server_control
         except Exception:
             return
         is_pg = server_control.is_postgres()
-        self._srv_engine.setCurrentIndex(1 if is_pg else 0)
+        engine = "postgres" if is_pg else "sqlite"
+        access = server_control.get_access_mode()
+        #serveo разумен только с SQLite; PostgreSQL — это «прямой» боевой профиль.
+        if engine == "postgres":
+            access = "direct"
+        self._srv_type.setCurrentIndex(self._server_type_index(access, engine))
         if is_pg:
             #Разбираем строку подключения, чтобы заполнить поля (без пароля — он
-            #остаётся в .env; пустое поле = «не менять» при сохранении).
+            #остаётся в .env; пустое поле = «не менять» при запуске).
             try:
                 from urllib.parse import urlparse, unquote
                 u = urlparse(server_control.get_db_url())
@@ -894,7 +891,7 @@ class AdminDashboard(QWidget):
                 self._pg_user.setText(unquote(u.username or ""))
             except Exception:
                 pass
-        self._toggle_pg_fields()
+        self._toggle_server_fields()
 
     def _refresh_server_status(self):
         """Показывает, запущен ли сервер на этом ПК, и блокирует кнопки по месту."""
@@ -944,53 +941,63 @@ class AdminDashboard(QWidget):
 
         self._run_bg(_check, _apply)
 
-    def _save_server_db(self):
+    def _start_server(self):
+        """Единая кнопка «Запустить сервер»: по выбранному типу ставит движок БД,
+        поднимает сам сервер (API) и — для Serveo — открывает доступ из интернета,
+        после чего сам записывает полученный адрес в программу (вписывать вручную
+        больше ничего не нужно)."""
         import server_control
-        engine = self._srv_engine.currentData()
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+        access, engine = self._current_type()
+        name = self._tun_name.text().strip()
+        if access == "serveo":
+            #Имя поддомена запоминаем, чтобы адрес был постоянным между запусками.
+            try:
+                server_control.set_tunnel_name(name)
+            except Exception:
+                pass
+        pg = None
         if engine == "postgres":
             pw = self._pg_pass.text()
             if not pw:
-                #Пустой пароль при уже настроенном PG — оставить прежний из .env.
+                #Пустой пароль при уже настроенном PG — берём прежний из .env.
                 from urllib.parse import urlparse, unquote
                 try:
                     u = urlparse(server_control.get_db_url())
                     pw = unquote(u.password or "") if server_control.is_postgres() else ""
                 except Exception:
                     pw = ""
-            ok = server_control.use_postgres(self._pg_host.text(), self._pg_port.text(),
-                                             self._pg_db.text(), self._pg_user.text(), pw)
-        else:
-            ok = server_control.use_sqlite()
-        if ok:
-            QMessageBox.information(
-                self, "Сохранено",
-                "Настройки БД сервера сохранены в server/.env.\n\n"
-                "Чтобы сменить движок БД (SQLite ⇄ PostgreSQL), перезапустите "
-                "программу — затем нажмите «Запустить сервер».")
-        else:
-            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить настройки сервера")
+            pg = {"host": self._pg_host.text(), "port": self._pg_port.text(),
+                  "db": self._pg_db.text(), "user": self._pg_user.text(), "password": pw}
 
-    def _start_server(self):
-        import server_control
-        try:
-            port = int(self._srv_port.text().strip() or "8000")
-        except ValueError:
-            port = 8000
-        self._srv_status.setText("⏳ Запускаю сервер...")
+        self._srv_status.setText("⏳ Запускаю сервер и открываю доступ (serveo)..."
+                                 if access == "serveo" else "⏳ Запускаю сервер...")
+        self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
         self._srv_start.setEnabled(False)
 
         def _do():
-            return server_control.start_server(port)
+            return server_control.launch(access, engine, port, name, pg)
 
         def _apply(res):
-            ok, msg = res
-            if not ok:
-                QMessageBox.critical(self, "Сервер", msg)
+            ok, url, message = res
+            if ok and url:
+                #Адрес сам пишется в программу (локально) и сразу подставляется в поле.
+                from app_settings import set_api_url
+                set_api_url(url)
+                self._api_url.setText(url)
+                QMessageBox.information(self, "Сервер запущен", message)
+            else:
+                QMessageBox.critical(self, "Сервер",
+                                     message or "Не удалось запустить сервер.")
             self._refresh_server_status()
 
         self._run_bg(_do, _apply)
 
     def _stop_server(self):
+        """Останавливает сервер и, если был поднят, ssh-туннель serveo."""
         import server_control
         try:
             port = int(self._srv_port.text().strip() or "8000")
@@ -1000,6 +1007,10 @@ class AdminDashboard(QWidget):
         self._srv_stop.setEnabled(False)
 
         def _do():
+            try:
+                server_control.stop_tunnel()   #туннеля не было — безвредный no-op
+            except Exception:
+                pass
             return server_control.stop_server(port)
 
         def _apply(res):
@@ -1009,116 +1020,6 @@ class AdminDashboard(QWidget):
             self._refresh_server_status()
 
         self._run_bg(_do, _apply)
-
-    #Доступ из интернета: туннель и раздача api_config
-    def _start_tunnel(self):
-        import server_control
-        try:
-            port = int(self._srv_port.text().strip() or "8000")
-        except ValueError:
-            port = 8000
-        name = self._tun_name.text().strip()
-        #Имя поддомена запоминаем, чтобы адрес был постоянным между запусками.
-        try:
-            server_control.set_tunnel_name(name)
-        except Exception:
-            pass
-        #Туннель без сервера бессмысленен — за ним была бы пустота (502).
-        if not server_control.server_running(port):
-            QMessageBox.warning(
-                self, "Сначала сервер",
-                "Сервер на этом ПК не запущен. Нажмите «Запустить сервер» выше, "
-                "затем открывайте доступ.")
-            return
-        self._tun_status.setText("⏳ Открываю доступ (подключаюсь к serveo)...")
-        self._tun_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
-        self._tun_start.setEnabled(False)
-
-        def _do():
-            return server_control.start_tunnel(port, name)
-
-        def _apply(res):
-            ok, msg = res
-            if ok:
-                self._tun_url.setText(msg)
-            else:
-                QMessageBox.critical(self, "Доступ из интернета", msg)
-            self._refresh_tunnel_status()
-
-        self._run_bg(_do, _apply)
-
-    def _stop_tunnel(self):
-        import server_control
-        self._tun_status.setText("⏳ Закрываю доступ...")
-        self._tun_stop.setEnabled(False)
-
-        def _do():
-            return server_control.stop_tunnel()
-
-        def _apply(_res):
-            self._tun_url.setText("")
-            self._refresh_tunnel_status()
-
-        self._run_bg(_do, _apply)
-
-    def _refresh_tunnel_status(self):
-        """Показывает, открыт ли доступ из интернета, и блокирует кнопки по месту."""
-        try:
-            import server_control
-        except Exception:
-            return
-        running = server_control.tunnel_running()
-        url = server_control.tunnel_url()
-        if running and url:
-            self._tun_url.setText(url)
-            self._tun_status.setText("✅ Доступ открыт. Раздайте адрес или api_config.json.")
-            self._tun_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
-        else:
-            self._tun_status.setText("⏹ Доступ из интернета закрыт.")
-            self._tun_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
-        self._tun_start.setEnabled(not running)
-        self._tun_stop.setEnabled(running)
-
-    def _copy_tunnel_url(self):
-        url = self._tun_url.text().strip()
-        if not url:
-            QMessageBox.information(self, "Адрес пуст",
-                                    "Сначала откройте доступ — появится публичный адрес.")
-            return
-        QApplication.clipboard().setText(url)
-        self._tun_status.setText("📋 Адрес скопирован в буфер обмена.")
-        self._tun_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
-
-    def _export_api_config(self):
-        """Сохраняет api_config.json с публичным адресом — для передачи коллеге."""
-        #Приоритет — поднятый туннель (публичный адрес), иначе поле «Адрес сервера».
-        #Локальные адреса другу бесполезны, поэтому отсекаем их с пояснением.
-        import server_control
-        url = server_control.tunnel_url() or self._api_url.text().strip()
-        if not url:
-            QMessageBox.information(
-                self, "Нет адреса",
-                "Сначала откройте доступ из интернета (или впишите адрес сервера выше).")
-            return
-        if "localhost" in url or "127.0.0.1" in url:
-            QMessageBox.warning(
-                self, "Локальный адрес",
-                "Этот адрес локальный — он работает только на этом ПК. Для коллег "
-                "сначала откройте доступ из интернета и сохраните публичный адрес.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить api_config.json для друга", "api_config.json", "JSON (*.json)")
-        if not path:
-            return
-        from app_settings import write_api_config
-        if write_api_config(path, url):
-            QMessageBox.information(
-                self, "Готово",
-                f"Файл сохранён:\n{path}\n\nОтдайте его коллеге — пусть положит рядом "
-                "с программой (GradeBookAI.exe). После запуска программа подключится "
-                "к вашему серверу автоматически.")
-        else:
-            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить файл.")
 
     def _save_api_url(self):
         from app_settings import set_api_url

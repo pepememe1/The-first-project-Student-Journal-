@@ -191,6 +191,22 @@ def _port_busy(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def lan_ip() -> str:
+    """IPv4-адрес этого ПК в локальной сети — его дают клиентам при «прямом»
+    доступе (ВСГУТУ-сервер в ЛВС). Открываем UDP-сокет «наружу» (НИЧЕГО не шлём),
+    ОС сама выбирает исходящий интерфейс — его адрес и берём. Строго AF_INET, без
+    IPv6. '' — если определить не удалось (тогда подскажем 127.0.0.1)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return ""
+
+
 def start_server(port: int = DEFAULT_PORT) -> tuple:
     """Запускает сервер ВНУТРИ этой программы (отдельным потоком). Внешний Python
     не нужен. (True, сообщение) или (False, причина)."""
@@ -277,6 +293,22 @@ def set_tunnel_name(name: str) -> bool:
     return _write_env(env)
 
 
+#Режим доступа к серверу — чтобы при следующем открытии админки восстановить выбор
+#типа сервера. 'serveo' — доступ из интернета через туннель; 'direct' — сервер
+#виден напрямую (локальная сеть / свой домен). Это настройка ПК-хоста, живёт в .env
+#рядом с прочей серверной конфигурацией.
+def get_access_mode() -> str:
+    """'serveo' или 'direct' (по умолчанию — 'direct', т.е. ВСГУТУ-сервер в ЛВС)."""
+    mode = read_env().get("GRADEBOOK_ACCESS_MODE", "").strip().lower()
+    return "serveo" if mode == "serveo" else "direct"
+
+
+def set_access_mode(mode: str) -> bool:
+    env = read_env()
+    env["GRADEBOOK_ACCESS_MODE"] = "serveo" if (mode or "").strip().lower() == "serveo" else "direct"
+    return _write_env(env)
+
+
 def tunnel_running() -> bool:
     """True, если ssh-туннель ещё жив."""
     return _tunnel_proc is not None and _tunnel_proc.poll() is None
@@ -320,7 +352,10 @@ def start_tunnel(port: int = DEFAULT_PORT, name: str = "") -> tuple:
     #С именем — постоянный адрес name.serveo.net; без имени — случайный каждый раз.
     remote = f"{name}:80:127.0.0.1:{port}" if name else f"80:127.0.0.1:{port}"
     cmd = [
-        "ssh", "-R", remote, "serveo.net",
+        #-4 — ВЕСЬ туннель строго по IPv4. В РФ IPv6 часто битый/выключен: без
+        #этого ssh может выбрать AAAA-адрес serveo.net и зависнуть на подключении,
+        #а форвард на 127.0.0.1 (а не localhost) гарантирует IPv4 и на нашем конце.
+        "ssh", "-4", "-R", remote, "serveo.net",
         #accept-new — не зависаем на вопросе про host-key при первом подключении;
         #ServerAlive — держим соединение; ExitOnForwardFailure — падаем сразу,
         #если порт занять не удалось (а не висим молча).
@@ -374,3 +409,54 @@ def stop_tunnel() -> tuple:
     except Exception as e:
         return False, f"Не удалось остановить туннель: {e}"
     return True, "Туннель остановлен."
+
+
+#Единый запуск из админки (одна кнопка «Запустить сервер»)
+def launch(access: str, engine: str, port: int = DEFAULT_PORT,
+           name: str = "", pg: dict = None) -> tuple:
+    """Поднимает сервер «под ключ» по выбранному типу и возвращает адрес, который
+    надо сохранить в программе как адрес сервера синхронизации.
+
+    Шаги: записать движок БД в .env → запустить сервер (in-process FastAPI — это и
+    есть «сам API») → для serveo поднять ssh-туннель и взять публичный адрес; для
+    прямого доступа вернуть локальный адрес этого ПК.
+
+    access: 'serveo' (доступ из интернета) | 'direct' (ЛВС/домен).
+    engine: 'sqlite' | 'postgres'.
+    Возвращает (ok: bool, url: str, message: str). url — что сохранить как адрес
+    сервера ('' при ошибке)."""
+    access = "serveo" if (access or "").lower() == "serveo" else "direct"
+    engine = "postgres" if (engine or "").lower() == "postgres" else "sqlite"
+
+    #1. Движок серверной БД в .env (его прочитает start_server до импорта сервера).
+    if engine == "postgres":
+        pg = pg or {}
+        ok = use_postgres(pg.get("host"), pg.get("port"), pg.get("db"),
+                          pg.get("user"), pg.get("password"))
+    else:
+        ok = use_sqlite()
+    if not ok:
+        return False, "", "Не удалось сохранить настройки БД сервера в .env."
+
+    #Запомним выбранный режим доступа, чтобы восстановить его в UI при след. запуске.
+    set_access_mode(access)
+
+    #2. Сам сервер (API). При уже запущенном — start_server вернёт «уже запущен».
+    ok, msg = start_server(port)
+    if not ok:
+        return False, "", msg
+
+    #3. Доступ к серверу.
+    if access == "serveo":
+        ok, res = start_tunnel(port, name)
+        if not ok:
+            #Сервер подняли, а туннель — нет: говорим честно, адрес не сохраняем.
+            return False, "", f"Сервер запущен, но доступ из интернета не открылся: {res}"
+        return True, res, f"Сервер запущен, доступ из интернета открыт:\n{res}"
+
+    #Прямой доступ: на ЭТОМ ПК клиент ходит на 127.0.0.1, остальным даём адрес в ЛВС.
+    ip = lan_ip() or "127.0.0.1"
+    url = f"http://127.0.0.1:{port}"
+    hint = (f"Сервер запущен на порту {port}.\n"
+            f"Адрес для других ПК в сети: http://{ip}:{port}")
+    return True, url, hint

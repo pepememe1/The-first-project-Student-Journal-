@@ -16,6 +16,103 @@ from styles import C
 from ui_components import HexLogoWidget, AnimatedBackground
 
 
+def ask_server_address(parent=None, first_run: bool = False) -> bool:
+    """Окно «введите API сервера для синхронизации».
+
+    Возвращает True, если адрес задан. ВАЖНО: окно всегда закрываемо («Позже») —
+    чтобы администратор, у которого сервер ещё не запущен, не попал в замкнутый круг
+    (адрес появляется только ПОСЛЕ запуска сервера). Через Serveo адрес меняется при
+    каждом запуске, поэтому клиент может вызвать это окно и со страницы входа.
+    first_run=True добавляет кнопку «Работать офлайн» (чтобы не спрашивать снова)."""
+    from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                    QLineEdit, QPushButton)
+    from app_settings import get_api_url, set_api_url, set_offline_ack
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Подключение к серверу")
+    dlg.setMinimumWidth(460)
+    v = QVBoxLayout(dlg)
+    v.setContentsMargins(22, 20, 22, 18)
+    v.setSpacing(12)
+
+    title = QLabel("Пожалуйста, введите API сервера для синхронизации")
+    title.setWordWrap(True)
+    title.setStyleSheet(f"font-size:15px;font-weight:700;color:{C['text']};")
+    v.addWidget(title)
+
+    hint = QLabel("Адрес выдаёт администратор после запуска сервера — например, "
+                  "https://vsgutu.serveo.net или http://10.0.0.5:8000. Через Serveo "
+                  "адрес меняется при каждом запуске сервера — берите актуальный. "
+                  "Без адреса программа работает только локально (офлайн).")
+    hint.setWordWrap(True)
+    hint.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+    v.addWidget(hint)
+
+    field = QLineEdit()
+    field.setText(get_api_url())
+    field.setPlaceholderText("https://...  или  http://адрес:8000")
+    field.setMinimumHeight(38)
+    v.addWidget(field)
+
+    status = QLabel("")
+    status.setWordWrap(True)
+    status.setStyleSheet("font-size:12px;color:#b9772b;")
+    v.addWidget(status)
+
+    state = {"ok": False}
+
+    def _connect():
+        url = field.text().strip()
+        if not url:
+            status.setText("Введите адрес сервера или нажмите «Позже».")
+            return
+        #Лёгкая проверка доступности. НЕ блокируем намертво: сервер мог ещё
+        #подниматься (или это serveo с задержкой) — адрес всё равно сохраняем.
+        reachable = False
+        try:
+            from sync_client import SyncClient
+            reachable = bool(SyncClient(url).health())
+        except Exception:
+            reachable = False
+        set_api_url(url)
+        state["ok"] = True
+        if reachable:
+            dlg.accept()
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                dlg, "Адрес сохранён",
+                "Адрес сохранён, но сервер сейчас не ответил. Если он ещё "
+                "запускается — синхронизация начнётся автоматически, как только "
+                "сервер станет доступен. Проверьте, что адрес введён верно.")
+            dlg.accept()
+
+    def _later():
+        dlg.reject()
+
+    def _offline():
+        set_offline_ack(True)
+        dlg.reject()
+
+    row = QHBoxLayout()
+    b_connect = QPushButton("Подключиться")
+    b_connect.setDefault(True)
+    b_connect.clicked.connect(_connect)
+    field.returnPressed.connect(_connect)
+    row.addWidget(b_connect)
+    b_later = QPushButton("Позже")
+    b_later.clicked.connect(_later)
+    row.addWidget(b_later)
+    if first_run:
+        b_off = QPushButton("Работать офлайн")
+        b_off.clicked.connect(_offline)
+        row.addWidget(b_off)
+    v.addLayout(row)
+
+    dlg.exec()
+    return state["ok"]
+
+
 #LOGIN PAGE (STUDENT & TEACHER)
 
 class LoginPage(QWidget):
@@ -117,7 +214,24 @@ class LoginPage(QWidget):
         hint.setStyleSheet(f"color:{C['text3']};font-size:11px;margin-top:8px;")
         lay.addWidget(hint)
 
+        #Адрес сервера доступен для смены ДО входа любому клиенту: через Serveo он
+        #меняется при каждом запуске, и студент/преподаватель должен ввести свежий
+        #сам, не заходя в админку.
+        srv_btn = QPushButton("⚙ Сервер синхронизации")
+        srv_btn.setCursor(Qt.PointingHandCursor)
+        srv_btn.setFlat(True)
+        srv_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;border:none;color:{C['text3']};"
+            "font-size:11px;}"
+            f"QPushButton:hover{{color:{C['green']};}}")
+        srv_btn.clicked.connect(self._open_server_settings)
+        lay.addWidget(srv_btn, alignment=Qt.AlignCenter)
+
         outer.addWidget(c)
+
+    def _open_server_settings(self):
+        """Открывает окно ввода адреса сервера (смена/ввод вручную с экрана входа)."""
+        ask_server_address(self, first_run=False)
 
     #Helper methods
     def _mk_label(self, text: str) -> QLabel:

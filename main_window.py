@@ -94,6 +94,25 @@ class MainAppWindow(QMainWindow):
         self._backup_timer.start(10 * 60 * 1000)        #тик раз в 10 минут
         QTimer.singleShot(5000, self._auto_backup)       #и один бэкап вскоре после старта
 
+        #Стартовая проверка адреса сервера. singleShot(0) — показываем уже после
+        #появления окна, а не в конструкторе. Само окно решает, показываться ли
+        #(не трогает админа/хост и офлайн-режим) — см. _maybe_prompt_server.
+        QTimer.singleShot(0, self._maybe_prompt_server)
+
+    def _maybe_prompt_server(self):
+        """Однократно предлагает ввести адрес сервера на свежем клиентском ПК.
+
+        НЕ показываем, если адрес уже задан, это ПК-хоста (там админ сам поднимает
+        сервер — иначе замкнутый круг) или пользователь осознанно выбрал офлайн."""
+        try:
+            from app_settings import has_api_url, is_host, get_offline_ack
+            if has_api_url() or is_host() or get_offline_ack():
+                return
+            from auth_pages import ask_server_address
+            ask_server_address(self, first_run=True)
+        except Exception as e:
+            print(f"[startup] окно адреса сервера пропущено: {e}")
+
     def _auto_backup(self):
         """Периодический бэкап локальной базы (троттлится по времени в DBManager)."""
         try:
@@ -139,6 +158,14 @@ class MainAppWindow(QMainWindow):
 
     def _on_admin_login(self):
         """Обработать вход администратора"""
+        #Этот ПК — хост (администратор поднимает сервер именно здесь). Помечаем, чтобы
+        #стартовое окно «введите адрес сервера» больше не доставало админа: адрес ведь
+        #появляется ПОСЛЕ запуска сервера — иначе вышел бы замкнутый круг.
+        try:
+            from app_settings import mark_host
+            mark_host()
+        except Exception:
+            pass
         try:
             if AdminDashboard is None:
                 QMessageBox.warning(self, "Ошибка", "Модуль AdminDashboard не загружен")
