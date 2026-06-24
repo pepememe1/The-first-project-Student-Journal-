@@ -42,6 +42,19 @@ class SyncManager:
         обновление текущего экрана (через потокобезопасный сигнал Qt)."""
         self._on_synced = cb
 
+    def current_auth(self):
+        """(url, token) текущей сессии — чтобы админ-панель могла сама дёрнуть
+        служебные эндпоинты /admin/*. Берём ЖИВОЙ токен синкера, иначе сохранённый
+        для текущего логина. ('', '') — если адрес/вход не заданы."""
+        url = get_api_url()
+        token = ""
+        if self._client and getattr(self._client, "token", ""):
+            token = self._client.token
+        elif self._login:
+            import app_settings
+            token = app_settings.get_saved_token(self._login)
+        return url, (token or "")
+
     def start(self, login: str, password: str, role: str):
         """Запустить фоновую синхронизацию для вошедшего пользователя."""
         url = get_api_url()
@@ -158,3 +171,8 @@ def set_on_synced(cb):
 def trigger():
     """Немедленно разбудить синкер (после изменения данных)."""
     _manager.trigger()
+
+
+def current_auth():
+    """(url, token) текущей сессии для админских запросов из UI ('', '' — нет входа)."""
+    return _manager.current_auth()

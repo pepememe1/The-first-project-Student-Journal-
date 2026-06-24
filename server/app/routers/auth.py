@@ -13,7 +13,7 @@ from ..db import get_db
 from ..models import User
 from ..schemas import LoginIn, TokenOut, BootstrapIn
 from ..security import hash_password, verify_password, create_token
-from .. import throttle
+from .. import throttle, events
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -63,6 +63,8 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     left = throttle.seconds_until_unlocked(ip, login_str)
     if left > 0:
         #429 + Retry-After — стандартный сигнал «слишком много попыток, подожди».
+        events.record("warn", "login_throttled",
+                      f"вход заблокирован за перебор (ещё {left} с)", login_str, ip)
         raise HTTPException(
             status_code=429,
             detail=f"Слишком много неудачных попыток. Повторите через {left} с.",
@@ -74,8 +76,10 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     ).first()
     if not u or not verify_password(body.password, u.password_hash):
         throttle.register_failure(ip, login_str)
+        events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     throttle.register_success(ip, login_str)
+    events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
     name = u.full_name or f"{u.surname} {u.name}".strip()
     return TokenOut(access_token=create_token(u.login, u.role), role=u.role, name=name)

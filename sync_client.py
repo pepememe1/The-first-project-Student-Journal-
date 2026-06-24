@@ -118,3 +118,17 @@ class SyncClient:
         r = self._req("POST", "/sync/push", json={"changes": changes})
         r.raise_for_status()
         return r.json()
+
+    #Админский мониторинг (доступ на сервере ограничен ролью admin — см. /admin/*)
+    def get_online(self) -> dict:
+        """Кто сейчас подключён к серверу. {online:[...], count, window_sec}."""
+        r = self._req("GET", "/admin/online", timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def get_events(self, since: int = 0) -> dict:
+        """Журнал событий сервера дельтой (since — последний полученный id).
+        {events:[...], last_id}."""
+        r = self._req("GET", "/admin/events", params={"since": since}, timeout=5)
+        r.raise_for_status()
+        return r.json()

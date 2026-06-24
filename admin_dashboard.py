@@ -6,7 +6,7 @@ admin_dashboard.py — AdminDashboard
 import json
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QDialog, QFileDialog, QFormLayout,
     QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -90,6 +90,7 @@ class AdminDashboard(QWidget):
             ("__label__", "", "Система"),
             ("api",  "🐯",  "Настройки ИИ"),
             ("pg",   "🌐", "Сервер"),
+            ("mon",  "📡", "Мониторинг"),
             ("ai",   "🤖",  "ИИ Помощник"),
         ]
         self.sidebar = Sidebar(items)
@@ -106,6 +107,7 @@ class AdminDashboard(QWidget):
         self._build_subjects()
         self._build_api()
         self._build_pg()
+        self._build_mon()
         self._build_ai()
         self.sidebar.set_active("dash")
 
@@ -1074,11 +1076,130 @@ class AdminDashboard(QWidget):
 
     #Роутинг
 
+    #Мониторинг сервера (только админу; данные с /admin/online и /admin/events)
+    def _build_mon(self):
+        w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
+        inner = QWidget(); lay = QVBoxLayout(inner)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
+        lay.addWidget(title_lbl("Мониторинг сервера"))
+        lay.addWidget(lbl("Кто сейчас подключён к серверу и журнал последних действий и "
+                          "ошибок. Данные берутся с сервера (доступ только администратору) "
+                          "и обновляются автоматически, пока открыта эта вкладка.",
+                          11, C['text3']))
+
+        #Кто онлайн
+        oc = card(); ol = QVBoxLayout(oc); ol.setContentsMargins(18, 16, 18, 16); ol.setSpacing(8)
+        self._mon_online_title = section_lbl("🟢 Сейчас онлайн")
+        ol.addWidget(self._mon_online_title)
+        self._mon_online = QListWidget(); self._mon_online.setMinimumHeight(150)
+        ol.addWidget(self._mon_online)
+        lay.addWidget(oc)
+
+        #Консоль событий
+        ec = card(); el = QVBoxLayout(ec); el.setContentsMargins(18, 16, 18, 16); el.setSpacing(8)
+        el.addWidget(section_lbl("🖥 Консоль событий"))
+        self._mon_console = QTextEdit(); self._mon_console.setReadOnly(True)
+        #Ограничиваем число строк — консоль не должна растить память бесконечно.
+        self._mon_console.document().setMaximumBlockCount(1000)
+        self._mon_console.setStyleSheet(
+            "QTextEdit{background:#0f1115;color:#cdd3df;border:1px solid "
+            f"{C['border2']};border-radius:8px;font-family:Consolas,'Courier New',"
+            "monospace;font-size:12px;padding:8px;}")
+        self._mon_console.setMinimumHeight(240)
+        el.addWidget(self._mon_console)
+        self._mon_status = lbl("", 11, C['text3']); self._mon_status.setWordWrap(True)
+        el.addWidget(self._mon_status)
+        lay.addWidget(ec)
+
+        lay.addStretch()
+        w.setWidget(inner)
+        self.pages["mon"] = w; self.stack.addWidget(w)
+
+        #Опрос идёт только пока открыта вкладка (start/stop в _switch) — не дёргаем
+        #сервер фоном, когда админ смотрит другие экраны.
+        self._mon_since = 0
+        self._mon_timer = QTimer(self)
+        self._mon_timer.setInterval(4000)             #раз в 4 секунды
+        self._mon_timer.timeout.connect(self._poll_monitor)
+
+    def _start_monitor(self):
+        """Открыли вкладку: чистим консоль и тянем всё заново, запускаем опрос."""
+        self._mon_since = 0
+        self._mon_console.clear()
+        self._mon_status.setText("⏳ Подключаюсь к серверу...")
+        self._poll_monitor()
+        self._mon_timer.start()
+
+    def _stop_monitor(self):
+        if getattr(self, "_mon_timer", None) is not None:
+            self._mon_timer.stop()
+
+    def _poll_monitor(self):
+        """Один цикл опроса: тянем /admin/online и /admin/events токеном текущей
+        сессии. Сетевую работу — в фоне (_run_bg), чтобы UI не подвисал."""
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        since = self._mon_since
+        if not url or not token:
+            self._mon_status.setText("⏹ Сервер не подключён. Задайте адрес и войдите "
+                                     "(или запустите сервер во вкладке «Сервер»).")
+            return
+
+        def _do():
+            from sync_client import SyncClient
+            c = SyncClient(url, token=token)
+            return c.get_online(), c.get_events(since=since)
+
+        def _apply(res):
+            online, evts = res
+            self._render_online(online)
+            self._append_events(evts)
+            self._mon_status.setText("")
+
+        def _err(e):
+            self._mon_status.setText(f"⚠️ Сервер недоступен или ошибка опроса: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _render_online(self, data):
+        rows = (data or {}).get("online", [])
+        self._mon_online_title.setText(f"🟢 Сейчас онлайн: {len(rows)}")
+        self._mon_online.clear()
+        role_ru = {"admin": "Администратор", "teacher": "Преподаватель", "student": "Студент"}
+        if not rows:
+            self._mon_online.addItem(QListWidgetItem("— сейчас никого —"))
+            return
+        for r in rows:
+            role = role_ru.get(r.get("role", ""), r.get("role", ""))
+            name = r.get("name") or r.get("login", "")
+            txt = (f"{role} · {name}  ({r.get('login','')})  — был активен "
+                   f"{r.get('idle_sec', 0)} c назад")
+            if r.get("ip"):
+                txt += f"  · {r['ip']}"
+            self._mon_online.addItem(QListWidgetItem(txt))
+
+    def _append_events(self, data):
+        import time as _t
+        from html import escape as _esc
+        evts = (data or {}).get("events", [])
+        colors = {"error": "#e0625f", "warn": "#d9a441", "info": "#9aa3b2"}
+        for e in evts:
+            ts = _t.strftime("%H:%M:%S", _t.localtime(e.get("ts", 0)))
+            lvl = e.get("level", "info")
+            who, ip = e.get("login", ""), e.get("ip", "")
+            tail = f"  ({who}{'@' + ip if ip else ''})" if (who or ip) else ""
+            line = f"[{ts}] {lvl.upper():<5} {e.get('kind','')}: {e.get('message','')}{tail}"
+            self._mon_console.append(
+                f'<span style="color:{colors.get(lvl, "#cdd3df")}">{_esc(line)}</span>')
+        if evts:
+            self._mon_since = (data or {}).get("last_id", self._mon_since)
+
     def _switch(self, key):
         if getattr(self, '_switching', False):
             return
         self._switching = True
         try:
+            self._stop_monitor()      #уходя с любой вкладки — гасим опрос мониторинга
             if key == "dash":     self._refresh_dash()
             if key == "teachers": self._render_teachers()
             if key == "students": self._refresh_students_combo(); self._render_students()
@@ -1086,6 +1207,7 @@ class AdminDashboard(QWidget):
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_vector_cfg()
             if key == "pg":       self._refresh_server_status()
+            if key == "mon":      self._start_monitor()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)

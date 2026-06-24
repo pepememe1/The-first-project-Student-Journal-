@@ -22,15 +22,16 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
-from app import throttle
+from app import throttle, events
 
 
 @pytest.fixture()
 def client():
-    """Чистый клиент на пустой БД: пересоздаём таблицы и сбрасываем троттлинг."""
+    """Чистый клиент на пустой БД: пересоздаём таблицы, сбрасываем троттлинг и монитор."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     throttle.reset()
+    events.reset()
     with TestClient(app) as c:
         yield c
 

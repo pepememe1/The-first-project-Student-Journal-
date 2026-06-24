@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import SYNC_MODELS, User, Lesson
+from .. import events
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
@@ -163,6 +164,11 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
             rejected[name] = rej
 
     db.commit()
+    #Преподаватель попытался записать НЕ свой предмет — это нарушение прав, поэтому
+    #видно в админской консоли (а не молча игнорируется).
+    if rejected:
+        events.record("warn", "push_rejected",
+                      f"отклонены чужие записи: {rejected}", user.login)
     result = {"server_time": server_ts, "applied": applied}
     #rejected включаем, только если что-то отвергли — клиенту видно, что часть
     #правок не его (не молчим, но и не шумим в обычном случае).

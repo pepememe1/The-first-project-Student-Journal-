@@ -1,15 +1,17 @@
 """
 deps.py — Зависимости FastAPI: текущий пользователь из JWT и проверка ролей.
 """
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .security import decode_token
 from .models import User
+from . import events, throttle
 
 
 def get_current_user(authorization: str = Header(None),
+                     request: Request = None,
                      db: Session = Depends(get_db)) -> User:
     """Достаёт пользователя по токену из заголовка Authorization: Bearer <token>."""
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -23,6 +25,15 @@ def get_current_user(authorization: str = Header(None),
     ).first()
     if not user:
         raise HTTPException(status_code=401, detail="Пользователь не найден")
+    #Отмечаем активность для админского «кто онлайн». Это единая точка — через
+    #get_current_user проходит КАЖДЫЙ авторизованный запрос (pull/push/admin).
+    #Не критично для запроса, поэтому под try: мониторинг не должен ронять API.
+    try:
+        ip = throttle.client_ip(request) if request is not None else ""
+        name = user.full_name or f"{user.surname} {user.name}".strip()
+        events.touch(user.login, user.role, name, ip)
+    except Exception:
+        pass
     return user
 
 
