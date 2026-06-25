@@ -1,0 +1,60 @@
+# ВАЖНО: git НЕ поддерживает комментарии в КОНЦЕ строки с шаблоном —
+# такой «# ...» становится частью шаблона и ломает игнор. Комментарии — только
+# на отдельных строках (как здесь).
+
+# ── Рантайм-данные и секреты (НИКОГДА не коммитим) ──
+secure_data.enc
+api_config.json
+data.key
+audit.log
+login_throttle.json
+backups/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
+*.pid
+
+# ── Конфигурация окружения ──
+.env
+.env.*
+# шаблон .env.example коммитим (реальные секреты — нет)
+!.env.example
+
+# ── Внутренние инструкции для ассистента (в публичный репозиторий не нужны) ──
+# Файл остаётся локально (его читает Claude Code), но в репозиторий не попадает.
+CLAUDE.md
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ── Виртуальные окружения ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── Сборка PyInstaller ──
+*.spec
+*.manifest
+
+# ── IDE / редакторы ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── ОС ──
+.DS_Store
+Thumbs.db
+desktop.ini
