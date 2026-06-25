@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from styles import C, SB
-from widgets import lbl, sb_btn, vline
+from widgets import lbl, sb_btn, vline, ElidingLabel
 
 
 #SIDEBAR WIDGET
@@ -120,7 +120,9 @@ class HeaderBar(QFrame):
             "background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.5);"
             "color:#FFFFFF;border-radius:100px;padding:3px 10px;font-size:11px;"
         )
-        self.user_lbl   = lbl("", 13, "#EAF6F8")
+        #ФИО может быть длинным — эллипсис по ширине + полное имя в подсказке,
+        #чтобы верхняя панель не «разъезжалась» на длинных ФИО.
+        self.user_lbl   = ElidingLabel("", 13, "#EAF6F8", max_width=360)
         lay.addWidget(self.role_badge)
         lay.addWidget(self.user_lbl)
 
@@ -142,7 +144,7 @@ class HeaderBar(QFrame):
     def set_role(self, role_text, user_text):
         """Установить информацию о роли пользователя"""
         self.role_badge.setText(role_text)
-        self.user_lbl.setText(user_text)
+        self.user_lbl.set_full_text(user_text)
 
     def refresh_theme(self):
         """Перекрасить верхнюю полосу в цвет активной темы. Шапка создаётся один раз
