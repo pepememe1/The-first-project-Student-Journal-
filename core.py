@@ -176,6 +176,90 @@ class DBManager:
             print(f"[DBManager] восстановление не удалось: {e}")
             return False
 
+    @classmethod
+    def wipe_all_local_data(cls, remove_backups: bool = True) -> dict:
+        """ПОЛНЫЙ сброс локальных данных ЭТОГО ПК до состояния «первый запуск».
+
+        Удаляет файл базы (вместе со студентами, преподавателями, оценками, группами,
+        конфигом, ХЕШЕМ пароля администратора, адресом сервера, сохранённым токеном и
+        кэшем темы — всё это лежит в kv_store одной базы), её WAL/SHM-хвосты и, по
+        умолчанию, все резервные копии (иначе восстановление вернуло бы старые данные).
+
+        Что НЕ трогаем сознательно:
+          • общую базу колледжа на сервере — это ЛОКАЛЬНЫЙ сброс одного ПК;
+          • ключ шифрования data.key — новой пустой базе он не мешает;
+          • audit.log и login_throttle.json — журнал безопасности по 152-ФЗ сохраняем.
+
+        Таблицы заново НЕ создаём: при следующем старте их пересоздаст DBManager.init().
+        Если файл занят другим процессом и удалить его не вышло — откатываемся на
+        очистку содержимого через SQL (DROP всех таблиц), чтобы данные всё равно ушли.
+
+        Возвращает {'removed': [...], 'errors': [...]} — что удалили и где споткнулись.
+        """
+        removed, errors = [], []
+
+        #Гасим фоновую синхронизацию: иначе её поток может в этот момент держать
+        #соединение (файл не удалить) или тут же подтянуть данные обратно с сервера.
+        try:
+            import sync_runner
+            sync_runner.stop()
+        except Exception:
+            pass
+
+        #Сбрасываем WAL в основной файл и отпускаем соединение — чтобы -wal/-shm не
+        #держали данные и файлы освободились для удаления.
+        try:
+            c = sqlite3.connect(LOCAL_DB)
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            c.close()
+        except Exception:
+            pass
+
+        file_ok = True
+        for suffix in ("-wal", "-shm", "-journal", ""):
+            p = LOCAL_DB + suffix
+            try:
+                if _os.path.exists(p):
+                    _os.remove(p)
+                    removed.append(_os.path.basename(p))
+            except Exception as e:
+                file_ok = False
+                errors.append(f"{_os.path.basename(p)}: {e}")
+
+        #Файл не удалился (занят) — чистим содержимое через SQL как запасной путь.
+        if not file_ok and _os.path.exists(LOCAL_DB):
+            try:
+                conn = cls.get_conn(); cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                for (t,) in cur.fetchall():
+                    if t.startswith("sqlite_"):
+                        continue
+                    cur.execute(f"DROP TABLE IF EXISTS {t}")
+                conn.commit(); conn.close()
+                cls._init_sqlite_tables()   #оставляем валидную пустую базу
+                removed.append("(содержимое базы очищено через SQL)")
+            except Exception as e:
+                errors.append(f"sql-wipe: {e}")
+
+        if remove_backups and _os.path.isdir(BACKUP_DIR):
+            for f in list(_os.listdir(BACKUP_DIR)):
+                if not f.endswith(".db"):
+                    continue
+                try:
+                    _os.remove(_os.path.join(BACKUP_DIR, f))
+                    removed.append("backups/" + f)
+                except Exception as e:
+                    errors.append(f"backups/{f}: {e}")
+
+        #Сбрасываем singleton хранилища, чтобы в памяти не осталось ссылок на старое.
+        try:
+            import data_store
+            data_store.reset_store()
+        except Exception:
+            pass
+
+        return {"removed": removed, "errors": errors}
+
     #Конфликты синхронизации (детект вместо тихой перезаписи)
     @classmethod
     def list_conflicts(cls, unresolved_only: bool = True) -> list:

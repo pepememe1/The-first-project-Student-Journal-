@@ -875,6 +875,31 @@ class AdminDashboard(QWidget):
         srow = QHBoxLayout(); srow.addWidget(chg); srow.addStretch(); sl.addLayout(srow)
         lay.addWidget(sc)
 
+        #Карточка: ОПАСНАЯ ЗОНА — где лежат данные и полный локальный сброс.
+        #Тут же отвечаем на вопрос «где физически база»: показываем путь и даём
+        #кнопку открыть папку в проводнике.
+        from core import DATA_DIR
+        dz = card(); dl = QVBoxLayout(dz); dl.setContentsMargins(18, 16, 18, 16); dl.setSpacing(10)
+        dl.addWidget(section_lbl("🧨 Опасная зона"))
+        dl.addWidget(lbl("Данные этого ПК (база, резервные копии, журнал входов) лежат в папке:",
+                         11, C['text3']))
+        path_lbl = lbl(DATA_DIR, 11, C['text']); path_lbl.setWordWrap(True)
+        path_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        dl.addWidget(path_lbl)
+        orow = QHBoxLayout()
+        openb = btn("📂 Открыть папку с данными", "blue"); openb.clicked.connect(self._open_data_folder)
+        orow.addWidget(openb); orow.addStretch(); dl.addLayout(orow)
+        dl.addWidget(separator())
+        dl.addWidget(lbl("Полностью удалить ВСЕ локальные данные этого ПК: студентов, "
+                         "преподавателей, группы, оценки, пароль администратора, адрес "
+                         "сервера, сохранённый вход и резервные копии. Программа вернётся "
+                         "к состоянию первого запуска. Общую базу колледжа на сервере это "
+                         "НЕ затрагивает.", 11, "#c0392b"))
+        wrow = QHBoxLayout()
+        wipeb = btn("🗑 Очистить все локальные данные", "red"); wipeb.clicked.connect(self._wipe_all_data)
+        wrow.addWidget(wipeb); wrow.addStretch(); dl.addLayout(wrow)
+        lay.addWidget(dz)
+
         lay.addStretch()
         w.setWidget(inner)
         self.pages["pg"] = w; self.stack.addWidget(w)
@@ -1148,6 +1173,55 @@ class AdminDashboard(QWidget):
             QMessageBox.information(self, "Готово", "Пароль администратора изменён.")
         else:
             QMessageBox.critical(self, "Ошибка", "Не удалось сохранить новый пароль")
+
+    #Опасная зона: расположение данных и полный локальный сброс
+    def _open_data_folder(self):
+        """Открыть в проводнике папку, где физически лежат база и резервные копии."""
+        from core import DATA_DIR
+        try:
+            os.startfile(DATA_DIR)   #Windows: открыть каталог в проводнике
+        except Exception as e:
+            QMessageBox.information(self, "Папка с данными",
+                                    f"{DATA_DIR}\n\n(открыть автоматически не вышло: {e})")
+
+    def _wipe_all_data(self):
+        """Полный локальный сброс. Двойное подтверждение (предупреждение + ввод слова),
+        потому что действие необратимо. После очистки закрываем программу: текущая
+        сессия админа держится на уже удалённой базе, чистый старт даст перезапуск."""
+        warn = QMessageBox(self)
+        warn.setIcon(QMessageBox.Warning)
+        warn.setWindowTitle("Очистка всех данных")
+        warn.setText("Будут БЕЗВОЗВРАТНО удалены все локальные данные этого ПК:\n"
+                     "•  студенты, преподаватели, группы, оценки\n"
+                     "•  пароль администратора и сохранённый вход\n"
+                     "•  адрес сервера и резервные копии\n\n"
+                     "Общую базу колледжа на сервере это не затрагивает. Продолжить?")
+        warn.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        warn.setDefaultButton(QMessageBox.No)
+        if warn.exec() != QMessageBox.Yes:
+            return
+        word, ok = QInputDialog.getText(
+            self, "Подтверждение",
+            "Действие необратимо. Введите слово  УДАЛИТЬ  заглавными, чтобы подтвердить:")
+        if not ok or word.strip() != "УДАЛИТЬ":
+            QMessageBox.information(self, "Отменено", "Очистка отменена.")
+            return
+
+        res = DBManager.wipe_all_local_data(remove_backups=True)
+        log_event("local_data_wiped", "admin", f"removed={len(res.get('removed', []))}")
+        errs = res.get("errors") or []
+        if errs:
+            QMessageBox.warning(
+                self, "Очищено с замечаниями",
+                "Часть файлов удалить не удалось (возможно, заняты другим процессом):\n\n"
+                + "\n".join(errs[:8])
+                + "\n\nЗакройте программу и при необходимости удалите остаток вручную.")
+        else:
+            QMessageBox.information(
+                self, "Готово",
+                "Все локальные данные удалены. Программа закроется — запустите её заново "
+                "для настройки с чистого листа.")
+        QApplication.quit()
 
     #ИИ
 
