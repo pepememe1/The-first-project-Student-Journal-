@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout, QWidget
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
 
 from styles import C, BTN, SB, FONT_TITLE, FONT_BODY
 
@@ -41,6 +42,39 @@ def lbl(text="", size=13, color=None, bold=False, parent=None) -> QLabel:
         s += "font-weight:700;"
     l.setStyleSheet(s)
     return l
+
+
+class ElidingLabel(QLabel):
+    """Лейбл, который сам укорачивает длинный текст многоточием по своей ширине, а
+    полный текст показывает в подсказке. Нужен для шапки: ФИО бывают очень разной
+    длины («Ли Ян» против «Будрин Владислав Владиславович»), и без эллипсиса длинное
+    имя ломало бы вёрстку верхней панели. Ширину ограничивает maximumWidth — короткое
+    имя показывается целиком, длинное — обрезается с «…»."""
+
+    def __init__(self, text="", size=13, color=None, max_width=360, parent=None):
+        super().__init__(parent)
+        self._full = text or ""
+        s = f"font-size:{size}px;font-family:{FONT_BODY};"
+        if color:
+            s += f"color:{color};"
+        self.setStyleSheet(s)
+        self.setMaximumWidth(max_width)
+        self.setToolTip(self._full)
+        self._apply_elide()
+
+    def set_full_text(self, text: str):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        fm = QFontMetrics(self.font())
+        avail = self.width() if self.width() > 0 else self.maximumWidth()
+        self.setText(fm.elidedText(self._full, Qt.ElideRight, max(10, avail)))
+
+    def resizeEvent(self, event):
+        self._apply_elide()
+        super().resizeEvent(event)
 
 
 def title_lbl(text, size=22) -> QLabel:

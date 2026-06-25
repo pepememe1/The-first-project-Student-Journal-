@@ -173,7 +173,9 @@ class MainAppWindow(QMainWindow):
             name, data = payload
             if TeacherDashboard is None:
                 raise RuntimeError("Модуль TeacherDashboard не загружен")
-            return TeacherDashboard(name, data), ("Учитель", name.split()[0])
+            #показываем ПОЛНОЕ ФИО (раньше была только фамилия name.split()[0]);
+            #длинные ФИО шапка сама укоротит эллипсисом (ElidingLabel)
+            return TeacherDashboard(name, data), ("Учитель", name)
         if role == "admin":
             if AdminDashboard is None:
                 raise RuntimeError("Модуль AdminDashboard не загружен")
