@@ -1,0 +1,15 @@
+# ============================================================
+# server/requirements.txt — Бэкенд GradeBookAI (Фаза 1)
+# Python 3.10+
+# Установка:  pip install -r server/requirements.txt
+# ============================================================
+fastapi>=0.110          # веб-фреймворк API
+uvicorn[standard]>=0.29 # ASGI-сервер для запуска
+SQLAlchemy>=2.0         # ORM (PostgreSQL на сервере, SQLite для разработки)
+python-jose[cryptography]>=3.3   # JWT-токены
+psycopg2-binary>=2.9    # драйвер PostgreSQL (на боевом сервере)
+httpx>=0.27             # для тестов (TestClient)
+pytest>=8.0             # автотесты API (запуск: cd server && pytest)
+# ГОСТ-этап хеша пароля (PBKDF2-Стрибог512). Fallback на dev/без GOST-engine.
+# На БОЕВОМ Linux ставь OpenSSL GOST-engine (ViPNet/gost-engine) — бэкенд авто-выберет его.
+gostcrypto>=1.2.5
