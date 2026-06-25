@@ -289,6 +289,18 @@ def _gost_iters() -> int:
     return 2000 if _openssl_gost_name() else 2
 
 
+def gost_backend_info() -> tuple:
+    """(метка, быстрый_ли_C) активного ГОСТ-бэкенда — для панели готовности/диагностики."""
+    name = _openssl_gost_name()
+    if name:
+        return f"OpenSSL {name} (C, быстро)", True
+    try:
+        import gostcrypto  # noqa: F401
+        return "gostcrypto (pure-Python)", False
+    except ImportError:
+        return "НЕТ ГОСТ-бэкенда", False
+
+
 def hash_password(password: str) -> str:
     """Двухэтапный хеш: PBKDF2-SHA512 (стойкость) → PBKDF2-Стрибог512 (ГОСТ)."""
     if password is None:

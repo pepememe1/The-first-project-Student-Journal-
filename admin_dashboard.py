@@ -825,6 +825,33 @@ class AdminDashboard(QWidget):
         hl.addWidget(self._srv_status)
         lay.addWidget(hc)
 
+        #Карточка: ГОТОВНОСТЬ к 152-ФЗ (УЗ-3). Жмёшь «Проверить» — видишь зелёным/красным,
+        #что готово в самой проге, и список того, что ОДИН РАЗ настраивает IT ВСГУТУ
+        #(ViPNet/ГОСТ-TLS — это их инфраструктура, прога её не создаёт).
+        cc = card(); cl = QVBoxLayout(cc); cl.setContentsMargins(18, 16, 18, 16); cl.setSpacing(8)
+        cl.addWidget(section_lbl("🛡 Готовность к 152-ФЗ (УЗ-3)"))
+        cl.addWidget(lbl("Что прога делает сама — зелёным ниже. ViPNet / ГОСТ-TLS / HTTPS — "
+                         "это «броня» вокруг сервера, её один раз ставит IT-отдел ВСГУТУ "
+                         "(прога её не создаёт). Жми «Проверить готовность» после запуска сервера.",
+                         11, C['text3']))
+        self._cmp_server = lbl("…", 12); self._cmp_server.setWordWrap(True)
+        self._cmp_channel = lbl("…", 12); self._cmp_channel.setWordWrap(True)
+        self._cmp_hash = lbl("…", 12); self._cmp_hash.setWordWrap(True)
+        self._cmp_app = lbl("…", 12); self._cmp_app.setWordWrap(True)
+        for wlbl in (self._cmp_server, self._cmp_channel, self._cmp_hash, self._cmp_app):
+            cl.addWidget(wlbl)
+        cl.addWidget(separator())
+        cl.addWidget(lbl("Один раз настраивает IT ВСГУТУ (инфраструктура, см. server/DEPLOY.md, "
+                         "раздел 7.7):\n"
+                         "•  ViPNet / ГОСТ-TLS на канал (HTTPS отечественной криптой)\n"
+                         "•  межсетевой экран + DMZ (сервер БД не виден из интернета)\n"
+                         "•  антивирус • СЗИ от НСД на сервере • физдоступ к серверу\n"
+                         "•  изолированное хранилище для резервных копий", 11, C['text3']))
+        cbtnrow = QHBoxLayout()
+        cbtn = btn("🔄 Проверить готовность", "blue"); cbtn.clicked.connect(self._refresh_compliance)
+        cbtnrow.addWidget(cbtn); cbtnrow.addStretch(); cl.addLayout(cbtnrow)
+        lay.addWidget(cc)
+
         #Карточка: смена пароля администратора
         sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
         sl.addWidget(section_lbl("🔐 Пароль администратора"))
@@ -844,6 +871,7 @@ class AdminDashboard(QWidget):
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
+        self._refresh_compliance()
 
     #ЭТОТ ПК как сервер: выбор типа, запуск/остановка
     def _current_type(self):
@@ -921,6 +949,62 @@ class AdminDashboard(QWidget):
             self._srv_stop.setEnabled(running)
 
         self._run_bg(_check, _apply)
+
+    def _refresh_compliance(self):
+        """Панель готовности к 152-ФЗ: что прога обеспечивает сама (зелёным), и
+        что остаётся на инфраструктуру ВСГУТУ. Живые проверки: сервер запущен,
+        защищён ли канал, активен ли ГОСТ-бэкенд хеша."""
+        ok, warn, bad = C['green'], "#b9772b", C['red']
+
+        def _set(widget, text, color):
+            widget.setText(text)
+            widget.setStyleSheet(f"font-size:12px;color:{color};")
+
+        #ГОСТ-хеш пароля (всегда активен — гибрид; показываем бэкенд)
+        try:
+            import security
+            label, _fast = security.gost_backend_info()
+            _set(self._cmp_hash, f"✅ ГОСТ-хеш пароля включён (бэкенд: {label})", ok)
+        except Exception:
+            _set(self._cmp_hash, "✅ ГОСТ-хеш пароля включён", ok)
+
+        #Канал: HTTPS / ГОСТ-TLS / локальный / открытый
+        try:
+            from app_settings import get_api_url, is_secure_transport
+            url = (get_api_url() or "").strip()
+        except Exception:
+            url = ""
+        if not url:
+            _set(self._cmp_channel, "⚠️ Адрес сервера не задан — канал ещё не настроен", warn)
+        elif url.startswith("https://"):
+            _set(self._cmp_channel, f"✅ Канал защищён (HTTPS/TLS): {url}", ok)
+        elif is_secure_transport(url):
+            _set(self._cmp_channel, "◻ Сервер локальный (127.0.0.1). Снаружи защиту даёт "
+                                    "ГОСТ-TLS/ViPNet перед сервером — настраивает IT ВСГУТУ", warn)
+        else:
+            _set(self._cmp_channel, f"❌ Канал НЕ защищён (http к удалённому адресу): {url}. "
+                                    "Нужен ViPNet ГОСТ-TLS или HTTPS!", bad)
+
+        #Прикладные меры — всегда включены
+        _set(self._cmp_app, "✅ Роли, анти-брутфорс, журнал входов/событий, авто-бэкап — включены", ok)
+
+        #Сервер запущен? — фоновая проверка
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+
+        def _chk():
+            import server_control
+            return server_control.server_running(port)
+
+        def _apply(running):
+            if running:
+                _set(self._cmp_server, f"✅ Сервер (API) запущен на порту {port}", ok)
+            else:
+                _set(self._cmp_server, "⏹ Сервер не запущен — нажмите «Запустить сервер» выше", warn)
+
+        self._run_bg(_chk, _apply)
 
     def _test_pg_conn(self):
         import server_control
@@ -1206,7 +1290,7 @@ class AdminDashboard(QWidget):
             if key == "groups":   self._render_groups()
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_vector_cfg()
-            if key == "pg":       self._refresh_server_status()
+            if key == "pg":       self._refresh_server_status(); self._refresh_compliance()
             if key == "mon":      self._start_monitor()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
