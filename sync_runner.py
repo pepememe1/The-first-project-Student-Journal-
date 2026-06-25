@@ -23,6 +23,7 @@ class SyncManager:
         self._login = ""
         self._password = ""
         self._role = ""
+        self._url = ""           #адрес сервера, под который создан текущий клиент
         self._interval = interval_sec
         self._on_synced = None   #колбэк после успешного цикла (для обновления UI)
         self._wake = threading.Event()   #«будильник» для немедленного синка
@@ -56,10 +57,16 @@ class SyncManager:
         return url, (token or "")
 
     def start(self, login: str, password: str, role: str):
-        """Запустить фоновую синхронизацию для вошедшего пользователя."""
-        url = get_api_url()
-        if not url:
-            return   #офлайн-режим без сервера — синк не нужен
+        """Запустить фоновую синхронизацию для вошедшего пользователя.
+
+        Креды запоминаем ВСЕГДА, даже если адрес сервера ещё не задан. Это важно
+        для хост-ПК: администратор поднимает сервер уже ПОСЛЕ входа (адрес ведь
+        появляется только после запуска сервера — иначе замкнутый круг). Раньше
+        здесь стоял ранний `return` при пустом адресе: поток не стартовал, креды
+        терялись, и когда сервер наконец поднимали — синхронизация так и не шла.
+        Из-за этого админ не отдавал на сервер пользователей (преподаватели/студенты
+        получали 401 при входе через API), а мониторинг не имел токена. Теперь поток
+        стартует всегда и сам подхватывает адрес, как только он появится."""
         self._login, self._password, self._role = login, password, role
         #Новый вход — снова разрешаем попытку по сохранённому токену именно этого
         #пользователя (на одном ПК мог входить другой).
@@ -67,12 +74,14 @@ class SyncManager:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._loop, args=(url,), daemon=True)
+        self._wake.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     def stop(self):
         self._running = False
         self._client = None
+        self._wake.set()   #будим цикл, чтобы он завершился сразу, а не через интервал
 
     def _apply_login_jitter(self):
         """Случайная задержка ПЕРЕД входом по паролю — один раз за процесс.
@@ -132,9 +141,22 @@ class SyncManager:
                     return False
             return False
 
-    def _loop(self, url: str):
+    def _loop(self):
         import sync_engine
         while self._running:
+            #Адрес сервера читаем КАЖДЫЙ цикл, а не один раз при старте: на хост-ПК он
+            #появляется уже после входа (админ поднимает сервер), а у serveo поддомен
+            #может смениться между запусками. Нет адреса — тихо ждём и проверяем снова.
+            url = get_api_url()
+            if not url:
+                self._sleep_cycle()
+                continue
+            #Сменился адрес — старый клиент/токен относятся к другому серверу и больше
+            #не годятся: пересоздаём клиента и идём по паролю (сохранённый токен чужой).
+            if self._url and self._url != url:
+                self._client = None
+                self._saved_token_tried = True
+            self._url = url
             try:
                 if self._ensure_auth(url):
                     sync_engine.sync_once(self._client)
@@ -147,9 +169,12 @@ class SyncManager:
                 #Сеть/токен/сервер недоступны — не критично, повторим позже.
                 self._client = None   # сбросим, чтобы перелогиниться
                 print(f"[sync] отложено: {e}")
-            #Ждём интервал ИЛИ «будильник» (trigger при изменении данных).
-            self._wake.wait(timeout=self._interval)
-            self._wake.clear()
+            self._sleep_cycle()
+
+    def _sleep_cycle(self):
+        """Ждём интервал ИЛИ «будильник» (trigger при изменении данных/запуске сервера)."""
+        self._wake.wait(timeout=self._interval)
+        self._wake.clear()
 
 
 #Глобальный менеджер на процесс.

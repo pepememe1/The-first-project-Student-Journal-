@@ -9,7 +9,7 @@
 [![PySide6](https://img.shields.io/badge/GUI-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
 [![SQLite](https://img.shields.io/badge/Local-SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![Sync](https://img.shields.io/badge/Sync-REST%20API%20(FastAPI)-009688?logo=fastapi&logoColor=white)](server/)
-[![Version](https://img.shields.io/badge/release-2.5-008080)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/release-2.6-008080)](CHANGELOG.md)
 [![Status](https://img.shields.io/badge/status-active%20development-success)]()
 
 *🏆 Победитель хакатона «Мы — будущее IT Бурятии» (март 2026)*
@@ -173,7 +173,9 @@ python main.py
    нажать «Проверить подключение»). Строка подключения к БД остаётся только на этом ПК.
 2. **«▶ Запустить сервер»** — одной кнопкой: ставит движок БД в `server/.env`, поднимает
    FastAPI/uvicorn **внутри самой программы** (внешний Python не нужен) и для Serveo
-   открывает доступ из интернета. Полученный адрес сервера **сам записывается в программу**.
+   открывает доступ из интернета. Полученный адрес сервера **сам записывается в программу**,
+   после чего фоновая синхронизация сразу логинится на сервер и публикует пользователей —
+   чтобы преподаватели и студенты с других ПК могли войти (иначе их учёток на сервере нет).
 3. Клиентам раздать `.exe`; адрес этого сервера они вводят в окне при запуске (или на
    странице входа кнопкой «⚙ Сервер»). Подключаются они **к API**, а не к PostgreSQL.
 
