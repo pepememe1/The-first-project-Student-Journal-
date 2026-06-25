@@ -226,37 +226,101 @@ def decrypt_value(value: str) -> str:
         return ""
 
 
-#Хеширование паролей пользователей (PBKDF2-HMAC-SHA256)
-#Формат строки: pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>
-#Итераций — 600 000 (рекомендация OWASP 2023 для PBKDF2-HMAC-SHA256). Подъём со
-#200k обратносовместим: verify_password берёт число итераций ИЗ САМОГО хеша, поэтому
-#старые хеши (200k) продолжают проверяться, а новые/изменённые пароли считаются с
-#600k. Соль — 128 бит из CSPRNG (secrets). Дороже хеш утяжеляет «герд» входов —
-#его компенсируют jitter автологина и переиспользование токена (см. sync_runner).
-_PW_ITERS = 600_000
+#Хеширование паролей — ДВУХЭТАПНЫЙ «гибрид» (152-ФЗ + практичная стойкость)
+#
+#Формат: hybrid_sha512_gost512$<sha_iters>-<gost_iters>$<salt_hex>$<hash_hex>
+#
+#Согласованная схема:
+#  ЭТАП 1 — PBKDF2-HMAC-SHA512 (быстрый, общепринятый): несёт ОСНОВНУЮ стойкость.
+#  ЭТАП 2 — итог обязательно проходит через российский ГОСТ Р 34.11-2012 «Стрибог-512»
+#           (PBKDF2 по Р 50.1.111-2016): даёт «отечественный сертифицированный
+#           прогон». На бою ГОСТ считает сертифицированное СКЗИ (ViPNet CSP /
+#           OpenSSL GOST-engine) — только тогда это юридически значимо.
+#
+#ГОСТ-бэкенд выбирается АВТОматически (без ручного флага):
+#  • бой (Linux + OpenSSL GOST-engine/ViPNet): hashlib.pbkdf2_hmac('streebog512') — C-скорость;
+#  • dev (Windows): gostcrypto (pure-Python, Р 50.1.111-2016) — медленно (~2.7 мс/итер),
+#    поэтому итераций ГОСТ берём МАЛО. Это не ослабляет защиту: стойкость несёт ЭТАП 1,
+#    а ГОСТ-слой — нормативная обёртка, а не источник work-factor.
+#⚠️ Совместимость dev↔бой держится на том, что ОБА бэкенда дают СТАНДАРТНЫЙ
+#   PBKDF2-HMAC-Стрибог512 — закреплено тестом на контрольном векторе Р 50.1.111-2016
+#   (tests/test_password_hash.py). Перед боем проверить на реальном GOST-engine сервера.
+#
+#Обратная совместимость: старые одноэтапные `pbkdf2_sha256$...` (200k/600k) ещё
+#проверяются (verify диспетчеризует по тегу) — апгрейд без сброса паролей.
+_SHA_ITERS = 200_000
+_HYBRID_TAG = "hybrid_sha512_gost512"
+#Имена Стрибог-512 в OpenSSL через GOST-engine (бой). На разных сборках различаются.
+_OPENSSL_GOST_NAMES = ("streebog512", "gost2012_512", "md_gost12_512")
+_LEGACY_SUPPORTED = ("sha256", "sha512")   #старые одноэтапные хеши, которые ещё проверяем
+
+
+def _openssl_gost_name():
+    """Имя Стрибог-512 в OpenSSL, если GOST-engine доступен (бой), иначе None."""
+    avail = hashlib.algorithms_available
+    for n in _OPENSSL_GOST_NAMES:
+        if n in avail:
+            return n
+    return None
+
+
+def _gost_pbkdf2(password: bytes, salt: bytes, iters: int) -> bytes:
+    """PBKDF2-HMAC-Стрибог512 (Р 50.1.111-2016), 64 байта. Бэкенд авто:
+    OpenSSL GOST-engine (быстро, бой) → gostcrypto (pure-Python, dev)."""
+    name = _openssl_gost_name()
+    if name:
+        return hashlib.pbkdf2_hmac(name, password, salt, iters, dklen=64)
+    try:
+        from gostcrypto import gostpbkdf
+    except ImportError as e:
+        raise RuntimeError(
+            "Нет ГОСТ-бэкенда для хеша пароля: на бою нужен OpenSSL GOST-engine "
+            "(ViPNet/gost-engine), на dev — пакет gostcrypto (pip install gostcrypto).") from e
+    return gostpbkdf.new(password, salt=salt, counter=iters).derive(64)
+
+
+def _gost_iters() -> int:
+    """Число итераций ГОСТ при СОЗДАНИИ хеша. Переопределяется переменной
+    GRADEBOOK_GOST_ITERS (тесты/нагрузка). По умолчанию: 2000 на быстром OpenSSL-
+    бэкенде (бой), мало на медленном pure-Python (dev) — чтобы вход не висел."""
+    env = os.environ.get("GRADEBOOK_GOST_ITERS", "").strip()
+    if env.isdigit():
+        return max(1, int(env))
+    return 2000 if _openssl_gost_name() else 2
 
 
 def hash_password(password: str) -> str:
-    """Возвращает безопасный хеш пароля для хранения в БД."""
+    """Двухэтапный хеш: PBKDF2-SHA512 (стойкость) → PBKDF2-Стрибог512 (ГОСТ)."""
     if password is None:
         password = ""
     salt = secrets.token_bytes(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PW_ITERS)
-    return f"pbkdf2_sha256${_PW_ITERS}${salt.hex()}${dk.hex()}"
+    gi = _gost_iters()
+    inter = hashlib.pbkdf2_hmac("sha512", password.encode("utf-8"), salt, _SHA_ITERS)
+    final = _gost_pbkdf2(inter, salt, gi)
+    return f"{_HYBRID_TAG}${_SHA_ITERS}-{gi}${salt.hex()}${final.hex()}"
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Проверяет пароль против сохранённого хеша. Защита от timing-атак."""
+    """Проверка пароля: гибрид (новый) или старые pbkdf2_sha256/sha512. Параметры
+    (итерации, соль) берутся ИЗ хеша, поэтому хеш самодостаточен. Timing-safe."""
     if not stored or "$" not in stored:
         return False
     try:
-        algo, iters_s, salt_hex, hash_hex = stored.split("$")
-        if algo != "pbkdf2_sha256":
-            return False
-        iters = int(iters_s)
+        tag, iters_field, salt_hex, hash_hex = stored.split("$")
         salt = bytes.fromhex(salt_hex)
         expected = bytes.fromhex(hash_hex)
-        dk = hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"), salt, iters)
+        pw = (password or "").encode("utf-8")
+        if tag == _HYBRID_TAG:
+            sha_iters, gost_iters = (int(x) for x in iters_field.split("-"))
+            inter = hashlib.pbkdf2_hmac("sha512", pw, salt, sha_iters)
+            dk = _gost_pbkdf2(inter, salt, gost_iters)
+        elif tag.startswith("pbkdf2_"):
+            hash_name = tag.split("_", 1)[1]
+            if hash_name not in _LEGACY_SUPPORTED:
+                return False
+            dk = hashlib.pbkdf2_hmac(hash_name, pw, salt, int(iters_field))
+        else:
+            return False
         return _hmac.compare_digest(dk, expected)
     except Exception:
         return False
