@@ -1108,6 +1108,15 @@ class AdminDashboard(QWidget):
                 from app_settings import set_api_url
                 set_api_url(url)
                 self._api_url.setText(url)
+                #Будим фоновый синк: на хост-ПК он стартовал при входе ещё без адреса
+                #и idle-ждёт. Теперь адрес есть — пусть сразу залогинится на сервер,
+                #отдаст пользователей (иначе препод/студент получат 401) и подтянет
+                #токен для мониторинга, не дожидаясь интервала.
+                try:
+                    import sync_runner
+                    sync_runner.trigger()
+                except Exception:
+                    pass
                 QMessageBox.information(self, "Сервер запущен", message)
             else:
                 QMessageBox.critical(self, "Сервер",
