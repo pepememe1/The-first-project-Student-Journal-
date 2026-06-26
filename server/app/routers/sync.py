@@ -22,16 +22,47 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user
-from ..models import SYNC_MODELS, User
+from ..models import SYNC_MODELS, User, Lesson
+from .. import events
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
-#Что какая роль имеет право отправлять на сервер.
+#Что какая роль имеет право отправлять на сервер (ограничение по ТИПУ сущности).
 PUSH_SCOPE = {
     "admin": set(SYNC_MODELS.keys()),
     "teacher": {"lessons", "grades"},
     "student": set(),
 }
+
+
+def _build_lesson_subject_map(db: Session, changes: dict, allowed_subjects: set) -> dict:
+    """Карта lesson_id → subject для построчной проверки оценок преподавателя.
+
+    Берём предметы из уже сохранённых на сервере занятий И из занятий этого же пуша,
+    которые прошли проверку по предмету. Второе нужно, чтобы оценка к НОВОМУ занятию
+    преподавателя принималась в одном пуше вместе с самим занятием (а не отвергалась
+    только потому, что занятие сервер ещё не видел)."""
+    m = {row[0]: row[1] for row in db.query(Lesson.id, Lesson.subject).all()}
+    for item in (changes.get("lessons") or []):
+        if isinstance(item, dict) and item.get("id") and item.get("subject", "") in allowed_subjects:
+            m[item["id"]] = item.get("subject", "")
+    return m
+
+
+def _teacher_may_write(name: str, item: dict, allowed_subjects: set,
+                       lesson_subject: dict) -> bool:
+    """Построчная авторизация преподавателя: он вправе менять только СВОИ предметы.
+
+    Ограничиваем по предмету, а не по группе: `subjects` у преподавателя реально
+    заполняется при заведении (admin_dashboard), а `group_assignments` часто пусто —
+    проверка по группам отвергала бы и легитимные правки. Это не даёт преподавателю
+    править чужой предмет; разграничение по конкретным группам внутри одного предмета —
+    осознанно вне области этой проверки (нет надёжных данных о владении группой)."""
+    if name == "lessons":
+        return item.get("subject", "") in allowed_subjects
+    if name == "grades":
+        return lesson_subject.get(item.get("lesson_id", "")) in allowed_subjects
+    return False
 
 
 def _now() -> str:
@@ -48,13 +79,20 @@ def _row_to_dict(row, model) -> dict:
 def pull(since: str = "", user: User = Depends(get_current_user),
          db: Session = Depends(get_db)):
     """Отдать изменения позже метки since (пусто — отдать всё)."""
+    #Метку времени фиксируем ДО выборки, а не после. Клиент сохранит её как новую
+    #границу дельты (следующий pull попросит since=server_time). Если взять метку
+    #ПОСЛЕ выборки, запись, попавшая в БД между выборкой и взятием метки, не вошла
+    #бы в этот ответ и была бы пропущена следующим pull. Беря метку раньше, мы в
+    #худшем случае повторно отдадим пограничную запись (применение идемпотентно),
+    #но НЕ потеряем её.
+    server_time = _now()
     changes = {}
     for name, model in SYNC_MODELS.items():
         q = db.query(model)
         if since:
             q = q.filter(model.updated_at > since)
         changes[name] = [_row_to_dict(r, model) for r in q.all()]
-    return {"server_time": _now(), "changes": changes}
+    return {"server_time": server_time, "changes": changes}
 
 
 @router.post("/push")
@@ -72,6 +110,15 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
     changes = (payload or {}).get("changes", {}) or {}
     server_ts = _now()
     applied = {}
+    rejected = {}
+
+    #Построчная авторизация преподавателя — по его предметам. Для admin проверки нет
+    #(он вправе писать всё). Карту lesson→subject строим один раз на запрос.
+    teacher_subjects = None
+    lesson_subject = {}
+    if user.role == "teacher":
+        teacher_subjects = set(user.subjects or [])
+        lesson_subject = _build_lesson_subject_map(db, changes, teacher_subjects)
 
     for name, items in changes.items():
         model = SYNC_MODELS.get(name)
@@ -82,11 +129,17 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
         #Поля, по которым решаем «изменилось ли»: всё, кроме PK и служебной метки.
         compare_cols = cols - {pk, "updated_at"}
         count = 0
+        rej = 0
         for item in items:
             if not isinstance(item, dict):
                 continue
             key = item.get(pk)
             if not key:
+                continue
+            #Преподаватель не вправе трогать чужой предмет — отбрасываем такие строки.
+            if teacher_subjects is not None and not _teacher_may_write(
+                    name, item, teacher_subjects, lesson_subject):
+                rej += 1
                 continue
             existing = db.get(model, key)
             if existing is None:
@@ -107,6 +160,18 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
                 existing.updated_at = server_ts   #метку обновляет сервер
                 count += 1
         applied[name] = count
+        if rej:
+            rejected[name] = rej
 
     db.commit()
-    return {"server_time": server_ts, "applied": applied}
+    #Преподаватель попытался записать НЕ свой предмет — это нарушение прав, поэтому
+    #видно в админской консоли (а не молча игнорируется).
+    if rejected:
+        events.record("warn", "push_rejected",
+                      f"отклонены чужие записи: {rejected}", user.login)
+    result = {"server_time": server_ts, "applied": applied}
+    #rejected включаем, только если что-то отвергли — клиенту видно, что часть
+    #правок не его (не молчим, но и не шумим в обычном случае).
+    if rejected:
+        result["rejected"] = rejected
+    return result
