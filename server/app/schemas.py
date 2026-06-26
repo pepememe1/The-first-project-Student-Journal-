@@ -24,3 +24,21 @@ class BootstrapIn(BaseModel):
     login: str
     password: str
     full_name: str = "Администратор"
+
+
+#Барьер подтверждения устройств (см. connect.py / routers/connect.py)
+class ConnectRequestIn(BaseModel):
+    """Запрос нового ПК на подключение. hostname — для опознания админом в списке."""
+    device_id: str
+    hostname: str = ""
+
+
+class ConnectVerifyIn(BaseModel):
+    """Ввод 6-значного кода, который сообщил администратор."""
+    device_id: str
+    code: str
+
+
+class DeviceActionIn(BaseModel):
+    """Действие администратора над запросом (принять/отклонить)."""
+    device_id: str

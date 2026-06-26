@@ -69,6 +69,16 @@ class SyncClient:
         #ngrok-skip-browser-warning — чтобы бесплатные туннели (ngrok и пр.) не
         #подсовывали HTML-страницу-предупреждение вместо JSON ответа API.
         h = {"ngrok-skip-browser-warning": "true"}
+        #X-Device-Id — идентификатор этого ПК для барьера подтверждения: сервер по
+        #нему решает, одобрено ли устройство (см. server/app/connect.py). Шлём на КАЖДОМ
+        #запросе, в т.ч. при входе — иначе неодобренный ПК не отличить от одобренного.
+        try:
+            import app_settings
+            dev = app_settings.get_device_id()
+            if dev:
+                h["X-Device-Id"] = dev
+        except Exception:
+            pass
         if self.token:
             h["Authorization"] = f"Bearer {self.token}"
         return h
@@ -123,6 +133,48 @@ class SyncClient:
         """Сохранить личные настройки текущего пользователя (self-scope /me/prefs).
         Меняет ТОЛЬКО свою строку — личность берётся из JWT на сервере."""
         r = self._req("POST", "/me/prefs", json={"prefs": prefs}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    #Барьер подтверждения подключения (см. server/app/connect.py)
+    #Эндпоинты /connect/{request,status,verify} — БЕЗ авторизации (новый ПК ещё не вошёл).
+    def connect_request(self, device_id: str, hostname: str = "") -> dict:
+        """Новый ПК просит доступ. Возвращает {status}."""
+        r = self._req("POST", "/connect/request",
+                      json={"device_id": device_id, "hostname": hostname}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def connect_status(self, device_id: str) -> str:
+        """Опрос статуса запроса (pending|code_issued|approved|rejected|none)."""
+        r = self._req("GET", "/connect/status",
+                      params={"device_id": device_id}, timeout=8)
+        r.raise_for_status()
+        return (r.json() or {}).get("status", "none")
+
+    def connect_verify(self, device_id: str, code: str) -> dict:
+        """Ввод кода подтверждения. Бросает HTTPError при неверном/просроченном коде."""
+        r = self._req("POST", "/connect/verify",
+                      json={"device_id": device_id, "code": code}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    #Действия администратора над запросами (на сервере — require_admin)
+    def list_connect_requests(self) -> dict:
+        """Активные запросы на подключение. {requests:[...], count}."""
+        r = self._req("GET", "/connect/requests", timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def approve_device(self, device_id: str) -> dict:
+        """Принять запрос — сервер вернёт 6-значный код для пользователя. {code}."""
+        r = self._req("POST", "/connect/approve", json={"device_id": device_id}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def reject_device(self, device_id: str) -> dict:
+        """Отклонить запрос. {ok}."""
+        r = self._req("POST", "/connect/reject", json={"device_id": device_id}, timeout=5)
         r.raise_for_status()
         return r.json()
 

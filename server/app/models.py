@@ -88,6 +88,24 @@ class ConfigKV(Base):
     deleted = Column(Boolean, default=False)
 
 
+class ApprovedDevice(Base):
+    """Устройство (ПК), которому администратор разрешил подключаться к серверу.
+
+    Барьер подтверждения: пока device_id не лежит здесь, сервер отвергает вход и
+    синхронизацию с этого устройства (см. connect.device_allowed). В отличие от
+    «ожидающих» запросов (они транзиентны, живут в памяти — connect.py), одобренные
+    устройства ДОЛЖНЫ переживать перезапуск сервера, поэтому хранятся в БД.
+
+    Намеренно НЕ входит в SYNC_MODELS: это серверная деталь доступа, клиентам её
+    синхронизировать незачем."""
+    __tablename__ = "approved_devices"
+    device_id = Column(String, primary_key=True)       #uuid с клиента (X-Device-Id)
+    ip = Column(String, default="")                    #IP на момент одобрения
+    hostname = Column(String, default="")              #имя ПК (для опознания админом)
+    approved_at = Column(String, default="")           #ISO-метка одобрения (UTC)
+    approved_by = Column(String, default="")           #логин админа, одобрившего
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 SYNC_MODELS = {
     "users": User,

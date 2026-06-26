@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..deps import ensure_device_allowed
 from ..models import User
 from ..schemas import LoginIn, TokenOut, BootstrapIn
 from ..security import hash_password, verify_password, create_token
@@ -25,9 +26,13 @@ def _now() -> str:
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
-def bootstrap_admin(body: BootstrapIn, db: Session = Depends(get_db)):
+def bootstrap_admin(body: BootstrapIn, request: Request, db: Session = Depends(get_db)):
     """Создаёт ПЕРВОГО администратора. Работает только если админа ещё нет —
-    безопасно вызывать при первичной настройке сервера."""
+    безопасно вызывать при первичной настройке сервера.
+
+    Барьер устройства применяется и здесь: первичную настройку делает хост (его
+    device_id пропускается), а случайный ПК из сети не сможет создать админа."""
+    ensure_device_allowed(request, db)
     exists = db.query(User).filter(
         User.role == "admin", User.deleted == False  # noqa: E712
     ).first()
@@ -59,6 +64,10 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     счётчик, удачный вход его сбрасывает."""
     login_str = body.login.strip()
     ip = throttle.client_ip(request)
+
+    #Барьер устройства ДО сверки пароля: неодобренный ПК вообще не должен входить
+    #(даже зная верные креды), и не нужно дёргать дорогой PBKDF2 ради него.
+    ensure_device_allowed(request, db)
 
     left = throttle.seconds_until_unlocked(ip, login_str)
     if left > 0:
