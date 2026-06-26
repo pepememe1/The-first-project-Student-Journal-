@@ -9,17 +9,20 @@ main.py — Точка входа бэкенда GradeBookAI (FastAPI).
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
 from .config import ALLOWED_ORIGINS
-from .routers import auth, sync, me
+from .routers import auth, sync, me, admin
+from . import events, throttle
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()   # создаём таблицы при старте
+    events.record("info", "server_start", "сервер запущен")
     yield
 
 
@@ -34,6 +37,26 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def _unhandled_error(request: Request, exc: Exception):
+    """Любая НЕперехваченная ошибка попадает в админскую консоль и отдаётся клиенту
+    как аккуратный 500 (без утечки стек-трейса наружу). Свои HTTPException (401/403/
+    409/429 и т.п.) сюда не попадают — у них собственный обработчик FastAPI."""
+    try:
+        events.record("error", "server_error", f"{type(exc).__name__}: {exc}",
+                      ip=throttle.client_ip(request))
+    except Exception:
+        pass
+    return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
+
+
+@app.get("/", tags=["service"])
+def root():
+    #Голый домен — это API, а не сайт. Отдаём короткую «визитку», чтобы при заходе в
+    #браузере было видно «сервер жив», а не пугающий {"detail":"Not Found"}.
+    return {"service": "GradeBookAI API", "status": "ok", "docs": "/docs"}
+
+
 @app.get("/health", tags=["service"])
 def health():
     return {"status": "ok"}
@@ -42,3 +65,4 @@ def health():
 app.include_router(auth.router)
 app.include_router(sync.router)
 app.include_router(me.router)
+app.include_router(admin.router)
