@@ -160,6 +160,7 @@ class SyncManager:
             try:
                 if self._ensure_auth(url):
                     sync_engine.sync_once(self._client)
+                    self._flush_pending_prefs()   #до-отправляем тему, если зависла
                     if self._on_synced:
                         try:
                             self._on_synced()   #сигнал «данные обновились» в UI
@@ -175,6 +176,53 @@ class SyncManager:
         """Ждём интервал ИЛИ «будильник» (trigger при изменении данных/запуске сервера)."""
         self._wake.wait(timeout=self._interval)
         self._wake.clear()
+
+    def push_my_prefs(self, prefs: dict):
+        """Отправить личные настройки (тему оформления) текущего пользователя на сервер.
+
+        Строго self-scope (POST /me/prefs), в ОТДЕЛЬНОМ потоке — UI не блокируем.
+        Если отправить сейчас нельзя (офлайн / нет токена / запрос упал) — кладём
+        prefs в отложенные (app_settings.set_pending_prefs) и до-отправим при следующей
+        удачной синхронизации (_flush_pending_prefs). Иначе выбранная тема осталась бы
+        только локально и не уехала бы в БД (не «роумилась» на другие ПК)."""
+        import app_settings
+        url = get_api_url()
+        token = ""
+        if self._client and getattr(self._client, "token", ""):
+            token = self._client.token
+        elif self._login:
+            token = app_settings.get_saved_token(self._login)
+        if not url or not token:
+            if self._login:
+                app_settings.set_pending_prefs(self._login, prefs)
+            return
+
+        def _send():
+            try:
+                from sync_client import SyncClient
+                SyncClient(url, token).set_my_prefs(prefs)
+                app_settings.clear_pending_prefs()
+            except Exception as e:
+                print(f"[theme] не удалось отправить тему на сервер: {e}")
+                if self._login:
+                    app_settings.set_pending_prefs(self._login, prefs)
+        threading.Thread(target=_send, daemon=True).start()
+
+    def _flush_pending_prefs(self):
+        """Если с прошлого раза тема не доехала до сервера — до-отправляем её сейчас,
+        пользуясь уже живым токеном текущего цикла. Зовётся после удачного sync_once."""
+        if not self._login or self._client is None:
+            return
+        import app_settings
+        prefs = app_settings.get_pending_prefs(self._login)
+        if not prefs:
+            return
+        try:
+            from sync_client import SyncClient
+            SyncClient(self._url, self._client.token).set_my_prefs(prefs)
+            app_settings.clear_pending_prefs()
+        except Exception as e:
+            print(f"[theme] отложенная отправка темы не удалась: {e}")
 
 
 #Глобальный менеджер на процесс.
@@ -206,16 +254,6 @@ def current_auth():
 def push_my_prefs(prefs: dict):
     """Отправить личные настройки (тему оформления) текущего пользователя на сервер.
 
-    Делается в ОТДЕЛЬНОМ потоке, чтобы не подвешивать UI на время сети. Офлайн/нет
-    токена → тихо выходим: тема всё равно применена и сохранена локально, в БД она
-    уедет при следующем сохранении онлайн. Запрос строго self-scope (/me/prefs)."""
-    url, token = current_auth()
-    if not url or not token:
-        return
-    def _send():
-        try:
-            from sync_client import SyncClient
-            SyncClient(url, token).set_my_prefs(prefs)
-        except Exception as e:
-            print(f"[theme] не удалось отправить тему на сервер: {e}")
-    threading.Thread(target=_send, daemon=True).start()
+    Делегируем менеджеру: он знает логин и при неудаче отложит отправку, чтобы тема
+    не потерялась для БД и «роуминга». Запрос строго self-scope (/me/prefs)."""
+    _manager.push_my_prefs(prefs)

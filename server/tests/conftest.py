@@ -16,23 +16,31 @@ import tempfile
 _TMP_DB = os.path.join(tempfile.gettempdir(), "gradebook_test.db")
 os.environ["GRADEBOOK_DB_URL"] = "sqlite:///" + _TMP_DB.replace("\\", "/")
 os.environ["GRADEBOOK_JWT_SECRET"] = "test-secret-not-for-production"
+#Барьер подтверждения устройств: даём тестам предсказуемый device_id хоста, чтобы
+#обычные запросы проходили барьер «как хост» (connect.device_allowed). Тесты самого
+#барьера используют ДРУГИЕ device_id, чтобы проверить отказ/одобрение.
+HOST_DEVICE_ID = "test-host-device"
+os.environ["GRADEBOOK_HOST_DEVICE_ID"] = HOST_DEVICE_ID
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
-from app import throttle, events
+from app import throttle, events, connect
 
 
 @pytest.fixture()
 def client():
-    """Чистый клиент на пустой БД: пересоздаём таблицы, сбрасываем троттлинг и монитор."""
+    """Чистый клиент на пустой БД: пересоздаём таблицы, сбрасываем троттлинг и монитор.
+    По умолчанию шлёт X-Device-Id хоста — так существующие тесты проходят барьер."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     throttle.reset()
     events.reset()
+    connect.reset()
     with TestClient(app) as c:
+        c.headers.update({"X-Device-Id": HOST_DEVICE_ID})
         yield c
 
 

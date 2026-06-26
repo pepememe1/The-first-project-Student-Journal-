@@ -16,37 +16,69 @@ from styles import C
 from ui_components import HexLogoWidget, AnimatedBackground
 
 
-def ask_server_address(parent=None, first_run: bool = False) -> bool:
-    """Окно «введите API сервера для синхронизации».
+def open_site_login(parent=None) -> bool:
+    """Открывает сайт журнала в браузере («Войти через сайт»).
 
-    Возвращает True, если адрес задан. ВАЖНО: окно всегда закрываемо («Позже») —
-    чтобы администратор, у которого сервер ещё не запущен, не попал в замкнутый круг
-    (адрес появляется только ПОСЛЕ запуска сервера). Через Serveo адрес меняется при
-    каждом запуске, поэтому клиент может вызвать это окно и со страницы входа.
-    first_run=True добавляет кнопку «Работать офлайн» (чтобы не спрашивать снова)."""
+    Сайт в перспективе живёт на том же сервере, что и БД, и вход там не требует
+    подтверждения устройства (сайт и БД — в одном защищённом месте). Сейчас реализуем
+    только саму кнопку: адрес берётся из app_settings.SITE_URL (меняется в коде).
+    Авто-вход обратно в приложение после входа на сайте — отдельная задача на будущее.
+    Возвращает True, если адрес задан и открыт."""
+    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtCore import QUrl
+    from app_settings import SITE_URL
+
+    url = (SITE_URL or "").strip()
+    if not url:
+        QMessageBox.information(
+            parent, "Сайт не настроен",
+            "Адрес сайта пока не задан. Его указывает разработчик в коде "
+            "(app_settings.SITE_URL).")
+        return False
+    QDesktopServices.openUrl(QUrl(url))
+    return True
+
+
+def ask_server_address(parent=None, first_run: bool = False) -> bool:
+    """Окно подключения к серверу с подтверждением устройства.
+
+    Шаги: ввод адреса → запрос на подключение (админ видит его во вкладке «Запросы на
+    подключение») → ожидание решения → ввод кода, который выдал админ → «подключение
+    успешно». ВАЖНО: окно всегда закрываемо («Позже») — чтобы администратор, у которого
+    сервер ещё не запущен, не попал в замкнутый круг. first_run=True добавляет кнопку
+    «Работать офлайн». Возвращает True, если устройство подтверждено или адрес сохранён."""
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                                    QLineEdit, QPushButton)
-    from app_settings import get_api_url, set_api_url, set_offline_ack
+                                    QLineEdit, QPushButton, QApplication, QMessageBox)
+    from PySide6.QtCore import Qt, QTimer
+    import socket
+    import threading
+    from app_settings import (get_api_url, set_api_url, set_offline_ack,
+                              get_device_id, set_device_connected,
+                              SUPPORT_PHONE, SITE_URL)
 
     dlg = QDialog(parent)
     dlg.setWindowTitle("Подключение к серверу")
-    dlg.setMinimumWidth(460)
+    dlg.setMinimumWidth(480)
     v = QVBoxLayout(dlg)
     v.setContentsMargins(22, 20, 22, 18)
-    v.setSpacing(12)
+    v.setSpacing(10)
+
+    #IP этого ПК — пользователю удобно назвать его поддержке/администратору, а админ
+    #опознаёт по нему запрос. lan_ip() уже умеет определять адрес в локальной сети.
+    try:
+        import server_control
+        my_ip = server_control.lan_ip() or "—"
+    except Exception:
+        my_ip = "—"
+    ip_lbl = QLabel(f"IP этого компьютера: {my_ip}")
+    ip_lbl.setStyleSheet(f"font-size:12px;font-weight:700;color:{C['text']};")
+    v.addWidget(ip_lbl)
 
     title = QLabel("Пожалуйста, введите API сервера для синхронизации")
     title.setWordWrap(True)
     title.setStyleSheet(f"font-size:15px;font-weight:700;color:{C['text']};")
     v.addWidget(title)
-
-    hint = QLabel("Адрес выдаёт администратор после запуска сервера — например, "
-                  "https://vsgutu.serveo.net или http://10.0.0.5:8000. Через Serveo "
-                  "адрес меняется при каждом запуске сервера — берите актуальный. "
-                  "Без адреса программа работает только локально (офлайн).")
-    hint.setWordWrap(True)
-    hint.setStyleSheet(f"font-size:12px;color:{C['text3']};")
-    v.addWidget(hint)
 
     field = QLineEdit()
     field.setText(get_api_url())
@@ -54,63 +86,205 @@ def ask_server_address(parent=None, first_run: bool = False) -> bool:
     field.setMinimumHeight(38)
     v.addWidget(field)
 
+    support = QLabel("За ссылкой подключения и подробной информацией обратитесь в "
+                     f"поддержку: {SUPPORT_PHONE}")
+    support.setWordWrap(True)
+    support.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+    v.addWidget(support)
+
+    #Поле кода подтверждения — появляется, когда администратор принял запрос.
+    code_field = QLineEdit()
+    code_field.setPlaceholderText("Код подтверждения (6 цифр)")
+    code_field.setMinimumHeight(38)
+    code_field.setMaxLength(6)
+    code_field.setVisible(False)
+    v.addWidget(code_field)
+
     status = QLabel("")
     status.setWordWrap(True)
     status.setStyleSheet("font-size:12px;color:#b9772b;")
     v.addWidget(status)
 
-    state = {"ok": False}
+    #Состояние диалога. phase: addr (ввод адреса) | wait (ожидание/код). srv — последний
+    #статус с сервера, его кладёт фоновый поллер, читает UI-таймер (сеть не на UI-потоке).
+    state = {"ok": False, "phase": "addr", "srv": "", "neterr": False}
+    poll = {"on": False}
+
+    def _poller():
+        """Фоновый опрос статуса запроса (НЕ на UI-потоке, чтобы окно не подвисало)."""
+        import time as _t
+        while poll["on"]:
+            url = get_api_url(); dev = get_device_id()
+            if url and dev:
+                try:
+                    from sync_client import SyncClient
+                    state["srv"] = SyncClient(url).connect_status(dev)
+                    state["neterr"] = False
+                except Exception:
+                    state["neterr"] = True
+            _t.sleep(2)
+
+    def _go_success():
+        set_device_connected(True)
+        state["ok"] = True
+        poll["on"] = False
+        dlg.accept()
+
+    def _set_phase_addr():
+        state["phase"] = "addr"
+        code_field.setVisible(False)
+        b_connect.setVisible(True); b_later.setVisible(True)
+        b_verify.setVisible(False); b_cancel.setVisible(False)
+        if first_run:
+            b_off.setVisible(True)
+
+    def _set_phase_wait():
+        state["phase"] = "wait"
+        b_connect.setVisible(False); b_later.setVisible(False)
+        if first_run:
+            b_off.setVisible(False)
+        b_cancel.setVisible(True)
+
+    def _tick():
+        """UI-таймер: переносит статус из фонового поллера в интерфейс."""
+        if state["phase"] != "wait":
+            return
+        if state["neterr"]:
+            status.setText("Сервер недоступен — повторяем попытку...")
+        srv = state["srv"]
+        if srv == "approved":
+            status.setText("Подключение успешно!")
+            _go_success()
+        elif srv == "code_issued":
+            status.setText("Администратор принял запрос. Введите код, который он вам "
+                           "сообщил, и нажмите «Подтвердить».")
+            code_field.setVisible(True)
+            b_verify.setVisible(True)
+            code_field.setFocus()
+        elif srv == "pending":
+            status.setText("Запрос отправлен. Ожидаем подтверждения администратором...")
+        elif srv == "rejected":
+            status.setText("Подключение отклонено администратором.")
+            _set_phase_addr()
+            state["srv"] = ""
+        elif srv == "none" and not state["neterr"]:
+            status.setText("Запрос не найден на сервере — отправьте заново.")
+            _set_phase_addr()
+            state["srv"] = ""
+
+    timer = QTimer(dlg)
+    timer.setInterval(700)
+    timer.timeout.connect(_tick)
 
     def _connect():
         url = field.text().strip()
         if not url:
             status.setText("Введите адрес сервера или нажмите «Позже».")
             return
-        #Лёгкая проверка доступности. НЕ блокируем намертво: сервер мог ещё
-        #подниматься (или это serveo с задержкой) — адрес всё равно сохраняем.
-        reachable = False
+        set_api_url(url)
+        dev = get_device_id()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             from sync_client import SyncClient
-            reachable = bool(SyncClient(url).health())
+            res = SyncClient(url).connect_request(dev, socket.gethostname())
         except Exception:
-            reachable = False
-        set_api_url(url)
-        state["ok"] = True
-        if reachable:
-            dlg.accept()
-        else:
-            from PySide6.QtWidgets import QMessageBox
+            QApplication.restoreOverrideCursor()
             QMessageBox.information(
-                dlg, "Адрес сохранён",
+                dlg, "Сервер не ответил",
                 "Адрес сохранён, но сервер сейчас не ответил. Если он ещё "
-                "запускается — синхронизация начнётся автоматически, как только "
-                "сервер станет доступен. Проверьте, что адрес введён верно.")
-            dlg.accept()
+                "запускается — попробуйте «Подключиться» снова чуть позже.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        #Устройство уже одобрено ранее (повторный заход) — сразу успех.
+        if (res or {}).get("status") == "approved":
+            _go_success()
+            return
+        state["srv"] = "pending"
+        _set_phase_wait()
+        status.setText("Запрос отправлен. Ожидаем подтверждения администратором...")
+        poll["on"] = True
+        threading.Thread(target=_poller, daemon=True).start()
+        timer.start()
+
+    def _verify():
+        code = code_field.text().strip()
+        if not code:
+            status.setText("Введите код, который сообщил администратор.")
+            return
+        url = get_api_url(); dev = get_device_id()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            from sync_client import SyncClient
+            SyncClient(url).connect_verify(dev, code)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            status.setText(_http_detail(e) or "Неверный код подтверждения.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        status.setText("Подключение успешно!")
+        _go_success()
 
     def _later():
+        poll["on"] = False
         dlg.reject()
 
     def _offline():
         set_offline_ack(True)
+        poll["on"] = False
         dlg.reject()
 
+    #Кнопки. Часть видна только на своём шаге (переключается _set_phase_*).
     row = QHBoxLayout()
-    b_connect = QPushButton("Подключиться")
-    b_connect.setDefault(True)
+    b_connect = QPushButton("Подключиться"); b_connect.setDefault(True)
     b_connect.clicked.connect(_connect)
     field.returnPressed.connect(_connect)
     row.addWidget(b_connect)
+
+    b_verify = QPushButton("Подтвердить"); b_verify.setVisible(False)
+    b_verify.clicked.connect(_verify)
+    code_field.returnPressed.connect(_verify)
+    row.addWidget(b_verify)
+
+    b_cancel = QPushButton("Отмена"); b_cancel.setVisible(False)
+    b_cancel.clicked.connect(_later)
+    row.addWidget(b_cancel)
+
     b_later = QPushButton("Позже")
     b_later.clicked.connect(_later)
     row.addWidget(b_later)
+
+    b_off = QPushButton("Работать офлайн"); b_off.setVisible(bool(first_run))
+    b_off.clicked.connect(_offline)
     if first_run:
-        b_off = QPushButton("Работать офлайн")
-        b_off.clicked.connect(_offline)
         row.addWidget(b_off)
     v.addLayout(row)
 
+    #Кнопка «Войти через сайт» — отдельной строкой, если адрес сайта задан в коде.
+    if (SITE_URL or "").strip():
+        site_btn = QPushButton("🌐 Войти через сайт")
+        site_btn.setCursor(Qt.PointingHandCursor)
+        site_btn.clicked.connect(lambda: open_site_login(dlg))
+        v.addWidget(site_btn)
+
+    #Закрытие окна любым способом гасит фоновый поллер.
+    dlg.finished.connect(lambda _=0: poll.__setitem__("on", False))
+
     dlg.exec()
+    poll["on"] = False
     return state["ok"]
+
+
+def _http_detail(exc) -> str:
+    """Достаёт человекочитаемое сообщение об ошибке из ответа сервера (поле detail)."""
+    try:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            return (resp.json() or {}).get("detail", "") or ""
+    except Exception:
+        pass
+    return ""
 
 
 #LOGIN PAGE (STUDENT & TEACHER)
@@ -226,6 +400,22 @@ class LoginPage(QWidget):
             f"QPushButton:hover{{color:{C['green']};}}")
         srv_btn.clicked.connect(self._open_server_settings)
         lay.addWidget(srv_btn, alignment=Qt.AlignCenter)
+
+        #Вход через сайт — если адрес сайта задан в коде (app_settings.SITE_URL).
+        try:
+            from app_settings import SITE_URL
+        except Exception:
+            SITE_URL = ""
+        if (SITE_URL or "").strip():
+            site_btn = QPushButton("🌐 Войти через сайт")
+            site_btn.setCursor(Qt.PointingHandCursor)
+            site_btn.setFlat(True)
+            site_btn.setStyleSheet(
+                f"QPushButton{{background:transparent;border:none;color:{C['text3']};"
+                "font-size:11px;}"
+                f"QPushButton:hover{{color:{C['green']};}}")
+            site_btn.clicked.connect(lambda: open_site_login(self))
+            lay.addWidget(site_btn, alignment=Qt.AlignCenter)
 
         outer.addWidget(c)
 

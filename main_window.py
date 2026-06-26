@@ -102,24 +102,71 @@ class MainAppWindow(QMainWindow):
         self._backup_timer.start(10 * 60 * 1000)        #тик раз в 10 минут
         QTimer.singleShot(5000, self._auto_backup)       #и один бэкап вскоре после старта
 
+        #На ПК-хосте сначала сам поднимаем его сервер (постоянная связь — см.
+        #_maybe_autostart_server), и только потом — стартовая проверка адреса.
+        QTimer.singleShot(0, self._maybe_autostart_server)
+
         #Стартовая проверка адреса сервера. singleShot(0) — показываем уже после
         #появления окна, а не в конструкторе. Само окно решает, показываться ли
         #(не трогает админа/хост и офлайн-режим) — см. _maybe_prompt_server.
         QTimer.singleShot(0, self._maybe_prompt_server)
 
-    def _maybe_prompt_server(self):
-        """Однократно предлагает ввести адрес сервера на свежем клиентском ПК.
+    def _maybe_autostart_server(self):
+        """ПК-хост сам поднимает свой сервер при старте программы (постоянная связь).
 
-        НЕ показываем, если адрес уже задан, это ПК-хоста (там админ сам поднимает
-        сервер — иначе замкнутый круг) или пользователь осознанно выбрал офлайн."""
+        Зачем. Раньше сервер жил только пока администратор держал свою сессию: вышел
+        из аккаунта или закрыл и открыл программу — сервер для всех «отваливался», и
+        админу приходилось каждый раз снова входить и жать «Запустить сервер». Теперь,
+        если этот ПК уже был хостом и автозапуск включён (его ставит удачный запуск из
+        админки), сервер поднимается сам — в фоне, ДО и НЕЗАВИСИМО от входа. Админ
+        спокойно выходит из аккаунта: сервер живёт в фоновом потоке до закрытия
+        программы, а после перезапуска встаёт заново сам."""
         try:
-            from app_settings import has_api_url, is_host, get_offline_ack
-            if has_api_url() or is_host() or get_offline_ack():
+            from app_settings import is_host, host_autostart_enabled
+            if not (is_host() and host_autostart_enabled()):
+                return
+        except Exception as e:
+            print(f"[server] проверка автозапуска пропущена: {e}")
+            return
+
+        import threading
+
+        def _do():
+            #Поднимаем сервер в фоновом потоке: старт uvicorn + (для serveo) туннеля
+            #может занять секунды, а UI блокировать нельзя.
+            try:
+                import server_control
+                import app_settings
+                ok, url, msg = server_control.autostart()
+                if ok and url:
+                    app_settings.set_api_url(url)
+                    try:
+                        import sync_runner
+                        sync_runner.trigger()   #разбудить синк — адрес уже есть
+                    except Exception:
+                        pass
+                print(f"[server] автозапуск хоста: {msg}")
+            except Exception as e:
+                print(f"[server] автозапуск хоста пропущен: {e}")
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _maybe_prompt_server(self):
+        """Предлагает подключиться (адрес + подтверждение устройства) на свежем ПК.
+
+        НЕ показываем, если устройство УЖЕ подтверждено на этом ПК, это ПК-хоста (там
+        админ сам поднимает сервер и одобряет остальных — иначе замкнутый круг) или
+        пользователь осознанно выбрал офлайн. Раньше условием было «адрес уже задан»,
+        но теперь барьер устройства важнее: даже с адресом ПК должен пройти
+        подтверждение, поэтому ориентируемся на флаг device_connected."""
+        try:
+            from app_settings import is_host, get_offline_ack, is_device_connected
+            if is_device_connected() or is_host() or get_offline_ack():
                 return
             from auth_pages import ask_server_address
             ask_server_address(self, first_run=True)
         except Exception as e:
-            print(f"[startup] окно адреса сервера пропущено: {e}")
+            print(f"[startup] окно подключения пропущено: {e}")
 
     def _auto_backup(self):
         """Периодический бэкап локальной базы (троттлится по времени в DBManager)."""

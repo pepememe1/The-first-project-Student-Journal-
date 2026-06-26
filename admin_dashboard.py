@@ -90,6 +90,7 @@ class AdminDashboard(QWidget):
             ("__label__", "", "Система"),
             ("api",   "🐯",  "Настройки ИИ"),
             ("pg",    "🌐", "Сервер"),
+            ("requests", "🔗", "Запросы на подключение"),
             ("theme", "🎨", "Оформление"),
             ("mon",   "📡", "Мониторинг"),
             ("ai",    "🤖",  "ИИ Помощник"),
@@ -108,6 +109,7 @@ class AdminDashboard(QWidget):
         self._build_subjects()
         self._build_api()
         self._build_pg()
+        self._build_requests()
         self._build_theme()
         self._build_mon()
         self._build_ai()
@@ -943,6 +945,11 @@ class AdminDashboard(QWidget):
         if engine == "postgres":
             access = "direct"
         self._srv_type.setCurrentIndex(self._server_type_index(access, engine))
+        #Восстанавливаем сохранённый порт (его же использует автозапуск хоста).
+        try:
+            self._srv_port.setText(str(server_control.get_server_port()))
+        except Exception:
+            pass
         if is_pg:
             #Разбираем строку подключения, чтобы заполнить поля (без пароля — он
             #остаётся в .env; пустое поле = «не менять» при запуске).
@@ -1104,10 +1111,20 @@ class AdminDashboard(QWidget):
         def _apply(res):
             ok, url, message = res
             if ok and url:
-                #Адрес сам пишется в программу (локально) и сразу подставляется в поле.
-                from app_settings import set_api_url
-                set_api_url(url)
-                self._api_url.setText(url)
+                #Этот ПК — хост и теперь должен поднимать свой сервер сам при каждом
+                #старте программы (постоянная связь): запоминаем порт и включаем
+                #автозапуск. Свой адрес у хоста — всегда localhost (сервер локальный),
+                #а публичный/ЛВС-адрес для других ПК показан в message ниже.
+                from app_settings import set_api_url, set_host_autostart, mark_host
+                try:
+                    server_control.set_server_port(port)
+                except Exception:
+                    pass
+                mark_host()
+                set_host_autostart(True)
+                local_url = f"http://127.0.0.1:{port}"
+                set_api_url(local_url)
+                self._api_url.setText(local_url)
                 #Будим фоновый синк: на хост-ПК он стартовал при входе ещё без адреса
                 #и idle-ждёт. Теперь адрес есть — пусть сразу залогинится на сервер,
                 #отдаст пользователей (иначе препод/студент получат 401) и подтянет
@@ -1144,7 +1161,15 @@ class AdminDashboard(QWidget):
 
         def _apply(res):
             ok, msg = res
-            if not ok:
+            if ok:
+                #Явная остановка = «больше не поднимать сервер сам». Снимаем автозапуск,
+                #иначе при следующем старте программы хост опять поднял бы сервер.
+                try:
+                    from app_settings import set_host_autostart
+                    set_host_autostart(False)
+                except Exception:
+                    pass
+            else:
                 QMessageBox.warning(self, "Сервер", msg)
             self._refresh_server_status()
 
@@ -1264,6 +1289,150 @@ class AdminDashboard(QWidget):
         self.pages["theme"] = w; self.stack.addWidget(w)
 
     #Роутинг
+
+    #Запросы на подключение (барьер подтверждения устройств; данные с /connect/requests)
+    def _build_requests(self):
+        w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
+        inner = QWidget(); lay = QVBoxLayout(inner)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
+        lay.addWidget(title_lbl("Запросы на подключение"))
+        lay.addWidget(lbl("Новые компьютеры сначала запрашивают доступ к серверу. "
+                          "Примите запрос — программа покажет 6-значный код; продиктуйте "
+                          "его пользователю (по телефону). Отклонить можно на любом шаге. "
+                          "Список обновляется автоматически, пока открыта эта вкладка.",
+                          11, C['text3']))
+
+        rc = card(); rl = QVBoxLayout(rc); rl.setContentsMargins(18, 16, 18, 16); rl.setSpacing(8)
+        self._req_title = section_lbl("🔗 Ожидают подтверждения")
+        rl.addWidget(self._req_title)
+        #Контейнер строк: на каждом опросе чистим и перезаполняем (как мониторинг).
+        self._req_box = QVBoxLayout(); self._req_box.setSpacing(8)
+        rl.addLayout(self._req_box)
+        self._req_status = lbl("", 11, C['text3']); self._req_status.setWordWrap(True)
+        rl.addWidget(self._req_status)
+        lay.addWidget(rc)
+
+        lay.addStretch()
+        w.setWidget(inner)
+        self.pages["requests"] = w; self.stack.addWidget(w)
+
+        #Опрос идёт только пока открыта вкладка (start/stop в _switch).
+        self._req_timer = QTimer(self)
+        self._req_timer.setInterval(3000)             #раз в 3 секунды
+        self._req_timer.timeout.connect(self._poll_requests)
+
+    def _start_requests(self):
+        self._req_status.setText("⏳ Запрашиваю список...")
+        self._poll_requests()
+        self._req_timer.start()
+
+    def _stop_requests(self):
+        if getattr(self, "_req_timer", None) is not None:
+            self._req_timer.stop()
+
+    def _poll_requests(self):
+        """Один цикл опроса /connect/requests токеном текущей сессии (в фоне)."""
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            self._req_status.setText("⏹ Сервер не подключён. Запустите сервер во "
+                                     "вкладке «Сервер» и войдите.")
+            self._clear_req_rows()
+            return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).list_connect_requests()
+
+        def _apply(data):
+            self._render_requests(data)
+            self._req_status.setText("")
+
+        def _err(e):
+            self._req_status.setText(f"⚠️ Не удалось получить запросы: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _clear_req_rows(self):
+        while self._req_box.count():
+            it = self._req_box.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+    def _render_requests(self, data):
+        rows = (data or {}).get("requests", [])
+        self._req_title.setText(f"🔗 Ожидают подтверждения: {len(rows)}")
+        self._clear_req_rows()
+        if not rows:
+            self._req_box.addWidget(lbl("— новых запросов нет —", 12, C['text3']))
+            return
+        for r in rows:
+            self._req_box.addWidget(self._make_request_row(r))
+
+    def _make_request_row(self, r: dict) -> QFrame:
+        """Строка запроса: IP · имя ПК · статус (+ код, если выдан) и кнопки."""
+        dev = r.get("device_id", "")
+        ip = r.get("ip", "") or "—"
+        host = r.get("hostname", "") or "—"
+        issued = r.get("status") == "code_issued"
+        f = QFrame(); f.setObjectName("card")
+        h = QHBoxLayout(f); h.setContentsMargins(14, 10, 14, 10); h.setSpacing(10)
+        info = f"💻 {host}   ·   IP: {ip}"
+        if issued and r.get("code"):
+            #Код показываем КРУПНО — админ диктует его пользователю.
+            info += f"\n🔑 Код: {r['code']}"
+        info_lbl = lbl(info, 12, C['text']); info_lbl.setWordWrap(True)
+        h.addWidget(info_lbl, 1)
+        if not issued:
+            b_ok = btn("✓ Принять", "green")
+            b_ok.clicked.connect(lambda _=0, d=dev: self._approve_device(d))
+            h.addWidget(b_ok)
+        b_no = btn("✕ Отклонить", "red")
+        b_no.clicked.connect(lambda _=0, d=dev: self._reject_device(d))
+        h.addWidget(b_no)
+        return f
+
+    def _approve_device(self, device_id: str):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).approve_device(device_id)
+
+        def _apply(res):
+            code = (res or {}).get("code", "")
+            if code:
+                QMessageBox.information(
+                    self, "Код подтверждения",
+                    f"Продиктуйте пользователю код:\n\n{code}\n\nОн действует около "
+                    "10 минут. Код также виден в строке запроса.")
+            self._poll_requests()
+
+        def _err(e):
+            QMessageBox.warning(self, "Сервер", f"Не удалось принять запрос: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _reject_device(self, device_id: str):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).reject_device(device_id)
+
+        def _apply(_res):
+            self._poll_requests()
+
+        def _err(e):
+            QMessageBox.warning(self, "Сервер", f"Не удалось отклонить запрос: {e}")
+
+        self._run_bg(_do, _apply, _err)
 
     #Мониторинг сервера (только админу; данные с /admin/online и /admin/events)
     def _build_mon(self):
@@ -1389,6 +1558,7 @@ class AdminDashboard(QWidget):
         self._switching = True
         try:
             self._stop_monitor()      #уходя с любой вкладки — гасим опрос мониторинга
+            self._stop_requests()     #и опрос запросов на подключение
             if key == "dash":     self._refresh_dash()
             if key == "teachers": self._render_teachers()
             if key == "students": self._refresh_students_combo(); self._render_students()
@@ -1396,6 +1566,7 @@ class AdminDashboard(QWidget):
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_vector_cfg()
             if key == "pg":       self._refresh_server_status(); self._refresh_compliance()
+            if key == "requests": self._start_requests()
             if key == "mon":      self._start_monitor()
             #Шторка Вектора прячется на вкладке «ИИ», возвращается на остальных.
             dock = getattr(self, "vector_dock", None)

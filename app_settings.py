@@ -30,6 +30,14 @@ import app_paths
 #(ПДн по сети только в шифрованном канале, 152-ФЗ). Пример: "https://journal.vsgutu.ru".
 DEFAULT_API_URL = ""
 
+#Телефон поддержки — показывается в окне подключения («за ссылкой и подробностями
+#обратитесь в поддержку»). Меняется здесь, в коде.
+SUPPORT_PHONE = "+7 (000) 000-00-00"
+
+#Адрес сайта журнала (тот же сервер, что и БД — в перспективе). Кнопка «Войти через
+#сайт» открывает его в браузере. Меняется здесь, в коде. Пусто — кнопку прячем.
+SITE_URL = ""
+
 #Ключ локальной настройки с адресом сервера (в data_store, префикс "_local:").
 _API_URL_KEY = "api_url"
 
@@ -170,6 +178,69 @@ def mark_host(value: bool = True) -> bool:
         return False
 
 
+#Автозапуск сервера на ПК-хосте. Чтобы связь была ПОСТОЯННОЙ: хост поднимает свой
+#сервер сам при каждом старте программы — без входа администратора и без ручной
+#кнопки. Тогда админ может спокойно выйти из своего аккаунта (сервер живёт в
+#фоновом потоке до закрытия программы), а после перезапуска сервер встаёт сам.
+#Флаг ставится при удачном запуске сервера из админки и снимается при ручной
+#остановке (явная остановка = «больше не поднимать автоматически»).
+_HOST_AUTOSTART_KEY = "host_autostart"
+
+
+def host_autostart_enabled() -> bool:
+    """True, если этот ПК-хост должен сам поднимать свой сервер при старте программы."""
+    try:
+        from data_store import local_get
+        return bool(local_get(_HOST_AUTOSTART_KEY, False))
+    except Exception:
+        return False
+
+
+def set_host_autostart(value: bool = True) -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_HOST_AUTOSTART_KEY, bool(value))
+    except Exception:
+        return False
+
+
+#Отложенная отправка личных настроек (темы оформления). Если в момент «Сохранить»
+#сервер недоступен или ещё нет токена, отправка self-эндпоинта POST /me/prefs не
+#удаётся. Раньше тему в этом случае просто теряли для БД (она оставалась только
+#локально и не «роумилась» на другие ПК). Теперь складываем prefs сюда и до-
+#отправляем при следующей удачной синхронизации. Привязано к логину: на общем ПК
+#«хвост» одного пользователя не уедет от имени другого.
+_PENDING_PREFS_KEY = "pending_prefs"
+
+
+def get_pending_prefs(login: str):
+    """Отложенные prefs именно для ЭТОГО логина (None — нет либо принадлежат другому)."""
+    try:
+        from data_store import local_get
+        rec = local_get(_PENDING_PREFS_KEY, None) or {}
+        if isinstance(rec, dict) and rec.get("login") == (login or ""):
+            return rec.get("prefs") or None
+    except Exception:
+        pass
+    return None
+
+
+def set_pending_prefs(login: str, prefs: dict) -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_PENDING_PREFS_KEY, {"login": login or "", "prefs": prefs or {}})
+    except Exception:
+        return False
+
+
+def clear_pending_prefs() -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_PENDING_PREFS_KEY, {})
+    except Exception:
+        return False
+
+
 #Сохранённый токен доступа (JWT) для переиспользования между ЗАПУСКАМИ программы.
 #Зачем: при каждом старте логиниться к API заново — значит гонять дорогой PBKDF2 на
 #сервере; когда так делают сотни ПК в 9:00, это «герд» входов и упор в CPU. Сохранив
@@ -203,6 +274,53 @@ def clear_saved_token() -> bool:
     try:
         from data_store import local_set
         return local_set(_TOKEN_KEY, {})
+    except Exception:
+        return False
+
+
+#Идентификатор ЭТОГО устройства (ПК) для барьера подтверждения подключения. Сервер
+#пускает к входу/синхронизации только одобренные администратором device_id (и сам
+#хост). Генерится один раз и хранится локально (в БД ПК, не синхронизируется), чтобы
+#переживать перезапуски: иначе после каждого запуска ПК выглядел бы «новым» и просил
+#подтверждение заново.
+_DEVICE_ID_KEY = "device_id"
+
+
+def get_device_id() -> str:
+    """Стабильный идентификатор этого ПК (создаётся при первом обращении)."""
+    try:
+        from data_store import local_get, local_set
+        dev = (local_get(_DEVICE_ID_KEY, "") or "").strip()
+        if not dev:
+            import uuid
+            dev = uuid.uuid4().hex
+            local_set(_DEVICE_ID_KEY, dev)
+        return dev
+    except Exception as e:
+        #БД ещё не готова — отдаём непустую заглушку, чтобы запрос не падал; на
+        #следующем обращении (БД готова) сгенерируется и сохранится постоянный id.
+        print(f"[app_settings] device_id временно недоступен: {e}")
+        return ""
+
+
+#Локальный признак «этот ПК уже прошёл барьер подтверждения» (UX-кэш, не безопасность —
+#реально доступ решает сервер по таблице одобренных). Нужен, чтобы не дёргать окно
+#подтверждения на уже подключённом ПК.
+_DEVICE_CONNECTED_KEY = "device_connected"
+
+
+def is_device_connected() -> bool:
+    try:
+        from data_store import local_get
+        return bool(local_get(_DEVICE_CONNECTED_KEY, False))
+    except Exception:
+        return False
+
+
+def set_device_connected(value: bool = True) -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_DEVICE_CONNECTED_KEY, bool(value))
     except Exception:
         return False
 

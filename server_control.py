@@ -229,6 +229,16 @@ def start_server(port: int = DEFAULT_PORT) -> tuple:
     for k, v in read_env().items():
         os.environ[k] = v
     os.environ["GRADEBOOK_DB_URL"] = _db_url_for_runtime()
+    #device_id этого ПК — чтобы сервер всегда пропускал ХОСТА через барьер подтверждения
+    #(на нём админ поднимает сервер и одобряет остальных — сам себя одобрить было бы
+    #некому). Сервер читает GRADEBOOK_HOST_DEVICE_ID при проверке устройства (connect.py).
+    try:
+        import app_settings
+        host_dev = app_settings.get_device_id()
+        if host_dev:
+            os.environ["GRADEBOOK_HOST_DEVICE_ID"] = host_dev
+    except Exception as e:
+        print(f"[server_control] device_id хоста не выставлен: {e}")
 
     #Папку server делаем импортируемой и поднимаем приложение в потоке.
     if SERVER_DIR not in sys.path:
@@ -306,6 +316,21 @@ def get_access_mode() -> str:
 def set_access_mode(mode: str) -> bool:
     env = read_env()
     env["GRADEBOOK_ACCESS_MODE"] = "serveo" if (mode or "").strip().lower() == "serveo" else "direct"
+    return _write_env(env)
+
+
+#Порт сервера храним в .env, чтобы автозапуск хоста поднимал сервер на ТОМ ЖЕ порту,
+#который админ выбрал в панели (а не на дефолтном 8000, если он его менял).
+def get_server_port() -> int:
+    try:
+        return int(read_env().get("GRADEBOOK_SERVER_PORT", str(DEFAULT_PORT)) or DEFAULT_PORT)
+    except ValueError:
+        return DEFAULT_PORT
+
+
+def set_server_port(port: int) -> bool:
+    env = read_env()
+    env["GRADEBOOK_SERVER_PORT"] = str(int(port or DEFAULT_PORT))
     return _write_env(env)
 
 
@@ -460,3 +485,34 @@ def launch(access: str, engine: str, port: int = DEFAULT_PORT,
     hint = (f"Сервер запущен на порту {port}.\n"
             f"Адрес для других ПК в сети: http://{ip}:{port}")
     return True, url, hint
+
+
+def autostart(port: int = None) -> tuple:
+    """Поднимает сервер ПК-хоста по УЖЕ сохранённой в .env конфигурации — без
+    перезаписи .env и без участия администратора. Зовётся при старте программы, если
+    включён автозапуск (app_settings.host_autostart_enabled). Так связь становится
+    постоянной: сервер встаёт сам при каждом запуске, админ может выйти из аккаунта.
+
+    Для режима serveo заодно поднимаем туннель (чтобы другие ПК видели сервер), но
+    СВОИМ адресом хост всегда ходит на 127.0.0.1: сервер локальный, гонять собственный
+    трафик наружу через serveo незачем (и надёжнее — localhost не отвалится).
+
+    Возвращает (ok: bool, local_url: str, message: str)."""
+    if port is None:
+        port = get_server_port()
+
+    #Сам сервер (API). Движок БД уже записан в .env прошлым запуском из админки —
+    #его прочитает start_server до импорта сервера, переписывать .env не нужно.
+    ok, msg = start_server(port)
+    if not ok:
+        return False, "", msg
+
+    #Для serveo поднимаем туннель в фоне — для ДРУГИХ ПК. Свой адрес — всё равно
+    #localhost, поэтому даже если туннель не встанет, хост продолжит работать.
+    if get_access_mode() == "serveo":
+        try:
+            start_tunnel(port, get_tunnel_name())
+        except Exception as e:
+            print(f"[server_control] автозапуск туннеля пропущен: {e}")
+
+    return True, f"http://127.0.0.1:{port}", f"Сервер хоста запущен на порту {port}."
