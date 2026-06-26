@@ -8,6 +8,8 @@ api_config.json
 data.key
 audit.log
 login_throttle.json
+# Логи фоновых процессов сервера/туннеля (server/server.log, server/tunnel.log) и пр.
+*.log
 backups/
 *.db
 *.db-journal

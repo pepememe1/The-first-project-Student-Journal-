@@ -26,6 +26,25 @@ def _safe_stream(stream):
 sys.stdout = _safe_stream(sys.stdout)
 sys.stderr = _safe_stream(sys.stderr)
 
+
+def _run_server_entrypoint():
+    """Режим «фонового сервера» для СОБРАННОГО .exe: тот же исполняемый файл,
+    запущенный с флагом --run-server, поднимает uvicorn вместо GUI.
+
+    Зачем так. Фоновый сервер хоста — отдельный процесс (переживает закрытие
+    программы). В dev его можно запустить как `python server/run.py`, но в собранном
+    .exe внешнего python НЕТ, поэтому отдельным процессом сервера выступает наш же exe
+    с этим флагом. Порт берём из GRADEBOOK_PORT (его выставляет server_control)."""
+    here = _get_app_dir()
+    server_dir = os.path.join(here, "server")
+    if server_dir not in sys.path:
+        sys.path.insert(0, server_dir)
+    os.chdir(server_dir)
+    port = int(os.environ.get("GRADEBOOK_PORT", "8000"))
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)
+
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 
@@ -48,6 +67,12 @@ def get_icon() -> QIcon:
 
 
 def main():
+    #Фоновый сервер для собранного .exe: если запущены с --run-server, поднимаем сам
+    #сервер (uvicorn) и НЕ открываем GUI. Проверяем это ПЕРВЫМ делом.
+    if "--run-server" in sys.argv:
+        _run_server_entrypoint()
+        return
+
     #Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
     #(см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
     from core import DBManager
@@ -88,21 +113,17 @@ def main():
     window.raise_()
     window.activateWindow()
 
-    #Авто-бэкап локальной базы при выходе
+    #Авто-бэкап локальной базы при выходе.
+    #ВАЖНО: сервер и ssh-туннель — ФОНОВЫЕ процессы, и при закрытии программы мы их
+    #НАМЕРЕННО НЕ гасим: связь должна жить без программы (хост сменил аккаунт/закрыл —
+    #клиенты продолжают синкаться). Останавливаются они только кнопкой «Остановить» в
+    #админке (server_control.stop_processes) или вручную.
     def _on_quit():
         try:
             from core import DBManager
             DBManager.backup(reason="on_exit")
         except Exception as _e:
             print(f"[exit] {_e}")
-        #Туннель — это внешний процесс ssh: сам он при закрытии программы не
-        #умрёт (Windows не убивает потомков), поэтому гасим его явно, чтобы не
-        #висел в фоне и не держал занятым имя на serveo.
-        try:
-            import server_control
-            server_control.stop_tunnel()
-        except Exception as _e:
-            print(f"[exit] туннель: {_e}")
     app.aboutToQuit.connect(_on_quit)
 
     sys.exit(app.exec())
