@@ -977,11 +977,19 @@ class AdminDashboard(QWidget):
             port = 8000
 
         def _check():
-            return server_control.server_running(port)
+            #Сервер — по /health; туннель — по живому PID; адрес постоянный.
+            return (server_control.server_running(port),
+                    server_control.tunnel_alive(),
+                    server_control.public_tunnel_url())
 
-        def _apply(running):
+        def _apply(res):
+            running, tun, link = res
             if running:
-                self._srv_status.setText(f"✅ Сервер запущен на порту {port}.")
+                txt = (f"✅ Сервер работает (фоновый — живёт и без программы) "
+                       f"на порту {port}.")
+                if tun and link:
+                    txt += f"\n🔗 Постоянная ссылка для других ПК: {link}"
+                self._srv_status.setText(txt)
                 self._srv_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
             else:
                 self._srv_status.setText("⏹ Сервер на этом ПК не запущен.")
@@ -1143,7 +1151,8 @@ class AdminDashboard(QWidget):
         self._run_bg(_do, _apply)
 
     def _stop_server(self):
-        """Останавливает сервер и, если был поднят, ssh-туннель serveo."""
+        """Останавливает ФОНОВЫЕ процессы хоста: сервер и ssh-туннель serveo.
+        (Закрытие программы их не гасит — только эта кнопка.)"""
         import server_control
         try:
             port = int(self._srv_port.text().strip() or "8000")
@@ -1153,11 +1162,7 @@ class AdminDashboard(QWidget):
         self._srv_stop.setEnabled(False)
 
         def _do():
-            try:
-                server_control.stop_tunnel()   #туннеля не было — безвредный no-op
-            except Exception:
-                pass
-            return server_control.stop_server(port)
+            return server_control.stop_processes(port)   #туннель + сервер по PID
 
         def _apply(res):
             ok, msg = res

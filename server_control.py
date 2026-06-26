@@ -26,8 +26,10 @@ server_control.py — Управление сервером синхрониза
 import os
 import re
 import sys
+import time
 import socket
-import threading
+import signal
+import secrets
 import subprocess
 
 #Папка сервера лежит рядом с клиентскими модулями (репозиторий) — и в dev, и при
@@ -39,17 +41,90 @@ ENV_PATH = os.path.join(SERVER_DIR, ".env")
 DEFAULT_PORT = 8000
 SQLITE_URL = "sqlite:///./gradebook_server.db"
 
-#Сервер запускается ВНУТРИ этого же процесса (отдельным потоком), чтобы не нужен
-#был отдельный Python — одна кнопка «Запустить» в админке и всё работает.
-_server = None     #uvicorn.Server текущего запуска
-_thread = None     #поток, в котором крутится сервер
+#ФОНОВЫЙ сервер. Раньше сервер крутился ВНУТРИ программы (uvicorn в потоке-демоне) и
+#умирал вместе с ней. Теперь сервер и ssh-туннель — ОТДЕЛЬНЫЕ процессы (detached),
+#которые продолжают работать, когда программа закрыта и при смене аккаунта на хосте.
+#Их PID пишем в файлы, чтобы при следующем запуске программы ПОДХВАТИТЬ уже работающие
+#(а не плодить второй сервер). Лог пишем в файл (а не в PIPE) — труба умерла бы вместе
+#с GUI, а файл переживает и помогает диагностике. Останавливаются процессы только явной
+#кнопкой «Остановить» (или taskkill) — закрытие программы их больше НЕ гасит.
+SERVER_PID = os.path.join(SERVER_DIR, "server.pid")
+SERVER_LOG = os.path.join(SERVER_DIR, "server.log")
+TUNNEL_PID = os.path.join(SERVER_DIR, "tunnel.pid")
+TUNNEL_LOG = os.path.join(SERVER_DIR, "tunnel.log")
 
-#Туннель «доступ из интернета» (ssh -R на serveo.net). Поднимается отдельной
-#кнопкой в админке: сервер крутится на этом ПК, а туннель показывает его наружу,
-#чтобы коллеги с других сетей могли подключиться. Внешний ssh уже встроен в
-#Windows 10/11, ставить ничего не нужно.
-_tunnel_proc = None    #subprocess.Popen запущенного ssh
-_tunnel_url = ""       #публичный адрес, который выдал serveo (https://…)
+
+#PID-файлы и проверка/остановка процессов (кросс-платформенно, без psutil)
+def _detached_flags() -> int:
+    """Флаги Popen, чтобы дочерний процесс пережил закрытие программы и не показывал
+    окно консоли. На не-Windows — 0 (там процесс и так не убивается с родителем, если
+    не в той же сессии; daemon-поведение задаём start_new_session)."""
+    if os.name == "nt":
+        return (getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return 0
+
+
+def _write_pid(path: str, pid: int):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(int(pid)))
+    except Exception as e:
+        print(f"[server_control] PID не записан ({path}): {e}")
+
+
+def _read_pid(path: str) -> int:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return int((f.read() or "0").strip() or 0)
+    except Exception:
+        return 0
+
+
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс с таким PID."""
+    if not pid:
+        return False
+    if os.name == "nt":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    else:
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except OSError:
+            return False
+
+
+def _pid_kill(pid: int):
+    """Останавливает процесс (с дочерними) по PID."""
+    if not pid:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"[server_control] taskkill {pid}: {e}")
+    else:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
 
 
 #Чтение/запись server/.env (простой формат KEY=VALUE)
@@ -207,80 +282,88 @@ def lan_ip() -> str:
         return ""
 
 
-def start_server(port: int = DEFAULT_PORT) -> tuple:
-    """Запускает сервер ВНУТРИ этой программы (отдельным потоком). Внешний Python
-    не нужен. (True, сообщение) или (False, причина)."""
-    global _server, _thread
+def _runtime_env(port: int) -> dict:
+    """Окружение для ОТДЕЛЬНОГО процесса сервера: к текущему env добавляем настройки из
+    .env, абсолютный путь к SQLite и device_id хоста (чтобы сервер пропускал хост через
+    барьер подтверждения — connect.py). Отдельный процесс не наследует наши os.environ
+    автоматически в нужном виде, поэтому собираем явно и передаём в Popen(env=...)."""
+    env = dict(os.environ)
+    env.update(read_env())
+    env["GRADEBOOK_DB_URL"] = _db_url_for_runtime()
+    env["GRADEBOOK_PORT"] = str(port)          #run.py читает GRADEBOOK_PORT
+    try:
+        import app_settings
+        host_dev = app_settings.get_device_id()
+        if host_dev:
+            env["GRADEBOOK_HOST_DEVICE_ID"] = host_dev
+    except Exception as e:
+        print(f"[server_control] device_id хоста не выставлен: {e}")
+    return env
+
+
+def _server_command() -> list:
+    """Команда запуска сервера отдельным процессом.
+      • dev (из исходников): python server/run.py — run.py поднимает uvicorn;
+      • frozen (.exe): тот же exe со спец-флагом --run-server (внешнего python нет,
+        поэтому сервер = наш же exe, который по флагу поднимает uvicorn вместо GUI)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-server"]
+    return [sys.executable, os.path.join(SERVER_DIR, "run.py")]
+
+
+def start_server_process(port: int = DEFAULT_PORT) -> tuple:
+    """Поднимает сервер ОТДЕЛЬНЫМ процессом (переживает закрытие программы).
+    Если сервер уже отвечает — подхватываем (не плодим второй). (ok, сообщение)."""
     if server_running(port):
-        return True, "Сервер уже запущен."
-    if _thread is not None and _thread.is_alive():
-        return True, "Сервер уже запускается."
+        return True, "Сервер уже запущен (подхвачен)."
+    #Уже стартует из прошлого вызова — подождём немного его /health ниже.
     if not os.path.isdir(SERVER_DIR):
         return False, f"Папка сервера не найдена: {SERVER_DIR}"
     if _port_busy(port):
         return False, f"Порт {port} занят другим процессом."
 
-    #Гарантируем .env с движком БД и секретом JWT.
+    #Гарантируем .env с движком БД и секретом JWT (их прочитает дочерний процесс).
     env_vals = read_env()
     if "GRADEBOOK_DB_URL" not in env_vals:
         env_vals["GRADEBOOK_DB_URL"] = SQLITE_URL
     _write_env(_ensure_jwt_secret(env_vals))
-    #Прокидываем настройки в окружение ДО импорта сервера (его config читает env).
-    for k, v in read_env().items():
-        os.environ[k] = v
-    os.environ["GRADEBOOK_DB_URL"] = _db_url_for_runtime()
-    #device_id этого ПК — чтобы сервер всегда пропускал ХОСТА через барьер подтверждения
-    #(на нём админ поднимает сервер и одобряет остальных — сам себя одобрить было бы
-    #некому). Сервер читает GRADEBOOK_HOST_DEVICE_ID при проверке устройства (connect.py).
+
     try:
-        import app_settings
-        host_dev = app_settings.get_device_id()
-        if host_dev:
-            os.environ["GRADEBOOK_HOST_DEVICE_ID"] = host_dev
+        logf = open(SERVER_LOG, "a", encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(
+            _server_command(), cwd=SERVER_DIR, env=_runtime_env(port),
+            stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT,
+            close_fds=True, creationflags=_detached_flags(),
+            start_new_session=(os.name != "nt"))
     except Exception as e:
-        print(f"[server_control] device_id хоста не выставлен: {e}")
+        return False, (f"Не удалось запустить процесс сервера: {e}\n"
+                       "Проверьте зависимости: pip install -r server/requirements.txt")
+    _write_pid(SERVER_PID, proc.pid)
 
-    #Папку server делаем импортируемой и поднимаем приложение в потоке.
-    if SERVER_DIR not in sys.path:
-        sys.path.insert(0, SERVER_DIR)
-    try:
-        import uvicorn
-        from app.main import app   #пакет server/app
-    except Exception as e:
-        return False, ("Не удалось загрузить сервер. На ПК-сервере нужны его "
-                       "зависимости — установите их один раз командой:\n"
-                       "pip install -r server/requirements.txt\n\n"
-                       f"Подробность: {e}")
-
-    #uvicorn в НЕглавном потоке сам пропускает установку обработчиков сигналов —
-    #это штатно. Поднимаем сервер и ждём, пока ответит /health.
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
-    _server = uvicorn.Server(config)
-    _thread = threading.Thread(target=_server.run, daemon=True)
-    _thread.start()
-
-    import time
-    for _ in range(30):                      #до ~15 секунд на старт
+    for _ in range(30):                          #до ~15 секунд на старт
         if server_running(port):
-            return True, f"Сервер запущен на порту {port}."
-        if not _thread.is_alive():
-            return False, ("Сервер не стартовал. Проверьте доступность БД "
-                           "(для PostgreSQL — что она запущена и реквизиты верны).")
+            return True, f"Сервер запущен (фоновый процесс) на порту {port}."
+        if proc.poll() is not None:
+            return False, ("Сервер не стартовал. Подробности — в server/server.log "
+                           "(проверьте БД и зависимости сервера).")
         time.sleep(0.5)
     return False, "Сервер запускается дольше обычного — проверьте состояние позже."
 
 
 def stop_server(port: int = DEFAULT_PORT) -> tuple:
-    """Останавливает сервер, запущенный этой программой."""
-    global _server, _thread
-    if _server is not None:
-        _server.should_exit = True           #штатная остановка uvicorn
-        if _thread is not None:
-            _thread.join(timeout=10)
-    _server = None
-    _thread = None
-    if not server_running(port):
-        return True, "Сервер остановлен."
+    """Останавливает ФОНОВЫЙ процесс сервера по сохранённому PID."""
+    pid = _read_pid(SERVER_PID)
+    if pid:
+        _pid_kill(pid)
+    try:
+        os.remove(SERVER_PID)
+    except OSError:
+        pass
+    #Дать порту освободиться и проверить, что /health больше не отвечает.
+    for _ in range(6):
+        if not server_running(port):
+            return True, "Сервер остановлен."
+        time.sleep(0.5)
     return False, ("Сервер ещё отвечает. Если его запускали другим способом — "
                    "остановите тот процесс вручную.")
 
@@ -301,6 +384,28 @@ def set_tunnel_name(name: str) -> bool:
     env = read_env()
     env["GRADEBOOK_TUNNEL_NAME"] = (name or "").strip()
     return _write_env(env)
+
+
+def ensure_tunnel_name() -> str:
+    """Гарантирует ПОСТОЯННОЕ имя поддомена serveo и возвращает его.
+
+    Раньше без имени serveo выдавал случайный адрес при каждом запуске — и клиентам
+    приходилось «делать ссылку заново». Теперь, если имя не задано, генерим стабильное
+    `gradebook-<8 hex>` и сохраняем в .env. С этого момента публичный адрес постоянный:
+    `https://<name>.serveo.net` (serveo закрепляет поддомен за ssh-ключом этого ПК)."""
+    name = get_tunnel_name()
+    if not name:
+        name = f"gradebook-{secrets.token_hex(4)}"
+        set_tunnel_name(name)
+    return name
+
+
+def public_tunnel_url(name: str = "") -> str:
+    """Детерминированный публичный адрес туннеля по имени поддомена. Имя постоянно,
+    поэтому адрес можно вычислить, не разбирая вывод ssh (а значит — и для фонового
+    процесса, чей stdout мы не держим)."""
+    name = (name or get_tunnel_name()).strip()
+    return f"https://{name}.serveo.net" if name else ""
 
 
 #Режим доступа к серверу — чтобы при следующем открытии админки восстановить выбор
@@ -334,106 +439,101 @@ def set_server_port(port: int) -> bool:
     return _write_env(env)
 
 
+def tunnel_alive() -> bool:
+    """True, если ФОНОВЫЙ ssh-туннель ещё жив (по сохранённому PID)."""
+    return _pid_alive(_read_pid(TUNNEL_PID))
+
+
+#Совместимость со старым именем (его звал admin/main): теперь это «жив ли туннель».
 def tunnel_running() -> bool:
-    """True, если ssh-туннель ещё жив."""
-    return _tunnel_proc is not None and _tunnel_proc.poll() is None
+    return tunnel_alive()
 
 
 def tunnel_url() -> str:
-    """Текущий публичный адрес туннеля ('' — туннель не поднят)."""
-    return _tunnel_url if tunnel_running() else ""
+    """Публичный адрес туннеля, пока он жив ('' — туннель не поднят). Адрес
+    детерминирован по постоянному имени поддомена (см. public_tunnel_url)."""
+    return public_tunnel_url() if tunnel_alive() else ""
 
 
-def _read_tunnel_output(proc, evt):
-    """В фоне дочитывает вывод ssh: ловит строку с публичным адресом и держит
-    трубу пустой (иначе ssh подвис бы на заполненном буфере). Нить-демон —
-    завершится сама, когда ssh закроется."""
-    global _tunnel_url
+def _confirm_tunnel(timeout: float = 12.0) -> str:
+    """Ждёт строку с публичным адресом в tunnel.log (подтверждение, что serveo принял
+    форвард). Возвращает найденный URL или '' (адрес всё равно знаем из имени)."""
     pat = re.compile(r"Forwarding\s+HTTP\s+traffic\s+from\s+(https?://\S+)")
-    try:
-        for line in proc.stdout:
-            m = pat.search(line)
-            if m:
-                _tunnel_url = m.group(1).rstrip("/")
-                evt.set()
-    except Exception:
-        pass
-    finally:
-        evt.set()   #процесс закрылся — разбудим ожидающего, даже если адреса нет
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(TUNNEL_LOG, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = pat.search(line)
+                    if m:
+                        return m.group(1).rstrip("/")
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return ""
 
 
-def start_tunnel(port: int = DEFAULT_PORT, name: str = "") -> tuple:
-    """Поднимает ssh-туннель к serveo.net и возвращает публичный адрес.
-    (True, 'https://…') либо (False, причина).
+def start_tunnel_process(port: int = DEFAULT_PORT, name: str = "") -> tuple:
+    """Поднимает ssh-туннель ОТДЕЛЬНЫМ процессом (переживает закрытие программы) с
+    ПОСТОЯННЫМ именем поддомена. Возвращает (ok, 'https://…' | причина).
 
-    Важно: форвардим на 127.0.0.1 (IPv4), а НЕ на localhost. На чистом IPv4
-    (типично для РФ) localhost резолвится сначала в IPv6 ::1, куда сервер не
-    слушает — и туннель отдавал бы 502. Явный 127.0.0.1 это снимает."""
-    global _tunnel_proc, _tunnel_url
-    if tunnel_running():
-        return True, (_tunnel_url or "Туннель уже запущен.")
-
-    name = (name or "").strip()
-    #С именем — постоянный адрес name.serveo.net; без имени — случайный каждый раз.
-    remote = f"{name}:80:127.0.0.1:{port}" if name else f"80:127.0.0.1:{port}"
+    Если туннель уже жив — подхватываем. Вывод ssh пишем в tunnel.log (не PIPE: трубу
+    мы держать не можем, она умерла бы с GUI, а файл переживает и помогает диагностике).
+    Форвардим на 127.0.0.1 (IPv4): на чистом IPv4 (типично для РФ) localhost ушёл бы в
+    IPv6 ::1, куда сервер не слушает, и serveo отдавал бы 502."""
+    if tunnel_alive():
+        return True, (public_tunnel_url() or "Туннель уже запущен.")
+    name = (name or get_tunnel_name()).strip() or ensure_tunnel_name()
+    remote = f"{name}:80:127.0.0.1:{port}"
     cmd = [
-        #-4 — ВЕСЬ туннель строго по IPv4. В РФ IPv6 часто битый/выключен: без
-        #этого ssh может выбрать AAAA-адрес serveo.net и зависнуть на подключении,
-        #а форвард на 127.0.0.1 (а не localhost) гарантирует IPv4 и на нашем конце.
         "ssh", "-4", "-R", remote, "serveo.net",
-        #accept-new — не зависаем на вопросе про host-key при первом подключении;
-        #ServerAlive — держим соединение; ExitOnForwardFailure — падаем сразу,
-        #если порт занять не удалось (а не висим молча).
+        #accept-new — не зависаем на host-key; ServerAlive — держим соединение;
+        #ExitOnForwardFailure — падаем сразу, если поддомен занять не удалось.
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ServerAliveInterval=60",
         "-o", "ServerAliveCountMax=3",
         "-o", "ExitOnForwardFailure=yes",
     ]
-    #На Windows прячем чёрное окно консоли ssh (иначе оно всплывает поверх UI).
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        _tunnel_url = ""
-        _tunnel_proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, creationflags=flags)
+        logf = open(TUNNEL_LOG, "w", encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT,
+            close_fds=True, creationflags=_detached_flags(),
+            start_new_session=(os.name != "nt"))
     except FileNotFoundError:
         return False, ("Не найден ssh. Он встроен в Windows 10/11 — включите "
                        "компонент «Клиент OpenSSH» (Параметры → Приложения → "
                        "Дополнительные компоненты).")
     except Exception as e:
         return False, f"Не удалось запустить туннель: {e}"
+    _write_pid(TUNNEL_PID, proc.pid)
 
-    evt = threading.Event()
-    threading.Thread(target=_read_tunnel_output, args=(_tunnel_proc, evt),
-                     daemon=True).start()
-    #Ждём, пока serveo выдаст адрес (обычно 2–5 c). Если ssh сразу умер или адрес
-    #не пришёл — честно сообщаем, а не оставляем «висящий» туннель.
-    if evt.wait(timeout=20) and _tunnel_url:
-        return True, _tunnel_url
-    if _tunnel_proc.poll() is not None:
-        return False, ("ssh-туннель сразу завершился. Проверьте интернет и что "
-                       "serveo.net доступен (он бывает перегружен — попробуйте "
-                       "ещё раз через минуту).")
-    return False, "Туннель не выдал адрес за 20 секунд — попробуйте ещё раз."
+    #Подтверждаем установление (serveo выдаёт строку в лог за 2–5 c). Если ssh сразу
+    #умер — честно сообщаем; иначе адрес известен из постоянного имени.
+    confirmed = _confirm_tunnel()
+    if proc.poll() is not None:
+        return False, ("ssh-туннель сразу завершился (см. server/tunnel.log). Проверьте "
+                       "интернет и доступность serveo.net — он бывает перегружен.")
+    return True, (confirmed or public_tunnel_url(name))
 
 
 def stop_tunnel() -> tuple:
-    """Останавливает ssh-туннель."""
-    global _tunnel_proc, _tunnel_url
-    proc = _tunnel_proc
-    _tunnel_proc = None
-    _tunnel_url = ""
-    if proc is None or proc.poll() is not None:
-        return True, "Туннель остановлен."
+    """Останавливает фоновый ssh-туннель по сохранённому PID."""
+    pid = _read_pid(TUNNEL_PID)
+    if pid:
+        _pid_kill(pid)
     try:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            proc.kill()
-    except Exception as e:
-        return False, f"Не удалось остановить туннель: {e}"
+        os.remove(TUNNEL_PID)
+    except OSError:
+        pass
     return True, "Туннель остановлен."
+
+
+def stop_processes(port: int = DEFAULT_PORT) -> tuple:
+    """Останавливает фоновые процессы хоста: сервер и туннель. Зовётся кнопкой
+    «Остановить» в админке (закрытие программы их НЕ гасит — это и есть цель)."""
+    stop_tunnel()
+    return stop_server(port)
 
 
 #Единый запуск из админки (одна кнопка «Запустить сервер»)
@@ -463,55 +563,51 @@ def launch(access: str, engine: str, port: int = DEFAULT_PORT,
     if not ok:
         return False, "", "Не удалось сохранить настройки БД сервера в .env."
 
-    #Запомним выбранный режим доступа, чтобы восстановить его в UI при след. запуске.
+    #Запомним выбранный режим доступа и порт, чтобы восстановить их при автозапуске.
     set_access_mode(access)
+    set_server_port(port)
 
-    #2. Сам сервер (API). При уже запущенном — start_server вернёт «уже запущен».
-    ok, msg = start_server(port)
+    #2. Сам сервер (API) — ОТДЕЛЬНЫМ процессом. При уже запущенном — подхват.
+    ok, msg = start_server_process(port)
     if not ok:
         return False, "", msg
 
-    #3. Доступ к серверу.
+    #3. Доступ к серверу. Свой адрес у хоста — всегда 127.0.0.1 (сервер локальный);
+    #публичный адрес для ДРУГИХ ПК отдаём в сообщении.
+    local_url = f"http://127.0.0.1:{port}"
     if access == "serveo":
-        ok, res = start_tunnel(port, name)
+        ensure_tunnel_name()                      #гарантируем ПОСТОЯННОЕ имя
+        ok, res = start_tunnel_process(port, name or get_tunnel_name())
         if not ok:
-            #Сервер подняли, а туннель — нет: говорим честно, адрес не сохраняем.
             return False, "", f"Сервер запущен, но доступ из интернета не открылся: {res}"
-        return True, res, f"Сервер запущен, доступ из интернета открыт:\n{res}"
+        return True, local_url, (f"Сервер запущен (фоновый — работает и без программы).\n"
+                                 f"Постоянная ссылка для других ПК:\n{res}")
 
     #Прямой доступ: на ЭТОМ ПК клиент ходит на 127.0.0.1, остальным даём адрес в ЛВС.
     ip = lan_ip() or "127.0.0.1"
-    url = f"http://127.0.0.1:{port}"
-    hint = (f"Сервер запущен на порту {port}.\n"
+    hint = (f"Сервер запущен (фоновый — работает и без программы) на порту {port}.\n"
             f"Адрес для других ПК в сети: http://{ip}:{port}")
-    return True, url, hint
+    return True, local_url, hint
 
 
 def autostart(port: int = None) -> tuple:
-    """Поднимает сервер ПК-хоста по УЖЕ сохранённой в .env конфигурации — без
-    перезаписи .env и без участия администратора. Зовётся при старте программы, если
-    включён автозапуск (app_settings.host_autostart_enabled). Так связь становится
-    постоянной: сервер встаёт сам при каждом запуске, админ может выйти из аккаунта.
+    """Поднимает фоновый сервер ПК-хоста по УЖЕ сохранённой в .env конфигурации — без
+    участия администратора. Зовётся при старте программы, если включён автозапуск
+    (app_settings.host_autostart_enabled). Если сервер/туннель уже работают (фоновые
+    процессы пережили прошлый сеанс) — ПОДХВАТЫВАЕМ их, не плодя второй.
 
-    Для режима serveo заодно поднимаем туннель (чтобы другие ПК видели сервер), но
-    СВОИМ адресом хост всегда ходит на 127.0.0.1: сервер локальный, гонять собственный
-    трафик наружу через serveo незачем (и надёжнее — localhost не отвалится).
-
-    Возвращает (ok: bool, local_url: str, message: str)."""
+    Свой адрес хоста — всегда http://127.0.0.1:port (сервер локальный).
+    Возвращает (ok, local_url, message)."""
     if port is None:
         port = get_server_port()
 
-    #Сам сервер (API). Движок БД уже записан в .env прошлым запуском из админки —
-    #его прочитает start_server до импорта сервера, переписывать .env не нужно.
-    ok, msg = start_server(port)
+    ok, msg = start_server_process(port)          #подхватит уже запущенный
     if not ok:
         return False, "", msg
 
-    #Для serveo поднимаем туннель в фоне — для ДРУГИХ ПК. Свой адрес — всё равно
-    #localhost, поэтому даже если туннель не встанет, хост продолжит работать.
     if get_access_mode() == "serveo":
         try:
-            start_tunnel(port, get_tunnel_name())
+            start_tunnel_process(port, ensure_tunnel_name())   #подхватит живой туннель
         except Exception as e:
             print(f"[server_control] автозапуск туннеля пропущен: {e}")
 
