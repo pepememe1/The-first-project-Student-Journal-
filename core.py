@@ -260,6 +260,23 @@ class DBManager:
 
         return {"removed": removed, "errors": errors}
 
+    @classmethod
+    def clear_synced_tables(cls) -> None:
+        """Очищает ТОЛЬКО синхронизируемые таблицы (занятия, оценки, конфликты),
+        оставляя саму базу и kv_store с локальными настройками (адрес сервера, токен,
+        device_id) на месте. Нужна для «реконсиляции с сервером»: на границе сессии
+        стираем локальный кэш данных, чтобы затем полным pull привести его в точное
+        соответствие серверу — иначе аддитивное слияние оставляло бы «осиротевшие»
+        локальные записи (баг с фантомным студентом). Файл НЕ удаляем (в отличие от
+        wipe_all_local_data), поэтому WAL-checkpoint не нужен."""
+        conn = cls.get_conn(); cur = conn.cursor()
+        try:
+            for t in ("grades", "lessons", "sync_conflicts"):
+                cur.execute(f"DELETE FROM {t}")
+            conn.commit()
+        finally:
+            conn.close()
+
     #Конфликты синхронизации (детект вместо тихой перезаписи)
     @classmethod
     def list_conflicts(cls, unresolved_only: bool = True) -> list:

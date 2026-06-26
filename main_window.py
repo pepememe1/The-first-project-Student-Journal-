@@ -12,6 +12,10 @@ class _SyncBridge(QObject):
     """Мост из фонового потока синхронизации в UI-поток. Сигнал, испускаемый из
     другого потока, Qt безопасно доставит в слот UI (очередью)."""
     synced = Signal()
+    #Восстановление сессии идёт в фоновом потоке (сеть), а собирать дашборд/возвращать
+    #на экран входа можно только в UI-потоке — поэтому через сигналы.
+    restore_local = Signal(str)   #данные готовы (после реконсиляции/офлайн) — собрать дашборд по логину
+    show_login = Signal()         #восстановить не удалось (токен протух) — оставить вход
 
 from core import APP_VERSION
 from styles import APP_STYLE, COLLEGE_NAME
@@ -84,9 +88,15 @@ class MainAppWindow(QMainWindow):
         #Начальное состояние — страница входа
         self._stack.setCurrentWidget(self._login)
 
+        #Идёт ли сейчас восстановление сохранённой сессии (персистентный вход). Пока
+        #True — не дёргаем окно подключения (см. _maybe_prompt_server).
+        self._session_restoring = False
+
         #Авто-обновление UI после фоновой синхронизации (если включён сервер).
         self._sync_bridge = _SyncBridge()
         self._sync_bridge.synced.connect(self._on_synced)
+        self._sync_bridge.restore_local.connect(self._restore_from_local)
+        self._sync_bridge.show_login.connect(self._restore_failed)
         try:
             from sync_runner import set_on_synced
             set_on_synced(self._sync_bridge.synced.emit)
@@ -105,6 +115,11 @@ class MainAppWindow(QMainWindow):
         #На ПК-хосте сначала сам поднимаем его сервер (постоянная связь — см.
         #_maybe_autostart_server), и только потом — стартовая проверка адреса.
         QTimer.singleShot(0, self._maybe_autostart_server)
+
+        #Персистентный вход: если есть сохранённая сессия — восстанавливаем её (с
+        #реконсиляцией данных от сервера). Ставится ДО _maybe_prompt_server: если сессия
+        #восстанавливается, окно подключения не показываем.
+        QTimer.singleShot(0, self._maybe_restore_session)
 
         #Стартовая проверка адреса сервера. singleShot(0) — показываем уже после
         #появления окна, а не в конструкторе. Само окно решает, показываться ли
@@ -151,6 +166,111 @@ class MainAppWindow(QMainWindow):
 
         threading.Thread(target=_do, daemon=True).start()
 
+    #Персистентный вход + реконсиляция данных с сервером
+    def _maybe_restore_session(self):
+        """Восстанавливает сохранённую сессию при старте (персистентный вход).
+
+        Логика «сервер = истина, только онлайн»:
+          • ХОСТ (админ) — источник данных для сервера: НЕ реконсилим, восстанавливаем
+            из локали, синк подключится сам.
+          • КЛИЕНТ — в фоне проверяем токен и, если сервер доступен, делаем реконсиляцию
+            (стереть локальный кэш + полный pull), чтобы убрать «осиротевшие» записи
+            прошлых сессий; офлайн — восстанавливаем из локали (offline-first); токен
+            протух (401) — возвращаемся на экран входа."""
+        try:
+            from app_settings import get_saved_session, is_host
+            sess = get_saved_session()
+        except Exception as e:
+            print(f"[restore] сохранённая сессия не прочитана: {e}")
+            return
+        login = (sess or {}).get("login", "")
+        role = (sess or {}).get("role", "")
+        if not login:
+            return
+        #Синхронно (до сетевых задержек) помечаем восстановление, чтобы окно подключения
+        #не выскочило параллельно.
+        self._session_restoring = True
+
+        if is_host():
+            #Хост: данные локальные и авторитетные — просто собираем дашборд.
+            self._restore_from_local(login)
+            return
+
+        import threading
+        threading.Thread(target=self._restore_client_bg, args=(login,), daemon=True).start()
+
+    def _restore_client_bg(self, login: str):
+        """Фоновая часть восстановления клиента: проверка токена + реконсиляция.
+        UI трогаем только через сигналы моста (restore_local / show_login)."""
+        from datetime import datetime, timezone
+        try:
+            from app_settings import (get_api_url, get_saved_token,
+                                      clear_saved_session, clear_saved_token)
+            url = get_api_url()
+            token = get_saved_token(login)
+            #Нет адреса/токена — работаем офлайн: восстановим из локали (если есть данные).
+            if not url or not token:
+                self._sync_bridge.restore_local.emit(login)
+                return
+            from sync_client import SyncClient
+            c = SyncClient(url, token=token)
+            #Сервер недоступен — offline-first: не трогаем локаль, собираем из неё.
+            if not c.health():
+                self._sync_bridge.restore_local.emit(login)
+                return
+            #Лёгкий pull проверяет токен (200 — жив; 401/403 — исключение). Берём
+            #«сейчас» как since, чтобы вернулось почти пусто (это только проверка).
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                c.pull(since=now_iso)
+            except Exception:
+                #Токен протух / устройство не одобрено — чистим сессию, на экран входа.
+                clear_saved_session(); clear_saved_token()
+                self._sync_bridge.show_login.emit()
+                return
+            #Токен жив и сервер на месте — реконсиляция: стереть кэш + полный pull.
+            import sync_engine
+            sync_engine.reconcile(c)
+            self._sync_bridge.restore_local.emit(login)
+        except Exception as e:
+            print(f"[restore] клиентское восстановление не удалось: {e}")
+            self._sync_bridge.show_login.emit()
+
+    def _restore_from_local(self, login: str):
+        """Собирает дашборд по сохранённому логину из ТЕКУЩИХ локальных данных (UI-поток).
+        Зовётся после реконсиляции (или сразу — для хоста/офлайна)."""
+        try:
+            from data_store import get_store
+            found = get_store().lookup_session(login)
+        except Exception as e:
+            print(f"[restore] поиск пользователя не удался: {e}")
+            found = None
+        if not found:
+            #Данных нет (пустой кэш + офлайн, или пользователь удалён на сервере) —
+            #оставляем экран входа.
+            self._restore_failed()
+            return
+        role, payload = found
+        self._session = (role, payload)
+        try:
+            self._open_dashboard()
+        except Exception as e:
+            print(f"[restore] дашборд не собрался: {e}")
+            self._restore_failed()
+            return
+        #Запускаем фоновый синк по СОХРАНЁННОМУ токену (пароль пуст — синк возьмёт токен;
+        #протухнет — синк тихо отложится, чинится перезапуском/повторным входом).
+        try:
+            from sync_runner import start as _sync_start
+            _sync_start(login, "", role)
+        except Exception as e:
+            print(f"[restore] синк не запущен: {e}")
+        self._session_restoring = False
+
+    def _restore_failed(self):
+        """Восстановление не удалось — снимаем флаг, остаёмся на экране входа."""
+        self._session_restoring = False
+
     def _maybe_prompt_server(self):
         """Предлагает подключиться (адрес + подтверждение устройства) на свежем ПК.
 
@@ -159,6 +279,10 @@ class MainAppWindow(QMainWindow):
         пользователь осознанно выбрал офлайн. Раньше условием было «адрес уже задан»,
         но теперь барьер устройства важнее: даже с адресом ПК должен пройти
         подтверждение, поэтому ориентируемся на флаг device_connected."""
+        #Идёт восстановление сессии или она уже восстановлена — окно подключения не нужно
+        #(устройство уже подключалось ранее, раз есть сохранённая сессия).
+        if getattr(self, "_session_restoring", False) or self._session is not None:
+            return
         try:
             from app_settings import is_host, get_offline_ack, is_device_connected
             if is_device_connected() or is_host() or get_offline_ack():
@@ -319,14 +443,40 @@ class MainAppWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть панель администратора:\n{e}")
 
     def _logout(self):
-        """Выход из системы"""
+        """Выход из системы.
+
+        Чтобы данные одного аккаунта не «протекали» в следующий на этом ПК (баг с
+        фантомным студентом), на выходе сбрасываем локальный кэш — но БЕЗОПАСНО:
+          • КЛИЕНТ онлайн → сперва flush (push текущих правок на сервер), потом сброс
+            кэша. Так чистый старт для следующего пользователя и без потери правок;
+          • офлайн или ХОСТ → кэш не трогаем (offline-first; хост — источник истины).
+        Сохранённую сессию и токен снимаем ВСЕГДА — это и есть «выход»."""
+        from app_settings import (is_host, get_saved_session, clear_saved_session,
+                                  clear_saved_token)
+        login = (get_saved_session() or {}).get("login", "")
+        was_host = is_host()
         self._session = None   #сессия закрыта — пересобирать по теме больше нечего
+
         #Останавливаем фоновую синхронизацию текущего пользователя.
         try:
             from sync_runner import stop as _sync_stop
             _sync_stop()
         except Exception:
             pass
+
+        #Клиент онлайн: flush правок и сброс кэша (под курсором ожидания — операция
+        #короткая). Хост/офлайн — пропускаем (см. докстринг).
+        if not was_host:
+            self._client_logout_reset(login)
+
+        #«Выход»: убираем сохранённую сессию и токен — следующий старт покажет вход.
+        try:
+            clear_saved_session()
+            if login:
+                clear_saved_token()
+        except Exception as e:
+            print(f"[logout] очистка сессии: {e}")
+
         #Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
         while self._stack.count() > 1:
             w = self._stack.widget(self._stack.count() - 1)
@@ -335,7 +485,34 @@ class MainAppWindow(QMainWindow):
 
         self._stack.setCurrentWidget(self._login)
         self._header.hide()
-        
+
         #Обновить базу учителей
         self.teachers_db, _ = parse_logins()
         self._login.update_teachers(self.teachers_db)
+
+    def _client_logout_reset(self, login: str):
+        """Flush правок на сервер и сброс локального кэша при выходе (только клиент,
+        только онлайн). Офлайн/без токена — НЕ трогаем локаль (offline-first): тогда
+        чистка произойдёт при следующем онлайн-входе через реконсиляцию."""
+        try:
+            from app_settings import get_api_url, get_saved_token
+            url = get_api_url()
+            token = get_saved_token(login) if login else ""
+            if not url or not token:
+                return
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt
+            from sync_client import SyncClient
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                c = SyncClient(url, token=token)
+                if not c.health():
+                    return   #сервер недоступен — офлайн, локаль не трогаем
+                import sync_engine
+                from data_store import reset_synced_local_data
+                c.push(sync_engine.collect_local())   #flush правок этой сессии на сервер
+                reset_synced_local_data()             #чистый старт для следующего юзера
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as e:
+            print(f"[logout] сброс кэша пропущен: {e}")

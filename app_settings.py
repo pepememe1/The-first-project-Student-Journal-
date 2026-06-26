@@ -278,6 +278,40 @@ def clear_saved_token() -> bool:
         return False
 
 
+#Сохранённая СЕССИЯ для персистентного входа: чтобы после закрытия программы при
+#следующем старте сразу попасть в свой аккаунт, не вводя логин/пароль заново. Храним
+#только логин и роль (НЕ пароль) в локальном ключе — доступ к серверу держит сохранённый
+#токен (_TOKEN_KEY). Лежит под префиксом `_local:`, поэтому переживает сброс кэша данных
+#(reset_synced_local_data чистит students/teachers/grades, но не локальные настройки).
+_SESSION_KEY = "session"
+
+
+def get_saved_session() -> dict:
+    """{'login':..., 'role':...} последнего входа ({} — нет сохранённой сессии)."""
+    try:
+        from data_store import local_get
+        rec = local_get(_SESSION_KEY, None) or {}
+        return rec if isinstance(rec, dict) and rec.get("login") else {}
+    except Exception:
+        return {}
+
+
+def set_saved_session(login: str, role: str) -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_SESSION_KEY, {"login": login or "", "role": role or ""})
+    except Exception:
+        return False
+
+
+def clear_saved_session() -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_SESSION_KEY, {})
+    except Exception:
+        return False
+
+
 #Идентификатор ЭТОГО устройства (ПК) для барьера подтверждения подключения. Сервер
 #пускает к входу/синхронизации только одобренные администратором device_id (и сам
 #хост). Генерится один раз и хранится локально (в БД ПК, не синхронизируется), чтобы

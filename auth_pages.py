@@ -515,6 +515,13 @@ class LoginPage(QWidget):
         self.login_inp.clear()
         self.pass_inp.clear()
         role = res.get("role")
+        #Запоминаем сессию (логин + роль) для персистентного входа: при следующем старте
+        #программа сама восстановит этот аккаунт по сохранённому токену, без ввода пароля.
+        try:
+            from app_settings import set_saved_session
+            set_saved_session(login, role)
+        except Exception as e:
+            print(f"[login] сессия не сохранена: {e}")
         if role == "admin":
             self.login_admin.emit()
         elif role == "teacher":
@@ -583,6 +590,12 @@ class LoginPage(QWidget):
                 print(f"[sync] не удалось запустить после first-run: {e}")
             self.login_inp.clear()
             self.pass_inp.clear()
+            #Запоминаем сессию админа и для этого пути (он идёт мимо _do_login).
+            try:
+                from app_settings import set_saved_session
+                set_saved_session(store.get_admin_login(), "admin")
+            except Exception:
+                pass
             QMessageBox.information(self, "Готово", "Пароль администратора создан.")
             self.login_admin.emit()
         else:
