@@ -378,6 +378,29 @@ class LocalStore:
                 return None
         return None
 
+    def lookup_session(self, login: str):
+        """Находит пользователя ПО ЛОГИНУ без проверки пароля и возвращает (role, payload)
+        в том же виде, что ждут экраны/сигналы входа:
+          ("admin", None) | ("teacher", (ФИО, data)) | ("student", stud) | None.
+
+        Нужна для ПЕРСИСТЕНТНОГО входа: при старте мы доверяем сохранённой сессии
+        (вход уже был выполнен ранее, а доступ к серверу держит сохранённый токен),
+        поэтому пароль повторно не спрашиваем — только пересобираем payload дашборда
+        из СВЕЖИХ локальных данных (после реконсиляции с сервером)."""
+        login = (login or "").strip()
+        if not login:
+            return None
+        if login == self.get_admin_login():
+            return ("admin", None)
+        for name, data in self.get_teachers().items():
+            if (data.get("login") or "").strip() == login:
+                return ("teacher", (name, data))
+        for s in self.get_students():
+            if (s.get("login") or "").strip() == login:
+                return ("student", {"f": s.get("surname", ""), "n": s.get("name", ""),
+                                    "g": s.get("group", "")})
+        return None
+
     #Проверка соединения (для админ-панели)
     def test_connection(self) -> tuple:
         """Локальное хранилище доступно всегда. Состояние синхронизации с
@@ -425,6 +448,43 @@ def get_store() -> LocalStore:
 def reset_store():
     global _store
     _store = None
+
+
+def reset_synced_local_data():
+    """Стирает СИНХРОНИЗИРУЕМЫЙ кэш этого ПК, сохраняя локальные настройки.
+
+    Зачем. Слияние с сервером аддитивное (sync_engine._merge_by_key): локальная запись
+    убирается только по серверному надгробию. Поэтому запись, оставшаяся ТОЛЬКО локально
+    (от прежнего аккаунта/сессии или после обновления), «протекала» в следующий аккаунт
+    на этом ПК (баг с фантомным студентом). Реконсиляция на границе сессии: стираем кэш и
+    затем полным pull приводим локаль в точное соответствие серверу (server wins).
+
+    Стираем: students/teachers/groups (kv), предметы (subjects.json), занятия/оценки/
+    конфликты (таблицы), метку дельты. НЕ трогаем:
+      • ключи с префиксом `_local:` — адрес сервера, device_id, токен, сохранённая
+        сессия, host-флаги, тема, offline_ack (иначе слетели бы подключение и вход);
+      • `config` — хеш пароля админа и тема вуза; на полном pull сервер перезапишет свои
+        ключи, а лишних «осиротевших» ключей в config практически не бывает.
+    """
+    #Пустые коллекции пишем без пробуждения синка (это не правка данных, а очистка
+    #кэша — будить синхронизацию незачем, да и нечего отправлять).
+    _kv_set("students", [], wake=False)
+    _kv_set("teachers", {}, wake=False)
+    _kv_set("groups", [], wake=False)
+    #Метку дельты сбрасываем, чтобы следующий pull был полным и наполнил кэш заново.
+    set_sync_watermark("")
+    try:
+        from subjects import save_subjects
+        save_subjects([])
+    except Exception as e:
+        print(f"[reset] предметы не очищены: {e}")
+    try:
+        from core import DBManager
+        DBManager.clear_synced_tables()
+    except Exception as e:
+        print(f"[reset] таблицы занятий/оценок не очищены: {e}")
+    #Сбрасываем singleton — чтобы в памяти не осталось ссылок на старые данные.
+    reset_store()
 
 
 def is_configured() -> bool:
