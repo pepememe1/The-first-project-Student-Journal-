@@ -112,6 +112,15 @@ class MainAppWindow(QMainWindow):
         self._backup_timer.start(10 * 60 * 1000)        #тик раз в 10 минут
         QTimer.singleShot(5000, self._auto_backup)       #и один бэкап вскоре после старта
 
+        #Тёмная тема ПО РАСПИСАНИЮ: раз в минуту проверяем, не наступило ли время
+        #переключиться (напр. 18:00 → тёмная). Реальная отрисовка режима уже зависит
+        #от времени (themes.effective_mode), здесь лишь ловим МОМЕНТ перехода и
+        #пересобираем интерфейс. _applied_mode — последний применённый режим.
+        self._applied_mode = None
+        self._theme_timer = QTimer(self)
+        self._theme_timer.timeout.connect(self._tick_theme_schedule)
+        self._theme_timer.start(60 * 1000)               #тик раз в минуту
+
         #На ПК-хосте сначала сам поднимаем его сервер (постоянная связь — см.
         #_maybe_autostart_server), и только потом — стартовая проверка адреса.
         QTimer.singleShot(0, self._maybe_autostart_server)
@@ -371,6 +380,7 @@ class MainAppWindow(QMainWindow):
         self._header.refresh_theme()
         self._header.set_role(role_text, user_text)
         self._header.show()
+        self._refresh_applied_mode()   #синхронизируем «текущий режим» для таймера расписания
 
     def reapply_current(self):
         """Пересобрать текущий дашборд (после «Сохранить» в кастомизации) — чтобы
@@ -381,6 +391,40 @@ class MainAppWindow(QMainWindow):
             self._open_dashboard()
         except Exception as e:
             print(f"[theme] пересборка интерфейса не удалась: {e}")
+
+    def _active_theme_spec(self) -> dict:
+        """Spec темы, актуальный сейчас (личный — если вошли, иначе вуза/дефолт)."""
+        import theme_service
+        role, identity = self._session_identity()
+        return theme_service.current_spec(role, identity)
+
+    def _refresh_applied_mode(self):
+        """Запомнить, какой режим (light/dark) сейчас применён — чтобы таймер
+        расписания ловил именно МОМЕНТ перехода, а не дёргал пересборку зря."""
+        try:
+            import themes
+            self._applied_mode = themes.effective_mode(self._active_theme_spec())
+        except Exception:
+            pass
+
+    def _tick_theme_schedule(self):
+        """Раз в минуту: если по расписанию пора сменить режим — применяем и
+        пересобираем интерфейс. Если расписание выключено — режим стабилен, тик пустой."""
+        try:
+            import themes, styles
+            spec = self._active_theme_spec()
+            desired = themes.effective_mode(spec)
+            if self._applied_mode is None:
+                self._applied_mode = desired      #первичная инициализация без пересборки
+                return
+            if desired != self._applied_mode:
+                self._applied_mode = desired
+                themes.apply_spec(spec)
+                self.setStyleSheet(styles.APP_STYLE)
+                if self._session:
+                    self._open_dashboard()        #перекрасить инлайн-виджеты под новый режим
+        except Exception as e:
+            print(f"[theme] тик расписания: {e}")
 
     def _on_synced(self):
         """Пришли свежие данные с сервера — обновляем текущий экран, если умеет.

@@ -35,7 +35,7 @@ def get_current_user(authorization: str = Header(None),
     if not payload:
         raise HTTPException(status_code=401, detail="Недействительный или просроченный токен")
     user = db.query(User).filter(
-        User.login == payload.get("sub"), User.deleted == False  # noqa: E712
+        User.login == payload.get("sub"), User.deleted == False  #noqa: E712
     ).first()
     if not user:
         raise HTTPException(status_code=401, detail="Пользователь не найден")

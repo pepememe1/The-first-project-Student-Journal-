@@ -1,0 +1,6 @@
+{
+    "extraPaths": [".", "ui", "sync", "data", "server"],
+    "typeCheckingMode": "off",
+    "exclude": ["**/__pycache__", "**/node_modules", ".git"],
+    "pythonVersion": "3.10"
+}

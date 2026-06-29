@@ -11,7 +11,7 @@ privacy.py — Обезличивание перед облачной LLM (GigaC
 чтобы код был один.
 """
 import re
-from typing import Dict, Tuple
+from typing import Dict
 
 
 class Anonymizer:
@@ -63,9 +63,3 @@ class Anonymizer:
     @property
     def mapping(self) -> Dict[str, str]:
         return dict(self._rev)
-
-
-def anonymize_facts(facts_text: str, names: list) -> Tuple[str, Anonymizer]:
-    """Удобная обёртка: вернуть (обезличенный_текст, анонимайзер)."""
-    anon = Anonymizer()
-    return anon.anonymize_text(facts_text, names), anon

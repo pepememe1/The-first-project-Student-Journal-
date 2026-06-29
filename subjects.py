@@ -130,18 +130,6 @@ def save_subjects(subjects: list) -> bool:
         return False
 
 
-def rename_subject(old_name: str, new_name: str) -> bool:
-    """
-    Переименовывает предмет в subjects.json.
-    Возвращает True если предмет найден и переименован.
-    """
-    subjects = load_subjects()
-    if old_name not in subjects:
-        return False
-    subjects = [new_name if s == old_name else s for s in subjects]
-    return save_subjects(subjects)
-
-
 def delete_subject(name: str) -> bool:
     """Удаляет предмет из subjects.json."""
     subjects = load_subjects()

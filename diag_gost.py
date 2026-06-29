@@ -20,6 +20,8 @@ import sys
 import time
 import hashlib
 
+import _bootstrap  # noqa: F401  (раскладка путей ui/sync/data — до ленивого import security)
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
