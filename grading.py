@@ -121,8 +121,3 @@ def practice_average(items: Iterable[Tuple[str, str]],
 def pairs_from_objects(lessons) -> List[Tuple[str, str]]:
     """Адаптер для core.Lesson: [(l.id, l.type), ...]."""
     return [(l.id, l.type) for l in lessons]
-
-
-def pairs_from_rows(rows) -> List[Tuple[str, str]]:
-    """Адаптер для строк intents (lid, ltype, ...): [(lid, ltype), ...]."""
-    return [(r[0], r[1]) for r in rows]

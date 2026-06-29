@@ -16,9 +16,8 @@ import sys
 from PySide6.QtGui import QFontDatabase, QFont
 from PySide6.QtWidgets import QApplication
 
-#Институциональный системный стек (приоритет — Windows/Segoe UI)
-_BODY_CANDIDATES  = ["Segoe UI", "PT Sans", "Arial", "Helvetica", "sans-serif"]
-_TITLE_CANDIDATES = ["Segoe UI Semibold", "Segoe UI", "PT Sans", "Arial", "sans-serif"]
+#Приоритет — фирменный DM Sans (если .ttf лежит в fonts/), иначе системный Segoe UI.
+_BODY_CANDIDATES  = ["DM Sans", "Segoe UI", "PT Sans", "Arial", "Helvetica", "sans-serif"]
 
 
 def _get_fonts_dir() -> str:
@@ -62,25 +61,3 @@ def load_fonts() -> dict:
 
     print(f"[Fonts] Основной шрифт: {_pick(_BODY_CANDIDATES)}")
     return loaded
-
-
-def font_available(family: str) -> bool:
-    """Проверить, доступно ли шрифтовое семейство в Qt."""
-    return family in QFontDatabase.families()
-
-
-def title_font(size: int = 22, weight: int = QFont.Bold) -> QFont:
-    """Шрифт заголовков."""
-    return QFont(_pick(_TITLE_CANDIDATES), size, weight)
-
-
-def body_font(size: int = 13, weight: int = QFont.Normal) -> QFont:
-    """Шрифт основного текста."""
-    return QFont(_pick(_BODY_CANDIDATES), size, weight)
-
-
-def get_font_css(role: str = "body") -> str:
-    """CSS font-family строка для QSS. role: 'title' / 'body'."""
-    if role == "title":
-        return "'Segoe UI Semibold', 'Segoe UI', 'PT Sans', 'Arial', sans-serif"
-    return "'Segoe UI', 'PT Sans', 'Arial', sans-serif"

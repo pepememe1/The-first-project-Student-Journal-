@@ -5,6 +5,9 @@ main.py — единая точка входа GradeBookAI (Release 2.2).
 import sys
 import os
 
+#Раскладка по папкам ui/ sync/ data/ — выполнить ДО любого клиентского импорта,
+#иначе плоские импорты (from main_window import ...) не найдут перенесённые модули.
+import _bootstrap  # noqa: F401,E402
 
 #Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
 #консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу

@@ -15,6 +15,8 @@ import os
 import socket
 import sys
 
+import _bootstrap  # noqa: F401  (раскладка путей ui/sync/data — до клиентских импортов)
+
 HOSTS = [
     ("ngw.devices.sberbank.ru", 9443, "получение токена (OAuth)"),
     ("gigachat.devices.sberbank.ru", 443, "сам чат"),

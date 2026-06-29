@@ -444,17 +444,6 @@ def tunnel_alive() -> bool:
     return _pid_alive(_read_pid(TUNNEL_PID))
 
 
-#Совместимость со старым именем (его звал admin/main): теперь это «жив ли туннель».
-def tunnel_running() -> bool:
-    return tunnel_alive()
-
-
-def tunnel_url() -> str:
-    """Публичный адрес туннеля, пока он жив ('' — туннель не поднят). Адрес
-    детерминирован по постоянному имени поддомена (см. public_tunnel_url)."""
-    return public_tunnel_url() if tunnel_alive() else ""
-
-
 def _confirm_tunnel(timeout: float = 12.0) -> str:
     """Ждёт строку с публичным адресом в tunnel.log (подтверждение, что serveo принял
     форвард). Возвращает найденный URL или '' (адрес всё равно знаем из имени)."""
