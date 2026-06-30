@@ -42,6 +42,7 @@ class TeacherDashboard(QWidget):
             ("__label__", "", "Журнал"),
             ("journal",  "clipboard", "Журнал"),
             ("students", "users",     "Студенты"),
+            ("schedule", "calendar",  "Расписание"),
             ("stats",    "chart",     "Статистика"),
             ("ai",       "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
@@ -56,6 +57,7 @@ class TeacherDashboard(QWidget):
         lay.addLayout(body)
         self._build_journal()
         self._build_students()
+        self._build_schedule()
         self._build_stats()
         self._build_ai()
         self._build_profile()
@@ -572,6 +574,15 @@ class TeacherDashboard(QWidget):
         self._stud_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         lay.addWidget(self._stud_table, 1)
         self.pages["students"] = w; self.stack.addWidget(w)
+
+    def _build_schedule(self):
+        """Вкладка «Расписание» — пары преподавателя (инверсия групповых расписаний
+        колледжа с портала ВСГУТУ). ФИО на сайте подбирается автоматически по имени
+        аккаунта; при расхождении преподаватель выбирает себя из списка."""
+        from schedule_view import ScheduleView
+        w = ScheduleView(role="teacher", login=self.teacher_name,
+                         app_hint=self.teacher_name)
+        self.pages["schedule"] = w; self.stack.addWidget(w)
 
     def _refresh_students(self):
         if not self.book: return
