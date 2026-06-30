@@ -8,15 +8,25 @@ audit.py — Журнал событий безопасности и защит�
   • Анти-брутфорс ограничивает число неверных попыток входа: после порога логин
     временно блокируется, чтобы пароль нельзя было подобрать перебором.
 
-Хранение — локальное, рядом с базой (offline-first): файл append-only audit.log
-и небольшой login_throttle.json в профиле пользователя. На каждом ПК свой журнал;
-централизованный сбор (в PostgreSQL/SIEM) можно добавить позже без смены API.
+ГДЕ ХРАНИМ (важно для 152-ФЗ). Раньше журнал лежал ОТКРЫТЫМ файлом audit.log рядом с
+базой, а состояние блокировок — login_throttle.json. Открытый файл с логинами/ролями
+и метками доступа к ИСПДн — это утечка по форме хранения. Теперь и журнал, и троттлинг
+живут ВНУТРИ программы — в её локальном зашифрованном хранилище (data_store, kv_store
+под префиксом «_local:», Fernet-шифрование, ключ под Windows DPAPI). Эти ключи НЕ
+синхронизируются на сервер (журнал у каждого ПК свой; централизованный сбор в SIEM —
+отдельная задача и делается на стороне сервера). Старые файлы при первом запуске
+разово переносятся внутрь и удаляются (см. _migrate_once).
 
-Модуль намеренно «не падающий»: любая ошибка ввода-вывода тут не должна ронять
-вход в программу, поэтому всё обёрнуто в try/except и логируется молча.
+Журнал админ видит во вкладке «Мониторинг» (раздел «Локальный журнал безопасности»).
+Это и есть мониторинг доступа на конкретном ПК.
+
+Модуль намеренно «не падающий»: любая ошибка ввода-вывода тут не должна ронять вход
+в программу, поэтому всё обёрнуто в try/except и логируется молча. data_store
+импортируем ЛЕНИВО внутри функций — чтобы импорт audit на раннем старте не тянул БД
+и не падал, если хранилище ещё не готово.
 """
 
-import json
+import os
 import time
 from datetime import datetime
 
@@ -26,10 +36,62 @@ import app_paths
 MAX_FAILS = 7            #сколько неверных попыток допускаем
 LOCK_SECONDS = 300       #на сколько блокируем логин после превышения (5 минут)
 
+#Ключи в локальном (зашифрованном, несинхронизируемом) хранилище.
+_AUDIT_KEY = "audit_log"          # список строк «ts\tevent\tactor\tdetail»
+_THROTTLE_KEY = "login_throttle"  # словарь login -> {fails, locked_until}
 
-#Папка та же, что у локальной базы (см. app_paths): рядом с .exe или в профиле.
-_AUDIT_LOG = app_paths.data_file("audit.log")
-_THROTTLE_FILE = app_paths.data_file("login_throttle.json")
+#Кольцевой буфер журнала: держим последние N записей (как консоль мониторинга),
+#чтобы зашифрованная запись не росла бесконечно. Полное хранение/SIEM — на сервере.
+_AUDIT_CAP = 1000
+
+#Старые файлы (наследие) — переносим внутрь программы и удаляем при первом запуске.
+_LEGACY_AUDIT = app_paths.data_file("audit.log")
+_LEGACY_THROTTLE = app_paths.data_file("login_throttle.json")
+
+_migrated = False
+
+
+def _ds():
+    """Ленивая ссылка на data_store (см. пояснение в шапке)."""
+    import data_store
+    return data_store
+
+
+def _migrate_once():
+    """Разовый перенос старых файлов журнала/троттлинга в зашифрованное хранилище.
+
+    Файл удаляем ТОЛЬКО после успешной записи внутрь — если хранилище ещё не готово
+    (нет ключа/БД), данные не теряем, попробуем в следующий запуск.
+    """
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True       # в этой сессии повторно не дёргаем (файл переживёт до успеха)
+    try:
+        ds = _ds()
+        #journal
+        if os.path.exists(_LEGACY_AUDIT):
+            with open(_LEGACY_AUDIT, "r", encoding="utf-8") as f:
+                lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+            ok = True
+            if lines:
+                cur = ds.local_get(_AUDIT_KEY, []) or []
+                ok = ds.local_set(_AUDIT_KEY, (cur + lines)[-_AUDIT_CAP:])
+            if ok:
+                os.remove(_LEGACY_AUDIT)
+        #throttle
+        if os.path.exists(_LEGACY_THROTTLE):
+            import json
+            with open(_LEGACY_THROTTLE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ok = True
+            if isinstance(data, dict) and data:
+                ok = ds.local_set(_THROTTLE_KEY, data)
+            if ok:
+                os.remove(_LEGACY_THROTTLE)
+    except Exception as e:
+        #миграция не критична: упадём молча, файл останется до следующего запуска
+        print(f"[audit] перенос старого журнала отложен: {e}")
 
 
 #Журнал аудита
@@ -40,26 +102,27 @@ def log_event(event: str, actor: str = "", detail: str = ""):
     только логины/роли и обезличенные пометки.
     """
     try:
+        _migrate_once()
         ts = datetime.now().isoformat(timespec="seconds")
         #экранируем переводы строк, чтобы одна запись = одна строка
         actor = (actor or "").replace("\n", " ").strip()
         detail = (detail or "").replace("\n", " ").strip()
-        line = f"{ts}\t{event}\t{actor}\t{detail}\n"
-        with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
-            f.write(line)
+        line = f"{ts}\t{event}\t{actor}\t{detail}"
+        ds = _ds()
+        cur = ds.local_get(_AUDIT_KEY, []) or []
+        cur.append(line)
+        ds.local_set(_AUDIT_KEY, cur[-_AUDIT_CAP:])
     except Exception as e:
         #аудит не должен ломать работу приложения
         print(f"[audit] не удалось записать событие: {e}")
 
 
 def read_events(limit: int = 200) -> list:
-    """Возвращает последние записи журнала (для возможного просмотра в админке)."""
+    """Возвращает последние записи журнала (для просмотра в «Мониторинге»)."""
     try:
-        with open(_AUDIT_LOG, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        return [ln.rstrip("\n") for ln in lines[-limit:]]
-    except FileNotFoundError:
-        return []
+        _migrate_once()
+        items = _ds().local_get(_AUDIT_KEY, []) or []
+        return list(items[-limit:])
     except Exception:
         return []
 
@@ -67,16 +130,16 @@ def read_events(limit: int = 200) -> list:
 #Анти-брутфорс (лимит попыток + временная блокировка)
 def _load_throttle() -> dict:
     try:
-        with open(_THROTTLE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        _migrate_once()
+        data = _ds().local_get(_THROTTLE_KEY, {})
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
 def _save_throttle(data: dict):
     try:
-        with open(_THROTTLE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+        _ds().local_set(_THROTTLE_KEY, data)
     except Exception as e:
         print(f"[audit] не удалось сохранить состояние блокировок: {e}")
 
@@ -84,7 +147,7 @@ def _save_throttle(data: dict):
 def is_locked(login: str) -> tuple:
     """
     Возвращает (locked: bool, seconds_left: int).
-    Блокировка хранится на диске, поэтому переживает перезапуск программы —
+    Блокировка хранится в зашифрованной БД программы, поэтому переживает перезапуск —
     иначе перебор обходился бы простым рестартом.
     """
     login = (login or "").strip().lower()

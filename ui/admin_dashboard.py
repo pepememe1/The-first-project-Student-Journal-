@@ -27,7 +27,7 @@ from PySide6.QtCore import QThread, Signal as QSignal
 from core import DBManager
 from subjects import load_subjects
 from data_store import get_store
-from audit import log_event
+from audit import log_event, read_events
 
 
 #Фоновый воркер для сетевых/долгих запросов
@@ -87,6 +87,7 @@ class AdminDashboard(QWidget):
             ("students", "users",        "Студенты"),
             ("groups",   "school",       "Группы"),
             ("subjects", "book",         "Предметы"),
+            ("schedule", "calendar",     "Расписание"),
             ("__label__", "", "Система"),
             ("api",   "cpu",      "Настройки ИИ"),
             ("pg",    "globe",    "Сервер"),
@@ -107,6 +108,7 @@ class AdminDashboard(QWidget):
         self._build_students()
         self._build_groups()
         self._build_subjects()
+        self._build_schedule()
         self._build_api()
         self._build_pg()
         self._build_requests()
@@ -593,6 +595,14 @@ class AdminDashboard(QWidget):
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
         for it in items: delete_subject(it.text())
         self._render_subjects()
+
+    #Расписание (просмотр любой группы/преподавателя + обновление кэша с портала)
+
+    def _build_schedule(self):
+        from schedule_view import ScheduleView
+        w = ScheduleView(role="admin", login="admin", app_hint="")
+        self.pages["schedule"] = w
+        self.stack.addWidget(w)
 
     #API ключ
 
@@ -1474,6 +1484,24 @@ class AdminDashboard(QWidget):
         el.addWidget(self._mon_status)
         lay.addWidget(ec)
 
+        #Локальный журнал безопасности ЭТОГО ПК (152-ФЗ): входы, смена пароля,
+        #экспорт ПДн. Хранится в зашифрованной БД программы (не открытым файлом),
+        #поэтому виден только здесь, у администратора. Это и есть мониторинг доступа.
+        ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16); al.setSpacing(8)
+        al.addWidget(section_lbl("Локальный журнал безопасности (этот ПК)"))
+        al.addWidget(lbl("События входа, смены пароля и экспорта данных на этом "
+                         "компьютере. Журнал зашифрован и хранится внутри программы "
+                         "(требование 152-ФЗ).", 11, C['text3']))
+        self._mon_audit = QTextEdit(); self._mon_audit.setReadOnly(True)
+        self._mon_audit.document().setMaximumBlockCount(1000)
+        self._mon_audit.setStyleSheet(
+            f"QTextEdit{{background:{C['card2']};color:{C['text3']};border:1px solid "
+            f"{C['border2']};border-radius:8px;font-family:Consolas,'Courier New',"
+            "monospace;font-size:12px;padding:8px;}}")
+        self._mon_audit.setMinimumHeight(200)
+        al.addWidget(self._mon_audit)
+        lay.addWidget(ac)
+
         lay.addStretch()
         w.setWidget(inner)
         self.pages["mon"] = w; self.stack.addWidget(w)
@@ -1490,8 +1518,31 @@ class AdminDashboard(QWidget):
         self._mon_since = 0
         self._mon_console.clear()
         self._mon_status.setText("⏳ Подключаюсь к серверу...")
+        self._refresh_local_audit()
         self._poll_monitor()
         self._mon_timer.start()
+
+    def _refresh_local_audit(self):
+        """Перечитывает локальный журнал безопасности (зашифрованный, этот ПК)."""
+        from html import escape as _esc
+        self._mon_audit.clear()
+        try:
+            events = read_events(limit=500)
+        except Exception as e:
+            self._mon_audit.append(f"⚠️ Журнал недоступен: {e}")
+            return
+        if not events:
+            self._mon_audit.append("— записей пока нет —")
+            return
+        #строки уже в формате «ts \t event \t actor \t detail» — покажем читабельно
+        for line in events:
+            parts = line.split("\t")
+            ts = parts[0] if parts else ""
+            ev = parts[1] if len(parts) > 1 else ""
+            actor = parts[2] if len(parts) > 2 else ""
+            detail = parts[3] if len(parts) > 3 else ""
+            tail = f"  ({actor}{' · ' + detail if detail else ''})" if actor or detail else ""
+            self._mon_audit.append(_esc(f"[{ts}] {ev}{tail}"))
 
     def _stop_monitor(self):
         if getattr(self, "_mon_timer", None) is not None:

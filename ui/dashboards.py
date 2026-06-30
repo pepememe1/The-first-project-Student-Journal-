@@ -96,6 +96,7 @@ class StudentDashboard(QWidget):
             ("__label__", "", "Обучение"),
             ("dash",    "home",      "Главная"),
             ("journal", "clipboard", "Мой журнал"),
+            ("schedule","calendar",  "Расписание"),
             ("stats",   "chart",     "Статистика"),
             ("ai",      "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
@@ -116,6 +117,7 @@ class StudentDashboard(QWidget):
 
         self._build_dash()
         self._build_journal()
+        self._build_schedule()
         self._build_stats()
         self._build_ai_page()
         self._build_profile()
@@ -353,6 +355,17 @@ class StudentDashboard(QWidget):
         self.pages["journal"] = w
         self.stack.addWidget(w)
         self._load_journal()
+
+    def _build_schedule(self):
+        """Вкладка «Расписание» — пары студента по его группе (данные с портала ВСГУТУ,
+        кэшируются локально). Ключ привязки строим из ФИО+группы: на общем ПК выбор
+        одного студента не утечёт другому."""
+        from schedule_view import ScheduleView
+        f, n, g = (self.cur_stud.get("f", ""), self.cur_stud.get("n", ""),
+                   self.cur_stud.get("g", ""))
+        w = ScheduleView(role="student", login=f"{f}|{n}|{g}", app_hint=g)
+        self.pages["schedule"] = w
+        self.stack.addWidget(w)
 
     def _load_journal(self):
         """Загрузить журнал для выбранного предмета"""
