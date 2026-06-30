@@ -135,6 +135,43 @@ class MainAppWindow(QMainWindow):
         #(не трогает админа/хост и офлайн-режим) — см. _maybe_prompt_server.
         QTimer.singleShot(0, self._maybe_prompt_server)
 
+        #Авто-обновление расписания при старте: подтягиваем свежий снимок с портала
+        #ВСГУТУ в фоне, чтобы вкладка «Расписание» открылась уже актуальной. Запускаем
+        #чуть погодя после показа окна, чтобы не тормозить старт.
+        QTimer.singleShot(3000, self._maybe_refresh_schedule)
+
+    def _maybe_refresh_schedule(self):
+        """Фоновое авто-обновление кэша расписания при запуске программы.
+
+        Тянем расписание с публичного портала и кладём в локальный кэш. Чтобы не
+        дёргать портал на КАЖДЫЙ запуск (десятки GET), обновляем только если кэша нет
+        или он старше порога (расписание меняется редко). Сеть — в отдельном потоке
+        (UI не блокируем); офлайн/ошибка — тихо выходим, остаётся прежний кэш."""
+        try:
+            import schedule as sched
+        except Exception as e:
+            print(f"[schedule] модуль расписания недоступен: {e}")
+            return
+        #Порог свежести: если кэшу меньше 3 часов — не обновляем (хватает).
+        age = sched.cache_age_minutes()
+        if age is not None and age < 180:
+            return
+
+        from PySide6.QtCore import QThread
+
+        class _SchedRefreshThread(QThread):
+            def run(self_inner):
+                try:
+                    snap = sched.build_snapshot()
+                    sched.save(snap)
+                    print(f"[schedule] авто-обновление: групп {len(snap.group_names())}, "
+                          f"предметов {len(snap.subjects)}")
+                except Exception as ex:
+                    print(f"[schedule] авто-обновление пропущено: {ex}")
+
+        self._sched_thread = _SchedRefreshThread(self)   # держим ссылку (GC)
+        self._sched_thread.start()
+
     def _maybe_autostart_server(self):
         """ПК-хост сам поднимает свой сервер при старте программы (постоянная связь).
 

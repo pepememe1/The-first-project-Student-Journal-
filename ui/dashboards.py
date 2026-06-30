@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QTableWidget, QTableWidgetItem,
     QLabel, QPushButton, QStackedWidget, QComboBox, QTextEdit, QMessageBox,
     QFileDialog, QInputDialog, QDialog, QGridLayout, QFrame, QHeaderView,
-    QAbstractItemView, QListWidget, QListWidgetItem, QApplication
+    QAbstractItemView, QListWidget, QListWidgetItem, QApplication, QSizePolicy
 )
 
 from core import GradeBook, Student, DBManager, APP_VERSION
@@ -23,13 +23,47 @@ from ui_components import Sidebar
 from utils import get_subjects_for_group
 
 
+class _MascotImage(QLabel):
+    """Большой маскот-тигр на «Главной» студента, который САМ масштабируется под свой
+    размер (адаптив под окно программы). Полный кадр храним в _src и при каждом
+    ресайзе пересчитываем уменьшенную версию с сохранением пропорций — так тигр
+    растёт/сжимается вместе с колонкой, а не остаётся фиксированным."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._src = None
+        self.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.setStyleSheet("background:transparent;")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(180, 240)
+
+    def set_source(self, pm):
+        self._src = pm
+        self._rescale()
+
+    def _rescale(self):
+        if self._src is None or self._src.isNull():
+            self.clear()
+            return
+        self.setPixmap(self._src.scaled(
+            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def resizeEvent(self, event):
+        self._rescale()
+        super().resizeEvent(event)
+
+
 class VectorTipThread(QThread):
     """Готовит «умный совет» студенту силами Вектора — по фактам из журнала.
 
     Раньше совет генерировал облачный ИИ-чат; теперь его считает сам Вектор
     (через свои интенты в vector/intents.py), поэтому фича работает офлайн и не
-    шлёт ничего наружу. Запускаем в фоне, чтобы не подвешивать интерфейс."""
-    finished = QSignal(str)
+    шлёт ничего наружу. Запускаем в фоне, чтобы не подвешивать интерфейс.
+
+    Вместе с текстом считаем ЭМОЦИЮ маскота (морда+поза) по успеваемости и
+    разовым событиям — её рисуем рядом с советом. Картинку (QPixmap) грузим уже
+    в GUI-потоке по эмоции/позе, тут возвращаем только их имена (строки)."""
+    finished = QSignal(str, str, str)     # text, emotion, pose
     error    = QSignal(str)
 
     def __init__(self, stud: dict):
@@ -69,7 +103,19 @@ class VectorTipThread(QThread):
                 parts.append(f"Пропусков накопилось {absc} ч — старайся не "
                              f"пропускать занятия.")
 
-            self.finished.emit("🐯 " + " ".join(parts))
+            #Эмоция маскота: считаем по фактам журнала + разовым событиям.
+            #Любой сбой здесь не должен срывать сам совет — падаем на нейтраль.
+            emotion, pose = "деф", "деф"
+            try:
+                from vector import mascot
+                data, signature = mascot.gather_student_data(self._stud)
+                events = mascot.detect_events(self._stud, signature)
+                state = mascot.resolveMascotState(data, events)
+                emotion, pose = state["emotion"], state["pose"]
+            except Exception:
+                pass
+
+            self.finished.emit(" ".join(parts), emotion, pose)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -124,15 +170,9 @@ class StudentDashboard(QWidget):
 
         self.sidebar.set_active("dash")
 
-        #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
-        try:
-            from vector.widget import VectorPanel, VectorHost
-            self._ensure_vector_session()
-            self.vector_dock = VectorHost(
-                body, VectorPanel(self.vector_session, docked=True))
-            self.vector_dock.mount(side="left")
-        except Exception as _e:
-            print(f"[Vector] панель сбоку (студент): {_e}")
+        #У студента боковой шторки-оверлёя Вектора НЕТ (по требованию): ИИ-помощник
+        #доступен только вкладкой «ИИ Помощник» в столбце «Обучение». Общая сессия
+        #Вектора создаётся лениво самой вкладкой (_build_ai_page → _ensure_vector_session).
 
     def _ensure_vector_session(self):
         """Общая сессия Вектора (одна история для шторки и вкладки «ИИ Помощник»)."""
@@ -171,9 +211,6 @@ class StudentDashboard(QWidget):
         col.addWidget(lbl(f"Группа: {self.cur_stud['g']}", 12, C['text3']))
         hdr.addLayout(col, 1)
         
-        ai_btn = btn("🤖  ИИ Помощник", "blue")
-        ai_btn.clicked.connect(lambda: self._switch("ai"))
-        hdr.addWidget(ai_btn)
         lay.addLayout(hdr)
         lay.addWidget(separator())
 
@@ -205,6 +242,20 @@ class StudentDashboard(QWidget):
         tip_lay.addWidget(self._tip_lbl)
         lay.addWidget(tip)
 
+        #Тело: СЛЕВА адаптивная колонка-тигр (маскот с эмоцией по успеваемости),
+        #СПРАВА — статистика и предметы. Тигр в своём столбце даёт ровный левый край
+        #контента («текст вровень»). Колонки на stretch — макет тянется под окно.
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        dash_body = QHBoxLayout()
+        dash_body.setSpacing(22)
+        self._tip_mascot = _MascotImage()
+        self._tip_mascot_fx = QGraphicsOpacityEffect(self._tip_mascot)
+        self._tip_mascot.setGraphicsEffect(self._tip_mascot_fx)
+        self._tip_mascot_fx.setOpacity(1.0)
+        dash_body.addWidget(self._tip_mascot, 2)
+        content = QVBoxLayout()
+        content.setSpacing(16)
+
         #Статистика
         stats_row = QHBoxLayout()
         stats_row.setSpacing(10)
@@ -218,14 +269,16 @@ class StudentDashboard(QWidget):
             sc = stat_card(label, val, col)
             self._stat_cards[label] = sc
             stats_row.addWidget(sc)
-        lay.addLayout(stats_row)
+        content.addLayout(stats_row)
 
-        #Список предметов
-        lay.addWidget(section_lbl("Мои предметы"))
+        #Список предметов (в правой колонке, справа от тигра)
+        content.addWidget(section_lbl("Мои предметы"))
         self._subj_list_lay = QVBoxLayout()
         self._subj_list_lay.setSpacing(8)
-        lay.addLayout(self._subj_list_lay)
-        lay.addStretch()
+        content.addLayout(self._subj_list_lay)
+        content.addStretch()
+        dash_body.addLayout(content, 5)
+        lay.addLayout(dash_body, 1)
         
         w.setWidget(inner)
         self.pages["dash"] = w
@@ -324,13 +377,36 @@ class StudentDashboard(QWidget):
             self._load_journal()
 
     def _load_tip(self):
-        """Умный совет от Вектора — по фактам из журнала, офлайн и без сети."""
+        """Умный совет от Вектора — по фактам из журнала, офлайн и без сети.
+        Вместе с текстом приходит эмоция маскота (морда+поза) — рисуем картинку."""
         self._tip_lbl.setText("⏳ Загрузка совета...")
         self._tip_thread = VectorTipThread(self.cur_stud)
-        self._tip_thread.finished.connect(self._tip_lbl.setText)
+        self._tip_thread.finished.connect(self._apply_tip)
         self._tip_thread.error.connect(
             lambda _e: self._tip_lbl.setText("Совет сейчас недоступен."))
         self._tip_thread.start()
+
+    def _apply_tip(self, text: str, emotion: str, pose: str):
+        """Показывает текст совета и эмоцию маскота рядом с ним (с плавным fade)."""
+        self._tip_lbl.setText(text)
+        try:
+            from vector import mascot
+            pm = mascot.getMascotFrame(emotion, pose)
+        except Exception:
+            pm = None
+        if pm is None or pm.isNull():
+            self._tip_mascot.clear()
+            return
+        #_MascotImage сам масштабирует кадр под свой размер (адаптив под окно).
+        self._tip_mascot.set_source(pm)
+        #плавная смена эмоции: короткий fade-in (по ТЗ — 200–300 мс, без рывка)
+        from PySide6.QtCore import QPropertyAnimation
+        anim = QPropertyAnimation(self._tip_mascot_fx, b"opacity", self)
+        anim.setDuration(250)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.start()
+        self._tip_anim = anim          # держим ссылку, чтобы GC не убил анимацию
 
     def _build_journal(self):
         """Построить страницу журнала"""
@@ -531,7 +607,8 @@ class StudentDashboard(QWidget):
         self._stats_content.addWidget(c_subj)
 
     def _build_ai_page(self):
-        """Вкладка «ИИ Помощник» — Вектор. Делит ОБЩУЮ сессию со шторкой."""
+        """Вкладка «ИИ Помощник» — Вектор во всю ширину (единственное место Вектора
+        у студента; боковой шторки нет)."""
         try:
             from vector.widget import VectorPanel
             self._ensure_vector_session()
@@ -571,10 +648,6 @@ class StudentDashboard(QWidget):
         try:
             if key == "stats":
                 self._refresh_stats()
-            #Шторка Вектора прячется на вкладке «ИИ», возвращается на остальных.
-            dock = getattr(self, "vector_dock", None)
-            if dock is not None:
-                dock.suspend() if key == "ai" else dock.resume()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)

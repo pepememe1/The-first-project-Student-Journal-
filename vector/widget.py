@@ -1,11 +1,11 @@
 """
 widget.py — Компаньон «Вектор» (PySide6): панель чата + маскот в полный рост.
 
-МАСКОТ — машина состояний, рисующая настоящий арт Арины (полноростовые спрайты
-из папки `emotes/`, см. vector/emotes.py). У каждого спрайта своя ЭМОЦИЯ: пара
-«морда + жест» подбирается по состоянию, настроению ответа и намерению — поэтому
-Вектор живёт всем диапазоном (радуется, грустит-подбадривает, думает, предупреждает,
-удивляется). Подбор — emotes.pick(state, mood, intent).
+МАСКОТ — машина состояний, рисующая арт Арины из папки `emotions/речь/`
+(см. vector/speech.py): 4 полноростовых кадра под состояние ЧАТА —
+говорит / думает / ждёт / молчит. Это простой слой «что делает помощник прямо
+сейчас». Эмоции по успеваемости (морда+жест из emotes/) — отдельный слой и живут
+в советах на дашборде студента (см. vector/mascot.py), здесь не используются.
 
 Состояния машины:
     idle      — Вектор «слушает» (курсор над чатом, ждёт вопрос) → удивлён-насторожен
@@ -24,11 +24,11 @@ widget.py — Компаньон «Вектор» (PySide6): панель чат
     • чат свёрнут/отключён → маскот скрывается вместе с панелью
     • чат перенесён вправо (⇄) → спрайт зеркалится по горизонтали
 
-Если папки `emotes/` нет — работает компактная эмодзи-заглушка 🐯, ничего не падает.
+Если папки `emotions/речь/` нет — работает компактная эмодзи-заглушка 🐯, ничего не падает.
 """
 import os
 
-from . import emotes
+from . import speech
 
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve
@@ -95,7 +95,6 @@ class VectorAvatar(QWidget):
         self._mood = "neutral"
         self._intent = "help"
         self._mirrored = False
-        self._emote = (emotes.DEFAULT_FACE, emotes.DEFAULT_GESTURE)
 
         #Фигура/заглушка занимает весь виджет (двигаем pos для лёгкого покачивания)
         self._face = QLabel(self)
@@ -137,8 +136,10 @@ class VectorAvatar(QWidget):
         return self._state
 
     def set_state(self, state: str, intent: str = None):
-        """Главный вход машины состояний. Спрайт-эмоцию подбирает emotes.pick()
-        по состоянию + текущему настроению + намерению ответа."""
+        """Главный вход машины состояний. Кадр берём из vector/speech.py по
+        состоянию чата (говорит/думает/ждёт/молчит). intent/mood на кадр речи не
+        влияют — это отдельный, более простой слой «что делает помощник в чате»
+        (эмоции по успеваемости живут отдельно, в советах на дашборде)."""
         if state not in (ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY):
             state = ST_IDLE
         self._state = state
@@ -147,7 +148,6 @@ class VectorAvatar(QWidget):
         self._bob.stop()
         self._face.move(0, 0)
 
-        self._emote = emotes.pick(state, self._mood, self._intent)
         if state == ST_THINK:
             self._start_bob(amp=4, dur=460)
         elif state == ST_SPEAK:
@@ -156,7 +156,7 @@ class VectorAvatar(QWidget):
 
     #внутреннее
     def _render(self):
-        pm = emotes.get(self._emote[0], self._emote[1])
+        pm = speech.get(self._state)
         if pm is not None and not pm.isNull():
             if self._mirrored:
                 pm = pm.transformed(QTransform().scale(-1, 1),
@@ -167,7 +167,7 @@ class VectorAvatar(QWidget):
                 Qt.SmoothTransformation))
             self._mouth.setText("")
         else:
-            #эмодзи-заглушка (папки emotes/ нет)
+            #эмодзи-заглушка (папки emotions/речь/ нет)
             self._face.setPixmap(QPixmap())
             self._face.setText(_FALLBACK_FACE[self._state])
             self._mouth.setText(_FALLBACK_MOUTH[self._state])

@@ -50,10 +50,16 @@ def _find_dir() -> str:
     if _dir_cache is not None:
         return _dir_cache
     here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)                            #корень проекта
+    #Поддерживаем две раскладки: историческую `emotes/` и новую `emotions/эмоции/`
+    #(куда Арина кладёт арт рядом с папкой речи). Берём первую существующую.
+    emotions_subdir = os.path.join("emotions", "эмоции")
     candidates = [
         os.path.join(os.getcwd(), EMOTES_DIR),
-        os.path.join(os.path.dirname(here), EMOTES_DIR),   #корень проекта
+        os.path.join(root, EMOTES_DIR),
         os.path.join(here, EMOTES_DIR),
+        os.path.join(os.getcwd(), emotions_subdir),
+        os.path.join(root, emotions_subdir),
     ]
     _dir_cache = next((c for c in candidates if os.path.isdir(c)), "")
     return _dir_cache
