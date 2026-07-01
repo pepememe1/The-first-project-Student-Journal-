@@ -149,9 +149,19 @@ class HeaderBar(QFrame):
         lay.addWidget(logout)
 
     def set_role(self, role_text, user_text):
-        """Установить информацию о роли пользователя"""
+        """Установить информацию о роли пользователя.
+
+        Если имя пользователя пустое или дословно совпадает с ролью (как у админа,
+        чья «личность» — это и есть «Администратор»), вторую подпись не показываем —
+        иначе в углу два раза подряд выводится «Администратор»."""
         self.role_badge.setText(role_text)
-        self.user_lbl.set_full_text(user_text)
+        name = (user_text or "").strip()
+        if not name or name.casefold() == (role_text or "").strip().casefold():
+            self.user_lbl.set_full_text("")
+            self.user_lbl.hide()
+        else:
+            self.user_lbl.set_full_text(name)
+            self.user_lbl.show()
 
     def refresh_theme(self):
         """Перекрасить верхнюю полосу в цвет активной темы. Шапка создаётся один раз
@@ -215,15 +225,101 @@ class HexLogoWidget(QWidget):
 #ANIMATED BACKGROUND
 
 class AnimatedBackground(QWidget):
-    """Чистый статичный институциональный фон ВСГУТУ.
+    """Фон ВСГУТУ. Два режима:
 
-    Мягкий светлый градиент с едва заметной бирюзовой сеткой.
-    Без анимации и частиц — спокойный вид и нулевая нагрузка на CPU.
-    """
+    • статичный (по умолчанию) — мягкий градиент + едва заметная сетка, ноль нагрузки;
+    • анимированный (`animated=True`, используется на экране входа) — поверх градиента
+      плывут частицы и полупрозрачные шестиугольники-«соты» (отсыл к лого GB) плюс
+      мягкие световые пятна за карточкой. Молодёжно-профессиональный вид, а не «госсайт».
 
-    def __init__(self, parent=None):
+    Анимация лёгкая: ~30 fps, ~26 частиц, таймер живёт только пока виджет на экране
+    (showEvent/hideEvent), поэтому CPU практически не нагружается. Все цвета берём из
+    активной палитры темы (C) — фон сам подстраивается под свет/тьму."""
+
+    def __init__(self, parent=None, animated=False):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._animated = animated
+        self._t = 0                      #счётчик кадров (для плавных колебаний)
+        self._particles = []             #летящие точки
+        self._hexes = []                 #дрейфующие шестиугольники
+        self._blobs = []                 #мягкие световые пятна
+        self._timer = None
+        if animated:
+            self._timer = QTimer(self)
+            self._timer.setInterval(33)  #~30 fps
+            self._timer.timeout.connect(self._tick)
+
+    #--- жизненный цикл анимации (бережём CPU: крутим только пока виден) ---
+    def showEvent(self, event):
+        if self._animated and self._timer is not None:
+            self._timer.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        if self._timer is not None:
+            self._timer.stop()
+        super().hideEvent(event)
+
+    def _tick(self):
+        self._t += 1
+        self._advance()
+        self.update()
+
+    def _seed(self):
+        """Создаём частицы/шестиугольники/пятна под текущий размер окна."""
+        W, H = max(self.width(), 1), max(self.height(), 1)
+        self._particles = []
+        for _ in range(30):
+            self._particles.append({
+                "x": random.uniform(0, W), "y": random.uniform(0, H),
+                "r": random.uniform(2.0, 5.0),
+                "vx": random.uniform(-0.25, 0.25), "vy": random.uniform(-0.55, -0.15),
+                "a": random.uniform(0.30, 0.70),         #базовая прозрачность (заметнее)
+                "ph": random.uniform(0, math.tau),       #фаза мерцания
+            })
+        self._hexes = []
+        for _ in range(5):
+            self._hexes.append({
+                "x": random.uniform(0, W), "y": random.uniform(0, H),
+                "R": random.uniform(40, 110),
+                "vx": random.uniform(-0.18, 0.18), "vy": random.uniform(-0.18, 0.18),
+                "ang": random.uniform(0, math.pi), "spin": random.uniform(-0.004, 0.004),
+            })
+        #пара мягких пятен — статичные опорные точки, слегка «дышат» в _advance
+        self._blobs = [
+            {"x": W * 0.30, "y": H * 0.35, "R": max(W, H) * 0.28},
+            {"x": W * 0.72, "y": H * 0.62, "R": max(W, H) * 0.22},
+        ]
+
+    def _advance(self):
+        """Сдвигаем частицы/шестиугольники; на краях заворачиваем (бесшовно)."""
+        W, H = max(self.width(), 1), max(self.height(), 1)
+        if not self._particles:
+            self._seed()
+        for pt in self._particles:
+            pt["x"] += pt["vx"]; pt["y"] += pt["vy"]
+            if pt["y"] < -5: pt["y"] = H + 5; pt["x"] = random.uniform(0, W)
+            if pt["x"] < -5: pt["x"] = W + 5
+            elif pt["x"] > W + 5: pt["x"] = -5
+        for hx in self._hexes:
+            hx["x"] += hx["vx"]; hx["y"] += hx["vy"]; hx["ang"] += hx["spin"]
+            if hx["x"] < -hx["R"]: hx["x"] = W + hx["R"]
+            elif hx["x"] > W + hx["R"]: hx["x"] = -hx["R"]
+            if hx["y"] < -hx["R"]: hx["y"] = H + hx["R"]
+            elif hx["y"] > H + hx["R"]: hx["y"] = -hx["R"]
+
+    def resizeEvent(self, event):
+        if self._animated:
+            self._seed()       #пересоздаём под новый размер
+        super().resizeEvent(event)
+
+    def _hexagon(self, cx, cy, r, ang=0.0) -> QPolygonF:
+        return QPolygonF([
+            QPointF(cx + r * math.cos(ang + math.radians(a)),
+                    cy + r * math.sin(ang + math.radians(a)))
+            for a in range(0, 360, 60)
+        ])
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -237,13 +333,48 @@ class AnimatedBackground(QWidget):
         grad.setColorAt(1.0, QColor(C['bg2']))
         p.fillRect(0, 0, W, H, QBrush(grad))
 
-        #Едва заметная сетка акцентным цветом темы (очень низкая прозрачность).
-        acc = QColor(C['green']); acc.setAlpha(10)
-        p.setPen(QPen(acc, 1))
-        step = 64
-        for x in range(0, W, step):
-            p.drawLine(x, 0, x, H)
-        for y in range(0, H, step):
-            p.drawLine(0, y, W, y)
+        if not self._animated:
+            #Едва заметная сетка акцентным цветом темы (очень низкая прозрачность).
+            acc = QColor(C['green']); acc.setAlpha(10)
+            p.setPen(QPen(acc, 1))
+            step = 64
+            for x in range(0, W, step):
+                p.drawLine(x, 0, x, H)
+            for y in range(0, H, step):
+                p.drawLine(0, y, W, y)
+            p.end()
+            return
+
+        if not self._particles:
+            self._seed()
+
+        #1) Мягкие световые пятна (глубина за карточкой) — радиальные градиенты.
+        from PySide6.QtGui import QRadialGradient
+        for i, b in enumerate(self._blobs):
+            pulse = 0.5 + 0.5 * math.sin(self._t * 0.01 + i)
+            rg = QRadialGradient(b["x"], b["y"], b["R"])
+            base = QColor(C['green2'] if i else C['green'])
+            c0 = QColor(base); c0.setAlpha(int(26 + 14 * pulse))
+            c1 = QColor(base); c1.setAlpha(0)
+            rg.setColorAt(0.0, c0); rg.setColorAt(1.0, c1)
+            p.setPen(Qt.NoPen); p.setBrush(QBrush(rg))
+            p.drawEllipse(QPointF(b["x"], b["y"]), b["R"], b["R"])
+
+        #2) Шестиугольники-«соты» (контур + заливка) — отсыл к лого GB. Заметнее, чем
+        #раньше: толще контур и выше прозрачность, чтобы фигуры читались, а не терялись.
+        for hx in self._hexes:
+            poly = self._hexagon(hx["x"], hx["y"], hx["R"], hx["ang"])
+            edge = QColor(C['green']); edge.setAlpha(70)
+            fill = QColor(C['green']); fill.setAlpha(20)
+            p.setPen(QPen(edge, 2.0)); p.setBrush(QBrush(fill))
+            p.drawPolygon(poly)
+
+        #3) Частицы (мерцают по фазе) — лёгкое «звёздное» поле в цвет акцента.
+        p.setPen(Qt.NoPen)
+        for pt in self._particles:
+            tw = 0.65 + 0.35 * math.sin(self._t * 0.05 + pt["ph"])
+            col = QColor(C['green']); col.setAlpha(int(max(0, min(255, pt["a"] * tw * 255))))
+            p.setBrush(QBrush(col))
+            p.drawEllipse(QPointF(pt["x"], pt["y"]), pt["r"], pt["r"])
 
         p.end()

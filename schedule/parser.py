@@ -64,7 +64,7 @@ def fetch_text(url: str, timeout: int = 20) -> str:
     Кодировку выставляем явно: requests по «Content-Type» иногда угадывает неверно.
     """
     resp = requests.get(url, timeout=timeout, verify=True,
-                        headers={"User-Agent": "GradeBookAI/2.6 schedule-sync"})
+                        headers={"User-Agent": "GradeBookAI/2.7 schedule-sync"})
     resp.raise_for_status()
     resp.encoding = "windows-1251"
     return resp.text

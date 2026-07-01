@@ -19,7 +19,7 @@ import time
 
 from jose import jwt, JWTError
 
-from .config import JWT_SECRET, JWT_ALG, JWT_TTL_MIN
+from .config import JWT_SECRET, JWT_ALG, JWT_TTL_MIN, JWT_REFRESH_TTL_MIN
 
 _SHA_ITERS = 200_000
 _HYBRID_TAG = "hybrid_sha512_gost512"
@@ -93,11 +93,31 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def create_token(subject: str, role: str) -> str:
-    """Подписанный JWT с логином (sub) и ролью; истекает через JWT_TTL_MIN минут."""
+def new_jti() -> str:
+    """Уникальный идентификатор токена (для чёрного списка/отзыва и видимости сессий)."""
+    return secrets.token_urlsafe(16)
+
+
+def create_token_full(subject: str, role: str, typ: str = "access",
+                      ttl_min: int = None, jti: str = None) -> tuple:
+    """Подписанный JWT с jti и типом. Возвращает (token, jti, exp_unix).
+
+    typ: 'access' (короткий, для запросов) | 'refresh' (длинный, для тихого обновления).
+    jti кладём в payload, чтобы сервер мог отозвать конкретный токен (см. AuthSession)."""
     now = int(time.time())
-    payload = {"sub": subject, "role": role, "iat": now, "exp": now + JWT_TTL_MIN * 60}
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    if ttl_min is None:
+        ttl_min = JWT_TTL_MIN if typ == "access" else JWT_REFRESH_TTL_MIN
+    jti = jti or new_jti()
+    exp = now + ttl_min * 60
+    payload = {"sub": subject, "role": role, "typ": typ,
+               "jti": jti, "iat": now, "exp": exp}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG), jti, exp
+
+
+def create_token(subject: str, role: str) -> str:
+    """Совместимость: короткий access-токен (с jti). Возвращает только строку токена."""
+    token, _jti, _exp = create_token_full(subject, role, "access")
+    return token
 
 
 def decode_token(token: str) -> dict:

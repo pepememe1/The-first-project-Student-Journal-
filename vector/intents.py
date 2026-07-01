@@ -333,7 +333,11 @@ def intent_groups(scope: VectorScope, asked_name: str = "") -> Facts:
         return Facts("groups", f"Твоя группа — {g}. Списком всех групп колледжа "
                                f"распоряжается администрация.")
     try:
-        groups = _store().get_groups() or []
+        #get_groups() возвращает СЛОВАРИ {"name":..,"subjects":[..]} — раньше их пытались
+        #склеить через join как строки, отсюда падало «expected str instance, dict found».
+        #Берём именно имена групп.
+        groups = [g.get("name", "") for g in (_store().get_groups() or [])
+                  if isinstance(g, dict) and g.get("name")]
     except Exception:
         groups = []
     if scope.role == "teacher":

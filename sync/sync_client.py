@@ -13,12 +13,32 @@ Offline-first: программа ВСЕГДА работает на локал�
 продолжает работать офлайн. Поэтому методы кидают исключения, а вызывающий код
 (фоновый синкер) ловит их и повторяет позже.
 """
+import base64
+import json
 import os
 import re
+import time
 
 import requests
 
 DEFAULT_TIMEOUT = 10
+
+
+def is_token_expired(token: str, skew_sec: int = 30) -> bool:
+    """True, если JWT просрочен (или не разобрался). Разбираем payload БЕЗ проверки
+    подписи — это обычный base64url-JSON, а поле exp — абсолютная метка времени сервера.
+
+    Зачем: не дёргать сеть заведомо мёртвым токеном и заранее (за skew_sec до exp)
+    обновить его через refresh. Подпись здесь проверять не нужно — решение «идти в сеть
+    или обновиться» не связано с доверием, а exp сервер всё равно перепроверит сам.
+    Офлайн-время тоже учитывается: exp абсолютный, «заморозить» его нельзя."""
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)          #добить паддинг base64
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+        return time.time() > (payload.get("exp", 0) - skew_sec)
+    except Exception:
+        return True
 
 
 def _verify_setting():
@@ -44,9 +64,10 @@ def _prefer_ipv4(url: str) -> str:
 
 
 class SyncClient:
-    def __init__(self, base_url: str, token: str = None):
+    def __init__(self, base_url: str, token: str = None, refresh_token: str = None):
         self.base_url = _prefer_ipv4((base_url or "").rstrip("/"))
         self.token = token
+        self.refresh_token = refresh_token or ""
         #verify (проверка TLS) и заголовки общие для всех запросов — держим в сессии.
         self._verify = _verify_setting()
         self._warn_if_insecure()
@@ -98,12 +119,13 @@ class SyncClient:
             return False
 
     def login(self, login: str, password: str) -> dict:
-        """Возвращает {access_token, role, name} и запоминает токен."""
+        """Возвращает {access_token, refresh_token, role, name} и запоминает оба токена."""
         r = self._req("POST", "/auth/login",
                       json={"login": login, "password": password})
         r.raise_for_status()
         data = r.json()
         self.token = data.get("access_token")
+        self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
 
     def bootstrap_admin(self, login: str, password: str,
@@ -115,7 +137,33 @@ class SyncClient:
         r.raise_for_status()
         data = r.json()
         self.token = data.get("access_token")
+        self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
+
+    def refresh(self, refresh_token: str = None) -> dict:
+        """Тихо обновляет access по refresh-токену (/auth/refresh). Обновляет self.token
+        и возвращает данные {access_token, refresh_token, role, name}. Бросает HTTPError,
+        если refresh недействителен/отозван — тогда вызывающий делает полный re-login."""
+        rt = (refresh_token or self.refresh_token or "").strip()
+        if not rt:
+            raise ValueError("нет refresh-токена для обновления")
+        r = self._req("POST", "/auth/refresh", json={"refresh_token": rt})
+        r.raise_for_status()
+        data = r.json()
+        self.token = data.get("access_token") or self.token
+        self.refresh_token = data.get("refresh_token", "") or self.refresh_token
+        return data
+
+    def logout(self) -> dict:
+        """Безопасный выход: просит сервер ОТОЗВАТЬ текущий токен (чёрный список), чтобы
+        украденный до выхода токен нельзя было использовать. Best-effort (ошибку глушим)."""
+        try:
+            r = self._req("POST", "/auth/logout", timeout=5)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return {"revoked": 0}
 
     def pull(self, since: str = "") -> dict:
         """Изменения позже метки since. Возвращает {server_time, changes}."""
@@ -175,6 +223,21 @@ class SyncClient:
     def reject_device(self, device_id: str) -> dict:
         """Отклонить запрос. {ok}."""
         r = self._req("POST", "/connect/reject", json={"device_id": device_id}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    #Управление сессиями/токенами (на сервере — require_admin)
+    def list_sessions(self, active: bool = True) -> dict:
+        """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""
+        r = self._req("GET", "/admin/sessions",
+                      params={"active": "true" if active else "false"}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+
+    def revoke_session(self, jti: str = "", login: str = "") -> dict:
+        """Отозвать сессию по jti (конкретный токен) ИЛИ по логину (все сессии юзера). {revoked}."""
+        r = self._req("POST", "/admin/sessions/revoke",
+                      json={"jti": jti or "", "login": login or ""}, timeout=5)
         r.raise_for_status()
         return r.json()
 

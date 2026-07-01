@@ -6,14 +6,15 @@ Offline-first: пользователей заводит админ в деск�
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import ensure_device_allowed
-from ..models import User
-from ..schemas import LoginIn, TokenOut, BootstrapIn
-from ..security import hash_password, verify_password, create_token
+from ..deps import ensure_device_allowed, get_current_user
+from ..models import User, AuthSession
+from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
+from ..security import (hash_password, verify_password, create_token_full,
+                        decode_token)
 from .. import throttle, events
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -23,6 +24,35 @@ def _now() -> str:
     #UTC + смещение (+00:00) — единый формат меток с клиентом, чтобы LWW-сравнение
     #строк было корректным независимо от часового пояса.
     return datetime.now(timezone.utc).isoformat()
+
+
+def _record_session(db: Session, jti: str, login: str, role: str, kind: str,
+                    exp: int, request: Request, pair_jti: str = ""):
+    """Сохраняет выданный токен в AuthSession (для отзыва/refresh/видимости сессий)."""
+    dev = ip = ""
+    try:
+        if request is not None:
+            dev = request.headers.get("X-Device-Id", "") or ""
+            ip = throttle.client_ip(request)
+    except Exception:
+        pass
+    db.add(AuthSession(jti=jti, login=login, role=role, kind=kind, device_id=dev,
+                       ip=ip, issued_at=_now(), expires_at=int(exp), revoked=False,
+                       pair_jti=pair_jti))
+
+
+def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
+    """Выдаёт пару (access + refresh), записывает обе сессии и коммитит.
+
+    access — короткий (для запросов), refresh — длинный (тихое обновление). Связаны
+    через pair_jti, чтобы logout/отзыв гасил оба разом."""
+    access, a_jti, a_exp = create_token_full(user.login, user.role, "access")
+    refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh")
+    _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti)
+    _record_session(db, r_jti, user.login, user.role, "refresh", r_exp, request, a_jti)
+    db.commit()
+    name = user.full_name or f"{user.surname} {user.name}".strip()
+    return TokenOut(access_token=access, refresh_token=refresh, role=user.role, name=name)
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
@@ -50,8 +80,7 @@ def bootstrap_admin(body: BootstrapIn, request: Request, db: Session = Depends(g
     )
     db.add(u)
     db.commit()
-    return TokenOut(access_token=create_token(u.login, u.role),
-                    role=u.role, name=u.full_name)
+    return _issue_token_pair(db, u, request)
 
 
 @router.post("/login", response_model=TokenOut)
@@ -90,5 +119,69 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
 
     throttle.register_success(ip, login_str)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
+    return _issue_token_pair(db, u, request)
+
+
+@router.post("/refresh", response_model=TokenOut)
+def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
+    """Тихое обновление сессии: меняем валидный refresh-токен на НОВЫЙ access.
+
+    Сценарий 152-ФЗ/удобства: короткий access протух (например, за время офлайна), но
+    refresh ещё жив — клиент в фоне дёргает этот эндпоинт и продолжает работу, НЕ
+    выкидывая пользователя на экран логина. Барьер устройства проверяем и здесь."""
+    ensure_device_allowed(request, db)
+    payload = decode_token(body.refresh_token)
+    if not payload or payload.get("typ") != "refresh":
+        raise HTTPException(status_code=401, detail="Недействительный refresh-токен")
+    jti = payload.get("jti", "")
+    sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+    if sess is None or sess.revoked:
+        #refresh отозван (logout/блокировка админом) или неизвестен — обновлять нечего
+        raise HTTPException(status_code=401, detail="Сессия завершена или отозвана")
+    login_str = payload.get("sub", "")
+    u = db.query(User).filter(
+        User.login == login_str, User.deleted == False  # noqa: E712
+    ).first()
+    if not u:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    #Новый access, привязанный к ТОМУ ЖЕ refresh (refresh не ротируем — он живёт до
+    #своего exp или явного отзыва). Прежний access этой пары гасим.
+    if sess.pair_jti:
+        old = db.query(AuthSession).filter(AuthSession.jti == sess.pair_jti).first()
+        if old is not None:
+            old.revoked = True
+    access, a_jti, a_exp = create_token_full(u.login, u.role, "access")
+    _record_session(db, a_jti, u.login, u.role, "access", a_exp, request, jti)
+    sess.pair_jti = a_jti
+    db.commit()
     name = u.full_name or f"{u.surname} {u.name}".strip()
-    return TokenOut(access_token=create_token(u.login, u.role), role=u.role, name=name)
+    #refresh возвращаем тот же — клиент продолжает им пользоваться.
+    return TokenOut(access_token=access, refresh_token=body.refresh_token,
+                    role=u.role, name=name)
+
+
+@router.post("/logout")
+def logout(request: Request, authorization: str = Header(None),
+           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Безопасный выход: сервер ОТЗЫВАЕТ текущий access и связанный refresh.
+
+    Зачем серверу «забывать» токен: если злоумышленник успел скопировать токен из
+    памяти ПК ДО нажатия «Выйти», без отзыва он пользовался бы им до конца срока. После
+    logout сервер мгновенно перестаёт его принимать (чёрный список AuthSession)."""
+    revoked = 0
+    payload = decode_token((authorization or "").split(" ", 1)[-1].strip())
+    jti = (payload or {}).get("jti", "")
+    if jti:
+        sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+        if sess is not None:
+            sess.revoked = True
+            revoked += 1
+            if sess.pair_jti:
+                pair = db.query(AuthSession).filter(AuthSession.jti == sess.pair_jti).first()
+                if pair is not None and not pair.revoked:
+                    pair.revoked = True
+                    revoked += 1
+        db.commit()
+        events.record("info", "logout", "выход (токен отозван)", user.login,
+                      throttle.client_ip(request))
+    return {"revoked": revoked}

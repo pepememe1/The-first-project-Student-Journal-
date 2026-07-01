@@ -92,6 +92,7 @@ class AdminDashboard(QWidget):
             ("api",   "cpu",      "Настройки ИИ"),
             ("pg",    "globe",    "Сервер"),
             ("requests", "link",  "Запросы на подключение"),
+            ("sessions", "shield", "Сессии и доступ"),
             ("theme", "palette",  "Оформление"),
             ("mon",   "activity", "Мониторинг"),
             ("ai",    "bot",      "ИИ Помощник"),
@@ -112,6 +113,7 @@ class AdminDashboard(QWidget):
         self._build_api()
         self._build_pg()
         self._build_requests()
+        self._build_sessions()
         self._build_theme()
         self._build_mon()
         self._build_ai()
@@ -1140,9 +1142,12 @@ class AdminDashboard(QWidget):
                     pass
                 mark_host()
                 set_host_autostart(True)
-                local_url = f"http://127.0.0.1:{port}"
-                set_api_url(local_url)
-                self._api_url.setText(local_url)
+                #Адрес сервера берём из launch(): для serveo это ПУБЛИЧНАЯ ссылка
+                #(serveo.net), для прямого доступа — локальный http://127.0.0.1:port.
+                #Раньше тут жёстко вписывался localhost, из-за чего поле адреса не
+                #показывало свежий serveo-адрес после запуска.
+                set_api_url(url)
+                self._api_url.setText(url)
                 #Будим фоновый синк: на хост-ПК он стартовал при входе ещё без адреса
                 #и idle-ждёт. Теперь адрес есть — пусть сразу залогинится на сервер,
                 #отдаст пользователей (иначе препод/студент получат 401) и подтянет
@@ -1311,11 +1316,16 @@ class AdminDashboard(QWidget):
         inner = QWidget(); lay = QVBoxLayout(inner)
         lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
         lay.addWidget(title_lbl("Запросы на подключение"))
-        lay.addWidget(lbl("Новые компьютеры сначала запрашивают доступ к серверу. "
-                          "Примите запрос — программа покажет 6-значный код; продиктуйте "
-                          "его пользователю (по телефону). Отклонить можно на любом шаге. "
-                          "Список обновляется автоматически, пока открыта эта вкладка.",
-                          11, C['text3']))
+        #ВАЖНО: lbl() по умолчанию НЕ переносит текст, поэтому длинное описание
+        #раздувало внутренний виджет шире области прокрутки и уезжало за правый край
+        #экрана. Включаем перенос явно — теперь текст всегда вписывается в ширину окна.
+        req_hint = lbl("Новые компьютеры сначала запрашивают доступ к серверу. "
+                       "Примите запрос — программа покажет 6-значный код; продиктуйте "
+                       "его пользователю (по телефону). Отклонить можно на любом шаге. "
+                       "Список обновляется автоматически, пока открыта эта вкладка.",
+                       11, C['text3'])
+        req_hint.setWordWrap(True)
+        lay.addWidget(req_hint)
 
         rc = card(); rl = QVBoxLayout(rc); rl.setContentsMargins(18, 16, 18, 16); rl.setSpacing(8)
         self._req_title = section_lbl("Ожидают подтверждения")
@@ -1446,6 +1456,139 @@ class AdminDashboard(QWidget):
 
         def _err(e):
             QMessageBox.warning(self, "Сервер", f"Не удалось отклонить запрос: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    #Сессии и доступ: активные токены + отзыв (чёрный список, данные с /admin/sessions)
+    def _build_sessions(self):
+        w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
+        inner = QWidget(); lay = QVBoxLayout(inner)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
+        lay.addWidget(title_lbl("Сессии и доступ"))
+        hint = lbl("Здесь видно, у кого сейчас есть доступ к серверу (выданные токены) и "
+                   "с какого устройства. «Отозвать» мгновенно закрывает доступ по токену — "
+                   "нужно при увольнении, компрометации учётки, смене группы или роли. "
+                   "Токен сам сгорает через 5 часов; refresh-токен продлевает работу тихо, "
+                   "но тоже отзывается здесь.", 11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+
+        rc = card(); rl = QVBoxLayout(rc); rl.setContentsMargins(18, 16, 18, 16); rl.setSpacing(8)
+        self._sess_title = section_lbl("Активные сессии")
+        rl.addWidget(self._sess_title)
+        self._sess_box = QVBoxLayout(); self._sess_box.setSpacing(8)
+        rl.addLayout(self._sess_box)
+        self._sess_status = lbl("", 11, C['text3']); self._sess_status.setWordWrap(True)
+        rl.addWidget(self._sess_status)
+        lay.addWidget(rc)
+        lay.addStretch()
+        w.setWidget(inner)
+        self.pages["sessions"] = w; self.stack.addWidget(w)
+
+        self._sess_timer = QTimer(self)
+        self._sess_timer.setInterval(5000)              #раз в 5 секунд
+        self._sess_timer.timeout.connect(self._poll_sessions)
+
+    def _start_sessions(self):
+        self._sess_status.setText("⏳ Запрашиваю список сессий...")
+        self._poll_sessions()
+        self._sess_timer.start()
+
+    def _stop_sessions(self):
+        if getattr(self, "_sess_timer", None) is not None:
+            self._sess_timer.stop()
+
+    def _poll_sessions(self):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            self._sess_status.setText("⏹ Сервер не подключён. Запустите сервер во "
+                                      "вкладке «Сервер» и войдите.")
+            self._clear_sess_rows()
+            return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).list_sessions(active=True)
+
+        def _apply(data):
+            self._render_sessions(data)
+            self._sess_status.setText("")
+
+        def _err(e):
+            self._sess_status.setText(f"⚠️ Не удалось получить сессии: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _clear_sess_rows(self):
+        while self._sess_box.count():
+            it = self._sess_box.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+    def _render_sessions(self, data):
+        rows = (data or {}).get("sessions", [])
+        #В таблице сессий пара access+refresh на один вход — для админа группируем по
+        #логину, чтобы список был компактным (одна строка = один пользователь/устройство).
+        by_login = {}
+        for s in rows:
+            key = (s.get("login", ""), s.get("device_id", ""))
+            cur = by_login.get(key)
+            #держим строку с наибольшим сроком (обычно refresh) для показа «до когда»
+            if cur is None or s.get("expires_in_sec", 0) > cur.get("expires_in_sec", 0):
+                by_login[key] = s
+        uniq = list(by_login.values())
+        self._sess_title.setText(f"Активные сессии: {len(uniq)}")
+        self._clear_sess_rows()
+        if not uniq:
+            self._sess_box.addWidget(lbl("— активных сессий нет —", 12, C['text3']))
+            return
+        for s in sorted(uniq, key=lambda x: (x.get("role", ""), x.get("login", ""))):
+            self._sess_box.addWidget(self._make_session_row(s))
+
+    def _make_session_row(self, s: dict) -> QFrame:
+        """Строка сессии: роль · логин · устройство · сколько осталось + «Отозвать»."""
+        login = s.get("login", "") or "—"
+        role = {"admin": "Администратор", "teacher": "Преподаватель",
+                "student": "Студент"}.get(s.get("role", ""), s.get("role", ""))
+        dev = (s.get("device_id", "") or "—")
+        dev_short = dev[:8] + "…" if len(dev) > 9 else dev
+        ip = s.get("ip", "") or "—"
+        mins = max(0, int(s.get("expires_in_sec", 0)) // 60)
+        left = f"{mins // 60} ч {mins % 60} мин" if mins >= 60 else f"{mins} мин"
+        f = QFrame(); f.setObjectName("card")
+        h = QHBoxLayout(f); h.setContentsMargins(14, 10, 14, 10); h.setSpacing(10)
+        info = (f"👤 {login}  ·  {role}\n💻 {dev_short}  ·  IP: {ip}  ·  доступ ещё ~{left}")
+        info_lbl = lbl(info, 12, C['text']); info_lbl.setWordWrap(True)
+        h.addWidget(info_lbl, 1)
+        b_rev = btn("Отозвать", "red", icon_name="x")
+        b_rev.clicked.connect(lambda _=0, lg=s.get("login", ""): self._revoke_login(lg))
+        h.addWidget(b_rev)
+        return f
+
+    def _revoke_login(self, login: str):
+        if not login:
+            return
+        if QMessageBox.question(
+                self, "Отзыв доступа",
+                f"Отозвать ВСЕ токены пользователя «{login}»?\n\nОн потеряет доступ к "
+                "серверу немедленно и должен будет войти заново.") != QMessageBox.Yes:
+            return
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).revoke_session(login=login)
+
+        def _apply(res):
+            n = (res or {}).get("revoked", 0)
+            QMessageBox.information(self, "Готово", f"Отозвано токенов: {n}.")
+            self._poll_sessions()
+
+        def _err(e):
+            QMessageBox.warning(self, "Сервер", f"Не удалось отозвать доступ: {e}")
 
         self._run_bg(_do, _apply, _err)
 
@@ -1615,6 +1758,7 @@ class AdminDashboard(QWidget):
         try:
             self._stop_monitor()      #уходя с любой вкладки — гасим опрос мониторинга
             self._stop_requests()     #и опрос запросов на подключение
+            self._stop_sessions()     #и опрос активных сессий
             if key == "dash":     self._refresh_dash()
             if key == "teachers": self._render_teachers()
             if key == "students": self._refresh_students_combo(); self._render_students()
@@ -1623,6 +1767,7 @@ class AdminDashboard(QWidget):
             if key == "api":      self._refresh_vector_cfg()
             if key == "pg":       self._refresh_server_status(); self._refresh_compliance()
             if key == "requests": self._start_requests()
+            if key == "sessions": self._start_sessions()
             if key == "mon":      self._start_monitor()
             #Шторка Вектора прячется на вкладке «ИИ», возвращается на остальных.
             dock = getattr(self, "vector_dock", None)

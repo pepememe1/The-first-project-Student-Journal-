@@ -550,11 +550,13 @@ class MainAppWindow(QMainWindow):
         if not was_host:
             self._client_logout_reset(login)
 
-        #«Выход»: убираем сохранённую сессию и токен — следующий старт покажет вход.
+        #«Выход»: убираем сохранённую сессию и ОБА токена — следующий старт покажет вход.
         try:
+            from app_settings import clear_saved_refresh_token
             clear_saved_session()
             if login:
                 clear_saved_token()
+                clear_saved_refresh_token()
         except Exception as e:
             print(f"[logout] очистка сессии: {e}")
 
@@ -566,6 +568,21 @@ class MainAppWindow(QMainWindow):
 
         self._stack.setCurrentWidget(self._login)
         self._header.hide()
+
+        #Тему вошедшего пользователя сбрасываем СРАЗУ на выходе — на дефолт/тему вуза.
+        #Раньше личная тема оставалась на экране входа и «отваливалась» лишь позже, на
+        #тике расписания тем (отсюда жалоба «тема пропадает через некоторое время»).
+        try:
+            import theme_service, styles
+            theme_service.apply_startup_default()
+            self.setStyleSheet(styles.APP_STYLE)
+            self._header.refresh_theme()
+            self._refresh_applied_mode()
+            if hasattr(self._login, "refresh_theme"):
+                self._login.refresh_theme()
+            self._login.update()      #перерисовать живой фон входа в новой палитре
+        except Exception as e:
+            print(f"[logout] сброс темы пропущен: {e}")
 
         #Обновить базу учителей
         self.teachers_db, _ = parse_logins()
@@ -592,6 +609,9 @@ class MainAppWindow(QMainWindow):
                 import sync_engine
                 from data_store import reset_synced_local_data
                 c.push(sync_engine.collect_local())   #flush правок этой сессии на сервер
+                #Безопасный выход: просим сервер ОТОЗВАТЬ токен (чёрный список), чтобы
+                #перехваченный до выхода токен нельзя было использовать до истечения срока.
+                c.logout()
                 reset_synced_local_data()             #чистый старт для следующего юзера
             finally:
                 QApplication.restoreOverrideCursor()

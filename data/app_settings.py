@@ -272,6 +272,41 @@ def clear_saved_token() -> bool:
         return False
 
 
+#Refresh-токен: долгоживущий, им ТИХО обновляют короткий access, не выкидывая
+#пользователя на логин (например, если access протух за время офлайна). Даёт доступ к
+#API так же, как access, поэтому хранится ТОЧНО ТАК ЖЕ — зашифрованным (DPAPI/Fernet)
+#и привязанным к логину; сервер проверяет его подпись, срок и чёрный список. НЕ логируем.
+_REFRESH_TOKEN_KEY = "api_refresh_token"
+
+
+def get_saved_refresh_token(login: str) -> str:
+    """Сохранённый refresh-токен для ЭТОГО логина ('' — нет либо принадлежит другому)."""
+    try:
+        from data_store import local_get
+        rec = local_get(_REFRESH_TOKEN_KEY, None) or {}
+        if isinstance(rec, dict) and rec.get("login") == (login or ""):
+            return rec.get("token", "") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def set_saved_refresh_token(login: str, token: str) -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_REFRESH_TOKEN_KEY, {"login": login or "", "token": token or ""})
+    except Exception:
+        return False
+
+
+def clear_saved_refresh_token() -> bool:
+    try:
+        from data_store import local_set
+        return local_set(_REFRESH_TOKEN_KEY, {})
+    except Exception:
+        return False
+
+
 #Сохранённая СЕССИЯ для персистентного входа: чтобы после закрытия программы при
 #следующем старте сразу попасть в свой аккаунт, не вводя логин/пароль заново. Храним
 #только логин и роль (НЕ пароль) в локальном ключе — доступ к серверу держит сохранённый
@@ -356,7 +391,7 @@ def set_device_connected(value: bool = True) -> bool:
 def dev_tunnel_enabled() -> bool:
     """Историческая «ручка»: показывать ли serveo как dev/demo-инструмент.
 
-    С версии 2.5.1 serveo вынесен в обычный выбор типа сервера в админке (с явным
+    Сейчас serveo вынесен в обычный выбор типа сервера в админке (с явным
     предупреждением про 152-ФЗ), поэтому отдельный флаг больше не прячет UI. Функция
     оставлена для совместимости и для dev-сценариев, где он ещё может опрашиваться.
     Включается переменной окружения GRADEBOOK_ENABLE_TUNNEL=1."""
