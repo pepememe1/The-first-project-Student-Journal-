@@ -24,6 +24,30 @@ def ensure_device_allowed(request: Request, db: Session):
                    "и введите код, который выдаст администратор.")
 
 
+def is_web_client(request: Request) -> bool:
+    """Пришёл ли запрос из БРАУЗЕРА (веб-версия), а не из десктоп-проги.
+
+    Веб-клиент помечает себя заголовком `X-Client: web` (см. фронтенд api/client.js).
+    Спуфинг этого заголовка максимум даёт доступ уровня СТУДЕНТА (для персонала барьер
+    остаётся, см. device_barrier_applies), а студенческий веб-доступ и так открыт —
+    поэтому подмена ничего сверх политики не открывает."""
+    if request is None:
+        return False
+    return (request.headers.get("x-client", "") or "").strip().lower() == "web"
+
+
+def device_barrier_applies(request: Request, role: str) -> bool:
+    """Нужно ли для этого запроса проверять одобрение устройства.
+
+    Политика веба (согласована с заказчиком): СТУДЕНТ в браузере входит открыто
+    (защита — креды + анти-брутфорс + HTTPS), а ПЕРСОНАЛ (teacher/admin) проходит
+    веб-подтверждение устройства — как в десктопе. ДЕСКТОП и любой не-веб клиент —
+    жёсткий барьер как прежде (инвариант §6 не ослаблен для них)."""
+    if is_web_client(request):
+        return role in ("teacher", "admin")
+    return True
+
+
 def get_current_user(authorization: str = Header(None),
                      request: Request = None,
                      db: Session = Depends(get_db)) -> User:
@@ -49,8 +73,10 @@ def get_current_user(authorization: str = Header(None),
     if not user:
         raise HTTPException(status_code=401, detail="Пользователь не найден")
     #Даже с валидным токеном доступ закрыт, если устройство не подтверждено: токен мог
-    #быть выдан до отзыва доступа или скопирован на чужой ПК.
-    ensure_device_allowed(request, db)
+    #быть выдан до отзыва доступа или скопирован на чужой ПК. Для веб-студента барьер
+    #не применяется (открытый веб-доступ), для персонала и десктопа — применяется.
+    if device_barrier_applies(request, user.role):
+        ensure_device_allowed(request, db)
     #Отмечаем активность для админского «кто онлайн». Это единая точка — через
     #get_current_user проходит КАЖДЫЙ авторизованный запрос (pull/push/admin).
     #Не критично для запроса, поэтому под try: мониторинг не должен ронять API.
