@@ -6,14 +6,154 @@ auth_pages.py — Страница аутентификации (LoginPage).
 ещё не задан, форма предложит его создать (см. _prompt_admin_setup).
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint, QPointF, QPropertyAnimation
+from PySide6.QtGui import (
+    QPainter, QColor, QPen, QBrush, QPolygonF, QPainterPath
+)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QMessageBox, QFrame, QInputDialog
+    QMessageBox, QFrame, QInputDialog, QGraphicsOpacityEffect
 )
 
 from styles import C
 from ui_components import HexLogoWidget, AnimatedBackground
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """hex (#rrggbb) → 'rgba(r,g,b,A)' для QSS, где A — целое 0–255 (Qt так разбирает
+    надёжнее, чем дробную долю). alpha задаём как 0.0–1.0."""
+    a = max(0, min(255, int(round(alpha * 255))))
+    try:
+        h = (hex_color or "#ffffff").lstrip("#")
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{a})"
+    except Exception:
+        return f"rgba(255,255,255,{a})"
+
+
+#Облачко-подсказка и интерактивный маскот на экране входа
+
+class _SpeechBubble(QWidget):
+    """Облачко с советом НАД головой Вектора на экране входа.
+
+    Скруглённый прямоугольник с «хвостиком» снизу (указывает вниз, на голову маскота)
+    и текстом совета внутри. Ширина фиксированная — текст переносится и не обрезается.
+    Появляется/прячется плавным fade; мышь не перехватываем."""
+    TAIL = 12                 #высота хвостика снизу
+    WIDTH = 300               #фиксированная ширина (чтобы текст всегда влезал, не резался)
+    MARGIN = 16               #левый/правый внутренний отступ
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFixedWidth(self.WIDTH)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(self.MARGIN, 12, self.MARGIN, 12 + self.TAIL)
+        lay.setSpacing(4)
+        self._title = QLabel("💡 Совет Вектора")
+        self._title.setStyleSheet(f"color:{C['green']};font-size:13px;font-weight:800;")
+        self._text = QLabel("")
+        self._text.setWordWrap(True)
+        #ширину текста фиксируем явно — тогда перенос и высота считаются точно
+        self._text.setFixedWidth(self.WIDTH - 2 * self.MARGIN)
+        #крупнее и контрастнее (line-height в Qt QSS не поддерживается — не используем)
+        self._text.setStyleSheet(f"color:{C['text']};font-size:13px;font-weight:600;")
+        lay.addWidget(self._title)
+        lay.addWidget(self._text)
+        self._fx = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._fx)
+        self._fx.setOpacity(0.0)
+        self._anim = QPropertyAnimation(self._fx, b"opacity", self)
+        self._anim.setDuration(180)
+        #один слот на всё время жизни (без connect/disconnect на каждый показ —
+        #иначе PySide шумит RuntimeWarning «Failed to disconnect»). Прячем виджет,
+        #только когда анимация довела прозрачность до нуля.
+        self._anim.finished.connect(self._on_anim_done)
+        self.hide()
+
+    def _on_anim_done(self):
+        if self._fx.opacity() <= 0.02:
+            self.hide()
+
+    def set_tip(self, text: str):
+        self._text.setText(text or "")
+        #высоту считаем НАДЁЖНО через heightForWidth текста (sizeHint у wrap-лейбла врёт),
+        #иначе длинные советы обрезались. Складываем поля + заголовок + сам текст + хвостик.
+        inner_w = self.WIDTH - 2 * self.MARGIN
+        th = self._text.heightForWidth(inner_w)
+        if th <= 0:
+            from PySide6.QtGui import QFontMetrics
+            fm = QFontMetrics(self._text.font())
+            th = fm.boundingRect(0, 0, inner_w, 10000, Qt.TextWordWrap, text or "").height()
+        title_h = self._title.sizeHint().height()
+        self.setFixedHeight(12 + title_h + 4 + th + 12 + self.TAIL)
+
+    def fade_in(self):
+        self.show(); self.raise_()
+        self._anim.stop()
+        self._anim.setStartValue(self._fx.opacity())
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+
+    def fade_out(self):
+        self._anim.stop()
+        self._anim.setStartValue(self._fx.opacity())
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        #тело облачка занимает всё, кроме нижней полоски под хвостик
+        r = self.rect().adjusted(1, 1, -1, -1 - self.TAIL)
+        path = QPainterPath()
+        path.addRoundedRect(r.x(), r.y(), r.width(), r.height(), 14, 14)
+        #хвостик СНИЗУ по центру — указывает вниз, на голову Вектора
+        cx = self.width() // 2
+        by = r.y() + r.height()
+        tail = QPolygonF([QPointF(cx - 10, by),
+                          QPointF(cx, by + self.TAIL),
+                          QPointF(cx + 10, by)])
+        path.addPolygon(tail)
+        p.setPen(QPen(QColor(C['border2']), 1))
+        p.setBrush(QBrush(QColor(C['card'])))
+        p.drawPath(path.simplified())
+        p.end()
+
+
+class _LoginMascot(QLabel):
+    """Маскот на экране входа. Спокойная поза по умолчанию; при наведении мышки —
+    «думающая» поза и облачко с советом (логику показа облачка ведёт LoginPage через
+    переданные колбэки on_enter / on_leave)."""
+
+    def __init__(self, default_pm, think_pm, on_enter, on_leave, parent=None):
+        super().__init__(parent)
+        self._default = default_pm
+        self._think = think_pm
+        self._on_enter = on_enter
+        self._on_leave = on_leave
+        self.setPixmap(default_pm)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("background:transparent;")
+
+    def enterEvent(self, event):
+        if self._think is not None and not self._think.isNull():
+            self.setPixmap(self._think)   #«задумался» — пока курсор над Вектором
+        try:
+            self._on_enter()
+        except Exception:
+            pass
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setPixmap(self._default)
+        try:
+            self._on_leave()
+        except Exception:
+            pass
+        super().leaveEvent(event)
 
 
 def open_site_login(parent=None) -> bool:
@@ -302,9 +442,17 @@ class LoginPage(QWidget):
         self.teachers_db   = teachers_db
         self._role         = "student"
 
-        #Animated background
-        self._bg = AnimatedBackground(self)
+        #Живой фон: частицы + «соты» + мягкие пятна (только на экране входа).
+        self._bg = AnimatedBackground(self, animated=True)
         self._bg.lower()
+
+        #Советы Вектора (для облачка при наведении) — берём из общего источника.
+        try:
+            from vector.faq import LOGIN_TIPS
+            self._tips = list(LOGIN_TIPS)
+        except Exception:
+            self._tips = ["Логин и пароль выдаёт администратор колледжа."]
+        self._tip_idx = 0
 
         #Main layout
         outer = QVBoxLayout(self)
@@ -326,6 +474,7 @@ class LoginPage(QWidget):
 
         #Card frame
         c = QFrame()
+        self._login_card = c          #ссылка нужна, чтобы облачко совета не залезало на карточку
         c.setObjectName("loginCard")
         c.setFixedWidth(420)
         c.setStyleSheet(
@@ -431,30 +580,131 @@ class LoginPage(QWidget):
             lay.addWidget(site_btn, alignment=Qt.AlignCenter)
 
         row.addWidget(c, 0, Qt.AlignVCenter)
-        #Правый балансир: ширина маскота + зазор — зеркало левой части, чтобы карточка
-        #оставалась ровно по центру окна, а не уезжала вправо из-за фигуры слева.
-        if self._mascot is not None:
-            row.addSpacing(self._mascot.pixmap().width() + GAP)
+        #Справа — геройский блок (заголовок + фишки): заполняет прежде пустую часть
+        #экрана и «продаёт» продукт. Раскладка: Вектор слева · карточка · герой справа.
+        row.addSpacing(GAP)
+        row.addWidget(self._build_hero(), 0, Qt.AlignVCenter)
         row.addStretch(1)
         outer.addLayout(row)
 
+        #Облачко-подсказка Вектора живёт поверх всего; позицию задаём при наведении.
+        self._tip_bubble = _SpeechBubble(self)
+
     def _make_mascot(self):
-        """Дефолтный Вектор (деф+деф) слева от формы входа. Прозрачный PNG из арта
-        Арины (vector/emotes.py). Если папки emotes/ нет — возвращаем None, и форма
-        показывается одна, без картинки (ничего не ломается)."""
+        """Интерактивный Вектор слева от формы. По умолчанию — спокойная поза (деф+деф);
+        при наведении мышки переходит в «думающую» позу (думает+думает) и показывает
+        облачко с советом. Прозрачные PNG из арта Арины (vector/emotes.py). Нет арта —
+        возвращаем None, форма показывается одна (ничего не ломается)."""
         try:
             from vector import emotes
-            pm = emotes.get(emotes.DEFAULT_FACE, emotes.DEFAULT_GESTURE)
-            if pm is None or pm.isNull():
+            base = emotes.get(emotes.DEFAULT_FACE, emotes.DEFAULT_GESTURE)
+            if base is None or base.isNull():
                 return None
-            lbl = QLabel()
-            lbl.setPixmap(pm.scaledToHeight(560, Qt.SmoothTransformation))
-            lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
-            lbl.setStyleSheet("background:transparent;")
-            return lbl
+            think = emotes.get("думает", "думает")
+            H = 560
+            base_pm = base.scaledToHeight(H, Qt.SmoothTransformation)
+            think_pm = (think.scaledToHeight(H, Qt.SmoothTransformation)
+                        if (think is not None and not think.isNull()) else base_pm)
+            return _LoginMascot(base_pm, think_pm,
+                                self._on_mascot_enter, self._on_mascot_leave)
         except Exception as e:
             print(f"[login] маскот не загрузился: {e}")
             return None
+
+    #--- интерактив маскота: «думает» + облачко с советом при наведении ---
+    def _on_mascot_enter(self):
+        """Курсор над Вектором: показываем следующий совет в облачке у его головы."""
+        if not getattr(self, "_tip_bubble", None) or self._mascot is None:
+            return
+        tip = self._tips[self._tip_idx % len(self._tips)]
+        self._tip_idx += 1
+        self._tip_bubble.set_tip(tip)
+        bw, bh = self._tip_bubble.width(), self._tip_bubble.height()
+        #облачко НАД головой Вектора (по центру фигуры), хвостиком вниз — лицо открыто
+        tl = self._mascot.mapTo(self, QPoint(0, 0))
+        cx = tl.x() + self._mascot.width() // 2
+        x = cx - bw // 2
+        y = tl.y() - bh - 6
+        x = max(8, min(x, self.width() - bw - 8))  #в пределах окна по горизонтали
+        y = max(8, y)                              #если сверху мало места — прижмём к верху
+        self._tip_bubble.move(x, y)
+        self._tip_bubble.fade_in()
+
+    def _on_mascot_leave(self):
+        if getattr(self, "_tip_bubble", None):
+            self._tip_bubble.fade_out()
+
+    def _build_hero(self) -> QWidget:
+        """Геройский блок справа от карточки — ОДНА цельная «стеклянная» панель.
+
+        Раньше это были разрозненные тёмные коробки с плохим контрастом («чёрная
+        таблица»). Теперь весь текст лежит на ОДНОЙ полупрозрачной подложке из цвета
+        карточки темы: пара card↔text по дизайну контрастна, поэтому читается и на
+        светлой, и на тёмной теме. Внутри — заголовок, подзаголовок, ровные строки-фишки
+        и бейдж хакатона."""
+        from widgets import title_lbl
+        panel = QFrame()
+        panel.setObjectName("heroPanel")
+        panel.setMaximumWidth(340)
+        panel.setStyleSheet(
+            f"QFrame#heroPanel{{background:{_rgba(C['card'], 0.92)};"
+            f"border:1px solid {C['border2']};border-radius:18px;}}")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(24, 24, 24, 24)
+        v.setSpacing(12)
+
+        head = title_lbl("Журнал, который думает вместе с вами", 24)
+        head.setWordWrap(True)
+        v.addWidget(head)
+
+        sub = QLabel("Электронный журнал с ИИ-помощником «Вектор»: оценки, средний балл, "
+                     "долги и пропуски — понятно и под рукой.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color:{C['text3']};font-size:13px;")
+        v.addWidget(sub)
+
+        v.addSpacing(4)
+        for icon_name, text in (("bot", "ИИ-помощник «Вектор»"),
+                                ("globe", "Работает офлайн"),
+                                ("shield", "Безопасно — по 152-ФЗ")):
+            v.addLayout(self._hero_feature(icon_name, text))
+
+        v.addSpacing(6)
+        badge = QLabel("🏆  Победитель хакатона «Мы — будущее IT Бурятии»")
+        badge.setWordWrap(True)
+        badge.setStyleSheet(
+            f"color:{C['green']};background:{_rgba(C['green'], 0.10)};"
+            f"border:1px solid {_rgba(C['green'], 0.28)};border-radius:10px;"
+            "padding:8px 12px;font-size:12px;font-weight:700;")
+        v.addWidget(badge)
+
+        try:
+            from core import APP_VERSION
+            ver = QLabel(f"GradeBookAI · {APP_VERSION}")
+            ver.setStyleSheet(f"color:{C['text3']};font-size:10px;")
+            v.addWidget(ver)
+        except Exception:
+            pass
+        return panel
+
+    def _hero_feature(self, icon_name: str, text: str) -> QHBoxLayout:
+        """Строка-фишка: цветной кружок с иконкой + контрастная подпись (без коробок)."""
+        import icons
+        from PySide6.QtCore import QSize
+        h = QHBoxLayout()
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(10)
+        ic = QLabel()
+        ic.setPixmap(icons.icon(icon_name, C['green'], 18).pixmap(QSize(18, 18)))
+        ic.setFixedSize(22, 22)
+        ic.setAlignment(Qt.AlignCenter)
+        ic.setStyleSheet(
+            f"background:{_rgba(C['green'], 0.12)};border-radius:11px;")
+        t = QLabel(text)
+        t.setStyleSheet(f"color:{C['text']};font-size:13px;font-weight:600;")
+        h.addWidget(ic)
+        h.addWidget(t, 1)
+        return h
 
     def _open_server_settings(self):
         """Открывает окно ввода адреса сервера (смена/ввод вручную с экрана входа)."""

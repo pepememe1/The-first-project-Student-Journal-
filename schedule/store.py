@@ -61,6 +61,35 @@ def load_cached() -> Snapshot | None:
         return None
 
 
+def subjects_all() -> list:
+    """Все уникальные предметы из снимка расписания (СПАРСЕНЫ С САЙТА ВСГУТУ).
+
+    Источник правды для списка предметов: вместо «вшитого текстом» перечня берём то,
+    что реально стоит в расписании на портале. Пусто — кэша ещё нет (тогда вызывающий
+    код откатывается на прежний список). Дедуп + сортировка для стабильного вывода."""
+    snap = load_cached()
+    if not snap:
+        return []
+    subs = set(snap.subjects or [])
+    if not subs:                                   #глобального списка нет — соберём из групп
+        for g in snap.groups.values():
+            subs.update(g.subjects())
+    return sorted({s.strip() for s in subs if s and s.strip()})
+
+
+def subjects_for_group(app_group: str) -> list:
+    """Предметы КОНКРЕТНОЙ группы из расписания сайта. Имя группы аккаунта сопоставляем
+    с группой на сайте (точное совпадение → нечёткое guess_group). Пусто — нет кэша или
+    совпадения (вызывающий код откатится на предметы из журнала)."""
+    snap = load_cached()
+    if not snap or not app_group:
+        return []
+    site_name = app_group if app_group in snap.groups else guess_group(
+        app_group, snap.group_names())
+    g = snap.groups.get(site_name)
+    return g.subjects() if g else []
+
+
 def cache_age_minutes() -> float | None:
     """Возраст кэша в минутах (None — кэша нет)."""
     snap = load_cached()

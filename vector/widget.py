@@ -47,11 +47,11 @@ except Exception:
          "text": "#0d2b30", "text3": "#3a565b", "green": "#147c8b",
          "blue": "#1f6f8b", "bg": "#eef5f6"}
 
-PANEL_WIDTH = 320
+PANEL_WIDTH = 400                     #шире прежнего: маскот крупнее, чат лежит поверх него
 
 #настройки маскота (арт из vector/emotes.py)
-AVATAR_H = 360                        #высота фигуры в боковой шторке, px (полный рост)
-AVATAR_H_TAB = 480                    #высота во вкладке «ИИ Помощник» (там места больше)
+AVATAR_H = 460                        #высота фигуры в боковой шторке, px (крупный, чат поверх)
+AVATAR_H_TAB = 520                    #высота во вкладке «ИИ Помощник» (там места больше)
 AVATAR_AR = 0.78                      #ширина виджета = высота × этот коэф. (под фигуру)
 
 THINK_HOLD_AFTER_ANSWER_MS = 1000     #1 c «дообдумывает» после ответа (по ТЗ)
@@ -74,6 +74,56 @@ def speak_duration_ms(text: str) -> int:
     """5–7 секунд в зависимости от длины ответа (по ТЗ)."""
     return max(SPEAK_MIN_MS,
                min(SPEAK_MAX_MS, SPEAK_MIN_MS + len(text or "") * SPEAK_MS_PER_CHAR))
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """hex (#rrggbb) → 'rgba(r,g,b,A)' для QSS, где A — целое 0–255 (Qt так разбирает
+    надёжнее дробной доли). Нужна, чтобы чат лёг ПОЛУПРОЗРАЧНЫМ поверх картинки Вектора."""
+    a = max(0, min(255, int(round(alpha * 255))))
+    try:
+        h = (hex_color or "#ffffff").lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{a})"
+    except Exception:
+        return f"rgba(255,255,255,{a})"
+
+
+class _AvatarChatOverlay(QWidget):
+    """Контейнер, где маскот лежит ФОНОМ, а история чата — полупрозрачным слоем поверх.
+
+    Раньше аватар и чат стояли друг под другом; по просьбе делаем «чат поверх Вектора»:
+    фигуру увеличиваем, а переписку кладём сверху с полупрозрачной подложкой — Вектор
+    просвечивает по краям и между строк, но текст остаётся читаемым. Геометрию детей
+    раскладываем вручную (аватар фиксированного размера — центрируем сверху; чат тянем
+    на всю площадь)."""
+
+    #Доля высоты ФИГУРЫ, на которой начинается чат сверху: 0 — голова, 1 — ноги.
+    #~0.42 = примерно уровень туловища: голова и плечи Вектора открыты, чат лежит ниже.
+    CHAT_TOP_FRACTION = 0.42
+
+    def __init__(self, avatar: "VectorAvatar", chat: QWidget, parent=None):
+        super().__init__(parent)
+        self.avatar = avatar
+        self.chat = chat
+        self.avatar.setParent(self)
+        self.chat.setParent(self)
+        self.avatar.lower()
+        self.chat.raise_()
+        #чтобы при узком окне фигура не «съедалась» — даём контейнеру разумную высоту
+        self.setMinimumHeight(220)
+
+    def resizeEvent(self, event):
+        w, h = self.width(), self.height()
+        aw, ah = self.avatar.width(), self.avatar.height()
+        #маскот СВЕРХУ, по центру по горизонтали — голова и плечи всегда видны.
+        self.avatar.move(max(0, (w - aw) // 2), 0)
+        #чат СНИЗУ и полупрозрачный: его верхний край — примерно на уровне туловища
+        #Вектора, поэтому переписка лежит на нижней части фигуры, не закрывая лицо.
+        chat_top = int(ah * self.CHAT_TOP_FRACTION)
+        self.chat.setGeometry(0, chat_top, w, max(150, h - chat_top))
+        super().resizeEvent(event)
 
 
 #Аватар Вектора: спрайтовая машина состояний
@@ -148,9 +198,9 @@ class VectorAvatar(QWidget):
         self._bob.stop()
         self._face.move(0, 0)
 
-        if state == ST_THINK:
-            self._start_bob(amp=4, dur=460)
-        elif state == ST_SPEAK:
+        #Покачивание ТОЛЬКО когда маскот говорит. В режиме «думает» он должен стоять
+        #спокойно (по просьбе: при обдумывании не трясётся, оживает лишь на речи).
+        if state == ST_SPEAK:
             self._start_bob(amp=6, dur=640)
         self._render()
 
@@ -326,29 +376,40 @@ class VectorPanel(QWidget):
                 b.hide()
         lay.addLayout(bar)
 
-        #Аватар-маскот: в шторке компактнее, во вкладке «ИИ Помощник» крупнее
+        #ОВЕРЛЕЙ: маскот фоном, история чата — полупрозрачным слоем ПОВЕРХ него.
         self.avatar = VectorAvatar(height=(AVATAR_H if self.docked else AVATAR_H_TAB))
-        lay.addWidget(self.avatar, 0, Qt.AlignHCenter)
-
-        #Чат
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
+        #Подложка чата ПОЛУПРОЗРАЧНАЯ — нижняя часть фигуры Вектора мягко просвечивает
+        #сквозь переписку (чат лежит на туловище/ногах, лицо сверху открыто).
         self.chat.setStyleSheet(
-            f"background:{C['card2']};border:1px solid {C['border']};border-radius:10px;"
-            f"padding:10px;font-size:12.5px;color:{C['text']};")
-        lay.addWidget(self.chat, 1)
+            f"QTextEdit{{background:{_rgba(C['card'], 0.72)};"
+            f"border:1px solid {_rgba(C['border'], 0.6)};border-radius:12px;"
+            f"padding:10px;font-size:12.5px;color:{C['text']};}}")
+        self.chat.viewport().setStyleSheet("background:transparent;")  #чтобы rgba-подложка просвечивала
+        self._overlay = _AvatarChatOverlay(self.avatar, self.chat)
+        lay.addWidget(self._overlay, 1)
 
-        #МЕНЮ БЫСТРЫХ КОМАНД: ответ мгновенно и без ИИ ────
-        lay.addLayout(self._build_quick_commands())
-
-        #Ввод
+        #Ввод + квадратная кнопка команд (всплывающее меню, как в телеграме)
         row = QHBoxLayout(); row.setSpacing(6)
+        import icons
+        from PySide6.QtCore import QSize as _QSize
+        self._cmd_btn = QToolButton()
+        self._cmd_btn.setFixedSize(38, 38)
+        self._cmd_btn.setIcon(icons.icon("layers", C["text3"], 18)); self._cmd_btn.setIconSize(_QSize(18, 18))
+        self._cmd_btn.setCursor(Qt.PointingHandCursor)
+        self._cmd_btn.setToolTip("Быстрые команды")
+        self._cmd_btn.setStyleSheet(
+            f"QToolButton{{background:{C['card2']};border:1px solid {C['border']};"
+            f"border-radius:8px;}}"
+            f"QToolButton:hover{{border-color:{C['green']};}}")
+        #клик тоже открывает/закрывает (для тач-экранов), наведение — основной сценарий
+        self._cmd_btn.clicked.connect(self._toggle_cmd_menu)
+
         self.inp = QLineEdit(); self.inp.setPlaceholderText("Спросить Вектора…")
         self.inp.setStyleSheet(
             f"background:{C['card']};border:1px solid {C['border']};border-radius:8px;"
             f"padding:7px;color:{C['text']};font-size:13px;")
         self.inp.returnPressed.connect(self._send)
-        import icons
-        from PySide6.QtCore import QSize as _QSize
         send = QPushButton(); send.setFixedSize(44, 38)
         send.setIcon(icons.icon("send", "#FFFFFF", 18)); send.setIconSize(_QSize(18, 18))
         send.setStyleSheet(
@@ -356,8 +417,17 @@ class VectorPanel(QWidget):
             f"QPushButton:hover{{background:{C['green2']};}}")
         send.clicked.connect(self._send)
         self.send_btn = send
-        row.addWidget(self.inp); row.addWidget(send)
+        row.addWidget(self._cmd_btn); row.addWidget(self.inp); row.addWidget(send)
         lay.addLayout(row)
+
+        #Всплывающее меню команд (скрыто; появляется при наведении на кнопку команд).
+        self._over_cmd_btn = False
+        self._over_cmd_menu = False
+        self._cmd_hide_timer = QTimer(self); self._cmd_hide_timer.setSingleShot(True)
+        self._cmd_hide_timer.timeout.connect(self._maybe_hide_cmd_menu)
+        self._cmd_menu = self._build_command_menu()
+        self._cmd_btn.installEventFilter(self)
+        self._cmd_menu.installEventFilter(self)
 
         #Проигрываем уже накопленную ОБЩУЮ историю (включая приветствие) — чтобы
         #только что открытая панель показала всю переписку, а не пустой чат.
@@ -371,9 +441,11 @@ class VectorPanel(QWidget):
         self.session.answered.connect(self._on_session_answer)
         self.session.askFailed.connect(self._on_session_fail)
 
-    def _build_quick_commands(self):
-        """Кнопки-команды из пула. Нажатие = готовый вопрос = ответ без LLM."""
-        from PySide6.QtWidgets import QGridLayout
+    #Всплывающее меню быстрых команд (телеграм-стиль: висит над кнопкой команд)
+    def _build_command_menu(self) -> QFrame:
+        """Меню-команды из пула в всплывающей плашке. Нажатие = готовый вопрос без LLM.
+        Появляется при наведении на квадратную кнопку команд, прячется при уходе курсора
+        (если не навели на само меню) — поведение управляется eventFilter + таймером."""
         try:
             from .faq import QUICK_COMMANDS
             role = getattr(self.engine.scope, "role", "student")
@@ -382,20 +454,72 @@ class VectorPanel(QWidget):
             cmds = []
         import icons
         from PySide6.QtCore import QSize as _QSize
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        for i, (icon_name, label, question) in enumerate(cmds):
+        frame = QFrame(self)
+        frame.setObjectName("cmdMenu")
+        frame.setStyleSheet(
+            f"QFrame#cmdMenu{{background:{C['card']};border:1px solid {C['border']};"
+            f"border-radius:12px;}}")
+        v = QVBoxLayout(frame); v.setContentsMargins(8, 8, 8, 8); v.setSpacing(4)
+        for icon_name, label, question in cmds:
             b = QPushButton("  " + label)
             b.setIcon(icons.icon(icon_name, C["text3"], 15)); b.setIconSize(_QSize(15, 15))
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet(
                 f"QPushButton{{background:{C['card2']};border:1px solid {C['border']};"
-                f"border-radius:8px;padding:6px 10px;color:{C['text3']};font-size:12px;"
+                f"border-radius:8px;padding:7px 12px;color:{C['text3']};font-size:12px;"
                 f"text-align:left;}}"
                 f"QPushButton:hover{{color:{C['green']};border-color:{C['green']};}}")
-            b.clicked.connect(lambda _=False, q=question: self.ask_command(q))
-            grid.addWidget(b, i // 2, i % 2)
-        return grid
+            b.clicked.connect(lambda _=False, q=question: self._run_command(q))
+            v.addWidget(b)
+        frame.hide()
+        return frame
+
+    def _run_command(self, question: str):
+        """Клик по команде в меню: отправляем и сразу прячем плашку."""
+        self._cmd_menu.hide()
+        self.ask_command(question)
+
+    def _show_cmd_menu(self):
+        m = self._cmd_menu
+        if m is None:
+            return
+        self._cmd_hide_timer.stop()
+        m.adjustSize()
+        #позиционируем плашку НАД кнопкой команд (если сверху мало места — под ней)
+        btn_tl = self._cmd_btn.mapTo(self, QPoint(0, 0))
+        x = min(btn_tl.x(), max(4, self.width() - m.width() - 4))
+        y = btn_tl.y() - m.height() - 6
+        if y < 4:
+            y = btn_tl.y() + self._cmd_btn.height() + 6
+        m.move(max(4, x), y)
+        m.show(); m.raise_()
+
+    def _maybe_hide_cmd_menu(self):
+        if not (self._over_cmd_btn or self._over_cmd_menu):
+            self._cmd_menu.hide()
+
+    def _toggle_cmd_menu(self):
+        if self._cmd_menu.isVisible():
+            self._cmd_menu.hide()
+        else:
+            self._show_cmd_menu()
+
+    def eventFilter(self, obj, event):
+        """Наведение на кнопку команд или на само меню держит плашку открытой; уход
+        курсора с обоих — прячет её с небольшой задержкой (чтобы можно было перевести
+        мышь с кнопки на меню, как в телеграме)."""
+        from PySide6.QtCore import QEvent
+        if obj is self._cmd_btn:
+            if event.type() == QEvent.Enter:
+                self._over_cmd_btn = True; self._show_cmd_menu()
+            elif event.type() == QEvent.Leave:
+                self._over_cmd_btn = False; self._cmd_hide_timer.start(240)
+        elif obj is self._cmd_menu:
+            if event.type() == QEvent.Enter:
+                self._over_cmd_menu = True; self._cmd_hide_timer.stop()
+            elif event.type() == QEvent.Leave:
+                self._over_cmd_menu = False; self._cmd_hide_timer.start(240)
+        return super().eventFilter(obj, event)
 
     #чат
     def _append(self, who, text):

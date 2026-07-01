@@ -127,6 +127,49 @@ def _pid_kill(pid: int):
             pass
 
 
+def _pids_on_port(port: int) -> list:
+    """PID(ы) процессов, СЛУШАЮЩИХ указанный TCP-порт.
+
+    Запасной путь остановки: сервер — фоновый detached-процесс и переживает закрытие
+    программы. К моменту «Остановить» сохранённый PID мог потеряться (например, сервер
+    подхватили из прошлого сеанса и PID-файла не было) — тогда сохранённый kill ничего
+    не гасит, а /health продолжает отвечать. Здесь находим слушателя порта напрямую и
+    возвращаем его PID, чтобы гарантированно остановить сервер.
+
+    Состояния в netstat (LISTENING/ESTABLISHED) не локализуются — на любой раскладке
+    Windows они английские, поэтому фильтр по 'LISTENING' надёжен."""
+    pids = set()
+    try:
+        if os.name == "nt":
+            out = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True, text=True, errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
+            needle = f":{port}"
+            for line in out.splitlines():
+                parts = line.split()
+                #Колонки: Proto  Local  Foreign  State  PID
+                if (len(parts) >= 5 and parts[0].upper() == "TCP"
+                        and parts[3].upper() == "LISTENING"
+                        and parts[1].endswith(needle)):
+                    try:
+                        pids.add(int(parts[4]))
+                    except ValueError:
+                        pass
+        else:
+            out = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True, errors="replace").stdout or ""
+            for tok in out.split():
+                try:
+                    pids.add(int(tok))
+                except ValueError:
+                    pass
+    except Exception as e:
+        print(f"[server_control] не удалось найти PID на порту {port}: {e}")
+    return list(pids)
+
+
 #Чтение/запись server/.env (простой формат KEY=VALUE)
 def read_env() -> dict:
     """Возвращает текущие переменные из server/.env (пусто, если файла нет)."""
@@ -315,6 +358,13 @@ def start_server_process(port: int = DEFAULT_PORT) -> tuple:
     """Поднимает сервер ОТДЕЛЬНЫМ процессом (переживает закрытие программы).
     Если сервер уже отвечает — подхватываем (не плодим второй). (ok, сообщение)."""
     if server_running(port):
+        #Подхватили живой фоновый сервер (пережил прошлый сеанс). ВАЖНО записать его
+        #PID, иначе «Остановить» потом не нашёл бы кого гасить — раньше PID-файла при
+        #подхвате не было, и сервер казался «неубиваемым».
+        if not _pid_alive(_read_pid(SERVER_PID)):
+            for p in _pids_on_port(port):
+                _write_pid(SERVER_PID, p)
+                break
         return True, "Сервер уже запущен (подхвачен)."
     #Уже стартует из прошлого вызова — подождём немного его /health ниже.
     if not os.path.isdir(SERVER_DIR):
@@ -359,6 +409,12 @@ def stop_server(port: int = DEFAULT_PORT) -> tuple:
         os.remove(SERVER_PID)
     except OSError:
         pass
+    #Запасной путь: если сохранённый PID потерян/устарел (сервер подхватили из прошлого
+    #сеанса), но порт ещё кто-то слушает — находим слушателя напрямую и гасим его.
+    #Именно из-за этого раньше выскакивало «Сервер ещё отвечает».
+    if server_running(port):
+        for p in _pids_on_port(port):
+            _pid_kill(p)
     #Дать порту освободиться и проверить, что /health больше не отвечает.
     for _ in range(6):
         if not server_running(port):
@@ -569,8 +625,13 @@ def launch(access: str, engine: str, port: int = DEFAULT_PORT,
         ok, res = start_tunnel_process(port, name or get_tunnel_name())
         if not ok:
             return False, "", f"Сервер запущен, но доступ из интернета не открылся: {res}"
-        return True, local_url, (f"Сервер запущен (фоновый — работает и без программы).\n"
-                                 f"Постоянная ссылка для других ПК:\n{res}")
+        #В serveo-режиме адресом сервера сохраняем именно ПУБЛИЧНУЮ ссылку serveo (а не
+        #127.0.0.1): её же видят клиенты, она по https (проходит проверку защищённости
+        #канала), и поле «Адрес сервера» теперь показывает реальный адрес, а не локалхост.
+        #Туннель форвардит публичный адрес на локальный порт, так что хост ходит к себе же.
+        public = (res or public_tunnel_url(name)).strip() or local_url
+        return True, public, (f"Сервер запущен (фоновый — работает и без программы).\n"
+                              f"Постоянная ссылка (этот же адрес у клиентов):\n{public}")
 
     #Прямой доступ: на ЭТОМ ПК клиент ходит на 127.0.0.1, остальным даём адрес в ЛВС.
     ip = lan_ip() or "127.0.0.1"

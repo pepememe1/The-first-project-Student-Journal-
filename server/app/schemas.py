@@ -17,6 +17,20 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
     role: str
     name: str = ""
+    #refresh-токен для тихого обновления access (клиент хранит его зашифрованно).
+    #Пустой — если эндпоинт не выдаёт новый refresh (/auth/refresh переиспользует прежний).
+    refresh_token: str = ""
+
+
+class RefreshIn(BaseModel):
+    """Обмен refresh-токена на новый access (тихое обновление сессии)."""
+    refresh_token: str
+
+
+class RevokeIn(BaseModel):
+    """Отзыв сессии админом: по jti конкретной сессии ИЛИ по логину (все сессии юзера)."""
+    jti: str = ""
+    login: str = ""
 
 
 class BootstrapIn(BaseModel):

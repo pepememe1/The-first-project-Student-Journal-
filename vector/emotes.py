@@ -45,22 +45,33 @@ _pix_cache = {}             #(face, gesture) -> QPixmap (уже уменьшен
 
 
 def _find_dir() -> str:
-    """Ищем папку emotes рядом с программой и рядом с пакетом vector."""
+    """Ищем папку с артом эмоций рядом с программой и рядом с пакетом vector.
+
+    ВАЖНО про порядок: сначала ищем НОВУЮ раскладку `emotions/эмоции/` (актуальный арт
+    Арины — все 30 пар «морда+жест»), и только потом историческую `emotes/`. Раньше
+    приоритет был обратный, поэтому в кабинете студента показывался старый/образцовый
+    набор из `emotes/`, а не подобранная по совету эмоция из `emotions/эмоции/`."""
     global _dir_cache
     if _dir_cache is not None:
         return _dir_cache
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)                            #корень проекта
-    #Поддерживаем две раскладки: историческую `emotes/` и новую `emotions/эмоции/`
-    #(куда Арина кладёт арт рядом с папкой речи). Берём первую существующую.
-    emotions_subdir = os.path.join("emotions", "эмоции")
+    emotions_subdir = os.path.join("emotions", "эмоции")    #новая раскладка (приоритет)
     candidates = [
+        os.path.join(os.getcwd(), emotions_subdir),
+        os.path.join(root, emotions_subdir),
+        os.path.join(here, emotions_subdir),
+        #исторический fallback — старая папка `emotes/` рядом с программой/пакетом
         os.path.join(os.getcwd(), EMOTES_DIR),
         os.path.join(root, EMOTES_DIR),
         os.path.join(here, EMOTES_DIR),
-        os.path.join(os.getcwd(), emotions_subdir),
-        os.path.join(root, emotions_subdir),
     ]
+    #если доступен app_paths (портативный .exe) — путь рядом с программой ставим первым
+    try:
+        import app_paths
+        candidates.insert(0, os.path.join(app_paths.app_dir(), emotions_subdir))
+    except Exception:
+        pass
     _dir_cache = next((c for c in candidates if os.path.isdir(c)), "")
     return _dir_cache
 

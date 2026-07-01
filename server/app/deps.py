@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db
 from .security import decode_token
-from .models import User
+from .models import User, AuthSession
 from . import events, throttle, connect
 
 
@@ -34,6 +34,15 @@ def get_current_user(authorization: str = Header(None),
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Недействительный или просроченный токен")
+    #ЧЁРНЫЙ СПИСОК / отзыв: токен с jti валиден, только пока его сессия не revoked.
+    #Так logout и админская блокировка мгновенно аннулируют украденный/устаревший токен,
+    #даже если по подписи и exp он ещё «живой». Токены БЕЗ jti (старого формата) пускаем
+    #по подписи+exp до их естественного истечения — обратная совместимость.
+    jti = payload.get("jti")
+    if jti:
+        sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+        if sess is None or sess.revoked:
+            raise HTTPException(status_code=401, detail="Сессия завершена или отозвана")
     user = db.query(User).filter(
         User.login == payload.get("sub"), User.deleted == False  #noqa: E712
     ).first()

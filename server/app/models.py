@@ -106,6 +106,32 @@ class ApprovedDevice(Base):
     approved_by = Column(String, default="")           #логин админа, одобрившего
 
 
+class AuthSession(Base):
+    """Выданный токен (сессия). Нужен для трёх вещей сразу:
+
+      • ЧЁРНЫЙ СПИСОК / отзыв: пока запись не `revoked`, токен с этим `jti` валиден;
+        админ (или logout) ставит `revoked=True` — и сервер мгновенно перестаёт пускать
+        этот токен, даже если по подписи и `exp` он ещё «живой» (важно для 152-ФЗ:
+        экстренная блокировка, безопасный выход, смена ролей на лету);
+      • REFRESH: долгоживущий refresh-токен (kind='refresh') обменивается на новый
+        access через /auth/refresh — клиент не выкидывает пользователя на логин, когда
+        короткий access протух посреди работы;
+      • ВИДИМОСТЬ: админ видит список активных сессий (кто, с какого устройства, до когда).
+
+    Серверная деталь доступа — НЕ входит в SYNC_MODELS (клиентам синхронизировать незачем)."""
+    __tablename__ = "auth_sessions"
+    jti = Column(String, primary_key=True)             #уникальный id токена (из payload)
+    login = Column(String, index=True, default="")
+    role = Column(String, default="")
+    kind = Column(String, default="access")            #access | refresh
+    device_id = Column(String, default="")             #X-Device-Id, с которого выдан
+    ip = Column(String, default="")
+    issued_at = Column(String, default="")             #ISO UTC
+    expires_at = Column(Integer, default=0, index=True)  #unix ts (быстрый фильтр/чистка)
+    revoked = Column(Boolean, default=False)
+    pair_jti = Column(String, default="")              #связанный токен (access↔refresh)
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 SYNC_MODELS = {
     "users": User,

@@ -105,41 +105,74 @@ class SyncManager:
         time.sleep(random.uniform(0, max_s))
 
     def _ensure_auth(self, url: str) -> bool:
-        """Гарантирует наличие токена. Сначала пробуем сохранённый токен (без
-        дорогого PBKDF2), затем — вход по паролю. При первом запуске сервера без
-        админа бутстрапит администратора теми же кредами (только для роли admin)."""
-        from sync_client import SyncClient
+        """Гарантирует наличие ГОДНОГО токена. Порядок (от дешёвого к дорогому):
+          1) уже есть непросроченный access — берём его;
+          2) сохранённый access (без дорогого PBKDF2), если он ещё жив;
+          3) ТИХОЕ обновление refresh-токеном — без пароля (главное: не выкидываем
+             пользователя на логин, когда короткий access протух, в т.ч. за офлайн);
+          4) резерв — вход по паролю (+ bootstrap администратора при первом запуске).
+
+        Просрочку access проверяем локально (is_token_expired, exp — абсолютная метка):
+        офлайн-время учитывается, «заморозить» токен нельзя."""
+        from sync_client import SyncClient, is_token_expired
         import app_settings
         if self._client is None:
             self._client = SyncClient(url)
-        if self._client.token:
+        #Подтянем сохранённый refresh-токен (для тихого обновления) — один раз.
+        if not self._client.refresh_token and self._login:
+            self._client.refresh_token = app_settings.get_saved_refresh_token(self._login)
+
+        #1) есть живой access
+        if self._client.token and not is_token_expired(self._client.token):
             return True
 
-        #Переиспользование токена: пробуем сохранённый JWT РОВНО один раз за сессию.
-        #Если он протух — сервер отдаст 401 на pull/push, цикл сбросит клиента, и в
-        #следующий заход (флаг уже взведён) мы пойдём по паролю.
-        if not self._saved_token_tried:
+        #2) сохранённый access (ровно один раз за сессию), если он ещё не протух
+        if not self._client.token and not self._saved_token_tried:
             self._saved_token_tried = True
             saved = app_settings.get_saved_token(self._login)
-            if saved:
+            if saved and not is_token_expired(saved):
                 self._client.token = saved
                 return True
 
-        #Нет годного токена — обычный вход по паролю. Перед ним — jitter (размазать герд).
+        #3) тихое обновление refresh-токеном — без пароля
+        if self._client.refresh_token and self._try_refresh():
+            return True
+
+        #4) вход по паролю. Перед ним — jitter (размазать герд входов в 9:00).
+        self._client.token = None
         self._apply_login_jitter()
         try:
             self._client.login(self._login, self._password)
-            app_settings.set_saved_token(self._login, self._client.token)
+            self._save_tokens()
             return True
         except Exception:
             if self._role == "admin":
                 try:
                     self._client.bootstrap_admin(self._login, self._password)
-                    app_settings.set_saved_token(self._login, self._client.token)
+                    self._save_tokens()
                     return True
                 except Exception:
                     return False
             return False
+
+    def _try_refresh(self) -> bool:
+        """Пробует тихо обновить access по refresh-токену. True — получилось. False —
+        refresh недействителен/отозван (тогда _ensure_auth уйдёт на вход по паролю)."""
+        if not self._client or not self._client.refresh_token:
+            return False
+        try:
+            self._client.refresh()
+            self._save_tokens()
+            return True
+        except Exception:
+            return False
+
+    def _save_tokens(self):
+        """Сохраняет access и refresh в зашифрованное локальное хранилище (DPAPI/Fernet)."""
+        import app_settings
+        app_settings.set_saved_token(self._login, self._client.token)
+        if self._client.refresh_token:
+            app_settings.set_saved_refresh_token(self._login, self._client.refresh_token)
 
     def _loop(self):
         import sync_engine

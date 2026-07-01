@@ -1,5 +1,5 @@
 """
-main.py — единая точка входа GradeBookAI (Release 2.2).
+main.py — единая точка входа GradeBookAI (Pre-release 2.7).
 Модульная архитектура: main_window.MainAppWindow.
 """
 import sys
