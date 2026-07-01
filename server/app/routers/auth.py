@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import ensure_device_allowed, get_current_user
+from ..deps import (ensure_device_allowed, get_current_user, is_web_client,
+                    device_barrier_applies)
 from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
@@ -93,10 +94,14 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     счётчик, удачный вход его сбрасывает."""
     login_str = body.login.strip()
     ip = throttle.client_ip(request)
+    web = is_web_client(request)
 
-    #Барьер устройства ДО сверки пароля: неодобренный ПК вообще не должен входить
-    #(даже зная верные креды), и не нужно дёргать дорогой PBKDF2 ради него.
-    ensure_device_allowed(request, db)
+    #Барьер устройства ДО сверки пароля: неодобренный ПК не должен входить (даже зная
+    #верные креды), и не нужно дёргать дорогой PBKDF2 ради него. ДЕСКТОП (и любой не-веб
+    #клиент) — жёсткий барьер, как прежде. Для ВЕБА барьер откладываем: студенту он не
+    #нужен, а роль мы узнаем после поиска пользователя (ниже).
+    if not web:
+        ensure_device_allowed(request, db)
 
     left = throttle.seconds_until_unlocked(ip, login_str)
     if left > 0:
@@ -112,6 +117,12 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     u = db.query(User).filter(
         User.login == login_str, User.deleted == False  # noqa: E712
     ).first()
+    #Веб: персонал (teacher/admin) обязан пройти подтверждение устройства ещё ДО сверки
+    #пароля (тот же барьер, что в десктопе), а студент входит открыто. Неизвестного
+    #пользователя барьером не выделяем — он уйдёт в обычный 401 (не палим, есть ли логин).
+    if web and u is not None and device_barrier_applies(request, u.role):
+        ensure_device_allowed(request, db)
+
     if not u or not verify_password(body.password, u.password_hash):
         throttle.register_failure(ip, login_str)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
@@ -129,7 +140,6 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     Сценарий 152-ФЗ/удобства: короткий access протух (например, за время офлайна), но
     refresh ещё жив — клиент в фоне дёргает этот эндпоинт и продолжает работу, НЕ
     выкидывая пользователя на экран логина. Барьер устройства проверяем и здесь."""
-    ensure_device_allowed(request, db)
     payload = decode_token(body.refresh_token)
     if not payload or payload.get("typ") != "refresh":
         raise HTTPException(status_code=401, detail="Недействительный refresh-токен")
@@ -144,6 +154,10 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     ).first()
     if not u:
         raise HTTPException(status_code=401, detail="Пользователь не найден")
+    #Барьер устройства применяем по той же политике, что и на входе: персонал и
+    #десктоп — обязательно; веб-студенту не нужен (роль знаем из его же токена).
+    if device_barrier_applies(request, u.role):
+        ensure_device_allowed(request, db)
     #Новый access, привязанный к ТОМУ ЖЕ refresh (refresh не ротируем — он живёт до
     #своего exp или явного отзыва). Прежний access этой пары гасим.
     if sess.pair_jti:
