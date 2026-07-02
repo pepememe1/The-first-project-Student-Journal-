@@ -846,6 +846,22 @@ class AdminDashboard(QWidget):
         hl.addLayout(btnrow)
         self._srv_status = lbl("", 12); self._srv_status.setWordWrap(True)
         hl.addWidget(self._srv_status)
+
+        #Веб-версия (сайт) отдаётся с ТОГО ЖЕ адреса, что и API — сервер сам монтирует
+        #собранный фронтенд (dist). Кнопка «Запустить сайт» поднимает сервер (если ещё
+        #не запущен), берёт публичный адрес, ВПИСЫВАЕТ его в поле и КОПИРУЕТ в буфер
+        #обмена — админу остаётся отправить ссылку студентам/преподавателям.
+        hl.addWidget(separator())
+        hl.addWidget(lbl("Сайт (веб-версия) — тот же адрес, что и сервер:", 11, C['text3']))
+        site_row = QHBoxLayout()
+        self._site_url = field_input("нажмите «Запустить сайт»")
+        self._site_url.setReadOnly(True)
+        site_row.addWidget(self._site_url, 1)
+        self._site_start = btn("Запустить сайт", "green", icon_name="globe")
+        self._site_start.clicked.connect(self._launch_site)
+        site_row.addWidget(self._site_start)
+        hl.addLayout(site_row)
+
         lay.addWidget(hc)
 
         #Карточка: ГОТОВНОСТЬ к 152-ФЗ (УЗ-3). Жмёшь «Проверить» — видишь зелёным/красным,
@@ -1161,6 +1177,87 @@ class AdminDashboard(QWidget):
             else:
                 QMessageBox.critical(self, "Сервер",
                                      message or "Не удалось запустить сервер.")
+            self._refresh_server_status()
+
+        self._run_bg(_do, _apply)
+
+    def _launch_site(self):
+        """«Запустить сайт»: поднимает сервер (он отдаёт веб-версию с ТОГО ЖЕ адреса),
+        берёт публичный адрес, вписывает его в поле и КОПИРУЕТ в буфер обмена.
+
+        Технически сайт и сервер живут на одном адресе (FastAPI монтирует собранный
+        фронтенд, см. server/app/main.py), поэтому «запуск сайта» = запуск сервера +
+        готовая к отправке ссылка. Логика запуска та же, что у «Запустить сервер»."""
+        import server_control
+        try:
+            port = int(self._srv_port.text().strip() or "8000")
+        except ValueError:
+            port = 8000
+        access, engine = self._current_type()
+        name = self._tun_name.text().strip()
+        if access == "serveo":
+            try:
+                server_control.set_tunnel_name(name)
+            except Exception:
+                pass
+        pg = None
+        if engine == "postgres":
+            pw = self._pg_pass.text()
+            if not pw:
+                from urllib.parse import urlparse, unquote
+                try:
+                    u = urlparse(server_control.get_db_url())
+                    pw = unquote(u.password or "") if server_control.is_postgres() else ""
+                except Exception:
+                    pw = ""
+            pg = {"host": self._pg_host.text(), "port": self._pg_port.text(),
+                  "db": self._pg_db.text(), "user": self._pg_user.text(), "password": pw}
+
+        self._srv_status.setText("⏳ Запускаю сайт (сервер + доступ)...")
+        self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+        self._site_start.setEnabled(False)
+
+        def _do():
+            return server_control.launch(access, engine, port, name, pg)
+
+        def _apply(res):
+            ok, url, message = res
+            self._site_start.setEnabled(True)
+            if ok and url:
+                from app_settings import set_api_url, set_host_autostart, mark_host
+                try:
+                    server_control.set_server_port(port)
+                except Exception:
+                    pass
+                mark_host()
+                set_host_autostart(True)
+                set_api_url(url)
+                self._api_url.setText(url)
+                self._site_url.setText(url)
+                #Копируем адрес сайта в буфер обмена — админу останется отправить ссылку.
+                copied = False
+                try:
+                    from PySide6.QtWidgets import QApplication
+                    cb = QApplication.clipboard()
+                    if cb is not None:
+                        cb.setText(url)
+                        copied = True
+                except Exception:
+                    pass
+                #Будим фоновый синк (как в _start_server): адрес есть — пусть хост
+                #залогинится на сервер и отдаст пользователей, не дожидаясь интервала.
+                try:
+                    import sync_runner
+                    sync_runner.trigger()
+                except Exception:
+                    pass
+                QMessageBox.information(
+                    self, "Сайт запущен",
+                    f"Сайт доступен по адресу:\n{url}\n\n"
+                    + ("Адрес скопирован в буфер обмена — отправьте ссылку студентам "
+                       "и преподавателям." if copied else "Скопируйте адрес из поля выше."))
+            else:
+                QMessageBox.critical(self, "Сайт", message or "Не удалось запустить сайт.")
             self._refresh_server_status()
 
         self._run_bg(_do, _apply)

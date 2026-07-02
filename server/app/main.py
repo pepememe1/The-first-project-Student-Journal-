@@ -51,11 +51,39 @@ async def _unhandled_error(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
 
 
-@app.get("/", tags=["service"])
+import os
+from fastapi.responses import FileResponse
+
+
+def _find_web_dist() -> str:
+    """Папка собранного САЙТА (dist), которую сервер отдаёт с ТОГО ЖЕ адреса, что и API.
+    Ищем: переменная окружения → bundled server/webdist → рядом лежащий репозиторий
+    веб-версии (dev-раскладка). Нет папки — сервер работает как чистый API (визитка на «/»)."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../server
+    root_dir = os.path.dirname(here)                                    # корень десктоп-репо
+    parent = os.path.dirname(root_dir)                                  # уровень выше (напр. GB_2_7)
+    candidates = [
+        os.environ.get("GRADEBOOK_WEB_DIST", "").strip(),
+        os.path.join(here, "webdist"),
+        os.path.join(parent, "GradeBookAI-Web-Edition", "dist"),
+        os.path.join(root_dir, "GradeBookAI-Web-Edition", "dist"),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(os.path.join(c, "index.html")):
+            return os.path.realpath(c)
+    return ""
+
+
+WEB_DIST = _find_web_dist()
+
+
+@app.get("/", tags=["service"], include_in_schema=False)
 def root():
-    #Голый домен — это API, а не сайт. Отдаём короткую «визитку», чтобы при заходе в
-    #браузере было видно «сервер жив», а не пугающий {"detail":"Not Found"}.
-    return {"service": "GradeBookAI API", "status": "ok", "docs": "/docs"}
+    #Есть собранный сайт → отдаём его (адрес сервера = адрес сайта). Нет — короткая
+    #«визитка» API, чтобы при заходе в браузере было видно «сервер жив».
+    if WEB_DIST:
+        return FileResponse(os.path.join(WEB_DIST, "index.html"))
+    return JSONResponse({"service": "GradeBookAI API", "status": "ok", "docs": "/docs"})
 
 
 @app.get("/health", tags=["service"])
@@ -69,3 +97,23 @@ app.include_router(me.router)
 app.include_router(admin.router)
 app.include_router(connect_router.router)
 app.include_router(web.router)
+
+
+#САЙТ (SPA): отдаём собранный фронтенд с ТОГО ЖЕ адреса, что и API. Монтируем ПОСЛЕ
+#всех API-роутеров, поэтому /auth, /web, /docs и т.п. имеют приоритет. Неизвестные
+#НЕ-API пути возвращают index.html (клиентский роутинг Vue), существующие файлы
+#(assets/, mascot/, favicon) — как есть. Нет dist — блок не подключается.
+if WEB_DIST:
+    from fastapi.staticfiles import StaticFiles
+
+    _assets_dir = os.path.join(WEB_DIST, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        target = os.path.realpath(os.path.join(WEB_DIST, full_path))
+        #защита от path traversal: отдаём только файлы ВНУТРИ dist
+        if target.startswith(WEB_DIST) and os.path.isfile(target):
+            return FileResponse(target)
+        return FileResponse(os.path.join(WEB_DIST, "index.html"))
