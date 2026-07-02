@@ -17,6 +17,7 @@ from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import User, Group, Subject, Lesson, Grade
 from .. import webdata as W
+from .. import schedule_web
 
 router = APIRouter(prefix="/web", tags=["web"])
 
@@ -274,17 +275,23 @@ def admin_subjects(_admin: User = Depends(require_admin), db: Session = Depends(
 
 
 # РАСПИСАНИЕ ──────────────────────────────────────────────────────────────────────
-# Заглушка: снимок расписания тянется с portal.esstu.ru. Серверная интеграция парсера
-# (schedule/) — следующий шаг; сейчас отдаём валидный пустой ответ, чтобы SPA не падал.
+# Снимок тянется с portal.esstu.ru серверным парсером (schedule_web, TTL-кэш). Данные
+# публичные, ПДн не участвуют. Оффлайн/ошибка → пустой снимок (200), SPA покажет заглушку.
 @router.get("/schedule/groups")
 def schedule_groups(user: User = Depends(get_current_user)):
-    return {"groups": [], "note": "Интеграция расписания ВСГУТУ подключается на сервере."}
+    return {"groups": schedule_web.list_groups()}
 
 
 @router.get("/schedule")
 def schedule_get(group: str = Query(""), user: User = Depends(get_current_user)):
-    return {"group": group, "days": [],
-            "note": "Интеграция расписания ВСГУТУ подключается на сервере."}
+    g = (group or user.group_name or "").strip()
+    data = schedule_web.get_group(g) if g else None
+    return {
+        "group": g,
+        "week": schedule_web.current_week_parity(),
+        "schedule": data,           # dict GroupSchedule.to_dict() или null
+        "available": data is not None,
+    }
 
 
 # «ВЕКТОР» ─────────────────────────────────────────────────────────────────────────
