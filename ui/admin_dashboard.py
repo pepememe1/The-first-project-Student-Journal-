@@ -782,7 +782,9 @@ class AdminDashboard(QWidget):
         #Данные пунктов — строки "доступ|движок": Qt возвращает Python-кортеж как
         #список, и сравнение со строкой надёжнее (без сюрпризов сериализации).
         self._srv_type = _QC()
-        self._srv_type.addItem("Serveo.net · SQLite3 — доступ из интернета", "serveo|sqlite")
+        self._srv_type.addItem("Свой домен · SQLite3 — HTTPS (боевой, esstu.gradebook.ru)", "domain|sqlite")
+        self._srv_type.addItem("Свой домен · PostgreSQL — HTTPS + нагрузка", "domain|postgres")
+        self._srv_type.addItem("Serveo.net · SQLite3 — доступ из интернета (тест)", "serveo|sqlite")
         self._srv_type.addItem("ВСГУТУ Сервер · SQLite3 — локальная сеть", "direct|sqlite")
         self._srv_type.addItem("ВСГУТУ Сервер · PostgreSQL — нагрузка/много ПК", "direct|postgres")
         self._srv_type.currentIndexChanged.connect(self._toggle_server_fields)
@@ -808,6 +810,23 @@ class AdminDashboard(QWidget):
                           "случайный каждый раз (тогда клиенты вводят новый при входе).",
                           11, C['text3']))
         hl.addWidget(self._serveo_box)
+
+        #Блок «Свой домен» (виден только для доступа 'domain'): поле домена + памятка.
+        self._domain_box = QWidget(); dbl = QVBoxLayout(self._domain_box)
+        dbl.setContentsMargins(0, 0, 0, 0); dbl.setSpacing(6)
+        dbl.addWidget(lbl("ДОМЕН СЕРВЕРА И САЙТА", 10, C['text3']))
+        self._domain = field_input("напр. esstu.gradebook.ru")
+        try:
+            import server_control
+            self._domain.setText(server_control.get_domain())
+        except Exception:
+            pass
+        dbl.addWidget(self._domain)
+        dbl.addWidget(lbl("HTTPS-сертификат Caddy получит сам (Let's Encrypt), адрес красивый "
+                          "и постоянный. Нужно один раз: домен куплен, A-запись домена → на "
+                          "публичный IP этого ПК, порты 80 и 443 открыты, рядом с программой "
+                          "лежит caddy.exe (один файл с caddyserver.com).", 11, C['text3']))
+        hl.addWidget(self._domain_box)
 
         #Блок реквизитов PostgreSQL (виден только для типа «ВСГУТУ · PostgreSQL»)
         self._pg_box = QWidget(); pgl = QVBoxLayout(self._pg_box)
@@ -840,27 +859,22 @@ class AdminDashboard(QWidget):
         hl.addLayout(prow)
 
         btnrow = QHBoxLayout()
-        self._srv_start = btn("Запустить сервер", "green", icon_name="play"); self._srv_start.clicked.connect(self._start_server)
+        self._srv_start = btn("Запустить сервер Десктопа и Сайта", "green", icon_name="play")
+        self._srv_start.clicked.connect(self._start_server)
         self._srv_stop  = btn("Остановить", "red", icon_name="stop"); self._srv_stop.clicked.connect(self._stop_server)
         btnrow.addWidget(self._srv_start); btnrow.addWidget(self._srv_stop); btnrow.addStretch()
         hl.addLayout(btnrow)
         self._srv_status = lbl("", 12); self._srv_status.setWordWrap(True)
         hl.addWidget(self._srv_status)
 
-        #Веб-версия (сайт) отдаётся с ТОГО ЖЕ адреса, что и API — сервер сам монтирует
-        #собранный фронтенд (dist). Кнопка «Запустить сайт» поднимает сервер (если ещё
-        #не запущен), берёт публичный адрес, ВПИСЫВАЕТ его в поле и КОПИРУЕТ в буфер
-        #обмена — админу остаётся отправить ссылку студентам/преподавателям.
+        #Сервер синхронизации и сам САЙТ живут на ОДНОМ адресе (сервер монтирует dist).
+        #Одна кнопка выше поднимает и то, и другое; адрес появляется здесь и КОПИРУЕТСЯ
+        #в буфер обмена — админу остаётся отправить ссылку студентам/преподавателям.
         hl.addWidget(separator())
-        hl.addWidget(lbl("Сайт (веб-версия) — тот же адрес, что и сервер:", 11, C['text3']))
-        site_row = QHBoxLayout()
-        self._site_url = field_input("нажмите «Запустить сайт»")
+        hl.addWidget(lbl("Адрес сервера и сайта (одно и то же — отправьте его пользователям):", 11, C['text3']))
+        self._site_url = field_input("появится после запуска")
         self._site_url.setReadOnly(True)
-        site_row.addWidget(self._site_url, 1)
-        self._site_start = btn("Запустить сайт", "green", icon_name="globe")
-        self._site_start.clicked.connect(self._launch_site)
-        site_row.addWidget(self._site_start)
-        hl.addLayout(site_row)
+        hl.addWidget(self._site_url)
 
         lay.addWidget(hc)
 
@@ -950,6 +964,7 @@ class AdminDashboard(QWidget):
         интернета, реквизиты PostgreSQL — только для PostgreSQL."""
         access, engine = self._current_type()
         self._serveo_box.setVisible(access == "serveo")
+        self._domain_box.setVisible(access == "domain")
         self._pg_box.setVisible(engine == "postgres")
 
     def _server_type_index(self, access: str, engine: str) -> int:
@@ -1116,10 +1131,17 @@ class AdminDashboard(QWidget):
             port = 8000
         access, engine = self._current_type()
         name = self._tun_name.text().strip()
+        domain = self._domain.text().strip()
         if access == "serveo":
             #Имя поддомена запоминаем, чтобы адрес был постоянным между запусками.
             try:
                 server_control.set_tunnel_name(name)
+            except Exception:
+                pass
+        elif access == "domain":
+            #Домен запоминаем, чтобы автозапуск поднимал HTTPS на том же адресе.
+            try:
+                server_control.set_domain(domain)
             except Exception:
                 pass
         pg = None
@@ -1136,13 +1158,15 @@ class AdminDashboard(QWidget):
             pg = {"host": self._pg_host.text(), "port": self._pg_port.text(),
                   "db": self._pg_db.text(), "user": self._pg_user.text(), "password": pw}
 
-        self._srv_status.setText("⏳ Запускаю сервер и открываю доступ (serveo)..."
-                                 if access == "serveo" else "⏳ Запускаю сервер...")
+        _startmsg = {"serveo": "⏳ Запускаю сервер и открываю доступ (serveo)...",
+                     "domain": "⏳ Запускаю сервер и HTTPS-домен (Caddy)..."}.get(
+                         access, "⏳ Запускаю сервер и сайт...")
+        self._srv_status.setText(_startmsg)
         self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
         self._srv_start.setEnabled(False)
 
         def _do():
-            return server_control.launch(access, engine, port, name, pg)
+            return server_control.launch(access, engine, port, name, pg, domain)
 
         def _apply(res):
             ok, url, message = res
@@ -1158,12 +1182,20 @@ class AdminDashboard(QWidget):
                     pass
                 mark_host()
                 set_host_autostart(True)
-                #Адрес сервера берём из launch(): для serveo это ПУБЛИЧНАЯ ссылка
-                #(serveo.net), для прямого доступа — локальный http://127.0.0.1:port.
-                #Раньше тут жёстко вписывался localhost, из-за чего поле адреса не
-                #показывало свежий serveo-адрес после запуска.
+                #Адрес берём из launch(): для домена это https://<домен>, для serveo —
+                #ссылка serveo.net, для прямого — http://127.0.0.1:port. Он же и адрес
+                #САЙТА (сервер отдаёт фронтенд с того же адреса).
                 set_api_url(url)
                 self._api_url.setText(url)
+                self._site_url.setText(url)
+                #Копируем адрес в буфер обмена — админу останется отправить ссылку.
+                try:
+                    from PySide6.QtWidgets import QApplication
+                    cb = QApplication.clipboard()
+                    if cb is not None:
+                        cb.setText(url)
+                except Exception:
+                    pass
                 #Будим фоновый синк: на хост-ПК он стартовал при входе ещё без адреса
                 #и idle-ждёт. Теперь адрес есть — пусть сразу залогинится на сервер,
                 #отдаст пользователей (иначе препод/студент получат 401) и подтянет
@@ -1173,91 +1205,12 @@ class AdminDashboard(QWidget):
                     sync_runner.trigger()
                 except Exception:
                     pass
-                QMessageBox.information(self, "Сервер запущен", message)
+                QMessageBox.information(self, "Сервер и сайт запущены",
+                                       message + "\n\nАдрес скопирован в буфер обмена — "
+                                       "отправьте ссылку студентам и преподавателям.")
             else:
                 QMessageBox.critical(self, "Сервер",
                                      message or "Не удалось запустить сервер.")
-            self._refresh_server_status()
-
-        self._run_bg(_do, _apply)
-
-    def _launch_site(self):
-        """«Запустить сайт»: поднимает сервер (он отдаёт веб-версию с ТОГО ЖЕ адреса),
-        берёт публичный адрес, вписывает его в поле и КОПИРУЕТ в буфер обмена.
-
-        Технически сайт и сервер живут на одном адресе (FastAPI монтирует собранный
-        фронтенд, см. server/app/main.py), поэтому «запуск сайта» = запуск сервера +
-        готовая к отправке ссылка. Логика запуска та же, что у «Запустить сервер»."""
-        import server_control
-        try:
-            port = int(self._srv_port.text().strip() or "8000")
-        except ValueError:
-            port = 8000
-        access, engine = self._current_type()
-        name = self._tun_name.text().strip()
-        if access == "serveo":
-            try:
-                server_control.set_tunnel_name(name)
-            except Exception:
-                pass
-        pg = None
-        if engine == "postgres":
-            pw = self._pg_pass.text()
-            if not pw:
-                from urllib.parse import urlparse, unquote
-                try:
-                    u = urlparse(server_control.get_db_url())
-                    pw = unquote(u.password or "") if server_control.is_postgres() else ""
-                except Exception:
-                    pw = ""
-            pg = {"host": self._pg_host.text(), "port": self._pg_port.text(),
-                  "db": self._pg_db.text(), "user": self._pg_user.text(), "password": pw}
-
-        self._srv_status.setText("⏳ Запускаю сайт (сервер + доступ)...")
-        self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
-        self._site_start.setEnabled(False)
-
-        def _do():
-            return server_control.launch(access, engine, port, name, pg)
-
-        def _apply(res):
-            ok, url, message = res
-            self._site_start.setEnabled(True)
-            if ok and url:
-                from app_settings import set_api_url, set_host_autostart, mark_host
-                try:
-                    server_control.set_server_port(port)
-                except Exception:
-                    pass
-                mark_host()
-                set_host_autostart(True)
-                set_api_url(url)
-                self._api_url.setText(url)
-                self._site_url.setText(url)
-                #Копируем адрес сайта в буфер обмена — админу останется отправить ссылку.
-                copied = False
-                try:
-                    from PySide6.QtWidgets import QApplication
-                    cb = QApplication.clipboard()
-                    if cb is not None:
-                        cb.setText(url)
-                        copied = True
-                except Exception:
-                    pass
-                #Будим фоновый синк (как в _start_server): адрес есть — пусть хост
-                #залогинится на сервер и отдаст пользователей, не дожидаясь интервала.
-                try:
-                    import sync_runner
-                    sync_runner.trigger()
-                except Exception:
-                    pass
-                QMessageBox.information(
-                    self, "Сайт запущен",
-                    f"Сайт доступен по адресу:\n{url}\n\n"
-                    + ("Адрес скопирован в буфер обмена — отправьте ссылку студентам "
-                       "и преподавателям." if copied else "Скопируйте адрес из поля выше."))
-            else:
-                QMessageBox.critical(self, "Сайт", message or "Не удалось запустить сайт.")
             self._refresh_server_status()
 
         self._run_bg(_do, _apply)

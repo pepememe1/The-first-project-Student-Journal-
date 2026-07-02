@@ -52,6 +52,12 @@ SERVER_PID = os.path.join(SERVER_DIR, "server.pid")
 SERVER_LOG = os.path.join(SERVER_DIR, "server.log")
 TUNNEL_PID = os.path.join(SERVER_DIR, "tunnel.pid")
 TUNNEL_LOG = os.path.join(SERVER_DIR, "tunnel.log")
+#Caddy — HTTPS-прокси под СВОИМ доменом (авто-сертификат Let's Encrypt). Отдельный
+#фоновый процесс, как ssh-туннель: свой PID, лог и Caddyfile. TLS терминируется на
+#этом ПК своим доменом — данные не идут через чужого посредника (важно для 152-ФЗ).
+CADDY_PID = os.path.join(SERVER_DIR, "caddy.pid")
+CADDY_LOG = os.path.join(SERVER_DIR, "caddy.log")
+CADDYFILE = os.path.join(SERVER_DIR, "Caddyfile")
 
 
 #PID-файлы и проверка/остановка процессов (кросс-платформенно, без psutil)
@@ -464,19 +470,120 @@ def public_tunnel_url(name: str = "") -> str:
     return f"https://{name}.serveo.net" if name else ""
 
 
+#Свой домен + HTTPS через Caddy — боевая альтернатива serveo. TLS терминируется на
+#ЭТОМ ПК под своим доменом (напр. esstu.gradebook.ru), без иностранного посредника —
+#это и нужно для 152-ФЗ. Домен храним в .env, чтобы адрес был постоянным.
+def get_domain() -> str:
+    return read_env().get("GRADEBOOK_DOMAIN", "").strip()
+
+
+def _norm_domain(domain: str) -> str:
+    """Чистое имя хоста из того, что ввёл админ: без схемы, слэшей и пробелов."""
+    d = (domain or "").strip().lower()
+    for pref in ("https://", "http://"):
+        if d.startswith(pref):
+            d = d[len(pref):]
+    return d.strip("/ ").split("/")[0]
+
+
+def set_domain(domain: str) -> bool:
+    env = read_env()
+    env["GRADEBOOK_DOMAIN"] = _norm_domain(domain)
+    return _write_env(env)
+
+
+def public_domain_url(domain: str = "") -> str:
+    domain = _norm_domain(domain or get_domain())
+    return f"https://{domain}" if domain else ""
+
+
+def _find_caddy() -> str:
+    """Путь к Caddy: рядом с программой, в SERVER_DIR или в PATH ('' — не найден)."""
+    import shutil
+    names = ["caddy.exe", "caddy"] if os.name == "nt" else ["caddy"]
+    for base in (_HERE, SERVER_DIR):
+        for n in names:
+            p = os.path.join(base, n)
+            if os.path.isfile(p):
+                return p
+    return shutil.which("caddy") or ""
+
+
+def caddy_alive() -> bool:
+    """True, если фоновый Caddy ещё жив (по сохранённому PID)."""
+    return _pid_alive(_read_pid(CADDY_PID))
+
+
+def _write_caddyfile(domain: str, port: int) -> None:
+    """Минимальный Caddyfile: домен → reverse_proxy на локальный uvicorn. Caddy сам
+    получит и продлит сертификат Let's Encrypt. X-Forwarded-For доходит до сервера
+    (нужен серверному анти-брутфорсу)."""
+    with open(CADDYFILE, "w", encoding="utf-8") as f:
+        f.write(f"{domain} {{\n\treverse_proxy 127.0.0.1:{port}\n}}\n")
+
+
+def start_caddy_process(domain: str, port: int = DEFAULT_PORT) -> tuple:
+    """Поднимает Caddy ОТДЕЛЬНЫМ процессом (переживает закрытие программы): HTTPS на
+    своём домене → 127.0.0.1:port (там и API, и сайт). Возвращает (ok, 'https://domain'
+    | причина).
+
+    Что нужно один раз (инфраструктура, прога её не создаёт): домен куплен; A-запись
+    домена → публичный IP этого ПК; порты 80 и 443 открыты/проброшены; установлен Caddy
+    (один .exe с caddyserver.com рядом с программой или в PATH)."""
+    domain = _norm_domain(domain or get_domain())
+    if not domain:
+        return False, "Не задан домен (например, esstu.gradebook.ru)."
+    if caddy_alive():
+        return True, public_domain_url(domain)
+    caddy = _find_caddy()
+    if not caddy:
+        return False, ("Не найден Caddy. Скачайте один файл caddy.exe с caddyserver.com "
+                       "и положите рядом с программой (или добавьте в PATH).")
+    _write_caddyfile(domain, port)
+    try:
+        logf = open(CADDY_LOG, "w", encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(
+            [caddy, "run", "--config", CADDYFILE, "--adapter", "caddyfile"],
+            stdin=subprocess.DEVNULL, stdout=logf, stderr=subprocess.STDOUT,
+            close_fds=True, creationflags=_detached_flags(),
+            start_new_session=(os.name != "nt"), cwd=SERVER_DIR)
+    except Exception as e:
+        return False, f"Не удалось запустить Caddy: {e}"
+    _write_pid(CADDY_PID, proc.pid)
+    #Даём Caddy подняться (получение сертификата — секунды). Сразу упал — честно скажем.
+    time.sleep(2.5)
+    if proc.poll() is not None:
+        return False, ("Caddy сразу завершился (см. server/caddy.log). Проверьте A-запись "
+                       "домена на этот ПК и открытость портов 80/443.")
+    return True, public_domain_url(domain)
+
+
+def stop_caddy() -> tuple:
+    """Останавливает фоновый Caddy по сохранённому PID."""
+    pid = _read_pid(CADDY_PID)
+    if pid:
+        _pid_kill(pid)
+    try:
+        os.remove(CADDY_PID)
+    except OSError:
+        pass
+    return True, "Caddy остановлен."
+
+
 #Режим доступа к серверу — чтобы при следующем открытии админки восстановить выбор
 #типа сервера. 'serveo' — доступ из интернета через туннель; 'direct' — сервер
 #виден напрямую (локальная сеть / свой домен). Это настройка ПК-хоста, живёт в .env
 #рядом с прочей серверной конфигурацией.
 def get_access_mode() -> str:
-    """'serveo' или 'direct' (по умолчанию — 'direct', т.е. ВСГУТУ-сервер в ЛВС)."""
+    """'serveo' | 'domain' | 'direct' (по умолчанию — 'direct', ВСГУТУ-сервер в ЛВС)."""
     mode = read_env().get("GRADEBOOK_ACCESS_MODE", "").strip().lower()
-    return "serveo" if mode == "serveo" else "direct"
+    return mode if mode in ("serveo", "domain") else "direct"
 
 
 def set_access_mode(mode: str) -> bool:
     env = read_env()
-    env["GRADEBOOK_ACCESS_MODE"] = "serveo" if (mode or "").strip().lower() == "serveo" else "direct"
+    m = (mode or "").strip().lower()
+    env["GRADEBOOK_ACCESS_MODE"] = m if m in ("serveo", "domain") else "direct"
     return _write_env(env)
 
 
@@ -578,12 +685,13 @@ def stop_processes(port: int = DEFAULT_PORT) -> tuple:
     """Останавливает фоновые процессы хоста: сервер и туннель. Зовётся кнопкой
     «Остановить» в админке (закрытие программы их НЕ гасит — это и есть цель)."""
     stop_tunnel()
+    stop_caddy()
     return stop_server(port)
 
 
 #Единый запуск из админки (одна кнопка «Запустить сервер»)
 def launch(access: str, engine: str, port: int = DEFAULT_PORT,
-           name: str = "", pg: dict = None) -> tuple:
+           name: str = "", pg: dict = None, domain: str = "") -> tuple:
     """Поднимает сервер «под ключ» по выбранному типу и возвращает адрес, который
     надо сохранить в программе как адрес сервера синхронизации.
 
@@ -595,7 +703,8 @@ def launch(access: str, engine: str, port: int = DEFAULT_PORT,
     engine: 'sqlite' | 'postgres'.
     Возвращает (ok: bool, url: str, message: str). url — что сохранить как адрес
     сервера ('' при ошибке)."""
-    access = "serveo" if (access or "").lower() == "serveo" else "direct"
+    a = (access or "").lower()
+    access = a if a in ("serveo", "domain") else "direct"
     engine = "postgres" if (engine or "").lower() == "postgres" else "sqlite"
 
     #1. Движок серверной БД в .env (его прочитает start_server до импорта сервера).
@@ -620,6 +729,20 @@ def launch(access: str, engine: str, port: int = DEFAULT_PORT,
     #3. Доступ к серверу. Свой адрес у хоста — всегда 127.0.0.1 (сервер локальный);
     #публичный адрес для ДРУГИХ ПК отдаём в сообщении.
     local_url = f"http://127.0.0.1:{port}"
+
+    #Свой домен + HTTPS (Caddy): адрес — красивый https://<домен>, он же и сервер, и сайт.
+    if access == "domain":
+        dom = _norm_domain(domain or get_domain())
+        if not dom:
+            return False, "", "Не задан домен для HTTPS (например, esstu.gradebook.ru)."
+        set_domain(dom)
+        ok, res = start_caddy_process(dom, port)
+        if not ok:
+            return False, "", f"Сервер запущен, но HTTPS-домен не поднялся: {res}"
+        public = public_domain_url(dom)
+        return True, public, (f"Сервер и сайт запущены под своим доменом (фоновые — "
+                              f"работают и без программы).\nАдрес (сервер + сайт):\n{public}")
+
     if access == "serveo":
         ensure_tunnel_name()                      #гарантируем ПОСТОЯННОЕ имя
         ok, res = start_tunnel_process(port, name or get_tunnel_name())
@@ -655,10 +778,16 @@ def autostart(port: int = None) -> tuple:
     if not ok:
         return False, "", msg
 
-    if get_access_mode() == "serveo":
+    mode = get_access_mode()
+    if mode == "serveo":
         try:
             start_tunnel_process(port, ensure_tunnel_name())   #подхватит живой туннель
         except Exception as e:
             print(f"[server_control] автозапуск туннеля пропущен: {e}")
+    elif mode == "domain":
+        try:
+            start_caddy_process(get_domain(), port)            #подхватит живой Caddy
+        except Exception as e:
+            print(f"[server_control] автозапуск Caddy пропущен: {e}")
 
     return True, f"http://127.0.0.1:{port}", f"Сервер хоста запущен на порту {port}."
