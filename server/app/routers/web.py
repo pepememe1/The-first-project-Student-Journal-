@@ -65,11 +65,37 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
         Grade.student_f == user.surname, Grade.student_n == user.name,
         Grade.deleted == False, Grade.updated_at >= cutoff).count()  # noqa: E712
 
+    # «Мои предметы» + счётчики + посещаемость (как на главной десктопа).
+    from collections import OrderedDict
+    subj_lessons = OrderedDict()
+    for l in lessons:
+        subj_lessons.setdefault(l.subject, []).append(l)
+    subjects = []
+    grades_total = 0
+    lec_total = lec_present = 0
+    for subj, ls in subj_lessons.items():
+        cnt = 0
+        for l in ls:
+            v = (records.get(l.id) or "").strip()
+            if l.type in ("Практика", "Экзамен") and v:
+                cnt += 1
+            elif l.type == "Лекция":
+                lec_total += 1
+                if v not in ("Н", "Б", "О"):
+                    lec_present += 1
+        grades_total += cnt
+        subjects.append({"subject": subj, "grades": cnt})
+    attendance = round(100 * lec_present / lec_total) if lec_total else 100
+
     return {
         "name": W.display_name(user),
         "group": user.group_name,
         "average": W.average(lessons, records, cfg),
         "grades_month": grades_month,
+        "grades_total": grades_total,
+        "subjects": subjects,
+        "subjects_count": len(subjects),
+        "attendance": attendance,
         "next_lesson": None,  # появится с интеграцией расписания
         "debts": len(W.debts(lessons, records)),
         "recent": recent,
