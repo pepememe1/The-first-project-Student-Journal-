@@ -122,6 +122,14 @@ def main():
     #клиенты продолжают синкаться). Останавливаются они только кнопкой «Остановить» в
     #админке (server_control.stop_processes) или вручную.
     def _on_quit():
+        #Перед закрытием ДО-ОТПРАВЛЯЕМ накопленные правки на сервер (синхронно), чтобы
+        #данные не «застряли» локально до следующего запуска. Без авторизации flush
+        #выходит сразу (не вешает закрытие). Только потом — локальный бэкап.
+        try:
+            import sync_runner
+            sync_runner.flush()
+        except Exception as _e:
+            print(f"[exit sync] {_e}")
         try:
             from core import DBManager
             DBManager.backup(reason="on_exit")
