@@ -279,12 +279,12 @@ class AnimatedBackground(QWidget):
                 "ph": random.uniform(0, math.tau),       #фаза мерцания
             })
         self._hexes = []
-        for _ in range(5):
+        for _ in range(6):
             self._hexes.append({
                 "x": random.uniform(0, W), "y": random.uniform(0, H),
-                "R": random.uniform(40, 110),
-                "vx": random.uniform(-0.18, 0.18), "vy": random.uniform(-0.18, 0.18),
-                "ang": random.uniform(0, math.pi), "spin": random.uniform(-0.004, 0.004),
+                "R": random.uniform(70, 190),
+                "vx": random.uniform(-0.16, 0.16), "vy": random.uniform(-0.16, 0.16),
+                "ang": random.uniform(0, math.pi), "spin": random.uniform(-0.0035, 0.0035),
             })
         #пара мягких пятен — статичные опорные точки, слегка «дышат» в _advance
         self._blobs = [
@@ -368,6 +368,20 @@ class AnimatedBackground(QWidget):
             fill = QColor(C['green']); fill.setAlpha(20)
             p.setPen(QPen(edge, 2.0)); p.setBrush(QBrush(fill))
             p.drawPolygon(poly)
+
+        #2.5) «Живая» сеть-созвездие: тонкие линии между близкими частицами — оживляет
+        #фон, как связанные узлы. Дёшево: 30 точек → ~435 пар за кадр.
+        p.setBrush(Qt.NoBrush)
+        n = len(self._particles)
+        for i in range(n):
+            a = self._particles[i]
+            for j in range(i + 1, n):
+                b = self._particles[j]
+                d = math.hypot(a["x"] - b["x"], a["y"] - b["y"])
+                if d < 155:
+                    lc = QColor(C['green']); lc.setAlpha(int(38 * (1 - d / 155)))
+                    p.setPen(QPen(lc, 1))
+                    p.drawLine(QPointF(a["x"], a["y"]), QPointF(b["x"], b["y"]))
 
         #3) Частицы (мерцают по фазе) — лёгкое «звёздное» поле в цвет акцента.
         p.setPen(Qt.NoPen)

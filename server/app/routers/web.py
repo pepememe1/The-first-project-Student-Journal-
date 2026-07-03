@@ -307,38 +307,75 @@ def vector_ask(payload: dict = Body(...),
     msg = (payload.get("message") or "").strip().lower()
     cfg = W.load_config(db)
 
+    def has(*keys):
+        return any(k in msg for k in keys)
+
+    #В ответе ВСЕГДА возвращаем intent — по нему клиент выбирает эмоцию маскота ровно как
+    #emotes.pick() в десктопе (задействуются все 30 спрайтов: debtors/absences → предупреж,
+    #hello → радость+поздрав, sad → грусть+подбадрив и т.д.).
     if user.role == "student":
         lessons = W.group_lessons(db, user.group_name)
         records = W.student_records(db, user.surname, user.name)
         avg = W.average(lessons, records, cfg)
-
-        if any(k in msg for k in ("долг", "задолж", "хвост", "не сдал")):
+        if has("долг", "задолж", "хвост", "не сдал"):
             d = W.debts(lessons, records)
             text = "Задолженностей нет — так держать!" if not d else \
                 "Есть задолженности: " + "; ".join(d) + "."
-            mood = "happy" if not d else "sad"
-        elif any(k in msg for k in ("пропуск", "прогул", "посещ", "отсутств")):
+            return {"text": text, "mood": "happy" if not d else "sad",
+                    "intent": "debtors", "facts": {"debts": len(d)}}
+        if has("пропуск", "прогул", "посещ", "отсутств"):
             a = W.absences(lessons, records)
-            text = (f"Пропусков всего: {a['всего']} "
-                    f"(Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).")
-            mood = "neutral" if a["всего"] else "happy"
-        elif any(k in msg for k in ("средн", "балл", "оцен", "успеваем")):
-            text = f"Ваш средний балл — {avg}. " + W.grading.methodology_text(cfg)
-            mood = _mood_by_avg(avg)
-        elif any(k in msg for k in ("привет", "здравств", "хай", "добр день", "добрый")):
-            text = (f"Привет! Ваш средний балл — {avg}. "
-                    "Спросите про оценки, задолженности или пропуски.")
-            mood = _mood_by_avg(avg)
-        else:
-            text = ("Я беру цифры из ваших реальных данных. Спросите: «какой мой "
-                    "средний балл», «есть ли задолженности», «сколько пропусков».")
-            mood = "neutral"
-        return {"text": text, "mood": mood, "facts": {"average": avg}}
+            return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
+                    "mood": "neutral" if a["всего"] else "happy",
+                    "intent": "absences", "facts": a}
+        if has("средн", "балл", "оцен", "успеваем"):
+            return {"text": f"Ваш средний балл — {avg}. " + W.grading.methodology_text(cfg),
+                    "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}
+        if has("привет", "здравств", "хай", "добр день", "добрый"):
+            return {"text": f"Привет! Ваш средний балл — {avg}. "
+                            "Спросите про оценки, задолженности или пропуски.",
+                    "mood": _mood_by_avg(avg), "intent": "hello", "facts": {"average": avg}}
+        if has("спасиб", "благодар"):
+            return {"text": "Всегда рад помочь! 🐯", "mood": "happy", "intent": "thanks", "facts": {}}
+        return {"text": "Я беру цифры из ваших реальных данных. Спросите: «какой мой средний "
+                        "балл», «есть ли задолженности», «сколько пропусков».",
+                "mood": "neutral", "intent": "help", "facts": {}}
 
-    #teacher/admin — безопасная заглушка (полный конвейер аналитики — следующий шаг).
-    return {"text": "Аналитика по группам и студентам для персонала подключается на "
-                    "сервере (анти-галлюцинационный конвейер).",
-            "mood": "neutral", "facts": {}}
+    if user.role == "teacher":
+        subjects = set(user.subjects or [])
+        groups = W.teacher_groups(db, subjects)
+        per, risk = [], 0
+        for g in groups:
+            gl = [l for l in W.group_lessons(db, g) if l.subject in subjects]
+            vals = []
+            for s in W.students_in_group(db, g):
+                a = W.average(gl, W.student_records(db, s.surname, s.name), cfg)
+                if 0 < a < 3:
+                    risk += 1
+                if a > 0:
+                    vals.append(a)
+            per.append((g, round(sum(vals) / len(vals), 2) if vals else 0.0))
+        if has("риск", "должник", "долг", "отстаю", "слаб", "двоеч", "хвост"):
+            return {"text": (f"В зоне риска (средний ниже 3) сейчас {risk} студ." if risk
+                             else "Отстающих (средний ниже 3) нет — группы идут ровно."),
+                    "mood": "sad" if risk else "happy",
+                    "intent": "at_risk", "facts": {"at_risk": risk}}
+        if per:
+            body = "; ".join(f"{g}: {ga}" for g, ga in per)
+            return {"text": f"Средний по вашим группам — {body}. Студентов в зоне риска: {risk}.",
+                    "mood": "neutral", "intent": "group_stats",
+                    "facts": {"groups": len(per), "at_risk": risk}}
+        return {"text": "За вами пока нет групп с занятиями по вашим предметам.",
+                "mood": "neutral", "intent": "help", "facts": {}}
+
+    #admin — агрегаты по заведению (только счётчики, без чужих ПДн в тексте).
+    n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
+    n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
+    n_groups = db.query(Group).filter(Group.deleted == False).count()  # noqa: E712
+    return {"text": f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
+                    f"групп — {n_groups}. Спросите про мониторинг или конкретную группу.",
+            "mood": "neutral", "intent": "group_stats",
+            "facts": {"students": n_students, "teachers": n_teachers, "groups": n_groups}}
 
 
 # ЗАПИСЬ (Phase B) ─────────────────────────────────────────────────────────────────
