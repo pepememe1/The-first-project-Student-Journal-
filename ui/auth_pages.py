@@ -446,6 +446,29 @@ class LoginPage(QWidget):
         self._bg = AnimatedBackground(self, animated=True)
         self._bg.lower()
 
+        #Бренд в левом верхнем углу окна (лого GB + название), поверх фона. HexLogoWidget
+        #рисуется В ЦВЕТАХ ТЕМЫ — поэтому значок сам меняется вместе со сменой темы
+        #(тёмная/светлая, кастомный акцент). Позиция задаётся в resizeEvent.
+        self._brand = QWidget(self)
+        _bl = QHBoxLayout(self._brand)
+        _bl.setContentsMargins(0, 0, 0, 0)
+        _bl.setSpacing(8)
+        _blogo = HexLogoWidget(30)
+        _blogo.setFixedSize(30, 30)
+        _bname = QLabel("GradeBookAI")
+        _bname.setStyleSheet(f"font-size:15px;font-weight:800;color:{C['text']};background:transparent;")
+        _bl.addWidget(_blogo)
+        _bl.addWidget(_bname)
+        self._brand.adjustSize()
+        self._brand.raise_()
+
+        #Футер по центру у нижнего края окна (те же надписи, что на сайте).
+        self._footer = QLabel(
+            "© 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse", self)
+        self._footer.setStyleSheet(f"color:{C['text3']};font-size:11px;background:transparent;")
+        self._footer.adjustSize()
+        self._footer.raise_()
+
         #Советы Вектора (для облачка при наведении) — берём из общего источника.
         try:
             from vector.faq import LOGIN_TIPS
@@ -586,14 +609,6 @@ class LoginPage(QWidget):
         row.addWidget(self._build_hero(), 0, Qt.AlignVCenter)
         row.addStretch(1)
         outer.addLayout(row)
-
-        #Футер — фирменная подпись (те же надписи, что на сайте): завершает экран и
-        #держит бренд. Идёт под блоком входа, по центру.
-        outer.addSpacing(16)
-        footer = QLabel("© 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse")
-        footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet(f"color:{C['text3']};font-size:11px;")
-        outer.addWidget(footer, 0, Qt.AlignHCenter)
 
         #Облачко-подсказка Вектора живёт поверх всего; позицию задаём при наведении.
         self._tip_bubble = _SpeechBubble(self)
@@ -765,6 +780,13 @@ class LoginPage(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._bg.setGeometry(0, 0, self.width(), self.height())
+        #Бренд — в левый верхний угол; футер — по центру у нижнего края окна.
+        if getattr(self, "_brand", None) is not None:
+            self._brand.move(24, 18)
+        if getattr(self, "_footer", None) is not None:
+            self._footer.adjustSize()
+            self._footer.move((self.width() - self._footer.width()) // 2,
+                              self.height() - self._footer.height() - 14)
 
     def _show_err(self, msg):
         self.err_lbl.setText(msg)
