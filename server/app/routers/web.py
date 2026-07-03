@@ -520,3 +520,86 @@ def admin_delete_student(login: str,
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "login": login}
+
+
+# --- Группы (CRUD) --- id=grp:name (как в sync_engine); удаление мягкое (надгробие).
+@router.post("/admin/groups")
+def admin_create_group(payload: dict = Body(...),
+                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно название группы")
+    gid = f"grp:{name}"
+    existing = db.get(Group, gid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Группа с таким названием уже есть")
+    row = existing or Group(id=gid)
+    if existing is None:
+        db.add(row)
+    row.name = name
+    row.subjects = payload.get("subjects") or []
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    return {"ok": True, "name": name}
+
+
+@router.put("/admin/groups/{name}")
+def admin_update_group(name: str, payload: dict = Body(...),
+                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Правка группы (название — ключ, не меняем). Меняем список предметов группы."""
+    row = db.get(Group, f"grp:{name}")
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    if "subjects" in payload:
+        row.subjects = payload.get("subjects") or []
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "name": name}
+
+
+@router.delete("/admin/groups/{name}")
+def admin_delete_group(name: str,
+                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.get(Group, f"grp:{name}")
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "name": name}
+
+
+# --- Предметы (CRUD) --- id=subj:name. NB: на десктопе список предметов аддитивный
+# (apply_remote объединяет множества), поэтому удаление предмета убирает его из веба и
+# таблицы, но на десктопе он может остаться до ручной чистки — это поведение синка §subjects.
+@router.post("/admin/subjects")
+def admin_create_subject(payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно название предмета")
+    sid = f"subj:{name}"
+    existing = db.get(Subject, sid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Такой предмет уже есть")
+    row = existing or Subject(id=sid)
+    if existing is None:
+        db.add(row)
+    row.name = name
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    return {"ok": True, "name": name}
+
+
+@router.delete("/admin/subjects/{name}")
+def admin_delete_subject(name: str,
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.get(Subject, f"subj:{name}")
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "name": name}
