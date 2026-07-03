@@ -61,11 +61,17 @@ def _get_app_dir() -> str:
 
 
 def get_icon() -> QIcon:
-    base_dir = _get_app_dir()
-    for name in ("icon.ico", "icon.png", "icon.jpg"):
-        path = os.path.join(base_dir, name)
-        if os.path.exists(path):
-            return QIcon(path)
+    #onefile: иконка распакована в sys._MEIPASS (рядом с .exe её нет), поэтому проверяем
+    #и папку рядом с программой, и распаковку.
+    bases = [_get_app_dir()]
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        bases.append(meipass)
+    for base_dir in bases:
+        for name in ("icon.ico", "icon.png", "icon.jpg"):
+            path = os.path.join(base_dir, name)
+            if os.path.exists(path):
+                return QIcon(path)
     return QIcon()
 
 
