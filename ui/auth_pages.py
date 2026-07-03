@@ -587,6 +587,14 @@ class LoginPage(QWidget):
         row.addStretch(1)
         outer.addLayout(row)
 
+        #Футер — фирменная подпись (те же надписи, что на сайте): завершает экран и
+        #держит бренд. Идёт под блоком входа, по центру.
+        outer.addSpacing(16)
+        footer = QLabel("© 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet(f"color:{C['text3']};font-size:11px;")
+        outer.addWidget(footer, 0, Qt.AlignHCenter)
+
         #Облачко-подсказка Вектора живёт поверх всего; позицию задаём при наведении.
         self._tip_bubble = _SpeechBubble(self)
 
