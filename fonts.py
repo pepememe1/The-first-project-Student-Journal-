@@ -21,8 +21,12 @@ _BODY_CANDIDATES  = ["DM Sans", "Segoe UI", "PT Sans", "Arial", "Helvetica", "sa
 
 
 def _get_fonts_dir() -> str:
-    """Папка fonts/ рядом с .exe или скриптом (необязательная)."""
+    """Папка fonts/ рядом с .exe/скриптом или в распаковке onefile (_MEIPASS)."""
     if getattr(sys, "frozen", False):
+        #onefile: ассеты распакованы во временный sys._MEIPASS — рядом с .exe их нет.
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass and os.path.isdir(os.path.join(meipass, "fonts")):
+            return os.path.join(meipass, "fonts")
         base = os.path.dirname(sys.executable)
     else:
         base = os.path.dirname(os.path.abspath(__file__))
