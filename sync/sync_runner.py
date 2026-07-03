@@ -138,7 +138,14 @@ class SyncManager:
         if self._client.refresh_token and self._try_refresh():
             return True
 
-        #4) вход по паролю. Перед ним — jitter (размазать герд входов в 9:00).
+        #4) вход по паролю. ВАЖНО: если пароля нет (восстановленная сессия без
+        #сохранённого токена — main_window запускает синк как start(login, "", role)),
+        #НЕ ходим на сервер. Неудачный вход с пустым паролем каждый цикл накручивал бы
+        #анти-брутфорс (429) и блокировал бы даже правильный вход. Тихо ждём, пока
+        #пользователь войдёт заново с паролем (data_store передаст его в start()).
+        if not (self._password or "").strip():
+            return False
+        #Перед входом — jitter (размазать герд входов в 9:00).
         self._client.token = None
         self._apply_login_jitter()
         try:
