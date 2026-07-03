@@ -6,7 +6,9 @@ web.py — READ-представления для веб-версии (SPA). В�
 роль вправе видеть, уже в готовом для UI виде. Средний балл считается через grading.py
 (единый источник), поэтому цифры совпадают с десктопом.
 
-Пишущих операций тут нет — оценки по-прежнему ставит десктоп через /sync/push.
+Есть и ЗАПИСЬ (Phase B, в конце файла): преподаватель ставит оценки, админ ведёт CRUD
+студентов. Пишем в те же таблицы и в том же формате id, что и синк десктопа — правки
+подхватываются десктопом обычным pull; метку LWW ставит сервер (инвариант §3).
 """
 from datetime import datetime, timezone, timedelta
 
@@ -337,3 +339,147 @@ def vector_ask(payload: dict = Body(...),
     return {"text": "Аналитика по группам и студентам для персонала подключается на "
                     "сервере (анти-галлюцинационный конвейер).",
             "mood": "neutral", "facts": {}}
+
+
+# ЗАПИСЬ (Phase B) ─────────────────────────────────────────────────────────────────
+# Веб теперь не только читает. Пишем в ТЕ ЖЕ таблицы (grades/users/groups) и в ТОМ ЖЕ
+# формате id, что и синк десктопа (sync_engine), поэтому десктоп подхватывает правки
+# обычным pull. Метку времени для LWW ставит СЕРВЕР (инвариант §3), а не часы клиента.
+def _now_iso() -> str:
+    """Серверная UTC-метка updated_at для LWW (как в /sync/push)."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+@router.post("/teacher/grade")
+def teacher_set_grade(payload: dict = Body(...),
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Преподаватель выставляет/меняет/снимает оценку. id грейда = «f|n|lesson_id»
+    (как в sync_engine) → десктоп получит её через pull. Пустой grade = снять оценку
+    (надгробие). Пишем только по СВОЕМУ предмету и студенту своей группы (row-level)."""
+    _require("teacher", user)
+    surname = (payload.get("surname") or "").strip()
+    name = (payload.get("name") or "").strip()
+    lesson_id = (payload.get("lesson_id") or "").strip()
+    value = (payload.get("grade") or "").strip()
+    if not (surname and name and lesson_id):
+        raise HTTPException(status_code=400, detail="Нужны surname, name и lesson_id")
+    lesson = db.query(Lesson).filter(
+        Lesson.id == lesson_id, Lesson.deleted == False).first()  # noqa: E712
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Занятие не найдено")
+    _teacher_check_subject(user, lesson.subject)   #только свой предмет
+    stud = db.query(User).filter(
+        User.role == "student", User.surname == surname, User.name == name,
+        User.group_name == lesson.group_name, User.deleted == False).first()  # noqa: E712
+    if not stud:
+        raise HTTPException(status_code=400, detail="Студент не найден в группе занятия")
+    gid = f"{surname}|{name}|{lesson_id}"
+    now = _now_iso()
+    cleared = (value == "")
+    row = db.get(Grade, gid)
+    if row is None:
+        row = Grade(id=gid, student_f=surname, student_n=name, lesson_id=lesson_id)
+        db.add(row)
+    row.grade = value
+    row.device = "web"
+    row.updated_at = now
+    row.deleted = cleared
+    db.commit()
+    return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now}
+
+
+def _ensure_group_row(db: Session, name: str):
+    """Заводит группу в таблице groups, если её ещё нет (id=grp:name) — как десктоп при
+    добавлении студента (_ensure_group_exists). Так группа не «висит» и уедет в десктоп."""
+    name = (name or "").strip()
+    if not name:
+        return
+    gid = f"grp:{name}"
+    row = db.get(Group, gid)
+    if row is None:
+        db.add(Group(id=gid, name=name, subjects=[], updated_at=_now_iso(), deleted=False))
+    elif row.deleted:
+        row.deleted = False
+        row.updated_at = _now_iso()
+
+
+@router.post("/admin/students")
+def admin_create_student(payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Создать студента (id=stud:login, как в sync_engine). Пароль хешируется тем же
+    гибридом (server.security) → вход работает и с сайта, и из десктопа. Группа
+    авто-создаётся, если её ещё нет (пункт 3 на сайте)."""
+    surname = (payload.get("surname") or "").strip()
+    name = (payload.get("name") or "").strip()
+    login = (payload.get("login") or "").strip()
+    group = (payload.get("group") or "").strip()
+    password = payload.get("password") or ""
+    if not (surname and name):
+        raise HTTPException(status_code=400, detail="Нужны фамилия и имя")
+    if not login:
+        raise HTTPException(status_code=400, detail="Нужен логин")
+    sid = f"stud:{login}"
+    existing = db.get(User, sid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Студент с таким логином уже есть")
+    _ensure_group_row(db, group)
+    row = existing or User(id=sid)
+    if existing is None:
+        db.add(row)
+    row.role = "student"
+    row.login = login
+    row.surname = surname
+    row.name = name
+    row.group_name = group
+    row.full_name = ""
+    row.subjects = []
+    row.group_assignments = {}
+    if password:
+        from ..security import hash_password
+        row.password_hash = hash_password(password)
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    return {"ok": True, "login": login, "id": sid}
+
+
+@router.put("/admin/students/{login}")
+def admin_update_student(login: str, payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Правка студента. Логин — ключ (id=stud:login), его не меняем: смена логина = это
+    другой студент (создайте нового). Меняем ФИО/группу/пароль. Пустой пароль —
+    оставляем прежний хеш."""
+    sid = f"stud:{login}"
+    row = db.get(User, sid)
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Студент не найден")
+    if "surname" in payload:
+        row.surname = (payload.get("surname") or "").strip()
+    if "name" in payload:
+        row.name = (payload.get("name") or "").strip()
+    if "group" in payload:
+        group = (payload.get("group") or "").strip()
+        _ensure_group_row(db, group)
+        row.group_name = group
+    password = payload.get("password") or ""
+    if password:
+        from ..security import hash_password
+        row.password_hash = hash_password(password)
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "login": login}
+
+
+@router.delete("/admin/students/{login}")
+def admin_delete_student(login: str,
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Мягкое удаление студента (надгробие deleted=1): удаление доедет до десктопа и
+    других клиентов через pull, а не «воскреснет» на следующем синке."""
+    sid = f"stud:{login}"
+    row = db.get(User, sid)
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Студент не найден")
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "login": login}
