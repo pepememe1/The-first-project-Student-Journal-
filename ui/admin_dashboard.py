@@ -403,7 +403,8 @@ class AdminDashboard(QWidget):
         lay.addWidget(title_lbl(f"{s.get('surname', '')} {s.get('name', '')}", 18))
         sn = field_input(); sn.setText(s.get("surname", ""))
         nm = field_input(); nm.setText(s.get("name", ""))
-        grp = field_input(); grp.setText(s.get("group", ""))
+        grp = combo(self._all_group_choices()); grp.setEditable(True)
+        grp.setCurrentText(s.get("group", ""))
         lg = field_input(); lg.setText(s.get("login", ""))
         pw = field_input("Новый пароль", password=True)
         for lb, w in [("Фамилия", sn), ("Имя", nm), ("Группа", grp), ("Логин", lg), ("Новый пароль", pw)]:
@@ -422,7 +423,9 @@ class AdminDashboard(QWidget):
         def _save():
             sts = gh.get_students() if gh else []
             p   = pw.text().strip()
-            nd  = {"surname": sn.text().strip(), "name": nm.text().strip(), "group": grp.text().strip(),
+            group = grp.currentText().strip()
+            self._ensure_group_exists(group)   #новую/спарсенную группу заводим в БД
+            nd  = {"surname": sn.text().strip(), "name": nm.text().strip(), "group": group,
                    "login": lg.text().strip()}
             old = sts[idx]
             if old.get("password_hash") and not p:
@@ -441,7 +444,11 @@ class AdminDashboard(QWidget):
         lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
         lay.addWidget(title_lbl("Добавить студента", 18))
         sn = field_input("Иванов"); nm = field_input("Иван")
-        grp = field_input("ИС-21"); pw = field_input("Пароль", password=True)
+        #Группа — выпадающий список спарсенных групп колледжа (+ уже заведённых);
+        #редактируемый, чтобы при необходимости завести свою. По умолчанию не выбрана.
+        grp = combo(self._all_group_choices()); grp.setEditable(True)
+        grp.setCurrentText(""); grp.lineEdit().setPlaceholderText("Выберите или введите группу")
+        pw = field_input("Пароль", password=True)
         lg = field_input("ivanov")
         for lb, w in [("Фамилия", sn), ("Имя", nm), ("Группа", grp), ("Логин", lg), ("Пароль", pw)]:
             lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(w)
@@ -457,7 +464,9 @@ class AdminDashboard(QWidget):
             sts = gh.get_students() if gh else []
             if not lg.text().strip():
                 QMessageBox.warning(d, "Ошибка", "Введите логин"); return
-            sts.append({"surname": s, "name": n, "group": grp.text().strip(),
+            group = grp.currentText().strip()
+            self._ensure_group_exists(group)   #спарсенную/новую группу заводим в БД
+            sts.append({"surname": s, "name": n, "group": group,
                         "login": lg.text().strip(), "password": pw.text().strip()})
             if gh: gh.set_students(sts)
             d.accept(); self._render_students(); self._refresh_dash()
@@ -493,11 +502,70 @@ class AdminDashboard(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
-    #Группы 
+    #Группы: источник (спарсенное расписание) и привязка студентов
+
+    def _parsed_group_names(self):
+        """Названия групп колледжа из спарсенного расписания. Офлайн/нет снимка →
+        пустой список (тихо). Источник — локальный зашифрованный кэш расписания."""
+        try:
+            from schedule import store as _sched_store
+            snap = _sched_store.load_cached()
+            return snap.group_names() if snap else []
+        except Exception:
+            return []
+
+    def _all_group_choices(self):
+        """Слитый список для выбора группы: уже заведённые в БД + спарсенные из
+        расписания, без дублей (сначала заведённые)."""
+        gh = get_store()
+        existing = [g.get("name", "") for g in (gh.get_groups() if gh else [])]
+        seen, out = set(), []
+        for name in existing + self._parsed_group_names():
+            if name and name not in seen:
+                seen.add(name); out.append(name)
+        return out
+
+    def _ensure_group_exists(self, name):
+        """Заводит группу в БД, если её ещё нет (предметы пустые). Вызывается при
+        добавлении/правке студента: выбрал спарсенную/новую группу — она сразу
+        появляется в «Группах», а не остаётся «висячим» именем у студента."""
+        name = (name or "").strip()
+        if not name:
+            return
+        gh = get_store()
+        gs = gh.get_groups() if gh else []
+        if not any(g.get("name") == name for g in gs):
+            gs.append({"name": name, "subjects": []})
+            if gh:
+                gh.set_groups(gs)
+
+    def _import_parsed_groups(self):
+        """Кнопка «🏫 Из расписания»: добавляет в БД все спарсенные группы колледжа,
+        которых там ещё нет. Так спарсенные группы «уже в БД», без ручного ввода."""
+        parsed = self._parsed_group_names()
+        if not parsed:
+            QMessageBox.information(self, "Расписание",
+                "Спарсенных групп нет — обнови расписание во вкладке «Расписание».")
+            return
+        store = get_store()
+        gs = store.get_groups() if store else []
+        have = {g.get("name") for g in gs}
+        added = [n for n in parsed if n and n not in have]
+        for n in added:
+            gs.append({"name": n, "subjects": []})
+        if store and added:
+            store.set_groups(gs)
+        self._render_groups(); self._refresh_dash()
+        QMessageBox.information(self, "Готово",
+            f"Добавлено групп: {len(added)}" if added else "Все спарсенные группы уже есть.")
+
+    #Группы
 
     def _build_groups(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
         hdr = QHBoxLayout(); hdr.addWidget(title_lbl("Группы"), 1)
+        imp_b = btn("🏫 Из расписания", "ghost"); imp_b.clicked.connect(self._import_parsed_groups)
+        hdr.addWidget(imp_b)
         add_b = btn("Добавить группу", "green", icon_name="plus"); add_b.clicked.connect(self._add_group)
         hdr.addWidget(add_b); lay.addLayout(hdr)
         self._g_table = QTableWidget(); self._g_table.setColumnCount(3)
