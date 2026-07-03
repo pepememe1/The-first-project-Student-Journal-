@@ -99,6 +99,35 @@ app.include_router(connect_router.router)
 app.include_router(web.router)
 
 
+#Раздача файлов для скачивания (десктоп-клиент GradeBookAI.exe). Файлы кладём в папку
+#downloads рядом с сервером (переопределяется GRADEBOOK_DOWNLOADS). Регистрируем ДО
+#SPA-заглушки, чтобы /downloads/* и /desktop-info не перехватывались катч-оллом Vue.
+_SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOWNLOADS_DIR = os.environ.get(
+    "GRADEBOOK_DOWNLOADS", os.path.join(os.path.dirname(_SERVER_DIR), "downloads"))
+DESKTOP_EXE = "GradeBookAI.exe"
+
+
+@app.get("/desktop-info", tags=["service"])
+def desktop_info():
+    """Доступен ли десктоп-клиент и его размер — для кнопки скачивания на сайте.
+    Пока файла нет — {available: false}, сайт покажет секцию как «готовится»."""
+    path = os.path.join(DOWNLOADS_DIR, DESKTOP_EXE)
+    if os.path.isfile(path):
+        return {"available": True, "url": f"/downloads/{DESKTOP_EXE}",
+                "size_mb": round(os.path.getsize(path) / 1048576, 1)}
+    return {"available": False}
+
+
+@app.get("/downloads/{fname}", include_in_schema=False)
+def download_file(fname: str):
+    target = os.path.realpath(os.path.join(DOWNLOADS_DIR, fname))
+    #защита от path traversal: отдаём только файлы ВНУТРИ downloads
+    if target.startswith(os.path.realpath(DOWNLOADS_DIR)) and os.path.isfile(target):
+        return FileResponse(target, filename=fname, media_type="application/octet-stream")
+    return JSONResponse(status_code=404, content={"detail": "Файл не найден"})
+
+
 #САЙТ (SPA): отдаём собранный фронтенд с ТОГО ЖЕ адреса, что и API. Монтируем ПОСЛЕ
 #всех API-роутеров, поэтому /auth, /web, /docs и т.п. имеют приоритет. Неизвестные
 #НЕ-API пути возвращают index.html (клиентский роутинг Vue), существующие файлы
