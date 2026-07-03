@@ -264,6 +264,23 @@ class SyncManager:
         except Exception as e:
             print(f"[theme] отложенная отправка темы не удалась: {e}")
 
+    def flush_now(self):
+        """Синхронный один цикл синхронизации ПРЯМО СЕЙЧАС — для выхода из аккаунта и
+        закрытия проги. Пушит накопленное, если есть авторизация. Долго не блокирует:
+        без пароля/токена _ensure_auth вернёт False сразу (фикс выше), а сетевые вызовы
+        ограничены таймаутом клиента. Так данные не теряются при закрытии крестиком."""
+        try:
+            url = get_api_url()
+            if not url:
+                return
+            self._url = url
+            if self._ensure_auth(url):
+                import sync_engine
+                sync_engine.sync_once(self._client)
+                self._flush_pending_prefs()
+        except Exception as e:
+            print(f"[sync] flush: {e}")
+
 
 #Глобальный менеджер на процесс.
 _manager = SyncManager()
