@@ -44,13 +44,21 @@ def test_web_student_logs_in_without_approval(client):
     assert r.json()["role"] == "student"
 
 
-def test_web_staff_blocked_without_approval(client):
-    """Преподаватель в браузере с неодобренного устройства не входит (403)."""
+def test_web_staff_open_without_approval(client):
+    """Политика веба (согласована с заказчиком): ПЕРСОНАЛ в браузере входит открыто, без
+    подтверждения устройства — как и студент. Барьер устройства для веба снят целиком
+    (см. deps.device_barrier_applies): защита веба — валидные креды + анти-брутфорс +
+    HTTPS + role-scoped /web/*. ДЕСКТОП при этом остаётся за жёстким барьером §6
+    (см. test_desktop_student_still_barred ниже) — инвариант для десктопа не ослаблен.
+
+    Раньше здесь ожидался 403 (веб-персонал проходил веб-подтверждение устройства). От
+    этого отказались по требованию: сайт не должен просить код ни у одной роли."""
     admin = make_admin(client)
     _add_teacher(client, admin)
     r = client.post("/auth/login", json={"login": "teacher1", "password": "teacherpass1"},
                     headers=WEB_DEV)
-    assert r.status_code == 403, r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["role"] == "teacher"
 
 
 def test_desktop_student_still_barred(client):
