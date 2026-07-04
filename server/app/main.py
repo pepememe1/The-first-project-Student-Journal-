@@ -65,7 +65,8 @@ def _find_web_dist() -> str:
     candidates = [
         os.environ.get("GRADEBOOK_WEB_DIST", "").strip(),
         os.path.join(here, "webdist"),
-        os.path.join(parent, "GradeBookAI-Web-Edition", "dist"),
+        os.path.join(root_dir, "web", "dist"),                     # монорепо (Pre-Release-2.8+)
+        os.path.join(parent, "GradeBookAI-Web-Edition", "dist"),   # старое раздельное расположение
         os.path.join(root_dir, "GradeBookAI-Web-Edition", "dist"),
     ]
     for c in candidates:
