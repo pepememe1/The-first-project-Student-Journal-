@@ -603,3 +603,71 @@ def admin_delete_subject(name: str,
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "name": name}
+
+
+# --- Преподаватели (CRUD) --- id=teach:login (как в sync_engine); ФИО — full_name,
+# нагрузка — список subjects. Пароль тем же гибридным хешем; удаление мягкое.
+@router.post("/admin/teachers")
+def admin_create_teacher(payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    full_name = (payload.get("full_name") or "").strip()
+    login = (payload.get("login") or "").strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Нужно ФИО преподавателя")
+    if not login:
+        raise HTTPException(status_code=400, detail="Нужен логин")
+    tid = f"teach:{login}"
+    existing = db.get(User, tid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Преподаватель с таким логином уже есть")
+    row = existing or User(id=tid)
+    if existing is None:
+        db.add(row)
+    row.role = "teacher"
+    row.login = login
+    row.full_name = full_name
+    row.surname = ""
+    row.name = ""
+    row.group_name = ""
+    row.subjects = payload.get("subjects") or []
+    row.group_assignments = {}
+    password = payload.get("password") or ""
+    if password:
+        from ..security import hash_password
+        row.password_hash = hash_password(password)
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    return {"ok": True, "login": login}
+
+
+@router.put("/admin/teachers/{login}")
+def admin_update_teacher(login: str, payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Правка преподавателя (логин — ключ). Меняем ФИО/нагрузку(предметы)/пароль."""
+    row = db.get(User, f"teach:{login}")
+    if row is None or row.deleted or row.role != "teacher":
+        raise HTTPException(status_code=404, detail="Преподаватель не найден")
+    if "full_name" in payload:
+        row.full_name = (payload.get("full_name") or "").strip()
+    if "subjects" in payload:
+        row.subjects = payload.get("subjects") or []
+    password = payload.get("password") or ""
+    if password:
+        from ..security import hash_password
+        row.password_hash = hash_password(password)
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "login": login}
+
+
+@router.delete("/admin/teachers/{login}")
+def admin_delete_teacher(login: str,
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    row = db.get(User, f"teach:{login}")
+    if row is None or row.deleted or row.role != "teacher":
+        raise HTTPException(status_code=404, detail="Преподаватель не найден")
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "login": login}

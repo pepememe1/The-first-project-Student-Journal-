@@ -75,6 +75,10 @@ export const adminApi = {
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
+  // CRUD преподавателей (Phase B). id на сервере = teach:login.
+  createTeacher: (payload) => api.post('/web/admin/teachers', payload),
+  updateTeacher: (login, payload) => api.put(`/web/admin/teachers/${encodeURIComponent(login)}`, payload),
+  deleteTeacher: (login) => api.delete(`/web/admin/teachers/${encodeURIComponent(login)}`),
   // Служебное — уже реализовано на сервере:
   online: () => api.get('/admin/online'),
   events: (since = 0) => api.get('/admin/events', { params: { since } }),
