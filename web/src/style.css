@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+
+/*
+  style.css — дизайн-система GradeBookAI для веба (порт desktop `ui/styles.py`).
+
+  Цвета живут в runtime-переменных --gb-* (их выставляет theme-store из buildPalette),
+  а Tailwind-утилиты (bg-card, text-text2, border-border, bg-accent, ...) через
+  `@theme inline` ссылаются на эти переменные. Значит смена темы = обновление
+  переменных на :root, без пересборки классов. Ровно как apply_palette() в десктопе.
+*/
+
+@theme {
+  /* Фирменные шрифты Synapse: Syne — заголовки, DM Sans — текст (fallback — системные). */
+  --font-body: 'DM Sans', 'Segoe UI', 'PT Sans', Arial, sans-serif;
+  --font-title: 'Syne', 'Segoe UI Semibold', 'Segoe UI', 'PT Sans', sans-serif;
+
+  /* Типографическая шкала (px) — как FS_* в styles.py. */
+  --text-tiny: 11px;
+  --text-display: 30px;
+
+  /* Радиусы скругления — как R_* в styles.py (переопределяем шкалу Tailwind под наш ДС). */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* Высоты контролов — крупные и «дорогие» (H_* в styles.py). */
+  --spacing-input: 42px;
+  --spacing-btn: 44px;
+}
+
+/* Цветовые утилиты Tailwind → runtime-переменные палитры. inline = значение
+   подставляется напрямую (bg-accent → background: var(--gb-accent)). */
+@theme inline {
+  --color-bg: var(--gb-bg);
+  --color-bg2: var(--gb-bg2);
+  --color-card: var(--gb-card);
+  --color-card2: var(--gb-card2);
+  --color-border: var(--gb-border);
+  --color-border2: var(--gb-border2);
+  --color-text: var(--gb-text);
+  --color-text2: var(--gb-text2);
+  --color-text3: var(--gb-text3);
+  --color-red: var(--gb-red);
+  --color-orange: var(--gb-orange);
+  --color-yellow: var(--gb-yellow);
+  --color-accent: var(--gb-accent);
+  --color-accent2: var(--gb-accent2);
+  --color-accent-glow: var(--gb-accent-glow);
+  --color-blue: var(--gb-blue);
+}
+
+/* Стартовые значения переменных (светлая база + фирменная бирюза): корректный
+   первый кадр ещё до того, как JS применит сохранённую тему. */
+:root {
+  --gb-bg: #f4f6f8;
+  --gb-bg2: #eceff2;
+  --gb-card: #ffffff;
+  --gb-card2: #f4f6f8;
+  --gb-border: #e4e9ed;
+  --gb-border2: #d3dbe1;
+  --gb-text: #0f1b22;
+  --gb-text3: #46555f;
+  --gb-text2: #7a8893;
+  --gb-red: #d14343;
+  --gb-orange: #d9892b;
+  --gb-yellow: #c99a0c;
+  --gb-shadow: rgba(15, 27, 34, 0.1);
+  --gb-overlay: rgba(15, 27, 34, 0.4);
+  --gb-accent: #147c8b;
+  --gb-accent2: #0e6271;
+  --gb-accent-glow: rgba(20, 124, 139, 0.14);
+  --gb-blue: #2ba6b8;
+
+  color-scheme: light dark;
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--gb-bg);
+    color: var(--gb-text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-title);
+    color: var(--gb-text);
+    margin: 0;
+  }
+
+  /* Мягкая тень карточек — единый «дорогой» уровень глубины. */
+  .shadow-card {
+    box-shadow: 0 1px 2px var(--gb-shadow), 0 8px 24px -12px var(--gb-shadow);
+  }
+
+  /* Тонкие нейтральные скроллбары (как в десктопном QSS). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--gb-border2) transparent;
+  }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: var(--gb-border2);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: var(--gb-text2); background-clip: content-box; }
+
+  :focus-visible {
+    outline: 2px solid var(--gb-accent);
+    outline-offset: 2px;
+  }
+}
