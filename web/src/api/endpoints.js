@@ -54,6 +54,10 @@ export const teacherApi = {
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
   setGrade: (surname, name, lesson_id, grade) =>
     api.post('/web/teacher/grade', { surname, name, lesson_id, grade }),
+  // Занятия/пары (Phase B): наполнение журнала. id = uuid на сервере.
+  createLesson: (payload) => api.post('/web/teacher/lesson', payload),
+  updateLesson: (id, payload) => api.put(`/web/teacher/lesson/${encodeURIComponent(id)}`, payload),
+  deleteLesson: (id) => api.delete(`/web/teacher/lesson/${encodeURIComponent(id)}`),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────

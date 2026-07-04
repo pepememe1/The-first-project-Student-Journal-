@@ -4,6 +4,7 @@
 import { ref, watch, onMounted } from 'vue'
 import { teacherApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import AppButton from '@/components/ui/AppButton.vue'
 
 const groups = ref([])
 const subjects = ref([])
@@ -58,11 +59,41 @@ function gradeClass(g) {
   if (v.startsWith('2') || v === 'Н') return 'text-red font-bold'
   return 'text-text2'
 }
+
+// Занятия/пары (Phase B): преподаватель наполняет журнал. Создание пишет в таблицу
+// lessons (uuid) → десктоп получит через pull; удаление мягкое (надгробие).
+const LESSON_TYPES = ['Практика', 'Лекция', 'Экзамен', 'Семинар', 'Лабораторная', 'Зачёт']
+const showLesson = ref(false)
+const lessonForm = ref({ type: 'Практика', number: 1, topic: '', date: '', hour: 0 })
+const savingLesson = ref(false)
+const lessonError = ref('')
+
+function openLesson() {
+  lessonForm.value = { type: 'Практика', number: (data.value?.lessons?.length || 0) + 1, topic: '', date: '', hour: 0 }
+  lessonError.value = ''
+  showLesson.value = true
+}
+async function saveLesson() {
+  if (!group.value || !subject.value) { lessonError.value = 'Выберите группу и предмет'; return }
+  savingLesson.value = true
+  lessonError.value = ''
+  try {
+    await teacherApi.createLesson({ group: group.value, subject: subject.value, ...lessonForm.value })
+    showLesson.value = false
+    await load()
+  } catch (e) { lessonError.value = e?.response?.data?.detail || 'Не удалось создать занятие' }
+  finally { savingLesson.value = false }
+}
+async function delLesson(l) {
+  if (!confirm(`Удалить занятие ${l.type} №${l.number}? Оценки этой пары перестанут учитываться.`)) return
+  try { await teacherApi.deleteLesson(l.id); await load() }
+  catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
+}
 </script>
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-wrap gap-3">
+    <div class="flex flex-wrap items-center gap-3">
       <select v-model="group" class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
         <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
       </select>
@@ -71,6 +102,7 @@ function gradeClass(g) {
       </select>
       <span v-if="saving" class="self-center text-xs text-text3">Сохранение…</span>
       <span v-else-if="data?.students?.length" class="self-center text-xs text-text3">Клик по клетке — ввод оценки</span>
+      <AppButton v-if="group && subject" variant="green" size="sm" class="ml-auto" @click="openLesson">+ Занятие</AppButton>
     </div>
 
     <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки"
@@ -84,7 +116,8 @@ function gradeClass(g) {
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="sticky left-0 z-10 bg-bg2 px-4 py-2.5 font-semibold">Студент</th>
             <th v-for="l in data.lessons" :key="l.id" class="px-3 py-2.5 text-center font-semibold" :title="`${l.topic} · ${l.date}`">
-              {{ l.type.slice(0, 3) }}<br>№{{ l.number }}
+              <div>{{ l.type.slice(0, 3) }}<br>№{{ l.number }}</div>
+              <button class="mt-0.5 text-[10px] font-normal text-text3 hover:text-red" title="Удалить занятие" @click="delLesson(l)">✕</button>
             </th>
             <th class="px-4 py-2.5 text-right font-semibold">Средн.</th>
           </tr>
@@ -101,6 +134,40 @@ function gradeClass(g) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Модалка создания занятия (пары) -->
+    <div v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLesson = false">
+      <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="mb-4 font-title text-lg font-bold text-text">Занятие · {{ group }} · {{ subject }}</h3>
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тип</span>
+              <select v-model="lessonForm.type" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+                <option v-for="t in LESSON_TYPES" :key="t" :value="t">{{ t }}</option>
+              </select></label>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">№</span>
+              <input v-model.number="lessonForm.number" type="number" min="1"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          </div>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тема</span>
+            <input v-model="lessonForm.topic" placeholder="Тема занятия"
+                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Дата</span>
+              <input v-model="lessonForm.date" placeholder="дд.мм.гггг"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Часы (лекции)</span>
+              <input v-model.number="lessonForm.hour" type="number" min="0"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          </div>
+          <p v-if="lessonError" class="text-sm text-red">{{ lessonError }}</p>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <AppButton variant="ghost" size="sm" @click="showLesson = false">Отмена</AppButton>
+          <AppButton variant="green" size="sm" :disabled="savingLesson" @click="saveLesson">{{ savingLesson ? 'Сохранение…' : 'Добавить' }}</AppButton>
+        </div>
+      </div>
     </div>
   </div>
 </template>
