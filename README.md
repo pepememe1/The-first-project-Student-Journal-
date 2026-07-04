@@ -2,19 +2,25 @@
 
 # 📊 GradeBookAI
 
-**Десктопный электронный журнал успеваемости с ИИ-помощником**
+**Электронный журнал успеваемости с ИИ-помощником — десктоп + веб**
 *для Технологического колледжа ВСГУТУ (Улан-Удэ)*
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![PySide6](https://img.shields.io/badge/GUI-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
-[![SQLite](https://img.shields.io/badge/Local-SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Sync](https://img.shields.io/badge/Sync-REST%20API%20(FastAPI)-009688?logo=fastapi&logoColor=white)](server/)
-[![Version](https://img.shields.io/badge/ветка-pre--release%202.7-008080)](CHANGELOG.md)
-[![Status](https://img.shields.io/badge/status-active%20development-success)]()
+[![PySide6](https://img.shields.io/badge/Desktop-PySide6%20(Qt)-41CD52?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython/)
+[![Vue](https://img.shields.io/badge/Web-Vue%203%20%2B%20Vite-42b883?logo=vuedotjs&logoColor=white)](web/)
+[![Sync](https://img.shields.io/badge/Server-REST%20API%20(FastAPI)-009688?logo=fastapi&logoColor=white)](server/)
+[![Version](https://img.shields.io/badge/ветка-Pre--Release%202.8-008080)](CHANGELOG.md)
+[![Site](https://img.shields.io/badge/сайт-esstu--gradebook.ru-008080)](https://esstu-gradebook.ru)
 
 *🏆 Победитель хакатона «Мы — будущее IT Бурятии» (март 2026)*
 
 </div>
+
+> **Монорепо (Pre-Release 2.8):** десктоп (корень репо, PySide6), сервер (`server/`,
+> FastAPI) и веб-версия (`web/`, Vue 3) — в одном репозитории, с общим сервером и БД.
+> Веб развёрнут на **https://esstu-gradebook.ru**; с ПК там же можно **скачать десктоп-
+> клиент** (защищённый `.exe`, скомпилирован Nuitka). Цель — довести сайт до 1:1 с
+> десктопом ([web/PARITY-PLAN.md](web/PARITY-PLAN.md)).
 
 ---
 
@@ -50,12 +56,11 @@ LLM лишь переформулирует уже готовые факты.
   Один виджет на все роли: студент видит свою группу, преподаватель — свои пары, админ — любую.
   **Список предметов тоже берётся из расписания** (спарсен с сайта) — не «вшит текстом»,
   всегда актуален; при отсутствии кэша — фолбэк на локальный `subjects.json`.
-- **Токены и сессии (152-ФЗ)** — вход по JWT: короткий **access (5 ч)** + **refresh-токен**,
-  который тихо обновляет доступ, не выкидывая пользователя на логин (в т.ч. если токен
-  протух за время офлайна). **Чёрный список токенов**: «Выйти» и админский отзыв мгновенно
-  аннулируют токен. У админа — вкладка **«Сессии и доступ»**: видно активные токены и кнопка
-  «Отозвать» (экстренная блокировка / смена ролей). Оба токена хранятся **зашифрованно**
-  (DPAPI/Fernet).
+- **Токены и сессии (152-ФЗ)** — вход по JWT с **жёстким сроком ~5 часов** (refresh = access):
+  после 5 часов нужен повторный вход, «накопления» сессий нет. **Чёрный список токенов**:
+  «Выйти» и админский отзыв мгновенно аннулируют токен. У админа — вкладка **«Сессии и
+  доступ»**: видно активные токены и кнопка «Отозвать» (экстренная блокировка / смена ролей).
+  Оба токена хранятся **зашифрованно** (DPAPI/Fernet).
 - **Барьер подтверждения устройств** — новый ПК сначала запрашивает доступ; администратор
   принимает запрос и диктует 6-значный код. Неодобренное устройство сервер не пускает (`403`).
 - **Полевое шифрование** — чувствительные поля шифруются Fernet; ключ данных защищён Windows DPAPI
@@ -267,13 +272,26 @@ gradebook/
 │   ├── speech.py           #   слой речи (кадры состояния чата)
 │   ├── emotes.py           #   реестр эмоций (морда + жест) по успеваемости
 │   └── widget.py / mascot.py #  виджеты маскота и аватара
-├── server/                 # REST API-сервер синхронизации (FastAPI)
 ├── emotions/               # арт маскота Арины: речь/ (4 кадра) + эмоции/ («морда+жест»)
 ├── vector_assets/          # запасной арт-плейсхолдер (4 состояния)
 ├── fonts/                  # шрифты Syne + DM Sans (.ttf)
 ├── tests/                  # клиентские тесты (pytest)
-├── requirements.txt
-└── CHANGELOG.md
+├── icon.ico / icon.png     # иконка приложения — гексагон GB (совпадает с фавиконом сайта)
+├── GradeBookAI.spec        # сборка .exe (PyInstaller, onefile)
+├── build_nuitka.sh         # сборка ЗАЩИЩЁННОГО .exe (Nuitka → машинный код; нужен python.org Python)
+│
+├── server/                 # REST API-сервер (FastAPI)
+│   └── app/                #   models, security (тот же хеш), webdata, routers/
+│       │                   #   (auth, sync, me, admin, connect, web: READ + запись Phase B),
+│       │                   #   main (раздаёт web/dist, /downloads/*, /desktop-info)
+│       └── tests/          #   серверные тесты (cd server && pytest)
+│
+└── web/                    # ВЕБ-РЕДАКЦИЯ (Vue 3 + Vite + Pinia + Tailwind)
+    ├── src/pages/          #   login, schedule, vector; student/*, teacher/*, admin/*
+    ├── src/api/            #   axios-клиент + весь контракт эндпоинтов
+    ├── src/stores/         #   auth (JWT), theme (палитра → CSS-переменные, фавикон под тему)
+    ├── src/components/     #   Mascot (30 эмоций), HexBackground (canvas-порт фона), ui/*
+    └── PARITY-PLAN.md      #   глобальный план «Desktop = Web»
 ```
 
 ---
