@@ -21,12 +21,15 @@ _BODY_CANDIDATES  = ["DM Sans", "Segoe UI", "PT Sans", "Arial", "Helvetica", "sa
 
 
 def _get_fonts_dir() -> str:
-    """Папка fonts/ рядом с .exe/скриптом или в распаковке onefile (_MEIPASS)."""
+    """Папка fonts/. В собранном виде ассеты лежат в распаковке onefile; ищем в разных
+    базах, чтобы работало и с PyInstaller (sys._MEIPASS), и с Nuitka (рядом со
+    скомпилированным модулем — dirname(__file__)), и с onedir/скриптом (рядом с exe)."""
     if getattr(sys, "frozen", False):
-        #onefile: ассеты распакованы во временный sys._MEIPASS — рядом с .exe их нет.
-        meipass = getattr(sys, "_MEIPASS", "")
-        if meipass and os.path.isdir(os.path.join(meipass, "fonts")):
-            return os.path.join(meipass, "fonts")
+        for base in (getattr(sys, "_MEIPASS", ""),
+                     os.path.dirname(os.path.abspath(__file__)),
+                     os.path.dirname(sys.executable)):
+            if base and os.path.isdir(os.path.join(base, "fonts")):
+                return os.path.join(base, "fonts")
         base = os.path.dirname(sys.executable)
     else:
         base = os.path.dirname(os.path.abspath(__file__))
