@@ -11,17 +11,10 @@ ROOT="$(pwd -W 2>/dev/null || pwd)"
 # Nuitka их сама не видит, поэтому даём папки в путь и включаем модули явно.
 export PYTHONPATH="$ROOT/ui;$ROOT/sync;$ROOT/data"
 
-# ФИКС Store-Python: gcc из скачанного Nuitka MinGW не находит свои заголовки (windows.h)
-# и библиотеки, потому что путь идёт через reparse-point песочницы Windows Store.
-# Явно указываем include/lib каталоги MinGW через переменные gcc.
-MINGW="C:/Users/yaros/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0/LocalCache/Local/Nuitka/Nuitka/Cache/downloads/gcc/x86_64/15.2.0posix-13.0.0-msvcrt-r6/mingw64"
-GCCV="$MINGW/lib/gcc/x86_64-w64-mingw32/15.2.0"
-if [ -f "$MINGW/x86_64-w64-mingw32/include/windows.h" ]; then
-  export CPATH="$MINGW/x86_64-w64-mingw32/include;$MINGW/include;$GCCV/include;$GCCV/include-fixed"
-  export LIBRARY_PATH="$MINGW/x86_64-w64-mingw32/lib;$MINGW/lib;$GCCV"
-  export PATH="$MINGW/bin:$PATH"
-  echo "CPATH задан на MinGW-заголовки."
-fi
+# Собираем ОБЫЧНЫМ python.org Python 3.11 (НЕ из Microsoft Store): у Store-Python
+# песочница ломала пути MinGW и gcc не находил windows.h. Нормальный Python — без песочницы.
+PYEXE="C:/Users/yaros/AppData/Local/Programs/Python/Python311/python.exe"
+[ -f "$PYEXE" ] || PYEXE="python"
 
 INC=""
 for d in ui sync data; do
@@ -35,8 +28,8 @@ for b in grading subjects server_control fonts app_paths _bootstrap main_window;
   INC="$INC --include-module=$b"
 done
 
-echo "== Nuitka старт $(date +%T) =="
-python -m nuitka main.py \
+echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
+"$PYEXE" -m nuitka main.py \
   --standalone --onefile \
   --enable-plugin=pyside6 \
   --windows-console-mode=disable \
