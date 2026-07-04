@@ -199,23 +199,29 @@ class HexLogoWidget(QWidget):
                    cy + r * math.sin(math.radians(a - 90)))
             for a in range(0, 360, 60)
         ])
-        p.setPen(QPen(QColor("#147C8B"), 1.5))
-        p.setBrush(QBrush(QColor(20, 124, 139, 10)))
+        #Цвет бренда берём из АКТИВНОЙ темы (акцент), а не хардкодом — значок меняется
+        #вместе с темой оформления (тёмная/светлая/кастомный акцент).
+        acc = QColor(C['green'])
+        fill1 = QColor(C['green']); fill1.setAlpha(10)
+        p.setPen(QPen(acc, 1.5))
+        p.setBrush(QBrush(fill1))
         p.drawPolygon(pts)
-        
+
         #Внутренний шестиугольник
         r2 = r * 0.72
         pts2 = QPolygonF([
-            QPointF(cx + r2 * math.cos(math.radians(a - 90)), 
+            QPointF(cx + r2 * math.cos(math.radians(a - 90)),
                    cy + r2 * math.sin(math.radians(a - 90)))
             for a in range(0, 360, 60)
         ])
-        p.setPen(QPen(QColor(20, 124, 139, 60), 1))
-        p.setBrush(QBrush(QColor(20, 124, 139, 18)))
+        edge2 = QColor(C['green']); edge2.setAlpha(60)
+        fill2 = QColor(C['green']); fill2.setAlpha(18)
+        p.setPen(QPen(edge2, 1))
+        p.setBrush(QBrush(fill2))
         p.drawPolygon(pts2)
-        
+
         #Текст "GB"
-        p.setPen(QPen(QColor("#147C8B")))
+        p.setPen(QPen(acc))
         f = QFont("Segoe UI", int(self._size * 0.22), QFont.Bold)
         p.setFont(f)
         p.drawText(self.rect(), Qt.AlignCenter, "GB")

@@ -456,7 +456,9 @@ class LoginPage(QWidget):
         _blogo = HexLogoWidget(30)
         _blogo.setFixedSize(30, 30)
         _bname = QLabel("GradeBookAI")
-        _bname.setStyleSheet(f"font-size:15px;font-weight:800;color:{C['text']};background:transparent;")
+        #Надпись бренда — акцентным цветом активной темы (а не белым C['text']); так она
+        #читается и на светлой, и на тёмной теме и меняется вместе с оформлением.
+        _bname.setStyleSheet(f"font-size:15px;font-weight:800;color:{C['green']};background:transparent;")
         _bl.addWidget(_blogo)
         _bl.addWidget(_bname)
         self._brand.adjustSize()
