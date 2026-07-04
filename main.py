@@ -61,9 +61,9 @@ def _get_app_dir() -> str:
 
 
 def get_icon() -> QIcon:
-    #onefile: иконка распакована в sys._MEIPASS (рядом с .exe её нет), поэтому проверяем
-    #и папку рядом с программой, и распаковку.
-    bases = [_get_app_dir()]
+    #onefile: иконка распакована рядом со скомпилированным модулем (Nuitka) или в
+    #sys._MEIPASS (PyInstaller); рядом с .exe её нет. Проверяем все базы.
+    bases = [_get_app_dir(), os.path.dirname(os.path.abspath(__file__))]
     meipass = getattr(sys, "_MEIPASS", "")
     if meipass:
         bases.append(meipass)
