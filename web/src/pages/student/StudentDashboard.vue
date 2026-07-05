@@ -1,8 +1,9 @@
 <script setup>
 // StudentDashboard — «Главная» студента (порт ui/dashboards.py _build_dash):
-// заголовок (ФИО + группа), «Умный совет» с обновлением, маскот-эмоция по фактам,
-// карточки Предметов/Средний/Посещаемость/Оценок и список «Мои предметы».
-import { ref, computed, onMounted } from 'vue'
+// заголовок, «Умный совет» (много советов, ротация), маскот-эмоция ПО ФАКТАМ
+// (грустный при среднем <3 / многих пропусках; спокойный 3–4; радостный ≥4),
+// карточки статистики, проактивные инсайты и список предметов.
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RotateCw } from '@lucide/vue'
 import { studentApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
@@ -17,64 +18,66 @@ const insights = ref([])
 async function load() {
   loading.value = true
   try { data.value = (await studentApi.overview()).data } catch { data.value = null } finally { loading.value = false }
-  // Проактивные карточки Вектора — отдельным запросом, чтобы не тормозить витрину.
   try { insights.value = (await studentApi.insights()).data.cards || [] } catch { insights.value = [] }
 }
 onMounted(load)
 
 const avg = computed(() => Number(data.value?.average ?? 0))
 const debts = computed(() => Number(data.value?.debts ?? 0))
+const attendance = computed(() => Number(data.value?.attendance ?? 100))
 
-// Поза покоя — по фактам; клик по Вектору на пару секунд включает бодрую позу.
-const POKES = ['happy-cheer', 'neutral-cheer', 'happy-congrats', 'surprise-cheer', 'think-cheer']
-const poke = ref(null)
-let pokeI = 0
-let pokeTimer = null
-const sprite = computed(() => poke.value || dashboardEmote({ average: avg.value, debts: debts.value }))
-function pokeMascot() {
-  pokeI = (pokeI + 1) % POKES.length
-  poke.value = POKES[pokeI]
-  clearTimeout(pokeTimer)
-  pokeTimer = setTimeout(() => { poke.value = null }, 1800)
-}
+// Поза Вектора — строго по фактам (не по клику). Низкая посещаемость трактуется как
+// «много пропусков» для эмоции.
+const sprite = computed(() =>
+  dashboardEmote({ average: avg.value, absences: attendance.value < 80 ? 20 : 0 }))
 
-const tip = computed(() => {
-  if (!data.value) return 'Загрузка совета…'
-  const parts = []
-  parts.push(avg.value ? `Твой средний балл — ${avg.value}.` : 'Оценок по практикам пока нет — самое время начать набирать.')
-  parts.push(debts.value ? `Есть незакрытые долги (${debts.value}). Загляни к преподавателю и договорись о пересдаче.` : 'Долгов нет — так держать!')
-  return parts.join(' ')
+// «Умный совет» — пул полезных советов из реальных данных + общие подсказки; ротация.
+const TIPS = computed(() => {
+  if (!data.value) return ['Загрузка совета…']
+  const t = []
+  t.push(avg.value ? `Твой средний балл — ${avg.value}${avg.value >= 4 ? '. Отличный результат!' : avg.value < 3 ? '. Есть куда расти — разбери сложные темы.' : '.'}`
+                   : 'Оценок по практикам пока нет — самое время начать набирать.')
+  t.push(debts.value ? `Есть незакрытые долги (${debts.value}). Договорись с преподавателем о пересдаче — не тяни.`
+                     : 'Задолженностей нет — так держать!')
+  t.push(`Посещаемость ${attendance.value}% — ${attendance.value >= 90 ? 'отлично, продолжай в том же духе' : 'старайся не пропускать пары'}.`)
+  t.push('Спроси Вектора во вкладке «ИИ Помощник»: он берёт цифры из твоих реальных данных, а не выдумывает.')
+  t.push('Расписание в приложении тянется прямо с портала ВСГУТУ — всегда актуальное.')
+  t.push('Тёмную тему можно включить по расписанию — вечером глазам легче.')
+  return t
 })
+const tipI = ref(0)
+const tip = computed(() => TIPS.value[tipI.value % TIPS.value.length])
+function nextTip() { tipI.value++ }
+let tipTimer = null
+onMounted(() => { tipTimer = setInterval(() => { if (data.value) tipI.value++ }, 9000) })
+onBeforeUnmount(() => clearInterval(tipTimer))
 </script>
 
 <template>
   <div class="space-y-5">
-    <!-- Заголовок -->
     <div>
       <h2 class="font-title text-2xl font-extrabold text-text">{{ data?.name || '—' }}</h2>
       <p class="mt-0.5 text-sm text-text3">Группа: {{ data?.group || '—' }}</p>
     </div>
     <div class="h-px bg-border" />
 
-    <!-- Умный совет -->
+    <!-- Умный совет: много советов, ротация; кнопка — следующий -->
     <div class="rounded-lg border p-4" style="background: var(--gb-accent-glow); border-color: color-mix(in srgb, var(--gb-accent) 20%, transparent);">
       <div class="mb-1 flex items-center justify-between">
-        <p class="text-sm font-bold text-accent">Умный совет</p>
+        <p class="text-sm font-bold text-accent">💡 Умный совет</p>
         <button class="grid size-7 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"
-                aria-label="Обновить" @click="load">
+                title="Следующий совет" @click="nextTip">
           <RotateCw class="size-3.5" />
         </button>
       </div>
       <p class="text-sm text-text">{{ tip }}</p>
     </div>
 
-    <!-- Проактивные карточки Вектора (долги, пересдачи, пропуски) -->
     <InsightCards :cards="insights" />
 
-    <!-- Тело: маскот слева + контент справа -->
     <div class="grid gap-6 lg:grid-cols-[minmax(180px,260px)_1fr]">
       <div class="flex items-start justify-center">
-        <Mascot :sprite="sprite" class="h-72 w-56 cursor-pointer" title="Кликни Вектора" @click="pokeMascot" />
+        <Mascot :sprite="sprite" class="h-72 w-56" />
       </div>
 
       <div class="space-y-5">

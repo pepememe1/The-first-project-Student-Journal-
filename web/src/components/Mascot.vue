@@ -3,12 +3,15 @@
 // Слаг — через prop `sprite`; выбор слага — config/mascot.js. `animate` добавляет
 // мягкое «дыхание». Смена эмоции — настоящий КРОСС-ФЕЙД (оба кадра видны одновременно),
 // а не мгновенная подмена. Дыхание идёт на GPU-слое (translateZ) — без дрожи.
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
+import { preloadMascots } from '@/config/mascot'
 const props = defineProps({
   sprite: { type: String, default: 'neutral-idle' },
   animate: { type: Boolean, default: true },
 })
 const src = computed(() => `/mascot/${props.sprite}.png`)
+// Предзагрузка распространённых поз — чтобы смена кадра была мгновенной, без «зависания».
+onMounted(preloadMascots)
 </script>
 
 <template>

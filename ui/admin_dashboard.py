@@ -540,24 +540,49 @@ class AdminDashboard(QWidget):
                 gh.set_groups(gs)
 
     def _import_parsed_groups(self):
-        """Кнопка «🏫 Из расписания»: добавляет в БД все спарсенные группы колледжа,
-        которых там ещё нет. Так спарсенные группы «уже в БД», без ручного ввода."""
-        parsed = self._parsed_group_names()
-        if not parsed:
+        """Кнопка «🏫 Из расписания»: заводит спарсенные группы колледжа И ПРИВЯЗЫВАЕТ к
+        каждой её предметы из расписания — предметы группы видны сразу, без ручного
+        ввода (для группы К74/1 берутся все предметы из ЕЁ расписания и т.д.). Все
+        предметы попадают и в общий каталог. Группы/предметы синкаются на сервер и сайт."""
+        try:
+            from schedule import store as _sched_store
+            snap = _sched_store.load_cached()
+        except Exception:
+            snap = None
+        if not snap or not snap.groups:
             QMessageBox.information(self, "Расписание",
                 "Спарсенных групп нет — обнови расписание во вкладке «Расписание».")
             return
         store = get_store()
         gs = store.get_groups() if store else []
-        have = {g.get("name") for g in gs}
-        added = [n for n in parsed if n and n not in have]
-        for n in added:
-            gs.append({"name": n, "subjects": []})
-        if store and added:
+        by_name = {g.get("name"): g for g in gs}
+        added = updated = 0
+        all_subjects = set()
+        for name, gsched in snap.groups.items():
+            subs = [s for s in gsched.subjects() if s]   #предметы ИЗ расписания этой группы
+            all_subjects.update(subs)
+            if name in by_name:
+                g = by_name[name]
+                merged = sorted(set(g.get("subjects") or []) | set(subs))
+                if merged != (g.get("subjects") or []):
+                    g["subjects"] = merged
+                    updated += 1
+            else:
+                grp = {"name": name, "subjects": sorted(subs)}
+                gs.append(grp); by_name[name] = grp
+                added += 1
+        if store:
             store.set_groups(gs)
+        #Предметы расписания — в общий каталог (чтобы были в списках выбора/нагрузки).
+        try:
+            from subjects import load_subjects, save_subjects
+            save_subjects(sorted(set(load_subjects()) | all_subjects))
+        except Exception as e:
+            print(f"[groups] каталог предметов: {e}")
         self._render_groups(); self._refresh_dash()
         QMessageBox.information(self, "Готово",
-            f"Добавлено групп: {len(added)}" if added else "Все спарсенные группы уже есть.")
+            f"Групп добавлено: {added}, обновлено (привязаны предметы): {updated}.\n"
+            f"Предметов из расписания: {len(all_subjects)}.")
 
     #Группы
 

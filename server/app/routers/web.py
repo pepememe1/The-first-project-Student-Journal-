@@ -194,8 +194,8 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
                       "action": "Разберите сложные темы с Вектором"})
 
     if not cards:
-        cards.append({"severity": "info", "icon": "✅", "title": "Всё спокойно",
-                      "detail": "Тревожных сигналов нет — Вектор доволен."})
+        cards.append({"severity": "info", "icon": "✅", "title": "Всё в порядке",
+                      "detail": "Долгов и тревожных сигналов нет — так держать!"})
     return {"cards": cards, "mood": _mood_by_avg(avg)}
 
 
@@ -225,11 +225,11 @@ def teacher_insights(group: str = Query(...),
 
     if vals:
         gavg = round(sum(vals) / len(vals), 2)
-        mood = "happy" if gavg >= 4 else ("neutral" if gavg >= 3 else "sad")
+        level = "хороший уровень" if gavg >= 4 else ("средний уровень" if gavg >= 3
+                                                     else "ниже нормы, стоит подтянуть")
         cards.append({"severity": "info" if gavg >= 3 else "warn", "icon": "📊",
                       "title": f"Средний балл группы {group}",
-                      "detail": f"{gavg} — настроение Вектора: "
-                                f"{ {'happy': 'радостное', 'neutral': 'спокойное', 'sad': 'грустное'}[mood] }."})
+                      "detail": f"{gavg} — {level}."})
     if debtors:
         cards.append({"severity": "warn", "icon": "⚠️", "title": "Незакрытые задолженности",
                       "detail": f"Должников: {debtors}. Стоит назначить пересдачи.",

@@ -232,7 +232,8 @@ async function exportXlsx() {
       <select v-model="group" class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
         <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
       </select>
-      <select v-model="subject" class="h-10 max-w-72 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+      <select v-model="subject" :title="subject"
+              class="h-10 min-w-52 max-w-md rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
       </select>
       <span v-if="saving" class="self-center text-xs font-medium text-accent">Сохранение…</span>
@@ -256,7 +257,9 @@ async function exportXlsx() {
 
     <!-- Таблица компактная и выровнена влево: обёртка не растягивает table (w-max). -->
     <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
-      <table class="w-max min-w-full text-sm">
+      <!-- w-max (без min-w-full): таблица ровно по содержимому и прижата ВЛЕВО, не
+           расползается к центру при 1–2 занятиях. -->
+      <table class="w-max text-sm">
         <thead>
           <tr class="border-b-2 border-accent/40 bg-bg2 text-text2">
             <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>

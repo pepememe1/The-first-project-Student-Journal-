@@ -28,13 +28,25 @@ export function pickEmote(state, mood = 'neutral', intent = 'help') {
   return 'neutral-idle'
 }
 
-/** Эмоция маскота на «Главной» студента по фактам журнала (порт mascot.resolveMascotState). */
-export function dashboardEmote({ average = 0, debts = 0 } = {}) {
-  if (debts > 0) return 'warn-warn'          // долги → предупреждает
-  if (average >= 4.5) return 'happy-congrats' // отлично → поздравляет
-  if (average >= 3.5) return 'happy-cheer'    // хорошо → подбадривает
-  if (average > 0 && average < 3) return 'sad-cheer' // плохо, но подбадривает
-  return 'neutral-idle'                        // нейтрально «руки в карманах»
+/** Эмоция маскота на «Главной» студента ПО ФАКТАМ (не по клику!):
+ *  • средний < 3 или много пропусков → грустный (но подбадривает);
+ *  • 3 ≤ средний < 4 → спокойный «руки в карманах»;
+ *  • средний ≥ 4 → радостный. */
+export function dashboardEmote({ average = 0, absences = 0 } = {}) {
+  if ((average > 0 && average < 3) || absences >= 15) return 'sad-cheer'
+  if (average >= 4) return 'happy-congrats'
+  return 'neutral-idle'   // 3–4 или нет оценок — спокоен
+}
+
+// Предзагрузка спрайтов маскота: без неё при первой смене позы кадр грузится с диска
+// и Вектор «зависает» пустым. Грузим один раз распространённые позы (кэш браузера).
+const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
+                 'sad-cheer', 'warn-warn', 'neutral-cheer', 'surprise-idle']
+let _preloaded = false
+export function preloadMascots() {
+  if (_preloaded || typeof Image === 'undefined') return
+  _preloaded = true
+  for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.png` }
 }
 
 /** Спрайт для чата «Вектора» по состоянию/настроению/НАМЕРЕНИЮ — из 30 эмоций.
