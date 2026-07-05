@@ -284,6 +284,30 @@ def schedule_groups(user: User = Depends(get_current_user)):
     return {"groups": schedule_web.list_groups()}
 
 
+@router.get("/schedule/teacher")
+def schedule_teacher(name: str = Query(""), user: User = Depends(get_current_user)):
+    """Расписание ПРЕПОДАВАТЕЛЯ (пункт 2). Без name — пробуем сматчить ФИО текущего
+    пользователя со спарсенными преподавателями (фамилия+инициалы). Полный снимок
+    строится лениво в фоне: пока он готовится — {building: true}, клиент подождёт."""
+    snap, building = schedule_web.full_state()
+    if snap is None:
+        return {"available": False, "building": building, "teacher": "", "teachers": [],
+                "week": schedule_web.current_week_parity(), "schedule": None,
+                "matched_self": False}
+    names = snap.teachers()
+    matched = (name or "").strip() or schedule_web.match_teacher(W.display_name(user), names)
+    weeks = schedule_web.teacher_weeks(snap, matched) if matched else None
+    return {
+        "available": weeks is not None,
+        "building": building,
+        "teacher": matched if weeks is not None else "",
+        "teachers": names,
+        "week": schedule_web.current_week_parity(),
+        "schedule": {"weeks": weeks} if weeks is not None else None,
+        "matched_self": (not name) and weeks is not None,   #авто-совпадение по ФИО
+    }
+
+
 @router.get("/schedule")
 def schedule_get(group: str = Query(""), user: User = Depends(get_current_user)):
     g = (group or user.group_name or "").strip()

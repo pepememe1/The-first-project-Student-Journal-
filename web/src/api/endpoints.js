@@ -97,6 +97,8 @@ export const adminApi = {
 export const scheduleApi = {
   get: (group) => api.get('/web/schedule', { params: { group } }),
   groups: () => api.get('/web/schedule/groups'),
+  // Расписание преподавателя (пункт 2): без name сервер матчит ФИО текущего юзера.
+  teacher: (name = '') => api.get('/web/schedule/teacher', { params: { name } }),
 }
 
 // «ВЕКТОР» — серверный анти-галлюцинационный конвейер (intents→SQL→анонимизация→LLM)

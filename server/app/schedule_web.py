@@ -71,6 +71,72 @@ def _href_for(name: str) -> str:
     return ""
 
 
+#Расписание ПРЕПОДАВАТЕЛЯ: нужен ПОЛНЫЙ снимок (teacher_index строится инверсией всех
+#групповых страниц — ~68 GET, десятки секунд). Поэтому ЛЕНИВО и в ФОНЕ: первый запрос
+#запускает сборку потоком и сразу отвечает {building: true}; готовый снимок живёт _TTL.
+_full = {"ts": 0.0, "snap": None, "building": False}
+
+
+def _build_full_bg():
+    try:
+        p = _parser()
+        snap = p.build_snapshot()
+        with _lock:
+            _full["snap"] = snap
+            _full["ts"] = time.time()
+    except Exception as e:
+        print(f"[schedule_web] полный снимок не собрался: {e}")
+    finally:
+        with _lock:
+            _full["building"] = False
+
+
+def full_state():
+    """(snapshot | None, building: bool). Устаревший/отсутствующий снимок запускает
+    фоновую пересборку; пока она идёт, отдаём прежний снимок (если был)."""
+    with _lock:
+        snap = _full["snap"]
+        fresh = snap is not None and (time.time() - _full["ts"] < _TTL)
+        if not fresh and not _full["building"]:
+            _full["building"] = True
+            threading.Thread(target=_build_full_bg, daemon=True).start()
+        return snap, _full["building"]
+
+
+def match_teacher(full_name: str, names: list) -> str:
+    """Ищет преподавателя портала по ФИО пользователя. На портале — «Иванов И.И.»,
+    в аккаунте — «Иванов Иван Иванович»: сравниваем фамилию + инициалы."""
+    fn = (full_name or "").strip().lower()
+    if not fn:
+        return ""
+    parts = fn.split()
+    surname = parts[0]
+    inits = "".join(p[0] for p in parts[1:3] if p)
+    for t in names:
+        tp = (t or "").lower().replace(".", " ").split()
+        if not tp or tp[0] != surname:
+            continue
+        tinits = "".join(p[0] for p in tp[1:3] if p)
+        if not inits or not tinits or tinits == inits[:len(tinits)]:
+            return t
+    return ""
+
+
+def teacher_weeks(snap, name: str) -> dict | None:
+    """Недели преподавателя из teacher_index в JSON-виде: {week: {day: [пары]}};
+    в каждую пару добавляем group — преподавателю важно, у кого он ведёт."""
+    weeks = (snap.teacher_index or {}).get(name)
+    if not weeks:
+        return None
+    out = {}
+    for w, days in weeks.items():
+        out[str(w)] = {}
+        for d, entries in days.items():
+            out[str(w)][d] = [dict(e["lesson"].to_dict(), group=e["group"])
+                              for e in entries]
+    return out
+
+
 def get_group(name: str) -> dict | None:
     """Снимок расписания одной группы (dict как GroupSchedule.to_dict) или None."""
     name = (name or "").strip()
