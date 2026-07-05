@@ -1,13 +1,15 @@
 <script setup>
 // TeacherJournal — журнал преподавателя, порт десктопного teacher_dashboard._update_table:
-//  • значения ячеек — селекты по типу занятия (Лекция: ✓/Н/Б/О; Практика: 2–5/Н;
-//    Экзамен: 2–5/Н с «(Зачтено)/(Не зачтено)» и назначением пересдачи, как на ПК);
-//  • колонки пересдач после экзамена — активны только у заваливших попытку;
-//  • информативные заголовки: тип №, дата, тема (полная — в подсказке), ✎ правка, ✕;
-//  • зебра-строки, цветные оценки/средний, строка «средний по группе»;
+//  • компактная таблица, выровнена ВЛЕВО (не расползается при 1–2 занятиях);
+//  • значения ячеек — селекты по типу (Лекция ✓/Н/Б/О; Практика 2–5/Н; Экзамен 2–5/Н с
+//    «(Зачтено)/(Не зачтено)» и назначением пересдачи, как на ПК);
+//  • заголовок занятия читаемый: тип №, дата, тема (2 строки + полная в тултипе);
+//  • ПКМ по заголовку — меню «Изменить / Пересдача / Удалить»; двойной клик — правка
+//    (в модалке видна полная тема); ✎/✕ прямо в шапке;
+//  • зебра, цветные оценки/средний, строка «средний по группе»;
 //  • дата нового занятия — автоматически сегодняшняя.
 // Всё пишется в те же таблицы, что синк десктопа → изменения доезжают до ПК pull'ом.
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { teacherApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -28,7 +30,9 @@ onMounted(async () => {
     group.value = groups.value[0] || ''
     subject.value = subjects.value[0] || ''
   } catch { /* */ }
+  document.addEventListener('click', closeCtx)
 })
+onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
@@ -53,11 +57,6 @@ const colDefs = computed(() => {
   return out
 })
 
-function shortTopic(t, limit = 26) {
-  t = (t || '').trim()
-  return t.length <= limit ? t : t.slice(0, limit).trimEnd() + '…'
-}
-
 // ── Значения ячеек (селекты, как комбобоксы десктопа) ───────────────────────────
 const OPTIONS = {
   'Лекция': ['', '✓', 'Н', 'Б', 'О'],
@@ -69,7 +68,6 @@ function isFailed(v) {
   v = (v || '').trim()
   return !!v && (v.startsWith('2') || v.startsWith('Н') || v.includes('Не зачтено'))
 }
-// Пересдача №ri видна студенту, только если предыдущая попытка завалена (или уже есть значение).
 function needsRetake(s, col) {
   if (s.grades[col.key]) return true
   const prevKey = col.ri === 1 ? col.l.id : retakeKey(col.l, col.ri - 1)
@@ -118,8 +116,7 @@ function plusDays(days) {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`
 }
 
-// Экзамен — та же логика, что _set_exam_val на ПК: 4/5 → «(Зачтено)», 3 → спросить
-// зачёт/пересдача, 2/Н → «(Не зачтено)» + назначить дату пересдачи (по умолчанию +7 дней).
+// Экзамен — та же логика, что _set_exam_val на ПК.
 async function setExamGrade(s, col, value) {
   if (value === '') { await setGrade(s, col.key, ''); return }
   let full = value
@@ -147,6 +144,18 @@ function onCell(s, col, value) {
   else setGrade(s, col.key, value)
 }
 
+// ── ПКМ-меню на заголовке занятия (изменить / пересдача / удалить) ──────────────
+const ctx = ref({ show: false, x: 0, y: 0, lesson: null })
+function openCtx(e, l) { ctx.value = { show: true, x: Math.min(e.clientX, window.innerWidth - 200), y: e.clientY, lesson: l } }
+function closeCtx() { if (ctx.value.show) ctx.value.show = false }
+function ctxEdit() { openEditLesson(ctx.value.lesson); closeCtx() }
+function ctxDelete() { const l = ctx.value.lesson; closeCtx(); delLesson(l) }
+async function ctxRetake() {
+  const l = ctx.value.lesson; closeCtx()
+  const rd = prompt('Дата пересдачи (дд.мм.гггг):', plusDays(7))
+  if (rd) { try { await teacherApi.updateLesson(l.id, { retake_date: rd }); await load() } catch { alert('Не удалось') } }
+}
+
 // ── Занятия: создание и правка (дата — сегодня по умолчанию) ────────────────────
 const LESSON_TYPES = ['Практика', 'Лекция', 'Экзамен', 'Семинар', 'Лабораторная', 'Зачёт']
 const showLesson = ref(false)
@@ -168,7 +177,6 @@ function openEditLesson(l) {
   lessonError.value = ''
   showLesson.value = true
 }
-// При смене типа в форме создания — номер продолжает нумерацию этого типа.
 watch(() => lessonForm.value.type, (t) => {
   if (editingLesson.value) return
   const n = (data.value?.lessons || []).filter((l) => l.type === t).length
@@ -198,7 +206,7 @@ async function delLesson(l) {
   catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 
-// ── Excel: скачивание blob; при ошибке показываем ПРИЧИНУ с сервера ──────────────
+// ── Excel ──────────────────────────────────────────────────────────────────────
 const exporting = ref(false)
 async function exportXlsx() {
   exporting.value = true
@@ -246,39 +254,46 @@ async function exportXlsx() {
     <EmptyState v-else-if="!data?.lessons?.length" title="Журнал пуст"
                 message="Добавьте первое занятие кнопкой «+ Занятие» — колонки появятся здесь." />
 
+    <!-- Таблица компактная и выровнена влево: обёртка не растягивает table (w-max). -->
     <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="w-max min-w-full text-sm">
         <thead>
-          <tr class="border-b-2 border-accent/40 bg-bg2 text-left text-text2">
-            <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-tiny font-semibold uppercase tracking-wide">Студент</th>
-            <th v-for="col in colDefs" :key="col.key" class="min-w-28 px-2 py-2 text-center align-top">
+          <tr class="border-b-2 border-accent/40 bg-bg2 text-text2">
+            <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
+            <th v-for="col in colDefs" :key="col.key"
+                class="w-32 border-l border-border align-top px-2 py-2"
+                :class="col.ri === 0 ? 'cursor-context-menu' : ''"
+                :title="col.ri === 0 ? 'ПКМ или двойной клик — изменить занятие' : ''"
+                @contextmenu.prevent="col.ri === 0 && openCtx($event, col.l)"
+                @dblclick="col.ri === 0 && openEditLesson(col.l)">
               <template v-if="col.ri > 0">
                 <div class="text-xs font-bold text-orange">Пересдача №{{ col.ri }}</div>
-                <div class="text-tiny text-text3">{{ retakeDate(col.l, col.ri) }}</div>
+                <div class="text-[11px] font-normal normal-case text-text3">{{ retakeDate(col.l, col.ri) }}</div>
               </template>
               <template v-else>
-                <div class="text-xs font-bold text-text" :title="col.l.topic">
-                  {{ col.l.type }} №{{ col.l.number }}<span v-if="col.l.type === 'Лекция' && col.l.hour"> ({{ col.l.hour }}-й ч.)</span>
+                <div class="text-xs font-bold text-text">
+                  {{ col.l.type }} №{{ col.l.number }}<span v-if="col.l.type === 'Лекция' && col.l.hour" class="font-normal text-text3"> ({{ col.l.hour }}ч)</span>
                 </div>
-                <div class="text-tiny text-text3">{{ col.l.date }}</div>
-                <div v-if="col.l.topic" class="max-w-36 truncate text-tiny normal-case text-text3" :title="col.l.topic">{{ shortTopic(col.l.topic) }}</div>
-                <div class="mt-0.5 space-x-2">
-                  <button class="text-tiny text-text3 hover:text-accent" title="Изменить занятие" @click="openEditLesson(col.l)">✎</button>
-                  <button class="text-tiny text-text3 hover:text-red" title="Удалить занятие" @click="delLesson(col.l)">✕</button>
+                <div class="text-[11px] font-normal normal-case text-text3">{{ col.l.date || '—' }}</div>
+                <div v-if="col.l.topic" class="mt-0.5 line-clamp-2 text-[11px] font-normal normal-case leading-snug text-text2" :title="col.l.topic">
+                  {{ col.l.topic }}
+                </div>
+                <div class="mt-1 flex items-center justify-center gap-3 text-text3">
+                  <button class="hover:text-accent" title="Изменить" @click.stop="openEditLesson(col.l)">✎</button>
+                  <button class="hover:text-red" title="Удалить" @click.stop="delLesson(col.l)">✕</button>
                 </div>
               </template>
             </th>
-            <th class="px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
+            <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(s, i) in data.students" :key="i"
               class="border-b border-border last:border-0 hover:bg-accent-glow/40" :class="i % 2 ? 'bg-bg2/50' : ''">
-            <td class="sticky left-0 z-10 whitespace-nowrap px-4 py-2 font-medium text-text" :class="i % 2 ? 'bg-bg2' : 'bg-card'">
+            <td class="sticky left-0 z-10 whitespace-nowrap px-4 py-2 text-left font-medium text-text" :class="i % 2 ? 'bg-bg2' : 'bg-card'">
               {{ s.surname }} {{ s.name }}
             </td>
-            <td v-for="col in colDefs" :key="col.key" class="px-1.5 py-1.5 text-center">
-              <!-- Пересдача не нужна (предыдущая попытка сдана) — серый прочерк, как на ПК. -->
+            <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
               <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key])"
                       :title="s.grades[col.key] || ''"
@@ -287,18 +302,26 @@ async function exportXlsx() {
                 <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
               </select>
             </td>
-            <td class="px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(s.average)">
+            <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(s.average)">
               {{ s.average || '—' }}
             </td>
           </tr>
           <tr class="border-t-2 border-accent/40 bg-bg2/70">
-            <td class="sticky left-0 z-10 bg-bg2 px-4 py-2.5 text-right text-xs font-semibold uppercase text-text3"
-                :colspan="1">Средний по группе</td>
+            <td class="sticky left-0 z-10 bg-bg2 px-4 py-2.5 text-right text-xs font-semibold uppercase text-text3">Средний по группе</td>
             <td :colspan="colDefs.length" class="px-2 py-2.5"></td>
-            <td class="px-4 py-2.5 text-right font-title text-base font-extrabold" :class="avgClass(groupAverage)">{{ groupAverage }}</td>
+            <td class="border-l-2 border-accent/40 px-4 py-2.5 text-right font-title text-base font-extrabold" :class="avgClass(groupAverage)">{{ groupAverage }}</td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Контекстное меню (ПКМ) -->
+    <div v-if="ctx.show" class="fixed z-50 min-w-48 rounded-lg border border-border2 bg-card py-1 shadow-card"
+         :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @click.stop>
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxEdit">✎ Изменить тему / дату</button>
+      <button v-if="ctx.lesson?.type === 'Экзамен'" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxRetake">📅 Назначить пересдачу</button>
+      <div class="my-1 border-t border-border" />
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-red/10" @click="ctxDelete">🗑 Удалить занятие</button>
     </div>
 
     <!-- Модалка занятия: создание и правка (дата — сегодня по умолчанию) -->
@@ -318,9 +341,9 @@ async function exportXlsx() {
               <input v-model.number="lessonForm.number" type="number" min="1"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тема</span>
-            <input v-model="lessonForm.topic" placeholder="Тема занятия"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тема (полностью)</span>
+            <textarea v-model="lessonForm.topic" rows="2" placeholder="Тема занятия"
+                      class="w-full resize-none rounded-sm border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent"></textarea></label>
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Дата</span>
               <input v-model="lessonForm.date" placeholder="дд.мм.гггг"

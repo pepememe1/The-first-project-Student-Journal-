@@ -432,13 +432,45 @@ class TeacherDashboard(QWidget):
             f"QMenu::item{{padding:8px 16px;border-radius:6px;}}"
             f"QMenu::item:selected{{background:rgba(20,124,139,0.1);color:{C['green']};}}"
         )
+        if ri == 0:
+            e = menu.addAction("✎  Изменить тему / дату")
+            e.triggered.connect(lambda: self._edit_lesson(l))
         if l.type == "Экзамен" and ri == 0:
             a = menu.addAction("📅 Назначить пересдачу")
             a.triggered.connect(lambda: self._ask_retake(l, 1))
-        if l.type in ("Лекция", "Практика", "Экзамен"):
-            d = menu.addAction("🗑  Удалить столбец")
-            d.triggered.connect(lambda: self._delete_lesson(l.id))
+        menu.addSeparator()
+        d = menu.addAction("🗑  Удалить занятие")
+        d.triggered.connect(lambda: self._delete_lesson(l.id))
         menu.exec(self.t_table.horizontalHeader().mapToGlobal(pos))
+
+    def _edit_lesson(self, l):
+        """Правка уже добавленного занятия через ПКМ: тема, дата, номер. Пишем в БД
+        (offline-first) и будим синк — правка уедет на сервер и на другие ПК."""
+        topic, ok = QInputDialog.getText(self, "Тема занятия",
+                                          "Тема (что было на паре):", text=l.topic or "")
+        if not ok:
+            return
+        date, ok = QInputDialog.getText(self, "Дата занятия",
+                                        "Дата (дд.мм.гггг):", text=l.date or "")
+        if not ok:
+            return
+        num, ok = QInputDialog.getInt(self, "Номер занятия", "№:", l.number, 1, 999)
+        if not ok:
+            return
+        l.topic = topic.strip()
+        l.date = date.strip()
+        l.number = num
+        try:
+            self.book.save_to_db()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить: {e}")
+            return
+        try:
+            from sync_runner import trigger
+            trigger()
+        except Exception:
+            pass
+        self._update_table()
 
     def _ask_retake(self, lesson, n):
         rd = ui_date.ask_date(self, "Дата пересдачи", "Когда пересдача:",

@@ -42,9 +42,9 @@ export function dashboardEmote({ average = 0, debts = 0 } = {}) {
  * в десктопе: долги/пропуски → предупреж, привет → радость+поздрав, плохой балл →
  * грусть+подбадрив, инфо → деф+подбадрив и т.д. */
 export function chatEmote(state, mood = 'neutral', intent = 'help') {
-  if (state === 'greeting') return 'happy-congrats'       // приветствие при открытии
-  if (state === 'thinking') return pickEmote('thinking')  // обдумывает вопрос
+  if (state === 'greeting') return 'happy-cheer'          // приветливо машет при открытии
+  if (state === 'thinking') return 'think-think'          // обдумывает вопрос
   if (state === 'speaking') return pickEmote('speaking', mood, intent)
-  if (state === 'idle') return pickEmote('idle')          // удив+деф — «заметил курсор»
-  return 'neutral-idle'                                    // ждёт/молчит
+  // покой/ждёт — СПОКОЙНАЯ поза «руки в карманах», рот закрыт (не удивление с открытым ртом)
+  return 'neutral-idle'
 }

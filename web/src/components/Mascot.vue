@@ -42,8 +42,8 @@ const src = computed(() => `/mascot/${props.sprite}.png`)
   0%, 100% { transform: translateZ(0) scale(1); }
   50%      { transform: translateZ(0) scale(1.015); }
 }
-/* Плавная смена кадра эмоции (кросс-фейд). */
-.mascot-swap-enter-active, .mascot-swap-leave-active { transition: opacity 0.45s ease; }
+/* Смена кадра эмоции — быстрый кросс-фейд (снаппи, без «зависания»). */
+.mascot-swap-enter-active, .mascot-swap-leave-active { transition: opacity 0.18s ease; }
 .mascot-swap-enter-from, .mascot-swap-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .mascot--float .mascot__img { animation: none; } }
 </style>
