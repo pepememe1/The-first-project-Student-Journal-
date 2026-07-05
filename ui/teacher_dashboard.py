@@ -530,26 +530,112 @@ class TeacherDashboard(QWidget):
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def _import_excel(self):
+        """Импорт журнала из Excel — АДАПТИВНЫЙ к разным форматам файла.
+
+        Раньше формат был жёстким (столбец 0 = фамилия, 1 = имя, дальше занятия строго
+        по порядку) — чужие таблицы и даже наш собственный экспорт (с титульной шапкой)
+        не читались. Теперь:
+          • строку заголовков ищем в первых 15 строках (по слову «фамилия»/«фио»);
+          • имя студента понимаем и как две колонки («Фамилия»+«Имя»), и как слитное
+            «ФИО» (первое слово — фамилия, остальное — имя);
+          • колонки занятий сопоставляем ПО ЗАГОЛОВКУ («Практика №2», «лек 1», …), а не
+            по позиции; колонки «Пересдача» пишутся в <id>_retake соответствующего
+            экзамена; колонка «Средний балл» пропускается;
+          • если по заголовкам ничего не распозналось — прежний позиционный порядок;
+          • «—»/«-» считаются пустыми (наш экспорт так помечает ненужные пересдачи)."""
         if not self.book:
             QMessageBox.warning(self, "Ошибка", "Сначала откройте журнал."); return
         path, _ = QFileDialog.getOpenFileName(self, "Открыть Excel", "", "Excel (*.xlsx *.xls)")
         if not path: return
         try:
+            import re as _re
             from openpyxl import load_workbook
-            wb = load_workbook(path); ws = wb.active; rows = list(ws.iter_rows(values_only=True))
-            if len(rows) < 2: QMessageBox.warning(self, "Ошибка", "Файл пустой."); return
+            wb = load_workbook(path, data_only=True); ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+
+            #1) Строка заголовков: первые 15 строк, ячейка со словом «фамилия»/«фио».
+            hdr_i = None
+            for i, row in enumerate(rows[:15]):
+                cells = [str(c).strip().lower() for c in (row or []) if c is not None]
+                if any(("фамилия" in c or "фио" in c or c == "студент") for c in cells):
+                    hdr_i = i; break
+            if hdr_i is None or len(rows) <= hdr_i + 1:
+                QMessageBox.warning(self, "Ошибка",
+                    "Не нашёл строку заголовков (нужна колонка «Фамилия» или «ФИО»)."); return
+            hdr = [str(c).strip() if c is not None else "" for c in rows[hdr_i]]
+            low = [h.lower() for h in hdr]
+
+            #2) Колонки имени: отдельные «Фамилия»+«Имя» либо слитное «ФИО».
+            fio_col = next((i for i, h in enumerate(low) if "фио" in h or h == "студент"), None)
+            sn_col = next((i for i, h in enumerate(low) if "фамилия" in h), fio_col)
+            nm_col = next((i for i, h in enumerate(low) if h.startswith("имя")), None)
+            combined = nm_col is None                    #одна колонка с полным ФИО
+
+            #3) Колонки занятий: по заголовку → конкретное занятие журнала.
+            TYPE_ALIASES = {"лек": "Лекция", "пр": "Практика", "лаб": "Лабораторная",
+                            "сем": "Семинар", "экз": "Экзамен", "зач": "Зачёт",
+                            "конс": "Консультация"}
+            def _match_lesson(header: str):
+                h = header.lower()
+                m = _re.search(r"№?\s*(\d+)", h)
+                if not m:
+                    return None
+                num = int(m.group(1))
+                ltype = next((full for pref, full in TYPE_ALIASES.items()
+                              if h.startswith(pref) or f" {pref}" in h), None)
+                for l in self.book.lessons:
+                    if l.number == num and (ltype is None or l.type.lower().startswith(ltype.lower()[:3])):
+                        return l
+                return None
+
+            col_map = {}                                  #индекс колонки → ключ records
+            last_exam = None
+            for ci, h in enumerate(hdr):
+                if ci in (sn_col, nm_col) or not h or "средн" in low[ci]:
+                    continue
+                if "пересдач" in low[ci]:
+                    if last_exam is not None:
+                        col_map[ci] = last_exam.id + "_retake"
+                    continue
+                l = _match_lesson(h)
+                if l is not None:
+                    col_map[ci] = l.id
+                    last_exam = l if l.type == "Экзамен" else last_exam
+            if not col_map:
+                #заголовки не распознались — прежний позиционный порядок
+                start = (max(sn_col if sn_col is not None else 0,
+                             nm_col if nm_col is not None else 0)) + 1
+                for k, l in enumerate(self.book.lessons):
+                    col_map[start + k] = l.id
+
+            #4) Строки студентов.
             added = updated = 0
-            for row in rows[1:]:
-                if not row or not row[0]: continue
-                sn = str(row[0]).strip()
-                nm = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-                s  = next((x for x in self.book.spisok_stud if x.f.lower() == sn.lower()), None)
+            for row in rows[hdr_i + 1:]:
+                if not row or sn_col is None or sn_col >= len(row) or not row[sn_col]:
+                    continue
+                raw = str(row[sn_col]).strip()
+                if raw.lower().startswith("средний"):     #итоговая строка нашего экспорта
+                    continue
+                if combined:
+                    parts = raw.split()
+                    sn, nm = parts[0], " ".join(parts[1:])
+                else:
+                    sn = raw
+                    nm = str(row[nm_col]).strip() if nm_col < len(row) and row[nm_col] else ""
+                s = next((x for x in self.book.spisok_stud
+                          if x.f.lower() == sn.lower()
+                          and (not nm or x.n.lower() == nm.lower())), None)
                 if not s:
-                    s = Student(nm, sn, self.book.group); self.book.spisok_stud.append(s); added += 1
-                for ci, val in enumerate(row[2:], start=2):
-                    if ci - 2 >= len(self.book.lessons): break
-                    if val is not None and str(val).strip():
-                        s.records[self.book.lessons[ci - 2].id] = str(val).strip(); updated += 1
+                    s = Student(nm, sn, self.book.group)
+                    self.book.spisok_stud.append(s); added += 1
+                for ci, key in col_map.items():
+                    if ci >= len(row) or row[ci] is None:
+                        continue
+                    val = str(row[ci]).strip()
+                    if not val or val in ("—", "-"):
+                        continue
+                    s.records[key] = val; updated += 1
+
             self.book.save_to_db(); self._update_table()
             QMessageBox.information(self, "Импорт",
                 f"Добавлено студентов: {added}\nОбновлено записей: {updated}")

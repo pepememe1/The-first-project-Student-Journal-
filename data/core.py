@@ -600,11 +600,23 @@ class GradeBook:
             grading.pairs_from_objects(self.lessons), student.records, cfg)
 
     def export_to_excel(self, file_path: str):
+        """Экспорт журнала в аккуратный xlsx: титульная шапка (группа/предмет/дата),
+        фирменные цвета, рамки, цвет оценок по уровню, закреплённые области и строка
+        «средний по группе». Весь текст — Times New Roman 14 (требование заказчика)."""
+        from openpyxl.styles import Border, Side
+        from openpyxl.utils import get_column_letter
+        from datetime import datetime
+
+        FNT = "Times New Roman"
+        ACCENT = "147C8B"                                   #фирменный цвет GB
+        thin = Side(style="thin", color="C9D4D6")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
         wb = Workbook()
         ws = wb.active
-        title      = f"Успеваемость {self.group}"
-        safe_title = re.sub(r'[\[\]:*?/\\]', '_', title)
-        ws.title   = safe_title[:31]
+        safe_title = re.sub(r'[\[\]:*?/\\]', '_', f"Успеваемость {self.group}")
+        ws.title = safe_title[:31]
+
         headers = ["Фамилия", "Имя"]
         for l in self.lessons:
             if l.type == "Экзамен":
@@ -614,12 +626,48 @@ class GradeBook:
             else:
                 headers.append(f"{l.type} №{l.number}\n({l.date})")
         headers.append("Средний балл")
+        ncols = len(headers)
+        last_col = get_column_letter(ncols)
+
+        #Титульная шапка: что это, чья группа, когда выгружено.
+        ws.merge_cells(f"A1:{last_col}1")
+        ws["A1"] = "Журнал успеваемости"
+        ws["A1"].font = Font(name=FNT, size=18, bold=True, color=ACCENT)
+        ws["A1"].alignment = Alignment(horizontal="center")
+        ws.merge_cells(f"A2:{last_col}2")
+        ws["A2"] = f"Группа {self.group}  ·  {self.subject}"
+        ws["A2"].font = Font(name=FNT, size=14, bold=True)
+        ws["A2"].alignment = Alignment(horizontal="center")
+        ws.merge_cells(f"A3:{last_col}3")
+        ws["A3"] = (f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
+                    f"GradeBookAI · Технологический колледж ВСГУТУ")
+        ws["A3"].font = Font(name=FNT, size=11, italic=True, color="7A8A8C")
+        ws["A3"].alignment = Alignment(horizontal="center")
+
+        HDR = 5                                             #строка заголовков таблицы
+        ws.append([])                                       #строка 4 — воздух
         ws.append(headers)
-        for cell in ws[1]:
-            cell.font      = Font(bold=True, color="FFFFFF")
-            cell.fill      = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
-        for s in self.spisok_stud:
+        for cell in ws[HDR]:
+            cell.font = Font(name=FNT, size=14, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color=ACCENT, end_color=ACCENT, fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = border
+
+        def _grade_color(v: str) -> str:
+            v = (v or "").strip()
+            if v.startswith("5"):
+                return "1E7B33"                             #зелёный
+            if v.startswith("4"):
+                return "1F5FBF"                             #синий
+            if v.startswith("3"):
+                return "B26B00"                             #оранжевый
+            if v.startswith("2") or v.upper().startswith("Н") or "Не зачтено" in v:
+                return "B3261E"                             #красный
+            return "222222"
+
+        stripe = PatternFill(start_color="F2F7F8", end_color="F2F7F8", fill_type="solid")
+        averages = []
+        for i, s in enumerate(self.spisok_stud):
             row = [s.f, s.n]
             for l in self.lessons:
                 base = s.records.get(l.id, "")
@@ -632,6 +680,46 @@ class GradeBook:
                         failed = b.startswith(("2", "Н")) or "Не зачтено" in b
                         rv = "" if failed else "—"
                     row.append(rv)
-            row.append(round(self.calculate_average(s), 2))
+            avg = round(self.calculate_average(s), 2)
+            averages.append(avg)
+            row.append(avg if avg > 0 else "")
             ws.append(row)
+            r = HDR + 1 + i
+            for c in range(1, ncols + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.border = border
+                if i % 2:
+                    cell.fill = stripe
+                if c <= 2:
+                    cell.font = Font(name=FNT, size=14)
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                elif c == ncols:
+                    cell.font = Font(name=FNT, size=14, bold=True, color=ACCENT)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.font = Font(name=FNT, size=14,
+                                     color=_grade_color(str(cell.value or "")))
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        #Итог: средний по группе (только по студентам с оценками).
+        vals = [a for a in averages if a > 0]
+        total_row = HDR + len(self.spisok_stud) + 1
+        ws.cell(row=total_row, column=1, value="Средний по группе:")
+        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row,
+                       end_column=ncols - 1)
+        ws.cell(row=total_row, column=1).font = Font(name=FNT, size=14, bold=True)
+        ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="right")
+        tc = ws.cell(row=total_row, column=ncols,
+                     value=round(sum(vals) / len(vals), 2) if vals else "—")
+        tc.font = Font(name=FNT, size=14, bold=True, color=ACCENT)
+        tc.alignment = Alignment(horizontal="center")
+
+        #Геометрия: ширины, высота шапки, закрепление (ФИО и заголовки всегда видны).
+        ws.column_dimensions["A"].width = 20
+        ws.column_dimensions["B"].width = 16
+        for c in range(3, ncols):
+            ws.column_dimensions[get_column_letter(c)].width = 14
+        ws.column_dimensions[last_col].width = 15
+        ws.row_dimensions[HDR].height = 54
+        ws.freeze_panes = f"C{HDR + 1}"
         wb.save(file_path)

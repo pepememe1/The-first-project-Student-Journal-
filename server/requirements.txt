@@ -13,3 +13,4 @@ pytest>=8.0             # автотесты API (запуск: cd server && pyt
 # ГОСТ-этап хеша пароля (PBKDF2-Стрибог512). Fallback на dev/без GOST-engine.
 # На БОЕВОМ Linux ставь OpenSSL GOST-engine (ViPNet/gost-engine) — бэкенд авто-выберет его.
 gostcrypto>=1.2.5
+openpyxl>=3.1        # экспорт журнала в xlsx с сайта (/web/teacher/journal.xlsx)

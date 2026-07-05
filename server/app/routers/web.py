@@ -425,6 +425,101 @@ def teacher_set_grade(payload: dict = Body(...),
     return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now}
 
 
+# --- Занятия (CRUD) --- id = str(uuid4), как создаёт десктоп (core.GradeBook) →
+# десктоп подхватывает занятия pull'ом. Преподаватель ведёт только СВОИ предметы.
+@router.post("/teacher/lesson")
+def teacher_create_lesson(payload: dict = Body(...),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Создать занятие (пару). Номер, если не передан, — следующий по типу в этом
+    журнале (как авто-нумерация в десктопе)."""
+    _require("teacher", user)
+    group = (payload.get("group") or "").strip()
+    subject = (payload.get("subject") or "").strip()
+    ltype = (payload.get("type") or "").strip()
+    if not (group and subject and ltype):
+        raise HTTPException(status_code=400, detail="Нужны group, subject и type")
+    _teacher_check_subject(user, subject)
+    number = payload.get("number")
+    if not number:
+        rows = db.query(Lesson.number).filter(
+            Lesson.group_name == group, Lesson.subject == subject,
+            Lesson.type == ltype, Lesson.deleted == False).all()  # noqa: E712
+        number = (max((r[0] or 0) for r in rows) + 1) if rows else 1
+    import uuid as _uuid
+    lid = str(_uuid.uuid4())
+    db.add(Lesson(id=lid, group_name=group, subject=subject, type=ltype,
+                  number=int(number), topic=(payload.get("topic") or "").strip(),
+                  date=(payload.get("date") or "").strip(),
+                  retake_date=(payload.get("retake_date") or "").strip(),
+                  hour=int(payload.get("hour") or 0), extra={},
+                  updated_at=_now_iso(), deleted=False))
+    db.commit()
+    return {"ok": True, "id": lid, "number": int(number)}
+
+
+@router.put("/teacher/lesson/{lesson_id}")
+def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require("teacher", user)
+    row = db.get(Lesson, lesson_id)
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Занятие не найдено")
+    _teacher_check_subject(user, row.subject)
+    for field in ("topic", "date", "retake_date"):
+        if field in payload:
+            setattr(row, field, (payload.get(field) or "").strip())
+    if "number" in payload and payload["number"]:
+        row.number = int(payload["number"])
+    if "hour" in payload:
+        row.hour = int(payload.get("hour") or 0)
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "id": lesson_id}
+
+
+@router.delete("/teacher/lesson/{lesson_id}")
+def teacher_delete_lesson(lesson_id: str,
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Мягкое удаление занятия (надгробие) — доедет до десктопа и скроет колонку."""
+    _require("teacher", user)
+    row = db.get(Lesson, lesson_id)
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Занятие не найдено")
+    _teacher_check_subject(user, row.subject)
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "id": lesson_id}
+
+
+@router.get("/teacher/journal.xlsx")
+def teacher_journal_xlsx(group: str = Query(...), subject: str = Query(...),
+                         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Экспорт журнала в xlsx прямо с сайта (тот же аккуратный стиль, что в десктопе:
+    Times New Roman 14, титульная шапка, цвет оценок, средний по группе)."""
+    _require("teacher", user)
+    _teacher_check_subject(user, subject)
+    try:
+        from .. import xlsx_export
+    except ImportError:
+        raise HTTPException(status_code=501, detail="На сервере не установлен openpyxl")
+    cfg = W.load_config(db)
+    lessons = W.group_lessons(db, group, subject)
+    studs = W.students_in_group(db, group)
+    rows = []
+    for s in studs:
+        recs = W.student_records(db, s.surname, s.name)
+        rows.append({"surname": s.surname, "name": s.name, "records": recs,
+                     "average": W.average(lessons, recs, cfg)})
+    data = xlsx_export.build_journal_xlsx(group, subject, lessons, rows)
+    from fastapi.responses import Response
+    fname = f"journal_{group}_{subject}.xlsx".replace(" ", "_")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
+
+
 def _ensure_group_row(db: Session, name: str):
     """Заводит группу в таблице groups, если её ещё нет (id=grp:name) — как десктоп при
     добавлении студента (_ensure_group_exists). Так группа не «висит» и уедет в десктоп."""

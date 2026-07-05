@@ -58,6 +58,9 @@ export const teacherApi = {
   createLesson: (payload) => api.post('/web/teacher/lesson', payload),
   updateLesson: (id, payload) => api.put(`/web/teacher/lesson/${encodeURIComponent(id)}`, payload),
   deleteLesson: (id) => api.delete(`/web/teacher/lesson/${encodeURIComponent(id)}`),
+  // Экспорт журнала в xlsx (тот же стиль, что в десктопе: Times New Roman 14).
+  journalXlsx: (group, subject) =>
+    api.get('/web/teacher/journal.xlsx', { params: { group, subject }, responseType: 'blob' }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────

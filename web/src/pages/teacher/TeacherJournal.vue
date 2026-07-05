@@ -89,6 +89,22 @@ async function delLesson(l) {
   try { await teacherApi.deleteLesson(l.id); await load() }
   catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
 }
+
+// Экспорт журнала в xlsx: сервер собирает файл (Times New Roman 14, как в десктопе),
+// браузер скачивает через blob (нужен Authorization-заголовок — прямой ссылкой нельзя).
+const exporting = ref(false)
+async function exportXlsx() {
+  exporting.value = true
+  try {
+    const { data: blob } = await teacherApi.journalXlsx(group.value, subject.value)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Журнал_${group.value}_${subject.value}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch { alert('Не удалось выгрузить Excel') } finally { exporting.value = false }
+}
 </script>
 
 <template>
@@ -102,7 +118,12 @@ async function delLesson(l) {
       </select>
       <span v-if="saving" class="self-center text-xs text-text3">Сохранение…</span>
       <span v-else-if="data?.students?.length" class="self-center text-xs text-text3">Клик по клетке — ввод оценки</span>
-      <AppButton v-if="group && subject" variant="green" size="sm" class="ml-auto" @click="openLesson">+ Занятие</AppButton>
+      <div v-if="group && subject" class="ml-auto flex gap-2">
+        <AppButton variant="ghost" size="sm" :disabled="exporting || !data?.students?.length" @click="exportXlsx">
+          {{ exporting ? 'Выгрузка…' : '💾 Excel' }}
+        </AppButton>
+        <AppButton variant="green" size="sm" @click="openLesson">+ Занятие</AppButton>
+      </div>
     </div>
 
     <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки"
