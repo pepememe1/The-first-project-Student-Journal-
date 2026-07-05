@@ -10,6 +10,7 @@ web.py — READ-представления для веб-версии (SPA). В�
 студентов. Пишем в те же таблицы и в том же формате id, что и синк десктопа — правки
 подхватываются десктопом обычным pull; метку LWW ставит сервер (инвариант §3).
 """
+import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -173,16 +174,27 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, group, subject)
     studs = W.students_in_group(db, group)
+    #Ключи пересдач экзаменов (как в десктопе: <id>_retake, дальше — _retake_N по extra).
+    retake_keys = []
+    for l in lessons:
+        if l.type == "Экзамен" and l.retake_date:
+            retake_keys.append(l.id + "_retake")
+            for n in range(2, 6):
+                if (l.extra or {}).get(f"retake_date_{n}"):
+                    retake_keys.append(f"{l.id}_retake_{n}")
     rows = []
     for s in studs:
         recs = W.student_records(db, s.surname, s.name)
-        rows.append({"surname": s.surname, "name": s.name,
-                     "grades": {l.id: recs.get(l.id, "") for l in lessons},
+        grades = {l.id: recs.get(l.id, "") for l in lessons}
+        grades.update({k: recs.get(k, "") for k in retake_keys})
+        rows.append({"surname": s.surname, "name": s.name, "grades": grades,
                      "average": W.average(lessons, recs, cfg)})
     return {
         "group": group, "subject": subject,
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
-                     "topic": l.topic, "date": l.date} for l in lessons],
+                     "topic": l.topic, "date": l.date, "hour": l.hour,
+                     "retake_date": l.retake_date, "extra": l.extra or {}}
+                    for l in lessons],
         "students": rows,
     }
 
@@ -424,8 +436,11 @@ def teacher_set_grade(payload: dict = Body(...),
     value = (payload.get("grade") or "").strip()
     if not (surname and name and lesson_id):
         raise HTTPException(status_code=400, detail="Нужны surname, name и lesson_id")
+    #Пересдачи экзаменов пишутся с суффиксом (<id>_retake[_N]) — как в десктопе. Права
+    #и группу проверяем по БАЗОВОМУ занятию, ключ оценки сохраняем полным.
+    base_id = re.sub(r"_retake(_\d+)?$", "", lesson_id)
     lesson = db.query(Lesson).filter(
-        Lesson.id == lesson_id, Lesson.deleted == False).first()  # noqa: E712
+        Lesson.id == base_id, Lesson.deleted == False).first()  # noqa: E712
     if not lesson:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_subject(user, lesson.subject)   #только свой предмет
@@ -492,6 +507,16 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     for field in ("topic", "date", "retake_date"):
         if field in payload:
             setattr(row, field, (payload.get(field) or "").strip())
+    #Даты пересдач №2+ живут в extra (как в десктопе: retake_date_2..5).
+    extra_changed = False
+    extra = dict(row.extra or {})
+    for n in range(2, 6):
+        k = f"retake_date_{n}"
+        if k in payload:
+            extra[k] = (payload.get(k) or "").strip()
+            extra_changed = True
+    if extra_changed:
+        row.extra = extra
     if "number" in payload and payload["number"]:
         row.number = int(payload["number"])
     if "hour" in payload:
@@ -537,11 +562,15 @@ def teacher_journal_xlsx(group: str = Query(...), subject: str = Query(...),
                      "average": W.average(lessons, recs, cfg)})
     data = xlsx_export.build_journal_xlsx(group, subject, lessons, rows)
     from fastapi.responses import Response
-    fname = f"journal_{group}_{subject}.xlsx".replace(" ", "_")
+    from urllib.parse import quote
+    #HTTP-заголовки — только latin-1: кириллицу в имени файла percent-кодируем
+    #(RFC 5987), иначе UnicodeEncodeError и 500. Слэши из имени группы убираем.
+    fname = f"Журнал_{group}_{subject}.xlsx".replace(" ", "_").replace("/", "-")
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
+        headers={"Content-Disposition":
+                 f"attachment; filename=journal.xlsx; filename*=UTF-8''{quote(fname)}"})
 
 
 def _ensure_group_row(db: Session, name: str):

@@ -135,6 +135,16 @@ class TeacherDashboard(QWidget):
         self.t_table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.t_table.horizontalHeader().customContextMenuRequested.connect(self._header_ctx)
         self.t_table.setWordWrap(True)
+        #Журнал должен ЧИТАТЬСЯ: крупный текст, высокие строки, зебра и заметная шапка —
+        #раньше таблица была мелкой и сливалась с фоном.
+        self.t_table.setAlternatingRowColors(True)
+        self.t_table.verticalHeader().setDefaultSectionSize(44)
+        self.t_table.setStyleSheet(
+            f"QTableWidget{{font-size:14px;alternate-background-color:{C['bg2']};"
+            f"background:{C['card']};gridline-color:{C['border']};}}"
+            f"QHeaderView::section{{font-size:12px;font-weight:700;color:{C['text']};"
+            f"background:{C['bg2']};border:none;border-bottom:2px solid {C['green']};"
+            "padding:6px 8px;}")
         self.t_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.t_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         lay.addWidget(self.t_table, 1)
@@ -260,14 +270,14 @@ class TeacherDashboard(QWidget):
                     cb = QComboBox()
                     cb.addItems(["", "✓", "Н", "Б", "О"])
                     cb.setCurrentText(val)
-                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:5px;color:{C['text']};font-size:12px;padding:2px;")
+                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
                     self.t_table.setCellWidget(r, col, cb)
                 elif l.type == "Практика" and ri == 0:
                     cb = QComboBox()
                     cb.addItems(["", "2", "3", "4", "5", "Н"])
                     cb.setCurrentText(val)
-                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:5px;color:{C['text']};font-size:12px;padding:2px;")
+                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
                     self.t_table.setCellWidget(r, col, cb)
                 elif l.type == "Экзамен" or ri > 0:
@@ -287,16 +297,16 @@ class TeacherDashboard(QWidget):
                     cb.addItems(["", "2", "3", "4", "5", "Н"])
                     raw = val.split()[0] if val else ""
                     cb.setCurrentText(raw)
-                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:5px;color:{C['text']};font-size:12px;padding:2px;")
+                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, le=l, rk=rk_full, ri_=ri: self._set_exam_val(st, le, rk, v, ri_))
                     self.t_table.setCellWidget(r, col, cb)
         self.t_table.blockSignals(False)
         self.t_table.resizeColumnsToContents()
         hh = self.t_table.horizontalHeader()
-        hh.setMinimumSectionSize(90); hh.setDefaultAlignment(Qt.AlignCenter)
-        self.t_table.setColumnWidth(0, 130); self.t_table.setColumnWidth(1, 100)
+        hh.setMinimumSectionSize(110); hh.setDefaultAlignment(Qt.AlignCenter)
+        self.t_table.setColumnWidth(0, 160); self.t_table.setColumnWidth(1, 120)
         for c in range(2, self.t_table.columnCount()):
-            self.t_table.setColumnWidth(c, max(self.t_table.columnWidth(c), 100))
+            self.t_table.setColumnWidth(c, max(self.t_table.columnWidth(c), 112))
 
     def _set_val(self, student, key, val):
         student.records[key] = val
