@@ -150,6 +150,103 @@ def student_stats(user: User = Depends(get_current_user), db: Session = Depends(
     }
 
 
+@router.get("/student/insights")
+def student_insights(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Проактивные карточки Вектора для студента (порт vector/insights.py, личный
+    скоуп): долги, ближайшие пересдачи, пропуски, средний. Все числа — из БД."""
+    _require("student", user)
+    cfg = W.load_config(db)
+    lessons = W.group_lessons(db, user.group_name)
+    records = W.student_records(db, user.surname, user.name)
+    avg = W.average(lessons, records, cfg)
+    cards = []
+
+    d = W.debts(lessons, records)
+    if d:
+        cards.append({"severity": "warn", "icon": "⚠️", "title": "Незакрытые задолженности",
+                      "detail": "; ".join(d[:3]) + ("…" if len(d) > 3 else "") + ".",
+                      "action": "Уточните у преподавателя дату пересдачи"})
+
+    #Назначенные пересдачи экзаменов, которые студент ещё не закрыл.
+    for l in lessons:
+        if l.type == "Экзамен" and l.retake_date:
+            base = (records.get(l.id) or "").strip()
+            retake = (records.get(l.id + "_retake") or "").strip()
+            failed = base.startswith(("2", "Н")) or "Не зачтено" in base
+            if failed and not retake:
+                cards.append({"severity": "alert", "icon": "📅",
+                              "title": f"Пересдача: {l.subject}",
+                              "detail": f"Назначена на {l.retake_date} (экзамен №{l.number}).",
+                              "action": "Подготовьтесь заранее"})
+
+    a = W.absences(lessons, records)
+    if a["всего"] >= 10:
+        cards.append({"severity": "warn", "icon": "🕒", "title": "Много пропусков",
+                      "detail": f"Всего {a['всего']} ч (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
+                      "action": "Не пропускайте ближайшие пары"})
+
+    if avg >= 4.5:
+        cards.append({"severity": "info", "icon": "🎉", "title": "Отличная успеваемость",
+                      "detail": f"Средний балл {avg} — так держать!"})
+    elif 0 < avg < 3:
+        cards.append({"severity": "alert", "icon": "🚨", "title": "Средний ниже 3",
+                      "detail": f"Сейчас {avg}. Есть риск задолженностей по итогам.",
+                      "action": "Разберите сложные темы с Вектором"})
+
+    if not cards:
+        cards.append({"severity": "info", "icon": "✅", "title": "Всё спокойно",
+                      "detail": "Тревожных сигналов нет — Вектор доволен."})
+    return {"cards": cards, "mood": _mood_by_avg(avg)}
+
+
+@router.get("/teacher/insights")
+def teacher_insights(group: str = Query(...),
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Карточки по группе для преподавателя (порт vector/insights.compute_insights):
+    средний группы, должники, зона риска, доля пропусков — по СВОИМ предметам."""
+    _require("teacher", user)
+    cfg = W.load_config(db)
+    subjects = set(user.subjects or [])
+    lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+    studs = W.students_in_group(db, group)
+    cards = []
+
+    vals, debtors, risky, absc_total = [], 0, 0, 0
+    for s in studs:
+        recs = W.student_records(db, s.surname, s.name)
+        a = W.average(lessons, recs, cfg)
+        if a > 0:
+            vals.append(a)
+        if W.debts(lessons, recs):
+            debtors += 1
+        if 0 < a < 3:
+            risky += 1
+        absc_total += W.absences(lessons, recs)["всего"]
+
+    if vals:
+        gavg = round(sum(vals) / len(vals), 2)
+        mood = "happy" if gavg >= 4 else ("neutral" if gavg >= 3 else "sad")
+        cards.append({"severity": "info" if gavg >= 3 else "warn", "icon": "📊",
+                      "title": f"Средний балл группы {group}",
+                      "detail": f"{gavg} — настроение Вектора: "
+                                f"{ {'happy': 'радостное', 'neutral': 'спокойное', 'sad': 'грустное'}[mood] }."})
+    if debtors:
+        cards.append({"severity": "warn", "icon": "⚠️", "title": "Незакрытые задолженности",
+                      "detail": f"Должников: {debtors}. Стоит назначить пересдачи.",
+                      "action": "Проверьте журнал"})
+    if risky:
+        cards.append({"severity": "alert", "icon": "🚨", "title": "Студенты в зоне риска",
+                      "detail": f"{risky} студ. со средним < 3.",
+                      "action": "Связаться с куратором группы"})
+    if studs and absc_total and round(absc_total / len(studs), 1) >= 5:
+        cards.append({"severity": "warn", "icon": "🕒", "title": "Высокая доля пропусков",
+                      "detail": f"В среднем {round(absc_total / len(studs), 1)} ч на студента."})
+    if not cards:
+        cards.append({"severity": "info", "icon": "✅", "title": "Всё спокойно",
+                      "detail": f"По группе {group} тревожных сигналов нет."})
+    return {"cards": cards}
+
+
 # ПРЕПОДАВАТЕЛЬ ──────────────────────────────────────────────────────────────────
 @router.get("/teacher/overview")
 def teacher_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):

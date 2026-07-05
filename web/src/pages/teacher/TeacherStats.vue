@@ -4,6 +4,7 @@ import { ref, watch, onMounted } from 'vue'
 import { teacherApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import InsightCards from '@/components/InsightCards.vue'
 import { TrendingUp, Users, BookOpen } from '@lucide/vue'
 
 const groups = ref([])
@@ -11,6 +12,7 @@ const subjects = ref([])
 const group = ref('')
 const subject = ref('')
 const data = ref(null)
+const insights = ref([])
 
 onMounted(async () => {
   try {
@@ -22,6 +24,8 @@ onMounted(async () => {
 async function load() {
   if (!group.value || !subject.value) return
   try { data.value = (await teacherApi.stats(group.value, subject.value)).data } catch { data.value = null }
+  // Карточки Вектора по группе (должники, зона риска, пропуски).
+  try { insights.value = (await teacherApi.insights(group.value)).data.cards || [] } catch { insights.value = [] }
 }
 watch([group, subject], load)
 </script>
@@ -37,10 +41,13 @@ watch([group, subject], load)
       </select>
     </div>
     <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки" />
-    <div v-else class="grid gap-4 sm:grid-cols-3">
-      <StatCard label="Средний по группе" :value="data?.group_average || '—'" :icon="TrendingUp" accent />
-      <StatCard label="Студентов" :value="data?.students ?? '—'" :icon="Users" />
-      <StatCard label="Занятий" :value="data?.lessons ?? '—'" :icon="BookOpen" />
-    </div>
+    <template v-else>
+      <div class="grid gap-4 sm:grid-cols-3">
+        <StatCard label="Средний по группе" :value="data?.group_average || '—'" :icon="TrendingUp" accent />
+        <StatCard label="Студентов" :value="data?.students ?? '—'" :icon="Users" />
+        <StatCard label="Занятий" :value="data?.lessons ?? '—'" :icon="BookOpen" />
+      </div>
+      <InsightCards :cards="insights" />
+    </template>
   </div>
 </template>

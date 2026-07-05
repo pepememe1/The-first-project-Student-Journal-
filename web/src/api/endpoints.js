@@ -43,6 +43,7 @@ export const studentApi = {
   overview: () => api.get('/web/student/overview'),
   journal: () => api.get('/web/student/journal'),
   stats: () => api.get('/web/student/stats'),
+  insights: () => api.get('/web/student/insights'),
 }
 
 // ПРЕПОДАВАТЕЛЬ ───────────────────────────────────────────────────────────────────
@@ -51,6 +52,7 @@ export const teacherApi = {
   journal: (group, subject) => api.get('/web/teacher/journal', { params: { group, subject } }),
   students: (group) => api.get('/web/teacher/students', { params: { group } }),
   stats: (group, subject) => api.get('/web/teacher/stats', { params: { group, subject } }),
+  insights: (group) => api.get('/web/teacher/insights', { params: { group } }),
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
   setGrade: (surname, name, lesson_id, grade) =>
     api.post('/web/teacher/grade', { surname, name, lesson_id, grade }),

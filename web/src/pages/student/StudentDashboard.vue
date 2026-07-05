@@ -7,14 +7,18 @@ import { RotateCw } from '@lucide/vue'
 import { studentApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
 import Mascot from '@/components/Mascot.vue'
+import InsightCards from '@/components/InsightCards.vue'
 import { dashboardEmote } from '@/config/mascot'
 
 const loading = ref(true)
 const data = ref(null)
+const insights = ref([])
 
 async function load() {
   loading.value = true
   try { data.value = (await studentApi.overview()).data } catch { data.value = null } finally { loading.value = false }
+  // Проактивные карточки Вектора — отдельным запросом, чтобы не тормозить витрину.
+  try { insights.value = (await studentApi.insights()).data.cards || [] } catch { insights.value = [] }
 }
 onMounted(load)
 
@@ -63,6 +67,9 @@ const tip = computed(() => {
       </div>
       <p class="text-sm text-text">{{ tip }}</p>
     </div>
+
+    <!-- Проактивные карточки Вектора (долги, пересдачи, пропуски) -->
+    <InsightCards :cards="insights" />
 
     <!-- Тело: маскот слева + контент справа -->
     <div class="grid gap-6 lg:grid-cols-[minmax(180px,260px)_1fr]">

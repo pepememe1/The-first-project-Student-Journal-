@@ -39,6 +39,7 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --output-filename=GradeBookAI.exe \
   --output-dir=nuitka_out \
   --assume-yes-for-downloads \
+  --onefile-tempdir-spec="{CACHE_DIR}/GradeBookAI/{VERSION}" \
   --include-data-dir=emotions=emotions \
   --include-data-dir=emotes=emotes \
   --include-data-dir=vector_assets=vector_assets \
