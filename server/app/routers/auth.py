@@ -199,3 +199,80 @@ def logout(request: Request, authorization: str = Header(None),
         events.record("info", "logout", "выход (токен отозван)", user.login,
                       throttle.client_ip(request))
     return {"revoked": revoked}
+
+
+# ── Самостоятельная регистрация студентов и восстановление пароля ────────────────
+import uuid as _uuid                                                   # noqa: E402
+from fastapi import Body                                              # noqa: E402
+from ..models import RegistrationRequest, Group                       # noqa: E402
+from .. import reg_utils, mailer                                      # noqa: E402
+
+
+@router.post("/register")
+def register(body: dict = Body(...), request: Request = None, db: Session = Depends(get_db)):
+    """Заявка студента на регистрацию (публичная, без токена). Проверяем ФИО, ГРУППУ
+    (с учётом «сдвоенных» — К104/2 → К104/2,105.0), телефон и e-mail (только разрешённые
+    домены). Аккаунт НЕ создаётся сразу — заявка ждёт одобрения администратора."""
+    full_name = " ".join((body.get("full_name") or "").split())
+    phone_in = body.get("phone") or ""
+    email = (body.get("email") or "").strip().lower()
+    group_in = (body.get("group") or "").strip()
+
+    if not reg_utils.valid_full_name(full_name):
+        raise HTTPException(status_code=400, detail="Укажите ФИО полностью (минимум фамилия и имя)")
+    phone = reg_utils.normalize_phone(phone_in)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Некорректный номер телефона")
+    if not reg_utils.valid_email(email):
+        raise HTTPException(status_code=400,
+                            detail="Разрешены только почты @yandex.ru, @mail.ru, @esstu.ru")
+    names = [g.name for g in db.query(Group).filter(Group.deleted == False).all()]  # noqa: E712
+    group = reg_utils.resolve_group(group_in, names)
+    if not group:
+        raise HTTPException(status_code=400,
+                            detail=f"Группа «{group_in}» не найдена. Проверьте номер (пример: К104/2).")
+
+    #не плодим дубликаты: уже есть студент с таким логином или заявка на рассмотрении
+    if db.query(User).filter(User.login == email, User.deleted == False).first():  # noqa: E712
+        raise HTTPException(status_code=409, detail="Аккаунт с такой почтой уже существует")
+    if db.query(RegistrationRequest).filter(
+            RegistrationRequest.email == email,
+            RegistrationRequest.status == "pending").first():
+        raise HTTPException(status_code=409, detail="Заявка с такой почтой уже на рассмотрении")
+
+    db.add(RegistrationRequest(id=str(_uuid.uuid4()), full_name=full_name, group_name=group,
+                               phone=phone, email=email, status="pending", created_at=_now()))
+    db.commit()
+    try:
+        events.record("info", "registration_request", f"{full_name} · {group} · {email}")
+    except Exception:
+        pass
+    return {"ok": True, "group": group}
+
+
+@router.post("/recover")
+def recover(body: dict = Body(...), db: Session = Depends(get_db)):
+    """Восстановление пароля студента по e-mail (= логин). Если аккаунт есть — генерируем
+    НОВЫЙ пароль, сохраняем ХЕШ (старый пароль перестаёт работать), отзываем активные
+    сессии и высылаем новый пароль на почту. Ответ одинаковый независимо от того, есть ли
+    аккаунт (не раскрываем существование почты)."""
+    email = (body.get("email") or "").strip().lower()
+    u = db.query(User).filter(User.login == email, User.role == "student",
+                              User.deleted == False).first()  # noqa: E712
+    sent = False
+    if u:
+        pw = reg_utils.gen_password()
+        u.password_hash = hash_password(pw)     #храним только хеш; старый недействителен
+        u.updated_at = _now()
+        db.query(AuthSession).filter(AuthSession.login == email).update({"revoked": True})
+        db.commit()
+        sent = mailer.send_email(
+            email, "GradeBookAI — новый пароль",
+            f"Здравствуйте!\n\nВаш новый пароль для входа в электронный журнал: {pw}\n"
+            f"Логин: {email}\n\nВойдите на https://esstu-gradebook.ru и при желании смените пароль.",
+            html=mailer._brand_html("Новый пароль", [
+                "Вы запросили восстановление доступа. Ваш новый пароль:",
+                f"<b style='font-size:18px'>{pw}</b>",
+                f"Логин: <b>{email}</b>",
+                "Войдите на <a href='https://esstu-gradebook.ru'>esstu-gradebook.ru</a>."]))
+    return {"ok": True, "sent": sent}

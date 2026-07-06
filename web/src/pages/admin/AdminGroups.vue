@@ -76,7 +76,7 @@ async function importParsed() {
   <div class="space-y-4">
     <div class="flex items-center justify-end gap-3">
       <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
-        {{ importing ? 'Привязка…' : '🏫 Привязать предметы' }}
+        {{ importing ? 'Обновление…' : 'Обновить группы' }}
       </AppButton>
       <AppButton variant="green" size="sm" @click="openCreate">+ Добавить</AppButton>
     </div>

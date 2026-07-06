@@ -24,6 +24,7 @@ import TeacherStats from '@/pages/teacher/TeacherStats.vue'
 import AdminDashboard from '@/pages/admin/AdminDashboard.vue'
 import AdminTeachers from '@/pages/admin/AdminTeachers.vue'
 import AdminStudents from '@/pages/admin/AdminStudents.vue'
+import AdminRegistrations from '@/pages/admin/AdminRegistrations.vue'
 import AdminGroups from '@/pages/admin/AdminGroups.vue'
 import AdminSubjects from '@/pages/admin/AdminSubjects.vue'
 import AdminSessions from '@/pages/admin/AdminSessions.vue'
@@ -77,6 +78,7 @@ const routes = [
       { path: '', component: AdminDashboard, meta: { title: 'Панель администратора' } },
       page('teachers', AdminTeachers, 'Преподаватели'),
       page('students', AdminStudents, 'Студенты'),
+      page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов'),
       page('groups', AdminGroups, 'Группы'),
       page('subjects', AdminSubjects, 'Предметы'),
       page('schedule', SchedulePage, 'Расписание'),

@@ -18,6 +18,9 @@ export const authApi = {
   login: (login, password) => api.post('/auth/login', { login, password }),
   refresh: (refresh_token) => api.post('/auth/refresh', { refresh_token }),
   logout: () => api.post('/auth/logout'),
+  // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
+  register: (payload) => api.post('/auth/register', payload),
+  recover: (email) => api.post('/auth/recover', { email }),
 }
 
 // ЛИЧНЫЕ НАСТРОЙКИ (тема и пр.) ──────────────────────────────────────────────────
@@ -90,6 +93,10 @@ export const adminApi = {
   createTeacher: (payload) => api.post('/web/admin/teachers', payload),
   updateTeacher: (login, payload) => api.put(`/web/admin/teachers/${encodeURIComponent(login)}`, payload),
   deleteTeacher: (login) => api.delete(`/web/admin/teachers/${encodeURIComponent(login)}`),
+  // Заявки на регистрацию студентов.
+  registrations: () => api.get('/web/admin/registrations'),
+  approveRegistration: (id) => api.post('/web/admin/registrations/approve', { id }),
+  rejectRegistration: (id, note = '') => api.post('/web/admin/registrations/reject', { id, note }),
   // Служебное — уже реализовано на сервере:
   online: () => api.get('/admin/online'),
   events: (since = 0) => api.get('/admin/events', { params: { since } }),

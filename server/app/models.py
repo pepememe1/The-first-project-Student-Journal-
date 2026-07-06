@@ -132,6 +132,22 @@ class AuthSession(Base):
     pair_jti = Column(String, default="")              #связанный токен (access↔refresh)
 
 
+class RegistrationRequest(Base):
+    """Заявка студента на самостоятельную регистрацию с экрана входа. Ждёт одобрения
+    администратора: тот подтверждает → система генерирует логин(=email)+пароль, заводит
+    студента и шлёт креды на почту. Серверная деталь доступа — НЕ входит в SYNC_MODELS
+    (заявки клиентам синхронизировать незачем)."""
+    __tablename__ = "registration_requests"
+    id = Column(String, primary_key=True)              #uuid
+    full_name = Column(String, default="")
+    group_name = Column(String, default="")            #РАЗРЕШЁННАЯ группа (после resolve)
+    phone = Column(String, default="")
+    email = Column(String, index=True, default="")     #станет логином
+    status = Column(String, default="pending")         #pending | approved | rejected
+    created_at = Column(String, default="")
+    note = Column(String, default="")                  #причина отклонения и т.п.
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 SYNC_MODELS = {
     "users": User,

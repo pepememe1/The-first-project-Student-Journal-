@@ -18,9 +18,10 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import User, Group, Subject, Lesson, Grade
+from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest
 from .. import webdata as W
 from .. import schedule_web
+from .. import reg_utils, mailer
 
 router = APIRouter(prefix="/web", tags=["web"])
 
@@ -822,9 +823,31 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
     строится лениво в фоне, ~минута). Пока снимок готовится — {building: true}, клиент
     подождёт и нажмёт снова. Группы, которых ещё нет, заводятся; у существующих предметы
     ОБЪЕДИНЯЮТСЯ. Всё пишется в те же таблицы → синкается в десктоп."""
+    #ФАНТОМЫ: несколько групп с ОДНИМ именем, но разными id (демо-остатки вроде
+    #g:webtest — имя «К74/1», но 1 предмет). Оставляем каноничную grp:name (или с
+    #бОльшим числом предметов), прочие с тем же именем удаляем. Hard-delete: на десктопе
+    #группы мёрджатся по ИМЕНИ, поэтому надгробие фантома задело бы настоящую — а так нет.
+    from collections import defaultdict
+    dups = defaultdict(list)
+    for g in db.query(Group).all():
+        dups[g.name].append(g)
+    removed = 0
+    for gname, gs in dups.items():
+        if len(gs) < 2:
+            continue
+        canon = next((x for x in gs if x.id == f"grp:{gname}"), None) \
+            or max(gs, key=lambda x: len(x.subjects or []))
+        for x in gs:
+            if x.id != canon.id:
+                db.delete(x)
+                removed += 1
+    if removed:
+        db.commit()
+
     snap, building = schedule_web.full_state()
     if snap is None or not snap.groups:
-        return {"ok": False, "building": building, "bound": 0, "subjects": 0}
+        return {"ok": bool(removed), "building": building, "bound": 0,
+                "subjects": 0, "removed": removed}
     now = _now_iso()
     bound = 0
     all_subjects = set()
@@ -954,6 +977,85 @@ def admin_delete_teacher(login: str,
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "login": login}
+
+
+# --- Заявки на регистрацию студентов (одобрение админом) ------------------------
+@router.get("/admin/registrations")
+def admin_registrations(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Список заявок студентов на самостоятельную регистрацию, ждущих решения."""
+    rows = db.query(RegistrationRequest).filter(
+        RegistrationRequest.status == "pending").order_by(RegistrationRequest.created_at).all()
+    return {"requests": [{"id": r.id, "full_name": r.full_name, "group": r.group_name,
+                          "phone": r.phone, "email": r.email, "created_at": r.created_at}
+                         for r in rows]}
+
+
+@router.post("/admin/registrations/approve")
+def admin_approve_registration(payload: dict = Body(...),
+                               _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Одобрить заявку: сгенерировать пароль (8 симв, 1 заглавная, 1 спец), логин = e-mail,
+    завести СТУДЕНТА (пароль хешируем) в его группу и выслать креды на почту. Если SMTP не
+    настроен — возвращаем пароль админу, чтобы передать вручную (регистрация не ломается).
+    id студента = stud:email (как в синке) → аккаунт доедет до десктопа обычным pull."""
+    req = db.get(RegistrationRequest, (payload.get("id") or "").strip())
+    if req is None or req.status != "pending":
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    email = req.email
+    if db.query(User).filter(User.login == email, User.deleted == False).first():  # noqa: E712
+        req.status = "rejected"
+        req.note = "дубликат — аккаунт уже есть"
+        db.commit()
+        raise HTTPException(status_code=409, detail="Аккаунт с такой почтой уже существует")
+
+    pw = reg_utils.gen_password()
+    parts = req.full_name.split()
+    surname = parts[0] if parts else ""
+    name = " ".join(parts[1:]) if len(parts) > 1 else ""
+    from ..security import hash_password
+    sid = f"stud:{email}"
+    row = db.get(User, sid) or User(id=sid)
+    if db.get(User, sid) is None:
+        db.add(row)
+    row.role = "student"
+    row.login = email
+    row.password_hash = hash_password(pw)
+    row.full_name = req.full_name
+    row.surname = surname
+    row.name = name
+    row.group_name = req.group_name
+    row.subjects = []
+    row.group_assignments = {}
+    row.updated_at = _now_iso()
+    row.deleted = False
+    req.status = "approved"
+    db.commit()
+
+    sent = mailer.send_email(
+        email, "GradeBookAI — доступ к электронному журналу",
+        f"Здравствуйте, {req.full_name}!\n\nВаша регистрация одобрена.\n"
+        f"Логин: {email}\nПароль: {pw}\nГруппа: {req.group_name}\n\n"
+        f"Войдите на https://esstu-gradebook.ru",
+        html=mailer._brand_html("Регистрация одобрена", [
+            f"Здравствуйте, <b>{req.full_name}</b>! Ваш доступ к электронному журналу готов.",
+            f"Логин: <b>{email}</b>",
+            f"Пароль: <b style='font-size:18px'>{pw}</b>",
+            f"Группа: <b>{req.group_name}</b>",
+            "Войдите на <a href='https://esstu-gradebook.ru'>esstu-gradebook.ru</a>."]))
+    #Пароль отдаём админу ТОЛЬКО если письмо не ушло (иначе не светим лишний раз).
+    return {"ok": True, "sent": sent, "login": email,
+            "password": None if sent else pw}
+
+
+@router.post("/admin/registrations/reject")
+def admin_reject_registration(payload: dict = Body(...),
+                              _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    req = db.get(RegistrationRequest, (payload.get("id") or "").strip())
+    if req is None or req.status != "pending":
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    req.status = "rejected"
+    req.note = (payload.get("note") or "отклонено администратором").strip()
+    db.commit()
+    return {"ok": True}
 
 
 # --- Занятия/пары (CRUD) --- преподаватель наполняет журнал: создаёт/правит/удаляет

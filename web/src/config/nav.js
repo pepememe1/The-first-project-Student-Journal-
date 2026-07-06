@@ -8,7 +8,7 @@
 import {
   Home, ClipboardList, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
-  Palette, MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard,
+  Palette, MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
 } from '@lucide/vue'
 
 export const NAV = {
@@ -37,6 +37,7 @@ export const NAV = {
     { key: 'dash', label: 'Дашборд', icon: LayoutDashboard, to: '/admin' },
     { key: 'teachers', label: 'Преподаватели', icon: GraduationCap, to: '/admin/teachers' },
     { key: 'students', label: 'Студенты', icon: Users, to: '/admin/students' },
+    { key: 'registrations', label: 'Заявки на регистрацию', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', icon: Library, to: '/admin/subjects' },
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/admin/schedule' },

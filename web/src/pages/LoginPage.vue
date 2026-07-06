@@ -13,6 +13,8 @@ import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
 import HexLogo from '@/components/HexLogo.vue'
 import Mascot from '@/components/Mascot.vue'
+import RegisterDialog from '@/components/RegisterDialog.vue'
+import RecoverDialog from '@/components/RecoverDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -74,6 +76,10 @@ async function submit() {
   }
 }
 function onApproved() { needApproval.value = false; submit() }
+
+// Регистрация студента / восстановление пароля — модалки под кнопкой «Войти».
+const showRegister = ref(false)
+const showRecover = ref(false)
 </script>
 
 <template>
@@ -142,9 +148,16 @@ function onApproved() { needApproval.value = false; submit() }
           </AppButton>
         </form>
 
-        <p class="mt-4 text-center text-xs text-text3">
-          Студенты и преподаватели входят по логину и паролю, которые выдал администратор.
-        </p>
+        <div class="mt-4 border-t border-border pt-3 text-center">
+          <p class="text-xs text-text3">Для обучающихся:</p>
+          <div class="mt-1.5 flex items-center justify-center gap-2">
+            <button type="button" class="rounded-sm border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow"
+                    @click="showRegister = true">Регистрация</button>
+            <button type="button" class="rounded-sm border border-border2 px-3 py-1.5 text-xs font-medium text-text3 transition-colors hover:border-accent hover:text-accent"
+                    @click="showRecover = true">Восстановление пароля</button>
+          </div>
+          <p class="mt-2 text-tiny text-text3">Преподаватели и админ входят по данным от администратора.</p>
+        </div>
 
         <DeviceApproval v-if="needApproval" @approved="onApproved" />
       </div>
@@ -189,6 +202,9 @@ function onApproved() { needApproval.value = false; submit() }
         </div>
       </div>
     </div>
+
+    <RegisterDialog v-if="showRegister" @close="showRegister = false" />
+    <RecoverDialog v-if="showRecover" @close="showRecover = false" />
 
     <!-- Футер — заполняет низ, даёт «завершённость» экрану. -->
     <p class="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap px-4 text-center text-tiny text-text3">
