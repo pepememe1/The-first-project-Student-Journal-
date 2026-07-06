@@ -45,14 +45,15 @@ async function onLogout() {
     </div>
     <div class="min-w-0 leading-tight">
       <p class="font-title text-[15px] font-extrabold tracking-wide">GRADEBOOK</p>
-      <p class="truncate text-[10px] font-semibold text-white/80">Технологический колледж ВСГУТУ</p>
+      <!-- Полное название колледжа — только с sm: на телефоне места нет, обрезка выглядела криво. -->
+      <p class="hidden truncate text-[10px] font-semibold text-white/80 sm:block">Технологический колледж ВСГУТУ</p>
     </div>
 
-    <div class="flex-1" />
+    <div class="min-w-2 flex-1" />
 
-    <!-- Переключатель темы -->
+    <!-- Переключатель темы (тёмная/светлая) -->
     <button
-      class="grid size-9 place-items-center rounded-md text-white/90 hover:bg-white/15"
+      class="grid size-9 shrink-0 place-items-center rounded-md text-white/90 hover:bg-white/15"
       :aria-label="theme.isDark ? 'Светлая тема' : 'Тёмная тема'" @click="theme.toggleMode()"
     >
       <Sun v-if="theme.isDark" class="size-5" />
@@ -71,7 +72,7 @@ async function onLogout() {
     <span class="mx-1 hidden h-5 w-px bg-white/30 sm:block" />
 
     <button
-      class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white"
+      class="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white sm:px-3"
       style="background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.5);"
       @click="onLogout"
     >

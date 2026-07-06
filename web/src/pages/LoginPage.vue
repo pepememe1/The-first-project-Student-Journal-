@@ -207,7 +207,7 @@ const showRecover = ref(false)
     <RecoverDialog v-if="showRecover" @close="showRecover = false" />
 
     <!-- Футер — заполняет низ, даёт «завершённость» экрану. -->
-    <p class="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap px-4 text-center text-tiny text-text3">
+    <p class="absolute bottom-3 left-1/2 z-10 w-full max-w-[94vw] -translate-x-1/2 px-4 text-center text-tiny leading-relaxed text-text3">
       © 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse
     </p>
   </div>
