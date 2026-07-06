@@ -228,23 +228,23 @@ async function exportXlsx() {
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-wrap items-center gap-3">
-      <select v-model="group" class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+      <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto">
         <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
       </select>
       <select v-model="subject" :title="subject"
-              class="h-10 min-w-52 max-w-md rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+              class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52 sm:max-w-md">
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
       </select>
-      <span v-if="saving" class="self-center text-xs font-medium text-accent">Сохранение…</span>
-      <span v-else-if="data" class="self-center text-xs text-text3">
+      <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">Сохранение…</span>
+      <span v-else-if="data" class="text-xs text-text3 sm:self-center">
         Студентов: {{ data.students?.length || 0 }} · занятий: {{ data.lessons?.length || 0 }}
       </span>
-      <div v-if="group && subject" class="ml-auto flex gap-2">
-        <AppButton variant="ghost" size="sm" :disabled="exporting || !data?.students?.length" @click="exportXlsx">
+      <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="exportXlsx">
           {{ exporting ? 'Выгрузка…' : '💾 Excel' }}
         </AppButton>
-        <AppButton variant="green" size="sm" @click="openLesson">+ Занятие</AppButton>
+        <AppButton variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ Занятие</AppButton>
       </div>
     </div>
 

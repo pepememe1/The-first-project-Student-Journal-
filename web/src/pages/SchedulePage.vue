@@ -144,7 +144,7 @@ const teacherChoice = computed(() => isTeacher.value && mode.value === '')
             <span class="font-medium text-text">{{ teacherName }}</span>
             <span class="text-xs text-text3">· мои пары</span>
           </div>
-          <select v-else v-model="teacherName" class="h-10 max-w-64 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent"
+          <select v-else v-model="teacherName" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:max-w-64"
                   @change="loadTeacher(teacherName)">
             <option value="" disabled>Преподаватель…</option>
             <option v-for="t in teachers" :key="t" :value="t">{{ t }}</option>
@@ -155,7 +155,7 @@ const teacherChoice = computed(() => isTeacher.value && mode.value === '')
         </template>
 
         <template v-else>
-          <select v-model="group" class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" @change="load">
+          <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto" @change="load">
             <option v-if="!groups.length" :value="group">{{ group || 'Группа' }}</option>
             <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
           </select>

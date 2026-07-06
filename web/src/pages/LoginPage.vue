@@ -150,7 +150,7 @@ const showRecover = ref(false)
 
         <div class="mt-4 border-t border-border pt-3 text-center">
           <p class="text-xs text-text3">Для обучающихся:</p>
-          <div class="mt-1.5 flex items-center justify-center gap-2">
+          <div class="mt-1.5 flex flex-wrap items-center justify-center gap-2">
             <button type="button" class="rounded-sm border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow"
                     @click="showRegister = true">Регистрация</button>
             <button type="button" class="rounded-sm border border-border2 px-3 py-1.5 text-xs font-medium text-text3 transition-colors hover:border-accent hover:text-accent"
