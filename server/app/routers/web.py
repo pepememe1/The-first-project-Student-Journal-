@@ -789,7 +789,7 @@ def admin_create_group(payload: dict = Body(...),
     return {"ok": True, "name": name}
 
 
-@router.put("/admin/groups/{name}")
+@router.put("/admin/groups/{name:path}")
 def admin_update_group(name: str, payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Правка группы (название — ключ, не меняем). Меняем список предметов группы."""
@@ -803,7 +803,7 @@ def admin_update_group(name: str, payload: dict = Body(...),
     return {"ok": True, "name": name}
 
 
-@router.delete("/admin/groups/{name}")
+@router.delete("/admin/groups/{name:path}")
 def admin_delete_group(name: str,
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     row = db.get(Group, f"grp:{name}")
@@ -813,6 +813,44 @@ def admin_delete_group(name: str,
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "name": name}
+
+
+@router.post("/admin/groups/bind-subjects")
+def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Привязывает к КАЖДОЙ группе колледжа предметы ИЗ ЕЁ расписания (портал ВСГУТУ) и
+    пополняет каталог предметов. Использует полный снимок расписания (schedule_web —
+    строится лениво в фоне, ~минута). Пока снимок готовится — {building: true}, клиент
+    подождёт и нажмёт снова. Группы, которых ещё нет, заводятся; у существующих предметы
+    ОБЪЕДИНЯЮТСЯ. Всё пишется в те же таблицы → синкается в десктоп."""
+    snap, building = schedule_web.full_state()
+    if snap is None or not snap.groups:
+        return {"ok": False, "building": building, "bound": 0, "subjects": 0}
+    now = _now_iso()
+    bound = 0
+    all_subjects = set()
+    for name, gsched in snap.groups.items():
+        subs = sorted({s for s in gsched.subjects() if s})
+        if not subs:
+            continue
+        all_subjects.update(subs)
+        gid = f"grp:{name}"
+        row = db.get(Group, gid)
+        if row is None:
+            db.add(Group(id=gid, name=name, subjects=subs, updated_at=now, deleted=False))
+            bound += 1
+        else:
+            merged = sorted(set(row.subjects or []) | set(subs))
+            if merged != list(row.subjects or []) or row.deleted:
+                row.subjects = merged
+                row.deleted = False
+                row.updated_at = now
+                bound += 1
+    for s in all_subjects:                                   #пополняем каталог предметов
+        sid = f"subj:{s}"
+        if db.get(Subject, sid) is None:
+            db.add(Subject(id=sid, name=s, updated_at=now, deleted=False))
+    db.commit()
+    return {"ok": True, "building": building, "bound": bound, "subjects": len(all_subjects)}
 
 
 # --- Предметы (CRUD) --- id=subj:name. NB: на десктопе список предметов аддитивный
@@ -838,7 +876,7 @@ def admin_create_subject(payload: dict = Body(...),
     return {"ok": True, "name": name}
 
 
-@router.delete("/admin/subjects/{name}")
+@router.delete("/admin/subjects/{name:path}")
 def admin_delete_subject(name: str,
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     row = db.get(Subject, f"subj:{name}")

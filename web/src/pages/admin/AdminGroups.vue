@@ -27,6 +27,7 @@ const editing = ref(null)
 const form = ref({ name: '', subjects: [] })
 const saving = ref(false)
 const formError = ref('')
+const importing = ref(false)
 
 function openCreate() { editing.value = null; form.value = { name: '', subjects: [] }; formError.value = ''; showForm.value = true }
 function openEdit(g) { editing.value = g.name; form.value = { name: g.name, subjects: [...(g.subjects || [])] }; formError.value = ''; showForm.value = true }
@@ -51,20 +52,32 @@ async function del(g) {
   try { await adminApi.deleteGroup(g.name); await reload() }
   catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
 }
+// «Из расписания» — привязывает к каждой группе предметы ИЗ её расписания (портал
+// ВСГУТУ) и пополняет каталог. Снимок строится на сервере лениво (~минута): если он
+// ещё готовится — просим нажать позже.
 async function importParsed() {
-  const have = new Set(rows.value.map((g) => g.name))
-  const toAdd = parsedGroups.value.filter((n) => n && !have.has(n))
-  if (!toAdd.length) { alert('Все спарсенные группы уже есть.'); return }
-  if (!confirm(`Добавить ${toAdd.length} групп из расписания?`)) return
-  for (const n of toAdd) { try { await adminApi.createGroup({ name: n, subjects: [] }) } catch { /* */ } }
-  await reload()
+  importing.value = true
+  try {
+    const r = (await adminApi.bindSubjects()).data
+    if (!r.ok && r.building) {
+      alert('Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.')
+    } else {
+      alert(`Готово: групп обновлено — ${r.bound}, предметов в каталоге — ${r.subjects}.` +
+            (r.building ? '\n(индекс ещё дообновляется — можно повторить для полноты)' : ''))
+      await reload()
+      try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
+    }
+  } catch (e) { alert(e?.response?.data?.detail || 'Не удалось выполнить') }
+  finally { importing.value = false }
 }
 </script>
 
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-end gap-3">
-      <AppButton v-if="parsedGroups.length" variant="ghost" size="sm" @click="importParsed">🏫 Из расписания</AppButton>
+      <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
+        {{ importing ? 'Привязка…' : '🏫 Привязать предметы' }}
+      </AppButton>
       <AppButton variant="green" size="sm" @click="openCreate">+ Добавить</AppButton>
     </div>
 

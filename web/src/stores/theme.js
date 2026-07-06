@@ -56,11 +56,13 @@ export const useThemeStore = defineStore('theme', () => {
   // он меняется вместе с темой (в т.ч. кастомный акцент) и заодно сбрасывает жёсткий
   // кэш фавикона в браузере (старый значок больше не «залипает»).
   function applyFavicon(accent) {
+    // Гексагон заполняет вкладку почти целиком, «GB» — крупная жирная, чтобы читалось
+    // на 16px в браузерной вкладке/ярлыке (раньше значок был мелкий и нечитаемый).
     const svg =
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>" +
-      `<path d='M16 2 L28.1 9 L28.1 23 L16 30 L3.9 23 L3.9 9 Z' fill='${accent}'/>` +
-      "<text x='16' y='20.6' text-anchor='middle' fill='#fff' " +
-      "font-family='Segoe UI,Arial,sans-serif' font-size='11.5' font-weight='800'>GB</text></svg>"
+      `<path d='M16 0.5 L31 9 L31 23 L16 31.5 L1 23 L1 9 Z' fill='${accent}'/>` +
+      "<text x='16' y='22' text-anchor='middle' fill='#fff' " +
+      "font-family='Arial,Segoe UI,sans-serif' font-size='17' font-weight='900' letter-spacing='-1'>GB</text></svg>"
     let link = document.querySelector("link[rel~='icon']")
     if (!link) {
       link = document.createElement('link')

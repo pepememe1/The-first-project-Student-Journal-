@@ -82,6 +82,8 @@ export const adminApi = {
   createGroup: (payload) => api.post('/web/admin/groups', payload),
   updateGroup: (name, payload) => api.put(`/web/admin/groups/${encodeURIComponent(name)}`, payload),
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
+  // Привязать предметы из расписания ко ВСЕМ группам (+ пополнить каталог).
+  bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
