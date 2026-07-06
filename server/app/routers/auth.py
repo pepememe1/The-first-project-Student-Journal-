@@ -213,36 +213,46 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
     """Заявка студента на регистрацию (публичная, без токена). Проверяем ФИО, ГРУППУ
     (с учётом «сдвоенных» — К104/2 → К104/2,105.0), телефон и e-mail (только разрешённые
     домены). Аккаунт НЕ создаётся сразу — заявка ждёт одобрения администратора."""
+    #Анти-DDoS заявками: 5 неверных попыток с одного IP → блок на 3 минуты.
+    ip = throttle.client_ip(request) if request is not None else ""
+    left = throttle.seconds_until_reg_unlocked(ip)
+    if left:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много попыток регистрации. Подождите {left // 60 + 1} мин.")
+
+    def _fail(msg: str, code: int = 400):
+        throttle.register_reg_failure(ip)          #каждая невалидная попытка приближает блок
+        raise HTTPException(status_code=code, detail=msg)
+
     full_name = " ".join((body.get("full_name") or "").split())
     phone_in = body.get("phone") or ""
     email = (body.get("email") or "").strip().lower()
     group_in = (body.get("group") or "").strip()
 
     if not reg_utils.valid_full_name(full_name):
-        raise HTTPException(status_code=400, detail="Укажите ФИО полностью (минимум фамилия и имя)")
+        _fail("Укажите ФИО полностью (минимум фамилия и имя)")
     phone = reg_utils.normalize_phone(phone_in)
     if not phone:
-        raise HTTPException(status_code=400, detail="Некорректный номер телефона")
+        _fail("Некорректный номер телефона")
     if not reg_utils.valid_email(email):
-        raise HTTPException(status_code=400,
-                            detail="Разрешены только почты @yandex.ru, @mail.ru, @esstu.ru")
+        _fail("Разрешены только почты @yandex.ru, @mail.ru, @esstu.ru")
     names = [g.name for g in db.query(Group).filter(Group.deleted == False).all()]  # noqa: E712
     group = reg_utils.resolve_group(group_in, names)
     if not group:
-        raise HTTPException(status_code=400,
-                            detail=f"Группа «{group_in}» не найдена. Проверьте номер (пример: К104/2).")
+        _fail(f"Группа «{group_in}» не найдена. Формат: К‹число›/‹подгруппа›, например К104/2.")
 
     #не плодим дубликаты: уже есть студент с таким логином или заявка на рассмотрении
     if db.query(User).filter(User.login == email, User.deleted == False).first():  # noqa: E712
-        raise HTTPException(status_code=409, detail="Аккаунт с такой почтой уже существует")
+        _fail("Аккаунт с такой почтой уже существует", 409)
     if db.query(RegistrationRequest).filter(
             RegistrationRequest.email == email,
             RegistrationRequest.status == "pending").first():
-        raise HTTPException(status_code=409, detail="Заявка с такой почтой уже на рассмотрении")
+        _fail("Заявка с такой почтой уже на рассмотрении", 409)
 
     db.add(RegistrationRequest(id=str(_uuid.uuid4()), full_name=full_name, group_name=group,
                                phone=phone, email=email, status="pending", created_at=_now()))
     db.commit()
+    throttle.register_reg_success(ip)              #удачная заявка сбрасывает счётчик
     try:
         events.record("info", "registration_request", f"{full_name} · {group} · {email}")
     except Exception:

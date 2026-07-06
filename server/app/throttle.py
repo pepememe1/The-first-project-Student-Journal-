@@ -35,11 +35,18 @@ LOCK_SECONDS = 300       #длительность блокировки (5 ми�
 IP_MAX_FAILS = 30
 IP_LOCK_SECONDS = 300
 
+#Регистрация (самостоятельная): по требованию — 5 неверных попыток подряд → ждать 3 мин.
+#Отдельный счётчик по IP, чтобы заявками не задудосили сайт.
+REG_MAX_FAILS = 5
+REG_LOCK_SECONDS = 180
+
 _lock = threading.Lock()
 #login-ключ "ip|login" -> {"fails": int, "locked_until": float}
 _pairs: dict = {}
 #ip-ключ "ip" -> {"fails": int, "locked_until": float}
 _ips: dict = {}
+#ip-ключ регистрации "ip" -> {...}
+_reg: dict = {}
 
 
 def _pair_key(ip: str, login: str) -> str:
@@ -88,11 +95,30 @@ def register_success(ip: str, login: str):
         _pairs.pop(_pair_key(ip, login), None)
 
 
+def seconds_until_reg_unlocked(ip: str) -> int:
+    """Сколько секунд до разблокировки регистрации с этого IP (0 — можно)."""
+    with _lock:
+        return _check(_reg, (ip or "").strip())
+
+
+def register_reg_failure(ip: str):
+    """Фиксирует неудачную (невалидную) попытку регистрации с IP."""
+    with _lock:
+        _register_failure(_reg, (ip or "").strip(), REG_MAX_FAILS, REG_LOCK_SECONDS)
+
+
+def register_reg_success(ip: str):
+    """Успешная заявка сбрасывает счётчик регистраций этого IP."""
+    with _lock:
+        _reg.pop((ip or "").strip(), None)
+
+
 def reset():
     """Полный сброс состояния — нужен тестам, чтобы прогоны не влияли друг на друга."""
     with _lock:
         _pairs.clear()
         _ips.clear()
+        _reg.clear()
 
 
 def client_ip(request) -> str:

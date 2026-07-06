@@ -25,11 +25,13 @@ function onPhone(e) {
   if (d.length === 11 && (d[0] === '7' || d[0] === '8')) d = d.slice(1)
   phoneDigits.value = d.slice(0, 10)
 }
+// В поле ВНЕ «+7» (он фиксированным префиксом слева) — только 10 цифр как (XXX) XXX-XX-XX.
 const phoneDisplay = computed(() => {
   const d = phoneDigits.value
-  let s = '+7'
-  if (d.length) s += ' (' + d.slice(0, 3)
-  if (d.length >= 3) s += ') ' + d.slice(3, 6)
+  if (!d) return ''
+  let s = '(' + d.slice(0, 3)
+  if (d.length >= 3) s += ')'
+  if (d.length > 3) s += ' ' + d.slice(3, 6)
   if (d.length >= 6) s += '-' + d.slice(6, 8)
   if (d.length >= 8) s += '-' + d.slice(8, 10)
   return s
@@ -77,8 +79,11 @@ async function submit() {
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent" />
             <span class="mt-1 block text-tiny text-text3">Формат К…/номер. Если группа сдвоенная — введите свою часть.</span></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Телефон</span>
-            <input :value="phoneDisplay" @input="onPhone" inputmode="numeric" placeholder="+7 (___) ___-__-__"
-                   class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent" /></label>
+            <div class="flex h-11 items-center rounded-sm border border-border2 bg-card2 focus-within:border-accent">
+              <span class="select-none pl-3.5 pr-1 text-sm text-text3">+7</span>
+              <input :value="phoneDisplay" @input="onPhone" inputmode="numeric" placeholder="(___) ___-__-__"
+                     class="h-full flex-1 bg-transparent pr-3.5 text-sm text-text outline-none" />
+            </div></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Электронная почта (логин)</span>
             <input v-model="email" type="email" placeholder="student@yandex.ru"
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent"
