@@ -18,10 +18,32 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest
+from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest, AuthSession
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer
+
+
+def _contact_info(db: Session, logins: list) -> dict:
+    """Для админ-списков: по логинам собираем телефон (из заявки на регистрацию) и данные
+    последнего входа (время/IP/устройство из AuthSession). Возвращает {login: {...}}."""
+    logins = [x for x in logins if x]
+    if not logins:
+        return {}
+    out = {x: {"phone": "", "last_login": "", "ip": "", "device": ""} for x in logins}
+    #последняя по времени сессия каждого логина
+    for s in (db.query(AuthSession).filter(AuthSession.login.in_(logins))
+              .order_by(AuthSession.issued_at.desc()).all()):
+        rec = out.get(s.login)
+        if rec is not None and not rec["last_login"]:
+            rec["last_login"] = s.issued_at or ""
+            rec["ip"] = s.ip or ""
+            rec["device"] = (s.device_id or "")[:8]
+    #телефон из заявки (у самостоятельно зарегистрированных студентов логин = email)
+    for r in db.query(RegistrationRequest).filter(RegistrationRequest.email.in_(logins)).all():
+        if r.phone and r.email in out and not out[r.email]["phone"]:
+            out[r.email]["phone"] = r.phone
+    return out
 
 router = APIRouter(prefix="/web", tags=["web"])
 
@@ -354,8 +376,10 @@ def admin_overview(_admin: User = Depends(require_admin), db: Session = Depends(
 def admin_teachers(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = db.query(User).filter(
         User.role == "teacher", User.deleted == False).order_by(User.full_name).all()  # noqa: E712
-    return {"teachers": [{"login": u.login, "name": W.display_name(u),
-                          "subjects": list(u.subjects or [])} for u in rows]}
+    info = _contact_info(db, [u.login for u in rows])
+    return {"teachers": [dict(
+        {"login": u.login, "name": W.display_name(u), "subjects": list(u.subjects or [])},
+        **info.get(u.login, {})) for u in rows]}
 
 
 @router.get("/admin/students")
@@ -365,8 +389,10 @@ def admin_students(group: str = Query(""),
     if group:
         q = q.filter(User.group_name == group)
     rows = q.order_by(User.group_name, User.surname, User.name).all()
-    return {"students": [{"login": u.login, "surname": u.surname, "name": u.name,
-                          "group": u.group_name} for u in rows]}
+    info = _contact_info(db, [u.login for u in rows])
+    return {"students": [dict(
+        {"login": u.login, "surname": u.surname, "name": u.name, "group": u.group_name},
+        **info.get(u.login, {})) for u in rows]}
 
 
 @router.get("/admin/groups")

@@ -114,16 +114,25 @@ def students_in_group(db, group: str):
 
 
 def teacher_groups(db, subjects) -> list:
-    """Группы, где преподаватель ведёт свои предметы (выводим из занятий).
-
-    Опираемся на subjects, а не group_assignments: первое реально заполнено при
-    заведении преподавателя, второе часто пусто (та же причина, что в sync.py)."""
-    subjects = list(subjects or [])
+    """Группы, доступные преподавателю по его предметам. ДВА источника (объединение):
+      1) группы, где уже есть его занятия (журнал наполнен);
+      2) группы, у которых его предмет числится в списке предметов ГРУППЫ (после
+         «Обновить группы» предметы привязаны к группам). Без п.2 НОВЫЙ преподаватель
+         (у него ещё нет ни одного занятия) видел пустой журнал — не мог выбрать группу
+         и создать первое занятие."""
+    from .models import Group
+    subjects = set(s for s in (subjects or []) if s)
     if not subjects:
         return []
-    rows = db.query(Lesson.group_name).filter(
-        Lesson.subject.in_(subjects), Lesson.deleted == False).distinct().all()  # noqa: E712
-    return sorted({r[0] for r in rows if r[0]})
+    result = set()
+    for r in db.query(Lesson.group_name).filter(
+            Lesson.subject.in_(subjects), Lesson.deleted == False).distinct().all():  # noqa: E712
+        if r[0]:
+            result.add(r[0])
+    for g in db.query(Group).filter(Group.deleted == False).all():  # noqa: E712
+        if subjects & set(g.subjects or []):
+            result.add(g.name)
+    return sorted(result)
 
 
 def display_name(user) -> str:

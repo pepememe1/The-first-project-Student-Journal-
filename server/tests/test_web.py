@@ -141,8 +141,12 @@ def test_admin_students_listing(client):
     admin = make_admin(client)
     _seed(client, admin)
     data = client.get("/web/admin/students", headers=admin).json()
-    assert data["students"] == [{"login": "stud1", "surname": "Иванов",
-                                 "name": "Иван", "group": "ИС-21"}]
+    #Ответ теперь несёт и контактные/сессионные поля (телефон, последний вход, IP,
+    #устройство) — у свежесозданного студента они пустые. Проверяем базовые + наличие.
+    s = data["students"][0]
+    assert (s["login"], s["surname"], s["name"], s["group"]) == \
+        ("stud1", "Иванов", "Иван", "ИС-21")
+    assert s["phone"] == "" and s["last_login"] == "" and s["ip"] == "" and s["device"] == ""
 
 
 def test_web_endpoints_require_auth(client):

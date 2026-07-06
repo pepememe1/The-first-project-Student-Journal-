@@ -11,6 +11,14 @@ const all = ref([])
 const loading = ref(true)
 const q = ref('')
 const groupChoices = ref([])
+const showPass = ref(false)     // показать вводимый пароль в модалке (по глазку)
+
+// Пароль в БД хранится ХЕШЕМ и не показывается — глазок открывает то, что админ ВВОДИТ.
+function fmtDT(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d) ? '—' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 async function reload() {
   loading.value = true
@@ -95,21 +103,25 @@ async function del(r) {
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
-            <th class="px-4 py-2.5 font-semibold">Фамилия</th>
-            <th class="px-4 py-2.5 font-semibold">Имя</th>
+            <th class="px-4 py-2.5 font-semibold">ФИО</th>
             <th class="px-4 py-2.5 font-semibold">Группа</th>
             <th class="px-4 py-2.5 font-semibold">Логин</th>
+            <th class="px-4 py-2.5 font-semibold">Телефон</th>
+            <th class="px-4 py-2.5 font-semibold">Посл. вход</th>
+            <th class="px-4 py-2.5 font-semibold">IP</th>
             <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="5" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
-          <tr v-else-if="!rows.length"><td colspan="5" class="px-4 py-6 text-center text-text3">Студентов нет</td></tr>
+          <tr v-if="loading"><td colspan="7" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
+          <tr v-else-if="!rows.length"><td colspan="7" class="px-4 py-6 text-center text-text3">Студентов нет</td></tr>
           <tr v-for="(r, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
-            <td class="px-4 py-2.5 font-medium text-text">{{ r.surname || '—' }}</td>
-            <td class="px-4 py-2.5 text-text">{{ r.name || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ r.surname }} {{ r.name }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.login || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? 'устройство: ' + r.device : ''">{{ fmtDT(r.last_login) }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text3">{{ r.ip || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
               <button class="mr-3 text-text3 hover:text-accent" title="Изменить" @click="openEdit(r)">✎</button>
               <button class="text-text3 hover:text-red" title="Удалить" @click="del(r)">✕</button>
@@ -139,8 +151,14 @@ async function del(r) {
             <datalist id="admin-group-list"><option v-for="g in groupChoices" :key="g" :value="g" /></datalist>
           </label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? 'Новый пароль (пусто — не менять)' : 'Пароль' }}</span>
-            <input v-model="form.password" type="password"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <div class="relative">
+              <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
+              <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
+                {{ showPass ? '🙈' : '👁' }}
+              </button>
+            </div>
+            <span class="mt-1 block text-tiny text-text3">Пароль в базе хранится хешем — показать можно только новый вводимый.</span></label>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
