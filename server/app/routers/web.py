@@ -21,7 +21,7 @@ from ..deps import get_current_user, require_admin
 from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest, AuthSession
 from .. import webdata as W
 from .. import schedule_web
-from .. import reg_utils, mailer, gost
+from .. import reg_utils, mailer, gost, audit
 
 
 def _contact_info(db: Session, logins: list) -> dict:
@@ -585,6 +585,10 @@ def teacher_set_grade(payload: dict = Body(...),
     row.updated_at = now
     row.deleted = cleared
     db.commit()
+    audit.log(db, actor=user.login, role=user.role,
+              action="grade.clear" if cleared else "grade.set",
+              target=f"{surname} {name}",
+              detail=f"{lesson.subject} · {lesson_id}" + ("" if cleared else f" = {value}"))
     return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now}
 
 
@@ -749,6 +753,8 @@ def admin_create_student(payload: dict = Body(...),
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="student.create",
+              target=login, detail=f"{surname} {name} · {group}")
     return {"ok": True, "login": login, "id": sid}
 
 
@@ -791,6 +797,7 @@ def admin_delete_student(login: str,
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="student.delete", target=login)
     return {"ok": True, "login": login}
 
 
@@ -813,6 +820,7 @@ def admin_create_group(payload: dict = Body(...),
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.create", target=name)
     return {"ok": True, "name": name}
 
 
@@ -839,6 +847,7 @@ def admin_delete_group(name: str,
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.delete", target=name)
     return {"ok": True, "name": name}
 
 
@@ -922,6 +931,7 @@ def admin_create_subject(payload: dict = Body(...),
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="subject.create", target=name)
     return {"ok": True, "name": name}
 
 
@@ -934,6 +944,7 @@ def admin_delete_subject(name: str,
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="subject.delete", target=name)
     return {"ok": True, "name": name}
 
 
@@ -970,6 +981,8 @@ def admin_create_teacher(payload: dict = Body(...),
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="teacher.create",
+              target=login, detail=full_name)
     return {"ok": True, "login": login}
 
 
@@ -1002,6 +1015,7 @@ def admin_delete_teacher(login: str,
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="teacher.delete", target=login)
     return {"ok": True, "login": login}
 
 
@@ -1056,6 +1070,8 @@ def admin_approve_registration(payload: dict = Body(...),
     row.deleted = False
     req.status = "approved"
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="reg.approve",
+              target=email, detail=req.group_name)
 
     sent = mailer.send_email(
         email, "GradeBookAI — доступ к электронному журналу",
@@ -1082,7 +1098,19 @@ def admin_reject_registration(payload: dict = Body(...),
     req.status = "rejected"
     req.note = (payload.get("note") or "отклонено администратором").strip()
     db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="reg.reject", target=req.email)
     return {"ok": True}
+
+
+# --- Журнал аудита (ФСТЭК №21) — только чтение, только админ ---------------------
+@router.get("/admin/audit")
+def admin_audit(limit: int = Query(200, ge=1, le=1000), action: str = Query(""),
+                actor: str = Query(""), _admin: User = Depends(require_admin),
+                db: Session = Depends(get_db)):
+    """Персистентный журнал значимых действий (входы/выходы, изменения оценок и ПДн,
+    регистрации). Только чтение — записи неизменяемы. Фильтры по коду действия и логину."""
+    return {"events": audit.recent(db, limit=limit, action=action or None,
+                                   actor=actor or None)}
 
 
 # --- Занятия/пары (CRUD) --- преподаватель наполняет журнал: создаёт/правит/удаляет

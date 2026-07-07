@@ -148,6 +148,28 @@ class RegistrationRequest(Base):
     note = Column(String, default="")                  #причина отклонения и т.п.
 
 
+class AuditEvent(Base):
+    """Журнал значимых действий (ФСТЭК №21, п. регистрации событий безопасности).
+
+    В отличие от `events.py` (кольцевой буфер В ПАМЯТИ, живёт до перезапуска) — это
+    ПЕРСИСТЕНТНЫЙ, только-на-добавление журнал в БД: входы/выходы, выдача и отзыв
+    доступа, изменения оценок и ПДн, одобрение/отклонение регистраций. Нужен для
+    разбора инцидентов и как доказательная база при проверке. Записи НЕ редактируются
+    и НЕ удаляются приложением. Серверная деталь — НЕ входит в SYNC_MODELS."""
+    __tablename__ = "audit_events"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_ts = Column(Integer, default=0, index=True)   #unix ts — быстрый фильтр/сортировка
+    ts = Column(String, default="")                       #ISO UTC — человекочитаемо
+    actor = Column(String, index=True, default="")        #логин инициатора ("" = аноним/система)
+    role = Column(String, default="")
+    ip = Column(String, default="")
+    device = Column(String, default="")                   #X-Device-Id (усечённо)
+    action = Column(String, index=True, default="")       #короткий код: login.ok, grade.set…
+    target = Column(String, default="")                   #на кого/что подействовали
+    detail = Column(String, default="")                   #доп.контекст (без «сырых» ПДн)
+    level = Column(String, default="info")                #info | warn | error
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 SYNC_MODELS = {
     "users": User,

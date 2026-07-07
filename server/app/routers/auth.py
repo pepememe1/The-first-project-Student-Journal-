@@ -16,7 +16,7 @@ from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
                         decode_token)
-from .. import throttle, events
+from .. import throttle, events, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -126,10 +126,12 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     if not u or not verify_password(body.password, u.password_hash):
         throttle.register_failure(ip, login_str)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
+        audit.log(db, request, actor=login_str, action="login.fail", level="warn")
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     throttle.register_success(ip, login_str)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
+    audit.log(db, request, actor=login_str, role=u.role, action="login.ok")
     return _issue_token_pair(db, u, request)
 
 
@@ -198,6 +200,7 @@ def logout(request: Request, authorization: str = Header(None),
         db.commit()
         events.record("info", "logout", "выход (токен отозван)", user.login,
                       throttle.client_ip(request))
+        audit.log(db, request, actor=user.login, role=user.role, action="logout")
     return {"revoked": revoked}
 
 
@@ -258,6 +261,7 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
         events.record("info", "registration_request", f"{full_name} · {group} · {email}")
     except Exception:
         pass
+    audit.log(db, request, actor=email, action="reg.request", target=group)
     return {"ok": True, "group": group}
 
 
@@ -293,4 +297,8 @@ def recover(body: dict = Body(...), request: Request = None, db: Session = Depen
                 f"Логин: <b>{email}</b>",
                 "Войдите на <a href='https://esstu-gradebook.ru'>esstu-gradebook.ru</a>."]))
     _ = sent  # ответ намеренно НЕ зависит от sent — не раскрываем существование аккаунта
+    #В ЖУРНАЛ (внутренний, админ-only) писать факт можно: анти-энумерация касается только
+    #ответа клиенту. Пишем, был ли сброс реально выполнен — для разбора инцидентов.
+    audit.log(db, request, actor=email, action="password.recover",
+              detail="сброшен" if u else "аккаунт не найден")
     return {"ok": True}
