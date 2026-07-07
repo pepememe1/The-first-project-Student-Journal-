@@ -261,11 +261,17 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
 
 
 @router.post("/recover")
-def recover(body: dict = Body(...), db: Session = Depends(get_db)):
+def recover(body: dict = Body(...), request: Request = None, db: Session = Depends(get_db)):
     """Восстановление пароля студента по e-mail (= логин). Если аккаунт есть — генерируем
     НОВЫЙ пароль, сохраняем ХЕШ (старый пароль перестаёт работать), отзываем активные
-    сессии и высылаем новый пароль на почту. Ответ одинаковый независимо от того, есть ли
-    аккаунт (не раскрываем существование почты)."""
+    сессии и высылаем новый пароль на почту. Ответ ВСЕГДА одинаковый и НЕ содержит sent
+    (не раскрываем существование почты — анти-энумерация). Лимит по IP — анти-спам сбросов."""
+    ip = throttle.client_ip(request) if request is not None else ""
+    left = throttle.seconds_until_reg_unlocked(ip)
+    if left:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много запросов. Подождите {left // 60 + 1} мин.")
+    throttle.register_reg_failure(ip)   #каждый запрос на сброс приближает временный лимит
     email = (body.get("email") or "").strip().lower()
     u = db.query(User).filter(User.login == email, User.role == "student",
                               User.deleted == False).first()  # noqa: E712
@@ -285,4 +291,5 @@ def recover(body: dict = Body(...), db: Session = Depends(get_db)):
                 f"<b style='font-size:18px'>{pw}</b>",
                 f"Логин: <b>{email}</b>",
                 "Войдите на <a href='https://esstu-gradebook.ru'>esstu-gradebook.ru</a>."]))
-    return {"ok": True, "sent": sent}
+    _ = sent  # ответ намеренно НЕ зависит от sent — не раскрываем существование аккаунта
+    return {"ok": True}
