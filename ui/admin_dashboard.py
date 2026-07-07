@@ -148,9 +148,21 @@ class AdminDashboard(QWidget):
 
     def _run_bg(self, fn, on_done, on_error=None):
         """Запустить fn() в фоновом потоке; on_done(result) вызовется в UI-потоке."""
+        def _safe_done(result):
+            #Пока шёл фоновый запрос, дерево виджетов могло быть пересобрано или закрыто
+            #(смена роли/темы, выход) — тогда целевые QLabel/поля уже удалены на стороне
+            #C++, и обращение к ним из on_done бросает RuntimeError «already deleted».
+            #Это не ошибка логики: обновлять просто нечего — молча выходим. Прочие
+            #RuntimeError пробрасываем (не маскируем реальные баги).
+            try:
+                on_done(result)
+            except RuntimeError as e:
+                if "already deleted" in str(e).lower():
+                    return
+                raise
         w = _BgWorker(fn)
         self._workers.append(w)
-        w.done.connect(on_done)
+        w.done.connect(_safe_done)
         w.done.connect(lambda _: self._workers.remove(w) if w in self._workers else None)
         if on_error:
             w.error.connect(on_error)

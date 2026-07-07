@@ -35,7 +35,7 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --windows-console-mode=disable \
   --windows-icon-from-ico=icon.ico \
   --company-name=Synapse --product-name=GradeBookAI \
-  --file-version=2.7.0.0 --product-version=2.7.0.0 \
+  --file-version=2.8.0.0 --product-version=2.8.0.0 \
   --output-filename=GradeBookAI.exe \
   --output-dir=nuitka_out \
   --assume-yes-for-downloads \
