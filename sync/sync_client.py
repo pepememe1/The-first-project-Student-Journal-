@@ -226,6 +226,41 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    #Заявки студентов на самостоятельную регистрацию (на сервере — require_admin).
+    #Те же эндпоинты, что и веб-админка, — десктоп теперь видит и решает заявки 1:1.
+    def list_registrations(self) -> dict:
+        """Заявки на регистрацию, ждущие решения. {requests:[{id,full_name,group,phone,email,created_at}]}."""
+        r = self._req("GET", "/web/admin/registrations", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def approve_registration(self, req_id: str) -> dict:
+        """Одобрить заявку: сервер заведёт студента и вышлет пароль на почту. {ok,sent,login,password}."""
+        r = self._req("POST", "/web/admin/registrations/approve", json={"id": req_id}, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
+    def reject_registration(self, req_id: str, note: str = "") -> dict:
+        """Отклонить заявку (с необязательной причиной). {ok}."""
+        r = self._req("POST", "/web/admin/registrations/reject",
+                      json={"id": req_id, "note": note or ""}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    #Контактные данные с сервера (телефон, IP, последний вход) — для карточек студентов
+    #и преподавателей в десктопе, как на сайте (require_admin).
+    def admin_students(self, group: str = "") -> dict:
+        """Студенты с сервера + контакты (login, phone, last_login, ip). {students:[...]}."""
+        r = self._req("GET", "/web/admin/students", params={"group": group or ""}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def admin_teachers(self) -> dict:
+        """Преподаватели с сервера + контакты (login, phone, last_login, ip). {teachers:[...]}."""
+        r = self._req("GET", "/web/admin/teachers", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

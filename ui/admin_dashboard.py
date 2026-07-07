@@ -91,6 +91,7 @@ class AdminDashboard(QWidget):
             ("__label__", "", "Система"),
             ("api",   "cpu",      "Настройки ИИ"),
             ("pg",    "globe",    "Сервер"),
+            ("reg",   "clipboard", "Запросы на регистрацию"),
             ("requests", "link",  "Запросы на подключение"),
             ("sessions", "shield", "Сессии и доступ"),
             ("theme", "palette",  "Оформление"),
@@ -112,6 +113,7 @@ class AdminDashboard(QWidget):
         self._build_schedule()
         self._build_api()
         self._build_pg()
+        self._build_registrations()
         self._build_requests()
         self._build_sessions()
         self._build_theme()
@@ -235,17 +237,56 @@ class AdminDashboard(QWidget):
         lay.addWidget(self._t_list, 1)
         self.pages["teachers"] = w; self.stack.addWidget(w)
 
+    def _server_contacts(self, kind: str) -> dict:
+        """Контакты с сервера по логину: {login: {phone, last_login, ip, device}}.
+
+        kind — 'teachers' или 'students'. Данные (телефон/IP/последний вход) живут ТОЛЬКО
+        на сервере (заявки + сессии), поэтому тянем их отдельным запросом — как на сайте.
+        Вызывается ИЗ фонового потока (_fetch). Оффлайн/ошибка/не-админ → {} (список всё
+        равно покажется по локальным данным, просто без контактной строки)."""
+        try:
+            import sync_runner
+            url, token = sync_runner.current_auth()
+            if not url or not token:
+                return {}
+            from sync_client import SyncClient
+            c = SyncClient(url, token=token)
+            data = c.admin_teachers() if kind == "teachers" else c.admin_students()
+            rows = data.get("teachers" if kind == "teachers" else "students", [])
+            return {r.get("login", ""): r for r in rows if r.get("login")}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _contact_line(c: dict) -> str:
+        """Короткая строка контактов для списка: телефон · последний вход · IP (что есть)."""
+        parts = []
+        if c.get("phone"):      parts.append(f"📞 {c['phone']}")
+        if c.get("last_login"): parts.append(f"🕒 {c['last_login'][:16].replace('T', ' ')}")
+        if c.get("ip"):         parts.append(f"🌐 {c['ip']}")
+        return "   ·   ".join(parts)
+
     def _render_teachers(self):
         q = self._t_search.text().lower()
         def _fetch():
             gh = get_store()
-            return gh.get_teachers() if gh else {}
-        def _apply(teachers):
+            teachers = gh.get_teachers() if gh else {}
+            return teachers, self._server_contacts("teachers")
+        def _apply(payload):
+            teachers, contacts = payload
             self._t_list.clear()
             for name, data in teachers.items():
                 if q and q not in name.lower(): continue
                 has_pw = "✅" if (data.get("password_hash") or data.get("password")) else "❌"
-                it = QListWidgetItem(f"{has_pw}  {name}"); it.setData(Qt.UserRole, name)
+                login = data.get("login", "")
+                c = contacts.get(login, {})
+                line = f"{has_pw}  {name}"
+                if login:
+                    line += f"   ·   {login}"
+                cl = self._contact_line(c)
+                if cl:
+                    line += f"\n        {cl}"
+                it = QListWidgetItem(line); it.setData(Qt.UserRole, name)
                 self._t_list.addItem(it)
         self._run_bg(_fetch, _apply)
 
@@ -381,15 +422,25 @@ class AdminDashboard(QWidget):
         grp = self._s_grp_filter.currentText()
         def _fetch():
             gh = get_store()
-            return gh.get_students() if gh else []
-        def _apply(students):
+            students = gh.get_students() if gh else []
+            return students, self._server_contacts("students")
+        def _apply(payload):
+            students, contacts = payload
             self._s_list.clear()
             for i, s in enumerate(students):
                 name = f"{s.get('surname', '')} {s.get('name', '')}".strip()
                 if q and q not in name.lower(): continue
                 if grp != "Все группы" and s.get("group", "") != grp: continue
                 has_pw = "✅" if (s.get("password_hash") or s.get("password")) else "❌"
-                it = QListWidgetItem(f"{has_pw}  {name}  [{s.get('group', '—')}]")
+                login = s.get("login", "")
+                c = contacts.get(login, {})
+                line = f"{has_pw}  {name}  [{s.get('group', '—')}]"
+                if login:
+                    line += f"   ·   {login}"
+                cl = self._contact_line(c)
+                if cl:
+                    line += f"\n        {cl}"
+                it = QListWidgetItem(line)
                 it.setData(Qt.UserRole, i); self._s_list.addItem(it)
         self._run_bg(_fetch, _apply)
 
@@ -1038,7 +1089,16 @@ class AdminDashboard(QWidget):
         lay.addWidget(dz)
 
         lay.addStretch()
-        w.setWidget(inner)
+        #Надёжный фикс переполнения: включаем перенос во ВСЕХ подписях этой страницы —
+        #раньше длинные пояснения (через lbl() без wrap) раздували виджет шире области
+        #прокрутки и уезжали за правый край экрана. Короткие подписи от этого не меняются.
+        for _q in inner.findChildren(QLabel):
+            _q.setWordWrap(True)
+        #Ограничиваем ширину читаемой колонки: на широком мониторе строки не растягиваются
+        #на весь экран (простыня текста), а держатся комфортной ширины — раздел выглядит
+        #аккуратно, а не «нагромождённо». Карточки центрируются в области прокрутки.
+        inner.setMaximumWidth(820)
+        w.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
@@ -1454,6 +1514,161 @@ class AdminDashboard(QWidget):
     #Роутинг
 
     #Запросы на подключение (барьер подтверждения устройств; данные с /connect/requests)
+    #Заявки студентов на самостоятельную регистрацию (с экрана входа сайта). Десктоп
+    #видит и решает их 1:1 с веб-админкой: одобрил → сервер заводит студента и шлёт
+    #пароль на почту (или показывает его тут, если письмо не ушло), отклонил → закрыл.
+    def _build_registrations(self):
+        w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
+        inner = QWidget(); lay = QVBoxLayout(inner)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
+        lay.addWidget(title_lbl("Запросы на регистрацию"))
+        hint = lbl("Студенты сами оставляют заявку на регистрацию с экрана входа сайта. "
+                   "Проверьте ФИО и группу — одобрите, и сервер заведёт студента и вышлет "
+                   "пароль ему на почту (если письмо не уйдёт — покажем пароль здесь, "
+                   "передадите вручную). Список обновляется автоматически.", 11, C['text3'])
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        rc = card(); rl = QVBoxLayout(rc); rl.setContentsMargins(18, 16, 18, 16); rl.setSpacing(8)
+        self._reg_title = section_lbl("Ожидают решения")
+        rl.addWidget(self._reg_title)
+        self._reg_box = QVBoxLayout(); self._reg_box.setSpacing(8)
+        rl.addLayout(self._reg_box)
+        self._reg_status = lbl("", 11, C['text3']); self._reg_status.setWordWrap(True)
+        rl.addWidget(self._reg_status)
+        lay.addWidget(rc)
+
+        lay.addStretch()
+        inner.setMaximumWidth(820)
+        w.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        w.setWidget(inner)
+        self.pages["reg"] = w; self.stack.addWidget(w)
+
+        self._reg_timer = QTimer(self)
+        self._reg_timer.setInterval(5000)             #раз в 5 секунд
+        self._reg_timer.timeout.connect(self._poll_registrations)
+
+    def _start_registrations(self):
+        self._reg_status.setText("⏳ Запрашиваю заявки...")
+        self._poll_registrations()
+        self._reg_timer.start()
+
+    def _stop_registrations(self):
+        if getattr(self, "_reg_timer", None) is not None:
+            self._reg_timer.stop()
+
+    def _poll_registrations(self):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            self._reg_status.setText("⏹ Сервер не подключён. Запустите сервер во вкладке "
+                                     "«Сервер» и войдите администратором.")
+            self._clear_reg_rows()
+            return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).list_registrations()
+
+        def _apply(data):
+            self._render_registrations(data)
+            self._reg_status.setText("")
+
+        def _err(e):
+            self._reg_status.setText(f"⚠️ Не удалось получить заявки: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _clear_reg_rows(self):
+        while self._reg_box.count():
+            it = self._reg_box.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+    def _render_registrations(self, data):
+        rows = (data or {}).get("requests", [])
+        self._reg_title.setText(f"Ожидают решения: {len(rows)}")
+        self._clear_reg_rows()
+        if not rows:
+            self._reg_box.addWidget(lbl("— новых заявок нет —", 12, C['text3']))
+            return
+        for r in rows:
+            self._reg_box.addWidget(self._make_reg_row(r))
+
+    def _make_reg_row(self, r: dict) -> QFrame:
+        """Строка заявки: ФИО · группа · телефон · e-mail · дата и кнопки решения."""
+        rid = r.get("id", "")
+        who = r.get("full_name", "") or "—"
+        grp = r.get("group", "") or "—"
+        phone = r.get("phone", "") or "—"
+        email = r.get("email", "") or "—"
+        created = (r.get("created_at", "") or "")[:16].replace("T", " ")
+        f = QFrame(); f.setObjectName("card")
+        h = QHBoxLayout(f); h.setContentsMargins(14, 10, 14, 10); h.setSpacing(10)
+        info = (f"👤 {who}   ·   🏫 {grp}\n"
+                f"📞 {phone}   ·   ✉️ {email}" + (f"   ·   🕒 {created}" if created else ""))
+        info_lbl = lbl(info, 12, C['text']); info_lbl.setWordWrap(True)
+        h.addWidget(info_lbl, 1)
+        b_ok = btn("Одобрить", "green", icon_name="check")
+        b_ok.clicked.connect(lambda _=0, i=rid, n=who: self._approve_registration(i, n))
+        h.addWidget(b_ok)
+        b_no = btn("Отклонить", "red", icon_name="x")
+        b_no.clicked.connect(lambda _=0, i=rid: self._reject_registration(i))
+        h.addWidget(b_no)
+        return f
+
+    def _approve_registration(self, req_id: str, who: str = ""):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).approve_registration(req_id)
+
+        def _apply(res):
+            res = res or {}
+            login = res.get("login", "")
+            pw = res.get("password")
+            if pw:   #письмо не ушло — показываем пароль админу, чтобы передать вручную
+                QMessageBox.information(
+                    self, "Заявка одобрена",
+                    f"Студент {who} заведён.\n\nЛогин: {login}\nПароль: {pw}\n\n"
+                    "Письмо на почту отправить не удалось — передайте эти данные вручную.")
+            else:
+                QMessageBox.information(
+                    self, "Заявка одобрена",
+                    f"Студент {who} заведён.\nЛогин и пароль отправлены на почту: {login}.")
+            self._poll_registrations(); self._refresh_dash()
+
+        def _err(e):
+            QMessageBox.warning(self, "Сервер", f"Не удалось одобрить заявку: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _reject_registration(self, req_id: str):
+        note, ok = QInputDialog.getText(self, "Отклонить заявку",
+                                        "Причина (необязательно):")
+        if not ok:
+            return
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).reject_registration(req_id, note.strip())
+
+        def _apply(_res):
+            self._poll_registrations()
+
+        def _err(e):
+            QMessageBox.warning(self, "Сервер", f"Не удалось отклонить заявку: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
     def _build_requests(self):
         w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
         inner = QWidget(); lay = QVBoxLayout(inner)
@@ -1763,7 +1978,7 @@ class AdminDashboard(QWidget):
         self._mon_console.setStyleSheet(
             f"QTextEdit{{background:{C['card2']};color:{C['text3']};border:1px solid "
             f"{C['border2']};border-radius:8px;font-family:Consolas,'Courier New',"
-            "monospace;font-size:12px;padding:8px;}}")
+            "monospace;font-size:12px;padding:8px;}")
         self._mon_console.setMinimumHeight(240)
         el.addWidget(self._mon_console)
         self._mon_status = lbl("", 11, C['text3']); self._mon_status.setWordWrap(True)
@@ -1783,7 +1998,7 @@ class AdminDashboard(QWidget):
         self._mon_audit.setStyleSheet(
             f"QTextEdit{{background:{C['card2']};color:{C['text3']};border:1px solid "
             f"{C['border2']};border-radius:8px;font-family:Consolas,'Courier New',"
-            "monospace;font-size:12px;padding:8px;}}")
+            "monospace;font-size:12px;padding:8px;}")
         self._mon_audit.setMinimumHeight(200)
         al.addWidget(self._mon_audit)
         lay.addWidget(ac)
@@ -1901,6 +2116,7 @@ class AdminDashboard(QWidget):
         try:
             self._stop_monitor()      #уходя с любой вкладки — гасим опрос мониторинга
             self._stop_requests()     #и опрос запросов на подключение
+            self._stop_registrations() #и опрос заявок на регистрацию
             self._stop_sessions()     #и опрос активных сессий
             if key == "dash":     self._refresh_dash()
             if key == "teachers": self._render_teachers()
@@ -1909,6 +2125,7 @@ class AdminDashboard(QWidget):
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_vector_cfg()
             if key == "pg":       self._refresh_server_status(); self._refresh_compliance()
+            if key == "reg":      self._start_registrations()
             if key == "requests": self._start_requests()
             if key == "sessions": self._start_sessions()
             if key == "mon":      self._start_monitor()

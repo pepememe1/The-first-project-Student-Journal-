@@ -61,8 +61,12 @@ def card2(parent=None) -> QFrame:
 
 #LABEL FACTORIES
 
-def lbl(text="", size=13, color=None, bold=False, parent=None) -> QLabel:
-    """Создать стилизованный лейбл (DM Sans)"""
+def lbl(text="", size=13, color=None, bold=False, parent=None, wrap=False) -> QLabel:
+    """Создать стилизованный лейбл (DM Sans).
+
+    wrap=True — включить перенос по словам. По умолчанию выключен (короткие подписи в
+    рядах не должны менять высоту), но для длинных описаний его ОБЯЗАТЕЛЬНО включать:
+    иначе длинный текст раздувает виджет шире области и уезжает за правый край окна."""
     l = QLabel(text, parent)
     s = f"font-size:{size}px;font-family:{FONT_BODY};"
     if color:
@@ -70,6 +74,8 @@ def lbl(text="", size=13, color=None, bold=False, parent=None) -> QLabel:
     if bold:
         s += "font-weight:700;"
     l.setStyleSheet(s)
+    if wrap:
+        l.setWordWrap(True)
     return l
 
 

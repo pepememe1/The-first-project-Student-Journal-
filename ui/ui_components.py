@@ -102,9 +102,11 @@ class HeaderBar(QFrame):
             "border-radius:6px;"
         )
         
-        logo_text = QLabel("GRADEBOOK")
+        #Бренд пишем как «GradeBookAI» (фирменное написание, как на сайте и экране входа),
+        #а не капсом «GRADEBOOK» — так шапка выглядит опрятно и узнаваемо.
+        logo_text = QLabel("GradeBookAI")
         logo_text.setStyleSheet(
-            "font-size:15px;font-weight:800;color:#FFFFFF;"
+            "font-size:16px;font-weight:800;color:#FFFFFF;letter-spacing:0.2px;"
         )
         college_text = QLabel("Технологический колледж ВСГУТУ")
         college_text.setStyleSheet(
