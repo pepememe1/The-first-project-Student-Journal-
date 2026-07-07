@@ -26,12 +26,19 @@ class SyncManager:
         self._url = ""           #адрес сервера, под который создан текущий клиент
         self._interval = interval_sec
         self._on_synced = None   #колбэк после успешного цикла (для обновления UI)
+        self._on_state = None    #колбэк смены онлайн/офлайн (для индикатора в шапке)
         self._wake = threading.Event()   #«будильник» для немедленного синка
         #Сохранённый токен пробуем РОВНО один раз за сессию входа: если он протух,
         #дальше идём по паролю, а не крутим бесконечно негодный токен.
         self._saved_token_tried = False
         #Jitter перед входом по паролю — один раз за процесс (размазать «герд»).
         self._jitter_done = False
+        #Устойчивость: считаем подряд идущие неудачи для ЭКСПОНЕНЦИАЛЬНОГО БЭКОФФА
+        #(не долбить мёртвый сервер каждые 30 c) и держим онлайн/офлайн-состояние
+        #для индикатора. None = ещё не знаем, True/False = определились.
+        self._fail_count = 0
+        self._online = None
+        self._last_error = ""
 
     def trigger(self):
         """Разбудить синкер прямо сейчас (например, после сохранения данных),
@@ -42,6 +49,28 @@ class SyncManager:
         """Колбэк, вызываемый после успешной синхронизации. UI подключает сюда
         обновление текущего экрана (через потокобезопасный сигнал Qt)."""
         self._on_synced = cb
+
+    def set_on_state(self, cb):
+        """Колбэк смены онлайн/офлайн: cb(online: bool, error: str). Вызывается ТОЛЬКО
+        при изменении состояния (не на каждом цикле). UI показывает индикатор."""
+        self._on_state = cb
+
+    def status(self) -> dict:
+        """Текущее состояние синка для UI/диагностики."""
+        return {"online": self._online, "fails": self._fail_count,
+                "error": self._last_error}
+
+    def _set_online(self, online: bool, error: str = ""):
+        """Обновить онлайн-состояние; колбэк дёргаем только при РЕАЛЬНОЙ смене."""
+        self._last_error = error or ""
+        if self._online is online:
+            return
+        self._online = online
+        if self._on_state:
+            try:
+                self._on_state(online, error or "")
+            except Exception:
+                pass
 
     def current_auth(self):
         """(url, token) текущей сессии — чтобы админ-панель могла сама дёрнуть
@@ -201,20 +230,37 @@ class SyncManager:
                 if self._ensure_auth(url):
                     sync_engine.sync_once(self._client)
                     self._flush_pending_prefs()   #до-отправляем тему, если зависла
+                    #Успех: сбрасываем бэкофф и помечаем «онлайн».
+                    self._fail_count = 0
+                    self._set_online(True)
                     if self._on_synced:
                         try:
                             self._on_synced()   #сигнал «данные обновились» в UI
                         except Exception:
                             pass
             except Exception as e:
-                #Сеть/токен/сервер недоступны — не критично, повторим позже.
+                #Сеть/токен/сервер недоступны — не критично, повторим позже с БЭКОФФОМ.
                 self._client = None   # сбросим, чтобы перелогиниться
-                print(f"[sync] отложено: {e}")
+                self._fail_count += 1
+                self._set_online(False, str(e))
+                #Логируем только первые неудачи, дальше молчим — не засоряем консоль
+                #одинаковым «Read timed out» каждый цикл, пока сервер недоступен.
+                if self._fail_count <= 3:
+                    print(f"[sync] отложено (попытка {self._fail_count}): {e}")
+                elif self._fail_count == 4:
+                    print("[sync] сервер недоступен — перехожу в режим редких повторов "
+                          "(бэкофф). Данные в безопасности локально, синк возобновится сам.")
             self._sleep_cycle()
 
     def _sleep_cycle(self):
-        """Ждём интервал ИЛИ «будильник» (trigger при изменении данных/запуске сервера)."""
-        self._wake.wait(timeout=self._interval)
+        """Ждём до следующего цикла ИЛИ «будильник» (trigger при изменении данных/запуске
+        сервера). При серии неудач — ЭКСПОНЕНЦИАЛЬНЫЙ БЭКОФФ: пауза растёт 30→60→120→240→
+        300 c (потолок 5 мин), чтобы не долбить мёртвый сервер. Успех обнуляет счётчик →
+        снова быстрый интервал. Любой trigger (сохранение данных) будит немедленно."""
+        delay = self._interval
+        if self._fail_count > 0:
+            delay = min(self._interval * (2 ** min(self._fail_count, 4)), 300)
+        self._wake.wait(timeout=delay)
         self._wake.clear()
 
     def push_my_prefs(self, prefs: dict):
@@ -296,6 +342,16 @@ def stop():
 
 def set_on_synced(cb):
     _manager.set_on_synced(cb)
+
+
+def set_on_state(cb):
+    """Колбэк смены онлайн/офлайн: cb(online: bool, error: str). Для индикатора в шапке."""
+    _manager.set_on_state(cb)
+
+
+def sync_status() -> dict:
+    """Состояние синка {online, fails, error} — для индикатора/диагностики."""
+    return _manager.status()
 
 
 def trigger():

@@ -16,6 +16,7 @@ class _SyncBridge(QObject):
     #на экран входа можно только в UI-потоке — поэтому через сигналы.
     restore_local = Signal(str)   #данные готовы (после реконсиляции/офлайн) — собрать дашборд по логину
     show_login = Signal()         #восстановить не удалось (токен протух) — оставить вход
+    state = Signal(bool, str)     #смена онлайн/офлайн синка (для индикатора в шапке)
 
 from core import APP_VERSION
 from styles import APP_STYLE, COLLEGE_NAME
@@ -97,9 +98,11 @@ class MainAppWindow(QMainWindow):
         self._sync_bridge.synced.connect(self._on_synced)
         self._sync_bridge.restore_local.connect(self._restore_from_local)
         self._sync_bridge.show_login.connect(self._restore_failed)
+        self._sync_bridge.state.connect(self._on_sync_state)
         try:
-            from sync_runner import set_on_synced
+            from sync_runner import set_on_synced, set_on_state
             set_on_synced(self._sync_bridge.synced.emit)
+            set_on_state(self._sync_bridge.state.emit)
         except Exception as e:
             print(f"[sync] мост обновления UI не подключён: {e}")
 
@@ -462,6 +465,14 @@ class MainAppWindow(QMainWindow):
                     self._open_dashboard()        #перекрасить инлайн-виджеты под новый режим
         except Exception as e:
             print(f"[theme] тик расписания: {e}")
+
+    def _on_sync_state(self, online: bool, error: str):
+        """Синк перешёл в онлайн/офлайн — показываем индикатор в шапке (UI-поток)."""
+        try:
+            if hasattr(self._header, "set_online"):
+                self._header.set_online(online)
+        except Exception:
+            pass
 
     def _on_synced(self):
         """Пришли свежие данные с сервера — обновляем текущий экран, если умеет.

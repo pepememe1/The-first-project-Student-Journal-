@@ -23,7 +23,11 @@ def test_ensure_tunnel_name_persists(tmp_path, monkeypatch):
     assert sc.get_tunnel_name() == name1
 
 
-def test_public_tunnel_url_deterministic():
+def test_public_tunnel_url_deterministic(tmp_path, monkeypatch):
+    #Изолируем .env (иначе тест зависит от реальной конфигурации ПК: если в server/.env
+    #уже прописан GRADEBOOK_TUNNEL_NAME, public_tunnel_url('') вернёт его, а не '').
+    #Так тест детерминирован и локально, и в CI.
+    monkeypatch.setattr(sc, "ENV_PATH", str(tmp_path / ".env"))
     assert sc.public_tunnel_url("vsgutu") == "https://vsgutu.serveo.net"
     assert sc.public_tunnel_url("") == ""
 

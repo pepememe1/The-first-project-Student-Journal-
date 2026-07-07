@@ -23,6 +23,12 @@ import requests
 
 DEFAULT_TIMEOUT = 10
 
+#Таймаут синка — КОРТЕЖ (connect, read): быстро понять, что сервера нет (5 c на
+#соединение), но дать серверу время отдать/принять КРУПНЫЙ первый обмен (30 c на
+#чтение). Раньше единый 10 c рвал большой первый pull/push на медленном канале —
+#отсюда «Read timed out» в логе. connect короткий → офлайн определяется быстро.
+SYNC_TIMEOUT = (5, 30)
+
 
 def is_token_expired(token: str, skew_sec: int = 30) -> bool:
     """True, если JWT просрочен (или не разобрался). Разбираем payload БЕЗ проверки
@@ -166,14 +172,16 @@ class SyncClient:
         return {"revoked": 0}
 
     def pull(self, since: str = "") -> dict:
-        """Изменения позже метки since. Возвращает {server_time, changes}."""
-        r = self._req("GET", "/sync/pull", params={"since": since})
+        """Изменения позже метки since. Возвращает {server_time, changes}.
+        Долгий read-таймаут: первый полный pull может быть большим на медленном канале."""
+        r = self._req("GET", "/sync/pull", params={"since": since}, timeout=SYNC_TIMEOUT)
         r.raise_for_status()
         return r.json()
 
     def push(self, changes: dict) -> dict:
-        """Отправляет изменения. changes = {users:[...], grades:[...], ...}."""
-        r = self._req("POST", "/sync/push", json={"changes": changes})
+        """Отправляет изменения. changes = {users:[...], grades:[...], ...}.
+        Долгий read-таймаут: первый пуш накопленного офлайн бывает объёмным."""
+        r = self._req("POST", "/sync/push", json={"changes": changes}, timeout=SYNC_TIMEOUT)
         r.raise_for_status()
         return r.json()
 

@@ -1,0 +1,49 @@
+name: CI
+
+# Ловим регрессии ДО сборки .exe и деплоя: синтаксис во всех файлах, серверные тесты
+# (52 шт.) и клиентские тесты (включая статический инвариант «QScrollArea без setWidget»,
+# который поймал бы пустую вкладку «Сервер» этого сеанса). Гоняем на каждый push/PR.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  compile:
+    name: Синтаксис (compileall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Компилируем ВСЕ .py — падаем на любой синтаксической ошибке (как двойная }} была бы,
+      # будь она синтаксисом). Быстро и без зависимостей.
+      - run: python -m compileall -q ui sync data server/app *.py
+
+  server-tests:
+    name: Серверные тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r server/requirements.txt pytest
+      - run: cd server && pytest -q
+
+  client-tests:
+    name: Клиентские тесты
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen   # Qt без дисплея (headless CI)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Системные библиотеки, без которых PySide6 не импортируется на голом ubuntu-runner.
+      - run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q

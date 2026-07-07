@@ -122,6 +122,17 @@ class HeaderBar(QFrame):
         lay.addLayout(logo_box)
         lay.addStretch()
 
+        #Индикатор связи с сервером (онлайн/офлайн). Обновляется из фонового синка через
+        #сигнал (main_window._on_sync_state → set_online). По умолчанию скрыт, пока синк
+        #не определил состояние — не пугаем пользователя «офлайн» до первой попытки.
+        self._online_lbl = QLabel("")
+        self._online_lbl.setStyleSheet(
+            "color:#EAF6F8;font-size:11px;font-weight:600;"
+            "background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.4);"
+            "border-radius:100px;padding:3px 10px;")
+        self._online_lbl.hide()
+        lay.addWidget(self._online_lbl)
+
         #User info
         from widgets import badge
         self.role_badge = badge("", "green")
@@ -149,6 +160,19 @@ class HeaderBar(QFrame):
         logout.setCursor(Qt.PointingHandCursor)
         logout.clicked.connect(self.logout_clicked)
         lay.addWidget(logout)
+
+    def set_online(self, online: bool):
+        """Показать состояние связи с сервером: 🟢 онлайн (данные синхронизируются) или
+        🔴 офлайн (работаем локально, синк возобновится сам). Вызывается из UI-потока."""
+        if online:
+            self._online_lbl.setText("🟢 Онлайн")
+        else:
+            self._online_lbl.setText("🔴 Офлайн — работаем локально")
+        self._online_lbl.setToolTip(
+            "Данные синхронизируются с сервером колледжа." if online else
+            "Нет связи с сервером. Все изменения сохраняются локально и уйдут на "
+            "сервер автоматически, как только связь восстановится.")
+        self._online_lbl.show()
 
     def set_role(self, role_text, user_text):
         """Установить информацию о роли пользователя.
