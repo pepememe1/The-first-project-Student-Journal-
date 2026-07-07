@@ -15,3 +15,13 @@ theme.startScheduleWatcher()
 
 app.use(router)
 app.mount('#app')
+
+// PWA: регистрируем service worker (офлайн-оболочка + «установить приложение»).
+// Только для https/localhost и если браузер поддерживает — иначе тихо пропускаем.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((e) => {
+      console.warn('[PWA] service worker не зарегистрирован:', e)
+    })
+  })
+}

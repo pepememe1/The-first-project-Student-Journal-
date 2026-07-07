@@ -7,6 +7,16 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#147C8B" />
     <title>Электронный журнал — Технологический колледж ВСГУТУ</title>
+
+    <!-- PWA: устанавливаемое приложение (Android/десктоп — из манифеста; iOS — из
+         apple-* мета). Регистрация service worker — в src/main.js (CSP запрещает
+         inline-скрипты, а модуль main.js грузится с 'self'). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GradeBookAI" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <!-- Фирменные шрифты Synapse: Syne (заголовки) + DM Sans (текст). Есть системный
          fallback (Segoe UI) — если шрифты не загрузились, вид остаётся предсказуемым.
          Для полностью офлайн-работы шрифты можно самостоятельно положить в /public/fonts. -->

@@ -66,10 +66,25 @@ function onEnter() { hovered.value = true; tipIndex.value = (tipIndex.value + 1)
 
 const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
 
+// Предложить браузеру/менеджеру паролей сохранить вход. Для SPA/AJAX-входа одних
+// autocomplete-атрибутов мало — надёжно срабатывает Credential Management API
+// (navigator.credentials.store). Побочный бонус: когда пароль сохранён в системном
+// менеджере, iOS предлагает автозаполнение по Face ID, Android — по отпечатку. Где API
+// нет (Safari/Firefox) — молча полагаемся на autocomplete-эвристику браузера.
+async function saveCredential(id, pass) {
+  try {
+    if (window.PasswordCredential) {
+      const cred = new window.PasswordCredential({ id, password: pass, name: id })
+      await navigator.credentials.store(cred)
+    }
+  } catch { /* сохранение необязательно — не мешаем входу */ }
+}
+
 async function submit() {
   needApproval.value = false
   try {
     const user = await auth.login(login.value, password.value)
+    await saveCredential(login.value, password.value)
     router.push(HOME_BY_ROLE[user.role] || '/')
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
@@ -124,14 +139,14 @@ const showRecover = ref(false)
         <form class="space-y-4" @submit.prevent="submit">
           <div>
             <label class="mb-1.5 block text-xs font-medium text-text3">Логин</label>
-            <input v-model="login" autocomplete="username"
+            <input v-model="login" id="login" name="username" autocomplete="username"
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                    placeholder="Введите логин" />
           </div>
           <div>
             <label class="mb-1.5 block text-xs font-medium text-text3">Пароль</label>
             <div class="relative">
-              <input v-model="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
+              <input v-model="password" id="password" name="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
                      class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-11 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                      placeholder="••••••••" />
               <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
