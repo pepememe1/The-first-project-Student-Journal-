@@ -205,7 +205,7 @@ def logout(request: Request, authorization: str = Header(None),
 import uuid as _uuid                                                   # noqa: E402
 from fastapi import Body                                              # noqa: E402
 from ..models import RegistrationRequest, Group                       # noqa: E402
-from .. import reg_utils, mailer                                      # noqa: E402
+from .. import reg_utils, mailer, gost                                # noqa: E402
 
 
 @router.post("/register")
@@ -250,7 +250,8 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
         _fail("Заявка с такой почтой уже на рассмотрении", 409)
 
     db.add(RegistrationRequest(id=str(_uuid.uuid4()), full_name=full_name, group_name=group,
-                               phone=phone, email=email, status="pending", created_at=_now()))
+                               phone=gost.encrypt(phone),  # ПДн-телефон шифруем при хранении (ГОСТ)
+                               email=email, status="pending", created_at=_now()))
     db.commit()
     throttle.register_reg_success(ip)              #удачная заявка сбрасывает счётчик
     try:

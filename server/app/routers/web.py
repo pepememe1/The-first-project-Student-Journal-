@@ -21,7 +21,7 @@ from ..deps import get_current_user, require_admin
 from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest, AuthSession
 from .. import webdata as W
 from .. import schedule_web
-from .. import reg_utils, mailer
+from .. import reg_utils, mailer, gost
 
 
 def _contact_info(db: Session, logins: list) -> dict:
@@ -42,7 +42,7 @@ def _contact_info(db: Session, logins: list) -> dict:
     #телефон из заявки (у самостоятельно зарегистрированных студентов логин = email)
     for r in db.query(RegistrationRequest).filter(RegistrationRequest.email.in_(logins)).all():
         if r.phone and r.email in out and not out[r.email]["phone"]:
-            out[r.email]["phone"] = r.phone
+            out[r.email]["phone"] = gost.decrypt(r.phone)   # телефон хранится в ГОСТ-шифре
     return out
 
 router = APIRouter(prefix="/web", tags=["web"])
@@ -1012,7 +1012,8 @@ def admin_registrations(_admin: User = Depends(require_admin), db: Session = Dep
     rows = db.query(RegistrationRequest).filter(
         RegistrationRequest.status == "pending").order_by(RegistrationRequest.created_at).all()
     return {"requests": [{"id": r.id, "full_name": r.full_name, "group": r.group_name,
-                          "phone": r.phone, "email": r.email, "created_at": r.created_at}
+                          "phone": gost.decrypt(r.phone), "email": r.email,
+                          "created_at": r.created_at}
                          for r in rows]}
 
 
