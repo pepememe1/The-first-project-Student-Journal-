@@ -50,6 +50,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  // Вход по passkey (Face ID / отпечаток) — без пароля. Токены и «визитку» ставим так
+  // же, как при обычном входе; логин приходит в ответе (клиент его не вводил).
+  async function loginPasskey() {
+    loading.value = true
+    error.value = ''
+    try {
+      const { loginWithPasskey } = await import('@/api/webauthn')
+      const data = await loginWithPasskey('')
+      setTokens({ access: data.access_token, refresh: data.refresh_token })
+      user.value = { login: data.login || '', role: data.role, name: data.name || data.login || '' }
+      localStorage.setItem(LS_USER, JSON.stringify(user.value))
+      return user.value
+    } catch (e) {
+      // Отмена пользователем (NotAllowedError/AbortError) — не ошибка, пробрасываем молча.
+      if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') throw e
+      error.value = e.response?.data?.detail || 'Не удалось войти по биометрии. Войдите паролем.'
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function logout() {
     // Гасим токен и на сервере (чёрный список), а не только локально — безопасный выход.
     try { await authApi.logout() } catch { /* офлайн — всё равно чистим локально */ }
@@ -65,5 +87,5 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, loading, error, isAuthenticated, role, login, logout, clearSession }
+  return { user, loading, error, isAuthenticated, role, login, loginPasskey, logout, clearSession }
 })

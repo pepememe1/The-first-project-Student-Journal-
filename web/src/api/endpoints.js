@@ -21,6 +21,14 @@ export const authApi = {
   // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
   register: (payload) => api.post('/auth/register', payload),
   recover: (email) => api.post('/auth/recover', { email }),
+  // Passkeys (вход по Face ID / отпечатку). begin выдаёт опции с challenge, complete
+  // проверяет ответ устройства. register — под токеном (включить), login — публичный.
+  webauthnRegisterBegin: () => api.post('/auth/webauthn/register/begin'),
+  webauthnRegisterComplete: (payload) => api.post('/auth/webauthn/register/complete', payload),
+  webauthnLoginBegin: (login = '') => api.post('/auth/webauthn/login/begin', { login }),
+  webauthnLoginComplete: (payload) => api.post('/auth/webauthn/login/complete', payload),
+  webauthnList: () => api.get('/auth/webauthn/credentials'),
+  webauthnDelete: (id) => api.post('/auth/webauthn/credentials/delete', { id }),
 }
 
 // ЛИЧНЫЕ НАСТРОЙКИ (тема и пр.) ──────────────────────────────────────────────────

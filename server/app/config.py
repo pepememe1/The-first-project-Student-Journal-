@@ -53,3 +53,26 @@ ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get("GRADEBOOK_ALLOWED_ORIGINS", "*").split(",")
     if o.strip()
 ] or ["*"]
+
+
+#WebAuthn (passkeys — вход по Face ID/отпечатку без пароля).
+#  • WEBAUTHN_ORIGIN — полный https-origin сайта (напр. https://esstu-gradebook.ru),
+#    с которым должна совпасть подпись ключа;
+#  • WEBAUTHN_RP_ID — «имя» доверенной стороны = ДОМЕН без схемы/порта (esstu-gradebook.ru);
+#    passkey привязывается к нему, поэтому менять его нельзя, иначе ключи «отвалятся».
+#По умолчанию берём первый https из ALLOWED_ORIGINS, иначе localhost для разработки.
+def _default_origin() -> str:
+    for o in ALLOWED_ORIGINS:
+        if o.startswith("https://"):
+            return o.rstrip("/")
+    return "http://localhost:5173"
+
+
+def _host_of(origin: str) -> str:
+    from urllib.parse import urlparse
+    return urlparse(origin).hostname or "localhost"
+
+
+WEBAUTHN_ORIGIN = (os.environ.get("GRADEBOOK_WEBAUTHN_ORIGIN", "").strip() or _default_origin())
+WEBAUTHN_RP_ID = (os.environ.get("GRADEBOOK_WEBAUTHN_RP_ID", "").strip() or _host_of(WEBAUTHN_ORIGIN))
+WEBAUTHN_RP_NAME = os.environ.get("GRADEBOOK_WEBAUTHN_RP_NAME", "GradeBookAI — ВСГУТУ")

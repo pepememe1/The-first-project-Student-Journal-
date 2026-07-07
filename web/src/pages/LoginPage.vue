@@ -4,9 +4,10 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Download } from '@lucide/vue'
+import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Download, Fingerprint } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { desktopApi } from '@/api/endpoints'
+import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
@@ -27,9 +28,13 @@ const needApproval = ref(false)
 // Секция «скачать десктоп» — только для ПК (мышь), не для телефонов/планшетов (touch).
 const isDesktop = ref(false)
 const desktop = ref({ available: false })
+// Кнопку «Войти по биометрии» показываем только если на устройстве есть встроенный
+// биометрический аутентификатор (Face ID/отпечаток) и браузер поддерживает passkeys.
+const canBiometric = ref(false)
 onMounted(async () => {
   isDesktop.value = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? true
   try { desktop.value = (await desktopApi.info()).data } catch { desktop.value = { available: false } }
+  try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
 })
 
 // Наведение на Вектора: поза «думает» + облачко-совет. Крутятся полезные подсказки и
@@ -88,6 +93,17 @@ async function submit() {
     router.push(HOME_BY_ROLE[user.role] || '/')
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
+  }
+}
+
+// Вход по биометрии (passkey). Отмену пользователем игнорируем молча.
+async function submitPasskey() {
+  needApproval.value = false
+  try {
+    const user = await auth.loginPasskey()
+    router.push(HOME_BY_ROLE[user.role] || '/')
+  } catch (e) {
+    /* ошибка уже в auth.error (или отмена — молчим) */
   }
 }
 function onApproved() { needApproval.value = false; submit() }
@@ -162,6 +178,16 @@ const showRecover = ref(false)
             {{ auth.loading ? 'Входим…' : 'Войти' }}
           </AppButton>
         </form>
+
+        <!-- Вход по биометрии (passkey): виден только если на устройстве есть Face ID/
+             отпечаток. Включается в профиле после обычного входа. -->
+        <div v-if="canBiometric" class="mt-3">
+          <button type="button" :disabled="auth.loading"
+                  class="flex w-full items-center justify-center gap-2 rounded-sm border border-accent/50 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow disabled:opacity-50"
+                  @click="submitPasskey">
+            <Fingerprint class="size-4" /> Войти по Face ID / отпечатку
+          </button>
+        </div>
 
         <div class="mt-4 border-t border-border pt-3 text-center">
           <p class="text-xs text-text3">Для обучающихся:</p>

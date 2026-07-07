@@ -170,6 +170,23 @@ class AuditEvent(Base):
     level = Column(String, default="info")                #info | warn | error
 
 
+class WebAuthnCredential(Base):
+    """Passkey (WebAuthn) — публичный ключ пользователя для входа по биометрии (Face ID/
+    отпечаток) БЕЗ пароля. Приватный ключ НИКОГДА не покидает устройство пользователя;
+    сервер хранит только публичную часть и проверяет ею подпись при входе. `sign_count`
+    растёт при каждом использовании — защита от клонирования ключа. Серверная деталь
+    доступа — НЕ входит в SYNC_MODELS."""
+    __tablename__ = "webauthn_credentials"
+    credential_id = Column(String, primary_key=True)   #base64url id ключа (от аутентификатора)
+    login = Column(String, index=True, default="")     #чей ключ
+    public_key = Column(String, default="")            #base64url COSE-публичный ключ
+    sign_count = Column(Integer, default=0)            #счётчик подписей (анти-клон)
+    transports = Column(String, default="")            #csv: internal,hybrid,usb…
+    device_name = Column(String, default="")           #как показать пользователю
+    created_at = Column(String, default="")
+    last_used = Column(String, default="")
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 SYNC_MODELS = {
     "users": User,
