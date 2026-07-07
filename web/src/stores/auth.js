@@ -9,6 +9,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
+import { loginWithPasskey } from '@/api/webauthn'
 
 const LS_USER = 'gb.user'
 
@@ -56,7 +57,6 @@ export const useAuthStore = defineStore('auth', () => {
     loading.value = true
     error.value = ''
     try {
-      const { loginWithPasskey } = await import('@/api/webauthn')
       const data = await loginWithPasskey('')
       setTokens({ access: data.access_token, refresh: data.refresh_token })
       user.value = { login: data.login || '', role: data.role, name: data.name || data.login || '' }
