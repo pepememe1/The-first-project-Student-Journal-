@@ -1071,6 +1071,9 @@ class AdminDashboard(QWidget):
         #(«Internal C++ object already deleted»), из-за чего вкладка переставала открываться.
         for _q in inner.findChildren(QLabel):
             _q.setWordWrap(True)
+        w.setWidget(inner)          #БЕЗ этого QScrollArea пуст, а inner с виджетами
+                                    #(_srv_port и др.) остаётся без владельца → C++ удаляет
+                                    #их после выхода из метода («object already deleted»).
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
@@ -1220,21 +1223,37 @@ class AdminDashboard(QWidget):
         #Прикладные меры — всегда включены
         _set(self._cmp_app, "✅ Роли, анти-брутфорс, журнал входов/событий, авто-бэкап — включены", ok)
 
-        #Сервер запущен? — фоновая проверка
+        #Сервер доступен? — фоновая проверка. Смотрим И локальный процесс, И РЕАЛЬНУЮ
+        #доступность настроенного адреса (сервер на VPS), иначе показывало «не запущен»
+        #даже когда боевой сервер прекрасно работает.
         try:
             port = int(self._srv_port.text().strip() or "8000")
-        except ValueError:
+        except (ValueError, RuntimeError):
             port = 8000
 
         def _chk():
             import server_control
-            return server_control.server_running(port)
+            local = server_control.server_running(port)
+            remote = False
+            try:
+                from app_settings import get_api_url
+                u = (get_api_url() or "").strip()
+                if u:
+                    from sync_client import SyncClient
+                    remote = SyncClient(u).health()
+            except Exception:
+                remote = False
+            return local, remote
 
-        def _apply(running):
-            if running:
-                _set(self._cmp_server, f"✅ Сервер (API) запущен на порту {port}", ok)
+        def _apply(res):
+            local, remote = res
+            if remote:
+                _set(self._cmp_server, "✅ Сервер (API) доступен и отвечает", ok)
+            elif local:
+                _set(self._cmp_server, f"✅ Локальный сервер (API) запущен на порту {port}", ok)
             else:
-                _set(self._cmp_server, "⏹ Сервер не запущен — нажмите «Запустить сервер» выше", warn)
+                _set(self._cmp_server, "⏹ Сервер недоступен — запустите его во вкладке "
+                                       "«Сервер и сайт» или проверьте адрес", warn)
 
         self._run_bg(_chk, _apply)
 
