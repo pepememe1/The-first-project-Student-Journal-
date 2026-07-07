@@ -902,89 +902,54 @@ class AdminDashboard(QWidget):
         from app_settings import get_api_url
         w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
-        lay.addWidget(title_lbl("Сервер синхронизации"))
+        lay.addWidget(title_lbl("Сервер и сайт"))
 
-        #Карточка: адрес сервера колледжа (API)
-        #Десктоп общается с сервером по сети (HTTP). Адрес обычно уже вшит в
-        #сборку; здесь его можно переопределить, если сервер переехал.
+        #Карточка СОСТОЯНИЯ — самое важное сверху: работает ли сервер и сайт ПРЯМО СЕЙЧАС.
+        #Статус по РЕАЛЬНОЙ доступности адреса (а не только локального процесса): если
+        #сервер поднят на VPS, админ сразу видит зелёное «работает», а не «Запустить».
+        stc = card(); stl = QVBoxLayout(stc); stl.setContentsMargins(18, 16, 18, 16); stl.setSpacing(6)
+        stl.addWidget(section_lbl("Состояние"))
+        self._srv_status = lbl("Проверяю…", 13, wrap=True)
+        stl.addWidget(self._srv_status)
+        lay.addWidget(stc)
+
+        #Карточка: единый адрес сайта и онлайн-базы. По умолчанию вшит боевой адрес
+        #esstu-gradebook.ru; менять нужно только если сервер переехал.
         ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16); al.setSpacing(10)
-        al.addWidget(section_lbl("Адрес сервера"))
-        al.addWidget(lbl("Адрес сервера колледжа. Обычно уже задан в программе — менять "
-                         "нужно, только если сервер переехал. Учителя и студенты просто "
-                         "входят, данные подтягиваются сами. Пусто — работа только локально.",
-                         11, C['text3']))
-        self._api_url = field_input("http://10.0.0.5:8000"); self._api_url.setText(get_api_url())
+        al.addWidget(section_lbl("Адрес сайта и онлайн-базы"))
+        al.addWidget(lbl("Единый адрес сайта и общей онлайн-базы колледжа. Обычно уже вшит "
+                         "в программу — менять нужно только если сервер переехал. Студенты и "
+                         "преподаватели просто входят, данные подтягиваются сами.",
+                         11, C['text3'], wrap=True))
+        self._api_url = field_input("https://esstu-gradebook.ru"); self._api_url.setText(get_api_url())
         al.addWidget(self._api_url)
         arow = QHBoxLayout()
         asave = btn("Сохранить адрес", "green", icon_name="save"); asave.clicked.connect(self._save_api_url)
-        arow.addWidget(asave); arow.addStretch(); al.addLayout(arow)
+        arefresh = btn("Проверить", "ghost", icon_name="refresh")
+        arefresh.clicked.connect(lambda: (self._refresh_server_status(), self._refresh_compliance()))
+        arow.addWidget(asave); arow.addWidget(arefresh); arow.addStretch(); al.addLayout(arow)
         lay.addWidget(ac)
 
-        #Карточка: ЭТОТ ПК как сервер (хостинг сервера синхронизации)
-        #Нужна только на ОДНОМ ПК — том, который будет сервером. На клиентских
-        #машинах её просто не трогают (там хватает «Адреса сервера» выше).
-        #Одна кнопка «Запустить сервер» делает всё: ставит движок БД, поднимает сам
-        #сервер (API) и — для Serveo — открывает доступ из интернета, после чего
-        #публичный адрес сам записывается в программу.
+        #Карточка: РАЗМЕСТИТЬ сервер на этом ПК. Сейчас боевой сервер — на VPS
+        #(esstu-gradebook.ru); позже его можно поднять прямо на ПК ВСГУТУ этой кнопкой:
+        #одним нажатием стартуют и САЙТ, и онлайн-БД (один адрес, один процесс).
         from PySide6.QtWidgets import QComboBox as _QC, QCheckBox as _QCB
         hc = card(); hl = QVBoxLayout(hc); hl.setContentsMargins(18, 16, 18, 16); hl.setSpacing(10)
-        hl.addWidget(section_lbl("Этот ПК как сервер"))
-        hl.addWidget(lbl("Запустить сервер синхронизации прямо на этом компьютере. "
-                         "Нужно только на ОДНОМ ПК колледжа (он станет сервером). "
-                         "Адрес для клиентов появится ниже после запуска.", 11, C['text3']))
+        hl.addWidget(section_lbl("Разместить сервер на этом ПК"))
+        hl.addWidget(lbl("Поднять сайт и онлайн-базу прямо на этом компьютере (он станет "
+                         "сервером колледжа). Нужно только на ОДНОМ ПК. Сейчас сервер работает "
+                         "на VPS — эта кнопка понадобится, когда сервер переедет на ПК ВСГУТУ.",
+                         11, C['text3'], wrap=True))
 
-        #Тип сервера: способ доступа + движок БД одним выбором.
-        hl.addWidget(lbl("ТИП СЕРВЕРА", 10, C['text3']))
-        #Данные пунктов — строки "доступ|движок": Qt возвращает Python-кортеж как
-        #список, и сравнение со строкой надёжнее (без сюрпризов сериализации).
-        self._srv_type = _QC()
-        self._srv_type.addItem("Свой домен · SQLite3 — HTTPS (боевой, esstu.gradebook.ru)", "domain|sqlite")
-        self._srv_type.addItem("Свой домен · PostgreSQL — HTTPS + нагрузка", "domain|postgres")
-        self._srv_type.addItem("Serveo.net · SQLite3 — доступ из интернета (тест)", "serveo|sqlite")
-        self._srv_type.addItem("ВСГУТУ Сервер · SQLite3 — локальная сеть", "direct|sqlite")
-        self._srv_type.addItem("ВСГУТУ Сервер · PostgreSQL — нагрузка/много ПК", "direct|postgres")
-        self._srv_type.currentIndexChanged.connect(self._toggle_server_fields)
-        hl.addWidget(self._srv_type)
+        #Движок базы данных: SQLite 3 (проще, по умолчанию) или PostgreSQL (нагрузка/много ПК).
+        hl.addWidget(lbl("БАЗА ДАННЫХ", 10, C['text3']))
+        self._srv_engine = _QC()
+        self._srv_engine.addItem("SQLite 3 — проще, по умолчанию", "sqlite")
+        self._srv_engine.addItem("PostgreSQL — нагрузка и много ПК", "postgres")
+        self._srv_engine.currentIndexChanged.connect(self._toggle_server_fields)
+        hl.addWidget(self._srv_engine)
 
-        #Блок Serveo: постоянное имя поддомена + предупреждение 152-ФЗ.
-        #Виден только для типа «Serveo.net».
-        self._serveo_box = QWidget(); sbl = QVBoxLayout(self._serveo_box)
-        sbl.setContentsMargins(0, 0, 0, 0); sbl.setSpacing(6)
-        sbl.addWidget(lbl("⚠️ Serveo — туннель через зарубежный сервис: только для теста "
-                          "на выдуманных данных. Реальные данные студентов так передавать "
-                          "нельзя (152-ФЗ). Боевой доступ — свой домен + HTTPS.",
-                          11, C['orange']))
-        sbl.addWidget(lbl("ПОСТОЯННОЕ ИМЯ (необязательно)", 10, C['text3']))
-        self._tun_name = field_input("напр. vsgutu — адрес станет vsgutu.serveo.net")
-        try:
-            import server_control
-            self._tun_name.setText(server_control.get_tunnel_name())
-        except Exception:
-            pass
-        sbl.addWidget(self._tun_name)
-        sbl.addWidget(lbl("С именем адрес постоянный между запусками. Пусто — адрес "
-                          "случайный каждый раз (тогда клиенты вводят новый при входе).",
-                          11, C['text3']))
-        hl.addWidget(self._serveo_box)
-
-        #Блок «Свой домен» (виден только для доступа 'domain'): поле домена + памятка.
-        self._domain_box = QWidget(); dbl = QVBoxLayout(self._domain_box)
-        dbl.setContentsMargins(0, 0, 0, 0); dbl.setSpacing(6)
-        dbl.addWidget(lbl("ДОМЕН СЕРВЕРА И САЙТА", 10, C['text3']))
-        self._domain = field_input("напр. esstu.gradebook.ru")
-        try:
-            import server_control
-            self._domain.setText(server_control.get_domain())
-        except Exception:
-            pass
-        dbl.addWidget(self._domain)
-        dbl.addWidget(lbl("HTTPS-сертификат Caddy получит сам (Let's Encrypt), адрес красивый "
-                          "и постоянный. Нужно один раз: домен куплен, A-запись домена → на "
-                          "публичный IP этого ПК, порты 80 и 443 открыты, рядом с программой "
-                          "лежит caddy.exe (один файл с caddyserver.com).", 11, C['text3']))
-        hl.addWidget(self._domain_box)
-
-        #Блок реквизитов PostgreSQL (виден только для типа «ВСГУТУ · PostgreSQL»)
+        #Реквизиты PostgreSQL — видны только когда выбран движок PostgreSQL.
         self._pg_box = QWidget(); pgl = QVBoxLayout(self._pg_box)
         pgl.setContentsMargins(0, 0, 0, 0); pgl.setSpacing(6)
         self._pg_host = field_input("localhost")
@@ -1002,32 +967,31 @@ class AdminDashboard(QWidget):
         pgl.addWidget(show_pg)
         test_pg = btn("Проверить подключение", "blue"); test_pg.clicked.connect(self._test_pg_conn)
         pgl.addWidget(test_pg)
-        self._pg_status = lbl("", 12); self._pg_status.setWordWrap(True)
+        self._pg_status = lbl("", 12, wrap=True)
         pgl.addWidget(self._pg_status)
         hl.addWidget(self._pg_box)
 
-        hl.addWidget(separator())
         prow = QHBoxLayout()
-        prow.addWidget(lbl("ПОРТ СЕРВЕРА", 10, C['text3']))
+        prow.addWidget(lbl("ПОРТ", 10, C['text3']))
         self._srv_port = field_input("8000"); self._srv_port.setFixedWidth(90)
         self._srv_port.setText("8000")
         prow.addWidget(self._srv_port); prow.addStretch()
         hl.addLayout(prow)
 
         btnrow = QHBoxLayout()
-        self._srv_start = btn("Запустить сервер Десктопа и Сайта", "green", icon_name="play")
+        self._srv_start = btn("Запустить сайт и онлайн-базу", "green", icon_name="play")
         self._srv_start.clicked.connect(self._start_server)
-        self._srv_stop  = btn("Остановить", "red", icon_name="stop"); self._srv_stop.clicked.connect(self._stop_server)
+        self._srv_stop  = btn("Остановить", "red", icon_name="stop")
+        self._srv_stop.clicked.connect(self._stop_server)
         btnrow.addWidget(self._srv_start); btnrow.addWidget(self._srv_stop); btnrow.addStretch()
         hl.addLayout(btnrow)
-        self._srv_status = lbl("", 12); self._srv_status.setWordWrap(True)
-        hl.addWidget(self._srv_status)
+        self._srv_host_status = lbl("", 12, wrap=True)
+        hl.addWidget(self._srv_host_status)
 
-        #Сервер синхронизации и сам САЙТ живут на ОДНОМ адресе (сервер монтирует dist).
-        #Одна кнопка выше поднимает и то, и другое; адрес появляется здесь и КОПИРУЕТСЯ
-        #в буфер обмена — админу остаётся отправить ссылку студентам/преподавателям.
+        #Адрес запущенного сайта/БД (один и тот же) — появляется после старта и копируется
+        #в буфер обмена, чтобы отправить студентам и преподавателям.
         hl.addWidget(separator())
-        hl.addWidget(lbl("Адрес сервера и сайта (одно и то же — отправьте его пользователям):", 11, C['text3']))
+        hl.addWidget(lbl("Адрес сайта и онлайн-базы (отправьте пользователям):", 11, C['text3'], wrap=True))
         self._site_url = field_input("появится после запуска")
         self._site_url.setReadOnly(True)
         hl.addWidget(self._site_url)
@@ -1101,60 +1065,46 @@ class AdminDashboard(QWidget):
         lay.addWidget(dz)
 
         lay.addStretch()
-        #Надёжный фикс переполнения: включаем перенос во ВСЕХ подписях этой страницы —
-        #раньше длинные пояснения (через lbl() без wrap) раздували виджет шире области
-        #прокрутки и уезжали за правый край экрана. Короткие подписи от этого не меняются.
+        #Перенос во ВСЕХ подписях страницы — длинные пояснения не уезжают за правый край.
+        #ВАЖНО: ширину НЕ ограничиваем и alignment у QScrollArea НЕ трогаем — их сочетание
+        #с setWidgetResizable(True) приводило к удалению дочерних виджетов на стороне C++
+        #(«Internal C++ object already deleted»), из-за чего вкладка переставала открываться.
         for _q in inner.findChildren(QLabel):
             _q.setWordWrap(True)
-        #Ограничиваем ширину читаемой колонки: на широком мониторе строки не растягиваются
-        #на весь экран (простыня текста), а держатся комфортной ширины — раздел выглядит
-        #аккуратно, а не «нагромождённо». Карточки центрируются в области прокрутки.
-        inner.setMaximumWidth(820)
-        w.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.pages["pg"] = w; self.stack.addWidget(w)
         self._refresh_server_cfg()
         self._refresh_server_status()
         self._refresh_compliance()
 
-    #ЭТОТ ПК как сервер: выбор типа, запуск/остановка
+    #ЭТОТ ПК как сервер: выбор движка БД, запуск/остановка
     def _current_type(self):
-        """(access, engine) из выбранного пункта. Данные хранятся строкой
-        'доступ|движок' — разбираем её здесь в одном месте."""
-        data = self._srv_type.currentData() or "direct|sqlite"
-        access, _, engine = str(data).partition("|")
-        return access or "direct", engine or "sqlite"
+        """(access, engine). Движок — из выбора БД (SQLite/PostgreSQL); доступ — 'domain',
+        если адрес это https-домен (Caddy поднимет HTTPS), иначе 'direct' (ЛВС)."""
+        try:
+            engine = self._srv_engine.currentData() or "sqlite"
+            url = (self._api_url.text() or "").strip()
+        except RuntimeError:
+            return "direct", "sqlite"
+        access = "domain" if url.startswith("https://") else "direct"
+        return access, engine
 
     def _toggle_server_fields(self, *_):
-        """Показываем поля по выбранному типу: блок Serveo — для доступа из
-        интернета, реквизиты PostgreSQL — только для PostgreSQL."""
-        access, engine = self._current_type()
-        self._serveo_box.setVisible(access == "serveo")
-        self._domain_box.setVisible(access == "domain")
-        self._pg_box.setVisible(engine == "postgres")
-
-    def _server_type_index(self, access: str, engine: str) -> int:
-        """Индекс пункта комбобокса по паре (доступ, движок)."""
-        target = f"{access}|{engine}"
-        for i in range(self._srv_type.count()):
-            if self._srv_type.itemData(i) == target:
-                return i
-        return 0
+        """Реквизиты PostgreSQL показываем только когда выбран движок PostgreSQL."""
+        try:
+            _, engine = self._current_type()
+            self._pg_box.setVisible(engine == "postgres")
+        except RuntimeError:
+            pass
 
     def _refresh_server_cfg(self):
-        """Подтягивает сохранённый тип сервера и реквизиты PostgreSQL из server/.env."""
+        """Подтягивает сохранённый движок БД и реквизиты PostgreSQL из server/.env."""
         try:
             import server_control
         except Exception:
             return
         is_pg = server_control.is_postgres()
-        engine = "postgres" if is_pg else "sqlite"
-        access = server_control.get_access_mode()
-        #serveo разумен только с SQLite; PostgreSQL — это «прямой» боевой профиль.
-        if engine == "postgres":
-            access = "direct"
-        self._srv_type.setCurrentIndex(self._server_type_index(access, engine))
-        #Восстанавливаем сохранённый порт (его же использует автозапуск хоста).
         try:
+            self._srv_engine.setCurrentIndex(1 if is_pg else 0)
             self._srv_port.setText(str(server_control.get_server_port()))
         except Exception:
             pass
@@ -1173,37 +1123,56 @@ class AdminDashboard(QWidget):
         self._toggle_server_fields()
 
     def _refresh_server_status(self):
-        """Показывает, запущен ли сервер на этом ПК, и блокирует кнопки по месту."""
-        try:
-            import server_control
-        except Exception:
-            self._srv_status.setText("Модуль управления сервером недоступен.")
-            return
+        """Показывает, работает ли сервер и сайт ПРЯМО СЕЙЧАС — по РЕАЛЬНОЙ доступности
+        настроенного адреса (ловит и сервер на VPS), а не только локального процесса.
+        Управляет доступностью кнопок «Запустить/Остановить»."""
+        #Виджеты вкладки могли быть уничтожены (пересборка дашборда при смене темы) —
+        #обращение к ним бросает RuntimeError. Молча выходим: обновлять нечего.
         try:
             port = int(self._srv_port.text().strip() or "8000")
         except ValueError:
             port = 8000
+        except RuntimeError:
+            return
+        try:
+            url = (self._api_url.text() or "").strip()
+        except RuntimeError:
+            return
 
         def _check():
-            #Сервер — по /health; туннель — по живому PID; адрес постоянный.
-            return (server_control.server_running(port),
-                    server_control.tunnel_alive(),
-                    server_control.public_tunnel_url())
+            import server_control
+            local = server_control.server_running(port)
+            remote = False
+            if url:
+                try:
+                    from sync_client import SyncClient
+                    remote = SyncClient(url).health()
+                except Exception:
+                    remote = False
+            return local, remote
 
         def _apply(res):
-            running, tun, link = res
-            if running:
-                txt = (f"✅ Сервер работает (фоновый — живёт и без программы) "
-                       f"на порту {port}.")
-                if tun and link:
-                    txt += f"\n🔗 Постоянная ссылка для других ПК: {link}"
-                self._srv_status.setText(txt)
-                self._srv_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+            local, remote = res
+            if remote:
+                self._srv_status.setText(f"✅ Сервер и сайт работают: {url}\n"
+                                         "Синхронизация активна — данные общие для всех ПК.")
+                self._srv_status.setStyleSheet(f"font-size:13px;color:{C['green']};font-weight:700;")
+            elif local:
+                self._srv_status.setText(f"✅ Локальный сервер запущен на порту {port} "
+                                         "(адрес сайта ещё не прописан выше).")
+                self._srv_status.setStyleSheet(f"font-size:13px;color:{C['green']};font-weight:700;")
+            elif url:
+                self._srv_status.setText(f"⏹ Сервер недоступен по адресу {url}.\n"
+                                         "Проверьте адрес или запустите сервер ниже.")
+                self._srv_status.setStyleSheet(f"font-size:13px;color:{C['orange']};")
             else:
-                self._srv_status.setText("⏹ Сервер на этом ПК не запущен.")
-                self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
-            self._srv_start.setEnabled(not running)
-            self._srv_stop.setEnabled(running)
+                self._srv_status.setText("⏹ Адрес не задан — работа только локально. "
+                                         "Впишите адрес выше или запустите сервер ниже.")
+                self._srv_status.setStyleSheet(f"font-size:13px;color:{C['text3']};")
+            #Если сервер работает (локальный или удалённый) — «Запустить» гасим. «Остановить»
+            #доступно только для ЛОКАЛЬНОГО процесса (сервер на VPS отсюда не остановить).
+            self._srv_start.setEnabled(not (local or remote))
+            self._srv_stop.setEnabled(local)
 
         self._run_bg(_check, _apply)
 
@@ -1211,6 +1180,12 @@ class AdminDashboard(QWidget):
         """Панель готовности к 152-ФЗ: что прога обеспечивает сама (зелёным), и
         что остаётся на инфраструктуру ВСГУТУ. Живые проверки: сервер запущен,
         защищён ли канал, активен ли ГОСТ-бэкенд хеша."""
+        #Проба: живы ли виджеты вкладки (дашборд мог быть пересобран при смене темы,
+        #тогда C++-объекты удалены). Если нет — молча выходим, обновлять нечего.
+        try:
+            self._cmp_hash.text()
+        except RuntimeError:
+            return
         ok, warn, bad = C['green'], C['orange'], C['red']
 
         def _set(widget, text, color):
@@ -1285,30 +1260,29 @@ class AdminDashboard(QWidget):
         self._run_bg(_check, _apply)
 
     def _start_server(self):
-        """Единая кнопка «Запустить сервер»: по выбранному типу ставит движок БД,
-        поднимает сам сервер (API) и — для Serveo — открывает доступ из интернета,
-        после чего сам записывает полученный адрес в программу (вписывать вручную
-        больше ничего не нужно)."""
+        """Одна кнопка: поднять на этом ПК и САЙТ, и онлайн-БД (один процесс, один адрес).
+        Движок берём из выбора БД; домен — из адреса выше (https-домен → Caddy поднимет
+        HTTPS сам). Полученный адрес записывается в программу автоматически."""
         import server_control
         try:
             port = int(self._srv_port.text().strip() or "8000")
         except ValueError:
             port = 8000
         access, engine = self._current_type()
-        name = self._tun_name.text().strip()
-        domain = self._domain.text().strip()
-        if access == "serveo":
-            #Имя поддомена запоминаем, чтобы адрес был постоянным между запусками.
+        name = ""
+        #Домен для боевого HTTPS берём из адреса сайта выше (напр. esstu-gradebook.ru).
+        domain = ""
+        if access == "domain":
             try:
-                server_control.set_tunnel_name(name)
+                from urllib.parse import urlparse
+                domain = urlparse((self._api_url.text() or "").strip()).hostname or ""
             except Exception:
-                pass
-        elif access == "domain":
-            #Домен запоминаем, чтобы автозапуск поднимал HTTPS на том же адресе.
-            try:
-                server_control.set_domain(domain)
-            except Exception:
-                pass
+                domain = ""
+            if domain:
+                try:
+                    server_control.set_domain(domain)
+                except Exception:
+                    pass
         pg = None
         if engine == "postgres":
             pw = self._pg_pass.text()
@@ -1323,11 +1297,10 @@ class AdminDashboard(QWidget):
             pg = {"host": self._pg_host.text(), "port": self._pg_port.text(),
                   "db": self._pg_db.text(), "user": self._pg_user.text(), "password": pw}
 
-        _startmsg = {"serveo": "⏳ Запускаю сервер и открываю доступ (serveo)...",
-                     "domain": "⏳ Запускаю сервер и HTTPS-домен (Caddy)..."}.get(
-                         access, "⏳ Запускаю сервер и сайт...")
-        self._srv_status.setText(_startmsg)
-        self._srv_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+        _startmsg = ("⏳ Запускаю сайт и онлайн-базу с HTTPS (Caddy)…" if access == "domain"
+                     else "⏳ Запускаю сайт и онлайн-базу…")
+        self._srv_host_status.setText(_startmsg)
+        self._srv_host_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
         self._srv_start.setEnabled(False)
 
         def _do():
@@ -1370,10 +1343,13 @@ class AdminDashboard(QWidget):
                     sync_runner.trigger()
                 except Exception:
                     pass
-                QMessageBox.information(self, "Сервер и сайт запущены",
+                self._srv_host_status.setText("✅ Запущено.")
+                self._srv_host_status.setStyleSheet(f"font-size:12px;color:{C['green']};")
+                QMessageBox.information(self, "Сайт и онлайн-база запущены",
                                        message + "\n\nАдрес скопирован в буфер обмена — "
                                        "отправьте ссылку студентам и преподавателям.")
             else:
+                self._srv_host_status.setText("")
                 QMessageBox.critical(self, "Сервер",
                                      message or "Не удалось запустить сервер.")
             self._refresh_server_status()
@@ -1381,14 +1357,16 @@ class AdminDashboard(QWidget):
         self._run_bg(_do, _apply)
 
     def _stop_server(self):
-        """Останавливает ФОНОВЫЕ процессы хоста: сервер и ssh-туннель serveo.
-        (Закрытие программы их не гасит — только эта кнопка.)"""
+        """Останавливает ЛОКАЛЬНЫЙ сервер+сайт на этом ПК (и связанный туннель), после чего
+        синхронизация с ним прекращается. (Закрытие программы их не гасит — только эта
+        кнопка.) Сервер на VPS отсюда не останавливается — он живёт своей жизнью."""
         import server_control
         try:
             port = int(self._srv_port.text().strip() or "8000")
         except ValueError:
             port = 8000
-        self._srv_status.setText("⏳ Останавливаю сервер...")
+        self._srv_host_status.setText("⏳ Останавливаю сайт и онлайн-базу…")
+        self._srv_host_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
         self._srv_stop.setEnabled(False)
 
         def _do():
@@ -1404,7 +1382,11 @@ class AdminDashboard(QWidget):
                     set_host_autostart(False)
                 except Exception:
                     pass
+                self._srv_host_status.setText("⏹ Остановлено. Синхронизация с этим ПК прекращена.")
+                self._srv_host_status.setStyleSheet(f"font-size:12px;color:{C['text3']};")
+                self._site_url.setText("")
             else:
+                self._srv_host_status.setText("")
                 QMessageBox.warning(self, "Сервер", msg)
             self._refresh_server_status()
 
