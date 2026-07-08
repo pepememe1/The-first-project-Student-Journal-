@@ -3,76 +3,27 @@
 // приветствие при открытии → «думает» во время запроса → эмоция по настроению ответа
 // (радость/грусть/предупреждение) → возврат в покой. Все позы — из 30 спрайтов эмоций.
 // Цифры считает СЕРВЕР (/web/vector/ask) из реальных данных — маскот не выдумывает.
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted, nextTick } from 'vue'
+import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid } from '@lucide/vue'
-import { vectorApi } from '@/api/endpoints'
 import Mascot from '@/components/Mascot.vue'
-import { chatEmote } from '@/config/mascot'
-import { QUICK_COMMANDS } from '@/config/vectorCommands'
-import { useAuthStore } from '@/stores/auth'
+import { useVectorStore } from '@/stores/vector'
 
-const auth = useAuthStore()
-const messages = ref([
-  { role: 'vector', text: 'Привет! Я Вектор. Спросите про средний балл, задолженности или пропуски — я беру цифры из ваших реальных данных.' },
-])
-const input = ref('')
-const state = ref('greeting')    // greeting | idle | thinking | speaking
-const lastMood = ref('neutral')
-const lastIntent = ref('help')   // намерение из ответа сервера ведёт эмоцию (как emotes.pick)
+// Чат живёт в общем store — ОДНА переписка с боковым доком (как в десктопе).
+const vector = useVectorStore()
+const { messages, input, state, sprite, label, cmds, tick } = storeToRefs(vector)
 const scroller = ref(null)
-const showQuick = ref(false)     // попап с быстрыми вопросами (как «Быстрые команды» в десктопе)
-let settleTimer = null
-
-// Быстрые команды под роль — ТОЧНО как в десктопе (vector/faq.py::QUICK_COMMANDS).
-const cmds = computed(() => QUICK_COMMANDS[auth.role] || QUICK_COMMANDS.student)
-const sprite = computed(() => chatEmote(state.value, lastMood.value, lastIntent.value))
-const label = computed(() => ({
-  greeting: 'Привет!', thinking: 'Думаю…', speaking: 'Отвечаю', idle: 'Готов помочь',
-}[state.value]))
-
-// Приветствие при открытии — через 2.5с уходит в покой.
-onMounted(() => { settleTimer = setTimeout(() => { if (state.value === 'greeting') state.value = 'idle' }, 2500) })
+const showQuick = ref(false)     // попап быстрых команд
 
 async function scrollDown() {
   await nextTick()
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: 'smooth' })
 }
+watch(tick, scrollDown)                       // новое сообщение → прокрутка вниз
+onMounted(() => { vector.greetSettle(); scrollDown() })
 
-function settle() {
-  clearTimeout(settleTimer)
-  settleTimer = setTimeout(() => { if (state.value === 'speaking') state.value = 'idle' }, 3000)
-}
-
-async function send() {
-  const text = input.value.trim()
-  if (!text || state.value === 'thinking') return
-  messages.value.push({ role: 'user', text })
-  input.value = ''
-  state.value = 'thinking'
-  scrollDown()
-  try {
-    const { data } = await vectorApi.ask(text)
-    lastMood.value = data.mood || 'neutral'
-    lastIntent.value = data.intent || 'help'
-    messages.value.push({ role: 'vector', text: data.text || 'Готово.' })
-    state.value = 'speaking'
-    settle()
-  } catch (e) {
-    const offline = e.response?.status === 404
-    messages.value.push({
-      role: 'vector',
-      text: offline ? 'Серверный «Вектор» ещё подключается (эндпоинт /web/vector/ask).'
-                    : 'Не удалось получить ответ. Проверьте соединение и попробуйте снова.',
-    })
-    lastMood.value = 'neutral'
-    state.value = 'speaking'
-    settle()
-  } finally {
-    scrollDown()
-  }
-}
-
-function ask(text) { showQuick.value = false; input.value = text; send() }
+function send() { vector.send() }             // берёт текст из store.input (v-model)
+function ask(q) { showQuick.value = false; vector.ask(q) }
 </script>
 
 <template>

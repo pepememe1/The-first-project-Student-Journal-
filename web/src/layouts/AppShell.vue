@@ -7,6 +7,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import HeaderBar from '@/components/HeaderBar.vue'
+import VectorDock from '@/components/VectorDock.vue'
 import { useThemeStore } from '@/stores/theme'
 
 const theme = useThemeStore()
@@ -15,6 +16,9 @@ const sidebarOpen = ref(false)
 
 const title = computed(() => route.meta?.title || '')
 const subtitle = computed(() => route.meta?.subtitle || '')
+// Боковой Вектор виден на всех страницах, КРОМЕ самой вкладки «ИИ Помощник»
+// (там полноразмерный Вектор в контенте). Только десктоп (на мобиле не показываем).
+const showDock = computed(() => !route.path.endsWith('/vector'))
 
 onMounted(() => theme.loadFromPrefs())
 </script>
@@ -53,6 +57,12 @@ onMounted(() => theme.loadFromPrefs())
           </RouterView>
         </div>
       </main>
+
+      <!-- Постоянный боковой Вектор (десктоп): справа поверх всех страниц, кроме вкладки
+           «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). -->
+      <div v-if="showDock" class="hidden lg:block">
+        <VectorDock />
+      </div>
     </div>
   </div>
 </template>
