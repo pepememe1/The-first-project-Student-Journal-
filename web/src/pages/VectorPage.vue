@@ -79,16 +79,19 @@ function ask(text) { input.value = text; send() }
 </script>
 
 <template>
-  <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-    <div class="hidden flex-col items-center lg:flex">
-      <Mascot :sprite="sprite" class="h-72 w-60" />
-      <span class="mt-2 inline-flex items-center gap-2 rounded-full bg-accent-glow px-3 py-1 text-sm font-medium text-accent">
+  <!-- Мобайл: колонка на весь экран — КРУПНЫЙ маскот сверху + чат снизу (как ИИ-компаньон
+       в Grok). Десктоп (lg): маскот слева отдельной колонкой, чат справа. -->
+  <div class="flex h-[calc(100dvh-8.5rem)] flex-col gap-2 sm:h-[calc(100dvh-10rem)] lg:grid lg:h-auto lg:grid-cols-[300px_1fr] lg:gap-6">
+    <!-- Маскот: на телефоне занимает большую часть верха и хорошо виден -->
+    <div class="flex shrink-0 flex-col items-center justify-end lg:justify-start lg:pt-2">
+      <Mascot :sprite="sprite" class="h-[36vh] w-[30vh] sm:h-[40vh] sm:w-[33vh] lg:h-80 lg:w-64" />
+      <span class="-mt-1 inline-flex items-center gap-2 rounded-full bg-accent-glow px-3 py-1 text-sm font-medium text-accent lg:mt-2">
         <span class="size-1.5 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
         {{ label }}
       </span>
     </div>
 
-    <div class="flex h-[calc(100vh-12rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card">
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card lg:h-[calc(100vh-12rem)]">
       <div ref="scroller" class="flex-1 space-y-4 overflow-y-auto p-5">
         <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.role === 'user' ? 'justify-end' : ''">
           <div class="max-w-[80%] rounded-lg px-4 py-2.5 text-sm"

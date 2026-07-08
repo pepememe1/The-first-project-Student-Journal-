@@ -13,15 +13,16 @@ web.py — READ-представления для веб-версии (SPA). В�
 import re
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import User, Group, Subject, Lesson, Grade, RegistrationRequest, AuthSession
+from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
+                      AuthSession, ConfigKV)
 from .. import webdata as W
 from .. import schedule_web
-from .. import reg_utils, mailer, gost, audit
+from .. import reg_utils, mailer, gost, audit, vector_llm
 
 
 def _contact_info(db: Session, logins: list) -> dict:
@@ -461,12 +462,20 @@ def schedule_get(group: str = Query(""), user: User = Depends(get_current_user))
 def vector_ask(payload: dict = Body(...),
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Серверный «Вектор». ПРИНЦИП тот же, что в десктопе: цифры берутся из реальных
-    данных (SQL), модель их НЕ выдумывает. Пока без LLM-переформулировки — ответ
-    собирает локальный шаблонизатор по фактам (LLM-озвучка через privacy→GigaChat —
-    следующий шаг). Студент видит только свои данные (privacy)."""
-    msg = (payload.get("message") or "").strip().lower()
+    данных (SQL) — модель их НЕ выдумывает. Фактический текст собирает `_vector_facts`,
+    затем LLM-провайдер (GigaChat/Ollama/оффлайн — из СИНХРОНИЗИРОВАННОГО конфига админа)
+    лишь ПЕРЕФОРМУЛИРУЕТ его в стиле Вектора. Студент видит только свои данные."""
+    question = (payload.get("message") or "").strip()
     cfg = W.load_config(db)
+    result = _vector_facts(question.lower(), user, db, cfg)
+    #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
+    #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
+    result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
+    return result
 
+
+def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
+    """Собирает фактический ответ (text/mood/intent/facts) по роли из реальных данных."""
     def has(*keys):
         return any(k in msg for k in keys)
 
@@ -1111,6 +1120,71 @@ def admin_audit(limit: int = Query(200, ge=1, le=1000), action: str = Query(""),
     регистрации). Только чтение — записи неизменяемы. Фильтры по коду действия и логину."""
     return {"events": audit.recent(db, limit=limit, action=action or None,
                                    actor=actor or None)}
+
+
+# --- Настройки ИИ «Вектор» (провайдер + ключ GigaChat) — 1:1 с десктопом -----------
+# Хранятся в той же строке ConfigKV key="config", что и на десктопе (синхронизируется
+# в обе стороны). Пишем с серверной меткой updated_at (LWW, §3) → ключ админа, заданный
+# на ПК, доедет на веб и наоборот.
+_AI_CFG_KEYS = ("vector_llm", "gigachat_credentials", "gigachat_scope",
+                "gigachat_model", "local_model")
+
+
+@router.get("/admin/ai-config")
+def admin_get_ai_config(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Текущие настройки ИИ (провайдер, ключ/скоуп GigaChat, модель Ollama)."""
+    cfg = W.load_config(db)
+    return {
+        "vector_llm": cfg.get("vector_llm", "offline"),
+        "gigachat_credentials": cfg.get("gigachat_credentials", ""),
+        "gigachat_scope": cfg.get("gigachat_scope", "GIGACHAT_API_B2B"),
+        "gigachat_model": cfg.get("gigachat_model", "GigaChat"),
+        "local_model": cfg.get("local_model", "qwen2.5:3b"),
+    }
+
+
+@router.post("/admin/ai-config")
+def admin_set_ai_config(payload: dict = Body(...), request: Request = None,
+                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Сохранить настройки ИИ. Мержим В строку config (не затирая методику оценок и пр.),
+    ставим серверную метку времени → синхронизируется на десктоп."""
+    row = db.get(ConfigKV, "config")
+    cur = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+    for k in _AI_CFG_KEYS:
+        if k in payload:
+            cur[k] = payload[k]
+    now = _now_iso()
+    if row is None:
+        db.add(ConfigKV(key="config", value=cur, updated_at=now, deleted=False))
+    else:
+        row.value = cur            #переприсваиваем dict — JSON-колонка увидит изменение
+        row.updated_at = now
+    db.commit()
+    audit.log(db, request, actor=_admin.login, role="admin", action="ai.config")
+    return {"ok": True}
+
+
+@router.post("/admin/ai-config/test")
+def admin_test_ai_config(payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Проверка провайдера: пробуем реально озвучить короткий факт. Ошибку НЕ глушим
+    (в отличие от боевого voice), чтобы админ увидел причину. {ok, message}."""
+    cfg = dict(W.load_config(db))
+    for k in _AI_CFG_KEYS:      #проверяем с ПЕРЕДАННЫМИ (ещё не сохранёнными) значениями
+        if k in payload:
+            cfg[k] = payload[k]
+    kind = (cfg.get("vector_llm") or "offline").strip()
+    if kind == "offline":
+        return {"ok": True, "message": "Оффлайн-режим: LLM не используется, ответы по фактам."}
+    facts = "Средний балл — 4.5. Задолженностей нет."
+    try:
+        if kind == "gigachat":
+            out = vector_llm._voice_gigachat(cfg, facts, "student", "как у меня дела")
+        else:
+            out = vector_llm._voice_ollama(cfg, facts, "student", "как у меня дела")
+        return {"ok": True, "message": (out or "")[:200]}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:200]}
 
 
 # --- Занятия/пары (CRUD) --- преподаватель наполняет журнал: создаёт/правит/удаляет

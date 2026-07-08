@@ -105,6 +105,11 @@ export const adminApi = {
   registrations: () => api.get('/web/admin/registrations'),
   approveRegistration: (id) => api.post('/web/admin/registrations/approve', { id }),
   rejectRegistration: (id, note = '') => api.post('/web/admin/registrations/reject', { id, note }),
+  // Настройки ИИ «Вектор» (провайдер + ключ GigaChat/модель Ollama). Хранятся в той же
+  // строке config, что и на десктопе → синхронизируются в обе стороны.
+  aiConfig: () => api.get('/web/admin/ai-config'),
+  aiConfigSave: (payload) => api.post('/web/admin/ai-config', payload),
+  aiConfigTest: (payload) => api.post('/web/admin/ai-config/test', payload),
   // Служебное — уже реализовано на сервере:
   online: () => api.get('/admin/online'),
   events: (since = 0) => api.get('/admin/events', { params: { since } }),

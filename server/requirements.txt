@@ -15,3 +15,4 @@ pytest>=8.0             # автотесты API (запуск: cd server && pyt
 gostcrypto>=1.2.5
 openpyxl>=3.1        # экспорт журнала в xlsx с сайта (/web/teacher/journal.xlsx)
 webauthn>=2.0        # passkeys — вход по Face ID/отпечатку без пароля (/auth/webauthn/*)
+gigachat>=0.1        # LLM-озвучка Вектора (GigaChat, РФ-облако; VPS в РФ → работает)
