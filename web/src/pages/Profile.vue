@@ -86,7 +86,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 
     <!-- Вход по биометрии (passkeys) — виден только на устройствах с Face ID/отпечатком. -->
     <Card v-if="canBiometric" title="Вход по биометрии"
-          subtitle="Быстрый вход по Face ID или отпечатку — без ввода пароля">
+          subtitle="Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
         <p>Приватный ключ хранится в защищённом чипе устройства и никогда его не покидает.

@@ -179,14 +179,17 @@ const showRecover = ref(false)
           </AppButton>
         </form>
 
-        <!-- Вход по биометрии (passkey): виден только если на устройстве есть Face ID/
-             отпечаток. Включается в профиле после обычного входа. -->
+        <!-- Вход по passkey. На телефоне это Face ID/отпечаток, на ПК — «ключ доступа»
+             (Windows Hello / PIN / аппаратный ключ), поэтому подпись зависит от устройства.
+             Включается в настройках профиля после обычного входа. -->
         <div v-if="canBiometric" class="mt-3">
           <button type="button" :disabled="auth.loading"
                   class="flex w-full items-center justify-center gap-2 rounded-sm border border-accent/50 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow disabled:opacity-50"
                   @click="submitPasskey">
-            <Fingerprint class="size-4" /> Войти по Face ID / отпечатку
+            <Fingerprint class="size-4" />
+            {{ isDesktop ? 'Войти по ключу доступа' : 'Войти по Face ID / отпечатку' }}
           </button>
+          <p class="mt-1.5 text-center text-tiny text-text3">Функция настраивается в настройках профиля</p>
         </div>
 
         <div class="mt-4 border-t border-border pt-3 text-center">
