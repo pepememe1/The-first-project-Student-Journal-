@@ -8,6 +8,7 @@ import { Send, LayoutGrid } from '@lucide/vue'
 import { vectorApi } from '@/api/endpoints'
 import Mascot from '@/components/Mascot.vue'
 import { chatEmote } from '@/config/mascot'
+import { QUICK_COMMANDS } from '@/config/vectorCommands'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -22,13 +23,8 @@ const scroller = ref(null)
 const showQuick = ref(false)     // попап с быстрыми вопросами (как «Быстрые команды» в десктопе)
 let settleTimer = null
 
-// Быстрые вопросы под роль — как подсказки «Вектора» в десктопе.
-const SUGGESTIONS = {
-  student: ['Какой мой средний балл?', 'Есть ли задолженности?', 'Сколько пропусков?'],
-  teacher: ['Средний по моим группам', 'Кто в зоне риска?'],
-  admin: ['Сводка по системе'],
-}
-const chips = computed(() => SUGGESTIONS[auth.role] || SUGGESTIONS.student)
+// Быстрые команды под роль — ТОЧНО как в десктопе (vector/faq.py::QUICK_COMMANDS).
+const cmds = computed(() => QUICK_COMMANDS[auth.role] || QUICK_COMMANDS.student)
 const sprite = computed(() => chatEmote(state.value, lastMood.value, lastIntent.value))
 const label = computed(() => ({
   greeting: 'Привет!', thinking: 'Думаю…', speaking: 'Отвечаю', idle: 'Готов помочь',
@@ -84,9 +80,19 @@ function ask(text) { showQuick.value = false; input.value = text; send() }
        Десктоп (lg): чат слева, а Вектор — СПРАВА отдельной колонкой, огромный, во всю
        высоту (от верхней панели до низа), как ИИ-компаньон в Grok. Порядок в DOM: чат,
        потом маскот; на мобиле order переносит маскот наверх. -->
-  <div class="flex h-[calc(100dvh-8rem)] flex-col gap-2 sm:h-[calc(100dvh-9.5rem)] lg:grid lg:h-[calc(100vh-11rem)] lg:grid-cols-[1fr_minmax(360px,38vw)] lg:gap-6">
-    <!-- Чат (на мобиле снизу, на десктопе слева) -->
-    <div class="order-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card lg:order-1 lg:h-full">
+  <div class="flex h-[calc(100dvh-8rem)] flex-col gap-2 sm:h-[calc(100dvh-9.5rem)] lg:grid lg:h-[calc(100vh-11rem)] lg:grid-cols-[minmax(300px,26vw)_1fr] lg:gap-6">
+    <!-- Вектор: на мобиле — крупный сверху; на десктопе — слева отдельной колонкой,
+         крупный (явная высота 62vh — с h-full картинка схлопывалась в ноль). -->
+    <div class="relative flex shrink-0 items-end justify-center lg:h-full lg:items-center">
+      <Mascot :sprite="sprite" class="h-[46vh] w-[40vh] max-w-[86vw] sm:h-[50vh] sm:w-[42vh] lg:h-[62vh] lg:w-full lg:max-w-none" />
+      <span class="absolute bottom-1 inline-flex items-center gap-2 rounded-full bg-accent-glow px-3 py-1 text-sm font-medium text-accent shadow-card lg:bottom-4">
+        <span class="size-1.5 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
+        {{ label }}
+      </span>
+    </div>
+
+    <!-- Чат (на мобиле снизу, на десктопе справа) -->
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card lg:h-full">
       <div ref="scroller" class="flex-1 space-y-4 overflow-y-auto p-5">
         <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.role === 'user' ? 'justify-end' : ''">
           <div class="max-w-[80%] rounded-lg px-4 py-2.5 text-sm"
@@ -101,13 +107,13 @@ function ask(text) { showQuick.value = false; input.value = text; send() }
            в десктопе): нажал кнопку → выехали вопросы → тапнул → Вектор сразу отвечает. -->
       <div class="relative border-t border-border p-3">
         <transition name="pop">
-          <div v-if="showQuick && chips.length"
+          <div v-if="showQuick && cmds.length"
                class="absolute bottom-full left-3 right-3 mb-2 rounded-lg border border-border2 bg-card p-2 shadow-card">
-            <p class="px-1 pb-1 text-xs font-semibold text-text3">Быстрые вопросы</p>
-            <div class="flex flex-col gap-1">
-              <button v-for="c in chips" :key="c" type="button" @click="ask(c)"
-                      class="rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-accent-glow hover:text-accent">
-                {{ c }}
+            <p class="px-1 pb-1 text-xs font-semibold text-text3">Быстрые команды</p>
+            <div class="flex flex-col gap-0.5">
+              <button v-for="c in cmds" :key="c.label" type="button" @click="ask(c.q)"
+                      class="flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-accent-glow hover:text-accent">
+                <component :is="c.icon" class="size-4 shrink-0 text-accent" />{{ c.label }}
               </button>
             </div>
           </div>
