@@ -256,12 +256,27 @@ _LEGACY_SUPPORTED = ("sha256", "sha512")   #старые одноэтапные 
 
 
 def _openssl_gost_name():
-    """Имя Стрибог-512 в OpenSSL, если GOST-engine доступен (бой), иначе None."""
-    avail = hashlib.algorithms_available
+    """Имя доступного ГОСТ-дайджеста в OpenSSL (движок/провайдер) или None.
+
+    ВАЖНО: проверяем через hashlib.new(), а НЕ по algorithms_available. На OpenSSL 3.0
+    дайджесты gost-провайдера доступны для new()/pbkdf2_hmac, но в algorithms_available
+    НЕ попадают (там только дефолт-провайдер) — иначе gost-engine «не виден» и хеш идёт
+    медленным pure-Python'ом. Результат кэшируем (бэкенд не меняется в процессе)."""
+    global _gost_name_cache
+    if _gost_name_cache is not False:
+        return _gost_name_cache
+    _gost_name_cache = None
     for n in _OPENSSL_GOST_NAMES:
-        if n in avail:
-            return n
-    return None
+        try:
+            hashlib.new(n)
+            _gost_name_cache = n
+            break
+        except Exception:
+            continue
+    return _gost_name_cache
+
+
+_gost_name_cache = False   #False = ещё не определяли; None/строка — результат детекции
 
 
 def _gost_pbkdf2(password: bytes, salt: bytes, iters: int) -> bytes:

@@ -28,11 +28,29 @@ _LEGACY_SUPPORTED = ("sha256", "sha512")   #старые одноэтапные 
 
 
 def _openssl_gost_name():
-    avail = hashlib.algorithms_available
+    """Имя доступного ГОСТ-дайджеста в OpenSSL (движок/провайдер) или None.
+
+    ВАЖНО: проверяем через hashlib.new(), а НЕ по algorithms_available. На OpenSSL 3.0
+    (Ubuntu 24.04) дайджесты от gost-провайдера доступны для new()/pbkdf2_hmac, но в
+    набор algorithms_available НЕ попадают (там только дайджесты дефолт-провайдера) —
+    из-за этого прежняя проверка «n in algorithms_available» не находила ГОСТ, и хеш
+    считался медленным pure-Python'ом даже при установленном gost-engine. Результат
+    кэшируем: бэкенд не меняется в течение процесса."""
+    global _gost_name_cache
+    if _gost_name_cache is not False:
+        return _gost_name_cache
+    _gost_name_cache = None
     for n in _OPENSSL_GOST_NAMES:
-        if n in avail:
-            return n
-    return None
+        try:
+            hashlib.new(n)
+            _gost_name_cache = n
+            break
+        except Exception:
+            continue
+    return _gost_name_cache
+
+
+_gost_name_cache = False   #False = ещё не определяли; None/строка — результат детекции
 
 
 def _gost_pbkdf2(password: bytes, salt: bytes, iters: int) -> bytes:
