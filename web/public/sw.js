@@ -9,7 +9,7 @@
  *   • Статика (/assets/* с хэшем в имени) — cache-first: файлы неизменяемы, берём из
  *     кэша мгновенно, чего нет — догружаем и кладём.
  */
-const VERSION = 'gb-v1'
+const VERSION = 'gb-v2'   // bump очищает старый (возможно «отравленный» HTML-заглушкой) кэш
 const SHELL = `${VERSION}-shell`
 const ASSETS = `${VERSION}-assets`
 const APP_SHELL = ['/', '/index.html', '/favicon.svg', '/manifest.webmanifest']
@@ -54,10 +54,10 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Статика (хэшированные /assets/*) — cache-first.
-  event.respondWith(
-    caches.match(request).then(
-      (hit) =>
+  // Хешированные ассеты (/assets/*) — cache-first: имена уникальны, безопасно.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(request).then((hit) =>
         hit ||
         fetch(request).then((resp) => {
           if (resp.ok && resp.type === 'basic') {
@@ -66,6 +66,24 @@ self.addEventListener('fetch', (event) => {
           }
           return resp
         })
+      )
     )
+    return
+  }
+
+  // Прочая статика (картинки маскота, иконки) — NETWORK-FIRST. В кэш кладём ТОЛЬКО
+  // успешный НЕ-HTML ответ (картинку), никогда HTML-заглушку SPA-фолбэка — иначе кэш
+  // «отравляется» и вместо PNG отдаётся страница → битая картинка. Офлайн — из кэша.
+  event.respondWith(
+    fetch(request)
+      .then((resp) => {
+        const ct = resp.headers.get('content-type') || ''
+        if (resp.ok && resp.type === 'basic' && !ct.includes('text/html')) {
+          const copy = resp.clone()
+          caches.open(ASSETS).then((c) => c.put(request, copy))
+        }
+        return resp
+      })
+      .catch(() => caches.match(request))
   )
 })
