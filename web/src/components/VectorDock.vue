@@ -25,10 +25,10 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
 </script>
 
 <template>
-  <aside class="flex h-full w-80 shrink-0 flex-col border-l border-border bg-card">
-    <!-- Аватар Вектора сверху -->
+  <aside class="flex h-full w-96 shrink-0 flex-col border-l border-border bg-card">
+    <!-- Аватар Вектора сверху — крупный, чтобы был заметен -->
     <div class="flex shrink-0 flex-col items-center border-b border-border pb-2 pt-3">
-      <Mascot :sprite="sprite" class="h-44 w-40" />
+      <Mascot :sprite="sprite" class="h-80 w-72" />
       <span class="inline-flex items-center gap-2 rounded-full bg-accent-glow px-3 py-1 text-xs font-medium text-accent">
         <span class="size-1.5 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
         {{ label }}
