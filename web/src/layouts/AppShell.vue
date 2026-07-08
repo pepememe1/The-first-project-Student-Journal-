@@ -5,12 +5,15 @@
 // сайдбар выезжает поверх как drawer.
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
 import HeaderBar from '@/components/HeaderBar.vue'
 import VectorDock from '@/components/VectorDock.vue'
 import { useThemeStore } from '@/stores/theme'
+import { useVectorStore } from '@/stores/vector'
 
 const theme = useThemeStore()
+const vector = useVectorStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
@@ -59,11 +62,19 @@ onMounted(() => theme.loadFromPrefs())
       </main>
 
       <!-- Постоянный боковой Вектор (десктоп): справа поверх всех страниц, кроме вкладки
-           «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). -->
-      <div v-if="showDock" class="hidden lg:block">
+           «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). Можно скрыть. -->
+      <div v-if="showDock && !vector.collapsed" class="hidden lg:block">
         <VectorDock />
       </div>
     </div>
+
+    <!-- Панель скрыта → вкладка-возврат у правого края (десктоп). -->
+    <button v-if="showDock && vector.collapsed" @click="vector.setCollapsed(false)"
+            aria-label="Показать панель Вектора" title="Показать Вектора"
+            class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-border bg-card py-3 pl-2.5 pr-2 text-accent shadow-card transition-colors hover:bg-accent-glow lg:flex">
+      <PanelRightOpen class="size-5" />
+      <span class="text-xs font-semibold" style="writing-mode: vertical-rl; transform: rotate(180deg)">Вектор</span>
+    </button>
   </div>
 </template>
 

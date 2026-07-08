@@ -4,7 +4,7 @@
 // vector). Показывается на всех страницах, кроме самой вкладки ИИ (см. AppShell).
 import { ref, watch, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Send, LayoutGrid } from '@lucide/vue'
+import { Send, LayoutGrid, PanelRightClose } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
 import { useVectorStore } from '@/stores/vector'
 
@@ -25,7 +25,14 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
 </script>
 
 <template>
-  <aside class="flex h-full w-96 shrink-0 flex-col border-l border-border bg-card">
+  <aside class="relative flex h-full w-96 shrink-0 flex-col border-l border-border bg-card">
+    <!-- Кнопка «скрыть панель» (в углу) -->
+    <button type="button" @click="vector.setCollapsed(true)" aria-label="Скрыть панель Вектора"
+            title="Скрыть панель"
+            class="absolute right-2 top-2 z-10 grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-text">
+      <PanelRightClose class="size-4" />
+    </button>
+
     <!-- Аватар Вектора сверху — крупный, чтобы был заметен -->
     <div class="flex shrink-0 flex-col items-center border-b border-border pb-2 pt-3">
       <Mascot :sprite="sprite" class="h-80 w-72" />

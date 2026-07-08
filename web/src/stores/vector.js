@@ -22,6 +22,13 @@ export const useVectorStore = defineStore('vector', () => {
   const state = ref('greeting')      // greeting | idle | thinking | speaking
   const lastMood = ref('neutral')
   const lastIntent = ref('help')
+  // Свёрнут ли боковой док (пользователь может спрятать панель). Запоминаем в localStorage,
+  // чтобы состояние держалось между страницами и перезапусками.
+  const collapsed = ref(localStorage.getItem('gb.vectorDock') === 'hidden')
+  function setCollapsed(v) {
+    collapsed.value = !!v
+    try { localStorage.setItem('gb.vectorDock', v ? 'hidden' : 'shown') } catch { /* приватный режим */ }
+  }
   // Счётчик отправленных — компоненты по нему скроллят свой чат вниз (у каждого свой контейнер).
   const tick = ref(0)
 
@@ -69,5 +76,6 @@ export const useVectorStore = defineStore('vector', () => {
   }
   function ask(q) { send(q) }
 
-  return { messages, input, state, lastMood, lastIntent, tick, sprite, label, cmds, send, ask, greetSettle }
+  return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
+           sprite, label, cmds, send, ask, greetSettle }
 })
