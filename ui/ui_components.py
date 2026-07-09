@@ -125,11 +125,12 @@ class HeaderBar(QFrame):
         #Индикатор связи с сервером (онлайн/офлайн). Обновляется из фонового синка через
         #сигнал (main_window._on_sync_state → set_online). По умолчанию скрыт, пока синк
         #не определил состояние — не пугаем пользователя «офлайн» до первой попытки.
+        #Чистый вид: маленький цветной кружок + короткое слово (без эмодзи и длинной фразы).
         self._online_lbl = QLabel("")
+        self._online_lbl.setTextFormat(Qt.RichText)
         self._online_lbl.setStyleSheet(
-            "color:#EAF6F8;font-size:11px;font-weight:600;"
-            "background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.4);"
-            "border-radius:100px;padding:3px 10px;")
+            "color:rgba(255,255,255,0.92);font-size:11px;font-weight:600;"
+            "background:rgba(255,255,255,0.12);border-radius:100px;padding:3px 11px;")
         self._online_lbl.hide()
         lay.addWidget(self._online_lbl)
 
@@ -140,9 +141,9 @@ class HeaderBar(QFrame):
             "background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.5);"
             "color:#FFFFFF;border-radius:100px;padding:3px 10px;font-size:11px;"
         )
-        #ФИО может быть длинным — эллипсис по ширине + полное имя в подсказке,
-        #чтобы верхняя панель не «разъезжалась» на длинных ФИО.
-        self.user_lbl   = ElidingLabel("", 13, "#EAF6F8", max_width=360)
+        #ФИО может быть длинным — эллипсис по ширине + полное имя в подсказке. Ширину
+        #держим умеренной (220), чтобы на узком окне не выталкивало кнопку «Выйти» за край.
+        self.user_lbl   = ElidingLabel("", 13, "#EAF6F8", max_width=220)
         lay.addWidget(self.role_badge)
         lay.addWidget(self.user_lbl)
 
@@ -162,16 +163,16 @@ class HeaderBar(QFrame):
         lay.addWidget(logout)
 
     def set_online(self, online: bool):
-        """Показать состояние связи с сервером: 🟢 онлайн (данные синхронизируются) или
-        🔴 офлайн (работаем локально, синк возобновится сам). Вызывается из UI-потока."""
-        if online:
-            self._online_lbl.setText("🟢 Онлайн")
-        else:
-            self._online_lbl.setText("🔴 Офлайн — работаем локально")
+        """Показать состояние связи с сервером: маленький цветной кружок + короткое слово.
+        Подробности — в подсказке. Вызывается из UI-потока."""
+        dot = "#3ddc84" if online else "#ff8a8a"
+        word = "Онлайн" if online else "Офлайн"
+        self._online_lbl.setText(
+            f'<span style="font-size:14px;color:{dot}">&#9679;</span>&nbsp;{word}')
         self._online_lbl.setToolTip(
             "Данные синхронизируются с сервером колледжа." if online else
-            "Нет связи с сервером. Все изменения сохраняются локально и уйдут на "
-            "сервер автоматически, как только связь восстановится.")
+            "Нет связи с сервером. Изменения сохраняются локально и уйдут на сервер "
+            "автоматически, как только связь восстановится.")
         self._online_lbl.show()
 
     def set_role(self, role_text, user_text):
@@ -193,10 +194,13 @@ class HeaderBar(QFrame):
         """Перекрасить верхнюю полосу в цвет активной темы. Шапка создаётся один раз
         (не пересобирается с дашбордом), поэтому при смене темы её обновляем явно —
         отсюда, читая текущий C['green']/C['green2']."""
+        #Диагональный градиент акцента (мягче и «премиальнее», чем ровный горизонтальный)
+        #+ тонкая полупрозрачная тёмная граница снизу вместо резкой линии green2 — так фон
+        #шапки не «обрывается тупо», а плавно отделяется от контента.
         self.setStyleSheet(
-            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 {C['green']}, stop:1 {C['green2']});"
-            f"border-bottom:1px solid {C['green2']};}}"
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            f"stop:0 {C['green']}, stop:0.55 {C['green']}, stop:1 {C['green2']});"
+            "border-bottom:1px solid rgba(0,0,0,0.12);}"
         )
 
 

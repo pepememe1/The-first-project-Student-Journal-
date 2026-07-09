@@ -301,10 +301,13 @@ class TeacherDashboard(QWidget):
                     cb.currentTextChanged.connect(lambda v, st=s, le=l, rk=rk_full, ri_=ri: self._set_exam_val(st, le, rk, v, ri_))
                     self.t_table.setCellWidget(r, col, cb)
         self.t_table.blockSignals(False)
-        self.t_table.resizeColumnsToContents()
+        self.t_table.resizeColumnsToContents()   #ширины по содержимому (столбцы 0,1 — под ФИО)
         hh = self.t_table.horizontalHeader()
         hh.setMinimumSectionSize(110); hh.setDefaultAlignment(Qt.AlignCenter)
-        self.t_table.setColumnWidth(0, 160); self.t_table.setColumnWidth(1, 120)
+        #Фамилия/Имя: НЕ фиксируем жёстко (иначе длинные ФИО обрезались) — берём ширину по
+        #содержимому, но не меньше комфортного минимума. Так все ФИО влезают целиком.
+        self.t_table.setColumnWidth(0, max(self.t_table.columnWidth(0) + 16, 160))
+        self.t_table.setColumnWidth(1, max(self.t_table.columnWidth(1) + 16, 120))
         for c in range(2, self.t_table.columnCount()):
             self.t_table.setColumnWidth(c, max(self.t_table.columnWidth(c), 112))
 
