@@ -7,13 +7,39 @@ db.py — Подключение к базе (SQLAlchemy).
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-from .config import DATABASE_URL
+from .config import DATABASE_URL, DB_KEY
 
 _IS_SQLITE = DATABASE_URL.startswith("sqlite")
 #Для SQLite нужен check_same_thread=False (FastAPI работает в нескольких потоках).
 _connect_args = {"check_same_thread": False} if _IS_SQLITE else {}
 
-engine = create_engine(DATABASE_URL, connect_args=_connect_args, pool_pre_ping=True)
+
+def _build_engine():
+    """Движок БД. Если задан GRADEBOOK_DB_KEY и доступен драйвер sqlcipher3 — поднимаем
+    движок поверх SQLCipher: файл БД шифруется ЦЕЛИКОМ (AES-256), ПДн at rest (152-ФЗ).
+    Ключ (64 hex, raw 256-bit) задаётся PRAGMA key ПЕРВОЙ операцией КАЖДОГО соединения.
+    Нет ключа/драйвера (напр. Windows-dev, CI без ключа) → обычный SQLite: схема id и
+    тесты не меняются. Ключ БД нигде не логируем."""
+    if _IS_SQLITE and DB_KEY:
+        try:
+            import sqlcipher3
+        except ImportError:
+            print("[db] GRADEBOOK_DB_KEY задан, но драйвер sqlcipher3 не установлен "
+                  "(на Windows-dev это нормально) — БД работает БЕЗ шифрования файла.")
+        else:
+            path = DATABASE_URL.split("sqlite:///", 1)[-1]
+
+            def _creator():
+                conn = sqlcipher3.connect(path, check_same_thread=False)
+                conn.execute("PRAGMA key = \"x'%s'\"" % DB_KEY)   # ДО любых других операций
+                return conn
+
+            print("[db] Файл БД шифруется (SQLCipher, AES-256).")
+            return create_engine("sqlite://", creator=_creator, pool_pre_ping=True)
+    return create_engine(DATABASE_URL, connect_args=_connect_args, pool_pre_ping=True)
+
+
+engine = _build_engine()
 
 
 if _IS_SQLITE:

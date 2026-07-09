@@ -31,6 +31,12 @@ _load_dotenv()
 #Разработка — SQLite рядом с проектом; боевой сервер — PostgreSQL (см. .env).
 DATABASE_URL = os.environ.get("GRADEBOOK_DB_URL", "sqlite:///./gradebook_server.db")
 
+#Шифрование ФАЙЛА БД при хранении (SQLCipher, AES-256) — ПДн at rest (152-ФЗ). Ключ —
+#64 hex (32 байта), хранится в server/.env (chmod 600), НЕ в git. Задан + драйвер
+#sqlcipher3 установлен → файл БД шифруется целиком, приложение работает как обычно
+#(схема id не меняется). Пусто/нет драйвера → обычный SQLite (dev/Windows). См. db.py.
+DB_KEY = os.environ.get("GRADEBOOK_DB_KEY", "").strip()
+
 #Секрет подписи JWT. На бою ОБЯЗАТЕЛЬНО переопределить длинной случайной строкой.
 JWT_SECRET = os.environ.get("GRADEBOOK_JWT_SECRET", "dev-secret-change-me")
 JWT_ALG = "HS256"

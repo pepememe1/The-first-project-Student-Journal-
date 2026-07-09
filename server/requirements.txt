@@ -16,3 +16,7 @@ gostcrypto>=1.2.5
 openpyxl>=3.1        # экспорт журнала в xlsx с сайта (/web/teacher/journal.xlsx)
 webauthn>=2.0        # passkeys — вход по Face ID/отпечатку без пароля (/auth/webauthn/*)
 gigachat>=0.1        # LLM-озвучка Вектора (GigaChat, РФ-облако; VPS в РФ → работает)
+# Шифрование файла БД (SQLCipher, AES-256) — ПДн at rest / 152-ФЗ. Только Linux: на
+# Windows готового wheel нет, там БД без шифрования файла (dev). Включается ключом
+# GRADEBOOK_DB_KEY (см. db.py). Миграция plaintext→encrypted — server/encrypt_db.py.
+sqlcipher3-binary>=0.5; sys_platform == "linux"
