@@ -37,6 +37,7 @@ class VectorScope:
     student_f: str = ""                   #для роли student — своя фамилия
     student_n: str = ""                   #для роли student — своё имя
     db_path: str = DEFAULT_DB
+    teacher_groups: List[str] = field(default_factory=list)  #для роли teacher — его группы
 
 
 @dataclass
@@ -342,14 +343,19 @@ def intent_groups(scope: VectorScope, asked_name: str = "") -> Facts:
         groups = []
     if scope.role == "teacher":
         cur = scope.group
+        extra = f" Сейчас открыта группа {cur}." if cur else ""
+        #Преподаватель видит ТОЛЬКО свои группы (из назначений предмет→группа), а не
+        #весь список колледжа — им распоряжается администрация.
+        my = [g for g in (scope.teacher_groups or []) if g]
+        if my:
+            word = "группа" if len(my) == 1 else "группы"
+            return Facts("groups", f"Твои {word} ({len(my)}): {', '.join(my)}.{extra}")
+        #Назначений нет — покажем хотя бы открытую сейчас.
         if cur:
-            extra = f" Сейчас открыта группа {cur}."
-        else:
-            extra = ""
-        if groups:
-            return Facts("groups", f"Группы в системе ({len(groups)}): "
-                                   f"{', '.join(groups)}.{extra}")
-        return Facts("groups", f"Открытая группа: {cur or '—'}.{extra}")
+            return Facts("groups", f"Открытая группа: {cur}. "
+                                   f"Полный список групп ведёт администрация.")
+        return Facts("groups", "За тобой пока не закреплено ни одной группы — "
+                               "это настраивает администратор.")
     # admin
     if not groups:
         return Facts("groups", "Групп в системе пока нет — добавьте их во вкладке «Группы».")

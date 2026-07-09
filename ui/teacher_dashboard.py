@@ -86,9 +86,14 @@ class TeacherDashboard(QWidget):
             _cfg0 = _gs()._config()
         except Exception:
             _cfg0 = {}
+        #Свои группы преподавателя — из назначений предмет→группа (а не весь колледж),
+        #чтобы Вектор на вопрос «какие у меня группы» отвечал по этому списку.
+        ga = self.teacher_data.get("group_assignments", {}) or {}
+        my_groups = sorted({g for g in ga.values() if g})
         eng = VectorEngine(VectorScope(
             role="teacher", group=self._group_combo.currentText(),
-            subject=self._subj_combo.currentText() or None), get_provider(_cfg0))
+            subject=self._subj_combo.currentText() or None,
+            teacher_groups=my_groups), get_provider(_cfg0))
         self.vector_engine = eng
         self.vector_session = VectorSession(eng)
         return self.vector_session

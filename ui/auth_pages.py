@@ -787,7 +787,17 @@ class LoginPage(QWidget):
             self._brand.move(24, 18)
         if getattr(self, "_footer", None) is not None:
             self._footer.adjustSize()
-            self._footer.move((self.width() - self._footer.width()) // 2,
+            #Футер центрируем под КАРТОЧКОЙ входа, а не под окном: слева от карточки
+            #стоит Вектор, справа — геройский блок, поэтому центр окна ≠ центр карточки.
+            card = getattr(self, "_login_card", None)
+            try:
+                if card is not None and card.width() > 0:
+                    cx = card.mapTo(self, QPoint(0, 0)).x() + card.width() // 2
+                else:
+                    cx = self.width() // 2
+            except RuntimeError:
+                cx = self.width() // 2
+            self._footer.move(cx - self._footer.width() // 2,
                               self.height() - self._footer.height() - 14)
 
     def _show_err(self, msg):
