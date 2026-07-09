@@ -91,7 +91,10 @@ export const useThemeStore = defineStore('theme', () => {
 
   async function pushPrefs() {
     try {
-      await api.post('/me/prefs', { theme: JSON.stringify(spec.value) })
+      // ВАЖНО: тему шлём ОБЪЕКТОМ, как десктоп (`push_my_prefs({"theme": spec})`), а не
+      // JSON-строкой — иначе поле prefs.theme несовместимо между вебом и десктопом и тема
+      // не «роумится» между устройствами. prefs — JSON-колонка, объект хранится нативно.
+      await api.post('/me/prefs', { theme: spec.value })
     } catch {
       // офлайн/не залогинен — не страшно, локальная тема уже применена
     }
@@ -101,8 +104,10 @@ export const useThemeStore = defineStore('theme', () => {
   async function loadFromPrefs() {
     try {
       const { data } = await api.get('/me/prefs')
-      const t = data?.prefs?.theme
-      if (t) set(t, { roam: false })
+      let t = data?.prefs?.theme
+      // Старые записи веба хранились строкой — разбираем; десктоп пишет объект напрямую.
+      if (typeof t === 'string') { try { t = JSON.parse(t) } catch { t = null } }
+      if (t && typeof t === 'object') set(t, { roam: false })
     } catch {
       // нет доступа/офлайн — остаёмся на локальной теме
     }
