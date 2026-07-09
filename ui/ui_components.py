@@ -134,16 +134,17 @@ class HeaderBar(QFrame):
         self._online_lbl.hide()
         lay.addWidget(self._online_lbl)
 
-        #User info
+        #User info. Бейдж роли — ТОТ ЖЕ тонкий стиль, что и индикатор онлайн (без яркой
+        #обводки/подсветки), чтобы элементы шапки выглядели единообразно, а не «кто в лес».
         from widgets import badge
         self.role_badge = badge("", "green")
         self.role_badge.setStyleSheet(
-            "background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.5);"
-            "color:#FFFFFF;border-radius:100px;padding:3px 10px;font-size:11px;"
+            "background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.92);"
+            "border-radius:100px;padding:3px 11px;font-size:11px;font-weight:600;"
         )
-        #ФИО может быть длинным — эллипсис по ширине + полное имя в подсказке. Ширину
-        #держим умеренной (220), чтобы на узком окне не выталкивало кнопку «Выйти» за край.
-        self.user_lbl   = ElidingLabel("", 13, "#EAF6F8", max_width=220)
+        #ФИО — эллипсис по ширине + полное имя в подсказке. Ширину даём щедрую (420): шапка
+        #на весь экран, места справа много, и длинные ФИО должны влезать целиком, а не «…».
+        self.user_lbl   = ElidingLabel("", 13, "#FFFFFF", max_width=420)
         lay.addWidget(self.role_badge)
         lay.addWidget(self.user_lbl)
 
@@ -194,13 +195,11 @@ class HeaderBar(QFrame):
         """Перекрасить верхнюю полосу в цвет активной темы. Шапка создаётся один раз
         (не пересобирается с дашбордом), поэтому при смене темы её обновляем явно —
         отсюда, читая текущий C['green']/C['green2']."""
-        #Диагональный градиент акцента (мягче и «премиальнее», чем ровный горизонтальный)
-        #+ тонкая полупрозрачная тёмная граница снизу вместо резкой линии green2 — так фон
-        #шапки не «обрывается тупо», а плавно отделяется от контента.
+        #СПЛОШНОЙ акцентный фон (без градиента): горизонтальный градиент green→green2 давал
+        #резкую видимую полосу-«обрыв» на широкой шапке (акцент и акцент2 — разные оттенки).
+        #Ровный цвет + тонкая полупрозрачная тёмная граница снизу выглядит чисто и не рябит.
         self.setStyleSheet(
-            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            f"stop:0 {C['green']}, stop:0.55 {C['green']}, stop:1 {C['green2']});"
-            "border-bottom:1px solid rgba(0,0,0,0.12);}"
+            f"QFrame{{background:{C['green']};border-bottom:1px solid rgba(0,0,0,0.14);}}"
         )
 
 
