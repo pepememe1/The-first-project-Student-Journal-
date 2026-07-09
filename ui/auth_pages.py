@@ -806,28 +806,44 @@ class LoginPage(QWidget):
         from data_store import get_store, AccountLocked
         store = get_store()
 
-        #Свежий ПК (у друга / новая установка): локальных данных ещё нет. Прежде
-        #чем проверять вход, пробуем залогиниться на сервер этими же кредами и
-        #подтянуть данные — иначе войти было бы нечем (нет ни пользователей, ни
-        #пароля админа). Офлайн / неверные креды — тихо пропускаем.
-        self._online_bootstrap(login, pw)
+        def _local():
+            return store.authenticate(login, pw)
 
-        #Первый запуск на хост-ПК: пароль администратора не задан НИГДЕ (и
-        #локально, и не подтянулся с сервера выше). Просим задать его.
-        if login == store.get_admin_login() and not store.has_admin_password():
-            self._prompt_admin_setup(store)
-            return
-
+        #1) БЫСТРЫЙ путь — ЛОКАЛЬНАЯ проверка БЕЗ СЕТИ (возвращающийся пользователь).
+        #authenticate при успехе сам запускает фоновый синк, поэтому свежие данные
+        #подтянутся В ФОНЕ — UI не ждёт. Раньше ПЕРЕД проверкой стоял синхронный
+        #_online_bootstrap (health 3с + login + полный pull) на UI-потоке → вход висел
+        #7-10с и прога не отвечала. Теперь сеть трогаем ТОЛЬКО если локально не вышло.
         try:
-            res = store.authenticate(login, pw)
+            res = _local()
         except AccountLocked as e:
-            mins = e.seconds // 60 + 1
-            self._show_err(f"Слишком много неверных попыток. "
-                           f"Повторите через {mins} мин.")
+            self._show_err("Слишком много неверных попыток. "
+                           f"Повторите через {e.seconds // 60 + 1} мин.")
             return
         except Exception as e:
             self._show_err(f"Ошибка входа: {e}")
             return
+
+        #2) Локально не вышло → возможно, ПЕРВЫЙ вход на этом ПК (данных/хеша ещё нет):
+        #только тут идём на сервер, тянем пользователей/хеш и пробуем снова. Плюс
+        #первичная установка пароля администратора (host-ПК, пароля нет нигде).
+        if not res:
+            from app_settings import get_api_url
+            if get_api_url():
+                self._online_bootstrap(login, pw)
+            if login == store.get_admin_login() and not store.has_admin_password():
+                self._prompt_admin_setup(store)
+                return
+            try:
+                res = _local()
+            except AccountLocked as e:
+                self._show_err("Слишком много неверных попыток. "
+                               f"Повторите через {e.seconds // 60 + 1} мин.")
+                return
+            except Exception as e:
+                self._show_err(f"Ошибка входа: {e}")
+                return
+
         if not res:
             self._show_err("Неверный логин или пароль")
             return
