@@ -13,7 +13,8 @@ web.py — READ-представления для веб-версии (SPA). В�
 import re
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
+                     UploadFile, File)
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -472,6 +473,40 @@ def vector_ask(payload: dict = Body(...),
     #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
     result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
     return result
+
+
+# ── Голосовой ввод (Speech-to-Text) — ЗАГОТОВКА, распознаёт на ХОСТЕ ────────────────
+@router.get("/vector/stt/status")
+def vector_stt_status(user: User = Depends(get_current_user)):
+    """Доступен ли голосовой ввод на сервере-хосте (стоит ли faster-whisper). По этому
+    флагу веб-клиент показывает/прячет кнопку микрофона."""
+    from .. import stt_service
+    return {"available": stt_service.is_available()}
+
+
+@router.post("/vector/stt")
+async def vector_stt(file: UploadFile = File(...),
+                     user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Принимает аудио (getUserMedia/MediaRecorder из браузера), распознаёт на ХОСТЕ и
+    возвращает текст. Клиент дальше сам решает: вопрос → /web/vector/ask, а команду
+    записи (для преподавателя) — через подтверждение (как в десктопе). Здесь только STT."""
+    from .. import stt_service
+    if not stt_service.is_available():
+        raise HTTPException(status_code=503,
+                            detail="Голосовой ввод не настроен на сервере.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Пустой аудиофайл.")
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Аудио слишком большое (макс 10 МБ).")
+    cfg = W.load_config(db)
+    res = stt_service.transcribe_bytes(
+        data, filename=file.filename or "audio.webm",
+        size=cfg.get("stt_model", "large-v3"), device=cfg.get("stt_device", "auto"))
+    if not res["ok"]:
+        raise HTTPException(status_code=500, detail=res["error"])
+    return {"text": res["text"]}
 
 
 def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:

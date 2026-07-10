@@ -853,6 +853,13 @@ class TeacherDashboard(QWidget):
             self._request_theme_rebuild()
 
         lay.addWidget(ThemeCustomizer(initial_spec=spec, on_save=_save))
+        #Выбор микрофона для голосового ввода (если стоят пакеты распознавания).
+        try:
+            from vector.voice_ui import MicSelectorWidget, mic_available
+            if mic_available():
+                lay.addWidget(MicSelectorWidget())
+        except Exception as e:
+            print(f"[profile] выбор микрофона недоступен: {e}")
         self.pages["profile"] = w; self.stack.addWidget(w)
 
     def _request_theme_rebuild(self):

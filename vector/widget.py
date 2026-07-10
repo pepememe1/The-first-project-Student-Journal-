@@ -417,7 +417,24 @@ class VectorPanel(QWidget):
             f"QPushButton:hover{{background:{C['green2']};}}")
         send.clicked.connect(self._send)
         self.send_btn = send
-        row.addWidget(self._cmd_btn); row.addWidget(self.inp); row.addWidget(send)
+
+        #Кнопка голосового ввода (микрофон). Показываем, только если админ ВКЛЮЧИЛ STT
+        #(config.stt_enabled — синхронизируется на все аккаунты) И на этой машине стоят
+        #пакеты распознавания (faster-whisper/sounddevice). Иначе мягко отсутствует.
+        self.mic_btn = None
+        try:
+            from .voice_ui import MicButton, mic_available
+            if self._stt_enabled() and mic_available():
+                self.mic_btn = MicButton(get_context=self._voice_context)
+                self.mic_btn.transcribed.connect(self._on_voice_text)
+                self.mic_btn.failed.connect(self._on_voice_failed)
+        except Exception as e:
+            print(f"[vector] голосовой ввод недоступен: {e}")
+
+        row.addWidget(self._cmd_btn); row.addWidget(self.inp)
+        if self.mic_btn is not None:
+            row.addWidget(self.mic_btn)
+        row.addWidget(send)
         lay.addLayout(row)
 
         #Всплывающее меню команд (скрыто; появляется при наведении на кнопку команд).
@@ -547,6 +564,52 @@ class VectorPanel(QWidget):
         #_append во всех панелях), поднимет thinking/answered. Так шторка и вкладка
         #остаются в одной переписке.
         self.session.ask(q)
+
+    #── Голосовой ввод ───────────────────────────────────────────────────────────────
+    def _stt_enabled(self) -> bool:
+        """Включён ли голосовой ввод админом (config.stt_enabled). По умолчанию — выкл."""
+        try:
+            from data_store import get_store
+            return bool((get_store()._config() or {}).get("stt_enabled", False))
+        except Exception:
+            return False
+
+    def _voice_context(self):
+        """Подсказка для Whisper: реальные ФИО студентов текущей группы + ключевые слова.
+        Повышает точность распознавания фамилий и терминов (важно юридически)."""
+        try:
+            from .voice_command import stt_context
+            from data_store import get_store
+            grp = getattr(self.engine.scope, "group", "") or ""
+            roster = []
+            if grp:
+                for s in (get_store().get_students() or []):
+                    if s.get("group", "") == grp:
+                        roster.append((s.get("surname", ""), s.get("name", "")))
+            return stt_context(roster)
+        except Exception:
+            return ""
+
+    def _on_voice_text(self, text: str):
+        """Распознанный текст → ролевой роутинг (вопрос в Q&A / команда препода → запись)."""
+        if self.session.is_busy():
+            return
+        try:
+            from .voice_ui import route_voice_text
+            route_voice_text(self, self.session, self.engine.scope, text,
+                             on_info=self._voice_info)
+        except Exception as e:
+            self._voice_info(f"🎙 Не удалось обработать голосовую команду: {e}")
+
+    def _on_voice_failed(self, msg: str):
+        self._voice_info("🎙 " + msg)
+
+    def _voice_info(self, msg: str):
+        """Служебное сообщение Вектора в чат (ошибки распознавания, итог записи)."""
+        try:
+            self.session.push_proactive(msg, mood="neutral", intent="help")
+        except Exception:
+            self._append("Вектор", msg)
 
     def _on_thinking(self):
         """Сессия отправила вопрос → маскот «думает», ввод блокируем."""

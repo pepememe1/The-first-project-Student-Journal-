@@ -321,6 +321,11 @@ class SyncManager:
                 return
             self._url = url
             if self._ensure_auth(url):
+                #Быстрая проверка доступности (health, таймаут 3с): если сервер молчит —
+                #НЕ вешаем закрытие программы полным push/pull (5+30с таймаут). Данные уже
+                #в локальной БД (offline-first) и уедут при следующем запуске.
+                if not self._client.health():
+                    return
                 import sync_engine
                 sync_engine.sync_once(self._client)
                 self._flush_pending_prefs()

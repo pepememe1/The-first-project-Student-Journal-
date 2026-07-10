@@ -71,6 +71,19 @@ def _get_checked(lw: QListWidget) -> list[str]:
             if lw.item(i).checkState() == Qt.Checked]
 
 
+#Курируемые модели Ollama по объёму видеопамяти (label, id). Пресеты для пикера в
+#настройках Вектора: подсказывают, что реально влезет в 6/8/12 ГБ VRAM. Русский язык
+#у qwen2.5 приличный — берём его основой.
+_OLLAMA_MODELS = [
+    ("qwen2.5:3b — 3B, ~2.5 ГБ VRAM (для 6 ГБ, рядом с Whisper)", "qwen2.5:3b"),
+    ("llama3.2:3b — 3B, ~2.5 ГБ VRAM", "llama3.2:3b"),
+    ("qwen2.5:7b-instruct — 7B, ~5 ГБ (умнее; для 8 ГБ или Whisper на CPU)", "qwen2.5:7b-instruct"),
+    ("llama3.1:8b — 8B, ~5 ГБ VRAM", "llama3.1:8b"),
+    ("gemma2:9b — 9B, ~6.5 ГБ (для 8-12 ГБ)", "gemma2:9b"),
+    ("qwen2.5:14b-instruct — 14B, ~9 ГБ (для 12 ГБ)", "qwen2.5:14b-instruct"),
+]
+
+
 class AdminDashboard(QWidget):
     def __init__(self, back_to_login_cb, parent=None):
         super().__init__(parent)
@@ -808,12 +821,53 @@ class AdminDashboard(QWidget):
         #ollama
         self._vec_local_box = QWidget(); lbx = QVBoxLayout(self._vec_local_box)
         lbx.setContentsMargins(0, 0, 0, 0); lbx.setSpacing(6)
-        lbx.addWidget(lbl("Модель ollama", 10, C['text3']))
+        lbx.addWidget(lbl("Модель ollama (выберите под видеопамять или впишите свою)", 10, C['text3']))
+        #Пресеты моделей по объёму VRAM. Выбор — подставляет id в поле ниже.
+        self._vec_local_presets = _QC()
+        for label_txt, mid in _OLLAMA_MODELS:
+            self._vec_local_presets.addItem(label_txt, mid)
+        self._vec_local_presets.currentIndexChanged.connect(
+            lambda *_: self._vec_local_model.setText(self._vec_local_presets.currentData()))
+        lbx.addWidget(self._vec_local_presets)
         self._vec_local_model = field_input("qwen2.5:3b")
         lbx.addWidget(self._vec_local_model)
-        lbx.addWidget(lbl("Нужен запущенный ollama на http://localhost:11434. "
-                          "Данные наружу не уходят вообще.", 10, C['text3']))
+        lbx.addWidget(lbl("Нужен запущенный ollama на http://localhost:11434 и скачанная "
+                          "модель (ollama pull …). Данные наружу не уходят вообще.", 10, C['text3']))
         vl.addWidget(self._vec_local_box)
+
+        #─── Голосовой ввод (Speech-to-Text, Whisper) ───────────────────────────────
+        stt_box = QWidget(); sbl = QVBoxLayout(stt_box)
+        sbl.setContentsMargins(0, 10, 0, 0); sbl.setSpacing(6)
+        sbl.addWidget(lbl("🎙 Голосовой ввод (распознавание речи)", 13, C['text']))
+        self._stt_enabled_cb = _QCB("Включить голосовой ввод — Вектор слушает микрофон "
+                                    "(во всех аккаунтах, пока не выключите)")
+        sbl.addWidget(self._stt_enabled_cb)
+        sbl.addWidget(lbl("Модель распознавания", 10, C['text3']))
+        self._stt_model = _QC()
+        self._stt_model.addItem("large-v3 — максимальная точность (~1.5 ГБ)", "large-v3")
+        self._stt_model.addItem("medium — баланс точность/скорость", "medium")
+        self._stt_model.addItem("small — быстрая, точность ниже", "small")
+        sbl.addWidget(self._stt_model)
+        sbl.addWidget(lbl("Устройство", 10, C['text3']))
+        self._stt_device = _QC()
+        self._stt_device.addItem("Авто (GPU если доступен, иначе CPU)", "auto")
+        self._stt_device.addItem("Только GPU (CUDA)", "cuda")
+        self._stt_device.addItem("Только процессор (CPU)", "cpu")
+        sbl.addWidget(self._stt_device)
+        self._stt_status = lbl("", 11, C['text3']); self._stt_status.setWordWrap(True)
+        sbl.addWidget(self._stt_status)
+        #Выбор микрофона (локальная настройка ПК администратора).
+        try:
+            from vector.voice_ui import MicSelectorWidget, mic_available as _mic_av
+            if _mic_av():
+                sbl.addWidget(MicSelectorWidget())
+        except Exception:
+            pass
+        sbl.addWidget(lbl("Распознавание идёт ЛОКАЛЬНО (аудио никуда не уходит, 152-ФЗ). "
+                          "Модель скачивается один раз при первом использовании. Команды "
+                          "преподавателя на оценку/пропуск всегда подтверждаются вручную.",
+                          10, C['text3']))
+        vl.addWidget(stt_box)
 
         vsave = btn("Сохранить настройки Вектора", "green", icon_name="save")
         vsave.clicked.connect(self._save_vector_cfg)
@@ -845,7 +899,28 @@ class AdminDashboard(QWidget):
         si = self._vec_giga_scope.findData(cfg.get("gigachat_scope", "GIGACHAT_API_PERS"))
         self._vec_giga_scope.setCurrentIndex(max(0, si))
         self._vec_local_model.setText(cfg.get("local_model", "qwen2.5:3b"))
+        #STT
+        self._stt_enabled_cb.setChecked(bool(cfg.get("stt_enabled", False)))
+        mi = self._stt_model.findData(cfg.get("stt_model", "large-v3"))
+        self._stt_model.setCurrentIndex(max(0, mi))
+        di = self._stt_device.findData(cfg.get("stt_device", "auto"))
+        self._stt_device.setCurrentIndex(max(0, di))
+        self._refresh_stt_status()
         self._toggle_vec_blocks()
+
+    def _refresh_stt_status(self):
+        """Показывает, установлен ли движок распознавания и какое устройство доступно."""
+        try:
+            from vector import voice_ui, stt
+            if not voice_ui.mic_available():
+                self._stt_status.setText("⚠ Пакеты распознавания не установлены на этом ПК "
+                                         "(faster-whisper / sounddevice) — кнопка микрофона "
+                                         "не появится, пока их не поставить.")
+                return
+            gpu = "GPU (CUDA)" if stt._cuda_ready() else "CPU"
+            self._stt_status.setText(f"✓ Движок установлен. Доступное устройство: {gpu}.")
+        except Exception as e:
+            self._stt_status.setText(f"Статус распознавания недоступен: {e}")
 
     def _save_vector_cfg(self):
         try:
@@ -856,6 +931,9 @@ class AdminDashboard(QWidget):
                 "gigachat_credentials": self._vec_giga_key.text().strip(),
                 "gigachat_scope": self._vec_giga_scope.currentData(),
                 "local_model": self._vec_local_model.text().strip() or "qwen2.5:3b",
+                "stt_enabled": self._stt_enabled_cb.isChecked(),
+                "stt_model": self._stt_model.currentData(),
+                "stt_device": self._stt_device.currentData(),
             })
             _kv_set("config", cfg)
             QMessageBox.information(

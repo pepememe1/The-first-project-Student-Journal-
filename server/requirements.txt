@@ -4,6 +4,7 @@
 # Установка:  pip install -r server/requirements.txt
 # ============================================================
 fastapi>=0.110          # веб-фреймворк API
+python-multipart>=0.0.9 # загрузка аудио для голосового ввода (/web/vector/stt)
 uvicorn[standard]>=0.29 # ASGI-сервер для запуска
 SQLAlchemy>=2.0         # ORM (PostgreSQL на сервере, SQLite для разработки)
 python-jose[cryptography]>=3.3   # JWT-токены
@@ -20,3 +21,7 @@ gigachat>=0.1        # LLM-озвучка Вектора (GigaChat, РФ-обл�
 # Windows готового wheel нет, там БД без шифрования файла (dev). Включается ключом
 # GRADEBOOK_DB_KEY (см. db.py). Миграция plaintext→encrypted — server/encrypt_db.py.
 sqlcipher3-binary>=0.5; sys_platform == "linux"
+# Голосовой ввод на ХОСТЕ (веб/телефон шлют аудио → сервер распознаёт локально).
+# ОПЦИОНАЛЬНО: без пакета эндпоинт /web/vector/stt отвечает 503, кнопка голоса на сайте
+# не показывается. Ставить на хосте с видеокартой (ПК ВСГУТУ). Модель — из конфига админа.
+# faster-whisper>=1.0
