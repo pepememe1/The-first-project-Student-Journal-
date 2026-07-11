@@ -171,8 +171,7 @@ def transcribe(samples, sample_rate: int = 16000, language: str = "ru",
         if 0 < peak < 0.9:
             audio = (audio / peak * 0.95).astype(np.float32)
 
-        segments, info = m.transcribe(
-            audio,
+        kw = dict(
             language=language,
             task="transcribe",
             beam_size=5,                       #точнее, чем greedy
@@ -182,6 +181,13 @@ def transcribe(samples, sample_rate: int = 16000, language: str = "ru",
             initial_prompt=context or None,
             temperature=[0.0, 0.2, 0.4],       #фолбэк-температуры при низкой уверенности
         )
+        #hotwords ДОПОЛНИТЕЛЬНО усиливают редкие имена (бурятские ФИО: Самбуева, Гындынова,
+        #Баянжаргал…) поверх initial_prompt. Есть не во всех версиях faster-whisper — при
+        #TypeError повторяем без него.
+        try:
+            segments, info = m.transcribe(audio, hotwords=context or None, **kw)
+        except TypeError:
+            segments, info = m.transcribe(audio, **kw)
         parts, logprobs = [], []
         for s in segments:
             parts.append(s.text)

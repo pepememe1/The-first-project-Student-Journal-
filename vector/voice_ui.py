@@ -21,7 +21,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer
 from PySide6.QtWidgets import (
     QToolButton, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-    QFrame,
+    QFrame, QScrollArea, QWidget, QLineEdit,
 )
 
 from . import stt, audio_capture, voice_command
@@ -324,6 +324,54 @@ def _refresh_teacher_journal():
         print(f"[voice] обновление журнала не удалось: {e}")
 
 
+_ACTION_LABEL = {"grade": "оценку", "present": "присутствие (✓)",
+                 "absent_n": "пропуск (Н)", "absent_b": "пропуск по болезни (Б)",
+                 "absent_o": "пропуск по уважительной (О)"}
+
+
+def _write_grades_batch(items, lesson_id: str) -> int:
+    """Пишет ПАКЕТ правок одной транзакцией + один раз будит синк и обновляет журнал
+    (быстрее, чем построчно). items — список WriteItem. Возвращает число записанных."""
+    ok = 0
+    try:
+        from core import DBManager
+        conn = DBManager.get_conn(); cur = conn.cursor()
+        for it in items:
+            try:
+                DBManager.upsert_grade(cur, (it.surname, it.name, lesson_id, it.value))
+                ok += 1
+            except Exception as e:
+                print(f"[voice] запись {it.who} не удалась: {e}")
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"[voice] пакетная запись не удалась: {e}")
+    try:
+        from sync_runner import trigger
+        trigger()
+    except Exception:
+        pass
+    _refresh_teacher_journal()
+    return ok
+
+
+def _create_lesson(group: str, subject: str, ltype: str, topic: str) -> bool:
+    """Создаёт занятие СЕГОДНЯ тем же путём, что кнопка «+ Занятие» в журнале."""
+    try:
+        from core import GradeBook
+        book = GradeBook(group, subject)
+        book.add_lesson(ltype, topic=topic, date=_today_str())   #save_to_db внутри
+        try:
+            from sync_runner import trigger
+            trigger()
+        except Exception:
+            pass
+        _refresh_teacher_journal()
+        return True
+    except Exception as e:
+        print(f"[voice] создание занятия не удалось: {e}")
+        return False
+
+
 #──────────────────────────────────────────────────────────────────────────────────
 # Диалог подтверждения записи (обязателен для преподавателя)
 #──────────────────────────────────────────────────────────────────────────────────
@@ -400,14 +448,220 @@ class ConfirmWriteDialog(QDialog):
 
 
 #──────────────────────────────────────────────────────────────────────────────────
+# Диалог подтверждения ПАКЕТА правок (несколько студентов / вся группа / первые N)
+#──────────────────────────────────────────────────────────────────────────────────
+class BatchConfirmDialog(QDialog):
+    """Показывает СПИСОК всех разобранных правок (кому что) + предупреждения (кого
+    пропустили). Пишем ТОЛЬКО после явного подтверждения. Массовое действие — поэтому
+    список виден целиком."""
+
+    def __init__(self, result, group: str, parent=None):
+        super().__init__(parent)
+        self.result = result
+        self.setWindowTitle("Подтверждение записи")
+        self.setMinimumWidth(460)
+        try:
+            from styles import C
+        except Exception:
+            C = {"text": "#111", "text3": "#666", "green": "#147C8B", "card": "#fff",
+                 "card2": "#eee", "border": "#ccc", "orange": "#c60", "red": "#d33"}
+        lay = QVBoxLayout(self); lay.setContentsMargins(18, 16, 18, 16); lay.setSpacing(10)
+
+        heard = QLabel(f"🎙 Распознано: «{result.heard}»")
+        heard.setWordWrap(True); heard.setStyleSheet(f"color:{C['text3']};font-size:12px;")
+        lay.addWidget(heard)
+
+        title = QLabel(f"Записать {len(result.items)} правк(и) за: {result.lesson_label}"
+                       f"  ·  группа {group}")
+        title.setWordWrap(True)
+        title.setStyleSheet(f"color:{C['text']};font-size:14px;font-weight:bold;")
+        lay.addWidget(title)
+
+        #Список правок (скролл — на случай всей группы).
+        box = QScrollArea(); box.setWidgetResizable(True); box.setMaximumHeight(280)
+        inner = QWidget(); il = QVBoxLayout(inner); il.setContentsMargins(6, 6, 6, 6); il.setSpacing(3)
+        for it in result.items:
+            row = QLabel(f"• {it.who} — {_ACTION_LABEL.get(it.action, it.action)} «{it.value}»")
+            row.setStyleSheet(f"color:{C['text']};font-size:13px;")
+            il.addWidget(row)
+        il.addStretch(1)
+        box.setWidget(inner)
+        box.setStyleSheet(f"QScrollArea{{border:1px solid {C.get('border','#ccc')};"
+                          f"border-radius:8px;background:{C.get('card2','#f4f4f4')};}}")
+        lay.addWidget(box)
+
+        #Предупреждения (кого пропустили) — не блокируют, но видны.
+        for w in (result.warnings or []):
+            wl = QLabel("⚠ " + w); wl.setWordWrap(True)
+            wl.setStyleSheet(f"color:{C.get('orange','#c60')};font-size:12px;")
+            lay.addWidget(wl)
+
+        btns = QHBoxLayout(); btns.addStretch(1)
+        cancel = QPushButton("Отмена"); cancel.clicked.connect(self.reject)
+        ok = QPushButton(f"Подтвердить и записать ({len(result.items)})")
+        ok.setStyleSheet(f"QPushButton{{background:{C['green']};color:#fff;border:none;"
+                         f"border-radius:8px;padding:8px 14px;font-weight:bold;}}")
+        ok.clicked.connect(self.accept)
+        btns.addWidget(cancel); btns.addWidget(ok)
+        lay.addLayout(btns)
+
+
+#──────────────────────────────────────────────────────────────────────────────────
+# Диалог создания занятия («создай сегодня лекцию по теме …»)
+#──────────────────────────────────────────────────────────────────────────────────
+class CreateLessonDialog(QDialog):
+    def __init__(self, plan, group: str, subject: str, today: str, parent=None):
+        super().__init__(parent)
+        self.plan = plan
+        self.setWindowTitle("Создать занятие")
+        self.setMinimumWidth(440)
+        try:
+            from styles import C
+        except Exception:
+            C = {"text": "#111", "text3": "#666", "green": "#147C8B", "card2": "#eee",
+                 "border": "#ccc"}
+        lay = QVBoxLayout(self); lay.setContentsMargins(18, 16, 18, 16); lay.setSpacing(10)
+        heard = QLabel(f"🎙 {plan.type} · сегодня {today} · {group} / {subject}")
+        heard.setWordWrap(True)
+        heard.setStyleSheet(f"color:{C['text']};font-size:14px;font-weight:bold;")
+        lay.addWidget(heard)
+        lay.addWidget(QLabel("Тема занятия (можно поправить):"))
+        self._topic = QLineEdit(plan.topic or "")
+        self._topic.setPlaceholderText("Тема занятия")
+        self._topic.setStyleSheet(f"border:1px solid {C.get('border','#ccc')};"
+                                  f"border-radius:6px;padding:7px;color:{C['text']};")
+        lay.addWidget(self._topic)
+        btns = QHBoxLayout(); btns.addStretch(1)
+        cancel = QPushButton("Отмена"); cancel.clicked.connect(self.reject)
+        ok = QPushButton("Создать занятие")
+        ok.setStyleSheet(f"QPushButton{{background:{C['green']};color:#fff;border:none;"
+                         f"border-radius:8px;padding:8px 14px;font-weight:bold;}}")
+        ok.clicked.connect(self.accept)
+        btns.addWidget(cancel); btns.addWidget(ok)
+        lay.addLayout(btns)
+
+    def topic(self) -> str:
+        return self._topic.text().strip()
+
+
+#──────────────────────────────────────────────────────────────────────────────────
+# Подсказки по функционалу и примеры команд (кнопка «?» у микрофона), по ролям
+#──────────────────────────────────────────────────────────────────────────────────
+VOICE_HELP = {
+    "student": [
+        ("Спросите голосом или текстом", [
+            "Какой у меня средний балл?",
+            "Есть ли у меня задолженности?",
+            "Сколько у меня пропусков?",
+            "Как у меня с успеваемостью?",
+            "Покажи моё расписание.",
+        ]),
+        ("Как пользоваться", [
+            "Нажмите 🎤, говорите чётко, нажмите ещё раз (стоп).",
+            "Микрофон выбирается в «Профиле».",
+            "Вектор отвечает по реальным данным журнала — не выдумывает.",
+        ]),
+    ],
+    "teacher": [
+        ("Вопросы (чтение)", [
+            "Какой средний балл группы?",
+            "Назови студентов группы.",
+            "Кто должники?",
+            "Какой средний балл у Иванова?",
+            "Сколько пропусков у Петрова?",
+        ]),
+        ("Оценки и посещаемость (с подтверждением)", [
+            "Иванову пять.",
+            "Иванову пять, Петрову четыре, Сидоровой три.",
+            "Иванову и Петрову по четыре.",
+            "Всей группе пять.",
+            "Первым десяти по списку четыре.",
+            "Петров болеет.  ·  Сидоров по уважительной.  ·  Иванов не пришёл.",
+        ]),
+        ("Занятия", [
+            "Создай сегодня лекцию по теме «Введение в модули».",
+            "Создай сегодня практику по теме «Циклы».",
+        ]),
+        ("Важно", [
+            "Любая запись сначала показывается на подтверждение — ничего не пишется молча.",
+            "При неоднозначности (два однофамильца, неясная оценка) Вектор переспросит.",
+            "Оценки ставятся за СЕГОДНЯШНЕЕ занятие текущей группы/предмета.",
+        ]),
+    ],
+    "admin": [
+        ("Спросите голосом или текстом", [
+            "Сколько студентов в системе?",
+            "Сколько преподавателей?",
+            "Сколько групп?",
+            "Дай сводку по заведению.",
+        ]),
+        ("Как пользоваться", [
+            "Нажмите 🎤, говорите, нажмите ещё раз (стоп).",
+            "Голосовой ввод включается в «Настройки ИИ».",
+        ]),
+    ],
+}
+
+
+class VoiceHelpPopup(QDialog):
+    """Подсказки и примеры голосовых команд для конкретной роли."""
+
+    def __init__(self, role: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Голосовой ввод — что можно сказать")
+        self.setMinimumWidth(460)
+        try:
+            from styles import C
+        except Exception:
+            C = {"text": "#111", "text3": "#666", "green": "#147C8B", "card2": "#eee",
+                 "border": "#ccc"}
+        lay = QVBoxLayout(self); lay.setContentsMargins(18, 16, 18, 16); lay.setSpacing(8)
+        head = QLabel("🎙 Примеры команд Вектора")
+        head.setStyleSheet(f"color:{C['text']};font-size:16px;font-weight:bold;")
+        lay.addWidget(head)
+
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setMaximumHeight(460)
+        inner = QWidget(); il = QVBoxLayout(inner); il.setContentsMargins(4, 4, 4, 4); il.setSpacing(6)
+        for section, examples in VOICE_HELP.get(role, VOICE_HELP["student"]):
+            sl = QLabel(section)
+            sl.setStyleSheet(f"color:{C['green']};font-size:13px;font-weight:bold;margin-top:6px;")
+            il.addWidget(sl)
+            for ex in examples:
+                el = QLabel("• " + ex); el.setWordWrap(True)
+                el.setStyleSheet(f"color:{C['text']};font-size:13px;")
+                il.addWidget(el)
+        il.addStretch(1)
+        scroll.setWidget(inner)
+        scroll.setStyleSheet(f"QScrollArea{{border:1px solid {C.get('border','#ccc')};"
+                             f"border-radius:8px;background:{C.get('card2','#f4f4f4')};}}")
+        lay.addWidget(scroll)
+
+        close = QPushButton("Понятно")
+        close.setStyleSheet(f"QPushButton{{background:{C['green']};color:#fff;border:none;"
+                            f"border-radius:8px;padding:8px 14px;font-weight:bold;}}")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout(); row.addStretch(1); row.addWidget(close)
+        lay.addLayout(row)
+
+
+def show_voice_help(role: str, parent=None):
+    VoiceHelpPopup(role, parent).exec()
+
+
+#──────────────────────────────────────────────────────────────────────────────────
 # Ролевой роутинг распознанного текста
 #──────────────────────────────────────────────────────────────────────────────────
-def route_voice_text(parent, session, scope, text: str,
-                     on_info=None):
+def _info(on_info, msg):
+    if on_info:
+        on_info(msg)
+
+
+def route_voice_text(parent, session, scope, text: str, on_info=None):
     """Куда направить распознанную фразу.
-      • Вопрос / не-команда / студент  → session.ask(text) (обычный Q&A Вектора).
-      • Команда препода (запись)        → parse → ДИАЛОГ подтверждения → запись.
-    on_info(msg) — колбэк для показа служебных сообщений в чате (ошибки разбора и т.п.).
+      • Студент/админ или ВОПРОС           → session.ask(text) (обычный Q&A Вектора).
+      • Препод, «создай … занятие»          → диалог создания → запись.
+      • Препод, ПАКЕТ простановок           → диалог со списком правок → запись всех.
+    on_info(msg) — колбэк для служебных сообщений в чате.
     """
     role = getattr(scope, "role", "student")
 
@@ -419,35 +673,44 @@ def route_voice_text(parent, session, scope, text: str,
     group = getattr(scope, "group", "") or ""
     subject = getattr(scope, "subject", "") or ""
     roster, today_lessons = teacher_roster_and_lessons(group, subject)
-    cmd = voice_command.parse(text, roster, today_lessons)
+    r = voice_command.parse_batch(text, roster, today_lessons)
 
-    #Вопрос или не-команда записи → обычный Q&A.
-    if cmd.is_question or cmd.action not in voice_command.WRITE_ACTIONS:
+    #Вопрос → обычный Q&A.
+    if r.is_question or r.kind == "question":
         session.ask(text)
         return
 
-    #Команда записи, но неоднозначная/ошибочная (не однофамильцы) → показать причину.
-    if not cmd.ok and not cmd.candidates:
-        if on_info:
-            on_info(f"🎙 «{cmd.heard}». {cmd.error}")
-        else:
-            session.ask(text)
+    #Ошибка разбора — показать причину (не гадаем).
+    if r.kind == "error":
+        _info(on_info, f"🎙 «{r.heard}». {r.error}")
         return
 
-    #Готовая команда (или выбор из однофамильцев) → подтверждение.
-    dlg = ConfirmWriteDialog(cmd, parent)
-    if dlg.exec() != QDialog.Accepted:
-        if on_info:
-            on_info("🎙 Запись отменена.")
+    #Создание занятия.
+    if r.kind == "lesson":
+        dlg = CreateLessonDialog(r.lesson, group, subject, _today_str(), parent)
+        if dlg.exec() != QDialog.Accepted:
+            _info(on_info, "🎙 Создание занятия отменено.")
+            return
+        topic = dlg.topic()
+        ok = _create_lesson(group, subject, r.lesson.type, topic)
+        _info(on_info, (f"✅ Создано занятие: {r.lesson.type}"
+                        + (f" «{topic}»" if topic else "") + " за сегодня.") if ok
+              else "⚠ Не удалось создать занятие — попробуйте вручную.")
         return
-    who = dlg.chosen_student
-    ok = _write_grade(who[0], who[1], cmd.lesson_id, cmd.value)
-    if on_info:
-        if ok:
-            act = {"grade": "оценка", "present": "присутствие",
-                   "absent_n": "пропуск (Н)", "absent_b": "болезнь (Б)",
-                   "absent_o": "уважительная (О)"}.get(cmd.action, cmd.action)
-            on_info(f"✅ Записано: {who[0]} {who[1]} — {act} «{cmd.value}» "
-                    f"за {cmd.lesson_label}.")
-        else:
-            on_info("⚠ Не удалось записать — попробуйте вручную в журнале.")
+
+    #Пакет простановок.
+    if r.kind == "grades" and r.items:
+        dlg = BatchConfirmDialog(r, group, parent)
+        if dlg.exec() != QDialog.Accepted:
+            _info(on_info, "🎙 Запись отменена.")
+            return
+        n = _write_grades_batch(r.items, r.lesson_id)
+        extra = ""
+        if r.warnings:
+            extra = f" Пропущено: {len(r.warnings)} (см. предупреждения)."
+        _info(on_info, f"✅ Записано правок: {n} из {len(r.items)} за {r.lesson_label}.{extra}"
+              if n else "⚠ Не удалось записать — попробуйте вручную в журнале.")
+        return
+
+    #На всякий случай — в Q&A.
+    session.ask(text)

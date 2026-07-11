@@ -422,18 +422,32 @@ class VectorPanel(QWidget):
         #(config.stt_enabled — синхронизируется на все аккаунты) И на этой машине стоят
         #пакеты распознавания (faster-whisper/sounddevice). Иначе мягко отсутствует.
         self.mic_btn = None
+        self.help_btn = None
         try:
             from .voice_ui import MicButton, mic_available
             if self._stt_enabled() and mic_available():
                 self.mic_btn = MicButton(get_context=self._voice_context)
                 self.mic_btn.transcribed.connect(self._on_voice_text)
                 self.mic_btn.failed.connect(self._on_voice_failed)
+                #Маленькая «?» рядом с микрофоном: подсказки и примеры команд по роли.
+                self.help_btn = QToolButton()
+                self.help_btn.setText("?")
+                self.help_btn.setCursor(Qt.PointingHandCursor)
+                self.help_btn.setFixedSize(26, 38)
+                self.help_btn.setToolTip("Что можно сказать голосом")
+                self.help_btn.setStyleSheet(
+                    f"QToolButton{{background:{C['card2']};border:1px solid {C['border']};"
+                    f"border-radius:8px;color:{C['text2']};font-weight:bold;font-size:14px;}}"
+                    f"QToolButton:hover{{border-color:{C['green']};color:{C['green']};}}")
+                self.help_btn.clicked.connect(self._show_voice_help)
         except Exception as e:
             print(f"[vector] голосовой ввод недоступен: {e}")
 
         row.addWidget(self._cmd_btn); row.addWidget(self.inp)
         if self.mic_btn is not None:
             row.addWidget(self.mic_btn)
+        if self.help_btn is not None:
+            row.addWidget(self.help_btn)
         row.addWidget(send)
         lay.addLayout(row)
 
@@ -573,6 +587,15 @@ class VectorPanel(QWidget):
             return bool((get_store()._config() or {}).get("stt_enabled", False))
         except Exception:
             return False
+
+    def _show_voice_help(self):
+        """Попап с примерами голосовых команд для текущей роли."""
+        try:
+            from .voice_ui import show_voice_help
+            role = getattr(self.engine.scope, "role", "student")
+            show_voice_help(role, self)
+        except Exception as e:
+            print(f"[vector] подсказка недоступна: {e}")
 
     def _voice_context(self):
         """Подсказка для Whisper: реальные ФИО студентов текущей группы + ключевые слова.

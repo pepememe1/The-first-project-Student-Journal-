@@ -164,3 +164,200 @@ def test_command_is_not_question():
     #Явная команда без вопросительных маркеров — это запись, не вопрос.
     c = ok("Гордееву пять")
     assert not c.is_question and c.ok
+
+
+# ═══ ПАКЕТНЫЕ КОМАНДЫ (parse_batch) ═══════════════════════════════════════════════
+from vector.voice_command import parse_batch
+
+# Ростер без однофамильцев — по алфавиту: Абрамов, Гордеев, Петров, Смирнова, Яковлев
+BR = [("Гордеев", "Ярослав"), ("Петров", "Пётр"), ("Смирнова", "Анна"),
+      ("Абрамов", "Иван"), ("Яковлев", "Олег")]
+L1 = [{"id": "L1", "label": "Практика №3 · 10.07"}]
+
+
+def b(text, roster=BR, lessons=L1):
+    return parse_batch(text, roster, lessons)
+
+
+def test_batch_whole_group_same_grade():
+    r = b("всей группе пять")
+    assert r.kind == "grades" and len(r.items) == 5
+    assert all(it.value == "5" and it.action == "grade" for it in r.items)
+
+
+def test_batch_whole_group_variants():
+    for txt in ["весь класс получил четыре", "поставь всем четыре", "всему классу четыре"]:
+        r = b(txt)
+        assert r.kind == "grades" and len(r.items) == 5 and all(it.value == "4" for it in r.items), txt
+
+
+def test_batch_first_n_alpha_word():
+    r = b("первым двум по списку пять")
+    assert r.kind == "grades" and len(r.items) == 2
+    assert [it.surname for it in r.items] == ["Абрамов", "Гордеев"]
+    assert all(it.value == "5" for it in r.items)
+
+
+def test_batch_first_n_digit():
+    r = b("первым 3 по списку два")
+    assert r.kind == "grades" and len(r.items) == 3
+    assert [it.surname for it in r.items] == ["Абрамов", "Гордеев", "Петров"]
+    assert all(it.value == "2" for it in r.items)
+
+
+def test_batch_several_students_different_grades():
+    r = b("Гордееву пять Петрову четыре Смирновой три")
+    assert r.kind == "grades" and len(r.items) == 3
+    by = {it.surname: it.value for it in r.items}
+    assert by == {"Гордеев": "5", "Петров": "4", "Смирнова": "3"}
+
+
+def test_batch_several_students_shared_grade():
+    r = b("Гордееву и Петрову пять")
+    assert r.kind == "grades" and len(r.items) == 2
+    assert all(it.value == "5" for it in r.items)
+    assert {it.surname for it in r.items} == {"Гордеев", "Петров"}
+
+
+def test_batch_comma_separated():
+    r = b("Гордееву пять, Петрову четыре, Яковлеву три")
+    by = {it.surname: it.value for it in r.items}
+    assert by == {"Гордеев": "5", "Петров": "4", "Яковлев": "3"}
+
+
+def test_batch_absence_shared():
+    r = b("Гордееву и Смирновой пропуск")
+    assert r.kind == "grades" and len(r.items) == 2
+    assert all(it.action == "absent_n" and it.value == "Н" for it in r.items)
+
+
+def test_batch_out_of_scale_group():
+    r = b("всей группе 6")
+    assert r.kind == "error" and "шкал" in r.error.lower()
+
+
+def test_batch_multiple_grades_group_error():
+    r = b("всей группе пять и четыре")
+    assert r.kind == "error" and "несколько" in r.error.lower()
+
+
+def test_batch_trailing_student_without_grade_skipped():
+    #При РАЗНЫХ оценках студент без своей оценки пропускается с предупреждением, не угадываем.
+    r = b("Гордееву пять Петрову четыре Смирновой")
+    by = {it.surname: it.value for it in r.items}
+    assert by == {"Гордеев": "5", "Петров": "4"}
+    assert any("Смирнов" in w for w in r.warnings)
+
+
+def test_batch_question_still_routes():
+    r = b("какой средний балл группы")
+    assert r.is_question and r.kind == "question"
+
+
+def test_batch_no_lesson_today():
+    r = b("всей группе пять", lessons=[])
+    assert r.kind == "error" and "сегодня" in r.error.lower()
+
+
+# ═══ СОЗДАНИЕ ЗАНЯТИЯ ГОЛОСОМ ═════════════════════════════════════════════════════
+def test_create_lecture_with_topic():
+    r = b("Создай сегодня лекцию по теме Введение в модули")
+    assert r.kind == "lesson" and r.lesson.type == "Лекция"
+    assert "Введение в модули" in r.lesson.topic
+
+
+def test_create_practice():
+    r = b("добавь практику по теме Циклы и функции")
+    assert r.kind == "lesson" and r.lesson.type == "Практика"
+    assert "Циклы" in r.lesson.topic
+
+
+def test_create_lesson_with_number():
+    r = b("создай лекцию номер 4 по теме Массивы")
+    assert r.kind == "lesson" and r.lesson.number == 4 and "Массивы" in r.lesson.topic
+
+
+def test_create_lesson_no_topic_warns():
+    r = b("создай сегодня лекцию")
+    assert r.kind == "lesson" and (not r.lesson.topic) and r.warnings
+
+
+# ═══ БУРЯТСКИЕ ФИО (Самбуева, Гындынова, Цыбенов… + имена Бато, Арюна, Баянжаргал) ═══
+BUR = [("Самбуева", "Арюна"), ("Халзанова", "Дарина"), ("Гындынова", "Оюна"),
+       ("Цыбенов", "Ардан"), ("Бомбаров", "Бато"), ("Дашиев", "Баянжаргал"),
+       ("Дашиев", "Аюр")]
+LB = [{"id": "L1", "label": "Практика №1"}]
+
+
+def bu(text):
+    return parse_batch(text, BUR, LB)
+
+
+@pytest.mark.parametrize("text,surname,val", [
+    ("Самбуевой пять", "Самбуева", "5"),
+    ("Гындыновой четыре", "Гындынова", "4"),
+    ("Цыбенову три", "Цыбенов", "3"),
+    ("Бомбарову два", "Бомбаров", "2"),
+    ("Халзановой отлично", "Халзанова", "5"),
+])
+def test_buryat_surnames_declension(text, surname, val):
+    r = bu(text)
+    assert r.kind == "grades" and len(r.items) == 1
+    assert r.items[0].surname == surname and r.items[0].value == val
+
+
+def test_buryat_batch():
+    r = bu("Самбуевой и Цыбенову пять")
+    assert r.kind == "grades" and {it.surname for it in r.items} == {"Самбуева", "Цыбенов"}
+
+
+def test_buryat_firstname_reference():
+    #Обращение по уникальному имени: «Бато не пришёл» → Бомбаров Бато, пропуск.
+    r = bu("Бато не пришёл")
+    assert r.kind == "grades" and len(r.items) == 1
+    assert r.items[0].surname == "Бомбаров" and r.items[0].action == "absent_n"
+
+
+def test_buryat_firstname_grade():
+    r = bu("Арюне пять")
+    assert r.kind == "grades" and r.items[0].surname == "Самбуева" and r.items[0].value == "5"
+
+
+def test_buryat_homonym_needs_name():
+    #Два Дашиевых без имени → понятная ошибка про однофамильцев (не «не узнал»).
+    r = bu("Дашиеву пять")
+    assert r.kind == "error" and "однофамил" in r.error.lower()
+
+
+def test_buryat_homonym_resolved_by_name():
+    r = bu("Дашиеву Аюру пять")
+    assert r.kind == "grades" and r.items[0].name == "Аюр"
+
+
+# ═══ РАСШИРЕННЫЕ СИНОНИМЫ ═════════════════════════════════════════════════════════
+@pytest.mark.parametrize("text,val", [
+    ("Гордееву двояк", "2"),
+    ("Гордееву троечку", "3"),
+    ("Гордееву четвёрочку", "4"),
+    ("Гордееву пятёрочку", "5"),
+])
+def test_synonym_grades(text, val):
+    r = b(text)
+    assert r.kind == "grades" and r.items[0].value == val
+
+
+@pytest.mark.parametrize("text,action", [
+    ("Гордеев приболел", "absent_b"),
+    ("Гордеев простыл", "absent_b"),
+    ("Гордеев по семейным обстоятельствам", "absent_o"),
+    ("Гордеев на соревнованиях", "absent_o"),
+    ("Гордеева нет на паре", "absent_n"),
+])
+def test_synonym_absence(text, action):
+    r = b(text)
+    assert r.kind == "grades" and r.items[0].action == action
+
+
+def test_synonym_group_pogolovno():
+    r = b("поголовно четыре")
+    assert r.kind == "grades" and len(r.items) == 5 and all(it.value == "4" for it in r.items)
