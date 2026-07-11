@@ -261,7 +261,7 @@ async function exportXlsx() {
            расползается к центру при 1–2 занятиях. -->
       <table class="w-max text-sm">
         <thead>
-          <tr class="border-b-2 border-accent/40 bg-bg2 text-text2">
+          <tr class="border-b-2 border-accent bg-bg2 text-text2">
             <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
             <th v-for="col in colDefs" :key="col.key"
                 class="w-32 border-l border-border align-top px-2 py-2"

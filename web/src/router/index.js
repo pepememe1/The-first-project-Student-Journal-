@@ -50,10 +50,12 @@ const routes = [
   {
     path: '/student', component: AppShell, meta: { requiresAuth: true, role: 'student' },
     children: [
-      { path: '', component: StudentDashboard, meta: { title: 'Главная' } },
-      page('journal', StudentJournal, 'Мой журнал', 'Ваши оценки по предметам'),
+      // Главная показывает ИМЯ студента как заголовок (title_lbl в десктопе) — рендерит
+      // сама StudentDashboard, поэтому статический title из AppShell тут не нужен.
+      { path: '', component: StudentDashboard, meta: {} },
+      page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам'),
       page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ'),
-      page('stats', StudentStats, 'Статистика', 'Динамика успеваемости'),
+      page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
     ],
@@ -63,10 +65,10 @@ const routes = [
   {
     path: '/teacher', component: AppShell, meta: { requiresAuth: true, role: 'teacher' },
     children: [
-      { path: '', component: TeacherJournal, meta: { title: 'Журнал', subtitle: 'Оценки по группам' } },
-      page('students', TeacherStudents, 'Студенты'),
+      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам' } },
+      page('students', TeacherStudents, 'Студенты группы'),
       page('schedule', SchedulePage, 'Расписание'),
-      page('stats', TeacherStats, 'Статистика'),
+      page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
     ],
@@ -83,8 +85,8 @@ const routes = [
       page('groups', AdminGroups, 'Группы'),
       page('subjects', AdminSubjects, 'Предметы'),
       page('schedule', SchedulePage, 'Расписание'),
-      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
-      sec('server', 'Сервер', { subtitle: 'Адрес, БД и публикация сайта' }),
+      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
+      sec('server', 'Сервер и сайт', { subtitle: 'Адрес, БД и публикация сайта' }),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),
       page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв'),
       { path: 'theme', component: ThemePage, meta: { title: 'Оформление', subtitle: 'Тема учреждения' } },

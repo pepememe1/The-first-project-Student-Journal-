@@ -12,10 +12,10 @@ defineProps({
 <template>
   <div class="rounded-lg border border-border bg-card p-5 shadow-card">
     <div class="flex items-start justify-between">
-      <p class="text-xs font-medium uppercase tracking-wide text-text2">{{ label }}</p>
+      <p class="text-[10px] font-medium uppercase tracking-wide text-text2">{{ label }}</p>
       <component :is="icon" v-if="icon" class="size-5" :class="accent ? 'text-accent' : 'text-text2'" />
     </div>
-    <p class="mt-2 font-title text-display font-extrabold leading-none" :class="accent ? 'text-accent' : 'text-text'">
+    <p class="mt-2 font-title text-[28px] font-extrabold leading-none" :class="accent ? 'text-accent' : 'text-text'">
       {{ value }}
     </p>
     <p v-if="hint" class="mt-1.5 text-xs text-text3">{{ hint }}</p>

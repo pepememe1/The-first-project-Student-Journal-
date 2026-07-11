@@ -16,7 +16,15 @@ const theme = useThemeStore()
 const ROLE = { student: 'Студент', teacher: 'Преподаватель', admin: 'Администратор' }
 const initial = computed(() => (auth.user?.name || '?').trim().charAt(0).toUpperCase())
 const currentId = computed(() => theme.spec.id)
-function swatch(id) { const [a, b] = swatchColors({ ...theme.spec, id }); return { a, b } }
+// Трёхцветный круг как в десктопе (_Swatch): акцент — верх, вторичный — низ-лево,
+// поверхность режима — низ-право.
+function swatchStyle(id) {
+  const [accent, accent2, surface] = swatchColors({ ...theme.spec, id })
+  return {
+    background: `conic-gradient(${accent} 0deg 90deg, ${surface} 90deg 180deg, `
+              + `${accent2} 180deg 270deg, ${accent} 270deg 360deg)`,
+  }
+}
 
 // ── Вход по биометрии (passkeys) ────────────────────────────────────────────────
 const canBiometric = ref(false)
@@ -75,9 +83,11 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
                 class="flex items-center gap-2.5 rounded-md border p-2.5 text-left transition-colors"
                 :class="currentId === p.id ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'"
                 @click="theme.setPreset(p.id)">
-          <span class="grid size-7 shrink-0 place-items-center rounded-full border border-black/10"
-                :style="{ background: `linear-gradient(135deg, ${swatch(p.id).a}, ${swatch(p.id).b})` }">
-            <Check v-if="currentId === p.id" class="size-3.5 text-white" />
+          <span class="relative size-7 shrink-0 rounded-full border border-black/10" :style="swatchStyle(p.id)">
+            <span v-if="currentId === p.id"
+                  class="absolute -right-1 -top-1 grid size-3.5 place-items-center rounded-full bg-accent text-white ring-2 ring-card">
+              <Check class="size-2" />
+            </span>
           </span>
           <span class="truncate text-xs font-medium text-text">{{ p.name }}</span>
         </button>
