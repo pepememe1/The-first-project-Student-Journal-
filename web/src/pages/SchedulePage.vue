@@ -177,7 +177,9 @@ const teacherChoice = computed(() => isTeacher.value && mode.value === '')
                   :message="building ? 'Индекс расписания готовится на сервере (~минута) — нажмите «Обновить».'
                             : 'Не удалось получить снимок с портала ВСГУТУ (нет связи или расписание не найдено).'" />
 
-      <div v-else class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <!-- Десктоп показывает 6 дней ОДНИМ горизонтальным рядом; на широком экране
+           повторяем (6 колонок), на узких — переносим по 2–3. -->
+      <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <div v-for="[short, full] in DAYS" :key="short" class="rounded-lg border border-border bg-card p-3 shadow-card">
           <p class="mb-2 font-title text-base font-bold text-text">{{ full }}</p>
           <p v-if="!dayLessons(short).length" class="py-4 text-center text-xs text-text2">Занятий нет</p>

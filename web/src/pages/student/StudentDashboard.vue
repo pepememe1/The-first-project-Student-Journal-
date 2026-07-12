@@ -79,14 +79,17 @@ onBeforeUnmount(() => clearInterval(tipTimer))
       <p class="text-sm text-text">{{ tip }}</p>
     </div>
 
-    <InsightCards :cards="insights" />
-
-    <div class="grid gap-6 lg:grid-cols-[minmax(180px,260px)_1fr]">
-      <div class="flex items-start justify-center">
-        <Mascot :sprite="sprite" class="h-72 w-56" />
+    <!-- Маскот слева крупным планом; справа — инсайты, статы и предметы ОДНОЙ колонкой,
+         поэтому плашки рисков/долгов встают вровень со статами. -->
+    <div class="grid gap-6 lg:grid-cols-[minmax(190px,240px)_1fr] xl:grid-cols-[minmax(300px,380px)_1fr]">
+      <div class="flex items-center justify-center">
+        <!-- Тигр во всю ширину колонки; пропорции спрайта 3:4 (460×613) — без пустот.
+             На телефоне ограничиваем, чтобы не занимал пол-экрана. -->
+        <Mascot :sprite="sprite" class="aspect-[3/4] w-full max-w-[190px] lg:max-w-[320px] xl:max-w-[380px]" />
       </div>
 
       <div class="space-y-5">
+        <InsightCards :cards="insights" />
         <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard label="Предметов" :value="data?.subjects_count ?? '—'" accent />
           <StatCard label="Средний балл" :value="data?.average || '—'" />

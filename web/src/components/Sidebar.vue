@@ -22,7 +22,7 @@ function isActive(to) {
 <template>
   <aside class="flex h-full w-[250px] shrink-0 flex-col overflow-y-auto border-r border-border bg-bg2 px-2.5 py-4">
     <template v-for="(item, i) in items" :key="i">
-      <p v-if="item.section" class="px-3.5 pb-1 pt-4 text-tiny font-semibold uppercase tracking-wider text-text2 first:pt-1">
+      <p v-if="item.section" class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
         {{ item.section }}
       </p>
       <RouterLink

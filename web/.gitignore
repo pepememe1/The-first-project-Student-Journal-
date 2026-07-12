@@ -17,6 +17,14 @@ dist-ssr
 .env.*
 !.env.example
 
+# Android: подпись release (СЕКРЕТЫ — никогда не коммитить!) и сборочные артефакты
+android/release.keystore
+android/keystore.properties
+android/app/build
+android/build
+android/.gradle
+android/app/release
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

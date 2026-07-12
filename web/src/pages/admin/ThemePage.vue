@@ -22,6 +22,15 @@ function swatch(id) {
   const [accent, accent2, surface] = swatchColors({ ...theme.spec, id })
   return { accent, accent2, surface }
 }
+// Трёхцветный круг как в десктопе (_Swatch): акцент — верхняя половина, вторичный —
+// нижний-левый сектор, поверхность режима — нижний-правый.
+function swatchStyle(id) {
+  const s = swatch(id)
+  return {
+    background: `conic-gradient(${s.accent} 0deg 90deg, ${s.surface} 90deg 180deg, `
+              + `${s.accent2} 180deg 270deg, ${s.accent} 270deg 360deg)`,
+  }
+}
 </script>
 
 <template>
@@ -35,11 +44,11 @@ function swatch(id) {
           :class="currentId === p.id ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'"
           @click="theme.setPreset(p.id)"
         >
-          <span
-            class="grid size-8 shrink-0 place-items-center rounded-full border border-black/10"
-            :style="{ background: `linear-gradient(135deg, ${swatch(p.id).accent}, ${swatch(p.id).accent2})` }"
-          >
-            <Check v-if="currentId === p.id" class="size-4 text-white" />
+          <span class="relative size-8 shrink-0 rounded-full border border-black/10" :style="swatchStyle(p.id)">
+            <span v-if="currentId === p.id"
+                  class="absolute -right-1 -top-1 grid size-4 place-items-center rounded-full bg-accent text-white ring-2 ring-card">
+              <Check class="size-2.5" />
+            </span>
           </span>
           <span class="truncate text-sm font-medium text-text">{{ p.name }}</span>
         </button>

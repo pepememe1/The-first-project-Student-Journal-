@@ -10,6 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.3",
+    "@capacitor/cli": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capgo/capacitor-updater": "^8.50.2",
     "@lucide/vue": "^1.22.0",
     "axios": "^1.18.1",
     "pinia": "^3.0.4",
@@ -17,6 +23,7 @@
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@tailwindcss/vite": "^4.3.2",
     "@vitejs/plugin-vue": "^6.0.7",
     "tailwindcss": "^4.3.2",

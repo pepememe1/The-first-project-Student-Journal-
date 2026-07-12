@@ -1,7 +1,8 @@
 <script setup>
-// VectorDock — постоянная боковая панель Вектора (справа, десктоп), как док в десктопном
-// приложении. Аватар + чат + ввод. Переписка ОБЩАЯ со вкладкой «ИИ Помощник» (Pinia-store
-// vector). Показывается на всех страницах, кроме самой вкладки ИИ (см. AppShell).
+// VectorDock — постоянная боковая шторка Вектора (справа, десктоп). Порт десктопной
+// компоновки vector/widget._AvatarChatOverlay: маскот лежит ФОНОМ во всю площадь, а
+// переписка — полупрозрачным слоем ПОВЕРХ него (Вектор просвечивает между строк, но
+// текст читаем). Переписка ОБЩАЯ со вкладкой «ИИ Помощник» (Pinia-store vector).
 import { ref, watch, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid, PanelRightClose } from '@lucide/vue'
@@ -26,35 +27,43 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
 
 <template>
   <aside class="relative flex h-full w-96 shrink-0 flex-col border-l border-border bg-card">
-    <!-- Кнопка «скрыть панель» (в углу) -->
-    <button type="button" @click="vector.setCollapsed(true)" aria-label="Скрыть панель Вектора"
-            title="Скрыть панель"
-            class="absolute right-2 top-2 z-10 grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-text">
-      <PanelRightClose class="size-4" />
-    </button>
-
-    <!-- Аватар Вектора сверху — крупный, чтобы был заметен -->
-    <div class="flex shrink-0 flex-col items-center border-b border-border pb-2 pt-3">
-      <Mascot :sprite="sprite" class="h-80 w-72" />
-      <span class="inline-flex items-center gap-2 rounded-full bg-accent-glow px-3 py-1 text-xs font-medium text-accent">
-        <span class="size-1.5 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
-        {{ label }}
-      </span>
+    <!-- Шапка: заголовок + индикатор состояния + скрыть панель -->
+    <div class="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="size-2 shrink-0 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
+        <span class="font-title text-sm font-bold text-text">Вектор</span>
+        <span v-if="label" class="truncate text-[11px] text-text3">· {{ label }}</span>
+      </div>
+      <button type="button" @click="vector.setCollapsed(true)" aria-label="Скрыть панель Вектора"
+              title="Скрыть панель"
+              class="grid size-7 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-text">
+        <PanelRightClose class="size-4" />
+      </button>
     </div>
 
-    <!-- Чат -->
-    <div ref="scroller" class="flex-1 space-y-3 overflow-y-auto p-3">
-      <div v-for="(m, i) in messages" :key="i" class="flex" :class="m.role === 'user' ? 'justify-end' : ''">
-        <div class="max-w-[85%] rounded-lg px-3 py-2 text-sm"
-             :class="m.role === 'user' ? 'bg-accent text-white' : 'bg-bg2 text-text'">
-          {{ m.text }}
-        </div>
+    <!-- Маскот ФОНОМ (во всю площадь) + чат полупрозрачным слоем поверх -->
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+      <div class="pointer-events-none absolute inset-0">
+        <Mascot :sprite="sprite" class="h-full w-full" />
       </div>
-      <p v-if="state === 'thinking'" class="text-xs text-text2">Вектор думает…</p>
+      <!-- Чат: верхний край ~42% высоты (уровень туловища) → голова и плечи открыты;
+           подложка полупрозрачная + лёгкое размытие фона, чтобы текст читался. -->
+      <div ref="scroller"
+           class="absolute inset-x-2 bottom-2 top-[42%] space-y-2 overflow-y-auto rounded-xl border border-border/60 bg-card/70 p-3 backdrop-blur-sm">
+        <template v-for="(m, i) in messages" :key="i">
+          <div v-if="m.role === 'user'" class="flex justify-end">
+            <div class="max-w-[85%] rounded-lg bg-accent px-3 py-1.5 text-sm text-white">{{ m.text }}</div>
+          </div>
+          <p v-else class="text-sm leading-snug text-text">
+            <span class="font-semibold text-accent">Вектор:</span> {{ m.text }}
+          </p>
+        </template>
+        <p v-if="state === 'thinking'" class="text-xs text-text2">Вектор думает…</p>
+      </div>
     </div>
 
     <!-- Ввод + быстрые команды -->
-    <div class="relative border-t border-border p-2.5">
+    <div class="relative shrink-0 border-t border-border p-2.5">
       <transition name="pop">
         <div v-if="showQuick && cmds.length"
              class="absolute bottom-full left-2.5 right-2.5 mb-2 rounded-lg border border-border2 bg-card p-2 shadow-card">

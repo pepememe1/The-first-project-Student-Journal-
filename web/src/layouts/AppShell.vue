@@ -40,18 +40,23 @@ onMounted(() => theme.loadFromPrefs())
       <transition name="fade">
         <div v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
           <div class="absolute inset-0" style="background: var(--gb-overlay)" @click="sidebarOpen = false" />
-          <div class="absolute inset-y-0 left-0 z-50 top-[60px] shadow-xl">
+          <div class="absolute inset-y-0 left-0 z-50 shadow-xl" style="top: calc(60px + env(safe-area-inset-top))">
             <Sidebar :open="sidebarOpen" @navigate="sidebarOpen = false" />
           </div>
         </div>
       </transition>
 
       <!-- Контент: мягкий фон + сетка (как AnimatedBackground в десктопе) -->
-      <main class="app-canvas min-h-0 flex-1 overflow-y-auto">
-        <div class="mx-auto max-w-6xl p-4 sm:p-6">
-          <div v-if="title" class="mb-5">
-            <h1 class="font-title text-2xl font-extrabold text-text">{{ title }}</h1>
-            <p v-if="subtitle" class="mt-1 text-sm text-text3">{{ subtitle }}</p>
+      <main class="app-canvas min-h-0 flex-1 overflow-y-auto" style="padding-bottom: env(safe-area-inset-bottom)">
+        <!-- Контент тянется на всю ширину области (как в десктопе — там сетка не
+             ограничена узкой колонкой), с очень высоким потолком, чтобы на 4K не
+             растягивалось до нечитаемых строк. -->
+        <div class="mx-auto max-w-[1700px] p-4 sm:px-7 sm:py-6">
+          <!-- На телефоне заголовок компактнее (меньше кегль и отступы), чтобы не
+               «съедал» экран у небольших страниц; с sm — как в десктопе. -->
+          <div v-if="title" class="mb-3 sm:mb-5">
+            <h1 class="font-title text-lg font-extrabold text-text sm:text-2xl">{{ title }}</h1>
+            <p v-if="subtitle" class="mt-0.5 text-xs text-text3 sm:mt-1 sm:text-sm">{{ subtitle }}</p>
           </div>
           <RouterView v-slot="{ Component }">
             <transition name="fade" mode="out-in">

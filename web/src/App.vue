@@ -5,6 +5,7 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { setAuthExpiredHandler } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import AppUpdateBanner from '@/components/AppUpdateBanner.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -19,4 +20,6 @@ onMounted(() => {
 
 <template>
   <RouterView />
+  <!-- Нативное авто-обновление приложения (баннер, только в APK) -->
+  <AppUpdateBanner />
 </template>

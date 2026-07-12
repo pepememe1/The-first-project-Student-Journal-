@@ -14,15 +14,19 @@ onMounted(async () => {
   try { data.value = (await studentApi.journal()).data } catch { data.value = null } finally { loading.value = false }
 })
 
-// Цвет оценки как в журнале: 5 — акцент, 4 — синий, 3 — оранжевый, 2/Н — красный.
-function gradeClass(g) {
+// Оценка-«плашка» как в журнале десктопа (_load_journal): у числовых оценок —
+// пастельный фон (5→зелёный, 4→синий, 3→жёлтый, 2→красный) поверх тёмного текста;
+// «Н» — красным, «✓» — акцентом; пусто — приглушённый прочерк.
+const GRADE_BG = { 5: '#DBF0E4', 4: '#DCEFF2', 3: '#FBEFD6', 2: '#FAE0DE' }
+function gradeChip(g) {
   const v = (g || '').trim()
-  if (v.startsWith('5')) return 'text-accent'
-  if (v.startsWith('4')) return 'text-blue'
-  if (v.startsWith('3')) return 'text-orange'
-  if (v.startsWith('2') || v === 'Н') return 'text-red'
-  return 'text-text2'
+  const head = v.split(' ')[0]
+  if (GRADE_BG[head]) return { background: GRADE_BG[head], color: '#0F1B22' }
+  if (v === 'Н') return { color: 'var(--gb-red)' }
+  if (v === '✓') return { color: 'var(--gb-accent)' }
+  return { color: 'var(--gb-text2)' }
 }
+const isNumericGrade = (g) => !!GRADE_BG[(g || '').trim().split(' ')[0]]
 </script>
 
 <template>
@@ -51,8 +55,10 @@ function gradeClass(g) {
                 <td class="py-2.5 pr-3 text-text3 whitespace-nowrap">{{ l.type }} №{{ l.number }}</td>
                 <td class="py-2.5 pr-3 text-text">{{ l.topic || '—' }}</td>
                 <td class="py-2.5 pr-3 text-text3 whitespace-nowrap">{{ l.date || '—' }}</td>
-                <td class="py-2.5 text-right font-title text-base font-bold" :class="gradeClass(l.grade)">
-                  {{ l.grade || '—' }}
+                <td class="py-2.5 text-right">
+                  <span class="inline-block min-w-[2.2rem] rounded-md text-center font-title text-base font-bold"
+                        :class="isNumericGrade(l.grade) ? 'px-2 py-0.5' : ''"
+                        :style="gradeChip(l.grade)">{{ l.grade || '—' }}</span>
                 </td>
               </tr>
             </tbody>

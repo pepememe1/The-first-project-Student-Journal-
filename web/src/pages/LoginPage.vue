@@ -114,7 +114,8 @@ const showRecover = ref(false)
 </script>
 
 <template>
-  <div class="relative flex min-h-full items-center justify-center overflow-hidden p-4">
+  <div class="relative flex min-h-full items-center justify-center overflow-hidden p-4"
+       style="padding-top: calc(1rem + env(safe-area-inset-top)); padding-bottom: calc(1rem + env(safe-area-inset-bottom))">
     <HexBackground />
 
     <!-- Брендинг в углу — заполняет верх и держит фирменный стиль. -->
@@ -201,6 +202,13 @@ const showRecover = ref(false)
                     @click="showRecover = true">Восстановление пароля</button>
           </div>
           <p class="mt-2 text-tiny text-text3">Преподаватели и админ входят по данным от администратора.</p>
+        </div>
+
+        <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную. -->
+        <div class="mt-3 text-center">
+          <button type="button" class="text-tiny text-text3 transition-colors hover:text-accent" @click="router.push('/connect')">
+            ⚙ Сервер синхронизации
+          </button>
         </div>
 
         <DeviceApproval v-if="needApproval" @approved="onApproved" />

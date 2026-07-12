@@ -1,0 +1,15 @@
+{
+  "appId": "ru.esstu.gradebook",
+  "appName": "GradeBookAI",
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": true,
+      "directUpdate": true,
+      "updateUrl": "https://esstu-gradebook.ru/app/updates"
+    }
+  }
+}

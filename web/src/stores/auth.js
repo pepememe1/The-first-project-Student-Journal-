@@ -9,6 +9,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
+import { clearCache } from '@/api/offlineCache'
 import { loginWithPasskey } from '@/api/webauthn'
 
 const LS_USER = 'gb.user'
@@ -77,6 +78,7 @@ export const useAuthStore = defineStore('auth', () => {
     try { await authApi.logout() } catch { /* офлайн — всё равно чистим локально */ }
     clearTokens()
     localStorage.removeItem(LS_USER)
+    clearCache()   // стираем оффлайн-кэш — чтобы данные не показались другому юзеру
     user.value = null
   }
 
@@ -84,6 +86,7 @@ export const useAuthStore = defineStore('auth', () => {
   function clearSession() {
     clearTokens()
     localStorage.removeItem(LS_USER)
+    clearCache()
     user.value = null
   }
 

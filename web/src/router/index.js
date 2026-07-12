@@ -7,10 +7,12 @@
  */
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { needsServer } from '@/api/server'
 import { HOME_BY_ROLE } from '@/config/nav'
 
 import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
+import ConnectServer from '@/pages/ConnectServer.vue'
 import SectionView from '@/views/SectionView.vue'
 import VectorPage from '@/pages/VectorPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
@@ -37,6 +39,7 @@ const sec = (path, title, opts = {}) => ({ path, component: SectionView, meta: {
 const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
 
 const routes = [
+  { path: '/connect', component: ConnectServer, meta: { public: true } },
   { path: '/login', component: LoginPage, meta: { public: true } },
   {
     path: '/',
@@ -50,10 +53,12 @@ const routes = [
   {
     path: '/student', component: AppShell, meta: { requiresAuth: true, role: 'student' },
     children: [
-      { path: '', component: StudentDashboard, meta: { title: 'Главная' } },
-      page('journal', StudentJournal, 'Мой журнал', 'Ваши оценки по предметам'),
+      // Главная показывает ИМЯ студента как заголовок (title_lbl в десктопе) — рендерит
+      // сама StudentDashboard, поэтому статический title из AppShell тут не нужен.
+      { path: '', component: StudentDashboard, meta: {} },
+      page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам'),
       page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ'),
-      page('stats', StudentStats, 'Статистика', 'Динамика успеваемости'),
+      page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
     ],
@@ -63,10 +68,10 @@ const routes = [
   {
     path: '/teacher', component: AppShell, meta: { requiresAuth: true, role: 'teacher' },
     children: [
-      { path: '', component: TeacherJournal, meta: { title: 'Журнал', subtitle: 'Оценки по группам' } },
-      page('students', TeacherStudents, 'Студенты'),
+      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам' } },
+      page('students', TeacherStudents, 'Студенты группы'),
       page('schedule', SchedulePage, 'Расписание'),
-      page('stats', TeacherStats, 'Статистика'),
+      page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
     ],
@@ -83,8 +88,8 @@ const routes = [
       page('groups', AdminGroups, 'Группы'),
       page('subjects', AdminSubjects, 'Предметы'),
       page('schedule', SchedulePage, 'Расписание'),
-      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
-      sec('server', 'Сервер', { subtitle: 'Адрес, БД и публикация сайта' }),
+      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
+      sec('server', 'Сервер и сайт', { subtitle: 'Адрес, БД и публикация сайта' }),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),
       page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв'),
       { path: 'theme', component: ThemePage, meta: { title: 'Оформление', subtitle: 'Тема учреждения' } },
@@ -103,6 +108,8 @@ export const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  // Приложение без заданного адреса сервера (первый запуск) → сперва экран подключения.
+  if (needsServer() && to.path !== '/connect') return '/connect'
   const auth = useAuthStore()
   if (to.meta.public) {
     if (to.path === '/login' && auth.isAuthenticated) return HOME_BY_ROLE[auth.role] || '/'

@@ -15,9 +15,11 @@
  */
 import axios from 'axios'
 import { getAccess, getRefresh, setTokens, clearTokens, getDeviceId } from './tokens'
+import { isCacheable, writeCache, readCache, servingStale } from './offlineCache'
+import { getApiBase } from './server'
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || '',
+  baseURL: getApiBase(),
   timeout: 20000,
 })
 
@@ -28,6 +30,9 @@ export function setAuthExpiredHandler(fn) {
 }
 
 api.interceptors.request.use((config) => {
+  // Адрес сервера берём динамически на КАЖДЫЙ запрос: в приложении он задаётся в
+  // рантайме (экран подключения), поэтому не фиксируем его при создании клиента.
+  config.baseURL = getApiBase()
   const token = getAccess()
   if (token) config.headers.Authorization = `Bearer ${token}`
   config.headers['X-Device-Id'] = getDeviceId()
@@ -43,7 +48,7 @@ async function doRefresh() {
   if (!refresh) throw new Error('no refresh token')
   // Голый axios (без интерсепторов), чтобы не зациклиться на 401.
   const { data } = await axios.post(
-    (import.meta.env.VITE_API_BASE || '') + '/auth/refresh',
+    getApiBase() + '/auth/refresh',
     { refresh_token: refresh },
     { headers: { 'X-Device-Id': getDeviceId(), 'X-Client': 'web' } },
   )
@@ -51,10 +56,32 @@ async function doRefresh() {
   return data.access_token
 }
 
+// Успешный ответ: кэшируем role-scoped READ (GET /web/*, /me/prefs) для оффлайна.
+function isGet(config) { return (config?.method || 'get').toLowerCase() === 'get' }
+
 api.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    const config = resp.config || {}
+    if (isGet(config) && isCacheable(config.url)) {
+      writeCache(config, resp.data)
+      servingStale.value = false     // пришли свежие данные — мы онлайн
+    }
+    return resp
+  },
   async (error) => {
     const { response, config } = error
+    // Нет ответа (сеть недоступна/таймаут): для кэшируемых GET отдаём СОХРАНЁННОЕ —
+    // экран показывает данные, а не пустоту. Обновятся, как только вернётся сеть.
+    if (!response && config && isGet(config) && isCacheable(config.url)) {
+      const hit = readCache(config)
+      if (hit) {
+        servingStale.value = true
+        return Promise.resolve({
+          data: hit.data, status: 200, statusText: 'OK (offline cache)',
+          headers: { 'x-gb-stale': '1' }, config, request: null, cached: true,
+        })
+      }
+    }
     if (!response || response.status !== 401 || config._retried) {
       return Promise.reject(error)
     }

@@ -56,6 +56,10 @@ ENV/
 *.swo
 *~
 
+# ── OTA-бандлы приложения (артефакты релиза; apk-info.json коммитим, бандлы — нет) ──
+server/ota_bundles/*.zip
+server/ota_bundles/latest.json
+
 # ── ОС ──
 .DS_Store
 Thumbs.db

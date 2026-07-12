@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GradeBookAI</string>
+    <string name="title_activity_main">GradeBookAI</string>
+    <string name="package_name">ru.esstu.gradebook</string>
+    <string name="custom_url_scheme">ru.esstu.gradebook</string>
+</resources>

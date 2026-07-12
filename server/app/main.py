@@ -18,6 +18,7 @@ from .config import ALLOWED_ORIGINS
 from .routers import auth, sync, me, admin, web
 from .routers import connect as connect_router
 from .routers import webauthn_router
+from .routers import appupdate
 from . import events, throttle
 
 
@@ -100,6 +101,7 @@ app.include_router(admin.router)
 app.include_router(connect_router.router)
 app.include_router(webauthn_router.router)
 app.include_router(web.router)
+app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
 
 
 #Раздача файлов для скачивания (десктоп-клиент GradeBookAI.exe). Файлы кладём в папку
