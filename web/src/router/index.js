@@ -23,6 +23,7 @@ import StudentStats from '@/pages/student/StudentStats.vue'
 import TeacherJournal from '@/pages/teacher/TeacherJournal.vue'
 import TeacherStudents from '@/pages/teacher/TeacherStudents.vue'
 import TeacherStats from '@/pages/teacher/TeacherStats.vue'
+import CuratorView from '@/pages/teacher/CuratorView.vue'
 import AdminDashboard from '@/pages/admin/AdminDashboard.vue'
 import AdminTeachers from '@/pages/admin/AdminTeachers.vue'
 import AdminStudents from '@/pages/admin/AdminStudents.vue'
@@ -70,6 +71,7 @@ const routes = [
     children: [
       { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам' } },
       page('students', TeacherStudents, 'Студенты группы'),
+      page('curator', CuratorView, 'Курирование', 'Ваши курируемые группы'),
       page('schedule', SchedulePage, 'Расписание'),
       page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },

@@ -3,7 +3,7 @@
 // удаление; кнопка «🏫 Из расписания» добавляет спарсенные группы колледжа (как в
 // десктопе). Пишется в те же таблицы (id=grp:name) → синкается в десктоп.
 import { ref, onMounted } from 'vue'
-import { adminApi, scheduleApi } from '@/api/endpoints'
+import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 
@@ -12,12 +12,32 @@ const loading = ref(true)
 const allSubjects = ref([])
 const parsedGroups = ref([])
 
+// ── Учебный период + перевод на курс (rollover) ─────────────────────────────────
+const currentTerm = ref(null)
+const rolling = ref(false)
+function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+async function loadTerm() {
+  try { currentTerm.value = (await termsApi.list()).data.current } catch { /* */ }
+}
+async function rollover() {
+  const next = currentTerm.value?.semester === 1 ? 'весенний семестр' : 'осенний семестр следующего года'
+  if (!confirm(`Перевести на следующий учебный период (${next})?\n\nТекущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.`)) return
+  rolling.value = true
+  try {
+    const r = (await adminApi.rolloverTerm()).data
+    currentTerm.value = r.current
+    alert(`Готово. Текущий период: ${termLabel(r.current)}.`)
+  } catch (e) { alert(e?.response?.data?.detail || 'Не удалось перевести') }
+  finally { rolling.value = false }
+}
+
 async function reload() {
   loading.value = true
   try { rows.value = (await adminApi.groups()).data.groups || [] } catch { rows.value = [] } finally { loading.value = false }
 }
 onMounted(async () => {
   await reload()
+  await loadTerm()
   try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
   try { parsedGroups.value = (await scheduleApi.groups()).data.groups || [] } catch { /* */ }
 })
@@ -74,7 +94,14 @@ async function importParsed() {
 
 <template>
   <div class="space-y-4">
-    <div class="flex items-center justify-end gap-3">
+    <div class="flex flex-wrap items-center gap-3">
+      <div v-if="currentTerm" class="mr-auto flex items-center gap-2 text-sm">
+        <span class="text-text3">Учебный период:</span>
+        <Badge variant="green">{{ termLabel(currentTerm) }}</Badge>
+      </div>
+      <AppButton variant="ghost" size="sm" :disabled="rolling" @click="rollover">
+        {{ rolling ? 'Перевод…' : '⏭ Перевод на курс' }}
+      </AppButton>
       <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
         {{ importing ? 'Обновление…' : 'Обновить группы' }}
       </AppButton>

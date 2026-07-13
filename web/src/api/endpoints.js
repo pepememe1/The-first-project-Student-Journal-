@@ -52,17 +52,19 @@ export const connectApi = {
 // СТУДЕНТ ────────────────────────────────────────────────────────────────────────
 export const studentApi = {
   overview: () => api.get('/web/student/overview'),
-  journal: () => api.get('/web/student/journal'),
-  stats: () => api.get('/web/student/stats'),
+  // params: { year, semester } — просмотр архива; без них — текущий семестр.
+  journal: (params = {}) => api.get('/web/student/journal', { params }),
+  stats: (params = {}) => api.get('/web/student/stats', { params }),
   insights: () => api.get('/web/student/insights'),
 }
 
 // ПРЕПОДАВАТЕЛЬ ───────────────────────────────────────────────────────────────────
 export const teacherApi = {
   overview: () => api.get('/web/teacher/overview'),
-  journal: (group, subject) => api.get('/web/teacher/journal', { params: { group, subject } }),
+  // params: { year, semester } — архив прошлого семестра; без них — текущий.
+  journal: (group, subject, params = {}) => api.get('/web/teacher/journal', { params: { group, subject, ...params } }),
   students: (group) => api.get('/web/teacher/students', { params: { group } }),
-  stats: (group, subject) => api.get('/web/teacher/stats', { params: { group, subject } }),
+  stats: (group, subject, params = {}) => api.get('/web/teacher/stats', { params: { group, subject, ...params } }),
   insights: (group) => api.get('/web/teacher/insights', { params: { group } }),
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
   setGrade: (surname, name, lesson_id, grade) =>
@@ -74,6 +76,25 @@ export const teacherApi = {
   // Экспорт журнала в xlsx (тот же стиль, что в десктопе: Times New Roman 14).
   journalXlsx: (group, subject) =>
     api.get('/web/teacher/journal.xlsx', { params: { group, subject }, responseType: 'blob' }),
+  // Итоговые оценки за семестр (промежуточная аттестация) + ведомость.
+  setTermGrade: (payload) => api.post('/web/teacher/term-grade', payload),
+  termGrades: (group, subject, params = {}) => api.get('/web/teacher/term-grades', { params: { group, subject, ...params } }),
+  vedomostXlsx: (group, subject, params = {}) =>
+    api.get('/web/teacher/vedomost.xlsx', { params: { group, subject, ...params }, responseType: 'blob' }),
+}
+
+// УЧЕБНЫЙ ПЕРИОД (год/семестр) ────────────────────────────────────────────────────
+export const termsApi = {
+  list: () => api.get('/web/terms'),
+}
+
+// КУРАТОР (read-only по курируемым группам) ───────────────────────────────────────
+export const curatorApi = {
+  groups: () => api.get('/web/curator/groups'),
+  subjects: (group, params = {}) =>
+    api.get(`/web/curator/group/${encodeURIComponent(group)}/subjects`, { params }),
+  groupSubject: (group, subject, params = {}) =>
+    api.get(`/web/curator/group/${encodeURIComponent(group)}/subject/${encodeURIComponent(subject)}`, { params }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
@@ -101,6 +122,8 @@ export const adminApi = {
   createTeacher: (payload) => api.post('/web/admin/teachers', payload),
   updateTeacher: (login, payload) => api.put(`/web/admin/teachers/${encodeURIComponent(login)}`, payload),
   deleteTeacher: (login) => api.delete(`/web/admin/teachers/${encodeURIComponent(login)}`),
+  // Перевод на курс (rollover): продвинуть текущий учебный период. Прошлые — в архив.
+  rolloverTerm: (payload = {}) => api.post('/web/admin/term/rollover', payload),
   // Заявки на регистрацию студентов.
   registrations: () => api.get('/web/admin/registrations'),
   approveRegistration: (id) => api.post('/web/admin/registrations/approve', { id }),

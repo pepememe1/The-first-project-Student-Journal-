@@ -1,17 +1,25 @@
 <script setup>
 // Sidebar — боковая навигация (порт ui_components.Sidebar). 250px, фон bg2, секции-
 // заголовки (uppercase) + пункты с иконками; активный подсвечен акцентом.
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { NAV } from '@/config/nav'
+import { curatorApi } from '@/api/endpoints'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
 
 const auth = useAuthStore()
 const route = useRoute()
-const items = computed(() => NAV[auth.role] || [])
+// Пункт «Курирование» (curatorOnly) виден только преподавателю-куратору.
+const isCurator = ref(false)
+onMounted(async () => {
+  if (auth.role === 'teacher') {
+    try { isCurator.value = ((await curatorApi.groups()).data.groups || []).length > 0 } catch { /* */ }
+  }
+})
+const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))
 
 function isActive(to) {
   if (to.split('/').length <= 2) return route.path === to

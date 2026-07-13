@@ -79,13 +79,45 @@ def student_records(db, surname: str, name: str, group: str | None = None,
     return {lid: g for lid, g in rows if base_lesson_id(lid) in allowed}
 
 
-def group_lessons(db, group: str, subject: str | None = None):
-    """Занятия группы (опц. по предмету), в том же порядке, что и в десктопе."""
+def current_term(cfg: dict) -> tuple:
+    """Текущий учебный термин (год, семестр) из config, иначе — дефолт по дате.
+    Год «YYYY/YYYY+1», семестр 1 (осень) | 2 (весна)."""
+    from . import db as _db
+    y = (cfg.get("current_year") or "").strip()
+    s = cfg.get("current_semester")
+    if y and s:
+        try:
+            return y, int(s)
+        except (TypeError, ValueError):
+            pass
+    return _db.default_term()
+
+
+def group_lessons(db, group: str, subject: str | None = None,
+                  year: str | None = None, semester: int | None = None):
+    """Занятия группы (опц. по предмету И учебному периоду), в порядке десктопа.
+
+    Фильтр по термину (year+semester) — основа долгосрочного журнала: показываем
+    занятия конкретного семестра. Без термина — все периоды (обратная совместимость)."""
     q = db.query(Lesson).filter(Lesson.group_name == group,
                                 Lesson.deleted == False)  # noqa: E712
     if subject:
         q = q.filter(Lesson.subject == subject)
+    if year:
+        q = q.filter(Lesson.year == year)
+    if semester:
+        q = q.filter(Lesson.semester == int(semester))
     return q.order_by(Lesson.subject, Lesson.type, Lesson.number, Lesson.hour).all()
+
+
+def list_terms(db) -> list:
+    """Список учебных периodов, по которым есть занятия: [{year, semester}], новые сверху.
+    Для селектора термина в журнале/статистике и для архива прошлых семестров."""
+    rows = db.query(Lesson.year, Lesson.semester).filter(
+        Lesson.deleted == False, Lesson.year != "").distinct().all()  # noqa: E712
+    terms = sorted({(y, int(s or 0)) for y, s in rows if y},
+                   key=lambda t: (t[0], t[1]), reverse=True)
+    return [{"year": y, "semester": s} for y, s in terms]
 
 
 def lesson_pairs(lessons):

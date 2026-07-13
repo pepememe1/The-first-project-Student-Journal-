@@ -136,3 +136,79 @@ def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
+                        teacher: str = "") -> bytes:
+    """Экзаменационно-зачётная (аттестационная) ведомость: группа+предмет+семестр,
+    список студентов с ИТОГОВОЙ оценкой, форма контроля, дата и строка подписи.
+    rows — [{surname, name, patronymic, grade}]. term — {year, semester}."""
+    thin = Side(style="thin", color="9AA7A9")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    year = (term or {}).get("year", "")
+    sem = (term or {}).get("semester", "")
+    sem_txt = "осенний" if sem == 1 else ("весенний" if sem == 2 else str(sem))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = re.sub(r'[\[\]:*?/\\]', '_', f"Ведомость {group}")[:31]
+    headers = ["№", "Фамилия Имя Отчество", "Итоговая оценка", "Подпись"]
+    ncols = len(headers)
+    last_col = get_column_letter(ncols)
+
+    def _title(row, text, size, **kw):
+        ws.merge_cells(f"A{row}:{last_col}{row}")
+        c = ws[f"A{row}"]
+        c.value = text
+        c.font = Font(name=FNT, size=size, **kw)
+        c.alignment = Alignment(horizontal="center")
+
+    _title(1, "Технологический колледж ВСГУТУ", 12, color="7A8A8C")
+    _title(2, ("Экзаменационная ведомость" if (form or "").lower().startswith("экз")
+               else "Зачётно-экзаменационная ведомость"), 16, bold=True, color=ACCENT)
+    _title(3, f"Группа {group}  ·  {subject}", 14, bold=True)
+    _title(4, f"{year}, {sem_txt} семестр"
+              + (f"  ·  форма контроля: {form}" if form else ""), 12, italic=True)
+
+    HDR = 6
+    ws.append([]); ws.append([]); ws.append([]); ws.append([]); ws.append([])
+    ws.append(headers)
+    for cell in ws[HDR]:
+        cell.font = Font(name=FNT, size=13, bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color=ACCENT, end_color=ACCENT, fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+
+    for i, s in enumerate(rows):
+        fio = " ".join(x for x in (s.get("surname", ""), s.get("name", ""),
+                                   s.get("patronymic", "")) if x).strip()
+        #если отчество уже внутри name — не дублируем
+        if s.get("patronymic") and s.get("name", "").endswith(s.get("patronymic", "")):
+            fio = f"{s.get('surname','')} {s.get('name','')}".strip()
+        grade = (s.get("grade") or "").strip()
+        ws.append([i + 1, fio, grade, ""])
+        r = HDR + 1 + i
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = border
+            cell.font = Font(name=FNT, size=13,
+                             color=_grade_color(grade) if c == 3 else "222222")
+            cell.alignment = Alignment(
+                horizontal="left" if c == 2 else "center", vertical="center")
+
+    foot = HDR + len(rows) + 2
+    ws.cell(row=foot, column=1,
+            value=f"Дата: {datetime.now().strftime('%d.%m.%Y')}").font = Font(name=FNT, size=12)
+    ws.merge_cells(start_row=foot, start_column=1, end_row=foot, end_column=2)
+    sign = ws.cell(row=foot, column=3, value=f"Преподаватель: {teacher or '____________'}")
+    sign.font = Font(name=FNT, size=12)
+    ws.merge_cells(start_row=foot, start_column=3, end_row=foot, end_column=ncols)
+
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 40
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 18
+    ws.row_dimensions[HDR].height = 32
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

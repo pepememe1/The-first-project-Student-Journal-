@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
-                      AuthSession, ConfigKV)
+                      AuthSession, ConfigKV, TermGrade)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -64,6 +64,36 @@ def _mood_by_avg(avg: float) -> str:
     if avg < 4:
         return "neutral"
     return "happy"
+
+
+def _resolve_term(cfg: dict, year: str = "", semester=None) -> tuple:
+    """Термин запроса: явные year+semester (просмотр архива) или ТЕКУЩИЙ из config.
+    Так журнал/статистика по умолчанию показывают активный семестр, а прошлые —
+    по явному выбору."""
+    year = (year or "").strip()
+    if year and semester:
+        try:
+            return year, int(semester)
+        except (TypeError, ValueError):
+            pass
+    return W.current_term(cfg)
+
+
+def _ensure_current_term(cfg: dict, lesson):
+    """Защита от правки АРХИВА: писать (оценки/занятия) можно только в ТЕКУЩИЙ термин.
+    Прошлые семестры — только чтение (перевод на курс их «замораживает»). Занятие без
+    периода (легаси/десктоп до штампа) считаем текущим — не блокируем."""
+    if lesson is None:
+        return
+    ly = (getattr(lesson, "year", "") or "").strip()
+    if not ly:
+        return
+    cy, cs = W.current_term(cfg)
+    if ly != cy or int(getattr(lesson, "semester", 0) or 0) != cs:
+        raise HTTPException(
+            status_code=409,
+            detail="Этот семестр уже в архиве (только чтение). Правки возможны только "
+                   "в текущем учебном периоде.")
 
 
 # СТУДЕНТ ──────────────────────────────────────────────────────────────────────
@@ -139,11 +169,14 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
 
 
 @router.get("/student/journal")
-def student_journal(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Журнал студента: занятия сгруппированы по предметам, у каждого — своя оценка."""
+def student_journal(year: str = Query(""), semester: int = Query(0),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Журнал студента: занятия сгруппированы по предметам, у каждого — своя оценка.
+    По умолчанию — ТЕКУЩИЙ семестр; year+semester открывают архив прошлого периода."""
     _require("student", user)
     cfg = W.load_config(db)
-    lessons = W.group_lessons(db, user.group_name)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, user.group_name, year=ty, semester=ts)
     records = W.student_records(db, user.surname, user.name, user.group_name)
 
     from collections import OrderedDict
@@ -163,18 +196,22 @@ def student_journal(user: User = Depends(get_current_user), db: Session = Depend
         subjects.append({"subject": subj, "lessons": items,
                          "average": W.average(ls, records, cfg)})
 
-    return {"group": user.group_name, "subjects": subjects,
+    return {"group": user.group_name, "subjects": subjects, "term": {"year": ty, "semester": ts},
             "methodology": W.grading.methodology_text(cfg)}
 
 
 @router.get("/student/stats")
-def student_stats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Статистика студента: общий средний, по предметам, пропуски, задолженности."""
+def student_stats(year: str = Query(""), semester: int = Query(0),
+                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Статистика студента: общий средний, по предметам, пропуски, задолженности.
+    По умолчанию — текущий семестр; year+semester — архив."""
     _require("student", user)
     cfg = W.load_config(db)
-    lessons = W.group_lessons(db, user.group_name)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, user.group_name, year=ty, semester=ts)
     records = W.student_records(db, user.surname, user.name, user.group_name)
     return {
+        "term": {"year": ty, "semester": ts},
         "average": W.average(lessons, records, cfg),
         "per_subject": W.per_subject_averages(lessons, records, cfg),
         "absences": W.absences(lessons, records),
@@ -296,12 +333,15 @@ def _teacher_check_subject(user: User, subject: str):
 
 @router.get("/teacher/journal")
 def teacher_journal(group: str = Query(...), subject: str = Query(...),
+                    year: str = Query(""), semester: int = Query(0),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Журнал группы по одному предмету преподавателя: студенты × занятия × оценки."""
+    """Журнал группы по одному предмету преподавателя: студенты × занятия × оценки.
+    По умолчанию — текущий семестр; year+semester открывают архив."""
     _require("teacher", user)
     _teacher_check_subject(user, subject)
     cfg = W.load_config(db)
-    lessons = W.group_lessons(db, group, subject)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
     #Ключи пересдач экзаменов (как в десктопе: <id>_retake, дальше — _retake_N по extra).
     retake_keys = []
@@ -319,7 +359,7 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
         rows.append({"surname": s.surname, "name": s.name, "grades": grades,
                      "average": W.average(lessons, recs, cfg)})
     return {
-        "group": group, "subject": subject,
+        "group": group, "subject": subject, "term": {"year": ty, "semester": ts},
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
                      "topic": l.topic, "date": l.date, "hour": l.hour,
                      "retake_date": l.retake_date, "extra": l.extra or {}}
@@ -347,18 +387,218 @@ def teacher_students(group: str = Query(...),
 
 @router.get("/teacher/stats")
 def teacher_stats(group: str = Query(...), subject: str = Query(...),
+                  year: str = Query(""), semester: int = Query(0),
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Средний по группе за предмет преподавателя."""
+    """Средний по группе за предмет преподавателя (по умолчанию — текущий семестр)."""
     _require("teacher", user)
     _teacher_check_subject(user, subject)
     cfg = W.load_config(db)
-    lessons = W.group_lessons(db, group, subject)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
     vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group), cfg) for s in studs]
     vals = [v for v in vals if v > 0]
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
-    return {"group": group, "subject": subject, "students": len(studs),
-            "group_average": group_avg, "lessons": len(lessons)}
+    return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
+            "students": len(studs), "group_average": group_avg, "lessons": len(lessons)}
+
+
+# УЧЕБНЫЙ ПЕРИОД (год/семестр) ───────────────────────────────────────────────────
+@router.get("/terms")
+def terms(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Доступные учебные периоды (для селектора/архива) + текущий термин."""
+    cfg = W.load_config(db)
+    cy, cs = W.current_term(cfg)
+    return {"current": {"year": cy, "semester": cs}, "terms": W.list_terms(db)}
+
+
+@router.post("/admin/term/rollover")
+def admin_term_rollover(payload: dict = Body(default={}), request: Request = None,
+                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Перевод на следующий учебный период (перевод на курс).
+
+    Продвигает ТЕКУЩИЙ термин: семестр 1→2 (тот же год) или 2→1 (год +1). Прошлые
+    занятия остаются в своём периоде и становятся read-only (архив, см. _ensure_current_term).
+    Ростер/группы НЕ трогаем — новый семестр наполняется занятиями заново. Можно задать
+    явные year+semester в теле. Текущий термин хранится в config (синкается на десктоп)."""
+    cfg = W.load_config(db)
+    cy, cs = W.current_term(cfg)
+    ny = (payload.get("year") or "").strip()
+    ns = payload.get("semester")
+    if ny and ns:
+        new_year, new_sem = ny, int(ns)
+    elif cs == 1:
+        new_year, new_sem = cy, 2                 #осень → весна того же года
+    else:
+        try:                                      #весна → осень следующего года
+            a, b = cy.split("/")
+            new_year = f"{int(a) + 1}/{int(b) + 1}"
+        except Exception:
+            new_year = cy
+        new_sem = 1
+    row = db.get(ConfigKV, "config")
+    cur = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+    cur["current_year"] = new_year
+    cur["current_semester"] = new_sem
+    now = _now_iso()
+    if row is None:
+        db.add(ConfigKV(key="config", value=cur, updated_at=now, deleted=False))
+    else:
+        row.value = cur
+        row.updated_at = now
+    db.commit()
+    audit.log(db, request, actor=_admin.login, role="admin", action="term.rollover",
+              detail=f"{cy}·{cs} → {new_year}·{new_sem}")
+    return {"ok": True, "previous": {"year": cy, "semester": cs},
+            "current": {"year": new_year, "semester": new_sem}}
+
+
+# КУРАТОР (только чтение по курируемым группам) ───────────────────────────────────
+# Куратор — это teacher с непустым curated_groups. В отличие от журнала препода (только
+# СВОИ предметы), куратор видит ВСЕ предметы курируемой группы, но ТОЛЬКО НА ЧТЕНИЕ.
+def _curator_check(user: User, group: str):
+    """Row-level: куратор видит только свои курируемые группы, иначе 403."""
+    if group not in (user.curated_groups or []):
+        raise HTTPException(status_code=403, detail="Группа вне вашего кураторства")
+
+
+@router.get("/curator/groups")
+def curator_groups(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Группы, которые курирует преподаватель. Пусто → он не куратор (вкладка скрыта)."""
+    _require("teacher", user)
+    return {"groups": list(user.curated_groups or [])}
+
+
+@router.get("/curator/group/{group}/subjects")
+def curator_group_subjects(group: str, year: str = Query(""), semester: int = Query(0),
+                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Предметы курируемой группы за термин (ВСЕ предметы группы, не только «свои»)."""
+    _require("teacher", user)
+    _curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    subs = sorted({l.subject for l in W.group_lessons(db, group, year=ty, semester=ts) if l.subject})
+    return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": subs}
+
+
+@router.get("/curator/group/{group}/subject/{subject}")
+def curator_group_subject(group: str, subject: str, year: str = Query(""), semester: int = Query(0),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Студенты курируемой группы + оценки/средний по ЛЮБОМУ предмету группы (read-only).
+    Ключевой скоуп безопасности: доступ по КУРИРУЕМОЙ ГРУППЕ, а не по предметам препода;
+    запись недоступна (куратор не ставит оценки — только смотрит ведение журнала)."""
+    _require("teacher", user)
+    _curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
+    studs = W.students_in_group(db, group)
+    rows = []
+    for s in studs:
+        recs = W.student_records(db, s.surname, s.name, group)
+        grades = {l.id: recs.get(l.id, "") for l in lessons}
+        rows.append({"surname": s.surname, "name": s.name,
+                     "first_name": W.first_name(s), "patronymic": W.patronymic_of(s),
+                     "grades": grades, "average": W.average(lessons, recs, cfg)})
+    return {
+        "group": group, "subject": subject, "term": {"year": ty, "semester": ts},
+        "lessons": [{"id": l.id, "type": l.type, "number": l.number,
+                     "topic": l.topic, "date": l.date} for l in lessons],
+        "students": rows,
+    }
+
+
+# ИТОГОВЫЕ ОЦЕНКИ ЗА СЕМЕСТР + ВЕДОМОСТИ (промежуточная аттестация) ────────────────
+def _term_grade_id(surname, name, subject, year, semester):
+    return f"{surname}|{name}|{subject}|{year}|{semester}"
+
+
+@router.post("/teacher/term-grade")
+def teacher_set_term_grade(payload: dict = Body(...),
+                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Преподаватель выставляет ИТОГОВУЮ оценку за семестр по СВОЕМУ предмету (текущий
+    термин). Пустая = снять. Форма контроля (зачёт/экзамен/диффзачёт) — опционально."""
+    _require("teacher", user)
+    surname = (payload.get("surname") or "").strip()
+    name = (payload.get("name") or "").strip()
+    subject = (payload.get("subject") or "").strip()
+    group = (payload.get("group") or "").strip()
+    grade = (payload.get("grade") or "").strip()
+    form = (payload.get("form") or "").strip()
+    if not (surname and name and subject and group):
+        raise HTTPException(status_code=400, detail="Нужны surname, name, subject, group")
+    _teacher_check_subject(user, subject)
+    ty, ts = W.current_term(W.load_config(db))
+    stud = db.query(User).filter(
+        User.role == "student", User.surname == surname, User.name == name,
+        User.group_name == group, User.deleted == False).first()  # noqa: E712
+    if not stud:
+        raise HTTPException(status_code=400, detail="Студент не найден в группе")
+    gid = _term_grade_id(surname, name, subject, ty, ts)
+    now = _now_iso()
+    row = db.get(TermGrade, gid)
+    if row is None:
+        row = TermGrade(id=gid, student_f=surname, student_n=name, subject=subject,
+                        year=ty, semester=ts)
+        db.add(row)
+    row.grade = grade
+    if form:
+        row.form = form
+    row.updated_at = now
+    row.deleted = (grade == "")
+    db.commit()
+    audit.log(db, actor=user.login, role=user.role, action="term_grade.set",
+              target=f"{surname} {name}", detail=f"{subject} · {ty}·{ts} = {grade}")
+    return {"ok": True, "id": gid, "grade": grade}
+
+
+@router.get("/teacher/term-grades")
+def teacher_term_grades(group: str = Query(...), subject: str = Query(...),
+                        year: str = Query(""), semester: int = Query(0),
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Итоговые оценки группы по предмету за термин: {«surname|name»: {grade, form}}."""
+    _require("teacher", user)
+    _teacher_check_subject(user, subject)
+    ty, ts = _resolve_term(W.load_config(db), year, semester)
+    rows = db.query(TermGrade).filter(
+        TermGrade.subject == subject, TermGrade.year == ty,
+        TermGrade.semester == ts, TermGrade.deleted == False).all()  # noqa: E712
+    out = {f"{r.student_f}|{r.student_n}": {"grade": r.grade, "form": r.form} for r in rows}
+    return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
+            "grades": out}
+
+
+@router.get("/teacher/vedomost.xlsx")
+def teacher_vedomost_xlsx(group: str = Query(...), subject: str = Query(...),
+                          form: str = Query(""), year: str = Query(""), semester: int = Query(0),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Экзаменационно-зачётная ведомость (xlsx): студенты + итоговая оценка + форма +
+    дата + строка подписи. Итоговые берём из TermGrade за термин."""
+    _require("teacher", user)
+    _teacher_check_subject(user, subject)
+    try:
+        from .. import xlsx_export
+    except ImportError:
+        raise HTTPException(status_code=501, detail="На сервере не установлен openpyxl")
+    ty, ts = _resolve_term(W.load_config(db), year, semester)
+    tg = {f"{r.student_f}|{r.student_n}": r for r in db.query(TermGrade).filter(
+        TermGrade.subject == subject, TermGrade.year == ty,
+        TermGrade.semester == ts, TermGrade.deleted == False).all()}  # noqa: E712
+    rows = []
+    for s in W.students_in_group(db, group):
+        r = tg.get(f"{s.surname}|{s.name}")
+        rows.append({"surname": s.surname, "name": s.name,
+                     "patronymic": W.patronymic_of(s), "grade": (r.grade if r else "")})
+    data = xlsx_export.build_vedomost_xlsx(
+        group, subject, {"year": ty, "semester": ts}, form, rows, teacher=W.display_name(user))
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    fname = f"Ведомость_{group}_{subject}_{ty}_{ts}.xlsx".replace(" ", "_").replace("/", "-")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f"attachment; filename=vedomost.xlsx; filename*=UTF-8''{quote(fname)}"})
 
 
 # АДМИНИСТРАТОР ───────────────────────────────────────────────────────────────────
@@ -387,7 +627,8 @@ def admin_teachers(_admin: User = Depends(require_admin), db: Session = Depends(
         User.role == "teacher", User.deleted == False).order_by(User.full_name).all()  # noqa: E712
     info = _contact_info(db, [u.login for u in rows])
     return {"teachers": [dict(
-        {"login": u.login, "name": W.display_name(u), "subjects": list(u.subjects or [])},
+        {"login": u.login, "name": W.display_name(u), "subjects": list(u.subjects or []),
+         "curated_groups": list(u.curated_groups or [])},
         **info.get(u.login, {})) for u in rows]}
 
 
@@ -622,6 +863,7 @@ def teacher_set_grade(payload: dict = Body(...),
     if not lesson:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_subject(user, lesson.subject)   #только свой предмет
+    _ensure_current_term(W.load_config(db), lesson)   #архив прошлых семестров — read-only
     stud = db.query(User).filter(
         User.role == "student", User.surname == surname, User.name == name,
         User.group_name == lesson.group_name, User.deleted == False).first()  # noqa: E712
@@ -668,11 +910,14 @@ def teacher_create_lesson(payload: dict = Body(...),
         number = (max((r[0] or 0) for r in rows) + 1) if rows else 1
     import uuid as _uuid
     lid = str(_uuid.uuid4())
+    #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр).
+    ty, ts = W.current_term(W.load_config(db))
     db.add(Lesson(id=lid, group_name=group, subject=subject, type=ltype,
                   number=int(number), topic=(payload.get("topic") or "").strip(),
                   date=(payload.get("date") or "").strip(),
                   retake_date=(payload.get("retake_date") or "").strip(),
                   hour=int(payload.get("hour") or 0), extra={},
+                  year=ty, semester=ts,
                   updated_at=_now_iso(), deleted=False))
     db.commit()
     return {"ok": True, "id": lid, "number": int(number)}
@@ -686,6 +931,7 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_subject(user, row.subject)
+    _ensure_current_term(W.load_config(db), row)   #архив — read-only
     for field in ("topic", "date", "retake_date"):
         if field in payload:
             setattr(row, field, (payload.get(field) or "").strip())
@@ -717,6 +963,7 @@ def teacher_delete_lesson(lesson_id: str,
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_subject(user, row.subject)
+    _ensure_current_term(W.load_config(db), row)   #архив — read-only
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
@@ -1055,6 +1302,8 @@ def admin_create_teacher(payload: dict = Body(...),
     row.name = ""
     row.group_name = ""
     row.subjects = payload.get("subjects") or []
+    #Куратор: непустой список групп = роль куратора (read-only доступ ко всем предметам групп).
+    row.curated_groups = payload.get("curated_groups") or []
     row.group_assignments = {}
     password = payload.get("password") or ""
     if password:
@@ -1079,6 +1328,13 @@ def admin_update_teacher(login: str, payload: dict = Body(...),
         row.full_name = (payload.get("full_name") or "").strip()
     if "subjects" in payload:
         row.subjects = payload.get("subjects") or []
+    #Выдача/снятие кураторства — только админ; логируем (роль остаётся teacher).
+    if "curated_groups" in payload:
+        before = list(row.curated_groups or [])
+        row.curated_groups = payload.get("curated_groups") or []
+        if list(row.curated_groups) != before:
+            audit.log(db, actor=_admin.login, role="admin", action="curator.set",
+                      target=login, detail=", ".join(row.curated_groups) or "(снято)")
     password = payload.get("password") or ""
     if password:
         from ..security import hash_password

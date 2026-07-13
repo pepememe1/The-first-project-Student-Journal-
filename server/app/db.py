@@ -80,6 +80,9 @@ def init_db():
     _ensure_user_prefs_column()
     _ensure_user_patronymic_column()
     _backfill_patronymic()
+    _ensure_lesson_term_columns()
+    _backfill_lesson_term()
+    _ensure_user_curated_groups_column()
 
 
 def _ensure_user_prefs_column():
@@ -139,3 +142,69 @@ def _backfill_patronymic():
                                  {"p": patr, "i": uid})
     except Exception as e:
         print(f"[db] backfill patronymic пропущен: {e}")
+
+
+def default_term() -> tuple:
+    """Текущий учебный термин по дате сервера: (год «YYYY/YYYY+1», семестр 1|2).
+    Осень (сен–янв) = семестр 1, весна (фев–авг) = семестр 2. Учебный год начинается
+    в сентябре. Единый источник дефолта для миграции и конфига (webdata дублирует)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    y, m = now.year, now.month
+    if m >= 9:
+        return f"{y}/{y + 1}", 1
+    if m == 1:
+        return f"{y - 1}/{y}", 1
+    return f"{y - 1}/{y}", 2
+
+
+def _ensure_lesson_term_columns():
+    """Идемпотентная мини-миграция: столбцы lessons.year / lessons.semester (учебный
+    период). На свежей БД создаются через create_all, на существующей — ALTER-ом."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("lessons")}
+    except Exception:
+        return
+    with engine.begin() as conn:
+        if "year" not in columns:
+            conn.execute(text("ALTER TABLE lessons ADD COLUMN year VARCHAR DEFAULT ''"))
+        if "semester" not in columns:
+            conn.execute(text("ALTER TABLE lessons ADD COLUMN semester INTEGER DEFAULT 0"))
+
+
+def _backfill_lesson_term():
+    """Разово проставляет период занятиям, у которых он ещё не задан (историческим).
+    Ставим ТЕКУЩИЙ термин по дате — чтобы старые занятия попали в актуальный период и
+    не «выпали» из фильтра. Идемпотентно: трогаем только year='' / NULL."""
+    from sqlalchemy import text
+    try:
+        y, s = default_term()
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE lessons SET year=:y, semester=:s "
+                "WHERE (year IS NULL OR year='') "), {"y": y, "s": s})
+            #у части могло проставиться year, но semester=0 — добьём семестр
+            conn.execute(text(
+                "UPDATE lessons SET semester=:s WHERE (semester IS NULL OR semester=0)"),
+                {"s": s})
+    except Exception as e:
+        print(f"[db] backfill lesson term пропущен: {e}")
+
+
+def _ensure_user_curated_groups_column():
+    """Идемпотентная мини-миграция: users.curated_groups (JSON-список групп, которые
+    курирует преподаватель). Непустой список = роль куратора (role остаётся teacher)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("users")}
+    except Exception:
+        return
+    if "curated_groups" in columns:
+        return
+    is_pg = engine.url.get_backend_name().startswith("postgres")
+    coltype = "JSONB" if is_pg else "JSON"
+    with engine.begin() as conn:
+        conn.execute(text(f"ALTER TABLE users ADD COLUMN curated_groups {coltype}"))

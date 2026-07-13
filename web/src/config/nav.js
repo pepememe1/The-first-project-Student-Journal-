@@ -6,7 +6,7 @@
  * Пункт-секция: { section: 'ЗАГОЛОВОК' }. Пункт-ссылка: { key, label, icon, to }.
  */
 import {
-  Home, ClipboardList, CalendarDays, BarChart3, Bot, User,
+  Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   Palette, MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
 } from '@lucide/vue'
@@ -26,6 +26,7 @@ export const NAV = {
     { section: 'Преподавание' },
     { key: 'journal', label: 'Журнал', icon: BookOpen, to: '/teacher' },
     { key: 'students', label: 'Студенты', icon: Users, to: '/teacher/students' },
+    { key: 'curator', label: 'Курирование', icon: ClipboardCheck, to: '/teacher/curator', curatorOnly: true },
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/teacher/schedule' },
     { key: 'stats', label: 'Статистика', icon: BarChart3, to: '/teacher/stats' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/teacher/vector' },

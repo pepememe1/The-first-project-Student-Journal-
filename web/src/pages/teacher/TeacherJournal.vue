@@ -10,7 +10,7 @@
 //  • дата нового занятия — автоматически сегодняшняя.
 // Всё пишется в те же таблицы, что синк десктопа → изменения доезжают до ПК pull'ом.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { teacherApi } from '@/api/endpoints'
+import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 
@@ -22,6 +22,28 @@ const data = ref(null)
 const loading = ref(false)
 const saving = ref(false)
 
+// ── Учебный период (семестр): текущий по умолчанию, прошлые — архив (read-only) ──
+const terms = ref([])
+const term = ref(null)
+const currentTerm = ref(null)
+const isArchive = computed(() => term.value && currentTerm.value &&
+  (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
+function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
+function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
+function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
+
+async function loadTerms() {
+  try {
+    const t = (await termsApi.list()).data
+    currentTerm.value = t.current
+    const all = (t.terms || []).slice()
+    if (!all.some((x) => x.year === t.current.year && x.semester === t.current.semester)) all.unshift(t.current)
+    terms.value = all
+    term.value = t.current
+  } catch { /* */ }
+}
+
 onMounted(async () => {
   try {
     const o = (await teacherApi.overview()).data
@@ -30,6 +52,7 @@ onMounted(async () => {
     group.value = groups.value[0] || ''
     subject.value = subjects.value[0] || ''
   } catch { /* */ }
+  await loadTerms()
   document.addEventListener('click', closeCtx)
 })
 onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
@@ -37,9 +60,9 @@ onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
   loading.value = true
-  try { data.value = (await teacherApi.journal(group.value, subject.value)).data } catch { data.value = null } finally { loading.value = false }
+  try { data.value = (await teacherApi.journal(group.value, subject.value, termParams())).data } catch { data.value = null } finally { loading.value = false }
 }
-watch([group, subject], load)
+watch([group, subject, term], load)
 
 // ── Колонки: занятие + его пересдачи (как col_defs в десктопе) ──────────────────
 function retakeKey(l, ri) { return ri === 1 ? `${l.id}_retake` : `${l.id}_retake_${ri}` }
@@ -140,6 +163,7 @@ async function setExamGrade(s, col, value) {
   }
 }
 function onCell(s, col, value) {
+  if (isArchive.value) return   // прошлый семестр — только чтение
   if (col.l.type === 'Экзамен' || col.ri > 0) setExamGrade(s, col, value)
   else setGrade(s, col.key, value)
 }
@@ -224,6 +248,48 @@ async function exportXlsx() {
     alert('Не удалось выгрузить Excel' + (detail ? `: ${detail}` : ''))
   } finally { exporting.value = false }
 }
+
+// ── Аттестация: итоговые оценки за семестр + ведомость ──────────────────────────
+const showAtt = ref(false)
+const attRows = ref([])
+const attForm = ref('экзамен')
+const attSaving = ref(false)
+const ATT_FORMS = ['экзамен', 'зачёт', 'диффзачёт']
+const ATT_GRADES = ['', '5', '4', '3', '2', 'Зачтено', 'Не зачтено']
+
+async function openAtt() {
+  try {
+    const tg = (await teacherApi.termGrades(group.value, subject.value, termParams())).data.grades || {}
+    attRows.value = (data.value?.students || []).map((s) => ({
+      surname: s.surname, name: s.name, grade: tg[`${s.surname}|${s.name}`]?.grade || '',
+    }))
+    showAtt.value = true
+  } catch { alert('Не удалось загрузить итоговые оценки') }
+}
+async function saveAtt() {
+  attSaving.value = true
+  try {
+    for (const r of attRows.value) {
+      await teacherApi.setTermGrade({
+        group: group.value, subject: subject.value,
+        surname: r.surname, name: r.name, grade: r.grade, form: attForm.value,
+      })
+    }
+    showAtt.value = false
+  } catch (e) { alert('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message)) }
+  finally { attSaving.value = false }
+}
+async function exportVedomost() {
+  try {
+    const { data: blob } = await teacherApi.vedomostXlsx(group.value, subject.value, { form: attForm.value, ...termParams() })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Ведомость_${group.value}_${subject.value}.xlsx`.replaceAll('/', '-')
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch { alert('Не удалось выгрузить ведомость') }
+}
 </script>
 
 <template>
@@ -236,16 +302,27 @@ async function exportXlsx() {
               class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52 sm:max-w-md">
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
       </select>
+      <select v-if="terms.length" :value="termKey(term)" @change="selectTerm($event.target.value)"
+              class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto"
+              :class="isArchive ? 'border-orange text-orange' : ''">
+        <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
+      </select>
       <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">Сохранение…</span>
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
         Студентов: {{ data.students?.length || 0 }} · занятий: {{ data.lessons?.length || 0 }}
       </span>
       <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 Аттестация</AppButton>
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="exportVedomost">📄 Ведомость</AppButton>
         <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="exportXlsx">
           {{ exporting ? 'Выгрузка…' : '💾 Excel' }}
         </AppButton>
-        <AppButton variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ Занятие</AppButton>
+        <AppButton v-if="!isArchive" variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ Занятие</AppButton>
       </div>
+    </div>
+
+    <div v-if="isArchive" class="rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
+      🔒 Прошлый семестр — архив (только просмотр). Правки доступны в текущем периоде: {{ termLabel(currentTerm) }}.
     </div>
 
     <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки"
@@ -281,7 +358,7 @@ async function exportXlsx() {
                 <div v-if="col.l.topic" class="mt-0.5 line-clamp-2 text-[11px] font-normal normal-case leading-snug text-text2" :title="col.l.topic">
                   {{ col.l.topic }}
                 </div>
-                <div class="mt-1 flex items-center justify-center gap-3 text-text3">
+                <div v-if="!isArchive" class="mt-1 flex items-center justify-center gap-3 text-text3">
                   <button class="hover:text-accent" title="Изменить" @click.stop="openEditLesson(col.l)">✎</button>
                   <button class="hover:text-red" title="Удалить" @click.stop="delLesson(col.l)">✕</button>
                 </div>
@@ -299,8 +376,8 @@ async function exportXlsx() {
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
               <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key])"
-                      :title="s.grades[col.key] || ''"
-                      class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent"
+                      :title="s.grades[col.key] || ''" :disabled="isArchive"
+                      class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
                       @change="onCell(s, col, $event.target.value)">
                 <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
               </select>
@@ -365,6 +442,32 @@ async function exportXlsx() {
           <AppButton variant="green" size="sm" :disabled="savingLesson" @click="saveLesson">
             {{ savingLesson ? 'Сохранение…' : (editingLesson ? 'Сохранить' : 'Добавить') }}
           </AppButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Модалка аттестации: итоговые оценки за семестр + форма контроля + ведомость -->
+    <div v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
+      <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 Итоговые оценки за семестр</h3>
+        <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(term) }}</p>
+        <label class="mb-3 block"><span class="mb-1 block text-tiny uppercase text-text3">Форма контроля</span>
+          <select v-model="attForm" class="h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option v-for="f in ATT_FORMS" :key="f" :value="f">{{ f }}</option>
+          </select>
+        </label>
+        <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+          <div v-for="(r, i) in attRows" :key="i" class="flex items-center gap-2">
+            <span class="flex-1 truncate text-sm text-text">{{ r.surname }} {{ r.name }}</span>
+            <select v-model="r.grade" class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+              <option v-for="g in ATT_GRADES" :key="g" :value="g">{{ g || '—' }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-4 flex flex-wrap justify-end gap-2">
+          <AppButton variant="ghost" size="sm" @click="showAtt = false">Закрыть</AppButton>
+          <AppButton variant="ghost" size="sm" @click="exportVedomost">📄 Ведомость</AppButton>
+          <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? 'Сохранение…' : 'Сохранить' }}</AppButton>
         </div>
       </div>
     </div>

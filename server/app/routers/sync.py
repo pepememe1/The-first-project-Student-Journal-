@@ -130,6 +130,14 @@ def push(payload: dict = Body(...), request: Request = None,
     _deny_web(request)   #браузер не пушит в общий синк (у него /web/*, /me/*)
     allowed = PUSH_SCOPE.get(user.role, set())
     changes = (payload or {}).get("changes", {}) or {}
+    #Занятия с десктопа приходят БЕЗ учебного периода (десктоп его не знает). Штампуем
+    #текущим термином, иначе они выпадут из фильтра журнала по семестру.
+    if isinstance(changes.get("lessons"), list) and changes["lessons"]:
+        from ..webdata import load_config, current_term
+        _ty, _ts = current_term(load_config(db))
+        for _it in changes["lessons"]:
+            if isinstance(_it, dict) and not (_it.get("year") or "").strip():
+                _it["year"], _it["semester"] = _ty, _ts
     server_ts = _now()
     applied = {}
     rejected = {}

@@ -32,6 +32,10 @@ class User(Base):
     group_name = Column(String, default="")            #для студента
     subjects = Column(JSON, default=list)              #для преподавателя
     group_assignments = Column(JSON, default=dict)     #для преподавателя
+    #Группы, которые преподаватель КУРИРУЕТ (роль куратора). Непустой список = куратор;
+    #отдельная роль не заводится (role остаётся teacher). Куратор ВИДИТ все предметы своих
+    #групп (в т.ч. чужие) в режиме ТОЛЬКО ЧТЕНИЕ — см. routers/web.py /web/curator/*.
+    curated_groups = Column(JSON, default=list)
     #Личные настройки пользователя (тема оформления и пр.). Меняет ТОЛЬКО сам
     #пользователь через self-эндпоинт POST /me/prefs (роли/пароль не затрагиваются).
     #Уезжает клиентам обычным pull (как и прочие столбцы) — так тема «роумится».
@@ -68,6 +72,11 @@ class Lesson(Base):
     date = Column(String, default="")
     retake_date = Column(String, default="")
     hour = Column(Integer, default=0)
+    #Измерение УЧЕБНОГО ПЕРИОДА (фундамент долгосрочного журнала): год «2025/2026» и
+    #семестр (1..8). Оценки наследуют период от занятия (ключ оценки не трогаем). Новые
+    #занятия штампуются ТЕКУЩИМ термином из config; старые бэкфилл-ятся при миграции.
+    year = Column(String, index=True, default="")
+    semester = Column(Integer, index=True, default=0)
     extra = Column(JSON, default=dict)                 #retake_date_2..5 и пр.
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
@@ -81,6 +90,24 @@ class Grade(Base):
     lesson_id = Column(String, index=True, default="")
     grade = Column(String, default="")
     device = Column(String, default="")                #имя ПК — для конфликтов
+    updated_at = Column(String, default="", index=True)
+    deleted = Column(Boolean, default=False)
+
+
+class TermGrade(Base):
+    """Итоговая оценка за семестр по предмету (промежуточная аттестация) — отдельно от
+    Grade (та — по конкретным занятиям). Ключ: студент+предмет+год+семестр. Из неё
+    строятся ведомости. Серверная деталь — НЕ в SYNC_MODELS (десктоп её пока не ведёт),
+    таблица создаётся create_all на старте."""
+    __tablename__ = "term_grades"
+    id = Column(String, primary_key=True)              #f|n|subject|year|semester
+    student_f = Column(String, index=True, default="")
+    student_n = Column(String, index=True, default="")
+    subject = Column(String, index=True, default="")
+    year = Column(String, index=True, default="")
+    semester = Column(Integer, index=True, default=0)
+    grade = Column(String, default="")                 #5/4/3/2 | Зачтено/Не зачтено
+    form = Column(String, default="")                  #зачёт | экзамен | диффзачёт
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 

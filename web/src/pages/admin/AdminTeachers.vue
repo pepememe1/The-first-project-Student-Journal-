@@ -10,6 +10,7 @@ import Badge from '@/components/ui/Badge.vue'
 const all = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
+const allGroups = ref([])
 const q = ref('')
 const showPass = ref(false)
 function fmtDT(iso) {
@@ -25,6 +26,7 @@ async function reload() {
 onMounted(async () => {
   await reload()
   try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
+  try { allGroups.value = (await adminApi.groups()).data.groups?.map((g) => g.name) || [] } catch { /* */ }
 })
 
 const rows = computed(() => {
@@ -35,16 +37,21 @@ const rows = computed(() => {
 
 const showForm = ref(false)
 const editing = ref(null)
-const form = ref({ full_name: '', login: '', subjects: [], password: '' })
+const form = ref({ full_name: '', login: '', subjects: [], curated_groups: [], password: '' })
 const saving = ref(false)
 const formError = ref('')
 
-function openCreate() { editing.value = null; form.value = { full_name: '', login: '', subjects: [], password: '' }; formError.value = ''; showForm.value = true }
-function openEdit(t) { editing.value = t.login; form.value = { full_name: t.name, login: t.login, subjects: [...(t.subjects || [])], password: '' }; formError.value = ''; showForm.value = true }
+function openCreate() { editing.value = null; form.value = { full_name: '', login: '', subjects: [], curated_groups: [], password: '' }; formError.value = ''; showForm.value = true }
+function openEdit(t) { editing.value = t.login; form.value = { full_name: t.name, login: t.login, subjects: [...(t.subjects || [])], curated_groups: [...(t.curated_groups || [])], password: '' }; formError.value = ''; showForm.value = true }
 function toggleSubject(s) {
   const i = form.value.subjects.indexOf(s)
   if (i >= 0) form.value.subjects.splice(i, 1)
   else form.value.subjects.push(s)
+}
+function toggleCurated(g) {
+  const i = form.value.curated_groups.indexOf(g)
+  if (i >= 0) form.value.curated_groups.splice(i, 1)
+  else form.value.curated_groups.push(g)
 }
 async function save() {
   const f = form.value
@@ -52,8 +59,9 @@ async function save() {
   if (!f.login.trim()) { formError.value = 'Введите логин'; return }
   saving.value = true; formError.value = ''
   try {
-    if (editing.value) await adminApi.updateTeacher(editing.value, { full_name: f.full_name, subjects: f.subjects, password: f.password })
-    else await adminApi.createTeacher({ full_name: f.full_name, login: f.login, subjects: f.subjects, password: f.password })
+    const payload = { full_name: f.full_name, subjects: f.subjects, curated_groups: f.curated_groups, password: f.password }
+    if (editing.value) await adminApi.updateTeacher(editing.value, payload)
+    else await adminApi.createTeacher({ ...payload, login: f.login })
     showForm.value = false; await reload()
   } catch (e) { formError.value = e?.response?.data?.detail || 'Не удалось сохранить' }
   finally { saving.value = false }
@@ -89,7 +97,10 @@ async function del(t) {
           <tr v-if="loading"><td colspan="6" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
           <tr v-else-if="!rows.length"><td colspan="6" class="px-4 py-6 text-center text-text3">Преподавателей нет</td></tr>
           <tr v-for="(t, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
-            <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ t.name || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">
+              {{ t.name || '—' }}
+              <Badge v-if="t.curated_groups?.length" variant="blue" class="ml-1.5" :title="'Куратор: ' + t.curated_groups.join(', ')">куратор</Badge>
+            </td>
             <td class="px-4 py-2.5 text-text2">{{ t.login || '—' }}</td>
             <td class="px-4 py-2.5">
               <div class="flex flex-wrap gap-1.5">
@@ -127,6 +138,16 @@ async function del(t) {
                 {{ s }}
               </label>
               <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">Сначала заведите предметы во вкладке «Предметы».</p>
+            </div>
+          </div>
+          <div>
+            <span class="mb-1 block text-tiny uppercase text-text3">Курирование групп <span class="normal-case text-text3">(куратор видит все предметы группы, только чтение)</span></span>
+            <div class="max-h-40 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
+              <label v-for="g in allGroups" :key="g" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
+                <input type="checkbox" :checked="form.curated_groups.includes(g)" @change="toggleCurated(g)" />
+                {{ g }}
+              </label>
+              <p v-if="!allGroups.length" class="px-1 py-2 text-xs text-text3">Групп пока нет.</p>
             </div>
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? 'Новый пароль (пусто — не менять)' : 'Пароль' }}</span>
