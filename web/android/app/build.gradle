@@ -15,8 +15,10 @@ android {
         applicationId "ru.esstu.gradebook"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        //RuStore требует БОЛЬШИЙ versionCode на каждую новую сборку. Подняли 1 → 2
+        //вместе с исключением REQUEST_INSTALL_PACKAGES (см. AndroidManifest.xml).
+        versionCode 2
+        versionName "1.0.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
