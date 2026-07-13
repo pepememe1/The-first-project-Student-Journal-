@@ -22,7 +22,13 @@ class User(Base):
     password_hash = Column(String, default="")
     full_name = Column(String, default="")             #ФИО (у преподавателя — ключ)
     surname = Column(String, default="")
+    #ВАЖНО: name хранит «Имя Отчество» (полную форму) и служит КЛЮЧОМ оценок
+    #(grades.student_n = name) и ключом студента при синке (stud:surname|name|group).
+    #Менять его формат нельзя — иначе осиротеют оценки и рассинхронится десктоп.
     name = Column(String, default="")
+    #Отчество ОТДЕЛЬНЫМ полем (для раздельного показа/ввода). Дублирует хвост name,
+    #но name остаётся неизменным ключом. first_name для показа = name без patronymic.
+    patronymic = Column(String, default="")
     group_name = Column(String, default="")            #для студента
     subjects = Column(JSON, default=list)              #для преподавателя
     group_assignments = Column(JSON, default=dict)     #для преподавателя

@@ -399,8 +399,11 @@ def admin_students(group: str = Query(""),
         q = q.filter(User.group_name == group)
     rows = q.order_by(User.group_name, User.surname, User.name).all()
     info = _contact_info(db, [u.login for u in rows])
+    #name отдаём как есть (полная форма — совместимость), плюс имя и отчество РАЗДЕЛЬНО.
     return {"students": [dict(
-        {"login": u.login, "surname": u.surname, "name": u.name, "group": u.group_name},
+        {"login": u.login, "surname": u.surname, "name": u.name,
+         "first_name": W.first_name(u), "patronymic": W.patronymic_of(u),
+         "group": u.group_name},
         **info.get(u.login, {})) for u in rows]}
 
 
@@ -752,6 +755,23 @@ def teacher_journal_xlsx(group: str = Query(...), subject: str = Query(...),
                  f"attachment; filename=journal.xlsx; filename*=UTF-8''{quote(fname)}"})
 
 
+def _compose_name(name_in: str, patronymic: str) -> tuple:
+    """Возвращает (key_name, patronymic). key_name = «Имя Отчество» — это КЛЮЧ оценок
+    и синка (grades.student_n, stud:surname|name|group), его формат менять нельзя.
+
+    - отчество передано отдельным полем → собираем «имя отчество» (без дублирования,
+      если имя уже оканчивается на это отчество);
+    - отчество не передано, но в имени есть пробел (старый фронт прислал полную форму) →
+      вычленяем отчество из хвоста, само имя-ключ оставляем как есть."""
+    name_in = (name_in or "").strip()
+    patronymic = (patronymic or "").strip()
+    if patronymic:
+        key = name_in if name_in.endswith(patronymic) else f"{name_in} {patronymic}".strip()
+        return key, patronymic
+    patr = name_in.split(" ", 1)[1].strip() if " " in name_in else ""
+    return name_in, patr
+
+
 def _ensure_group_row(db: Session, name: str):
     """Заводит группу в таблице groups, если её ещё нет (id=grp:name) — как десктоп при
     добавлении студента (_ensure_group_exists). Так группа не «висит» и уедет в десктоп."""
@@ -774,14 +794,18 @@ def admin_create_student(payload: dict = Body(...),
     гибридом (server.security) → вход работает и с сайта, и из десктопа. Группа
     авто-создаётся, если её ещё нет (пункт 3 на сайте)."""
     surname = (payload.get("surname") or "").strip()
-    name = (payload.get("name") or "").strip()
+    name_in = (payload.get("name") or "").strip()          #ИМЯ (или полная форма — старый фронт)
+    patronymic = (payload.get("patronymic") or "").strip()  #ОТЧЕСТВО отдельным полем
     login = (payload.get("login") or "").strip()
     group = (payload.get("group") or "").strip()
     password = payload.get("password") or ""
-    if not (surname and name):
+    if not (surname and name_in):
         raise HTTPException(status_code=400, detail="Нужны фамилия и имя")
     if not login:
         raise HTTPException(status_code=400, detail="Нужен логин")
+    #name = «Имя Отчество» — это КЛЮЧ оценок и синка (не меняем формат). Если отчество
+    #пришло отдельным полем — собираем; если пришла полная форма без отчества — вычленяем.
+    key_name, patronymic = _compose_name(name_in, patronymic)
     sid = f"stud:{login}"
     existing = db.get(User, sid)
     if existing is not None and not existing.deleted:
@@ -793,7 +817,8 @@ def admin_create_student(payload: dict = Body(...),
     row.role = "student"
     row.login = login
     row.surname = surname
-    row.name = name
+    row.name = key_name
+    row.patronymic = patronymic
     row.group_name = group
     row.full_name = ""
     row.subjects = []
@@ -805,7 +830,7 @@ def admin_create_student(payload: dict = Body(...),
     row.deleted = False
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="student.create",
-              target=login, detail=f"{surname} {name} · {group}")
+              target=login, detail=f"{surname} {key_name} · {group}")
     return {"ok": True, "login": login, "id": sid}
 
 
@@ -821,8 +846,14 @@ def admin_update_student(login: str, payload: dict = Body(...),
         raise HTTPException(status_code=404, detail="Студент не найден")
     if "surname" in payload:
         row.surname = (payload.get("surname") or "").strip()
-    if "name" in payload:
-        row.name = (payload.get("name") or "").strip()
+    #Имя/отчество: пересобираем name-ключ из имени и отчества (отчество храним отдельно).
+    #ВАЖНО: смена name — это смена КЛЮЧА оценок (как и раньше при правке имени), поэтому
+    #трогаем только если пришло name или patronymic. Иначе оставляем как есть.
+    if "name" in payload or "patronymic" in payload:
+        name_in = (payload.get("name") if "name" in payload else W.first_name(row)) or ""
+        patr_in = (payload.get("patronymic") if "patronymic" in payload
+                   else (row.patronymic or ""))
+        row.name, row.patronymic = _compose_name(name_in, patr_in)
     if "group" in payload:
         group = (payload.get("group") or "").strip()
         _ensure_group_row(db, group)
@@ -1100,9 +1131,12 @@ def admin_approve_registration(payload: dict = Body(...),
         raise HTTPException(status_code=409, detail="Аккаунт с такой почтой уже существует")
 
     pw = reg_utils.gen_password()
+    #name = «Имя Отчество» (parts[1:]) — прежний КЛЮЧ (не меняем). Отчество (parts[2:])
+    #дополнительно кладём в отдельное поле patronymic. Формат ключа не трогаем.
     parts = req.full_name.split()
     surname = parts[0] if parts else ""
     name = " ".join(parts[1:]) if len(parts) > 1 else ""
+    patronymic = " ".join(parts[2:]) if len(parts) > 2 else ""
     from ..security import hash_password
     sid = f"stud:{email}"
     row = db.get(User, sid) or User(id=sid)
@@ -1114,6 +1148,7 @@ def admin_approve_registration(payload: dict = Body(...),
     row.full_name = req.full_name
     row.surname = surname
     row.name = name
+    row.patronymic = patronymic
     row.group_name = req.group_name
     row.subjects = []
     row.group_assignments = {}

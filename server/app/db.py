@@ -78,6 +78,8 @@ def init_db():
     from . import models  #noqa: F401 — регистрируем модели в метаданных
     Base.metadata.create_all(bind=engine)
     _ensure_user_prefs_column()
+    _ensure_user_patronymic_column()
+    _backfill_patronymic()
 
 
 def _ensure_user_prefs_column():
@@ -99,3 +101,41 @@ def _ensure_user_prefs_column():
     coltype = "JSONB" if is_pg else "JSON"
     with engine.begin() as conn:
         conn.execute(text(f"ALTER TABLE users ADD COLUMN prefs {coltype}"))
+
+
+def _ensure_user_patronymic_column():
+    """Идемпотентная мини-миграция: добавляет столбец users.patronymic (отчество
+    отдельным полем) на уже существующей базе. На свежей БД он создан create_all."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("users")}
+    except Exception:
+        return
+    if "patronymic" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN patronymic VARCHAR DEFAULT ''"))
+
+
+def _backfill_patronymic():
+    """Разово заполняет patronymic из уже существующих ФИО: отчество исторически
+    хранилось внутри name («Имя Отчество»). Берём хвост после ПЕРВОГО пробела.
+
+    ВАЖНО: name НЕ меняем (он — ключ оценок/синка). Трогаем только строки, где
+    patronymic ещё пуст, а в name есть пробел — идемпотентно и безопасно к повтору.
+    Заполненное вручную отчество не перетираем."""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(text(
+                "SELECT id, name FROM users WHERE role='student' "
+                "AND (patronymic IS NULL OR patronymic='') "
+                "AND name LIKE '% %'")).fetchall()
+            for uid, name in rows:
+                patr = (name or "").split(" ", 1)[1].strip() if " " in (name or "") else ""
+                if patr:
+                    conn.execute(text("UPDATE users SET patronymic=:p WHERE id=:i"),
+                                 {"p": patr, "i": uid})
+    except Exception as e:
+        print(f"[db] backfill patronymic пропущен: {e}")

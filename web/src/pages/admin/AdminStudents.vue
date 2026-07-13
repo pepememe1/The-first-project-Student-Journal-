@@ -46,19 +46,23 @@ const rows = computed(() => {
 // Модалка создания/правки
 const showForm = ref(false)
 const editing = ref(null) // null = создание; иначе исходный login (ключ)
-const form = ref({ surname: '', name: '', login: '', group: '', password: '' })
+const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', password: '' })
 const saving = ref(false)
 const formError = ref('')
 
 function openCreate() {
   editing.value = null
-  form.value = { surname: '', name: '', login: '', group: '', password: '' }
+  form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '' }
   formError.value = ''
   showForm.value = true
 }
 function openEdit(r) {
   editing.value = r.login
-  form.value = { surname: r.surname, name: r.name, login: r.login, group: r.group, password: '' }
+  //Имя и отчество — раздельно: сервер отдаёт first_name/patronymic (name — полная форма-ключ).
+  form.value = {
+    surname: r.surname, name: r.first_name ?? r.name, patronymic: r.patronymic ?? '',
+    login: r.login, group: r.group, password: '',
+  }
   formError.value = ''
   showForm.value = true
 }
@@ -71,9 +75,9 @@ async function save() {
   formError.value = ''
   try {
     if (editing.value) {
-      await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, group: f.group, password: f.password })
+      await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password })
     } else {
-      await adminApi.createStudent({ surname: f.surname, name: f.name, login: f.login, group: f.group, password: f.password })
+      await adminApi.createStudent({ surname: f.surname, name: f.name, patronymic: f.patronymic, login: f.login, group: f.group, password: f.password })
     }
     showForm.value = false
     await reload()
@@ -142,6 +146,8 @@ async function del(r) {
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Имя</span>
               <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Отчество <span class="text-text3 normal-case">(необязательно)</span></span>
+            <input v-model="form.patronymic" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Логин</span>
             <input v-model="form.login" :disabled="!!editing"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>

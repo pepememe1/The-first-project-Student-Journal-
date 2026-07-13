@@ -169,3 +169,33 @@ def teacher_groups(db, subjects) -> list:
 
 def display_name(user) -> str:
     return user.full_name or f"{user.surname} {user.name}".strip()
+
+
+def first_name(user) -> str:
+    """Имя БЕЗ отчества (первое слово name) — для раздельного показа/ввода.
+    name хранит «Имя Отчество» и остаётся ключом оценок, поэтому имя берём как
+    первое слово, а отчество отдаём отдельным полем (см. patronymic_of)."""
+    n = (getattr(user, "name", "") or "").strip()
+    return n.split(" ", 1)[0] if " " in n else n
+
+
+def patronymic_of(user) -> str:
+    """Отчество: из отдельного поля users.patronymic, а если оно пусто (напр. строка
+    пришла со старого десктопа без этого поля) — из хвоста name. Так отчество всегда
+    показывается раздельно, независимо от источника строки."""
+    p = (getattr(user, "patronymic", "") or "").strip()
+    if p:
+        return p
+    n = (getattr(user, "name", "") or "").strip()
+    return n.split(" ", 1)[1].strip() if " " in n else ""
+
+
+def split_fio(full_name: str) -> tuple:
+    """Разбор «Фамилия Имя Отчество» → (surname, first_name, patronymic).
+    Отчество — всё, что после 2-го слова (на случай двойных отчеств/фамилий редко,
+    но хвост целиком относим к отчеству, как и раньше делал name= parts[1:])."""
+    parts = (full_name or "").split()
+    surname = parts[0] if parts else ""
+    first = parts[1] if len(parts) > 1 else ""
+    patr = " ".join(parts[2:]) if len(parts) > 2 else ""
+    return surname, first, patr
