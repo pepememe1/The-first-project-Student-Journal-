@@ -11,9 +11,10 @@ me.py — Личные настройки текущего пользовате�
 Метку updated_at ставит сервер — как и в /sync/push, чтобы LWW не зависел от часов
 клиента, и обновлённый prefs уехал другим устройствам этого же пользователя на pull.
 """
+import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -22,6 +23,10 @@ from ..deps import get_current_user
 from ..models import User
 
 router = APIRouter(prefix="/me", tags=["me"])
+
+#Личные настройки — это тема оформления и мелкие флаги. Ограничиваем размер, чтобы
+#авторизованный пользователь не «раздул» свою строку произвольным JSON (защита БД).
+_MAX_PREFS_BYTES = 16 * 1024
 
 
 def _now() -> str:
@@ -46,6 +51,13 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
         incoming = {}
     merged = dict(user.prefs or {})
     merged.update(incoming)
+    #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
+    try:
+        size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректные настройки")
+    if size > _MAX_PREFS_BYTES:
+        raise HTTPException(status_code=413, detail="Слишком большой объём настроек")
     user.prefs = merged
     #JSON-столбец меняем «по месту» — подсказываем ORM, что поле грязное, иначе
     #переприсваивание того же объекта может не попасть в UPDATE.

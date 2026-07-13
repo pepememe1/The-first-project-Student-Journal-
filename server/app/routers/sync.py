@@ -11,21 +11,41 @@ sync.py — Сердце offline-first: дельта-синхронизация 
 Десктоп хранит метку последней успешной синхронизации и в следующий раз тянет
 только дельту. Так связь нужна редко и кратко — это и даёт работу «без интернета».
 
-Авторизация: по JWT. Что роль вправе ПУШИТЬ — ограничено (PUSH_SCOPE):
-  admin — всё; teacher — занятия и оценки; student — ничего (только тянет).
-Тянуть (pull) общий набор данных может любой авторизованный пользователь.
+Авторизация (важно для безопасности). Полный дельта-синк выгружает ВСЕ строки всех
+таблиц — включая password_hash всех пользователей и таблицу config (в т.ч. ключи ИИ).
+Это допустимо только для ДЕСКТОП-клиента на ПОДТВЕРЖДЁННОМ устройстве, поэтому /sync:
+  • закрыт для ВЕБ-клиентов (X-Client: web) — из браузера синк не нужен (там role-
+    scoped /web/* и /me/*), а web-клиент в обход барьера устройства был единственным
+    вектором массовой выгрузки чужих данных (студент → весь дамп БД). Теперь — 403;
+  • для не-веба (десктоп) get_current_user применяет БАРЬЕР УСТРОЙСТВА: пускаются
+    только одобренные администратором ПК. Роли admin/teacher/student на таком ПК
+    синхронизируются штатно; неодобренный ПК получает 403 ещё в get_current_user.
+Что роль вправе ПУШИТЬ — дополнительно ограничено PUSH_SCOPE (admin — всё; teacher —
+занятия и оценки СВОИХ предметов; student — ничего, только тянет).
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, is_web_client
 from ..models import SYNC_MODELS, User, Lesson
 from .. import events
 
 router = APIRouter(prefix="/sync", tags=["sync"])
+
+
+def _deny_web(request: Request):
+    """Синк — десктоп-протокол. Веб-клиенту (браузеру) он недоступен: из браузера
+    выгружать полный дамп БД (хеши паролей, config с ключами) нельзя. Веб работает
+    через role-scoped /web/* и /me/*. Возвращаем 403 ДО любой работы с БД."""
+    if is_web_client(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Синхронизация доступна только десктоп-клиенту на подтверждённом "
+                   "устройстве. В браузере используйте разделы сайта.")
+
 
 #Что какая роль имеет право отправлять на сервер (ограничение по ТИПУ сущности).
 PUSH_SCOPE = {
@@ -76,9 +96,10 @@ def _row_to_dict(row, model) -> dict:
 
 
 @router.get("/pull")
-def pull(since: str = "", user: User = Depends(get_current_user),
-         db: Session = Depends(get_db)):
+def pull(since: str = "", request: Request = None,
+         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Отдать изменения позже метки since (пусто — отдать всё)."""
+    _deny_web(request)   #браузеру полный дамп БД не отдаём (см. модульный docstring)
     #Метку времени фиксируем ДО выборки, а не после. Клиент сохранит её как новую
     #границу дельты (следующий pull попросит since=server_time). Если взять метку
     #ПОСЛЕ выборки, запись, попавшая в БД между выборкой и взятием метки, не вошла
@@ -96,8 +117,8 @@ def pull(since: str = "", user: User = Depends(get_current_user),
 
 
 @router.post("/push")
-def push(payload: dict = Body(...), user: User = Depends(get_current_user),
-         db: Session = Depends(get_db)):
+def push(payload: dict = Body(...), request: Request = None,
+         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Принять изменения от клиента. Права — по роли (PUSH_SCOPE).
 
     Метку времени ставит СЕРВЕР (server_ts), а не клиент: так разрешение конфликтов
@@ -106,6 +127,7 @@ def push(payload: dict = Body(...), user: User = Depends(get_current_user),
 
     Чтобы дельта-синк не гонял все записи каждый цикл, штампуем и применяем только
     те записи, чьё содержимое реально изменилось (клиент шлёт полный снимок)."""
+    _deny_web(request)   #браузер не пушит в общий синк (у него /web/*, /me/*)
     allowed = PUSH_SCOPE.get(user.role, set())
     changes = (payload or {}).get("changes", {}) or {}
     server_ts = _now()

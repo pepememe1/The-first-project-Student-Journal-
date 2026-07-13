@@ -10,6 +10,7 @@ webdata.py — Общие выборки для веб-представлени�
 поэтому импортируется на сервере без тяжёлых GUI-зависимостей.
 """
 import os
+import re
 import sys
 
 #grading.py лежит в корне репозитория рядом с server/. Разворачивание идёт из того
@@ -38,13 +39,44 @@ def load_config(db) -> dict:
     return cfg
 
 
-def student_records(db, surname: str, name: str) -> dict:
+_RETAKE_RE = re.compile(r"_retake(_\d+)?$")
+
+
+def base_lesson_id(lesson_id: str) -> str:
+    """Базовый id занятия без суффикса пересдачи: `<lid>_retake[_N]` → `<lid>`.
+    Оценки пересдач хранятся отдельными строками с таким суффиксом в lesson_id."""
+    return _RETAKE_RE.sub("", lesson_id or "")
+
+
+def group_lesson_ids(db, group: str) -> set:
+    """Множество БАЗОВЫХ id занятий группы (без надгробий) — для скоупинга оценок.
+
+    Зачем: оценки хранятся по ключу surname|name|lesson_id БЕЗ группы, поэтому выборка
+    по (surname, name) затягивает и строки ОДНОФАМИЛЬЦА-ТЁЗКИ из другой группы. Их
+    занятия принадлежат другой группе, значит их lesson_id НЕ попадёт в этот набор —
+    так мы отфильтровываем чужие оценки, не меняя формат ключа (совместимость синка)."""
+    rows = db.query(Lesson.id).filter(
+        Lesson.group_name == group, Lesson.deleted == False).all()  # noqa: E712
+    return {r[0] for r in rows}
+
+
+def student_records(db, surname: str, name: str, group: str | None = None,
+                    allowed_lesson_ids: set | None = None) -> dict:
     """{lesson_id → оценка} для студента. Ключи пересдач (`<lid>_retake[_N]`) тоже
-    приходят как отдельные строки grades — grading их учитывает по последней попытке."""
+    приходят как отдельные строки grades — grading их учитывает по последней попытке.
+
+    ЗАЩИТА ОТ ТЁЗОК. Если задана `group` (или готовый `allowed_lesson_ids`), оставляем
+    только оценки, чьё занятие принадлежит этой группе — так студент/преподаватель
+    никогда не видит оценок однофамильца из ДРУГОЙ группы. Легитимные оценки студента
+    всегда стоят на занятиях его группы, поэтому фильтр ничего своего не теряет.
+    Без параметров — прежнее поведение (полная выборка по имени)."""
     rows = db.query(Grade.lesson_id, Grade.grade).filter(
         Grade.student_f == surname, Grade.student_n == name,
         Grade.deleted == False).all()  # noqa: E712
-    return {lid: g for lid, g in rows}
+    if group is None and allowed_lesson_ids is None:
+        return {lid: g for lid, g in rows}
+    allowed = allowed_lesson_ids if allowed_lesson_ids is not None else group_lesson_ids(db, group)
+    return {lid: g for lid, g in rows if base_lesson_id(lid) in allowed}
 
 
 def group_lessons(db, group: str, subject: str | None = None):

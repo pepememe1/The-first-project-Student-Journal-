@@ -7,6 +7,7 @@ main.py — Точка входа бэкенда GradeBookAI (FastAPI).
 
 Документация API после запуска: http://localhost:8000/docs
 """
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -29,7 +30,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan)
+#На бою прячем интерактивную документацию и схему API (/docs, /redoc, /openapi.json):
+#анониму они раскрывают всю поверхность атаки. Признак «боя» — суженный CORS
+#(GRADEBOOK_ALLOWED_ORIGINS задан, т.е. не "*"); в dev по умолчанию "*" и доки нужны.
+#Явно вернуть на бою — GRADEBOOK_ENABLE_DOCS=1.
+_PROD = ALLOWED_ORIGINS != ["*"]
+_DOCS_ON = os.environ.get("GRADEBOOK_ENABLE_DOCS", "").strip() == "1"
+_docs_kw = ({} if (_DOCS_ON or not _PROD)
+            else dict(docs_url=None, redoc_url=None, openapi_url=None))
+app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan, **_docs_kw)
 
 #CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
 app.add_middleware(
@@ -127,8 +136,11 @@ def desktop_info():
 @app.get("/downloads/{fname}", include_in_schema=False)
 def download_file(fname: str):
     target = os.path.realpath(os.path.join(DOWNLOADS_DIR, fname))
-    #защита от path traversal: отдаём только файлы ВНУТРИ downloads
-    if target.startswith(os.path.realpath(DOWNLOADS_DIR)) and os.path.isfile(target):
+    #защита от path traversal: отдаём только файлы СТРОГО ВНУТРИ downloads. Сравниваем с
+    #разделителем на конце (root + os.sep), иначе соседний каталог-префикс (downloads_x)
+    #прошёл бы голый startswith.
+    _root = os.path.realpath(DOWNLOADS_DIR)
+    if (target == _root or target.startswith(_root + os.sep)) and os.path.isfile(target):
         return FileResponse(target, filename=fname, media_type="application/octet-stream")
     return JSONResponse(status_code=404, content={"detail": "Файл не найден"})
 
@@ -147,7 +159,8 @@ if WEB_DIST:
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
         target = os.path.realpath(os.path.join(WEB_DIST, full_path))
-        #защита от path traversal: отдаём только файлы ВНУТРИ dist
-        if target.startswith(WEB_DIST) and os.path.isfile(target):
+        #защита от path traversal: отдаём файл только СТРОГО ВНУТРИ dist (root + os.sep),
+        #иначе неизвестный путь → отдаём index.html (клиентский роутинг Vue).
+        if (target == WEB_DIST or target.startswith(WEB_DIST + os.sep)) and os.path.isfile(target):
             return FileResponse(target)
         return FileResponse(os.path.join(WEB_DIST, "index.html"))

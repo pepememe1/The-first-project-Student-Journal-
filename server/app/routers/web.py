@@ -74,12 +74,16 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, user.group_name)
     by_id = {l.id: l for l in lessons}
-    records = W.student_records(db, user.surname, user.name)
+    records = W.student_records(db, user.surname, user.name, user.group_name)
 
-    #Свежие оценки — по серверной метке времени, только реальные занятия своей группы.
+    #Свежие оценки — по серверной метке времени, только реальные занятия СВОЕЙ группы.
+    #Скоуп по lesson_id группы нужен и здесь: иначе оценки тёзки из другой группы могли
+    #бы вытеснить свои из окна limit(30) ещё до фильтра by_id ниже (защита от тёзок).
+    own_ids = set(by_id.keys())
     recent_rows = db.query(Grade).filter(
         Grade.student_f == user.surname, Grade.student_n == user.name,
-        Grade.deleted == False).order_by(Grade.updated_at.desc()).limit(30).all()  # noqa: E712
+        Grade.deleted == False,
+        Grade.lesson_id.in_(own_ids)).order_by(Grade.updated_at.desc()).limit(30).all()  # noqa: E712
     recent = []
     for g in recent_rows:
         l = by_id.get(g.lesson_id)
@@ -89,10 +93,13 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
         if len(recent) >= 6:
             break
 
+    #Счётчик оценок за месяц — тоже строго по занятиям своей группы (без тёзок из чужих).
+    #Считаем по БАЗОВОМУ lesson_id, чтобы не потерять свои пересдачи (<lid>_retake).
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    grades_month = db.query(Grade).filter(
+    month_rows = db.query(Grade.lesson_id).filter(
         Grade.student_f == user.surname, Grade.student_n == user.name,
-        Grade.deleted == False, Grade.updated_at >= cutoff).count()  # noqa: E712
+        Grade.deleted == False, Grade.updated_at >= cutoff).all()  # noqa: E712
+    grades_month = sum(1 for (lid,) in month_rows if W.base_lesson_id(lid) in own_ids)
 
     # «Мои предметы» + счётчики + посещаемость (как на главной десктопа).
     from collections import OrderedDict
@@ -137,7 +144,7 @@ def student_journal(user: User = Depends(get_current_user), db: Session = Depend
     _require("student", user)
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, user.group_name)
-    records = W.student_records(db, user.surname, user.name)
+    records = W.student_records(db, user.surname, user.name, user.group_name)
 
     from collections import OrderedDict
     buckets = OrderedDict()
@@ -166,7 +173,7 @@ def student_stats(user: User = Depends(get_current_user), db: Session = Depends(
     _require("student", user)
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, user.group_name)
-    records = W.student_records(db, user.surname, user.name)
+    records = W.student_records(db, user.surname, user.name, user.group_name)
     return {
         "average": W.average(lessons, records, cfg),
         "per_subject": W.per_subject_averages(lessons, records, cfg),
@@ -182,7 +189,7 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     _require("student", user)
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, user.group_name)
-    records = W.student_records(db, user.surname, user.name)
+    records = W.student_records(db, user.surname, user.name, user.group_name)
     avg = W.average(lessons, records, cfg)
     cards = []
 
@@ -238,7 +245,7 @@ def teacher_insights(group: str = Query(...),
 
     vals, debtors, risky, absc_total = [], 0, 0, 0
     for s in studs:
-        recs = W.student_records(db, s.surname, s.name)
+        recs = W.student_records(db, s.surname, s.name, group)
         a = W.average(lessons, recs, cfg)
         if a > 0:
             vals.append(a)
@@ -306,7 +313,7 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
                     retake_keys.append(f"{l.id}_retake_{n}")
     rows = []
     for s in studs:
-        recs = W.student_records(db, s.surname, s.name)
+        recs = W.student_records(db, s.surname, s.name, group)
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         grades.update({k: recs.get(k, "") for k in retake_keys})
         rows.append({"surname": s.surname, "name": s.name, "grades": grades,
@@ -332,7 +339,7 @@ def teacher_students(group: str = Query(...),
     lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
     out = []
     for s in W.students_in_group(db, group):
-        recs = W.student_records(db, s.surname, s.name)
+        recs = W.student_records(db, s.surname, s.name, group)
         out.append({"surname": s.surname, "name": s.name,
                     "average": W.average(lessons, recs, cfg)})
     return {"group": group, "students": out}
@@ -347,7 +354,7 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, group, subject)
     studs = W.students_in_group(db, group)
-    vals = [W.average(lessons, W.student_records(db, s.surname, s.name), cfg) for s in studs]
+    vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group), cfg) for s in studs]
     vals = [v for v in vals if v > 0]
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
     return {"group": group, "subject": subject, "students": len(studs),
@@ -519,7 +526,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
     #hello → радость+поздрав, sad → грусть+подбадрив и т.д.).
     if user.role == "student":
         lessons = W.group_lessons(db, user.group_name)
-        records = W.student_records(db, user.surname, user.name)
+        records = W.student_records(db, user.surname, user.name, user.group_name)
         avg = W.average(lessons, records, cfg)
         if has("долг", "задолж", "хвост", "не сдал"):
             d = W.debts(lessons, records)
@@ -553,7 +560,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             gl = [l for l in W.group_lessons(db, g) if l.subject in subjects]
             vals = []
             for s in W.students_in_group(db, g):
-                a = W.average(gl, W.student_records(db, s.surname, s.name), cfg)
+                a = W.average(gl, W.student_records(db, s.surname, s.name, g), cfg)
                 if 0 < a < 3:
                     risk += 1
                 if a > 0:
@@ -729,7 +736,7 @@ def teacher_journal_xlsx(group: str = Query(...), subject: str = Query(...),
     studs = W.students_in_group(db, group)
     rows = []
     for s in studs:
-        recs = W.student_records(db, s.surname, s.name)
+        recs = W.student_records(db, s.surname, s.name, group)
         rows.append({"surname": s.surname, "name": s.name, "records": recs,
                      "average": W.average(lessons, recs, cfg)})
     data = xlsx_export.build_journal_xlsx(group, subject, lessons, rows)
