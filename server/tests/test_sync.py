@@ -65,6 +65,57 @@ def test_pull_requires_auth(client):
     assert client.get("/sync/pull").status_code == 401
 
 
+# Минимизация выгрузки по роли (152-ФЗ) ───────────────────────────────────────────
+def test_pull_hides_foreign_hashes_and_secrets_from_non_admin(client):
+    """Преподаватель НЕ получает чужие хеши паролей и секреты config (токен GigaChat),
+    но получает СВОЙ хеш (нужен для офлайн-входа) и несекретные ключи config."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="teacher1")
+    #Админ кладёт секретный ключ ИИ и несекретную настройку.
+    _push(client, admin, config=[
+        {"key": "gigachat_credentials", "value": "SECRET_TOKEN", "deleted": False},
+        {"key": "vector_llm", "value": "gigachat", "deleted": False}])
+
+    ch = client.get("/sync/pull", headers=th).json()["changes"]
+    users = {u["login"]: u for u in ch["users"] if u.get("login")}
+    assert users["teacher1"]["password_hash"], "свой хеш преподаватель получить должен"
+    assert users["admin"]["password_hash"] == "", "чужой (админский) хеш — вырезан"
+    cfg = {c["key"]: c.get("value") for c in ch["config"]}
+    assert "gigachat_credentials" not in cfg, "секрет ИИ не должен уходить не-админу"
+    assert cfg.get("vector_llm") == "gigachat", "несекретная настройка остаётся"
+
+
+def test_pull_admin_gets_everything(client):
+    """Админ получает полный дамп (хеши всех + секреты) — нужно для правки юзеров и ИИ."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="teacher1")
+    _push(client, admin, config=[
+        {"key": "gigachat_credentials", "value": "SECRET_TOKEN", "deleted": False}])
+
+    ch = client.get("/sync/pull", headers=admin).json()["changes"]
+    hashes = [u["password_hash"] for u in ch["users"] if u.get("login")]
+    assert all(hashes), "у админа все хеши на месте"
+    cfg = {c["key"]: c.get("value") for c in ch["config"]}
+    assert cfg.get("gigachat_credentials") == "SECRET_TOKEN", "админ видит секреты ИИ"
+
+
+def test_vector_voice_offline_echoes_facts(client):
+    """/vector/voice в оффлайн-режиме (нет провайдера) возвращает факты как есть —
+    десктоп получает озвучку через сервер, не держа токен у себя. Пустые факты → ''."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="teacher1")
+    r = client.post("/vector/voice",
+                    json={"facts": "Средний балл 4.5, долгов нет.", "question": "как дела"},
+                    headers=th)
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == "Средний балл 4.5, долгов нет."
+    assert client.post("/vector/voice", json={"facts": ""}, headers=th).json()["text"] == ""
+
+
+def test_vector_voice_requires_auth(client):
+    assert client.post("/vector/voice", json={"facts": "x"}).status_code == 401
+
+
 def test_teacher_can_push_own_subject_but_not_foreign(client):
     """Преподаватель математики вправе пушить занятия по математике, но не по физике —
     построчная авторизация по предмету (row-level scope)."""

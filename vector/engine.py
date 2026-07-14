@@ -107,7 +107,7 @@ class VectorEngine:
         #озвучка. Для облачных провайдеров — сначала обезличиваем.
         facts_for_llm = facts.facts_text
         anon: Optional[Anonymizer] = None
-        if getattr(self.llm, "name", "offline") in ("gigachat", "local") and facts.names:
+        if getattr(self.llm, "name", "offline") in ("gigachat", "local", "server") and facts.names:
             anon = Anonymizer()
             facts_for_llm = anon.anonymize_text(facts.facts_text, facts.names)
 

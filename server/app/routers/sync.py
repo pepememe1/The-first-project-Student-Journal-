@@ -98,6 +98,38 @@ def _row_to_dict(row, model) -> dict:
     return {c.name: getattr(row, c.name) for c in model.__table__.columns}
 
 
+#Ключи config, которые НЕ должны покидать сервер к не-админам: секреты провайдеров ИИ
+#(токен GigaChat и т.п.). Паттерн, а не точный список — чтобы новый секретный ключ не
+#«протёк» по недосмотру. Методику оценок, тему, выбор провайдера НЕ трогаем (не секреты).
+_SECRET_CFG_PATTERNS = ("credential", "token", "secret", "api_key", "apikey", "password")
+
+
+def _is_secret_config_key(key: str) -> bool:
+    k = (key or "").lower()
+    return any(p in k for p in _SECRET_CFG_PATTERNS)
+
+
+def _scope_pull_for_role(changes: dict, user: User) -> None:
+    """Минимизация выгрузки по роли (152-ФЗ, снижение радиуса поражения одного ПК).
+
+    Для НЕ-админа:
+      • password_hash отдаём ТОЛЬКО владельцу его собственный (нужен для офлайн-входа на
+        его ПК); чужие хеши вырезаем — на ПК студента/преподавателя их быть не должно;
+      • секретные ключи config (токен GigaChat и пр.) не отдаём вовсе — озвучку ИИ
+        десктоп получает через сервер (/vector/voice), токен остаётся на сервере.
+    Админ получает всё без изменений: ему нужны хеши для правки пользователей (сохранение
+    старого хеша при смене без пароля), а админ-ПК доверенные и малочисленные.
+    (Row-scope ПДн — не слать студенту чужих студентов — отдельный следующий шаг.)"""
+    if user.role == "admin":
+        return
+    own_login = (user.login or "")
+    for u in (changes.get("users") or []):
+        if u.get("login") != own_login:
+            u["password_hash"] = ""
+    changes["config"] = [c for c in (changes.get("config") or [])
+                         if not _is_secret_config_key(c.get("key", ""))]
+
+
 @router.get("/pull")
 def pull(since: str = "", request: Request = None,
          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -116,6 +148,8 @@ def pull(since: str = "", request: Request = None,
         if since:
             q = q.filter(model.updated_at > since)
         changes[name] = [_row_to_dict(r, model) for r in q.all()]
+    #Минимизация по роли: чужие хеши и секреты config не покидают сервер к не-админам.
+    _scope_pull_for_role(changes, user)
     return {"server_time": server_time, "changes": changes}
 
 

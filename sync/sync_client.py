@@ -185,6 +185,16 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def voice(self, facts_text: str, role: str = "student", question: str = "") -> str:
+        """Озвучка готовых фактов LLM на СЕРВЕРЕ (токен провайдера ИИ живёт только там,
+        не раздаётся на клиентские ПК — 152-ФЗ). Шлём уже посчитанный обезличенный текст,
+        получаем переформулированный. Заголовки (в т.ч. X-Device-Id) ставит _req."""
+        r = self._req("POST", "/vector/voice",
+                      json={"facts": facts_text, "role": role, "question": question},
+                      timeout=30)
+        r.raise_for_status()
+        return (r.json().get("text") or facts_text).strip()
+
     def set_my_prefs(self, prefs: dict) -> dict:
         """Сохранить личные настройки текущего пользователя (self-scope /me/prefs).
         Меняет ТОЛЬКО свою строку — личность берётся из JWT на сервере."""

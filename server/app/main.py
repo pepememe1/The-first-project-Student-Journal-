@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
 from .config import ALLOWED_ORIGINS
-from .routers import auth, sync, me, admin, web
+from .routers import auth, sync, me, admin, web, vector
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
@@ -113,6 +113,7 @@ app.include_router(auth.router)
 app.include_router(sync.router)
 app.include_router(me.router)
 app.include_router(admin.router)
+app.include_router(vector.router)
 app.include_router(connect_router.router)
 app.include_router(webauthn_router.router)
 app.include_router(web.router)

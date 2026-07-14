@@ -188,6 +188,38 @@ class LocalModelProvider(LLMProvider):
         return r.json()["message"]["content"].strip()
 
 
+#Озвучка через СЕРВЕР (токен провайдера ИИ живёт на сервере, не на клиентских ПК)
+class ServerProvider(LLMProvider):
+    """Переформулирует факты, вызывая эндпоинт сервера (/vector/voice). Ключ GigaChat
+    хранится ТОЛЬКО на сервере (152-ФЗ: не раздаём токен колледжа по сотням ПК). Десктоп
+    шлёт УЖЕ ГОТОВЫЕ и обезличенные факты (движок обезличивает, как для облачных
+    провайдеров), сервер их только озвучивает. Адрес/токен берём у фонового синкера.
+
+    Свободный чат (free_chat) не проксируем: остаётся честный офлайн-ответ (базовый
+    класс) — на клиентских ПК без ключа это ожидаемо, а факты всё равно озвучиваются."""
+    name = "server"
+
+    @staticmethod
+    def _auth():
+        try:
+            from sync_runner import current_auth
+            return current_auth()          #(url, token)
+        except Exception:
+            return ("", "")
+
+    def available(self) -> bool:
+        url, token = self._auth()
+        return bool(url and token)
+
+    def voice(self, facts_text: str, role: str = "student",
+              user_question: str = "") -> str:
+        url, token = self._auth()
+        if not (url and token):
+            raise RuntimeError("нет адреса сервера или токена для серверной озвучки")
+        from sync_client import SyncClient
+        return SyncClient(url, token).voice(facts_text, role=role, question=user_question)
+
+
 #  Фабрика
 def get_provider(config: Optional[dict] = None) -> LLMProvider:
     """
@@ -201,12 +233,19 @@ def get_provider(config: Optional[dict] = None) -> LLMProvider:
     kind = config.get("vector_llm", "offline")
     try:
         if kind == "gigachat":
-            p = GigaChatProvider(
-                credentials=config.get("gigachat_credentials", ""),
-                scope=config.get("gigachat_scope", "GIGACHAT_API_B2B"),
-                model=config.get("gigachat_model", "GigaChat"),
-            )
-            return p if p.available() else OfflineTemplateProvider()
+            creds = config.get("gigachat_credentials", "")
+            if creds:
+                #Ключ есть локально (админ-ПК) — ходим в GigaChat напрямую.
+                p = GigaChatProvider(
+                    credentials=creds,
+                    scope=config.get("gigachat_scope", "GIGACHAT_API_B2B"),
+                    model=config.get("gigachat_model", "GigaChat"),
+                )
+                if p.available():
+                    return p
+            #Ключа локально нет (не-админ: токен остался на сервере) → озвучка через сервер.
+            sp = ServerProvider()
+            return sp if sp.available() else OfflineTemplateProvider()
         if kind == "local":
             p = LocalModelProvider(model=config.get("local_model", "qwen2.5:3b"))
             return p if p.available() else OfflineTemplateProvider()
