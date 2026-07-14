@@ -1,53 +1,59 @@
 """
-xlsx_export.py — сборка журнала в xlsx для веб-версии.
+xlsx_export.py — сборка журнала и ведомости в xlsx (веб).
 
-Стиль повторяет десктопный экспорт (data/core.py GradeBook.export_to_excel): весь текст
-Times New Roman 14, титульная шапка (журнал/группа/предмет/дата), фирменный цвет GB,
-рамки, цвет оценок по уровню, полосатые строки, «средний по группе», закрепление
-областей. Данные приходят уже выбранными по роли (routers/web.py), поэтому модуль
-чистый: (group, subject, lessons, rows) → bytes.
+ЕДИНЫЙ стиль десктопа и веба (по требованию заказчика): весь текст Times New Roman 14,
+БЕЗ цветов (чёрный текст на белом), тонкие рамки, заголовки жирным, адаптивная ширина
+столбцов (текст не обрезается). Официальный чёрно-белый вид, пригодный для печати.
+Данные приходят уже выбранными по роли (routers/web.py): (group, subject, lessons, rows).
 """
 import io
 import re
 from datetime import datetime
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 FNT = "Times New Roman"
-ACCENT = "147C8B"
+SZ = 14                    #единый размер шрифта везде
+_THIN = Side(style="thin", color="000000")
+BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
 
-def _grade_color(v: str) -> str:
-    v = (v or "").strip()
-    if v.startswith("5"):
-        return "1E7B33"
-    if v.startswith("4"):
-        return "1F5FBF"
-    if v.startswith("3"):
-        return "B26B00"
-    if v.startswith("2") or v.upper().startswith("Н") or "Не зачтено" in v:
-        return "B3261E"
-    return "222222"
+def _autofit(ws, ncols: int, rows: list, min_w=8, max_w=48):
+    """Адаптивная ширина столбцов по содержимому (openpyxl сам не умеет auto-fit).
+    Меряем ТОЛЬКО переданные строки (шапка+данные), без объединённых титульных —
+    иначе длинный заголовок раздул бы все колонки. Для многострочных ячеек берём
+    самую длинную строку. Times New Roman 14 шире — коэффициент 1.45."""
+    for c in range(1, ncols + 1):
+        best = 0
+        for r in rows:
+            v = ws.cell(row=r, column=c).value
+            if v is None:
+                continue
+            best = max(best, max((len(s) for s in str(v).split("\n")), default=0))
+        ws.column_dimensions[get_column_letter(c)].width = max(min_w, min(max_w, best * 1.45 + 2))
+
+
+def _title(ws, row, last_col, text, size, bold=False, italic=False):
+    ws.merge_cells(f"A{row}:{last_col}{row}")
+    c = ws[f"A{row}"]
+    c.value = text
+    c.font = Font(name=FNT, size=size, bold=bold, italic=italic)
+    c.alignment = Alignment(horizontal="center", vertical="center")
 
 
 def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
-    """lessons — ORM-строки Lesson (id/type/number/topic/date/retake_date);
-    rows — [{surname, name, records: {lesson_id→оценка}, average: float}]."""
-    thin = Side(style="thin", color="C9D4D6")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
+    """lessons — ORM-строки Lesson; rows — [{surname, name, records: {lid→оценка}, average}]."""
     wb = Workbook()
     ws = wb.active
     ws.title = re.sub(r'[\[\]:*?/\\]', '_', f"Успеваемость {group}")[:31]
 
     headers = ["Фамилия", "Имя"]
-    #(колонка → ключ records): у экзамена с пересдачей — две колонки
     keys = []
     for l in lessons:
         if l.type == "Экзамен":
-            headers.append(f"Экзамен №{l.number}\n({l.date})\n{l.topic}")
+            headers.append(f"Экзамен №{l.number}\n({l.date})\n{l.topic or ''}".strip())
             keys.append(l.id)
             if l.retake_date:
                 headers.append(f"Пересдача\n({l.retake_date})")
@@ -59,30 +65,19 @@ def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
     ncols = len(headers)
     last_col = get_column_letter(ncols)
 
-    ws.merge_cells(f"A1:{last_col}1")
-    ws["A1"] = "Журнал успеваемости"
-    ws["A1"].font = Font(name=FNT, size=18, bold=True, color=ACCENT)
-    ws["A1"].alignment = Alignment(horizontal="center")
-    ws.merge_cells(f"A2:{last_col}2")
-    ws["A2"] = f"Группа {group}  ·  {subject}"
-    ws["A2"].font = Font(name=FNT, size=14, bold=True)
-    ws["A2"].alignment = Alignment(horizontal="center")
-    ws.merge_cells(f"A3:{last_col}3")
-    ws["A3"] = (f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
-                f"GradeBookAI · Технологический колледж ВСГУТУ")
-    ws["A3"].font = Font(name=FNT, size=11, italic=True, color="7A8A8C")
-    ws["A3"].alignment = Alignment(horizontal="center")
+    _title(ws, 1, last_col, "Журнал успеваемости", 16, bold=True)
+    _title(ws, 2, last_col, f"Группа {group}  ·  {subject}", SZ, bold=True)
+    _title(ws, 3, last_col, f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
+                            f"Технологический колледж ВСГУТУ", 12, italic=True)
 
     HDR = 5
     ws.append([])
     ws.append(headers)
     for cell in ws[HDR]:
-        cell.font = Font(name=FNT, size=14, bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color=ACCENT, end_color=ACCENT, fill_type="solid")
+        cell.font = Font(name=FNT, size=SZ, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border
+        cell.border = BORDER
 
-    stripe = PatternFill(start_color="F2F7F8", end_color="F2F7F8", fill_type="solid")
     averages = []
     for i, s in enumerate(rows):
         recs = s.get("records") or {}
@@ -101,36 +96,22 @@ def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
         r = HDR + 1 + i
         for c in range(1, ncols + 1):
             cell = ws.cell(row=r, column=c)
-            cell.border = border
-            if i % 2:
-                cell.fill = stripe
-            if c <= 2:
-                cell.font = Font(name=FNT, size=14)
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            elif c == ncols:
-                cell.font = Font(name=FNT, size=14, bold=True, color=ACCENT)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            else:
-                cell.font = Font(name=FNT, size=14, color=_grade_color(str(cell.value or "")))
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = BORDER
+            cell.font = Font(name=FNT, size=SZ, bold=(c == ncols))
+            cell.alignment = Alignment(horizontal="left" if c <= 2 else "center", vertical="center")
 
     vals = [a for a in averages if a > 0]
     total_row = HDR + len(rows) + 1
     ws.cell(row=total_row, column=1, value="Средний по группе:")
     ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=ncols - 1)
-    ws.cell(row=total_row, column=1).font = Font(name=FNT, size=14, bold=True)
+    ws.cell(row=total_row, column=1).font = Font(name=FNT, size=SZ, bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="right")
-    tc = ws.cell(row=total_row, column=ncols,
-                 value=round(sum(vals) / len(vals), 2) if vals else "—")
-    tc.font = Font(name=FNT, size=14, bold=True, color=ACCENT)
+    tc = ws.cell(row=total_row, column=ncols, value=round(sum(vals) / len(vals), 2) if vals else "—")
+    tc.font = Font(name=FNT, size=SZ, bold=True)
     tc.alignment = Alignment(horizontal="center")
 
-    ws.column_dimensions["A"].width = 20
-    ws.column_dimensions["B"].width = 16
-    for c in range(3, ncols):
-        ws.column_dimensions[get_column_letter(c)].width = 14
-    ws.column_dimensions[last_col].width = 15
-    ws.row_dimensions[HDR].height = 54
+    _autofit(ws, ncols, [HDR] + list(range(HDR + 1, total_row + 1)), min_w=10, max_w=44)
+    ws.row_dimensions[HDR].height = 62
     ws.freeze_panes = f"C{HDR + 1}"
 
     buf = io.BytesIO()
@@ -143,8 +124,6 @@ def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
     """Экзаменационно-зачётная (аттестационная) ведомость: группа+предмет+семестр,
     список студентов с ИТОГОВОЙ оценкой, форма контроля, дата и строка подписи.
     rows — [{surname, name, patronymic, grade}]. term — {year, semester}."""
-    thin = Side(style="thin", color="9AA7A9")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
     year = (term or {}).get("year", "")
     sem = (term or {}).get("semester", "")
     sem_txt = "осенний" if sem == 1 else ("весенний" if sem == 2 else str(sem))
@@ -156,33 +135,25 @@ def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
     ncols = len(headers)
     last_col = get_column_letter(ncols)
 
-    def _title(row, text, size, **kw):
-        ws.merge_cells(f"A{row}:{last_col}{row}")
-        c = ws[f"A{row}"]
-        c.value = text
-        c.font = Font(name=FNT, size=size, **kw)
-        c.alignment = Alignment(horizontal="center")
-
-    _title(1, "Технологический колледж ВСГУТУ", 12, color="7A8A8C")
-    _title(2, ("Экзаменационная ведомость" if (form or "").lower().startswith("экз")
-               else "Зачётно-экзаменационная ведомость"), 16, bold=True, color=ACCENT)
-    _title(3, f"Группа {group}  ·  {subject}", 14, bold=True)
-    _title(4, f"{year}, {sem_txt} семестр"
-              + (f"  ·  форма контроля: {form}" if form else ""), 12, italic=True)
+    _title(ws, 1, last_col, "Технологический колледж ВСГУТУ", 12)
+    _title(ws, 2, last_col, "Экзаменационная ведомость" if (form or "").lower().startswith("экз")
+           else "Зачётно-экзаменационная ведомость", 16, bold=True)
+    _title(ws, 3, last_col, f"Группа {group}  ·  {subject}", SZ, bold=True)
+    _title(ws, 4, last_col, f"{year}, {sem_txt} семестр"
+           + (f"  ·  форма контроля: {form}" if form else ""), 12, italic=True)
 
     HDR = 6
-    ws.append([]); ws.append([]); ws.append([]); ws.append([]); ws.append([])
+    for _ in range(5):
+        ws.append([])
     ws.append(headers)
     for cell in ws[HDR]:
-        cell.font = Font(name=FNT, size=13, bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color=ACCENT, end_color=ACCENT, fill_type="solid")
+        cell.font = Font(name=FNT, size=SZ, bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border
+        cell.border = BORDER
 
     for i, s in enumerate(rows):
         fio = " ".join(x for x in (s.get("surname", ""), s.get("name", ""),
                                    s.get("patronymic", "")) if x).strip()
-        #если отчество уже внутри name — не дублируем
         if s.get("patronymic") and s.get("name", "").endswith(s.get("patronymic", "")):
             fio = f"{s.get('surname','')} {s.get('name','')}".strip()
         grade = (s.get("grade") or "").strip()
@@ -190,25 +161,20 @@ def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
         r = HDR + 1 + i
         for c in range(1, ncols + 1):
             cell = ws.cell(row=r, column=c)
-            cell.border = border
-            cell.font = Font(name=FNT, size=13,
-                             color=_grade_color(grade) if c == 3 else "222222")
-            cell.alignment = Alignment(
-                horizontal="left" if c == 2 else "center", vertical="center")
+            cell.border = BORDER
+            cell.font = Font(name=FNT, size=SZ)
+            cell.alignment = Alignment(horizontal="left" if c == 2 else "center", vertical="center")
 
     foot = HDR + len(rows) + 2
-    ws.cell(row=foot, column=1,
-            value=f"Дата: {datetime.now().strftime('%d.%m.%Y')}").font = Font(name=FNT, size=12)
+    ws.cell(row=foot, column=1, value=f"Дата: {datetime.now().strftime('%d.%m.%Y')}").font = Font(name=FNT, size=SZ)
     ws.merge_cells(start_row=foot, start_column=1, end_row=foot, end_column=2)
     sign = ws.cell(row=foot, column=3, value=f"Преподаватель: {teacher or '____________'}")
-    sign.font = Font(name=FNT, size=12)
+    sign.font = Font(name=FNT, size=SZ)
     ws.merge_cells(start_row=foot, start_column=3, end_row=foot, end_column=ncols)
 
-    ws.column_dimensions["A"].width = 6
-    ws.column_dimensions["B"].width = 40
-    ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 18
-    ws.row_dimensions[HDR].height = 32
+    _autofit(ws, ncols, [HDR] + list(range(HDR + 1, HDR + len(rows) + 1)), min_w=6, max_w=55)
+    ws.column_dimensions["A"].width = 5
+    ws.row_dimensions[HDR].height = 30
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

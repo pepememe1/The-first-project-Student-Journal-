@@ -230,22 +230,33 @@ async function delLesson(l) {
   catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 
-// ── Excel ──────────────────────────────────────────────────────────────────────
+// ── Экспорт журнала/ведомости с выбором формата (Excel / Word) ──────────────────
 const exporting = ref(false)
-async function exportXlsx() {
+const fmtMenu = ref({ show: false, kind: '' })   // kind: 'journal' | 'vedomost'
+function openFmt(kind) { fmtMenu.value = { show: true, kind } }
+async function pickFmt(fmt) {
+  const kind = fmtMenu.value.kind
+  fmtMenu.value.show = false
+  if (kind === 'journal') await downloadJournal(fmt)
+  else await downloadVedomost(fmt)
+}
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name.replaceAll('/', '-')
+  a.click()
+  URL.revokeObjectURL(url)
+}
+async function downloadJournal(fmt) {
   exporting.value = true
   try {
-    const { data: blob } = await teacherApi.journalXlsx(group.value, subject.value)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `Журнал_${group.value}_${subject.value}.xlsx`.replaceAll('/', '-')
-    a.click()
-    URL.revokeObjectURL(url)
+    const { data: blob } = await teacherApi.journalExport(group.value, subject.value, { fmt, ...termParams() })
+    saveBlob(blob, `Журнал_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
   } catch (e) {
     let detail = ''
     try { detail = JSON.parse(await e?.response?.data?.text())?.detail || '' } catch { /* */ }
-    alert('Не удалось выгрузить Excel' + (detail ? `: ${detail}` : ''))
+    alert('Не удалось выгрузить журнал' + (detail ? `: ${detail}` : ''))
   } finally { exporting.value = false }
 }
 
@@ -279,15 +290,10 @@ async function saveAtt() {
   } catch (e) { alert('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message)) }
   finally { attSaving.value = false }
 }
-async function exportVedomost() {
+async function downloadVedomost(fmt) {
   try {
-    const { data: blob } = await teacherApi.vedomostXlsx(group.value, subject.value, { form: attForm.value, ...termParams() })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `Ведомость_${group.value}_${subject.value}.xlsx`.replaceAll('/', '-')
-    a.click()
-    URL.revokeObjectURL(url)
+    const { data: blob } = await teacherApi.vedomost(group.value, subject.value, { fmt, form: attForm.value, ...termParams() })
+    saveBlob(blob, `Ведомость_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
   } catch { alert('Не удалось выгрузить ведомость') }
 }
 </script>
@@ -313,9 +319,9 @@ async function exportVedomost() {
       </span>
       <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
         <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 Аттестация</AppButton>
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="exportVedomost">📄 Ведомость</AppButton>
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="exportXlsx">
-          {{ exporting ? 'Выгрузка…' : '💾 Excel' }}
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 Ведомость</AppButton>
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
+          {{ exporting ? 'Выгрузка…' : '📘 Журнал' }}
         </AppButton>
         <AppButton v-if="!isArchive" variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ Занятие</AppButton>
       </div>
@@ -466,8 +472,20 @@ async function exportVedomost() {
         </div>
         <div class="mt-4 flex flex-wrap justify-end gap-2">
           <AppButton variant="ghost" size="sm" @click="showAtt = false">Закрыть</AppButton>
-          <AppButton variant="ghost" size="sm" @click="exportVedomost">📄 Ведомость</AppButton>
+          <AppButton variant="ghost" size="sm" @click="openFmt('vedomost')">📄 Ведомость</AppButton>
           <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? 'Сохранение…' : 'Сохранить' }}</AppButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- Выбор формата экспорта: Excel или Word -->
+    <div v-if="fmtMenu.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="fmtMenu.show = false">
+      <div class="w-full max-w-xs rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="mb-1 font-title text-base font-bold text-text">В каком формате?</h3>
+        <p class="mb-4 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? 'Журнал успеваемости' : 'Ведомость' }} · {{ group }} · {{ subject }}</p>
+        <div class="flex flex-col gap-2">
+          <AppButton variant="ghost" @click="pickFmt('xlsx')">📊 Excel (.xlsx)</AppButton>
+          <AppButton variant="ghost" @click="pickFmt('docx')">📄 Word (.docx)</AppButton>
         </div>
       </div>
     </div>

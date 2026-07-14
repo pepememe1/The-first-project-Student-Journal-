@@ -73,14 +73,14 @@ export const teacherApi = {
   createLesson: (payload) => api.post('/web/teacher/lesson', payload),
   updateLesson: (id, payload) => api.put(`/web/teacher/lesson/${encodeURIComponent(id)}`, payload),
   deleteLesson: (id) => api.delete(`/web/teacher/lesson/${encodeURIComponent(id)}`),
-  // Экспорт журнала в xlsx (тот же стиль, что в десктопе: Times New Roman 14).
-  journalXlsx: (group, subject) =>
-    api.get('/web/teacher/journal.xlsx', { params: { group, subject }, responseType: 'blob' }),
-  // Итоговые оценки за семестр (промежуточная аттестация) + ведомость.
+  // Экспорт журнала (fmt=xlsx|docx) за выбранный семестр. Единый стиль TNR 14, ч/б.
+  journalExport: (group, subject, params = {}) =>
+    api.get('/web/teacher/journal-export', { params: { group, subject, ...params }, responseType: 'blob' }),
+  // Итоговые оценки за семестр (промежуточная аттестация) + ведомость (fmt=xlsx|docx).
   setTermGrade: (payload) => api.post('/web/teacher/term-grade', payload),
   termGrades: (group, subject, params = {}) => api.get('/web/teacher/term-grades', { params: { group, subject, ...params } }),
-  vedomostXlsx: (group, subject, params = {}) =>
-    api.get('/web/teacher/vedomost.xlsx', { params: { group, subject, ...params }, responseType: 'blob' }),
+  vedomost: (group, subject, params = {}) =>
+    api.get('/web/teacher/vedomost', { params: { group, subject, ...params }, responseType: 'blob' }),
 }
 
 // УЧЕБНЫЙ ПЕРИОД (год/семестр) ────────────────────────────────────────────────────

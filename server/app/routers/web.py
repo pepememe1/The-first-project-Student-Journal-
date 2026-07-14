@@ -568,18 +568,31 @@ def teacher_term_grades(group: str = Query(...), subject: str = Query(...),
             "grades": out}
 
 
-@router.get("/teacher/vedomost.xlsx")
-def teacher_vedomost_xlsx(group: str = Query(...), subject: str = Query(...),
-                          form: str = Query(""), year: str = Query(""), semester: int = Query(0),
-                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Экзаменационно-зачётная ведомость (xlsx): студенты + итоговая оценка + форма +
-    дата + строка подписи. Итоговые берём из TermGrade за термин."""
+#Единый ответ-файл для xlsx/docx (Content-Disposition + правильный media-type).
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _file_response(data: bytes, base_name: str, fmt: str):
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    ext = "docx" if fmt == "docx" else "xlsx"
+    media = _DOCX_MEDIA if fmt == "docx" else _XLSX_MEDIA
+    fname = f"{base_name}.{ext}".replace(" ", "_").replace("/", "-")
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition":
+                             f"attachment; filename=export.{ext}; filename*=UTF-8''{quote(fname)}"})
+
+
+@router.get("/teacher/vedomost")
+def teacher_vedomost(group: str = Query(...), subject: str = Query(...),
+                     form: str = Query(""), fmt: str = Query("xlsx"),
+                     year: str = Query(""), semester: int = Query(0),
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Экзаменационно-зачётная ведомость (fmt=xlsx|docx): студенты + итоговая оценка +
+    форма + дата + строка подписи. Единый стиль TNR 14, ч/б. Итоговые — из TermGrade."""
     _require("teacher", user)
     _teacher_check_subject(user, subject)
-    try:
-        from .. import xlsx_export
-    except ImportError:
-        raise HTTPException(status_code=501, detail="На сервере не установлен openpyxl")
     ty, ts = _resolve_term(W.load_config(db), year, semester)
     tg = {f"{r.student_f}|{r.student_n}": r for r in db.query(TermGrade).filter(
         TermGrade.subject == subject, TermGrade.year == ty,
@@ -589,16 +602,15 @@ def teacher_vedomost_xlsx(group: str = Query(...), subject: str = Query(...),
         r = tg.get(f"{s.surname}|{s.name}")
         rows.append({"surname": s.surname, "name": s.name,
                      "patronymic": W.patronymic_of(s), "grade": (r.grade if r else "")})
-    data = xlsx_export.build_vedomost_xlsx(
-        group, subject, {"year": ty, "semester": ts}, form, rows, teacher=W.display_name(user))
-    from fastapi.responses import Response
-    from urllib.parse import quote
-    fname = f"Ведомость_{group}_{subject}_{ty}_{ts}.xlsx".replace(" ", "_").replace("/", "-")
-    return Response(
-        content=data,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition":
-                 f"attachment; filename=vedomost.xlsx; filename*=UTF-8''{quote(fname)}"})
+    term = {"year": ty, "semester": ts}
+    teacher = W.display_name(user)
+    if fmt == "docx":
+        from .. import docx_export
+        data = docx_export.build_vedomost_docx(group, subject, term, form, rows, teacher=teacher)
+    else:
+        from .. import xlsx_export
+        data = xlsx_export.build_vedomost_xlsx(group, subject, term, form, rows, teacher=teacher)
+    return _file_response(data, f"Ведомость_{group}_{subject}_{ty}_{ts}", fmt)
 
 
 # АДМИНИСТРАТОР ───────────────────────────────────────────────────────────────────
@@ -970,36 +982,30 @@ def teacher_delete_lesson(lesson_id: str,
     return {"ok": True, "id": lesson_id}
 
 
-@router.get("/teacher/journal.xlsx")
-def teacher_journal_xlsx(group: str = Query(...), subject: str = Query(...),
-                         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Экспорт журнала в xlsx прямо с сайта (тот же аккуратный стиль, что в десктопе:
-    Times New Roman 14, титульная шапка, цвет оценок, средний по группе)."""
+@router.get("/teacher/journal-export")
+def teacher_journal_export(group: str = Query(...), subject: str = Query(...),
+                           fmt: str = Query("xlsx"), year: str = Query(""), semester: int = Query(0),
+                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Экспорт журнала (fmt=xlsx|docx) за выбранный семестр. Единый стиль десктопа и
+    веба: Times New Roman 14, ч/б, титульная шапка, средний по группе, адаптивная
+    ширина (текст не обрезается)."""
     _require("teacher", user)
     _teacher_check_subject(user, subject)
-    try:
-        from .. import xlsx_export
-    except ImportError:
-        raise HTTPException(status_code=501, detail="На сервере не установлен openpyxl")
     cfg = W.load_config(db)
-    lessons = W.group_lessons(db, group, subject)
-    studs = W.students_in_group(db, group)
+    ty, ts = _resolve_term(cfg, year, semester)
+    lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     rows = []
-    for s in studs:
+    for s in W.students_in_group(db, group):
         recs = W.student_records(db, s.surname, s.name, group)
         rows.append({"surname": s.surname, "name": s.name, "records": recs,
                      "average": W.average(lessons, recs, cfg)})
-    data = xlsx_export.build_journal_xlsx(group, subject, lessons, rows)
-    from fastapi.responses import Response
-    from urllib.parse import quote
-    #HTTP-заголовки — только latin-1: кириллицу в имени файла percent-кодируем
-    #(RFC 5987), иначе UnicodeEncodeError и 500. Слэши из имени группы убираем.
-    fname = f"Журнал_{group}_{subject}.xlsx".replace(" ", "_").replace("/", "-")
-    return Response(
-        content=data,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition":
-                 f"attachment; filename=journal.xlsx; filename*=UTF-8''{quote(fname)}"})
+    if fmt == "docx":
+        from .. import docx_export
+        data = docx_export.build_journal_docx(group, subject, lessons, rows)
+    else:
+        from .. import xlsx_export
+        data = xlsx_export.build_journal_xlsx(group, subject, lessons, rows)
+    return _file_response(data, f"Журнал_{group}_{subject}_{ty}_{ts}", fmt)
 
 
 def _compose_name(name_in: str, patronymic: str) -> tuple:
