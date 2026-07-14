@@ -151,7 +151,8 @@ def _collect_lessons() -> list:
     #Шлём ВСЕ занятия, включая надгробия (deleted=1) — иначе удаление не доедет до
     #других ПК и занятие воскреснет на следующем pull.
     cur.execute("SELECT id,group_name,subject,type,number,topic,date,"
-                "retake_date,hour,COALESCE(updated_at,''),COALESCE(deleted,0) FROM lessons")
+                "retake_date,hour,COALESCE(updated_at,''),COALESCE(deleted,0),"
+                "COALESCE(year,''),COALESCE(semester,0) FROM lessons")
     rows = cur.fetchall()
     conn.close()
     out = []
@@ -161,6 +162,7 @@ def _collect_lessons() -> list:
             "number": r[4], "topic": r[5], "date": r[6], "retake_date": r[7],
             "hour": r[8], "extra": {}, "updated_at": r[9] or _now(),
             "deleted": bool(r[10]),
+            "year": r[11], "semester": r[12],   #учебный период — общий с сервером/вебом
         })
     return out
 
@@ -326,12 +328,14 @@ def _merge_lessons(remote: list):
         #журнала, фильтр deleted=0 в load_from_db), 0 — обычное активное занятие.
         cur.execute(
             "INSERT OR REPLACE INTO lessons "
-            "(id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at,deleted) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "(id,group_name,subject,type,number,topic,date,retake_date,hour,"
+            "year,semester,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (lid, l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
              l.get("number", 0), l.get("topic", ""), l.get("date", ""),
-             l.get("retake_date", ""), l.get("hour", 0), l.get("updated_at", ""),
-             1 if rdel else 0))
+             l.get("retake_date", ""), l.get("hour", 0),
+             l.get("year", "") or "", int(l.get("semester", 0) or 0),
+             l.get("updated_at", ""), 1 if rdel else 0))
     conn.commit()
     conn.close()
 

@@ -110,11 +110,18 @@ class TeacherDashboard(QWidget):
         group_names = [g["name"] if isinstance(g, dict) else str(g) for g in raw_groups]
         self._group_combo = combo(group_names)
         self._group_combo.currentTextChanged.connect(self._reload_journal)
+        #Селектор учебного семестра (как на вебе): текущий по умолчанию, прошлые — архив.
+        self._term_combo = combo([])
+        self._term_combo.currentIndexChanged.connect(self._on_term_change)
         hdr.addWidget(lbl("Предмет:", 12, C['text3'])); hdr.addWidget(self._subj_combo)
         hdr.addWidget(lbl("Группа:",  12, C['text3'])); hdr.addWidget(self._group_combo)
+        hdr.addWidget(lbl("Семестр:", 12, C['text3'])); hdr.addWidget(self._term_combo)
         lay.addLayout(hdr)
-        #Кнопки
+        #Кнопки. Изменяющие журнал кнопки блокируются на архивном (прошлом) семестре.
         btn_row = QHBoxLayout(); btn_row.setSpacing(6)
+        self._edit_buttons = []
+        _EDIT_LABELS = {"+ Лекция/Практика", "+ Экзамен", "+ Студент",
+                        "💾 Сохранить", "🎓 Аттестация", "📥 Импорт"}
         for txt, style, cb in [
             ("+ Лекция/Практика", "green",  self._add_lesson),
             ("+ Экзамен",         "blue",   self._add_exam),
@@ -126,6 +133,8 @@ class TeacherDashboard(QWidget):
             ("📥 Импорт",         "ghost",  self._import_excel),
         ]:
             b = btn(txt, style); b.clicked.connect(cb); btn_row.addWidget(b)
+            if txt in _EDIT_LABELS:
+                self._edit_buttons.append(b)
         #индикатор конфликтов синхронизации (виден, только если они есть)
         self._conflict_btn = btn("⚠ Конфликты", "blue")
         self._conflict_btn.clicked.connect(self._open_conflicts)
@@ -134,6 +143,11 @@ class TeacherDashboard(QWidget):
         btn_row.addStretch()
         lay.addLayout(btn_row)
         self._refresh_conflicts_badge()
+        #Плашка архива (виден только на прошлом семестре — журнал только для просмотра).
+        self._archive_lbl = lbl("", 12, C['yellow'])
+        self._archive_lbl.setWordWrap(True)
+        self._archive_lbl.hide()
+        lay.addWidget(self._archive_lbl)
         #Таблица
         self.t_table = QTableWidget()
         self.t_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -183,11 +197,63 @@ class TeacherDashboard(QWidget):
             if idx >= 0: self._group_combo.setCurrentIndex(idx)
         self._reload_journal()
 
+    #Учебные семестры (как на вебе): текущий — редактируемый, прошлые — архив read-only.
+    def _cur_term(self):
+        import terms
+        if not getattr(self, "_current_term", None):
+            self._current_term = terms.current_term()
+        return self._current_term
+
+    def _term_label(self, t) -> str:
+        import terms
+        y, s = t
+        return f"{y} · {terms.semester_label(s)} семестр"
+
+    def _populate_terms(self):
+        """Наполняет комбо семестров (локальные периоды + текущий), сохраняя выбор."""
+        from core import DBManager
+        cur = self._cur_term()
+        prev = self._selected_term() if getattr(self, "_term_items", None) else cur
+        items = DBManager.list_terms()
+        if cur not in items:
+            items = [cur] + items
+        self._term_items = items
+        self._term_combo.blockSignals(True)
+        self._term_combo.clear()
+        self._term_combo.addItems([self._term_label(t) for t in items])
+        idx = items.index(prev) if prev in items else (items.index(cur) if cur in items else 0)
+        self._term_combo.setCurrentIndex(idx)
+        self._term_combo.blockSignals(False)
+
+    def _selected_term(self):
+        items = getattr(self, "_term_items", [])
+        i = self._term_combo.currentIndex()
+        return items[i] if 0 <= i < len(items) else self._cur_term()
+
+    def _is_archive(self) -> bool:
+        return self._selected_term() != self._cur_term()
+
+    def _on_term_change(self):
+        self._reload_journal()
+
     def _reload_journal(self):
         subj  = self._subj_combo.currentText()
         group = self._group_combo.currentText()
         if not subj or not group: return
-        self.book = GradeBook(group, subj)
+        self._populate_terms()                       #подхватить новые периоды, сохранив выбор
+        year, sem = self._selected_term()
+        self.book = GradeBook(group, subj, year, sem)
+        #Архив (прошлый семестр) — только просмотр: гасим кнопки правки и показываем плашку.
+        archive = self._is_archive()
+        for b in getattr(self, "_edit_buttons", []):
+            b.setEnabled(not archive)
+        if archive:
+            self._archive_lbl.setText(
+                "🔒 Прошлый семестр — архив (только просмотр). Правки доступны в текущем "
+                f"периоде: {self._term_label(self._cur_term())}.")
+            self._archive_lbl.show()
+        else:
+            self._archive_lbl.hide()
         #Вектор отвечает по той группе/предмету, что открыты сейчас
         if getattr(self, "vector_engine", None):
             self.vector_engine.scope.group = group
@@ -306,6 +372,13 @@ class TeacherDashboard(QWidget):
                     cb.currentTextChanged.connect(lambda v, st=s, le=l, rk=rk_full, ri_=ri: self._set_exam_val(st, le, rk, v, ri_))
                     self.t_table.setCellWidget(r, col, cb)
         self.t_table.blockSignals(False)
+        #Архив (прошлый семестр) — только просмотр: гасим все редактируемые ячейки.
+        if self._is_archive():
+            for rr in range(self.t_table.rowCount()):
+                for cc in range(2, self.t_table.columnCount()):
+                    wcell = self.t_table.cellWidget(rr, cc)
+                    if wcell is not None:
+                        wcell.setEnabled(False)
         self.t_table.resizeColumnsToContents()   #ширины по содержимому (столбцы 0,1 — под ФИО)
         hh = self.t_table.horizontalHeader()
         hh.setMinimumSectionSize(110); hh.setDefaultAlignment(Qt.AlignCenter)
@@ -420,6 +493,8 @@ class TeacherDashboard(QWidget):
         self._update_table()
 
     def _header_ctx(self, pos):
+        if self._is_archive():   #архивный семестр — правка/удаление занятий недоступны
+            return
         col = self.t_table.horizontalHeader().logicalIndexAt(pos)
         if col < 2: return
         ci = col - 2
@@ -668,9 +743,8 @@ class TeacherDashboard(QWidget):
         fmt = self._ask_format()
         if not fmt:
             return
-        import terms
         from core import DBManager
-        year, sem = terms.current_term()
+        year, sem = self._selected_term()   #ведомость — за выбранный семестр (в т.ч. архив)
         tg = DBManager.get_term_grades(self.book.subject, year, sem)
         rows = self._vedomost_rows(tg)
         term = {"year": year, "semester": sem}
@@ -708,7 +782,7 @@ class TeacherDashboard(QWidget):
             return
         import terms
         from core import DBManager
-        year, sem = terms.current_term()
+        year, sem = self._selected_term()   #аттестация — за выбранный (обычно текущий) семестр
         existing = DBManager.get_term_grades(self.book.subject, year, sem)
         dlg = AttestationDialog(self, self.book.group, self.book.subject,
                                 terms.semester_label(sem), year,

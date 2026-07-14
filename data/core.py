@@ -352,8 +352,13 @@ class DBManager:
              retake_date TEXT DEFAULT '', hour INTEGER DEFAULT 0)""")
         #deleted — «надгробие»: удалённое занятие НЕ стираем, а помечаем, чтобы
         #удаление доехало до других ПК (иначе занятие воскресало бы при pull).
+        #year/semester — учебный период занятия (как на сервере/вебе): год «YYYY/YYYY+1»,
+        #семестр 1|2. Нужны для журнала по семестрам и архива прошлых периодов. Старые
+        #базы получают колонки через ALTER; сами занятия «усыновляются» в текущий термин
+        #при первой загрузке журнала (GradeBook.load_from_db — бэкфилл пустого периода).
         for col, default in [("retake_date", "TEXT DEFAULT ''"), ("hour", "INTEGER DEFAULT 0"),
-                             ("updated_at", "TEXT DEFAULT ''"), ("deleted", "INTEGER DEFAULT 0")]:
+                             ("updated_at", "TEXT DEFAULT ''"), ("deleted", "INTEGER DEFAULT 0"),
+                             ("year", "TEXT DEFAULT ''"), ("semester", "INTEGER DEFAULT 0")]:
             try:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
             except Exception:
@@ -395,11 +400,19 @@ class DBManager:
     @classmethod
     def upsert_lesson(cls, cur, vals: tuple):
         """INSERT OR REPLACE для занятия в SQLite.
-        Проставляем updated_at — нужно для синхронизации через API (LWW)."""
+        vals = (id, group, subject, type, number, topic, date, retake_date, hour[, year, semester]).
+        Проставляем updated_at — нужно для синхронизации через API (LWW). year/semester —
+        учебный период (по умолчанию пусто/0; журнал усыновляет пустые в текущий термин)."""
         now = datetime.now(timezone.utc).isoformat()
+        base = tuple(vals[:9])
+        year = vals[9] if len(vals) > 9 else ""
+        semester = int(vals[10]) if len(vals) > 10 else 0
         #deleted=0 — это сохранение АКТИВНОГО занятия (в т.ч. «воскрешает» ранее
         #удалённое, если занятие создали заново с тем же id — на практике id новый).
-        cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,type,number,topic,date,retake_date,hour,updated_at,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,0)", tuple(vals[:9]) + (now,))
+        cur.execute("INSERT OR REPLACE INTO lessons "
+                    "(id,group_name,subject,type,number,topic,date,retake_date,hour,"
+                    "year,semester,updated_at,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                    base + (year, semester, now))
 
     @classmethod
     def upsert_student(cls, cur, vals: tuple):
@@ -447,6 +460,22 @@ class DBManager:
         conn.close()
 
     @classmethod
+    def list_terms(cls) -> list:
+        """Учебные периоды, по которым есть занятия: [(year, semester)], новые сверху.
+        Для селектора семестра в журнале и архива прошлых периодов (как list_terms в вебе)."""
+        conn = cls.get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT year, COALESCE(semester,0) FROM lessons "
+                        "WHERE COALESCE(deleted,0)=0 AND COALESCE(year,'')<>''")
+            terms = sorted({(y, int(s or 0)) for y, s in cur.fetchall() if y},
+                           key=lambda t: (t[0], t[1]), reverse=True)
+        except Exception:
+            terms = []
+        conn.close()
+        return terms
+
+    @classmethod
     def get_term_grades(cls, subject: str, year: str, semester: int) -> dict:
         """Итоговые оценки по предмету за термин: {«f|n»: {'grade','form'}} (без надгробий)."""
         conn = cls.get_conn()
@@ -471,6 +500,8 @@ class Lesson:
     date: str
     retake_date: str = ""
     hour: int = 0
+    year: str = ""          #учебный год «YYYY/YYYY+1» (период занятия)
+    semester: int = 0       #семестр 1 (осень) | 2 (весна)
 
 
 @dataclass
@@ -483,9 +514,14 @@ class Student:
 
 #Журнал
 class GradeBook:
-    def __init__(self, group: str, subject: str):
+    def __init__(self, group: str, subject: str, year: str = "", semester: int = 0):
         self.group   = group
         self.subject = subject
+        #Учебный период журнала. Пусто → БЕЗ фильтра (все периоды — прежнее поведение,
+        #обратная совместимость для вызовов без термина). Задан → журнал показывает
+        #только этот семестр; прошлые периоды в UI открываются read-only (архив).
+        self.year    = year or ""
+        self.semester = int(semester or 0)
         DBManager._init_sqlite_tables()
         self.lessons: List[Lesson] = []
         self.spisok_stud: List[Student] = []
@@ -536,14 +572,18 @@ class GradeBook:
         next_num = max(nums) + 1 if nums else 1
         dt = date or datetime.now().strftime('%d.%m.%Y')
 
+        #Новое занятие штампуем текущим периодом журнала (self.year/semester) — чтобы
+        #оно попало в правильный семестр. Если период не задан (легаси-вызов) — пусто,
+        #сервер проставит термин при push, а бэкфилл усыновит его в текущий период.
+        yr, sem = self.year, self.semester
         if lesson_type == "Лекция" and hour == 0:
-            l1 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=1)
-            l2 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=2)
+            l1 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=1, year=yr, semester=sem)
+            l2 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=2, year=yr, semester=sem)
             self.lessons.extend([l1, l2])
             self.save_to_db()
             return l1
         else:
-            l = Lesson(id=str(uuid.uuid4()), type=lesson_type, number=next_num, topic=topic, date=dt, retake_date="", hour=hour)
+            l = Lesson(id=str(uuid.uuid4()), type=lesson_type, number=next_num, topic=topic, date=dt, retake_date="", hour=hour, year=yr, semester=sem)
             self.lessons.append(l)
             self.save_to_db()
             return l
@@ -573,7 +613,11 @@ class GradeBook:
                 l.id, self.group, self.subject, l.type,
                 l.number, l.topic, l.date,
                 getattr(l, 'retake_date', ''),
-                getattr(l, 'hour', 0)
+                getattr(l, 'hour', 0),
+                #период занятия сохраняем как есть (архивные не переносим в текущий);
+                #если у занятия периода нет — берём период журнала.
+                getattr(l, 'year', '') or self.year,
+                getattr(l, 'semester', 0) or self.semester,
             ))
         for s in self.spisok_stud:
             DBManager.upsert_student(cur, (s.f, s.n, s.group))
@@ -586,20 +630,41 @@ class GradeBook:
         conn = DBManager.get_conn()
         cur  = conn.cursor()
 
-        #deleted=0 — удалённые (надгробия) занятия в журнал не показываем.
-        cur.execute(
-            "SELECT id, type, number, topic, date, retake_date, hour "
-            "FROM lessons WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0 "
-            "ORDER BY type, number, hour",
-            (self.group, self.subject)
-        )
+        #Бэкфилл периода: занятия без учебного периода (старые базы, до семестров)
+        #«усыновляем» в ТЕКУЩИЙ термин — иначе при фильтрации по семестру они бы не
+        #показались ни в одном. Только когда журнал открыт с термином (self.year задан).
+        if self.year:
+            try:
+                import terms
+                cy, cs = terms.current_term()
+                cur.execute(
+                    "UPDATE lessons SET year=?, semester=? "
+                    "WHERE group_name=? AND subject=? AND COALESCE(year,'')='' "
+                    "AND COALESCE(deleted,0)=0",
+                    (cy, int(cs or 0), self.group, self.subject))
+                conn.commit()
+            except Exception as e:
+                print(f"[GradeBook] бэкфилл периода пропущен: {e}")
+
+        #deleted=0 — удалённые (надгробия) занятия в журнал не показываем. Если задан
+        #период журнала (self.year) — показываем только его семестр (архив/текущий).
+        base_sql = ("SELECT id, type, number, topic, date, retake_date, hour, "
+                    "COALESCE(year,''), COALESCE(semester,0) "
+                    "FROM lessons WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0")
+        params = [self.group, self.subject]
+        if self.year:
+            base_sql += " AND COALESCE(year,'')=? AND COALESCE(semester,0)=?"
+            params += [self.year, self.semester]
+        base_sql += " ORDER BY type, number, hour"
+        cur.execute(base_sql, tuple(params))
         self.lessons = []
         for row in cur.fetchall():
             l = Lesson(
                 id=row[0], type=row[1], number=row[2],
                 topic=row[3], date=row[4],
                 retake_date=row[5] if row[5] else "",
-                hour=row[6] if row[6] else 0
+                hour=row[6] if row[6] else 0,
+                year=row[7] or "", semester=row[8] or 0,
             )
             self.lessons.append(l)
 
