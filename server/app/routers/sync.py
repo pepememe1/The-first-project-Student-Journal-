@@ -109,25 +109,70 @@ def _is_secret_config_key(key: str) -> bool:
     return any(p in k for p in _SECRET_CFG_PATTERNS)
 
 
-def _scope_pull_for_role(changes: dict, user: User) -> None:
-    """Минимизация выгрузки по роли (152-ФЗ, снижение радиуса поражения одного ПК).
-
-    Для НЕ-админа:
-      • password_hash отдаём ТОЛЬКО владельцу его собственный (нужен для офлайн-входа на
-        его ПК); чужие хеши вырезаем — на ПК студента/преподавателя их быть не должно;
-      • секретные ключи config (токен GigaChat и пр.) не отдаём вовсе — озвучку ИИ
-        десктоп получает через сервер (/vector/voice), токен остаётся на сервере.
-    Админ получает всё без изменений: ему нужны хеши для правки пользователей (сохранение
-    старого хеша при смене без пароля), а админ-ПК доверенные и малочисленные.
-    (Row-scope ПДн — не слать студенту чужих студентов — отдельный следующий шаг.)"""
-    if user.role == "admin":
-        return
-    own_login = (user.login or "")
-    for u in (changes.get("users") or []):
+def _strip_other_hashes(users: list, own_login: str) -> None:
+    """Хеш пароля оставляем ТОЛЬКО владельцу (нужен для офлайн-входа на его ПК);
+    у остальных строк вырезаем — на клиентском ПК чужих хешей быть не должно."""
+    for u in users:
         if u.get("login") != own_login:
             u["password_hash"] = ""
+
+
+def _scope_for_student(changes: dict, user: User) -> None:
+    """Студент получает ТОЛЬКО своё: свою строку user, свои оценки/итоги, занятия своей
+    группы и саму группу. Чужих студентов (ПДн) и чужих занятий он не видит вовсе."""
+    login = user.login or ""
+    f, n, grp = (user.surname or ""), (user.name or ""), (user.group_name or "")
+    changes["users"] = [u for u in (changes.get("users") or []) if u.get("login") == login]
+    changes["groups"] = [g for g in (changes.get("groups") or []) if g.get("name") == grp]
+    changes["lessons"] = [l for l in (changes.get("lessons") or []) if l.get("group_name") == grp]
+    changes["grades"] = [gr for gr in (changes.get("grades") or [])
+                         if gr.get("student_f") == f and gr.get("student_n") == n]
+    changes["term_grades"] = [t for t in (changes.get("term_grades") or [])
+                              if t.get("student_f") == f and t.get("student_n") == n]
+    #subjects — справочник имён (не ПДн), оставляем как есть.
+
+
+def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
+    """Преподаватель получает свою строку + студентов СВОИХ групп (ростер журнала) и
+    занятия/оценки/итоги только СВОИХ предметов. Чужие группы/предметы и чужих
+    преподавателей — не видит. Хеши студентов вырезаем (нужны только имена/группы)."""
+    from ..models import Lesson
+    from .. import webdata as W
+    login = user.login or ""
+    subjects = set(user.subjects or [])
+    groups = set(W.teacher_groups(db, subjects))
+    changes["users"] = [u for u in (changes.get("users") or [])
+                        if u.get("login") == login
+                        or (u.get("role") == "student" and u.get("group_name") in groups)]
+    _strip_other_hashes(changes["users"], login)
+    changes["groups"] = [g for g in (changes.get("groups") or []) if g.get("name") in groups]
+    changes["lessons"] = [l for l in (changes.get("lessons") or [])
+                          if l.get("subject") in subjects]
+    lesson_subj = {row[0]: row[1] for row in db.query(Lesson.id, Lesson.subject).all()}
+    changes["grades"] = [gr for gr in (changes.get("grades") or [])
+                         if lesson_subj.get(gr.get("lesson_id")) in subjects]
+    changes["term_grades"] = [t for t in (changes.get("term_grades") or [])
+                              if t.get("subject") in subjects]
+
+
+def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:
+    """Минимизация выгрузки по роли (152-ФЗ, снижение радиуса поражения одного ПК).
+
+    Админ получает всё (нужны хеши для правки юзеров, секреты ИИ для настроек; админ-ПК
+    доверенные и малочисленные). Не-админам:
+      • секретные ключи config (токен GigaChat и пр.) не отдаём вовсе — озвучку ИИ
+        десктоп получает через сервер (/vector/voice), токен остаётся на сервере;
+      • row-scope ПДн: студент видит только себя, преподаватель — только свои группы/
+        предметы. Свой хеш пароля пользователь получает (нужен для офлайн-входа)."""
+    if user.role == "admin":
+        return
     changes["config"] = [c for c in (changes.get("config") or [])
                          if not _is_secret_config_key(c.get("key", ""))]
+    if user.role == "teacher":
+        _scope_for_teacher(changes, user, db)
+    else:
+        #student и любая иная не-админ-роль — по минимуму «только своё».
+        _scope_for_student(changes, user)
 
 
 @router.get("/pull")
@@ -148,8 +193,8 @@ def pull(since: str = "", request: Request = None,
         if since:
             q = q.filter(model.updated_at > since)
         changes[name] = [_row_to_dict(r, model) for r in q.all()]
-    #Минимизация по роли: чужие хеши и секреты config не покидают сервер к не-админам.
-    _scope_pull_for_role(changes, user)
+    #Минимизация по роли: чужие ПДн/хеши и секреты config не покидают сервер к не-админам.
+    _scope_pull_for_role(changes, user, db)
     return {"server_time": server_time, "changes": changes}
 
 

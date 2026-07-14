@@ -66,23 +66,66 @@ def test_pull_requires_auth(client):
 
 
 # Минимизация выгрузки по роли (152-ФЗ) ───────────────────────────────────────────
-def test_pull_hides_foreign_hashes_and_secrets_from_non_admin(client):
-    """Преподаватель НЕ получает чужие хеши паролей и секреты config (токен GigaChat),
-    но получает СВОЙ хеш (нужен для офлайн-входа) и несекретные ключи config."""
+def _mk_student(client, admin, login, surname, name, group, pw="studpass1"):
+    """Заводит студента через push админа и логинит его — возвращает его заголовок."""
+    from app.security import hash_password
+    client.post("/sync/push", json={"changes": {"users": [{
+        "id": f"stud:{login}", "role": "student", "login": login,
+        "password_hash": hash_password(pw), "surname": surname, "name": name,
+        "group_name": group}]}}, headers=admin)
+    r = client.post("/auth/login", json={"login": login, "password": pw})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_pull_teacher_row_scope(client):
+    """Преподаватель получает свою строку + студентов СВОИХ групп и занятия СВОИХ
+    предметов; чужие группы/предметы/преподавателей и админа — не видит. Свой хеш есть,
+    хеши студентов и секреты config — вырезаны."""
     admin = make_admin(client)
-    th = make_teacher(client, admin, login="teacher1")
-    #Админ кладёт секретный ключ ИИ и несекретную настройку.
-    _push(client, admin, config=[
-        {"key": "gigachat_credentials", "value": "SECRET_TOKEN", "deleted": False},
-        {"key": "vector_llm", "value": "gigachat", "deleted": False}])
+    th = make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    _push(client, admin,
+          groups=[{"id": "grp:ИС-21", "name": "ИС-21", "subjects": ["Математика"]},
+                  {"id": "grp:ИС-22", "name": "ИС-22", "subjects": ["Физика"]}],
+          config=[{"key": "gigachat_credentials", "value": "SECRET", "deleted": False},
+                  {"key": "vector_llm", "value": "gigachat", "deleted": False}])
+    _mk_student(client, admin, "sa", "Иванов", "Иван", "ИС-21")
+    _mk_student(client, admin, "sb", "Петров", "Пётр", "ИС-22")
+    _push(client, admin, lessons=[
+        dict(_LESSON, id="L1", group_name="ИС-21", subject="Математика"),
+        dict(_LESSON, id="L2", group_name="ИС-22", subject="Физика")])
 
     ch = client.get("/sync/pull", headers=th).json()["changes"]
+    logins = {u.get("login") for u in ch["users"]}
+    assert "teacher1" in logins and "sa" in logins
+    assert "sb" not in logins and "admin" not in logins, "чужая группа/админ не видны"
+    assert {l["id"] for l in ch["lessons"]} == {"L1"}, "только занятия своего предмета"
     users = {u["login"]: u for u in ch["users"] if u.get("login")}
-    assert users["teacher1"]["password_hash"], "свой хеш преподаватель получить должен"
-    assert users["admin"]["password_hash"] == "", "чужой (админский) хеш — вырезан"
+    assert users["teacher1"]["password_hash"], "свой хеш есть (офлайн-вход)"
+    assert users["sa"]["password_hash"] == "", "хеш студента вырезан"
     cfg = {c["key"]: c.get("value") for c in ch["config"]}
-    assert "gigachat_credentials" not in cfg, "секрет ИИ не должен уходить не-админу"
-    assert cfg.get("vector_llm") == "gigachat", "несекретная настройка остаётся"
+    assert "gigachat_credentials" not in cfg and cfg.get("vector_llm") == "gigachat"
+
+
+def test_pull_student_row_scope(client):
+    """Студент получает ТОЛЬКО себя: свою строку, свои оценки, занятия своей группы.
+    Чужих студентов (ПДн) и их оценки — не видит вовсе."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    sa = _mk_student(client, admin, "sa", "Иванов", "Иван", "ИС-21")
+    _mk_student(client, admin, "sb", "Петров", "Пётр", "ИС-21")
+    _push(client, admin,
+          lessons=[dict(_LESSON, id="L1", group_name="ИС-21", subject="Математика"),
+                   dict(_LESSON, id="L2", group_name="ИС-22", subject="Физика")],
+          grades=[dict(_GRADE, id="Иванов|Иван|L1", lesson_id="L1"),
+                  {"id": "Петров|Пётр|L1", "student_f": "Петров", "student_n": "Пётр",
+                   "lesson_id": "L1", "grade": "3"}])
+
+    ch = client.get("/sync/pull", headers=sa).json()["changes"]
+    assert {u.get("login") for u in ch["users"]} == {"sa"}, "видит только себя"
+    assert {l["id"] for l in ch["lessons"]} == {"L1"}, "только занятия своей группы ИС-21"
+    assert {(g["student_f"], g["student_n"]) for g in ch["grades"]} == {("Иванов", "Иван")}, \
+        "только свои оценки, не Петрова"
 
 
 def test_pull_admin_gets_everything(client):
