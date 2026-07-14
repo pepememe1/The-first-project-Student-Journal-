@@ -22,6 +22,32 @@ jobs:
       # будь она синтаксисом). Быстро и без зависимостей.
       - run: python -m compileall -q ui sync data server/app *.py
 
+  lint-python:
+    name: Линтер Python (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Высокосигнальный набор правил задан в pyproject.toml [tool.ruff] — ловим
+      # неопределённые имена, мёртвые импорты, дубли определений (реальные баги).
+      - run: pip install ruff
+      - run: ruff check .
+
+  lint-web:
+    name: Линтер веба (eslint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # npm ci — детерминированная установка по package-lock.json. eslint падает
+      # только на ошибках; предупреждения стиля не блокируют (форматом владеет prettier).
+      - run: cd web && npm ci
+      - run: cd web && npm run lint
+
   server-tests:
     name: Серверные тесты
     runs-on: ubuntu-latest

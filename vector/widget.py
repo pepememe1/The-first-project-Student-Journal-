@@ -26,17 +26,16 @@ widget.py — Компаньон «Вектор» (PySide6): панель чат
 
 Если папки `emotions/речь/` нет — работает компактная эмодзи-заглушка 🐯, ничего не падает.
 """
-import os
 
 from . import speech
 
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve
 )
-from PySide6.QtGui import QPixmap, QColor, QTransform
+from PySide6.QtGui import QPixmap, QTransform
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QLineEdit, QFrame, QToolButton, QSizePolicy
+    QLineEdit, QFrame, QToolButton
 )
 
 #Цвета/виджеты проекта (фолбэк, если импорт не удался при изоляции)

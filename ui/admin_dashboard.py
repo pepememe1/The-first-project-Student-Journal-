@@ -8,10 +8,9 @@ import os
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QFileDialog, QFormLayout,
-    QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QAbstractItemView, QApplication, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QSpacerItem, QStackedWidget,
+    QScrollArea, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QFrame
 )
 

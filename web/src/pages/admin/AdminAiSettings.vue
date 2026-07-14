@@ -3,7 +3,7 @@
 // провайдера «Вектора» (Оффлайн/GigaChat/Ollama) и вводит ключ GigaChat. Хранится в той
 // же строке config, что и на десктопе → синхронизируется в обе стороны (ключ, заданный
 // на ПК, приезжает на веб и наоборот).
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { Bot, Eye, EyeOff, Check, CircleAlert, CircleCheck } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'

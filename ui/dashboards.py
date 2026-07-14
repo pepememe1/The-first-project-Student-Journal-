@@ -2,22 +2,17 @@
 dashboards.py — Панели управления для студентов, учителей и администраторов
 """
 
-from datetime import datetime, timedelta
 from PySide6.QtCore import Qt, QThread, Signal as QSignal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QTableWidget, QTableWidgetItem,
-    QLabel, QPushButton, QStackedWidget, QComboBox, QTextEdit, QMessageBox,
-    QFileDialog, QInputDialog, QDialog, QGridLayout, QFrame, QHeaderView,
-    QAbstractItemView, QListWidget, QListWidgetItem, QApplication, QSizePolicy
+    QLabel, QPushButton, QStackedWidget, QFrame, QAbstractItemView, QSizePolicy
 )
 
-from core import GradeBook, Student, DBManager, APP_VERSION
-from subjects import load_subjects
-from styles import C, BTN
+from core import GradeBook
+from styles import C
 from widgets import (
-    lbl, title_lbl, section_lbl, btn, stat_card, card, card2,
-    field_input, combo, separator, badge, vector_unavailable_widget
+    lbl, title_lbl, section_lbl, stat_card, card, combo, separator, vector_unavailable_widget
 )
 from ui_components import Sidebar
 from utils import get_subjects_for_group
@@ -217,7 +212,7 @@ class StudentDashboard(QWidget):
         #Совет карточка
         tip = QFrame()
         tip.setStyleSheet(
-            f"background:rgba(14,98,113,0.06);border:1px solid rgba(20,124,139,0.15);border-radius:12px;"
+            "background:rgba(14,98,113,0.06);border:1px solid rgba(20,124,139,0.15);border-radius:12px;"
         )
         tip_lay = QVBoxLayout(tip)
         tip_lay.setContentsMargins(16, 12, 16, 12)
@@ -597,8 +592,7 @@ class StudentDashboard(QWidget):
             bar.setFixedHeight(4)
             bar.setStyleSheet(f"background:{C['border']};border-radius:2px;")
             row.addWidget(bar, 1)
-            
-            pct = int((avg_s - 1) / 4 * 100)
+
             col = (C['green'] if avg_s >= 4.5 else C['blue'] if avg_s >= 3.5
                    else C['yellow'] if avg_s >= 2.5 else C['red'])
             row.addWidget(lbl(f"{avg_s:.1f}", 14, col, True))

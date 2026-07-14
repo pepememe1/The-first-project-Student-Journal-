@@ -13,7 +13,6 @@ import { HOME_BY_ROLE } from '@/config/nav'
 import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ConnectServer from '@/pages/ConnectServer.vue'
-import SectionView from '@/views/SectionView.vue'
 import VectorPage from '@/pages/VectorPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
 import Profile from '@/pages/Profile.vue'
@@ -37,7 +36,6 @@ import MonitorPage from '@/pages/admin/MonitorPage.vue'
 import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
 import AdminServer from '@/pages/admin/AdminServer.vue'
 
-const sec = (path, title, opts = {}) => ({ path, component: SectionView, meta: { title, ...opts } })
 const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
 
 const routes = [

@@ -1,0 +1,4 @@
+dist
+android
+node_modules
+*.min.js

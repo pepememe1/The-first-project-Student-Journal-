@@ -233,7 +233,6 @@ class MainAppWindow(QMainWindow):
             print(f"[restore] сохранённая сессия не прочитана: {e}")
             return
         login = (sess or {}).get("login", "")
-        role = (sess or {}).get("role", "")
         if not login:
             return
         #Синхронно (до сетевых задержек) помечаем восстановление, чтобы окно подключения

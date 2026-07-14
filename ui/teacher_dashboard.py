@@ -3,22 +3,20 @@ teacher_dashboard.py — TeacherDashboard
 Часть рефакторинга GUI.py → модульная архитектура
 """
 
-import os
-from datetime import datetime, timedelta
 import ui_date
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QHeaderView, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
+    QHeaderView, QHBoxLayout, QInputDialog, QMessageBox,
+    QPushButton, QScrollArea, QStackedWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame
 )
 
 from styles import C, BTN
 from widgets import (
-    lbl, title_lbl, section_lbl, btn, combo, card, separator, stat_card,
+    lbl, title_lbl, section_lbl, btn, combo, card, stat_card,
     vector_unavailable_widget
 )
 from ui_components import Sidebar
@@ -288,7 +286,7 @@ class TeacherDashboard(QWidget):
                     cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
                     self.t_table.setCellWidget(r, col, cb)
                 elif l.type == "Экзамен" or ri > 0:
-                    rk_full = l.id + (f"_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
+                    rk_full = l.id + ("_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
                     #ФИКС БАГА: пересдача назначается не всем.
                     #Ячейка пересдачи №ri активна только у студента, который
                     #ЗАВАЛИЛ предыдущую попытку (2 / Н / «Не зачтено»).

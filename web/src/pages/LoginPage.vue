@@ -102,7 +102,7 @@ async function submitPasskey() {
   try {
     const user = await auth.loginPasskey()
     router.push(HOME_BY_ROLE[user.role] || '/')
-  } catch (e) {
+  } catch {
     /* ошибка уже в auth.error (или отмена — молчим) */
   }
 }

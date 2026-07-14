@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Dict
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.styles import Font, Alignment
 
 APP_VERSION = "Pre-release 2.9"
 
@@ -101,6 +101,15 @@ class DBManager:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             tag = ("_" + "".join(ch for ch in reason if ch.isalnum())[:16]) if reason else ""
             dst = _os.path.join(BACKUP_DIR, f"vsgutu_grades_{ts}{tag}.db")
+            #На Windows datetime.now() имеет разрешение ~15 мс — два бэкапа подряд могут
+            #получить ОДНУ микросекунду и одно имя, и второй затёр бы первый (потеря копии).
+            #Гарантируем уникальность суффиксом, если файл с таким именем уже есть.
+            if _os.path.exists(dst):
+                base = _os.path.join(BACKUP_DIR, f"vsgutu_grades_{ts}{tag}")
+                n = 1
+                while _os.path.exists(f"{base}_{n}.db"):
+                    n += 1
+                dst = f"{base}_{n}.db"
             #WAL: гарантируем, что данные на диске, затем копируем
             try:
                 c = sqlite3.connect(LOCAL_DB)

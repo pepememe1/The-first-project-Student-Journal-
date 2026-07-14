@@ -12,7 +12,6 @@ intents.py — Whitelisted-интенты: распознавание намер
   • преподаватель — текущую группу и предмет;
   • админ — группу (по всем предметам) или всё.
 """
-import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple

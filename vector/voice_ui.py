@@ -18,7 +18,7 @@ voice_ui.py — Десктопный голосовой ввод для Вект
 """
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QToolButton, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QFrame, QScrollArea, QWidget, QLineEdit,

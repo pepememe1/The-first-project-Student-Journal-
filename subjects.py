@@ -140,7 +140,7 @@ def save_subjects(subjects: list) -> bool:
         with open(SUBJECTS_FILE, "w", encoding="utf-8") as f:
             json.dump(cleaned, f, ensure_ascii=False, indent=2)
         return True
-    except OSError as e:
+    except OSError:
         return False
 
 

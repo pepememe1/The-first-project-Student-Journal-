@@ -1614,74 +1614,8 @@ def admin_test_ai_config(payload: dict = Body(...),
         return {"ok": False, "message": str(e)[:200]}
 
 
-# --- Занятия/пары (CRUD) --- преподаватель наполняет журнал: создаёт/правит/удаляет
-# пары по СВОЕМУ предмету. id — uuid (как в десктопе), пишется в таблицу lessons →
-# десктоп получает через pull (_merge_lessons). Оценки цепляются к lesson_id.
-def _as_int(v, default=0):
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return default
-
-
-@router.post("/teacher/lesson")
-def teacher_create_lesson(payload: dict = Body(...),
-                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    _require("teacher", user)
-    group = (payload.get("group") or "").strip()
-    subject = (payload.get("subject") or "").strip()
-    if not group or not subject:
-        raise HTTPException(status_code=400, detail="Нужны группа и предмет")
-    _teacher_check_subject(user, subject)   # только свой предмет
-    import uuid
-    lid = uuid.uuid4().hex
-    row = Lesson(
-        id=lid, group_name=group, subject=subject,
-        type=(payload.get("type") or "Практика").strip(),
-        number=_as_int(payload.get("number")),
-        topic=(payload.get("topic") or "").strip(),
-        date=(payload.get("date") or "").strip(),
-        retake_date="", hour=_as_int(payload.get("hour")),
-        extra={}, updated_at=_now_iso(), deleted=False)
-    db.add(row)
-    db.commit()
-    return {"ok": True, "id": lid}
-
-
-@router.put("/teacher/lesson/{lesson_id}")
-def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
-                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    _require("teacher", user)
-    row = db.get(Lesson, lesson_id)
-    if row is None or row.deleted:
-        raise HTTPException(status_code=404, detail="Занятие не найдено")
-    _teacher_check_subject(user, row.subject)
-    if "type" in payload:
-        row.type = (payload.get("type") or "").strip()
-    if "number" in payload:
-        row.number = _as_int(payload.get("number"))
-    if "topic" in payload:
-        row.topic = (payload.get("topic") or "").strip()
-    if "date" in payload:
-        row.date = (payload.get("date") or "").strip()
-    if "hour" in payload:
-        row.hour = _as_int(payload.get("hour"))
-    row.updated_at = _now_iso()
-    db.commit()
-    return {"ok": True, "id": lesson_id}
-
-
-@router.delete("/teacher/lesson/{lesson_id}")
-def teacher_delete_lesson(lesson_id: str,
-                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    _require("teacher", user)
-    row = db.get(Lesson, lesson_id)
-    if row is None or row.deleted:
-        raise HTTPException(status_code=404, detail="Занятие не найдено")
-    _teacher_check_subject(user, row.subject)
-    #Мягкое удаление (надгробие) → уедет в десктоп; оценки этой пары останутся в БД, но
-    #в журнале не показываются (фильтр deleted). Так удаление не «воскресает» на синке.
-    row.deleted = True
-    row.updated_at = _now_iso()
-    db.commit()
-    return {"ok": True, "id": lesson_id}
+# ПРИМЕЧАНИЕ: канонический CRUD занятий (create/update/delete) определён ВЫШЕ
+# (teacher_create_lesson и др. ~строка 993) — с учебным периодом и защитой архива.
+# Здесь раньше был дублирующий, устаревший набор тех же роутов (без термина и без
+# read-only архива). FastAPI брал первый зарегистрированный, поэтому дубль был мёртвым
+# кодом-миной (ruff F811) и удалён.

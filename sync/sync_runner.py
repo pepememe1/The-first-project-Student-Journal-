@@ -12,7 +12,10 @@ offline-first сохраняется, прога продолжает работ
 import threading
 import time
 
+import log
 from app_settings import get_api_url
+
+_log = log.get("sync")
 
 
 class SyncManager:
@@ -246,10 +249,10 @@ class SyncManager:
                 #Логируем только первые неудачи, дальше молчим — не засоряем консоль
                 #одинаковым «Read timed out» каждый цикл, пока сервер недоступен.
                 if self._fail_count <= 3:
-                    print(f"[sync] отложено (попытка {self._fail_count}): {e}")
+                    _log.info("отложено (попытка %s): %s", self._fail_count, e)
                 elif self._fail_count == 4:
-                    print("[sync] сервер недоступен — перехожу в режим редких повторов "
-                          "(бэкофф). Данные в безопасности локально, синк возобновится сам.")
+                    _log.warning("сервер недоступен — режим редких повторов (бэкофф). "
+                                 "Данные в безопасности локально, синк возобновится сам.")
             self._sleep_cycle()
 
     def _sleep_cycle(self):
@@ -289,7 +292,7 @@ class SyncManager:
                 SyncClient(url, token).set_my_prefs(prefs)
                 app_settings.clear_pending_prefs()
             except Exception as e:
-                print(f"[theme] не удалось отправить тему на сервер: {e}")
+                _log.warning("тема на сервер не ушла (отложу): %s", e)
                 if self._login:
                     app_settings.set_pending_prefs(self._login, prefs)
         threading.Thread(target=_send, daemon=True).start()
@@ -308,7 +311,7 @@ class SyncManager:
             SyncClient(self._url, self._client.token).set_my_prefs(prefs)
             app_settings.clear_pending_prefs()
         except Exception as e:
-            print(f"[theme] отложенная отправка темы не удалась: {e}")
+            _log.warning("отложенная отправка темы не удалась: %s", e)
 
     def flush_now(self):
         """Синхронный один цикл синхронизации ПРЯМО СЕЙЧАС — для выхода из аккаунта и
@@ -330,7 +333,7 @@ class SyncManager:
                 sync_engine.sync_once(self._client)
                 self._flush_pending_prefs()
         except Exception as e:
-            print(f"[sync] flush: {e}")
+            _log.warning("flush перед выходом не удался: %s", e)
 
 
 #Глобальный менеджер на процесс.

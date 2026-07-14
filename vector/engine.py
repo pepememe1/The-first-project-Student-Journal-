@@ -9,7 +9,7 @@ engine.py — Оркестратор Вектора.
 переформулирует. Если LLM недоступна — фразу даёт офлайн-шаблон.
 """
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from . import intents

@@ -29,7 +29,7 @@ for d in ('ui', 'sync', 'data'):
     hidden += _flat_mods(d)
 # корневые модули, которые тоже импортируются плоско/лениво
 hidden += ['grading', 'subjects', 'server_control', 'fonts', 'app_paths', '_bootstrap',
-           'main_window']
+           'main_window', 'log']
 # пакеты
 for pkg in ('vector', 'schedule'):
     hidden += collect_submodules(pkg)

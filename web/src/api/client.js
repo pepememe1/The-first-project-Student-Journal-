@@ -95,7 +95,7 @@ api.interceptors.response.use(
       config._retried = true
       config.headers.Authorization = `Bearer ${newAccess}`
       return api(config)
-    } catch (e) {
+    } catch {
       clearTokens()
       if (authExpiredHandler) authExpiredHandler()
       return Promise.reject(error)

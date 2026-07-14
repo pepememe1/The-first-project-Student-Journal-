@@ -50,7 +50,7 @@ def ask_date(parent, title: str = "Дата", label: str = "Выберите д�
         from PySide6.QtWidgets import (
             QDialog, QVBoxLayout, QHBoxLayout, QDateEdit, QPushButton, QLabel
         )
-        from PySide6.QtCore import QDate, Qt
+        from PySide6.QtCore import QDate
     except Exception:
         #Если Qt недоступен (например, в тестах) — текстовый фолбэк с проверкой
         return normalize_date(default or today_str())

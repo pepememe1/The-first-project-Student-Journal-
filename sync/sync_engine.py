@@ -17,6 +17,10 @@ sync_client. Любая сетевая ошибка не критична: си�
 """
 from datetime import datetime, timezone
 
+import log
+
+_log = log.get("sync")
+
 
 def _now() -> str:
     #UTC + микросекунды (единый формат с сервером и data_store._now_iso) —
@@ -475,7 +479,7 @@ def reconcile(client) -> bool:
     try:
         client.push(collect_local())
     except Exception as e:
-        print(f"[reconcile] пуш офлайн-правок перед сбросом кэша не удался: {e}")
+        _log.warning("пуш офлайн-правок перед сбросом кэша не удался: %s", e)
         raise   #не стираем кэш, если правки не удалось отправить — данные важнее «чистоты»
     reset_synced_local_data()
     force_full_pull()

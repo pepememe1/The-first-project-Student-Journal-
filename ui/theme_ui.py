@@ -11,8 +11,8 @@ theme_ui.py — Виджет выбора темы оформления (как 
 from PySide6.QtCore import Qt, Signal, QTime
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QSlider,
-    QScrollArea, QFrame, QCheckBox, QTimeEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSlider,
+    QScrollArea, QCheckBox, QTimeEdit
 )
 
 import themes

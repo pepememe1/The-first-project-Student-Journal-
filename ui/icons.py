@@ -11,7 +11,7 @@ icons.py — фирменный набор линейных иконок (вме
     button.setIcon(icon("home", size=18))          # цвет — текущий вторичный текст
     button.setIcon(icon("home", color="#147C8B"))  # явный цвет (напр. акцент)
 """
-from PySide6.QtCore import QByteArray, QRectF, Qt, QSize
+from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 
 try:
