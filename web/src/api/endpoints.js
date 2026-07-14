@@ -133,6 +133,8 @@ export const adminApi = {
   aiConfig: () => api.get('/web/admin/ai-config'),
   aiConfigSave: (payload) => api.post('/web/admin/ai-config', payload),
   aiConfigTest: (payload) => api.post('/web/admin/ai-config/test', payload),
+  // Инфо-панель «Сервер и сайт» (адрес, БД, шифрование, ГОСТ, онлайн, период).
+  serverInfo: () => api.get('/web/admin/server-info'),
   // Служебное — уже реализовано на сервере:
   online: () => api.get('/admin/online'),
   events: (since = 0) => api.get('/admin/events', { params: { since } }),

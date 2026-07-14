@@ -677,6 +677,59 @@ def admin_subjects(_admin: User = Depends(require_admin), db: Session = Depends(
     return {"subjects": [{"name": s.name} for s in rows]}
 
 
+# СЕРВЕР И САЙТ (инфо-панель, только чтение) ──────────────────────────────────────
+import time as _time                                                    # noqa: E402
+_SERVER_START_TS = _time.time()   #≈ старт процесса (web.py грузится при старте)
+
+
+@router.get("/admin/server-info")
+def admin_server_info(request: Request = None,
+                      _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Статус сервера/сайта для веб-вкладки «Сервер»: адрес, версия, тип БД, шифрование
+    ПДн (152-ФЗ), ГОСТ-бэкенд, кто онлайн, учебный период, аптайм. Только чтение —
+    хостингом управляют на ХОСТЕ (десктоп server_control), из браузера это не трогаем."""
+    import os
+    from ..config import DATABASE_URL, ALLOWED_ORIGINS
+    from .. import gost, security, events as _events
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    db_key = os.environ.get("GRADEBOOK_DB_KEY", "").strip()
+    sqlcipher = False
+    if is_sqlite and db_key:
+        try:
+            import sqlcipher3  # noqa: F401
+            sqlcipher = True
+        except ImportError:
+            sqlcipher = False
+    bi = gost.backend_info()
+    domain = (os.environ.get("GRADEBOOK_DOMAIN", "").strip()
+              or (ALLOWED_ORIGINS[0] if ALLOWED_ORIGINS and ALLOWED_ORIGINS != ["*"] else ""))
+    if domain and not domain.startswith("http"):
+        domain = "https://" + domain
+    cfg = W.load_config(db)
+    cy, cs = W.current_term(cfg)
+    gost_hash = security._openssl_gost_name()
+    return {
+        "address": domain or (str(request.base_url).rstrip("/") if request else ""),
+        "version": "Pre-release 2.9",
+        "status": "работает",
+        "uptime_sec": int(_time.time() - _SERVER_START_TS),
+        "db_kind": "PostgreSQL" if not is_sqlite else "SQLite",
+        "db_file_encrypted": sqlcipher,          # файл БД шифруется целиком (SQLCipher AES-256)
+        "pdn_field_encrypted": gost.enabled(),   # поля ПДн (телефон) шифруются «Кузнечик»
+        "crypto_backend": bi.get("backend", ""),
+        "crypto_algorithm": bi.get("algorithm", ""),
+        "crypto_certified": bi.get("certified", False),
+        "gost_hash_backend": gost_hash or "gostcrypto (pure-python)",
+        "online_count": len(_events.online()),
+        "term": {"year": cy, "semester": cs},
+        "counts": {
+            "students": db.query(User).filter(User.role == "student", User.deleted == False).count(),  # noqa: E712
+            "teachers": db.query(User).filter(User.role == "teacher", User.deleted == False).count(),  # noqa: E712
+            "groups": db.query(Group).filter(Group.deleted == False).count(),  # noqa: E712
+        },
+    }
+
+
 # РАСПИСАНИЕ ──────────────────────────────────────────────────────────────────────
 # Снимок тянется с portal.esstu.ru серверным парсером (schedule_web, TTL-кэш). Данные
 # публичные, ПДн не участвуют. Оффлайн/ошибка → пустой снимок (200), SPA покажет заглушку.
@@ -772,45 +825,72 @@ async def vector_stt(file: UploadFile = File(...),
     return {"text": res["text"]}
 
 
+#Слова-триггеры «что умеешь / помощь / кто ты» и приветствие — распознаём ПЕРВЫМИ,
+#чтобы Вектор отвечал по делу, а не сваливался в статистику. Дефолт тоже = подсказка.
+_HELP_KW = ("что умеешь", "что ты умеешь", "что можешь", "что ты можешь", "что ты делаешь",
+            "чем помож", "чем можешь", "умеешь", "можешь ли", "помощь", "помоги", "команды",
+            "как пользоваться", "кто ты", "что ты за", "что ты такое", "функции", "возможности",
+            "справка", "help", "что делать", "подскажи что")
+_GREET_KW = ("привет", "здравств", "хай", "добрый день", "добрый вечер", "доброе утро",
+             "здоров", "приветствую")
+
+
 def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
-    """Собирает фактический ответ (text/mood/intent/facts) по роли из реальных данных."""
+    """Собирает фактический ответ (text/mood/intent/facts) по роли из реальных данных.
+
+    Порядок важен: сначала приветствие и «что умеешь/помощь», потом конкретные интенты,
+    в дефолте — тоже подсказка (а НЕ статистика). Иначе на «что ты умеешь» Вектор
+    отвечал средним по группам."""
     def has(*keys):
         return any(k in msg for k in keys)
 
-    #В ответе ВСЕГДА возвращаем intent — по нему клиент выбирает эмоцию маскота ровно как
-    #emotes.pick() в десктопе (задействуются все 30 спрайтов: debtors/absences → предупреж,
-    #hello → радость+поздрав, sad → грусть+подбадрив и т.д.).
+    #В ответе ВСЕГДА возвращаем intent — по нему клиент выбирает эмоцию маскота
+    #(emotes.pick в десктопе): help/hello → радость, debtors/absences → предупреждение и т.д.
     if user.role == "student":
         lessons = W.group_lessons(db, user.group_name)
         records = W.student_records(db, user.surname, user.name, user.group_name)
         avg = W.average(lessons, records, cfg)
+        help_text = ("Я — Вектор 🐯, помогаю с учёбой по вашим РЕАЛЬНЫМ данным (цифры не "
+                     "выдумываю). Умею показать: средний балл, задолженности, пропуски. "
+                     "Спросите: «какой мой средний балл», «есть ли долги», «сколько пропусков».")
+        if has(*_GREET_KW):
+            return {"text": f"Привет! {help_text}", "mood": "happy",
+                    "intent": "hello", "facts": {"average": avg}}
+        if has(*_HELP_KW):
+            return {"text": help_text, "mood": "happy", "intent": "help", "facts": {}}
         if has("долг", "задолж", "хвост", "не сдал"):
             d = W.debts(lessons, records)
             text = "Задолженностей нет — так держать!" if not d else \
                 "Есть задолженности: " + "; ".join(d) + "."
             return {"text": text, "mood": "happy" if not d else "sad",
                     "intent": "debtors", "facts": {"debts": len(d)}}
-        if has("пропуск", "прогул", "посещ", "отсутств"):
+        if has("пропуск", "прогул", "посещ", "отсутств", "не был"):
             a = W.absences(lessons, records)
             return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                     "mood": "neutral" if a["всего"] else "happy",
                     "intent": "absences", "facts": a}
-        if has("средн", "балл", "оцен", "успеваем"):
+        if has("средн", "балл", "оцен", "успеваем", "как учусь", "как дела"):
             return {"text": f"Ваш средний балл — {avg}. " + W.grading.methodology_text(cfg),
                     "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}
-        if has("привет", "здравств", "хай", "добр день", "добрый"):
-            return {"text": f"Привет! Ваш средний балл — {avg}. "
-                            "Спросите про оценки, задолженности или пропуски.",
-                    "mood": _mood_by_avg(avg), "intent": "hello", "facts": {"average": avg}}
         if has("спасиб", "благодар"):
             return {"text": "Всегда рад помочь! 🐯", "mood": "happy", "intent": "thanks", "facts": {}}
-        return {"text": "Я беру цифры из ваших реальных данных. Спросите: «какой мой средний "
-                        "балл», «есть ли задолженности», «сколько пропусков».",
-                "mood": "neutral", "intent": "help", "facts": {}}
+        return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
     if user.role == "teacher":
         subjects = set(user.subjects or [])
         groups = W.teacher_groups(db, subjects)
+        help_text = ("Я — Вектор 🐯 для преподавателя, считаю по вашим группам из реальных "
+                     "данных. Умею: средний балл по каждой группе, кто в зоне риска (средний "
+                     "ниже 3), сколько должников. Спросите: «средний по группам», «кто в зоне "
+                     "риска».")
+        if has(*_GREET_KW):
+            return {"text": f"Здравствуйте! {help_text}", "mood": "happy",
+                    "intent": "hello", "facts": {}}
+        if has(*_HELP_KW):
+            return {"text": help_text, "mood": "happy", "intent": "help", "facts": {}}
+        if not groups:
+            return {"text": "За вами пока нет групп с занятиями по вашим предметам. " + help_text,
+                    "mood": "neutral", "intent": "help", "facts": {}}
         per, risk = [], 0
         for g in groups:
             gl = [l for l in W.group_lessons(db, g) if l.subject in subjects]
@@ -827,22 +907,30 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                              else "Отстающих (средний ниже 3) нет — группы идут ровно."),
                     "mood": "sad" if risk else "happy",
                     "intent": "at_risk", "facts": {"at_risk": risk}}
-        if per:
+        if has("средн", "балл", "групп", "статист", "успеваем", "оцен", "как дела"):
             body = "; ".join(f"{g}: {ga}" for g, ga in per)
             return {"text": f"Средний по вашим группам — {body}. Студентов в зоне риска: {risk}.",
                     "mood": "neutral", "intent": "group_stats",
                     "facts": {"groups": len(per), "at_risk": risk}}
-        return {"text": "За вами пока нет групп с занятиями по вашим предметам.",
-                "mood": "neutral", "intent": "help", "facts": {}}
+        return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
     #admin — агрегаты по заведению (только счётчики, без чужих ПДн в тексте).
     n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
     n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
     n_groups = db.query(Group).filter(Group.deleted == False).count()  # noqa: E712
-    return {"text": f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
-                    f"групп — {n_groups}. Спросите про мониторинг или конкретную группу.",
-            "mood": "neutral", "intent": "group_stats",
-            "facts": {"students": n_students, "teachers": n_teachers, "groups": n_groups}}
+    help_text = ("Я — Вектор 🐯 для администратора. Умею дать сводку по колледжу: сколько "
+                 "студентов, преподавателей, групп; кто сейчас онлайн. Спросите: «сколько "
+                 "студентов», «сводка», «сколько групп».")
+    if has(*_GREET_KW):
+        return {"text": f"Здравствуйте! {help_text}", "mood": "happy", "intent": "hello", "facts": {}}
+    if has(*_HELP_KW):
+        return {"text": help_text, "mood": "happy", "intent": "help", "facts": {}}
+    if has("сколько", "сводк", "статист", "студент", "преподав", "групп", "всего", "количество", "итог"):
+        return {"text": f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
+                        f"групп — {n_groups}.",
+                "mood": "neutral", "intent": "group_stats",
+                "facts": {"students": n_students, "teachers": n_teachers, "groups": n_groups}}
+    return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
 
 # ЗАПИСЬ (Phase B) ─────────────────────────────────────────────────────────────────

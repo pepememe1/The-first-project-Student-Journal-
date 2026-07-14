@@ -10,7 +10,7 @@
 //  • админ — выбор любой группы.
 // Полный снимок для преподавателей сервер строит лениво в фоне (~минута) — пока
 // готовится, показываем статус и кнопку «Проверить снова».
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RotateCw, GraduationCap, User, Users } from '@lucide/vue'
 import { scheduleApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
@@ -61,6 +61,10 @@ async function load() {
   } catch { data.value = null } finally { loading.value = false }
 }
 
+let pollTimer = null
+function stopPoll() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null } }
+onBeforeUnmount(stopPoll)
+
 async function loadTeacher(name) {
   loading.value = true
   try {
@@ -77,6 +81,10 @@ async function loadTeacher(name) {
       data.value = null
       if (name) mode.value = 'teacher'   // выбрал вручную, но пар нет — остаёмся в режиме
     }
+    // Снимок ещё строится на сервере — АВТО-повтор через 5 с (без ручного «Обновить»),
+    // пока не будет готов. Прогрев при старте сервера делает ожидание редким.
+    stopPoll()
+    if (building.value) pollTimer = setTimeout(() => loadTeacher(name), 5000)
   } catch { data.value = null } finally { loading.value = false }
 }
 

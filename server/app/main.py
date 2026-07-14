@@ -27,6 +27,12 @@ from . import events, throttle
 async def lifespan(app: FastAPI):
     init_db()   # создаём таблицы при старте
     events.record("info", "server_start", "сервер запущен")
+    #Прогреваем снимок расписания в фоне, чтобы преподаватель не ждал сборку при входе.
+    try:
+        from . import schedule_web
+        schedule_web.warm()
+    except Exception:
+        pass
     yield
 
 

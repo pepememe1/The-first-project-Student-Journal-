@@ -35,6 +35,7 @@ import AdminRequests from '@/pages/admin/AdminRequests.vue'
 import ThemePage from '@/pages/admin/ThemePage.vue'
 import MonitorPage from '@/pages/admin/MonitorPage.vue'
 import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
+import AdminServer from '@/pages/admin/AdminServer.vue'
 
 const sec = (path, title, opts = {}) => ({ path, component: SectionView, meta: { title, ...opts } })
 const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
@@ -91,7 +92,7 @@ const routes = [
       page('subjects', AdminSubjects, 'Предметы'),
       page('schedule', SchedulePage, 'Расписание'),
       { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
-      sec('server', 'Сервер и сайт', { subtitle: 'Адрес, БД и публикация сайта' }),
+      page('server', AdminServer, 'Сервер и сайт', 'Адрес, БД, шифрование, статус'),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),
       page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв'),
       { path: 'theme', component: ThemePage, meta: { title: 'Оформление', subtitle: 'Тема учреждения' } },
