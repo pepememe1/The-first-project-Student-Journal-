@@ -19,5 +19,17 @@
     { "grade": "5 (Зачтено)",   "expected": false },
     { "grade": "2 (Не зачтено)","expected": true  },
     { "grade": "4 (Зачтено)",   "expected": false }
+  ],
+  "_comment_retake": "needs_retake(records, lesson_id, ri): нужна ли пересдача №ri. true, если за эту попытку уже есть оценка ЛИБО предыдущая попытка завалена (is_failed). Ключи попыток: ri=0 → id, ri=1 → id_retake, ri>=2 → id_retake_N.",
+  "needs_retake": [
+    { "records": {},                        "lesson_id": "L", "ri": 1, "expected": false },
+    { "records": {"L": "5"},                "lesson_id": "L", "ri": 1, "expected": false },
+    { "records": {"L": "3"},                "lesson_id": "L", "ri": 1, "expected": false },
+    { "records": {"L": "2"},                "lesson_id": "L", "ri": 1, "expected": true  },
+    { "records": {"L": "Не зачтено"},       "lesson_id": "L", "ri": 1, "expected": true  },
+    { "records": {"L": "2", "L_retake": "4"}, "lesson_id": "L", "ri": 1, "expected": true },
+    { "records": {"L": "2", "L_retake": "4"}, "lesson_id": "L", "ri": 2, "expected": false },
+    { "records": {"L": "2", "L_retake": "2"}, "lesson_id": "L", "ri": 2, "expected": true },
+    { "records": {"L": "2", "L_retake": "2", "L_retake_2": "5"}, "lesson_id": "L", "ri": 2, "expected": true }
   ]
 }

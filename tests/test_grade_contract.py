@@ -10,10 +10,12 @@ from pathlib import Path
 
 import grading
 
-_CASES = json.loads(
+_CONTRACT = json.loads(
     (Path(__file__).resolve().parents[1] / "docs" / "contracts" / "grade-cases.json")
     .read_text(encoding="utf-8")
-)["is_failed"]
+)
+_CASES = _CONTRACT["is_failed"]
+_RETAKE = _CONTRACT["needs_retake"]
 
 
 def test_is_failed_matches_contract():
@@ -23,7 +25,16 @@ def test_is_failed_matches_contract():
             f"is_failed({case['grade']!r}) = {got}, ожидалось {case['expected']}")
 
 
+def test_needs_retake_matches_contract():
+    for case in _RETAKE:
+        got = grading.needs_retake(case["records"], case["lesson_id"], case["ri"])
+        assert got is case["expected"], (
+            f"needs_retake({case['records']!r}, ri={case['ri']}) = {got}, "
+            f"ожидалось {case['expected']}")
+
+
 def test_contract_has_edge_cases():
     #Гард на то, что golden не выхолостили: должны быть и пустые, и «Не зачтено», и «Н».
     grades = {c["grade"].strip() for c in _CASES}
     assert "" in grades and "Не зачтено" in grades and "Н" in grades
+    assert _RETAKE, "кейсы пересдач должны быть"

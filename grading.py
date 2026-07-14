@@ -84,6 +84,24 @@ def is_failed(grade: str) -> bool:
     return bool(v) and (v.startswith(("2", "Н")) or "Не зачтено" in v)
 
 
+def attempt_key(lesson_id: str, ri: int) -> str:
+    """Ключ записи попытки №ri по экзамену: 0 — основной (lesson_id), 1 — <id>_retake,
+    2+ — <id>_retake_N. Единый формат для десктопа и веба (закреплён контрактом)."""
+    if ri <= 0:
+        return lesson_id
+    return lesson_id + ("_retake" if ri == 1 else f"_retake_{ri}")
+
+
+def needs_retake(records: Dict[str, str], lesson_id: str, ri: int) -> bool:
+    """Нужна ли студенту пересдача №ri: либо у него уже проставлена оценка за эту
+    попытку (показываем существующее), либо ПРЕДЫДУЩАЯ попытка завалена (is_failed).
+    Единый источник для десктопа (teacher_dashboard) и веба (grades.js::needsRetake) —
+    закреплён контрактом docs/contracts/grade-cases.json (парные тесты Python/JS)."""
+    if records.get(attempt_key(lesson_id, ri)):
+        return True
+    return is_failed(records.get(attempt_key(lesson_id, ri - 1), ""))
+
+
 def latest_exam_value(lesson_id: str, records: Dict[str, str]) -> str:
     """
     Последняя попытка по экзамену с учётом пересдач:

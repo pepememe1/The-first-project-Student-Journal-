@@ -13,7 +13,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
-import { isFailed } from '@/utils/grades'   //единая fail-логика (контракт с Python)
+import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
 
 const groups = ref([])
 const subjects = ref([])
@@ -66,7 +66,7 @@ async function load() {
 watch([group, subject, term], load)
 
 // ── Колонки: занятие + его пересдачи (как col_defs в десктопе) ──────────────────
-function retakeKey(l, ri) { return ri === 1 ? `${l.id}_retake` : `${l.id}_retake_${ri}` }
+function retakeKey(l, ri) { return attemptKey(l.id, ri) }   //единый формат ключа (контракт)
 function retakeDate(l, ri) { return ri === 1 ? l.retake_date : (l.extra || {})[`retake_date_${ri}`] || '' }
 const colDefs = computed(() => {
   const out = []
@@ -88,11 +88,7 @@ const OPTIONS = {
 }
 function cellOptions(l) { return OPTIONS[l.type] || OPTIONS.default }
 function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено)» → «5» в селекте
-function needsRetake(s, col) {
-  if (s.grades[col.key]) return true
-  const prevKey = col.ri === 1 ? col.l.id : retakeKey(col.l, col.ri - 1)
-  return isFailed(s.grades[prevKey])
-}
+function needsRetake(s, col) { return needsRetakeShared(s.grades, col.l.id, col.ri) }
 
 function gradeClass(v) {
   v = rawValue(v)

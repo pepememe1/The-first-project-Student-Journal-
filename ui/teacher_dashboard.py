@@ -436,31 +436,21 @@ class TeacherDashboard(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Конфликты", f"Не удалось открыть: {e}")
 
-    #хелперы пересдач
+    #хелперы пересдач — тонкие обёртки над ЕДИНЫМ источником grading (тот же код на
+    #сервере и вебе, закреплён контрактом grade-cases.json).
     @staticmethod
     def _attempt_key(lesson, ri: int) -> str:
-        """Ключ записи попытки №ri: 0 — основной экзамен, 1 — _retake, 2+ — _retake_N."""
-        if ri <= 0:
-            return lesson.id
-        return lesson.id + ("_retake" if ri == 1 else f"_retake_{ri}")
+        import grading
+        return grading.attempt_key(lesson.id, ri)
 
     @staticmethod
     def _is_failed(val: str) -> bool:
-        """Попытка заваленная: 2, Н или «Не зачтено». Единый источник — grading.is_failed
-        (тот же код на сервере и вебе, закреплён контрактом grade-cases.json)."""
         import grading
         return grading.is_failed(val)
 
     def _needs_retake(self, student, lesson, ri: int) -> bool:
-        """
-        Нужна ли студенту пересдача №ri: предыдущая попытка должна быть
-        ЗАВАЛЕНА. Если ячейка пересдачи уже заполнена (оценка проставлена
-        ранее) — тоже показываем, чтобы не прятать существующие данные.
-        """
-        if student.records.get(self._attempt_key(lesson, ri), ""):
-            return True
-        prev = student.records.get(self._attempt_key(lesson, ri - 1), "")
-        return self._is_failed(prev)
+        import grading
+        return grading.needs_retake(student.records, lesson.id, ri)
 
     def _set_exam_val(self, student, lesson, key, val, ri):
         if not val: return
