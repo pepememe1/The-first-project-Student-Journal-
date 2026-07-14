@@ -21,13 +21,17 @@ import time
 
 import requests
 
-DEFAULT_TIMEOUT = 10
+#Таймауты — КОРТЕЖ (connect, read). connect чуть щедрее (РФ-VPS за Cloudflare/TLS не
+#всегда соединяется за пару секунд), read короче для быстрых вызовов. Единичный блип
+#гасит retry-адаптер ниже, поэтому жёстких «5 c» больше нет.
+DEFAULT_TIMEOUT = (8, 15)
 
-#Таймаут синка — КОРТЕЖ (connect, read): быстро понять, что сервера нет (5 c на
-#соединение), но дать серверу время отдать/принять КРУПНЫЙ первый обмен (30 c на
-#чтение). Раньше единый 10 c рвал большой первый pull/push на медленном канале —
-#отсюда «Read timed out» в логе. connect короткий → офлайн определяется быстро.
-SYNC_TIMEOUT = (5, 30)
+#Таймаут синка — connect как у всех, но read ДЛИННЫЙ: первый полный pull/push на
+#медленном канале бывает крупным (иначе «Read timed out» в логе).
+SYNC_TIMEOUT = (8, 45)
+
+#Быстрая проверка доступности (health): короткая, но не впритык.
+HEALTH_TIMEOUT = (5, 5)
 
 
 def is_token_expired(token: str, skew_sec: int = 30) -> bool:
@@ -76,7 +80,35 @@ class SyncClient:
         self.refresh_token = refresh_token or ""
         #verify (проверка TLS) и заголовки общие для всех запросов — держим в сессии.
         self._verify = _verify_setting()
+        self._session = self._build_session()
         self._warn_if_insecure()
+
+    @staticmethod
+    def _build_session():
+        """Сессия с АВТО-РЕТРАЯМИ на транзиентные сетевые сбои. Одиночный блип канала
+        до РФ-VPS (обрыв соединения `RemoteDisconnected`, кратковременный отказ TCP,
+        502/503/504 от Caddy/Cloudflare, пока бэкенд перезапускается) повторяется на
+        уровне HTTP и НЕ доходит до синк-раннера как «сбой» — синхронизация проходит
+        прозрачно, а лог не засоряется. Бэкофф между попытками: 0.6 → 1.2 → 2.4 c."""
+        s = requests.Session()
+        try:
+            from urllib3.util.retry import Retry
+            from requests.adapters import HTTPAdapter
+            retry = Retry(
+                total=3, connect=3, read=2, backoff_factor=0.6,
+                status_forcelist=(502, 503, 504),
+                #Наши POST идемпотентны (push сверяет содержимое, login/refresh безопасны),
+                #поэтому разрешаем ретрай и для них — иначе connect-блип на pull/push не
+                #гасился бы.
+                allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+                raise_on_status=False,
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
+        except Exception:
+            pass   #нет urllib3 Retry (крайне маловероятно) — работаем без авто-ретраев
+        return s
 
     def _warn_if_insecure(self):
         """Предупреждаем, если адрес сервера — http к удалённому хосту: тогда ПДн
@@ -111,16 +143,23 @@ class SyncClient:
         return h
 
     def _req(self, method: str, path: str, timeout=DEFAULT_TIMEOUT, **kwargs):
-        """Единая точка сетевого вызова: общие заголовки и проверка TLS (verify) в
-        одном месте, чтобы их нельзя было случайно забыть на отдельном запросе."""
-        return requests.request(method, f"{self.base_url}{path}",
-                                headers=self._headers(), timeout=timeout,
-                                verify=self._verify, **kwargs)
+        """Единая точка сетевого вызова: общие заголовки, проверка TLS (verify) и
+        авто-ретраи (через self._session) в одном месте — их нельзя случайно забыть."""
+        return self._session.request(method, f"{self.base_url}{path}",
+                                     headers=self._headers(), timeout=timeout,
+                                     verify=self._verify, **kwargs)
 
     def health(self) -> bool:
-        """True, если сервер отвечает. Не кидает исключений."""
+        """True, если сервер отвечает. Не кидает исключений.
+
+        ВАЖНО: health БЕЗ авто-ретраев (обычный requests, не self._session) — он должен
+        падать БЫСТРО. Его зовут UI-блокирующие пути: вход (_online_bootstrap ставит
+        WaitCursor) и закрытие приложения (flush_now). С ретраями (3× connect) оффлайн-
+        вход/закрытие висли бы ~18 c. Ретраи нужны фоновому pull/push, а не этой пробе."""
         try:
-            return self._req("GET", "/health", timeout=3).status_code == 200
+            r = requests.get(f"{self.base_url}/health", headers=self._headers(),
+                             timeout=HEALTH_TIMEOUT, verify=self._verify)
+            return r.status_code == 200
         except Exception:
             return False
 
