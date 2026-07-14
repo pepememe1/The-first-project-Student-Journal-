@@ -271,7 +271,7 @@ class DBManager:
         wipe_all_local_data), поэтому WAL-checkpoint не нужен."""
         conn = cls.get_conn(); cur = conn.cursor()
         try:
-            for t in ("grades", "lessons", "sync_conflicts"):
+            for t in ("grades", "lessons", "term_grades", "sync_conflicts"):
                 cur.execute(f"DELETE FROM {t}")
             conn.commit()
         finally:
@@ -373,6 +373,13 @@ class DBManager:
              remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS kv_store
             (key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+        #Итоговые оценки за семестр (промежуточная аттестация) — отдельно от оценок за
+        #занятия. Ключ f|n|subject|year|semester (совпадает с сервером). Синхронизируется
+        #как «term_grades» (SYNC_MODELS): ведомости на ПК и на сайте — из одних данных.
+        cur.execute("""CREATE TABLE IF NOT EXISTS term_grades
+            (id TEXT PRIMARY KEY, student_f TEXT, student_n TEXT, subject TEXT,
+             year TEXT DEFAULT '', semester INTEGER DEFAULT 0, grade TEXT DEFAULT '',
+             form TEXT DEFAULT '', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
         conn.commit()
         conn.close()
 
@@ -405,8 +412,47 @@ class DBManager:
             "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
             "VALUES (?,?,?,?,?,?,0)", (f, n, lid, grade, now, DEVICE_ID))
 
+    #Итоговые оценки за семестр (аттестация) ────────────────────────────────────────
+    @staticmethod
+    def _term_grade_id(f: str, n: str, subject: str, year: str, semester: int) -> str:
+        """Стабильный ключ итоговой оценки — тот же формат, что на сервере."""
+        return f"{f}|{n}|{subject}|{year}|{semester}"
 
-#Датаклассы 
+    @classmethod
+    def set_term_grade(cls, f: str, n: str, subject: str, year: str, semester: int,
+                       grade: str, form: str = "") -> None:
+        """Выставить/снять итоговую оценку за семестр (offline-first: сразу в SQLite).
+        Пустая оценка = надгробие (deleted=1) — снятие распространится синком. Метку
+        updated_at ставим локально (UTC); на сервере при push её перештампует сервер."""
+        gid = cls._term_grade_id(f, n, subject, year, semester)
+        now = datetime.now(timezone.utc).isoformat()
+        deleted = 1 if not (grade or "").strip() else 0
+        conn = cls.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO term_grades "
+            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (gid, f, n, subject, year, int(semester or 0), grade, form, now, deleted))
+        conn.commit()
+        conn.close()
+
+    @classmethod
+    def get_term_grades(cls, subject: str, year: str, semester: int) -> dict:
+        """Итоговые оценки по предмету за термин: {«f|n»: {'grade','form'}} (без надгробий)."""
+        conn = cls.get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT student_f,student_n,grade,form FROM term_grades "
+            "WHERE subject=? AND year=? AND semester=? AND COALESCE(deleted,0)=0",
+            (subject, year, int(semester or 0)))
+        out = {f"{r[0]}|{r[1]}": {"grade": r[2] or "", "form": r[3] or ""}
+               for r in cur.fetchall()}
+        conn.close()
+        return out
+
+
+#Датаклассы
 @dataclass
 class Lesson:
     id: str

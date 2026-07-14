@@ -10,8 +10,8 @@ import ui_date
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QHeaderView,
-    QHBoxLayout, QInputDialog, QLabel, QMessageBox,
+    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QHeaderView, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame
 )
@@ -122,7 +122,9 @@ class TeacherDashboard(QWidget):
             ("+ Экзамен",         "blue",   self._add_exam),
             ("+ Студент",         "ghost",  self._add_student),
             ("💾 Сохранить",      "ghost",  self._save),
-            ("📤 Экспорт",        "ghost",  self._export_excel),
+            ("🎓 Аттестация",     "ghost",  self._open_attestation),
+            ("📄 Ведомость",      "ghost",  self._export_vedomost),
+            ("📘 Журнал",         "ghost",  self._export_journal),
             ("📥 Импорт",         "ghost",  self._import_excel),
         ]:
             b = btn(txt, style); b.clicked.connect(cb); btn_row.addWidget(b)
@@ -569,15 +571,169 @@ class TeacherDashboard(QWidget):
         if self.book: self.book.save_to_db()
         QMessageBox.information(self, "Сохранено", "Данные сохранены.")
 
-    def _export_excel(self):
-        if not self.book: return
-        path, _ = QFileDialog.getSaveFileName(self, "Сохранить", "", "Excel (*.xlsx)")
-        if path:
-            try:
+    #Экспорт / аттестация / ведомость ────────────────────────────────────────────
+    def _ask_format(self) -> str:
+        """Спрашивает формат выгрузки — как на вебе (Excel / Word). Возвращает
+        'xlsx' | 'docx' | '' (отмена)."""
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Формат выгрузки")
+        dlg.setText("В каком формате сохранить?")
+        bx = dlg.addButton("📊 Excel (.xlsx)", QMessageBox.AcceptRole)
+        bw = dlg.addButton("📄 Word (.docx)", QMessageBox.AcceptRole)
+        dlg.addButton("Отмена", QMessageBox.RejectRole)
+        dlg.exec()
+        clicked = dlg.clickedButton()
+        if clicked is bx:
+            return "xlsx"
+        if clicked is bw:
+            return "docx"
+        return ""
+
+    def _teacher_display_name(self) -> str:
+        """ФИО преподавателя для подписи ведомости (логин как fallback)."""
+        d = self.teacher_data or {}
+        return (d.get("full_name") or d.get("name") or self.teacher_name or "").strip()
+
+    def _journal_rows(self) -> list:
+        """Строки журнала для экспорта: [{surname, name, records, average}]."""
+        rows = []
+        for s in self.book.spisok_stud:
+            rows.append({"surname": s.f, "name": s.n, "records": s.records,
+                         "average": round(self.book.calculate_average(s), 2)})
+        return rows
+
+    def _patronymic_map(self) -> dict:
+        """Отчества студентов из общего хранилища по (фамилия|имя) — для ведомости."""
+        out = {}
+        try:
+            store = get_store()
+            for st in (store.get_students() if store else []):
+                key = f"{st.get('surname', '')}|{st.get('name', '')}"
+                if st.get("patronymic"):
+                    out[key] = st.get("patronymic", "")
+        except Exception:
+            pass
+        return out
+
+    def _export_journal(self):
+        """Экспорт журнала: выбор формата (Excel/Word), как на вебе."""
+        if not self._journal_ready():
+            return
+        fmt = self._ask_format()
+        if not fmt:
+            return
+        ext = "xlsx" if fmt == "xlsx" else "docx"
+        flt = "Excel (*.xlsx)" if fmt == "xlsx" else "Word (*.docx)"
+        default = f"Журнал_{self.book.group}_{self.book.subject}.{ext}".replace("/", "-")
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить журнал", default, flt)
+        if not path:
+            return
+        try:
+            if fmt == "xlsx":
                 self.book.export_to_excel(path)
-                QMessageBox.information(self, "Excel", "Готово!")
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка", str(e))
+            else:
+                import exports
+                data = exports.build_journal_docx(
+                    self.book.group, self.book.subject, self.book.lessons,
+                    self._journal_rows())
+                with open(path, "wb") as f:
+                    f.write(data)
+            QMessageBox.information(self, "Журнал", "Готово!")
+        except ImportError:
+            QMessageBox.critical(self, "Нет пакета",
+                "Для Word нужен пакет python-docx:\n\npip install python-docx")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _vedomost_rows(self, term_grades: dict) -> list:
+        """Строки ведомости: студенты группы + итоговая оценка + отчество."""
+        patr = self._patronymic_map()
+        rows = []
+        for s in self.book.spisok_stud:
+            key = f"{s.f}|{s.n}"
+            rows.append({"surname": s.f, "name": s.n,
+                         "patronymic": patr.get(key, ""),
+                         "grade": (term_grades.get(key) or {}).get("grade", "")})
+        return rows
+
+    def _export_vedomost(self):
+        """Экзаменационно-зачётная ведомость (аттестация): форма контроля → формат."""
+        if not self._journal_ready():
+            return
+        if not self.book.spisok_stud:
+            QMessageBox.information(self, "Нет студентов", "В группе нет студентов.")
+            return
+        form, ok = QInputDialog.getItem(self, "Форма контроля",
+            "Форма промежуточной аттестации:", ["экзамен", "зачёт", "диффзачёт"], 0, False)
+        if not ok:
+            return
+        fmt = self._ask_format()
+        if not fmt:
+            return
+        import terms
+        from core import DBManager
+        year, sem = terms.current_term()
+        tg = DBManager.get_term_grades(self.book.subject, year, sem)
+        rows = self._vedomost_rows(tg)
+        term = {"year": year, "semester": sem}
+        ext = "xlsx" if fmt == "xlsx" else "docx"
+        flt = "Excel (*.xlsx)" if fmt == "xlsx" else "Word (*.docx)"
+        default = f"Ведомость_{self.book.group}_{self.book.subject}.{ext}".replace("/", "-")
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить ведомость", default, flt)
+        if not path:
+            return
+        try:
+            import exports
+            teacher = self._teacher_display_name()
+            if fmt == "xlsx":
+                data = exports.build_vedomost_xlsx(self.book.group, self.book.subject,
+                                                   term, form, rows, teacher=teacher)
+            else:
+                data = exports.build_vedomost_docx(self.book.group, self.book.subject,
+                                                   term, form, rows, teacher=teacher)
+            with open(path, "wb") as f:
+                f.write(data)
+            QMessageBox.information(self, "Ведомость", "Готово!")
+        except ImportError:
+            QMessageBox.critical(self, "Нет пакета",
+                "Для Word нужен пакет python-docx:\n\npip install python-docx")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _open_attestation(self):
+        """Диалог итоговых оценок за семестр (промежуточная аттестация). Пишет в
+        term_grades (offline-first) и будит синк — данные общие с сайтом."""
+        if not self._journal_ready():
+            return
+        if not self.book.spisok_stud:
+            QMessageBox.information(self, "Нет студентов", "В группе нет студентов.")
+            return
+        import terms
+        from core import DBManager
+        year, sem = terms.current_term()
+        existing = DBManager.get_term_grades(self.book.subject, year, sem)
+        dlg = AttestationDialog(self, self.book.group, self.book.subject,
+                                terms.semester_label(sem), year,
+                                self.book.spisok_stud, existing)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            wrote = False
+            for (f, n), (grade, form) in dlg.result_grades().items():
+                had = f"{f}|{n}" in existing
+                #Пустую оценку пишем (надгробием) ТОЛЬКО если она была раньше — снятие.
+                #Для тех, кому оценку так и не поставили, лишних надгробий не плодим.
+                if not (grade or "").strip() and not had:
+                    continue
+                DBManager.set_term_grade(f, n, self.book.subject, year, sem, grade, form)
+                wrote = True
+            if wrote:
+                from sync_runner import trigger
+                trigger()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+            return
+        QMessageBox.information(self, "Аттестация", "Итоговые оценки сохранены.")
 
     def _import_excel(self):
         """Импорт журнала из Excel — АДАПТИВНЫЙ к разным форматам файла.
@@ -887,3 +1043,65 @@ class TeacherDashboard(QWidget):
                 self.sidebar.set_active(key)
         finally:
             self._switching = False
+
+
+class AttestationDialog(QDialog):
+    """Диалог выставления ИТОГОВЫХ оценок за семестр (промежуточная аттестация) —
+    порт модалки веба (TeacherJournal.vue). Список студентов + форма контроля;
+    сохранение делает вызывающий (пишет в term_grades и будит синк)."""
+
+    GRADES = ["", "5", "4", "3", "2", "Зачтено", "Не зачтено"]
+    FORMS = ["экзамен", "зачёт", "диффзачёт"]
+
+    def __init__(self, parent, group, subject, sem_label, year, students, existing):
+        super().__init__(parent)
+        self.setWindowTitle("🎓 Итоговые оценки за семестр")
+        self.setMinimumWidth(460)
+        self._rows = []            #[(surname, name, QComboBox)]
+
+        lay = QVBoxLayout(self); lay.setContentsMargins(20, 18, 20, 18); lay.setSpacing(10)
+        lay.addWidget(title_lbl("Итоговые оценки за семестр", 16))
+        lay.addWidget(lbl(f"{group} · {subject} · {year}, {sem_label} семестр", 12, C['text3']))
+
+        #Форма контроля (общая для всей ведомости) — предзаполняем из уже сохранённого.
+        form_row = QHBoxLayout()
+        form_row.addWidget(lbl("Форма контроля:", 12, C['text3']))
+        self._form_combo = combo(self.FORMS)
+        saved_form = next((v.get("form") for v in existing.values() if v.get("form")), "")
+        if saved_form:
+            idx = self._form_combo.findText(saved_form)
+            if idx >= 0:
+                self._form_combo.setCurrentIndex(idx)
+        form_row.addWidget(self._form_combo); form_row.addStretch()
+        lay.addLayout(form_row)
+
+        #Прокручиваемый список студентов с комбобоксом оценки у каждого.
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setStyleSheet("border:none;")
+        inner = QWidget(); grid = QVBoxLayout(inner); grid.setContentsMargins(0, 0, 6, 0); grid.setSpacing(6)
+        for s in students:
+            r = QHBoxLayout()
+            r.addWidget(lbl(f"{s.f} {s.n}", 13, C['text']), 1)
+            cb = combo(self.GRADES)
+            cur = (existing.get(f"{s.f}|{s.n}") or {}).get("grade", "")
+            if cur:
+                idx = cb.findText(cur)
+                if idx >= 0:
+                    cb.setCurrentIndex(idx)
+            cb.setFixedWidth(140)
+            r.addWidget(cb)
+            grid.addLayout(r)
+            self._rows.append((s.f, s.n, cb))
+        grid.addStretch()
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Save).setText("Сохранить")
+        bb.button(QDialogButtonBox.Cancel).setText("Отмена")
+        bb.accepted.connect(self.accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def result_grades(self) -> dict:
+        """{(surname, name): (grade, form)} — что выставил преподаватель."""
+        form = self._form_combo.currentText()
+        return {(f, n): (cb.currentText(), form) for f, n, cb in self._rows}

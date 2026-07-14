@@ -181,6 +181,27 @@ def _collect_grades() -> list:
     return out
 
 
+def _collect_term_grades() -> list:
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    #Шлём ВСЕ итоговые оценки, включая надгробия (deleted=1) — иначе снятие оценки
+    #не доедет до других ПК/сайта и она «воскреснет» на следующем pull.
+    cur.execute("SELECT id,student_f,student_n,subject,COALESCE(year,''),"
+                "COALESCE(semester,0),COALESCE(grade,''),COALESCE(form,''),"
+                "COALESCE(updated_at,''),COALESCE(deleted,0) FROM term_grades")
+    rows = cur.fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "student_f": r[1], "student_n": r[2], "subject": r[3],
+            "year": r[4], "semester": r[5], "grade": r[6], "form": r[7],
+            "updated_at": r[8] or _now(), "deleted": bool(r[9]),
+        })
+    return out
+
+
 def collect_local() -> dict:
     """Читает всё локальное состояние и переводит в формат API (для push)."""
     from data_store import get_store
@@ -199,6 +220,7 @@ def collect_local() -> dict:
         "config": config_to_rows(cfg),
         "lessons": _collect_lessons(),
         "grades": _collect_grades(),
+        "term_grades": _collect_term_grades(),
     }
 
 
@@ -277,6 +299,8 @@ def apply_remote(changes: dict):
         _merge_lessons(changes["lessons"])
     if changes.get("grades"):
         _merge_grades(changes["grades"])
+    if changes.get("term_grades"):
+        _merge_term_grades(changes["term_grades"])
 
 
 def _merge_lessons(remote: list):
@@ -384,6 +408,33 @@ def _merge_grades(remote: list):
                 "remote_device,remote_at,detected_at,resolved) "
                 "VALUES (?,?,?,?,?,?,?,?,0)",
                 (f, n, lid, lgrade, rgrade, rdev, rat, now_iso))
+    conn.commit()
+    conn.close()
+
+
+def _merge_term_grades(remote: list):
+    """Слияние итоговых оценок (аттестации) с сервера — простой LWW с tie-break
+    (как занятия). Диалог конфликтов тут не нужен: это одна итоговая оценка за
+    семестр, а не «два разных балла за занятие» — побеждает более поздняя правка."""
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    for g in remote:
+        gid = g.get("id")
+        if not gid:
+            continue
+        rdel = bool(g.get("deleted"))
+        cur.execute("SELECT COALESCE(updated_at,'') FROM term_grades WHERE id=?", (gid,))
+        row = cur.fetchone()
+        if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
+            continue
+        cur.execute(
+            "INSERT OR REPLACE INTO term_grades "
+            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (gid, g.get("student_f", ""), g.get("student_n", ""), g.get("subject", ""),
+             g.get("year", ""), int(g.get("semester", 0) or 0), g.get("grade", ""),
+             g.get("form", ""), g.get("updated_at", ""), 1 if rdel else 0))
     conn.commit()
     conn.close()
 

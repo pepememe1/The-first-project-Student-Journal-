@@ -50,7 +50,7 @@ def _deny_web(request: Request):
 #Что какая роль имеет право отправлять на сервер (ограничение по ТИПУ сущности).
 PUSH_SCOPE = {
     "admin": set(SYNC_MODELS.keys()),
-    "teacher": {"lessons", "grades"},
+    "teacher": {"lessons", "grades", "term_grades"},
     "student": set(),
 }
 
@@ -82,6 +82,9 @@ def _teacher_may_write(name: str, item: dict, allowed_subjects: set,
         return item.get("subject", "") in allowed_subjects
     if name == "grades":
         return lesson_subject.get(item.get("lesson_id", "")) in allowed_subjects
+    #Итоговая оценка за семестр несёт свой предмет — проверяем прямо по нему.
+    if name == "term_grades":
+        return item.get("subject", "") in allowed_subjects
     return False
 
 

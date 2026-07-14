@@ -97,8 +97,8 @@ class Grade(Base):
 class TermGrade(Base):
     """Итоговая оценка за семестр по предмету (промежуточная аттестация) — отдельно от
     Grade (та — по конкретным занятиям). Ключ: студент+предмет+год+семестр. Из неё
-    строятся ведомости. Серверная деталь — НЕ в SYNC_MODELS (десктоп её пока не ведёт),
-    таблица создаётся create_all на старте."""
+    строятся ведомости. Входит в SYNC_MODELS: десктоп ведёт аттестацию/ведомости
+    наравне с вебом, данные общие (десктопная таблица term_grades ↔ эта)."""
     __tablename__ = "term_grades"
     id = Column(String, primary_key=True)              #f|n|subject|year|semester
     student_f = Column(String, index=True, default="")
@@ -221,11 +221,14 @@ class WebAuthnCredential(Base):
 
 
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
+#term_grades включены: десктоп теперь ведёт итоговые оценки/ведомости (аттестацию)
+#наравне с вебом — данные общие через синк (ключ f|n|subject|year|semester).
 SYNC_MODELS = {
     "users": User,
     "groups": Group,
     "subjects": Subject,
     "lessons": Lesson,
     "grades": Grade,
+    "term_grades": TermGrade,
     "config": ConfigKV,
 }

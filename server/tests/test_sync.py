@@ -8,6 +8,9 @@ _LESSON = {"id": "L1", "group_name": "ИС-21", "subject": "Математика
            "type": "Практика", "number": 1, "topic": "Тест", "date": "01.09.2025"}
 _GRADE = {"id": "Иванов|Иван|L1", "student_f": "Иванов", "student_n": "Иван",
           "lesson_id": "L1", "grade": "5"}
+_TERM_GRADE = {"id": "Иванов|Иван|Математика|2025/2026|1", "student_f": "Иванов",
+               "student_n": "Иван", "subject": "Математика", "year": "2025/2026",
+               "semester": 1, "grade": "5", "form": "экзамен"}
 
 
 def _push(client, headers, **entities):
@@ -92,6 +95,29 @@ def test_teacher_grade_scoped_by_lesson_subject(client):
     r = _push(client, th, grades=[dict(_GRADE, id="Иванов|Иван|PHYS", lesson_id="PHYS")])
     assert r.json()["applied"].get("grades", 0) == 0
     assert r.json().get("rejected", {}).get("grades") == 1
+
+
+def test_term_grade_roundtrip(client):
+    """Итоговая оценка за семестр (аттестация) переживает push→pull: десктоп и веб
+    делят одни данные ведомостей через синк (term_grades в SYNC_MODELS)."""
+    h = make_admin(client)
+    r = _push(client, h, term_grades=[_TERM_GRADE])
+    assert r.json()["applied"]["term_grades"] == 1
+    ch = client.get("/sync/pull", headers=h).json()["changes"]
+    tg = [x for x in ch["term_grades"] if x["id"] == _TERM_GRADE["id"]]
+    assert tg and tg[0]["grade"] == "5" and tg[0]["updated_at"]
+
+
+def test_teacher_term_grade_scoped_by_subject(client):
+    """Преподаватель вправе выставить итоговую оценку только по СВОЕМУ предмету."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, subjects=["Математика"])
+    r = _push(client, th, term_grades=[_TERM_GRADE])
+    assert r.json()["applied"].get("term_grades") == 1
+    foreign = dict(_TERM_GRADE, id="Иванов|Иван|Физика|2025/2026|1", subject="Физика")
+    r = _push(client, th, term_grades=[foreign])
+    assert r.json()["applied"].get("term_grades", 0) == 0
+    assert r.json().get("rejected", {}).get("term_grades") == 1
 
 
 def test_delta_pull_returns_only_newer(client):

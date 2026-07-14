@@ -12,7 +12,7 @@
 #  • Серверный (host) режим --run-server в этот билд НЕ входит — это отдельная сборка;
 #    клиент подключается к готовому серверу (esstu-gradebook.ru).
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 ROOT = os.path.abspath('.')
 
@@ -36,8 +36,13 @@ for pkg in ('vector', 'schedule'):
 # зависимости, которые импортируются лениво/динамически
 hidden += ['gostcrypto', 'gostcrypto.gostpbkdf', 'requests', 'cryptography',
            'openpyxl', 'win32crypt']
+# python-docx (Word-экспорт журнала/ведомости) — импортируется лениво (data/exports.py).
+# Пакет ставится как python-docx, а импортируется как `docx`; ему нужны его шаблоны
+# (docx/templates/*.docx), поэтому тянем и submodules, и data-файлы.
+hidden += collect_submodules('docx')
 
 datas = []
+datas += collect_data_files('docx')   # шаблон default.docx и пр. — иначе Document() падает
 for folder in ('emotions', 'emotes', 'vector_assets', 'fonts'):
     if os.path.isdir(os.path.join(ROOT, folder)):
         datas.append((folder, folder))
