@@ -152,7 +152,7 @@ def debts(lessons, records):
                 reasons.append(f"практика №{l.number} не сдана ({v})")
         elif l.type == "Экзамен":
             v = grading.latest_exam_value(l.id, records)
-            if v and ("Не зачтено" in v or v.strip().startswith(("2", "Н"))):
+            if grading.is_failed(v):   #единый источник fail-логики (см. grading.is_failed)
                 reasons.append(f"экзамен №{l.number} не зачтён")
     return reasons
 

@@ -72,6 +72,18 @@ def lead_num(val: str) -> Optional[float]:
     return float(head) if head in PRACTICE_VALUES else None
 
 
+def is_failed(grade: str) -> bool:
+    """Считается ли оценка ЗАВАЛЕННОЙ (нужна пересдача).
+
+    ЕДИНЫЙ источник правды для трёх мест, где это раньше дублировалось инлайном:
+    десктоп (teacher_dashboard), сервер (webdata.debts) и веб (web/src/utils/grades.js —
+    точный порт). Правило: непусто И (начинается с «2» или «Н») ЛИБО содержит «Не зачтено».
+    Пороговые случаи закреплены контрактом docs/contracts/grade-cases.json (парные тесты
+    Python и JS) — молчаливое расхождение реализаций больше невозможно."""
+    v = (grade or "").strip()
+    return bool(v) and (v.startswith(("2", "Н")) or "Не зачтено" in v)
+
+
 def latest_exam_value(lesson_id: str, records: Dict[str, str]) -> str:
     """
     Последняя попытка по экзамену с учётом пересдач:

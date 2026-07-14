@@ -446,11 +446,10 @@ class TeacherDashboard(QWidget):
 
     @staticmethod
     def _is_failed(val: str) -> bool:
-        """Попытка считается заваленной: 2, Н или «Не зачтено» (в т.ч. 3 без зачёта)."""
-        v = (val or "").strip()
-        if not v:
-            return False
-        return v.startswith(("2", "Н")) or "Не зачтено" in v
+        """Попытка заваленная: 2, Н или «Не зачтено». Единый источник — grading.is_failed
+        (тот же код на сервере и вебе, закреплён контрактом grade-cases.json)."""
+        import grading
+        return grading.is_failed(val)
 
     def _needs_retake(self, student, lesson, ri: int) -> bool:
         """

@@ -1,0 +1,23 @@
+{
+  "_comment": "Контракт fail-логики оценок. Единый источник для парных тестов Python (grading.is_failed) и JS (web/src/utils/grades.js::isFailed). Меняешь правило — меняй здесь, оба теста должны сойтись. Правило: непусто И (начинается с 2 или Н) ЛИБО содержит «Не зачтено».",
+  "is_failed": [
+    { "grade": "",              "expected": false },
+    { "grade": "   ",           "expected": false },
+    { "grade": "2",             "expected": true  },
+    { "grade": "3",             "expected": false },
+    { "grade": "4",             "expected": false },
+    { "grade": "5",             "expected": false },
+    { "grade": "Н",             "expected": true  },
+    { "grade": "Б",             "expected": false },
+    { "grade": "О",             "expected": false },
+    { "grade": "✓",             "expected": false },
+    { "grade": " Н ",           "expected": true  },
+    { "grade": "Зачтено",       "expected": false },
+    { "grade": "Не зачтено",    "expected": true  },
+    { "grade": "3 (Зачтено)",   "expected": false },
+    { "grade": "3 (Не зачтено)","expected": true  },
+    { "grade": "5 (Зачтено)",   "expected": false },
+    { "grade": "2 (Не зачтено)","expected": true  },
+    { "grade": "4 (Зачтено)",   "expected": false }
+  ]
+}

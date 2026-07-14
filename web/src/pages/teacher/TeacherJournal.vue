@@ -13,6 +13,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import { isFailed } from '@/utils/grades'   //единая fail-логика (контракт с Python)
 
 const groups = ref([])
 const subjects = ref([])
@@ -87,10 +88,6 @@ const OPTIONS = {
 }
 function cellOptions(l) { return OPTIONS[l.type] || OPTIONS.default }
 function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено)» → «5» в селекте
-function isFailed(v) {
-  v = (v || '').trim()
-  return !!v && (v.startsWith('2') || v.startsWith('Н') || v.includes('Не зачтено'))
-}
 function needsRetake(s, col) {
   if (s.grades[col.key]) return true
   const prevKey = col.ri === 1 ? col.l.id : retakeKey(col.l, col.ri - 1)

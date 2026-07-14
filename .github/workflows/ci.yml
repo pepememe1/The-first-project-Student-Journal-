@@ -47,6 +47,8 @@ jobs:
       # только на ошибках; предупреждения стиля не блокируют (форматом владеет prettier).
       - run: cd web && npm ci
       - run: cd web && npm run lint
+      # Контрактные тесты (node:test): fail-логика оценок JS = Python (grade-cases.json).
+      - run: cd web && npm test
 
   server-tests:
     name: Серверные тесты
