@@ -489,6 +489,21 @@ class DBManager:
         return terms
 
     @classmethod
+    def group_subjects_with_lessons(cls, group: str) -> list:
+        """Предметы, по которым в группе РЕАЛЬНО есть занятия (активные). Нужен, чтобы
+        студент видел предмет с выставленными оценками, даже если этого предмета нет в
+        портальном расписании / списке предметов группы (иначе оценки «пропадают»)."""
+        conn = cls.get_conn(); cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT subject FROM lessons WHERE group_name=? "
+                        "AND COALESCE(deleted,0)=0 AND COALESCE(subject,'')<>''", (group,))
+            subs = [r[0] for r in cur.fetchall()]
+        except Exception:
+            subs = []
+        conn.close()
+        return subs
+
+    @classmethod
     def get_term_grades(cls, subject: str, year: str, semester: int) -> dict:
         """Итоговые оценки по предмету за термин: {«f|n»: {'grade','form'}} (без надгробий)."""
         conn = cls.get_conn()

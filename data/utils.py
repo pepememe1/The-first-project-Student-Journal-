@@ -25,23 +25,40 @@ def get_subjects_for_group(group_name: str):
 
     ПРИОРИТЕТ — предметы группы, спарсенные с сайта ВСГУТУ (расписание): всегда
     актуальны и не заданы «текстом» в проге. Если расписания ещё нет/нет совпадения —
-    откатываемся на предметы, заданные вручную в журнале, затем на дефолт."""
+    откатываемся на предметы, заданные вручную в журнале, затем на дефолт.
+
+    ВСЕГДА добавляем предметы, по которым в группе РЕАЛЬНО есть занятия: иначе предмет,
+    заведённый преподавателем вручную (и отсутствующий в портальном расписании), был бы
+    невидим студенту — вместе с уже выставленными оценками (частый баг «нет предметов»)."""
+    base = None
     try:
         import schedule.store as sched_store
         site = sched_store.subjects_for_group(group_name)
         if site:
-            return site
+            base = list(site)
     except Exception as e:
         print(f"[ERROR] get_subjects_for_group (site): {e}")
-    store = get_store()
-    if store:
-        try:
-            for g in store.get_groups():
-                if g.get("name") == group_name:
-                    return g.get("subjects", DEFAULT_SUBJECTS)
-        except Exception as e:
-            print(f"[ERROR] get_subjects_for_group: {e}")
-    return DEFAULT_SUBJECTS
+    if base is None:
+        store = get_store()
+        if store:
+            try:
+                for g in store.get_groups():
+                    if g.get("name") == group_name:
+                        base = list(g.get("subjects", []) or [])
+                        break
+            except Exception as e:
+                print(f"[ERROR] get_subjects_for_group: {e}")
+    if not base:
+        base = list(DEFAULT_SUBJECTS)
+    #Юнион с предметами, у которых есть реальные занятия в группе (сохраняем порядок base).
+    try:
+        from core import DBManager
+        for s in DBManager.group_subjects_with_lessons(group_name):
+            if s not in base:
+                base.append(s)
+    except Exception as e:
+        print(f"[ERROR] get_subjects_for_group (lessons): {e}")
+    return base or DEFAULT_SUBJECTS
 
 
 def parse_logins():
