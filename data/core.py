@@ -307,7 +307,7 @@ class DBManager:
             cur.execute(q)
             cols = ["id", "student_f", "student_n", "lesson_id", "local_grade",
                     "remote_grade", "remote_device", "remote_at", "detected_at", "resolved"]
-            out = [dict(zip(cols, r)) for r in cur.fetchall()]
+            out = [dict(zip(cols, r, strict=False)) for r in cur.fetchall()]
             conn.close()
         except Exception as e:
             log.get("core").warning(f"[DBManager] чтение конфликтов: {e}")

@@ -255,7 +255,7 @@ def intent_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     recs = _records(conn, f, n)
     conn.close()
     marks = []
-    for lid, ltype, num, *_ in lessons:
+    for lid, ltype, _num, *_ in lessons:
         v = recs.get(lid)
         if ltype == "Практика" and v in PRACTICE_VALUES:
             marks.append(v)

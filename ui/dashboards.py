@@ -686,7 +686,7 @@ class StudentDashboard(QWidget):
         cl.setContentsMargins(18, 16, 18, 16)
         cl.addWidget(section_lbl("По предметам"))
         
-        for subj, avg_s, cnt in sorted(by_subj, key=lambda x: -x[1]):
+        for subj, avg_s, _cnt in sorted(by_subj, key=lambda x: -x[1]):
             row = QHBoxLayout()
             n = lbl(subj[:40] + "…" if len(subj) > 40 else subj, 12, C['text'])
             n.setFixedWidth(300)

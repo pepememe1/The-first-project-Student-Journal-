@@ -1066,7 +1066,7 @@ class TeacherDashboard(QWidget):
         #Посещаемость
         ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16)
         al.addWidget(section_lbl("Посещаемость по студентам"))
-        for f, att, avg_s in sorted(att_rows, key=lambda x: -x[1]):
+        for f, att, _avg_s in sorted(att_rows, key=lambda x: -x[1]):
             c = C['green'] if att >= 90 else C['blue'] if att >= 70 else C['red']
             row = QHBoxLayout()
             row.addWidget(lbl(f, 12, C['text'])); row.setStretch(0, 1)

@@ -198,7 +198,7 @@ def _match_students(text: str, roster: List[Tuple[str, str]],
 def _second_surname_score(scored) -> float:
     """Скор лучшего кандидата с ДРУГОЙ фамилией (для флага «несколько студентов»)."""
     top_f = scored[0][1]
-    for (sc, f, n) in scored:
+    for (sc, f, _n) in scored:
         if f != top_f:
             return sc
     return 0.0
@@ -545,7 +545,7 @@ def parse_batch(text: str, roster: List[Tuple[str, str]],
         #Счётчик N (напр. «первым 3») мог попасть в оценки как цифра 2–5 — исключаем его.
         gp_val = grade_pos
         if n_first is not None:
-            for k, (gi, g) in enumerate(grade_pos):
+            for k, (gi, _g) in enumerate(grade_pos):
                 if words[gi] == str(n_first):
                     gp_val = grade_pos[:k] + grade_pos[k + 1:]
                     break

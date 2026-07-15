@@ -55,7 +55,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Некорректные настройки")
+        raise HTTPException(status_code=400, detail="Некорректные настройки") from None
     if size > _MAX_PREFS_BYTES:
         raise HTTPException(status_code=413, detail="Слишком большой объём настроек")
     user.prefs = merged

@@ -106,7 +106,7 @@ def register_complete(body: dict = Body(...), request: Request = None,
             expected_origin=WEBAUTHN_ORIGIN,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Не удалось проверить ключ: {e}")
+        raise HTTPException(status_code=400, detail=f"Не удалось проверить ключ: {e}") from e
     cred_id = bytes_to_base64url(verification.credential_id)
     if db.get(WebAuthnCredential, cred_id) is None:
         db.add(WebAuthnCredential(
@@ -168,7 +168,7 @@ def login_complete(body: dict = Body(...), request: Request = None, db: Session 
             require_user_verification=False,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Проверка биометрии не удалась: {e}")
+        raise HTTPException(status_code=400, detail=f"Проверка биометрии не удалась: {e}") from e
     row.sign_count = verification.new_sign_count
     row.last_used = _now()
     db.commit()

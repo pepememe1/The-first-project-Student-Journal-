@@ -22,8 +22,11 @@ extend-exclude = ["build", "dist", "nuitka_out", "web", "*.spec"]
 #   E9  — синтаксические ошибки (то, что раньше ловил только compileall);
 #   W605 — некорректные escape-последовательности в строках (частый тихий баг в regex).
 # По мере наведения порядка можно добавлять: I (сорт импортов), UP, B, SIM.
-select = ["F", "E9", "W605"]
-ignore = []
+#   B    — flake8-bugbear: реальные ловушки (raise без from, неиспользуемые loop-var,
+#          zip без strict и т.п.). B008 отключаем: `Depends(...)`/`Body(...)` в дефолтах —
+#          ШТАТНЫЙ паттерн FastAPI, а не ошибка.
+select = ["F", "E9", "W605", "B"]
+ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 # В тестах допускаем «неиспользованные» импорты-фикстуры и локальные переменные-проверки.
@@ -42,4 +45,8 @@ python_version = "3.10"
 # так проверка типов остаётся ЗЕЛЁНОЙ и полезной, а не «1000 ошибок, все игнорируют».
 ignore_missing_imports = true
 warn_unused_ignores = true
-files = ["data/terms.py", "data/exports.py", "grading.py"]
+#follow_imports=silent: типы из импортов ПОДТЯГИВАЕМ, но ошибки в ещё-не-типизированных
+#транзитивных модулях (core и пр.) НЕ репортим — иначе один непроверенный модуль топит
+#всю проверку. Так mypy остаётся зелёным и полезным на уже аннотированных файлах.
+follow_imports = "silent"
+files = ["data/terms.py", "data/exports.py", "grading.py", "log.py", "app_paths.py"]
