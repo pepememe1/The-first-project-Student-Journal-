@@ -4,6 +4,7 @@ admin_dashboard.py — AdminDashboard
 """
 
 import json
+import log
 import os
 
 from PySide6.QtCore import Qt, QTimer
@@ -141,7 +142,7 @@ class AdminDashboard(QWidget):
                 body, VectorPanel(self.vector_session, docked=True))
             self.vector_dock.mount(side="left")
         except Exception as _e:
-            print(f"[Vector] панель сбоку (админ): {_e}")
+            log.get("admin_dashboard").warning(f"[Vector] панель сбоку (админ): {_e}")
 
     def _ensure_vector_session(self):
         """Общая сессия Вектора (одна история для шторки и вкладки «ИИ Помощник»)."""
@@ -179,7 +180,7 @@ class AdminDashboard(QWidget):
         if on_error:
             w.error.connect(on_error)
         else:
-            w.error.connect(lambda e: print(f"[BG] фоновая ошибка: {e}"))
+            w.error.connect(lambda e: log.get("admin_dashboard").warning(f"[BG] фоновая ошибка: {e}"))
         w.start()
 
     #Дашборд
@@ -653,7 +654,7 @@ class AdminDashboard(QWidget):
             from subjects import load_subjects, save_subjects
             save_subjects(sorted(set(load_subjects()) | all_subjects))
         except Exception as e:
-            print(f"[groups] каталог предметов: {e}")
+            log.get("admin_dashboard").warning(f"[groups] каталог предметов: {e}")
         self._render_groups(); self._refresh_dash()
         QMessageBox.information(self, "Готово",
             f"Групп добавлено: {added}, обновлено (привязаны предметы): {updated}.\n"
@@ -1579,7 +1580,7 @@ class AdminDashboard(QWidget):
             self._ensure_vector_session()
             ai = VectorPanel(self.vector_session, docked=False)
         except Exception as _e:
-            print(f"[Vector] вкладка не собралась (админ): {_e}")
+            log.get("admin_dashboard").warning(f"[Vector] вкладка не собралась (админ): {_e}")
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 

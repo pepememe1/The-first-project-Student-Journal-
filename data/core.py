@@ -8,6 +8,7 @@ core.py — Журнал ВСГУТУ.
   - Оффлайн: работаем с SQLite, при восстановлении сети — автосинхронизация.
 """
 import sqlite3
+import log
 import uuid
 import re
 from dataclasses import dataclass, field
@@ -54,7 +55,7 @@ MAX_BACKUPS = 48                                    #сколько бэкапо
 AUTO_BACKUP_INTERVAL_SEC = 30 * 60                  #не чаще одного авто-бэкапа в 30 минут
 
 if _is_network_path(LOCAL_DB):
-    print("[DBManager] ВНИМАНИЕ: локальная база на сетевом пути — это вызывает "
+    log.get("core").warning("[DBManager] ВНИМАНИЕ: локальная база на сетевом пути — это вызывает "
           "блокировки и порчу. Используйте локальный диск.")
 
 
@@ -121,7 +122,7 @@ class DBManager:
             cls._prune_backups()
             return dst
         except Exception as e:
-            print(f"[DBManager] бэкап не удался: {e}")
+            log.get("core").warning(f"[DBManager] бэкап не удался: {e}")
             return ""
 
     @classmethod
@@ -138,7 +139,7 @@ class DBManager:
                 return ""                     #ещё рано — последний бэкап свежий
             return cls.backup(reason=reason)
         except Exception as e:
-            print(f"[DBManager] backup_if_due: {e}")
+            log.get("core").warning(f"[DBManager] backup_if_due: {e}")
             return ""
 
     @classmethod
@@ -182,7 +183,7 @@ class DBManager:
             _shutil.copy2(backup_path, LOCAL_DB)
             return True
         except Exception as e:
-            print(f"[DBManager] восстановление не удалось: {e}")
+            log.get("core").warning(f"[DBManager] восстановление не удалось: {e}")
             return False
 
     @classmethod
@@ -309,7 +310,7 @@ class DBManager:
             out = [dict(zip(cols, r)) for r in cur.fetchall()]
             conn.close()
         except Exception as e:
-            print(f"[DBManager] чтение конфликтов: {e}")
+            log.get("core").warning(f"[DBManager] чтение конфликтов: {e}")
         return out
 
     @classmethod
@@ -335,7 +336,7 @@ class DBManager:
             conn.commit(); conn.close()
             return True
         except Exception as e:
-            print(f"[DBManager] resolve_conflict: {e}")
+            log.get("core").warning(f"[DBManager] resolve_conflict: {e}")
             return False
 
     @classmethod
@@ -672,7 +673,7 @@ class GradeBook:
                     (cy, int(cs or 0), self.group, self.subject))
                 conn.commit()
             except Exception as e:
-                print(f"[GradeBook] бэкфилл периода пропущен: {e}")
+                log.get("core").warning(f"[GradeBook] бэкфилл периода пропущен: {e}")
 
         #deleted=0 — удалённые (надгробия) занятия в журнал не показываем. Если задан
         #период журнала (self.year) — показываем только его семестр (архив/текущий).
@@ -721,7 +722,7 @@ class GradeBook:
                         existing.add((surname.lower(), name.lower()))
                 conn.commit()
         except Exception as e:
-            print(f"[GradeBook] синхронизация студентов в load_from_db: {e}")
+            log.get("core").warning(f"[GradeBook] синхронизация студентов в load_from_db: {e}")
 
         cur.execute("SELECT f, n, group_name FROM students WHERE group_name=?", (self.group,))
         self.spisok_stud = []

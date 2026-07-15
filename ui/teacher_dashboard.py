@@ -4,6 +4,7 @@ teacher_dashboard.py — TeacherDashboard
 """
 
 import ui_date
+import log
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -70,7 +71,7 @@ class TeacherDashboard(QWidget):
                 body, VectorPanel(self.vector_session, docked=True))
             self.vector_dock.mount(side="left")
         except Exception as _e:
-            print(f"[Vector] панель сбоку (препод): {_e}")
+            log.get("teacher_dashboard").warning(f"[Vector] панель сбоку (препод): {_e}")
 
     def _ensure_vector_session(self):
         """Создаёт ОБЩУЮ сессию Вектора (одна история для шторки и вкладки). Движок
@@ -289,7 +290,7 @@ class TeacherDashboard(QWidget):
             if added:
                 self.book.save_to_db()
         except Exception as e:
-            print(f"[sync students] {e}")
+            log.get("teacher_dashboard").warning(f"[sync students] {e}")
 
     def _avg_cfg(self) -> dict:
         """config с учётом тумблера «Н = 2» — визуальный пересчёт среднего, не сохраняем."""
@@ -443,7 +444,7 @@ class TeacherDashboard(QWidget):
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[journal] не удалось сохранить оценку: {e}")
+            log.get("teacher_dashboard").warning(f"[journal] не удалось сохранить оценку: {e}")
         try:
             from sync_runner import trigger
             trigger()
@@ -661,7 +662,7 @@ class TeacherDashboard(QWidget):
                     ss.append({"surname": sn, "name": nm, "group": self.book.group})
                     gh.set_students(ss)
             except Exception as e:
-                print(f"[GH add student] {e}")
+                log.get("teacher_dashboard").warning(f"[GH add student] {e}")
         self._update_table()
 
     def _save(self):
@@ -1002,7 +1003,7 @@ class TeacherDashboard(QWidget):
                       if not (x.get("surname", "") == f and x.get("name", "") == n)]
                 gh.set_students(ss)
             except Exception as e:
-                print(f"[GH del student] {e}")
+                log.get("teacher_dashboard").warning(f"[GH del student] {e}")
         self._refresh_students(); self._update_table()
 
     #Статистика
@@ -1086,7 +1087,7 @@ class TeacherDashboard(QWidget):
             self._ensure_vector_session()
             ai = VectorPanel(self.vector_session, docked=False)
         except Exception as _e:
-            print(f"[Vector] вкладка не собралась (препод): {_e}")
+            log.get("teacher_dashboard").warning(f"[Vector] вкладка не собралась (препод): {_e}")
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 
@@ -1111,7 +1112,7 @@ class TeacherDashboard(QWidget):
             if mic_available():
                 lay.addWidget(MicSelectorWidget())
         except Exception as e:
-            print(f"[profile] выбор микрофона недоступен: {e}")
+            log.get("teacher_dashboard").warning(f"[profile] выбор микрофона недоступен: {e}")
         self.pages["profile"] = w; self.stack.addWidget(w)
 
     def _request_theme_rebuild(self):

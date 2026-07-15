@@ -10,6 +10,7 @@ Recorder(device=...). На вебе/телефоне захват делает �
 только для десктопа.
 """
 import threading
+import log
 from typing import List, Optional, Tuple
 
 SAMPLE_RATE = 16000        #родная частота Whisper — пишем сразу в ней
@@ -86,7 +87,7 @@ class Recorder:
             self._stream.start()
             return True
         except Exception as e:
-            print(f"[audio] не удалось открыть микрофон (device={self.device}): {e}")
+            log.get("audio_capture").warning(f"[audio] не удалось открыть микрофон (device={self.device}): {e}")
             self._stream = None
             self._recording = False
             return False
@@ -110,7 +111,7 @@ class Recorder:
                 audio = np.concatenate(self._frames)
             return audio
         except Exception as e:
-            print(f"[audio] сборка записи не удалась: {e}")
+            log.get("audio_capture").warning(f"[audio] сборка записи не удалась: {e}")
             return None
 
     @property

@@ -19,6 +19,7 @@ theme_service.py — Логика выбора и сохранения темы 
 institution) → меняем тему на своём аккаунте → source=user, id темы в БД меняется.
 """
 import themes
+import log
 from data_store import get_store, local_get, local_set, _kv_set
 
 #Локальный кэш применённой темы. Хранит {"spec":..,"source":..}. ВАЖНО: ключ
@@ -134,7 +135,7 @@ def save_institution_theme(spec: dict) -> dict:
         cfg[_INSTITUTION_CFG] = themes.spec_to_json(spec)
         _kv_set("config", cfg)   #wake=True по умолчанию — config уедет на сервер
     except Exception as e:
-        print(f"[theme] не удалось сохранить тему вуза: {e}")
+        log.get("theme_service").warning(f"[theme] не удалось сохранить тему вуза: {e}")
     #У самого админа эта тема становится текущей темой аккаунта на этом ПК.
     _set_local("admin", {}, spec, "institution")
     return themes.apply_spec(spec)

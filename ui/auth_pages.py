@@ -7,6 +7,7 @@ auth_pages.py — Страница аутентификации (LoginPage).
 """
 
 from PySide6.QtCore import Qt, QPoint, QPointF, QPropertyAnimation
+import log
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPolygonF, QPainterPath
 )
@@ -633,7 +634,7 @@ class LoginPage(QWidget):
             return _LoginMascot(base_pm, think_pm,
                                 self._on_mascot_enter, self._on_mascot_leave)
         except Exception as e:
-            print(f"[login] маскот не загрузился: {e}")
+            log.get("auth_pages").warning(f"[login] маскот не загрузился: {e}")
             return None
 
     #--- интерактив маскота: «думает» + облачко с советом при наведении ---
@@ -866,7 +867,7 @@ class LoginPage(QWidget):
             from app_settings import set_saved_session
             set_saved_session(login, role)
         except Exception as e:
-            print(f"[login] сессия не сохранена: {e}")
+            log.get("auth_pages").warning(f"[login] сессия не сохранена: {e}")
         if role == "admin":
             self.login_admin.emit()
         elif role == "teacher":
@@ -898,7 +899,7 @@ class LoginPage(QWidget):
             finally:
                 QApplication.restoreOverrideCursor()
         except Exception as e:
-            print(f"[login] онлайн-подтягивание пропущено: {e}")
+            log.get("auth_pages").warning(f"[login] онлайн-подтягивание пропущено: {e}")
 
     def _prompt_admin_setup(self, store):
         """Диалог первичной установки пароля администратора (только хост-ПК)."""
@@ -932,7 +933,7 @@ class LoginPage(QWidget):
                 from sync_runner import start as _sync_start
                 _sync_start(store.get_admin_login(), pw1, "admin")
             except Exception as e:
-                print(f"[sync] не удалось запустить после first-run: {e}")
+                log.get("auth_pages").warning(f"[sync] не удалось запустить после first-run: {e}")
             self.login_inp.clear()
             self.pass_inp.clear()
             #Запоминаем сессию админа и для этого пути (он идёт мимо _do_login).

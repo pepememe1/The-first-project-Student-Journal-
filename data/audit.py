@@ -27,6 +27,7 @@ audit.py — Журнал событий безопасности и защит�
 """
 
 import os
+import log
 import time
 from datetime import datetime
 
@@ -91,7 +92,7 @@ def _migrate_once():
                 os.remove(_LEGACY_THROTTLE)
     except Exception as e:
         #миграция не критична: упадём молча, файл останется до следующего запуска
-        print(f"[audit] перенос старого журнала отложен: {e}")
+        log.get("audit").warning(f"[audit] перенос старого журнала отложен: {e}")
 
 
 #Журнал аудита
@@ -114,7 +115,7 @@ def log_event(event: str, actor: str = "", detail: str = ""):
         ds.local_set(_AUDIT_KEY, cur[-_AUDIT_CAP:])
     except Exception as e:
         #аудит не должен ломать работу приложения
-        print(f"[audit] не удалось записать событие: {e}")
+        log.get("audit").warning(f"[audit] не удалось записать событие: {e}")
 
 
 def read_events(limit: int = 200) -> list:
@@ -141,7 +142,7 @@ def _save_throttle(data: dict):
     try:
         _ds().local_set(_THROTTLE_KEY, data)
     except Exception as e:
-        print(f"[audit] не удалось сохранить состояние блокировок: {e}")
+        log.get("audit").warning(f"[audit] не удалось сохранить состояние блокировок: {e}")
 
 
 def is_locked(login: str) -> tuple:

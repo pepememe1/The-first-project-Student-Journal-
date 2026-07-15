@@ -28,6 +28,7 @@ widget.py — Компаньон «Вектор» (PySide6): панель чат
 """
 
 from . import speech
+import log
 
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve
@@ -440,7 +441,7 @@ class VectorPanel(QWidget):
                     f"QToolButton:hover{{border-color:{C['green']};color:{C['green']};}}")
                 self.help_btn.clicked.connect(self._show_voice_help)
         except Exception as e:
-            print(f"[vector] голосовой ввод недоступен: {e}")
+            log.get("widget").warning(f"[vector] голосовой ввод недоступен: {e}")
 
         row.addWidget(self._cmd_btn); row.addWidget(self.inp)
         if self.mic_btn is not None:
@@ -594,7 +595,7 @@ class VectorPanel(QWidget):
             role = getattr(self.engine.scope, "role", "student")
             show_voice_help(role, self)
         except Exception as e:
-            print(f"[vector] подсказка недоступна: {e}")
+            log.get("widget").warning(f"[vector] подсказка недоступна: {e}")
 
     def _voice_context(self):
         """Подсказка для Whisper: реальные ФИО студентов текущей группы + ключевые слова.

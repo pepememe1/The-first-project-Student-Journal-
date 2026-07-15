@@ -15,6 +15,7 @@ data_store.py — Локальное хранилище данных GradeBookAI
 превращается в "password_hash" (PBKDF2-HMAC-SHA256, см. security.py).
 """
 import json
+import log
 from typing import Optional
 
 from core import DBManager
@@ -554,7 +555,7 @@ class LocalStore:
                 from sync_runner import start as _sync_start
                 _sync_start(login, password, result.get("role", ""))
             except Exception as e:
-                print(f"[sync] не удалось запустить: {e}")
+                log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
         return result
 
     def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:
@@ -666,11 +667,11 @@ def reset_synced_local_data():
         from subjects import save_subjects
         save_subjects([])
     except Exception as e:
-        print(f"[reset] предметы не очищены: {e}")
+        log.get("data_store").warning(f"[reset] предметы не очищены: {e}")
     try:
         from core import DBManager
         DBManager.clear_synced_tables()
     except Exception as e:
-        print(f"[reset] таблицы занятий/оценок не очищены: {e}")
+        log.get("data_store").warning(f"[reset] таблицы занятий/оценок не очищены: {e}")
     #Сбрасываем singleton — чтобы в памяти не осталось ссылок на старые данные.
     reset_store()

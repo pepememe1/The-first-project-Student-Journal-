@@ -21,6 +21,7 @@ app_settings.py — Локальные настройки ПК (НЕ синхр�
 штатный режим, не ошибка).
 """
 import os
+import log
 import json
 from urllib.parse import urlparse
 
@@ -91,7 +92,7 @@ def _migrate_legacy_json():
                 local_set(_API_URL_KEY, url)
         os.remove(p)   #файл-костыль больше не нужен
     except Exception as e:
-        print(f"[app_settings] миграция api_config.json пропущена: {e}")
+        log.get("app_settings").warning(f"[app_settings] миграция api_config.json пропущена: {e}")
 
 
 def get_api_url() -> str:
@@ -105,7 +106,7 @@ def get_api_url() -> str:
             return url
     except Exception as e:
         #БД ещё не готова или недоступна — не падаем, пробуем запасные источники.
-        print(f"[app_settings] чтение адреса сервера из БД пропущено: {e}")
+        log.get("app_settings").warning(f"[app_settings] чтение адреса сервера из БД пропущено: {e}")
     env = os.environ.get("GRADEBOOK_API_URL", "").strip()
     if env:
         return env
@@ -124,7 +125,7 @@ def set_api_url(url: str) -> bool:
             local_set(_OFFLINE_ACK_KEY, False)
         return ok
     except Exception as e:
-        print(f"[app_settings] не удалось сохранить адрес сервера: {e}")
+        log.get("app_settings").warning(f"[app_settings] не удалось сохранить адрес сервера: {e}")
         return False
 
 
@@ -363,7 +364,7 @@ def get_device_id() -> str:
     except Exception as e:
         #БД ещё не готова — отдаём непустую заглушку, чтобы запрос не падал; на
         #следующем обращении (БД готова) сгенерируется и сохранится постоянный id.
-        print(f"[app_settings] device_id временно недоступен: {e}")
+        log.get("app_settings").warning(f"[app_settings] device_id временно недоступен: {e}")
         return ""
 
 

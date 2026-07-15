@@ -3,6 +3,7 @@ dashboards.py — Панели управления для студентов, �
 """
 
 from PySide6.QtCore import Qt, QThread, Signal as QSignal
+import log
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QTableWidget, QTableWidgetItem,
@@ -711,7 +712,7 @@ class StudentDashboard(QWidget):
             self._ensure_vector_session()
             ai = VectorPanel(self.vector_session, docked=False)
         except Exception as _e:
-            print(f"[Vector] вкладка не собралась (студент): {_e}")
+            log.get("dashboards").warning(f"[Vector] вкладка не собралась (студент): {_e}")
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai
         self.stack.addWidget(ai)
@@ -740,7 +741,7 @@ class StudentDashboard(QWidget):
             if mic_available():
                 lay.addWidget(MicSelectorWidget())
         except Exception as e:
-            print(f"[profile] выбор микрофона недоступен: {e}")
+            log.get("dashboards").warning(f"[profile] выбор микрофона недоступен: {e}")
         self.pages["profile"] = w
         self.stack.addWidget(w)
 

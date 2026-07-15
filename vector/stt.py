@@ -17,6 +17,7 @@ stt.py — Распознавание речи (Speech-to-Text) на базе Op
 на GPU (~2.5–3 ГБ), а LLM-озвучка Вектора — на лёгкой модели Ollama (qwen2.5:3b) или оффлайн.
 """
 import os
+import log
 import threading
 from typing import Optional
 
@@ -124,19 +125,19 @@ def load_model(size: str = "large-v3", device: str = "auto",
             m = WhisperModel(size, device=dev, compute_type=comp)
         except Exception as e:
             #GPU не завёлся (нет cuDNN/мало памяти) — пробуем CPU, лишь бы работало.
-            print(f"[stt] загрузка на {dev}/{comp} не удалась ({e}); откат на CPU int8")
+            log.get("stt").warning(f"[stt] загрузка на {dev}/{comp} не удалась ({e}); откат на CPU int8")
             if dev != "cpu":
                 try:
                     m = WhisperModel(size, device="cpu", compute_type="int8")
                     key = (size, "cpu", "int8")
                 except Exception as e2:
-                    print(f"[stt] CPU-загрузка тоже не удалась: {e2}")
+                    log.get("stt").warning(f"[stt] CPU-загрузка тоже не удалась: {e2}")
                     return None
             else:
                 return None
         _model = m
         _model_key = key
-        print(f"[stt] модель Whisper готова: {size} @ {key[1]}/{key[2]}")
+        log.get("stt").warning(f"[stt] модель Whisper готова: {size} @ {key[1]}/{key[2]}")
         return _model
 
 

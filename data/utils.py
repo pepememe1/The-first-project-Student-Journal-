@@ -3,6 +3,7 @@ utils.py — Вспомогательные функции и утилиты
 """
 
 from styles import DEFAULT_GROUPS, DEFAULT_SUBJECTS
+import log
 from data_store import get_store
 
 
@@ -16,7 +17,7 @@ def get_groups():
             stored = store.get_groups()
             return stored if stored else DEFAULT_GROUPS
         except Exception as e:
-            print(f"[ERROR] get_groups: {e}")
+            log.get("utils").warning(f"[ERROR] get_groups: {e}")
     return DEFAULT_GROUPS
 
 
@@ -37,7 +38,7 @@ def get_subjects_for_group(group_name: str):
         if site:
             base = list(site)
     except Exception as e:
-        print(f"[ERROR] get_subjects_for_group (site): {e}")
+        log.get("utils").warning(f"[ERROR] get_subjects_for_group (site): {e}")
     if base is None:
         store = get_store()
         if store:
@@ -47,7 +48,7 @@ def get_subjects_for_group(group_name: str):
                         base = list(g.get("subjects", []) or [])
                         break
             except Exception as e:
-                print(f"[ERROR] get_subjects_for_group: {e}")
+                log.get("utils").warning(f"[ERROR] get_subjects_for_group: {e}")
     if not base:
         base = list(DEFAULT_SUBJECTS)
     #Юнион с предметами, у которых есть реальные занятия в группе (сохраняем порядок base).
@@ -57,7 +58,7 @@ def get_subjects_for_group(group_name: str):
             if s not in base:
                 base.append(s)
     except Exception as e:
-        print(f"[ERROR] get_subjects_for_group (lessons): {e}")
+        log.get("utils").warning(f"[ERROR] get_subjects_for_group (lessons): {e}")
     return base or DEFAULT_SUBJECTS
 
 
@@ -70,5 +71,5 @@ def parse_logins():
             if t:
                 return t, ""
         except Exception as e:
-            print(f"[ERROR] parse_logins: {e}")
+            log.get("utils").warning(f"[ERROR] parse_logins: {e}")
     return {}, ""

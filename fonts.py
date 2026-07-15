@@ -11,6 +11,7 @@ fonts.py — Шрифты GradeBookAI.
     load_fonts()
 """
 import os
+import log
 import sys
 
 from PySide6.QtGui import QFontDatabase, QFont
@@ -66,5 +67,5 @@ def load_fonts() -> dict:
     if app:
         app.setFont(QFont(_pick(_BODY_CANDIDATES), 10))
 
-    print(f"[Fonts] Основной шрифт: {_pick(_BODY_CANDIDATES)}")
+    log.get("fonts").warning(f"[Fonts] Основной шрифт: {_pick(_BODY_CANDIDATES)}")
     return loaded

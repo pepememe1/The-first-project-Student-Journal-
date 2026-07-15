@@ -9,6 +9,7 @@ engine.py — Оркестратор Вектора.
 переформулирует. Если LLM недоступна — фразу даёт офлайн-шаблон.
 """
 import sqlite3
+import log
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -71,7 +72,7 @@ class VectorEngine:
             try:
                 text = self.llm.free_chat(q_for_llm, role=self.scope.role)
             except Exception as e:
-                print(f"[Vector] free_chat не удался, офлайн-фолбэк: {e}")
+                log.get("engine").warning(f"[Vector] free_chat не удался, офлайн-фолбэк: {e}")
                 #Если это сетевая проблема GigaChat/ollama — честно скажем об этом,
                 #вместо общего «вопрос вне моих данных».
                 net = ""
@@ -119,7 +120,7 @@ class VectorEngine:
                 voiced = self.llm.voice(facts_for_llm, role=self.scope.role,
                                         user_question=question)
         except Exception as e:
-            print(f"[Vector] озвучка не удалась, офлайн-фолбэк: {e}")
+            log.get("engine").warning(f"[Vector] озвучка не удалась, офлайн-фолбэк: {e}")
             voiced = OfflineTemplateProvider().voice(facts.facts_text,
                                                      role=self.scope.role,
                                                      intent=intent)

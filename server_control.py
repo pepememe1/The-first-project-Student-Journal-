@@ -24,6 +24,7 @@ server_control.py — Управление сервером синхрониза
 права на него сужаем. Не копируйте server/.env на чужие машины.
 """
 import os
+import log
 import re
 import sys
 import time
@@ -77,7 +78,7 @@ def _write_pid(path: str, pid: int):
         with open(path, "w", encoding="utf-8") as f:
             f.write(str(int(pid)))
     except Exception as e:
-        print(f"[server_control] PID не записан ({path}): {e}")
+        log.get("server_control").warning(f"[server_control] PID не записан ({path}): {e}")
 
 
 def _read_pid(path: str) -> int:
@@ -125,7 +126,7 @@ def _pid_kill(pid: int):
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
-            print(f"[server_control] taskkill {pid}: {e}")
+            log.get("server_control").warning(f"[server_control] taskkill {pid}: {e}")
     else:
         try:
             os.kill(int(pid), signal.SIGTERM)
@@ -172,7 +173,7 @@ def _pids_on_port(port: int) -> list:
                 except ValueError:
                     pass
     except Exception as e:
-        print(f"[server_control] не удалось найти PID на порту {port}: {e}")
+        log.get("server_control").warning(f"[server_control] не удалось найти PID на порту {port}: {e}")
     return list(pids)
 
 
@@ -190,7 +191,7 @@ def read_env() -> dict:
                     k, v = line.split("=", 1)
                     out[k.strip()] = v.strip()
     except Exception as e:
-        print(f"[server_control] не удалось прочитать .env: {e}")
+        log.get("server_control").warning(f"[server_control] не удалось прочитать .env: {e}")
     return out
 
 
@@ -212,7 +213,7 @@ def _write_env(values: dict) -> bool:
             pass
         return True
     except Exception as e:
-        print(f"[server_control] не удалось записать .env: {e}")
+        log.get("server_control").warning(f"[server_control] не удалось записать .env: {e}")
         return False
 
 
@@ -346,7 +347,7 @@ def _runtime_env(port: int) -> dict:
         if host_dev:
             env["GRADEBOOK_HOST_DEVICE_ID"] = host_dev
     except Exception as e:
-        print(f"[server_control] device_id хоста не выставлен: {e}")
+        log.get("server_control").warning(f"[server_control] device_id хоста не выставлен: {e}")
     return env
 
 
@@ -783,11 +784,11 @@ def autostart(port: int = None) -> tuple:
         try:
             start_tunnel_process(port, ensure_tunnel_name())   #подхватит живой туннель
         except Exception as e:
-            print(f"[server_control] автозапуск туннеля пропущен: {e}")
+            log.get("server_control").warning(f"[server_control] автозапуск туннеля пропущен: {e}")
     elif mode == "domain":
         try:
             start_caddy_process(get_domain(), port)            #подхватит живой Caddy
         except Exception as e:
-            print(f"[server_control] автозапуск Caddy пропущен: {e}")
+            log.get("server_control").warning(f"[server_control] автозапуск Caddy пропущен: {e}")
 
     return True, f"http://127.0.0.1:{port}", f"Сервер хоста запущен на порту {port}."

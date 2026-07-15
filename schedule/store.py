@@ -19,6 +19,7 @@ kv_store через data_store.local_* (префикс «_local:»): данны�
 не утекает другому (ключ включает роль и логин).
 """
 from __future__ import annotations
+import log
 
 import math
 from datetime import date, datetime, timezone
@@ -45,7 +46,7 @@ def save(snapshot: Snapshot) -> bool:
     try:
         return _ds().local_set(_CACHE_KEY, snapshot.to_dict())
     except Exception as e:
-        print(f"[schedule] не удалось сохранить кэш расписания: {e}")
+        log.get("store").warning(f"[schedule] не удалось сохранить кэш расписания: {e}")
         return False
 
 
@@ -57,7 +58,7 @@ def load_cached() -> Snapshot | None:
             return None
         return Snapshot.from_dict(raw)
     except Exception as e:
-        print(f"[schedule] кэш расписания недоступен/повреждён: {e}")
+        log.get("store").warning(f"[schedule] кэш расписания недоступен/повреждён: {e}")
         return None
 
 
@@ -143,7 +144,7 @@ def set_identity(role: str, login: str, value: str) -> bool:
     try:
         return _ds().local_set(_identity_key(role, login), value or "")
     except Exception as e:
-        print(f"[schedule] не удалось сохранить привязку расписания: {e}")
+        log.get("store").warning(f"[schedule] не удалось сохранить привязку расписания: {e}")
         return False
 
 

@@ -3,6 +3,7 @@ main.py — единая точка входа GradeBookAI (Pre-release 2.7).
 Модульная архитектура: main_window.MainAppWindow.
 """
 import sys
+import log
 import os
 
 #Раскладка по папкам ui/ sync/ data/ — выполнить ДО любого клиентского импорта,
@@ -111,7 +112,7 @@ def main():
         from fonts import load_fonts
         load_fonts()
     except Exception as e:
-        print(f"[Fonts] {e}")
+        log.get("main").warning(f"[Fonts] {e}")
 
     icon = get_icon()
     app.setWindowIcon(icon)
@@ -135,12 +136,12 @@ def main():
             import sync_runner
             sync_runner.flush()
         except Exception as _e:
-            print(f"[exit sync] {_e}")
+            log.get("main").warning(f"[exit sync] {_e}")
         try:
             from core import DBManager
             DBManager.backup(reason="on_exit")
         except Exception as _e:
-            print(f"[exit] {_e}")
+            log.get("main").warning(f"[exit] {_e}")
     app.aboutToQuit.connect(_on_quit)
 
     sys.exit(app.exec())

@@ -3,6 +3,7 @@ main_window.py — Главное окно приложения
 """
 
 from PySide6.QtCore import QObject, Signal, QTimer
+import log
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QStackedWidget, QMessageBox
 )
@@ -104,7 +105,7 @@ class MainAppWindow(QMainWindow):
             set_on_synced(self._sync_bridge.synced.emit)
             set_on_state(self._sync_bridge.state.emit)
         except Exception as e:
-            print(f"[sync] мост обновления UI не подключён: {e}")
+            log.get("main_window").warning(f"[sync] мост обновления UI не подключён: {e}")
 
         #Авто-бэкап по расписанию. Раньше бэкап делался только «на выходе» — при
         #аварийном завершении (зависание/выключение ПК) данные за сессию терялись бы.
@@ -153,7 +154,7 @@ class MainAppWindow(QMainWindow):
         try:
             import schedule as sched
         except Exception as e:
-            print(f"[schedule] модуль расписания недоступен: {e}")
+            log.get("main_window").warning(f"[schedule] модуль расписания недоступен: {e}")
             return
         #Порог свежести: если кэшу меньше 3 часов — не обновляем (хватает).
         age = sched.cache_age_minutes()
@@ -167,10 +168,10 @@ class MainAppWindow(QMainWindow):
                 try:
                     snap = sched.build_snapshot()
                     sched.save(snap)
-                    print(f"[schedule] авто-обновление: групп {len(snap.group_names())}, "
+                    log.get("main_window").warning(f"[schedule] авто-обновление: групп {len(snap.group_names())}, "
                           f"предметов {len(snap.subjects)}")
                 except Exception as ex:
-                    print(f"[schedule] авто-обновление пропущено: {ex}")
+                    log.get("main_window").warning(f"[schedule] авто-обновление пропущено: {ex}")
 
         self._sched_thread = _SchedRefreshThread(self)   # держим ссылку (GC)
         self._sched_thread.start()
@@ -190,7 +191,7 @@ class MainAppWindow(QMainWindow):
             if not (is_host() and host_autostart_enabled()):
                 return
         except Exception as e:
-            print(f"[server] проверка автозапуска пропущена: {e}")
+            log.get("main_window").warning(f"[server] проверка автозапуска пропущена: {e}")
             return
 
         import threading
@@ -209,9 +210,9 @@ class MainAppWindow(QMainWindow):
                         sync_runner.trigger()   #разбудить синк — адрес уже есть
                     except Exception:
                         pass
-                print(f"[server] автозапуск хоста: {msg}")
+                log.get("main_window").warning(f"[server] автозапуск хоста: {msg}")
             except Exception as e:
-                print(f"[server] автозапуск хоста пропущен: {e}")
+                log.get("main_window").warning(f"[server] автозапуск хоста пропущен: {e}")
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -230,7 +231,7 @@ class MainAppWindow(QMainWindow):
             from app_settings import get_saved_session, is_host
             sess = get_saved_session()
         except Exception as e:
-            print(f"[restore] сохранённая сессия не прочитана: {e}")
+            log.get("main_window").warning(f"[restore] сохранённая сессия не прочитана: {e}")
             return
         login = (sess or {}).get("login", "")
         if not login:
@@ -281,7 +282,7 @@ class MainAppWindow(QMainWindow):
             sync_engine.reconcile(c)
             self._sync_bridge.restore_local.emit(login)
         except Exception as e:
-            print(f"[restore] клиентское восстановление не удалось: {e}")
+            log.get("main_window").warning(f"[restore] клиентское восстановление не удалось: {e}")
             self._sync_bridge.show_login.emit()
 
     def _restore_from_local(self, login: str):
@@ -291,7 +292,7 @@ class MainAppWindow(QMainWindow):
             from data_store import get_store
             found = get_store().lookup_session(login)
         except Exception as e:
-            print(f"[restore] поиск пользователя не удался: {e}")
+            log.get("main_window").warning(f"[restore] поиск пользователя не удался: {e}")
             found = None
         if not found:
             #Данных нет (пустой кэш + офлайн, или пользователь удалён на сервере) —
@@ -303,7 +304,7 @@ class MainAppWindow(QMainWindow):
         try:
             self._open_dashboard()
         except Exception as e:
-            print(f"[restore] дашборд не собрался: {e}")
+            log.get("main_window").warning(f"[restore] дашборд не собрался: {e}")
             self._restore_failed()
             return
         #Запускаем фоновый синк по СОХРАНЁННОМУ токену (пароль пуст — синк возьмёт токен;
@@ -312,7 +313,7 @@ class MainAppWindow(QMainWindow):
             from sync_runner import start as _sync_start
             _sync_start(login, "", role)
         except Exception as e:
-            print(f"[restore] синк не запущен: {e}")
+            log.get("main_window").warning(f"[restore] синк не запущен: {e}")
         self._session_restoring = False
 
     def _restore_failed(self):
@@ -338,7 +339,7 @@ class MainAppWindow(QMainWindow):
             from auth_pages import ask_server_address
             ask_server_address(self, first_run=True)
         except Exception as e:
-            print(f"[startup] окно подключения пропущено: {e}")
+            log.get("main_window").warning(f"[startup] окно подключения пропущено: {e}")
 
     def _auto_backup(self):
         """Периодический бэкап локальной базы (троттлится по времени в DBManager)."""
@@ -346,7 +347,7 @@ class MainAppWindow(QMainWindow):
             from core import DBManager
             DBManager.backup_if_due()
         except Exception as e:
-            print(f"[backup] авто-бэкап: {e}")
+            log.get("main_window").warning(f"[backup] авто-бэкап: {e}")
 
     def _apply_theme_startup(self):
         """Применить тему вуза (или дефолт) до показа экрана входа."""
@@ -356,7 +357,7 @@ class MainAppWindow(QMainWindow):
             theme_service.apply_startup_default()
             self.setStyleSheet(styles.APP_STYLE)
         except Exception as e:
-            print(f"[theme] стартовая тема пропущена: {e}")
+            log.get("main_window").warning(f"[theme] стартовая тема пропущена: {e}")
 
     def _session_identity(self):
         """(role, identity) текущей сессии для theme_service ('', {} — не вошёл)."""
@@ -381,7 +382,7 @@ class MainAppWindow(QMainWindow):
                 theme_service.resolve_and_apply(role, identity)
                 self.setStyleSheet(styles.APP_STYLE)
         except Exception as e:
-            print(f"[theme] тема пользователя пропущена: {e}")
+            log.get("main_window").warning(f"[theme] тема пользователя пропущена: {e}")
 
     def _build_dashboard(self):
         """Создаёт виджет дашборда по текущей сессии (роль + данные)."""
@@ -429,7 +430,7 @@ class MainAppWindow(QMainWindow):
         try:
             self._open_dashboard()
         except Exception as e:
-            print(f"[theme] пересборка интерфейса не удалась: {e}")
+            log.get("main_window").warning(f"[theme] пересборка интерфейса не удалась: {e}")
 
     def _active_theme_spec(self) -> dict:
         """Spec темы, актуальный сейчас (личный — если вошли, иначе вуза/дефолт)."""
@@ -463,7 +464,7 @@ class MainAppWindow(QMainWindow):
                 if self._session:
                     self._open_dashboard()        #перекрасить инлайн-виджеты под новый режим
         except Exception as e:
-            print(f"[theme] тик расписания: {e}")
+            log.get("main_window").warning(f"[theme] тик расписания: {e}")
 
     def _on_sync_state(self, online: bool, error: str):
         """Синк перешёл в онлайн/офлайн — показываем индикатор в шапке (UI-поток)."""
@@ -485,13 +486,13 @@ class MainAppWindow(QMainWindow):
                 self.reapply_current()
                 return
         except Exception as e:
-            print(f"[theme] обновление темы по синку: {e}")
+            log.get("main_window").warning(f"[theme] обновление темы по синку: {e}")
         w = self._stack.currentWidget()
         if hasattr(w, "refresh"):
             try:
                 w.refresh()
             except Exception as e:
-                print(f"[sync] обновление экрана: {e}")
+                log.get("main_window").warning(f"[sync] обновление экрана: {e}")
 
     def _on_student_login(self, stud: dict):
         """Обработать вход студента"""
@@ -568,7 +569,7 @@ class MainAppWindow(QMainWindow):
                 clear_saved_token()
                 clear_saved_refresh_token()
         except Exception as e:
-            print(f"[logout] очистка сессии: {e}")
+            log.get("main_window").warning(f"[logout] очистка сессии: {e}")
 
         #Удалить все виджеты, кроме страницы входа (она всегда первая в стеке)
         while self._stack.count() > 1:
@@ -592,7 +593,7 @@ class MainAppWindow(QMainWindow):
                 self._login.refresh_theme()
             self._login.update()      #перерисовать живой фон входа в новой палитре
         except Exception as e:
-            print(f"[logout] сброс темы пропущен: {e}")
+            log.get("main_window").warning(f"[logout] сброс темы пропущен: {e}")
 
         #Обновить базу учителей
         self.teachers_db, _ = parse_logins()
@@ -626,4 +627,4 @@ class MainAppWindow(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
         except Exception as e:
-            print(f"[logout] сброс кэша пропущен: {e}")
+            log.get("main_window").warning(f"[logout] сброс кэша пропущен: {e}")

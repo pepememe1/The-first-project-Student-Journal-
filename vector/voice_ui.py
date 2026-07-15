@@ -17,6 +17,7 @@ voice_ui.py — Десктопный голосовой ввод для Вект
 = False и кнопка не показывается.
 """
 from datetime import datetime
+import log
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
@@ -55,7 +56,7 @@ def _save_mic_device(index):
         from data_store import local_set
         local_set("stt_mic_device", "" if index is None else int(index))
     except Exception as e:
-        print(f"[voice] не удалось сохранить выбор микрофона: {e}")
+        log.get("voice_ui").warning(f"[voice] не удалось сохранить выбор микрофона: {e}")
 
 
 #──────────────────────────────────────────────────────────────────────────────────
@@ -279,7 +280,7 @@ def teacher_roster_and_lessons(group: str, subject: str):
                 label = f"{l.type} №{getattr(l, 'number', '')} · {l.date}"
                 lessons.append({"id": l.id, "label": label})
     except Exception as e:
-        print(f"[voice] не удалось собрать ростер/занятия: {e}")
+        log.get("voice_ui").warning(f"[voice] не удалось собрать ростер/занятия: {e}")
     return roster, lessons
 
 
@@ -299,7 +300,7 @@ def _write_grade(surname: str, name: str, lesson_id: str, value: str) -> bool:
         _refresh_teacher_journal()   #перечитать открытый журнал, чтобы оценка появилась сразу
         return True
     except Exception as e:
-        print(f"[voice] запись не удалась: {e}")
+        log.get("voice_ui").warning(f"[voice] запись не удалась: {e}")
         return False
 
 
@@ -321,7 +322,7 @@ def _refresh_teacher_journal():
                     except Exception:
                         pass
     except Exception as e:
-        print(f"[voice] обновление журнала не удалось: {e}")
+        log.get("voice_ui").warning(f"[voice] обновление журнала не удалось: {e}")
 
 
 _ACTION_LABEL = {"grade": "оценку", "present": "присутствие (✓)",
@@ -341,10 +342,10 @@ def _write_grades_batch(items, lesson_id: str) -> int:
                 DBManager.upsert_grade(cur, (it.surname, it.name, lesson_id, it.value))
                 ok += 1
             except Exception as e:
-                print(f"[voice] запись {it.who} не удалась: {e}")
+                log.get("voice_ui").warning(f"[voice] запись {it.who} не удалась: {e}")
         conn.commit(); conn.close()
     except Exception as e:
-        print(f"[voice] пакетная запись не удалась: {e}")
+        log.get("voice_ui").warning(f"[voice] пакетная запись не удалась: {e}")
     try:
         from sync_runner import trigger
         trigger()
@@ -368,7 +369,7 @@ def _create_lesson(group: str, subject: str, ltype: str, topic: str) -> bool:
         _refresh_teacher_journal()
         return True
     except Exception as e:
-        print(f"[voice] создание занятия не удалось: {e}")
+        log.get("voice_ui").warning(f"[voice] создание занятия не удалось: {e}")
         return False
 
 

@@ -21,6 +21,7 @@ security.py — Криптографический слой GradeBookAI.
 """
 
 import os
+import log
 import sys
 import base64
 import hashlib
@@ -198,7 +199,7 @@ def _save_data_key(key: bytes, path: str):
         except Exception:
             pass
     except Exception as e:
-        print(f"[Security] не удалось сохранить ключ: {e}")
+        log.get("security").warning(f"[Security] не удалось сохранить ключ: {e}")
 
 
 def is_encrypted(value) -> bool:
@@ -222,7 +223,7 @@ def decrypt_value(value: str) -> str:
         pt = _decrypt_bytes(ct, get_data_key())
         return pt.decode("utf-8")
     except Exception as e:
-        print(f"[Security] ошибка расшифровки: {e}")
+        log.get("security").warning(f"[Security] ошибка расшифровки: {e}")
         return ""
 
 
