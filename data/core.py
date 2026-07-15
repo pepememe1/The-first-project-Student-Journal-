@@ -734,16 +734,19 @@ class GradeBook:
             self.spisok_stud.append(student)
         conn.close()
 
-    def calculate_average(self, student: Student) -> float:
+    def calculate_average(self, student: Student, cfg=None) -> float:
         """Средний балл через единый модуль grading (та же формула, что у Вектора).
-        Методика (Н=вес, учитывать ли пропуск, включать ли экзамены) берётся
-        из config, дефолты сохраняют прежнее поведение."""
+        Методика (Н=вес, учитывать ли пропуск, включать ли экзамены) берётся из config,
+        дефолты сохраняют прежнее поведение. cfg можно передать явно — например, чтобы
+        ВРЕМЕННО (визуально) отключить учёт пропусков «Н=2» тумблером в интерфейсе, не
+        меняя общий config."""
         import grading
-        try:
-            from data_store import get_store
-            cfg = get_store()._config()
-        except Exception:
-            cfg = {}
+        if cfg is None:
+            try:
+                from data_store import get_store
+                cfg = get_store()._config()
+            except Exception:
+                cfg = {}
         return grading.practice_average(
             grading.pairs_from_objects(self.lessons), student.records, cfg)
 

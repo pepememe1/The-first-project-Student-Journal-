@@ -6,13 +6,15 @@ from PySide6.QtCore import Qt, QThread, Signal as QSignal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QTableWidget, QTableWidgetItem,
-    QLabel, QPushButton, QStackedWidget, QFrame, QAbstractItemView, QSizePolicy
+    QLabel, QPushButton, QStackedWidget, QFrame, QAbstractItemView, QSizePolicy,
+    QCheckBox, QHeaderView
 )
 
 from core import GradeBook
 from styles import C
 from widgets import (
-    lbl, title_lbl, section_lbl, stat_card, card, combo, separator, vector_unavailable_widget
+    lbl, title_lbl, section_lbl, stat_card, card, btn, separator,
+    vector_unavailable_widget
 )
 from ui_components import Sidebar
 from utils import get_subjects_for_group
@@ -363,13 +365,9 @@ class StudentDashboard(QWidget):
             self._subj_list_lay.addWidget(row)
 
     def _open_subj(self, subj):
-        """Открыть предмет в журнале"""
+        """Открыть предмет в журнале (переход с «Главной»)."""
         self._switch("journal")
-        if hasattr(self, "_journal_combo"):
-            idx = self._journal_combo.findText(subj)
-            if idx >= 0:
-                self._journal_combo.setCurrentIndex(idx)
-            self._load_journal()
+        self._open_subject(subj)
 
     def _load_tip(self):
         """Умный совет от Вектора — по фактам из журнала, офлайн и без сети.
@@ -404,28 +402,201 @@ class StudentDashboard(QWidget):
         self._tip_anim = anim          # держим ссылку, чтобы GC не убил анимацию
 
     def _build_journal(self):
-        """Построить страницу журнала"""
+        """Журнал студента в два экрана: (1) крупный список предметов со средним баллом
+        справа → клик открывает (2) читаемую таблицу оценок по предмету с кнопкой «назад».
+        Галочка «Н = 2» визуально пересчитывает средний (не трогая общий config)."""
         w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(28, 24, 28, 24)
-        lay.setSpacing(12)
-        
+        lay = QVBoxLayout(w); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        self._journal_stack = QStackedWidget()
+        lay.addWidget(self._journal_stack)
+        self._cur_subject = None
+
+        # ── Экран 1: список предметов ──────────────────────────────────────────────
+        list_page = QWidget()
+        lp = QVBoxLayout(list_page); lp.setContentsMargins(28, 24, 28, 24); lp.setSpacing(12)
         hdr = QHBoxLayout()
-        hdr.addWidget(title_lbl("Журнал оценок"))
-        hdr.addStretch()
-        
-        self._journal_combo = combo(get_subjects_for_group(self.cur_stud['g']))
-        self._journal_combo.currentTextChanged.connect(self._load_journal)
-        hdr.addWidget(self._journal_combo)
-        lay.addLayout(hdr)
-        
+        hdr.addWidget(title_lbl("Мой журнал"), 1)
+        self._absence_chk = QCheckBox("Пропуск «Н» = 2 в среднем")
+        self._absence_chk.setChecked(True)
+        self._absence_chk.setToolTip("Снимите галочку, чтобы пропуски не занижали средний балл")
+        self._absence_chk.setStyleSheet(
+            f"QCheckBox{{color:{C['text2']};font-size:13px;}}"
+            f"QCheckBox::indicator{{width:18px;height:18px;}}")
+        self._absence_chk.stateChanged.connect(self._on_absence_toggle)
+        hdr.addWidget(self._absence_chk)
+        lp.addLayout(hdr)
+        lp.addWidget(lbl("Выберите предмет — откроется таблица оценок.", 12, C['text3']))
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setStyleSheet("border:none;")
+        inner = QWidget()
+        self._subj_btns_lay = QVBoxLayout(inner)
+        self._subj_btns_lay.setContentsMargins(0, 4, 6, 4); self._subj_btns_lay.setSpacing(10)
+        self._subj_btns_lay.addStretch()
+        scroll.setWidget(inner)
+        lp.addWidget(scroll, 1)
+        self._journal_stack.addWidget(list_page)
+
+        # ── Экран 2: таблица предмета ──────────────────────────────────────────────
+        detail_page = QWidget()
+        dp = QVBoxLayout(detail_page); dp.setContentsMargins(28, 24, 28, 24); dp.setSpacing(12)
+        dhdr = QHBoxLayout()
+        back = btn("← К предметам", "ghost"); back.clicked.connect(self._show_subject_list)
+        dhdr.addWidget(back)
+        self._detail_title = title_lbl("", 20)
+        dhdr.addWidget(self._detail_title, 1)
+        self._detail_avg = lbl("", 14, C['text3'])
+        dhdr.addWidget(self._detail_avg)
+        dp.addLayout(dhdr)
         self._journal_table = QTableWidget()
         self._journal_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        lay.addWidget(self._journal_table, 1)
-        
+        self._journal_table.setAlternatingRowColors(True)
+        self._journal_table.verticalHeader().setVisible(False)
+        self._journal_table.verticalHeader().setDefaultSectionSize(46)
+        #Крупный читаемый стиль — как в журнале преподавателя.
+        self._journal_table.setStyleSheet(
+            f"QTableWidget{{font-size:15px;alternate-background-color:{C['bg2']};"
+            f"background:{C['card']};gridline-color:{C['border']};}}"
+            f"QHeaderView::section{{font-size:13px;font-weight:700;color:{C['text']};"
+            f"background:{C['bg2']};border:none;border-bottom:2px solid {C['green']};"
+            "padding:8px 10px;}")
+        self._journal_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        dp.addWidget(self._journal_table, 1)
+        self._journal_stack.addWidget(detail_page)
+
         self.pages["journal"] = w
         self.stack.addWidget(w)
-        self._load_journal()
+        self._refresh_subject_list()
+
+    def _avg_cfg(self) -> dict:
+        """config с учётом тумблера «Н = 2» — визуальный пересчёт среднего, не сохраняем."""
+        try:
+            from data_store import get_store
+            base = dict(get_store()._config() or {})
+        except Exception:
+            base = {}
+        chk = getattr(self, "_absence_chk", None)
+        base["avg_count_absence"] = chk.isChecked() if chk is not None else True
+        return base
+
+    def _on_absence_toggle(self):
+        self._refresh_subject_list()
+        if self._journal_stack.currentIndex() == 1 and self._cur_subject:
+            self._open_subject(self._cur_subject, keep_view=True)  # обновить средний в шапке
+
+    def _avg_color(self, avg: float) -> str:
+        if avg >= 4.5: return C['green']
+        if avg >= 3.5: return C['blue']
+        if avg >= 2.5: return C['yellow']
+        if avg > 0:    return C['red']
+        return C['text3']
+
+    def _refresh_subject_list(self):
+        if not hasattr(self, "_subj_btns_lay"):
+            return
+        while self._subj_btns_lay.count() > 1:      # оставляем финальный stretch
+            it = self._subj_btns_lay.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        cfg = self._avg_cfg()
+        for subj in get_subjects_for_group(self.cur_stud['g']):
+            book = GradeBook(self.cur_stud['g'], subj)
+            s = next((x for x in book.spisok_stud
+                      if x.f.lower() == self.cur_stud['f'].lower()), None)
+            avg = book.calculate_average(s, cfg) if s else 0.0
+            self._subj_btns_lay.insertWidget(self._subj_btns_lay.count() - 1,
+                                             self._subject_card(subj, avg))
+
+    def _subject_card(self, subj: str, avg: float) -> QPushButton:
+        b = QPushButton(); b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton{{background:{C['card']};border:1px solid {C['border']};"
+            f"border-radius:12px;text-align:left;}}"
+            f"QPushButton:hover{{border:1px solid {C['green']};background:{C['bg2']};}}")
+        h = QHBoxLayout(b); h.setContentsMargins(20, 16, 20, 16); h.setSpacing(12)
+        name = lbl(subj, 16, C['text'], True); name.setWordWrap(True)
+        name.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(name, 1)
+        badge = lbl(f"{avg:.2f}" if avg > 0 else "—", 20, self._avg_color(avg), True)
+        badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(badge)
+        arrow = lbl("›", 20, C['text3'], True)
+        arrow.setAttribute(Qt.WA_TransparentForMouseEvents)
+        h.addWidget(arrow)
+        b.clicked.connect(lambda _=False, sub=subj: self._open_subject(sub))
+        return b
+
+    def _show_subject_list(self):
+        self._refresh_subject_list()
+        self._journal_stack.setCurrentIndex(0)
+
+    def _open_subject(self, subj: str, keep_view: bool = False):
+        self._cur_subject = subj
+        self._detail_title.setText(subj)
+        book = GradeBook(self.cur_stud['g'], subj)
+        s = next((x for x in book.spisok_stud
+                  if x.f.lower() == self.cur_stud['f'].lower()), None)
+        avg = book.calculate_average(s, self._avg_cfg()) if s else 0.0
+        self._detail_avg.setText(f"Средний: {avg:.2f}" if avg > 0 else "Средний: —")
+        self._detail_avg.setStyleSheet(f"color:{self._avg_color(avg)};font-weight:700;")
+        self._fill_subject_table(book, s)
+        if not keep_view:
+            self._journal_stack.setCurrentIndex(1)
+
+    def _fill_subject_table(self, book, s):
+        """Вертикальная таблица предмета: занятие | дата | тема | оценка (крупно, с цветом
+        оценок и прочерком у неактуальных пересдач). Одна строка на занятие — читаемее
+        широкой однострочной таблицы."""
+        import grading
+        t = self._journal_table
+        t.clear()
+        t.setColumnCount(4)
+        t.setHorizontalHeaderLabels(["Занятие", "Дата", "Тема", "Оценка"])
+        rows = []
+        for l in book.lessons:
+            rows.append((l, 0))
+            if l.type == "Экзамен":
+                ri = 1
+                while getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', ''):
+                    rows.append((l, ri)); ri += 1
+        t.setRowCount(len(rows))
+        recs = s.records if s else {}
+        for r, (l, ri) in enumerate(rows):
+            if ri > 0:
+                rd = getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', '')
+                name, date, topic = f"Пересдача №{ri}", rd, ""
+                rk = l.id + ("_retake" if ri == 1 else f"_retake_{ri}")
+                val = recs.get(rk, "")
+                if not val:   #прочерк, если предыдущую попытку не заваливал
+                    prev_key = l.id if ri == 1 else \
+                        l.id + ("_retake" if ri - 1 == 1 else f"_retake_{ri - 1}")
+                    if not grading.is_failed(recs.get(prev_key, "")):
+                        val = "—"
+            else:
+                name = f"{l.type} №{l.number}" + (f" ({l.hour}ч)" if l.type == "Лекция" and l.hour else "")
+                date, topic, val = (l.date or "—"), (l.topic or ""), recs.get(l.id, "")
+            cells = [name, date, topic, val or ""]
+            for c, text in enumerate(cells):
+                it = QTableWidgetItem(text)
+                if c == 3:
+                    it.setTextAlignment(Qt.AlignCenter)
+                    raw = (text or "").split()[0] if text else ""
+                    if raw in ("5", "4", "3", "2"):
+                        colors = {"5": "#DBF0E4", "4": "#DCEFF2", "3": "#FBEFD6", "2": "#FAE0DE"}
+                        it.setBackground(QColor(colors[raw]))
+                    elif raw == "Н":
+                        it.setForeground(QColor(C['red']))
+                    elif raw == "✓":
+                        it.setForeground(QColor(C['green']))
+                elif c == 0:
+                    it.setForeground(QColor(C['text']))
+                else:
+                    it.setForeground(QColor(C['text2']))
+                t.setItem(r, c, it)
+        hh = t.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        t.setColumnWidth(3, 90)
 
     def _build_schedule(self):
         """Вкладка «Расписание» — пары студента по его группе (данные с портала ВСГУТУ,
@@ -437,76 +608,6 @@ class StudentDashboard(QWidget):
         w = ScheduleView(role="student", login=f"{f}|{n}|{g}", app_hint=g)
         self.pages["schedule"] = w
         self.stack.addWidget(w)
-
-    def _load_journal(self):
-        """Загрузить журнал для выбранного предмета"""
-        subj = self._journal_combo.currentText()
-        book = GradeBook(self.cur_stud['g'], subj)
-        s = next((x for x in book.spisok_stud if x.f.lower() == self.cur_stud['f'].lower()), None)
-        
-        if not s:
-            self._journal_table.setRowCount(0)
-            self._journal_table.setColumnCount(2)
-            self._journal_table.setHorizontalHeaderLabels(["Фамилия", "Имя"])
-            return
-        
-        col_defs = []
-        for l in book.lessons:
-            col_defs.append((l, 0))
-            if l.type == "Экзамен":
-                ri = 1
-                while getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', ''):
-                    col_defs.append((l, ri))
-                    ri += 1
-        
-        self._journal_table.setColumnCount(2 + len(col_defs))
-        self._journal_table.setRowCount(1)
-        
-        headers = ["Фамилия", "Имя"]
-        for l, ri in col_defs:
-            if ri > 0:
-                rd = getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', '')
-                headers.append(f"Пересдача {ri}\n{rd}")
-            elif l.type == "Лекция":
-                headers.append(f"Лекция {l.number}{f' ({l.hour}-й ч.)' if l.hour else ''}\n{l.date}\n{l.topic[:20]}")
-            elif l.type == "Экзамен":
-                headers.append(f"Экзамен №{l.number}\n{l.date}\n{l.topic[:20]}")
-            else:
-                headers.append(f"Практика {l.number}\n{l.date}\n{l.topic[:20]}")
-        
-        self._journal_table.setHorizontalHeaderLabels(headers)
-        self._journal_table.setItem(0, 0, QTableWidgetItem(s.f))
-        self._journal_table.setItem(0, 1, QTableWidgetItem(s.n))
-        
-        for ci, (l, ri) in enumerate(col_defs):
-            rk = l.id + ("_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
-            val = s.records.get(rk if ri > 0 else l.id, "")
-
-            #Пересдача касается только заваливших предыдущую попытку.
-            #Если студент сдал — в его строке прочерк, а не пустая ячейка.
-            if ri > 0 and not val:
-                prev_key = l.id if ri == 1 else (
-                    l.id + ("_retake" if ri - 1 == 1 else f"_retake_{ri - 1}"))
-                prev = (s.records.get(prev_key, "") or "").strip()
-                failed = prev.startswith(("2", "Н")) or "Не зачтено" in prev
-                if not failed:
-                    val = "—"
-
-            it = QTableWidgetItem(val)
-            it.setTextAlignment(Qt.AlignCenter)
-            
-            if val in ("5", "4", "3", "2"):
-                colors = {"5": "#DBF0E4", "4": "#DCEFF2", "3": "#FBEFD6", "2": "#FAE0DE"}
-                it.setBackground(QColor(colors.get(val, "#FFFFFF")))
-            elif val == "Н":
-                it.setForeground(QColor(C['red']))
-            elif val == "✓":
-                it.setForeground(QColor(C['green']))
-            
-            self._journal_table.setItem(0, 2 + ci, it)
-        
-        self._journal_table.resizeColumnsToContents()
-        self._journal_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
 
     def _build_stats(self):
         """Построить страницу статистики"""
@@ -649,6 +750,10 @@ class StudentDashboard(QWidget):
         try:
             if key == "stats":
                 self._refresh_stats()
+            #Журнал открываем со списка предметов (со свежими средними после синка).
+            if key == "journal" and hasattr(self, "_journal_stack"):
+                self._refresh_subject_list()
+                self._journal_stack.setCurrentIndex(0)
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)

@@ -8,7 +8,7 @@ import ui_date
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QHeaderView, QHBoxLayout, QInputDialog, QMessageBox,
     QPushButton, QScrollArea, QStackedWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame
@@ -116,6 +116,13 @@ class TeacherDashboard(QWidget):
         hdr.addWidget(lbl("Предмет:", 12, C['text3'])); hdr.addWidget(self._subj_combo)
         hdr.addWidget(lbl("Группа:",  12, C['text3'])); hdr.addWidget(self._group_combo)
         hdr.addWidget(lbl("Семестр:", 12, C['text3'])); hdr.addWidget(self._term_combo)
+        #Тумблер «Н = 2»: визуально пересчитывает столбец «Средний» (не трогая config).
+        self._absence_chk = QCheckBox("Н = 2 в среднем")
+        self._absence_chk.setChecked(True)
+        self._absence_chk.setToolTip("Снимите галочку, чтобы пропуски «Н» не занижали средний балл")
+        self._absence_chk.setStyleSheet(f"QCheckBox{{color:{C['text2']};font-size:12px;}}")
+        self._absence_chk.stateChanged.connect(lambda: self._update_table())
+        hdr.addWidget(self._absence_chk)
         lay.addLayout(hdr)
         #Кнопки. Изменяющие журнал кнопки блокируются на архивном (прошлом) семестре.
         btn_row = QHBoxLayout(); btn_row.setSpacing(6)
@@ -284,6 +291,24 @@ class TeacherDashboard(QWidget):
         except Exception as e:
             print(f"[sync students] {e}")
 
+    def _avg_cfg(self) -> dict:
+        """config с учётом тумблера «Н = 2» — визуальный пересчёт среднего, не сохраняем."""
+        try:
+            base = dict(get_store()._config() or {})
+        except Exception:
+            base = {}
+        chk = getattr(self, "_absence_chk", None)
+        base["avg_count_absence"] = chk.isChecked() if chk is not None else True
+        return base
+
+    @staticmethod
+    def _avg_color(avg: float) -> str:
+        if avg >= 4.5: return C['green']
+        if avg >= 3.5: return C['blue']
+        if avg >= 2.5: return C['yellow']
+        if avg > 0:    return C['red']
+        return C['text3']
+
     def _update_table(self):
         if not self.book: return
         students = self.book.spisok_stud
@@ -294,8 +319,9 @@ class TeacherDashboard(QWidget):
                 ri = 1
                 while getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', ''):
                     col_defs.append((l, ri)); ri += 1
+        avg_col = 2 + len(col_defs)                     #последний столбец — «Средний»
         self.t_table.setRowCount(len(students))
-        self.t_table.setColumnCount(2 + len(col_defs))
+        self.t_table.setColumnCount(avg_col + 1)
         #Тему в шапке показываем коротко (чтобы столбец не разъезжался), но
         #полную тему кладём в подсказку — наведёшь мышь и прочитаешь целиком.
         def _short(text: str, limit: int = 22) -> str:
@@ -322,17 +348,26 @@ class TeacherDashboard(QWidget):
             else:
                 headers.append(f"Практика {l.number}\n{l.date}\n{_short(l.topic)}")
                 tooltips.append(l.topic or "")
+        headers.append("Средний"); tooltips.append("")
         self.t_table.setHorizontalHeaderLabels(headers)
         #полная тема в подсказке заголовка
         for c, tip in enumerate(tooltips):
             it = self.t_table.horizontalHeaderItem(c)
             if it is not None and tip:
                 it.setToolTip(tip)
+        avg_cfg = self._avg_cfg()                       #считаем один раз на перерисовку
         self.t_table.blockSignals(True)
         for r, s in enumerate(students):
             fi = QTableWidgetItem(s.f); fi.setForeground(QColor(C['text']))
             ni = QTableWidgetItem(s.n); ni.setForeground(QColor(C['text3']))
             self.t_table.setItem(r, 0, fi); self.t_table.setItem(r, 1, ni)
+            #Столбец «Средний» — с учётом тумблера «Н = 2» (визуально, не в config).
+            avg = self.book.calculate_average(s, avg_cfg)
+            ai = QTableWidgetItem(f"{avg:.2f}" if avg > 0 else "—")
+            ai.setTextAlignment(Qt.AlignCenter); ai.setFlags(Qt.ItemIsEnabled)
+            ai.setForeground(QColor(self._avg_color(avg)))
+            af = ai.font(); af.setBold(True); af.setPointSize(af.pointSize() + 1); ai.setFont(af)
+            self.t_table.setItem(r, avg_col, ai)
             for ci, (l, ri) in enumerate(col_defs):
                 col = 2 + ci
                 rk  = l.id + ("_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
