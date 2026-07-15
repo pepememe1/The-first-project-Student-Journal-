@@ -82,14 +82,8 @@ def teachers_to_users(teachers: dict) -> list:
     return out
 
 
-#  Группы (list)  <->  groups
-def groups_to_rows(groups: list) -> list:
-    return [{
-        "id": f"grp:{g.get('name','')}", "name": g.get("name", ""),
-        "subjects": g.get("subjects", []) or [],
-        "updated_at": g.get("updated_at", "") or _now(),
-        "deleted": bool(g.get("deleted", False)),
-    } for g in groups]
+#Группы синхронизируются ПРЯМЫМ upsert'ом из таблицы groups (без переводчика — план №2):
+#сбор в _collect_groups(), приём в _merge_groups() (как lessons/term_grades).
 
 
 #Предметы (list имён)  <->  subjects
@@ -187,6 +181,30 @@ def _collect_grades() -> list:
     return out
 
 
+def _collect_groups() -> list:
+    """Группы из таблицы в формате API (со надгробиями) — прямой upsert, без переводчика."""
+    import json as _json
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id,name,COALESCE(subjects,'[]'),COALESCE(updated_at,''),"
+                    "COALESCE(deleted,0) FROM groups")
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    out = []
+    for gid, name, subj, uat, deleted in rows:
+        try:
+            subjects = _json.loads(subj) if subj else []
+        except Exception:
+            subjects = []
+        out.append({"id": gid or f"grp:{name}", "name": name, "subjects": subjects,
+                    "updated_at": uat or _now(), "deleted": bool(deleted)})
+    return out
+
+
 def _collect_term_grades() -> list:
     from core import DBManager
     conn = DBManager.get_conn()
@@ -221,9 +239,9 @@ def collect_local() -> dict:
         users.append(admin)
     return {
         "users": users,
-        "groups": groups_to_rows(st.get_groups_raw()),
         "subjects": subjects_to_rows(load_subjects()),
         "config": config_to_rows(cfg),
+        "groups": _collect_groups(),
         "lessons": _collect_lessons(),
         "grades": _collect_grades(),
         "term_grades": _collect_term_grades(),
@@ -280,13 +298,9 @@ def apply_remote(changes: dict):
         teachers = {r.pop("full_name"): r for r in merged_t}
         st.set_teachers(teachers, stamp=False, wake=False)
 
-    #Группы (с надгробиями)
-    if "groups" in changes:
-        rem_g = [{"name": r.get("name", ""), "subjects": r.get("subjects") or [],
-                  "updated_at": r.get("updated_at", ""), "deleted": bool(r.get("deleted", False))}
-                 for r in changes["groups"]]
-        merged_g = _merge_by_key(st.get_groups_raw(), rem_g, lambda r: r.get("name", ""))
-        st.set_groups(merged_g, stamp=False, wake=False)
+    #Группы — прямой LWW-upsert в таблицу groups (как lessons/term_grades), без переводчика.
+    if changes.get("groups"):
+        _merge_groups(changes["groups"])
 
     #Предметы (объединение множеств)
     if "subjects" in changes:
@@ -336,6 +350,34 @@ def _merge_lessons(remote: list):
              l.get("retake_date", ""), l.get("hour", 0),
              l.get("year", "") or "", int(l.get("semester", 0) or 0),
              l.get("updated_at", ""), 1 if rdel else 0))
+    conn.commit()
+    conn.close()
+
+
+def _merge_groups(remote: list):
+    """Слияние групп с сервера — прямой LWW с tie-break в таблицу groups (как занятия).
+    Пишем напрямую в таблицу (не через data_store.set_groups) — так синк НЕ будит сам
+    себя (это применение серверных данных, а не UI-правка)."""
+    import json as _json
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
+                "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+    for g in remote:
+        name = g.get("name", "")
+        gid = g.get("id") or (f"grp:{name}" if name else "")
+        if not gid:
+            continue
+        rdel = bool(g.get("deleted"))
+        cur.execute("SELECT COALESCE(updated_at,'') FROM groups WHERE id=?", (gid,))
+        row = cur.fetchone()
+        if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
+            continue
+        cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
+                    "VALUES (?,?,?,?,?)",
+                    (gid, name, _json.dumps(g.get("subjects") or [], ensure_ascii=False),
+                     g.get("updated_at", ""), 1 if rdel else 0))
     conn.commit()
     conn.close()
 

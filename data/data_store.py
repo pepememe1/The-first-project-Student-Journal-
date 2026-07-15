@@ -188,6 +188,70 @@ def _merge_list_tombstones(new_live, old_raw, key_fn):
             out.append(t)                       # было живым, исчезло → надгробие
     return out
 
+#  Группы: хранятся в ТАБЛИЦЕ groups (серверная форма), а не JSON-блобом в kv_store —
+#  синк ходит прямым upsert'ом без переводчика (план техдолга №2). Публичный API
+#  get_groups/set_groups сохраняет прежнюю форму [{name, subjects, updated_at, deleted}],
+#  поэтому UI не трогаем. Имена групп/предметы не ПДн — таблица без шифрования оправдана
+#  (в отличие от users с хешами паролей, которые остаются в зашифрованном kv).
+def _groups_read_raw() -> list:
+    """Все группы из таблицы (вкл. надгробия) в форме [{name, subjects, updated_at, deleted}]."""
+    _ensure_groups_migrated()
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT name, COALESCE(subjects,'[]'), COALESCE(updated_at,''), "
+                    "COALESCE(deleted,0) FROM groups")
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    out = []
+    for name, subj, uat, deleted in rows:
+        try:
+            subjects = json.loads(subj) if subj else []
+        except Exception:
+            subjects = []
+        out.append({"name": name, "subjects": subjects,
+                    "updated_at": uat, "deleted": bool(deleted)})
+    return out
+
+
+def _groups_write_raw(groups: list) -> None:
+    """Полностью перезаписывает таблицу групп СЫРЫМ списком (уже со штампами/надгробиями)."""
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
+                "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+    cur.execute("DELETE FROM groups")
+    for g in groups:
+        name = g.get("name", "")
+        cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
+                    "VALUES (?,?,?,?,?)",
+                    (f"grp:{name}", name,
+                     json.dumps(g.get("subjects") or [], ensure_ascii=False),
+                     g.get("updated_at", ""), 1 if g.get("deleted") else 0))
+    conn.commit(); conn.close()
+
+
+def _ensure_groups_migrated() -> None:
+    """Одноразовый перенос групп kv_store → таблица (старые базы). Идемпотентно по СОСТОЯНИЮ
+    БД (не по флагу — чтобы работало и в тестах): если таблица пуста, а в kv есть группы —
+    копируем и убираем kv-ключ. Дёшево (один COUNT), безопасно звать на каждом чтении."""
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM groups")
+        has_rows = cur.fetchone()[0] > 0
+    except Exception:
+        has_rows = True   #таблицы ещё нет (init создаст) — не мигрируем сейчас
+    conn.close()
+    if has_rows:
+        return
+    kv_groups = _kv_get("groups", None)
+    if kv_groups:
+        _groups_write_raw(kv_groups)
+        conn = DBManager.get_conn(); cur = conn.cursor()
+        cur.execute("DELETE FROM kv_store WHERE key='groups'")
+        conn.commit(); conn.close()
+
+
 #  Высокоуровневый интерфейс к локальному хранилищу
 class LocalStore:
     """
@@ -251,18 +315,27 @@ class LocalStore:
                     out[name] = t
         return _kv_set("teachers", out, wake=wake)
 
-    #Группы
+    #Группы (в таблице groups; форма API сохранена — UI не трогаем)
     def get_groups(self) -> list:
-        return [g for g in _kv_get("groups", []) if not g.get("deleted")]
+        return [g for g in _groups_read_raw() if not g.get("deleted")]
 
     def get_groups_raw(self) -> list:
-        return _kv_get("groups", [])
+        return _groups_read_raw()
 
     def set_groups(self, groups: list, stamp: bool = True, wake: bool = True) -> bool:
+        #stamp=True — правка в UI: штампуем изменённые, исчезнувшие → надгробия (та же
+        #оттестированная логика _merge_list_tombstones, что была для kv-списка).
         if stamp:
-            groups = _merge_list_tombstones(groups, _kv_get("groups", []),
+            groups = _merge_list_tombstones(groups, _groups_read_raw(),
                                             lambda r: r.get("name", ""))
-        return _kv_set("groups", groups, wake=wake)
+        _groups_write_raw(groups)
+        if wake:   #разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу
+            try:
+                from sync_runner import trigger as _sync_trigger
+                _sync_trigger()
+            except Exception:
+                pass
+        return True
 
     #Конфиг приложения
     def _config(self) -> dict:
@@ -435,8 +508,8 @@ def reset_synced_local_data():
     на этом ПК (баг с фантомным студентом). Реконсиляция на границе сессии: стираем кэш и
     затем полным pull приводим локаль в точное соответствие серверу (server wins).
 
-    Стираем: students/teachers/groups (kv), предметы (subjects.json), занятия/оценки/
-    конфликты (таблицы), метку дельты. НЕ трогаем:
+    Стираем: students/teachers (kv), группы/предметы (таблица groups / subjects.json),
+    занятия/оценки/конфликты (таблицы), метку дельты. НЕ трогаем:
       • ключи с префиксом `_local:` — адрес сервера, device_id, токен, сохранённая
         сессия, host-флаги, тема, offline_ack (иначе слетели бы подключение и вход);
       • `config` — хеш пароля админа и тема вуза; на полном pull сервер перезапишет свои
@@ -446,7 +519,7 @@ def reset_synced_local_data():
     #кэша — будить синхронизацию незачем, да и нечего отправлять).
     _kv_set("students", [], wake=False)
     _kv_set("teachers", {}, wake=False)
-    _kv_set("groups", [], wake=False)
+    #Группы теперь в таблице groups — очистит DBManager.clear_synced_tables() ниже.
     #Метку дельты сбрасываем, чтобы следующий pull был полным и наполнил кэш заново.
     set_sync_watermark("")
     try:

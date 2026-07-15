@@ -280,7 +280,7 @@ class DBManager:
         wipe_all_local_data), поэтому WAL-checkpoint не нужен."""
         conn = cls.get_conn(); cur = conn.cursor()
         try:
-            for t in ("grades", "lessons", "term_grades", "sync_conflicts"):
+            for t in ("grades", "lessons", "term_grades", "groups", "sync_conflicts"):
                 cur.execute(f"DELETE FROM {t}")
             conn.commit()
         finally:
@@ -394,6 +394,11 @@ class DBManager:
             (id TEXT PRIMARY KEY, student_f TEXT, student_n TEXT, subject TEXT,
              year TEXT DEFAULT '', semester INTEGER DEFAULT 0, grade TEXT DEFAULT '',
              form TEXT DEFAULT '', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+        #Группы — в СЕРВЕРНОЙ форме (как lessons/grades), а не JSON-блобом в kv_store:
+        #синк ходит прямым upsert'ом без переводчика (план техдолга №2, пилот). id=grp:{name}.
+        cur.execute("""CREATE TABLE IF NOT EXISTS groups
+            (id TEXT PRIMARY KEY, name TEXT, subjects TEXT DEFAULT '[]',
+             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
         conn.commit()
         conn.close()
 
