@@ -14,6 +14,11 @@ import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
+
+const toast = useToast()
+const { confirm, prompt } = useConfirm()
 
 const groups = ref([])
 const subjects = ref([])
@@ -123,7 +128,7 @@ async function setGrade(s, key, value) {
     await load()
   } catch (e) {
     s.grades[key] = prev
-    alert('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message))
+    toast.error('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message))
   } finally { saving.value = false }
 }
 
@@ -139,18 +144,23 @@ async function setExamGrade(s, col, value) {
   let scheduleRetake = false
   if (value === '4' || value === '5') full = `${value} (Зачтено)`
   else if (value === '3') {
-    if (confirm(`Оценка 3 у ${s.surname}. Засчитать?\n\nOK — зачёт, Отмена — на пересдачу.`)) full = '3 (Зачтено)'
+    const ok = await confirm({
+      title: `Оценка 3 у ${s.surname}`,
+      message: 'Засчитать или отправить на пересдачу?',
+      okText: 'Зачесть', cancelText: 'На пересдачу',
+    })
+    if (ok) full = '3 (Зачтено)'
     else { full = '3 (Не зачтено)'; scheduleRetake = true }
   } else if (value === '2' || value === 'Н') { full = `${value} (Не зачтено)`; scheduleRetake = true }
   await setGrade(s, col.key, full)
   if (scheduleRetake) {
     const nextRi = col.ri + 1
     if (nextRi <= 5 && !retakeDate(col.l, nextRi)) {
-      const rd = prompt('Дата пересдачи (дд.мм.гггг):', plusDays(7))
+      const rd = await prompt({ title: 'Дата пересдачи', placeholder: 'дд.мм.гггг', defaultValue: plusDays(7) })
       if (rd) {
         const payload = nextRi === 1 ? { retake_date: rd } : { [`retake_date_${nextRi}`]: rd }
         try { await teacherApi.updateLesson(col.l.id, payload); await load() }
-        catch { alert('Не удалось назначить пересдачу') }
+        catch { toast.error('Не удалось назначить пересдачу') }
       }
     }
   }
@@ -169,8 +179,8 @@ function ctxEdit() { openEditLesson(ctx.value.lesson); closeCtx() }
 function ctxDelete() { const l = ctx.value.lesson; closeCtx(); delLesson(l) }
 async function ctxRetake() {
   const l = ctx.value.lesson; closeCtx()
-  const rd = prompt('Дата пересдачи (дд.мм.гггг):', plusDays(7))
-  if (rd) { try { await teacherApi.updateLesson(l.id, { retake_date: rd }); await load() } catch { alert('Не удалось') } }
+  const rd = await prompt({ title: 'Дата пересдачи', placeholder: 'дд.мм.гггг', defaultValue: plusDays(7) })
+  if (rd) { try { await teacherApi.updateLesson(l.id, { retake_date: rd }); await load() } catch { toast.error('Не удалось назначить пересдачу') } }
 }
 
 // ── Занятия: создание и правка (дата — сегодня по умолчанию) ────────────────────
@@ -218,9 +228,14 @@ async function saveLesson() {
   finally { savingLesson.value = false }
 }
 async function delLesson(l) {
-  if (!confirm(`Удалить занятие ${l.type} №${l.number}? Оценки этой пары перестанут учитываться.`)) return
+  const ok = await confirm({
+    title: `Удалить занятие ${l.type} №${l.number}?`,
+    message: 'Оценки этой пары перестанут учитываться.',
+    okText: 'Удалить', danger: true,
+  })
+  if (!ok) return
   try { await teacherApi.deleteLesson(l.id); await load() }
-  catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 
 // ── Экспорт журнала/ведомости с выбором формата (Excel / Word) ──────────────────
@@ -249,7 +264,7 @@ async function downloadJournal(fmt) {
   } catch (e) {
     let detail = ''
     try { detail = JSON.parse(await e?.response?.data?.text())?.detail || '' } catch { /* */ }
-    alert('Не удалось выгрузить журнал' + (detail ? `: ${detail}` : ''))
+    toast.error('Не удалось выгрузить журнал' + (detail ? `: ${detail}` : ''))
   } finally { exporting.value = false }
 }
 
@@ -268,7 +283,7 @@ async function openAtt() {
       surname: s.surname, name: s.name, grade: tg[`${s.surname}|${s.name}`]?.grade || '',
     }))
     showAtt.value = true
-  } catch { alert('Не удалось загрузить итоговые оценки') }
+  } catch { toast.error('Не удалось загрузить итоговые оценки') }
 }
 async function saveAtt() {
   attSaving.value = true
@@ -280,14 +295,15 @@ async function saveAtt() {
       })
     }
     showAtt.value = false
-  } catch (e) { alert('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message)) }
+    toast.success('Итоговые оценки сохранены')
+  } catch (e) { toast.error('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message)) }
   finally { attSaving.value = false }
 }
 async function downloadVedomost(fmt) {
   try {
     const { data: blob } = await teacherApi.vedomost(group.value, subject.value, { fmt, form: attForm.value, ...termParams() })
     saveBlob(blob, `Ведомость_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
-  } catch { alert('Не удалось выгрузить ведомость') }
+  } catch { toast.error('Не удалось выгрузить ведомость') }
 }
 </script>
 

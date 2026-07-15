@@ -7,7 +7,11 @@ import { ref, onMounted } from 'vue'
 import { adminApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
+const toast = useToast()
+const { confirm } = useConfirm()
 const rows = ref([])
 const loading = ref(true)
 const busy = ref('')            // id заявки, по которой идёт действие
@@ -24,20 +28,20 @@ async function approve(r) {
   try {
     const res = (await adminApi.approveRegistration(r.id)).data
     if (res.sent) {
-      alert(`Одобрено. Логин и пароль отправлены на ${res.login}.`)
+      toast.success(`Одобрено. Логин и пароль отправлены на ${res.login}.`)
     } else {
       // Письмо не ушло (SMTP не настроен) — показываем креды админу.
       issued.value = { email: res.login, password: res.password }
     }
     await reload()
-  } catch (e) { alert(e?.response?.data?.detail || 'Не удалось одобрить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось одобрить') }
   finally { busy.value = '' }
 }
 async function reject(r) {
-  if (!confirm(`Отклонить заявку ${r.full_name} (${r.email})?`)) return
+  if (!(await confirm({ title: `Отклонить заявку ${r.full_name}?`, message: r.email, okText: 'Отклонить', danger: true }))) return
   busy.value = r.id
   try { await adminApi.rejectRegistration(r.id); await reload() }
-  catch (e) { alert(e?.response?.data?.detail || 'Не удалось отклонить') }
+  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось отклонить') }
   finally { busy.value = '' }
 }
 </script>

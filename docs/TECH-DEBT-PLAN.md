@@ -128,7 +128,12 @@ get/set_teachers) — UI не тронут. Админ по-прежнему в 
 **Подход.** Один переиспользуемый `useConfirm()`/`useToast()` composable + компонент
 модалки (уже есть `components/ui/*`). Заменить точечно в `TeacherJournal.vue` и остальных.
 
-**Риск.** Низкий (изолировано в вебе). **Тесты:** ручная проверка сценариев оценок/пересдач.
+**✅ СДЕЛАНО.** `useToast` + `ToastHost.vue` (неблокирующие уведомления вместо `alert`),
+`useConfirm` + `ConfirmDialog.vue` (промис-модалки вместо `confirm`/`prompt`, с danger-
+вариантом, фокусом в поле и Esc). Хосты смонтированы один раз в `App.vue`. Заменены ВСЕ
+~30 браузерных диалогов: `TeacherJournal.vue` (12) + `AdminGroups/Registrations/Teachers/
+Subjects/Students` (18). Браузерных `alert/confirm/prompt` в `web/src` больше нет. eslint
+чисто, сборка ок. **Веб надо задеплоить** (dist → VPS), чтобы увидеть на боевом сайте.
 
 ### 6. Постепенные типы (mypy) + расширение линтера `[качество, НИЗКИЙ, фоново]`
 

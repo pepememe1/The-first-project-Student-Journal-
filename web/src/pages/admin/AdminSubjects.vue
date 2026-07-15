@@ -5,7 +5,11 @@
 import { ref, onMounted } from 'vue'
 import { adminApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
+const toast = useToast()
+const { confirm } = useConfirm()
 const rows = ref([])
 const loading = ref(true)
 const showForm = ref(false)
@@ -28,9 +32,9 @@ async function save() {
   finally { saving.value = false }
 }
 async function del(s) {
-  if (!confirm(`Удалить предмет «${s.name}»?`)) return
+  if (!(await confirm({ title: `Удалить предмет «${s.name}»?`, okText: 'Удалить', danger: true }))) return
   try { await adminApi.deleteSubject(s.name); await reload() }
-  catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 </script>
 

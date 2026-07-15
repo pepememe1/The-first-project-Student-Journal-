@@ -6,7 +6,11 @@ import { ref, onMounted } from 'vue'
 import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
+const toast = useToast()
+const { confirm } = useConfirm()
 const rows = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
@@ -21,13 +25,18 @@ async function loadTerm() {
 }
 async function rollover() {
   const next = currentTerm.value?.semester === 1 ? 'весенний семестр' : 'осенний семестр следующего года'
-  if (!confirm(`Перевести на следующий учебный период (${next})?\n\nТекущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.`)) return
+  const ok = await confirm({
+    title: `Перевести на следующий учебный период (${next})?`,
+    message: 'Текущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.',
+    okText: 'Перевести',
+  })
+  if (!ok) return
   rolling.value = true
   try {
     const r = (await adminApi.rolloverTerm()).data
     currentTerm.value = r.current
-    alert(`Готово. Текущий период: ${termLabel(r.current)}.`)
-  } catch (e) { alert(e?.response?.data?.detail || 'Не удалось перевести') }
+    toast.success(`Готово. Текущий период: ${termLabel(r.current)}.`)
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось перевести') }
   finally { rolling.value = false }
 }
 
@@ -68,9 +77,9 @@ async function save() {
   finally { saving.value = false }
 }
 async function del(g) {
-  if (!confirm(`Удалить группу ${g.name}?`)) return
+  if (!(await confirm({ title: `Удалить группу ${g.name}?`, okText: 'Удалить', danger: true }))) return
   try { await adminApi.deleteGroup(g.name); await reload() }
-  catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 // «Из расписания» — привязывает к каждой группе предметы ИЗ её расписания (портал
 // ВСГУТУ) и пополняет каталог. Снимок строится на сервере лениво (~минута): если он
@@ -80,14 +89,14 @@ async function importParsed() {
   try {
     const r = (await adminApi.bindSubjects()).data
     if (!r.ok && r.building) {
-      alert('Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.')
+      toast.info('Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.')
     } else {
-      alert(`Готово: групп обновлено — ${r.bound}, предметов в каталоге — ${r.subjects}.` +
-            (r.building ? '\n(индекс ещё дообновляется — можно повторить для полноты)' : ''))
+      toast.success(`Готово: групп обновлено — ${r.bound}, предметов в каталоге — ${r.subjects}.` +
+            (r.building ? ' (индекс ещё дообновляется — можно повторить для полноты)' : ''))
       await reload()
       try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
     }
-  } catch (e) { alert(e?.response?.data?.detail || 'Не удалось выполнить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось выполнить') }
   finally { importing.value = false }
 }
 </script>

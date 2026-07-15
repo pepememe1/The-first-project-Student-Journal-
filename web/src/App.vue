@@ -5,6 +5,8 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { setAuthExpiredHandler } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import ToastHost from '@/components/ui/ToastHost.vue'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -19,4 +21,6 @@ onMounted(() => {
 
 <template>
   <RouterView />
+  <ToastHost />
+  <ConfirmDialog />
 </template>

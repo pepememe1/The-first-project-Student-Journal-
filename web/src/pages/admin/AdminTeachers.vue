@@ -6,7 +6,11 @@ import { ref, computed, onMounted } from 'vue'
 import { adminApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
+const toast = useToast()
+const { confirm } = useConfirm()
 const all = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
@@ -67,9 +71,9 @@ async function save() {
   finally { saving.value = false }
 }
 async function del(t) {
-  if (!confirm(`Удалить преподавателя ${t.name}?`)) return
+  if (!(await confirm({ title: `Удалить преподавателя ${t.name}?`, okText: 'Удалить', danger: true }))) return
   try { await adminApi.deleteTeacher(t.login); await reload() }
-  catch (e) { alert(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
 }
 </script>
 
