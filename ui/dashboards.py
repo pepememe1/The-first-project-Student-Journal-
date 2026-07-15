@@ -505,13 +505,15 @@ class StudentDashboard(QWidget):
             self._subj_btns_lay.insertWidget(self._subj_btns_lay.count() - 1,
                                              self._subject_card(subj, avg))
 
-    def _subject_card(self, subj: str, avg: float) -> QPushButton:
-        b = QPushButton(); b.setCursor(Qt.PointingHandCursor)
-        b.setStyleSheet(
-            f"QPushButton{{background:{C['card']};border:1px solid {C['border']};"
-            f"border-radius:12px;text-align:left;}}"
-            f"QPushButton:hover{{border:1px solid {C['green']};background:{C['bg2']};}}")
-        h = QHBoxLayout(b); h.setContentsMargins(20, 16, 20, 16); h.setSpacing(12)
+    def _subject_card(self, subj: str, avg: float) -> QFrame:
+        #ВАЖНО: карточка — QFrame, а НЕ QPushButton: Qt не рисует дочерние QLabel внутри
+        #QPushButton (кнопка перекрывает их), поэтому надписи пропадали. Кликабельность —
+        #через mousePressEvent (тот же приём, что у строк на «Главной»).
+        fr = QFrame(); fr.setCursor(Qt.PointingHandCursor)
+        fr.setStyleSheet(
+            f"QFrame{{background:{C['card']};border:1px solid {C['border']};border-radius:12px;}}"
+            f"QFrame:hover{{border:1px solid {C['green']};background:{C['bg2']};}}")
+        h = QHBoxLayout(fr); h.setContentsMargins(20, 16, 20, 16); h.setSpacing(12)
         name = lbl(subj, 16, C['text'], True); name.setWordWrap(True)
         name.setAttribute(Qt.WA_TransparentForMouseEvents)
         h.addWidget(name, 1)
@@ -521,8 +523,8 @@ class StudentDashboard(QWidget):
         arrow = lbl("›", 20, C['text3'], True)
         arrow.setAttribute(Qt.WA_TransparentForMouseEvents)
         h.addWidget(arrow)
-        b.clicked.connect(lambda _=False, sub=subj: self._open_subject(sub))
-        return b
+        fr.mousePressEvent = lambda e, sub=subj: self._open_subject(sub)
+        return fr
 
     def _show_subject_list(self):
         self._refresh_subject_list()
