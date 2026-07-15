@@ -280,7 +280,7 @@ class DBManager:
         wipe_all_local_data), поэтому WAL-checkpoint не нужен."""
         conn = cls.get_conn(); cur = conn.cursor()
         try:
-            for t in ("grades", "lessons", "term_grades", "groups", "sync_conflicts"):
+            for t in ("grades", "lessons", "term_grades", "groups", "users", "sync_conflicts"):
                 cur.execute(f"DELETE FROM {t}")
             conn.commit()
         finally:
@@ -399,6 +399,14 @@ class DBManager:
         cur.execute("""CREATE TABLE IF NOT EXISTS groups
             (id TEXT PRIMARY KEY, name TEXT, subjects TEXT DEFAULT '[]',
              updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+        #Пользователи (студенты/преподаватели) — в таблице для прямого синка (LWW/надгробия/
+        #дельта, как lessons), НО payload лежит ЗАШИФРОВАННЫМ blob'ом (Fernet+DPAPI): хеши
+        #паролей и ПДн НЕ оголяются на диске (152-ФЗ; та же защита, что была у kv_store).
+        #id/role/updated_at/deleted — открытые служебные колонки для синка; blob — секрет.
+        #Админ здесь НЕ хранится (его хеш живёт в config). План техдолга №2, Стадия 2.
+        cur.execute("""CREATE TABLE IF NOT EXISTS users
+            (id TEXT PRIMARY KEY, role TEXT, updated_at TEXT DEFAULT '',
+             deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')""")
         conn.commit()
         conn.close()
 

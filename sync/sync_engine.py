@@ -37,53 +37,10 @@ def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
     return inc_ts == cur_ts and bool(inc_deleted)
 
 
-#Стабильные идентификаторы сущностей (нужны для upsert на сервере)
-def _student_id(s: dict) -> str:
-    login = (s.get("login") or "").strip()
-    if login:
-        return f"stud:{login}"
-    return f"stud:{s.get('surname','')}|{s.get('name','')}|{s.get('group','')}"
-
-
-def _teacher_id(fullname: str, data: dict) -> str:
-    login = (data.get("login") or "").strip()
-    return f"teach:{login}" if login else f"teach:{fullname}"
-
-
-#Студенты  <->  users(role=student)
-def students_to_users(students: list) -> list:
-    out = []
-    for s in students:
-        out.append({
-            "id": _student_id(s), "role": "student",
-            "login": s.get("login", ""), "password_hash": s.get("password_hash", ""),
-            "surname": s.get("surname", ""), "name": s.get("name", ""),
-            "group_name": s.get("group", ""), "full_name": "",
-            "subjects": [], "group_assignments": {},
-            "updated_at": s.get("updated_at", "") or _now(),
-            "deleted": bool(s.get("deleted", False)),
-        })
-    return out
-
-
-#Преподаватели (dict {ФИО: data})  ↔  users(role=teacher)
-def teachers_to_users(teachers: dict) -> list:
-    out = []
-    for fullname, d in teachers.items():
-        out.append({
-            "id": _teacher_id(fullname, d), "role": "teacher",
-            "login": (d.get("login") or ""), "password_hash": d.get("password_hash", ""),
-            "full_name": fullname, "surname": "", "name": "", "group_name": "",
-            "subjects": d.get("subjects", []) or [],
-            "group_assignments": d.get("group_assignments", {}) or {},
-            "updated_at": d.get("updated_at", "") or _now(),
-            "deleted": bool(d.get("deleted", False)),
-        })
-    return out
-
-
-#Группы синхронизируются ПРЯМЫМ upsert'ом из таблицы groups (без переводчика — план №2):
-#сбор в _collect_groups(), приём в _merge_groups() (как lessons/term_grades).
+#Пользователи (студенты/преподаватели) синхронизируются ПРЯМЫМ upsert'ом из таблицы users
+#(без переводчика — план №2, Стадия 2): сбор в _collect_users(), приём в _merge_users().
+#Конвертацию desktop↔server-формы делает data_store на границе UI (get/set_students и т.п.).
+#Группы — так же (таблица groups): _collect_groups() / _merge_groups().
 
 
 #Предметы (list имён)  <->  subjects
@@ -181,6 +138,14 @@ def _collect_grades() -> list:
     return out
 
 
+def _collect_users() -> list:
+    """Пользователи (студенты/преподаватели) из таблицы users в СЕРВЕРНОЙ форме (со
+    надгробиями) — прямой push, без переводчика. Расшифровку blob'а делает data_store.
+    Админ добавляется отдельно (его хеш — в config)."""
+    from data_store import users_for_sync
+    return users_for_sync()
+
+
 def _collect_groups() -> list:
     """Группы из таблицы в формате API (со надгробиями) — прямой upsert, без переводчика."""
     import json as _json
@@ -232,8 +197,9 @@ def collect_local() -> dict:
     from subjects import load_subjects
     st = get_store()
     cfg = st._config()
-    #raw — со «надгробиями», чтобы удаления тоже уезжали на сервер
-    users = students_to_users(st.get_students_raw()) + teachers_to_users(st.get_teachers_raw())
+    #Пользователи — прямо из таблицы users (серверная форма, со надгробиями). Админ —
+    #синтетически из config (его хеш там и живёт).
+    users = _collect_users()
     admin = admin_user_from_config(cfg, st.get_admin_login())
     if admin:
         users.append(admin)
@@ -248,55 +214,18 @@ def collect_local() -> dict:
     }
 
 
-def _merge_by_key(local_list: list, remote_list: list, key_fn) -> list:
-    """Слияние двух списков по ключу: побеждает запись с более поздним updated_at.
-    Надгробия (deleted=True) СОХРАНЯЕМ — они должны храниться локально и дальше
-    распространяться, иначе удалённая запись «воскреснет» на других ПК."""
-    m = {key_fn(r): r for r in local_list}
-    for r in remote_list:
-        k = key_fn(r)
-        loc = m.get(k)
-        if loc is None or _should_apply(r.get("updated_at", ""),
-                                        loc.get("updated_at", ""), r.get("deleted")):
-            m[k] = r
-    return list(m.values())
-
-
 def apply_remote(changes: dict):
     """Применяет пришедшие с сервера изменения в локальное хранилище (LWW-слияние).
     Пишем с stamp=False — сохраняем серверные метки, чтобы синк не зациклился."""
-    from data_store import get_store, _kv_set, _student_key
+    from data_store import get_store, _kv_set
     from subjects import load_subjects, save_subjects
     st = get_store()
     users = changes.get("users", []) or []
 
-    #Студенты (с надгробиями: deleted-записи переносим как есть для LWW-слияния)
+    #Пользователи — прямой LWW-upsert в таблицу users (студенты/преподаватели). Админ
+    #(role=admin) в таблицу НЕ пишем — его хеш применяется в config ниже (config_from_pull).
     if users:
-        rem_s = [{
-            "surname": u.get("surname", ""), "name": u.get("name", ""),
-            "group": u.get("group_name", ""), "login": u.get("login", ""),
-            "password_hash": u.get("password_hash", ""),
-            "prefs": u.get("prefs") or {},   #тема оформления приезжает с сервера
-            "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
-        } for u in users if u.get("role") == "student"]
-        merged_s = _merge_by_key(st.get_students_raw(), rem_s, _student_key)
-        #wake=False: это применение серверных данных, не локальная правка — будить
-        #синк не нужно (иначе apply_remote зациклил бы синхронизацию сам на себя).
-        st.set_students(merged_s, stamp=False, wake=False)
-
-        #Преподаватели (dict <-> список для слияния)
-        loc_t = [dict(v, full_name=k) for k, v in st.get_teachers_raw().items()]
-        rem_t = [{
-            "full_name": u.get("full_name", ""), "login": u.get("login", ""),
-            "password_hash": u.get("password_hash", ""),
-            "subjects": u.get("subjects") or [],
-            "group_assignments": u.get("group_assignments") or {},
-            "prefs": u.get("prefs") or {},   #тема оформления приезжает с сервера
-            "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
-        } for u in users if u.get("role") == "teacher"]
-        merged_t = _merge_by_key(loc_t, rem_t, lambda r: r.get("full_name", ""))
-        teachers = {r.pop("full_name"): r for r in merged_t}
-        st.set_teachers(teachers, stamp=False, wake=False)
+        _merge_users(users)
 
     #Группы — прямой LWW-upsert в таблицу groups (как lessons/term_grades), без переводчика.
     if changes.get("groups"):
@@ -350,6 +279,37 @@ def _merge_lessons(remote: list):
              l.get("retake_date", ""), l.get("hour", 0),
              l.get("year", "") or "", int(l.get("semester", 0) or 0),
              l.get("updated_at", ""), 1 if rdel else 0))
+    conn.commit()
+    conn.close()
+
+
+def _merge_users(remote: list):
+    """Слияние пользователей (студенты/преподаватели) с сервера — прямой LWW с tie-break
+    в таблицу users. payload шифруем в blob (Fernet+DPAPI) — хеши паролей и ПДн на диске
+    защищены (152-ФЗ). role=admin пропускаем: его хеш применяется в config (не тут)."""
+    import json as _json
+    from core import DBManager
+    from security import encrypt_value
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, role TEXT, "
+                "updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')")
+    for u in remote:
+        role = u.get("role")
+        if role not in ("student", "teacher"):
+            continue
+        uid = u.get("id")
+        if not uid:
+            continue
+        rdel = bool(u.get("deleted"))
+        cur.execute("SELECT COALESCE(updated_at,'') FROM users WHERE id=?", (uid,))
+        row = cur.fetchone()
+        if not (row is None or _should_apply(u.get("updated_at", ""), row[0] or "", rdel)):
+            continue
+        cur.execute("INSERT OR REPLACE INTO users (id,role,updated_at,deleted,blob) "
+                    "VALUES (?,?,?,?,?)",
+                    (uid, role, u.get("updated_at", ""), 1 if rdel else 0,
+                     encrypt_value(_json.dumps(u, ensure_ascii=False))))
     conn.commit()
     conn.close()
 

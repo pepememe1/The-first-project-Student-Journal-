@@ -252,6 +252,143 @@ def _ensure_groups_migrated() -> None:
         conn.commit(); conn.close()
 
 
+#  Пользователи (студенты/преподаватели) — в таблице users, но payload ЗАШИФРОВАН blob'ом
+#  (Fernet+DPAPI: та же защита, что была у kv). Хранится СЕРВЕРНАЯ форма → синк ходит прямым
+#  upsert'ом по строке (без переводчика). data_store конвертирует server↔desktop-форму на
+#  границе UI (get/set_students, get/set_teachers), поэтому UI не трогаем. Админ здесь НЕ
+#  живёт (его хеш — в config). План техдолга №2, Стадия 2.
+def _student_id(s: dict) -> str:
+    login = (s.get("login") or "").strip()
+    return f"stud:{login}" if login else \
+        f"stud:{s.get('surname','')}|{s.get('name','')}|{s.get('group','')}"
+
+
+def _teacher_id(fullname: str, d: dict) -> str:
+    login = (d.get("login") or "").strip()
+    return f"teach:{login}" if login else f"teach:{fullname}"
+
+
+def _student_to_server(s: dict) -> dict:
+    """desktop-форма студента → строка users(role=student). password_hash тут ПЛЕЙНТЕКСТ
+    (шифруется при записи blob'а). Прежний translator students_to_users, но со всеми полями."""
+    return {
+        "id": _student_id(s), "role": "student",
+        "login": s.get("login", ""), "password_hash": s.get("password_hash", ""),
+        "surname": s.get("surname", ""), "name": s.get("name", ""),
+        "patronymic": s.get("patronymic", ""), "group_name": s.get("group", ""),
+        "full_name": "", "subjects": [], "group_assignments": {}, "curated_groups": [],
+        "prefs": s.get("prefs") or {},
+        "updated_at": s.get("updated_at", "") or _now_iso(),
+        "deleted": bool(s.get("deleted", False)),
+    }
+
+
+def _server_to_student(u: dict) -> dict:
+    return {
+        "surname": u.get("surname", ""), "name": u.get("name", ""),
+        "group": u.get("group_name", ""), "login": u.get("login", ""),
+        "password_hash": u.get("password_hash", ""), "patronymic": u.get("patronymic", ""),
+        "prefs": u.get("prefs") or {},
+        "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
+    }
+
+
+def _teacher_to_server(fullname: str, d: dict) -> dict:
+    return {
+        "id": _teacher_id(fullname, d), "role": "teacher",
+        "login": d.get("login", ""), "password_hash": d.get("password_hash", ""),
+        "full_name": fullname, "surname": "", "name": "", "patronymic": "", "group_name": "",
+        "subjects": d.get("subjects") or [], "group_assignments": d.get("group_assignments") or {},
+        "curated_groups": d.get("curated_groups") or [], "prefs": d.get("prefs") or {},
+        "updated_at": d.get("updated_at", "") or _now_iso(),
+        "deleted": bool(d.get("deleted", False)),
+    }
+
+
+def _server_to_teacher(u: dict) -> dict:
+    """Строка users(role=teacher) → значение teachers-dict (ключ — full_name отдельно)."""
+    return {
+        "login": u.get("login", ""), "password_hash": u.get("password_hash", ""),
+        "subjects": u.get("subjects") or [], "group_assignments": u.get("group_assignments") or {},
+        "curated_groups": u.get("curated_groups") or [], "prefs": u.get("prefs") or {},
+        "updated_at": u.get("updated_at", ""), "deleted": bool(u.get("deleted", False)),
+    }
+
+
+def _users_table_read() -> list:
+    """Все пользователи (студенты+преподаватели, вкл. надгробия) в СЕРВЕРНОЙ форме —
+    расшифровываем blob. Мигрирует старую kv-базу при первом доступе."""
+    _ensure_users_migrated()
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, role, COALESCE(updated_at,''), COALESCE(deleted,0), "
+                    "COALESCE(blob,'') FROM users")
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    out = []
+    for uid, role, uat, deleted, blob in rows:
+        d = {}
+        if blob:
+            try:
+                d = json.loads(decrypt_value(blob))
+            except Exception:
+                d = {}
+        #Служебные поля берём из ОТКРЫТЫХ колонок (они — источник правды для синка).
+        d["id"] = uid
+        d["role"] = role or d.get("role", "")
+        d["updated_at"] = uat
+        d["deleted"] = bool(deleted)
+        out.append(d)
+    return out
+
+
+def _users_table_write(server_users: list) -> None:
+    """Полная перезапись таблицы users СЕРВЕРНЫМ списком (payload шифруем в blob)."""
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, role TEXT, "
+                "updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')")
+    cur.execute("DELETE FROM users")
+    for u in server_users:
+        uid = u.get("id", "")
+        if not uid:
+            continue
+        cur.execute("INSERT OR REPLACE INTO users (id,role,updated_at,deleted,blob) "
+                    "VALUES (?,?,?,?,?)",
+                    (uid, u.get("role", ""), u.get("updated_at", ""),
+                     1 if u.get("deleted") else 0,
+                     encrypt_value(json.dumps(u, ensure_ascii=False))))
+    conn.commit(); conn.close()
+
+
+def _ensure_users_migrated() -> None:
+    """Одноразовый перенос kv (students-список + teachers-dict) → таблицу users.
+    НЕДЕСТРУКТИВНО: старые kv-ключи НЕ удаляем (бэкап на случай отката). Идемпотентно по
+    состоянию БД: если в таблице уже есть строки — не мигрируем."""
+    conn = DBManager.get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM users")
+        has_rows = cur.fetchone()[0] > 0
+    except Exception:
+        has_rows = True   #таблицы ещё нет (init создаст) — не мигрируем сейчас
+    conn.close()
+    if has_rows:
+        return
+    old_students = _kv_get("students", None)
+    old_teachers = _kv_get("teachers", None)
+    if not old_students and not old_teachers:
+        return
+    server = [_student_to_server(s) for s in (old_students or [])]
+    server += [_teacher_to_server(fn, d) for fn, d in (old_teachers or {}).items()]
+    _users_table_write(server)
+
+
+def users_for_sync() -> list:
+    """Все пользователи в СЕРВЕРНОЙ форме (вкл. надгробия) — для collect_local (прямой push)."""
+    return _users_table_read()
+
+
 #  Высокоуровневый интерфейс к локальному хранилищу
 class LocalStore:
     """
@@ -260,60 +397,62 @@ class LocalStore:
     колледжа идёт через API-сервер (см. sync_runner).
     """
 
-    #Студенты
+    #Студенты (в таблице users, форма API сохранена — UI не трогаем)
     #get_* отдают только ЖИВЫЕ записи (UI не видит надгробий).
     #get_*_raw отдают всё, включая надгробия — нужно синхронизации.
     def get_students(self) -> list:
-        return [s for s in _kv_get("students", []) if not s.get("deleted")]
+        return [_server_to_student(u) for u in _users_table_read()
+                if u.get("role") == "student" and not u.get("deleted")]
 
     def get_students_raw(self) -> list:
-        return _kv_get("students", [])
+        return [_server_to_student(u) for u in _users_table_read()
+                if u.get("role") == "student"]
 
     def set_students(self, students: list, stamp: bool = True, wake: bool = True) -> bool:
-        records = [self._hash_record(s) for s in students]
-        #stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
-        # надгробиями, изменённые — штампуются.
-        #stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
-        # сохраняем как есть, чтобы синк не зациклился.
-        #wake=False идёт в паре со stamp=False: запись серверных данных НЕ должна
-        # будить синк (иначе apply_remote → wake → синк → apply_remote — busy-loop).
+        all_users = _users_table_read()
+        others = [u for u in all_users if u.get("role") != "student"]   #преподы не трогаем
+        old_students = [u for u in all_users if u.get("role") == "student"]
+        #Внутри работаем в СЕРВЕРНОЙ форме (её же кладём в blob). Пароль→хеш через _hash_record.
+        new_students = [_student_to_server(self._hash_record(s)) for s in students]
+        #stamp=True — правка/удаление в UI: исчезнувшие → надгробия, изменённые — штамп
+        #(та же оттестированная логика _merge_list_tombstones, ключ — стабильный id).
         if stamp:
-            records = _merge_list_tombstones(records, _kv_get("students", []), _student_key)
-        return _kv_set("students", records, wake=wake)
+            new_students = _merge_list_tombstones(new_students, old_students,
+                                                  lambda r: r.get("id", ""))
+        _users_table_write(others + new_students)
+        return self._after_users_write(wake)
 
-    #Преподаватели
+    #Преподаватели (в таблице users, dict по ФИО сохранён — UI не трогаем)
     def get_teachers(self) -> dict:
-        return {k: v for k, v in _kv_get("teachers", {}).items() if not v.get("deleted")}
+        return {u["full_name"]: _server_to_teacher(u) for u in _users_table_read()
+                if u.get("role") == "teacher" and not u.get("deleted") and u.get("full_name")}
 
     def get_teachers_raw(self) -> dict:
-        return _kv_get("teachers", {})
+        return {u["full_name"]: _server_to_teacher(u) for u in _users_table_read()
+                if u.get("role") == "teacher" and u.get("full_name")}
 
     def set_teachers(self, teachers: dict, stamp: bool = True, wake: bool = True) -> bool:
-        out = {name: self._hash_record(data) for name, data in teachers.items()}
+        all_users = _users_table_read()
+        others = [u for u in all_users if u.get("role") != "teacher"]   #студентов не трогаем
+        old_teachers = [u for u in all_users if u.get("role") == "teacher"]
+        new_teachers = [_teacher_to_server(name, self._hash_record(data))
+                        for name, data in teachers.items()]
         if stamp:
-            old_raw = _kv_get("teachers", {})
-            old_live = {k: v for k, v in old_raw.items() if not v.get("deleted")}
-            now = _now_iso()
-            for name, data in out.items():
-                data["deleted"] = False
-                prev = old_live.get(name)
-                changed = (prev is None or
-                           {k: v for k, v in data.items() if k != "updated_at"} !=
-                           {k: v for k, v in prev.items() if k != "updated_at"})
-                if changed:
-                    data["updated_at"] = now
-                elif not data.get("updated_at"):
-                    data["updated_at"] = prev.get("updated_at", now)
-            #надгробия: были, в новом наборе исчезли
-            for name, prev in old_raw.items():
-                if name in out:
-                    continue
-                if prev.get("deleted"):
-                    out[name] = prev
-                else:
-                    t = dict(prev); t["deleted"] = True; t["updated_at"] = now
-                    out[name] = t
-        return _kv_set("teachers", out, wake=wake)
+            new_teachers = _merge_list_tombstones(new_teachers, old_teachers,
+                                                  lambda r: r.get("id", ""))
+        _users_table_write(others + new_teachers)
+        return self._after_users_write(wake)
+
+    @staticmethod
+    def _after_users_write(wake: bool) -> bool:
+        #Разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу.
+        if wake:
+            try:
+                from sync_runner import trigger as _sync_trigger
+                _sync_trigger()
+            except Exception:
+                pass
+        return True
 
     #Группы (в таблице groups; форма API сохранена — UI не трогаем)
     def get_groups(self) -> list:
@@ -502,14 +641,15 @@ def reset_store():
 def reset_synced_local_data():
     """Стирает СИНХРОНИЗИРУЕМЫЙ кэш этого ПК, сохраняя локальные настройки.
 
-    Зачем. Слияние с сервером аддитивное (sync_engine._merge_by_key): локальная запись
+    Зачем. Слияние с сервером аддитивное (LWW-upsert по строкам): локальная запись
     убирается только по серверному надгробию. Поэтому запись, оставшаяся ТОЛЬКО локально
     (от прежнего аккаунта/сессии или после обновления), «протекала» в следующий аккаунт
     на этом ПК (баг с фантомным студентом). Реконсиляция на границе сессии: стираем кэш и
     затем полным pull приводим локаль в точное соответствие серверу (server wins).
 
-    Стираем: students/teachers (kv), группы/предметы (таблица groups / subjects.json),
-    занятия/оценки/конфликты (таблицы), метку дельты. НЕ трогаем:
+    Стираем: пользователей/группы/занятия/оценки/итоги/конфликты (таблицы users/groups/
+    lessons/grades/term_grades — через clear_synced_tables), предметы (subjects.json), старые
+    kv-бэкапы students/teachers, метку дельты. НЕ трогаем:
       • ключи с префиксом `_local:` — адрес сервера, device_id, токен, сохранённая
         сессия, host-флаги, тема, offline_ack (иначе слетели бы подключение и вход);
       • `config` — хеш пароля админа и тема вуза; на полном pull сервер перезапишет свои
