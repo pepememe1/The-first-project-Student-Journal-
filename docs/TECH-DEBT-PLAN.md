@@ -103,8 +103,18 @@ get/set_teachers) — UI не тронут. Админ по-прежнему в 
 (pytest) и `web/tests/grades.contract.test.mjs` (node:test, в CI) — молчаливое
 расхождение реализаций теперь невозможно.
 
-**⏳ Дальше:** тем же паттерном закрепить `needsRetake`/логику пересдач и `mascot.js`↔
-`emotes.pick`; постепенно выносить расчёты на сервер (тонкие клиенты).
+**✅ Стадия 2 — СДЕЛАНО (логика пересдач):** `needs_retake` + формат ключа попытки —
+единый `grading.attempt_key`/`grading.needs_retake` (десктоп) и `grades.js`
+(`attemptKey`/`needsRetake`); +9 кейсов в `grade-cases.json`, парные тесты pytest+node.
+
+**✅ Стадия 3 — СДЕЛАНО (эмоции маскота):** выбор эмоции `vector/emotes.py::pick`
+(русский кортеж морда+жест) ↔ `web/src/config/mascot.js::pickEmote` (строка 'face-gesture')
+закреплён контрактом `docs/contracts/mascot-cases.json` (мост русский↔английский —
+`face_map`/`gesture_map`; кейсы пиннят и приоритет веток). Парные тесты:
+`tests/test_mascot_contract.py` + `web/tests/mascot.contract.test.mjs` (оба в CI).
+
+**⏳ Дальше:** постепенно выносить сами РАСЧЁТЫ на сервер (тонкие клиенты) — там, где
+это не бьёт по мгновенной UI-реакции; остальное держать под контрактами (как сейчас).
 
 **Риск.** Рост числа запросов к серверу; кэширование. **Тесты:** контрактные (golden-файлы).
 

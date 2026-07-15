@@ -1,0 +1,32 @@
+{
+  "_comment": "Контракт выбора эмоции маскота. Единый источник для парных тестов Python (vector/emotes.py::pick — возвращает русский кортеж (морда, жест)) и JS (web/src/config/mascot.js::pickEmote — возвращает английскую строку 'face-gesture'). Мост — face_map/gesture_map. Меняешь приоритет веток — меняй здесь, оба теста должны сойтись. Кейсы пиннят и ПОРЯДОК приоритетов (state > warn-intent > hello/thanks > mood > info-intent > дефолт).",
+  "face_map": {
+    "груст": "sad", "деф": "neutral", "думает": "think",
+    "предупреж": "warn", "рад": "happy", "удив": "surprise"
+  },
+  "gesture_map": {
+    "деф": "idle", "думает": "think", "подбадрив": "cheer",
+    "поздрав": "congrats", "предупреж": "warn"
+  },
+  "pick": [
+    { "state": "thinking", "mood": "neutral", "intent": "help",         "expected": "think-think" },
+    { "state": "away",     "mood": "neutral", "intent": "help",         "expected": "neutral-idle" },
+    { "state": "idle",     "mood": "neutral", "intent": "help",         "expected": "surprise-idle" },
+    { "state": "idle",     "mood": "happy",   "intent": "hello",        "expected": "surprise-idle" },
+    { "state": "speaking", "mood": "neutral", "intent": "debtors",      "expected": "warn-warn" },
+    { "state": "speaking", "mood": "neutral", "intent": "absences",     "expected": "warn-warn" },
+    { "state": "speaking", "mood": "neutral", "intent": "at_risk",      "expected": "warn-warn" },
+    { "state": "speaking", "mood": "happy",   "intent": "debtors",      "expected": "warn-warn" },
+    { "state": "speaking", "mood": "neutral", "intent": "hello",        "expected": "happy-congrats" },
+    { "state": "speaking", "mood": "sad",     "intent": "hello",        "expected": "happy-congrats" },
+    { "state": "speaking", "mood": "neutral", "intent": "thanks",       "expected": "happy-cheer" },
+    { "state": "speaking", "mood": "happy",   "intent": "average",      "expected": "happy-congrats" },
+    { "state": "speaking", "mood": "happy",   "intent": "help",         "expected": "happy-congrats" },
+    { "state": "speaking", "mood": "sad",     "intent": "average",      "expected": "sad-cheer" },
+    { "state": "speaking", "mood": "neutral", "intent": "help",         "expected": "neutral-cheer" },
+    { "state": "speaking", "mood": "neutral", "intent": "groups",       "expected": "neutral-cheer" },
+    { "state": "speaking", "mood": "neutral", "intent": "about_vsgutu", "expected": "neutral-cheer" },
+    { "state": "speaking", "mood": "neutral", "intent": "average",      "expected": "neutral-idle" },
+    { "state": "speaking", "mood": "neutral", "intent": "unknown",      "expected": "neutral-idle" }
+  ]
+}
