@@ -437,28 +437,142 @@ def intent_unknown(scope: VectorScope, asked_name: str = "") -> Facts:
 #и «у кого долги» дают ОДИН И ТОТ ЖЕ ответ без всякой LLM.
 #Если суммарный вес совпадений ниже порога — интент «unknown», и engine
 #передаёт вопрос живой ИИ-модели (если она подключена).
-def classify(question: str, known_surnames: List[str]) -> Tuple[str, str]:
-    """
-    Возвращает (intent_name, asked_surname). Чисто локально, без сети.
-    intent_name == "unknown" означает «вопроса нет в пуле» → дорога к LLM.
-    """
-    from .faq import classify_by_stems, normalize
-    best, _score = classify_by_stems(question)
-    q = normalize(question)
-    asked = ""
-    for surname in known_surnames:
-        if not surname:
-            continue
-        s = surname.lower().replace("ё", "е")
-        #сначала точное вхождение, затем основа (для склонений: Петрова, Сидоровой)
-        if s in q:
-            asked = surname
-            break
-        stem = s[:-1] if len(s) > 4 else s
-        if stem and stem in q:
-            asked = surname
-            break
-    return best, asked
+def classify(question: str, known_surnames: List[str],
+             known_subjects: List[str] = ()) -> Tuple[str, str, str, object]:
+    """Возвращает (intent, asked_surname, subject, day). Чисто локально, без сети.
+
+    Делегирует ЕДИНОМУ классификатору vector_nlu (тот же, что на сервере) — раньше здесь
+    была своя копия разбора, из-за чего десктоп и веб расходились. subject/day нужны новым
+    интентам (оценки по предмету, расписание). intent=="unknown" → дорога к LLM."""
+    import vector_nlu
+    r = vector_nlu.classify(question, known_surnames, list(known_subjects))
+    return r["intent"], r["surname"], r["subject"], r["day"]
+
+
+def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
+    """Счёт оценок студента: всего практических (2–5) + разбивка. scope.subject фильтрует
+    («сколько у меня оценок», «сколько пятёрок», «сколько оценок по математике»)."""
+    conn = _conn(scope)
+    lessons = _lessons(conn, scope.group, scope.subject)
+    who = _resolve_student(scope, asked_name)
+    if not who:
+        conn.close()
+        return Facts("grade_count", "Назови студента по фамилии — посчитаю его оценки.")
+    f, n = who
+    recs = _records(conn, f, n)
+    conn.close()
+    counts = {"5": 0, "4": 0, "3": 0, "2": 0}
+    for lid, ltype, *_ in lessons:
+        if ltype == "Практика":
+            v = recs.get(lid)
+            if v in counts:
+                counts[v] += 1
+    total = sum(counts.values())
+    subj = f" по предмету «{scope.subject}»" if scope.subject else ""
+    txt = (f"Оценок{subj}: всего {total} (5: {counts['5']}, 4: {counts['4']}, "
+           f"3: {counts['3']}, 2: {counts['2']}).")
+    return Facts("grade_count", txt, data={"total": total, **counts})
+
+
+def intent_subject_grades(scope: VectorScope, asked_name: str = "") -> Facts:
+    """Оценки по КОНКРЕТНОМУ предмету (scope.subject). Без предмета → общий журнал."""
+    if not scope.subject:
+        return intent_grades(scope, asked_name)
+    conn = _conn(scope)
+    lessons = _lessons(conn, scope.group, scope.subject)
+    who = _resolve_student(scope, asked_name)
+    if not who:
+        conn.close()
+        return Facts("subject_grades", "Назови студента — покажу его оценки по предмету.")
+    f, n = who
+    recs = _records(conn, f, n)
+    conn.close()
+    marks = [recs.get(lid) for lid, ltype, *_ in lessons
+             if ltype == "Практика" and recs.get(lid) in ("2", "3", "4", "5")]
+    avg = _practice_average(lessons, recs)
+    if not avg:
+        return Facts("subject_grades",
+                     f"По предмету «{scope.subject}» оценок по практикам пока нет.",
+                     data={"subject": scope.subject})
+    body = ", ".join(marks) if marks else "—"
+    return Facts("subject_grades", f"По предмету «{scope.subject}»: средний {avg}. "
+                 f"Оценки: {body}.", data={"subject": scope.subject, "average": avg},
+                 mood_value=avg)
+
+
+_SCHED_DAYS_RU = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
+
+
+def intent_schedule(scope: VectorScope, asked_name: str = "", day="") -> Facts:
+    """Расписание группы из ЛОКАЛЬНОГО кэша (schedule/store). Предмет/день — из запроса.
+    Защищено: любой сбой/пустой кэш → мягкая подсказка открыть вкладку «Расписание»."""
+    fallback = ("Расписание пока не загружено в чат. Открой вкладку «Расписание» — оно "
+                "подтянется с портала ВСГУТУ. 🐯")
+    try:
+        from schedule import store
+        snap = store.load_cached()
+        if not snap or not getattr(snap, "groups", None):
+            return Facts("schedule", fallback)
+        site_group = store.guess_group(scope.group, snap.group_names()) or scope.group
+        gs = snap.groups.get(site_group)
+        if gs is None:
+            return Facts("schedule", f"Группы {scope.group} нет в снимке расписания. "
+                         "Открой вкладку «Расписание».")
+
+        def norm(s):
+            import vector_nlu
+            return vector_nlu.normalize(s or "")
+
+        def lessons_of(week, di):
+            wk = getattr(gs, "weeks", {}) or {}
+            dayd = wk.get(week) or wk.get(str(week)) or {}
+            return dayd.get(_SCHED_DAYS_RU[di], []) or []
+
+        def sub_of(l):
+            return getattr(l, "subject", "") if not isinstance(l, dict) else l.get("subject", "")
+
+        def fmt(l):
+            g = (lambda k: getattr(l, k, "") if not isinstance(l, dict) else l.get(k, ""))
+            room = f", ауд. {g('room')}" if g("room") else ""
+            return f"{g('pair_no')} пара ({g('time')}) — {g('subject') or g('raw')}{room}"
+
+        cur_week = store.current_week_parity()
+        # предмет из запроса (по предметам самого расписания)
+        import vector_nlu
+        sched_subjects = sorted({sub_of(l) for wk in (1, 2)
+                                 for di in range(6) for l in lessons_of(wk, di) if sub_of(l)})
+        want_subject = vector_nlu.match_subject(getattr(scope, "_q", ""), sched_subjects) \
+            if getattr(scope, "_q", "") else ""
+
+        if want_subject:
+            found = []
+            for wk in (1, 2):
+                for di in range(6):
+                    for l in lessons_of(wk, di):
+                        if norm(want_subject) in norm(sub_of(l)) or norm(sub_of(l)) in norm(want_subject):
+                            wl = "" if wk == cur_week else f" ({'II' if wk == 2 else 'I'} неделя)"
+                            found.append(f"{_SCHED_DAYS_RU[di]}, {fmt(l)}{wl}")
+            if found:
+                return Facts("schedule", f"Расписание «{want_subject}»:\n• " + "\n• ".join(found),
+                             data={"subject": want_subject})
+            return Facts("schedule", f"«{want_subject}» в расписании не нашёл.")
+
+        import datetime as _dt
+        today = _dt.datetime.now().weekday()
+        idx = today if day in ("today", "") else (today + 1 if day == "tomorrow" else day)
+        if isinstance(idx, int) and idx > 5:
+            return Facts("schedule", "В этот день пар нет — выходной. 🐯")
+        di = idx if isinstance(idx, int) else today
+        ls = lessons_of(cur_week, di)
+        label = {"today": "Сегодня", "tomorrow": "Завтра"}.get(day, _SCHED_DAYS_RU[di])
+        if not ls:
+            return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}) пар нет. 🐯")
+        return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}):\n• "
+                     + "\n• ".join(fmt(l) for l in ls), data={"day": _SCHED_DAYS_RU[di]})
+    except Exception as e:
+        import log
+        log.get("intents").warning(f"[schedule] чат-расписание не удалось: {e}")
+        return Facts("schedule", fallback)
 
 
 _HANDLERS = {
@@ -468,6 +582,8 @@ _HANDLERS = {
     "average": intent_average,
     "group_stats": intent_group_stats,
     "grades": intent_grades,
+    "grade_count": intent_grade_count,
+    "subject_grades": intent_subject_grades,
     "groups": intent_groups,
     "teachers": intent_teachers,
     "roster": intent_roster,
@@ -480,6 +596,8 @@ _HANDLERS = {
 }
 
 
-def run_intent(intent: str, scope: VectorScope, asked_name: str = "") -> Facts:
+def run_intent(intent: str, scope: VectorScope, asked_name: str = "", day="") -> Facts:
+    if intent == "schedule":
+        return intent_schedule(scope, asked_name, day)
     handler = _HANDLERS.get(intent, intent_help)
     return handler(scope, asked_name)

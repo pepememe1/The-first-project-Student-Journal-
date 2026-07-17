@@ -212,7 +212,10 @@ def match_subject(question: str, subjects: List[str]) -> str:
         words = [w for w in ns.split() if len(w) >= 5]
         hit = 0
         for w in words:
-            stem = w[:6]
+            #основа 5 букв: ловит склонения предмета («физик» → физике/физику/физики),
+            #6 букв («физика») пропускала дательный «физике». Различимость предметов при
+            #5 буквах сохраняется (математ/материал, физик/физку и т.п.).
+            stem = w[:5]
             if (" " + stem) in q:
                 hit += 1
         if hit and hit >= best_len:

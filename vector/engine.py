@@ -34,6 +34,9 @@ class VectorEngine:
         self.scope = scope
         self.llm = llm or OfflineTemplateProvider()
         self._mood = "neutral"
+        #Базовый предмет области видимости — чтобы распознанный в ОДНОМ вопросе предмет
+        #(«оценки по математике») не «залипал» на следующий вопрос без предмета.
+        self._base_subject = scope.subject
 
     #известные фамилии (для классификатора и анонимайзера)
     def _known_surnames(self) -> List[str]:
@@ -48,10 +51,28 @@ class VectorEngine:
         except Exception:
             return []
 
+    def _known_subjects(self) -> List[str]:
+        """Предметы занятий группы — чтобы vector_nlu распознал «оценки по <предмет>»."""
+        try:
+            conn = sqlite3.connect(self.scope.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT subject FROM lessons WHERE group_name=?",
+                        (self.scope.group,))
+            res = [r[0] for r in cur.fetchall() if r[0]]
+            conn.close()
+            return res
+        except Exception:
+            return []
+
     #основной вызов
     def ask(self, question: str) -> VectorResponse:
         surnames = self._known_surnames()
-        intent, asked = intents.classify(question, surnames)
+        intent, asked, subject, day = intents.classify(question, surnames,
+                                                        self._known_subjects())
+        #Распознанный предмет кладём в scope — subject-фильтрующие обработчики (оценки,
+        #средний, счёт) подхватят его. Сырой вопрос — для матча предмета в расписании.
+        self.scope.subject = subject or self._base_subject   #сброс, чтобы не «залипал»
+        self.scope._q = question
 
         #Голая фамилия (или «а Гордеев?», «расскажи про Иванова») без явного интента —
         #это УТОЧНЕНИЕ по студенту (типичный follow-up после списка должников/группы).
@@ -93,7 +114,7 @@ class VectorEngine:
                 text = anon.deanonymize(text)
             return VectorResponse(text=text, mood=self._mood, intent="unknown")
 
-        facts = intents.run_intent(intent, self.scope, asked)
+        facts = intents.run_intent(intent, self.scope, asked, day)
 
         #настроение по среднему баллу, если интент его дал
         if facts.mood_value is not None:
@@ -101,7 +122,9 @@ class VectorEngine:
 
         #Заготовленные ответы (приветствие/спасибо/помощь + справка о ВСГУТУ/
         #колледже) отдаём как есть — они уже дружелюбные, точные и не требуют LLM.
-        if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college"):
+        #schedule НЕ озвучиваем: структурный список пар — LLM мог бы добавить/выкинуть
+        #занятие. Набор ОБЯЗАН совпадать с server _NO_VOICE_INTENTS (см. CLAUDE.md §5).
+        if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college", "schedule"):
             return VectorResponse(text=facts.facts_text, mood=self._mood,
                                   intent=intent, facts=facts)
 
