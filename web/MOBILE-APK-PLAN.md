@@ -78,8 +78,9 @@ cd android && ./gradlew assembleDebug   # → android/app/build/outputs/apk/debu
 Настройки нативной обёртки: `server.androidScheme=https`; для запросов к боевому
 серверу — либо один origin (как на вебе), либо разрешить cleartext только для dev.
 Нативные плагины по мере надобности: `@capacitor/preferences` (хранилище),
-`@capacitor/network` (онлайн/офлайн), `@capacitor/app`, иконка/сплеш через
-`@capacitor/assets`.
+`@capacitor/network` (онлайн/офлайн), `@capacitor/app`. Иконка/сплеш — разовой командой
+`npx @capacitor/assets generate` (в зависимостях НЕ держим: инструмент нужен раз в год,
+а тянул за собой 6 уязвимостей `node-tar` без доступного фикса).
 
 ## 4. OFFLINE-FIRST для мобилы (ключевое требование)
 
