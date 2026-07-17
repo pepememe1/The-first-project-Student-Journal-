@@ -1,9 +1,9 @@
 """
 subjects.py — единственный источник правды для списка учебных предметов ВСГУТУ.
 
-Файл subjects.json находится в той же папке что и программа.
-Его можно открыть обычным текстовым редактором (Блокнот, VS Code и т.д.)
-и вручную добавить/удалить/переименовать предметы.
+Файл subjects.json ВСЕГДА лежит рядом с .exe (или рядом с main.py при запуске
+из исходников). Он НЕ упаковывается внутрь .exe — его можно свободно
+редактировать в Блокноте, VS Code и любом другом текстовом редакторе.
 
 Формат subjects.json:
 [
@@ -11,13 +11,35 @@ subjects.py — единственный источник правды для с
   "Название предмета 2",
   ...
 ]
+
+При сборке PyInstaller — НЕ добавляйте subjects.json через --add-data.
+Файл создастся автоматически рядом с .exe при первом запуске.
+
+  pyinstaller --onefile --windowed --icon=icon.ico main.py
 """
 import json
 import os
+import sys
 
-# Путь к файлу subjects.json рядом с исполняемым файлом / скриптом
-_HERE = os.path.dirname(os.path.abspath(__file__))
-SUBJECTS_FILE = os.path.join(_HERE, "subjects.json")
+
+def _get_app_dir() -> str:
+    """
+    Возвращает папку рядом с .exe (или рядом с main.py при запуске из .py).
+
+    PyInstaller при --onefile распаковывает всё в sys._MEIPASS (временная
+    папка в %TEMP%), но нам нужна папка где ЛЕЖИТ сам .exe —
+    это os.path.dirname(sys.executable).
+
+    При обычном запуске через python main.py — папка со скриптом.
+    """
+    if getattr(sys, "frozen", False):
+        # Запущен как .exe — берём папку где лежит .exe файл
+        return os.path.dirname(sys.executable)
+    # Запущен как .py — папка где лежит subjects.py / main.py
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+SUBJECTS_FILE = os.path.join(_get_app_dir(), "subjects.json")
 
 # Встроенный список по умолчанию — используется если subjects.json не существует
 _BUILTIN_SUBJECTS = [

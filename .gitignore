@@ -1,0 +1,47 @@
+# ── Рантайм-данные и секреты (НИКОГДА не коммитим) ──
+secure_data.enc          # зашифрованный мастер-ключ
+pg_config.json           # параметры подключения к PostgreSQL (пароль БД!)
+install_key.txt          # ключ установки ПК
+*.db                     # локальные базы SQLite (vsgutu_grades.db)
+*.db-journal
+*.db-wal
+*.db-shm
+backups/                 # авто-бэкапы базы
+*.bak
+
+# ── Конфигурация окружения ──
+.env
+.env.*
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ── Виртуальные окружения ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── Сборка PyInstaller ──
+*.spec
+*.manifest
+
+# ── IDE / редакторы ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── ОС ──
+.DS_Store
+Thumbs.db
+desktop.ini
