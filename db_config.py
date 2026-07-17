@@ -15,39 +15,60 @@ db_config.py — Настройка подключения к PostgreSQL и си
   "port": 5432,
   "database": "vsgutu_grades",
   "user": "vsgutu_user",
-  "password": "пароль",
+  "password_enc": "<пароль БД, зашифрованный Windows DPAPI>",
   "install_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
+
+⚠️ Пароль БД НЕ хранится открытым текстом: поле password_enc защищено DPAPI и
+привязано к учётной записи Windows (см. security.os_protect). Старые файлы с
+открытым полем "password" по-прежнему читаются и при следующем сохранении
+автоматически перешифровываются.
+
+⚠️ 152-ФЗ ст. 18 ч. 5 (локализация): сервер PostgreSQL должен физически
+находиться на территории РФ (сервер/ПК колледжа в локальной сети или российское
+облако). Не размещайте боевую базу с ПДн на зарубежном хостинге.
 """
 import os
 import sys
 import json
 import uuid
-import hashlib
+import base64
 
 CONFIG_FILE = "pg_config.json"
-KEY_FILE    = "install_key.txt"   # хранится в APPDATA для единого ключа на ПК
+KEY_FILE    = "install_key.txt"   # служебный, в папке данных (см. app_paths)
 
-#  Определение папок
-def _get_app_dir() -> str:
-    """Папка рядом с .exe / main.py — для pg_config.json."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
 
-def _get_data_dir() -> str:
-    """Папка данных пользователя (APPDATA\\GradeBookAI) — для install_key.txt."""
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA", os.path.expanduser("~"))
-    else:
-        base = os.path.expanduser("~")
-    app_dir = os.path.join(base, "GradeBookAI")
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
+# ── Защита пароля БД на диске (DPAPI) ───────────────────────────
+def _encrypt_pw(plain: str) -> str:
+    """Шифрует пароль БД для хранения в pg_config.json (DPAPI → base64)."""
+    if not plain:
+        return ""
+    try:
+        from security import os_protect
+        return base64.b64encode(os_protect(plain.encode("utf-8"))).decode("ascii")
+    except Exception as e:
+        print(f"[db_config] не удалось зашифровать пароль БД: {e}")
+        return ""
 
-_APP_DIR = _get_app_dir()
-_CONFIG_PATH = os.path.join(_APP_DIR, CONFIG_FILE)
-_KEY_PATH    = os.path.join(_get_data_dir(), KEY_FILE)  # APPDATA\GradeBookAI\install_key.txt
+
+def _decrypt_pw(enc: str) -> str:
+    """Расшифровывает password_enc. Возвращает '' при неудаче."""
+    if not enc:
+        return ""
+    try:
+        from security import os_unprotect
+        raw = os_unprotect(base64.b64decode(enc.encode("ascii")))
+        return raw.decode("utf-8") if raw else ""
+    except Exception as e:
+        print(f"[db_config] не удалось расшифровать пароль БД: {e}")
+        return ""
+
+#  Расположение файлов — через единый app_paths (рядом с .exe или в профиле).
+import app_paths
+
+_APP_DIR = app_paths.app_dir()
+_CONFIG_PATH = app_paths.app_file(CONFIG_FILE)        # pg_config.json — правится руками
+_KEY_PATH    = app_paths.data_file(KEY_FILE)          # install_key.txt — служебный
 
 
 #  Ключ установки (уникален для каждого ПК)
@@ -76,11 +97,6 @@ def get_install_key() -> str:
     return key
 
 
-def get_key_hash(key: str) -> str:
-    """SHA-256 хэш ключа для хранения в БД (не сам ключ)."""
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
-
 #  Конфигурация PostgreSQL
 _DEFAULT_CONFIG = {
     "host": "",
@@ -93,7 +109,9 @@ _DEFAULT_CONFIG = {
 
 
 def load_pg_config() -> dict:
-    """Загружает конфигурацию из pg_config.json."""
+    """Загружает конфигурацию из pg_config.json.
+    Пароль БД возвращается в открытом виде В ПАМЯТИ (поле password) — на диске он
+    хранится зашифрованным (password_enc). Старый открытый password тоже читаем."""
     if not os.path.exists(_CONFIG_PATH):
         return dict(_DEFAULT_CONFIG)
     try:
@@ -102,18 +120,27 @@ def load_pg_config() -> dict:
         # Гарантируем наличие install_key
         if not cfg.get("install_key"):
             cfg["install_key"] = get_install_key()
+        # Восстанавливаем пароль: приоритет у зашифрованного поля.
+        if cfg.get("password_enc"):
+            cfg["password"] = _decrypt_pw(cfg["password_enc"])
+        # иначе остаётся старый открытый cfg["password"] (перешифруется при save)
         return cfg
     except Exception:
         return dict(_DEFAULT_CONFIG)
 
 
 def save_pg_config(cfg: dict) -> bool:
-    """Сохраняет конфигурацию в pg_config.json."""
+    """Сохраняет конфигурацию в pg_config.json. Пароль шифруется через DPAPI,
+    открытым текстом на диск не попадает."""
     try:
-        if not cfg.get("install_key"):
-            cfg["install_key"] = get_install_key()
+        out = dict(cfg)
+        if not out.get("install_key"):
+            out["install_key"] = get_install_key()
+        # Пароль на диск — только зашифрованным.
+        out["password_enc"] = _encrypt_pw(out.get("password", ""))
+        out.pop("password", None)
         with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(out, f, ensure_ascii=False, indent=2)
         return True
     except Exception:
         return False
@@ -140,12 +167,17 @@ def get_pg_connection(cfg: dict = None):
         )
     if cfg is None:
         cfg = load_pg_config()
+    # sslmode: шифрование канала к серверу (152-ФЗ — защита ПДн при передаче).
+    # По умолчанию "prefer" (использует TLS, если сервер поддерживает; иначе обычное
+    # соединение — не ломает локальные стенды). Для боевого сервера задайте "require"
+    # в pg_config.json, чтобы соединение без TLS было запрещено.
     conn = psycopg2.connect(
         host=cfg.get("host", "localhost"),
         port=int(cfg.get("port", 5432)),
         database=cfg.get("database", "vsgutu_grades"),
         user=cfg.get("user", ""),
         password=cfg.get("password", ""),
+        sslmode=cfg.get("sslmode", "prefer"),
         connect_timeout=5
     )
     return conn
@@ -167,20 +199,3 @@ def test_connection(cfg: dict = None) -> tuple:
         return False, str(e)
 
 
-#  Проверка активации ключа
-def is_key_activated(cfg: dict = None) -> bool:
-    """Проверяет, активирован ли ключ этого ПК в PostgreSQL."""
-    try:
-        conn = get_pg_connection(cfg)
-        cur = conn.cursor()
-        key = get_install_key()
-        key_hash = get_key_hash(key)
-        cur.execute(
-            "SELECT active FROM install_keys WHERE key_hash = %s",
-            (key_hash,)
-        )
-        row = cur.fetchone()
-        conn.close()
-        return bool(row and row[0])
-    except Exception:
-        return False

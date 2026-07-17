@@ -22,8 +22,29 @@ from core import DBManager, _syncer
 from security import hash_password, verify_password, encrypt_value, decrypt_value
 from styles import DEFAULT_GROUPS
 
-DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
-DEFAULT_ADMIN_LOGIN    = "admin"
+# Логин администратора не секрет (секрет — пароль). Дефолтного ПАРОЛЯ больше нет:
+# раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
+# первом входе — это был бэкдор. Теперь пароль администратора задаётся вручную
+# при первом запуске на хост-ПК (см. setup_admin_password / auth_pages).
+DEFAULT_ADMIN_LOGIN = "admin"
+
+# Старый скомпрометированный дефолтный пароль. Его мог записать в базу старый код.
+# Новый код считает такой пароль НЕ заданным: вход с ним запрещён, а при попытке
+# войти администратором запускается принудительная установка нового пароля.
+# Здесь он нужен ТОЛЬКО чтобы распознать и отвергнуть наследие — это не бэкдор.
+_LEGACY_DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
+
+
+def _is_legacy_default(stored_hash: str) -> bool:
+    """True, если сохранённый хеш — это старый дефолтный пароль (его надо отвергнуть)."""
+    return bool(stored_hash) and verify_password(_LEGACY_DEFAULT_ADMIN_PASSWORD, stored_hash)
+
+
+class AccountLocked(Exception):
+    """Логин временно заблокирован из-за серии неверных попыток (анти-брутфорс)."""
+    def __init__(self, seconds_left: int):
+        super().__init__(f"Вход заблокирован, осталось {seconds_left} с")
+        self.seconds = seconds_left
 
 
 # ─────────────────────────────────────────────────────────────
@@ -36,6 +57,14 @@ def _ensure_kv(cur):
     )
 
 
+# Модель хранения kv_store (студенты, преподаватели, конфиг, пароль-хеш админа):
+#   • Локально в SQLite значение ЗАШИФРОВАНО ключом этого ПК (DPAPI-привязка к
+#     учётной записи Windows) — защищает данные на украденном/чужом компьютере,
+#     при этом ничего не спрашивает у пользователя.
+#   • В общую базу PostgreSQL значение кладётся ОТКРЫТЫМ текстом — так его читает
+#     любой ПК колледжа без всякого ключа. Безопасность общей базы обеспечивают:
+#     учётная запись PostgreSQL (её пароль на диске под DPAPI), TLS-канал и
+#     размещение сервера в РФ. Пароли пользователей в любом случае только хешами.
 def _kv_get(key: str, default):
     conn = DBManager.get_conn()
     cur = conn.cursor()
@@ -45,6 +74,7 @@ def _kv_get(key: str, default):
     conn.close()
     if row:
         try:
+            # decrypt_value прозрачно вернёт и открытый текст (на случай миграции).
             return json.loads(decrypt_value(row[0]))
         except Exception:
             return default
@@ -52,24 +82,88 @@ def _kv_get(key: str, default):
 
 
 def _kv_set(key: str, value) -> bool:
-    raw = encrypt_value(json.dumps(value, ensure_ascii=False))
+    plain = json.dumps(value, ensure_ascii=False)
+    local_blob = encrypt_value(plain)        # локально (SQLite) — шифруем
     conn = DBManager.get_conn()
     cur = conn.cursor()
     _ensure_kv(cur)
-    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, raw))
+    cur.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, local_blob))
     conn.commit()
     conn.close()
     if DBManager.use_pg():
+        # В общую базу — ОТКРЫТЫЙ текст, чтобы читалось на всех ПК без ключа.
         _syncer.push(
             "INSERT INTO kv_store (key, value) VALUES (%s, %s) "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            (key, raw),
+            (key, plain),
         )
+    # Разбудить фоновую синхронизацию с сервером (API-режим), чтобы изменение
+    # ушло сразу, а не через интервал. Офлайн/нет сервера — это безвредный no-op.
+    try:
+        from sync_runner import trigger as _sync_trigger
+        _sync_trigger()
+    except Exception:
+        pass
     return True
 
 
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+    # С микросекундами: создание и последующее удаление записи в одну секунду
+    # должны различаться по времени, иначе LWW не отличит их.
+    return datetime.now().isoformat()
+
+
+def _stamp_records(new_records, old_records, key_fn):
+    """Проставляет updated_at=now только тем записям, что появились или изменились
+    (сравнение с прошлой версией по ключу, без учёта самого updated_at). Неизменные
+    сохраняют свою метку. Так синхронизация шлёт только реальные изменения, а не
+    весь список заново — корректный LWW между ПК без лишнего «шума»."""
+    now = _now_iso()
+    old_map = {key_fn(r): r for r in old_records}
+    for r in new_records:
+        prev = old_map.get(key_fn(r))
+        changed = (prev is None or
+                   {k: v for k, v in r.items() if k != "updated_at"} !=
+                   {k: v for k, v in prev.items() if k != "updated_at"})
+        if changed:
+            r["updated_at"] = now
+        elif not r.get("updated_at"):
+            r["updated_at"] = prev.get("updated_at", now)
+    return new_records
+
+
+def _student_key(r) -> str:
+    return (r.get("login") or
+            f"{r.get('surname','')}|{r.get('name','')}|{r.get('group','')}")
+
+
+def _merge_list_tombstones(new_live, old_raw, key_fn):
+    """Возвращает «сырой» список со штампами и надгробиями: записи, которые БЫЛИ,
+    а в новом списке исчезли, помечаются deleted=True (а не пропадают) — чтобы
+    удаление доехало до других ПК. Существующие надгробия сохраняются."""
+    now = _now_iso()
+    old_map = {key_fn(r): r for r in old_raw}
+    old_live = [r for r in old_raw if not r.get("deleted")]
+    _stamp_records(new_live, old_live, key_fn)
+    out, new_keys = [], set()
+    for r in new_live:
+        r["deleted"] = False
+        new_keys.add(key_fn(r))
+        out.append(r)
+    for k, r in old_map.items():
+        if k in new_keys:
+            continue
+        if r.get("deleted"):
+            out.append(r)                       # уже надгробие — сохраняем
+        else:
+            t = dict(r); t["deleted"] = True; t["updated_at"] = now
+            out.append(t)                       # было живым, исчезло → надгробие
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -83,25 +177,69 @@ class LocalStore:
     """
 
     # ── Студенты ──────────────────────────────────────────────
+    # get_* отдают только ЖИВЫЕ записи (UI не видит надгробий).
+    # get_*_raw отдают всё, включая надгробия — нужно синхронизации.
     def get_students(self) -> list:
+        return [s for s in _kv_get("students", []) if not s.get("deleted")]
+
+    def get_students_raw(self) -> list:
         return _kv_get("students", [])
 
-    def set_students(self, students: list) -> bool:
-        return _kv_set("students", [self._hash_record(s) for s in students])
+    def set_students(self, students: list, stamp: bool = True) -> bool:
+        records = [self._hash_record(s) for s in students]
+        # stamp=True — обычная правка/удаление в UI: исчезнувшие записи становятся
+        #   надгробиями, изменённые — штампуются.
+        # stamp=False — применение данных с сервера (уже слиты, с надгробиями) —
+        #   сохраняем как есть, чтобы синк не зациклился.
+        if stamp:
+            records = _merge_list_tombstones(records, _kv_get("students", []), _student_key)
+        return _kv_set("students", records)
 
     # ── Преподаватели ─────────────────────────────────────────
     def get_teachers(self) -> dict:
+        return {k: v for k, v in _kv_get("teachers", {}).items() if not v.get("deleted")}
+
+    def get_teachers_raw(self) -> dict:
         return _kv_get("teachers", {})
 
-    def set_teachers(self, teachers: dict) -> bool:
+    def set_teachers(self, teachers: dict, stamp: bool = True) -> bool:
         out = {name: self._hash_record(data) for name, data in teachers.items()}
+        if stamp:
+            old_raw = _kv_get("teachers", {})
+            old_live = {k: v for k, v in old_raw.items() if not v.get("deleted")}
+            now = _now_iso()
+            for name, data in out.items():
+                data["deleted"] = False
+                prev = old_live.get(name)
+                changed = (prev is None or
+                           {k: v for k, v in data.items() if k != "updated_at"} !=
+                           {k: v for k, v in prev.items() if k != "updated_at"})
+                if changed:
+                    data["updated_at"] = now
+                elif not data.get("updated_at"):
+                    data["updated_at"] = prev.get("updated_at", now)
+            # надгробия: были, в новом наборе исчезли
+            for name, prev in old_raw.items():
+                if name in out:
+                    continue
+                if prev.get("deleted"):
+                    out[name] = prev
+                else:
+                    t = dict(prev); t["deleted"] = True; t["updated_at"] = now
+                    out[name] = t
         return _kv_set("teachers", out)
 
     # ── Группы ────────────────────────────────────────────────
     def get_groups(self) -> list:
+        return [g for g in _kv_get("groups", []) if not g.get("deleted")]
+
+    def get_groups_raw(self) -> list:
         return _kv_get("groups", [])
 
-    def set_groups(self, groups: list) -> bool:
+    def set_groups(self, groups: list, stamp: bool = True) -> bool:
+        if stamp:
+            groups = _merge_list_tombstones(groups, _kv_get("groups", []),
+                                            lambda r: r.get("name", ""))
         return _kv_set("groups", groups)
 
     # ── Журналы ───────────────────────────────────────────────
@@ -127,25 +265,36 @@ class LocalStore:
     def get_admin_login(self) -> str:
         return self._config().get("admin_login", DEFAULT_ADMIN_LOGIN)
 
+    def has_admin_password(self) -> bool:
+        """True, если задан ВАЛИДНЫЙ пароль администратора (хеш есть и это не старый
+        дефолт). На хост-ПК при первом запуске — False → нужен first-run диалог.
+        На остальных ПК конфиг приходит из PostgreSQL уже с хешем → True.
+        Старый дефолтный пароль считаем «не заданным», чтобы заставить сменить его."""
+        h = self._config().get("admin_password_hash")
+        if not h or _is_legacy_default(h):
+            return False
+        return True
+
     def set_admin_password(self, pw: str) -> bool:
+        # Не даём установить старый скомпрометированный дефолт — иначе бэкдор вернётся.
+        if pw == _LEGACY_DEFAULT_ADMIN_PASSWORD:
+            return False
         cfg = self._config()
         cfg["admin_password_hash"] = hash_password(pw)
         return _kv_set("config", cfg)
 
-    def check_admin_password(self, pw: str) -> bool:
-        cfg = self._config()
-        h = cfg.get("admin_password_hash")
-        if h:
-            return verify_password(pw, h)
-        # Первый запуск: хеша ещё нет — принимаем дефолтный пароль и сразу хешируем
-        if pw == DEFAULT_ADMIN_PASSWORD:
-            self.set_admin_password(pw)
-            return True
-        return False
+    def setup_admin_password(self, pw: str) -> bool:
+        """Первичная установка пароля администратора (только если он ещё не задан).
+        Защищает от перезаписи уже настроенного пароля на клиентских ПК."""
+        if self.has_admin_password():
+            return False
+        return self.set_admin_password(pw)
 
-    # Совместимость со старым кодом
-    def get_admin_password(self) -> str:
-        return ""  # пароль больше не отдаётся в открытом виде; см. check_admin_password
+    def check_admin_password(self, pw: str) -> bool:
+        h = self._config().get("admin_password_hash")
+        if not h or _is_legacy_default(h):
+            return False  # пароль не задан или это старый дефолт — вход запрещён
+        return verify_password(pw, h)
 
     # ── Аутентификация (логин + пароль) ───────────────────────
     def authenticate(self, login: str, password: str) -> Optional[dict]:
@@ -155,11 +304,42 @@ class LocalStore:
           {"role": "teacher", "name": <ФИО>, "data": {...}}
           {"role": "student", "stud": {"f":..,"n":..,"g":..}}
         или None, если логин/пароль неверны.
+        Бросает AccountLocked, если логин временно заблокирован за перебор.
+
+        Здесь же — журнал аудита и анти-брутфорс: фиксируем каждый вход и блокируем
+        логин после серии неверных попыток (152-ФЗ / приказ ФСТЭК №21).
         """
+        from audit import (is_locked, register_failure, register_success,
+                            log_event)
+
         login = (login or "").strip()
         if not login:
             return None
 
+        locked, left = is_locked(login)
+        if locked:
+            log_event("login_locked", login, f"осталось {left}s")
+            raise AccountLocked(left)
+
+        result = self._authenticate_inner(login, password)
+
+        if result is None:
+            register_failure(login)
+            log_event("login_failed", login)
+        else:
+            register_success(login)
+            log_event("login_success", login, result.get("role", ""))
+            # Запускаем фоновую синхронизацию с сервером (если задан адрес API).
+            # Офлайн / без сервера — внутри просто ничего не делает.
+            try:
+                from sync_runner import start as _sync_start
+                _sync_start(login, password, result.get("role", ""))
+            except Exception as e:
+                print(f"[sync] не удалось запустить: {e}")
+        return result
+
+    def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:
+        """Сама проверка логина/пароля без аудита и блокировок."""
         if login == self.get_admin_login() and self.check_admin_password(password):
             return {"role": "admin"}
 
@@ -233,11 +413,6 @@ def get_store() -> LocalStore:
 def reset_store():
     global _store
     _store = None
-
-
-# Совместимость с прежними именами из github_storage
-get_gh_store = get_store
-reset_gh_store = reset_store
 
 
 def is_configured() -> bool:

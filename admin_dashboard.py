@@ -28,6 +28,7 @@ from PySide6.QtCore import QThread, Signal as QSignal
 from core import DBManager
 from subjects import load_subjects
 from data_store import get_store as get_gh_store
+from audit import log_event
 
 
 # ── Фоновый воркер для сетевых/долгих запросов ──────────────────────
@@ -89,7 +90,7 @@ class AdminDashboard(QWidget):
             ("subjects", "📚",  "Предметы"),
             ("__label__", "", "Система"),
             ("api",  "🔑",  "API Ключ"),
-            ("pg",   "🗄️", "База данных"),
+            ("pg",   "🌐", "Сервер"),
             ("ai",   "🤖",  "ИИ Помощник"),
         ]
         self.sidebar = Sidebar(items)
@@ -153,7 +154,7 @@ class AdminDashboard(QWidget):
             ("groups",   "🏫",   "Группы",         "Группы и предметы"),
             ("subjects", "📚",   "Предметы",       "Каталог предметов"),
             ("api",      "🔑",   "API Ключ",       "OpenRouter AI"),
-            ("pg",       "🗄️",  "База данных",    "PostgreSQL / перенос"),
+            ("pg",       "🌐",   "Сервер",         "Адрес и пароль"),
         ]
         grid = QGridLayout(); grid.setSpacing(12)
         for i, (key, icon, ttl, desc) in enumerate(tiles):
@@ -311,6 +312,8 @@ class AdminDashboard(QWidget):
         ts = gh.get_teachers() if gh else {}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(ts, f, ensure_ascii=False, indent=2)
+        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        log_event("export_personal_data", "admin", f"teachers={len(ts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(ts)} преподавателей")
 
     def _import_teachers(self):
@@ -451,6 +454,8 @@ class AdminDashboard(QWidget):
         sts = gh.get_students() if gh else []
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sts, f, ensure_ascii=False, indent=2)
+        # Аудит: экспорт персональных данных — значимое событие (152-ФЗ).
+        log_event("export_personal_data", "admin", f"students={len(sts)}")
         QMessageBox.information(self, "Готово", f"Экспортировано {len(sts)}")
 
     def _import_students(self):
@@ -775,98 +780,80 @@ class AdminDashboard(QWidget):
 
         self._run_bg(_check, _ok, _err)
 
-    # База данных
-
-    # База данных (PostgreSQL — сервер колледжа)
+    # Сервер синхронизации (адрес API + пароль администратора)
 
     def _build_pg(self):
-        from db_config import load_pg_config, get_install_key
+        from app_settings import get_api_url
         w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
-        lay.addWidget(title_lbl("База данных"))
+        lay.addWidget(title_lbl("Сервер синхронизации"))
 
-        cfg = load_pg_config()
-        gc = card(); gl = QVBoxLayout(gc); gl.setContentsMargins(18, 16, 18, 16); gl.setSpacing(10)
-        gl.addWidget(section_lbl("🐘 PostgreSQL (сервер колледжа)"))
-        self._pg_status = lbl("Проверка...", 12, C['text3']); gl.addWidget(self._pg_status)
+        # ── Карточка: адрес сервера колледжа (API) ────────────────────────
+        # Десктоп общается с сервером по сети (HTTP). Адрес обычно уже вшит в
+        # сборку; здесь его можно переопределить, если сервер переехал.
+        ac = card(); al = QVBoxLayout(ac); al.setContentsMargins(18, 16, 18, 16); al.setSpacing(10)
+        al.addWidget(section_lbl("🌐 Адрес сервера"))
+        al.addWidget(lbl("Адрес сервера колледжа. Обычно уже задан в программе — менять "
+                         "нужно, только если сервер переехал. Учителя и студенты просто "
+                         "входят, данные подтягиваются сами. Пусто — работа только локально.",
+                         11, C['text3']))
+        self._api_url = field_input("http://10.0.0.5:8000"); self._api_url.setText(get_api_url())
+        al.addWidget(self._api_url)
+        arow = QHBoxLayout()
+        asave = btn("💾 Сохранить адрес", "green"); asave.clicked.connect(self._save_api_url)
+        arow.addWidget(asave); arow.addStretch(); al.addLayout(arow)
+        lay.addWidget(ac)
 
-        self._pg_host = field_input("192.168.1.100");      self._pg_host.setText(str(cfg.get("host", "")))
-        self._pg_port = field_input("5432");                self._pg_port.setText(str(cfg.get("port", 5432)))
-        self._pg_db   = field_input("vsgutu_grades");       self._pg_db.setText(str(cfg.get("database", "vsgutu_grades")))
-        self._pg_user = field_input("vsgutu_user");         self._pg_user.setText(str(cfg.get("user", "")))
-        self._pg_pass = field_input("пароль БД", password=True); self._pg_pass.setText(str(cfg.get("password", "")))
-        for lab, wdg in [("СЕРВЕР (IP)", self._pg_host), ("ПОРТ", self._pg_port),
-                         ("БАЗА ДАННЫХ", self._pg_db), ("ПОЛЬЗОВАТЕЛЬ", self._pg_user),
-                         ("ПАРОЛЬ БД", self._pg_pass)]:
-            gl.addWidget(lbl(lab, 10, C['text3'])); gl.addWidget(wdg)
+        # ── Карточка: смена пароля администратора ──────────────────
+        sc = card(); sl = QVBoxLayout(sc); sl.setContentsMargins(18, 16, 18, 16); sl.setSpacing(10)
+        sl.addWidget(section_lbl("🔐 Пароль администратора"))
+        self._adm_old = field_input("Текущий пароль", password=True)
+        self._adm_new = field_input("Новый пароль (мин. 8 символов)", password=True)
+        self._adm_new2 = field_input("Повтор нового пароля", password=True)
+        for lab, wdg in [("ТЕКУЩИЙ ПАРОЛЬ", self._adm_old),
+                         ("НОВЫЙ ПАРОЛЬ", self._adm_new),
+                         ("ПОВТОР", self._adm_new2)]:
+            sl.addWidget(lbl(lab, 10, C['text3'])); sl.addWidget(wdg)
+        chg = btn("💾 Сменить пароль", "green"); chg.clicked.connect(self._change_admin_pw)
+        srow = QHBoxLayout(); srow.addWidget(chg); srow.addStretch(); sl.addLayout(srow)
+        lay.addWidget(sc)
 
-        row = QHBoxLayout()
-        save_b = btn("💾 Сохранить и подключить", "green")
-        test_b = btn("🔌 Проверить", "ghost")
-        save_b.clicked.connect(self._save_pg)
-        test_b.clicked.connect(self._test_pg)
-        row.addWidget(save_b); row.addWidget(test_b); row.addStretch()
-        gl.addLayout(row)
-
-        info = lbl(f"Ключ этого ПК: {get_install_key()}\n\n"
-                   "PostgreSQL ставится на один сервер/ПК в колледже — остальные ПК "
-                   "подключаются к нему по локальной сети. Данные не уходят в интернет. "
-                   "Если PostgreSQL не настроен, программа работает на локальном SQLite.",
-                   10, C['text3'])
-        info.setWordWrap(True)
-        info.setStyleSheet(f"background:{C['green_glow']};border:1px solid {C['border']};border-radius:8px;padding:10px;")
-        gl.addWidget(info)
-        lay.addWidget(gc); lay.addStretch()
+        lay.addStretch()
         w.setWidget(inner)
         self.pages["pg"] = w; self.stack.addWidget(w)
 
-    def _refresh_pg(self):
-        def _fetch():
-            from data_store import get_store
-            try: return get_store().test_connection()
-            except Exception as e: return False, str(e)
-        def _apply(result):
-            ok, msg = result
-            self._pg_status.setText((("✅ " if ok else "⚠️ ") + str(msg))[:70])
-            self._pg_status.setStyleSheet(f"font-size:12px;color:{C['green'] if ok else C['red']};")
-        self._run_bg(_fetch, _apply)
-
-    def _collect_pg_cfg(self):
-        try: port = int(self._pg_port.text().strip() or "5432")
-        except ValueError: port = 5432
-        return {
-            "host": self._pg_host.text().strip(),
-            "port": port,
-            "database": self._pg_db.text().strip() or "vsgutu_grades",
-            "user": self._pg_user.text().strip(),
-            "password": self._pg_pass.text(),
-        }
-
-    def _test_pg(self):
-        from db_config import test_connection
-        cfg = self._collect_pg_cfg()
-        if not cfg["host"] or not cfg["user"]:
-            QMessageBox.warning(self, "Ошибка", "Укажите адрес сервера и пользователя"); return
-        ok, msg = test_connection(cfg)
-        if ok: QMessageBox.information(self, "✅ Подключение есть", str(msg)[:300])
-        else:  QMessageBox.critical(self, "❌ Не удалось подключиться", str(msg)[:400])
-
-    def _save_pg(self):
-        from db_config import save_pg_config, test_connection, get_install_key
-        cfg = self._collect_pg_cfg()
-        if not cfg["host"] or not cfg["user"]:
-            QMessageBox.warning(self, "Ошибка", "Укажите адрес сервера и пользователя"); return
-        ok, msg = test_connection(cfg)
-        if not ok:
-            QMessageBox.critical(self, "❌ Ошибка подключения", str(msg)[:400]); return
-        cfg["install_key"] = get_install_key()
-        if save_pg_config(cfg):
-            QMessageBox.information(self, "Сохранено",
-                "Настройки PostgreSQL сохранены.\n\nПерезапустите программу, чтобы все ПК "
-                "работали с общей базой колледжа.")
-            self._refresh_pg()
+    def _save_api_url(self):
+        from app_settings import set_api_url
+        url = self._api_url.text().strip()
+        if set_api_url(url):
+            QMessageBox.information(
+                self, "Сохранено",
+                "Адрес сервера сохранён.\n\nПерезапустите программу, чтобы включить "
+                "синхронизацию. Если поле пустое — программа работает только локально.")
         else:
-            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить настройки")
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить адрес сервера")
+
+    def _change_admin_pw(self):
+        """Смена пароля администратора. Меняется в общем конфиге → синхронизируется
+        на все ПК через сервер (API)."""
+        gh = get_gh_store()
+        if not gh:
+            QMessageBox.critical(self, "Ошибка", "Хранилище недоступно"); return
+        old = self._adm_old.text()
+        new = self._adm_new.text()
+        new2 = self._adm_new2.text()
+        if not gh.check_admin_password(old):
+            QMessageBox.warning(self, "Ошибка", "Текущий пароль неверен"); return
+        if len(new) < 8:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль должен быть не короче 8 символов"); return
+        if new != new2:
+            QMessageBox.warning(self, "Ошибка", "Новый пароль и повтор не совпадают"); return
+        if gh.set_admin_password(new):
+            log_event("admin_password_changed", "admin")
+            self._adm_old.clear(); self._adm_new.clear(); self._adm_new2.clear()
+            QMessageBox.information(self, "Готово", "Пароль администратора изменён.")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить новый пароль")
 
     # ИИ
 
@@ -919,12 +906,22 @@ class AdminDashboard(QWidget):
             if key == "groups":   self._render_groups()
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_api()
-            if key == "pg":       self._refresh_pg()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
+                self._current_key = key
         finally:
             self._switching = False
+
+    def refresh(self):
+        """Перерисовать текущую вкладку — вызывается после фоновой синхронизации,
+        чтобы свежие данные с сервера сразу появились на экране."""
+        key = getattr(self, "_current_key", "dash")
+        if key == "dash":     self._refresh_dash()
+        elif key == "teachers": self._render_teachers()
+        elif key == "students": self._render_students()
+        elif key == "groups":   self._render_groups()
+        elif key == "subjects": self._render_subjects()
 
     def _refresh_students_combo(self):
         """Обновить список групп в фильтре студентов (фоновая загрузка)."""

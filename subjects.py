@@ -19,27 +19,12 @@ subjects.py — единственный источник правды для с
 """
 import json
 import os
-import sys
 
+import app_paths
 
-def _get_app_dir() -> str:
-    """
-    Возвращает папку рядом с .exe (или рядом с main.py при запуске из .py).
-
-    PyInstaller при --onefile распаковывает всё в sys._MEIPASS (временная
-    папка в %TEMP%), но нам нужна папка где ЛЕЖИТ сам .exe —
-    это os.path.dirname(sys.executable).
-
-    При обычном запуске через python main.py — папка со скриптом.
-    """
-    if getattr(sys, "frozen", False):
-        # Запущен как .exe — берём папку где лежит .exe файл
-        return os.path.dirname(sys.executable)
-    # Запущен как .py — папка где лежит subjects.py / main.py
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-SUBJECTS_FILE = os.path.join(_get_app_dir(), "subjects.json")
+# subjects.json ВСЕГДА рядом с программой (см. app_paths.app_dir): его можно
+# свободно править в любом текстовом редакторе. В .exe НЕ упаковывается.
+SUBJECTS_FILE = app_paths.app_file("subjects.json")
 
 # Встроенный список по умолчанию — используется если subjects.json не существует
 _BUILTIN_SUBJECTS = [

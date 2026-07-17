@@ -103,9 +103,8 @@ class TeacherDashboard(QWidget):
             ("+ Экзамен",         "blue",   self._add_exam),
             ("+ Студент",         "ghost",  self._add_student),
             ("💾 Сохранить",      "ghost",  self._save),
-            ("📤 Excel",          "ghost",  self._export_excel),
-            ("📥 Excel",          "ghost",  self._import_excel),
-            ("🗄 Бэкап",          "ghost",  self._make_backup),
+            ("📤 Экспорт",        "ghost",  self._export_excel),
+            ("📥 Импорт",         "ghost",  self._import_excel),
         ]:
             b = btn(txt, style); b.clicked.connect(cb); btn_row.addWidget(b)
         # индикатор конфликтов синхронизации (виден, только если они есть)
@@ -202,18 +201,38 @@ class TeacherDashboard(QWidget):
                     col_defs.append((l, ri)); ri += 1
         self.t_table.setRowCount(len(students))
         self.t_table.setColumnCount(2 + len(col_defs))
+        # Тему в шапке показываем коротко (чтобы столбец не разъезжался), но
+        # полную тему кладём в подсказку — наведёшь мышь и прочитаешь целиком.
+        def _short(text: str, limit: int = 22) -> str:
+            text = (text or "").strip()
+            if len(text) <= limit:
+                return text
+            cut = text[:limit].rstrip()
+            sp = cut.rfind(" ")
+            if sp >= limit - 8:          # обрезаем по последнему пробелу, не посреди слова
+                cut = cut[:sp].rstrip()
+            return cut + "…"
         headers = ["Фамилия", "Имя"]
+        tooltips = ["", ""]
         for l, ri in col_defs:
             if ri > 0:
                 rd = getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', '')
-                headers.append(f"Пересдача №{ri}\n{rd}")
+                headers.append(f"Пересдача №{ri}\n{rd}"); tooltips.append("")
             elif l.type == "Лекция":
-                headers.append(f"Лекция {l.number}{f' ({l.hour}-й ч.)' if l.hour else ''}\n{l.date}\n{l.topic[:18]}")
+                headers.append(f"Лекция {l.number}{f' ({l.hour}-й ч.)' if l.hour else ''}\n{l.date}\n{_short(l.topic)}")
+                tooltips.append(l.topic or "")
             elif l.type == "Экзамен":
-                headers.append(f"Экзамен №{l.number}\n{l.date}\n{l.topic[:18]}")
+                headers.append(f"Экзамен №{l.number}\n{l.date}\n{_short(l.topic)}")
+                tooltips.append(l.topic or "")
             else:
-                headers.append(f"Практика {l.number}\n{l.date}\n{l.topic[:18]}")
+                headers.append(f"Практика {l.number}\n{l.date}\n{_short(l.topic)}")
+                tooltips.append(l.topic or "")
         self.t_table.setHorizontalHeaderLabels(headers)
+        # полная тема в подсказке заголовка
+        for c, tip in enumerate(tooltips):
+            it = self.t_table.horizontalHeaderItem(c)
+            if it is not None and tip:
+                it.setToolTip(tip)
         self.t_table.blockSignals(True)
         for r, s in enumerate(students):
             fi = QTableWidgetItem(s.f); fi.setForeground(QColor(C['text']))
@@ -268,19 +287,7 @@ class TeacherDashboard(QWidget):
     def _set_val(self, student, key, val):
         student.records[key] = val
 
-    # ── бэкапы / конфликты ───────────────────────────────────
-    def _make_backup(self):
-        try:
-            from core import DBManager
-            path = DBManager.backup(reason="manual")
-            if path:
-                QMessageBox.information(self, "Бэкап создан",
-                                        f"Резервная копия сохранена:\n{path}")
-            else:
-                QMessageBox.information(self, "Бэкап", "Нечего копировать.")
-        except Exception as e:
-            QMessageBox.warning(self, "Бэкап", f"Ошибка: {e}")
-
+    # ── конфликты синхронизации ───────────────────────────────
     def _refresh_conflicts_badge(self):
         try:
             from core import DBManager
@@ -397,7 +404,19 @@ class TeacherDashboard(QWidget):
         self.book.lessons = [l for l in self.book.lessons if l.id != lesson_id]
         self.book.save_to_db(); self._update_table()
 
+    def _journal_ready(self) -> bool:
+        """Журнал открыт (выбраны предмет и группа)? Если нет — self.book пуст, и
+        добавление молча падало бы: в .exe без консоли исключение не видно. Поэтому
+        проверяем заранее и понятно сообщаем пользователю."""
+        if not self.book:
+            QMessageBox.warning(self, "Журнал не открыт",
+                "Сначала выберите предмет и группу на вкладке «Журнал».")
+            return False
+        return True
+
     def _add_lesson(self):
+        if not self._journal_ready():
+            return
         t, ok = QInputDialog.getItem(self, "Тип", "Выберите тип:", ["Лекция", "Практика"], 0, False)
         if not ok: return
         d = ui_date.ask_date(self, "Дата занятия", "Когда занятие:",
@@ -405,18 +424,28 @@ class TeacherDashboard(QWidget):
         if not d: return
         tp, ok3 = QInputDialog.getText(self, "Тема", "Тема занятия:")
         if not ok3: return
-        self.book.add_lesson(t, topic=tp, date=d)
-        self._update_table()
+        try:
+            self.book.add_lesson(t, topic=tp.strip(), date=d)
+            self._update_table()
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            QMessageBox.critical(self, "Не удалось добавить занятие", str(e))
 
     def _add_exam(self):
+        if not self._journal_ready():
+            return
         d = ui_date.ask_date(self, "Дата экзамена", "Когда экзамен:",
                              default=ui_date.today_str())
         if not d: return
         tp, ok2 = QInputDialog.getText(self, "Тема", "Тема экзамена:")
         if not ok2: return
-        l = self.book.add_lesson("Экзамен", topic=tp, date=d)
-        l.retake_date = ""
-        self.book.save_to_db(); self._update_table()
+        try:
+            l = self.book.add_lesson("Экзамен", topic=tp.strip(), date=d)
+            l.retake_date = ""
+            self.book.save_to_db(); self._update_table()
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            QMessageBox.critical(self, "Не удалось добавить экзамен", str(e))
 
     def _add_student(self):
         # Если журнал ещё не открыт — предупреждаем

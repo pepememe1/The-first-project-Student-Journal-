@@ -4,6 +4,28 @@ main.py — единая точка входа GradeBookAI (Release 2.2).
 """
 import sys
 import os
+
+
+# Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
+# консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу
+# (UnicodeEncodeError). По всему проекту есть такие print — делаем вывод
+# неубиваемым ОДИН раз здесь, до любых сообщений.
+def _safe_stream(stream):
+    if stream is None:
+        try:
+            return open(os.devnull, "w", encoding="utf-8")
+        except Exception:
+            return None
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    return stream
+
+
+sys.stdout = _safe_stream(sys.stdout)
+sys.stderr = _safe_stream(sys.stderr)
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 
@@ -26,17 +48,31 @@ def get_icon() -> QIcon:
 
 
 def main():
-    # Инициализация базы данных (SQLite + опционально PostgreSQL)
+    # Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
+    # (см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
     from core import DBManager
-    if DBManager.init():
-        print("✅ Работаем с PostgreSQL")
-    else:
-        print("ℹ️  Работаем с локальным SQLite")
+    DBManager.init()
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # Шрифты Syne + DM Sans (фирменный стиль Synapse)
+    #Проверка криптографии: без пакета cryptography шифрование ПДн недоступно.
+    #Раньше приложение молча откатывалось на слабый самописный шифр — для боевой
+    #эксплуатации (152-ФЗ) это недопустимо, поэтому честно останавливаемся.
+    try:
+        from security import CRYPTO_AVAILABLE
+    except Exception:
+        CRYPTO_AVAILABLE = False
+    if not CRYPTO_AVAILABLE:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "Не установлен компонент защиты",
+            "Для работы с персональными данными требуется пакет «cryptography».\n\n"
+            "Установите его командой:\n    pip install cryptography\n\n"
+            "Без него запуск невозможен: данные нельзя зашифровать надёжно.")
+        sys.exit(1)
+
+    #Шрифты Syne + DM Sans (фирменный стиль Synapse)
     try:
         from fonts import load_fonts
         load_fonts()
@@ -52,7 +88,7 @@ def main():
     window.raise_()
     window.activateWindow()
 
-    # Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
+    #Авто-бэкап локальной базы при выходе + аккуратная остановка синхронизации
     def _on_quit():
         try:
             from core import DBManager, _syncer
