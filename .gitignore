@@ -64,3 +64,23 @@ server/ota_bundles/latest.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── СЕКРЕТЫ ПОДПИСИ ANDROID — НИКОГДА не коммитить ─────────────────────────────────
+# release.keystore — ключ подписи приложения в RuStore. Его утечка = чужие сборки под
+# нашим именем; его потеря = невозможность выпускать обновления. Хранить вне git (бэкап!).
+release.keystore
+*.keystore
+*.jks
+keystore.properties
+web/android/keystore.properties
+
+# ── Сборочные артефакты и сторонние бинарники (не место в репозитории) ─────────────
+*.apk
+*.aab
+Sdk.zip
+caddy.exe
+nuitka_out/
+web/*.zip
+
+# ── Реальные журналы с ПДн студентов (152-ФЗ) — только локально ────────────────────
+Журнал_*.xlsx
