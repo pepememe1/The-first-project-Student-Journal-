@@ -6,6 +6,7 @@ db.py — Подключение к базе (SQLAlchemy).
 """
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import QueuePool
 
 from .config import DATABASE_URL, DB_KEY
 
@@ -35,7 +36,20 @@ def _build_engine():
                 return conn
 
             print("[db] Файл БД шифруется (SQLCipher, AES-256).")
-            return create_engine("sqlite://", creator=_creator, pool_pre_ping=True)
+            #poolclass=QueuePool — ОБЯЗАТЕЛЬНО, не убирать.
+            #Файл БД мы открываем через creator, поэтому URL здесь пустой («sqlite://»).
+            #Но для такого URL SQLAlchemy считает базу IN-MEMORY и молча берёт
+            #SingletonThreadPool — пул «одно соединение на поток», предназначенный для
+            #тестов с памятью. Он ЗАКРЫВАЕТ лишние соединения сверх size, а FastAPI
+            #обслуживает синхронные эндпоинты из пула потоков → соединение закрывалось
+            #под работающей сессией, и SQLAlchemy падал на откате:
+            #   sqlcipher3.dbapi2.ProgrammingError: Cannot operate on a closed database
+            #(ловили на бою при живых пользователях). QueuePool — нормальный пул с
+            #переиспользованием: соединения не закрываются произвольно, а PRAGMA key
+            #(тяжёлый KDF) выполняется только при создании нового соединения, а не на
+            #каждый запрос. Потокобезопасно: creator ставит check_same_thread=False.
+            return create_engine("sqlite://", creator=_creator, pool_pre_ping=True,
+                                 poolclass=QueuePool)
     return create_engine(DATABASE_URL, connect_args=_connect_args, pool_pre_ping=True)
 
 
