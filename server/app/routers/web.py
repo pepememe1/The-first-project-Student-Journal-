@@ -775,6 +775,17 @@ def schedule_get(group: str = Query(""), user: User = Depends(get_current_user))
 
 
 # «ВЕКТОР» ─────────────────────────────────────────────────────────────────────────
+#Интенты со СТАТИЧНЫМ текстом (приветствие/справка/благодарность/факты о ВСГУТУ). Их
+#НЕЛЬЗЯ гонять через LLM: там нечего переформулировать — это готовая справка, а не данные.
+#Модель видит в ней НАЗВАНИЯ метрик («средний балл», «должники», «зона риска») без цифр и
+#дописывает шаблон с плейсхолдерами («Средний балл по группам: [укажите средние баллы]») —
+#ровно та выдумка, которую продукт обещает не делать (§5). LLM озвучивает ТОЛЬКО ответы с
+#РЕАЛЬНЫМИ числами.
+#ВАЖНО: набор ДОЛЖЕН совпадать с десктопным guard'ом в vector/engine.py::ask — при
+#портировании веба его забыли перенести, отсюда и был баг с плейсхолдерами на сайте.
+_NO_VOICE_INTENTS = {"hello", "thanks", "help", "about_vsgutu", "about_college"}
+
+
 @router.post("/vector/ask")
 def vector_ask(payload: dict = Body(...),
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -787,7 +798,10 @@ def vector_ask(payload: dict = Body(...),
     result = _vector_facts(question.lower(), user, db, cfg)
     #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
     #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
-    result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
+    #Приветствие/справку/благодарность НЕ озвучиваем (см. _NO_VOICE_INTENTS) — там нет
+    #цифр, и модель начинает дописывать шаблоны с плейсхолдерами вместо фактов.
+    if result.get("intent") not in _NO_VOICE_INTENTS:
+        result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
     return result
 
 
