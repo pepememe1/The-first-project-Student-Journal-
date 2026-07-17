@@ -1,6 +1,8 @@
 """
 test_sync.py — Синхронизация: push/pull, права ролей, серверные метки, идемпотентность.
 """
+import time
+
 from conftest import make_admin, make_teacher
 
 
@@ -214,11 +216,20 @@ def test_teacher_term_grade_scoped_by_subject(client):
     assert r.json().get("rejected", {}).get("term_grades") == 1
 
 
+def _tick():
+    """Пауза, гарантирующая СМЕНУ метки времени сервера. На Windows часы дискретны
+    (до ~16 мс), поэтому push и следующий за ним pull могут попасть в ОДИН тик. Тесты
+    ниже проверяют семантику дельты, а не поведение на стыке тиков (для стыка есть
+    отдельный тест test_delta_pull_does_not_lose_boundary_record)."""
+    time.sleep(0.03)
+
+
 def test_delta_pull_returns_only_newer(client):
     """pull?since=<метка> отдаёт только записи, изменённые позже метки — основа
     дельта-синхронизации (не качать всю базу каждый раз)."""
     h = make_admin(client)
     _push(client, h, lessons=[_LESSON])
+    _tick()
     server_time = client.get("/sync/pull", headers=h).json()["server_time"]
     #с момента server_time изменений не было — дельта пуста
     later = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
@@ -230,9 +241,28 @@ def test_delta_pull_brings_new_changes_after_watermark(client):
     дельта-pull по метке приносит ТОЛЬКО новое занятие, без старых."""
     h = make_admin(client)
     _push(client, h, lessons=[_LESSON])
+    _tick()
     server_time = client.get("/sync/pull", headers=h).json()["server_time"]
     #появилось новое занятие уже ПОСЛЕ взятой метки
     _push(client, h, lessons=[dict(_LESSON, id="L2", topic="Новое")])
     delta = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
     ids = [l["id"] for l in delta["changes"]["lessons"]]
     assert ids == ["L2"], f"дельта должна вернуть только новое занятие, а не {ids}"
+
+
+def test_delta_pull_does_not_lose_boundary_record(client):
+    """ПОГРАНИЧНАЯ ЗАПИСЬ НЕ ТЕРЯЕТСЯ (правило: лучше отдать повторно, чем потерять).
+
+    Если метка клиента совпала с меткой записи (push и pull попали в один тик часов —
+    на Windows реально), строгий фильтр «updated_at > since» выкидывал такую запись из
+    дельты НАВСЕГДА, до её следующего изменения: оценка просто не доезжала до второго ПК.
+    Здесь метка берётся РАВНОЙ метке занятия — оно обязано прийти (фильтр «>=»)."""
+    h = make_admin(client)
+    _push(client, h, lessons=[_LESSON])
+    lesson = [x for x in client.get("/sync/pull", headers=h).json()["changes"]["lessons"]
+              if x["id"] == _LESSON["id"]][0]
+    same_ts = lesson["updated_at"]          #метка клиента = метка самой записи (стык тиков)
+    delta = client.get("/sync/pull", params={"since": same_ts}, headers=h).json()
+    ids = [x["id"] for x in delta["changes"]["lessons"]]
+    assert _LESSON["id"] in ids, ("занятие с меткой, равной метке клиента, обязано прийти "
+                                  f"(иначе теряется навсегда), а пришло: {ids}")

@@ -191,7 +191,12 @@ def pull(since: str = "", request: Request = None,
     for name, model in SYNC_MODELS.items():
         q = db.query(model)
         if since:
-            q = q.filter(model.updated_at > since)
+            #СТРОГО >= , а не > : запись, чья метка совпала с меткой прошлого pull (обе
+            #операции попали в один тик часов — на Windows это реально), при строгом «>»
+            #выпадала из дельты НАВСЕГДА, до своего следующего изменения. Это ровно та
+            #потеря, которую docstring выше обещает не допускать. С «>=» пограничная
+            #запись максимум придёт повторно — а применение идемпотентно (см. push).
+            q = q.filter(model.updated_at >= since)
         changes[name] = [_row_to_dict(r, model) for r in q.all()]
     #Минимизация по роли: чужие ПДн/хеши и секреты config не покидают сервер к не-админам.
     _scope_pull_for_role(changes, user, db)
