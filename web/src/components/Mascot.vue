@@ -1,21 +1,29 @@
 <script setup>
-// Mascot — маскот «Вектор» (арт Арины): один из 30 спрайтов эмоций (морда+жест).
-// Слаг — через prop `sprite`; выбор слага — config/mascot.js. `animate` добавляет
-// мягкое «дыхание». Смена эмоции — настоящий КРОСС-ФЕЙД (оба кадра видны одновременно),
-// а не мгновенная подмена. Дыхание идёт на GPU-слое (translateZ) — без дрожи.
+// Mascot — маскот «Вектор» (арт Арины). Два режима отображения одного персонажа:
+//   • ЭМОЦИЯ (prop `sprite`) — один из 30 статичных спрайтов «морда+жест» (§5): настроение
+//     по успеваемости на дашборде. `animate` добавляет мягкое «дыхание».
+//   • ДЕЙСТВИЕ (prop `anim`) — анимированный WebP с альфой (idle/greeting/thinking/speaking):
+//     что Вектор делает в ЧАТЕ. Один WebP-файл играет и в браузере (веб/мобилка), и в Qt
+//     (десктоп) — общий формат на все платформы. `anim` имеет приоритет над `sprite`.
+// Смена кадра — настоящий КРОСС-ФЕЙД (оба видны одновременно), без мига пустоты.
 import { computed, onMounted } from 'vue'
-import { preloadMascots } from '@/config/mascot'
+import { preloadMascots, preloadAnims } from '@/config/mascot'
 const props = defineProps({
   sprite: { type: String, default: 'neutral-idle' },
   animate: { type: Boolean, default: true },
+  // Активность для анимированного режима: idle | greeting | thinking | speaking.
+  // Пусто — показываем статичный спрайт эмоции (§5).
+  anim: { type: String, default: '' },
 })
-const src = computed(() => `/mascot/${props.sprite}.png`)
-// Предзагрузка распространённых поз — чтобы смена кадра была мгновенной, без «зависания».
-onMounted(preloadMascots)
+// anim (WebP) приоритетнее статичного спрайта. WebP сам зациклен (loop=0) — «дыхание»
+// в этом режиме не нужно (персонаж и так двигается: уши/хвост/рот).
+const src = computed(() =>
+  props.anim ? `/mascot/anim/${props.anim}.webp` : `/mascot/${props.sprite}.png`)
+onMounted(() => { preloadMascots(); preloadAnims() })
 </script>
 
 <template>
-  <div class="mascot" :class="{ 'mascot--float': animate }">
+  <div class="mascot" :class="{ 'mascot--float': animate && !anim }">
     <transition name="mascot-swap">
       <img :key="src" :src="src" alt="Вектор"
            class="mascot__img select-none object-contain" draggable="false" />
@@ -45,8 +53,9 @@ onMounted(preloadMascots)
   0%, 100% { transform: translateZ(0) scale(1); }
   50%      { transform: translateZ(0) scale(1.015); }
 }
-/* Смена кадра эмоции — быстрый кросс-фейд (снаппи, без «зависания»). */
-.mascot-swap-enter-active, .mascot-swap-leave-active { transition: opacity 0.18s ease; }
+/* Смена состояния — МГНОВЕННО (снаппи): очень короткий кросс-фейд только чтобы скрыть
+   микро-декод нового WebP, без ощутимой задержки между переключениями анимаций. */
+.mascot-swap-enter-active, .mascot-swap-leave-active { transition: opacity 0.06s linear; }
 .mascot-swap-enter-from, .mascot-swap-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .mascot--float .mascot__img { animation: none; } }
 </style>

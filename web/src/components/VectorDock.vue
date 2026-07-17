@@ -10,7 +10,7 @@ import Mascot from '@/components/Mascot.vue'
 import { useVectorStore } from '@/stores/vector'
 
 const vector = useVectorStore()
-const { messages, input, state, sprite, label, cmds, tick } = storeToRefs(vector)
+const { messages, input, state, anim, label, cmds, tick } = storeToRefs(vector)
 const scroller = ref(null)
 const showQuick = ref(false)
 
@@ -44,7 +44,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
     <!-- Маскот ФОНОМ (во всю площадь) + чат полупрозрачным слоем поверх -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <div class="pointer-events-none absolute inset-0">
-        <Mascot :sprite="sprite" class="h-full w-full" />
+        <Mascot :anim="anim" class="h-full w-full" />
       </div>
       <!-- Чат: верхний край ~42% высоты (уровень туловища) → голова и плечи открыты;
            подложка полупрозрачная + лёгкое размытие фона, чтобы текст читался. -->

@@ -49,6 +49,17 @@ export function preloadMascots() {
   for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.png` }
 }
 
+// Анимированные состояния чата (WebP с альфой). Состояния store совпадают с именами
+// файлов: greeting | idle | thinking | speaking. Предзагружаем thinking/speaking заранее,
+// чтобы при первом вопросе не было паузы на загрузку (idle грузится сразу как дефолт).
+export const CHAT_ANIMS = ['idle', 'greeting', 'thinking', 'speaking']
+let _animsPreloaded = false
+export function preloadAnims() {
+  if (_animsPreloaded || typeof Image === 'undefined') return
+  _animsPreloaded = true
+  for (const a of CHAT_ANIMS) { const img = new Image(); img.src = `/mascot/anim/${a}.webp` }
+}
+
 /** Спрайт для чата «Вектора» по состоянию/настроению/НАМЕРЕНИЮ — из 30 эмоций.
  * Для «speaking» делегируем pickEmote(intent) — так задействуется весь диапазон, как
  * в десктопе: долги/пропуски → предупреж, привет → радость+поздрав, плохой балл →

@@ -6,10 +6,10 @@ auth_pages.py — Страница аутентификации (LoginPage).
 ещё не задан, форма предложит его создать (см. _prompt_admin_setup).
 """
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QPropertyAnimation
+from PySide6.QtCore import Qt, QPoint, QPointF, QPropertyAnimation, QTimer, QSize
 import log
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPolygonF, QPainterPath
+    QPainter, QColor, QPen, QBrush, QPolygonF, QPainterPath, QMovie
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -125,23 +125,78 @@ class _SpeechBubble(QWidget):
 
 
 class _LoginMascot(QLabel):
-    """Маскот на экране входа. Спокойная поза по умолчанию; при наведении мышки —
-    «думающая» поза и облачко с советом (логику показа облачка ведёт LoginPage через
-    переданные колбэки on_enter / on_leave)."""
+    """Маскот на экране входа. Появляется с «приветствием», через ~1.6 с успокаивается в
+    покой (idle), при наведении мышки — «думает» + облачко-совет (логику облачка ведёт
+    LoginPage через колбэки on_enter/on_leave).
 
-    def __init__(self, default_pm, think_pm, on_enter, on_leave, parent=None):
+    Приоритет — анимированные WebP (`anim`: словарь state→путь, тот же формат, что в чате
+    и на вебе). Нет анимаций — фолбэк на статичные PNG (default_pm/think_pm), как раньше."""
+
+    def __init__(self, height, on_enter, on_leave, *, anim=None,
+                 default_pm=None, think_pm=None, parent=None):
         super().__init__(parent)
-        self._default = default_pm
-        self._think = think_pm
+        self._h = height
         self._on_enter = on_enter
         self._on_leave = on_leave
-        self.setPixmap(default_pm)
+        self._anim = anim or {}
+        self._default = default_pm
+        self._think = think_pm
+        self._movie = None
+        self._movie_state = None
+        self._hovered = False
+        self._greeted = False
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("background:transparent;")
+        if self._anim.get("idle"):
+            #Показываем idle-кадр сразу (виджет получает размер), а САМО «приветствие»
+            #запускаем при первом ПОКАЗЕ окна (showEvent) — иначе махание проигрывается
+            #ещё до появления окна и пользователь его не видит.
+            self._play("idle")
+        elif default_pm is not None:
+            self.setFixedHeight(height)
+            self.setPixmap(default_pm)
+
+    def showEvent(self, event):
+        #Первый показ окна: Вектор МАШЕТ (приветствие), затем через 1.6 с уходит в покой.
+        super().showEvent(event)
+        if self._anim.get("idle") and not self._greeted and not self._hovered:
+            self._greeted = True
+            self._movie_state = None          #сброс, чтобы _play перезапустил с кадра 0
+            self._play("greeting")
+            QTimer.singleShot(1600, self._settle_to_idle)
+
+    def _settle_to_idle(self):
+        if not self._hovered:
+            self._play("idle")
+
+    def _play(self, state: str):
+        """Проигрывает анимированный WebP состояния (idle/greeting/thinking) через QMovie.
+        Ширину виджета подгоняем под пропорцию кадра, высота фиксирована."""
+        path = self._anim.get(state) or self._anim.get("idle")
+        if not path or self._movie_state == state:
+            return
+        if self._movie is not None:
+            self._movie.stop()
+        mv = QMovie(path)
+        if not mv.isValid():
+            return
+        mv.jumpToFrame(0)
+        sz = mv.currentImage().size()
+        if sz.height() > 0:
+            w = max(1, round(sz.width() * self._h / sz.height()))
+            mv.setScaledSize(QSize(w, self._h))
+            self.setFixedSize(w, self._h)
+        self.setMovie(mv)
+        mv.start()
+        self._movie = mv
+        self._movie_state = state
 
     def enterEvent(self, event):
-        if self._think is not None and not self._think.isNull():
-            self.setPixmap(self._think)   #«задумался» — пока курсор над Вектором
+        self._hovered = True
+        if self._anim.get("thinking"):
+            self._play("thinking")      #«задумался» — пока курсор над Вектором
+        elif self._think is not None and not self._think.isNull():
+            self.setPixmap(self._think)
         try:
             self._on_enter()
         except Exception:
@@ -149,7 +204,11 @@ class _LoginMascot(QLabel):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.setPixmap(self._default)
+        self._hovered = False
+        if self._anim.get("idle"):
+            self._play("idle")
+        elif self._default is not None:
+            self.setPixmap(self._default)
         try:
             self._on_leave()
         except Exception:
@@ -621,18 +680,26 @@ class LoginPage(QWidget):
         при наведении мышки переходит в «думающую» позу (думает+думает) и показывает
         облачко с советом. Прозрачные PNG из арта Арины (vector/emotes.py). Нет арта —
         возвращаем None, форма показывается одна (ничего не ломается)."""
+        H = 560
         try:
-            from vector import emotes
+            from vector import speech, emotes
+            #ПРИОРИТЕТ — анимированный Вектор (тот же WebP, что в чате и на вебе):
+            #появление «приветствие» → покой idle (с паузой-покоем), наведение → «думает».
+            if speech.has_anim():
+                anim = {s: speech.anim_path(s) for s in ("idle", "thinking", "greeting")}
+                if anim.get("idle"):
+                    return _LoginMascot(H, self._on_mascot_enter, self._on_mascot_leave,
+                                        anim=anim)
+            #ФОЛБЭК — статичные PNG (деф+деф / думает+думает), как раньше.
             base = emotes.get(emotes.DEFAULT_FACE, emotes.DEFAULT_GESTURE)
             if base is None or base.isNull():
                 return None
             think = emotes.get("думает", "думает")
-            H = 560
             base_pm = base.scaledToHeight(H, Qt.SmoothTransformation)
             think_pm = (think.scaledToHeight(H, Qt.SmoothTransformation)
                         if (think is not None and not think.isNull()) else base_pm)
-            return _LoginMascot(base_pm, think_pm,
-                                self._on_mascot_enter, self._on_mascot_leave)
+            return _LoginMascot(H, self._on_mascot_enter, self._on_mascot_leave,
+                                default_pm=base_pm, think_pm=think_pm)
         except Exception as e:
             log.get("auth_pages").warning(f"[login] маскот не загрузился: {e}")
             return None

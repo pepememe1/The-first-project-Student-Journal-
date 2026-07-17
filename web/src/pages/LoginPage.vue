@@ -32,6 +32,8 @@ const desktop = ref({ available: false })
 // биометрический аутентификатор (Face ID/отпечаток) и браузер поддерживает passkeys.
 const canBiometric = ref(false)
 onMounted(async () => {
+  // greeting держим ~1.6 с, потом плавный переход в покой (без частого мелькания).
+  setTimeout(() => { greetingDone.value = true }, 1600)
   isDesktop.value = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? true
   try { desktop.value = (await desktopApi.info()).data } catch { desktop.value = { available: false } }
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
@@ -68,6 +70,13 @@ const hovered = ref(false)
 const tipIndex = ref(0)
 const tip = computed(() => TIPS[tipIndex.value])
 function onEnter() { hovered.value = true; tipIndex.value = (tipIndex.value + 1) % TIPS.length }
+
+// Анимированный Вектор на входе: появляется с «приветствием» (машет), через ~1.6 с
+// успокаивается в покой (idle) — задержка убирает мелькание greeting↔idle. Наведение
+// мыши → «думает». Все три состояния — тот же анимированный WebP, что и в чате.
+const greetingDone = ref(false)
+const loginAnim = computed(() =>
+  hovered.value ? 'thinking' : (greetingDone.value ? 'idle' : 'greeting'))
 
 const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
 
@@ -141,7 +150,7 @@ const showRecover = ref(false)
             <div class="absolute -bottom-2 left-1/2 size-4 -translate-x-1/2 rotate-45 border-b border-r border-border2 bg-card" />
           </div>
         </transition>
-        <Mascot :sprite="hovered ? 'think-think' : 'neutral-idle'" class="h-[30rem] w-80 cursor-pointer" />
+        <Mascot :anim="loginAnim" class="h-[30rem] w-80 cursor-pointer" />
       </div>
 
       <!-- Карточка входа (центр экрана) -->

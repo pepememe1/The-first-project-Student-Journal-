@@ -33,6 +33,10 @@ export const useVectorStore = defineStore('vector', () => {
   const tick = ref(0)
 
   const sprite = computed(() => chatEmote(state.value, lastMood.value, lastIntent.value))
+  // Анимация чата = само состояние (greeting|idle|thinking|speaking) — имена совпадают
+  // с файлами /mascot/anim/*.webp. Это «действие» Вектора (гибрид: анимации в чате,
+  // а статичные эмоции по успеваемости — на дашборде, см. §5).
+  const anim = computed(() => state.value)
   const label = computed(() => ({
     greeting: 'Привет!', thinking: 'Думаю…', speaking: 'Отвечаю', idle: 'Готов помочь',
   }[state.value] || 'Готов помочь'))
@@ -69,13 +73,21 @@ export const useVectorStore = defineStore('vector', () => {
       })
       lastMood.value = 'neutral'
     } finally {
-      state.value = 'speaking'
       tick.value++
-      settle()
+      // На ПРИВЕТСТВИЕ (intent hello) Вектор сначала МАШЕТ рукой (greeting), а потом
+      // «говорит» ответ. На остальное — сразу переходит к речи.
+      if (lastIntent.value === 'hello') {
+        state.value = 'greeting'
+        clearTimeout(settleTimer)
+        settleTimer = setTimeout(() => { state.value = 'speaking'; settle() }, 1400)
+      } else {
+        state.value = 'speaking'
+        settle()
+      }
     }
   }
   function ask(q) { send(q) }
 
   return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
-           sprite, label, cmds, send, ask, greetSettle }
+           sprite, anim, label, cmds, send, ask, greetSettle }
 })

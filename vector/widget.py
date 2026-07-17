@@ -31,9 +31,9 @@ from . import speech
 import log
 
 from PySide6.QtCore import (
-    Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve
+    Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve, QSize
 )
-from PySide6.QtGui import QPixmap, QTransform
+from PySide6.QtGui import QPixmap, QTransform, QMovie
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
     QLineEdit, QFrame, QToolButton
@@ -59,13 +59,17 @@ SPEAK_MIN_MS = 5000                   #речь минимум 5 c
 SPEAK_MAX_MS = 7000                   #речь максимум 7 c
 SPEAK_MS_PER_CHAR = 25                #+25 мс за символ ответа (между 5 и 7 c)
 AWAY_DELAY_MS = 2000                  #«ещё пару секунд» idle после ухода курсора
+GREET_MS = 1400                       #сколько машет «приветствием» перед речью (на hello)
 
 #Состояния машины маскота
 ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY = "idle", "thinking", "speaking", "away"
+ST_GREET = "greeting"                 #машет рукой (на приветствие) — анимир. WebP
 
 #Заглушка, пока папки emotes/ нет (компактные эмодзи под состояние)
-_FALLBACK_FACE = {ST_IDLE: "🐯", ST_THINK: "🤔", ST_SPEAK: "🗣️", ST_AWAY: "😴"}
-_FALLBACK_MOUTH = {ST_IDLE: "•‿•", ST_THINK: "· · ·", ST_SPEAK: "▿", ST_AWAY: "︶"}
+_FALLBACK_FACE = {ST_IDLE: "🐯", ST_THINK: "🤔", ST_SPEAK: "🗣️", ST_AWAY: "😴",
+                  ST_GREET: "👋"}
+_FALLBACK_MOUTH = {ST_IDLE: "•‿•", ST_THINK: "· · ·", ST_SPEAK: "▿", ST_AWAY: "︶",
+                   ST_GREET: "•‿•"}
 
 _MOOD_TINT = {"happy": "#2e9e5b", "neutral": C.get("green", "#147c8b"), "sad": "#b9772b"}
 
@@ -145,6 +149,8 @@ class VectorAvatar(QWidget):
         self._mood = "neutral"
         self._intent = "help"
         self._mirrored = False
+        self._movie = None            #QMovie анимированного WebP (если арт-анимации есть)
+        self._movie_state = None      #для какого состояния сейчас крутится _movie
 
         #Фигура/заглушка занимает весь виджет (двигаем pos для лёгкого покачивания)
         self._face = QLabel(self)
@@ -190,7 +196,7 @@ class VectorAvatar(QWidget):
         состоянию чата (говорит/думает/ждёт/молчит). intent/mood на кадр речи не
         влияют — это отдельный, более простой слой «что делает помощник в чате»
         (эмоции по успеваемости живут отдельно, в советах на дашборде)."""
-        if state not in (ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY):
+        if state not in (ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY, ST_GREET):
             state = ST_IDLE
         self._state = state
         if intent is not None:
@@ -198,14 +204,23 @@ class VectorAvatar(QWidget):
         self._bob.stop()
         self._face.move(0, 0)
 
-        #Покачивание ТОЛЬКО когда маскот говорит. В режиме «думает» он должен стоять
-        #спокойно (по просьбе: при обдумывании не трясётся, оживает лишь на речи).
-        if state == ST_SPEAK:
+        #Покачивание-имитация ТОЛЬКО для статичного арта и только в «речи». Если есть
+        #анимированный WebP — персонаж и так живёт (рот/уши/хвост), фейковое покачивание
+        #не нужно (иначе двойное движение). При «думает» стоит спокойно в любом случае.
+        if state == ST_SPEAK and not speech.anim_path(state):
             self._start_bob(amp=6, dur=640)
         self._render()
 
     #внутреннее
     def _render(self):
+        #ПРИОРИТЕТ 1 — анимированный WebP состояния (живой маскот, общий формат с вебом).
+        apath = speech.anim_path(self._state)
+        if apath:
+            self._play_anim(apath)
+            self._mouth.setText("")
+            return
+        #ПРИОРИТЕТ 2 — статичный PNG-кадр состояния (старый арт emotions/речь).
+        self._stop_anim()
         pm = speech.get(self._state)
         if pm is not None and not pm.isNull():
             if self._mirrored:
@@ -217,10 +232,42 @@ class VectorAvatar(QWidget):
                 Qt.SmoothTransformation))
             self._mouth.setText("")
         else:
-            #эмодзи-заглушка (папки emotions/речь/ нет)
+            #ПРИОРИТЕТ 3 — эмодзи-заглушка (арта нет вовсе)
             self._face.setPixmap(QPixmap())
             self._face.setText(_FALLBACK_FACE[self._state])
             self._mouth.setText(_FALLBACK_MOUTH[self._state])
+
+    def _play_anim(self, path: str):
+        """Проигрывает анимированный WebP состояния в QLabel через QMovie. Кадр вписан
+        по высоте виджета с сохранением пропорций. Если состояние не сменилось — не
+        перезапускаем (чтобы idle не «дёргался» при повторных set_state)."""
+        if self._movie is not None and self._movie_state == self._state:
+            return
+        self._stop_anim()
+        mv = QMovie(path)
+        if not mv.isValid():
+            self._movie = None
+            return
+        #Масштаб по высоте виджета, ширина — по пропорции первого кадра.
+        mv.jumpToFrame(0)
+        sz = mv.currentImage().size()
+        if sz.height() > 0:
+            w = max(1, round(sz.width() * self._h / sz.height()))
+            mv.setScaledSize(QSize(min(w, self.width()), self._h))
+        self._face.setText("")
+        self._face.setPixmap(QPixmap())
+        self._face.setMovie(mv)
+        mv.start()
+        self._movie = mv
+        self._movie_state = self._state
+
+    def _stop_anim(self):
+        """Останавливает и снимает текущий QMovie (перед статикой/сменой анимации)."""
+        if self._movie is not None:
+            self._movie.stop()
+            self._face.setMovie(None)
+            self._movie = None
+            self._movie_state = None
 
     def _start_bob(self, amp=6, dur=600):
         base = QPoint(0, 0)
@@ -661,6 +708,13 @@ class VectorPanel(QWidget):
         self._speak_start_timer.start(THINK_HOLD_AFTER_ANSWER_MS)
 
     def _begin_speaking(self, dur_ms: int, intent: str = "help"):
+        #На ПРИВЕТСТВИЕ (intent hello) Вектор сначала МАШЕТ рукой (greeting ~1.4 c), потом
+        #переходит к речи. На остальное — сразу речь. (intent="help" при повторе — чтобы
+        #не зациклить приветствие.)
+        if intent == "hello" and speech.anim_path("greeting"):
+            self.avatar.set_state(ST_GREET)
+            QTimer.singleShot(GREET_MS, lambda: self._begin_speaking(dur_ms, "help"))
+            return
         self.avatar.set_state(ST_SPEAK, intent=intent)
         self._speak_end_timer.start(dur_ms)
 

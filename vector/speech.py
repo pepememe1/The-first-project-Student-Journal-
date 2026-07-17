@@ -23,6 +23,9 @@ from PySide6.QtGui import QPixmap
 
 #Имя папки с речью у Арины — лежит в каталоге ассетов `emotions/`.
 _DIR_PARTS = ("emotions", "речь")
+#Анимированные состояния чата (WebP с альфой) — приоритетнее статичных PNG выше.
+#Тот же WebP играет и в браузере (веб/мобилка), и в Qt (десктоп) — общий формат.
+_ANIM_PARTS = ("emotions", "анимации")
 MAX_CACHE_H = 760           #до какой высоты ужимаем кадр при загрузке (px)
 
 #Состояние машины маскота (см. widget.py) → базовое имя файла без расширения.
@@ -32,9 +35,19 @@ STATE_FILE = {
     "idle": "ждет",
     "away": "молчит",
 }
+#Состояние → базовое имя анимированного файла (WebP). «away» живёт тем же покоем, что idle;
+#«greeting» — появление (проигрывается один раз при первом показе панели).
+STATE_ANIM = {
+    "speaking": "speaking",
+    "thinking": "thinking",
+    "idle": "idle",
+    "away": "idle",
+    "greeting": "greeting",
+}
 DEFAULT_STATE = "idle"
 
 _dir_cache = None           #найденная папка речи (или "")
+_anim_dir_cache = None      #найденная папка анимаций (или "")
 _pix_cache = {}             #имя файла -> QPixmap (уже уменьшенный)
 
 
@@ -70,6 +83,45 @@ def _find_dir() -> str:
 def has_art() -> bool:
     """Есть ли вообще папка с речью (иначе маскот живёт на эмодзи-заглушке)."""
     return bool(_find_dir())
+
+
+def _find_anim_dir() -> str:
+    """Ищем папку `emotions/анимации` (анимированные WebP чата). Та же логика, что и у
+    статичной `речь`: приложение запускают из исходников (cwd=корень) и собранным .exe."""
+    global _anim_dir_cache
+    if _anim_dir_cache is not None:
+        return _anim_dir_cache
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    rel = os.path.join(*_ANIM_PARTS)
+    candidates = [
+        os.path.join(os.getcwd(), rel),
+        os.path.join(root, rel),
+        os.path.join(here, rel),
+    ]
+    try:
+        import app_paths
+        candidates.insert(0, os.path.join(app_paths.app_dir(), rel))
+    except Exception:
+        pass
+    _anim_dir_cache = next((c for c in candidates if os.path.isdir(c)), "")
+    return _anim_dir_cache
+
+
+def anim_path(state: str = DEFAULT_STATE) -> str:
+    """Полный путь к анимированному WebP для состояния чата (или '', если анимации нет).
+    Приоритетнее статичного get() — если файл есть, маскот в чате живёт анимацией."""
+    base = _find_anim_dir()
+    if not base:
+        return ""
+    name = STATE_ANIM.get(state, STATE_ANIM[DEFAULT_STATE])
+    path = os.path.join(base, name + ".webp")
+    return path if os.path.isfile(path) else ""
+
+
+def has_anim() -> bool:
+    """Есть ли папка анимаций (тогда чат-маскот анимирован, а не статичен)."""
+    return bool(_find_anim_dir())
 
 
 def get(state: str = DEFAULT_STATE):

@@ -11,7 +11,7 @@ import Mascot from '@/components/Mascot.vue'
 import { useVectorStore } from '@/stores/vector'
 
 const vector = useVectorStore()
-const { messages, input, state, sprite, label, cmds, tick } = storeToRefs(vector)
+const { messages, input, state, anim, label, cmds, tick } = storeToRefs(vector)
 const scroller = ref(null)
 const showQuick = ref(false)
 // На телефоне при вводе (клавиатура открыта) прячем крупный маскот-фон и разворачиваем
@@ -43,7 +43,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <div class="pointer-events-none absolute inset-0 transition-opacity duration-300"
            :class="{ 'opacity-15 sm:opacity-100': focused }">
-        <Mascot :sprite="sprite" class="h-full w-full" />
+        <Mascot :anim="anim" class="h-full w-full" />
       </div>
       <!-- Чат: верхний край ~40% высоты (уровень туловища), по центру, ограничен по
            ширине; подложка полупрозрачная + размытие — текст читаем, Вектор просвечивает.
