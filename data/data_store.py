@@ -118,6 +118,25 @@ def set_sync_watermark(server_time: str):
     _kv_set(_SYNC_WATERMARK_KEY, server_time or "", wake=False)
 
 
+#Граница дельта-PUSH — зеркало предыдущей метки, но для отправки. Раньше push слал
+#ПОЛНЫЙ снимок локальной базы каждый цикл: сервер применял только изменившееся, зато
+#трафик рос вместе с числом занятий/оценок (на большой базе — мегабайты каждые 30 с).
+#Метка ЛОКАЛЬНАЯ (на сервер не уходит, синк не будит), хранит локальное UTC-время
+#начала последнего успешного push.
+_PUSH_WATERMARK_KEY = "_push_watermark"
+
+
+def get_push_watermark() -> str:
+    """Локальное время начала последнего успешного push ('' — пушей ещё не было)."""
+    val = _kv_get(_PUSH_WATERMARK_KEY, "")
+    return val if isinstance(val, str) else ""
+
+
+def set_push_watermark(local_time: str):
+    """Сохраняет границу дельта-push молча (без пробуждения синка)."""
+    _kv_set(_PUSH_WATERMARK_KEY, local_time or "", wake=False)
+
+
 #Локальные настройки ПК (НЕ синхронизируются): адрес сервера API и т.п.
 #Лежат в том же kv_store, но под служебным префиксом "_local:" и пишутся с
 #wake=False. collect_local их не собирает (на сервер уходят только
@@ -259,9 +278,44 @@ def _ensure_groups_migrated() -> None:
 #  границе UI (get/set_students, get/set_teachers), поэтому UI не трогаем. Админ здесь НЕ
 #  живёт (его хеш — в config). План техдолга №2, Стадия 2.
 def _student_id(s: dict) -> str:
+    """Идентификатор студента для синка. Порядок источников важен.
+
+    1. Уже присвоенный id — возвращаем как есть. Он НЕИЗМЕНЯЕМ: id это ключ строки в
+       users на сервере, и его смена = осиротевший аккаунт плюс рассинхрон десктопа.
+    2. Логин — стабилен (смена логина трактуется как новый аккаунт, см. web.py).
+    3. Иначе — СЛУЧАЙНЫЙ id `stud:u:{uuid4}`.
+
+    Пункт 3 — исправление старого дефекта. Раньше безлогинный студент получал
+    `stud:{фамилия}|{имя}|{группа}`, то есть его id зависел от ФИО: переименование или
+    перевод в другую группу порождали НОВОГО пользователя, а старая строка оставалась
+    висеть вместе с оценками. Ровно та же мина, что и в ключах оценок. Случайный id её
+    снимает: ФИО меняется сколько угодно, id держит связь.
+
+    ⚠️ Уже существующим студентам id НЕ пересчитываем (ветка 1) — на боевых данных это
+    оборвало бы связь с их оценками и аккаунтом на сервере."""
+    import uuid
+    existing = (s.get("id") or "").strip()
+    if existing:
+        return existing
     login = (s.get("login") or "").strip()
-    return f"stud:{login}" if login else \
-        f"stud:{s.get('surname','')}|{s.get('name','')}|{s.get('group','')}"
+    return f"stud:{login}" if login else f"stud:u:{uuid.uuid4()}"
+
+
+def student_id_by_name(f: str, n: str, group: str = "") -> str:
+    """ФИО (+ группа, если задана) → id студента. '' — не нашли или неоднозначно.
+
+    Однофамильцы с одинаковым именем в РАЗНЫХ группах — обычное дело, поэтому при
+    нескольких совпадениях без указания группы возвращаем '': лучше оставить привязку по
+    ФИО, чем уверенно приписать оценку не тому человеку. Надгробия пропускаем."""
+    f, n, group = (f or "").strip(), (n or "").strip(), (group or "").strip()
+    if not (f and n):
+        return ""
+    hits = [u for u in _users_table_read()
+            if u.get("role") == "student" and not u.get("deleted")
+            and (u.get("surname") or "").strip() == f
+            and (u.get("name") or "").strip() == n
+            and (not group or (u.get("group_name") or "").strip() == group)]
+    return hits[0].get("id", "") if len(hits) == 1 else ""
 
 
 def _teacher_id(fullname: str, d: dict) -> str:
@@ -285,7 +339,13 @@ def _student_to_server(s: dict) -> dict:
 
 
 def _server_to_student(u: dict) -> dict:
+    #id ОБЯЗАН доехать до UI-формы и вернуться обратно: на нём держится сопоставление
+    #«старый ↔ новый» в _merge_list_tombstones. Потеряем — set_students примет студента
+    #за нового (новый случайный id), а прежнюю строку прикопает надгробием вместе с
+    #привязкой оценок. Раньше id тут терялся молча — сходило с рук лишь потому, что
+    #_student_id пересчитывал его из ФИО (та самая мина, которую и убираем).
     return {
+        "id": u.get("id", ""),
         "surname": u.get("surname", ""), "name": u.get("name", ""),
         "group": u.get("group_name", ""), "login": u.get("login", ""),
         "password_hash": u.get("password_hash", ""), "patronymic": u.get("patronymic", ""),
@@ -637,7 +697,9 @@ def rekey_student_grades(old_f: str, old_n: str, new_f: str, new_n: str) -> int:
     _rekey_student_grades (правки делаем на ОБЕИХ платформах).
 
     Это заплатка поверх архитектурного долга: правильно — ключевать неизменным
-    student_id, а ФИО подклеивать при выдаче (отдельная миграция)."""
+    student_id, а ФИО подклеивать при выдаче (этапы 1-3 миграции). Уже накопленный
+    student_id при переносе СОХРАНЯЕМ: он и есть та связь, ради которой всё делается —
+    потерять его здесь значило бы обнулять миграцию на каждом переименовании."""
     if (old_f, old_n) == (new_f, new_n) or not (old_f or old_n):
         return 0
     from datetime import datetime, timezone
@@ -646,25 +708,27 @@ def rekey_student_grades(old_f: str, old_n: str, new_f: str, new_n: str) -> int:
     conn = DBManager.get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT lesson_id, grade FROM grades WHERE student_f=? AND student_n=? "
-                    "AND COALESCE(deleted,0)=0", (old_f, old_n))
-        for lesson_id, grade in cur.fetchall():
+        cur.execute("SELECT lesson_id, grade, COALESCE(student_id,'') FROM grades "
+                    "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0",
+                    (old_f, old_n))
+        for lesson_id, grade, sid in cur.fetchall():
             cur.execute("INSERT OR REPLACE INTO grades "
-                        "(student_f,student_n,lesson_id,grade,updated_at,deleted) "
-                        "VALUES (?,?,?,?,?,0)", (new_f, new_n, lesson_id, grade, now))
+                        "(student_f,student_n,lesson_id,grade,updated_at,deleted,student_id) "
+                        "VALUES (?,?,?,?,?,0,?)",
+                        (new_f, new_n, lesson_id, grade, now, sid))
             cur.execute("UPDATE grades SET deleted=1, updated_at=? "
                         "WHERE student_f=? AND student_n=? AND lesson_id=?",
                         (now, old_f, old_n, lesson_id))
             moved += 1
-        cur.execute("SELECT id,subject,year,semester,grade,form FROM term_grades "
-                    "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0",
-                    (old_f, old_n))
-        for oid, subject, year, semester, grade, form in cur.fetchall():
+        cur.execute("SELECT id,subject,year,semester,grade,form,COALESCE(student_id,'') "
+                    "FROM term_grades WHERE student_f=? AND student_n=? "
+                    "AND COALESCE(deleted,0)=0", (old_f, old_n))
+        for oid, subject, year, semester, grade, form, sid in cur.fetchall():
             nid = f"{new_f}|{new_n}|{subject}|{year}|{semester}"
             cur.execute("INSERT OR REPLACE INTO term_grades "
-                        "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,0)",
-                        (nid, new_f, new_n, subject, year, semester, grade, form, now))
+                        "(id,student_f,student_n,subject,year,semester,grade,form,"
+                        "updated_at,deleted,student_id) VALUES (?,?,?,?,?,?,?,?,?,0,?)",
+                        (nid, new_f, new_n, subject, year, semester, grade, form, now, sid))
             cur.execute("UPDATE term_grades SET deleted=1, updated_at=? WHERE id=?", (now, oid))
             moved += 1
         conn.commit()
@@ -710,6 +774,9 @@ def reset_synced_local_data():
     #Группы теперь в таблице groups — очистит DBManager.clear_synced_tables() ниже.
     #Метку дельты сбрасываем, чтобы следующий pull был полным и наполнил кэш заново.
     set_sync_watermark("")
+    #И метку push — кэш стёрт, «уже отправленного» больше нет; следующий push обязан
+    #быть полным, иначе уцелевшие после реконсиляции локальные правки не уехали бы.
+    set_push_watermark("")
     try:
         from subjects import save_subjects
         save_subjects([])

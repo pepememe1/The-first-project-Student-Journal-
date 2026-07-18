@@ -23,10 +23,11 @@ sync_engine.py — Слой-переходник offline-first синхрони�
 Сетевой обмен — через sync_client. Любая сетевая ошибка не критична: синк
 откладывается, прога работает офлайн.
 
-⚠️ Известный техдолг: push отправляет ПОЛНЫЙ снимок локальных данных (collect_local), а
-не дельту. Сервер применяет только реально изменившиеся строки (push идемпотентен), так
-что БД не страдает — растёт объём ТРАФИКА по мере накопления занятий/оценок. Лечится
-локальным трекингом изменений (dirty-флаги/watermark для push) — отдельная задача.
+Push тоже ДЕЛЬТА (раньше уезжал полный снимок базы каждый цикл — трафик рос вместе с
+числом занятий/оценок). Граница — локальная метка `_push_watermark`; чтобы дельта не
+теряла правки, действуют три страховки: нестрогое сравнение `>=`, лаг PUSH_SAFETY_LAG_S
+на случай отхода часов назад и полный снимок раз в FULL_PUSH_EVERY циклов и на старте
+сессии. Push идемпотентен, поэтому «отправить лишний раз» всегда дешевле, чем потерять.
 """
 from datetime import datetime, timezone
 
@@ -133,16 +134,20 @@ def config_from_pull(config_rows: list, users: list, admin_login: str = "admin")
 #Локальное хранилище — через data_store/DBManager (offline-first не ломаем).
 
 def _collect_lessons() -> list:
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    #Шлём ВСЕ занятия, включая надгробия (deleted=1) — иначе удаление не доедет до
-    #других ПК и занятие воскреснет на следующем pull.
-    cur.execute("SELECT id,group_name,subject,type,number,topic,date,"
-                "retake_date,hour,COALESCE(updated_at,''),COALESCE(deleted,0),"
-                "COALESCE(year,''),COALESCE(semester,0) FROM lessons")
-    rows = cur.fetchall()
-    conn.close()
+    rows = []
+    try:
+        with closing(DBManager.get_conn()) as conn:
+            cur = conn.cursor()
+            #Шлём ВСЕ занятия, включая надгробия (deleted=1) — иначе удаление не доедет
+            #до других ПК и занятие воскреснет на следующем pull.
+            cur.execute("SELECT id,group_name,subject,type,number,topic,date,"
+                        "retake_date,hour,COALESCE(updated_at,''),COALESCE(deleted,0),"
+                        "COALESCE(year,''),COALESCE(semester,0) FROM lessons")
+            rows = cur.fetchall()
+    except Exception as e:
+        _log.error("не удалось прочитать занятия для синка: %s", e)
     out = []
     for r in rows:
         out.append({
@@ -156,21 +161,30 @@ def _collect_lessons() -> list:
 
 
 def _collect_grades() -> list:
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    #Шлём ВСЕ оценки, включая надгробия (deleted=1) — чтобы удаление оценки
-    #распространилось, а не «воскресло» при следующем pull.
-    cur.execute("SELECT student_f,student_n,lesson_id,grade,"
-                "COALESCE(updated_at,''),COALESCE(device,''),COALESCE(deleted,0) FROM grades")
-    rows = cur.fetchall()
-    conn.close()
+    rows = []
+    try:
+        with closing(DBManager.get_conn()) as conn:
+            cur = conn.cursor()
+            #Шлём ВСЕ оценки, включая надгробия (deleted=1) — чтобы удаление оценки
+            #распространилось, а не «воскресло» при следующем pull.
+            cur.execute("SELECT student_f,student_n,lesson_id,grade,"
+                        "COALESCE(updated_at,''),COALESCE(device,''),"
+                        "COALESCE(deleted,0),COALESCE(student_id,'') FROM grades")
+            rows = cur.fetchall()
+    except Exception as e:
+        _log.error("не удалось прочитать оценки для синка: %s", e)
     out = []
-    for f, n, lid, grade, uat, dev, deleted in rows:
+    for f, n, lid, grade, uat, dev, deleted, sid in rows:
         out.append({
             "id": f"{f}|{n}|{lid}", "student_f": f, "student_n": n, "lesson_id": lid,
             "grade": grade, "device": dev, "updated_at": uat or _now(),
             "deleted": bool(deleted),
+            #Этап 1 миграции: ключ пока ФИО, но неизменяемый id везём рядом. Сервер его
+            #сохранит, и после бэкофилла привязку можно будет переключить, не потеряв
+            #историю переименованных студентов.
+            "student_id": sid,
         })
     return out
 
@@ -186,16 +200,19 @@ def _collect_users() -> list:
 def _collect_groups() -> list:
     """Группы из таблицы в формате API (со надгробиями) — прямой upsert, без переводчика."""
     import json as _json
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
+    rows = []
     try:
-        cur.execute("SELECT id,name,COALESCE(subjects,'[]'),COALESCE(updated_at,''),"
-                    "COALESCE(deleted,0) FROM groups")
-        rows = cur.fetchall()
-    except Exception:
-        rows = []
-    conn.close()
+        with closing(DBManager.get_conn()) as conn:   #закроется и при исключении
+            cur = conn.cursor()
+            cur.execute("SELECT id,name,COALESCE(subjects,'[]'),COALESCE(updated_at,''),"
+                        "COALESCE(deleted,0) FROM groups")
+            rows = cur.fetchall()
+    except Exception as e:
+        #НЕ глушим молча: при залоченной/битой БД пустой список уехал бы как «нет групп»,
+        #и локальные группы просто перестали бы синхронизироваться — без следа в логах.
+        _log.error("не удалось прочитать группы для синка: %s", e)
     out = []
     for gid, name, subj, uat, deleted in rows:
         try:
@@ -208,28 +225,49 @@ def _collect_groups() -> list:
 
 
 def _collect_term_grades() -> list:
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    #Шлём ВСЕ итоговые оценки, включая надгробия (deleted=1) — иначе снятие оценки
-    #не доедет до других ПК/сайта и она «воскреснет» на следующем pull.
-    cur.execute("SELECT id,student_f,student_n,subject,COALESCE(year,''),"
-                "COALESCE(semester,0),COALESCE(grade,''),COALESCE(form,''),"
-                "COALESCE(updated_at,''),COALESCE(deleted,0) FROM term_grades")
-    rows = cur.fetchall()
-    conn.close()
+    rows = []
+    try:
+        with closing(DBManager.get_conn()) as conn:
+            cur = conn.cursor()
+            #Шлём ВСЕ итоговые, включая надгробия (deleted=1) — иначе снятие оценки не
+            #доедет до других ПК/сайта и она «воскреснет» на следующем pull.
+            cur.execute("SELECT id,student_f,student_n,subject,COALESCE(year,''),"
+                        "COALESCE(semester,0),COALESCE(grade,''),COALESCE(form,''),"
+                        "COALESCE(updated_at,''),COALESCE(deleted,0),"
+                        "COALESCE(student_id,'') FROM term_grades")
+            rows = cur.fetchall()
+    except Exception as e:
+        _log.error("не удалось прочитать итоговые оценки для синка: %s", e)
     out = []
     for r in rows:
         out.append({
             "id": r[0], "student_f": r[1], "student_n": r[2], "subject": r[3],
             "year": r[4], "semester": r[5], "grade": r[6], "form": r[7],
             "updated_at": r[8] or _now(), "deleted": bool(r[9]),
+            "student_id": r[10],            #этап 1 миграции — см. _collect_grades
         })
     return out
 
 
-def collect_local() -> dict:
-    """Читает всё локальное состояние и переводит в формат API (для push)."""
+def _filter_since(rows: list, since: str) -> list:
+    """Оставляет строки, изменённые не раньше метки. Граница НЕ строгая (`>=`) — по той же
+    причине, что и в дельта-pull (§3 CLAUDE.md): push и запись могут попасть в один тик
+    часов, и при строгом «>» такая правка выпала бы из дельты навсегда. Push идемпотентен,
+    поэтому лишний повтор безвреден, а потеря — нет."""
+    if not since:
+        return rows
+    key = _ts_key(since)
+    return [r for r in rows if _ts_key(r.get("updated_at", "")) >= key]
+
+
+def collect_local(since: str = "") -> dict:
+    """Читает локальное состояние и переводит в формат API (для push).
+
+    since != "" — собираем ДЕЛЬТУ: только строки с updated_at >= since. Предметы и конфиг
+    отдаём всегда: их локальные «метки» синтезируются на лету (`_now()`), реальной истории
+    изменений у них нет, а объём — десятки строк, фильтровать нечего."""
     from data_store import get_store
     from subjects import load_subjects
     st = get_store()
@@ -241,14 +279,14 @@ def collect_local() -> dict:
     if admin:
         users.append(admin)
     return {
-        "users": users,
+        "users": _filter_since(users, since),
         "subjects": subjects_to_rows(load_subjects()),
         "config": config_to_rows(cfg),
-        "groups": _collect_groups(),
-        "lessons": _collect_lessons(),
-        "grades": _collect_grades(),
-        "term_grades": _collect_term_grades(),
-        "schedule_overrides": _collect_schedule_overrides(),
+        "groups": _filter_since(_collect_groups(), since),
+        "lessons": _filter_since(_collect_lessons(), since),
+        "grades": _filter_since(_collect_grades(), since),
+        "term_grades": _filter_since(_collect_term_grades(), since),
+        "schedule_overrides": _filter_since(_collect_schedule_overrides(), since),
     }
 
 
@@ -368,17 +406,19 @@ def _ensure_sovr_table(cur):
 
 def _collect_schedule_overrides() -> list:
     """Правки расписания из локальной таблицы (со надгробиями) — прямой upsert в синк."""
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
+    rows = []
     try:
-        _ensure_sovr_table(cur)
-        cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,teacher,"
-                    "kind,COALESCE(updated_at,''),COALESCE(deleted,0) FROM schedule_overrides")
-        rows = cur.fetchall()
-    except Exception:
-        rows = []
-    conn.close()
+        with closing(DBManager.get_conn()) as conn:
+            cur = conn.cursor()
+            _ensure_sovr_table(cur)
+            cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,"
+                        "teacher,kind,COALESCE(updated_at,''),COALESCE(deleted,0) "
+                        "FROM schedule_overrides")
+            rows = cur.fetchall()
+    except Exception as e:
+        _log.error("не удалось прочитать правки расписания для синка: %s", e)
     out = []
     for r in rows:
         out.append({"id": r[0], "group_name": r[1], "week": r[2], "day": r[3], "pair_no": r[4],
@@ -480,9 +520,10 @@ def _merge_grades(remote: list):
                 continue                       #уже удалено
             if lat and rat and lat > rat:
                 continue                       #локальная правка новее — оставляем
-            cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? "
+            cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=?, "
+                        "student_id=COALESCE(NULLIF(?,''),student_id) "
                         "WHERE student_f=? AND student_n=? AND lesson_id=?",
-                        (rat, rdev, f, n, lid))
+                        (rat, rdev, g.get("student_id", "") or "", f, n, lid))
             continue
 
         #Активная оценка с сервера.
@@ -490,8 +531,9 @@ def _merge_grades(remote: list):
             #Локально такой оценки нет — просто принимаем серверную.
             cur.execute(
                 "INSERT OR REPLACE INTO grades "
-                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
-                "VALUES (?,?,?,?,?,?,0)", (f, n, lid, rgrade, rat, rdev))
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
+                "student_id) VALUES (?,?,?,?,?,?,0,?)",
+                (f, n, lid, rgrade, rat, rdev, g.get("student_id", "") or ""))
             continue
         lgrade, lat, ldel = local
         if ldel:
@@ -501,8 +543,9 @@ def _merge_grades(remote: list):
             if not (lat and rat and lat > rat):
                 cur.execute(
                     "INSERT OR REPLACE INTO grades "
-                    "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
-                    "VALUES (?,?,?,?,?,?,0)", (f, n, lid, rgrade, rat, rdev))
+                    "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
+                    "student_id) VALUES (?,?,?,?,?,?,0,?)",
+                    (f, n, lid, rgrade, rat, rdev, g.get("student_id", "") or ""))
             continue
         if (lgrade or "") == (rgrade or ""):
             continue   #значения совпали — менять нечего
@@ -541,11 +584,12 @@ def _merge_term_grades(remote: list):
             continue
         cur.execute(
             "INSERT OR REPLACE INTO term_grades "
-            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted,"
+            "student_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (gid, g.get("student_f", ""), g.get("student_n", ""), g.get("subject", ""),
              g.get("year", ""), int(g.get("semester", 0) or 0), g.get("grade", ""),
-             g.get("form", ""), g.get("updated_at", ""), 1 if rdel else 0))
+             g.get("form", ""), g.get("updated_at", ""), 1 if rdel else 0,
+             g.get("student_id", "") or ""))
     conn.commit()
     conn.close()
 
@@ -555,6 +599,29 @@ def _merge_term_grades(remote: list):
 #пограничной записи из-за гонки «коммит против взятия метки». Дальше в течение
 #сессии тянем только дельту. Поток синка один, поэтому простого флага достаточно.
 _session_full_pull_done = False
+
+#То же для PUSH: первый push сессии — полный. За время, пока прога была закрыта, часы
+#могли сдвинуться, а правки — прийти мимо синка (восстановление из бэкапа, ручной импорт).
+#Полный снимок на старте это лечит.
+_session_full_push_done = False
+
+#Страховка от «дырки» в дельта-push: локальные часы могут отойти назад (синхронизация
+#времени, переезд через часовой пояс, виртуалка после сна). Тогда правка получила бы
+#метку РАНЬШЕ watermark и не попала бы в дельту. Поэтому метку сдвигаем назад на лаг —
+#последние две минуты правок уезжают повторно (push идемпотентен, это дёшево).
+PUSH_SAFETY_LAG_S = 120
+
+#И грубый предохранитель на всё остальное: раз в N циклов шлём полный снимок. Даже если
+#какая-то правка мимо всех расчётов выпала из дельты, она уедет максимум через N циклов,
+#а не потеряется навсегда. Дешевле, чем гарантировать безошибочность меток.
+FULL_PUSH_EVERY = 20
+_push_cycles = 0
+
+
+def force_full_push():
+    """Следующий push будет ПОЛНЫМ снимком (не дельтой)."""
+    global _session_full_push_done
+    _session_full_push_done = False
 
 
 def force_full_pull():
@@ -590,18 +657,32 @@ def reconcile(client) -> bool:
         raise   #не стираем кэш, если правки не удалось отправить — данные важнее «чистоты»
     reset_synced_local_data()
     force_full_pull()
+    force_full_push()   #кэш стёрт — «уже отправленному» верить нельзя, шлём полный снимок
     return sync_once(client)
 
 
 def sync_once(client) -> bool:
     """Один цикл синхронизации: отправить локальные изменения, забрать серверные.
     Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код."""
-    global _session_full_pull_done
-    from data_store import get_sync_watermark, set_sync_watermark
+    global _session_full_pull_done, _session_full_push_done, _push_cycles
+    from datetime import timedelta
 
-    #1. Отправляем то, что вправе отправлять (роль ограничивает на сервере).
-    #Push — полный снимок и идемпотентен: сервер применит только реально изменённое.
-    client.push(collect_local())
+    from data_store import (get_push_watermark, get_sync_watermark,
+                            set_push_watermark, set_sync_watermark)
+
+    #1. Отправляем ДЕЛЬТУ локальных правок (роль ограничивает на сервере). Раньше уезжал
+    #полный снимок базы каждый цикл: сервер применял только изменившееся, но трафик рос
+    #вместе с базой. Полный снимок оставляем для первого цикла сессии и раз в
+    #FULL_PUSH_EVERY циклов — как самоизлечение.
+    full_push = (not _session_full_push_done) or (_push_cycles % FULL_PUSH_EVERY == 0)
+    #Метку берём ДО сбора: правка, сделанная во время push, попадёт в СЛЕДУЮЩУЮ дельту,
+    #а не провалится между сбором и сохранением метки.
+    mark = (datetime.now(timezone.utc) - timedelta(seconds=PUSH_SAFETY_LAG_S)).isoformat()
+    client.push(collect_local("" if full_push else get_push_watermark()))
+    #Метку двигаем только после УСПЕШНОГО push: упало — правки останутся в дельте.
+    set_push_watermark(mark)
+    _session_full_push_done = True
+    _push_cycles += 1
 
     #2. Тянем ДЕЛЬТУ: только изменения позже метки last_sync — это снимает главный
     #тормоз (раньше каждый цикл качал всю базу). Первый pull сессии — полный

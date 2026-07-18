@@ -97,6 +97,7 @@ def init_db():
     _ensure_lesson_term_columns()
     _backfill_lesson_term()
     _ensure_user_curated_groups_column()
+    _ensure_grade_student_id_columns()
 
 
 def _ensure_user_prefs_column():
@@ -170,6 +171,30 @@ def default_term() -> tuple:
     if m == 1:
         return f"{y - 1}/{y}", 1
     return f"{y - 1}/{y}", 2
+
+
+def _ensure_grade_student_id_columns():
+    """Идемпотентная мини-миграция: grades.student_id / term_grades.student_id.
+
+    ЭТАП 1 перехода с ФИО-ключей на неизменяемый id студента. Столбец ДОБАВОЧНЫЙ:
+    первичный ключ остаётся прежним (f|n|lesson_id), поэтому старые клиенты, которые о
+    поле не знают, продолжают работать — они просто шлют записи без него.
+
+    Зачем вообще: оценка ключуется по написанию ФИО. Студентка выходит замуж, админ
+    правит фамилию — и вся история оценок остаётся висеть на старом ключе. id строки
+    users не меняется никогда, поэтому привязка к нему такой проблемы не имеет.
+    """
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in ("grades", "term_grades"):
+            try:
+                columns = {c["name"] for c in insp.get_columns(table)}
+            except Exception:
+                continue        #таблицы ещё нет — create_all создал её уже со столбцом
+            if "student_id" not in columns:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN student_id VARCHAR DEFAULT ''"))
 
 
 def _ensure_lesson_term_columns():

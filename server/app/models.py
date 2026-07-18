@@ -92,6 +92,10 @@ class Grade(Base):
     device = Column(String, default="")                #имя ПК — для конфликтов
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
+    #Неизменяемая привязка к студенту (users.id). ЭТАП 1 миграции с ФИО-ключей: поле
+    #ДОБАВОЧНОЕ, первичный ключ пока прежний (f|n|lesson_id). Пусто допустимо — старые
+    #строки и клиенты, которые о поле не знают. Смысл: ФИО меняется, id нет.
+    student_id = Column(String, index=True, default="")
 
 
 class TermGrade(Base):
@@ -110,6 +114,10 @@ class TermGrade(Base):
     form = Column(String, default="")                  #зачёт | экзамен | диффзачёт
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
+    #Неизменяемая привязка к студенту (users.id). ЭТАП 1 миграции с ФИО-ключей: поле
+    #ДОБАВОЧНОЕ, первичный ключ пока прежний (f|n|subject|year|semester). Пусто допустимо — старые
+    #строки и клиенты, которые о поле не знают. Смысл: ФИО меняется, id нет.
+    student_id = Column(String, index=True, default="")
 
 
 class ConfigKV(Base):

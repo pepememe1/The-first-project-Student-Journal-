@@ -501,9 +501,14 @@ class AdminDashboard(QWidget):
             p   = pw.text().strip()
             group = grp.currentText().strip()
             self._ensure_group_exists(group)   #новую/спарсенную группу заводим в БД
-            nd  = {"surname": sn.text().strip(), "name": nm.text().strip(), "group": group,
-                   "login": lg.text().strip()}
             old = sts[idx]
+            #Диалог правит только 4 поля, поэтому берём СТАРУЮ запись за основу, а не
+            #собираем новую с нуля: иначе молча терялись бы id, отчество и настройки.
+            #id критичен — на нём держится и связь с оценками, и сопоставление
+            #«старый ↔ новый» при сохранении (без него студент считался бы новым).
+            nd = dict(old)
+            nd.update({"surname": sn.text().strip(), "name": nm.text().strip(),
+                       "group": group, "login": lg.text().strip()})
             if old.get("password_hash") and not p:
                 nd["password_hash"] = old["password_hash"]
             if p: nd["password"] = p

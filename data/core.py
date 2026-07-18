@@ -59,6 +59,25 @@ if _is_network_path(LOCAL_DB):
           "блокировки и порчу. Используйте локальный диск.")
 
 
+def resolve_student_id(f: str, n: str, group: str = "") -> str:
+    """ФИО → неизменяемый id студента (строка users), '' — если не нашли.
+
+    Этап 1 миграции оценок с ФИО-ключей на student_id. Оценка по-прежнему ключуется по
+    ФИО, но ДОПОЛНИТЕЛЬНО несёт id: ФИО меняется (замужество, исправление опечатки), id
+    нет. Пустой ответ не ошибка — студента могло не быть в справочнике (ростер препода
+    ведётся отдельно), и тогда связь остаётся прежней, по ФИО.
+
+    Импорт data_store ЛЕНИВЫЙ и намеренно: владелец таблицы users — он, а он сам стоит
+    на core. Импорт на уровне модуля замкнул бы кольцо.
+    """
+    try:
+        from data_store import student_id_by_name
+        return student_id_by_name(f, n, group)
+    except Exception as e:
+        log.get("core").warning(f"[student_id] не удалось определить id для {f} {n}: {e}")
+        return ""
+
+
 #Менеджер подключений
 class DBManager:
     @classmethod
@@ -395,6 +414,16 @@ class DBManager:
             (id TEXT PRIMARY KEY, student_f TEXT, student_n TEXT, subject TEXT,
              year TEXT DEFAULT '', semester INTEGER DEFAULT 0, grade TEXT DEFAULT '',
              form TEXT DEFAULT '', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+        #student_id — НЕИЗМЕНЯЕМАЯ привязка оценки к студенту (id строки users).
+        #Этап 1 миграции с ФИО-ключей: колонка ДОБАВОЧНАЯ, PRIMARY KEY пока прежний
+        #(student_f, student_n, lesson_id). Пустое значение допустимо — старые строки
+        #и старые клиенты, которые о колонке не знают. Смысл: ФИО меняется (замужество,
+        #опечатка), id — нет, поэтому история перестаёт зависеть от написания фамилии.
+        for _tbl in ("grades", "term_grades", "sync_conflicts"):
+            try:
+                cur.execute(f"ALTER TABLE {_tbl} ADD COLUMN student_id TEXT DEFAULT ''")
+            except Exception:
+                pass
         #Правки расписания админом (overlay поверх портала) — синкуемая сущность.
         #Схему создаём ЗДЕСЬ, при инициализации БД, а не на каждое чтение/запись в
         #schedule/overrides.py: DDL на каждый вызов — лишний парсинг запроса, а флаг
@@ -450,12 +479,15 @@ class DBManager:
         """
         f, n, lid, grade = vals[:4]
         now = datetime.now(timezone.utc).isoformat()
+        #Пятый элемент (student_id) НЕОБЯЗАТЕЛЕН: старые вызывающие места шлют кортеж из
+        #четырёх, и ломать их ради этапа 1 незачем — тогда id доставит бэкофилл.
+        sid = vals[4] if len(vals) > 4 else resolve_student_id(f, n)
         #deleted=0 — выставление оценки делает запись активной (снимает прежнее
         #надгробие, если оценку ставят заново после удаления).
         cur.execute(
             "INSERT OR REPLACE INTO grades "
-            "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
-            "VALUES (?,?,?,?,?,?,0)", (f, n, lid, grade, now, DEVICE_ID))
+            "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,student_id) "
+            "VALUES (?,?,?,?,?,?,0,?)", (f, n, lid, grade, now, DEVICE_ID, sid or ""))
 
     #Итоговые оценки за семестр (аттестация) ────────────────────────────────────────
     @staticmethod
@@ -476,9 +508,10 @@ class DBManager:
         cur = conn.cursor()
         cur.execute(
             "INSERT OR REPLACE INTO term_grades "
-            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (gid, f, n, subject, year, int(semester or 0), grade, form, now, deleted))
+            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted,"
+            "student_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (gid, f, n, subject, year, int(semester or 0), grade, form, now, deleted,
+             resolve_student_id(f, n)))
         conn.commit()
         conn.close()
 

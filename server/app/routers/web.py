@@ -548,6 +548,7 @@ def teacher_set_term_grade(payload: dict = Body(...),
         row.form = form
     row.updated_at = now
     row.deleted = (grade == "")
+    row.student_id = stud.id        #этап 1 миграции — см. /web/teacher/grade
     db.commit()
     audit.log(db, actor=user.login, role=user.role, action="term_grade.set",
               target=f"{surname} {name}", detail=f"{subject} · {ty}·{ts} = {grade}")
@@ -1357,6 +1358,9 @@ def teacher_set_grade(payload: dict = Body(...),
     row.device = "web"
     row.updated_at = now
     row.deleted = cleared
+    #Этап 1 миграции: рядом с ФИО-ключом кладём неизменяемый id студента. Студент уже
+    #найден выше (проверка «состоит в группе занятия»), так что это бесплатно.
+    row.student_id = stud.id
     db.commit()
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
@@ -1573,7 +1577,8 @@ def _rekey_student_grades(db: Session, old_f: str, old_n: str,
         new_id = f"{new_f}|{new_n}|{g.lesson_id}"
         tgt = db.get(Grade, new_id)
         if tgt is None:
-            tgt = Grade(id=new_id, student_f=new_f, student_n=new_n, lesson_id=g.lesson_id)
+            tgt = Grade(id=new_id, student_f=new_f, student_n=new_n, lesson_id=g.lesson_id,
+                        student_id=g.student_id or "")
             db.add(tgt)
         tgt.grade, tgt.deleted, tgt.updated_at = g.grade, False, now
         g.deleted, g.updated_at = True, now          #надгробие старого ключа
@@ -1585,6 +1590,7 @@ def _rekey_student_grades(db: Session, old_f: str, old_n: str,
         tgt = db.get(TermGrade, new_id)
         if tgt is None:
             tgt = TermGrade(id=new_id, student_f=new_f, student_n=new_n, subject=t.subject,
+                            student_id=t.student_id or "",
                             year=t.year, semester=t.semester)
             db.add(tgt)
         tgt.grade, tgt.form, tgt.deleted, tgt.updated_at = t.grade, t.form, False, now
