@@ -639,9 +639,12 @@ class AdminDashboard(QWidget):
             all_subjects.update(subs)
             if name in by_name:
                 g = by_name[name]
-                merged = sorted(set(g.get("subjects") or []) | set(subs))
-                if merged != (g.get("subjects") or []):
-                    g["subjects"] = merged
+                #РАСПИСАНИЕ — основа: ЗАМЕНЯЕМ предметы группы на предметы из расписания
+                #(раньше union оставлял выставленные админом вручную). Менять по-прежнему
+                #можно в карточке группы; повторный импорт пересинхронит с порталом.
+                new = sorted(subs)
+                if new != (g.get("subjects") or []):
+                    g["subjects"] = new
                     updated += 1
             else:
                 grp = {"name": name, "subjects": sorted(subs)}

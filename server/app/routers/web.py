@@ -1696,9 +1696,13 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
             db.add(Group(id=gid, name=name, subjects=subs, updated_at=now, deleted=False))
             bound += 1
         else:
-            merged = sorted(set(row.subjects or []) | set(subs))
-            if merged != list(row.subjects or []) or row.deleted:
-                row.subjects = merged
+            #РАСПИСАНИЕ — основа: ЗАМЕНЯЕМ предметы группы на предметы из расписания, а не
+            #объединяем со старыми (раньше union оставлял то, что выставил админ вручную —
+            #Ярослав просил, чтобы по умолчанию были ИЗ РАСПИСАНИЯ). Менять по-прежнему можно
+            #вручную в карточке группы; повторный «Из расписания» пересинхронит с порталом.
+            new = sorted(subs)
+            if new != list(row.subjects or []) or row.deleted:
+                row.subjects = new
                 row.deleted = False
                 row.updated_at = now
                 bound += 1
