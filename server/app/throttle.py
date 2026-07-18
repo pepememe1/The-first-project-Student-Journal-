@@ -40,13 +40,26 @@ IP_LOCK_SECONDS = 300
 REG_MAX_FAILS = 5
 REG_LOCK_SECONDS = 180
 
+#Окно подсчёта неудач: серия «протухает», если давно не было попыток. Без него счётчик
+#копился ВЕЧНО (обнулялся только после сработавшей блокировки), и человек, ошибшийся
+#7 раз за полгода, получал бы бан — при обещанных «7 попыток / 5 минут».
+FAIL_WINDOW = 300
+
+#Уборка мусора: сервер торчит в интернете, и боты долбятся с ТЫСЯЧ разных IP. Каждая
+#новая пара (IP, логин) оставляла запись НАВСЕГДА → словари росли безгранично и съедали
+#память VPS. Держим только «живые» записи: заблокированные + недавно активные.
+IDLE_TTL = 900           #сколько храним запись без активности (не заблокированную)
+GC_EVERY = 200           #как часто (по числу регистраций неудач) запускать уборку
+MAX_ENTRIES = 20000      #жёсткий предохранитель на случай взрывного всплеска
+
 _lock = threading.Lock()
-#login-ключ "ip|login" -> {"fails": int, "locked_until": float}
+#login-ключ "ip|login" -> {"fails": int, "locked_until": float, "last": float}
 _pairs: dict = {}
-#ip-ключ "ip" -> {"fails": int, "locked_until": float}
+#ip-ключ "ip" -> {"fails": int, "locked_until": float, "last": float}
 _ips: dict = {}
 #ip-ключ регистрации "ip" -> {...}
 _reg: dict = {}
+_since_gc = 0            #счётчик обращений до следующей уборки
 
 
 def _pair_key(ip: str, login: str) -> str:
@@ -69,16 +82,49 @@ def seconds_until_unlocked(ip: str, login: str) -> int:
         return max(_check(_pairs, _pair_key(ip, login)), _check(_ips, (ip or "").strip()))
 
 
+def _gc(force: bool = False):
+    """Выбрасывает протухшие записи. Вызывается изредка (см. GC_EVERY) — без фонового
+    потока. Держим: заблокированные (наказание не должно теряться) и недавно активные.
+
+    ВАЖНО: чистим и записи с fails>0 — именно они составляют основную массу мусора
+    (бот сделал 2-3 попытки с одного IP и ушёл). Условие «удалять только при fails==0»
+    оставило бы утечку почти нетронутой."""
+    global _since_gc
+    _since_gc += 0 if force else 1
+    if not force and _since_gc < GC_EVERY:
+        return
+    _since_gc = 0
+    now = time.time()
+    for store in (_pairs, _ips, _reg):
+        stale = [k for k, v in store.items()
+                 if v.get("locked_until", 0) <= now and now - v.get("last", 0) > IDLE_TTL]
+        for k in stale:
+            store.pop(k, None)
+        #предохранитель: при взрывном всплеске (быстрее уборки) режем самые старые
+        if len(store) > MAX_ENTRIES:
+            for k, _v in sorted(store.items(), key=lambda kv: kv[1].get("last", 0))[
+                    :len(store) - MAX_ENTRIES]:
+                if store.get(k, {}).get("locked_until", 0) <= now:
+                    store.pop(k, None)
+
+
 def _register_failure(store: dict, key: str, threshold: int, lock_seconds: int):
-    rec = store.get(key, {"fails": 0, "locked_until": 0})
+    now = time.time()
+    rec = store.get(key, {"fails": 0, "locked_until": 0, "last": now})
     #истёкшая блокировка обнуляет счётчик — новая серия считается с нуля
-    if rec.get("locked_until", 0) and rec["locked_until"] < time.time():
-        rec = {"fails": 0, "locked_until": 0}
+    if rec.get("locked_until", 0) and rec["locked_until"] < now:
+        rec = {"fails": 0, "locked_until": 0, "last": now}
+    #СКОЛЬЗЯЩЕЕ ОКНО: давние неудачи не копятся (иначе редкие опечатки за месяцы
+    #складывались бы в блокировку живого пользователя).
+    elif now - rec.get("last", now) > FAIL_WINDOW:
+        rec = {"fails": 0, "locked_until": rec.get("locked_until", 0), "last": now}
     rec["fails"] = rec.get("fails", 0) + 1
+    rec["last"] = now
     if rec["fails"] >= threshold:
-        rec["locked_until"] = time.time() + lock_seconds
+        rec["locked_until"] = now + lock_seconds
         rec["fails"] = 0
     store[key] = rec
+    _gc()
 
 
 def register_failure(ip: str, login: str):
@@ -115,10 +161,25 @@ def register_reg_success(ip: str):
 
 def reset():
     """Полный сброс состояния — нужен тестам, чтобы прогоны не влияли друг на друга."""
+    global _since_gc
     with _lock:
         _pairs.clear()
         _ips.clear()
         _reg.clear()
+        _since_gc = 0
+
+
+def gc_now() -> tuple:
+    """Принудительная уборка (тесты/диагностика). Возвращает размеры словарей после неё."""
+    with _lock:
+        _gc(force=True)
+        return len(_pairs), len(_ips), len(_reg)
+
+
+def sizes() -> tuple:
+    """Текущие размеры счётчиков — для мониторинга роста памяти."""
+    with _lock:
+        return len(_pairs), len(_ips), len(_reg)
 
 
 def client_ip(request) -> str:
