@@ -9,6 +9,8 @@ overrides.py — Правки расписания администраторо�
 Метку updated_at ставим предварительно локально (для локального LWW/сбора); при push
 СЕРВЕР её пере-штампует — как для групп/занятий (инвариант §3).
 """
+import log
+from contextlib import closing
 from datetime import datetime, timezone
 
 from schedule.model import Lesson, WEEKDAYS
@@ -23,35 +25,30 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#Схему таблицы создаёт core.DBManager при инициализации БД (там же, где grades/term_grades)
+#— не на каждое чтение/запись. Флага «уже создано» здесь СОЗНАТЕЛЬНО нет: он врал бы при
+#пересоздании базы (тесты, сброс синхронизируемого кэша) и таблица «пропадала» бы.
 def _conn():
     from core import DBManager
     return DBManager.get_conn()
 
 
-def _ensure(cur):
-    cur.execute("CREATE TABLE IF NOT EXISTS schedule_overrides (id TEXT PRIMARY KEY, "
-                "group_name TEXT, week INTEGER DEFAULT 1, day TEXT, pair_no INTEGER DEFAULT 0, "
-                "action TEXT DEFAULT 'set', subject TEXT, time TEXT, room TEXT, teacher TEXT, "
-                "kind TEXT, updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
-
-
 def list_overrides(group: str = None) -> list:
     """Активные правки (без надгробий). group=None — все."""
-    conn = _conn()
-    cur = conn.cursor()
+    rows = []
     try:
-        _ensure(cur)
-        if group:
-            cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,"
-                        "teacher,kind FROM schedule_overrides WHERE group_name=? AND "
-                        "COALESCE(deleted,0)=0", (group,))
-        else:
-            cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,"
-                        "teacher,kind FROM schedule_overrides WHERE COALESCE(deleted,0)=0")
-        rows = cur.fetchall()
-    except Exception:
-        rows = []
-    conn.close()
+        with closing(_conn()) as conn:          #закроется даже при исключении
+            cur = conn.cursor()
+            if group:
+                cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,"
+                            "teacher,kind FROM schedule_overrides WHERE group_name=? AND "
+                            "COALESCE(deleted,0)=0", (group,))
+            else:
+                cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,"
+                            "teacher,kind FROM schedule_overrides WHERE COALESCE(deleted,0)=0")
+            rows = cur.fetchall()
+    except Exception as e:
+        log.get("overrides").warning(f"[overrides] чтение правок не удалось: {e}")
     keys = ("id", "group_name", "week", "day", "pair_no", "action", "subject", "time",
             "room", "teacher", "kind")
     return [dict(zip(keys, r)) for r in rows]
@@ -62,29 +59,26 @@ def set_override(group: str, week: int, day: str, pair_no: int, action: str = "s
                  kind: str = "") -> str:
     """Задать/заменить/скрыть пару. Возвращает id ячейки. Будит синк (уедет на сервер)."""
     oid = override_id(group, week, day, pair_no)
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure(cur)
-    cur.execute(
-        "INSERT OR REPLACE INTO schedule_overrides "
-        "(id,group_name,week,day,pair_no,action,subject,time,room,teacher,kind,updated_at,deleted) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
-        (oid, group, int(week), day, int(pair_no), action, subject.strip(), time.strip(),
-         room.strip(), teacher.strip(), kind.strip(), _now()))
-    conn.commit()
-    conn.close()
+    #id — PRIMARY KEY, поэтому INSERT OR REPLACE именно ЗАМЕНЯЕТ правку той же ячейки
+    #(без него плодились бы дубли на одну ячейку).
+    with closing(_conn()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO schedule_overrides "
+            "(id,group_name,week,day,pair_no,action,subject,time,room,teacher,kind,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
+            (oid, group, int(week), day, int(pair_no), action, subject.strip(), time.strip(),
+             room.strip(), teacher.strip(), kind.strip(), _now()))
+        conn.commit()
     _wake()
     return oid
 
 
 def delete_override(oid: str) -> bool:
     """Убрать правку (надгробие) — ячейка вернётся к порталу. Будит синк."""
-    conn = _conn()
-    cur = conn.cursor()
-    _ensure(cur)
-    cur.execute("UPDATE schedule_overrides SET deleted=1, updated_at=? WHERE id=?", (_now(), oid))
-    conn.commit()
-    conn.close()
+    with closing(_conn()) as conn:
+        conn.execute("UPDATE schedule_overrides SET deleted=1, updated_at=? WHERE id=?",
+                     (_now(), oid))
+        conn.commit()
     _wake()
     return True
 

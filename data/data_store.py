@@ -626,6 +626,53 @@ class LocalStore:
 _store: Optional[LocalStore] = None
 
 
+def rekey_student_grades(old_f: str, old_n: str, new_f: str, new_n: str) -> int:
+    """ПЕРЕКЛЮЧАЕТ оценки студента при смене ФИО (иначе они ОСИРОТЕЮТ).
+
+    Оценки ключуются по ФИО (§10: grades PK = (student_f, student_n, lesson_id),
+    term_grades id = `{f}|{n}|{subject}|{year}|{sem}`), поэтому переименование
+    (замужество, исправление опечатки) отвязывало всю историю. Здесь под новым ФИО
+    создаём записи с НОВЫМ ключом, а старые помечаем надгробием — так удаление старого
+    ключа доезжает синком на другие ПК и дублей не остаётся. Зеркало серверного
+    _rekey_student_grades (правки делаем на ОБЕИХ платформах).
+
+    Это заплатка поверх архитектурного долга: правильно — ключевать неизменным
+    student_id, а ФИО подклеивать при выдаче (отдельная миграция)."""
+    if (old_f, old_n) == (new_f, new_n) or not (old_f or old_n):
+        return 0
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    moved = 0
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT lesson_id, grade FROM grades WHERE student_f=? AND student_n=? "
+                    "AND COALESCE(deleted,0)=0", (old_f, old_n))
+        for lesson_id, grade in cur.fetchall():
+            cur.execute("INSERT OR REPLACE INTO grades "
+                        "(student_f,student_n,lesson_id,grade,updated_at,deleted) "
+                        "VALUES (?,?,?,?,?,0)", (new_f, new_n, lesson_id, grade, now))
+            cur.execute("UPDATE grades SET deleted=1, updated_at=? "
+                        "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                        (now, old_f, old_n, lesson_id))
+            moved += 1
+        cur.execute("SELECT id,subject,year,semester,grade,form FROM term_grades "
+                    "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0",
+                    (old_f, old_n))
+        for oid, subject, year, semester, grade, form in cur.fetchall():
+            nid = f"{new_f}|{new_n}|{subject}|{year}|{semester}"
+            cur.execute("INSERT OR REPLACE INTO term_grades "
+                        "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,0)",
+                        (nid, new_f, new_n, subject, year, semester, grade, form, now))
+            cur.execute("UPDATE term_grades SET deleted=1, updated_at=? WHERE id=?", (now, oid))
+            moved += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return moved
+
+
 def get_store() -> LocalStore:
     """Всегда возвращает рабочее хранилище (SQLite доступен всегда)."""
     global _store

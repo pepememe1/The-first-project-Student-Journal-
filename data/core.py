@@ -395,6 +395,15 @@ class DBManager:
             (id TEXT PRIMARY KEY, student_f TEXT, student_n TEXT, subject TEXT,
              year TEXT DEFAULT '', semester INTEGER DEFAULT 0, grade TEXT DEFAULT '',
              form TEXT DEFAULT '', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+        #Правки расписания админом (overlay поверх портала) — синкуемая сущность.
+        #Схему создаём ЗДЕСЬ, при инициализации БД, а не на каждое чтение/запись в
+        #schedule/overrides.py: DDL на каждый вызов — лишний парсинг запроса, а флаг
+        #«уже создано» в модуле врал бы при ПЕРЕСОЗДАНИИ базы (тесты, сброс кэша).
+        cur.execute("""CREATE TABLE IF NOT EXISTS schedule_overrides
+            (id TEXT PRIMARY KEY, group_name TEXT, week INTEGER DEFAULT 1, day TEXT,
+             pair_no INTEGER DEFAULT 0, action TEXT DEFAULT 'set', subject TEXT,
+             time TEXT, room TEXT, teacher TEXT, kind TEXT,
+             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
         #Группы — в СЕРВЕРНОЙ форме (как lessons/grades), а не JSON-блобом в kv_store:
         #синк ходит прямым upsert'ом без переводчика (план техдолга №2, пилот). id=grp:{name}.
         cur.execute("""CREATE TABLE IF NOT EXISTS groups

@@ -509,6 +509,15 @@ class AdminDashboard(QWidget):
             if p: nd["password"] = p
             sts[idx] = nd
             if gh: gh.set_students(sts)
+            #ФИО изменилось → переносим историю оценок на новый ключ, иначе она осиротеет
+            #(оценки ключуются по ФИО). Зеркало серверного поведения.
+            from data_store import rekey_student_grades
+            moved = rekey_student_grades(old.get("surname", ""), old.get("name", ""),
+                                         nd["surname"], nd["name"])
+            if moved:
+                log_event("student_rekey", "admin",
+                          f"{old.get('surname','')} {old.get('name','')} → "
+                          f"{nd['surname']} {nd['name']}: оценок {moved}")
             d.accept(); self._render_students()
         save_b.clicked.connect(_save)
         btns.addWidget(del_b); btns.addStretch()

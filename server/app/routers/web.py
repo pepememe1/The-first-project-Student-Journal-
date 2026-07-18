@@ -1552,26 +1552,72 @@ def admin_create_student(payload: dict = Body(...),
     return {"ok": True, "login": login, "id": sid}
 
 
+def _rekey_student_grades(db: Session, old_f: str, old_n: str,
+                          new_f: str, new_n: str) -> int:
+    """ПЕРЕКЛЮЧАЕТ оценки студента при смене ФИО. Без этого они ОСИРОТЕЮТ.
+
+    Оценки ключуются по ФИО (§10: `{f}|{n}|{lesson_id}`, у итоговых — плюс предмет/период),
+    поэтому переименование (замужество, исправление опечатки) отвязывало бы всю историю.
+    Здесь: под новым ФИО создаём записи-копии с НОВЫМ id, а старые помечаем надгробием —
+    так удаление старого id доезжает на другие ПК и дублей не остаётся.
+
+    Это заплатка поверх архитектурного долга: правильное решение — ключевать оценки
+    неизменным student_id (отдельная миграция), а ФИО подклеивать при выдаче."""
+    if (old_f, old_n) == (new_f, new_n) or not (old_f or old_n):
+        return 0
+    now = _now_iso()
+    moved = 0
+    for g in db.query(Grade).filter(Grade.student_f == old_f,
+                                    Grade.student_n == old_n,
+                                    Grade.deleted == False).all():  # noqa: E712
+        new_id = f"{new_f}|{new_n}|{g.lesson_id}"
+        tgt = db.get(Grade, new_id)
+        if tgt is None:
+            tgt = Grade(id=new_id, student_f=new_f, student_n=new_n, lesson_id=g.lesson_id)
+            db.add(tgt)
+        tgt.grade, tgt.deleted, tgt.updated_at = g.grade, False, now
+        g.deleted, g.updated_at = True, now          #надгробие старого ключа
+        moved += 1
+    for t in db.query(TermGrade).filter(TermGrade.student_f == old_f,
+                                        TermGrade.student_n == old_n,
+                                        TermGrade.deleted == False).all():  # noqa: E712
+        new_id = _term_grade_id(new_f, new_n, t.subject, t.year, t.semester)
+        tgt = db.get(TermGrade, new_id)
+        if tgt is None:
+            tgt = TermGrade(id=new_id, student_f=new_f, student_n=new_n, subject=t.subject,
+                            year=t.year, semester=t.semester)
+            db.add(tgt)
+        tgt.grade, tgt.form, tgt.deleted, tgt.updated_at = t.grade, t.form, False, now
+        t.deleted, t.updated_at = True, now
+        moved += 1
+    return moved
+
+
 @router.put("/admin/students/{login}")
 def admin_update_student(login: str, payload: dict = Body(...),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Правка студента. Логин — ключ (id=stud:login), его не меняем: смена логина = это
     другой студент (создайте нового). Меняем ФИО/группу/пароль. Пустой пароль —
-    оставляем прежний хеш."""
+    оставляем прежний хеш. При смене ФИО ОЦЕНКИ ПЕРЕКЛЮЧАЮТСЯ на новый ключ."""
     sid = f"stud:{login}"
     row = db.get(User, sid)
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Студент не найден")
+    old_f, old_n = row.surname or "", row.name or ""
     if "surname" in payload:
         row.surname = (payload.get("surname") or "").strip()
     #Имя/отчество: пересобираем name-ключ из имени и отчества (отчество храним отдельно).
-    #ВАЖНО: смена name — это смена КЛЮЧА оценок (как и раньше при правке имени), поэтому
-    #трогаем только если пришло name или patronymic. Иначе оставляем как есть.
     if "name" in payload or "patronymic" in payload:
         name_in = (payload.get("name") if "name" in payload else W.first_name(row)) or ""
         patr_in = (payload.get("patronymic") if "patronymic" in payload
                    else (row.patronymic or ""))
         row.name, row.patronymic = _compose_name(name_in, patr_in)
+    #ФИО изменилось → переносим историю оценок на новый ключ (иначе осиротеет).
+    moved = _rekey_student_grades(db, old_f, old_n, row.surname or "", row.name or "")
+    if moved:
+        audit.log(db, actor=_admin.login, role="admin", action="student.rekey",
+                  target=f"{old_f} {old_n} → {row.surname} {row.name}",
+                  detail=f"перенесено оценок: {moved}")
     if "group" in payload:
         group = (payload.get("group") or "").strip()
         _ensure_group_row(db, group)
