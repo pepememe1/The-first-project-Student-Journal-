@@ -133,6 +133,11 @@ export const adminApi = {
   aiConfig: () => api.get('/web/admin/ai-config'),
   aiConfigSave: (payload) => api.post('/web/admin/ai-config', payload),
   aiConfigTest: (payload) => api.post('/web/admin/ai-config/test', payload),
+  // Редактор расписания (правки ПОВЕРХ портала). schedule — слитое расписание + правки;
+  // set — задать/заменить/скрыть пару в ячейке; del — убрать правку (вернуться к порталу).
+  schedule: (group) => api.get('/web/admin/schedule', { params: { group } }),
+  setScheduleOverride: (payload) => api.post('/web/admin/schedule/override', payload),
+  deleteScheduleOverride: (id) => api.delete(`/web/admin/schedule/override/${id}`),
   // Инфо-панель «Сервер и сайт» (адрес, БД, шифрование, ГОСТ, онлайн, период).
   serverInfo: () => api.get('/web/admin/server-info'),
   // Служебное — уже реализовано на сервере:

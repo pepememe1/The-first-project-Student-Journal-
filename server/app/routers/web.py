@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
-                      AuthSession, ConfigKV, TermGrade)
+                      AuthSession, ConfigKV, TermGrade, ScheduleOverride)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -763,16 +763,127 @@ def schedule_teacher(name: str = Query(""), user: User = Depends(get_current_use
     }
 
 
+_OV_DAYS = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
+
+
+def _apply_overrides(db: Session, group: str, data) -> dict:
+    """Накладывает админ-правки (ScheduleOverride) ПОВЕРХ портального расписания группы.
+    action=set — задать/заменить пару в ячейке (неделя,день,№); remove — скрыть пару.
+    Портала нет (data=None) → строим расписание ТОЛЬКО из правок (колледж без портала)."""
+    ovs = db.query(ScheduleOverride).filter(
+        ScheduleOverride.group_name == group,
+        ScheduleOverride.deleted == False).all()  # noqa: E712
+    if data is None and not ovs:
+        return None
+    base = dict(data) if data else {"name": group, "href": "", "weeks": {}}
+    # глубокая копия недель, чтобы не мутировать TTL-кэш парсера
+    weeks = {wk: {d: [dict(x) for x in ls] for d, ls in dd.items()}
+             for wk, dd in (base.get("weeks") or {}).items()}
+    for ov in ovs:
+        wk, day = str(ov.week), ov.day
+        daylist = weeks.setdefault(wk, {}).setdefault(day, [])
+        daylist[:] = [x for x in daylist if x.get("pair_no") != ov.pair_no]   # убрать старую
+        if ov.action == "set":
+            daylist.append({"pair_no": ov.pair_no, "time": ov.time, "kind": ov.kind,
+                            "subject": ov.subject, "teacher": ov.teacher, "room": ov.room,
+                            "raw": ov.subject, "extra": "", "_override": True})
+        daylist.sort(key=lambda x: x.get("pair_no") or 0)
+    base["weeks"] = weeks
+    return base
+
+
+def _group_schedule(db: Session, group: str):
+    """Расписание группы с наложенными админ-правками — единый источник для студента,
+    Вектора и админ-редактора."""
+    return _apply_overrides(db, group, schedule_web.get_group(group) if group else None)
+
+
 @router.get("/schedule")
-def schedule_get(group: str = Query(""), user: User = Depends(get_current_user)):
+def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
     g = (group or user.group_name or "").strip()
-    data = schedule_web.get_group(g) if g else None
+    data = _group_schedule(db, g) if g else None
     return {
         "group": g,
         "week": schedule_web.current_week_parity(),
-        "schedule": data,           # dict GroupSchedule.to_dict() или null
-        "available": data is not None,
+        "schedule": data,           # dict GroupSchedule.to_dict() (+ правки) или null
+        "available": bool(data and data.get("weeks")),
     }
+
+
+# ── Редактор расписания в админке (правки ПОВЕРХ портала) ────────────────────────────
+@router.get("/admin/schedule")
+def admin_schedule_get(group: str = Query(...), user: User = Depends(require_admin),
+                       db: Session = Depends(get_db)):
+    """Слитое расписание группы (портал + правки) + сырой список правок для редактора."""
+    g = (group or "").strip()
+    merged = _group_schedule(db, g)
+    ovs = db.query(ScheduleOverride).filter(
+        ScheduleOverride.group_name == g,
+        ScheduleOverride.deleted == False).order_by(  # noqa: E712
+        ScheduleOverride.week, ScheduleOverride.day, ScheduleOverride.pair_no).all()
+    return {
+        "group": g,
+        "week": schedule_web.current_week_parity(),
+        "schedule": merged,
+        "available": bool(merged and merged.get("weeks")),
+        "days": _OV_DAYS,
+        "overrides": [{"id": o.id, "week": o.week, "day": o.day, "pair_no": o.pair_no,
+                       "action": o.action, "subject": o.subject, "time": o.time,
+                       "room": o.room, "teacher": o.teacher, "kind": o.kind} for o in ovs],
+    }
+
+
+@router.post("/admin/schedule/override")
+def admin_schedule_override(payload: dict = Body(...), user: User = Depends(require_admin),
+                            db: Session = Depends(get_db)):
+    """Создать/обновить правку ячейки (группа, неделя, день, № пары). action: set|remove.
+    Уникальность по ячейке: повторная правка той же ячейки ЗАМЕНЯЕТ прежнюю."""
+    g = (payload.get("group") or "").strip()
+    day = (payload.get("day") or "").strip()
+    action = (payload.get("action") or "set").strip()
+    try:
+        week = int(payload.get("week") or 1)
+        pair_no = int(payload.get("pair_no") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "week и pair_no должны быть числами")
+    if not g or day not in _OV_DAYS or week not in (1, 2) or pair_no < 1:
+        raise HTTPException(400, "Проверьте группу, неделю (1/2), день и номер пары")
+    if action not in ("set", "remove"):
+        raise HTTPException(400, "action: set | remove")
+    row = db.query(ScheduleOverride).filter(
+        ScheduleOverride.group_name == g, ScheduleOverride.week == week,
+        ScheduleOverride.day == day, ScheduleOverride.pair_no == pair_no,
+        ScheduleOverride.deleted == False).first()  # noqa: E712
+    if row is None:
+        row = ScheduleOverride(group_name=g, week=week, day=day, pair_no=pair_no)
+        db.add(row)
+    row.action = action
+    row.subject = (payload.get("subject") or "").strip()
+    row.time = (payload.get("time") or "").strip()
+    row.room = (payload.get("room") or "").strip()
+    row.teacher = (payload.get("teacher") or "").strip()
+    row.kind = (payload.get("kind") or "").strip()
+    row.deleted = False
+    row.updated_at = _now_iso()
+    db.commit()
+    audit.log(db, actor=user.login, role="admin", action="schedule.override",
+              target=f"{g} {day} н{week} п{pair_no} [{action}] {row.subject}")
+    return {"ok": True, "id": row.id}
+
+
+@router.delete("/admin/schedule/override/{ov_id}")
+def admin_schedule_override_delete(ov_id: int, user: User = Depends(require_admin),
+                                   db: Session = Depends(get_db)):
+    """Убрать правку (ячейка вернётся к тому, что даёт портал)."""
+    row = db.get(ScheduleOverride, ov_id)
+    if row and not row.deleted:
+        row.deleted = True
+        row.updated_at = _now_iso()
+        db.commit()
+        audit.log(db, actor=user.login, role="admin", action="schedule.override",
+                  target=f"удалена правка #{ov_id}")
+    return {"ok": True}
 
 
 # «ВЕКТОР» ─────────────────────────────────────────────────────────────────────────
@@ -942,7 +1053,7 @@ def _subj_match(detected: str, lesson_subject: str) -> bool:
     return hits >= max(1, len(aw) // 2)
 
 
-def _schedule_answer(group: str, msg: str, day) -> tuple:
+def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
     """Ответ по расписанию группы (данные — серверный парсер портала schedule_web).
 
     ПРЕДМЕТ ищем по предметам САМОГО расписания (портал называет их иначе, чем журнал),
@@ -951,7 +1062,7 @@ def _schedule_answer(group: str, msg: str, day) -> tuple:
     день/сегодня/завтра → пары этого дня; иначе — сегодня."""
     if not group:
         return ("Не вижу твоей группы — расписание привязано к ней. Уточни у администратора.", {})
-    data = schedule_web.get_group(group)
+    data = _group_schedule(db, group)   #портал + админ-правки (overlay)
     if not data or not data.get("weeks"):
         return (f"Расписание группы {group} пока не загрузилось с портала — попробуй чуть позже.", {})
     weeks = data["weeks"]
@@ -1053,7 +1164,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         records = W.student_records(db, user.surname, user.name, group)
 
         if intent == "schedule":
-            text, facts = _schedule_answer(group, msg, day)
+            text, facts = _schedule_answer(db, group, msg, day)
             return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
         if intent == "groups":
             return {"text": f"Твоя группа — {group}." if group else "Группа за тобой не закреплена.",
@@ -1121,7 +1232,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                     "mood": "neutral", "intent": "help", "facts": {}}
 
         if intent == "schedule":
-            text, facts = _schedule_answer(groups[0], msg, day)
+            text, facts = _schedule_answer(db, groups[0], msg, day)
             return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
         if intent == "groups":
             return {"text": "Ваши группы: " + ", ".join(groups) + ".", "mood": "neutral",

@@ -220,6 +220,31 @@ class WebAuthnCredential(Base):
     last_used = Column(String, default="")
 
 
+class ScheduleOverride(Base):
+    """Правка расписания администратором ПОВЕРХ портала (overlay).
+
+    Расписание тянется с portal.esstu.ru (read-only). Здесь админ точечно правит его для
+    группы: `action='set'` — задать/заменить пару в ячейке (неделя, день, номер пары),
+    `action='remove'` — скрыть портальную пару в этой ячейке. При выдаче расписания
+    группы правки НАКЛАДЫВАЮТСЯ на портальные данные (см. web._apply_overrides). Так
+    работает и для колледжей без портала (там просто пустая основа + ручные пары).
+    Серверная деталь — НЕ входит в SYNC_MODELS (десктопу это не синхронизируется)."""
+    __tablename__ = "schedule_overrides"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_name = Column(String, index=True, default="")
+    week = Column(Integer, default=1)          #1 (I неделя) / 2 (II неделя)
+    day = Column(String, default="")           #короткое имя: Пнд Втр Срд Чтв Птн Сбт
+    pair_no = Column(Integer, default=0)        #номер пары в дне
+    action = Column(String, default="set")      #set | remove
+    subject = Column(String, default="")
+    time = Column(String, default="")
+    room = Column(String, default="")
+    teacher = Column(String, default="")
+    kind = Column(String, default="")           #Лекция/Практика и т.п.
+    updated_at = Column(String, default="")
+    deleted = Column(Boolean, default=False)
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 #term_grades включены: десктоп теперь ведёт итоговые оценки/ведомости (аттестацию)
 #наравне с вебом — данные общие через синк (ключ f|n|subject|year|semester).
