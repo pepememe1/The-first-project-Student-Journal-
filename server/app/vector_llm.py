@@ -94,3 +94,72 @@ def voice(cfg: dict, facts_text: str, role: str = "student", question: str = "")
         #Не роняем ответ: факты уже верные, LLM лишь переформулировка.
         print(f"[vector_llm] озвучка не удалась ({kind}), отдаю факты как есть: {e}")
     return facts_text
+
+
+# ── СВОБОДНЫЙ ЧАТ (small-talk) — с редиректом к учёбе и запретом решать задачи ────────
+# Просьба заказчика: с Вектором можно перекинуться парой фраз (погода, настроение), но он
+# мягко возвращает к учёбе и НЕ решает задания в чате (не «решебник»). Данные журнала здесь
+# не выдумываем — их дают ИНТЕНТЫ (SQL). Тут только живой, но управляемый разговор.
+_SMALLTALK_RULES = """\
+Пользователь написал НЕ по журналу (болтовня, погода, настроение, «как дела»). Правила:
+1. Можно коротко (1–2 фразы) по-доброму поддержать разговор, а затем МЯГКО вернуть к учёбе:
+   предложи спросить про оценки, средний балл, пропуски или расписание.
+2. СТРОГО НЕ РЕШАЙ учебные ЗАДАЧИ в чате: примеры, уравнения, задачи, код, переводы,
+   сочинения, рефераты, ответы на тесты. Если просят «реши / посчитай / напиши / переведи /
+   сделай задание» — по-доброму откажись («я помощник журнала, а не решебник — лучше
+   разберёмся вместе или спроси преподавателя») и НЕ давай решение даже частично.
+3. Не выдумывай данные журнала (оценки, имена, списки, расписание) — предложи команды:
+   «мои оценки», «средний балл», «какие группы», «расписание».
+4. Не давай медицинских/юридических/политических заключений.
+Коротко, на русском, максимум один эмодзи."""
+
+
+def _freechat_messages(question: str, role: str) -> list:
+    system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "") + "\n\n" + _SMALLTALK_RULES
+    return [{"role": "system", "content": system}, {"role": "user", "content": question}]
+
+
+def _free_offline(role: str) -> str:
+    return ("С радостью бы поболтал, но сейчас я без ИИ-модели. Зато точно помогу по журналу: "
+            "спроси про оценки, средний балл, пропуски или расписание. 🐯")
+
+
+def _chat_gigachat(cfg: dict, messages: list) -> str:
+    from gigachat import GigaChat
+    from gigachat.models import Chat, Messages
+    creds = cfg.get("gigachat_credentials", "")
+    if not creds:
+        return ""
+    with GigaChat(credentials=creds, scope=cfg.get("gigachat_scope", "GIGACHAT_API_B2B"),
+                  model=cfg.get("gigachat_model", "GigaChat"),
+                  verify_ssl_certs=False, timeout=25.0) as client:
+        chat = Chat(messages=[Messages(role=m["role"], content=m["content"]) for m in messages],
+                    temperature=0.5)
+        return client.chat(chat).choices[0].message.content.strip()
+
+
+def _chat_ollama(cfg: dict, messages: list) -> str:
+    import requests
+    host = (cfg.get("local_host") or "http://localhost:11434").rstrip("/")
+    r = requests.post(host + "/api/chat",
+                      json={"model": cfg.get("local_model", "qwen2.5:3b"),
+                            "messages": messages, "stream": False,
+                            "options": {"temperature": 0.5}}, timeout=60)
+    return r.json()["message"]["content"].strip()
+
+
+def free_chat(cfg: dict, question: str, role: str = "student") -> str:
+    """Свободный ответ на НЕжурнальный вопрос: короткий small-talk → возврат к учёбе, без
+    решения задач. Нет провайдера/ошибка → мягкий офлайн-редирект (чат не ломается)."""
+    cfg = cfg or {}
+    if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
+        return _free_offline(role)
+    kind = (cfg.get("vector_llm") or "offline").strip()
+    try:
+        if kind == "gigachat":
+            return _chat_gigachat(cfg, _freechat_messages(question, role)) or _free_offline(role)
+        if kind in ("local", "ollama"):
+            return _chat_ollama(cfg, _freechat_messages(question, role)) or _free_offline(role)
+    except Exception as e:
+        print(f"[vector_llm] free_chat не удался ({kind}): {e}")
+    return _free_offline(role)

@@ -47,6 +47,21 @@ def test_static_intents_are_not_voiced_by_llm(client, monkeypatch):
     assert r["text"] == "LLM_ОЗВУЧИЛ", f"ответ с цифрами должен озвучиваться LLM: {r}"
 
 
+def test_offtopic_goes_to_free_chat_not_canned_help(client, monkeypatch):
+    """Небанальный/НЕжурнальный вопрос (unknown) уходит в free_chat (small-talk с
+    редиректом к учёбе), а не в шаблонную справку. Данные журнала при этом НЕ выдумываются
+    (их дают интенты). free_chat замокан — проверяем сам МАРШРУТ."""
+    from app import vector_llm
+    monkeypatch.setattr(vector_llm, "free_chat",
+                        lambda cfg, q, role: f"SMALLTALK:{role}")
+    admin = make_admin(client)
+    th = make_teacher(client, admin, subjects=["Мат"])
+    r = client.post("/web/vector/ask",
+                    json={"message": "какая сегодня погода в Улан-Удэ"}, headers=th).json()
+    assert r["intent"] == "unknown", r
+    assert r["text"] == "SMALLTALK:teacher", r      # ушёл в free_chat, а не в справку
+
+
 def test_server_info(client):
     admin = make_admin(client)
     r = client.get("/web/admin/server-info", headers=admin).json()

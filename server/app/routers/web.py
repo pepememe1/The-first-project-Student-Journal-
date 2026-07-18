@@ -803,11 +803,15 @@ def vector_ask(payload: dict = Body(...),
     question = (payload.get("message") or "").strip()
     cfg = W.load_config(db)
     result = _vector_facts(question.lower(), user, db, cfg)
+    intent = result.get("intent")
+    #Вопрос НЕ из пула (unknown) — свободный small-talk: пара фраз + мягкий возврат к учёбе,
+    #без решения задач (см. vector_llm.free_chat). Данные журнала тут не выдумываем.
+    if intent == "unknown":
+        result["text"] = vector_llm.free_chat(cfg, question, user.role)
     #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
     #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
-    #Приветствие/справку/благодарность НЕ озвучиваем (см. _NO_VOICE_INTENTS) — там нет
-    #цифр, и модель начинает дописывать шаблоны с плейсхолдерами вместо фактов.
-    if result.get("intent") not in _NO_VOICE_INTENTS:
+    #Приветствие/справку/благодарность/расписание НЕ озвучиваем (см. _NO_VOICE_INTENTS).
+    elif intent not in _NO_VOICE_INTENTS:
         result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
     return result
 
