@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
-                      AuthSession, ConfigKV, TermGrade, ScheduleOverride)
+                      AuthSession, ConfigKV, TermGrade, ScheduleOverride,
+                      schedule_override_id)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -851,12 +852,12 @@ def admin_schedule_override(payload: dict = Body(...), user: User = Depends(requ
         raise HTTPException(400, "Проверьте группу, неделю (1/2), день и номер пары")
     if action not in ("set", "remove"):
         raise HTTPException(400, "action: set | remove")
-    row = db.query(ScheduleOverride).filter(
-        ScheduleOverride.group_name == g, ScheduleOverride.week == week,
-        ScheduleOverride.day == day, ScheduleOverride.pair_no == pair_no,
-        ScheduleOverride.deleted == False).first()  # noqa: E712
+    #Детерминированный id ячейки — один и тот же на вебе и десктопе (ключ синка): повторная
+    #правка той же ячейки ЗАМЕНЯЕТ прежнюю на обеих платформах.
+    oid = schedule_override_id(g, week, day, pair_no)
+    row = db.get(ScheduleOverride, oid)
     if row is None:
-        row = ScheduleOverride(group_name=g, week=week, day=day, pair_no=pair_no)
+        row = ScheduleOverride(id=oid, group_name=g, week=week, day=day, pair_no=pair_no)
         db.add(row)
     row.action = action
     row.subject = (payload.get("subject") or "").strip()
@@ -872,8 +873,8 @@ def admin_schedule_override(payload: dict = Body(...), user: User = Depends(requ
     return {"ok": True, "id": row.id}
 
 
-@router.delete("/admin/schedule/override/{ov_id}")
-def admin_schedule_override_delete(ov_id: int, user: User = Depends(require_admin),
+@router.delete("/admin/schedule/override/{ov_id:path}")
+def admin_schedule_override_delete(ov_id: str, user: User = Depends(require_admin),
                                    db: Session = Depends(get_db)):
     """Убрать правку (ячейка вернётся к тому, что даёт портал)."""
     row = db.get(ScheduleOverride, ov_id)

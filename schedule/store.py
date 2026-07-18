@@ -78,16 +78,30 @@ def subjects_all() -> list:
     return sorted({s.strip() for s in subs if s and s.strip()})
 
 
-def subjects_for_group(app_group: str) -> list:
-    """Предметы КОНКРЕТНОЙ группы из расписания сайта. Имя группы аккаунта сопоставляем
-    с группой на сайте (точное совпадение → нечёткое guess_group). Пусто — нет кэша или
-    совпадения (вызывающий код откатится на предметы из журнала)."""
+def group_schedule(app_group: str):
+    """Расписание группы из кэша портала С НАЛОЖЕННЫМИ админ-правками (overlay). Единый
+    источник для предметов и просмотра (как web._group_schedule). None — нет данных."""
     snap = load_cached()
-    if not snap or not app_group:
+    g = None
+    if snap and app_group:
+        site_name = app_group if app_group in snap.groups else guess_group(
+            app_group, snap.group_names())
+        g = snap.groups.get(site_name)
+    try:
+        from schedule.overrides import apply_to_group, list_overrides
+        if g is not None or list_overrides(app_group):
+            g = apply_to_group(g, app_group)
+    except Exception:
+        pass
+    return g
+
+
+def subjects_for_group(app_group: str) -> list:
+    """Предметы КОНКРЕТНОЙ группы из расписания (+ админ-правки). Пусто — нет кэша или
+    совпадения (вызывающий код откатится на предметы из журнала)."""
+    if not app_group:
         return []
-    site_name = app_group if app_group in snap.groups else guess_group(
-        app_group, snap.group_names())
-    g = snap.groups.get(site_name)
+    g = group_schedule(app_group)
     return g.subjects() if g else []
 
 

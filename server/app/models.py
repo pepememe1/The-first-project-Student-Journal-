@@ -228,9 +228,12 @@ class ScheduleOverride(Base):
     `action='remove'` — скрыть портальную пару в этой ячейке. При выдаче расписания
     группы правки НАКЛАДЫВАЮТСЯ на портальные данные (см. web._apply_overrides). Так
     работает и для колледжей без портала (там просто пустая основа + ручные пары).
-    Серверная деталь — НЕ входит в SYNC_MODELS (десктопу это не синхронизируется)."""
+    ВХОДИТ в SYNC_MODELS — правки расписания ОБЩИЕ для веб и десктопа: админ правит на любой
+    платформе, изменение синхронизируется на другую (и работает офлайн на десктопе)."""
     __tablename__ = "schedule_overrides"
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    #Строковый детерминированный id `sovr:{group}|{week}|{day}|{pair}` — как у остальных
+    #синкуемых сущностей (grp:/subj:/...). Автоинкремент-int столкнулся бы между ПК.
+    id = Column(String, primary_key=True)
     group_name = Column(String, index=True, default="")
     week = Column(Integer, default=1)          #1 (I неделя) / 2 (II неделя)
     day = Column(String, default="")           #короткое имя: Пнд Втр Срд Чтв Птн Сбт
@@ -245,6 +248,11 @@ class ScheduleOverride(Base):
     deleted = Column(Boolean, default=False)
 
 
+def schedule_override_id(group: str, week, day: str, pair_no) -> str:
+    """Детерминированный id ячейки — одинаков на вебе и десктопе (ключ синка)."""
+    return f"sovr:{group}|{int(week)}|{day}|{int(pair_no)}"
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 #term_grades включены: десктоп теперь ведёт итоговые оценки/ведомости (аттестацию)
 #наравне с вебом — данные общие через синк (ключ f|n|subject|year|semester).
@@ -255,5 +263,6 @@ SYNC_MODELS = {
     "lessons": Lesson,
     "grades": Grade,
     "term_grades": TermGrade,
+    "schedule_overrides": ScheduleOverride,   #правки расписания — общие веб↔десктоп
     "config": ConfigKV,
 }

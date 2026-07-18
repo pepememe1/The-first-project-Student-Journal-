@@ -211,6 +211,7 @@ def collect_local() -> dict:
         "lessons": _collect_lessons(),
         "grades": _collect_grades(),
         "term_grades": _collect_term_grades(),
+        "schedule_overrides": _collect_schedule_overrides(),
     }
 
 
@@ -250,6 +251,9 @@ def apply_remote(changes: dict):
         _merge_grades(changes["grades"])
     if changes.get("term_grades"):
         _merge_term_grades(changes["term_grades"])
+    #Правки расписания (overlay) — общие веб↔десктоп, прямой LWW-upsert (как группы).
+    if changes.get("schedule_overrides"):
+        _merge_schedule_overrides(changes["schedule_overrides"])
 
 
 def _merge_lessons(remote: list):
@@ -310,6 +314,66 @@ def _merge_users(remote: list):
                     "VALUES (?,?,?,?,?)",
                     (uid, role, u.get("updated_at", ""), 1 if rdel else 0,
                      encrypt_value(_json.dumps(u, ensure_ascii=False))))
+    conn.commit()
+    conn.close()
+
+
+_SOVR_COLS = ("id", "group_name", "week", "day", "pair_no", "action", "subject",
+              "time", "room", "teacher", "kind")
+
+
+def _ensure_sovr_table(cur):
+    cur.execute("CREATE TABLE IF NOT EXISTS schedule_overrides (id TEXT PRIMARY KEY, "
+                "group_name TEXT, week INTEGER DEFAULT 1, day TEXT, pair_no INTEGER DEFAULT 0, "
+                "action TEXT DEFAULT 'set', subject TEXT, time TEXT, room TEXT, teacher TEXT, "
+                "kind TEXT, updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+
+
+def _collect_schedule_overrides() -> list:
+    """Правки расписания из локальной таблицы (со надгробиями) — прямой upsert в синк."""
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    try:
+        _ensure_sovr_table(cur)
+        cur.execute("SELECT id,group_name,week,day,pair_no,action,subject,time,room,teacher,"
+                    "kind,COALESCE(updated_at,''),COALESCE(deleted,0) FROM schedule_overrides")
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({"id": r[0], "group_name": r[1], "week": r[2], "day": r[3], "pair_no": r[4],
+                    "action": r[5], "subject": r[6], "time": r[7], "room": r[8], "teacher": r[9],
+                    "kind": r[10], "updated_at": r[11], "deleted": bool(r[12])})
+    return out
+
+
+def _merge_schedule_overrides(remote: list):
+    """Слияние правок расписания с сервера — прямой LWW-upsert (как группы). Пишем прямо
+    в таблицу, синк не будим (серверные данные, а не UI-правка)."""
+    from core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    _ensure_sovr_table(cur)
+    for o in remote:
+        oid = o.get("id")
+        if not oid:
+            continue
+        rdel = bool(o.get("deleted"))
+        cur.execute("SELECT COALESCE(updated_at,'') FROM schedule_overrides WHERE id=?", (oid,))
+        row = cur.fetchone()
+        if not (row is None or _should_apply(o.get("updated_at", ""), row[0] or "", rdel)):
+            continue
+        cur.execute(
+            "INSERT OR REPLACE INTO schedule_overrides "
+            "(id,group_name,week,day,pair_no,action,subject,time,room,teacher,kind,updated_at,deleted) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (oid, o.get("group_name", ""), int(o.get("week") or 1), o.get("day", ""),
+             int(o.get("pair_no") or 0), o.get("action", "set"), o.get("subject", ""),
+             o.get("time", ""), o.get("room", ""), o.get("teacher", ""), o.get("kind", ""),
+             o.get("updated_at", ""), 1 if rdel else 0))
     conn.commit()
     conn.close()
 

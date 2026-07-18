@@ -308,7 +308,9 @@ class ScheduleView(QWidget):
                 for e in entries:
                     out[d].append((e.get("group", ""), e["lesson"]))
         else:
-            gs = self.snapshot.groups.get(self.entity)
+            #Расписание группы С НАЛОЖЕННЫМИ админ-правками (overlay) — единый источник,
+            #как на вебе. Правки синкуются, поэтому видны и здесь.
+            gs = sched.group_schedule(self.entity) or self.snapshot.groups.get(self.entity)
             if gs:
                 for d, lessons in gs.weeks.get(self.week, {}).items():
                     out.setdefault(d, [])

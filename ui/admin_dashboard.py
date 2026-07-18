@@ -773,10 +773,14 @@ class AdminDashboard(QWidget):
     #Расписание (просмотр любой группы/преподавателя + обновление кэша с портала)
 
     def _build_schedule(self):
+        from PySide6.QtWidgets import QTabWidget
         from schedule_view import ScheduleView
-        w = ScheduleView(role="admin", login="admin", app_hint="")
-        self.pages["schedule"] = w
-        self.stack.addWidget(w)
+        from schedule_editor import ScheduleEditor
+        tabs = QTabWidget()
+        tabs.addTab(ScheduleView(role="admin", login="admin", app_hint=""), "Просмотр")
+        tabs.addTab(ScheduleEditor(), "Редактор")   #правки поверх портала (синкуются)
+        self.pages["schedule"] = tabs
+        self.stack.addWidget(tabs)
 
     #API ключ
 

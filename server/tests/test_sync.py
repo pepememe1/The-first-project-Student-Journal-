@@ -224,6 +224,24 @@ def _tick():
     time.sleep(0.03)
 
 
+def test_schedule_override_syncs_roundtrip(client):
+    """Правки расписания (ScheduleOverride) синхронизируются как обычная сущность — так
+    админ-редактор общий для веб и десктопа (правка на одном ПК доезжает на другой)."""
+    h = make_admin(client)
+    ov = {"id": "sovr:ИС-21|1|Пнд|2", "group_name": "ИС-21", "week": 1, "day": "Пнд",
+          "pair_no": 2, "action": "set", "subject": "Математика", "time": "10:45"}
+    r = _push(client, h, schedule_overrides=[ov])
+    assert r.json()["applied"]["schedule_overrides"] == 1
+    ch = client.get("/sync/pull", headers=h).json()["changes"]
+    got = [x for x in ch["schedule_overrides"] if x["id"] == ov["id"]]
+    assert got and got[0]["subject"] == "Математика" and got[0]["updated_at"]
+    #надгробие (удаление правки) тоже доезжает
+    _push(client, h, schedule_overrides=[dict(ov, deleted=True)])
+    ch2 = client.get("/sync/pull", headers=h).json()["changes"]
+    g2 = [x for x in ch2["schedule_overrides"] if x["id"] == ov["id"]]
+    assert g2 and g2[0]["deleted"] is True
+
+
 def test_delta_pull_returns_only_newer(client):
     """pull?since=<метка> отдаёт только записи, изменённые позже метки — основа
     дельта-синхронизации (не качать всю базу каждый раз)."""
