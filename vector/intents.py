@@ -557,17 +557,27 @@ def intent_schedule(scope: VectorScope, asked_name: str = "", day="") -> Facts:
                              data={"subject": want_subject})
             return Facts("schedule", f"«{want_subject}» в расписании не нашёл.")
 
+        #Чётность берём у ДАТЫ целевого дня, не у сегодня: спрошенный «понедельник» в
+        #субботу — уже следующая неделя (другая чётность). Иначе выдавали не ту неделю.
         import datetime as _dt
-        today = _dt.datetime.now().weekday()
-        idx = today if day in ("today", "") else (today + 1 if day == "tomorrow" else day)
-        if isinstance(idx, int) and idx > 5:
+        today = _dt.date.today()
+        ti = today.weekday()
+        if day == "tomorrow":
+            target = today + _dt.timedelta(days=1)
+        elif isinstance(day, int):
+            target = today + _dt.timedelta(days=(day - ti) % 7)
+        else:
+            target = today
+        di = target.weekday()
+        if di > 5:
             return Facts("schedule", "В этот день пар нет — выходной. 🐯")
-        di = idx if isinstance(idx, int) else today
-        ls = lessons_of(cur_week, di)
+        week = store.current_week_parity(target)
+        ls = lessons_of(week, di)
         label = {"today": "Сегодня", "tomorrow": "Завтра"}.get(day, _SCHED_DAYS_RU[di])
+        wl = "II неделя" if week == 2 else "I неделя"
         if not ls:
-            return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}) пар нет. 🐯")
-        return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}):\n• "
+            return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}, {wl}) пар нет. 🐯")
+        return Facts("schedule", f"{label} ({_SCHED_DAYS_RU[di]}, {wl}):\n• "
                      + "\n• ".join(fmt(l) for l in ls), data={"day": _SCHED_DAYS_RU[di]})
     except Exception as e:
         import log

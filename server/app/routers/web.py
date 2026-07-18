@@ -987,26 +987,32 @@ def _schedule_answer(group: str, msg: str, day) -> tuple:
         return ("Не понял, какой предмет — назови точнее (как во вкладке «Расписание»), "
                 "или спроси «что сегодня» / «что завтра». 🐯", {})
 
-    # B) конкретный день / сегодня / завтра
+    # B) конкретный день / сегодня / завтра. Берём ДАТУ целевого дня и чётность ИМЕННО
+    # ЕЁ, а не сегодняшнюю: спрошенный «понедельник» в субботу — это уже СЛЕДУЮЩАЯ неделя
+    # (другая чётность). Раньше брали cur_week (сегодня) → выдавали пары не той недели.
     import datetime as _dt
-    today_idx = _dt.datetime.now().weekday()   # 0=Пн..6=Вс
+    today = _dt.date.today()
+    today_idx = today.weekday()                # 0=Пн..6=Вс
     if day == "today":
-        idx = today_idx
+        target = today
     elif day == "tomorrow":
-        idx = today_idx + 1
+        target = today + _dt.timedelta(days=1)
     elif isinstance(day, int):
-        idx = day
+        target = today + _dt.timedelta(days=(day - today_idx) % 7)   # ближайший этот день
     else:
-        idx = today_idx                        # по умолчанию — сегодня
+        target = today
+    idx = target.weekday()
     if idx > 5:
         return (f"В этот день у группы {group} занятий нет — выходной. 🐯", {})
+    week = str(schedule_web.current_week_parity(target) or 1)         # чётность ЦЕЛЕВОГО дня
     dname = _SCHED_DAYS[idx]
     label = {"today": "Сегодня", "tomorrow": "Завтра"}.get(day, dname)
-    lessons_day = weeks.get(cur_week, {}).get(dname, [])
+    lessons_day = weeks.get(week, {}).get(dname, [])
     if not lessons_day:
-        return (f"{label} ({dname}) у группы {group} пар нет. 🐯", {"day": dname, "count": 0})
+        return (f"{label} ({dname}, {'II' if week == '2' else 'I'} неделя) у группы {group} "
+                f"пар нет. 🐯", {"day": dname, "count": 0})
     body = "\n• ".join(fmt(l) for l in lessons_day)
-    return (f"{label} ({dname}), {'II' if cur_week == '2' else 'I'} неделя — группа {group}:\n• "
+    return (f"{label} ({dname}), {'II' if week == '2' else 'I'} неделя — группа {group}:\n• "
             + body, {"day": dname, "count": len(lessons_day)})
 
 
