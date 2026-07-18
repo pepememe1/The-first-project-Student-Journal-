@@ -39,6 +39,12 @@ def app_dir() -> str:
     но нам нужна папка, где лежит САМ .exe — это os.path.dirname(sys.executable),
     иначе пользовательские файлы оказались бы в %TEMP% и пропадали бы.
     """
+    #Переопределение папки — для ТЕСТОВ. Без него прогон клиентского набора писал в
+    #subjects.json РЕПОЗИТОРИЯ (reset_synced_local_data чистит предметы) и затирал
+    #рабочий список разработчика: тесты «зелёные», а файл в дереве изменён.
+    override = os.environ.get("GRADEBOOK_APP_DIR", "").strip()
+    if override:
+        return override
     if is_frozen():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
