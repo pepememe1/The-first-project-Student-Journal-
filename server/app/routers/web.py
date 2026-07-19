@@ -905,8 +905,11 @@ def admin_schedule_override_delete(ov_id: str, user: User = Depends(require_admi
 #    плейсхолдеры «[укажите средние баллы]» вместо фактов, см. §5);
 #  about_* — статичные факты о заведении;
 #  schedule — структурный список пар: LLM мог бы добавить/выкинуть занятие.
+#  weather — реальные показания метеослужбы: модель, «озвучивая данные», охотно
+#            меняет числа, а неверная температура в продукте, обещающем не врать,
+#            дороже красивой формулировки.
 _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
-                     "about_vsgutu", "about_college", "schedule"}
+                     "about_vsgutu", "about_college", "schedule", "weather"}
 
 
 @router.post("/vector/ask")
@@ -1157,6 +1160,15 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                 "intent": "help" if intent == "help" else "unknown", "facts": {}}
     if intent == "thanks":
         return {"text": "Всегда рад помочь! 🐯", "mood": "happy", "intent": "thanks", "facts": {}}
+    if intent == "weather":
+        #Погода — такой же факт, как средний балл: берём у метеослужбы, не сочиняем.
+        #Нет связи — честное «не знаю» (weather.answer сам это учитывает).
+        import weather as _w
+        data = _w.current()
+        return {"text": _w.answer(),
+                "mood": "happy" if data else "neutral",
+                "intent": "weather",
+                "facts": {"weather": data or {}}}
     if intent == "about_vsgutu":
         return {"text": _ABOUT_VSGUTU, "mood": "neutral", "intent": "about_vsgutu", "facts": {}}
     if intent == "about_college":

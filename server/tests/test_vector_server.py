@@ -56,8 +56,11 @@ def test_offtopic_goes_to_free_chat_not_canned_help(client, monkeypatch):
                         lambda cfg, q, role: f"SMALLTALK:{role}")
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
+    #Пример НАРОЧНО не про погоду: с появлением реальных метеоданных «какая погода»
+    #стала полноценным интентом weather (ответ строится по факту, а не моделью).
+    #Здесь проверяется маршрут для вопросов, у которых интента нет вовсе.
     r = client.post("/web/vector/ask",
-                    json={"message": "какая сегодня погода в Улан-Удэ"}, headers=th).json()
+                    json={"message": "посоветуй что почитать на выходных"}, headers=th).json()
     assert r["intent"] == "unknown", r
     assert r["text"] == "SMALLTALK:teacher", r      # ушёл в free_chat, а не в справку
 

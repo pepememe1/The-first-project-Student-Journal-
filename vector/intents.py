@@ -425,6 +425,17 @@ def intent_thanks(scope: VectorScope, asked_name: str = "") -> Facts:
     return Facts("thanks", thanks_text(scope.role))
 
 
+def intent_weather(scope: VectorScope, asked_name: str = "") -> Facts:
+    """Погода в Улан-Удэ. ЗЕРКАЛО серверного обработчика (правки — на обеих платформах).
+
+    Данные реальные (weather.py, общий модуль с сервером): Вектор не выдумывает цифры,
+    и погода тут не исключение. Нет интернета — модуль сам вернёт честное «не знаю»,
+    а не последнее запомненное значение: «сейчас −20» вместо оттепели вводит в
+    заблуждение сильнее, чем отсутствие ответа."""
+    import weather
+    return Facts("weather", weather.answer())
+
+
 def intent_unknown(scope: VectorScope, asked_name: str = "") -> Facts:
     """Вопрос не из пула. Текст здесь — фолбэк; engine может отдать вопрос LLM."""
     from .faq import unknown_offline_text
@@ -603,6 +614,7 @@ _HANDLERS = {
     "thanks": intent_thanks,
     "help": intent_help,
     "unknown": intent_unknown,
+    "weather": intent_weather,
 }
 
 

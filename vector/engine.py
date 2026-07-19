@@ -124,7 +124,11 @@ class VectorEngine:
         #колледже) отдаём как есть — они уже дружелюбные, точные и не требуют LLM.
         #schedule НЕ озвучиваем: структурный список пар — LLM мог бы добавить/выкинуть
         #занятие. Набор ОБЯЗАН совпадать с server _NO_VOICE_INTENTS (см. CLAUDE.md §5).
-        if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college", "schedule"):
+        #weather — реальные показания метеослужбы: LLM, «озвучивая данные», меняет
+        #числа, а неверная температура в продукте, обещающем не врать, дороже
+        #красивой формулировки.
+        if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college",
+                      "schedule", "weather"):
             return VectorResponse(text=facts.facts_text, mood=self._mood,
                                   intent=intent, facts=facts)
 
