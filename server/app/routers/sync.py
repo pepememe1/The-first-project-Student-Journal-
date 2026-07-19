@@ -30,7 +30,8 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, is_web_client
-from ..models import SYNC_MODELS, User, Lesson
+from ..models import (SYNC_MODELS, User, Lesson, grade_id, term_grade_id,
+                      is_new_style_key)
 from .. import events
 
 router = APIRouter(prefix="/sync", tags=["sync"])
@@ -203,6 +204,54 @@ def pull(since: str = "", request: Request = None,
     return {"server_time": server_time, "changes": changes}
 
 
+
+def _student_id_by_name(db, f: str, n: str, group: str = "") -> str:
+    """ФИО (+группа) → id студента. '' — не нашли или тёзки неразличимы.
+
+    Та же логика, что в backfill_student_id.py: при неоднозначности ОТКАЗЫВАЕМСЯ.
+    Приписать оценку не тому студенту хуже, чем отвергнуть строку."""
+    q = db.query(User).filter(User.role == "student", User.surname == (f or "").strip(),
+                              User.name == (n or "").strip(),
+                              User.deleted == False)      # noqa: E712
+    if group:
+        q = q.filter(User.group_name == group)
+    hits = q.all()
+    return hits[0].id if len(hits) == 1 else ""
+
+
+def _normalize_grade_key(db, name: str, item: dict, lesson_group: dict) -> str:
+    """Канонический ключ строки оценки — ЭТАП 3 миграции.
+
+    Зачем: ключом стал student_id, но клиент старой версии продолжает слать
+    `Иванова|Мария|L1`. Без нормализации такая строка легла бы РЯДОМ с
+    `stud:ivanova|L1` — две записи одной и той же оценки, и журнал показал бы
+    дубль. Поэтому ключ на приёме пересчитываем сами и клиенту на слово не верим.
+
+    Порядок: готовый student_id из payload → иначе резолв по ФИО.
+
+    Не разрешилось — возвращаем ИСХОДНЫЙ ключ, а не отбрасываем строку. Это важно:
+    ростер преподавателя ведётся отдельно от справочника, и оценка студенту, которого
+    админ ещё не завёл, — законная ситуация (см. REASON_NOT_FOUND в бэкофилле).
+    Отвергать такие строки значило бы ТЕРЯТЬ выставленные оценки, а потеря данных
+    несоразмерно хуже дубля. Строка синхронизируется на старом ключе и доклеится
+    позже, когда студент появится.
+    """
+    key = item.get("id") or ""
+    if is_new_style_key(key):
+        return key                       #уже новый формат — доверяем
+    sid = (item.get("student_id") or "").strip()
+    if not sid:
+        group = lesson_group.get(item.get("lesson_id", ""), "") if name == "grades" else ""
+        sid = _student_id_by_name(db, item.get("student_f", ""),
+                                  item.get("student_n", ""), group)
+    if not sid:
+        return key                       #не опознали — оставляем как есть, но не теряем
+    if name == "grades":
+        return grade_id(sid, item.get("lesson_id", ""))
+    return term_grade_id(sid, item.get("subject", ""), item.get("year", ""),
+                         item.get("semester", 0))
+
+
 @router.post("/push")
 def push(payload: dict = Body(...), request: Request = None,
          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -237,6 +286,14 @@ def push(payload: dict = Body(...), request: Request = None,
         teacher_subjects = set(user.subjects or [])
         lesson_subject = _build_lesson_subject_map(db, changes, teacher_subjects)
 
+    #Карта занятие→группа: нужна, чтобы развести ПОЛНЫХ ТЁЗОК при нормализации ключа
+    #оценки, пришедшей от старого клиента (без student_id). Двух Ивановых Иванов в одну
+    #группу не заводят, поэтому занятие однозначно указывает на нужного. Строим один раз
+    #на запрос и только если оценки в payload вообще есть.
+    lesson_group = {}
+    if changes.get("grades"):
+        lesson_group = {r[0]: (r[1] or "") for r in db.query(Lesson.id, Lesson.group_name)}
+
     for name, items in changes.items():
         model = SYNC_MODELS.get(name)
         if model is None or name not in allowed or not isinstance(items, list):
@@ -251,6 +308,12 @@ def push(payload: dict = Body(...), request: Request = None,
             if not isinstance(item, dict):
                 continue
             key = item.get(pk)
+            #Оценки ключуются по НЕИЗМЕНЯЕМОМУ student_id (этап 3). Клиенту на слово не
+            #верим: старая версия шлёт ФИО-ключ, и без пересчёта строка легла бы РЯДОМ
+            #с новой — дубль одной и той же оценки в журнале.
+            if name in ("grades", "term_grades") and key:
+                key = _normalize_grade_key(db, name, item, lesson_group)
+                item = dict(item, id=key)
             if not key:
                 continue
             #Преподаватель не вправе трогать чужой предмет — отбрасываем такие строки.

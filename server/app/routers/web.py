@@ -511,8 +511,11 @@ def curator_group_subject(group: str, subject: str, year: str = Query(""), semes
 
 
 # ИТОГОВЫЕ ОЦЕНКИ ЗА СЕМЕСТР + ВЕДОМОСТИ (промежуточная аттестация) ────────────────
-def _term_grade_id(surname, name, subject, year, semester):
-    return f"{surname}|{name}|{subject}|{year}|{semester}"
+def _term_grade_id(student_id, subject, year, semester):
+    """ЭТАП 3: ключ считает models.term_grade_id — единый на обе платформы. Раньше
+    формат собирался тут строкой из ФИО, и любое расхождение с десктопом плодило дубли."""
+    from ..models import term_grade_id
+    return term_grade_id(student_id, subject, year, semester)
 
 
 @router.post("/teacher/term-grade")
@@ -536,7 +539,7 @@ def teacher_set_term_grade(payload: dict = Body(...),
         User.group_name == group, User.deleted == False).first()  # noqa: E712
     if not stud:
         raise HTTPException(status_code=400, detail="Студент не найден в группе")
-    gid = _term_grade_id(surname, name, subject, ty, ts)
+    gid = _term_grade_id(stud.id, subject, ty, ts)
     now = _now_iso()
     row = db.get(TermGrade, gid)
     if row is None:
@@ -1347,7 +1350,8 @@ def teacher_set_grade(payload: dict = Body(...),
         User.group_name == lesson.group_name, User.deleted == False).first()  # noqa: E712
     if not stud:
         raise HTTPException(status_code=400, detail="Студент не найден в группе занятия")
-    gid = f"{surname}|{name}|{lesson_id}"
+    from ..models import grade_id as _grade_key
+    gid = _grade_key(stud.id, lesson_id)   #ЭТАП 3: ключ по неизменяемому id студента
     now = _now_iso()
     cleared = (value == "")
     row = db.get(Grade, gid)
@@ -1557,46 +1561,37 @@ def admin_create_student(payload: dict = Body(...),
 
 
 def _rekey_student_grades(db: Session, old_f: str, old_n: str,
-                          new_f: str, new_n: str) -> int:
-    """ПЕРЕКЛЮЧАЕТ оценки студента при смене ФИО. Без этого они ОСИРОТЕЮТ.
+                          new_f: str, new_n: str, student_id: str = "") -> int:
+    """Обновляет ФИО в строках оценок студента. Возвращает число тронутых строк.
 
-    Оценки ключуются по ФИО (§10: `{f}|{n}|{lesson_id}`, у итоговых — плюс предмет/период),
-    поэтому переименование (замужество, исправление опечатки) отвязывало бы всю историю.
-    Здесь: под новым ФИО создаём записи-копии с НОВЫМ id, а старые помечаем надгробием —
-    так удаление старого id доезжает на другие ПК и дублей не остаётся.
+    ЭТАП 3 миграции сильно упростил эту функцию. Раньше оценки ключевались по ФИО, и
+    переименование означало ПЕРЕНОС истории: под новым ФИО создавались записи-копии с
+    новым id, а старые прикапывались надгробиями. Операция была хрупкой — сбой посреди
+    пути оставлял часть оценок осиротевшими, а на другие ПК уезжала пачка надгробий.
 
-    Это заплатка поверх архитектурного долга: правильное решение — ключевать оценки
-    неизменным student_id (отдельная миграция), а ФИО подклеивать при выдаче."""
-    if (old_f, old_n) == (new_f, new_n) or not (old_f or old_n):
+    Теперь ключ — неизменяемый student_id, и ФИО в таблицах живёт лишь как
+    ДЕНОРМАЛИЗОВАННАЯ КОПИЯ для показа и старых выборок. Поэтому смена фамилии — это
+    обычный UPDATE двух полей: ключи не двигаются, история никуда не переезжает,
+    терять по дороге нечего.
+
+    Ищем по student_id, а НЕ по старому ФИО: у переименованной студентки в базе может
+    быть смесь строк (часть уже обновлена прошлым вызовом), и поиск по ФИО находил бы
+    только часть.
+    """
+    if (old_f, old_n) == (new_f, new_n):
         return 0
     now = _now_iso()
-    moved = 0
-    for g in db.query(Grade).filter(Grade.student_f == old_f,
-                                    Grade.student_n == old_n,
-                                    Grade.deleted == False).all():  # noqa: E712
-        new_id = f"{new_f}|{new_n}|{g.lesson_id}"
-        tgt = db.get(Grade, new_id)
-        if tgt is None:
-            tgt = Grade(id=new_id, student_f=new_f, student_n=new_n, lesson_id=g.lesson_id,
-                        student_id=g.student_id or "")
-            db.add(tgt)
-        tgt.grade, tgt.deleted, tgt.updated_at = g.grade, False, now
-        g.deleted, g.updated_at = True, now          #надгробие старого ключа
-        moved += 1
-    for t in db.query(TermGrade).filter(TermGrade.student_f == old_f,
-                                        TermGrade.student_n == old_n,
-                                        TermGrade.deleted == False).all():  # noqa: E712
-        new_id = _term_grade_id(new_f, new_n, t.subject, t.year, t.semester)
-        tgt = db.get(TermGrade, new_id)
-        if tgt is None:
-            tgt = TermGrade(id=new_id, student_f=new_f, student_n=new_n, subject=t.subject,
-                            student_id=t.student_id or "",
-                            year=t.year, semester=t.semester)
-            db.add(tgt)
-        tgt.grade, tgt.form, tgt.deleted, tgt.updated_at = t.grade, t.form, False, now
-        t.deleted, t.updated_at = True, now
-        moved += 1
-    return moved
+    touched = 0
+    for model in (Grade, TermGrade):
+        rows = db.query(model).filter(model.student_id == student_id).all()             if student_id else             db.query(model).filter(model.student_f == old_f,
+                                   model.student_n == old_n).all()
+        for r in rows:
+            if r.student_f == new_f and r.student_n == new_n:
+                continue                      #уже актуально — метку не трогаем
+            r.student_f, r.student_n = new_f, new_n
+            r.updated_at = now
+            touched += 1
+    return touched
 
 
 @router.put("/admin/students/{login}")
@@ -1618,12 +1613,14 @@ def admin_update_student(login: str, payload: dict = Body(...),
         patr_in = (payload.get("patronymic") if "patronymic" in payload
                    else (row.patronymic or ""))
         row.name, row.patronymic = _compose_name(name_in, patr_in)
-    #ФИО изменилось → переносим историю оценок на новый ключ (иначе осиротеет).
-    moved = _rekey_student_grades(db, old_f, old_n, row.surname or "", row.name or "")
+    #ФИО изменилось → обновляем его КОПИЮ в строках оценок. Ключи (student_id) при этом
+    #не двигаются: история остаётся на месте, переносить нечего.
+    moved = _rekey_student_grades(db, old_f, old_n, row.surname or "", row.name or "",
+                                  student_id=row.id)
     if moved:
         audit.log(db, actor=_admin.login, role="admin", action="student.rekey",
                   target=f"{old_f} {old_n} → {row.surname} {row.name}",
-                  detail=f"перенесено оценок: {moved}")
+                  detail=f"обновлено строк оценок: {moved}")
     if "group" in payload:
         group = (payload.get("group") or "").strip()
         _ensure_group_row(db, group)

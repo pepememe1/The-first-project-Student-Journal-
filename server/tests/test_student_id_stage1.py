@@ -34,7 +34,7 @@ def test_web_grade_write_fills_student_id(client):
     assert r.status_code == 200, r.text
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
-    g = [x for x in ch["grades"] if x["id"] == "Иванова|Мария|L1"][0]
+    g = [x for x in ch["grades"] if x["id"] == "stud:ivanova|L1"][0]
     assert g["student_id"] == "stud:ivanova", "оценка обязана нести id студента"
 
 
@@ -44,12 +44,12 @@ def test_push_without_student_id_is_accepted(client):
     admin = make_admin(client)
     _seed(client, admin)
     r = _push(client, admin, grades=[{
-        "id": "Иванова|Мария|L1", "student_f": "Иванова", "student_n": "Мария",
+        "id": "stud:ivanova|L1", "student_f": "Иванова", "student_n": "Мария",
         "lesson_id": "L1", "grade": "4"}])
     assert r.status_code == 200, r.text
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
-    g = [x for x in ch["grades"] if x["id"] == "Иванова|Мария|L1"][0]
+    g = [x for x in ch["grades"] if x["id"] == "stud:ivanova|L1"][0]
     assert g["grade"] == "4"
     assert g.get("student_id", "") == "", "пустой id законен на этапе 1"
 
@@ -59,11 +59,11 @@ def test_push_with_student_id_round_trips(client):
     admin = make_admin(client)
     _seed(client, admin)
     _push(client, admin, grades=[{
-        "id": "Иванова|Мария|L1", "student_f": "Иванова", "student_n": "Мария",
+        "id": "stud:ivanova|L1", "student_f": "Иванова", "student_n": "Мария",
         "lesson_id": "L1", "grade": "3", "student_id": "stud:ivanova"}])
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
-    g = [x for x in ch["grades"] if x["id"] == "Иванова|Мария|L1"][0]
+    g = [x for x in ch["grades"] if x["id"] == "stud:ivanova|L1"][0]
     assert g["student_id"] == "stud:ivanova"
 
 
@@ -84,5 +84,6 @@ def test_rename_preserves_student_id(client):
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
     live = [x for x in ch["grades"] if not x.get("deleted")]
-    assert live and live[0]["id"] == "Петрова|Мария|L1"
+    assert live and live[0]["id"] == "stud:ivanova|L1", \
+        "этап 3: ключ не зависит от ФИО и при переименовании не меняется"
     assert live[0]["student_id"] == "stud:ivanova", "id обязан пережить переименование"
