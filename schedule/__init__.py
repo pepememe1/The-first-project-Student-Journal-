@@ -7,6 +7,7 @@ schedule/ — парсинг и хранение расписания занят
         build_snapshot, load_cached, save, current_week_parity, week_label,
         get_identity, set_identity, guess_group, guess_teacher,
         Snapshot, GroupSchedule, Lesson, WEEKDAYS,
+        group_schedule, subjects_for_group, subjects_all,
     )
 
 Источник данных — публичный сайт portal.esstu.ru (см. parser.py). Снимок кладётся в
@@ -22,6 +23,10 @@ from .store import (
     save, load_cached, cache_age_minutes,
     current_week_parity, week_label,
     get_identity, set_identity, guess_group, guess_teacher,
+    #Расписание группы С УЧЁТОМ правок админа (overlay) и предметы из него. UI зовёт их
+    #как sched.group_schedule(...) — без реэкспорта здесь падало AttributeError прямо
+    #на входе администратора (модуль есть, атрибута у пакета нет).
+    group_schedule, subjects_for_group, subjects_all,
 )
 
 __all__ = [
@@ -31,4 +36,5 @@ __all__ = [
     "save", "load_cached", "cache_age_minutes",
     "current_week_parity", "week_label",
     "get_identity", "set_identity", "guess_group", "guess_teacher",
+    "group_schedule", "subjects_for_group", "subjects_all",
 ]
