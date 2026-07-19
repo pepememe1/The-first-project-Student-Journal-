@@ -92,10 +92,17 @@ export async function consumePendingEvent(router) {
   localStorage.removeItem(PENDING_KEY)
   try {
     const { data } = await meApi.getEvent(id)
+    // Маршруты в проекте БЕЗ имён, поэтому переход по пути, а не по name — иначе
+    // router молча никуда не уйдёт.
     if (data?.kind === 'grade') {
-      // Ведём на журнал и сразу на нужный предмет. Маршруты в проекте БЕЗ имён,
-      // поэтому переход по пути, а не по name — иначе router молча никуда не уйдёт.
+      // Журнал сразу на нужном предмете.
       await router.push({ path: '/student/journal', query: { subject: data.subject || '' } })
+      return true
+    }
+    if (data?.kind === 'schedule') {
+      // Изменилось расписание группы. В subject лежит день недели — по нему страница
+      // может сразу показать нужный день, а не заставлять его искать.
+      await router.push({ path: '/student/schedule', query: { day: data.subject || '' } })
       return true
     }
   } catch (e) {

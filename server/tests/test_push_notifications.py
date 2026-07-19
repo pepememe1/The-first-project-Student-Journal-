@@ -178,3 +178,102 @@ def test_push_disabled_when_not_configured(client, monkeypatch):
     monkeypatch.setattr(config, "RUSTORE_PROJECT_ID", "")
     monkeypatch.setattr(config, "RUSTORE_SERVICE_TOKEN", "")
     assert config.push_enabled() is False
+
+
+#Уведомления об изменении РАСПИСАНИЯ
+
+def _mk_student(client, admin, login, group):
+    client.post("/web/admin/students", json={
+        "login": login, "surname": login.capitalize(), "name": "Тест",
+        "group": group, "password": "studpass1"}, headers=admin)
+    r = client.post("/auth/login", json={"login": login, "password": "studpass1"})
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "X-Client": "web"}
+
+
+def _override(client, admin, group, subject="Физика", action="set"):
+    return client.post("/web/admin/schedule/override", json={
+        "group": group, "week": 1, "day": "Пнд", "pair_no": 2,
+        "action": action, "subject": subject, "time": "09:00", "room": "301"},
+        headers=admin)
+
+
+def test_schedule_change_notifies_only_that_group(client, push_on):
+    """Ключевое требование: уведомление получает ТОЛЬКО группа, чьё расписание
+    изменилось. Рассылать всему колледжу — прямой путь к тому, что уведомления
+    отключат, и вместе с ними потеряются важные."""
+    admin = make_admin(client)
+    sh_mine = _mk_student(client, admin, "ivanova", "ИС-21")
+    sh_other = _mk_student(client, admin, "petrov", "ИС-22")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh_mine)
+    client.post("/me/push-token", json={"token": "dev-other"}, headers=sh_other)
+
+    r = _override(client, admin, "ИС-21")
+    assert r.status_code == 200, r.text
+
+    tokens = [p["message"]["token"] for p in push_on]
+    assert tokens == ["dev-mine"], f"уведомление ушло не туда: {tokens}"
+
+
+def test_no_notification_when_nothing_actually_changed(client, push_on):
+    """Админ открыл ячейку и сохранил её без правок — пуша быть не должно."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+
+    assert _override(client, admin, "ИС-21").json()["changed"] is True
+    push_on.clear()
+    #ровно та же правка второй раз
+    r = _override(client, admin, "ИС-21")
+    assert r.json()["changed"] is False, "повторное сохранение — не изменение"
+    assert push_on == [], "за сохранение без правок уведомлять нельзя"
+
+
+def test_real_change_notifies_again(client, push_on):
+    """А вот реальная правка (сменился предмет) уведомление даёт."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+    _override(client, admin, "ИС-21", subject="Физика")
+    push_on.clear()
+
+    r = _override(client, admin, "ИС-21", subject="Химия")
+    assert r.json()["changed"] is True
+    assert len(push_on) == 1
+
+
+def test_schedule_push_has_no_personal_data(client, push_on):
+    """152-ФЗ: ни предмета, ни аудитории, ни ФИО — тело идёт через RuStore."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+    _override(client, admin, "ИС-21", subject="Физика")
+
+    text = str(push_on[0])
+    for leak in ("Физика", "301", "Ivanova", "ivanova"):
+        assert leak not in text, f"в пуш утекло: {leak}"
+    assert "расписание" in text.lower()
+
+
+def test_removing_override_also_notifies(client, push_on):
+    """Снятие правки — тоже изменение: пара вернулась к порталу, студент должен знать."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+    ov_id = _override(client, admin, "ИС-21").json()["id"]
+    push_on.clear()
+
+    r = client.delete(f"/web/admin/schedule/override/{ov_id}", headers=admin)
+    assert r.status_code == 200, r.text
+    assert len(push_on) == 1
+
+
+def test_schedule_event_opens_schedule_screen(client, push_on):
+    """По событию приложение понимает, что открывать расписание, а не журнал."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+    _override(client, admin, "ИС-21")
+
+    event_id = push_on[0]["message"]["android"]["data"]["event_id"]
+    body = client.get(f"/me/events/{event_id}", headers=sh).json()
+    assert body["kind"] == "schedule"

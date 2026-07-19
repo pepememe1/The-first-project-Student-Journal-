@@ -166,3 +166,49 @@ def prune_stale(db) -> int:
         log.warning("уборка токенов не удалась: %s", e)
         db.rollback()
         return 0
+
+
+def notify_schedule_change(db, group: str, day: str = "", week: int = 0) -> int:
+    """Уведомить студентов КОНКРЕТНОЙ группы об изменении их расписания.
+
+    Адресность здесь принципиальна. Расписание правят по ячейке (группа·неделя·день·
+    пара), и уведомлять всех студентов колледжа о правке одной группы — это спам,
+    после которого уведомления начинают отключать, и вместе с ними теряются важные.
+    Поэтому получатели берутся строго из ЭТОЙ группы.
+
+    В тексте нет ни предмета, ни аудитории: как и с оценками, тело идёт через серверы
+    RuStore, а расписание конкретной группы вместе с привязкой к студенту — лишние
+    сведения для посредника. Подробности приложение покажет само, открывшись.
+    """
+    if not config.push_enabled():
+        return 0
+    from .models import NotifyEvent, User
+    import uuid
+    try:
+        students = db.query(User).filter(
+            User.role == "student", User.group_name == group,
+            User.deleted == False).all()          # noqa: E712
+    except Exception as e:
+        log.warning("не удалось получить список группы %s: %s", group, e)
+        return 0
+
+    sent = 0
+    for st in students:
+        if not st.login:
+            continue                              #без логина уведомлять некуда
+        event_id = str(uuid.uuid4())
+        try:
+            db.add(NotifyEvent(id=event_id, login=st.login, kind="schedule",
+                               subject=day or "", lesson_id="", created_at=_now_iso()))
+            db.commit()
+        except Exception as e:
+            log.warning("не удалось сохранить событие расписания: %s", e)
+            db.rollback()
+            event_id = ""
+        sent += notify_login(
+            db, st.login,
+            title="Изменение в расписании",
+            body="Расписание вашей группы изменилось. Откройте, чтобы посмотреть.",
+            data={"type": "schedule", "event_id": event_id},
+        )
+    return sent
