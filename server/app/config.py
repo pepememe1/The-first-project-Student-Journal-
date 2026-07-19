@@ -82,3 +82,19 @@ def _host_of(origin: str) -> str:
 WEBAUTHN_ORIGIN = (os.environ.get("GRADEBOOK_WEBAUTHN_ORIGIN", "").strip() or _default_origin())
 WEBAUTHN_RP_ID = (os.environ.get("GRADEBOOK_WEBAUTHN_RP_ID", "").strip() or _host_of(WEBAUTHN_ORIGIN))
 WEBAUTHN_RP_NAME = os.environ.get("GRADEBOOK_WEBAUTHN_RP_NAME", "GradeBookAI — ВСГУТУ")
+
+
+#RuStore Push. Секреты — ТОЛЬКО из окружения (.env вне git): сервисный токен даёт право
+#рассылать уведомления всем пользователям приложения, утечка = чужая рассылка от нашего
+#имени. Пусто — пуши просто выключены, сервер работает как раньше.
+RUSTORE_PROJECT_ID = os.environ.get("GRADEBOOK_RUSTORE_PROJECT_ID", "").strip()
+RUSTORE_SERVICE_TOKEN = os.environ.get("GRADEBOOK_RUSTORE_SERVICE_TOKEN", "").strip()
+#Сколько дней держим токен устройства без подтверждения. Приложение подтверждает токен
+#при каждом запуске; молчит дольше — считаем, что программу удалили.
+PUSH_TOKEN_TTL_DAYS = int(os.environ.get("GRADEBOOK_PUSH_TOKEN_TTL_DAYS", "90"))
+
+
+def push_enabled() -> bool:
+    """Настроены ли пуши. Проверяем ЯВНО, а не по факту ошибки при отправке: без этого
+    каждый выставленный балл порождал бы бесполезный сетевой запрос и запись в лог."""
+    return bool(RUSTORE_PROJECT_ID and RUSTORE_SERVICE_TOKEN)

@@ -1378,6 +1378,13 @@ def teacher_set_grade(payload: dict = Body(...),
     #найден выше (проверка «состоит в группе занятия»), так что это бесплатно.
     row.student_id = stud.id
     db.commit()
+    #Пуш студенту о новой оценке. СНЯТИЕ оценки не уведомляем: «у вас новая оценка»
+    #при её удалении — прямая дезинформация. Ошибки внутри не всплывают: сбой доставки
+    #не должен мешать преподавателю поставить балл.
+    if not cleared and stud.login:
+        from .. import rustore_push
+        rustore_push.notify_new_grade(db, stud.login, subject=lesson.subject,
+                                      lesson_id=lesson_id)
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",
