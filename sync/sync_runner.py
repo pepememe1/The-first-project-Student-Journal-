@@ -13,6 +13,7 @@ import threading
 import time
 
 import log
+import student_link
 from app_settings import get_api_url
 
 _log = log.get("sync")
@@ -233,6 +234,12 @@ class SyncManager:
                 if self._ensure_auth(url):
                     sync_engine.sync_once(self._client)
                     self._flush_pending_prefs()   #до-отправляем тему, если зависла
+                    #Доклеиваем оценкам неизменяемый id студента. Именно ЗДЕСЬ, после
+                    #pull: справочник студентов уже свежий, есть с чем сопоставлять.
+                    #Идемпотентно и дёшево (берутся только строки с пустым id), поэтому
+                    #флаг «уже сделано» не нужен — он соврал бы на свежей установке,
+                    #где справочник ещё не приехал и клеить было не с чем.
+                    student_link.backfill_quietly()
                     #Успех: сбрасываем бэкофф и помечаем «онлайн».
                     self._fail_count = 0
                     self._set_online(True)

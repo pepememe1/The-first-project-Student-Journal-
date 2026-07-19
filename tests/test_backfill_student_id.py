@@ -117,7 +117,8 @@ def test_unknown_student_reported_with_reason(fresh_db):
 
     text, _written = bf.run(apply=True)
     assert "Нет Такого" in text
-    assert bf.REASON_NOT_FOUND in text
+    import student_link
+    assert student_link.REASON_NOT_FOUND in text
 
 
 def test_tombstones_do_not_block_stage3(fresh_db):
