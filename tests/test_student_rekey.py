@@ -33,19 +33,28 @@ def _rows(sql, args=()):
     return out
 
 
-def test_rename_moves_grades_and_tombstones_old(fresh_db):
+def test_rename_updates_in_place_without_tombstones(fresh_db):
+    """ЭТАП 3: переименование правит ФИО НА МЕСТЕ и надгробий не создаёт.
+
+    Раньше история физически переезжала на новый ключ, а старый хоронился. Так делать
+    больше нельзя, и это не вкусовщина: у живой строки и её надгробия ОДИН student_id,
+    значит при push обе дают один серверный ключ — сервер применил бы пришедшую
+    последней и с вероятностью 50% похоронил бы живую оценку."""
     _seed()
     moved = rekey_student_grades("Иванова", "Мария", "Петрова", "Мария")
     assert moved == 2                      #обычная + итоговая
 
     live = _rows("SELECT student_f,grade FROM grades WHERE COALESCE(deleted,0)=0")
-    assert live == [{"student_f": "Петрова", "grade": "5"}], "оценка переехала на новый ключ"
+    assert live == [{"student_f": "Петрова", "grade": "5"}], "ФИО-копия обновилась"
 
-    old = _rows("SELECT deleted FROM grades WHERE student_f='Иванова'")
-    assert old and old[0]["deleted"] == 1, "старый ключ должен стать надгробием"
+    dead = _rows("SELECT student_f FROM grades WHERE COALESCE(deleted,0)=1")
+    assert dead == [], "надгробий быть не должно — они утопили бы живую оценку"
 
-    tg = _rows("SELECT id FROM term_grades WHERE COALESCE(deleted,0)=0")
-    assert tg == [{"id": "Петрова|Мария|Математика|2025/2026|1"}], "итоговая тоже переехала"
+    all_rows = _rows("SELECT student_f FROM grades")
+    assert len(all_rows) == 1, "строка одна, дубля со старым ФИО не осталось"
+
+    tg = _rows("SELECT student_f FROM term_grades WHERE COALESCE(deleted,0)=0")
+    assert tg == [{"student_f": "Петрова"}], "итоговая тоже обновилась на месте"
 
 
 def test_noop_when_name_unchanged(fresh_db):

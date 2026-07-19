@@ -78,6 +78,25 @@ def resolve_student_id(f: str, n: str, group: str = "") -> str:
         return ""
 
 
+#Ключи оценок — ЭТАП 3 миграции. ЗЕРКАЛО server/app/models.py::grade_id/term_grade_id:
+#формат обязан совпадать до символа, иначе десктоп и сервер будут считать одну и ту же
+#оценку разными записями и наплодят дубли. Правишь здесь — правь и там.
+def grade_id(student_id: str, lesson_id: str) -> str:
+    """Ключ оценки за занятие: `{student_id}|{lesson_id}`."""
+    return f"{student_id}|{lesson_id}"
+
+
+def term_grade_id(student_id: str, subject: str, year: str, semester) -> str:
+    """Ключ итоговой оценки: `{student_id}|{subject}|{year}|{semester}`."""
+    return f"{student_id}|{subject}|{year}|{int(semester or 0)}"
+
+
+def legacy_term_grade_id(f: str, n: str, subject: str, year: str, semester) -> str:
+    """СТАРЫЙ ключ (по ФИО). Нужен только миграции — чтобы найти строки, которые ещё
+    не переведены. В новом коде не использовать."""
+    return f"{f}|{n}|{subject}|{year}|{semester}"
+
+
 #Менеджер подключений
 class DBManager:
     @classmethod
@@ -491,9 +510,18 @@ class DBManager:
 
     #Итоговые оценки за семестр (аттестация) ────────────────────────────────────────
     @staticmethod
-    def _term_grade_id(f: str, n: str, subject: str, year: str, semester: int) -> str:
-        """Стабильный ключ итоговой оценки — тот же формат, что на сервере."""
-        return f"{f}|{n}|{subject}|{year}|{semester}"
+    def _term_grade_id(f: str, n: str, subject: str, year: str, semester: int,
+                       student_id: str = "") -> str:
+        """Ключ итоговой оценки — тот же формат, что на сервере.
+
+        ЭТАП 3: ключуем по неизменяемому student_id. Если студент не опознан (нет в
+        справочнике, неразличимые тёзки) — откатываемся на СТАРЫЙ ФИО-ключ. Это не
+        недоделка, а осознанный компромисс: ростер преподавателя ведётся отдельно, и
+        такая оценка законна. Сервер умеет работать со смешанной базой и нормализует
+        ключ на приёме, а доклейка проставит id позже (data/student_link.py)."""
+        if student_id:
+            return term_grade_id(student_id, subject, year, semester)
+        return legacy_term_grade_id(f, n, subject, year, semester)
 
     @classmethod
     def set_term_grade(cls, f: str, n: str, subject: str, year: str, semester: int,
@@ -501,7 +529,8 @@ class DBManager:
         """Выставить/снять итоговую оценку за семестр (offline-first: сразу в SQLite).
         Пустая оценка = надгробие (deleted=1) — снятие распространится синком. Метку
         updated_at ставим локально (UTC); на сервере при push её перештампует сервер."""
-        gid = cls._term_grade_id(f, n, subject, year, semester)
+        sid = resolve_student_id(f, n)
+        gid = cls._term_grade_id(f, n, subject, year, semester, sid)
         now = datetime.now(timezone.utc).isoformat()
         deleted = 1 if not (grade or "").strip() else 0
         conn = cls.get_conn()
@@ -510,8 +539,7 @@ class DBManager:
             "INSERT OR REPLACE INTO term_grades "
             "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted,"
             "student_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (gid, f, n, subject, year, int(semester or 0), grade, form, now, deleted,
-             resolve_student_id(f, n)))
+            (gid, f, n, subject, year, int(semester or 0), grade, form, now, deleted, sid))
         conn.commit()
         conn.close()
 

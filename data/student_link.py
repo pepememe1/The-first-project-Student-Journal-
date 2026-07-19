@@ -140,6 +140,14 @@ def backfill_quietly() -> int:
     было бы несоразмерно."""
     try:
         written, total, live_failed = backfill(apply=True)
+        #Сразу за доклейкой — перевод ключей итоговых (этап 3). Порядок важен: без
+        #student_id переводить нечего, поэтому только ПОСЛЕ бэкофилла.
+        from contextlib import closing as _closing
+        from core import DBManager as _DB
+        with _closing(_DB.get_conn()) as _c:
+            moved = migrate_local_term_keys(_c)
+        if moved:
+            _log.info("ключи итоговых оценок переведены на student_id: %s", moved)
         if written:
             _log.info("привязка оценок к id студентов: проставлено %s из %s", written, total)
         if live_failed:
@@ -151,3 +159,40 @@ def backfill_quietly() -> int:
     except Exception as e:
         _log.warning("привязка оценок к id не удалась (не критично): %s", e)
         return 0
+
+
+def migrate_local_term_keys(conn) -> int:
+    """ЭТАП 3: переводит id итоговых оценок с ФИО-ключа на student_id. Возвращает число
+    переведённых строк.
+
+    Почему только term_grades. У оценок за занятия локальный ключ — (ФИО, занятие), и
+    поле `id` в таблице вообще не хранится: его считает _collect_grades при отправке.
+    А у итоговых `id` лежит в таблице И приходит с сервера при pull — поэтому, не
+    переведи мы их здесь, после серверной миграции рядом со старой строкой
+    `Иванова|Мария|Мат|…` легла бы новая `stud:ivanova|Мат|…`: ДУБЛЬ в ведомости.
+
+    updated_at не трогаем: это техническая смена ключа, а не правка оценки (см. backfill).
+    Конфликт (целевой id уже занят) разрешаем в пользу СУЩЕСТВУЮЩЕЙ строки и просто
+    убираем дубликат — данные в них одинаковы, это две записи одной оценки.
+    """
+    from core import term_grade_id
+    cur = conn.cursor()
+    cur.execute("SELECT id,subject,COALESCE(year,''),COALESCE(semester,0),"
+                "COALESCE(student_id,'') FROM term_grades WHERE COALESCE(student_id,'')<>''")
+    rows = cur.fetchall()
+    existing = {r[0] for r in rows}
+    moved = 0
+    for old_id, subject, year, semester, sid in rows:
+        new_id = term_grade_id(sid, subject, year, semester)
+        if new_id == old_id:
+            continue                       #уже переведена
+        if new_id in existing:
+            cur.execute("DELETE FROM term_grades WHERE id=?", (old_id,))
+        else:
+            cur.execute("UPDATE term_grades SET id=? WHERE id=?", (new_id, old_id))
+            existing.add(new_id)
+        existing.discard(old_id)
+        moved += 1
+    if moved:
+        conn.commit()
+    return moved

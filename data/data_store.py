@@ -687,54 +687,49 @@ _store: Optional[LocalStore] = None
 
 
 def rekey_student_grades(old_f: str, old_n: str, new_f: str, new_n: str) -> int:
-    """ПЕРЕКЛЮЧАЕТ оценки студента при смене ФИО (иначе они ОСИРОТЕЮТ).
+    """Обновляет ФИО в строках оценок студента. Возвращает число тронутых строк.
 
-    Оценки ключуются по ФИО (§10: grades PK = (student_f, student_n, lesson_id),
-    term_grades id = `{f}|{n}|{subject}|{year}|{sem}`), поэтому переименование
-    (замужество, исправление опечатки) отвязывало всю историю. Здесь под новым ФИО
-    создаём записи с НОВЫМ ключом, а старые помечаем надгробием — так удаление старого
-    ключа доезжает синком на другие ПК и дублей не остаётся. Зеркало серверного
-    _rekey_student_grades (правки делаем на ОБЕИХ платформах).
+    ЭТАП 3 сильно упростил эту функцию (зеркало серверного _rekey_student_grades).
+    Раньше оценки ключевались по ФИО, и переименование означало ПЕРЕНОС истории: под
+    новым ФИО создавались копии, а старые прикапывались надгробиями.
 
-    Это заплатка поверх архитектурного долга: правильно — ключевать неизменным
-    student_id, а ФИО подклеивать при выдаче (этапы 1-3 миграции). Уже накопленный
-    student_id при переносе СОХРАНЯЕМ: он и есть та связь, ради которой всё делается —
-    потерять его здесь значило бы обнулять миграцию на каждом переименовании."""
+    Так делать больше НЕЛЬЗЯ, и это не вкусовщина. У живой строки и её надгробия один и
+    тот же student_id, значит при push обе дают ОДИН серверный ключ — сервер применил бы
+    ту, что пришла последней, и с вероятностью 50% похоронил бы живую оценку. Поэтому
+    теперь строго UPDATE на месте: одна строка, ключ не двигается, хоронить нечего.
+
+    ФИО в таблицах остаётся денормализованной копией для показа и старых выборок,
+    поэтому обновить его всё же надо — иначе оценки «пропадут» из выдачи по ФИО.
+    """
     if (old_f, old_n) == (new_f, new_n) or not (old_f or old_n):
         return 0
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
-    moved = 0
+    touched = 0
     conn = DBManager.get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT lesson_id, grade, COALESCE(student_id,'') FROM grades "
-                    "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0",
+        #INSERT OR REPLACE не годится: в grades ФИО входит в PRIMARY KEY, и обычный
+        #UPDATE упрётся в конфликт, если строка с новым ФИО уже есть (перезапуск
+        #переименования). Поэтому сначала убираем возможного двойника.
+        cur.execute("SELECT lesson_id FROM grades WHERE student_f=? AND student_n=?",
                     (old_f, old_n))
-        for lesson_id, grade, sid in cur.fetchall():
-            cur.execute("INSERT OR REPLACE INTO grades "
-                        "(student_f,student_n,lesson_id,grade,updated_at,deleted,student_id) "
-                        "VALUES (?,?,?,?,?,0,?)",
-                        (new_f, new_n, lesson_id, grade, now, sid))
-            cur.execute("UPDATE grades SET deleted=1, updated_at=? "
+        for (lesson_id,) in cur.fetchall():
+            cur.execute("DELETE FROM grades WHERE student_f=? AND student_n=? AND "
+                        "lesson_id=?", (new_f, new_n, lesson_id))
+            cur.execute("UPDATE grades SET student_f=?, student_n=?, updated_at=? "
                         "WHERE student_f=? AND student_n=? AND lesson_id=?",
-                        (now, old_f, old_n, lesson_id))
-            moved += 1
-        cur.execute("SELECT id,subject,year,semester,grade,form,COALESCE(student_id,'') "
-                    "FROM term_grades WHERE student_f=? AND student_n=? "
-                    "AND COALESCE(deleted,0)=0", (old_f, old_n))
-        for oid, subject, year, semester, grade, form, sid in cur.fetchall():
-            nid = f"{new_f}|{new_n}|{subject}|{year}|{semester}"
-            cur.execute("INSERT OR REPLACE INTO term_grades "
-                        "(id,student_f,student_n,subject,year,semester,grade,form,"
-                        "updated_at,deleted,student_id) VALUES (?,?,?,?,?,?,?,?,?,0,?)",
-                        (nid, new_f, new_n, subject, year, semester, grade, form, now, sid))
-            cur.execute("UPDATE term_grades SET deleted=1, updated_at=? WHERE id=?", (now, oid))
-            moved += 1
+                        (new_f, new_n, now, old_f, old_n, lesson_id))
+            touched += 1
+        #У итоговых ФИО не в ключе (ключ — id), поэтому просто правим поля.
+        cur.execute("UPDATE term_grades SET student_f=?, student_n=?, updated_at=? "
+                    "WHERE student_f=? AND student_n=?",
+                    (new_f, new_n, now, old_f, old_n))
+        touched += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         conn.commit()
     finally:
         conn.close()
-    return moved
+    return touched
 
 
 def get_store() -> LocalStore:

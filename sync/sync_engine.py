@@ -162,6 +162,7 @@ def _collect_lessons() -> list:
 
 def _collect_grades() -> list:
     from contextlib import closing
+    import core as _core
     from core import DBManager
     rows = []
     try:
@@ -178,7 +179,11 @@ def _collect_grades() -> list:
     out = []
     for f, n, lid, grade, uat, dev, deleted, sid in rows:
         out.append({
-            "id": f"{f}|{n}|{lid}", "student_f": f, "student_n": n, "lesson_id": lid,
+            #ЭТАП 3: ключ по неизменяемому student_id. Не опознан — уезжает СТАРЫЙ
+            #ФИО-ключ (сервер нормализует его на приёме, см. sync._normalize_grade_key):
+            #ростер препода ведётся отдельно, и такая оценка законна — терять её нельзя.
+            "id": (_core.grade_id(sid, lid) if sid else f"{f}|{n}|{lid}"),
+            "student_f": f, "student_n": n, "lesson_id": lid,
             "grade": grade, "device": dev, "updated_at": uat or _now(),
             "deleted": bool(deleted),
             #Этап 1 миграции: ключ пока ФИО, но неизменяемый id везём рядом. Сервер его
