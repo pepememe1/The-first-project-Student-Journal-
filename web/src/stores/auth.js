@@ -10,6 +10,7 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
+import { registerToken, unregisterToken } from '@/services/push'
 import { loginWithPasskey } from '@/api/webauthn'
 
 const LS_USER = 'gb.user'
@@ -39,6 +40,9 @@ export const useAuthStore = defineStore('auth', () => {
       setTokens({ access: data.access_token, refresh: data.refresh_token })
       user.value = { login: login.trim(), role: data.role, name: data.name || login.trim() }
       localStorage.setItem(LS_USER, JSON.stringify(user.value))
+      // Привязываем телефон к ЭТОМУ аккаунту: на одном устройстве могли входить
+      // разные люди, и уведомления должны идти последнему вошедшему.
+      registerToken()
       return user.value
     } catch (e) {
       const status = e.response?.status
@@ -74,6 +78,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
+    // Отписываем устройство ДО гашения токена: после clearTokens запрос уже не пройдёт,
+    // и бывший владелец телефона продолжал бы получать чужие уведомления.
+    await unregisterToken()
     // Гасим токен и на сервере (чёрный список), а не только локально — безопасный выход.
     try { await authApi.logout() } catch { /* офлайн — всё равно чистим локально */ }
     clearTokens()

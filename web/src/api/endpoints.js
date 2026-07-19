@@ -35,6 +35,15 @@ export const authApi = {
 export const meApi = {
   getPrefs: () => api.get('/me/prefs'),
   setPrefs: (prefs) => api.post('/me/prefs', { prefs }),
+  // Пуш-уведомления (только в мобильном приложении — в браузере токена нет).
+  // Токен подтверждаем при КАЖДОМ запуске: сервер по нему обновляет владельца
+  // устройства и метку «живо», иначе уборка выбросит рабочий телефон.
+  registerPushToken: (token, platform = 'android') =>
+    api.post('/me/push-token', { token, platform }),
+  deletePushToken: (token) => api.delete('/me/push-token', { data: { token } }),
+  // Куда открыть экран по нажатому уведомлению (детали НЕ приходят в самом пуше).
+  getEvent: (id) => api.get(`/me/events/${id}`),
+  unreadEvents: () => api.get('/me/events'),
 }
 
 // ВЕБ-ПОДТВЕРЖДЕНИЕ УСТРОЙСТВА (для teacher/admin) ────────────────────────────────

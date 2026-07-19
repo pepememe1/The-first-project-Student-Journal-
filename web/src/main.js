@@ -25,6 +25,19 @@ if (Capacitor.isNativePlatform()) {
   import('@capgo/capacitor-updater')
     .then(({ CapacitorUpdater }) => CapacitorUpdater.notifyAppReady())
     .catch(() => { /* плагин недоступен — не критично */ })
+
+  // Пуш-уведомления. Три вещи по порядку:
+  //  1) слушаем нажатия — нативная часть зовёт колбэк и при «холодном» старте тоже;
+  //  2) подтверждаем токен устройства (сервер по нему держит владельца и метку «живо»);
+  //  3) доигрываем отложенный переход — он мог остаться с прошлого запуска, если в
+  //     момент нажатия сессия была просрочена и пользователь только что вошёл.
+  import('./services/push')
+    .then(async (push) => {
+      push.onNotificationTap(router)
+      await push.registerToken()
+      await push.consumePendingEvent(router)
+    })
+    .catch(() => { /* вне приложения моста нет — это норма */ })
 }
 
 // PWA: регистрируем service worker (офлайн-оболочка + «установить приложение»).

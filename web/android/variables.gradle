@@ -1,4 +1,6 @@
 ext {
+    //Версия RuStore Push SDK — держим в одном месте, как и остальные версии.
+    rustorePushVersion = '6.10.0'
     minSdkVersion = 24
     compileSdkVersion = 36
     targetSdkVersion = 36

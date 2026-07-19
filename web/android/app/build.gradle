@@ -17,8 +17,13 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         //RuStore требует БОЛЬШИЙ versionCode на каждую новую сборку. 2 → 3 → 4
         //(4 — перезалив после отклонения по скриншотам: контент прежний, версия для перезагрузки).
-        versionCode 4
-        versionName "1.0.3"
+        versionCode 5
+        versionName "1.0.4"
+        //project_id из консоли RuStore подставляется в манифест. Держим в
+        //gradle.properties (файл вне git), чтобы не зашивать идентификатор в исходники.
+        manifestPlaceholders = [
+            rustoreProjectId: project.findProperty("RUSTORE_PROJECT_ID") ?: ""
+        ]
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -55,6 +60,10 @@ repositories {
 }
 
 dependencies {
+    //RuStore Push. Именно он, а не Firebase: приложение раздаётся через RuStore, и на
+    //части телефонов российской аудитории сервисов Google нет — FCM там молчит без
+    //единой ошибки, то есть студент просто не получает уведомления и никто не узнает.
+    implementation "ru.rustore.sdk:pushclient:$rustorePushVersion"
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"

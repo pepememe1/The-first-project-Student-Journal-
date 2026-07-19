@@ -21,6 +21,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        //Артефакты RuStore лежат в их собственном репозитории — в mavenCentral их нет.
+        maven { url "https://artifactory-external.vkpartner.ru/artifactory/maven" }
     }
 }
 

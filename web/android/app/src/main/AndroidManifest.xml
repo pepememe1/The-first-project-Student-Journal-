@@ -21,6 +21,22 @@
             </intent-filter>
         </activity>
 
+        <!-- Приём пуш-уведомлений RuStore. exported="false": сервис дёргает только
+             сам SDK внутри процесса, снаружи к нему обращаться незачем. -->
+        <service
+            android:name=".GradeBookPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ru.rustore.sdk.pushclient.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Идентификатор проекта из консоли RuStore. НЕ секрет (он виден в APK), в
+             отличие от сервисного токена — тот живёт только на сервере в .env. -->
+        <meta-data
+            android:name="ru.rustore.sdk.pushclient.project_id"
+            android:value="${rustoreProjectId}" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -33,6 +49,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ требует явного разрешения на показ уведомлений; на более старых
+         версиях оно выдаётся при установке и запрос просто пропускается. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- REQUEST_INSTALL_PACKAGES убрано по требованию модерации RuStore: нативная
          установка APK в обход магазина запрещена. Обновления приложения — только через
          RuStore; веб-слой обновляется незаметно через Capgo OTA (установка APK не нужна). -->
