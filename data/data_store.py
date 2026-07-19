@@ -561,6 +561,10 @@ class LocalStore:
             return False
         cfg = self._config()
         cfg["admin_password_hash"] = hash_password(pw)
+        #Метку ставим ЗДЕСЬ, при реальной смене пароля. Без неё admin_user_from_config
+        #подставлял _now() на каждом сборе, и запись администратора попадала в дельту
+        #КАЖДЫЙ push — даже когда ничего не менялось («грязная» дельта).
+        cfg["admin_updated_at"] = _now_iso()
         return _kv_set("config", cfg)
 
     def setup_admin_password(self, pw: str) -> bool:

@@ -23,6 +23,19 @@ sync_engine.py — Слой-переходник offline-first синхрони�
 Сетевой обмен — через sync_client. Любая сетевая ошибка не критична: синк
 откладывается, прога работает офлайн.
 
+ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ (осознанные, не забытые):
+  • УДАЛЕНИЕ ПРЕДМЕТА через синк НЕ РАБОТАЕТ. apply_remote сливает предметы объединением
+    множеств, а rows_to_subjects отбрасывает надгробия — значит удалённый на сервере
+    предмет останется на клиенте навсегда. Сделано так намеренно: предметы лежат в
+    subjects.json (не в таблице), общий список редактируется с нескольких сторон, и
+    «сервер стирает локальные» приводило бы к потере правок. Занятия/оценки/группы
+    удаляются штатно, через надгробия. Понадобится удаление предметов — заводить им
+    таблицу с deleted, а не менять слияние.
+  • СОСТАВНЫЕ КЛЮЧИ через `|` (`{student_id}|{lesson_id}`) неоднозначны, если сама
+    часть содержит `|`. На практике student_id — это `stud:{логин}`, а lesson_id
+    генерируется программой, так что риск теоретический. Появятся вольные логины —
+    экранировать разделитель или уходить на UUID.
+
 Push тоже ДЕЛЬТА (раньше уезжал полный снимок базы каждый цикл — трафик рос вместе с
 числом занятий/оценок). Граница — локальная метка `_push_watermark`; чтобы дельта не
 теряла правки, действуют три страховки: нестрогое сравнение `>=`, лаг PUSH_SAFETY_LAG_S
@@ -96,6 +109,14 @@ def rows_to_subjects(rows: list) -> list:
 #admin_password_hash уезжает как пользователь role=admin; остальные ключи — в config.
 
 def admin_user_from_config(cfg: dict, admin_login: str = "admin") -> dict:
+    """Админ как строка users (его хеш живёт в config, отдельной записи нет).
+
+    updated_at берём из `admin_updated_at` — метки РЕАЛЬНОЙ смены пароля
+    (её ставит data_store.set_admin_password). Фолбэк на _now() остался для баз,
+    заведённых до появления этой метки: там она проставится при первой же смене
+    пароля. Пока её нет, запись админа уезжает каждый push — одна строка, терпимо;
+    подставлять фиксированную дату нельзя, иначе LWW счёл бы её самой старой и
+    сервер никогда бы её не принял."""
     h = cfg.get("admin_password_hash")
     if not h:
         return None
@@ -337,34 +358,36 @@ def apply_remote(changes: dict):
 
 
 def _merge_lessons(remote: list):
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    for l in remote:
-        lid = l.get("id")
-        if not lid:
-            continue
-        rdel = bool(l.get("deleted"))
-        cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (lid,))
-        row = cur.fetchone()
-        #LWW с tie-break: применяем, если входящая метка позже (или при равной —
-        #если это удаление). Так удаление с сервера тоже применяется к локали.
-        if not (row is None or _should_apply(l.get("updated_at", ""), row[0] or "", rdel)):
-            continue
-        #deleted переносим как есть: 1 — занятие становится надгробием (исчезнет из
-        #журнала, фильтр deleted=0 в load_from_db), 0 — обычное активное занятие.
-        cur.execute(
-            "INSERT OR REPLACE INTO lessons "
-            "(id,group_name,subject,type,number,topic,date,retake_date,hour,"
-            "year,semester,updated_at,deleted) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (lid, l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
-             l.get("number", 0), l.get("topic", ""), l.get("date", ""),
-             l.get("retake_date", ""), l.get("hour", 0),
-             l.get("year", "") or "", int(l.get("semester", 0) or 0),
-             l.get("updated_at", ""), 1 if rdel else 0))
-    conn.commit()
-    conn.close()
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        for l in remote:
+            lid = l.get("id")
+            if not lid:
+                continue
+            rdel = bool(l.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM lessons WHERE id=?", (lid,))
+            row = cur.fetchone()
+            #LWW с tie-break: применяем, если входящая метка позже (или при равной —
+            #если это удаление). Так удаление с сервера тоже применяется к локали.
+            if not (row is None or _should_apply(l.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            #deleted переносим как есть: 1 — занятие становится надгробием (исчезнет из
+            #журнала, фильтр deleted=0 в load_from_db), 0 — обычное активное занятие.
+            cur.execute(
+                "INSERT OR REPLACE INTO lessons "
+                "(id,group_name,subject,type,number,topic,date,retake_date,hour,"
+                "year,semester,updated_at,deleted) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (lid, l.get("group_name", ""), l.get("subject", ""), l.get("type", ""),
+                 l.get("number", 0), l.get("topic", ""), l.get("date", ""),
+                 l.get("retake_date", ""), l.get("hour", 0),
+                 l.get("year", "") or "", int(l.get("semester", 0) or 0),
+                 l.get("updated_at", ""), 1 if rdel else 0))
+        conn.commit()
 
 
 def _merge_users(remote: list):
@@ -374,28 +397,30 @@ def _merge_users(remote: list):
     import json as _json
     from core import DBManager
     from security import encrypt_value
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, role TEXT, "
-                "updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')")
-    for u in remote:
-        role = u.get("role")
-        if role not in ("student", "teacher"):
-            continue
-        uid = u.get("id")
-        if not uid:
-            continue
-        rdel = bool(u.get("deleted"))
-        cur.execute("SELECT COALESCE(updated_at,'') FROM users WHERE id=?", (uid,))
-        row = cur.fetchone()
-        if not (row is None or _should_apply(u.get("updated_at", ""), row[0] or "", rdel)):
-            continue
-        cur.execute("INSERT OR REPLACE INTO users (id,role,updated_at,deleted,blob) "
-                    "VALUES (?,?,?,?,?)",
-                    (uid, role, u.get("updated_at", ""), 1 if rdel else 0,
-                     encrypt_value(_json.dumps(u, ensure_ascii=False))))
-    conn.commit()
-    conn.close()
+    from contextlib import closing
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, role TEXT, "
+                    "updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')")
+        for u in remote:
+            role = u.get("role")
+            if role not in ("student", "teacher"):
+                continue
+            uid = u.get("id")
+            if not uid:
+                continue
+            rdel = bool(u.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM users WHERE id=?", (uid,))
+            row = cur.fetchone()
+            if not (row is None or _should_apply(u.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            cur.execute("INSERT OR REPLACE INTO users (id,role,updated_at,deleted,blob) "
+                        "VALUES (?,?,?,?,?)",
+                        (uid, role, u.get("updated_at", ""), 1 if rdel else 0,
+                         encrypt_value(_json.dumps(u, ensure_ascii=False))))
+        conn.commit()
 
 
 _SOVR_COLS = ("id", "group_name", "week", "day", "pair_no", "action", "subject",
@@ -428,36 +453,41 @@ def _collect_schedule_overrides() -> list:
     for r in rows:
         out.append({"id": r[0], "group_name": r[1], "week": r[2], "day": r[3], "pair_no": r[4],
                     "action": r[5], "subject": r[6], "time": r[7], "room": r[8], "teacher": r[9],
-                    "kind": r[10], "updated_at": r[11], "deleted": bool(r[12])})
+                    #Пустую метку подменяем на now, как во всех остальных коллекторах.
+                    #Иначе правка без метки считалась бы САМОЙ СТАРОЙ и её затирала бы
+                    #любая серверная версия (LWW сравнивает именно updated_at).
+                    "kind": r[10], "updated_at": r[11] or _now(), "deleted": bool(r[12])})
     return out
 
 
 def _merge_schedule_overrides(remote: list):
     """Слияние правок расписания с сервера — прямой LWW-upsert (как группы). Пишем прямо
     в таблицу, синк не будим (серверные данные, а не UI-правка)."""
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    _ensure_sovr_table(cur)
-    for o in remote:
-        oid = o.get("id")
-        if not oid:
-            continue
-        rdel = bool(o.get("deleted"))
-        cur.execute("SELECT COALESCE(updated_at,'') FROM schedule_overrides WHERE id=?", (oid,))
-        row = cur.fetchone()
-        if not (row is None or _should_apply(o.get("updated_at", ""), row[0] or "", rdel)):
-            continue
-        cur.execute(
-            "INSERT OR REPLACE INTO schedule_overrides "
-            "(id,group_name,week,day,pair_no,action,subject,time,room,teacher,kind,updated_at,deleted) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (oid, o.get("group_name", ""), int(o.get("week") or 1), o.get("day", ""),
-             int(o.get("pair_no") or 0), o.get("action", "set"), o.get("subject", ""),
-             o.get("time", ""), o.get("room", ""), o.get("teacher", ""), o.get("kind", ""),
-             o.get("updated_at", ""), 1 if rdel else 0))
-    conn.commit()
-    conn.close()
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        _ensure_sovr_table(cur)
+        for o in remote:
+            oid = o.get("id")
+            if not oid:
+                continue
+            rdel = bool(o.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM schedule_overrides WHERE id=?", (oid,))
+            row = cur.fetchone()
+            if not (row is None or _should_apply(o.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            cur.execute(
+                "INSERT OR REPLACE INTO schedule_overrides "
+                "(id,group_name,week,day,pair_no,action,subject,time,room,teacher,kind,updated_at,deleted) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (oid, o.get("group_name", ""), int(o.get("week") or 1), o.get("day", ""),
+                 int(o.get("pair_no") or 0), o.get("action", "set"), o.get("subject", ""),
+                 o.get("time", ""), o.get("room", ""), o.get("teacher", ""), o.get("kind", ""),
+                 o.get("updated_at", ""), 1 if rdel else 0))
+        conn.commit()
 
 
 def _merge_groups(remote: list):
@@ -465,27 +495,29 @@ def _merge_groups(remote: list):
     Пишем напрямую в таблицу (не через data_store.set_groups) — так синк НЕ будит сам
     себя (это применение серверных данных, а не UI-правка)."""
     import json as _json
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
-                "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
-    for g in remote:
-        name = g.get("name", "")
-        gid = g.get("id") or (f"grp:{name}" if name else "")
-        if not gid:
-            continue
-        rdel = bool(g.get("deleted"))
-        cur.execute("SELECT COALESCE(updated_at,'') FROM groups WHERE id=?", (gid,))
-        row = cur.fetchone()
-        if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
-            continue
-        cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
-                    "VALUES (?,?,?,?,?)",
-                    (gid, name, _json.dumps(g.get("subjects") or [], ensure_ascii=False),
-                     g.get("updated_at", ""), 1 if rdel else 0))
-    conn.commit()
-    conn.close()
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
+                    "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+        for g in remote:
+            name = g.get("name", "")
+            gid = g.get("id") or (f"grp:{name}" if name else "")
+            if not gid:
+                continue
+            rdel = bool(g.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM groups WHERE id=?", (gid,))
+            row = cur.fetchone()
+            if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
+                        "VALUES (?,?,?,?,?)",
+                        (gid, name, _json.dumps(g.get("subjects") or [], ensure_ascii=False),
+                         g.get("updated_at", ""), 1 if rdel else 0))
+        conn.commit()
 
 
 def _merge_grades(remote: list):
@@ -493,110 +525,120 @@ def _merge_grades(remote: list):
     слепой LWW, а детектор конфликтов: если серверное значение оценки расходится
     с локальным и локальное не новее — расхождение пишем в sync_conflicts и НЕ
     затираем работу преподавателя (он решит вручную через conflict_dialog).
-    Если значения совпали или локальное новее — конфликта нет."""
+    Если значения совпали или локальное новее — конфликта нет.
+
+    Метки сравниваем через _ts_key, а НЕ строками. Раньше здесь стояло голое `lat > rat`,
+    и это противоречило всему остальному модулю: `isoformat()` выбрасывает нулевые
+    микросекунды, а «Z» лексикографически больше «+00:00». Стоило серверу и клиенту
+    разойтись в формате — и оценка либо молча затиралась, либо бесконечно порождала
+    конфликт. Ровно то, от чего _ts_key и заводился."""
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    #Таблица конфликтов нужна гарантированно (на случай, если init не отработал).
-    cur.execute("CREATE TABLE IF NOT EXISTS sync_conflicts ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                "student_f TEXT, student_n TEXT, lesson_id TEXT,"
-                "local_grade TEXT, remote_grade TEXT, remote_device TEXT,"
-                "remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)")
-    now_iso = _now()
-    for g in remote:
-        f, n, lid = g.get("student_f"), g.get("student_n"), g.get("lesson_id")
-        rgrade = g.get("grade", "")
-        rat = g.get("updated_at", "")
-        rdev = g.get("device", "")
-        rdel = bool(g.get("deleted"))
-        cur.execute("SELECT grade, COALESCE(updated_at,''), COALESCE(deleted,0) FROM grades "
-                    "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
-        local = cur.fetchone()
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        #Таблица конфликтов нужна гарантированно (на случай, если init не отработал).
+        cur.execute("CREATE TABLE IF NOT EXISTS sync_conflicts ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "student_f TEXT, student_n TEXT, lesson_id TEXT,"
+                    "local_grade TEXT, remote_grade TEXT, remote_device TEXT,"
+                    "remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)")
+        now_iso = _now()
+        for g in remote:
+            f, n, lid = g.get("student_f"), g.get("student_n"), g.get("lesson_id")
+            rgrade = g.get("grade", "")
+            rat = g.get("updated_at", "")
+            rdev = g.get("device", "")
+            rdel = bool(g.get("deleted"))
+            cur.execute("SELECT grade, COALESCE(updated_at,''), COALESCE(deleted,0) FROM grades "
+                        "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
+            local = cur.fetchone()
 
-        #Удаление с сервера (надгробие). Применяем по LWW (новее побеждает); диалог
-        #конфликтов для удалений не заводим — это не «два разных балла», а явное
-        #удаление. Если локальная правка новее — оставляем её (уедет на сервер).
-        if rdel:
+            #Удаление с сервера (надгробие). Применяем по LWW (новее побеждает); диалог
+            #конфликтов для удалений не заводим — это не «два разных балла», а явное
+            #удаление. Если локальная правка новее — оставляем её (уедет на сервер).
+            if rdel:
+                if local is None:
+                    continue                       #нечего удалять
+                lgrade, lat, ldel = local
+                if ldel:
+                    continue                       #уже удалено
+                if _ts_key(lat) > _ts_key(rat):
+                    continue                       #локальная правка новее — оставляем
+                cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=?, "
+                            "student_id=COALESCE(NULLIF(?,''),student_id) "
+                            "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                            (rat, rdev, g.get("student_id", "") or "", f, n, lid))
+                continue
+
+            #Активная оценка с сервера.
             if local is None:
-                continue                       #нечего удалять
-            lgrade, lat, ldel = local
-            if ldel:
-                continue                       #уже удалено
-            if lat and rat and lat > rat:
-                continue                       #локальная правка новее — оставляем
-            cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=?, "
-                        "student_id=COALESCE(NULLIF(?,''),student_id) "
-                        "WHERE student_f=? AND student_n=? AND lesson_id=?",
-                        (rat, rdev, g.get("student_id", "") or "", f, n, lid))
-            continue
-
-        #Активная оценка с сервера.
-        if local is None:
-            #Локально такой оценки нет — просто принимаем серверную.
-            cur.execute(
-                "INSERT OR REPLACE INTO grades "
-                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
-                "student_id) VALUES (?,?,?,?,?,?,0,?)",
-                (f, n, lid, rgrade, rat, rdev, g.get("student_id", "") or ""))
-            continue
-        lgrade, lat, ldel = local
-        if ldel:
-            #Локально оценка была удалена, а с сервера пришла активная (её
-            #восстановили на другом ПК). Применяем, если серверная не старше нашего
-            #надгробия — иначе наше удаление новее и уедет на сервер.
-            if not (lat and rat and lat > rat):
+                #Локально такой оценки нет — просто принимаем серверную.
                 cur.execute(
                     "INSERT OR REPLACE INTO grades "
                     "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
                     "student_id) VALUES (?,?,?,?,?,?,0,?)",
                     (f, n, lid, rgrade, rat, rdev, g.get("student_id", "") or ""))
-            continue
-        if (lgrade or "") == (rgrade or ""):
-            continue   #значения совпали — менять нечего
-        if lat and rat and lat > rat:
-            continue   #локальная правка новее — оставляем, она уедет на сервер
-        #Значения разошлись, и серверное не старше локального → НАСТОЯЩИЙ конфликт.
-        #Локальное значение НЕ трогаем; фиксируем расхождение для ручного решения.
-        cur.execute("SELECT 1 FROM sync_conflicts WHERE student_f=? AND student_n=? "
-                    "AND lesson_id=? AND resolved=0", (f, n, lid))
-        if cur.fetchone() is None:   #не плодим дубли по одной и той же оценке
-            cur.execute(
-                "INSERT INTO sync_conflicts "
-                "(student_f,student_n,lesson_id,local_grade,remote_grade,"
-                "remote_device,remote_at,detected_at,resolved) "
-                "VALUES (?,?,?,?,?,?,?,?,0)",
-                (f, n, lid, lgrade, rgrade, rdev, rat, now_iso))
-    conn.commit()
-    conn.close()
+                continue
+            lgrade, lat, ldel = local
+            if ldel:
+                #Локально оценка была удалена, а с сервера пришла активная (её
+                #восстановили на другом ПК). Применяем, если серверная не старше нашего
+                #надгробия — иначе наше удаление новее и уедет на сервер.
+                if not (_ts_key(lat) > _ts_key(rat)):
+                    cur.execute(
+                        "INSERT OR REPLACE INTO grades "
+                        "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
+                        "student_id) VALUES (?,?,?,?,?,?,0,?)",
+                        (f, n, lid, rgrade, rat, rdev, g.get("student_id", "") or ""))
+                continue
+            if (lgrade or "") == (rgrade or ""):
+                continue   #значения совпали — менять нечего
+            if _ts_key(lat) > _ts_key(rat):
+                continue   #локальная правка новее — оставляем, она уедет на сервер
+            #Значения разошлись, и серверное не старше локального → НАСТОЯЩИЙ конфликт.
+            #Локальное значение НЕ трогаем; фиксируем расхождение для ручного решения.
+            cur.execute("SELECT 1 FROM sync_conflicts WHERE student_f=? AND student_n=? "
+                        "AND lesson_id=? AND resolved=0", (f, n, lid))
+            if cur.fetchone() is None:   #не плодим дубли по одной и той же оценке
+                cur.execute(
+                    "INSERT INTO sync_conflicts "
+                    "(student_f,student_n,lesson_id,local_grade,remote_grade,"
+                    "remote_device,remote_at,detected_at,resolved) "
+                    "VALUES (?,?,?,?,?,?,?,?,0)",
+                    (f, n, lid, lgrade, rgrade, rdev, rat, now_iso))
+        conn.commit()
 
 
 def _merge_term_grades(remote: list):
     """Слияние итоговых оценок (аттестации) с сервера — простой LWW с tie-break
     (как занятия). Диалог конфликтов тут не нужен: это одна итоговая оценка за
     семестр, а не «два разных балла за занятие» — побеждает более поздняя правка."""
+    from contextlib import closing
     from core import DBManager
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    for g in remote:
-        gid = g.get("id")
-        if not gid:
-            continue
-        rdel = bool(g.get("deleted"))
-        cur.execute("SELECT COALESCE(updated_at,'') FROM term_grades WHERE id=?", (gid,))
-        row = cur.fetchone()
-        if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
-            continue
-        cur.execute(
-            "INSERT OR REPLACE INTO term_grades "
-            "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted,"
-            "student_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (gid, g.get("student_f", ""), g.get("student_n", ""), g.get("subject", ""),
-             g.get("year", ""), int(g.get("semester", 0) or 0), g.get("grade", ""),
-             g.get("form", ""), g.get("updated_at", ""), 1 if rdel else 0,
-             g.get("student_id", "") or ""))
-    conn.commit()
-    conn.close()
+    #closing гарантирует закрытие даже при исключении: раньше при ошибке
+    #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        for g in remote:
+            gid = g.get("id")
+            if not gid:
+                continue
+            rdel = bool(g.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM term_grades WHERE id=?", (gid,))
+            row = cur.fetchone()
+            if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            cur.execute(
+                "INSERT OR REPLACE INTO term_grades "
+                "(id,student_f,student_n,subject,year,semester,grade,form,updated_at,deleted,"
+                "student_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (gid, g.get("student_f", ""), g.get("student_n", ""), g.get("subject", ""),
+                 g.get("year", ""), int(g.get("semester", 0) or 0), g.get("grade", ""),
+                 g.get("form", ""), g.get("updated_at", ""), 1 if rdel else 0,
+                 g.get("student_id", "") or ""))
+        conn.commit()
 
 
 #Флаг «первый синк этой сессии». На старте процесса делаем ОДИН полный pull
@@ -701,5 +743,12 @@ def sync_once(client) -> bool:
     server_time = data.get("server_time", "")
     if server_time:
         set_sync_watermark(server_time)
+    else:
+        #Метку НЕ выдумываем: подставить локальное «сейчас» было бы опасно — часы клиента
+        #и сервера расходятся, и при спешащих часах следующая дельта ПРОПУСТИЛА бы записи
+        #(потеря данных). Оставляем прежнюю: повторный pull идемпотентен, лишний трафик —
+        #единственная плата. Но молчать нельзя: это дефект контракта сервера.
+        _log.warning("pull без server_time — метка дельты не сдвинута, следующий цикл "
+                     "заберёт те же изменения повторно")
     _session_full_pull_done = True
     return True
