@@ -6,9 +6,9 @@ widgets.py — Переиспользуемые фабрики для созда
 
 from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout, QWidget,
-    QGraphicsDropShadowEffect
+    QGraphicsDropShadowEffect, QLayout
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QRect, QPoint
 from PySide6.QtGui import QFontMetrics, QColor
 
 import icons
@@ -278,3 +278,82 @@ def stat_card(label: str, value: str, color="text") -> QFrame:
     lay.addWidget(val_w)
 
     return f
+
+
+class FlowLayout(QLayout):
+    """Layout, который ПЕРЕНОСИТ элементы на новую строку, когда они не влезают.
+
+    Зачем. В журнале преподавателя девять кнопок и три выпадающих списка лежали в
+    QHBoxLayout. Он не переносит — он СЖИМАЕТ: в неполноэкранном окне кнопки уезжали
+    за край и часть из них была просто недоступна. Qt такого layout'а не даёт из
+    коробки (это классический пример из документации), поэтому он здесь.
+
+    Поведение: элементы идут слева направо; кончилась ширина — следующая строка.
+    Высота считается по фактическому числу строк, поэтому родитель корректно
+    выделяет место и ничего не обрезается.
+    """
+
+    def __init__(self, parent=None, margin=0, h_spacing=6, v_spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self._h = h_spacing
+        self._v = v_spacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):          # noqa: N802 — имя из Qt API
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):              # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):              # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):    # noqa: N802
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):      # noqa: N802
+        return True                   #высота зависит от ширины — в этом весь смысл
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):      # noqa: N802
+        super().setGeometry(rect)
+        self._layout(rect, test_only=False)
+
+    def sizeHint(self):               # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):            # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _layout(self, rect, test_only: bool) -> int:
+        """Раскладывает элементы, возвращает итоговую ВЫСОТУ.
+        test_only=True — только посчитать (для heightForWidth), ничего не двигая."""
+        m = self.contentsMargins()
+        x = rect.x() + m.left()
+        y = rect.y() + m.top()
+        right = rect.right() - m.right()
+        line_h = 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            h = item.sizeHint().height()
+            #Не влезает в текущую строку — переносим (кроме случая, когда строка пуста:
+            #иначе одинокий широкий элемент уходил бы в бесконечный перенос).
+            if line_h > 0 and x + w > right:
+                x = rect.x() + m.left()
+                y += line_h + self._v
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+            x += w + self._h
+            line_h = max(line_h, h)
+        return y + line_h - rect.y() + m.bottom()

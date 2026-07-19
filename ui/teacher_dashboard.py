@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from styles import C, BTN
 from widgets import (
+    FlowLayout,
     lbl, title_lbl, section_lbl, btn, combo, card, stat_card,
     vector_unavailable_widget
 )
@@ -103,8 +104,11 @@ class TeacherDashboard(QWidget):
         w = QWidget()
         lay = QVBoxLayout(w); lay.setContentsMargins(20, 18, 20, 18); lay.setSpacing(10)
         #Заголовок
-        hdr = QHBoxLayout()
-        hdr.addWidget(title_lbl("Журнал преподавателя", 20), 1)
+        #Заголовок ОТДЕЛЬНОЙ строкой, а фильтры — в переносящемся ряду ниже. Раньше всё
+        #лежало в одном QHBoxLayout, и в неполноэкранном окне выпадающие списки
+        #сжимались до нечитаемых огрызков.
+        lay.addWidget(title_lbl("Журнал преподавателя", 20))
+        hdr = FlowLayout(h_spacing=8, v_spacing=6)
         self._subj_combo = combo(self.teacher_data.get("subjects", []))
         self._subj_combo.currentTextChanged.connect(self._on_subj_change)
         raw_groups = get_groups()
@@ -126,7 +130,10 @@ class TeacherDashboard(QWidget):
         hdr.addWidget(self._absence_chk)
         lay.addLayout(hdr)
         #Кнопки. Изменяющие журнал кнопки блокируются на архивном (прошлом) семестре.
-        btn_row = QHBoxLayout(); btn_row.setSpacing(6)
+        #Девять кнопок в QHBoxLayout не помещались в неполноэкранное окно: layout их
+        #СЖИМАЛ, и часть уезжала за край — до них было просто не добраться. FlowLayout
+        #переносит на новую строку.
+        btn_row = FlowLayout(h_spacing=6, v_spacing=6)
         self._edit_buttons = []
         _EDIT_LABELS = {"+ Лекция/Практика", "+ Экзамен", "+ Студент",
                         "💾 Сохранить", "🎓 Аттестация", "📥 Импорт"}
@@ -148,7 +155,6 @@ class TeacherDashboard(QWidget):
         self._conflict_btn.clicked.connect(self._open_conflicts)
         self._conflict_btn.hide()
         btn_row.addWidget(self._conflict_btn)
-        btn_row.addStretch()
         lay.addLayout(btn_row)
         self._refresh_conflicts_badge()
         #Плашка архива (виден только на прошлом семестре — журнал только для просмотра).
