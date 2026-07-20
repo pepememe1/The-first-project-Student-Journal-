@@ -889,6 +889,12 @@ def _apply_override_row(db: Session, payload: dict) -> ScheduleOverride:
     #правка той же ячейки ЗАМЕНЯЕТ прежнюю на обеих платформах.
     oid = schedule_override_id(g, week, day, pair_no)
     row = db.get(ScheduleOverride, oid)
+    #Снимок ДО правки. Нужен, чтобы НЕ двигать updated_at, когда ничего не изменилось:
+    #админ часто открывает ячейку и сохраняет её не тронув, а лишний бамп метки отправил
+    #бы строку в дельту синка на все ПК без единой реальной правки.
+    #(Уведомления здесь ни при чём — они уходят одной пачкой по кнопке «Опубликовать».)
+    before = None if row is None else (row.action, row.subject, row.time, row.room,
+                                       row.teacher, row.kind, bool(row.deleted))
     if row is None:
         row = ScheduleOverride(id=oid, group_name=g, week=week, day=day, pair_no=pair_no)
         db.add(row)
@@ -899,7 +905,9 @@ def _apply_override_row(db: Session, payload: dict) -> ScheduleOverride:
     row.teacher = (payload.get("teacher") or "").strip()
     row.kind = (payload.get("kind") or "").strip()
     row.deleted = False
-    row.updated_at = _now_iso()
+    after = (row.action, row.subject, row.time, row.room, row.teacher, row.kind, False)
+    if before != after:
+        row.updated_at = _now_iso()
     return row
 
 
@@ -1012,6 +1020,8 @@ def admin_schedule_override_delete(ov_id: str, user: User = Depends(require_admi
     """Убрать правку (ячейка вернётся к тому, что даёт портал)."""
     row = db.get(ScheduleOverride, ov_id)
     if row and not row.deleted:
+        group = row.group_name
+        day = row.day
         row.deleted = True
         row.updated_at = _now_iso()
         db.commit()

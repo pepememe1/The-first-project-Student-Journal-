@@ -178,3 +178,60 @@ def test_push_disabled_when_not_configured(client, monkeypatch):
     monkeypatch.setattr(config, "RUSTORE_PROJECT_ID", "")
     monkeypatch.setattr(config, "RUSTORE_SERVICE_TOKEN", "")
     assert config.push_enabled() is False
+
+
+#Уведомления об изменении РАСПИСАНИЯ
+#
+#Адресность и тон писем проверяет test_schedule_conflicts.py (схема Влада: рассылка
+#по кнопке «Опубликовать», а не на каждую правку ячейки). Здесь остаётся то, чего там
+#нет: отсутствие ПДн в теле пуша и «пустое» сохранение ячейки.
+
+def _mk_student(client, admin, login, group):
+    client.post("/web/admin/students", json={
+        "login": login, "surname": login.capitalize(), "name": "Тест",
+        "group": group, "password": "studpass1"}, headers=admin)
+    r = client.post("/auth/login", json={"login": login, "password": "studpass1"})
+    return {"Authorization": f"Bearer {r.json()['access_token']}", "X-Client": "web"}
+
+
+def _override(client, admin, group, subject="Физика", action="set"):
+    return client.post("/web/admin/schedule/override", json={
+        "group": group, "week": 1, "day": "Пнд", "pair_no": 2,
+        "action": action, "subject": subject, "time": "09:00", "room": "301"},
+        headers=admin)
+
+
+def test_schedule_push_has_no_personal_data(client, push_on):
+    """152-ФЗ: тело уходит через серверы RuStore, поэтому ни предмета, ни аудитории,
+    ни ФИО. Подробности студент получает от НАС, открыв приложение."""
+    admin = make_admin(client)
+    sh = _mk_student(client, admin, "ivanova", "ИС-21")
+    client.post("/me/push-token", json={"token": "dev-mine"}, headers=sh)
+    _override(client, admin, "ИС-21", subject="Физика")
+    client.post("/web/admin/schedule/publish", json={"group": "ИС-21"}, headers=admin)
+
+    assert push_on, "публикация должна разослать уведомление"
+    text = str(push_on[0])
+    for leak in ("Физика", "301", "Ivanova", "ivanova"):
+        assert leak not in text, f"в пуш утекло: {leak}"
+    assert "расписан" in text.lower()
+
+
+def test_saving_cell_without_changes_does_not_bump_timestamp(client):
+    """Сохранение ячейки БЕЗ правок не двигает updated_at.
+
+    Иначе строка уезжала бы в дельте синка на все ПК при каждом открытии редактора —
+    трафик и лишний шум в LWW на ровном месте."""
+    admin = make_admin(client)
+    _override(client, admin, "ИС-21", subject="Физика")
+
+    def _stamp():
+        ch = client.get("/sync/pull", headers=admin).json()["changes"]
+        return [o["updated_at"] for o in ch["schedule_overrides"]][0]
+
+    first = _stamp()
+    _override(client, admin, "ИС-21", subject="Физика")      #та же самая правка
+    assert _stamp() == first, "без реальных изменений метку двигать нельзя"
+
+    _override(client, admin, "ИС-21", subject="Химия")       #а тут уже правка
+    assert _stamp() != first, "реальная правка обязана обновить метку"
