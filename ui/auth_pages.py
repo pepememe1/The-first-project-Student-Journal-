@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from styles import C
-from ui_components import HexLogoWidget, AnimatedBackground
+from ui_components import HexLogoWidget, HexLogo, AnimatedBackground
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
@@ -506,23 +506,8 @@ class LoginPage(QWidget):
         self._bg = AnimatedBackground(self, animated=True)
         self._bg.lower()
 
-        #Бренд в левом верхнем углу окна (лого GB + название), поверх фона. HexLogoWidget
-        #рисуется В ЦВЕТАХ ТЕМЫ — поэтому значок сам меняется вместе со сменой темы
-        #(тёмная/светлая, кастомный акцент). Позиция задаётся в resizeEvent.
-        self._brand = QWidget(self)
-        _bl = QHBoxLayout(self._brand)
-        _bl.setContentsMargins(0, 0, 0, 0)
-        _bl.setSpacing(8)
-        _blogo = HexLogoWidget(30)
-        _blogo.setFixedSize(30, 30)
-        _bname = QLabel("GradeBookAI")
-        #Надпись бренда — акцентным цветом активной темы (а не белым C['text']); так она
-        #читается и на светлой, и на тёмной теме и меняется вместе с оформлением.
-        _bname.setStyleSheet(f"font-size:15px;font-weight:800;color:{C['green']};background:transparent;")
-        _bl.addWidget(_blogo)
-        _bl.addWidget(_bname)
-        self._brand.adjustSize()
-        self._brand.raise_()
+        #Угловой логотип с названием убран по требованию: фирменный знак теперь только
+        #в карточке входа (по центру над названием).
 
         #Футер по центру у нижнего края окна (те же надписи, что на сайте).
         self._footer = QLabel(
@@ -573,9 +558,9 @@ class LoginPage(QWidget):
         lay.setContentsMargins(36, 30, 36, 30)
         lay.setSpacing(12)
 
-        #Logo
-        hex_w = HexLogoWidget(54)
-        hex_w.setFixedSize(54, 54)
+        #Logo — знак над названием журнала: цвет из темы (кольца акцентным цветом видны на
+        #светлой карточке, ядро двухцветное). Подстраивается под цветовую гамму.
+        hex_w = HexLogo(76, oncard=True)
         hex_row = QHBoxLayout()
         hex_row.setAlignment(Qt.AlignCenter)
         hex_row.addWidget(hex_w)
@@ -850,9 +835,7 @@ class LoginPage(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._bg.setGeometry(0, 0, self.width(), self.height())
-        #Бренд — в левый верхний угол; футер — по центру у нижнего края окна.
-        if getattr(self, "_brand", None) is not None:
-            self._brand.move(24, 18)
+        #Футер — по центру у нижнего края окна.
         if getattr(self, "_footer", None) is not None:
             self._footer.adjustSize()
             #Футер центрируем под КАРТОЧКОЙ входа, а не под окном: слева от карточки

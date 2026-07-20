@@ -12,7 +12,7 @@ import { HOME_BY_ROLE } from '@/config/nav'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
-import HexLogo from '@/components/HexLogo.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
 import RegisterDialog from '@/components/RegisterDialog.vue'
 import RecoverDialog from '@/components/RecoverDialog.vue'
@@ -127,14 +127,7 @@ const showRecover = ref(false)
        style="padding-top: calc(1rem + env(safe-area-inset-top)); padding-bottom: calc(1rem + env(safe-area-inset-bottom))">
     <HexBackground />
 
-    <!-- Брендинг в углу — заполняет верх и держит фирменный стиль. -->
-    <div class="absolute left-6 top-5 z-10 hidden items-center gap-2.5 sm:flex">
-      <HexLogo :size="32" />
-      <div class="leading-tight">
-        <p class="font-title text-base font-extrabold text-text">GradeBookAI</p>
-        <p class="text-tiny text-text3">by Synapse</p>
-      </div>
-    </div>
+    <!-- Угловой логотип с названием убран по требованию: знак теперь только в карточке входа. -->
 
     <!-- Сетка 1fr · auto · 1fr: карточка входа СТРОГО по центру экрана (боковые колонки
          равны). items-center — блок по центру по вертикали (не прижат к низу). -->
@@ -156,7 +149,9 @@ const showRecover = ref(false)
       <!-- Карточка входа (центр экрана) -->
       <div class="mx-auto w-full max-w-sm justify-self-center rounded-2xl border border-border bg-card p-7 shadow-card">
         <div class="mb-5 flex flex-col items-center text-center">
-          <HexLogo :size="56" />
+          <!-- Знак над названием журнала: цвет из темы (кольца — акцентным цветом,
+               видны на белой карточке; ядро двухцветное). -->
+          <BrandLogo :size="76" oncard />
           <h1 class="mt-3 font-title text-2xl font-extrabold text-text">GradeBookAI</h1>
           <p class="mt-1 text-sm text-text3">Система учёта успеваемости</p>
           <p class="mt-1 text-sm font-semibold text-accent">Технологический колледж ВСГУТУ</p>

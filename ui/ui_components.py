@@ -91,17 +91,10 @@ class HeaderBar(QFrame):
         lay.setContentsMargins(20, 0, 20, 0)
         lay.setSpacing(10)
 
-        #Logo box (GB)
-        hex_lbl = QLabel()
-        hex_lbl.setFixedSize(32, 32)
-        hex_lbl.setText("GB")
-        hex_lbl.setAlignment(Qt.AlignCenter)
-        hex_lbl.setStyleSheet(
-            "color:#FFFFFF;font-size:11px;font-weight:800;"
-            "background:rgba(255,255,255,0.16);border:1.5px solid rgba(255,255,255,0.55);"
-            "border-radius:6px;"
-        )
-        
+        #Утверждённый фирменный знак: вращающийся гексагон GB (цвет — из темы, белая
+        #обводка/кольца видны на акцентном фоне шапки). Заменил прежний плоский «GB».
+        hex_lbl = HexLogo(40)
+
         #Бренд пишем как «GradeBookAI» (фирменное написание, как на сайте и экране входа),
         #а не капсом «GRADEBOOK» — так шапка выглядит опрятно и узнаваемо.
         logo_text = QLabel("GradeBookAI")
@@ -254,6 +247,116 @@ class HexLogoWidget(QWidget):
         f = QFont("Segoe UI", int(self._size * 0.22), QFont.Bold)
         p.setFont(f)
         p.drawText(self.rect(), Qt.AlignCenter, "GB")
+        p.end()
+
+
+class HexLogo(QWidget):
+    """Утверждённый фирменный знак (вариант №8), анимированный.
+
+    Двухцветный гексагон «GB» (ЦВЕТ ЯДРА — всегда из темы, C['green']/C['green2']) + средняя
+    обводка + мягкая тень; ВРАЩАЮЩЕЕСЯ внешнее кольцо со свечением и СТАТИЧНОЕ внутреннее
+    кольцо. Знак подстраивается под цветовую гамму.
+
+    oncard=True — вариант для КАРТОЧКИ (экран входа): кольца/свечение — акцентным цветом
+    темы (видны на белом фоне), ядро двухцветное, «GB» белые, без белого ободка. По
+    умолчанию (шапка на акцентном фоне): кольца/обводка/свечение белые.
+
+    Qt/QtSvg не поддерживает SMIL-анимацию, поэтому вращение рисуем сами: QTimer двигает
+    углы, paintEvent перерисовывает. Значок читает C[...] на каждом кадре, так что смену
+    темы подхватывает без доп. кода."""
+
+    def __init__(self, size=40, oncard=False, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self._oncard = oncard
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TranslucentBackground)   #лечь на цветную шапку без «плашки»
+        self._ao = 0.0      #угол внешнего кольца
+        self._ac = 0.0      #угол ядра
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)                            #~25 к/с — плавно и не грузит CPU
+
+    def _tick(self):
+        #22 c и 19 c на оборот (как в веб-версии) при шаге 40 мс.
+        self._ao = (self._ao + 360.0 / 22.0 * 0.040) % 360.0
+        self._ac = (self._ac + 360.0 / 19.0 * 0.040) % 360.0
+        self.update()
+
+    def _hex(self, r, rot_deg=0.0) -> QPolygonF:
+        """Гексагон вершиной вверх (радиус r), повёрнутый на rot_deg, вокруг (0,0)."""
+        return QPolygonF([
+            QPointF(r * math.cos(math.radians(60 * k - 90 + rot_deg)),
+                    r * math.sin(math.radians(60 * k - 90 + rot_deg)))
+            for k in range(6)
+        ])
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        s = self._size
+        f = s / 200.0                       #масштаб от эталонного viewBox 200
+        R_out, R_in, R_core = 93 * f, 82 * f, 70 * f
+        rim = 6.0 * f
+        white = QColor("#ffffff")
+        #Кольца/обводка/свечение: на карточке — акцент темы (виден на белом), в шапке — белые.
+        line = QColor(C['green']) if self._oncard else white
+
+        p.translate(s / 2.0, s / 2.0)
+
+        #1) Мягкая тень ядра. Тень статична (гексагон почти симметричен, вращать незачем)
+        #   → всегда снизу. Мягкость имитируем несколькими тёмными слоями со смещением.
+        core_shadow = self._hex(R_core, 0)
+        p.setPen(Qt.NoPen)
+        for i in range(1, 5):
+            sh = QColor(15, 27, 34); sh.setAlpha(14)
+            p.setBrush(sh)
+            p.save(); p.translate(0, i * 0.9 * f + 0.5); p.drawPolygon(core_shadow); p.restore()
+
+        #2) ВНЕШНЕЕ кольцо: вращается, со свечением (широкий бледный контур снизу + чёткий
+        #   пунктир сверху).
+        p.save()
+        p.rotate(self._ao)
+        ring = self._hex(R_out, 0)
+        glow = QColor(line); glow.setAlpha(70)
+        p.setPen(QPen(glow, 9 * f, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush); p.drawPolygon(ring)
+        dash = QPen(QColor(line), 4 * f, Qt.CustomDashLine, Qt.RoundCap, Qt.RoundJoin)
+        dash.setDashPattern([5, 4])
+        p.setPen(dash); p.setBrush(Qt.NoBrush); p.drawPolygon(ring)
+        p.restore()
+
+        #3) ВНУТРЕННЕЕ кольцо: СТАТИЧНОЕ (не крутится).
+        inner = self._hex(R_in, 0)
+        ic = QColor(line); ic.setAlpha(215)
+        p.setPen(QPen(ic, 3 * f, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush); p.drawPolygon(inner)
+
+        #4) ЯДРО: вращается, двухцветная заливка из темы. В шапке — белый ободок (виден на
+        #   акцентном фоне); на карточке ободок не нужен (цветное ядро само видно на белом).
+        p.save()
+        p.rotate(self._ac)
+        core = self._hex(R_core, 0)
+        if not self._oncard:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(white)); p.drawPolygon(self._hex(R_core + rim, 0))
+        grad = QLinearGradient(-R_core, -R_core, R_core, R_core)
+        light = QColor(C['green']); dark = QColor(C['green2'])
+        grad.setColorAt(0.0, light); grad.setColorAt(0.5, light)
+        grad.setColorAt(0.5, dark); grad.setColorAt(1.0, dark)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(grad)); p.drawPolygon(core)
+        p.restore()
+
+        #5) GB: белые на цветном ядре, уменьшены, стоят ровно (не крутятся).
+        gb = QFont("Syne")
+        gb.setPixelSize(max(7, int(56 * f)))
+        gb.setWeight(QFont.ExtraBold)
+        gb.setLetterSpacing(QFont.AbsoluteSpacing, -2 * f)
+        p.setFont(gb)
+        p.setPen(QPen(white))
+        from PySide6.QtCore import QRectF
+        p.drawText(QRectF(-s / 2.0, -s / 2.0 + 1.0 * f, s, s), Qt.AlignCenter, "GB")
         p.end()
 
 

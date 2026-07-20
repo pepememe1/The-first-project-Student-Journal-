@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 import { Menu, Moon, Sun, LogOut } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import BrandLogo from '@/components/BrandLogo.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
 const router = useRouter()
@@ -55,11 +56,9 @@ async function onLogout() {
       <Menu class="size-5" />
     </button>
 
-    <!-- Лого GB + «GradeBookAI» + колледж -->
-    <div class="grid size-8 place-items-center rounded-md text-[11px] font-extrabold"
-         style="background: rgba(255,255,255,0.16); border: 1.5px solid rgba(255,255,255,0.55);">
-      GB
-    </div>
+    <!-- Утверждённый фирменный знак: вращающийся гексагон GB (цвет — из темы, белая
+         обводка/кольца видны на акцентном фоне шапки). -->
+    <BrandLogo :size="40" class="shrink-0" />
     <div class="min-w-0 leading-tight">
       <!-- Фирменное написание «GradeBookAI» (как на экране входа), НЕ капсом «GRADEBOOK».
            Шрифт — основной (DM Sans), как в десктопной шапке. -->
