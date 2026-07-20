@@ -152,3 +152,62 @@ def build_vedomost_docx(group: str, subject: str, term: dict, form: str, rows,
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def build_schedule_docx(group: str, weeks: dict, pair_times=None) -> bytes:
+    """Расписание группы в Word: по таблице на неделю, строки — пары, колонки — дни.
+
+    Ориентация АЛЬБОМНАЯ: шесть дней плюс номер и время в книжную страницу не влезают
+    без нечитаемого сжатия. Текст клетки собирается общей с xlsx функцией, чтобы две
+    выгрузки одного расписания не отличались вёрсткой."""
+    from .xlsx_export import schedule_cell_text, _week_pairs, _DAYS, _WEEK_NAME
+
+    doc = Document()
+    _landscape(doc)
+    _title(doc, f"Расписание занятий — {group}", SZ + 2, bold=True)
+    _title(doc, f"Сформировано {datetime.now().strftime('%d.%m.%Y')}", SZ - 2, italic=True)
+
+    for wk in sorted((weeks or {}).keys(), key=lambda x: str(x)):
+        days = (weeks or {}).get(wk) or {}
+        pairs = _week_pairs(days)
+        if not pairs:
+            continue
+        try:
+            wk_int = int(wk)
+        except (TypeError, ValueError):
+            wk_int = 0
+        _title(doc, _WEEK_NAME.get(wk_int, f"Неделя {wk}"), SZ, bold=True)
+
+        table = doc.add_table(rows=1, cols=2 + len(_DAYS))
+        table.style = "Table Grid"
+        for i, name in enumerate(["Пара", "Время"] + _DAYS):
+            _cell(table.rows[0].cells[i], name, bold=True)
+
+        for pair_no in pairs:
+            time_text = ""
+            for day in _DAYS:
+                for ls in (days.get(day) or []):
+                    if int(ls.get("pair_no") or 0) == pair_no and (ls.get("time") or "").strip():
+                        time_text = ls["time"].strip()
+                        break
+                if time_text:
+                    break
+            if not time_text and pair_times:
+                idx = pair_no - 1
+                if 0 <= idx < len(pair_times):
+                    time_text = str(pair_times[idx])
+
+            cells = table.add_row().cells
+            _cell(cells[0], str(pair_no))
+            _cell(cells[1], time_text)
+            for i, day in enumerate(_DAYS, start=2):
+                found = [ls for ls in (days.get(day) or [])
+                         if int(ls.get("pair_no") or 0) == pair_no]
+                _cell(cells[i], "\n\n".join(schedule_cell_text(ls) for ls in found),
+                      align="center")
+
+        doc.add_paragraph("")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()

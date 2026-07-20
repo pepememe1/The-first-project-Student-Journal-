@@ -4,17 +4,44 @@
 # Сервер (host) не входит: он не распространяется (живёт на VPS), а вложение его сырых
 # .py как данных свело бы защиту на нет.
 set -e
-cd "c:/Users/yaros/Desktop/GB_2_7/The-first-project-Student-Journal-"
+# Корень берём от САМОГО скрипта: путь к репозиторию у каждого разработчика свой, а
+# захардкоженный чужой путь просто ломает сборку на любой другой машине.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(pwd -W 2>/dev/null || pwd)"
 
 # Плоские импорты (ui/ sync/ data/ кладутся в sys.path через _bootstrap на рантайме) —
 # Nuitka их сама не видит, поэтому даём папки в путь и включаем модули явно.
 export PYTHONPATH="$ROOT/ui;$ROOT/sync;$ROOT/data"
 
-# Собираем ОБЫЧНЫМ python.org Python 3.11 (НЕ из Microsoft Store): у Store-Python
-# песочница ломала пути MinGW и gcc не находил windows.h. Нормальный Python — без песочницы.
-PYEXE="C:/Users/yaros/AppData/Local/Programs/Python/Python311/python.exe"
-[ -f "$PYEXE" ] || PYEXE="python"
+# ⚠️ Собирать нужно ОБЫЧНЫМ python.org Python, НЕ из Microsoft Store: у Store-сборки
+# песочница ломает пути MinGW, и gcc не находит windows.h. Ошибка при этом вылезает
+# глубоко внутри компиляции и выглядит непонятно, поэтому ниже стоит явная проверка.
+#
+# Порядок выбора: переменная GRADEBOOK_PYEXE → установленные python.org сборки (свежие
+# первыми) → системный python. Верхняя граница 3.14 не случайна: PySide6 требует <3.15.
+#
+# Рабочая версия команды — Python 3.14 (решение Ярослава, у него на ней собирается).
+# ⚠️ Учтите: Nuitka 4.1.3 при старте пишет, что 3.14 поддержана ЭКСПЕРИМЕНТАЛЬНО и
+# советует 3.13. Предупреждение не блокирует сборку, но если в готовом .exe полезут
+# необъяснимые сбои — проверять эту связку нужно первой: `GRADEBOOK_PYEXE=...Python313`
+# даёт полностью поддерживаемый вариант, зависимости туда уже поставлены.
+PYEXE="${GRADEBOOK_PYEXE:-}"
+if [ -z "$PYEXE" ]; then
+  for ver in 314 313 312 311 310; do
+    cand="$LOCALAPPDATA/Programs/Python/Python$ver/python.exe"
+    [ -f "$cand" ] && { PYEXE="$cand"; break; }
+  done
+fi
+[ -z "$PYEXE" ] && PYEXE="python"
+
+# Fail fast: со Store-Python сборка всё равно не пройдёт, но упадёт неочевидно.
+case "$("$PYEXE" -c 'import sys; print(sys.executable)')" in
+  *WindowsApps*)
+    echo "ОШИБКА: выбран Python из Microsoft Store — Nuitka с ним не соберётся." >&2
+    echo "Поставьте python.org (winget install Python.Python.3.14) либо задайте" >&2
+    echo "GRADEBOOK_PYEXE=путь/к/python.exe" >&2
+    exit 1 ;;
+esac
 
 INC=""
 for d in ui sync data; do

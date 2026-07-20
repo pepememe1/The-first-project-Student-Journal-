@@ -98,6 +98,7 @@ def init_db():
     _backfill_lesson_term()
     _ensure_user_curated_groups_column()
     _ensure_grade_student_id_columns()
+    _ensure_notify_event_columns()
 
 
 def _ensure_user_prefs_column():
@@ -247,3 +248,30 @@ def _ensure_user_curated_groups_column():
     coltype = "JSONB" if is_pg else "JSON"
     with engine.begin() as conn:
         conn.execute(text(f"ALTER TABLE users ADD COLUMN curated_groups {coltype}"))
+
+
+def _ensure_notify_event_columns():
+    """Идемпотентная мини-миграция: notify_events.title/body/payload — готовый текст
+    уведомления для вкладки «Уведомления».
+
+    Таблица уже существует на проде (приехала вместе с пушами об оценках), а create_all
+    новые СТОЛБЦЫ не досоздаёт — поэтому ALTER. Уже накопленные события останутся с
+    пустым текстом, и это нормально: клиент умеет показать их по kind, как и раньше.
+    Задним числом сочинять им тело мы не имеем права — человек получал другое."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("notify_events")}
+    except Exception:
+        return          #таблицы ещё нет — create_all создал её сразу со столбцами
+    is_pg = engine.url.get_backend_name().startswith("postgres")
+    #Столбцы добавляем по одному: часть могла появиться в прошлый запуск, а СУБД
+    #откажет на попытке добавить уже существующий.
+    wanted = (("title", "VARCHAR DEFAULT ''"),
+              ("body", "VARCHAR DEFAULT ''"),
+              ("payload", "JSONB" if is_pg else "JSON"))
+    with engine.begin() as conn:
+        for name, coltype in wanted:
+            if name not in columns:
+                conn.execute(text(
+                    f"ALTER TABLE notify_events ADD COLUMN {name} {coltype}"))

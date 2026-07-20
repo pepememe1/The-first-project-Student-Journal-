@@ -14,7 +14,7 @@ me.py — Личные настройки текущего пользовате�
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -115,11 +115,61 @@ def delete_push_token(payload: dict = Body(default={}),
     return {"ok": True, "removed": removed}
 
 
+#Вкладка «Уведомления» — список писем, чтение, отметки о прочтении.
+#
+#⚠️ ПОРЯДОК ОБЪЯВЛЕНИЯ МАРШРУТОВ ЗДЕСЬ ЗНАЧИМ. Статический "/events/unread-count" обязан
+#идти РАНЬШЕ шаблонного "/events/{event_id}": FastAPI сопоставляет маршруты сверху вниз,
+#и при обратном порядке запрос за счётчиком попал бы в обработчик события с
+#event_id="unread-count" и вернул 404 вместо числа.
+
+@router.get("/events/unread-count")
+def unread_events_count(user: User = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    """Только число непрочитанных — для значка в интерфейсе.
+
+    Отдельный дешёвый COUNT: ради цифры в углу экрана незачем выгружать список событий
+    при каждом открытии страницы."""
+    n = (db.query(NotifyEvent)
+         .filter(NotifyEvent.login == (user.login or ""), NotifyEvent.read_at == "")
+         .count())
+    return {"unread": n}
+
+
+@router.post("/events/read-all")
+def mark_all_events_read(user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """«Прочитать все». Фильтр по login обязателен: без него UPDATE прошёлся бы по
+    чужим строкам."""
+    now = datetime.now(timezone.utc).isoformat()
+    n = (db.query(NotifyEvent)
+         .filter(NotifyEvent.login == (user.login or ""), NotifyEvent.read_at == "")
+         .update({NotifyEvent.read_at: now}, synchronize_session=False))
+    db.commit()
+    return {"ok": True, "updated": n}
+
+
+@router.post("/events/{event_id}/read")
+def mark_event_read(event_id: str,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Отметить одно событие прочитанным (клик по письму в списке).
+
+    Чужое событие — 404, а не 403, по той же причине, что и в get_notify_event: 403
+    подтвердил бы факт существования события."""
+    row = db.get(NotifyEvent, event_id)
+    if row is None or row.login != (user.login or ""):
+        raise HTTPException(status_code=404, detail="Событие не найдено")
+    if not row.read_at:
+        row.read_at = datetime.now(timezone.utc).isoformat()
+        db.commit()
+    return {"ok": True, "read_at": row.read_at}
+
+
 @router.get("/events/{event_id}")
 def get_notify_event(event_id: str,
                      user: User = Depends(get_current_user),
                      db: Session = Depends(get_db)):
-    """Куда открыть экран по нажатому уведомлению.
+    """Куда открыть экран по нажатому уведомлению + текст письма.
 
     Проверка владельца обязательна: id события уезжает в пуш и оседает на телефоне,
     поэтому его нельзя считать секретом. На чужой id отвечаем 404, а НЕ 403 — 403
@@ -131,18 +181,38 @@ def get_notify_event(event_id: str,
     if not row.read_at:
         row.read_at = datetime.now(timezone.utc).isoformat()
         db.commit()
-    return {"kind": row.kind, "subject": row.subject, "lesson_id": row.lesson_id,
-            "created_at": row.created_at}
+    #Поля title/body/payload добавлены позже: у событий, накопленных до этого, они
+    #пустые — клиент в таком случае показывает текст по kind, как делал раньше.
+    return {"id": row.id, "kind": row.kind, "subject": row.subject,
+            "lesson_id": row.lesson_id, "created_at": row.created_at,
+            "title": row.title or "", "body": row.body or "",
+            "payload": row.payload or {}, "read_at": row.read_at or ""}
 
 
 @router.get("/events")
-def list_unread_events(user: User = Depends(get_current_user),
-                       db: Session = Depends(get_db)):
-    """Непрочитанные события — для значка «новое» в интерфейсе (и на сайте тоже,
-    там пушей нет, а знать о новых оценках студенту так же полезно)."""
-    rows = (db.query(NotifyEvent)
-            .filter(NotifyEvent.login == (user.login or ""), NotifyEvent.read_at == "")
-            .order_by(NotifyEvent.created_at.desc()).limit(50).all())
-    return {"count": len(rows),
+def list_events(filter_: str = Query("unread", alias="filter"),
+                limit: int = Query(50, ge=1, le=100),
+                offset: int = Query(0, ge=0),
+                user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Список событий пользователя.
+
+    ⚠️ ПО УМОЛЧАНИЮ отдаёт ТОЛЬКО НЕПРОЧИТАННЫЕ — поведение менять нельзя. Этот
+    эндпоинт уже вызывают установленные Android-приложения (см. web/src/services/push.js
+    и нативную часть), а у пользователей на телефонах старый бандл. Полный список для
+    вкладки «Уведомления» запрашивается явно: ?filter=all."""
+    q = db.query(NotifyEvent).filter(NotifyEvent.login == (user.login or ""))
+    if filter_ != "all":
+        q = q.filter(NotifyEvent.read_at == "")
+    rows = (q.order_by(NotifyEvent.created_at.desc())
+            .offset(offset).limit(limit).all())
+    #Непрочитанные считаем отдельно: при filter=all длина списка о них ничего не говорит,
+    #а значку нужно честное число.
+    unread = (db.query(NotifyEvent)
+              .filter(NotifyEvent.login == (user.login or ""), NotifyEvent.read_at == "")
+              .count())
+    return {"count": len(rows), "unread": unread,
             "items": [{"id": r.id, "kind": r.kind, "subject": r.subject,
-                       "created_at": r.created_at} for r in rows]}
+                       "created_at": r.created_at,
+                       "title": r.title or "", "body": r.body or "",
+                       "read_at": r.read_at or ""} for r in rows]}

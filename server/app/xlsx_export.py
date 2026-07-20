@@ -178,3 +178,108 @@ def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+#Расписание группы: сетка «пары × дни», по таблице на каждую неделю.
+#Данные приходят уже слитыми (портал + правки админа) — тем же кодом, что видит студент,
+#иначе выгрузка разошлась бы с сайтом.
+_DAYS = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
+_WEEK_NAME = {1: "I неделя (нечётная)", 2: "II неделя (чётная)"}
+
+
+def schedule_cell_text(lesson: dict) -> str:
+    """Текст клетки: предмет (тип), преподаватель, аудитория — каждый со своей строки.
+
+    Общая функция для xlsx и docx: расхождение форматов между двумя выгрузками одного
+    и того же расписания выглядит как ошибка данных, хотя это была бы ошибка вёрстки."""
+    subject = (lesson.get("subject") or "").strip()
+    kind = (lesson.get("kind") or "").strip()
+    head = f"{subject} ({kind})" if subject and kind else (subject or kind)
+    parts = [head, (lesson.get("teacher") or "").strip(), (lesson.get("room") or "").strip()]
+    return "\n".join(p for p in parts if p)
+
+
+def _week_pairs(days: dict) -> list:
+    """Номера пар, которые в этой неделе реально есть (пустые строки не рисуем)."""
+    nums = set()
+    for lessons in (days or {}).values():
+        for ls in (lessons or []):
+            try:
+                nums.add(int(ls.get("pair_no") or 0))
+            except (TypeError, ValueError):
+                continue
+    return sorted(n for n in nums if n)
+
+
+def build_schedule_xlsx(group: str, weeks: dict, pair_times=None) -> bytes:
+    """Расписание группы в xlsx. weeks — {"1": {"Пнд": [пары]}, ...} как отдаёт сервер."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Расписание"
+    ncols = 2 + len(_DAYS)                     #«Пара» + «Время» + дни
+    last_col = get_column_letter(ncols)
+
+    row = 1
+    _title(ws, row, last_col, f"Расписание занятий — {group}", SZ + 2, bold=True)
+    row += 1
+    _title(ws, row, last_col, f"Сформировано {datetime.now().strftime('%d.%m.%Y')}",
+           SZ - 2, italic=True)
+    row += 2
+
+    measured = []                              #строки для расчёта ширины столбцов
+    for wk in sorted((weeks or {}).keys(), key=lambda x: str(x)):
+        days = (weeks or {}).get(wk) or {}
+        pairs = _week_pairs(days)
+        if not pairs:
+            continue                           #неделя без пар — таблицу не рисуем
+        try:
+            wk_int = int(wk)
+        except (TypeError, ValueError):
+            wk_int = 0
+        _title(ws, row, last_col, _WEEK_NAME.get(wk_int, f"Неделя {wk}"), SZ, bold=True)
+        row += 1
+
+        hdr = row
+        for col, name in enumerate(["Пара", "Время"] + _DAYS, start=1):
+            c = ws.cell(row=hdr, column=col, value=name)
+            c.font = Font(name=FNT, size=SZ, bold=True)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = BORDER
+        measured.append(hdr)
+        row += 1
+
+        for pair_no in pairs:
+            #Время берём из первой найденной пары с этим номером: у портала оно одно
+            #на весь поток, но в ручных правках может быть не заполнено.
+            time_text = ""
+            for day in _DAYS:
+                for ls in (days.get(day) or []):
+                    if int(ls.get("pair_no") or 0) == pair_no and (ls.get("time") or "").strip():
+                        time_text = ls["time"].strip()
+                        break
+                if time_text:
+                    break
+            if not time_text and pair_times:
+                idx = pair_no - 1
+                if 0 <= idx < len(pair_times):
+                    time_text = str(pair_times[idx])
+
+            values = [str(pair_no), time_text]
+            for day in _DAYS:
+                found = [ls for ls in (days.get(day) or [])
+                         if int(ls.get("pair_no") or 0) == pair_no]
+                values.append("\n\n".join(schedule_cell_text(ls) for ls in found))
+            for col, val in enumerate(values, start=1):
+                c = ws.cell(row=row, column=col, value=val)
+                c.font = Font(name=FNT, size=SZ)
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                c.border = BORDER
+            measured.append(row)
+            row += 1
+        row += 1                               #пустая строка между неделями
+
+    _autofit(ws, ncols, measured, min_w=10, max_w=32)
+    ws.column_dimensions["A"].width = 6
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

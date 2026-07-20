@@ -144,6 +144,7 @@ class StudentDashboard(QWidget):
             ("stats",   "chart",     "Статистика"),
             ("ai",      "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
+            ("notifications", "alert-circle", "Уведомления"),
             ("profile", "user",      "Профиль"),
         ]
         self.sidebar = Sidebar(sidebar_items)
@@ -164,6 +165,7 @@ class StudentDashboard(QWidget):
         self._build_schedule()
         self._build_stats()
         self._build_ai_page()
+        self._build_notifications()
         self._build_profile()
 
         self.sidebar.set_active("dash")
@@ -716,6 +718,13 @@ class StudentDashboard(QWidget):
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai
         self.stack.addWidget(ai)
+
+    def _build_notifications(self):
+        """Вкладка «Уведомления» — письма об оценках и изменениях расписания."""
+        from notifications_view import NotificationsView
+        w = NotificationsView()
+        self.pages["notifications"] = w
+        self.stack.addWidget(w)
 
     def _build_profile(self):
         """Вкладка «Профиль»: данные ученика + кастомизация темы оформления."""

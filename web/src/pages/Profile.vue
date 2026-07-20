@@ -6,13 +6,27 @@ import { Check, Fingerprint, Trash2, ShieldCheck } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { PRESETS, swatchColors } from '@/theme/palette'
-import { authApi } from '@/api/endpoints'
+import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import NotificationsInbox from '@/components/NotificationsInbox.vue'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
+
+// Вкладки профиля: настройки и почта уведомлений.
+const tab = ref('profile')
+const unread = ref(0)
+async function loadUnread() {
+  try { unread.value = (await meApi.unreadCount()).data.unread || 0 } catch { unread.value = 0 }
+}
+// Открыли «Уведомления» — значок обнулять сразу нельзя: письма станут прочитанными
+// только по мере открытия. Пересчитываем по возвращении на вкладку профиля.
+function switchTab(next) {
+  tab.value = next
+  if (next === 'profile') loadUnread()
+}
 const ROLE = { student: 'Студент', teacher: 'Преподаватель', admin: 'Администратор' }
 const initial = computed(() => (auth.user?.name || '?').trim().charAt(0).toUpperCase())
 const currentId = computed(() => theme.spec.id)
@@ -36,6 +50,7 @@ async function loadPasskeys() {
   try { passkeys.value = (await authApi.webauthnList()).data.credentials || [] } catch { passkeys.value = [] }
 }
 onMounted(async () => {
+  loadUnread()
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
 })
@@ -73,7 +88,29 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
       </div>
     </Card>
 
-    <Card title="Оформление" subtitle="Тема сохраняется за вашим аккаунтом">
+    <!-- Вкладки: настройки профиля и почта уведомлений. -->
+    <div class="flex gap-1 border-b border-border">
+      <button v-for="t in [{ id: 'profile', label: 'Профиль' }, { id: 'inbox', label: 'Уведомления' }]"
+              :key="t.id" type="button"
+              class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors"
+              :class="tab === t.id
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text3 hover:text-text'"
+              @click="switchTab(t.id)">
+        {{ t.label }}
+        <span v-if="t.id === 'inbox' && unread"
+              class="ml-1.5 inline-grid min-w-4 place-items-center rounded-full bg-accent px-1 text-tiny font-bold text-white">
+          {{ unread }}
+        </span>
+      </button>
+    </div>
+
+    <Card v-if="tab === 'inbox'" title="Уведомления"
+          subtitle="Оценки и изменения расписания">
+      <NotificationsInbox />
+    </Card>
+
+    <Card v-if="tab === 'profile'" title="Оформление" subtitle="Тема сохраняется за вашим аккаунтом">
       <div class="mb-4 flex gap-2">
         <AppButton :variant="theme.isDark ? 'ghost' : 'green'" @click="theme.setMode('light')">Светлая</AppButton>
         <AppButton :variant="theme.isDark ? 'green' : 'ghost'" @click="theme.setMode('dark')">Тёмная</AppButton>
@@ -95,7 +132,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
     </Card>
 
     <!-- Вход по биометрии (passkeys) — виден только на устройствах с Face ID/отпечатком. -->
-    <Card v-if="canBiometric" title="Вход по биометрии"
+    <Card v-if="canBiometric && tab === 'profile'" title="Вход по биометрии"
           subtitle="Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />

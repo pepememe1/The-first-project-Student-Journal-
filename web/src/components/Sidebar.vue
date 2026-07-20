@@ -5,7 +5,7 @@ import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { NAV } from '@/config/nav'
-import { curatorApi } from '@/api/endpoints'
+import { curatorApi, adminApi } from '@/api/endpoints'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
@@ -14,9 +14,15 @@ const auth = useAuthStore()
 const route = useRoute()
 // Пункт «Курирование» (curatorOnly) виден только преподавателю-куратору.
 const isCurator = ref(false)
+// Счётчики у пунктов меню (nav.badge → число). Пока нужен один — накладки расписания.
+const badges = ref({})
 onMounted(async () => {
   if (auth.role === 'teacher') {
     try { isCurator.value = ((await curatorApi.groups()).data.groups || []).length > 0 } catch { /* */ }
+  }
+  if (auth.role === 'admin') {
+    // Ошибку глушим намеренно: недоступная проверка расписания не повод ломать меню.
+    try { badges.value.scheduleIssues = (await adminApi.scheduleConflicts()).data.count || 0 } catch { /* */ }
   }
 })
 const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))
@@ -46,6 +52,12 @@ function isActive(to) {
       >
         <component :is="item.icon" class="size-[18px] shrink-0" />
         <span class="truncate">{{ item.label }}</span>
+        <!-- Счётчик проблем: красный, потому что это не информация, а требующая
+             вмешательства ошибка. Ноль не показываем — пустой значок только шумит. -->
+        <span v-if="item.badge && badges[item.badge]"
+              class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full bg-red px-1.5 text-tiny font-bold text-white">
+          {{ badges[item.badge] }}
+        </span>
       </RouterLink>
     </template>
   </aside>

@@ -11,9 +11,10 @@
 // Полный снимок для преподавателей сервер строит лениво в фоне (~минута) — пока
 // готовится, показываем статус и кнопку «Проверить снова».
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { RotateCw, GraduationCap, User, Users } from '@lucide/vue'
+import { RotateCw, GraduationCap, User, Users, Download } from '@lucide/vue'
 import { scheduleApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -24,6 +25,7 @@ const KIND = { лек: ['Лекция', 'blue'], пр: ['Практика', 'gre
                сем: ['Семинар', 'muted'], конс: ['Консульт.', 'muted'], зач: ['Зачёт', 'red'], экз: ['Экзамен', 'red'] }
 
 const auth = useAuthStore()
+const toast = useToast()
 const isStudent = computed(() => auth.role === 'student')
 const isTeacher = computed(() => auth.role === 'teacher')
 
@@ -39,6 +41,31 @@ const mode = ref('')
 const teachers = ref([])
 const teacherName = ref('')
 const building = ref(false)
+
+// ── Выгрузка расписания файлом ──────────────────────────────────────────────────
+// Сервер выгружает расписание ГРУППЫ, поэтому в преподавательском виде («мои пары»,
+// где группы как таковой нет) кнопки не показываем: они молча выгрузили бы не то,
+// что человек видит на экране.
+const exporting = ref(false)
+const exportGroup = computed(() =>
+  (isTeacher.value && mode.value !== 'group') ? '' : group.value)
+
+async function downloadSchedule(fmt) {
+  if (!exportGroup.value) return
+  exporting.value = true
+  try {
+    const { data: blob } = await scheduleApi.exportFile(exportGroup.value, fmt)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `Расписание_${exportGroup.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`
+      .replaceAll('/', '-')
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    toast.error('Не удалось выгрузить расписание')
+  } finally { exporting.value = false }
+}
 
 onMounted(async () => {
   if (isTeacher.value) {
@@ -177,6 +204,20 @@ const teacherChoice = computed(() => isTeacher.value && mode.value === '')
           <button class="px-3 py-2 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">II неделя</button>
         </div>
         <AppButton variant="ghost" size="sm" @click="refresh"><RotateCw class="size-3.5" /> Обновить</AppButton>
+
+        <!-- Выгрузка расписания файлом. Показываем только для расписания ГРУППЫ:
+             у преподавательского вида группы нет, а сервер выгружает именно её. -->
+        <template v-if="exportGroup && hasAny">
+          <AppButton variant="ghost" size="sm" :disabled="exporting"
+                     @click="downloadSchedule('xlsx')">
+            <Download class="size-3.5" /> Excel
+          </AppButton>
+          <AppButton variant="ghost" size="sm" :disabled="exporting"
+                     @click="downloadSchedule('docx')">
+            <Download class="size-3.5" /> Word
+          </AppButton>
+        </template>
+
         <span v-if="data?.week" class="text-xs text-text3">Сейчас: {{ data.week === 2 ? 'II' : 'I' }} неделя</span>
       </div>
 

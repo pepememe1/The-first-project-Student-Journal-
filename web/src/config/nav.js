@@ -9,6 +9,7 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   Palette, MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
+  AlertTriangle,
 } from '@lucide/vue'
 
 export const NAV = {
@@ -42,6 +43,9 @@ export const NAV = {
     { key: 'groups', label: 'Группы', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', icon: Library, to: '/admin/subjects' },
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/admin/schedule' },
+    // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.
+    { key: 'issues', label: 'Накладки расписания', icon: AlertTriangle,
+      to: '/admin/schedule-issues', badge: 'scheduleIssues' },
     { section: 'Система' },
     { key: 'api', label: 'Настройки ИИ', icon: Settings, to: '/admin/api' },
     { key: 'server', label: 'Сервер', icon: Server, to: '/admin/server' },

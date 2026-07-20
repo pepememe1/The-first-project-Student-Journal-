@@ -120,30 +120,141 @@ def notify_login(db, login: str, title: str, body: str, data: dict | None = None
     return sent
 
 
-def notify_new_grade(db, login: str, subject: str = "", lesson_id: str = "") -> int:
-    """Уведомление студенту о новой оценке + событие для перехода в нужный журнал.
+#──────────────────────────────────────────────────────────────────────────────────────
+#ТЕКСТЫ ПИСЕМ для вкладки «Уведомления».
+#
+#⚠️ НЕ ПУТАТЬ С ТЕКСТОМ ПУША. В пуш через серверы RuStore уходит только нейтральное
+#«у вас новая оценка» — без балла, предмета и ФИО (см. шапку модуля). Тексты ниже
+#хранятся в НАШЕЙ базе и показываются уже вошедшему пользователю по защищённому каналу,
+#поэтому здесь балл и предмет называть можно — без них письмо бессмысленно.
 
-    Текст намеренно БЕЗ балла, предмета и ФИО: он идёт через посредника (см. шапку
-    модуля). В пуш уезжает только id события; предмет и занятие приложение получит от
-    НАС, открывшись. Побочный выигрыш: если токен входа сгорел, приложение запомнит id,
-    покажет вход и совершит переход после него — событие не потеряется."""
+#Посещаемость приезжает тем же полем, что и балл (Н/Б/О).
+_ATTENDANCE = {"Н": "неявка", "Б": "болезнь", "О": "уважительная причина"}
+
+
+def _subject_phrase(subject: str) -> str:
+    return f" по предмету «{subject}»" if subject else ""
+
+
+def _new_grade_words(value: str, subject: str) -> tuple:
+    """(заголовок, тело) письма о новой оценке. Тон зависит от балла.
+
+    На двойке намеренно НЕ ругаем. Уведомление читает подросток, и упрёк из приложения
+    оценку не исправит — он научит только отключать уведомления. Поэтому вместо
+    недовольства даём понятный следующий шаг."""
+    v = (value or "").strip()
+    where = _subject_phrase(subject)
+    if v in _ATTENDANCE:
+        return ("Отмечено посещение",
+                f"Преподаватель отметил{where}: {_ATTENDANCE[v]} ({v}).")
+    if v == "5":
+        return ("Отличная оценка!", f"Вам поставили 5{where}. Так держать!")
+    if v == "4":
+        return ("Хорошая оценка", f"Вам поставили 4{where}. Хороший результат!")
+    if v == "3":
+        return ("Новая оценка",
+                f"Вам поставили 3{where}. Есть куда расти — разберите тему, "
+                "и следующая будет выше.")
+    if v == "2":
+        return ("Новая оценка",
+                f"Вам поставили 2{where}. Не откладывайте: подойдите к преподавателю "
+                "и спросите, как её исправить.")
+    return ("Новая оценка",
+            f"Вам поставили оценку {v}{where}." if v else f"У вас новая оценка{where}.")
+
+
+def _changed_grade_words(old: str, new: str, subject: str) -> tuple:
+    return ("Оценка изменена",
+            f"Оценка {old} изменена на {new}{_subject_phrase(subject)}. "
+            "Если этого не ожидали — перепроверьте у преподавателя.")
+
+
+def _schedule_words(role: str, group: str) -> tuple:
+    """Тон зависит от роли — так просил заказчик: студенту по-дружески, преподавателю
+    официально."""
+    who = f" группы {group}" if group else ""
+    if role == "student":
+        return ("Расписание изменилось",
+                f"Эй! У тебя поменялось расписание{who} — загляни и проверь, "
+                "а то придёшь в выходной 😄")
+    return ("Изменение в расписании",
+            f"Здравствуйте! Расписание{who} изменилось. Просим вас сверить занятия.")
+
+
+def _create_event(db, login: str, kind: str, title: str, body: str,
+                  subject: str = "", lesson_id: str = "", payload: dict | None = None) -> str:
+    """Сохраняет событие и возвращает его id ("" — если сохранить не удалось).
+
+    Пустой id не отменяет отправку пуша: человек всё равно узнает, что что-то новое
+    есть, просто без адресного перехода. Терять уведомление из-за сбоя записи хуже."""
     import uuid
     from .models import NotifyEvent
     event_id = str(uuid.uuid4())
     try:
-        db.add(NotifyEvent(id=event_id, login=login, kind="grade",
+        db.add(NotifyEvent(id=event_id, login=login, kind=kind,
                            subject=subject or "", lesson_id=lesson_id or "",
+                           title=title, body=body, payload=payload or {},
                            created_at=_now_iso()))
         db.commit()
     except Exception as e:
         log.warning("не удалось сохранить событие уведомления: %s", e)
         db.rollback()
-        event_id = ""        #пуш всё равно отправим, просто без адресного перехода
+        return ""
+    return event_id
+
+
+def notify_new_grade(db, login: str, subject: str = "", lesson_id: str = "",
+                     value: str = "") -> int:
+    """Уведомление студенту о новой оценке + событие для перехода в нужный журнал.
+
+    Текст ПУША намеренно без балла, предмета и ФИО: он идёт через посредника (см. шапку
+    модуля). В пуш уезжает только id события; подробности приложение получит от НАС,
+    открывшись. Побочный выигрыш: если токен входа сгорел, приложение запомнит id,
+    покажет вход и совершит переход после него — событие не потеряется.
+
+    `value` необязателен: без него письмо будет обезличенным («у вас новая оценка»),
+    но ничего не сломается — так вызывали эту функцию раньше."""
+    title, body = _new_grade_words(value, subject)
+    event_id = _create_event(db, login, "grade", title, body,
+                             subject=subject, lesson_id=lesson_id,
+                             payload={"value": value} if value else {})
     return notify_login(
         db, login,
         title="Новая оценка",
         body="У вас новая оценка. Откройте журнал, чтобы посмотреть.",
         data={"type": "grade", "event_id": event_id},
+    )
+
+
+def notify_grade_changed(db, login: str, subject: str = "", lesson_id: str = "",
+                         old: str = "", new: str = "") -> int:
+    """Оценку ИСПРАВИЛИ. Отдельное событие, а не «новая оценка»: подмена одного другим
+    дезинформирует — студент пойдёт искать несуществующий новый балл."""
+    title, body = _changed_grade_words(old, new, subject)
+    event_id = _create_event(db, login, "grade_changed", title, body,
+                             subject=subject, lesson_id=lesson_id,
+                             payload={"old": old, "new": new})
+    return notify_login(
+        db, login,
+        title="Оценка изменена",
+        body="Одну из ваших оценок изменили. Откройте журнал, чтобы посмотреть.",
+        data={"type": "grade_changed", "event_id": event_id},
+    )
+
+
+def notify_schedule_changed(db, login: str, role: str = "student",
+                            group: str = "") -> int:
+    """Расписание изменилось. Рассылается ТОЛЬКО тем, кого это касается: студентам
+    затронутой группы и ведущим у неё преподавателям (см. вызывающий код) — уведомлять
+    весь колледж о правке одной ячейки значит приучить людей игнорировать уведомления."""
+    title, body = _schedule_words(role, group)
+    event_id = _create_event(db, login, "schedule_changed", title, body,
+                             payload={"group": group})
+    return notify_login(
+        db, login,
+        title="Расписание изменилось",
+        body="В расписании есть изменения. Откройте приложение, чтобы посмотреть.",
+        data={"type": "schedule_changed", "event_id": event_id},
     )
 
 

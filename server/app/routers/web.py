@@ -21,7 +21,7 @@ from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                       AuthSession, ConfigKV, TermGrade, ScheduleOverride,
-                      schedule_override_id)
+                      ScheduleJointMark, schedule_override_id, joint_mark_id)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -816,6 +816,36 @@ def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
     }
 
 
+@router.get("/schedule/export")
+def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Расписание группы файлом: fmt=xlsx|docx.
+
+    Права те же, что у просмотра (`/web/schedule`): расписание берётся с публичного
+    портала и ПДн не содержит, поэтому отдельного сужения по ролям не вводим — иначе
+    получилось бы, что смотреть можно, а сохранить те же самые данные нельзя.
+
+    Источник — СЛИТОЕ расписание (портал + правки админа), тот же `_group_schedule`,
+    что видит студент на сайте. Иначе выгруженный файл расходился бы с сайтом, и
+    доверия к нему не было бы."""
+    g = (group or user.group_name or "").strip()
+    if not g:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    data = _group_schedule(db, g)
+    if not (data and data.get("weeks")):
+        raise HTTPException(status_code=404, detail="Расписание для группы недоступно")
+
+    weeks = data.get("weeks") or {}
+    pair_times = data.get("pair_times") or []
+    if fmt == "docx":
+        from .. import docx_export
+        payload = docx_export.build_schedule_docx(g, weeks, pair_times)
+    else:
+        from .. import xlsx_export
+        payload = xlsx_export.build_schedule_xlsx(g, weeks, pair_times)
+    return _file_response(payload, f"Расписание_{g}", fmt)
+
+
 # ── Редактор расписания в админке (правки ПОВЕРХ портала) ────────────────────────────
 @router.get("/admin/schedule")
 def admin_schedule_get(group: str = Query(...), user: User = Depends(require_admin),
@@ -839,11 +869,10 @@ def admin_schedule_get(group: str = Query(...), user: User = Depends(require_adm
     }
 
 
-@router.post("/admin/schedule/override")
-def admin_schedule_override(payload: dict = Body(...), user: User = Depends(require_admin),
-                            db: Session = Depends(get_db)):
-    """Создать/обновить правку ячейки (группа, неделя, день, № пары). action: set|remove.
-    Уникальность по ячейке: повторная правка той же ячейки ЗАМЕНЯЕТ прежнюю."""
+def _apply_override_row(db: Session, payload: dict) -> ScheduleOverride:
+    """Валидация + upsert ОДНОЙ правки ячейки. Возвращает строку (без commit и аудита —
+    их делает вызывающий, чтобы пачка черновика легла одной транзакцией и одной записью
+    в аудит). Общая для одиночной правки и пачечного сохранения."""
     g = (payload.get("group") or "").strip()
     day = (payload.get("day") or "").strip()
     action = (payload.get("action") or "set").strip()
@@ -871,10 +900,110 @@ def admin_schedule_override(payload: dict = Body(...), user: User = Depends(requ
     row.kind = (payload.get("kind") or "").strip()
     row.deleted = False
     row.updated_at = _now_iso()
+    return row
+
+
+@router.post("/admin/schedule/override")
+def admin_schedule_override(payload: dict = Body(...), user: User = Depends(require_admin),
+                            db: Session = Depends(get_db)):
+    """Создать/обновить ОДНУ правку ячейки. action: set|remove."""
+    row = _apply_override_row(db, payload)
     db.commit()
     audit.log(db, actor=user.login, role="admin", action="schedule.override",
-              target=f"{g} {day} н{week} п{pair_no} [{action}] {row.subject}")
+              target=f"{row.group_name} {row.day} н{row.week} п{row.pair_no} "
+                     f"[{row.action}] {row.subject}")
     return {"ok": True, "id": row.id}
+
+
+@router.post("/admin/schedule/overrides")
+def admin_schedule_overrides(payload: dict = Body(...), user: User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
+    """Пачка правок из ЧЕРНОВИКА редактора — одной транзакцией.
+
+    Редактор копит переносы/правки локально и шлёт их сюда по кнопке «Сохранить». Либо
+    применяется всё, либо ничего: любая невалидная правка бросает 400 ДО commit, и сессия
+    закрывается без записи — половинчатого сохранения расписания не бывает."""
+    items = payload.get("overrides")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "overrides: непустой список правок")
+    if len(items) > 500:
+        raise HTTPException(400, "слишком много правок за раз")
+    ids = []
+    for it in items:
+        if not isinstance(it, dict):
+            raise HTTPException(400, "каждая правка должна быть объектом")
+        ids.append(_apply_override_row(db, it).id)
+    db.commit()
+    groups = sorted({(it.get("group") or "").strip() for it in items if it.get("group")})
+    audit.log(db, actor=user.login, role="admin", action="schedule.override",
+              target=f"пачка {len(ids)} правок: {', '.join(groups)}")
+    return {"ok": True, "count": len(ids), "ids": ids}
+
+
+@router.post("/admin/schedule/refresh")
+def admin_schedule_refresh(group: str = Query(""), all_: bool = Query(False, alias="all"),
+                           user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """«Взять расписание с ВСГУТУ» — форс-обновление кэша портала (сервер держит его 3 ч).
+
+    Обновляется ОСНОВА, поверх которой лежат правки; сами правки это не трогает (для их
+    удаления есть /reset). all=1 — пересобрать полный снимок (нужен расписаниям
+    преподавателей): помечаем кэш протухшим и запускаем сборку В ФОНЕ, ~68 GET блокировать
+    запрос нельзя (одноядерный VPS)."""
+    from .. import schedule_web
+    if all_:
+        schedule_web.invalidate_all()
+        _snap, building = schedule_web.full_state()   #стартует фоновую пересборку
+        audit.log(db, actor=user.login, role="admin", action="schedule.refresh",
+                  target="ВСЕ группы")
+        return {"ok": True, "all": True, "building": building}
+    g = (group or "").strip()
+    if not g:
+        raise HTTPException(400, "Нужна group или all=1")
+    data = schedule_web.get_group(g, force=True)
+    audit.log(db, actor=user.login, role="admin", action="schedule.refresh", target=g)
+    return {"ok": True, "group": g, "available": bool(data and data.get("weeks"))}
+
+
+@router.post("/admin/schedule/reset")
+def admin_schedule_reset(group: str = Query(""), all_: bool = Query(False, alias="all"),
+                         user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Сброс правок: расписание снова берётся с портала как есть.
+
+    ⚠️ ScheduleOverride СИНКУЕТСЯ, поэтому правки не удаляем физически, а помечаем
+    надгробиями (deleted=True + свежий updated_at) — иначе на десктопе они воскреснут при
+    следующем pull. all=1 РАЗРУШИТЕЛЕН: стирает ВСЕ ручные правки колледжа безвозвратно
+    (UI обязан спросить подтверждение)."""
+    q = db.query(ScheduleOverride).filter(ScheduleOverride.deleted == False)  # noqa: E712
+    if not all_:
+        g = (group or "").strip()
+        if not g:
+            raise HTTPException(400, "Нужна group или all=1")
+        q = q.filter(ScheduleOverride.group_name == g)
+    rows = q.all()
+    now = _now_iso()
+    for r in rows:
+        r.deleted = True
+        r.updated_at = now
+    db.commit()
+    audit.log(db, actor=user.login, role="admin", action="schedule.reset",
+              target="ВСЕ группы" if all_ else (group or ""),
+              detail=f"снято правок: {len(rows)}")
+    return {"ok": True, "reset": len(rows), "all": all_}
+
+
+@router.get("/admin/schedule/slot-conflicts")
+def admin_slot_conflicts(group: str = Query(...), week: int = Query(...),
+                         day: str = Query(...), pair_no: int = Query(...),
+                         room: str = Query(""), teacher: str = Query(""),
+                         subject: str = Query(""),
+                         user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Накладки конкретного слота при переносе пары — для подсветки сразу после drag-drop.
+
+    Проверяются ПРЕДЛОЖЕННЫЕ (ещё не сохранённые) аудитория/преподаватель против других
+    групп. building=true → снимок портала ещё собирается, проверка неполна."""
+    from .. import schedule_conflicts
+    return schedule_conflicts.slot_conflicts(db, group, week, day, pair_no,
+                                             room=room, teacher=teacher, subject=subject)
 
 
 @router.delete("/admin/schedule/override/{ov_id:path}")
@@ -889,6 +1018,107 @@ def admin_schedule_override_delete(ov_id: str, user: User = Depends(require_admi
         audit.log(db, actor=user.login, role="admin", action="schedule.override",
                   target=f"удалена правка #{ov_id}")
     return {"ok": True}
+
+
+# ── Сверка расписаний: накладки и совместные пары ────────────────────────────────────
+@router.get("/admin/schedule/conflicts")
+def admin_schedule_conflicts(user: User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
+    """Накладки: один преподаватель (или аудитория) в одном слоте у разных групп.
+
+    ⚠️ `building=true` означает «полный снимок портала ещё собирается», а НЕ «накладок
+    нет». Клиент обязан показывать это разными состояниями: пустой список при
+    незавершённой сборке — не повод сообщать составителю, что всё чисто."""
+    from .. import schedule_conflicts
+    return schedule_conflicts.find_conflicts(db)
+
+
+@router.post("/admin/schedule/joint")
+def admin_schedule_joint_set(payload: dict = Body(...), user: User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
+    """Пометить слот как СОВМЕСТНУЮ пару — законное совпадение, а не ошибка.
+
+    Ключ детерминированный, поэтому повторная пометка того же слота заменяет прежнюю и
+    дублей не создаёт."""
+    kind = (payload.get("kind") or "teacher").strip()
+    if kind not in ("teacher", "room"):
+        raise HTTPException(status_code=400, detail="kind: teacher или room")
+    value = (payload.get("value") or "").strip()
+    day = (payload.get("day") or "").strip()
+    if not value or not day:
+        raise HTTPException(status_code=400, detail="Нужны value и day")
+    try:
+        week = int(payload.get("week") or 0)
+        pair_no = int(payload.get("pair_no") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="week и pair_no — числа") from None
+
+    mid = joint_mark_id(kind, week, day, pair_no, value)
+    row = db.get(ScheduleJointMark, mid)
+    if row is None:
+        row = ScheduleJointMark(id=mid, created_at=_now_iso(), created_by=user.login or "")
+        db.add(row)
+    row.kind, row.week, row.day, row.pair_no = kind, week, day, pair_no
+    row.value = value
+    row.note = (payload.get("note") or "").strip()[:500]
+    db.commit()
+    audit.log(db, actor=user.login, role="admin", action="schedule.joint",
+              target=f"{kind} {value}", detail=f"неделя {week}, {day}, пара {pair_no}")
+    return {"ok": True, "id": mid}
+
+
+@router.delete("/admin/schedule/joint/{mark_id:path}")
+def admin_schedule_joint_delete(mark_id: str, user: User = Depends(require_admin),
+                                db: Session = Depends(get_db)):
+    """Снять отметку «совместная пара» — слот снова начнёт считаться накладкой."""
+    row = db.get(ScheduleJointMark, mark_id)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+        audit.log(db, actor=user.login, role="admin", action="schedule.joint",
+                  target=f"снята отметка #{mark_id}")
+    return {"ok": True}
+
+
+@router.post("/admin/schedule/publish")
+def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(require_admin),
+                           db: Session = Depends(get_db)):
+    """Разослать уведомление об изменении расписания ГРУППЫ.
+
+    Почему отдельная кнопка, а не автоматическая рассылка на каждую правку ячейки:
+    админ правит расписание десятками ячеек подряд, и «правка = уведомление» означало бы
+    три десятка пушей студенту за минуту. После такого уведомления отключают, и мы
+    теряем канал целиком — включая действительно важные сообщения об оценках.
+
+    Адресаты (решение Влада): студенты ЭТОЙ группы и преподаватели, ведущие у неё. Всему
+    колледжу об изменении одной группы знать незачем — это и шум, и лишние сведения о
+    чужих группах."""
+    group = (payload.get("group") or "").strip()
+    if not group:
+        raise HTTPException(status_code=400, detail="Нужна group")
+
+    students = db.query(User).filter(
+        User.role == "student", User.group_name == group,
+        User.deleted == False).all()  # noqa: E712
+    #Преподаватель считается ведущим у группы, если у него есть занятия по её предметам.
+    subjects_here = {row.subject for row in db.query(Lesson).filter(
+        Lesson.group_name == group, Lesson.deleted == False).all() if row.subject}  # noqa: E712
+    teachers = [t for t in db.query(User).filter(
+        User.role == "teacher", User.deleted == False).all()  # noqa: E712
+        if t.login and (set(t.subjects or []) & subjects_here)]
+
+    from .. import rustore_push
+    sent = 0
+    for person, role in ([(s, "student") for s in students]
+                         + [(t, "teacher") for t in teachers]):
+        if not person.login:
+            continue        #без логина уведомлять некого (внешний ростер преподавателя)
+        rustore_push.notify_schedule_changed(db, person.login, role=role, group=group)
+        sent += 1
+    audit.log(db, actor=user.login, role="admin", action="schedule.publish",
+              target=group, detail=f"уведомлено: {sent}")
+    return {"ok": True, "notified": sent,
+            "students": len(students), "teachers": len(teachers)}
 
 
 # «ВЕКТОР» ─────────────────────────────────────────────────────────────────────────
@@ -1367,6 +1597,10 @@ def teacher_set_grade(payload: dict = Body(...),
     now = _now_iso()
     cleared = (value == "")
     row = db.get(Grade, gid)
+    #Прежнее значение запоминаем ДО перезаписи — по нему отличаем «поставили впервые»
+    #от «исправили». Ранее СНЯТАЯ оценка (надгробие) прежним значением не считается:
+    #иначе простановка балла после снятия выглядела бы как исправление.
+    previous = "" if (row is None or row.deleted) else (row.grade or "")
     if row is None:
         row = Grade(id=gid, student_f=surname, student_n=name, lesson_id=lesson_id)
         db.add(row)
@@ -1378,13 +1612,20 @@ def teacher_set_grade(payload: dict = Body(...),
     #найден выше (проверка «состоит в группе занятия»), так что это бесплатно.
     row.student_id = stud.id
     db.commit()
-    #Пуш студенту о новой оценке. СНЯТИЕ оценки не уведомляем: «у вас новая оценка»
-    #при её удалении — прямая дезинформация. Ошибки внутри не всплывают: сбой доставки
-    #не должен мешать преподавателю поставить балл.
-    if not cleared and stud.login:
+    #Пуш студенту. СНЯТИЕ оценки не уведомляем: «у вас новая оценка» при её удалении —
+    #прямая дезинформация. Ошибки внутри не всплывают: сбой доставки не должен мешать
+    #преподавателю поставить балл.
+    #Повторное сохранение ТОГО ЖЕ балла молчит: ничего не изменилось, а лишнее
+    #уведомление приучает отключать уведомления вовсе.
+    if not cleared and stud.login and previous != value:
         from .. import rustore_push
-        rustore_push.notify_new_grade(db, stud.login, subject=lesson.subject,
-                                      lesson_id=lesson_id)
+        if previous:
+            rustore_push.notify_grade_changed(db, stud.login, subject=lesson.subject,
+                                              lesson_id=lesson_id,
+                                              old=previous, new=value)
+        else:
+            rustore_push.notify_new_grade(db, stud.login, subject=lesson.subject,
+                                          lesson_id=lesson_id, value=value)
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",

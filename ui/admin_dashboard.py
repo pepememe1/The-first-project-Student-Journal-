@@ -792,9 +792,24 @@ class AdminDashboard(QWidget):
         from schedule_editor import ScheduleEditor
         tabs = QTabWidget()
         tabs.addTab(ScheduleView(role="admin", login="admin", app_hint=""), "Просмотр")
-        tabs.addTab(ScheduleEditor(), "Редактор")   #правки поверх портала (синкуются)
+        self._schedule_editor = ScheduleEditor()   #правки поверх портала (синкуются)
+        self._editor_tab_index = tabs.addTab(self._schedule_editor, "Редактор")
+        #Уход с вкладки «Редактор» с несохранённым черновиком — переспрос (как на вебе).
+        tabs.currentChanged.connect(self._on_schedule_tab_change)
+        self._schedule_tabs = tabs
         self.pages["schedule"] = tabs
         self.stack.addWidget(tabs)
+
+    def _on_schedule_tab_change(self, index):
+        """Переключение Редактор→Просмотр при несохранённом черновике: переспрос."""
+        ed = getattr(self, "_schedule_editor", None)
+        if ed is None or index == self._editor_tab_index:
+            return
+        if ed.has_unsaved() and not ed.confirm_leave():
+            #вернуть на «Редактор», не потеряв черновик
+            self._schedule_tabs.blockSignals(True)
+            self._schedule_tabs.setCurrentIndex(self._editor_tab_index)
+            self._schedule_tabs.blockSignals(False)
 
     #API ключ
 
@@ -2224,6 +2239,13 @@ class AdminDashboard(QWidget):
     def _switch(self, key):
         if getattr(self, '_switching', False):
             return
+        #Уход из раздела «Расписание» с несохранённым черновиком редактора — переспрос.
+        #Если пользователь передумал — оставляем его в расписании и не переключаемся.
+        if getattr(self, "_current_key", None) == "schedule" and key != "schedule":
+            ed = getattr(self, "_schedule_editor", None)
+            if ed is not None and ed.has_unsaved() and not ed.confirm_leave():
+                self.sidebar.set_active("schedule")
+                return
         self._switching = True
         try:
             self._stop_monitor()      #уходя с любой вкладки — гасим опрос мониторинга

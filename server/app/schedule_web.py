@@ -148,16 +148,36 @@ def teacher_weeks(snap, name: str) -> dict | None:
     return out
 
 
-def get_group(name: str) -> dict | None:
-    """Снимок расписания одной группы (dict как GroupSchedule.to_dict) или None."""
+def invalidate_all() -> None:
+    """Сбросить ВЕСЬ кэш портала: индекс групп, снимки групп и полный снимок.
+
+    Нужен кнопке «Взять с ВСГУТУ» — форс-обновление основы, поверх которой лежат правки
+    администратора. Полный снимок помечаем протухшим (ts=0), но НЕ дёргаем сборку здесь:
+    её запустит следующий full_state() в фоне (на одноядерном VPS блокировать нельзя)."""
+    with _lock:
+        _index["ts"] = 0.0
+        _index["pairs"] = []
+        _groups.clear()
+        _full["ts"] = 0.0
+
+
+def get_group(name: str, force: bool = False) -> dict | None:
+    """Снимок расписания одной группы (dict как GroupSchedule.to_dict) или None.
+
+    force=True — игнорировать кэш и сходить на портал заново (кнопка «Взять с ВСГУТУ»
+    для одной группы). Обычные заходы кэш используют (портал не дёргается на каждый
+    просмотр)."""
     name = (name or "").strip()
     if not name:
         return None
-    with _lock:
-        c = _groups.get(name)
-        if c and time.time() - c["ts"] < _TTL:
-            return c["data"]
+    if not force:
+        with _lock:
+            c = _groups.get(name)
+            if c and time.time() - c["ts"] < _TTL:
+                return c["data"]
     try:
+        if force:
+            _load_index(force=True)   #индекс групп мог устареть — обновляем и его
         href = _href_for(name)
         if not href:
             return None

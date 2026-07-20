@@ -261,6 +261,42 @@ def schedule_override_id(group: str, week, day: str, pair_no) -> str:
     return f"sovr:{group}|{int(week)}|{day}|{int(pair_no)}"
 
 
+class ScheduleJointMark(Base):
+    """Отметка «совместная пара» — законное совпадение, а не накладка.
+
+    Один преподаватель в одно время у ДВУХ групп обычно означает ошибку составителя.
+    Но лекция, которую читают сразу двум группам в одной аудитории, — нормальная
+    практика, и детектор накладок обязан такие слоты пропускать, иначе админ утонет в
+    ложных тревогах и перестанет смотреть в центр проблем вовсе.
+
+    Почему ОТДЕЛЬНАЯ таблица, а не колонка в ScheduleOverride (решение Влада):
+      • пометить нужно и ПОРТАЛЬНУЮ пару, которой в overrides нет вообще; иначе ради
+        одной галочки пришлось бы создавать override-копию и тем самым подменять данные
+        портала своими;
+      • ScheduleOverride синхронизируется с десктопом, а это чисто серверная деталь
+        админского редактора — в SYNC_MODELS ей делать нечего.
+
+    Ключ — слот + то, что совпало: kind='teacher' → ФИО, kind='room' → аудитория."""
+    __tablename__ = "schedule_joint_marks"
+    id = Column(String, primary_key=True)
+    kind = Column(String, default="teacher")    #teacher | room
+    week = Column(Integer, default=1)
+    day = Column(String, default="")
+    pair_no = Column(Integer, default=0)
+    value = Column(String, default="")          #ФИО преподавателя либо номер аудитории
+    note = Column(String, default="")           #зачем помечено (для следующего админа)
+    created_at = Column(String, default="")
+    created_by = Column(String, default="")
+
+
+def joint_mark_id(kind: str, week, day: str, pair_no, value: str) -> str:
+    """Детерминированный ключ отметки: повторная пометка того же слота ЗАМЕНЯЕТ прежнюю,
+    а не плодит дубли. Значение приводим к нижнему регистру без крайних пробелов —
+    «Иванов И.И.» и «иванов и.и. » это один и тот же преподаватель."""
+    v = (value or "").strip().lower()
+    return f"joint:{kind}|{int(week)}|{day}|{int(pair_no)}|{v}"
+
+
 #Ключи оценок — ЭТАП 3 миграции. Формат один на обе платформы (§10), считается ТОЛЬКО
 #здесь и в десктопном зеркале (core.grade_id / core.term_grade_id): раньше строка
 #f"{f}|{n}|{lesson_id}" собиралась в семи местах, и любое расхождение молча плодило
@@ -333,12 +369,26 @@ class NotifyEvent(Base):
     __tablename__ = "notify_events"
     id = Column(String, primary_key=True)               #uuid, он же уезжает в пуш
     login = Column(String, index=True, default="")      #владелец: чужому не отдаём
-    kind = Column(String, default="grade")              #задел: расписание, аттестация
+    #grade — новая оценка, grade_changed — оценку исправили, schedule_changed — правка
+    #расписания ЕГО группы (о чужих группах не уведомляем: это и спам, и лишние сведения).
+    kind = Column(String, default="grade")
     #Куда открыть. Предмет нужен, чтобы попасть сразу на нужную вкладку журнала.
     subject = Column(String, default="")
     lesson_id = Column(String, default="")
     created_at = Column(String, default="", index=True)
     read_at = Column(String, default="")                #когда открыли (для значка)
+
+    #Текст письма для вкладки «Уведомления». Рендерится на СЕРВЕРЕ в момент создания, а
+    #не на клиенте при показе. Причин две. Тон зависит от роли (студенту — дружелюбно,
+    #преподавателю — официально), и три платформы неизбежно разъехались бы в
+    #формулировках. И главное: история должна оставаться правдивой — правка шаблона не
+    #имеет права задним числом переписывать то, что человек уже получил.
+    #⚠️ В САМ ПУШ это не уходит (см. шапку rustore_push): тело идёт через посредника.
+    title = Column(String, default="")
+    body = Column(String, default="")
+    #Подробности показа: {"old": "3", "new": "5"} у смены оценки, {"group": "К-24"} у
+    #расписания. JSON, а не отдельные колонки — набор полей зависит от kind и будет расти.
+    payload = Column(JSON, default=dict)
 
 
 SYNC_MODELS = {

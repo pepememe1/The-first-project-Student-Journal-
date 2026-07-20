@@ -62,6 +62,50 @@ def load_cached() -> Snapshot | None:
         return None
 
 
+def refresh_all() -> "Snapshot | None":
+    """Заново скачать ПОЛНЫЙ снимок расписания с портала ВСГУТУ и сохранить в кэш.
+
+    Кнопка «Взять с ВСГУТУ (все группы)». Сетевая операция (~68 GET, десятки секунд) —
+    ВЫЗЫВАТЬ ТОЛЬКО ИЗ ФОНОВОГО ПОТОКА, иначе интерфейс замрёт. Правки (overrides) это не
+    трогает — обновляется лишь портальная основа, поверх которой они лежат."""
+    from schedule import parser
+    snap = parser.build_snapshot()
+    save(snap)
+    return snap
+
+
+def refresh_group(app_group: str) -> bool:
+    """Обновить с портала ОДНУ группу и вписать её в кэш (остальные не трогаем).
+
+    Кнопка «Взять с ВСГУТУ» для выбранной группы: быстрее полного снимка (1 GET вместо
+    ~68). Тоже сетевая — из фонового потока. teacher_index при этом не пересобирается
+    (он нужен расписаниям преподавателей, а не редактору группы)."""
+    from schedule import parser
+    from schedule.model import Snapshot
+    if not app_group:
+        return False
+    pairs = parser.list_college_groups(parser.fetch_text(parser.COLLEGE_INDEX))
+    site_name, href = app_group, None
+    for name, h in pairs:
+        if name == app_group:
+            href = h
+            break
+    if href is None:                       #имя в журнале ≠ имя на портале — подбираем
+        site_name = guess_group(app_group, [n for n, _ in pairs]) or app_group
+        for name, h in pairs:
+            if name == site_name:
+                href = h
+                break
+    if href is None:
+        return False
+    page = parser.fetch_text(parser.BASE_URL + parser.COLLEGE_DIR + href)
+    gs = parser.parse_group_page(page, name=site_name, href=href)
+    snap = load_cached() or Snapshot()
+    snap.groups[site_name] = gs
+    save(snap)
+    return True
+
+
 def subjects_all() -> list:
     """Все уникальные предметы из снимка расписания (СПАРСЕНЫ С САЙТА ВСГУТУ).
 

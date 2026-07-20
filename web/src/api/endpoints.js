@@ -43,7 +43,14 @@ export const meApi = {
   deletePushToken: (token) => api.delete('/me/push-token', { data: { token } }),
   // Куда открыть экран по нажатому уведомлению (детали НЕ приходят в самом пуше).
   getEvent: (id) => api.get(`/me/events/${id}`),
+  // Без параметров сервер отдаёт ТОЛЬКО непрочитанные — так исторически ждёт
+  // мобильное приложение, поэтому вызов оставлен как есть.
   unreadEvents: () => api.get('/me/events'),
+  // Вкладка «Уведомления»: вся почта, включая прочитанное.
+  events: (params = {}) => api.get('/me/events', { params: { filter: 'all', ...params } }),
+  unreadCount: () => api.get('/me/events/unread-count'),
+  markEventRead: (id) => api.post(`/me/events/${id}/read`),
+  markAllEventsRead: () => api.post('/me/events/read-all'),
 }
 
 // ВЕБ-ПОДТВЕРЖДЕНИЕ УСТРОЙСТВА (для teacher/admin) ────────────────────────────────
@@ -147,6 +154,26 @@ export const adminApi = {
   schedule: (group) => api.get('/web/admin/schedule', { params: { group } }),
   setScheduleOverride: (payload) => api.post('/web/admin/schedule/override', payload),
   deleteScheduleOverride: (id) => api.delete(`/web/admin/schedule/override/${encodeURIComponent(id)}`),
+  // Пачечное сохранение черновика редактора (переносы/правки) — одной транзакцией.
+  saveScheduleOverrides: (overrides) => api.post('/web/admin/schedule/overrides', { overrides }),
+  // «Взять с ВСГУТУ» — форс-обновление кэша портала (для группы или для всех — в фоне).
+  refreshSchedule: (group = '', all = false) =>
+    api.post('/web/admin/schedule/refresh', null, { params: all ? { all: 1 } : { group } }),
+  // Сброс правок: снова берётся портал. all=1 стирает ВСЕ правки колледжа (подтверждать!).
+  resetSchedule: (group = '', all = false) =>
+    api.post('/web/admin/schedule/reset', null, { params: all ? { all: 1 } : { group } }),
+  // Накладки конкретного слота при переносе пары (подсветка сразу после drag-drop).
+  slotConflicts: (params) => api.get('/web/admin/schedule/slot-conflicts', { params }),
+  // Сверка расписаний: накладки (один преподаватель/аудитория в одном слоте у разных
+  // групп). ⚠️ Ответ с building=true означает «снимок портала ещё собирается», а НЕ
+  // «накладок нет» — показывать эти состояния надо по-разному.
+  scheduleConflicts: () => api.get('/web/admin/schedule/conflicts'),
+  // Пометить слот совместной парой (законное совпадение) / снять пометку.
+  setScheduleJoint: (payload) => api.post('/web/admin/schedule/joint', payload),
+  deleteScheduleJoint: (id) => api.delete(`/web/admin/schedule/joint/${encodeURIComponent(id)}`),
+  // Разослать уведомление об изменении расписания группы (явная кнопка, а не автомат
+  // на каждую правку ячейки — иначе студент получит десятки уведомлений подряд).
+  publishSchedule: (group) => api.post('/web/admin/schedule/publish', { group }),
   // Инфо-панель «Сервер и сайт» (адрес, БД, шифрование, ГОСТ, онлайн, период).
   serverInfo: () => api.get('/web/admin/server-info'),
   // Служебное — уже реализовано на сервере:
@@ -162,6 +189,10 @@ export const scheduleApi = {
   groups: () => api.get('/web/schedule/groups'),
   // Расписание преподавателя (пункт 2): без name сервер матчит ФИО текущего юзера.
   teacher: (name = '') => api.get('/web/schedule/teacher', { params: { name } }),
+  // Выгрузка расписания группы файлом (fmt: xlsx|docx). Строится из ТОГО ЖЕ слитого
+  // расписания (портал + правки админа), что показано на сайте.
+  exportFile: (group, fmt = 'xlsx') =>
+    api.get('/web/schedule/export', { params: { group, fmt }, responseType: 'blob' }),
 }
 
 // «ВЕКТОР» — серверный анти-галлюцинационный конвейер (intents→SQL→анонимизация→LLM)

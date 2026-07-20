@@ -30,6 +30,7 @@ import AdminRegistrations from '@/pages/admin/AdminRegistrations.vue'
 import AdminGroups from '@/pages/admin/AdminGroups.vue'
 import AdminSubjects from '@/pages/admin/AdminSubjects.vue'
 import AdminSchedule from '@/pages/admin/AdminSchedule.vue'
+import AdminScheduleIssues from '@/pages/admin/AdminScheduleIssues.vue'
 import AdminSessions from '@/pages/admin/AdminSessions.vue'
 import AdminRequests from '@/pages/admin/AdminRequests.vue'
 import ThemePage from '@/pages/admin/ThemePage.vue'
@@ -90,6 +91,8 @@ const routes = [
       page('groups', AdminGroups, 'Группы'),
       page('subjects', AdminSubjects, 'Предметы'),
       page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ'),
+      page('schedule-issues', AdminScheduleIssues, 'Накладки расписания',
+           'Один преподаватель или аудитория заняты дважды'),
       { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
       page('server', AdminServer, 'Сервер и сайт', 'Адрес, БД, шифрование, статус'),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),

@@ -42,10 +42,18 @@ class TeacherDashboard(QWidget):
             ("__label__", "", "Журнал"),
             ("journal",  "clipboard", "Журнал"),
             ("students", "users",     "Студенты"),
+        ]
+        #Вкладка куратора появляется, ТОЛЬКО если админ назначил группы. Список едет
+        #синком в users.curated_groups, поэтому куратор работает и офлайн — как весь
+        #остальной десктоп (инвариант §1), без похода на сервер.
+        if self._curated_groups():
+            items.append(("curator", "check", "Курирование"))
+        items += [
             ("schedule", "calendar",  "Расписание"),
             ("stats",    "chart",     "Статистика"),
             ("ai",       "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
+            ("notifications", "alert-circle", "Уведомления"),
             ("profile",  "user",      "Профиль"),
         ]
         self.sidebar = Sidebar(items)
@@ -57,9 +65,12 @@ class TeacherDashboard(QWidget):
         lay.addLayout(body)
         self._build_journal()
         self._build_students()
+        if self._curated_groups():
+            self._build_curator()
         self._build_schedule()
         self._build_stats()
         self._build_ai()
+        self._build_notifications()
         self._build_profile()
         self.sidebar.set_active("journal")
         self._init_selectors()
@@ -969,6 +980,135 @@ class TeacherDashboard(QWidget):
         self._stud_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         lay.addWidget(self._stud_table, 1)
         self.pages["students"] = w; self.stack.addWidget(w)
+
+    def _build_notifications(self):
+        """Вкладка «Уведомления» — письма об оценках и изменениях расписания."""
+        from notifications_view import NotificationsView
+        w = NotificationsView()
+        self.pages["notifications"] = w
+        self.stack.addWidget(w)
+
+    #Курирование (ТОЛЬКО ЧТЕНИЕ)
+
+    def _curated_groups(self) -> list:
+        """Группы, которые преподаватель курирует. Пусто → он не куратор."""
+        return [g for g in (self.teacher_data.get("curated_groups") or []) if g]
+
+    def _build_curator(self):
+        """Вкладка «Курирование»: группы → предметы → студенты с оценками.
+
+        ⚠️ СТРОГО ТОЛЬКО ЧТЕНИЕ, как и на вебе (`/web/curator/*`). Куратор видит ВСЕ
+        предметы своей группы, включая чужие, — но не ставит оценки: журнал ведёт
+        преподаватель предмета. Поэтому здесь нет ни одной кнопки правки, а таблица
+        нередактируема. Ослабить это нельзя: иначе куратор сможет менять чужие оценки
+        мимо проверки прав (§6)."""
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
+        lay.addWidget(title_lbl("Курирование", 20))
+        lay.addWidget(lbl("Успеваемость курируемых групп по всем предметам "
+                          "(только просмотр)", 12, C['text3']))
+
+        row = QHBoxLayout()
+        self._cur_group_combo = combo(self._curated_groups())
+        self._cur_subj_combo = combo([])
+        self._cur_group_combo.currentTextChanged.connect(self._on_curator_group)
+        self._cur_subj_combo.currentTextChanged.connect(self._refresh_curator)
+        row.addWidget(lbl("Группа:", 12, C['text3'])); row.addWidget(self._cur_group_combo)
+        row.addWidget(lbl("Предмет:", 12, C['text3'])); row.addWidget(self._cur_subj_combo)
+        row.addStretch()
+        lay.addLayout(row)
+
+        self._cur_hint = lbl("", 12, C['text3'])
+        lay.addWidget(self._cur_hint)
+
+        self._cur_table = QTableWidget()
+        self._cur_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._cur_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        lay.addWidget(self._cur_table, 1)
+        self.pages["curator"] = w; self.stack.addWidget(w)
+        self._on_curator_group()
+
+    def _curator_subjects(self, group: str) -> list:
+        """Предметы, по которым у группы РЕАЛЬНО есть занятия.
+
+        Берём из самих занятий, а не из справочника предметов: справочник и журнал
+        расходятся (предмет могли переименовать или не завести вовсе), и тогда куратор
+        не увидел бы существующие оценки — то есть решил бы, что их нет. Данные важнее
+        справочника.
+
+        Доступ к базе — через DBManager, как и везде на десктопе (инвариант §9)."""
+        from core import DBManager
+        #Соединение ОБЯЗАТЕЛЬНО закрываем: get_conn() открывает новое на каждый вызов, и
+        #брошенное живёт до сборщика мусора. На каждое переключение группы это утечка,
+        #а на Windows ещё и держит файл базы открытым.
+        conn = None
+        try:
+            conn = DBManager.get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT DISTINCT subject FROM lessons "
+                "WHERE group_name=? AND subject<>'' "
+                "AND (deleted IS NULL OR deleted=0) ORDER BY subject",
+                (group,))
+            return [r[0] for r in cur.fetchall() if r[0]]
+        except Exception as e:
+            log.get("teacher_dashboard").warning(f"[curator] предметы группы {group}: {e}")
+            return []
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _on_curator_group(self):
+        group = self._cur_group_combo.currentText()
+        subjects = self._curator_subjects(group) if group else []
+        self._cur_subj_combo.blockSignals(True)
+        self._cur_subj_combo.clear(); self._cur_subj_combo.addItems(subjects)
+        self._cur_subj_combo.blockSignals(False)
+        self._refresh_curator()
+
+    def _refresh_curator(self):
+        group = self._cur_group_combo.currentText()
+        subject = self._cur_subj_combo.currentText()
+        table = self._cur_table
+        if not (group and subject):
+            table.setRowCount(0); table.setColumnCount(0)
+            self._cur_hint.setText("Для этой группы пока нет занятий." if group else "")
+            return
+        try:
+            book = GradeBook(group, subject)
+        except Exception as e:
+            log.get("teacher_dashboard").warning(f"[curator] книга {group}/{subject}: {e}")
+            table.setRowCount(0); table.setColumnCount(0)
+            self._cur_hint.setText("Не удалось прочитать журнал группы.")
+            return
+
+        lessons = book.lessons
+        students = book.spisok_stud
+        self._cur_hint.setText(f"Студентов: {len(students)} · занятий: {len(lessons)}")
+        table.setColumnCount(3 + len(lessons))
+        table.setHorizontalHeaderLabels(
+            ["Фамилия", "Имя"] + [f"{l.type} №{l.number}" for l in lessons] + ["Средн."])
+        table.setRowCount(len(students))
+
+        #Средний балл — ТОЛЬКО через grading.py (инвариант §8): своя формула тут
+        #разошлась бы с журналом преподавателя и с сайтом.
+        import grading
+        try:
+            cfg = get_store()._config()
+        except Exception:
+            cfg = {}
+        pairs = grading.pairs_from_objects(lessons)
+        for r, st in enumerate(students):
+            table.setItem(r, 0, QTableWidgetItem(st.f))
+            table.setItem(r, 1, QTableWidgetItem(st.n))
+            for c, l in enumerate(lessons, start=2):
+                table.setItem(r, c, QTableWidgetItem(st.records.get(l.id, "")))
+            avg = grading.practice_average(pairs, st.records, cfg)
+            table.setItem(r, 2 + len(lessons),
+                          QTableWidgetItem(f"{avg:.2f}" if avg else "—"))
 
     def _build_schedule(self):
         """Вкладка «Расписание» — пары преподавателя (инверсия групповых расписаний

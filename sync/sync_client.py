@@ -346,3 +346,33 @@ class SyncClient:
         r = self._req("GET", "/admin/events", params={"since": since}, timeout=5)
         r.raise_for_status()
         return r.json()
+
+    #Уведомления пользователя (вкладка «Уведомления» в профиле).
+    #События серверные по своей природе (их порождает сервер при выставлении оценки и
+    #правке расписания), поэтому в синк они НЕ входят и читаются по HTTP. Это чтение,
+    #а не операция над журналом, так что offline-first (§1) не нарушается: нет связи —
+    #показываем то, что успели загрузить, и честно говорим об отсутствии сети.
+    def list_notifications(self, only_unread: bool = False, limit: int = 100) -> dict:
+        """Письма пользователя. {items:[{id,kind,title,body,created_at,read_at}], unread}.
+
+        По умолчанию просим ВСЕ: вкладка показывает и прочитанные, как почта. Сервер без
+        параметров отдаёт только непрочитанные (так исторически ждёт мобильное
+        приложение), поэтому filter передаём явно."""
+        params = {"limit": limit}
+        if not only_unread:
+            params["filter"] = "all"
+        r = self._req("GET", "/me/events", params=params, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def mark_notification_read(self, event_id: str) -> dict:
+        """Отметить одно письмо прочитанным."""
+        r = self._req("POST", f"/me/events/{event_id}/read", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def mark_all_notifications_read(self) -> dict:
+        """«Прочитать все»."""
+        r = self._req("POST", "/me/events/read-all", timeout=8)
+        r.raise_for_status()
+        return r.json()
