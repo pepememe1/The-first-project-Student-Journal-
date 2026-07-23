@@ -15,6 +15,7 @@ const cfg = ref({
   gigachat_scope: 'GIGACHAT_API_B2B',
   gigachat_model: 'GigaChat',
   local_model: 'qwen2.5:3b',
+  tts_enabled: true,
 })
 const showKey = ref(false)
 const loading = ref(false)
@@ -68,6 +69,16 @@ async function test() {
           </span>
         </label>
       </div>
+    </Card>
+
+    <!-- Озвучка (TTS): глобальный рубильник. Выключение прячет озвучку у всех
+         пользователей. Персональный выбор (вкл/голос) каждый делает в своём профиле. -->
+    <Card title="Озвучка ответов (голос Вектора)"
+          subtitle="Синтез речи на сервере. Выключите, если сервер перегружен — пользователи не увидят озвучку.">
+      <label class="flex cursor-pointer items-center justify-between gap-3">
+        <span class="text-sm text-text">Разрешить озвучку на сервере</span>
+        <input type="checkbox" v-model="cfg.tts_enabled" class="size-5 accent-[var(--gb-accent)]" />
+      </label>
     </Card>
 
     <!-- GigaChat: ключ + скоуп -->

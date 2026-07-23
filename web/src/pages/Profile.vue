@@ -2,9 +2,10 @@
 // Profile — «Профиль» (порт dashboards "profile"): карточка пользователя + оформление
 // (тема роумится через /me/prefs, поэтому доступна каждому — как у студента в проге).
 import { computed, ref, onMounted } from 'vue'
-import { Check, Fingerprint, Trash2, ShieldCheck } from '@lucide/vue'
+import { Check, Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { useTtsStore } from '@/stores/tts'
 import { PRESETS, swatchColors } from '@/theme/palette'
 import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
@@ -14,6 +15,13 @@ import NotificationsInbox from '@/components/NotificationsInbox.vue'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
+const tts = useTtsStore()
+
+// Проба голоса при выборе — короткая фраза от лица Вектора, чтобы услышать разницу.
+function previewVoice(v) {
+  tts.setVoice(v)
+  if (tts.enabled) tts.speak('Привет! Я Вектор. Буду озвучивать ответы этим голосом.')
+}
 
 // Вкладки профиля: настройки и почта уведомлений.
 const tab = ref('profile')
@@ -51,6 +59,7 @@ async function loadPasskeys() {
 }
 onMounted(async () => {
   loadUnread()
+  tts.refreshStatus()
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
 })
@@ -128,6 +137,42 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
           </span>
           <span class="truncate text-xs font-medium text-text">{{ p.name }}</span>
         </button>
+      </div>
+    </Card>
+
+    <!-- Озвучка Вектора: включение и выбор голоса. Настройка устройства (хранится
+         локально), поэтому доступна каждой роли. По умолчанию включена, голос мужской. -->
+    <Card v-if="tab === 'profile'" title="Озвучка Вектора"
+          subtitle="Вектор проговаривает свои ответы вслух">
+      <div class="mb-4 flex gap-2">
+        <AppButton :variant="tts.enabled ? 'green' : 'ghost'" @click="tts.setEnabled(true)">
+          <Volume2 class="mr-2 inline size-4" />Включена
+        </AppButton>
+        <AppButton :variant="tts.enabled ? 'ghost' : 'green'" @click="tts.setEnabled(false)">
+          <VolumeX class="mr-2 inline size-4" />Выключена
+        </AppButton>
+      </div>
+
+      <div v-if="tts.enabled">
+        <p class="mb-2 text-sm font-medium text-text2">Голос</p>
+        <div class="flex gap-2">
+          <button type="button" @click="previewVoice('male')"
+                  class="flex-1 rounded-md border p-3 text-left transition-colors"
+                  :class="tts.voice === 'male' ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
+            <span class="block text-sm font-semibold text-text">Мужской</span>
+            <span class="block text-xs text-text3">Полегче и мягче · по умолчанию</span>
+          </button>
+          <button type="button" @click="previewVoice('female')"
+                  class="flex-1 rounded-md border p-3 text-left transition-colors"
+                  :class="tts.voice === 'female' ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
+            <span class="block text-sm font-semibold text-text">Женский</span>
+            <span class="block text-xs text-text3">Нажмите, чтобы прослушать</span>
+          </button>
+        </div>
+        <p v-if="!tts.available" class="mt-3 text-xs text-text3">
+          Серверный синтез сейчас недоступен — озвучка идёт средствами браузера
+          (голоса зависят от вашего устройства).
+        </p>
       </div>
     </Card>
 

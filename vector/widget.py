@@ -338,6 +338,15 @@ class VectorSession(QObject):
         q = (question or "").strip()
         if not q or self.is_busy():
             return
+        #Новый вопрос перебивает предыдущую озвучку сразу (barge-in), не дожидаясь ответа:
+        #Вектор не договаривает старое, пока пользователь уже спросил другое. Отменяет и
+        #ещё не проигранный синтез (по поколению внутри tts). Одна сессия на все панели —
+        #поэтому здесь, а не в панели (иначе синтез запускался бы по разу на каждую панель).
+        try:
+            from . import tts
+            tts.stop()
+        except Exception:
+            pass
         self._add("Вы", q)
         self.busy = True
         self.thinkingStarted.emit()
@@ -350,6 +359,13 @@ class VectorSession(QObject):
         self.busy = False
         self._add("Вектор", text)
         self.answered.emit(text, mood, intent)
+        #Озвучка ответа вслух (если включена). Здесь, в сессии, — ровно один раз на ответ
+        #(панелей несколько, а озвучивать нужно однократно). Изолировано: сбой не ломает чат.
+        try:
+            from . import tts
+            tts.speak(text)
+        except Exception:
+            pass
 
     def _on_fail(self, err):
         self.busy = False

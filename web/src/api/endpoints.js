@@ -206,6 +206,11 @@ export const scheduleApi = {
 // «ВЕКТОР» — серверный анти-галлюцинационный конвейер (intents→SQL→анонимизация→LLM)
 export const vectorApi = {
   ask: (message) => api.post('/web/vector/ask', { message }),
+  // Озвучка (TTS): текст ответа → WAV-аудио. Голос — male|female из настроек.
+  // arraybuffer — чтобы декодировать через Web Audio API (надёжнее автоплея <audio>).
+  ttsStatus: () => api.get('/web/vector/tts/status'),
+  tts: (text, voice = 'male') =>
+    api.post('/web/vector/tts', { text, voice }, { responseType: 'arraybuffer' }),
 }
 
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).

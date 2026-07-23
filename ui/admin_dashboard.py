@@ -899,6 +899,17 @@ class AdminDashboard(QWidget):
                 sbl.addWidget(MicSelectorWidget())
         except Exception:
             pass
+        #Озвучка: ГЛОБАЛЬНЫЙ рубильник (синхронизируется на все ПК/веб). Выключение прячет
+        #озвучку у всех — на случай перегруженного сервера. Персональный выбор — ниже.
+        self._tts_enabled_cb = _QCB("🔊 Разрешить озвучку ответов на сервере (для всех "
+                                    "пользователей)")
+        sbl.addWidget(self._tts_enabled_cb)
+        #Озвучка ответов Вектора (вкл/выкл + голос) — ЛОКАЛЬНАЯ настройка этого ПК.
+        try:
+            from vector.voice_ui import TtsSettingsWidget
+            sbl.addWidget(TtsSettingsWidget())
+        except Exception:
+            pass
         sbl.addWidget(lbl("Распознавание идёт ЛОКАЛЬНО (аудио никуда не уходит, 152-ФЗ). "
                           "Модель скачивается один раз при первом использовании. Команды "
                           "преподавателя на оценку/пропуск всегда подтверждаются вручную.",
@@ -937,6 +948,7 @@ class AdminDashboard(QWidget):
         self._vec_local_model.setText(cfg.get("local_model", "qwen2.5:3b"))
         #STT
         self._stt_enabled_cb.setChecked(bool(cfg.get("stt_enabled", False)))
+        self._tts_enabled_cb.setChecked(bool(cfg.get("tts_enabled", True)))
         mi = self._stt_model.findData(cfg.get("stt_model", "large-v3"))
         self._stt_model.setCurrentIndex(max(0, mi))
         di = self._stt_device.findData(cfg.get("stt_device", "auto"))
@@ -970,6 +982,7 @@ class AdminDashboard(QWidget):
                 "stt_enabled": self._stt_enabled_cb.isChecked(),
                 "stt_model": self._stt_model.currentData(),
                 "stt_device": self._stt_device.currentData(),
+                "tts_enabled": self._tts_enabled_cb.isChecked(),
             })
             _kv_set("config", cfg)
             QMessageBox.information(

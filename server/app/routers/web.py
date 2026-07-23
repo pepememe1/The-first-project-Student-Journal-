@@ -1258,6 +1258,41 @@ async def vector_stt(file: UploadFile = File(...),
     return {"text": res["text"]}
 
 
+# ── Голосовая ОЗВУЧКА (Text-to-Speech) — синтез на ХОСТЕ (Silero), см. tts_service ──
+@router.get("/vector/tts/status")
+def vector_tts_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Доступна ли озвучка: движок стоит на хосте И админ её не выключил. По этому флагу
+    и списку голосов веб-клиент решает, показывать ли кнопку динамика и выбор голоса."""
+    from .. import tts_service
+    cfg = W.load_config(db)
+    enabled = cfg.get("tts_enabled", True)
+    return {"available": bool(enabled) and tts_service.is_available(),
+            "voices": tts_service.voices()}
+
+
+@router.post("/vector/tts")
+def vector_tts(payload: dict = Body(...),
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Синтезирует переданный текст (уже готовый ответ Вектора, без ПДн) в WAV. Голос
+    (male/female) выбирает пользователь в настройках. Кэш — внутри tts_service."""
+    from fastapi.responses import Response
+    from .. import tts_service
+    cfg = W.load_config(db)
+    if not cfg.get("tts_enabled", True):
+        raise HTTPException(status_code=503, detail="Озвучка отключена администратором.")
+    text = (payload.get("text") or "").strip()
+    voice = (payload.get("voice") or "male").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Пустой текст.")
+    #Движок синтеза выбирается конфигом (silero сейчас; клон-голос на GPU — потом).
+    res = tts_service.synthesize(text, voice, engine=cfg.get("tts_engine", "silero"))
+    if not res["ok"]:
+        #Движок не поднялся / нет модели — 503: клиент откатится на speechSynthesis.
+        raise HTTPException(status_code=503, detail=res["error"])
+    return Response(content=res["audio"], media_type=res["mime"],
+                   headers={"Cache-Control": "no-store"})
+
+
 #Слова-триггеры «что умеешь / помощь / кто ты» и приветствие — распознаём ПЕРВЫМИ,
 #чтобы Вектор отвечал по делу, а не сваливался в статистику. Дефолт тоже = подсказка.
 # Факты о заведении — источник правды, НЕ генерация (как vector/knowledge.py на десктопе).
@@ -2346,7 +2381,7 @@ def admin_audit(limit: int = Query(200, ge=1, le=1000), action: str = Query(""),
 # в обе стороны). Пишем с серверной меткой updated_at (LWW, §3) → ключ админа, заданный
 # на ПК, доедет на веб и наоборот.
 _AI_CFG_KEYS = ("vector_llm", "gigachat_credentials", "gigachat_scope",
-                "gigachat_model", "local_model")
+                "gigachat_model", "local_model", "tts_enabled", "tts_engine")
 
 
 @router.get("/admin/ai-config")
@@ -2359,6 +2394,8 @@ def admin_get_ai_config(_admin: User = Depends(require_admin), db: Session = Dep
         "gigachat_scope": cfg.get("gigachat_scope", "GIGACHAT_API_B2B"),
         "gigachat_model": cfg.get("gigachat_model", "GigaChat"),
         "local_model": cfg.get("local_model", "qwen2.5:3b"),
+        "tts_enabled": cfg.get("tts_enabled", True),
+        "tts_engine": cfg.get("tts_engine", "silero"),
     }
 
 

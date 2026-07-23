@@ -22,7 +22,7 @@ import log
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QToolButton, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-    QFrame, QScrollArea, QWidget, QLineEdit,
+    QFrame, QScrollArea, QWidget, QLineEdit, QCheckBox,
 )
 
 from . import stt, audio_capture, voice_command
@@ -101,6 +101,74 @@ class MicSelectorWidget(QFrame):
                       "микрофон выбирается автоматически (нужно разрешить доступ).")
         hint.setWordWrap(True); hint.setStyleSheet(f"color:{C['text3']};font-size:11px;")
         lay.addWidget(hint)
+
+
+#──────────────────────────────────────────────────────────────────────────────────
+# Виджет озвучки Вектора (для вкладки «Профиль» на десктопе)
+#──────────────────────────────────────────────────────────────────────────────────
+class TtsSettingsWidget(QFrame):
+    """Настройка озвучки ответов Вектора: вкл/выкл и голос (мужской/женский). Настройка
+    ЭТОГО ПК (хранится локально). По умолчанию: включена, мужской. Онлайн синтез идёт на
+    сервере, офлайн — локально на этом ПК (даже без нейросети — через голос Windows)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        try:
+            from styles import C
+        except Exception:
+            C = {"text": "#111", "text3": "#666", "card2": "#eee", "border": "#ccc"}
+        from . import tts
+        self._tts = tts
+        lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(6)
+        title = QLabel("🔊 Озвучка Вектора")
+        title.setStyleSheet(f"color:{C['text']};font-size:14px;font-weight:bold;")
+        lay.addWidget(title)
+
+        self._enabled_cb = QCheckBox("Озвучивать ответы Вектора вслух")
+        self._enabled_cb.setChecked(tts.is_enabled())
+        self._enabled_cb.setStyleSheet(f"color:{C['text']};font-size:12px;")
+        self._enabled_cb.toggled.connect(self._on_toggle)
+        lay.addWidget(self._enabled_cb)
+
+        row = QHBoxLayout(); row.setSpacing(8)
+        vlabel = QLabel("Голос:")
+        vlabel.setStyleSheet(f"color:{C['text3']};font-size:12px;")
+        row.addWidget(vlabel)
+        self._combo = QComboBox()
+        self._combo.addItem("Мужской", "male")
+        self._combo.addItem("Женский", "female")
+        pos = self._combo.findData(tts.get_voice())
+        if pos >= 0:
+            self._combo.setCurrentIndex(pos)
+        self._combo.currentIndexChanged.connect(self._on_voice)
+        row.addWidget(self._combo, 1)
+        self._preview_btn = QPushButton("Прослушать")
+        self._preview_btn.clicked.connect(self._preview)
+        row.addWidget(self._preview_btn)
+        lay.addLayout(row)
+
+        hint = QLabel("Онлайн озвучку считает сервер, без интернета — этот компьютер "
+                      "(работает даже на слабом). Настройка запоминается для этого ПК.")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color:{C['text3']};font-size:11px;")
+        lay.addWidget(hint)
+        self._sync_enabled()
+
+    def _sync_enabled(self):
+        on = self._enabled_cb.isChecked()
+        self._combo.setEnabled(on)
+        self._preview_btn.setEnabled(on)
+
+    def _on_toggle(self, on):
+        self._tts.set_enabled(bool(on))
+        self._sync_enabled()
+
+    def _on_voice(self, *_):
+        self._tts.set_voice(self._combo.currentData())
+
+    def _preview(self):
+        #Короткая проба выбранным голосом — услышать разницу тут же.
+        self._tts.set_voice(self._combo.currentData())
+        self._tts.speak("Привет! Я Вектор. Буду озвучивать ответы этим голосом.")
 
 
 #──────────────────────────────────────────────────────────────────────────────────

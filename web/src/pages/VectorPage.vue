@@ -23,7 +23,8 @@ async function scrollDown() {
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: 'smooth' })
 }
 watch(tick, scrollDown)
-onMounted(() => { vector.greetSettle(); scrollDown() })
+// greetOnce — приветствие голосом ровно при открытии этой вкладки (не на бургер-меню).
+onMounted(() => { vector.greetSettle(); scrollDown(); vector.greetOnce() })
 
 function send() { vector.send() }
 function ask(q) { showQuick.value = false; vector.ask(q) }

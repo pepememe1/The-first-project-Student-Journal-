@@ -751,6 +751,12 @@ class StudentDashboard(QWidget):
                 lay.addWidget(MicSelectorWidget())
         except Exception as e:
             log.get("dashboards").warning(f"[profile] выбор микрофона недоступен: {e}")
+        #Озвучка ответов Вектора (вкл/выкл + голос). Доступна всегда (офлайн — голос Windows).
+        try:
+            from vector.voice_ui import TtsSettingsWidget
+            lay.addWidget(TtsSettingsWidget())
+        except Exception as e:
+            log.get("dashboards").warning(f"[profile] настройки озвучки недоступны: {e}")
         self.pages["profile"] = w
         self.stack.addWidget(w)
 

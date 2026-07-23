@@ -234,6 +234,15 @@ class SyncClient:
         r.raise_for_status()
         return (r.json().get("text") or facts_text).strip()
 
+    def tts(self, text: str, voice: str = "male") -> bytes:
+        """Синтез речи на СЕРВЕРЕ (Silero) → WAV-байты. Десктоп-онлайн отдаёт нагрузку
+        сюда (на боевом ПК ВСГУТУ — GPU). Оффлайн/ошибка → вызывающий синтезирует локально.
+        Заголовки (авторизация, X-Device-Id) ставит _req."""
+        r = self._req("POST", "/web/vector/tts",
+                      json={"text": text, "voice": voice}, timeout=30)
+        r.raise_for_status()
+        return r.content
+
     def set_my_prefs(self, prefs: dict) -> dict:
         """Сохранить личные настройки текущего пользователя (self-scope /me/prefs).
         Меняет ТОЛЬКО свою строку — личность берётся из JWT на сервере."""
