@@ -132,6 +132,18 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     throttle.register_success(ip, login_str)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
     audit.log(db, request, actor=login_str, role=u.role, action="login.ok")
+
+    #Преподаватель вошёл — СРАЗУ запускаем сборку снимка расписания в фоне. Полный
+    #снимок это ~68 запросов к порталу (десятки секунд), и раньше эта сборка стартовала
+    #только когда препод уже открыл вкладку расписания — он смотрел на «строится…».
+    #Теперь сборка идёт, пока он на дашборде, и к моменту открытия расписание готово.
+    #warm() ничего не блокирует: лишь стартует фоновый поток, если снимок несвежий.
+    if u.role == "teacher":
+        try:
+            from .. import schedule_web
+            schedule_web.warm()
+        except Exception:
+            pass        #прогрев — удобство, а не условие входа; сбой не мешает логину
     return _issue_token_pair(db, u, request)
 
 
