@@ -37,13 +37,13 @@ def test_curator_sees_all_group_subjects_readonly(client):
 
     assert client.get("/web/curator/groups", headers=th).json()["groups"] == ["G1"]
     #видит и «Физ» — чужой для него предмет
-    subs = client.get("/web/curator/group/G1/subjects", headers=th).json()["subjects"]
+    subs = client.get("/web/curator/subjects", params={"group":"G1"}, headers=th).json()["subjects"]
     assert "Мат" in subs and "Физ" in subs, subs
     #видит оценки по «Физ» (не свой предмет!) — чтение
-    view = client.get("/web/curator/group/G1/subject/Физ", headers=th).json()
+    view = client.get("/web/curator/group-subject", params={"group":"G1","subject":"Физ"}, headers=th).json()
     assert any(st["grades"].get("Lf") == "4" for st in view["students"]), view
     #некурируемая группа → 403
-    assert client.get("/web/curator/group/G2/subjects", headers=th).status_code == 403
+    assert client.get("/web/curator/subjects", params={"group":"G2"}, headers=th).status_code == 403
 
 
 def test_non_curator_teacher_has_no_curator_access(client):
@@ -51,7 +51,7 @@ def test_non_curator_teacher_has_no_curator_access(client):
     th = make_teacher(client, admin, subjects=["Мат"])
     assert client.get("/web/curator/groups", headers=th).json()["groups"] == []
     #даже зная имя группы — 403 (не курирует)
-    assert client.get("/web/curator/group/G1/subjects", headers=th).status_code == 403
+    assert client.get("/web/curator/subjects", params={"group":"G1"}, headers=th).status_code == 403
 
 
 #  Сводный отчёт успеваемости (Excel / Word) + скоуп по группам
@@ -123,3 +123,30 @@ def test_non_curator_cannot_get_report(client):
     th = make_teacher(client, admin, subjects=["Мат"])
     assert client.get("/web/curator/report", params={"groups": "all", "fmt": "xlsx"},
                       headers=th).status_code == 403
+
+
+def test_curator_group_with_slash_in_name(client):
+    """Группы колледжа содержат слэш («К75/1»). Раньше group шёл в PATH, и encodeURIComponent
+    давал «%2F», который ломал роутинг → эндпоинт молча 404-ил и вкладка показывала «нет
+    предметов». Теперь group — query-параметр, слэш проходит как значение."""
+    admin = make_admin(client)
+    _push(client, admin,
+          lessons=[{"id": "L1", "group_name": "К75/1", "subject": "Биология",
+                    "type": "Практика", "number": 1, "year": "2026/2027", "semester": 1}],
+          users=[{"id": "stud:s1", "role": "student", "login": "s1", "surname": "Пуп",
+                  "name": "Пётр", "group_name": "К75/1", "password_hash": hash_password("p")}])
+    client.post("/web/admin/teachers", json={
+        "full_name": "Кур Атор", "login": "t1", "password": "pass1234",
+        "subjects": ["X"], "curated_groups": ["К75/1"]}, headers=admin)
+    th = _login(client, "t1", "pass1234")
+
+    r = client.get("/web/curator/subjects",
+                   params={"group": "К75/1", "year": "2026/2027", "semester": 1}, headers=th)
+    assert r.status_code == 200, r.text
+    assert r.json()["subjects"] == ["Биология"], r.json()
+
+    v = client.get("/web/curator/group-subject",
+                   params={"group": "К75/1", "subject": "Биология",
+                           "year": "2026/2027", "semester": 1}, headers=th)
+    assert v.status_code == 200, v.text
+    assert v.json()["group"] == "К75/1"

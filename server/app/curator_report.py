@@ -40,8 +40,16 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict) -> dict:
     # средний по группе — по студентам с ненулевым средним (пустые не занижают)
     vals = [r["average"] for r in rows if r["average"]]
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
+    # средний ПО КАЖДОМУ ПРЕДМЕТУ (по студентам с ненулевым баллом) — видно, где группа
+    # слабее: куратору это нужнее общего числа.
+    subject_group_avg = {}
+    for subj in subjects:
+        sv = [r["subject_avg"].get(subj) for r in rows]
+        sv = [x for x in sv if x]
+        subject_group_avg[subj] = round(sum(sv) / len(sv), 2) if sv else 0.0
     return {"group": group, "subjects": subjects, "rows": rows,
-            "group_avg": group_avg, "students": len(students)}
+            "group_avg": group_avg, "subject_group_avg": subject_group_avg,
+            "students": len(students)}
 
 
 def _fmt(v) -> str:
@@ -97,12 +105,17 @@ def build_xlsx(groups_data: list, term: dict) -> bytes:
                 if c >= 3:
                     cell.alignment = center
 
-        # строка «Средний по группе»
-        ws.append(["", "Средний по группе"] + [""] * len(subs)
+        # строка «Средний по группе»: средний по КАЖДОМУ предмету + общий
+        sga = gd.get("subject_group_avg", {})
+        ws.append(["", "Средний по группе"] + [_fmt(sga.get(s)) for s in subs]
                   + [_fmt(gd["group_avg"]), "", "", "", "", ""])
         fr = ws.max_row
         for c in range(1, len(headers) + 1):
-            ws.cell(fr, c).font = Font(bold=True)
+            cell = ws.cell(fr, c)
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="E8F0F1")
+            if c >= 3:
+                cell.alignment = center
 
         # ширины
         ws.column_dimensions["A"].width = 4
@@ -163,6 +176,19 @@ def build_docx(groups_data: list, term: dict) -> bytes:
                 run.font.size = Pt(8)
                 if c >= 2:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # итоговая строка «Средний по группе»: по каждому предмету + общий
+        sga = gd.get("subject_group_avg", {})
+        foot = table.add_row().cells
+        fvals = ["", "Средний по группе"] + [_fmt(sga.get(s)) for s in subs] \
+            + [_fmt(gd["group_avg"]), "", "", "", ""]
+        for c, v in enumerate(fvals):
+            p = foot[c].paragraphs[0]
+            run = p.add_run(v)
+            run.font.size = Pt(8)
+            run.bold = True
+            if c >= 2:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     buf = io.BytesIO()
     doc.save(buf)

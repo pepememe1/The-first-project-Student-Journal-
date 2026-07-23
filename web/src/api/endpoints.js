@@ -107,10 +107,12 @@ export const termsApi = {
 // КУРАТОР (read-only по курируемым группам) ───────────────────────────────────────
 export const curatorApi = {
   groups: () => api.get('/web/curator/groups'),
+  // group/subject идут в QUERY, а не в путь: имена групп содержат слэш («К75/1»), и в
+  // пути %2F ломает роутинг FastAPI (эндпоинт молча 404-ил → «нет предметов»).
   subjects: (group, params = {}) =>
-    api.get(`/web/curator/group/${encodeURIComponent(group)}/subjects`, { params }),
+    api.get('/web/curator/subjects', { params: { group, ...params } }),
   groupSubject: (group, subject, params = {}) =>
-    api.get(`/web/curator/group/${encodeURIComponent(group)}/subject/${encodeURIComponent(subject)}`, { params }),
+    api.get('/web/curator/group-subject', { params: { group, subject, ...params } }),
   // Сводный отчёт успеваемости. groups: 'all' | 'К74/1,К75/1'; fmt: 'xlsx' | 'docx'.
   // responseType blob — сервер отдаёт файл, а не JSON.
   report: (groups, fmt, params = {}) =>

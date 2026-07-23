@@ -143,8 +143,12 @@ def teacher_weeks(snap, name: str) -> dict | None:
     for w, days in weeks.items():
         out[str(w)] = {}
         for d, entries in days.items():
+            #Сортируем пары дня ПО НОМЕРУ. teacher_index строится инверсией страниц групп,
+            #поэтому пары одного дня приходят в произвольном порядке (у разных групп) — без
+            #сортировки в расписании препода 5-я пара оказывалась выше 4-й.
+            ordered = sorted(entries, key=lambda e: getattr(e["lesson"], "pair_no", 0) or 0)
             out[str(w)][d] = [dict(e["lesson"].to_dict(), group=e["group"])
-                              for e in entries]
+                              for e in ordered]
     return out
 
 

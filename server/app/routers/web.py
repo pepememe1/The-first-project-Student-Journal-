@@ -471,10 +471,15 @@ def curator_groups(user: User = Depends(get_current_user), db: Session = Depends
     return {"groups": list(user.curated_groups or [])}
 
 
-@router.get("/curator/group/{group}/subjects")
-def curator_group_subjects(group: str, year: str = Query(""), semester: int = Query(0),
+@router.get("/curator/subjects")
+def curator_group_subjects(group: str = Query(...), year: str = Query(""), semester: int = Query(0),
                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Предметы курируемой группы за термин (ВСЕ предметы группы, не только «свои»)."""
+    """Предметы курируемой группы за термин (ВСЕ предметы группы, не только «свои»).
+
+    group — QUERY-параметр, а НЕ path: имена групп колледжа содержат слэш («К75/1»), и в
+    пути encodeURIComponent даёт «%2F», который Starlette декодирует обратно в «/» и роут
+    `{group}/subjects` перестаёт матчиться — эндпоинт молча 404-ил, и вкладка куратора
+    показывала «нет предметов». В query слэш проходит как обычное значение."""
     _require("teacher", user)
     _curator_check(user, group)
     cfg = W.load_config(db)
@@ -483,8 +488,9 @@ def curator_group_subjects(group: str, year: str = Query(""), semester: int = Qu
     return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": subs}
 
 
-@router.get("/curator/group/{group}/subject/{subject}")
-def curator_group_subject(group: str, subject: str, year: str = Query(""), semester: int = Query(0),
+@router.get("/curator/group-subject")
+def curator_group_subject(group: str = Query(...), subject: str = Query(...),
+                          year: str = Query(""), semester: int = Query(0),
                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Студенты курируемой группы + оценки/средний по ЛЮБОМУ предмету группы (read-only).
     Ключевой скоуп безопасности: доступ по КУРИРУЕМОЙ ГРУППЕ, а не по предметам препода;
@@ -1189,7 +1195,7 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
 #            меняет числа, а неверная температура в продукте, обещающем не врать,
 #            дороже красивой формулировки.
 _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
-                     "about_vsgutu", "about_college", "schedule", "weather"}
+                     "about_vsgutu", "about_college", "schedule", "weather", "howto"}
 
 
 @router.post("/vector/ask")
@@ -1210,8 +1216,11 @@ def vector_ask(payload: dict = Body(...),
     #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
     #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
     #Приветствие/справку/благодарность/расписание НЕ озвучиваем (см. _NO_VOICE_INTENTS).
-    elif intent not in _NO_VOICE_INTENTS:
+    elif intent not in _NO_VOICE_INTENTS and not result.get("no_voice"):
+        #no_voice — ответ содержит фактический список (имена, причины), который LLM исказил
+        #бы или отказался озвучивать. Отдаём как есть.
         result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
+    result.pop("no_voice", None)   #внутренний флаг наружу не отдаём
     return result
 
 
@@ -1252,13 +1261,37 @@ async def vector_stt(file: UploadFile = File(...),
 #Слова-триггеры «что умеешь / помощь / кто ты» и приветствие — распознаём ПЕРВЫМИ,
 #чтобы Вектор отвечал по делу, а не сваливался в статистику. Дефолт тоже = подсказка.
 # Факты о заведении — источник правды, НЕ генерация (как vector/knowledge.py на десктопе).
-_ABOUT_VSGUTU = ("ВСГУТУ — Восточно-Сибирский государственный университет технологий и "
-                 "управления, ведущий технический вуз Республики Бурятия в Улан-Удэ. "
-                 "Технологический колледж — его структурное подразделение среднего "
-                 "профессионального образования.")
-_ABOUT_COLLEGE = ("Технологический колледж ВСГУТУ готовит специалистов среднего звена в "
-                  "Улан-Удэ: IT, экономика, техника и другие направления. Этот электронный "
-                  "журнал сделан как раз для него.")
+#Факты о заведении. Держать СИНХРОННО с vector/knowledge.py (ANSWER_VSGUTU/ANSWER_COLLEGE)
+#— это источник правды десктопа (§12). Импортировать оттуда напрямую нельзя: vector/__init__
+#тянет десктопные engine/intents, и на сервере это падает. Поэтому — копия с пометкой,
+#как и другие «обязаны совпадать» дубли (_NO_VOICE_INTENTS, grade_id). Раньше сервер нёс
+#УРЕЗАННУЮ версию (без истории и масштаба) и расходился с десктопом.
+_ABOUT_VSGUTU = (
+    "ВСГУТУ — это Восточно-Сибирский государственный университет технологий и "
+    "управления в Улан-Удэ (Республика Бурятия). Основан 19 июня 1962 года как "
+    "Восточно-Сибирский технологический институт (ВСТИ); в 1994 году получил статус "
+    "университета, а в 2011-м переименован во ВСГУТУ. Сегодня это один из крупнейших "
+    "вузов Сибири и Дальнего Востока — свыше 15 тысяч студентов и более 1900 "
+    "преподавателей и сотрудников. Основной адрес — ул. Ключевская, 40В."
+)
+_ABOUT_COLLEGE = (
+    "Технологический колледж ВСГУТУ — структурное подразделение университета в "
+    "Улан-Удэ, которое даёт среднее профессиональное образование (СПО) и готовит "
+    "специалистов среднего звена. После колледжа можно продолжить учёбу в самом "
+    "ВСГУТУ. Группы колледжа обозначаются буквой «К» (например, К75/1). Этот "
+    "электронный журнал — внутренняя система колледжа: оценки, посещаемость, "
+    "пересдачи и успеваемость по группам."
+)
+
+_HOWTO = (
+    "Как всё устроено в журнале:\n"
+    "• Средний балл считается по практикам и экзаменам (лекции в него не входят); "
+    "пересдача заменяет прежнюю попытку — учитывается последняя.\n"
+    "• Задолженность — несданная практика (2 или Н) либо незачтённый экзамен.\n"
+    "• Посещаемость: Н — неявка, Б — по болезни, О — по уважительной причине.\n"
+    "• Зона риска — студенты со средним баллом ниже 3.\n"
+    "Спроси про свои цифры словами — я беру их из реальных данных, а не выдумываю.")
+
 
 _HELP_BY_ROLE = {
     "student": ("Я — Вектор 🐯, помогаю с учёбой по твоим РЕАЛЬНЫМ данным (цифры не выдумываю). "
@@ -1453,6 +1486,8 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         return {"text": _ABOUT_VSGUTU, "mood": "neutral", "intent": "about_vsgutu", "facts": {}}
     if intent == "about_college":
         return {"text": _ABOUT_COLLEGE, "mood": "neutral", "intent": "about_college", "facts": {}}
+    if intent == "howto":
+        return {"text": _HOWTO, "mood": "happy", "intent": "howto", "facts": {}}
 
     # ── СТУДЕНТ: только свои данные (privacy-by-design) ──────────────────────────────
     if role == "student":
@@ -1560,23 +1595,40 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"Студента «{surname}» в ваших группах не нашёл.", "mood": "neutral",
                     "intent": "help", "facts": {}}
 
-        # Агрегаты по группам (средний + зона риска)
-        per, risk = [], 0
+        # Агрегаты по группам (средний + зона риска) + ПОИМЁННЫЙ список отстающих.
+        # Преподаватель видит своих студентов в журнале, поэтому назвать их долги — не
+        # раскрытие ПДн, а прямой ответ на «у кого долги». Раньше отдавался только счётчик,
+        # и Вектор честно не мог назвать фамилии.
+        per, risky = [], []
         for g in groups:
             gl = [l for l in W.group_lessons(db, g) if l.subject in tsubjects]
             vals = []
             for s in W.students_in_group(db, g):
-                a = W.average(gl, W.student_records(db, s.surname, s.name, g), cfg)
-                if 0 < a < 3:
-                    risk += 1
+                rec = W.student_records(db, s.surname, s.name, g)
+                a = W.average(gl, rec, cfg)
+                dbts = W.debts(gl, rec)
+                if dbts or (0 < a < 3):
+                    risky.append((W.display_name(s), g, a, dbts))
                 if a > 0:
                     vals.append(a)
             per.append((g, round(sum(vals) / len(vals), 2) if vals else 0.0))
         if intent in ("at_risk", "debtors"):
-            return {"text": (f"В зоне риска (средний ниже 3) сейчас {risk} студ." if risk
-                             else "Отстающих (средний ниже 3) нет — группы идут ровно."),
-                    "mood": "sad" if risk else "happy", "intent": "at_risk",
-                    "facts": {"at_risk": risk}}
+            if not risky:
+                return {"text": "Должников и отстающих сейчас нет — группы идут ровно.",
+                        "mood": "happy", "intent": "at_risk",
+                        "facts": {"at_risk": 0}, "no_voice": True}
+            #no_voice: имена и причины отдаём ДОСЛОВНО, мимо LLM — иначе он их исказит
+            #(серверная озвучка фамилии не обезличивает) или, как в жалобе, откажется
+            #называть. Это фактический список, переформулировать нечего.
+            lines = []
+            for nm, g, a, dbts in risky:
+                reason = "; ".join(dbts) if dbts else f"средний балл {a}"
+                lines.append(f"• {nm} ({g}): {reason}")
+            head = ("Задолженности есть у одного студента:" if len(risky) == 1
+                    else f"Задолженности есть у {len(risky)} студентов:")
+            return {"text": head + "\n" + "\n".join(lines),
+                    "mood": "sad", "intent": "at_risk",
+                    "facts": {"at_risk": len(risky)}, "no_voice": True}
         if intent in ("average", "group_stats", "grades"):
             body = "; ".join(f"{g}: {ga}" for g, ga in per)
             return {"text": f"Средний по вашим группам — {body}. Студентов в зоне риска: {risk}.",
