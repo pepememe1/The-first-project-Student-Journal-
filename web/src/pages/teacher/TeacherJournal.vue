@@ -95,6 +95,15 @@ function cellOptions(l) { return OPTIONS[l.type] || OPTIONS.default }
 function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено)» → «5» в селекте
 function needsRetake(s, col) { return needsRetakeShared(s.grades, col.l.id, col.ri) }
 
+// Короткое ФИО для мобилки: «Иванчиков Егор Андреевич» → «Иванчиков Е.А.». Полная
+// колонка ФИО с whitespace-nowrap на телефоне съедала почти всю ширину, и занятия не
+// влезали. На десктопе (sm:) по-прежнему показываем полное ФИО.
+function shortName(s) {
+  const initials = (s.name || '').trim().split(/\s+/).filter(Boolean)
+    .map((w) => w[0].toUpperCase() + '.').join('')
+  return `${s.surname || ''} ${initials}`.trim()
+}
+
 function gradeClass(v) {
   v = rawValue(v)
   if (v === '5' || v === '✓') return 'text-accent font-bold'
@@ -354,9 +363,9 @@ async function downloadVedomost(fmt) {
       <table class="w-max text-sm">
         <thead>
           <tr class="border-b-2 border-accent bg-bg2 text-text2">
-            <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
+            <th class="sticky left-0 z-10 bg-bg2 px-2 py-3 text-left text-tiny font-semibold uppercase tracking-wide sm:px-4">Студент</th>
             <th v-for="col in colDefs" :key="col.key"
-                class="w-32 border-l border-border align-top px-2 py-2"
+                class="w-24 border-l border-border align-top px-2 py-2 sm:w-32"
                 :class="col.ri === 0 ? 'cursor-context-menu' : ''"
                 :title="col.ri === 0 ? 'ПКМ или двойной клик — изменить занятие' : ''"
                 @contextmenu.prevent="col.ri === 0 && openCtx($event, col.l)"
@@ -385,8 +394,11 @@ async function downloadVedomost(fmt) {
         <tbody>
           <tr v-for="(s, i) in data.students" :key="i"
               class="border-b border-border last:border-0 hover:bg-accent-glow/40" :class="i % 2 ? 'bg-bg2/50' : ''">
-            <td class="sticky left-0 z-10 whitespace-nowrap px-4 py-2 text-left font-medium text-text" :class="i % 2 ? 'bg-bg2' : 'bg-card'">
-              {{ s.surname }} {{ s.name }}
+            <td class="sticky left-0 z-10 max-w-[7.5rem] truncate px-2 py-2 text-left font-medium text-text sm:max-w-none sm:whitespace-nowrap sm:px-4"
+                :class="i % 2 ? 'bg-bg2' : 'bg-card'" :title="`${s.surname} ${s.name}`">
+              <!-- Мобилка: «Фамилия И.О.» (полное — в подсказке). Десктоп: полное ФИО. -->
+              <span class="sm:hidden">{{ shortName(s) }}</span>
+              <span class="hidden sm:inline">{{ s.surname }} {{ s.name }}</span>
             </td>
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
@@ -402,7 +414,7 @@ async function downloadVedomost(fmt) {
             </td>
           </tr>
           <tr class="border-t-2 border-accent/40 bg-bg2/70">
-            <td class="sticky left-0 z-10 bg-bg2 px-4 py-2.5 text-right text-xs font-semibold uppercase text-text3">Средний по группе</td>
+            <td class="sticky left-0 z-10 max-w-[7.5rem] truncate bg-bg2 px-2 py-2.5 text-right text-xs font-semibold uppercase text-text3 sm:max-w-none sm:px-4">Средний по группе</td>
             <td :colspan="colDefs.length" class="px-2 py-2.5"></td>
             <td class="border-l-2 border-accent/40 px-4 py-2.5 text-right font-title text-base font-extrabold" :class="avgClass(groupAverage)">{{ groupAverage }}</td>
           </tr>
