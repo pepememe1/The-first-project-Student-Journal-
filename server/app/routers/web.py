@@ -510,6 +510,46 @@ def curator_group_subject(group: str, subject: str, year: str = Query(""), semes
     }
 
 
+@router.get("/curator/report")
+def curator_report(groups: str = Query("all"), fmt: str = Query("xlsx"),
+                   year: str = Query(""), semester: int = Query(0),
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сводный отчёт куратора по успеваемости (fmt=xlsx|docx).
+
+    groups — «all» (все курируемые) ИЛИ список через запятую. КАЖДАЯ запрошенная группа
+    проверяется на принадлежность к curated_groups: куратор не должен выгрузить чужую
+    группу, подставив её в параметр. Пустой пересечённый список — 403 (нечего отдавать).
+
+    В отчёте по каждой группе: список студентов, средние по предметам и общий, посещаемость
+    (Н/Б/О) и число долгов — см. curator_report.collect_group."""
+    from .. import curator_report as R
+    _require("teacher", user)
+    curated = list(user.curated_groups or [])
+    if not curated:
+        raise HTTPException(status_code=403, detail="Вы не куратор ни одной группы")
+
+    if groups.strip().lower() == "all":
+        chosen = curated
+    else:
+        asked = [g.strip() for g in groups.split(",") if g.strip()]
+        #Строгий скоуп: оставляем только реально курируемые (порядок — как в curated).
+        chosen = [g for g in curated if g in asked]
+    if not chosen:
+        raise HTTPException(status_code=403,
+                            detail="Нет доступных для выгрузки групп из запрошенных")
+
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    data = [R.collect_group(db, g, ty, ts, cfg) for g in chosen]
+    term = {"year": ty, "semester": ts}
+    blob = R.build_docx(data, term) if fmt == "docx" else R.build_xlsx(data, term)
+
+    name = "Успеваемость_" + ("все_группы" if len(chosen) > 1 else chosen[0])
+    audit.log(db, actor=user.login, role="teacher", action="curator.report",
+              target=", ".join(chosen), detail=f"{fmt}, семестр {ty}/{ts}")
+    return _file_response(blob, name, fmt)
+
+
 # ИТОГОВЫЕ ОЦЕНКИ ЗА СЕМЕСТР + ВЕДОМОСТИ (промежуточная аттестация) ────────────────
 def _term_grade_id(student_id, subject, year, semester):
     """ЭТАП 3: ключ считает models.term_grade_id — единый на обе платформы. Раньше

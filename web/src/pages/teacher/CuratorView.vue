@@ -78,6 +78,39 @@ function avgClass(a) {
   if (n > 0) return 'text-red'
   return 'text-text3'
 }
+
+// ── Экспорт отчёта успеваемости (Excel/Word, выбор групп) ───────────────────────────
+const showExport = ref(false)
+const exporting = ref(false)
+const pickedGroups = ref([])       // отмеченные группы (галочки = одна/несколько/все)
+function openExport() {
+  // По умолчанию отмечаем текущую группу — самый частый сценарий.
+  pickedGroups.value = group.value ? [group.value] : groups.value.slice()
+  showExport.value = true
+}
+function toggleAllGroups(on) { pickedGroups.value = on ? groups.value.slice() : [] }
+
+async function exportReport(fmt) {
+  if (!pickedGroups.value.length) return
+  exporting.value = true
+  try {
+    // 'all' — когда выбраны все курируемые (короче URL и понятнее в аудите).
+    const scope = pickedGroups.value.length === groups.value.length
+      ? 'all' : pickedGroups.value.join(',')
+    const { data: blob } = await curatorApi.report(scope, fmt, termParams())
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const many = pickedGroups.value.length > 1
+    a.download = `Успеваемость_${many ? 'группы' : pickedGroups.value[0]}`
+      .replaceAll('/', '-') + (fmt === 'docx' ? '.docx' : '.xlsx')
+    a.click()
+    URL.revokeObjectURL(url)
+    showExport.value = false
+  } catch { /* сеть/сервер — тихо, кнопка станет снова активной */ } finally {
+    exporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -99,7 +132,52 @@ function avgClass(a) {
                 :class="isArchive ? 'border-orange text-orange' : ''">
           <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
         </select>
-        <span class="text-xs text-text3 sm:ml-auto sm:self-center">👁 Только просмотр (куратор)</span>
+        <button class="flex h-10 items-center gap-1.5 rounded-sm border border-accent bg-accent/10 px-3 text-sm font-medium text-accent hover:bg-accent/20 sm:ml-auto"
+                @click="openExport">
+          📊 Отчёт успеваемости
+        </button>
+        <span class="w-full text-xs text-text3 sm:w-auto sm:self-center">👁 Только просмотр (куратор)</span>
+      </div>
+
+      <!-- Диалог экспорта: формат (Excel/Word) + выбор групп (галочки = одна/несколько/все) -->
+      <div v-if="showExport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+           @click.self="showExport = false">
+        <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
+          <h3 class="mb-3 font-title text-lg font-bold text-text">Отчёт успеваемости</h3>
+          <p class="mb-2 text-xs text-text3">
+            Аналитика по группам: средние по предметам, посещаемость (Н/Б/О), долги, списки.
+          </p>
+
+          <div class="mb-2 flex items-center justify-between">
+            <span class="text-sm font-medium text-text2">Группы</span>
+            <div class="flex gap-3 text-xs">
+              <button class="text-accent hover:underline" @click="toggleAllGroups(true)">выбрать все</button>
+              <button class="text-text3 hover:underline" @click="toggleAllGroups(false)">снять</button>
+            </div>
+          </div>
+          <div class="mb-4 max-h-44 space-y-1 overflow-y-auto rounded-sm border border-border2 p-2">
+            <label v-for="g in groups" :key="g"
+                   class="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-text hover:bg-bg2">
+              <input type="checkbox" :value="g" v-model="pickedGroups" class="accent-accent" />
+              {{ g }}
+            </label>
+          </div>
+
+          <div class="flex flex-wrap gap-2">
+            <button :disabled="exporting || !pickedGroups.length"
+                    class="flex-1 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                    @click="exportReport('xlsx')">
+              {{ exporting ? 'Готовим…' : '📗 Excel' }}
+            </button>
+            <button :disabled="exporting || !pickedGroups.length"
+                    class="flex-1 rounded-sm bg-blue px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                    @click="exportReport('docx')">
+              {{ exporting ? 'Готовим…' : '📘 Word' }}
+            </button>
+            <button class="rounded-sm border border-border2 px-4 py-2.5 text-sm text-text2 hover:bg-bg2"
+                    @click="showExport = false">Отмена</button>
+          </div>
+        </div>
       </div>
 
       <EmptyState v-if="!subjects.length" title="Нет предметов"

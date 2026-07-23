@@ -111,6 +111,12 @@ export const curatorApi = {
     api.get(`/web/curator/group/${encodeURIComponent(group)}/subjects`, { params }),
   groupSubject: (group, subject, params = {}) =>
     api.get(`/web/curator/group/${encodeURIComponent(group)}/subject/${encodeURIComponent(subject)}`, { params }),
+  // Сводный отчёт успеваемости. groups: 'all' | 'К74/1,К75/1'; fmt: 'xlsx' | 'docx'.
+  // responseType blob — сервер отдаёт файл, а не JSON.
+  report: (groups, fmt, params = {}) =>
+    api.get('/web/curator/report', {
+      params: { groups, fmt, ...params }, responseType: 'blob',
+    }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
