@@ -1,7 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <!-- Значок GradeBookAI: гексагон GB. Заполняет вкладку почти целиком, крупная «GB» —
-       чтобы читалось на 16px в браузерной вкладке и ярлыке. -->
-  <path d="M16 0.5 L31 9 L31 23 L16 31.5 L1 23 L1 9 Z" fill="#147C8B"/>
+  <!-- Значок GradeBookAI: двухцветный гексагон «GB» (фирменный знак, упрощённый для 16px).
+       Загружается ДО JS; когда тема применится, theme.js заменит значок на data-URI в
+       цвете текущей темы (applyFavicon). Цвета здесь — дефолт ВСГУТУ. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.5" stop-color="#147C8B"/>
+      <stop offset="0.5" stop-color="#0f5d68"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 0.5 L31 9 L31 23 L16 31.5 L1 23 L1 9 Z" fill="url(#g)"
+        stroke="rgba(15,27,34,0.35)" stroke-width="1"/>
   <text x="16" y="22" text-anchor="middle" fill="#ffffff"
         font-family="Arial, Segoe UI, sans-serif" font-size="17" font-weight="900" letter-spacing="-1">GB</text>
 </svg>

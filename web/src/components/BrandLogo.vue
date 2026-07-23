@@ -14,6 +14,9 @@ import { computed } from 'vue'
 const props = defineProps({
   size: { type: Number, default: 40 },
   oncard: { type: Boolean, default: false },
+  // animated=false — СТАТИЧНЫЙ знак (без вращения колец/ядра). Нужен там, где анимация
+  // неуместна или невозможна: печать, растровые иконки, экономия отрисовки в списках.
+  animated: { type: Boolean, default: true },
 })
 
 // Уникальный суффикс id фильтров/градиента — чтобы несколько знаков не конфликтовали.
@@ -46,10 +49,10 @@ const lineColor = computed(() => (props.oncard ? 'var(--gb-accent)' : '#ffffff')
       </filter>
     </defs>
 
-    <!-- Внешнее кольцо: вращается, со свечением. -->
+    <!-- Внешнее кольцо: со свечением. Вращается только когда animated. -->
     <g fill="none" :stroke="lineColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"
        stroke-dasharray="20 16" :filter="`url(#${uid}-glow)`">
-      <animateTransform attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="22s" repeatCount="indefinite" />
+      <animateTransform v-if="animated" attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="22s" repeatCount="indefinite" />
       <path :d="OUTER" />
     </g>
 
@@ -60,7 +63,7 @@ const lineColor = computed(() => (props.oncard ? 'var(--gb-accent)' : '#ffffff')
          акцентном фоне); на карточке обводка не нужна (цветное ядро само видно на белом). -->
     <g :filter="`url(#${uid}-soft)`">
       <g>
-        <animateTransform attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="19s" repeatCount="indefinite" />
+        <animateTransform v-if="animated" attributeName="transform" type="rotate" from="0 100 100" to="360 100 100" dur="19s" repeatCount="indefinite" />
         <path :d="CORE" :fill="`url(#${uid}-tt)`"
               :stroke="oncard ? 'none' : '#ffffff'" stroke-width="12"
               stroke-linejoin="round" paint-order="stroke" />

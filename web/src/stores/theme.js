@@ -49,18 +49,25 @@ export const useThemeStore = defineStore('theme', () => {
     root.dataset.mode = p.mode // 'light' | 'dark' — на случай mode-специфичных правил
     const meta = document.querySelector('meta[name="theme-color"]')
     if (meta) meta.setAttribute('content', p.card)
-    applyFavicon(p.green || '#147C8B') // значок вкладки — под тему
+    applyFavicon(p.green || '#147C8B', p.green2 || '#0f5d68') // значок вкладки — под тему
   }
 
   // Фавикон вкладки — гексагон GB в АКЦЕНТНОМ цвете текущей темы. Ставим как data-URI:
   // он меняется вместе с темой (в т.ч. кастомный акцент) и заодно сбрасывает жёсткий
   // кэш фавикона в браузере (старый значок больше не «залипает»).
-  function applyFavicon(accent) {
-    // Гексагон заполняет вкладку почти целиком, «GB» — крупная жирная, чтобы читалось
-    // на 16px в браузерной вкладке/ярлыке (раньше значок был мелкий и нечитаемый).
+  function applyFavicon(accent, accent2) {
+    // Двухцветный гексагон «GB» — тот же фирменный знак, что BrandLogo (ядро делится по
+    // диагонали на accent/accent2), но упрощённый для 16px: без вращения, свечения и
+    // тонких колец, которые на вкладке превратились бы в грязь. Тонкая тёмная обводка —
+    // чтобы значок читался и на светлой, и на тёмной вкладке. «GB» крупная и жирная.
+    const c2 = accent2 || accent
     const svg =
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>" +
-      `<path d='M16 0.5 L31 9 L31 23 L16 31.5 L1 23 L1 9 Z' fill='${accent}'/>` +
+      "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" +
+      `<stop offset='0.5' stop-color='${accent}'/><stop offset='0.5' stop-color='${c2}'/>` +
+      "</linearGradient></defs>" +
+      "<path d='M16 0.5 L31 9 L31 23 L16 31.5 L1 23 L1 9 Z' fill='url(#g)' " +
+      "stroke='rgba(15,27,34,0.35)' stroke-width='1'/>" +
       "<text x='16' y='22' text-anchor='middle' fill='#fff' " +
       "font-family='Arial,Segoe UI,sans-serif' font-size='17' font-weight='900' letter-spacing='-1'>GB</text></svg>"
     let link = document.querySelector("link[rel~='icon']")

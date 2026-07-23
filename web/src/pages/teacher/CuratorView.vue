@@ -36,6 +36,11 @@ onMounted(async () => {
     terms.value = all
     term.value = t.current
   } catch { /* */ }
+  // Загрузку предметов вызываем ЯВНО, когда И группа, И термин уже выставлены. Раньше
+  // это делал только watch([group, term]) — но group и term задаются в разные моменты
+  // (между ними await termsApi), и предметы грузились в гонке с ещё не готовым термином,
+  // из-за чего вкладка показывала «нет предметов» даже при наличии занятий.
+  await loadSubjects()
 })
 
 async function loadSubjects() {
