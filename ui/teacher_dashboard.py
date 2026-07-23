@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from styles import C, BTN
 from widgets import (
     FlowLayout,
-    lbl, title_lbl, section_lbl, btn, combo, card, stat_card,
+    lbl, title_lbl, section_lbl, btn, combo, card, stat_card, field_cell,
     vector_unavailable_widget
 )
 from ui_components import Sidebar
@@ -53,8 +53,8 @@ class TeacherDashboard(QWidget):
             ("stats",    "chart",     "Статистика"),
             ("ai",       "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
-            ("notifications", "alert-circle", "Уведомления"),
             ("profile",  "user",      "Профиль"),
+            ("settings", "settings",  "Настройки"),
         ]
         self.sidebar = Sidebar(items)
         self.sidebar.tab_clicked.connect(self._switch)
@@ -70,8 +70,8 @@ class TeacherDashboard(QWidget):
         self._build_schedule()
         self._build_stats()
         self._build_ai()
-        self._build_notifications()
         self._build_profile()
+        self._build_settings()
         self.sidebar.set_active("journal")
         self._init_selectors()
 
@@ -129,9 +129,12 @@ class TeacherDashboard(QWidget):
         #Селектор учебного семестра (как на вебе): текущий по умолчанию, прошлые — архив.
         self._term_combo = combo([])
         self._term_combo.currentIndexChanged.connect(self._on_term_change)
-        hdr.addWidget(lbl("Предмет:", 12, C['text3'])); hdr.addWidget(self._subj_combo)
-        hdr.addWidget(lbl("Группа:",  12, C['text3'])); hdr.addWidget(self._group_combo)
-        hdr.addWidget(lbl("Семестр:", 12, C['text3'])); hdr.addWidget(self._term_combo)
+        #Каждая пара «подпись + список» — единая ячейка одинаковой ширины (field_cell):
+        #в переносящемся FlowLayout подпись не отрывается от поля, а поля при любом размере
+        #окна стоят ровными параллельными колонками (см. §недочёт выравнивания).
+        hdr.addWidget(field_cell("Предмет:", self._subj_combo))
+        hdr.addWidget(field_cell("Группа:",  self._group_combo))
+        hdr.addWidget(field_cell("Семестр:", self._term_combo))
         #Тумблер «Н = 2»: визуально пересчитывает столбец «Средний» (не трогая config).
         self._absence_chk = QCheckBox("Н = 2 в среднем")
         self._absence_chk.setChecked(True)
@@ -981,12 +984,33 @@ class TeacherDashboard(QWidget):
         lay.addWidget(self._stud_table, 1)
         self.pages["students"] = w; self.stack.addWidget(w)
 
-    def _build_notifications(self):
-        """Вкладка «Уведомления» — письма об оценках и изменениях расписания."""
-        from notifications_view import NotificationsView
-        w = NotificationsView()
-        self.pages["notifications"] = w
-        self.stack.addWidget(w)
+    def _build_settings(self):
+        """Вкладка «Настройки»: оформление, микрофон и озвучка Вектора (раньше в «Профиле»)."""
+        from theme_ui import ThemeCustomizer
+        import theme_service
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+
+        identity = {"name": self.teacher_name}
+        spec = theme_service.current_spec("teacher", identity)
+
+        def _save(s):
+            theme_service.save_user_theme(s, "teacher", identity)
+            self._request_theme_rebuild()
+
+        lay.addWidget(ThemeCustomizer(initial_spec=spec, on_save=_save))
+        try:
+            from vector.voice_ui import MicSelectorWidget, mic_available
+            if mic_available():
+                lay.addWidget(MicSelectorWidget())
+        except Exception as e:
+            log.get("teacher_dashboard").warning(f"[settings] выбор микрофона недоступен: {e}")
+        try:
+            from vector.voice_ui import TtsSettingsWidget
+            lay.addWidget(TtsSettingsWidget())
+        except Exception as e:
+            log.get("teacher_dashboard").warning(f"[settings] настройки озвучки недоступны: {e}")
+        self.pages["settings"] = w; self.stack.addWidget(w)
 
     #Курирование (ТОЛЬКО ЧТЕНИЕ)
 
@@ -1238,33 +1262,20 @@ class TeacherDashboard(QWidget):
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 
     def _build_profile(self):
-        """Вкладка «Профиль»: данные преподавателя + кастомизация темы оформления."""
-        from theme_ui import ThemeCustomizer
-        import theme_service
+        """Вкладка «Профиль»: сведения об аккаунте + уведомления."""
+        from notifications_view import NotificationsView
         w = QWidget(); lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
+        lay.addWidget(title_lbl("Профиль", 20))
 
-        identity = {"name": self.teacher_name}
-        spec = theme_service.current_spec("teacher", identity)
+        acc = card()
+        acc_lay = QVBoxLayout(acc); acc_lay.setContentsMargins(16, 14, 16, 14); acc_lay.setSpacing(2)
+        acc_lay.addWidget(lbl(self.teacher_name or "Преподаватель", 16, C['text'], bold=True))
+        acc_lay.addWidget(lbl("Преподаватель", 12, C['text3']))
+        lay.addWidget(acc)
 
-        def _save(s):
-            theme_service.save_user_theme(s, "teacher", identity)
-            self._request_theme_rebuild()
-
-        lay.addWidget(ThemeCustomizer(initial_spec=spec, on_save=_save))
-        #Выбор микрофона для голосового ввода (если стоят пакеты распознавания).
-        try:
-            from vector.voice_ui import MicSelectorWidget, mic_available
-            if mic_available():
-                lay.addWidget(MicSelectorWidget())
-        except Exception as e:
-            log.get("teacher_dashboard").warning(f"[profile] выбор микрофона недоступен: {e}")
-        #Озвучка ответов Вектора (вкл/выкл + голос). Доступна всегда (офлайн — голос Windows).
-        try:
-            from vector.voice_ui import TtsSettingsWidget
-            lay.addWidget(TtsSettingsWidget())
-        except Exception as e:
-            log.get("teacher_dashboard").warning(f"[profile] настройки озвучки недоступны: {e}")
+        lay.addWidget(section_lbl("Уведомления"))
+        lay.addWidget(NotificationsView(), 1)
         self.pages["profile"] = w; self.stack.addWidget(w)
 
     def _request_theme_rebuild(self):
@@ -1290,6 +1301,9 @@ class TeacherDashboard(QWidget):
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
+            #Ушли туда, где Вектора не видно (шторка свёрнута) → глушим озвучку.
+            from vector.widget import hush_if_vector_hidden
+            hush_if_vector_hidden(dock, key)
         finally:
             self._switching = False
 

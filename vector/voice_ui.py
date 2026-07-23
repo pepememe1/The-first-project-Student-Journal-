@@ -107,16 +107,20 @@ class MicSelectorWidget(QFrame):
 # Виджет озвучки Вектора (для вкладки «Профиль» на десктопе)
 #──────────────────────────────────────────────────────────────────────────────────
 class TtsSettingsWidget(QFrame):
-    """Настройка озвучки ответов Вектора: вкл/выкл и голос (мужской/женский). Настройка
-    ЭТОГО ПК (хранится локально). По умолчанию: включена, мужской. Онлайн синтез идёт на
-    сервере, офлайн — локально на этом ПК (даже без нейросети — через голос Windows)."""
+    """Настройка озвучки ответов Вектора: кнопка-циклер режима (Голос → Бубнеж → Выкл) и
+    голос (мужской/женский, виден только в режиме «Голос»). Настройка ЭТОГО ПК (локально).
+
+    Бубнеж — имитация речи короткими сигналами (как голоса персонажей в Undertale), без
+    сети и без TTS. Онлайн голос считает сервер, офлайн — этот ПК (даже голосом Windows)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         try:
             from styles import C
         except Exception:
-            C = {"text": "#111", "text3": "#666", "card2": "#eee", "border": "#ccc"}
+            C = {"text": "#111", "text3": "#666", "card2": "#eee", "border": "#ccc",
+                 "green": "#147C8B"}
+        self._C = C
         from . import tts
         self._tts = tts
         lay = QVBoxLayout(self); lay.setContentsMargins(14, 12, 14, 12); lay.setSpacing(6)
@@ -124,13 +128,19 @@ class TtsSettingsWidget(QFrame):
         title.setStyleSheet(f"color:{C['text']};font-size:14px;font-weight:bold;")
         lay.addWidget(title)
 
-        self._enabled_cb = QCheckBox("Озвучивать ответы Вектора вслух")
-        self._enabled_cb.setChecked(tts.is_enabled())
-        self._enabled_cb.setStyleSheet(f"color:{C['text']};font-size:12px;")
-        self._enabled_cb.toggled.connect(self._on_toggle)
-        lay.addWidget(self._enabled_cb)
+        #Кнопка-циклер: Голос → Бубнеж → Выкл → Голос.
+        self._mode_btn = QPushButton()
+        self._mode_btn.setCursor(Qt.PointingHandCursor)
+        self._mode_btn.clicked.connect(self._on_cycle)
+        lay.addWidget(self._mode_btn)
 
-        row = QHBoxLayout(); row.setSpacing(8)
+        self._mode_hint = QLabel("Нажмите, чтобы переключить: Голос → Бубнеж → Выкл")
+        self._mode_hint.setStyleSheet(f"color:{C['text3']};font-size:11px;")
+        lay.addWidget(self._mode_hint)
+
+        #Выбор голоса — только для режима «Голос».
+        self._voice_row = QWidget()
+        row = QHBoxLayout(self._voice_row); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(8)
         vlabel = QLabel("Голос:")
         vlabel.setStyleSheet(f"color:{C['text3']};font-size:12px;")
         row.addWidget(vlabel)
@@ -145,22 +155,31 @@ class TtsSettingsWidget(QFrame):
         self._preview_btn = QPushButton("Прослушать")
         self._preview_btn.clicked.connect(self._preview)
         row.addWidget(self._preview_btn)
-        lay.addLayout(row)
+        lay.addWidget(self._voice_row)
 
-        hint = QLabel("Онлайн озвучку считает сервер, без интернета — этот компьютер "
-                      "(работает даже на слабом). Настройка запоминается для этого ПК.")
+        hint = QLabel("Онлайн голос считает сервер, без интернета — этот компьютер. Бубнеж "
+                      "работает всегда. Настройка запоминается для этого ПК.")
         hint.setWordWrap(True); hint.setStyleSheet(f"color:{C['text3']};font-size:11px;")
         lay.addWidget(hint)
-        self._sync_enabled()
+        self._sync_mode()
 
-    def _sync_enabled(self):
-        on = self._enabled_cb.isChecked()
-        self._combo.setEnabled(on)
-        self._preview_btn.setEnabled(on)
+    def _sync_mode(self):
+        mode = self._tts.get_mode()
+        self._mode_btn.setText("  " + self._tts.mode_label())
+        C = self._C
+        on = mode != "off"
+        # Кнопка активного режима — акцентная, выключенная — приглушённая.
+        col = C.get("green", "#147C8B") if on else C.get("text3", "#666")
+        self._mode_btn.setStyleSheet(
+            f"QPushButton{{text-align:left;padding:8px 12px;border-radius:8px;"
+            f"border:1px solid {col};color:{col};font-size:13px;font-weight:600;}}")
+        self._voice_row.setVisible(mode == "voice")
 
-    def _on_toggle(self, on):
-        self._tts.set_enabled(bool(on))
-        self._sync_enabled()
+    def _on_cycle(self):
+        self._tts.cycle_mode()
+        self._sync_mode()
+        if self._tts.get_mode() == "mumble":
+            self._tts.speak("Привет! Я Вектор.")   # сразу дать услышать бубнеж
 
     def _on_voice(self, *_):
         self._tts.set_voice(self._combo.currentData())

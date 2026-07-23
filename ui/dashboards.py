@@ -144,8 +144,8 @@ class StudentDashboard(QWidget):
             ("stats",   "chart",     "Статистика"),
             ("ai",      "bot",       "ИИ Помощник"),
             ("__label__", "", "Личное"),
-            ("notifications", "alert-circle", "Уведомления"),
             ("profile", "user",      "Профиль"),
+            ("settings", "settings", "Настройки"),
         ]
         self.sidebar = Sidebar(sidebar_items)
         self.sidebar.tab_clicked.connect(self._switch)
@@ -165,8 +165,8 @@ class StudentDashboard(QWidget):
         self._build_schedule()
         self._build_stats()
         self._build_ai_page()
-        self._build_notifications()
         self._build_profile()
+        self._build_settings()
 
         self.sidebar.set_active("dash")
 
@@ -719,15 +719,9 @@ class StudentDashboard(QWidget):
         self.pages["ai"] = ai
         self.stack.addWidget(ai)
 
-    def _build_notifications(self):
-        """Вкладка «Уведомления» — письма об оценках и изменениях расписания."""
-        from notifications_view import NotificationsView
-        w = NotificationsView()
-        self.pages["notifications"] = w
-        self.stack.addWidget(w)
-
-    def _build_profile(self):
-        """Вкладка «Профиль»: данные ученика + кастомизация темы оформления."""
+    def _build_settings(self):
+        """Вкладка «Настройки»: оформление (темы), микрофон и озвучка Вектора.
+        Раньше это лежало в «Профиле» — вынесли в отдельную вкладку."""
         from theme_ui import ThemeCustomizer
         import theme_service
         w = QWidget(); lay = QVBoxLayout(w)
@@ -750,13 +744,33 @@ class StudentDashboard(QWidget):
             if mic_available():
                 lay.addWidget(MicSelectorWidget())
         except Exception as e:
-            log.get("dashboards").warning(f"[profile] выбор микрофона недоступен: {e}")
-        #Озвучка ответов Вектора (вкл/выкл + голос). Доступна всегда (офлайн — голос Windows).
+            log.get("dashboards").warning(f"[settings] выбор микрофона недоступен: {e}")
+        #Озвучка ответов Вектора (Голос → Бубнеж → Выкл + голос).
         try:
             from vector.voice_ui import TtsSettingsWidget
             lay.addWidget(TtsSettingsWidget())
         except Exception as e:
-            log.get("dashboards").warning(f"[profile] настройки озвучки недоступны: {e}")
+            log.get("dashboards").warning(f"[settings] настройки озвучки недоступны: {e}")
+        self.pages["settings"] = w
+        self.stack.addWidget(w)
+
+    def _build_profile(self):
+        """Вкладка «Профиль»: сведения об аккаунте + уведомления."""
+        from notifications_view import NotificationsView
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
+        lay.addWidget(title_lbl("Профиль", 20))
+
+        name = f"{self.cur_stud.get('f', '')} {self.cur_stud.get('n', '')}".strip()
+        grp = self.cur_stud.get("g", "")
+        acc = card()
+        acc_lay = QVBoxLayout(acc); acc_lay.setContentsMargins(16, 14, 16, 14); acc_lay.setSpacing(2)
+        acc_lay.addWidget(lbl(name or "Студент", 16, C['text'], bold=True))
+        acc_lay.addWidget(lbl("Студент" + (f" · {grp}" if grp else ""), 12, C['text3']))
+        lay.addWidget(acc)
+
+        lay.addWidget(section_lbl("Уведомления"))
+        lay.addWidget(NotificationsView(), 1)
         self.pages["profile"] = w
         self.stack.addWidget(w)
 
@@ -775,5 +789,8 @@ class StudentDashboard(QWidget):
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
+            #Ушли с Вектора (у студента шторки нет — значит с любой не-ИИ вкладки) → тишина.
+            from vector.widget import hush_if_vector_hidden
+            hush_if_vector_hidden(getattr(self, "vector_dock", None), key)
         finally:
             self._switching = False

@@ -3,7 +3,7 @@
 // СВЕРХУ на всю ширину, ниже — сайдбар слева и область контента. Каждая страница
 // показывает свой заголовок (как title_lbl в десктопе). Адаптив: на телефоне
 // сайдбар выезжает поверх как drawer.
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -11,9 +11,11 @@ import HeaderBar from '@/components/HeaderBar.vue'
 import VectorDock from '@/components/VectorDock.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
+import { useTtsStore } from '@/stores/tts'
 
 const theme = useThemeStore()
 const vector = useVectorStore()
+const tts = useTtsStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
@@ -21,9 +23,26 @@ const title = computed(() => route.meta?.title || '')
 const subtitle = computed(() => route.meta?.subtitle || '')
 // Боковой Вектор виден на всех страницах, КРОМЕ самой вкладки «ИИ Помощник»
 // (там полноразмерный Вектор в контенте). Только десктоп (на мобиле не показываем).
-const showDock = computed(() => !route.path.endsWith('/vector'))
+const onVectorPage = computed(() => route.path.endsWith('/vector'))
+const showDock = computed(() => !onVectorPage.value)
+
+// «Вектор виден» = полноэкранный на вкладке ИИ ЛИБО открытая боковая шторка (шторка —
+// только на широком экране lg, на мобиле её нет). Озвучка звучит, пока виден хоть один
+// Вектор, и обрывается РОВНО когда пропал последний: ушли на вкладку без шторки — тишина;
+// на вкладке шторка открыта — Вектор договаривает; закрыли шторку — тишина.
+const isLg = ref(typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
+let _mq = null
+const _onMq = (e) => { isLg.value = e.matches }
+if (typeof window !== 'undefined') {
+  _mq = window.matchMedia('(min-width:1024px)')
+  _mq.addEventListener('change', _onMq)
+}
+const dockShown = computed(() => showDock.value && !vector.collapsed && isLg.value)
+const vectorShown = computed(() => onVectorPage.value || dockShown.value)
+watch(vectorShown, (now, was) => { if (was && !now) tts.stop() })
 
 onMounted(() => theme.loadFromPrefs())
+onBeforeUnmount(() => { if (_mq) _mq.removeEventListener('change', _onMq) })
 </script>
 
 <template>

@@ -8,8 +8,8 @@
 import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
-  Palette, MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle,
+  MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
+  AlertTriangle, SlidersHorizontal,
 } from '@lucide/vue'
 
 export const NAV = {
@@ -22,6 +22,7 @@ export const NAV = {
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/student/vector' },
     { section: 'Личное' },
     { key: 'profile', label: 'Профиль', icon: User, to: '/student/profile' },
+    { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/student/settings' },
   ],
   teacher: [
     { section: 'Преподавание' },
@@ -33,6 +34,7 @@ export const NAV = {
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/teacher/vector' },
     { section: 'Личное' },
     { key: 'profile', label: 'Профиль', icon: User, to: '/teacher/profile' },
+    { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/teacher/settings' },
   ],
   admin: [
     { section: 'Управление' },
@@ -51,7 +53,7 @@ export const NAV = {
     { key: 'server', label: 'Сервер', icon: Server, to: '/admin/server' },
     { key: 'requests', label: 'Запросы на подключение', icon: MonitorSmartphone, to: '/admin/requests' },
     { key: 'sessions', label: 'Сессии и доступ', icon: ShieldCheck, to: '/admin/access' },
-    { key: 'theme', label: 'Оформление', icon: Palette, to: '/admin/theme' },
+    { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/admin/settings' },
     { key: 'mon', label: 'Мониторинг', icon: Activity, to: '/admin/monitor' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/admin/vector' },
   ],

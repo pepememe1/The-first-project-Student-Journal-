@@ -107,7 +107,7 @@ class AdminDashboard(QWidget):
             ("reg",   "clipboard", "Запросы на регистрацию"),
             ("requests", "link",  "Запросы на подключение"),
             ("sessions", "shield", "Сессии и доступ"),
-            ("theme", "palette",  "Оформление"),
+            ("theme", "settings",  "Настройки"),
             ("mon",   "activity", "Мониторинг"),
             ("ai",    "bot",      "ИИ Помощник"),
         ]
@@ -904,12 +904,8 @@ class AdminDashboard(QWidget):
         self._tts_enabled_cb = _QCB("🔊 Разрешить озвучку ответов на сервере (для всех "
                                     "пользователей)")
         sbl.addWidget(self._tts_enabled_cb)
-        #Озвучка ответов Вектора (вкл/выкл + голос) — ЛОКАЛЬНАЯ настройка этого ПК.
-        try:
-            from vector.voice_ui import TtsSettingsWidget
-            sbl.addWidget(TtsSettingsWidget())
-        except Exception:
-            pass
+        #Личный выбор режима озвучки (Голос/Бубнеж/Выкл + голос) переехал во вкладку
+        #«Настройки» — здесь остаётся только ГЛОБАЛЬНЫЙ рубильник для всех пользователей.
         sbl.addWidget(lbl("Распознавание идёт ЛОКАЛЬНО (аудио никуда не уходит, 152-ФЗ). "
                           "Модель скачивается один раз при первом использовании. Команды "
                           "преподавателя на оценку/пропуск всегда подтверждаются вручную.",
@@ -1634,8 +1630,8 @@ class AdminDashboard(QWidget):
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 
     def _build_theme(self):
-        """Вкладка «Оформление»: админ задаёт тему учебного заведения по умолчанию.
-        Палитра уезжает в общий config и применяется всем, у кого нет своей темы."""
+        """Вкладка «Настройки»: оформление (тема учреждения по умолчанию — уезжает в общий
+        config и применяется всем без своей темы) + личная озвучка Вектора этого ПК."""
         from theme_ui import ThemeCustomizer
         import theme_service
         w = QWidget(); lay = QVBoxLayout(w)
@@ -1649,6 +1645,12 @@ class AdminDashboard(QWidget):
 
         lay.addWidget(ThemeCustomizer(initial_spec=theme_service.current_spec("admin", {}),
                                       on_save=_save))
+        #Озвучка ответов Вектора (Голос → Бубнеж → Выкл) — личная настройка этого ПК.
+        try:
+            from vector.voice_ui import TtsSettingsWidget
+            lay.addWidget(TtsSettingsWidget())
+        except Exception:
+            pass
         self.pages["theme"] = w; self.stack.addWidget(w)
 
     #Роутинг
@@ -2284,6 +2286,9 @@ class AdminDashboard(QWidget):
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
                 self._current_key = key
+            #Ушли туда, где Вектора не видно (шторка свёрнута) → глушим озвучку.
+            from vector.widget import hush_if_vector_hidden
+            hush_if_vector_hidden(dock, key)
         finally:
             self._switching = False
 

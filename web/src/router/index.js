@@ -16,6 +16,7 @@ import ConnectServer from '@/pages/ConnectServer.vue'
 import VectorPage from '@/pages/VectorPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
 import Profile from '@/pages/Profile.vue'
+import Settings from '@/pages/Settings.vue'
 import StudentDashboard from '@/pages/student/StudentDashboard.vue'
 import StudentJournal from '@/pages/student/StudentJournal.vue'
 import StudentStats from '@/pages/student/StudentStats.vue'
@@ -33,7 +34,6 @@ import AdminSchedule from '@/pages/admin/AdminSchedule.vue'
 import AdminScheduleIssues from '@/pages/admin/AdminScheduleIssues.vue'
 import AdminSessions from '@/pages/admin/AdminSessions.vue'
 import AdminRequests from '@/pages/admin/AdminRequests.vue'
-import ThemePage from '@/pages/admin/ThemePage.vue'
 import MonitorPage from '@/pages/admin/MonitorPage.vue'
 import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
 import AdminServer from '@/pages/admin/AdminServer.vue'
@@ -63,6 +63,7 @@ const routes = [
       page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
     ],
   },
 
@@ -77,6 +78,7 @@ const routes = [
       page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       page('profile', Profile, 'Профиль'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
     ],
   },
 
@@ -97,7 +99,7 @@ const routes = [
       page('server', AdminServer, 'Сервер и сайт', 'Адрес, БД, шифрование, статус'),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),
       page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв'),
-      { path: 'theme', component: ThemePage, meta: { title: 'Оформление', subtitle: 'Тема учреждения' } },
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
       { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
     ],
@@ -124,3 +126,6 @@ router.beforeEach((to) => {
   if (to.meta.role && to.meta.role !== auth.role) return HOME_BY_ROLE[auth.role] || '/login'
   return true
 })
+// Обрыв озвучки при уходе от Вектора живёт НЕ здесь: глушить на каждом переходе неверно
+// (на странице с открытой шторкой Вектор ещё виден и должен договорить). Правило «звук
+// играет, пока виден хоть один Вектор» — реактивно в AppShell.vue (watch vectorShown).

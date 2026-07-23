@@ -308,12 +308,19 @@ class VectorSession(QObject):
       • messageAdded(who, text) — в историю добавлена реплика (рисуют все панели);
       • thinkingStarted()       — отправлен вопрос (маскот → «думает»);
       • answered(text, mood)    — пришёл ответ (маскот → «говорит»);
-      • askFailed(err)          — ответить не удалось.
+      • askFailed(err)          — ответить не удалось;
+      • speechStarted()         — РЕАЛЬНО пошёл звук озвучки (маскот держит «речь»);
+      • speechEnded()           — звук озвучки кончился (маскот → покой).
     """
     messageAdded = Signal(str, str)
     thinkingStarted = Signal()
     answered = Signal(str, str, str)   # text, mood, intent
     askFailed = Signal(str)
+    #Границы фактического воспроизведения озвучки — чтобы анимация речи длилась РОВНО
+    #столько, сколько играет звук (а не по эвристике длины текста; на длинном ответе она
+    #обрывалась раньше речи). Эмитятся из фонового потока tts — Qt доставит их в GUI-поток.
+    speechStarted = Signal()
+    speechEnded = Signal()
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -363,7 +370,10 @@ class VectorSession(QObject):
         #(панелей несколько, а озвучивать нужно однократно). Изолировано: сбой не ломает чат.
         try:
             from . import tts
-            tts.speak(text)
+            #on_start/on_end — границы фактического звука. Прокидываем их наружу сигналами,
+            #чтобы каждая панель держала анимацию речи ровно пока играет озвучка. Эмит из
+            #фонового потока безопасен: Qt поставит вызов в очередь GUI-потока.
+            tts.speak(text, on_start=self.speechStarted.emit, on_end=self.speechEnded.emit)
         except Exception:
             pass
 
@@ -400,9 +410,13 @@ class VectorPanel(QWidget):
         self._away_timer.timeout.connect(self._go_away)
         self._speak_start_timer = QTimer(self)   #1 c thinking после ответа
         self._speak_start_timer.setSingleShot(True)
-        self._speak_end_timer = QTimer(self)     #конец речи через 5–7 c
+        self._speak_end_timer = QTimer(self)     #конец речи по ЭВРИСТИКЕ (когда озвучки нет)
         self._speak_end_timer.setSingleShot(True)
         self._speak_end_timer.timeout.connect(self._finish_speaking)
+        #Пока идёт реальная озвучка — анимацию речи ведёт ЗВУК (speechStarted/Ended), а не
+        #эвристический таймер. Флаг гасит `_speak_end_timer`, чтобы он не обрывал длинный ответ.
+        self._tts_driving = False
+        self._last_intent = "help"
 
         if docked:
             self.setFixedWidth(PANEL_WIDTH)
@@ -534,6 +548,9 @@ class VectorPanel(QWidget):
         self.session.thinkingStarted.connect(self._on_thinking)
         self.session.answered.connect(self._on_session_answer)
         self.session.askFailed.connect(self._on_session_fail)
+        #Границы реального звука → анимация речи длится ровно сколько играет озвучка.
+        self.session.speechStarted.connect(self._on_speech_started)
+        self.session.speechEnded.connect(self._on_speech_ended)
 
     #Всплывающее меню быстрых команд (телеграм-стиль: висит над кнопкой команд)
     def _build_command_menu(self) -> QFrame:
@@ -709,8 +726,12 @@ class VectorPanel(QWidget):
         """Пришёл ответ (текст уже добавлен в чат через messageAdded)."""
         self.send_btn.setEnabled(True)
         self.avatar.set_mood(mood)
-        #маскот: ответ отправлен, но ещё 1 c «дообдумывает» (по ТЗ), затем speaking
-        #на 5–7 c по длине ответа (эмоция = морда/жест по mood+intent), затем idle.
+        self._last_intent = intent
+        #Пока не знаем, будет ли реальная озвучка — сбрасываем флаг. Если пойдёт звук,
+        #speechStarted включит его и анимацию поведёт звук; если озвучки нет — эвристика ниже.
+        self._tts_driving = False
+        #маскот: ответ отправлен, но ещё 1 c «дообдумывает» (по ТЗ), затем speaking. Без
+        #озвучки длительность — эвристика по длине ответа; с озвучкой её ведёт сам звук.
         dur = speak_duration_ms(text)
         #отвязываем прошлый слот без шумного RuntimeWarning
         prev = getattr(self, "_speak_slot", None)
@@ -732,7 +753,26 @@ class VectorPanel(QWidget):
             QTimer.singleShot(GREET_MS, lambda: self._begin_speaking(dur_ms, "help"))
             return
         self.avatar.set_state(ST_SPEAK, intent=intent)
-        self._speak_end_timer.start(dur_ms)
+        #Эвристический конец речи — ТОЛЬКО когда озвучки нет. Если звук идёт, его конец
+        #поймает speechEnded (иначе длинный ответ обрывался бы раньше речи).
+        if not self._tts_driving:
+            self._speak_end_timer.start(dur_ms)
+
+    def _on_speech_started(self):
+        """РЕАЛЬНО пошёл звук озвучки → анимацию речи ведёт звук, не эвристика. Синхронно
+        со стартом звука переводим маскота в «речь» (отменяя 1-c додумывание и таймер конца)."""
+        self._tts_driving = True
+        self._speak_start_timer.stop()
+        self._speak_end_timer.stop()
+        self._busy = True
+        self._begin_speaking(0, self._last_intent)
+
+    def _on_speech_ended(self):
+        """Звук озвучки кончился → договорил, уходим в покой."""
+        if not self._tts_driving:
+            return                       #звук этой панели не вёл — ничего не трогаем
+        self._tts_driving = False
+        self._finish_speaking()
 
     def _finish_speaking(self):
         """Речь окончена → 1_idle, будто договорил; если курсор не у чата —
@@ -839,11 +879,24 @@ class VectorHost:
         #зеркалим маскота, когда панель справа (по ТЗ)
         self.panel.set_side(self.side)
 
+    def is_open(self):
+        """Развёрнута ли шторка = виден полноценный Вектор (панель показана, не свёрнута
+        до полоски 🐯 и не спрятана под вкладку «ИИ»)."""
+        return not self._collapsed and self._suspended is None
+
     def hide_panel(self):
         #картинки маскота скрываются вместе со всей панелью (по ТЗ)
         self.panel.hide()
         self.restore.show()
         self._collapsed = True
+        #Закрыли шторку — Вектора больше не видно, глушим озвучку (как на вебе: пропал
+        #последний видимый Вектор → тишина). Кнопка «скрыть» доступна только вне вкладки
+        #«ИИ», так что здесь мы точно НЕ на полноэкранном Векторе.
+        try:
+            from . import tts
+            tts.stop()
+        except Exception:
+            pass
 
     def show_panel(self):
         self.restore.hide()
@@ -876,3 +929,22 @@ class VectorHost:
         else:
             self.restore.hide()
             self.panel.show()
+
+
+def hush_if_vector_hidden(dock, key):
+    """Заглушить озвучку, если после переключения на вкладку `key` Вектора не видно.
+
+    Правило то же, что на вебе: голос звучит, пока виден хоть один Вектор — полноэкранный
+    на вкладке «ИИ» ИЛИ развёрнутая боковая шторка. Ушли туда, где Вектора нет (у студента
+    любая не-ИИ вкладка; у препода/админа — если шторка свёрнута) → тишина.
+
+    dock — VectorHost или None (у студента шторки нет). Зовётся из `_switch` дашбордов."""
+    if key == "ai":
+        return                       #полноэкранный Вектор виден — пусть договаривает
+    if dock is not None and dock.is_open():
+        return                       #боковая шторка открыта — Вектор виден
+    try:
+        from . import tts
+        tts.stop()
+    except Exception:
+        pass

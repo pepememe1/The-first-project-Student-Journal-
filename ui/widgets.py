@@ -5,7 +5,7 @@ widgets.py — Переиспользуемые фабрики для созда
 """
 
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout, QWidget,
+    QFrame, QLabel, QPushButton, QLineEdit, QComboBox, QVBoxLayout, QHBoxLayout, QWidget,
     QGraphicsDropShadowEffect, QLayout
 )
 from PySide6.QtCore import Qt, QSize, QRect, QPoint
@@ -225,6 +225,26 @@ def combo(items=None) -> QComboBox:
         c.addItems(items)
     c.setMinimumHeight(36)
     return c
+
+
+def field_cell(label_text, field, label_w=72, cell_w=330) -> QWidget:
+    """«Ячейка» шапки: подпись фиксированной ширины + поле, как единый блок одинаковой ширины.
+
+    Зачем. В переносящемся FlowLayout каждый виджет переносится ПО ОТДЕЛЬНОСТИ — из-за этого
+    подпись отрывалась от своего поля («Группа:» оставалась на строке выше, а список уезжал
+    вниз), а разные ширины полей ломали колонки. Оборачивая пару в ячейку ОДИНАКОВОЙ ширины с
+    подписью ОДИНАКОВОЙ ширины, добиваемся: подпись и поле не разрываются, а поля при любом
+    размере окна встают в ровные ПАРАЛЛЕЛЬНЫЕ колонки (одинаковый левый и правый край)."""
+    cell = QWidget()
+    h = QHBoxLayout(cell)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(8)
+    cap = lbl(label_text, 12, C['text3'])
+    cap.setFixedWidth(label_w)
+    h.addWidget(cap)
+    h.addWidget(field, 1)
+    cell.setFixedWidth(cell_w)
+    return cell
 
 
 #SEPARATOR FACTORIES

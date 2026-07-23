@@ -22,6 +22,7 @@ import os
 import re
 import html
 import wave
+import base64
 import threading
 
 import log
@@ -64,23 +65,53 @@ _local_lock = threading.Lock()
 
 
 # ── Настройки этого ПК ──────────────────────────────────────────────────────────────
-def is_enabled() -> bool:
-    """Включена ли озвучка (по умолчанию да — выключает только явное 'off')."""
+#Три режима озвучки: 'voice' (настоящий синтез), 'mumble' («бубнеж» — имитация речи
+#блипами, как голоса персонажей в Undertale/Deltarune), 'off' (тишина).
+_MODES = ("voice", "mumble", "off")
+_MODE_LABELS = {"voice": "Голос включён", "mumble": "Бубнеж", "off": "Озвучка выключена"}
+
+
+def get_mode() -> str:
+    """Текущий режим озвучки. Мигрирует со старого 'tts_enabled' (вкл/выкл)."""
     try:
         from data_store import local_get
-        return str(local_get("tts_enabled", "on")) != "off"
+        m = str(local_get("tts_mode", ""))
+        if m in _MODES:
+            return m
+        return "off" if str(local_get("tts_enabled", "on")) == "off" else "voice"
     except Exception:
-        return True
+        return "voice"
+
+
+def set_mode(mode: str) -> None:
+    m = mode if mode in _MODES else "voice"
+    try:
+        from data_store import local_set
+        local_set("tts_mode", m)
+    except Exception as e:
+        _LOG.warning(f"[tts] не сохранил режим озвучки: {e}")
+    if m == "off":
+        stop()
+
+
+def cycle_mode() -> str:
+    """Переключить по кругу: Голос → Бубнеж → Выкл → Голос. Возвращает новый режим."""
+    set_mode(_MODES[(_MODES.index(get_mode()) + 1) % len(_MODES)])
+    return get_mode()
+
+
+def mode_label() -> str:
+    return _MODE_LABELS.get(get_mode(), _MODE_LABELS["voice"])
+
+
+def is_enabled() -> bool:
+    """Совместимость: озвучка не выключена (режим ≠ 'off')."""
+    return get_mode() != "off"
 
 
 def set_enabled(on: bool) -> None:
-    try:
-        from data_store import local_set
-        local_set("tts_enabled", "on" if on else "off")
-    except Exception as e:
-        _LOG.warning(f"[tts] не сохранил флаг озвучки: {e}")
-    if not on:
-        stop()
+    """Совместимость со старым вкл/выкл: включить = режим 'voice', выключить = 'off'."""
+    set_mode("voice" if on else "off")
 
 
 def get_voice() -> str:
@@ -260,14 +291,47 @@ def _speak_sapi(text: str, voice: str, gen: int) -> None:
         _LOG.warning(f"[tts] SAPI-озвучка не удалась: {e}")
 
 
+# ── Уведомления о фактическом воспроизведении ───────────────────────────────────────
+# Маскот на десктопе анимирует «речь» РОВНО пока идёт звук: колбэки on_start/on_end
+# зовём вокруг настоящего проигрывания. Оба защищены поколением (gen) — устаревший, уже
+# перебитый barge-in'ом воркер молчит, анимацию ведёт актуальный ответ (или сам stop()).
+def _fire(cb, gen: int) -> None:
+    if cb is None:
+        return
+    with _gen_lock:
+        if gen != _gen:
+            return
+    try:
+        cb()
+    except Exception:
+        pass
+
+
+def _play_cb(samples, sr, gen, on_start, on_end) -> bool:
+    """Проиграть сэмплы, оповестив о старте/конце звука (для анимации речи)."""
+    _fire(on_start, gen)
+    try:
+        return _play_samples(samples, sr, gen)
+    finally:
+        _fire(on_end, gen)
+
+
+def _speak_sapi_cb(text, voice, gen, on_start, on_end) -> None:
+    _fire(on_start, gen)
+    try:
+        _speak_sapi(text, voice, gen)
+    finally:
+        _fire(on_end, gen)
+
+
 # ── Публичный вход ──────────────────────────────────────────────────────────────────
-def _worker(text: str, voice: str, gen: int) -> None:
+def _worker(text: str, voice: str, gen: int, on_start=None, on_end=None) -> None:
     #Слой 1: сервер.
     wav = _server_wav(text, voice)
     if wav:
         try:
             samples, sr = _wav_to_samples(wav)
-            if _play_samples(samples, sr, gen):
+            if _play_cb(samples, sr, gen, on_start, on_end):
                 return
         except Exception as e:
             _LOG.info(f"[tts] не проиграл серверный WAV ({e})")
@@ -275,19 +339,113 @@ def _worker(text: str, voice: str, gen: int) -> None:
     local = _local_samples(text, voice)
     if local is not None:
         try:
-            if _play_samples(local[0], local[1], gen):
+            if _play_cb(local[0], local[1], gen, on_start, on_end):
                 return
         except Exception as e:
             _LOG.info(f"[tts] не проиграл локальный синтез ({e})")
     #Слой 3: SAPI.
-    _speak_sapi(text, voice, gen)
+    _speak_sapi_cb(text, voice, gen, on_start, on_end)
 
 
-def speak(text: str) -> None:
-    """Озвучить ответ Вектора (асинхронно). Ничего не делает, если выключено/пусто.
-    Прерывает предыдущую озвучку. Никогда не бросает — звук не должен ронять чат."""
+# Паузы на пунктуации (сек) — из-за них бубнеж «дышит» как речь, а не тарахтит монотонно.
+_MUMBLE_PAUSE = {",": 0.20, ";": 0.22, ":": 0.22, ".": 0.34, "!": 0.36, "?": 0.40,
+                 "…": 0.42, "—": 0.14, "-": 0.10, "\n": 0.34}
+# Фрагмент бубнежа (голос Влада, ~27 мс, int16 PCM моно @22050). Base64 вынесен в модуль
+# `_mumble_data.py` (генерируется из vector_mumble.mp3) — так он бандлится в .exe как обычный
+# модуль, без путей к арту, и работает офлайн. Тембр НЕ трогаем — только повторяем встык с
+# шагом и поднимаем общую громкость.
+_MUMBLE_SR = 22050
+_MUMBLE_GAIN = 1.15        #чуть громче оригинала (~15%) — по просьбе; тембр не меняем
+_MUMBLE_STEP = 0.0825     #шаг склейки: фрагмент 27 мс + пауза ~55 мс между повторами
+_MUMBLE_CHAR = 0.058      #«речевое» время на символ (темп проговаривания)
+
+_MUMBLE_GRAIN = None       #ленивый кэш распакованного фрагмента (numpy float32)
+
+
+def _mumble_grain():
+    """Распаковать встроенный фрагмент бубнежа в float32 (кэшируется)."""
+    global _MUMBLE_GRAIN
+    if _MUMBLE_GRAIN is None:
+        import numpy as np
+        from . import _mumble_data
+        raw = base64.b64decode(_mumble_data.B64)
+        g = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        _MUMBLE_GRAIN = (g * _MUMBLE_GAIN).astype(np.float32)
+    return _MUMBLE_GRAIN
+
+
+def _mumble_segments(text: str):
+    """Разложить фразу на отрезки: (речь, длительность) и (пауза, длительность). Речь —
+    непрерывный прогон букв ДО знака препинания, пауза — сам знак."""
+    segs = []
+    run = 0.0
+    for ch in text:
+        if ch in _MUMBLE_PAUSE:
+            if run > 0:
+                segs.append((True, run)); run = 0.0
+            segs.append((False, _MUMBLE_PAUSE[ch]))
+        elif ch.isalnum():
+            run += _MUMBLE_CHAR
+        elif ch == " ":
+            run += _MUMBLE_CHAR * 0.6
+        else:
+            run += _MUMBLE_CHAR * 0.5
+    if run > 0:
+        segs.append((True, run))
+    return segs
+
+
+def _mumble_samples(text: str, voice: str = None):
+    """«Бубнеж»: фрагмент голоса Влада, СКЛЕЕННЫЙ циклично (шаг _MUMBLE_STEP), пока идёт
+    «речь», с паузами на знаках препинания. Один звук — без мужского/женского (у бубнежа
+    выбор голоса не показывается). Считается локально, без сети и без TTS. `voice` не используется."""
+    import numpy as np
+    g = _mumble_grain()
+    sr = _MUMBLE_SR
+    segs = _mumble_segments(text)
+    if not any(sp for sp, _ in segs):
+        return None
+    total = int(sum(d for _, d in segs) * sr) + len(g) + 4
+    out = np.zeros(total, dtype=np.float32)
+    step = max(1, int(sr * _MUMBLE_STEP))
+    t = 0.0
+    for speaking, dur in segs:
+        if speaking:
+            pos, stop = int(t * sr), int((t + dur) * sr)
+            while pos < stop:
+                end = min(pos + len(g), total)
+                out[pos:end] += g[:end - pos]      #блипы не наложены (шаг > длины) → без клиппинга
+                pos += step
+        t += dur
+    np.clip(out, -1.0, 1.0, out=out)
+    return out, sr
+
+
+def _mumble_worker(text: str, voice: str, gen: int, on_start=None, on_end=None) -> None:
+    try:
+        res = _mumble_samples(text, voice)
+        if res is not None:
+            _play_cb(res[0], res[1], gen, on_start, on_end)
+        else:
+            #Нет букв (пусто) — звука не будет, но конец речи отметить надо, иначе анимация зависнет.
+            _fire(on_start, gen)
+            _fire(on_end, gen)
+    except Exception as e:
+        _LOG.info(f"[tts] бубнеж не сыграл: {e}")
+        _fire(on_end, gen)
+
+
+def speak(text: str, on_start=None, on_end=None) -> None:
+    """Озвучить ответ Вектора (асинхронно) по текущему режиму. Ничего не делает, если
+    режим 'off' или текст пуст. Прерывает предыдущую озвучку. Никогда не бросает.
+
+    on_start/on_end — колбэки вокруг РЕАЛЬНОГО воспроизведения (для анимации речи маскота:
+    пока идёт звук — играет speaking). Зовутся из фонового потока и защищены поколением,
+    так что перебитый barge-in'ом синтез их не дёрнет. Работают для всех слоёв (сервер/
+    локальный Silero/SAPI) и для бубнежа — т.е. и для «нормального» голоса тоже."""
     t = (text or "").strip()
-    if not t or not is_enabled():
+    mode = get_mode()
+    if not t or mode == "off":
         return
     if len(t) > _MAX_CHARS:
         t = t[:_MAX_CHARS]
@@ -295,4 +453,5 @@ def speak(text: str) -> None:
     with _gen_lock:
         gen = _gen
     voice = get_voice()
-    threading.Thread(target=_worker, args=(t, voice, gen), daemon=True).start()
+    target = _mumble_worker if mode == "mumble" else _worker
+    threading.Thread(target=target, args=(t, voice, gen, on_start, on_end), daemon=True).start()

@@ -67,21 +67,32 @@ class _FakeThread:
 
 
 def test_speak_disabled_is_noop(monkeypatch):
-    monkeypatch.setattr(tts, "is_enabled", lambda: False)
+    monkeypatch.setattr(tts, "get_mode", lambda: "off")
     rec = []
     monkeypatch.setattr(tts, "_worker", lambda t, v, g: rec.append((t, v, g)))
     tts.speak("привет")
-    assert rec == [], "выключенная озвучка не должна синтезировать"
+    assert rec == [], "выключенная озвучка (режим off) не должна синтезировать"
+
+
+def test_speak_mumble_uses_mumble_worker(monkeypatch):
+    """В режиме «бубнеж» речь идёт через _mumble_worker, а НЕ через серверный/локальный синтез."""
+    monkeypatch.setattr(tts, "get_mode", lambda: "mumble")
+    monkeypatch.setattr(tts.threading, "Thread", _FakeThread)
+    voice_rec, mumble_rec = [], []
+    monkeypatch.setattr(tts, "_worker", lambda t, v, g, *a: voice_rec.append(t))
+    monkeypatch.setattr(tts, "_mumble_worker", lambda t, v, g, *a: mumble_rec.append(t))
+    tts.speak("привет")
+    assert mumble_rec == ["привет"] and voice_rec == [], "бубнеж не должен звать синтез речи"
 
 
 def test_speak_starts_worker_with_current_gen(monkeypatch):
     """speak() перебивает прежнюю речь (gen++) и запускает воркер с текущим поколением
     и выбранным голосом."""
-    monkeypatch.setattr(tts, "is_enabled", lambda: True)
+    monkeypatch.setattr(tts, "get_mode", lambda: "voice")
     monkeypatch.setattr(tts, "get_voice", lambda: "female")
     monkeypatch.setattr(tts.threading, "Thread", _FakeThread)
     rec = []
-    monkeypatch.setattr(tts, "_worker", lambda t, v, g: rec.append((t, v, g)))
+    monkeypatch.setattr(tts, "_worker", lambda t, v, g, *a: rec.append((t, v, g)))
 
     g0 = tts._gen
     tts.speak("сколько у меня оценок")
@@ -89,6 +100,33 @@ def test_speak_starts_worker_with_current_gen(monkeypatch):
     assert rec and rec[0][0] == "сколько у меня оценок"
     assert rec[0][1] == "female"
     assert rec[0][2] == tts._gen                  # воркер получил СВЕЖЕЕ поколение
+
+
+def test_speak_fires_start_end_callbacks(monkeypatch):
+    """on_start/on_end зовутся ВОКРУГ реального воспроизведения (анимация речи маскота
+    длится ровно пока играет звук)."""
+    monkeypatch.setattr(tts, "get_mode", lambda: "voice")
+    monkeypatch.setattr(tts.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(tts, "_server_wav", lambda text, voice: b"WAV")
+    monkeypatch.setattr(tts, "_wav_to_samples", lambda data: (["s"], 24000))
+    order = []
+    monkeypatch.setattr(tts, "_play_samples",
+                        lambda s, sr, g: order.append("play") or True)
+    tts.speak("длинный ответ", on_start=lambda: order.append("start"),
+              on_end=lambda: order.append("end"))
+    assert order == ["start", "play", "end"], "старт → звук → конец, строго в этом порядке"
+
+
+def test_speak_callbacks_skipped_for_stale_generation(monkeypatch):
+    """Колбэки перебитого barge-in'ом воркера молчат (защита по поколению) — иначе
+    устаревший конец речи погасил бы анимацию свежего ответа."""
+    monkeypatch.setattr(tts, "_play_samples", lambda s, sr, g: True)
+    fired = []
+    stale = tts._gen - 1                            # уже неактуальное поколение
+    tts._play_cb(["s"], 24000, stale,
+                 on_start=lambda: fired.append("start"),
+                 on_end=lambda: fired.append("end"))
+    assert fired == [], "устаревшее поколение не должно дёргать анимацию"
 
 
 # ── Выбор слоя синтеза (сервер → локальный Silero → SAPI) ───────────────────────────
