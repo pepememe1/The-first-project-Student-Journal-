@@ -361,3 +361,104 @@ def test_synonym_absence(text, action):
 def test_synonym_group_pogolovno():
     r = b("поголовно четыре")
     assert r.kind == "grades" and len(r.items) == 5 and all(it.value == "4" for it in r.items)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# УСТОЙЧИВОСТЬ: бурятские ФИО, варианты транскрипции STT, расширенный словарь.
+# «Как автомат Калашникова» — предусмотрены реальные способы, которыми препод и Whisper
+# коверкают команды.
+# ═══════════════════════════════════════════════════════════════════════════════════
+
+BUR_ROSTER = [("Гындынова", "Арюна"), ("Самбуев", "Бато"), ("Цыренова", "Саяна"),
+              ("Дондоков", "Аюр"), ("Гомбоева", "Оюна")]
+BUR_LESSONS = [{"id": "L1", "label": "Практика №1 · 10.09"}]
+
+
+def bok(text):
+    return parse(text, BUR_ROSTER, BUR_LESSONS)
+
+
+@pytest.mark.parametrize("text,surname", [
+    ("поставь Гындыновой пять", "Гындынова"),
+    ("Самбуеву четыре", "Самбуев"),
+    ("Цыреновой тройку", "Цыренова"),
+    ("Дондокову отлично", "Дондоков"),
+    ("Гомбоевой двойку", "Гомбоева"),
+])
+def test_buryat_surnames_match(text, surname):
+    c = bok(text)
+    assert c.ok and c.student[0] == surname, (text, c.error, c.student)
+
+
+@pytest.mark.parametrize("text,surname", [
+    # Whisper часто путает гласные/удвоения в бурятских ФИО — фонетика должна вытянуть.
+    ("Гундыновой пять", "Гындынова"),        # ы→у услышал
+    ("Самбоеву четыре", "Самбуев"),          # у→о
+    ("Цыреновой тройку", "Цыренова"),
+    ("Гомбоеевой двойку", "Гомбоева"),        # удвоенная гласная
+])
+def test_buryat_surnames_transcription_variants(text, surname):
+    c = bok(text)
+    # либо распознал точно, либо честно переспросил — но НИКОГДА не поставил другому
+    if c.ok:
+        assert c.student[0] == surname, (text, c.student)
+    else:
+        assert not c.student, (text, c.student)
+
+
+def test_buryat_firstname_address():
+    # Обращение по УНИКАЛЬНОМУ имени (бурятские имена различимее фамилий).
+    c = bok("Бато не пришёл")
+    assert c.ok and c.student == ("Самбуев", "Бато") and c.action == "absent_n", (c.error, c.student)
+
+
+def test_buryat_firstname_grade():
+    c = bok("Арюне пятёрку")
+    assert c.ok and c.student == ("Гындынова", "Арюна") and c.value == "5", (c.error, c.student)
+
+
+def test_buryat_unknown_still_no_guess():
+    # Фамилии нет в группе — не подсунуть похоже звучащую.
+    c = bok("Раднаевой пять")
+    assert not c.ok and not c.student
+
+
+@pytest.mark.parametrize("text,val", [
+    ("Гордееву трёшку", "3"),
+    ("Гордееву пятёру", "5"),
+    ("Гордееву четвёру", "4"),
+    ("Смирновой неудовл", "2"),
+    ("Гордееву удовлет", "3"),
+    ("Петрову хорошист", "4"),
+])
+def test_extended_grade_vocab(text, val):
+    c = ok(text)
+    assert c.ok and c.action == "grade" and c.value == val, (text, c.error, c.value)
+
+
+@pytest.mark.parametrize("text,action", [
+    ("Гордеев пропустил", "absent_n"),
+    ("Гордеев не дошёл до аудитории", "absent_n"),
+    ("Смирнова заболела", "absent_b"),
+    ("Смирнова плохо себя чувствует", "absent_b"),
+    ("Гордеев на конференции", "absent_o"),
+    ("Гордеев отпросился", "absent_o"),
+    ("Гордеев присутствовал", "present"),
+    ("Гордеев работал на паре", "present"),
+])
+def test_extended_attendance_vocab(text, action):
+    c = ok(text)
+    assert c.ok and c.action == action, (text, c.error, c.action)
+
+
+def test_present_not_confused_by_negation_extended():
+    # «не появлялся» — это Н, а не присутствие, хотя рядом «появлял».
+    c = ok("Гордеев не появлялся")
+    assert c.ok and c.action == "absent_n", (c.error, c.action)
+
+
+def test_stt_context_has_buryat_hints():
+    ctx = stt_context(BUR_ROSTER)
+    assert "Гындынова" in ctx and "Бато" in ctx      # опоры бурятской фонетики
+    assert "Арюна" in ctx                             # реальный ростер тоже
+    assert "пятёрка" in ctx and "по уважительной" in ctx
