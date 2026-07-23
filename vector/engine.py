@@ -128,7 +128,7 @@ class VectorEngine:
         #числа, а неверная температура в продукте, обещающем не врать, дороже
         #красивой формулировки.
         if intent in ("hello", "thanks", "help", "about_vsgutu", "about_college",
-                      "schedule", "weather"):
+                      "schedule", "weather", "howto"):
             return VectorResponse(text=facts.facts_text, mood=self._mood,
                                   intent=intent, facts=facts)
 

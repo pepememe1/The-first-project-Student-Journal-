@@ -410,6 +410,12 @@ def intent_about_vsgutu(scope: VectorScope, asked_name: str = "") -> Facts:
     return Facts("about_vsgutu", ANSWER_VSGUTU)
 
 
+def intent_howto(scope: VectorScope, asked_name: str = "") -> Facts:
+    """Как устроен журнал (средний/долги/пропуски/пересдачи). Факты из кода, не выдумка."""
+    from .knowledge import ANSWER_HOWTO
+    return Facts("howto", ANSWER_HOWTO)
+
+
 def intent_about_college(scope: VectorScope, asked_name: str = "") -> Facts:
     from .knowledge import ANSWER_COLLEGE
     return Facts("about_college", ANSWER_COLLEGE)
@@ -610,6 +616,7 @@ _HANDLERS = {
     "roster": intent_roster,
     "about_vsgutu": intent_about_vsgutu,
     "about_college": intent_about_college,
+    "howto": intent_howto,
     "hello": intent_hello,
     "thanks": intent_thanks,
     "help": intent_help,
