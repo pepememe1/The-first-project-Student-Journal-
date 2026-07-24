@@ -191,7 +191,7 @@ def test_engine_registry_and_unknown_falls_back(monkeypatch):
     """Движок выбирается конфигом; неизвестный — откат на дефолт (silero), а не ошибка.
     Задел под клон-голос на GPU: новый движок добавляется в _RENDERERS без правок synthesize."""
     tts_service, fake = _patch_engine(monkeypatch)
-    assert "silero" in tts_service.engines()
+    assert "silero" in tts_service._RENDERERS
     #Неизвестный движок не роняет синтез — откатывается на silero.
     r = tts_service.synthesize("привет", "male", engine="нет-такого")
     assert r["ok"] is True and len(fake.calls) == 1
