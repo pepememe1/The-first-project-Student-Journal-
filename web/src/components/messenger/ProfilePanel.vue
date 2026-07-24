@@ -1,0 +1,98 @@
+<script setup>
+// ProfilePanel — карточка собеседника (портфолио) СЛЕВА от чата. Только безопасные поля
+// (см. MESSENGER-PLAN.md §9): ФИО, роль, группа (студент) / предметы (преподаватель).
+import { computed } from 'vue'
+import { storeToRefs } from 'pinia'
+import { GraduationCap, UserRound, ShieldCheck, Users } from '@lucide/vue'
+import { useMessengerStore } from '@/stores/messenger'
+
+const m = useMessengerStore()
+const { activePeer, isModeration, activeInfo } = storeToRefs(m)
+
+function initials(name) {
+  const p = (name || '').trim().split(/\s+/)
+  return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
+}
+const isTeacher = computed(() => activePeer.value?.role === 'teacher')
+const roleLabel = computed(() => (isTeacher.value ? 'Преподаватель' : 'Студент'))
+const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeInfo.value?.kind))
+const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
+</script>
+
+<template>
+  <aside class="hidden w-72 shrink-0 flex-col border-r border-border bg-card xl:flex">
+    <!-- Режим модерации: сводка правил + контакты вместо карточки собеседника -->
+    <div v-if="isModeration" class="flex flex-col p-6">
+      <div class="mb-3 flex items-center gap-2">
+        <ShieldCheck class="size-6 text-accent" />
+        <h2 class="font-title text-lg font-bold text-text">Модерация</h2>
+      </div>
+      <p class="text-sm text-text2">Сюда можно написать о проблеме: жалоба на пользователя,
+        технический вопрос, нарушение правил.</p>
+      <div class="mt-4 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Что не делать</p>
+        Оскорбления, спам, флуд. Сообщения переписки могут быть просмотрены модерацией в
+        целях безопасности.
+      </div>
+      <div class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Контакты</p>
+        Учебная часть колледжа · ответ обычно в течение рабочего дня.
+      </div>
+    </div>
+
+    <!-- Группа / канал: описание + участники + покинуть -->
+    <div v-else-if="isGroupOrChannel" class="flex min-h-0 flex-col p-5">
+      <div class="mb-3 flex items-center gap-2">
+        <Users class="size-6 text-accent" />
+        <div class="min-w-0">
+          <h2 class="truncate font-title text-lg font-bold text-text">{{ activeInfo.title }}</h2>
+          <p class="text-xs text-text3">{{ activeInfo.kind === 'channel' ? 'Канал' : 'Группа' }} · {{ activeInfo.subscribers }}</p>
+        </div>
+      </div>
+      <p v-if="activeInfo.about" class="mb-3 text-sm text-text2">{{ activeInfo.about }}</p>
+      <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Участники</p>
+      <div class="min-h-0 flex-1 space-y-1 overflow-y-auto">
+        <div v-for="p in activeInfo.participants" :key="p.user_id"
+             class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg2">
+          <div class="grid size-7 shrink-0 place-items-center rounded-full bg-accent2 text-[11px] font-bold text-white">{{ initials(p.full_name) }}</div>
+          <span class="min-w-0 flex-1 truncate text-sm text-text">{{ p.full_name }}</span>
+          <span class="shrink-0 text-[11px] text-text3">{{ ROLE_RU[p.role] || p.role }}</span>
+        </div>
+      </div>
+      <button type="button" @click="m.leaveActive()"
+              class="mt-3 rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">
+        Покинуть {{ activeInfo.kind === 'channel' ? 'канал' : 'группу' }}
+      </button>
+    </div>
+
+    <div v-else-if="activePeer" class="flex flex-col items-center p-6 text-center">
+      <div class="grid size-24 place-items-center rounded-full bg-accent text-3xl font-bold text-white">
+        {{ initials(activePeer.full_name) }}
+      </div>
+      <h2 class="mt-3 font-title text-lg font-bold text-text">{{ activePeer.full_name }}</h2>
+      <span class="mt-1 inline-flex items-center gap-1 text-xs text-text3">
+        <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
+      </span>
+      <span class="mt-1 inline-flex items-center gap-1.5 text-xs"
+            :class="activePeer.online ? 'text-accent' : 'text-text3'">
+        <span class="size-2 rounded-full" :style="activePeer.online ? 'background:#2e9e5b' : 'background:var(--gb-text3)'"></span>
+        {{ activePeer.online ? 'в сети' : 'не в сети' }}
+      </span>
+
+      <div class="mt-5 w-full space-y-3 text-left">
+        <div v-if="!isTeacher" class="rounded-lg border border-border bg-card2 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-text3">Группа</p>
+          <p class="text-sm text-text">{{ activePeer.group_name || '—' }}</p>
+        </div>
+        <div v-else class="rounded-lg border border-border bg-card2 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-text3">Ведёт предметы</p>
+          <p class="text-sm text-text">{{ (activePeer.subjects || []).join(', ') || '—' }}</p>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="grid flex-1 place-items-center p-6 text-center text-sm text-text3">
+      Выберите чат, чтобы увидеть карточку собеседника.
+    </div>
+  </aside>
+</template>

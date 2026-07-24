@@ -391,6 +391,95 @@ class NotifyEvent(Base):
     payload = Column(JSON, default=dict)
 
 
+# ── Мессенджер (см. docs/MESSENGER-PLAN.md) ─────────────────────────────────────────
+# ОТДЕЛЬНАЯ онлайн-подсистема: НЕ входит в SYNC_MODELS (реконсиляция «сервер=истина»
+# вычистила бы кэш чатов; сообщения append-only, истина всегда на сервере — конфликтов
+# LWW нет). Поэтому здесь НЕТ служебных полей синка (updated_at/deleted) — вместо
+# tombstone'ов используем явные deleted_at/скрытие. id сообщений — АВТОИНКРЕМЕНТ: даёт
+# бесплатный монотонный порядок и курсорную пагинацию (before/after), а межузловая
+# детерминированность ключей тут не нужна (в отличие от синкуемых сущностей).
+
+class Conversation(Base):
+    """Беседа: личный чат / группа / канал / чат с модерацией."""
+    __tablename__ = "conversations"
+    id = Column(String, primary_key=True)              #conv:{uuid4}; direct — детерминир. ключ пары
+    kind = Column(String, default="direct")            #direct | group | channel | moderation
+    title = Column(String, default="")                 #для групп/каналов (у direct имя = собеседник)
+    about = Column(String, default="")
+    owner_id = Column(String, index=True, default="")  #создатель (у direct/moderation пусто)
+    is_public = Column(Boolean, default=False)         #канал виден в каталоге и свободно вступаем
+    created_at = Column(String, default="", index=True)
+
+
+class ConversationParticipant(Base):
+    """Участник беседы: роль + состояние прочтения/закрепления у этого пользователя."""
+    __tablename__ = "conversation_participants"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    role = Column(String, default="member")            #owner | admin | writer | member | reader
+    joined_at = Column(String, default="")
+    last_read_at = Column(String, default="")          #ISO последней прочитанной метки (непрочитанное)
+    muted = Column(Boolean, default=False)             #без пушей по этой беседе
+    pinned = Column(Boolean, default=False)            #закреплён ли сам чат в списке у этого юзера
+
+
+class Message(Base):
+    """Сообщение. created_at ставит СЕРВЕР (UTC). Порядок/курсор — по автоинкрементному id."""
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    sender_id = Column(String, index=True, default="")
+    body = Column(String, default="")
+    created_at = Column(String, default="", index=True)
+    edited_at = Column(String, default="")
+    deleted_at = Column(String, default="")            #«удалено у всех» (тумбстоун для всех)
+    reply_to_id = Column(Integer, default=0)           #ответ на сообщение (0 = нет)
+    #Пересылка — снимок источника (оригинал может исчезнуть):
+    fwd_from_sender_id = Column(String, default="")
+    fwd_from_conv_id = Column(String, default="")
+    fwd_from_created_at = Column(String, default="")
+    fwd_sender_name = Column(String, default="")
+    #Закрепление:
+    pinned = Column(Boolean, default=False, index=True)
+    pinned_at = Column(String, default="")
+    pinned_by = Column(String, default="")
+
+
+class MessageHidden(Base):
+    """«Удалить у себя»: сообщение скрыто у конкретного пользователя (на других не влияет)."""
+    __tablename__ = "message_hidden"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, index=True, default=0)
+    user_id = Column(String, index=True, default="")
+
+
+class MessageReport(Base):
+    """Жалоба на сообщение = ТИКЕТ модерации (см. MESSENGER-PLAN.md §6.7, §10). Хранит СНИМОК
+    текста, чтобы контекст жил, даже если сообщение потом удалят. НЕ в SYNC_MODELS."""
+    __tablename__ = "message_reports"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, index=True, default=0)
+    conversation_id = Column(String, default="")
+    message_snapshot = Column(String, default="")      #текст на момент жалобы
+    reporter_id = Column(String, index=True, default="")
+    reported_user_id = Column(String, index=True, default="")
+    reason_code = Column(String, default="other")      #spam|harassment|threats|fraud|illegal|flood|other
+    description = Column(String, default="")
+    created_at = Column(String, default="", index=True)
+    status = Column(String, default="open", index=True)  #open | in_review | resolved | dismissed
+    handled_by = Column(String, default="")
+    handled_at = Column(String, default="")
+    resolution_note = Column(String, default="")
+
+
+def direct_conversation_id(uid_a: str, uid_b: str) -> str:
+    """Детерминированный id личного чата — чтобы пара не плодила дубли (ищем по нему перед
+    созданием). Порядок id участников не важен: сортируем."""
+    lo, hi = sorted([uid_a or "", uid_b or ""])
+    return f"direct:{lo}|{hi}"
+
+
 SYNC_MODELS = {
     "users": User,
     "groups": Group,

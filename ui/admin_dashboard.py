@@ -110,6 +110,7 @@ class AdminDashboard(QWidget):
             ("theme", "settings",  "Настройки"),
             ("mon",   "activity", "Мониторинг"),
             ("ai",    "bot",      "ИИ Помощник"),
+            ("messages", "send",  "Сообщения"),
         ]
         self.sidebar = Sidebar(items)
         self.sidebar.tab_clicked.connect(self._switch)
@@ -132,6 +133,7 @@ class AdminDashboard(QWidget):
         self._build_theme()
         self._build_mon()
         self._build_ai()
+        self._build_messenger()
         self.sidebar.set_active("dash")
 
         #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
@@ -1629,6 +1631,18 @@ class AdminDashboard(QWidget):
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 
+    def _build_messenger(self):
+        """Вкладка «Сообщения» — мессенджер (тот же REST API, что и веб; §13 плана)."""
+        try:
+            from messenger_view import MessengerView
+            mv = MessengerView()
+        except Exception as _e:
+            log.get("admin_dashboard").warning(f"[messenger] вкладка не собралась: {_e}")
+            from PySide6.QtWidgets import QLabel
+            mv = QLabel("Сообщения недоступны")
+        self.pages["messages"] = mv
+        self.stack.addWidget(mv)
+
     def _build_theme(self):
         """Вкладка «Настройки»: оформление (тема учреждения по умолчанию — уезжает в общий
         config и применяется всем без своей темы) + личная озвучка Вектора этого ПК."""
@@ -2278,10 +2292,11 @@ class AdminDashboard(QWidget):
             if key == "requests": self._start_requests()
             if key == "sessions": self._start_sessions()
             if key == "mon":      self._start_monitor()
-            #Шторка Вектора прячется на вкладке «ИИ», возвращается на остальных.
+            #Шторка Вектора прячется на «ИИ» и «Сообщениях» (речь там тоже должна замолкнуть —
+            #hush_if_vector_hidden ниже), возвращается на остальных.
             dock = getattr(self, "vector_dock", None)
             if dock is not None:
-                dock.suspend() if key == "ai" else dock.resume()
+                dock.suspend() if key in ("ai", "messages") else dock.resume()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)

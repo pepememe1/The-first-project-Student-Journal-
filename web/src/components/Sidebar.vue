@@ -4,6 +4,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useMessengerStore } from '@/stores/messenger'
 import { NAV } from '@/config/nav'
 import { curatorApi, adminApi } from '@/api/endpoints'
 
@@ -11,7 +12,14 @@ defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
 
 const auth = useAuthStore()
+const messenger = useMessengerStore()
 const route = useRoute()
+// Значение бейджа пункта: непрочитанные сообщения берём из стора мессенджера (живой
+// счётчик), остальные — из локальной карты badges (напр., накладки расписания).
+function badgeCount(key) {
+  if (key === 'messagesUnread') return messenger.totalUnread
+  return badges.value[key] || 0
+}
 // Пункт «Курирование» (curatorOnly) виден только преподавателю-куратору.
 const isCurator = ref(false)
 // Счётчики у пунктов меню (nav.badge → число). Пока нужен один — накладки расписания.
@@ -52,11 +60,12 @@ function isActive(to) {
       >
         <component :is="item.icon" class="size-[18px] shrink-0" />
         <span class="truncate">{{ item.label }}</span>
-        <!-- Счётчик проблем: красный, потому что это не информация, а требующая
-             вмешательства ошибка. Ноль не показываем — пустой значок только шумит. -->
-        <span v-if="item.badge && badges[item.badge]"
-              class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full bg-red px-1.5 text-tiny font-bold text-white">
-          {{ badges[item.badge] }}
+        <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
+             расписания — красным (требует вмешательства). Ноль не показываем. -->
+        <span v-if="item.badge && badgeCount(item.badge)"
+              class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-tiny font-bold text-white"
+              :class="item.badge === 'messagesUnread' ? 'bg-accent' : 'bg-red'">
+          {{ badgeCount(item.badge) }}
         </span>
       </RouterLink>
     </template>

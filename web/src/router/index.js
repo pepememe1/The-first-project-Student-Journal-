@@ -14,6 +14,7 @@ import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ConnectServer from '@/pages/ConnectServer.vue'
 import VectorPage from '@/pages/VectorPage.vue'
+import MessengerPage from '@/pages/MessengerPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
 import Profile from '@/pages/Profile.vue'
 import Settings from '@/pages/Settings.vue'
@@ -37,6 +38,7 @@ import AdminRequests from '@/pages/admin/AdminRequests.vue'
 import MonitorPage from '@/pages/admin/MonitorPage.vue'
 import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
 import AdminServer from '@/pages/admin/AdminServer.vue'
+import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
 
 const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
 
@@ -62,6 +64,7 @@ const routes = [
       page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ'),
       page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
       page('profile', Profile, 'Профиль'),
       page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
     ],
@@ -77,6 +80,7 @@ const routes = [
       page('schedule', SchedulePage, 'Расписание'),
       page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
       page('profile', Profile, 'Профиль'),
       page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
     ],
@@ -102,6 +106,8 @@ const routes = [
       page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
       { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
+      page('moderation', AdminMessenger, 'Модерация чатов', 'Жалобы и просмотр переписок'),
     ],
   },
 

@@ -213,6 +213,64 @@ export const vectorApi = {
     api.post('/web/vector/tts', { text, voice }, { responseType: 'arraybuffer' }),
 }
 
+// МЕССЕНДЖЕР (см. docs/MESSENGER-PLAN.md) ─────────────────────────────────────────
+// Отдельная онлайн-подсистема (НЕ через /sync). Фаза 1/2: личные чаты + каталог людей.
+export const messengerApi = {
+  // Каталог/поиск людей для выбора собеседника (role: student|teacher).
+  users: (role = 'student', q = '', page = 0) =>
+    api.get('/web/messenger/users', { params: { role, q, page } }),
+  profile: (id) => api.get(`/web/messenger/users/${encodeURIComponent(id)}/profile`),
+  // Чаты.
+  chats: () => api.get('/web/messenger/chats'),
+  openDirect: (userId) => api.post(`/web/messenger/chats/direct/${encodeURIComponent(userId)}`),
+  // Сообщения: history (before=<id>) / poll (after=<id>) / последние (без параметров).
+  messages: (convId, params = {}) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`, { params }),
+  send: (convId, body, replyToId = 0) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`,
+      { body, reply_to_id: replyToId }),
+  read: (convId, lastMessageId = 0) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/read`,
+      { last_message_id: lastMessageId }),
+  // Действия над сообщением (Фаза 3).
+  edit: (id, body) => api.patch(`/web/messenger/messages/${id}`, { body }),
+  deleteMessage: (id, scope = 'self') =>
+    api.delete(`/web/messenger/messages/${id}`, { params: { scope } }),
+  pin: (id) => api.post(`/web/messenger/messages/${id}/pin`),
+  unpin: (id) => api.delete(`/web/messenger/messages/${id}/pin`),
+  pinned: (convId) => api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/pinned`),
+  forward: (messageIds, toConversationIds) =>
+    api.post('/web/messenger/messages/forward',
+      { message_ids: messageIds, to_conversation_ids: toConversationIds }),
+  report: (messageId, reasonCode, description = '') =>
+    api.post('/web/messenger/reports',
+      { message_id: messageId, reason_code: reasonCode, description }),
+  // Чат с модерацией (кнопка ⚙).
+  moderation: () => api.get('/web/messenger/moderation'),
+  // Группы и каналы (Фазы 5–6).
+  createGroup: (title, memberIds = [], about = '') =>
+    api.post('/web/messenger/chats/group', { title, member_ids: memberIds, about }),
+  createChannel: (title, writerIds = [], isPublic = true, about = '') =>
+    api.post('/web/messenger/chats/channel', { title, writer_ids: writerIds, is_public: isPublic, about }),
+  channels: (q = '') => api.get('/web/messenger/channels', { params: { q } }),
+  join: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/join`),
+  leave: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/leave`),
+  convInfo: (convId) => api.get(`/web/messenger/chats/${encodeURIComponent(convId)}`),
+}
+
+// МОДЕРАЦИЯ МЕССЕНДЖЕРА (только админ) ─────────────────────────────────────────────
+export const messengerModApi = {
+  reports: (status = 'open') => api.get('/web/admin/messenger/reports', { params: { status } }),
+  resolve: (id, status, note = '') =>
+    api.post(`/web/admin/messenger/reports/${id}/resolve`, { status, resolution_note: note }),
+  conversations: (q = '', kind = '') =>
+    api.get('/web/admin/messenger/conversations', { params: { q, kind } }),
+  conversationMessages: (id) =>
+    api.get(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/messages`),
+  reply: (id, body) =>
+    api.post(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/reply`, { body }),
+}
+
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).
 export const desktopApi = {
   info: () => api.get('/desktop-info'),

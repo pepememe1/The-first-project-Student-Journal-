@@ -12,10 +12,12 @@ import VectorDock from '@/components/VectorDock.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
+import { useMessengerStore } from '@/stores/messenger'
 
 const theme = useThemeStore()
 const vector = useVectorStore()
 const tts = useTtsStore()
+const messenger = useMessengerStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
@@ -41,8 +43,18 @@ const dockShown = computed(() => showDock.value && !vector.collapsed && isLg.val
 const vectorShown = computed(() => onVectorPage.value || dockShown.value)
 watch(vectorShown, (now, was) => { if (was && !now) tts.stop() })
 
-onMounted(() => theme.loadFromPrefs())
-onBeforeUnmount(() => { if (_mq) _mq.removeEventListener('change', _onMq) })
+// Фоновый счётчик непрочитанных для бейджа «Сообщения» в меню (живёт на всех страницах).
+// На самой вкладке мессенджера свой опрос чаще — этот лишь держит бейдж свежим глобально.
+let _unreadTimer = null
+onMounted(() => {
+  theme.loadFromPrefs()
+  messenger.loadChats()
+  _unreadTimer = setInterval(() => messenger.loadChats(), 20000)
+})
+onBeforeUnmount(() => {
+  if (_mq) _mq.removeEventListener('change', _onMq)
+  if (_unreadTimer) clearInterval(_unreadTimer)
+})
 </script>
 
 <template>

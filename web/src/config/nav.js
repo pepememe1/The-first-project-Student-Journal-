@@ -9,7 +9,7 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, SlidersHorizontal,
+  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert,
 } from '@lucide/vue'
 
 export const NAV = {
@@ -20,6 +20,7 @@ export const NAV = {
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/student/schedule' },
     { key: 'stats', label: 'Статистика', icon: BarChart3, to: '/student/stats' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/student/vector' },
+    { key: 'messages', label: 'Сообщения', icon: MessagesSquare, to: '/student/messages', badge: 'messagesUnread' },
     { section: 'Личное' },
     { key: 'profile', label: 'Профиль', icon: User, to: '/student/profile' },
     { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/student/settings' },
@@ -32,6 +33,7 @@ export const NAV = {
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/teacher/schedule' },
     { key: 'stats', label: 'Статистика', icon: BarChart3, to: '/teacher/stats' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/teacher/vector' },
+    { key: 'messages', label: 'Сообщения', icon: MessagesSquare, to: '/teacher/messages', badge: 'messagesUnread' },
     { section: 'Личное' },
     { key: 'profile', label: 'Профиль', icon: User, to: '/teacher/profile' },
     { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/teacher/settings' },
@@ -56,6 +58,8 @@ export const NAV = {
     { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/admin/settings' },
     { key: 'mon', label: 'Мониторинг', icon: Activity, to: '/admin/monitor' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/admin/vector' },
+    { key: 'messages', label: 'Сообщения', icon: MessagesSquare, to: '/admin/messages', badge: 'messagesUnread' },
+    { key: 'moderation', label: 'Модерация чатов', icon: ShieldAlert, to: '/admin/moderation' },
   ],
 }
 

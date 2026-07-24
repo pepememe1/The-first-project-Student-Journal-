@@ -143,6 +143,7 @@ class StudentDashboard(QWidget):
             ("schedule","calendar",  "Расписание"),
             ("stats",   "chart",     "Статистика"),
             ("ai",      "bot",       "ИИ Помощник"),
+            ("messages", "send",     "Сообщения"),
             ("__label__", "", "Личное"),
             ("profile", "user",      "Профиль"),
             ("settings", "settings", "Настройки"),
@@ -165,6 +166,7 @@ class StudentDashboard(QWidget):
         self._build_schedule()
         self._build_stats()
         self._build_ai_page()
+        self._build_messenger()
         self._build_profile()
         self._build_settings()
 
@@ -718,6 +720,18 @@ class StudentDashboard(QWidget):
             ai = vector_unavailable_widget()
         self.pages["ai"] = ai
         self.stack.addWidget(ai)
+
+    def _build_messenger(self):
+        """Вкладка «Сообщения» — мессенджер (тот же REST API, что и веб; см. §13 плана)."""
+        try:
+            from messenger_view import MessengerView
+            mv = MessengerView()
+        except Exception as _e:
+            log.get("dashboards").warning(f"[messenger] вкладка не собралась: {_e}")
+            from PySide6.QtWidgets import QLabel
+            mv = QLabel("Сообщения недоступны")
+        self.pages["messages"] = mv
+        self.stack.addWidget(mv)
 
     def _build_settings(self):
         """Вкладка «Настройки»: оформление (темы), микрофон и озвучка Вектора.
