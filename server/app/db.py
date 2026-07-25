@@ -100,6 +100,45 @@ def init_db():
     _ensure_grade_student_id_columns()
     _ensure_notify_event_columns()
     _ensure_participant_state_columns()
+    _ensure_message_addon_columns()
+    _ensure_conversation_system_columns()
+
+
+def _ensure_message_addon_columns():
+    """Мини-миграция: messages.kind/body_format/client_nonce/mentions — фичи мессенджера §D
+    (системные сообщения, Markdown-формат, идемпотентность, упоминания). Таблица messages
+    уже могла появиться на проде, а create_all новые СТОЛБЦЫ не досоздаёт → ALTER по одному."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("messages")}
+    except Exception:
+        return          #таблицы ещё нет — create_all создал её сразу со столбцами
+    is_pg = engine.url.get_backend_name().startswith("postgres")
+    wanted = (("kind", "VARCHAR DEFAULT 'text'"),
+              ("body_format", "VARCHAR DEFAULT 'markdown'"),
+              ("client_nonce", "VARCHAR DEFAULT ''"),
+              ("mentions", "JSONB" if is_pg else "JSON"))
+    with engine.begin() as conn:
+        for name, coltype in wanted:
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE messages ADD COLUMN {name} {coltype}"))
+
+
+def _ensure_conversation_system_columns():
+    """Мини-миграция: conversations.is_system/system_kind — §D12, автоматические
+    системные каналы (оценки/объявления/расписание). Тот же паттерн, что и выше."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("conversations")}
+    except Exception:
+        return
+    wanted = (("is_system", "BOOLEAN DEFAULT 0"), ("system_kind", "VARCHAR DEFAULT ''"))
+    with engine.begin() as conn:
+        for name, coltype in wanted:
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE conversations ADD COLUMN {name} {coltype}"))
 
 
 def _ensure_user_prefs_column():
@@ -215,6 +254,9 @@ def _ensure_participant_state_columns():
         if "hidden" not in columns:
             conn.execute(text(
                 "ALTER TABLE conversation_participants ADD COLUMN hidden BOOLEAN DEFAULT 0"))
+        if "archived" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN archived BOOLEAN DEFAULT 0"))
 
 
 def _ensure_grade_student_id_columns():

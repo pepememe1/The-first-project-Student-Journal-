@@ -76,11 +76,57 @@ def check(user_id: str) -> int:
         return 0
 
 
+# §D2: «маскот-замедление» — вместо холодного 429 показываем Вектора с фразой (композер
+# блокируется на cooldown_seconds). Порог МЯГЧЕ и УЖЕ базового (5 сообщений за 8 c) — на
+# практике срабатывает раньше жёсткого лимита выше, который остаётся глубокой защитой от
+# скрипта, игнорирующего клиентский UI. Эскалация — по истории «поймали на всплеске»:
+#   1-е нарушение              → 8 c
+#   повтор за 5 мин            → 20 c
+#   3-е и далее нарушение за 10 мин → 60 c (+ тикет модерации — решает вызывающий код)
+_MASCOT_BURST_WINDOW = 8.0
+_MASCOT_BURST_LIMIT = 5
+_VIOLATION_WINDOW = 600.0      # 10 минут — окно «систематичности»
+_REPEAT_WINDOW = 300.0         # 5 минут — окно «повтора»
+
+_violations: dict = defaultdict(deque)   # user_id -> deque[float] меток нарушения
+
+
+def mascot_check(user_id: str):
+    """Возвращает (wait_seconds, violations_in_10min). wait=0 — можно писать.
+
+    Читает ТЕ ЖЕ метки успешной отправки, что и check() (общий _events), сама их не
+    пишет — вызывать ДО check(), иначе последняя попытка уже попала бы в свой же расчёт.
+    Одна затянувшаяся перегрузка не плодит нарушения на каждый повторный клик «Отправить»:
+    новое нарушение засчитывается, только если с прошлого прошло больше окна всплеска."""
+    if not user_id:
+        return 0, 0
+    now = time.time()
+    with _lock:
+        dq = _events[user_id]
+        _prune(dq, now)
+        in_burst = sum(1 for t in dq if t > now - _MASCOT_BURST_WINDOW)
+        if in_burst < _MASCOT_BURST_LIMIT:
+            return 0, 0
+        vq = _violations[user_id]
+        while vq and vq[0] <= now - _VIOLATION_WINDOW:
+            vq.popleft()
+        if not vq or now - vq[-1] > _MASCOT_BURST_WINDOW:
+            vq.append(now)
+        recent_10m = len(vq)
+        recent_5m = sum(1 for t in vq if t > now - _REPEAT_WINDOW)
+        if recent_10m >= 3:
+            return 60, recent_10m
+        if recent_5m >= 2:
+            return 20, recent_10m
+        return 8, recent_10m
+
+
 def reset() -> None:
     """Полный сброс — нужен тестам, чтобы прогоны не влияли друг на друга."""
     global _since_gc
     with _lock:
         _events.clear()
+        _violations.clear()
         _since_gc = 0
 
 

@@ -1292,7 +1292,8 @@ class TeacherDashboard(QWidget):
         from avatar_dialog import AvatarSection
         lay.addWidget(AvatarSection("teacher", {"name": self.teacher_name}))
 
-        lay.addWidget(section_lbl("Уведомления"))
+        #Заголовок «Уведомления» уже внутри NotificationsView — без отдельного section_lbl,
+        #иначе задваивается (правка по отчёту).
         lay.addWidget(NotificationsView(), 1)
         self.pages["profile"] = w; self.stack.addWidget(w)
 

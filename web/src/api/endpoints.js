@@ -226,9 +226,11 @@ export const messengerApi = {
   // Сообщения: history (before=<id>) / poll (after=<id>) / последние (без параметров).
   messages: (convId, params = {}) =>
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`, { params }),
-  send: (convId, body, replyToId = 0) =>
+  // clientNonce (§D10): UUID клиента — повтор с тем же nonce не создаёт дубль на сервере
+  // (защита от ретраев при обрыве сети/двойном клике).
+  send: (convId, body, replyToId = 0, clientNonce = '') =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`,
-      { body, reply_to_id: replyToId }),
+      { body, reply_to_id: replyToId, client_nonce: clientNonce }),
   read: (convId, lastMessageId = 0) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/read`,
       { last_message_id: lastMessageId }),
@@ -249,6 +251,12 @@ export const messengerApi = {
   forward: (messageIds, toConversationIds) =>
     api.post('/web/messenger/messages/forward',
       { message_ids: messageIds, to_conversation_ids: toConversationIds }),
+  // Реакции-эмодзи (§D3) и история редактирования (§D11).
+  addReaction: (mid, emoji) => api.post(`/web/messenger/messages/${mid}/reactions`, { emoji }),
+  removeReaction: (mid, emoji) =>
+    api.delete(`/web/messenger/messages/${mid}/reactions/${encodeURIComponent(emoji)}`),
+  reactionUsers: (mid) => api.get(`/web/messenger/messages/${mid}/reactions`),
+  messageHistory: (mid) => api.get(`/web/messenger/messages/${mid}/history`),
   report: (messageId, reasonCode, description = '') =>
     api.post('/web/messenger/reports',
       { message_id: messageId, reason_code: reasonCode, description }),
@@ -263,6 +271,34 @@ export const messengerApi = {
   join: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/join`),
   leave: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/leave`),
   convInfo: (convId) => api.get(`/web/messenger/chats/${encodeURIComponent(convId)}`),
+  // §D6: переименовать группу/канал (owner/admin) — пишет системное сообщение.
+  renameChat: (convId, title, about) =>
+    api.patch(`/web/messenger/chats/${encodeURIComponent(convId)}`, { title, about }),
+  // §D7: статус (поверх presence) — dnd/studying/away + текст (только у преподавателя).
+  getStatus: () => api.get('/web/messenger/status'),
+  setStatus: (kind, customText = '') =>
+    api.post('/web/messenger/status', { kind, custom_text: customText }),
+  // §D12: открыть/создать системный канал «Объявления · Группа» (teacher/admin), дальше
+  // публикация — обычным send() в этот же чат (это просто kind='channel').
+  ensureAnnouncementsChannel: (groupName) =>
+    api.post(`/web/messenger/channels/announcements/${encodeURIComponent(groupName)}`),
+  // Организация списка чатов (docs/MESSENGER-ADDON-PLAN-GPT*.md): закреп/архив/избранное.
+  pinChat: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
+  unpinChat: (convId) => api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
+  archiveChat: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/archive`),
+  unarchiveChat: (convId) => api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/archive`),
+  openSaved: () => api.post('/web/messenger/chats/saved'),
+  // Треды (ответы на сообщение) и поиск внутри чата.
+  thread: (convId, messageId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages/thread/${messageId}`),
+  searchInChat: (convId, q) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages/search`, { params: { q } }),
+  // Кто прочитал конкретное сообщение (переиспользует last_read_at участников).
+  readBy: (mid) => api.get(`/web/messenger/messages/${mid}/read_by`),
+  // Личные шаблоны быстрых ответов преподавателя.
+  templates: () => api.get('/web/messenger/templates'),
+  createTemplate: (body) => api.post('/web/messenger/templates', { body }),
+  deleteTemplate: (id) => api.delete(`/web/messenger/templates/${id}`),
 }
 
 // МОДЕРАЦИЯ МЕССЕНДЖЕРА (только админ) ─────────────────────────────────────────────

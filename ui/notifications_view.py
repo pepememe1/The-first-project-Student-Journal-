@@ -68,8 +68,17 @@ class NotificationsView(QWidget):
         super().__init__(parent)
         self._workers = []
         self._items = []
+        self._loading = False
         self._build()
-        self.reload()
+        #НЕ грузим здесь: при сборке дашборда серверная сессия ещё не готова → первый запрос
+        #падал в «Нет связи», и приходилось жать «Обновить». Грузим в showEvent — когда вкладку
+        #реально открыли (к этому моменту вход выполнен).
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        #Автообновление при показе вкладки (без повторов, если запрос уже в пути).
+        if not self._loading:
+            self.reload()
 
     def _build(self):
         lay = QVBoxLayout(self)
@@ -104,6 +113,7 @@ class NotificationsView(QWidget):
     #Загрузка
 
     def reload(self):
+        self._loading = True
         self._status.setText("Загружаем…")
         self._run(lambda: (_client() or _NoClient()).list_notifications(),
                   self._on_loaded, self._on_failed)
@@ -118,6 +128,7 @@ class NotificationsView(QWidget):
         w.start()
 
     def _on_loaded(self, data):
+        self._loading = False
         self._items = (data or {}).get("items", []) or []
         unread = (data or {}).get("unread", 0)
         self._status.setText(
@@ -126,6 +137,7 @@ class NotificationsView(QWidget):
         self._fill()
 
     def _on_failed(self, msg):
+        self._loading = False
         _LOG.warning(f"[уведомления] не загрузились: {msg}")
         #Список НЕ чистим: показать пустоту при обрыве связи значило бы соврать, что
         #уведомлений нет. Оставляем прошлые и говорим, что данные могли устареть.

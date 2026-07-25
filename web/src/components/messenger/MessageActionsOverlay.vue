@@ -11,13 +11,16 @@ const props = defineProps({
   x: { type: Number, default: 0 },
   y: { type: Number, default: 0 },
 })
-const emit = defineEmits(['pick', 'close'])
+const emit = defineEmits(['pick', 'react', 'close'])
+
+// §D3: реакции-эмодзи — тот же белый список, что на сервере (MessageReaction.emoji).
+const REACTIONS = ['👍', '✅', '❤️', '😂', '👀', '🔥', '💯', '❓', '📌']
 
 const m = computed(() => props.message)
 // Позиция: клампим, чтобы меню не уезжало за правый/нижний край.
 const style = computed(() => ({
-  top: `${Math.min(props.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 320)}px`,
-  left: `${Math.min(props.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 220)}px`,
+  top: `${Math.min(props.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 360)}px`,
+  left: `${Math.min(props.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 240)}px`,
 }))
 
 // Список действий по правам (Фаза 3 — личные чаты).
@@ -40,8 +43,17 @@ const items = computed(() => {
 <template>
   <!-- Полупрозрачная подложка: клик мимо — закрыть -->
   <div class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')">
-    <div class="fixed z-50 w-52 overflow-hidden rounded-xl border border-border2 bg-card py-1 shadow-card"
+    <div class="fixed z-50 w-56 overflow-hidden rounded-xl border border-border2 bg-card py-1 shadow-card"
          :style="style" @click.stop>
+      <!-- §D3: быстрые реакции — строка эмодзи над списком действий (как в Telegram).
+           flex-wrap — 9 эмодзи не помещаются в один ряд узкой панели, переносим на вторую. -->
+      <div v-if="!m.deleted" class="flex flex-wrap justify-center gap-0.5 border-b border-border px-1.5 py-1.5">
+        <button v-for="e in REACTIONS" :key="e" type="button"
+                @click="emit('react', e); emit('close')"
+                class="grid size-7 place-items-center rounded-md text-base transition-colors hover:bg-bg2">
+          {{ e }}
+        </button>
+      </div>
       <button v-for="it in items" :key="it.key" type="button"
               @click="emit('pick', it.key); emit('close')"
               class="flex w-full items-center gap-3 px-3.5 py-2 text-left text-sm transition-colors hover:bg-bg2"

@@ -2,21 +2,28 @@
 // ChatThread — правая колонка: переписка активной беседы (пузыри в стиле Telegram) +
 // действия над сообщением (Фаза 3): оверлей по тапу, плашка закреплённого, режим
 // выделения, ответ/пересылка/удаление(у себя|у всех)/жалоба. ⚙-чат модерации — Фаза 4.
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff } from '@lucide/vue'
+import {
+  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
+  Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
+  Search, Zap, MessageSquare, Eye, Plus,
+} from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
+import { renderMarkdownLite } from '@/utils/markdownLite'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
 import ConversationInfo from './ConversationInfo.vue'
+import MascotCooldown from './MascotCooldown.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
-const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat } = storeToRefs(m)
+const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, mascotCooldown, templates, activeThread, searchResults, searching } = storeToRefs(m)
+const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
 const isAdmin = computed(() => auth.role === 'admin')
 // Замьючена ли текущая беседа у меня (без пушей). Кнопка-колокольчик — в шапке.
@@ -29,6 +36,8 @@ const canPost = computed(() => {
   if (kind.value !== 'channel') return true
   return ['owner', 'admin', 'writer'].includes(activeInfo.value?.my_role)
 })
+// §D1: заголовки # / ## разрешены только в каналах (в личных чатах/группах — просто текст).
+const isChannel = computed(() => kind.value === 'channel')
 
 const draft = ref('')
 const scroller = ref(null)
@@ -47,9 +56,58 @@ const allSelected = computed(() => messages.value.length > 0 && selectedIds.valu
 async function scrollDown() {
   await nextTick()
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight })
+  showScrollBtn.value = false
 }
-watch(() => messages.value.length, scrollDown)
-watch(activeId, scrollDown)
+
+// §D5: плавающая кнопка «↓ N новых» — видна, когда пользователь прокрутил вверх (читает
+// историю); новые сообщения тогда НЕ дёргают его вниз силой (кроме своих же исходящих).
+const showScrollBtn = ref(false)
+function onScrollerScroll() {
+  const el = scroller.value
+  if (!el) return
+  showScrollBtn.value = (el.scrollHeight - el.scrollTop - el.clientHeight) > 200
+}
+
+watch(() => messages.value.length, async () => {
+  const wasNearBottom = !showScrollBtn.value
+  const lastMsg = messages.value[messages.value.length - 1]
+  if (wasNearBottom || lastMsg?.mine) scrollDown()
+  else await nextTick().then(onScrollerScroll)
+})
+
+// §D5: разделитель «Новые сообщения» — первое сообщение позже метки прочтения ДО открытия
+// чата (activeInfo.my_last_read_at снимается в сторе ДО markReadActive, см. messenger.js).
+const firstUnreadId = computed(() => {
+  const lastRead = activeInfo.value?.my_last_read_at
+  if (!lastRead) return null
+  const found = messages.value.find(x => x.created_at > lastRead)
+  return found ? found.id : null
+})
+
+watch(activeId, async (newId, oldId) => {
+  // Черновики (клиент-only, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики»): сохраняем
+  // недописанное перед уходом из чата и восстанавливаем при возврате в него.
+  if (oldId) m.saveDraft(oldId, draft.value)
+  draft.value = newId ? m.draftFor(newId) : ''
+  closeSearchPanel()
+  if (!newId) return
+  // Ждём, пока стор подгрузит и сообщения, и activeInfo (для позиции разделителя), но не
+  // дольше секунды — иначе просто скроллим вниз как обычно (не хуже прежнего поведения).
+  for (let i = 0; i < 20 && (!messages.value.length || activeInfo.value === null); i++) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  await nextTick()
+  if (firstUnreadId.value) {
+    const el = document.getElementById(`gb-msg-${firstUnreadId.value}`)
+    if (el) { el.scrollIntoView({ behavior: 'instant', block: 'center' }); onScrollerScroll(); return }
+  }
+  scrollDown()
+})
+
+onMounted(() => {
+  if (activeId.value) draft.value = m.draftFor(activeId.value)
+  m.loadTemplates()
+})
 
 function fmtTime(iso) {
   const d = new Date(iso)
@@ -58,6 +116,108 @@ function fmtTime(iso) {
 function quoted(id) {
   const src = messages.value.find(x => x.id === id)
   return src ? (src.deleted ? 'Сообщение удалено' : src.body) : ''
+}
+
+// §D6: системные сообщения (вступил/вышел/переименовано/закреп) — сервер шлёт шаблон
+// "событие:аргументы", здесь превращаем в человеческий текст.
+function formatSystemMessage(body) {
+  // Разделитель полей — \x1f (Unit Separator), НЕ ':': id участника сам вида "stud:login"
+  // и split(':') расклеивал бы его на куски (баг — простое ':' совпадало с id).
+  const parts = String(body || '').split('\x1f')
+  const type = parts[0]
+  const rest = parts.slice(1)
+  if (type === 'user_joined' || type === 'user_left') {
+    const name = rest[1] || rest[0] || 'Участник'
+    return type === 'user_joined' ? `${name} вступил(а) в беседу` : `${name} покинул(а) беседу`
+  }
+  if (type === 'title_changed') return `Название изменено на «${rest[0] || ''}»`
+  if (type === 'pin_added') return '📌 Сообщение закреплено'
+  if (type === 'pin_removed') return 'Сообщение откреплено'
+  return body
+}
+
+// §D1: рендер тела сообщения (Markdown-lite → безопасный HTML для v-html).
+// §D8: подсветка @Фамилия/@!Фамилия — визуальная, ПОСЛЕ Markdown (безопасно: результат
+// markdownLite уже экранирован, «@Слово» — обычный текст ни в одном из вставленных тегов).
+function renderBody(msg) {
+  const html = renderMarkdownLite(msg.body, isChannel.value)
+  return html.replace(/@!?[A-Za-zА-Яа-яЁё]+/g, (hit) => `<span class="mention">${hit}</span>`)
+}
+
+// §D3: клик по реакции — поставить/снять свою.
+function onReactionClick(msg, emoji) { m.toggleReaction(msg.id, emoji) }
+function onReact(emoji) {
+  const msg = overlay.value.message
+  if (msg) m.toggleReaction(msg.id, emoji)
+}
+
+// §D11: попап «История изменений» у отредактированного сообщения.
+const historyPopup = ref({ open: false, versions: [] })
+async function openHistory(msg) {
+  historyPopup.value = { open: true, versions: await m.messageHistory(msg.id) }
+}
+function fmtFull(iso) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+// §D1: тулбар форматирования — оборачивает ВЫДЕЛЕНИЕ в textarea нужными символами
+// (или вставляет пару символов на позицию курсора, если ничего не выделено).
+function wrapSelection(before, after = before) {
+  const el = composer.value
+  if (!el) return
+  const start = el.selectionStart ?? draft.value.length
+  const end = el.selectionEnd ?? draft.value.length
+  const sel = draft.value.slice(start, end)
+  draft.value = draft.value.slice(0, start) + before + sel + after + draft.value.slice(end)
+  nextTick(() => {
+    el.focus()
+    const pos = sel ? end + before.length + after.length : start + before.length
+    el.setSelectionRange(pos, pos)
+  })
+}
+function onComposerKeydown(e) {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'b') { e.preventDefault(); wrapSelection('**'); return }
+    if (e.key === 'i') { e.preventDefault(); wrapSelection('*'); return }
+    if (e.key === 'u') { e.preventDefault(); wrapSelection('__'); return }
+  }
+  if (mentionCandidates.value.length && e.key === 'Escape') { mentionQuery.value = null; return }
+  onKey(e)
+}
+
+// §D8: автодополнение @Фамилия в композере — только среди участников ЭТОЙ беседы.
+// Разбор всплывает, когда курсор стоит сразу после "@буквы" (без пробела внутри).
+const mentionQuery = ref(null)     // null — закрыто; иначе набранное после «@»
+let draftTimer = null
+function onComposerInput() {
+  m.sendTyping()
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => m.saveDraft(activeId.value, draft.value), 400)
+  const el = composer.value
+  if (!el) { mentionQuery.value = null; return }
+  const pos = el.selectionStart ?? draft.value.length
+  const before = draft.value.slice(0, pos)
+  const at = /(?:^|\s)@([A-Za-zА-Яа-яЁё]*)$/.exec(before)
+  mentionQuery.value = at ? at[1] : null
+}
+const mentionCandidates = computed(() => {
+  if (mentionQuery.value === null || !isGroupOrChannel.value) return []
+  const q = mentionQuery.value.toLowerCase()
+  return (activeInfo.value?.participants || [])
+    .filter(p => (p.full_name || '').trim().split(/\s+/)[0]?.toLowerCase().startsWith(q))
+    .slice(0, 6)
+})
+function insertMention(p) {
+  const first = (p.full_name || '').trim().split(/\s+/)[0] || ''
+  const el = composer.value
+  const pos = el?.selectionStart ?? draft.value.length
+  const before = draft.value.slice(0, pos)
+  const at = before.lastIndexOf('@')
+  if (at < 0) return
+  draft.value = draft.value.slice(0, at) + '@' + first + ' ' + draft.value.slice(pos)
+  mentionQuery.value = null
+  nextTick(() => el?.focus())
 }
 
 // ── Жесты над сообщением (как в Telegram) ────────────────────────────────────────────
@@ -178,10 +338,61 @@ async function submit() {
   const t = draft.value.trim()
   if (!t) return
   draft.value = ''
+  m.clearDraft(activeId.value)
   const ok = await m.send(t)
-  if (!ok) draft.value = t          // сервер отклонил (анти-флуд/мьют) — вернуть текст
+  if (!ok) { draft.value = t; m.saveDraft(activeId.value, t) }   //отклонили — вернуть текст и черновик
 }
 function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
+
+// ── Быстрые ответы и шаблоны преподавателя (docs/MESSENGER-ADDON-PLAN-GPT.md) ───────────
+// Фиксированный универсальный набор — клиент-only, без AI: короткая типовая реплика одним
+// кликом, отправляется СРАЗУ (как бот-команды в Slack/Teams), а не просто вставляется.
+const FIXED_QUICK_REPLIES = ['👍 Принято', 'Спасибо!', 'Хорошо', 'Понял(а)', 'Уточню и отвечу']
+const showQuickReplies = ref(false)
+const newTemplateText = ref('')
+async function sendQuickReply(text) {
+  showQuickReplies.value = false
+  await m.send(text)
+}
+async function addTemplateFromInput() {
+  const t = newTemplateText.value.trim()
+  if (!t) return
+  newTemplateText.value = ''
+  await m.addTemplate(t)
+}
+
+// ── Треды: ответы на сообщение (переиспользует reply_to_id, см. messenger.js) ───────────
+const threadParent = computed(() => messages.value.find(x => x.id === activeThread.value?.parentId) || null)
+function replyInThread() {
+  if (threadParent.value) m.setReply(threadParent.value)
+  m.closeThread()
+  nextTick(() => composer.value?.focus())
+}
+
+// ── Поиск внутри чата ────────────────────────────────────────────────────────────────
+const showSearch = ref(false)
+const searchQ = ref('')
+let searchTimer = null
+function toggleSearchPanel() {
+  showSearch.value = !showSearch.value
+  if (!showSearch.value) closeSearchPanel()
+}
+function closeSearchPanel() { showSearch.value = false; searchQ.value = ''; m.clearSearch() }
+function onSearchInput() {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => m.searchInActive(searchQ.value), 300)
+}
+function jumpToSearchResult(msg) {
+  closeSearchPanel()
+  jumpTo(msg.id)
+}
+
+// ── Кто прочитал сообщение (по клику, popup) — переиспользует last_read_at участников ───
+const readByPopup = ref({ open: false, names: [] })
+async function showReadBy(msg) {
+  const users = await m.readBy(msg.id)
+  readByPopup.value = { open: true, names: users.map(u => u.full_name) }
+}
 
 function jumpTo(id) {
   const el = document.getElementById(`gb-msg-${id}`)
@@ -193,11 +404,15 @@ const peerName = computed(() => {
   if (isGroupOrChannel.value) return activeInfo.value?.title || activePeer.value?.full_name || 'Беседа'
   return activePeer.value?.full_name || 'Диалог'
 })
+// §D7: подпись статуса поверх presence (dnd/studying/away + текст преподавателя).
+const STATUS_RU = { dnd: 'Не беспокоить', studying: 'Готовится/учится', away: 'Отошёл(а)' }
 const subtitle = computed(() => {
   if (isModeration.value) return 'Официальная поддержка'
   if (peerTyping.value) return 'печатает…'
   if (kind.value === 'channel') return `${activeInfo.value?.subscribers || 0} подписчиков`
   if (kind.value === 'group') return `${activeInfo.value?.subscribers || 0} участников`
+  const sk = activePeer.value?.status_kind
+  if (sk) return activePeer.value?.status_text || STATUS_RU[sk] || sk
   return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
 })
 const topPinned = computed(() => pinned.value[0] || null)
@@ -256,6 +471,14 @@ const headerTint = computed(() =>
                :class="headerTint ? 'text-white' : 'text-text'">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
+        <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->
+        <button type="button" @click="toggleSearchPanel"
+                aria-label="Поиск по чату" title="Поиск по чату"
+                class="grid size-8 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                  : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+          <Search class="size-5" />
+        </button>
         <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
         <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
                 :aria-label="muted ? 'Включить уведомления' : 'Отключить уведомления'"
@@ -290,6 +513,27 @@ const headerTint = computed(() =>
                 class="grid size-9 place-items-center rounded-md text-red hover:bg-bg2 disabled:opacity-40"><Trash2 class="size-5" /></button>
       </div>
 
+      <!-- Поиск внутри чата: строка + результаты (без встроенного скролла к старым — если
+           сообщение уже не подгружено в ленту, просто показываем его текст здесь). -->
+      <div v-if="showSearch" class="shrink-0 border-b border-border bg-card">
+        <div class="flex items-center gap-2 px-3 py-2">
+          <Search class="size-4 shrink-0 text-text3" />
+          <input v-model="searchQ" @input="onSearchInput" autofocus placeholder="Поиск по сообщениям…"
+                 class="h-8 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
+          <button type="button" @click="closeSearchPanel" aria-label="Закрыть поиск"
+                  class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
+        </div>
+        <div v-if="searchQ.trim()" class="max-h-56 overflow-y-auto border-t border-border">
+          <p v-if="searching" class="p-3 text-center text-xs text-text3">Ищем…</p>
+          <p v-else-if="!searchResults?.length" class="p-3 text-center text-xs text-text3">Ничего не найдено.</p>
+          <button v-for="r in searchResults" :key="r.id" type="button" @click="jumpToSearchResult(r)"
+                  class="flex w-full flex-col items-start gap-0.5 border-b border-border/50 px-3 py-2 text-left hover:bg-bg2">
+            <span class="text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? 'Вы' : '') }} · {{ fmtTime(r.created_at) }}</span>
+            <span class="line-clamp-2 text-sm text-text">{{ r.body }}</span>
+          </button>
+        </div>
+      </div>
+
       <!-- Плашка закреплённого -->
       <button v-if="topPinned" type="button" @click="jumpTo(topPinned.id)"
               class="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-left">
@@ -304,47 +548,110 @@ const headerTint = computed(() =>
       <!-- Отступы задаём НА САМОМ сообщении (mt-*), а не через space-y на контейнере:
            селектор space-y перебивал бы mt-* по специфичности, и пачки склеивались бы
            с соседними — визуальной группировки не получалось. -->
-      <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        <div v-for="msg in messages" :id="`gb-msg-${msg.id}`" :key="msg.id"
-             class="flex items-end gap-2"
-             :class="[msg.mine ? 'justify-end' : 'justify-start',
-                      runStarts.has(msg.id) ? 'mt-4 first:mt-0' : 'mt-0.5']">
-          <input v-if="selectionMode" type="checkbox" :checked="selectedIds.includes(msg.id)"
-                 @change="m.toggleSelect(msg.id)" class="order-first accent-[var(--gb-accent)]" />
-          <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
-          <div v-if="!msg.mine" class="w-8 shrink-0">
-            <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
-                    :name="msg.sender_name || activePeer?.full_name || ''" :size="32" />
+      <!-- Обёртка relative — плавающая кнопка «вниз» позиционируется absolute ОТНОСИТЕЛЬНО
+           этой области (а не всей секции чата, где съезжала бы на композер). -->
+      <div class="relative min-h-0 flex-1">
+      <div ref="scroller" class="h-full overflow-y-auto px-3 py-4" @scroll="onScrollerScroll">
+        <template v-for="msg in messages" :key="msg.id">
+          <!-- §D5: разделитель «Новые сообщения» — перед первым непрочитанным на момент открытия. -->
+          <div v-if="msg.id === firstUnreadId" class="my-3 flex items-center gap-3 text-xs font-semibold text-accent">
+            <span class="h-px flex-1 bg-accent/40" /> Новые сообщения <span class="h-px flex-1 bg-accent/40" />
           </div>
-          <button type="button" @click="onMessageClick(msg)"
-                  @contextmenu="onContextMenu(msg, $event)"
-                  @touchstart.passive="onTouchStart(msg, $event)"
-                  @touchmove.passive="onTouchMove($event)"
-                  @touchend="onTouchEnd" @touchcancel="onTouchEnd"
-                  class="max-w-[75%] select-none rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm transition-shadow hover:shadow"
-                  :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'"
-                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
-            <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
-            <div v-if="!msg.mine && runStarts.has(msg.id) && (msg.sender_name || activePeer?.full_name)"
-                 class="mb-0.5 text-[11px] font-semibold text-accent">
-              {{ msg.sender_name || activePeer?.full_name }}
+
+          <!-- §D6: системное сообщение — центрированная строка, не пузырь. -->
+          <div v-if="msg.kind === 'system'" :id="`gb-msg-${msg.id}`" class="my-1.5 text-center text-xs text-text3">
+            {{ formatSystemMessage(msg.body) }}
+          </div>
+
+          <div v-else :id="`gb-msg-${msg.id}`"
+               class="flex items-end gap-2"
+               :class="[msg.mine ? 'justify-end' : 'justify-start',
+                        runStarts.has(msg.id) ? 'mt-4 first:mt-0' : 'mt-0.5']">
+            <input v-if="selectionMode" type="checkbox" :checked="selectedIds.includes(msg.id)"
+                   @change="m.toggleSelect(msg.id)" class="order-first accent-[var(--gb-accent)]" />
+            <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
+            <div v-if="!msg.mine" class="w-8 shrink-0">
+              <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
+                      :name="msg.sender_name || activePeer?.full_name || ''" :size="32" />
             </div>
-            <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
-              Переслано от {{ msg.forwarded_from }}
+            <!-- div, а не button: внутри есть свои интерактивные элементы (реакции) —
+                 кнопка-в-кнопке невалидна. Жесты (клик/ПКМ/тач) не завязаны на семантику тега. -->
+            <div role="button" tabindex="0" @click="onMessageClick(msg)"
+                 @keydown.enter="onMessageClick(msg)"
+                 @contextmenu="onContextMenu(msg, $event)"
+                 @touchstart.passive="onTouchStart(msg, $event)"
+                 @touchmove.passive="onTouchMove($event)"
+                 @touchend="onTouchEnd" @touchcancel="onTouchEnd"
+                 class="max-w-[75%] select-none rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm outline-none transition-shadow hover:shadow"
+                 :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'"
+                 :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
+              <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
+              <div v-if="!msg.mine && runStarts.has(msg.id) && (msg.sender_name || activePeer?.full_name)"
+                   class="mb-0.5 text-[11px] font-semibold text-accent">
+                {{ msg.sender_name || activePeer?.full_name }}
+              </div>
+              <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
+                Переслано от {{ msg.forwarded_from }}
+              </div>
+              <div v-if="msg.reply_to_id && quoted(msg.reply_to_id)"
+                   class="mb-1 border-l-2 pl-2 text-xs opacity-80"
+                   :class="msg.mine ? 'border-white/60' : 'border-accent'">
+                {{ quoted(msg.reply_to_id) }}
+              </div>
+              <span v-if="msg.deleted" class="italic opacity-70">Сообщение удалено</span>
+              <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
+              <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)" />
+              <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
+                <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />
+                <!-- §D11: «изм.» кликабельно — открывает историю версий. -->
+                <button v-if="msg.edited_at" type="button" @click.stop="openHistory(msg)"
+                        class="underline decoration-dotted hover:opacity-80">изм.</button>
+                {{ fmtTime(msg.created_at) }}
+                <!-- Кто прочитал (переиспользует last_read_at — см. messenger.js::readBy). -->
+                <button v-if="msg.mine" type="button" @click.stop="showReadBy(msg)" title="Кто прочитал"
+                        class="ml-0.5 inline-flex align-middle hover:opacity-80"><Eye class="size-2.5" /></button>
+              </span>
+
+              <!-- §D3: пилюли реакций — клик по своей снимает её, по чужой добавляет ту же. -->
+              <div v-if="msg.reactions?.length" class="mt-1 flex flex-wrap gap-1">
+                <button v-for="r in msg.reactions" :key="r.emoji" type="button"
+                        @click.stop="onReactionClick(msg, r.emoji)"
+                        class="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition-colors"
+                        :class="r.mine
+                          ? (msg.mine ? 'border-white/50 bg-white/20' : 'border-accent bg-accent-glow text-accent')
+                          : (msg.mine ? 'border-white/30 hover:bg-white/10' : 'border-border2 hover:bg-bg2')">
+                  {{ r.emoji }} {{ r.count }}
+                </button>
+              </div>
+
+              <!-- Треды: «N ответов» — открывает панель с ответами (reply_to_id), не
+                   загромождая основную ленту (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3). -->
+              <button v-if="msg.reply_count" type="button" @click.stop="m.openThread(msg.id)"
+                      class="mt-1 flex items-center gap-1 text-xs font-semibold hover:underline"
+                      :class="msg.mine ? 'text-white/90' : 'text-accent'">
+                <MessageSquare class="size-3" />{{ msg.reply_count }} {{ msg.reply_count === 1 ? 'ответ' : 'ответа' }}
+              </button>
             </div>
-            <div v-if="msg.reply_to_id && quoted(msg.reply_to_id)"
-                 class="mb-1 border-l-2 pl-2 text-xs opacity-80"
-                 :class="msg.mine ? 'border-white/60' : 'border-accent'">
-              {{ quoted(msg.reply_to_id) }}
-            </div>
-            <span v-if="msg.deleted" class="italic opacity-70">Сообщение удалено</span>
-            <span v-else class="whitespace-pre-wrap break-words">{{ msg.body }}</span>
-            <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
-              <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />{{ msg.edited_at ? 'изм. ' : '' }}{{ fmtTime(msg.created_at) }}
-            </span>
-          </button>
-        </div>
+          </div>
+        </template>
       </div>
+
+      <!-- §D5: плавающая кнопка «вниз» с числом непрочитанных — видна, когда прокручено вверх.
+           Вне scroller (в relative-обёртке) — не уезжает вместе с содержимым при скролле. -->
+      <transition name="fade">
+        <button v-if="showScrollBtn" type="button" @click="scrollDown"
+                aria-label="К последним сообщениям"
+                class="absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border border-border2 bg-card shadow-card hover:bg-bg2">
+          <ChevronDown class="size-5 text-text2" />
+          <span v-if="activeChat?.unread" class="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
+            {{ activeChat.unread }}
+          </span>
+        </button>
+      </transition>
+      </div>
+
+      <!-- §D2: Вектор с репликой вместо холодного 429 — композер блокируется на remaining c. -->
+      <MascotCooldown v-if="mascotCooldown.active" :cooldown="mascotCooldown" />
 
       <!-- Плашка анти-флуда/мьюта: «не отправляйте так часто» / «вы ограничены модерацией» -->
       <div v-if="notice" class="shrink-0 border-t border-border bg-red/10 px-3 py-2 text-center text-xs font-semibold text-red">
@@ -363,11 +670,62 @@ const headerTint = computed(() =>
             <button type="button" @click="m.clearReply()" aria-label="Отменить ответ"
                     class="grid size-6 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
           </div>
+          <!-- §D1: тулбар форматирования — оборачивает выделение в поле ввода. На мобиле
+               (узкий экран) прячем, чтобы не съедал место — там достаточно ручного синтаксиса. -->
+          <div class="hidden items-center gap-0.5 border-b border-border px-2 py-1 sm:flex">
+            <button type="button" title="Жирный (Ctrl+B)" @click="wrapSelection('**')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Bold class="size-4" /></button>
+            <button type="button" title="Курсив (Ctrl+I)" @click="wrapSelection('*')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Italic class="size-4" /></button>
+            <button type="button" title="Подчёркнутый (Ctrl+U)" @click="wrapSelection('__')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Underline class="size-4" /></button>
+            <button type="button" title="Зачёркнутый" @click="wrapSelection('~~')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Strikethrough class="size-4" /></button>
+            <button type="button" title="Код" @click="wrapSelection('`')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Code class="size-4" /></button>
+            <button type="button" title="Цитата" @click="wrapSelection('> ', '')"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Quote class="size-4" /></button>
+            <span class="mx-1 h-4 w-px bg-border2" />
+            <!-- Быстрые ответы/шаблоны (docs/MESSENGER-ADDON-PLAN-GPT.md) — канонические
+                 фразы одним кликом, отправляются СРАЗУ. -->
+            <button type="button" title="Быстрые ответы" @click="showQuickReplies = !showQuickReplies"
+                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"
+                    :class="{ 'bg-bg2 text-accent': showQuickReplies }"><Zap class="size-4" /></button>
+          </div>
+          <!-- §D8: подсказки @Фамилия — только участники ЭТОЙ беседы (группа/канал). -->
+          <div v-if="mentionCandidates.length" class="border-b border-border p-1.5">
+            <button v-for="p in mentionCandidates" :key="p.user_id" type="button"
+                    @mousedown.prevent="insertMention(p)"
+                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg2">
+              <Avatar :src="p.avatar" :name="p.full_name" :size="24" />
+              {{ p.full_name }}
+            </button>
+          </div>
+          <!-- Панель быстрых ответов: фиксированный универсальный набор + (препод/админ)
+               личные шаблоны с возможностью добавить/удалить свой. -->
+          <div v-if="showQuickReplies" class="border-b border-border p-2">
+            <div class="flex flex-wrap gap-1.5">
+              <button v-for="txt in FIXED_QUICK_REPLIES" :key="txt" type="button" @click="sendQuickReply(txt)"
+                      class="rounded-full border border-border2 px-2.5 py-1 text-xs text-text hover:bg-bg2">{{ txt }}</button>
+              <button v-for="t in templates" :key="t.id" type="button" @click="sendQuickReply(t.body)"
+                      class="group flex items-center gap-1 rounded-full border border-border2 px-2.5 py-1 text-xs text-text hover:bg-bg2">
+                {{ t.body }}
+                <span v-if="canManageTemplates" role="button" tabindex="0" @click.stop="m.removeTemplate(t.id)"
+                      class="text-text3 opacity-0 hover:text-red group-hover:opacity-100">×</span>
+              </button>
+            </div>
+            <form v-if="canManageTemplates" class="mt-1.5 flex items-center gap-1.5" @submit.prevent="addTemplateFromInput">
+              <input v-model="newTemplateText" placeholder="Свой шаблон (напр. «Работа принята»)…"
+                     class="h-7 min-w-0 flex-1 rounded-md border border-border2 bg-card2 px-2 text-xs text-text outline-none focus:border-accent" />
+              <button type="submit" :disabled="!newTemplateText.trim()" aria-label="Добавить шаблон"
+                      class="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-white disabled:opacity-40"><Plus class="size-3.5" /></button>
+            </form>
+          </div>
           <form class="flex items-end gap-2 p-2.5" @submit.prevent="submit">
-            <textarea ref="composer" v-model="draft" rows="1" placeholder="Сообщение…"
-                      @keydown="onKey" @input="m.sendTyping()"
-                      class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card" />
-            <button type="submit" :disabled="!draft.trim() || sending" aria-label="Отправить"
+            <textarea ref="composer" v-model="draft" rows="1" placeholder="Сообщение… (**жирный**, *курсив*, `код`, @Фамилия, /vector — спросить ИИ)"
+                      @keydown="onComposerKeydown" @input="onComposerInput" :disabled="mascotCooldown.active"
+                      class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60" />
+            <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" aria-label="Отправить"
                     class="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
               <Send class="size-5" />
             </button>
@@ -382,9 +740,73 @@ const headerTint = computed(() =>
       </div>
     </template>
 
+    <!-- Треды: ответы на сообщение (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
+    <div v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"
+         style="background: var(--gb-overlay)" @click.self="m.closeThread()">
+      <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
+        <div class="mb-2 flex items-center gap-2">
+          <MessageSquare class="size-4 text-accent" />
+          <h3 class="flex-1 font-title text-sm font-bold text-text">Ответы</h3>
+          <button type="button" @click="m.closeThread()" aria-label="Закрыть"
+                  class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
+        </div>
+        <div v-if="threadParent" class="mb-2 rounded-md border-l-2 border-accent bg-bg2 px-3 py-2 text-xs text-text2">
+          {{ threadParent.deleted ? 'Сообщение удалено' : threadParent.body }}
+        </div>
+        <div class="min-h-0 flex-1 space-y-2 overflow-y-auto">
+          <div v-for="r in activeThread.messages" :key="r.id" class="rounded-md bg-bg2 px-3 py-2 text-sm">
+            <div class="mb-0.5 text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? 'Вы' : '') }} · {{ fmtTime(r.created_at) }}</div>
+            <div class="text-text">{{ r.deleted ? 'Сообщение удалено' : r.body }}</div>
+          </div>
+          <p v-if="!activeThread.messages.length" class="p-2 text-center text-xs text-text3">Пока нет ответов.</p>
+        </div>
+        <button type="button" @click="replyInThread"
+                class="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2">Ответить</button>
+      </div>
+    </div>
+
+    <!-- Кто прочитал сообщение -->
+    <div v-if="readByPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+         style="background: var(--gb-overlay)" @click.self="readByPopup.open = false">
+      <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-4 shadow-card">
+        <div class="mb-2 flex items-center gap-2">
+          <Eye class="size-4 text-accent" />
+          <h3 class="font-title text-sm font-bold text-text">Прочитали</h3>
+        </div>
+        <p v-if="!readByPopup.names.length" class="text-sm text-text3">Пока никто не прочитал.</p>
+        <ul v-else class="space-y-1 text-sm text-text">
+          <li v-for="(n, i) in readByPopup.names" :key="i">{{ n }}</li>
+        </ul>
+        <button type="button" @click="readByPopup.open = false"
+                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Закрыть</button>
+      </div>
+    </div>
+
     <!-- Оверлей действий -->
     <MessageActionsOverlay v-if="overlay.open" :message="overlay.message" :x="overlay.x" :y="overlay.y"
-                           @pick="onPick" @close="overlay.open = false" />
+                           @pick="onPick" @react="onReact" @close="overlay.open = false" />
+
+    <!-- §D11: история редактирования сообщения -->
+    <div v-if="historyPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+         style="background: var(--gb-overlay)" @click.self="historyPopup.open = false">
+      <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-4 shadow-card">
+        <div class="mb-2 flex items-center gap-2">
+          <History class="size-4 text-accent" />
+          <h3 class="font-title text-sm font-bold text-text">История изменений</h3>
+        </div>
+        <div class="max-h-72 space-y-2 overflow-y-auto">
+          <div v-for="(v, i) in historyPopup.versions" :key="i"
+               class="rounded-md border border-border bg-bg2 px-3 py-2 text-sm">
+            <div class="mb-0.5 text-[11px] text-text3">
+              {{ fmtFull(v.at) }}{{ v.current ? ' · текущая версия' : '' }}
+            </div>
+            <div class="text-text">{{ v.body }}</div>
+          </div>
+        </div>
+        <button type="button" @click="historyPopup.open = false"
+                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Закрыть</button>
+      </div>
+    </div>
 
     <!-- Выбор режима удаления своего сообщения(-й) -->
     <div v-if="deleteTargets" class="fixed inset-0 z-50 grid place-items-center p-4"
@@ -424,4 +846,30 @@ const headerTint = computed(() =>
 <style scoped>
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* §D1: оформление Markdown-lite внутри пузыря сообщения (см. utils/markdownLite.js). */
+.msg-body :deep(strong) { font-weight: 700; }
+.msg-body :deep(em) { font-style: italic; }
+.msg-body :deep(u) { text-decoration: underline; }
+.msg-body :deep(s) { text-decoration: line-through; opacity: 0.75; }
+.msg-body :deep(code) {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background: rgba(0, 0, 0, 0.12);
+  padding: 1px 5px; border-radius: 4px; font-size: 0.88em;
+}
+.msg-body :deep(pre) {
+  background: rgba(0, 0, 0, 0.12);
+  padding: 8px 12px; border-radius: 8px; overflow-x: auto;
+  margin: 4px 0; font-size: 0.85em;
+}
+.msg-body :deep(pre code) { background: none; padding: 0; }
+.msg-body :deep(blockquote) {
+  border-left: 3px solid currentColor;
+  margin: 4px 0; padding: 2px 10px; opacity: 0.85;
+}
+.msg-body :deep(h1) { font-size: 1.3em; font-weight: 800; margin: 4px 0 2px; }
+.msg-body :deep(h2) { font-size: 1.15em; font-weight: 700; margin: 4px 0 2px; }
+.msg-body :deep(ul) { margin: 2px 0 2px 1.1em; list-style: disc; }
+/* §D8: подсветка упоминаний — заметно, но не спорит с цветом текста своих/чужих пузырей. */
+.msg-body :deep(.mention) { font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 </style>

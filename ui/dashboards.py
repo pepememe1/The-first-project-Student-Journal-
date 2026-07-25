@@ -675,14 +675,46 @@ class StudentDashboard(QWidget):
         all_g = sum(dist.values())
         avg = f"{sum(k * v for k, v in dist.items()) / all_g:.1f}" if all_g else "—"
         att = f"{int(att_pres / att_total * 100)}%" if att_total else "—"
-        
-        #Статистика строка
+
+        #Долги и пропуски (Н/Б/О) — из того же движка, что и «Вектор»/веб (единый расчёт).
+        reasons, absc = [], {"Н": 0, "Б": 0, "О": 0, "всего": 0}
+        try:
+            from vector import VectorScope
+            from vector import intents as vintents
+            scope = VectorScope(role="student", group=self.cur_stud['g'],
+                                student_f=self.cur_stud['f'], student_n=self.cur_stud.get('n', ''))
+            absc = vintents.intent_absences(scope).data or absc
+            dbt = vintents.intent_debtors(scope).data.get("debtors", [])
+            reasons = dbt[0].get("reasons", []) if dbt else []
+        except Exception:
+            pass
+
+        #Статистика строка (добавлены пропуски и задолженности — раньше их не было)
         sr = QHBoxLayout()
         sr.setSpacing(10)
         for lbl_t, val, col in [("Средний балл", avg, "blue"), ("Посещаемость", att, "text"),
-                                 ("Отличных", str(dist[5]), "green"), ("Неудов.", str(dist[2]), "text")]:
+                                 ("Пропусков (ч)", str(absc.get("всего", 0)), "yellow"),
+                                 ("Задолженности", str(len(reasons)), "red" if reasons else "green")]:
             sr.addWidget(stat_card(lbl_t, val, col))
         self._stats_content.addLayout(sr)
+
+        #Карта «Задолженности и пропуски»: разбивка Н/Б/О + перечень незакрытых долгов.
+        c_da = card()
+        dal = QVBoxLayout(c_da)
+        dal.setContentsMargins(18, 16, 18, 16)
+        dal.addWidget(section_lbl("Задолженности и пропуски"))
+        arow = QHBoxLayout(); arow.setSpacing(10)
+        arow.addWidget(stat_card("Н (неув.)", str(absc.get("Н", 0)), "red"))
+        arow.addWidget(stat_card("Б (болезнь)", str(absc.get("Б", 0)), "text"))
+        arow.addWidget(stat_card("О (уваж.)", str(absc.get("О", 0)), "text"))
+        dal.addLayout(arow)
+        if reasons:
+            dal.addWidget(lbl("Незакрытые долги:", 12, C['text2'], True))
+            for r in reasons:
+                dal.addWidget(lbl("•  " + r, 12, C['text'], wrap=True))
+        else:
+            dal.addWidget(lbl("Долгов нет — так держать!", 12, C['green']))
+        self._stats_content.addWidget(c_da)
         
         #По предметам
         c_subj = card()
@@ -789,7 +821,8 @@ class StudentDashboard(QWidget):
                                                 "n": self.cur_stud.get("n", ""),
                                                 "g": self.cur_stud.get("g", "")}))
 
-        lay.addWidget(section_lbl("Уведомления"))
+        #Свой заголовок «Уведомления» есть у самого NotificationsView — отдельный section_lbl
+        #здесь дал бы задвоение надписи (правка по отчёту).
         lay.addWidget(NotificationsView(), 1)
         self.pages["profile"] = w
         self.stack.addWidget(w)

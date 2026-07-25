@@ -11,6 +11,7 @@ API один и тот же).
 (ПРОСМОТР всех по алфавиту + поиск по ФИО). Клик по человеку открывает личный чат.
 """
 import html
+import re
 import threading
 
 from PySide6.QtCore import Qt, QObject, Signal, QTimer
@@ -27,6 +28,83 @@ except Exception:
     C = {"card": "#fff", "card2": "#f3f6f7", "border": "#dfe6e8", "text": "#0d2b30",
          "text2": "#3a565b", "text3": "#6b8085", "green": "#147c8b", "green_glow": "#dbeef0",
          "bg": "#eef5f6"}
+
+
+# ── §D1: Markdown-lite (порт web/src/utils/markdownLite.js — та же логика на Python) ──
+# Экранируем ВЕСЬ пользовательский текст, потом накладываем ограниченный whitelist тегов
+# поверх уже безопасного текста — единственные теги в результате мы вставили сами.
+def _render_inline_md(escaped: str) -> str:
+    codes = []
+
+    def _code(m):
+        codes.append(f"<code>{m.group(1)}</code>")
+        return f"C{len(codes) - 1}"
+
+    s = re.sub(r"`([^`\n]+)`", _code, escaped)
+    s = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"__([^_\n]+)__", r"<u>\1</u>", s)
+    s = re.sub(r"~~([^~\n]+)~~", r"<s>\1</s>", s)
+    s = re.sub(r"\*([^*\n]+)\*", r"<i>\1</i>", s)
+    s = re.sub(r"C(\d+)", lambda m: codes[int(m.group(1))], s)
+    return s
+
+
+def render_markdown_lite(raw: str) -> str:
+    """Тот же ограниченный набор, что и на вебе: **жирный** *курсив* __подчёркн__ ~~зачёрк~~
+    `код` ```блок``` > цитата - список (заголовки # / ## — только там, где это видно веб-
+    клиенту как канал; десктоп для простоты применяет их везде)."""
+    text = raw or ""
+    blocks = []
+
+    def _block(m):
+        blocks.append(f"<pre style='background:{C['card2']};padding:6px;border-radius:6px;'>"
+                      f"<code>{m.group(1)}</code></pre>")
+        return f" B{len(blocks) - 1} "
+
+    escaped = html.escape(text)
+    escaped = re.sub(r"```([\s\S]*?)```", _block, escaped)
+    out = []
+    for line in escaped.split("\n"):
+        m = re.match(r"^-\s+(.*)$", line)
+        if m:
+            out.append(f"&bull; {_render_inline_md(m.group(1))}")
+            continue
+        m = re.match(r"^&gt;\s?(.*)$", line)
+        if m:
+            out.append(f"<span style='border-left:2px solid {C['green']};padding-left:6px;"
+                       f"opacity:0.85;'>{_render_inline_md(m.group(1))}</span>")
+            continue
+        m = re.match(r"^##\s+(.*)$", line)
+        if m:
+            out.append(f"<b style='font-size:15px;'>{_render_inline_md(m.group(1))}</b>")
+            continue
+        m = re.match(r"^#\s+(.*)$", line)
+        if m:
+            out.append(f"<b style='font-size:17px;'>{_render_inline_md(m.group(1))}</b>")
+            continue
+        out.append(_render_inline_md(line))
+    result = "<br>".join(out)
+    return re.sub(r" B(\d+) ", lambda m: blocks[int(m.group(1))], result)
+
+
+# ── §D6: системные сообщения — те же шаблоны "событие:аргументы", что отдаёт сервер ────
+def format_system_message(body: str) -> str:
+    # Разделитель — \x1f (Unit Separator), НЕ ':': id участника сам вида "stud:login",
+    # и split(':') расклеивал бы его на куски (сервер шлёт события через тот же символ,
+    # см. routers/messenger.py::_system).
+    parts = (body or "").split("\x1f")
+    kind = parts[0]
+    rest = parts[1:]
+    if kind in ("user_joined", "user_left"):
+        name = (rest[1] if len(rest) > 1 else "") or (rest[0] if rest else "Участник")
+        return f"{name} вступил(а) в беседу" if kind == "user_joined" else f"{name} покинул(а) беседу"
+    if kind == "title_changed":
+        return f"Название изменено на «{rest[0] if rest else ''}»"
+    if kind == "pin_added":
+        return "📌 Сообщение закреплено"
+    if kind == "pin_removed":
+        return "Сообщение откреплено"
+    return body
 
 
 class _Bus(QObject):
@@ -51,6 +129,10 @@ class MessengerView(QWidget):
         self._last_id = 0              # последний показанный id (для опроса)
         self._tab = "chats"            # chats | teacher | student
         self._msgs = {}
+        #Черновики (клиент-only, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики»): недописанное
+        #сохраняется при переключении чата в памяти сессии (без диска — мессенджер и так
+        #не синкует состояние между устройствами, см. §5.4 CLAUDE.md).
+        self._drafts = {}
         self._bus = _Bus()
         self._bus.chats.connect(self._render_chats)
         self._bus.directory.connect(self._render_directory)
@@ -122,7 +204,7 @@ class MessengerView(QWidget):
         rv.addWidget(self._thread, 1)
         comp = QHBoxLayout()
         self._input = QLineEdit()
-        self._input.setPlaceholderText("Сообщение…")
+        self._input.setPlaceholderText("Сообщение… (/vector — спросить ИИ)")
         self._input.returnPressed.connect(self._send)
         self._input.setEnabled(False)
         self._send_btn = QPushButton("Отправить")
@@ -264,6 +346,8 @@ class MessengerView(QWidget):
             self._enter(conv_id, title)
 
     def _enter(self, conv_id, title):
+        if self._active:
+            self._drafts[self._active] = self._input.text()
         self._active = conv_id
         self._title = title or "Диалог"
         self._last_id = 0
@@ -271,6 +355,7 @@ class MessengerView(QWidget):
         self._header.setText(self._title)
         self._input.setEnabled(True)
         self._send_btn.setEnabled(True)
+        self._input.setText(self._drafts.get(conv_id, ""))
         self._thread.setHtml("")
         self._load_history(conv_id)
 
@@ -293,18 +378,32 @@ class MessengerView(QWidget):
     def _html(self, msgs):
         parts = ["<div style='font-family:sans-serif;'>"]
         for m in msgs:
+            #§D6: системное сообщение — центрированная серая строка, не пузырь.
+            if m.get("kind") == "system":
+                text = html.escape(format_system_message(m.get("body") or ""))
+                parts.append(f"<div style='text-align:center;color:{C['text3']};"
+                            f"font-size:11px;margin:6px 0;'>{text}</div>")
+                continue
             mine = m.get("mine")
             deleted = m.get("deleted")
-            body = "Сообщение удалено" if deleted else html.escape(m.get("body") or "")
+            #§D1: Markdown-lite вместо сырого текста; §D8 — упоминания подсвечены жирным.
+            body = "Сообщение удалено" if deleted else render_markdown_lite(m.get("body") or "")
+            body = re.sub(r"@!?[A-Za-zА-Яа-яЁё]+", lambda mm: f"<u>{mm.group(0)}</u>", body)
             name = html.escape(m.get("sender_name") or "")
             align = "right" if mine else "left"
             bg = C["green"] if mine else C["card"]
             fg = "#ffffff" if mine else C["text"]
             head = f"<div style='font-size:10px;color:{C['green']};'>{name}</div>" if (name and not mine) else ""
+            #§D3: реакции — простая строка эмодзи+счётчик под текстом (без интерактива в Qt-порте).
+            reactions = m.get("reactions") or []
+            react_html = ""
+            if reactions:
+                react_html = ("<div style='margin-top:3px;font-size:11px;'>"
+                             + " ".join(f"{r['emoji']} {r['count']}" for r in reactions) + "</div>")
             parts.append(
                 f"<div style='text-align:{align};margin:4px 0;'>"
                 f"<div style='display:inline-block;max-width:70%;background:{bg};color:{fg};"
-                f"padding:6px 10px;border-radius:12px;text-align:left;'>{head}{body}</div></div>")
+                f"padding:6px 10px;border-radius:12px;text-align:left;'>{head}{body}{react_html}</div></div>")
         parts.append("</div>")
         return "".join(parts)
 
@@ -313,6 +412,7 @@ class MessengerView(QWidget):
         if not text or not self._active:
             return
         self._input.clear()
+        self._drafts.pop(self._active, None)
         conv, last = self._active, self._last_id
 
         def work():

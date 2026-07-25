@@ -12,12 +12,14 @@ SYNC_MODELS. Метку времени сообщения ставит СЕРВ�
 ?after=<id>); WebSocket добавим отдельной фазой.
 """
 import asyncio
+import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import (
     APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import audit, events, msg_limit
@@ -26,7 +28,8 @@ from ..deps import get_current_user, require_admin
 from ..security import decode_token
 from ..models import (
     Conversation, ConversationParticipant, Message, MessageHidden, MessageReport,
-    MutedUser, User, direct_conversation_id,
+    MessageReaction, MessageEdit, MessageTemplate, MutedUser, UserStatus, User, Lesson,
+    direct_conversation_id,
 )
 
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
@@ -76,7 +79,7 @@ class _WSManager:
         """Вызывается из СИНХРОННЫХ REST-обработчиков (пул потоков) — планируем корутину в
         цикл событий приложения. Нет цикла (никто не подключён по WS) → просто ничего."""
         loop = self._loop
-        if loop is None:
+        if loop is None or loop.is_closed():   #нет живого цикла (никто по WS / цикл закрыт)
             return
         try:
             asyncio.run_coroutine_threadsafe(self.send_users(list(uids), data), loop)
@@ -101,15 +104,16 @@ def _broadcast(db: Session, conv_id: str, kind: str = "changed"):
         pass
 
 
-def _notify_recipients(db: Session, conv: Conversation, sender: User):
+def _notify_recipients(db: Session, conv: Conversation, sender: User, skip_ids: set = None):
     """Пуш о новом сообщении получателям, которых НЕТ в приложении (по presence). Через
     RuStore Push, как уведомления об оценке. Контент НЕ уходит третьей стороне (§12 плана):
     заголовок — имя отправителя/название беседы, тело — нейтральное «Новое сообщение».
-    Best-effort: сбой доставки не влияет на отправку сообщения."""
+    `skip_ids` — §D8: тихо упомянутые (@!Фамилия) не получают пуш по ЭТОМУ сообщению
+    (только бейдж при следующем открытии). Best-effort: сбой доставки не роняет отправку."""
     try:
         from .. import rustore_push
         online = _online_logins()
-        ids = [i for i in _participant_ids(db, conv.id) if i != sender.id]
+        ids = [i for i in _participant_ids(db, conv.id) if i != sender.id and i not in (skip_ids or ())]
         if not ids:
             return
         #Получатели, замьютившие ЭТУ беседу, пушей не получают (их выбор — тишина).
@@ -151,13 +155,16 @@ def _online_logins() -> set:
         return set()
 
 
-def _safe_user(u: User, online_logins: set = None, muted: bool = False) -> dict:
+def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: dict = None) -> dict:
     """Безопасные поля пользователя для карточки/каталога (НИЧЕГО, что помогает входу в
     чужой аккаунт — см. MESSENGER-PLAN.md §9: без логина, почты, телефона, хэша, device-id).
     У студента — группа; у преподавателя — предметы, которые ведёт. online — по presence.
     `muted` (глобальный мьют модерацией) заполняем ТОЛЬКО в админ-контексте — рядовым
-    пользователям состояние мьюта чужого аккаунта в каталоге ни к чему."""
+    пользователям состояние мьюта чужого аккаунта в каталоге ни к чему.
+    `status` — §D7: {kind, custom_text} НАКЛАДКА поверх presence (dnd/studying/away);
+    kind='' значит статуса нет — клиент показывает просто online/не в сети."""
     prefs = u.prefs if isinstance(u.prefs, dict) else {}
+    st = status or {}
     d = {
         "id": u.id,
         "full_name": u.full_name or u.name or u.login or "",
@@ -172,10 +179,24 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False) -> dict:
         "bio": prefs.get("bio", "") or "",
         "profile_color": prefs.get("profile_color", "") or "",
         "muted": bool(muted),
+        "status_kind": st.get("kind", "") or "",
+        "status_text": st.get("custom_text", "") or "",
     }
     if u.role == "teacher":
         d["subjects"] = u.subjects or []
     return d
+
+
+_STATUS_KINDS = {"", "dnd", "studying", "away"}
+
+
+def _status_map(db: Session, user_ids) -> dict:
+    """§D7: карта id→{kind, custom_text} для набора пользователей (пачкой, один запрос)."""
+    ids = {i for i in user_ids if i}
+    if not ids:
+        return {}
+    rows = db.query(UserStatus).filter(UserStatus.user_id.in_(ids)).all()
+    return {r.user_id: {"kind": r.kind, "custom_text": r.custom_text} for r in rows}
 
 
 def _is_muted(db: Session, user_id: str) -> bool:
@@ -192,14 +213,35 @@ def _muted_set(db: Session, user_ids) -> set:
     return {r[0] for r in rows}
 
 
+def _create_flood_ticket(db: Session, user: User) -> None:
+    """§D2: систематический флуд (3+ нарушений всплеска за 10 минут) — автотикет модерации,
+    без ручного создания. reporter_id='system' — отличает автообнаружение от жалобы человека."""
+    db.add(MessageReport(
+        message_id=0, conversation_id="",
+        message_snapshot="Автоматически: систематическая частая отправка сообщений.",
+        reporter_id="system", reported_user_id=user.id,
+        reason_code="flood", description="", created_at=_now(), status="open",
+    ))
+    db.commit()
+
+
 def _guard_can_write(db: Session, user: User) -> None:
-    """Единый барьер записи в мессенджер: глобальный мьют модерацией (403) + анти-флуд (429).
-    Зовётся из всех точек, создающих сообщения (отправка, пересылка). Порядок: сперва мьют
-    (жёсткий запрет), потом частота."""
+    """Единый барьер записи в мессенджер: глобальный мьют модерацией (403) → маскот-кулдаун
+    (429 с эскалацией, §D2) → жёсткий анти-флуд (429, задел на скрипт, игнорирующий UI).
+    Зовётся из всех точек, создающих сообщения (отправка, пересылка)."""
     if _is_muted(db, user.id):
         raise HTTPException(
             status_code=403,
             detail="Вы ограничены модерацией и временно не можете отправлять сообщения.")
+    mascot_wait, violations = msg_limit.mascot_check(user.id)
+    if mascot_wait:
+        if violations == 3:                    #ровно на переходе к «систематическому»
+            _create_flood_ticket(db, user)
+        raise HTTPException(
+            status_code=429,
+            detail={"message": "Не отправляйте сообщения так часто.",
+                    "cooldown_seconds": mascot_wait, "mascot": True},
+            headers={"Retry-After": str(mascot_wait)})
     wait = msg_limit.check(user.id)
     if wait:
         raise HTTPException(
@@ -251,12 +293,45 @@ def _hidden_ids(db: Session, conv_id: str, user_id: str) -> set:
 
 
 def _names_for(db: Session, sender_ids) -> dict:
-    """Карта id→ФИО для набора отправителей (в группах/каналах показываем автора)."""
+    """Карта id→ФИО для набора отправителей (в группах/каналах показываем автора).
+    §D12: синтетический "system" (автопосты в системные каналы) — всегда «Вектор»."""
     ids = {s for s in sender_ids if s}
     if not ids:
         return {}
+    out = {}
+    if "system" in ids:
+        out["system"] = SYSTEM_SENDER_NAME
+        ids = ids - {"system"}
+    if ids:
+        rows = db.query(User).filter(User.id.in_(ids)).all()
+        out.update({u.id: (u.full_name or u.name or u.login or u.id) for u in rows})
+    return out
+
+
+_MENTION_RE = re.compile(r"@(!?)([A-Za-zА-Яа-яЁё]+)")
+
+
+def _parse_mentions(db: Session, body: str, participant_ids) -> list:
+    """§D8: находит @Фамилия / @!Фамилия (тихое, без пуша) среди УЧАСТНИКОВ беседы.
+    Сопоставление — по ПЕРВОМУ слову ФИО (фамилии), регистронезависимо, без разбора
+    склонений: осознанно просто, как и остальной MVP мессенджера (см. MESSENGER-PLAN
+    §D8 — точный морфологический разбор там же не предполагался)."""
+    ids = [i for i in participant_ids if i]
+    if not ids or "@" not in body:
+        return []
     rows = db.query(User).filter(User.id.in_(ids)).all()
-    return {u.id: (u.full_name or u.name or u.login or u.id) for u in rows}
+    surnames = {}
+    for u in rows:
+        first = (u.full_name or u.name or "").split(" ", 1)[0].strip().lower()
+        if first:
+            surnames.setdefault(first, u.id)
+    out, seen = [], set()
+    for m in _MENTION_RE.finditer(body):
+        uid = surnames.get(m.group(2).lower())
+        if uid and uid not in seen:
+            seen.add(uid)
+            out.append({"user_id": uid, "silent": bool(m.group(1))})
+    return out
 
 
 def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
@@ -270,7 +345,9 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
         "sender_id": m.sender_id,
         "sender_name": sender_name,
         "mine": bool(me_id) and m.sender_id == me_id,
+        "kind": getattr(m, "kind", "") or "text",          #§D6: text | system
         "body": "" if deleted else (m.body or ""),
+        "body_format": getattr(m, "body_format", "") or "markdown",  #§D1
         "created_at": m.created_at,
         "edited_at": "" if deleted else (m.edited_at or ""),
         "deleted": deleted,
@@ -278,7 +355,64 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
         "pinned": bool(m.pinned) and not deleted,
         #Шапка «Переслано от …» (снимок имени источника):
         "forwarded_from": (m.fwd_sender_name or "") if (m.fwd_from_sender_id and not deleted) else None,
+        "mentions": [] if deleted else (getattr(m, "mentions", None) or []),   #§D8
+        "reactions": [],   #§D3: заполняется в списке сообщений (_attach_reactions)
+        "reply_count": 0,  #Треды: заполняется в списке сообщений (_attach_reply_counts)
     }
+
+
+def _attach_reactions(db: Session, msgs: list, me_id: str) -> None:
+    """§D3: догрузить реакции пачкой для списка сериализованных сообщений (по id) и
+    сгруппировать: [{emoji, count, mine}]. Один запрос на всю страницу."""
+    ids = [m["id"] for m in msgs]
+    if not ids:
+        return
+    rows = db.query(MessageReaction).filter(MessageReaction.message_id.in_(ids)).all()
+    by_msg = {}
+    for r in rows:
+        grp = by_msg.setdefault(r.message_id, {})
+        cell = grp.setdefault(r.emoji, {"emoji": r.emoji, "count": 0, "mine": False})
+        cell["count"] += 1
+        if r.user_id == me_id:
+            cell["mine"] = True
+    for m in msgs:
+        m["reactions"] = list(by_msg.get(m["id"], {}).values())
+
+
+def _attach_reply_counts(db: Session, msgs: list) -> None:
+    """Треды (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3): число ответов на сообщение —
+    для бейджа «N ответов». Своей сущности треда не заводим: ветка = сообщения этой же
+    беседы с reply_to_id == id родителя (переиспользуем уже существующее поле)."""
+    ids = [m["id"] for m in msgs]
+    if not ids:
+        return
+    rows = (db.query(Message.reply_to_id, func.count(Message.id))
+            .filter(Message.reply_to_id.in_(ids), Message.deleted_at == "")
+            .group_by(Message.reply_to_id).all())
+    counts = {rid: cnt for rid, cnt in rows}
+    for m in msgs:
+        m["reply_count"] = counts.get(m["id"], 0)
+
+
+#§D3: белый список эмодзи-реакций (как в плане). Ничего сверх — предсказуемо и безопасно.
+_REACTIONS = {"👍", "✅", "❤️", "😂", "👀", "🔥", "💯", "❓", "📌"}
+
+
+#§D6: разделитель полей системного события — НЕ двоеточие: id участника сам содержит ':'
+#(формат stud:{login}/teach:{login}), и простой split(':') на клиенте расклеивал бы его на
+#куски (баг был найден при добавлении Qt-рендера и относится и к вебу тоже). \x1f (Unit
+#Separator) — непечатный символ, набрать с клавиатуры невозможно, коллизий не бывает.
+_SYS_SEP = "\x1f"
+
+
+def _system(db: Session, conv_id: str, event: str, *args: str) -> None:
+    """§D6: вставить СИСТЕМНОЕ сообщение в ленту (вступил/вышел/закрепил/…). Тело —
+    'событие\\x1fаргумент\\x1f...', клиент рендерит по-человечески. Не шлёт пуш, но
+    триггерит WS-обновление."""
+    body = _SYS_SEP.join((event, *args))
+    db.add(Message(conversation_id=conv_id, sender_id="system", body=body,
+                   created_at=_now(), kind="system"))
+    db.commit()
 
 
 def _peer_of_direct(db: Session, conv_id: str, me_id: str):
@@ -316,7 +450,8 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
     page = max(0, int(page or 0))
     chunk = rows[page * _PAGE_USERS:(page + 1) * _PAGE_USERS]
     onl = _online_logins()
-    return {"users": [_safe_user(u, onl) for u in chunk],
+    sm = _status_map(db, [u.id for u in chunk])
+    return {"users": [_safe_user(u, onl, status=sm.get(u.id)) for u in chunk],
             "total": total, "page": page, "page_size": _PAGE_USERS}
 
 
@@ -327,7 +462,79 @@ def user_profile(user_id: str, _user: User = Depends(get_current_user),
     u = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
     if u is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    return {"profile": _safe_user(u, _online_logins())}
+    sm = _status_map(db, [user_id])
+    return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id))}
+
+
+# ── Статус пользователя (§D7) ─────────────────────────────────────────────────────────
+@router.get("/status")
+def get_my_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Мой текущий статус (для инициализации переключателя в UI)."""
+    row = db.query(UserStatus).filter(UserStatus.user_id == user.id).first()
+    return {"kind": row.kind if row else "", "custom_text": row.custom_text if row else ""}
+
+
+@router.post("/status")
+def set_my_status(payload: dict = Body(...), user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Установить свой статус (dnd/studying/away, '' — сбросить). custom_text — только у
+    преподавателя (см. MESSENGER-PLAN §D7); у прочих ролей молча игнорируем текст."""
+    kind = payload.get("kind") or ""
+    if kind not in _STATUS_KINDS:
+        raise HTTPException(status_code=400, detail="Некорректный статус")
+    text = (payload.get("custom_text") or "").strip()[:80] if user.role == "teacher" else ""
+    row = db.query(UserStatus).filter(UserStatus.user_id == user.id).first()
+    if row is None:
+        row = UserStatus(user_id=user.id)
+        db.add(row)
+    row.kind = kind
+    row.custom_text = text
+    row.updated_at = _now()
+    db.commit()
+    return {"ok": True, "kind": row.kind, "custom_text": row.custom_text}
+
+
+# ── Шаблоны быстрых ответов преподавателя ────────────────────────────────────────────
+# docs/MESSENGER-ADDON-PLAN-GPT.md «Шаблоны сообщений преподавателя»: часто используемые
+# фразы одним кликом («Работа принята», «Исправьте ошибки»). Личный набор, НЕ AI —
+# преподаватель сам пишет текст один раз и переиспользует. Лимит — защита от «простыней».
+_MAX_TEMPLATES = 20
+
+
+@router.get("/templates")
+def list_templates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = (db.query(MessageTemplate).filter(MessageTemplate.user_id == user.id)
+            .order_by(MessageTemplate.position.asc(), MessageTemplate.id.asc()).all())
+    return {"templates": [{"id": t.id, "body": t.body} for t in rows]}
+
+
+@router.post("/templates")
+def create_template(payload: dict = Body(...), user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Шаблоны доступны преподавателям и администрации")
+    body = (payload.get("body") or "").strip()[:500]
+    if not body:
+        raise HTTPException(status_code=400, detail="Пустой шаблон")
+    count = db.query(MessageTemplate).filter(MessageTemplate.user_id == user.id).count()
+    if count >= _MAX_TEMPLATES:
+        raise HTTPException(status_code=400, detail=f"Не больше {_MAX_TEMPLATES} шаблонов")
+    t = MessageTemplate(user_id=user.id, body=body, position=count, created_at=_now())
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return {"id": t.id, "body": t.body}
+
+
+@router.delete("/templates/{tid}")
+def delete_template(tid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    t = (db.query(MessageTemplate)
+         .filter(MessageTemplate.id == tid, MessageTemplate.user_id == user.id).first())
+    if t is None:
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+    db.delete(t)
+    db.commit()
+    return {"ok": True}
 
 
 # ── Открыть/создать личный чат ───────────────────────────────────────────────────────
@@ -353,7 +560,9 @@ def open_direct(user_id: str, user: User = Depends(get_current_user),
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=peer.id,
                                        role="member", joined_at=now))
         db.commit()
-    return {"conversation_id": conv_id, "kind": "direct", "peer": _safe_user(peer, _online_logins())}
+    sm = _status_map(db, [peer.id])
+    return {"conversation_id": conv_id, "kind": "direct",
+            "peer": _safe_user(peer, _online_logins(), status=sm.get(peer.id))}
 
 
 # ── Список бесед ─────────────────────────────────────────────────────────────────────
@@ -390,6 +599,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             "conversation_id": conv.id,
             "kind": conv.kind,
             "pinned": bool(p.pinned),
+            "archived": bool(p.archived),
             "muted": bool(p.muted),
             "unread": unread,
             "last_message": _msg_out(last, user.id) if last else None,
@@ -398,7 +608,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         if conv.kind == "direct":
             peer = _peer_of_direct(db, conv.id, user.id)
             item["title"] = (peer.full_name or peer.name or peer.login) if peer else "Диалог"
-            item["peer"] = _safe_user(peer, onl) if peer else None
+            item["peer"] = _safe_user(peer, onl, status=_status_map(db, [peer.id]).get(peer.id)) if peer else None
         else:
             item["title"] = conv.title or ""
         out.append(item)
@@ -410,6 +620,69 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
 def _neg_key(iso: str):
     """Ключ сортировки «по убыванию времени» для строковых ISO-меток (позже → выше)."""
     return "" if not iso else "".join(chr(255 - b) for b in iso.encode("utf-8"))
+
+
+# ── Организация списка чатов: закреп/архив/избранное ─────────────────────────────────
+# Дополнения из docs/MESSENGER-ADDON-PLAN-GPT*.md, отобранные как «действительно полезное
+# и удобное» (без ИИ-упрощений учёбы — см. §5.4 CLAUDE.md). Личное состояние участника,
+# как mute — на собеседника не влияет.
+@router.post("/chats/{conv_id}/pin")
+def pin_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Закрепить чат в списке у СЕБЯ (сортировка — см. list_chats)."""
+    part = _require_participant(db, conv_id, user)
+    part.pinned = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/pin")
+def unpin_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    part = _require_participant(db, conv_id, user)
+    part.pinned = False
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/chats/{conv_id}/archive")
+def archive_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """В архив — чат уходит из основного списка, но НЕ удаляется (в отличие от DELETE
+    /chats/{conv_id}). В отличие от «удалить у себя» (hidden), новое сообщение чат из
+    архива само не выводит — только явная расархивация, это и есть смысл архива."""
+    part = _require_participant(db, conv_id, user)
+    part.archived = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/archive")
+def unarchive_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    part = _require_participant(db, conv_id, user)
+    part.archived = False
+    db.commit()
+    return {"ok": True}
+
+
+def _saved_conv_id(user_id: str) -> str:
+    return f"saved:{user_id}"
+
+
+@router.post("/chats/saved")
+def open_saved(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """«Избранное» (Saved Messages) — личный чат с самим собой: заметки, ссылки, код себе,
+    без надобности заводить отдельную сущность заметок — переиспользуем ВСЮ инфраструктуру
+    сообщений (Markdown, реакции, правка, пересылка). Один на пользователя, создаётся лениво
+    при первом открытии. Закреплён по умолчанию — как в Telegram, всегда сверху списка."""
+    conv_id = _saved_conv_id(user.id)
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is None:
+        now = _now()
+        conv = Conversation(id=conv_id, kind="saved", title="Избранное",
+                            owner_id=user.id, created_at=now)
+        db.add(conv)
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="owner", joined_at=now, pinned=True))
+        db.commit()
+    return {"conversation_id": conv_id}
 
 
 # ── История и новые сообщения ────────────────────────────────────────────────────────
@@ -441,7 +714,75 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
         rows = q.order_by(Message.id.desc()).limit(limit).all()
         rows.reverse()
     names = _names_for(db, [m.sender_id for m in rows])
-    return {"messages": [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]}
+    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
+    _attach_reactions(db, out, user.id)      #§D3: реакции пачкой
+    _attach_reply_counts(db, out)            #Треды: бейдж «N ответов»
+    return {"messages": out}
+
+
+@router.get("/chats/{conv_id}/messages/thread/{message_id}")
+def message_thread(conv_id: str, message_id: int,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Треды: ответы на КОНКРЕТНОЕ сообщение этой беседы (см. `_attach_reply_counts`).
+    Своей сущности «ветки» не заводим — фильтр по уже существующему `reply_to_id`."""
+    _require_participant(db, conv_id, user)
+    hidden = _hidden_ids(db, conv_id, user.id)
+    q = (db.query(Message)
+         .filter(Message.conversation_id == conv_id, Message.reply_to_id == message_id))
+    if hidden:
+        q = q.filter(~Message.id.in_(hidden))
+    rows = q.order_by(Message.id.asc()).all()
+    names = _names_for(db, [m.sender_id for m in rows])
+    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
+    _attach_reactions(db, out, user.id)
+    return {"messages": out}
+
+
+@router.get("/chats/{conv_id}/messages/search")
+def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Поиск по тексту ВНУТРИ одной беседы. Регистронезависимое вхождение делаем в Python
+    (та же причина, что и в directory(): SQLite без ICU не даёт регистронезависимый LIKE
+    для кириллицы, а объём переписки учебного заведения в память умещается)."""
+    part = _require_participant(db, conv_id, user)
+    needle = (q or "").strip().lower()
+    if not needle:
+        return {"messages": []}
+    hidden = _hidden_ids(db, conv_id, user.id)
+    qq = (db.query(Message)
+          .filter(Message.conversation_id == conv_id, Message.deleted_at == "",
+                  Message.kind == "text"))
+    if part.cleared_at:
+        qq = qq.filter(Message.created_at > part.cleared_at)
+    if hidden:
+        qq = qq.filter(~Message.id.in_(hidden))
+    rows = qq.order_by(Message.id.desc()).limit(2000).all()   #верхняя граница выборки
+    limit = max(1, min(int(limit or 50), 100))
+    matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
+    names = _names_for(db, [m.sender_id for m in matched])
+    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
+    return {"messages": out}
+
+
+@router.get("/messages/{mid}/read_by")
+def message_read_by(mid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Кто прочитал сообщение — переиспользует УЖЕ существующий per-участнику
+    `last_read_at` (без новой таблицы «строка на каждое прочтение каждым»): читатель —
+    участник, чья метка прочтения НЕ РАНЬШЕ момента отправки этого сообщения."""
+    m = db.query(Message).filter(Message.id == mid).first()
+    if m is None:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    _require_participant(db, m.conversation_id, user)
+    rows = (db.query(ConversationParticipant)
+            .filter(ConversationParticipant.conversation_id == m.conversation_id,
+                    ConversationParticipant.user_id != m.sender_id,
+                    ConversationParticipant.last_read_at >= m.created_at).all())
+    ids = [r.user_id for r in rows]
+    if not ids:
+        return {"users": []}
+    onl = _online_logins()
+    users = db.query(User).filter(User.id.in_(ids)).all()
+    return {"users": [_safe_user(u, onl) for u in users]}
 
 
 # ── Отправка ─────────────────────────────────────────────────────────────────────────
@@ -467,8 +808,22 @@ def send_message(conv_id: str, payload: dict = Body(...),
         if ok is None:
             reply_to = 0                     #ответ на чужое/несуществующее — игнорируем связь
 
+    #§D10: идемпотентность. Повторный POST с тем же client_nonce (ретрай при обрыве сети)
+    #возвращает уже созданное сообщение, а не плодит дубль.
+    nonce = str(payload.get("client_nonce") or "").strip()[:64]
+    if nonce:
+        dup = (db.query(Message)
+               .filter(Message.conversation_id == conv_id, Message.client_nonce == nonce).first())
+        if dup is not None:
+            return _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
+
+    #§D8: упоминания — среди участников ЭТОЙ беседы (иначе @Фамилия постороннего человека
+    #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
+    mentions = _parse_mentions(db, body, _participant_ids(db, conv_id))
+
     m = Message(conversation_id=conv_id, sender_id=user.id, body=body,
-                created_at=_now(), reply_to_id=reply_to)
+                created_at=_now(), reply_to_id=reply_to, mentions=mentions,
+                kind="text", body_format="markdown", client_nonce=nonce)
     db.add(m)
     db.commit()
     db.refresh(m)
@@ -476,8 +831,37 @@ def send_message(conv_id: str, payload: dict = Body(...),
     _mark_read(db, conv_id, user.id, m.created_at)
     _unhide_participants(db, conv_id)        #«удалённый» чат возвращается с новым сообщением
     _broadcast(db, conv_id)                  #живой сигнал участникам (WS)
-    _notify_recipients(db, conv, user)       #пуш офлайн-получателям
+    silent_ids = {mm["user_id"] for mm in mentions if mm.get("silent")}
+    _notify_recipients(db, conv, user, skip_ids=silent_ids)   #пуш офлайн — минус тихие упоминания
+    _handle_vector_command(db, conv_id, body, user)
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
+
+
+_VECTOR_CMD_RE = re.compile(r"^/vector(?:@\w+)?\s*(.*)$", re.IGNORECASE | re.DOTALL)
+
+
+def _handle_vector_command(db: Session, conv_id: str, body: str, user: User) -> None:
+    """`docs/MESSENGER-ADDON-PLAN-GPT.md`: «AI-поиск по смыслу» — реализован не как отдельная
+    embedding-инфраструктура (её негде держать на 1-ядерном VPS), а как переиспользование УЖЕ
+    существующего анти-галлюцинационного Вектора (`web.py::answer_vector_question`, тот же
+    код, что у `/web/vector/ask`). Команда `/vector <вопрос>` в ЛЮБОМ чате — ответ приходит
+    публично, от лица «Вектора», как обычное сообщение (все участники его видят, как в
+    Discord/Slack ботах). try/except: сбой ИИ-ответа не должен мешать самой отправке
+    сообщения — она уже прошла и закоммичена выше."""
+    match = _VECTOR_CMD_RE.match(body.strip())
+    if not match:
+        return
+    question = match.group(1).strip()
+    if not question:
+        return
+    try:
+        from .web import answer_vector_question
+        answer = answer_vector_question(question, user, db)
+        text = (answer.get("text") or "").strip()
+        if text:
+            _post_system_channel_message(db, conv_id, text)
+    except Exception:
+        pass
 
 
 # ── Прочтение ────────────────────────────────────────────────────────────────────────
@@ -599,12 +983,83 @@ def edit_message(mid: int, payload: dict = Body(...),
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
+    #§D11: сохраняем текст ДО правки — модерация должна видеть оригинал (автор мог исправить
+    #сообщение после жалобы). Пустых снимков не плодим.
+    if (m.body or "") and m.body != body[:_MAX_MSG_CHARS]:
+        db.add(MessageEdit(message_id=m.id, body_before=m.body, edited_at=_now()))
     m.body = body[:_MAX_MSG_CHARS]
     m.edited_at = _now()
     db.commit()
     db.refresh(m)
     _broadcast(db, m.conversation_id)
     return _msg_out(m, user.id)
+
+
+@router.get("/messages/{mid}/history")
+def message_history(mid: int, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """§D11: история редактирования сообщения (участникам беседы). Показывает версии ДО
+    правок + текущий текст — чтобы было видно, что менялось."""
+    m = _message_in_conv(db, mid)
+    _require_participant(db, m.conversation_id, user)
+    edits = (db.query(MessageEdit).filter(MessageEdit.message_id == mid)
+             .order_by(MessageEdit.id.asc()).all())
+    versions = [{"body": e.body_before, "at": e.edited_at} for e in edits]
+    versions.append({"body": m.body or "", "at": m.edited_at or m.created_at, "current": True})
+    return {"versions": versions}
+
+
+# ── Реакции (§D3) ────────────────────────────────────────────────────────────────────
+@router.post("/messages/{mid}/reactions")
+def add_reaction(mid: int, payload: dict = Body(...),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Поставить реакцию-эмодзи (из белого списка). Идемпотентно: та же реакция от того же
+    пользователя не дублируется."""
+    emoji = str(payload.get("emoji") or "")
+    if emoji not in _REACTIONS:
+        raise HTTPException(status_code=400, detail="Недопустимая реакция")
+    m = _message_in_conv(db, mid)
+    _require_participant(db, m.conversation_id, user)
+    if m.deleted_at:
+        raise HTTPException(status_code=400, detail="Сообщение удалено")
+    exists = (db.query(MessageReaction)
+              .filter(MessageReaction.message_id == mid, MessageReaction.user_id == user.id,
+                      MessageReaction.emoji == emoji).first())
+    if exists is None:
+        db.add(MessageReaction(message_id=mid, user_id=user.id, emoji=emoji, created_at=_now()))
+        db.commit()
+        _broadcast(db, m.conversation_id)
+    return {"ok": True}
+
+
+@router.delete("/messages/{mid}/reactions/{emoji}")
+def remove_reaction(mid: int, emoji: str, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Снять СВОЮ реакцию."""
+    m = _message_in_conv(db, mid)
+    _require_participant(db, m.conversation_id, user)
+    row = (db.query(MessageReaction)
+           .filter(MessageReaction.message_id == mid, MessageReaction.user_id == user.id,
+                   MessageReaction.emoji == emoji).first())
+    if row is not None:
+        db.delete(row)
+        db.commit()
+        _broadcast(db, m.conversation_id)
+    return {"ok": True}
+
+
+@router.get("/messages/{mid}/reactions")
+def list_reactions(mid: int, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Кто какие реакции поставил (для попапа «кто поставил»)."""
+    m = _message_in_conv(db, mid)
+    _require_participant(db, m.conversation_id, user)
+    rows = db.query(MessageReaction).filter(MessageReaction.message_id == mid).all()
+    names = _names_for(db, [r.user_id for r in rows])
+    out = {}
+    for r in rows:
+        out.setdefault(r.emoji, []).append(names.get(r.user_id, r.user_id))
+    return {"reactions": [{"emoji": e, "users": u, "count": len(u)} for e, u in out.items()]}
 
 
 @router.delete("/messages/{mid}")
@@ -646,6 +1101,7 @@ def pin_message(mid: int, user: User = Depends(get_current_user), db: Session = 
     m.pinned_by = user.id
     db.commit()
     db.refresh(m)
+    _system(db, m.conversation_id, "pin_added", str(mid))     #§D6
     _broadcast(db, m.conversation_id)
     return _msg_out(m, user.id)
 
@@ -659,6 +1115,7 @@ def unpin_message(mid: int, user: User = Depends(get_current_user), db: Session 
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     m.pinned = False
     db.commit()
+    _system(db, m.conversation_id, "pin_removed", str(mid))   #§D6
     _broadcast(db, m.conversation_id)
     return {"ok": True, "id": mid}
 
@@ -830,6 +1287,8 @@ def join_chat(conv_id: str, user: User = Depends(get_current_user), db: Session 
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
                                        role="reader", joined_at=_now()))
         db.commit()
+        _system(db, conv_id, "user_joined", user.id, user.full_name or user.name or user.login)
+        _broadcast(db, conv_id)
     return {"ok": True, "conversation_id": conv_id}
 
 
@@ -838,8 +1297,11 @@ def leave_chat(conv_id: str, user: User = Depends(get_current_user), db: Session
     """Покинуть беседу (группу/канал)."""
     p = _participant(db, conv_id, user.id)
     if p is not None:
+        name = user.full_name or user.name or user.login
         db.delete(p)
         db.commit()
+        _system(db, conv_id, "user_left", user.id, name)
+        _broadcast(db, conv_id)
     return {"ok": True}
 
 
@@ -852,14 +1314,21 @@ def add_members(conv_id: str, payload: dict = Body(...),
     role = "reader" if conv.kind == "channel" else "member"
     now = _now()
     added = 0
+    joined_names = []
     for uid in (payload.get("user_ids") or []):
         if _participant(db, conv_id, uid) is not None:
             continue
-        if db.query(User).filter(User.id == uid, User.deleted == False).first() is None:  # noqa: E712
+        u = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
+        if u is None:
             continue
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role=role, joined_at=now))
+        joined_names.append((uid, u.full_name or u.name or u.login))
         added += 1
     db.commit()
+    for uid, name in joined_names:                        #§D6: системные «вступил»
+        _system(db, conv_id, "user_joined", uid, name)
+    if added:
+        _broadcast(db, conv_id)
     return {"added": added}
 
 
@@ -873,8 +1342,12 @@ def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user)
         _require_participant(db, conv_id, user)
     p = _participant(db, conv_id, uid)
     if p is not None and p.role != "owner":
+        u = db.query(User).filter(User.id == uid).first()
+        name = (u.full_name or u.name or u.login) if u else uid
         db.delete(p)
         db.commit()
+        _system(db, conv_id, "user_left", uid, name)   #§D6
+        _broadcast(db, conv_id)
     return {"ok": True}
 
 
@@ -909,10 +1382,12 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
     urows = {u.id: u for u in db.query(User).filter(
         User.id.in_([p.user_id for p in parts]))} if parts else {}
     onl = _online_logins()
+    sm = _status_map(db, [p.user_id for p in parts])
     people = []
     for p in parts:
         u = urows.get(p.user_id)
         prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
+        st = sm.get(p.user_id, {})
         people.append({
             "user_id": p.user_id,
             "full_name": (u.full_name or u.name or u.login) if u else p.user_id,
@@ -925,13 +1400,160 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "user_role": (u.role if u else ""),   #student | teacher | admin (роль в системе)
             "group_name": (u.group_name or "") if u else "",
             "subjects": (u.subjects or []) if (u is not None and u.role == "teacher") else [],
+            #§D7: статус поверх presence (dnd/studying/away + текст у преподавателя).
+            "status_kind": st.get("kind", "") or "",
+            "status_text": st.get("custom_text", "") or "",
         })
     #Владелец — первым, дальше по роли и алфавиту: сразу видно, кто создал беседу.
     _ORDER = {"owner": 0, "admin": 1, "writer": 2, "member": 3, "reader": 4}
     people.sort(key=lambda x: (_ORDER.get(x["role"], 9), (x["full_name"] or "").lower()))
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
             "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
-            "my_role": part.role, "participants": people, "subscribers": len(people)}
+            "my_role": part.role, "participants": people, "subscribers": len(people),
+            #§D5: метка прочтения ДО открытия чата — клиент строит по ней разделитель
+            #«Новые сообщения» (снимаем ДО markReadActive, иначе она бы уже сдвинулась).
+            "my_last_read_at": part.last_read_at or ""}
+
+
+@router.patch("/chats/{conv_id}")
+def rename_conversation(conv_id: str, payload: dict = Body(...),
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Переименовать группу/канал (owner/admin). Личный чат и беседу с модерацией не
+    переименовываем — у них нет своего названия. Пишет системное сообщение (§D6).
+
+    Проверяем ТИП беседы раньше роли: у личного чата участники всегда 'member' (не
+    owner/admin), и без этого порядка запрос падал бы в 403 «недостаточно прав» вместо
+    внятного 400 «эту беседу нельзя переименовать» — путало бы причину отказа."""
+    conv = _conversation(db, conv_id)
+    part = _require_participant(db, conv_id, user)
+    if conv.kind not in ("group", "channel"):
+        raise HTTPException(status_code=400, detail="Эту беседу нельзя переименовать")
+    if part.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Нужно название")
+    title = title[:120]
+    if title != conv.title:
+        conv.title = title
+        if "about" in payload:
+            conv.about = (payload.get("about") or "").strip()[:500]
+        db.commit()
+        _system(db, conv_id, "title_changed", title)   #§D6
+        _broadcast(db, conv_id)
+    return {"ok": True, "title": conv.title, "about": conv.about}
+
+
+# ── §D12: автоматические системные каналы (оценки/объявления/расписание) ─────────────
+# Превращают мессенджер из «просто чата» в хаб колледжа: авто-канал появляется у студента
+# сам, без ручного создания. Технически это ОБЫЧНЫЙ kind='channel' (переиспользует всю
+# инфраструктуру — закрепление/реакции/пересылка), просто отмечен is_system=True и создан
+# от лица "system". Публичные точки входа вызываются ИЗВНЕ (routers/web.py — оценки,
+# рассылка расписания), ОБЯЗАНЫ быть обёрнуты в try/except на СТОРОНЕ ВЫЗЫВАЮЩЕГО КОДА —
+# сбой мессенджера НИКОГДА не должен ронять выставление оценки/рассылку расписания.
+SYSTEM_SENDER_NAME = "Вектор"    #посты подписаны уже знакомым маскотом, а не безликой «системой»
+
+
+def _ensure_system_channel(db: Session, conv_id: str, title: str, about: str,
+                           reader_ids, writer_ids=()) -> Conversation:
+    """Найти/создать системный канал. Не идёт через create_channel (тот проверяет роль
+    вызывающего и требует явного owner-пользователя) — здесь owner условный ("system")."""
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is not None:
+        return conv
+    now = _now()
+    kind_tag = conv_id.split(":", 2)[1] if conv_id.count(":") >= 2 else ""
+    conv = Conversation(id=conv_id, kind="channel", title=title[:120], about=about[:500],
+                        owner_id="system", is_public=False, created_at=now,
+                        is_system=True, system_kind=kind_tag)
+    db.add(conv)
+    writer_set = set(writer_ids)
+    for uid in writer_set:
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role="writer", joined_at=now))
+    for uid in reader_ids:
+        if uid in writer_set:
+            continue
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role="reader", joined_at=now))
+    db.commit()
+    return conv
+
+
+def _post_system_channel_message(db: Session, conv_id: str, body: str) -> None:
+    """Опубликовать пост от лица «Вектора» + пуш офлайн-читателям (не замьютившим канал)."""
+    m = Message(conversation_id=conv_id, sender_id="system", body=body,
+               created_at=_now(), kind="text", body_format="markdown")
+    db.add(m)
+    db.commit()
+    _broadcast(db, conv_id)
+    try:
+        from .. import rustore_push
+        online = _online_logins()
+        parts = db.query(ConversationParticipant).filter(
+            ConversationParticipant.conversation_id == conv_id).all()
+        ids = [p.user_id for p in parts if not p.muted]
+        if ids:
+            for u in db.query(User).filter(User.id.in_(ids)).all():
+                if u.login and u.login not in online:
+                    rustore_push.notify_login(db, u.login, SYSTEM_SENDER_NAME, body[:120],
+                                              {"type": "message", "conversation_id": conv_id})
+    except Exception:
+        pass
+
+
+def notify_grade_posted(db: Session, student_id: str, teacher_name: str, subject: str, grade: str) -> None:
+    """§D12(1): «Мои оценки» — личный read-only канал студента. Публичная точка входа для
+    routers/web.py (POST /web/teacher/grade); ВЫЗЫВАЮЩИЙ КОД оборачивает в try/except."""
+    if not student_id:
+        return
+    conv_id = f"sys:grades:{student_id}"
+    _ensure_system_channel(db, conv_id, "Мои оценки",
+                          "Автоматические уведомления о ваших оценках.", reader_ids=[student_id])
+    _post_system_channel_message(
+        db, conv_id, f"**{teacher_name}** поставил(а) вам **{grade}** по {subject}")
+
+
+def ensure_group_schedule_channel(db: Session, group_name: str, student_ids) -> str:
+    """§D12(3): «Расписание · Группа» — read-only канал, публикует schedule.publish (админ,
+    web.py). Возвращает id канала (для _post_system_channel_message вызывающим кодом)."""
+    conv_id = f"sys:schedule:{group_name}"
+    _ensure_system_channel(db, conv_id, f"Расписание · {group_name}",
+                          "Автоматические изменения расписания вашей группы.",
+                          reader_ids=student_ids)
+    return conv_id
+
+
+@router.post("/channels/announcements/{group_name}")
+def ensure_announcements_channel(group_name: str, user: User = Depends(get_current_user),
+                                 db: Session = Depends(get_db)):
+    """§D12(2): «Объявления · Группа» — teacher/admin открывают/создают канал (студенты
+    группы — читатели, преподаватели этой группы — авторы) и дальше публикуют ОБЫЧНЫМ
+    send_message (это простой kind='channel', отдельного эндпоинта «отправить объявление»
+    не требуется — переиспользуем всю уже готовую инфраструктуру постинга в канал)."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    group_name = group_name.strip()
+    if not group_name:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    students = [u.id for u in db.query(User).filter(
+        User.role == "student", User.group_name == group_name, User.deleted == False).all()]  # noqa: E712
+    subjects_here = {row.subject for row in db.query(Lesson).filter(
+        Lesson.group_name == group_name, Lesson.deleted == False).all() if row.subject}  # noqa: E712
+    teachers = [t.id for t in db.query(User).filter(
+        User.role == "teacher", User.deleted == False).all()  # noqa: E712
+        if set(t.subjects or []) & subjects_here] if subjects_here else []
+    if user.role == "teacher" and user.id not in teachers:
+        teachers.append(user.id)     #админ мог создать канал раньше, чем завёл занятия
+    conv_id = f"sys:announce:{group_name}"
+    conv = _ensure_system_channel(db, conv_id, f"Объявления · {group_name}",
+                                  "Объявления от преподавателей и администрации.",
+                                  reader_ids=students, writer_ids=teachers)
+    #Уже существующий канал: если пользователь — преподаватель этой группы и ещё не писатель,
+    #добавляем (группа могла завести предметы уже ПОСЛЕ создания канала).
+    if user.role == "teacher" and _participant(db, conv_id, user.id) is None:
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="writer", joined_at=_now()))
+        db.commit()
+    return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
 
 
 # ── Чат с модерацией (сторона пользователя, кнопка ⚙) ────────────────────────────────

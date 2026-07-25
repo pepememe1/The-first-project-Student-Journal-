@@ -149,21 +149,37 @@ class ThemeCustomizer(QWidget):
         mlc.addLayout(mode_row)
 
         #Тёмная тема по расписанию (по умолчанию 18:00–08:00, время настраивается).
+        #Чекбокс и поля времени стилизуем под тему — иначе выглядят «системно» и выбиваются
+        #из остального интерфейса (правка внешнего вида по просьбе).
         self._sched_chk = QCheckBox("Тёмная тема по расписанию")
         self._sched_chk.setChecked(self._schedule["enabled"])
+        self._sched_chk.setCursor(Qt.PointingHandCursor)
+        self._sched_chk.setStyleSheet(
+            f"QCheckBox{{color:{C['text2']};font-size:13px;spacing:9px;}}"
+            f"QCheckBox::indicator{{width:18px;height:18px;border:1px solid {C['border2']};"
+            f"border-radius:5px;background:{C['card2']};}}"
+            f"QCheckBox::indicator:hover{{border:1px solid {C['green']};}}"
+            f"QCheckBox::indicator:checked{{background:{C['green']};border:1px solid {C['green']};}}")
         self._sched_chk.toggled.connect(self._on_sched_toggled)
         mlc.addWidget(self._sched_chk)
 
+        _te_style = (
+            f"QTimeEdit{{background:{C['card2']};border:1px solid {C['border2']};border-radius:8px;"
+            f"padding:5px 8px;color:{C['text']};min-width:66px;min-height:18px;}}"
+            f"QTimeEdit:focus{{border:1px solid {C['green']};}}"
+            f"QTimeEdit::up-button,QTimeEdit::down-button{{width:16px;border:none;background:transparent;}}")
         sched_row = QHBoxLayout()
         sched_row.setSpacing(8)
         sched_row.addWidget(lbl("Тёмная с", 12, C["text3"]))
         self._sched_from = QTimeEdit(QTime.fromString(self._schedule["start"], "HH:mm"))
         self._sched_from.setDisplayFormat("HH:mm")
+        self._sched_from.setStyleSheet(_te_style)
         self._sched_from.timeChanged.connect(self._on_sched_time)
         sched_row.addWidget(self._sched_from)
         sched_row.addWidget(lbl("до", 12, C["text3"]))
         self._sched_to = QTimeEdit(QTime.fromString(self._schedule["end"], "HH:mm"))
         self._sched_to.setDisplayFormat("HH:mm")
+        self._sched_to.setStyleSheet(_te_style)
         self._sched_to.timeChanged.connect(self._on_sched_time)
         sched_row.addWidget(self._sched_to)
         sched_row.addStretch()

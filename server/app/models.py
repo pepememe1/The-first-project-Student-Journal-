@@ -409,6 +409,10 @@ class Conversation(Base):
     owner_id = Column(String, index=True, default="")  #создатель (у direct/moderation пусто)
     is_public = Column(Boolean, default=False)         #канал виден в каталоге и свободно вступаем
     created_at = Column(String, default="", index=True)
+    #§D12: автоматические системные каналы («Мои оценки», «Объявления группы», «Расписание»).
+    #Их нельзя покинуть/переименовать обычными эндпоинтами — см. routers/messenger.py.
+    is_system = Column(Boolean, default=False)
+    system_kind = Column(String, default="")           #grades | announcements | schedule | ''
 
 
 class ConversationParticipant(Base):
@@ -428,6 +432,9 @@ class ConversationParticipant(Base):
     cleared_at = Column(String, default="")
     #Чат убран из списка до первой новой активности (тогда снимаем флаг и он вернётся).
     hidden = Column(Boolean, default=False)
+    #Архив: чат убран из основного списка БЕЗ удаления (в отличие от hidden — не возвращается
+    #сам новым сообщением, только явной расархивацией). Личное состояние, как pinned/muted.
+    archived = Column(Boolean, default=False)
 
 
 class Message(Base):
@@ -450,6 +457,63 @@ class Message(Base):
     pinned = Column(Boolean, default=False, index=True)
     pinned_at = Column(String, default="")
     pinned_by = Column(String, default="")
+    #§D6: тип сообщения. text — обычное, system — служебное (вступил/вышел/закрепил/…).
+    #Тело system-сообщения — шаблон "event:arg1:arg2" (см. routers/messenger._system).
+    kind = Column(String, default="text")
+    #§D1: формат тела. markdown — рендерить Markdown-lite, plain — как есть (старые строки).
+    body_format = Column(String, default="markdown")
+    #§D10: ключ идемпотентности от клиента (UUID). Повторный POST с тем же nonce возвращает
+    #уже созданное сообщение — защита от дублей при ретраях/обрыве сети.
+    client_nonce = Column(String, index=True, default="")
+    #§D8: упоминания в тексте — [{"user_id":.., "silent": bool}, ...]. silent=true — пуш
+    #НЕ шлём (только бейдж), обычное @Фамилия — шлём как всегда. Разбирается на отправке
+    #(см. routers/messenger._parse_mentions), клиент подсвечивает по этому списку.
+    mentions = Column(JSON, default=list)
+
+
+class MessageReaction(Base):
+    """§D3: реакция-эмодзи на сообщение. Ключ — (сообщение, пользователь, эмодзи): один
+    пользователь может поставить разные эмодзи, но каждую — один раз. НЕ в SYNC_MODELS."""
+    __tablename__ = "message_reactions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, index=True, default=0)
+    user_id = Column(String, index=True, default="")
+    emoji = Column(String, default="")
+    created_at = Column(String, default="")
+
+
+class MessageEdit(Base):
+    """§D11: история редактирования — текст ДО правки. Нужна модерации: автор мог
+    исправить сообщение после жалобы, и тикет должен показывать оригинал. НЕ в SYNC_MODELS."""
+    __tablename__ = "message_edits"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, index=True, default=0)
+    body_before = Column(String, default="")
+    edited_at = Column(String, default="")
+
+
+class MessageTemplate(Base):
+    """Шаблон быстрого ответа преподавателя («Работа принята», «Исправьте ошибки») —
+    личный набор, вставляется в композер одним кликом. НЕ в SYNC_MODELS (деталь той же
+    онлайн-подсистемы мессенджера)."""
+    __tablename__ = "message_templates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True, default="")
+    body = Column(String, default="")
+    position = Column(Integer, default=0)
+    created_at = Column(String, default="")
+
+
+class UserStatus(Base):
+    """§D7: статус пользователя ПОВЕРХ presence (online/оффлайн уже даёт events.online()).
+    kind='' — статуса нет, показываем просто presence; иначе dnd/studying/away — накладка
+    поверх неё. custom_text — только у преподавателя (см. routers/messenger.py). НЕ в
+    SYNC_MODELS: серверная деталь той же online-подсистемы, что и presence."""
+    __tablename__ = "user_statuses"
+    user_id = Column(String, primary_key=True)
+    kind = Column(String, default="")
+    custom_text = Column(String, default="")
+    updated_at = Column(String, default="")
 
 
 class MessageHidden(Base):

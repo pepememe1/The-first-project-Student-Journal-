@@ -10,11 +10,16 @@ from app.security import hash_password
 
 
 def _make_student(client, admin_headers, login, name="Студент"):
-    """Завести студента (через push админа) и вернуть (id, headers)."""
+    """Завести студента (через push админа) и вернуть (id, headers). surname/name — из
+    первого/остальных слов full_name (конвенция «Фамилия Имя») — нужны отдельно для
+    /web/teacher/grade, который матчит студента ИМЕННО по этим двум колонкам, не по full_name."""
     uid = f"stud:{login}"
+    parts = name.split(" ", 1)
+    surname, given = parts[0], (parts[1] if len(parts) > 1 else "")
     r = client.post("/sync/push", json={"changes": {"users": [{
         "id": uid, "role": "student", "login": login,
         "password_hash": hash_password("studpass1"), "full_name": name,
+        "surname": surname, "name": given,
         "group_name": "К-24",
     }]}}, headers=admin_headers)
     assert r.status_code == 200, r.text
@@ -651,3 +656,461 @@ def test_no_push_to_online_recipient(client, monkeypatch):
     calls.clear()
     client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "привет"}, headers=a)
     assert "bob" not in calls
+
+
+# ── §D-фичи (Discord-аддоны): идемпотентность, реакции, системные, история правок ─────
+def test_d10_idempotency_client_nonce(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    n = "nonce-abc-123"
+    m1 = client.post(f"/web/messenger/chats/{conv}/messages",
+                     json={"body": "привет", "client_nonce": n}, headers=a).json()
+    m2 = client.post(f"/web/messenger/chats/{conv}/messages",
+                     json={"body": "привет", "client_nonce": n}, headers=a).json()
+    assert m1["id"] == m2["id"], "повтор с тем же nonce — тот же message, не дубль"
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert len([m for m in msgs if m["body"] == "привет"]) == 1
+    assert m1["body_format"] == "markdown"      # §D1
+
+
+def test_d3_reactions_add_remove(client):
+    from urllib.parse import quote
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "оценка"}, headers=a).json()["id"]
+    #Недопустимый эмодзи отвергается.
+    assert client.post(f"/web/messenger/messages/{mid}/reactions",
+                       json={"emoji": "X"}, headers=b).status_code == 400
+    #b ставит 👍 (повтор идемпотентен).
+    assert client.post(f"/web/messenger/messages/{mid}/reactions",
+                       json={"emoji": "👍"}, headers=b).status_code == 200
+    client.post(f"/web/messenger/messages/{mid}/reactions", json={"emoji": "👍"}, headers=b)
+    ra = [m for m in client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+          if m["id"] == mid][0]["reactions"]
+    assert ra == [{"emoji": "👍", "count": 1, "mine": False}]
+    rb = [m for m in client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+          if m["id"] == mid][0]["reactions"]
+    assert rb[0]["mine"] is True
+    #Снять свою реакцию.
+    client.delete(f"/web/messenger/messages/{mid}/reactions/{quote('👍')}", headers=b)
+    ra = [m for m in client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+          if m["id"] == mid][0]["reactions"]
+    assert ra == []
+
+
+def test_d6_system_message_on_join(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Проект", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/members", json={"user_ids": [c_id]}, headers=a)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    sysm = [m for m in msgs if m["kind"] == "system"]
+    assert any(m["body"].startswith("user_joined") and c_id in m["body"] for m in sysm)
+
+
+def test_d11_edit_history(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "опечтка"}, headers=a).json()["id"]
+    client.patch(f"/web/messenger/messages/{mid}", json={"body": "опечатка"}, headers=a)
+    v = client.get(f"/web/messenger/messages/{mid}/history", headers=a).json()["versions"]
+    assert v[0]["body"] == "опечтка"
+    assert v[-1]["body"] == "опечатка" and v[-1].get("current")
+
+
+def test_d6_rename_group_writes_system_message(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Старое имя", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    #Обычный участник (не owner/admin) не может переименовать.
+    assert client.patch(f"/web/messenger/chats/{conv}",
+                        json={"title": "Взлом"}, headers=b).status_code == 403
+    #Владелец переименовывает — событие видно всем участникам.
+    r = client.patch(f"/web/messenger/chats/{conv}", json={"title": "Новое имя"}, headers=a)
+    assert r.status_code == 200 and r.json()["title"] == "Новое имя"
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    sysm = [m for m in msgs if m["kind"] == "system"]
+    assert any(m["body"] == "title_changedНовое имя" for m in sysm)
+
+
+def test_d6_rename_rejects_direct_chat(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    assert client.patch(f"/web/messenger/chats/{conv}", json={"title": "X"}, headers=a).status_code == 400
+
+
+# ── §D2: маскот-замедление (эскалирующий кулдаун вместо холодного 429) ────────────────
+def test_d2_mascot_cooldown_shape_on_burst(client):
+    from app import msg_limit
+    msg_limit.reset()
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    #5 быстрых сообщений проходят (это и есть сам всплеск-триггер, но проверка идёт
+    #ДО регистрации текущей попытки — 5-е ещё пройдёт, 6-е уже упрётся в порог).
+    for i in range(5):
+        r = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": f"msg{i}"}, headers=a)
+        assert r.status_code == 200, r.text
+    r = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "перебор"}, headers=a)
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert detail["mascot"] is True and detail["cooldown_seconds"] == 8
+
+
+def test_d2_systematic_flood_creates_moderation_ticket(client):
+    from app import msg_limit
+    msg_limit.reset()
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    #Готовим 2 уже «остывших» нарушения напрямую (не гонять реальные 5+5 минут ожидания).
+    for _ in range(2):
+        for i in range(5):
+            client.post(f"/web/messenger/chats/{conv}/messages", json={"body": f"x{i}"}, headers=a)
+        client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "over"}, headers=a)
+        msg_limit._violations[a_id][-1] -= msg_limit._MASCOT_BURST_WINDOW + 1
+        msg_limit._events[a_id].clear()             #новый «чистый» всплеск для следующей серии
+    #Третий всплеск — систематика: 60 c + автотикет модерации.
+    for i in range(5):
+        client.post(f"/web/messenger/chats/{conv}/messages", json={"body": f"y{i}"}, headers=a)
+    r = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "flood"}, headers=a)
+    assert r.status_code == 429 and r.json()["detail"]["cooldown_seconds"] == 60
+
+    reports = client.get("/web/admin/messenger/reports?status=open", headers=admin).json()["reports"]
+    flood = [t for t in reports if t["reason_code"] == "flood" and t["reported_name"] == "Преподаватель"]
+    assert flood, "систематический флуд должен создать автотикет модерации"
+
+
+# ── §D7: статус пользователя (dnd/studying/away + текст у преподавателя) ─────────────
+def test_d7_set_and_read_own_status(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    #Без статуса — пусто.
+    assert client.get("/web/messenger/status", headers=a).json() == {"kind": "", "custom_text": ""}
+    #Преподаватель ставит статус с текстом.
+    r = client.post("/web/messenger/status", json={"kind": "dnd", "custom_text": "На паре"}, headers=a)
+    assert r.status_code == 200 and r.json() == {"ok": True, "kind": "dnd", "custom_text": "На паре"}
+    assert client.get("/web/messenger/status", headers=a).json() == {"kind": "dnd", "custom_text": "На паре"}
+    #Некорректный kind отвергается.
+    assert client.post("/web/messenger/status", json={"kind": "bogus"}, headers=a).status_code == 400
+
+
+def test_d7_custom_text_ignored_for_non_teacher(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    r = client.post("/web/messenger/status",
+                    json={"kind": "studying", "custom_text": "Готовлюсь к экзамену"}, headers=b)
+    #Студент: kind принимается, но custom_text — нет (только у преподавателя).
+    assert r.json() == {"ok": True, "kind": "studying", "custom_text": ""}
+
+
+def test_d7_status_visible_in_directory_and_conv_info(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    client.post("/web/messenger/status", json={"kind": "dnd", "custom_text": "Занят"}, headers=a)
+    users = client.get("/web/messenger/users?role=teacher", headers=b).json()["users"]
+    teacher = [u for u in users if u["id"] == a_id][0]
+    assert teacher["status_kind"] == "dnd" and teacher["status_text"] == "Занят"
+
+    conv = _conv(client, a, b_id)
+    info = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
+    person = [p for p in info["participants"] if p["user_id"] == a_id][0]
+    assert person["status_kind"] == "dnd" and person["status_text"] == "Занят"
+
+
+# ── §D8: упоминания (@Фамилия — обычное, @!Фамилия — тихое, без пуша) ────────────────
+def test_d8_mention_parsed_in_group(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Группа", "member_ids": [b_id, c_id]}, headers=a).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "@Боб, посмотри домашку"}, headers=a)
+    msg = r.json()
+    assert msg["mentions"] == [{"user_id": b_id, "silent": False}]
+
+
+def test_d8_silent_mention_marked(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "@!Боб, не срочно, просто на будущее"}, headers=a)
+    assert r.json()["mentions"] == [{"user_id": b_id, "silent": True}]
+
+
+def test_d8_mention_ignores_non_participant(client):
+    """Фамилия, которой нет среди участников ЭТОЙ беседы, не резолвится — не даёт
+    заглянуть в чужой аккаунт по совпадению фамилии в другой беседе."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = _conv(client, a, b_id)          #Кэрол НЕ участник этой беседы
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "Кэров, ты здесь?"}, headers=a)
+    assert r.json()["mentions"] == []
+
+
+def test_d8_silent_mention_skips_push(client, monkeypatch):
+    import app.rustore_push as rp
+    calls = []
+    monkeypatch.setattr(rp, "notify_login",
+                        lambda db, login, title, body, data=None: calls.append(login) or 1)
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    #Боб офлайн — обычно получил бы пуш, но упоминание тихое → пуша быть не должно.
+    client.post(f"/web/messenger/chats/{conv}/messages",
+               json={"body": "@!Боб проверь позже"}, headers=a)
+    assert "bob" not in calls
+
+
+def test_d8_loud_mention_still_pushes(client, monkeypatch):
+    import app.rustore_push as rp
+    calls = []
+    monkeypatch.setattr(rp, "notify_login",
+                        lambda db, login, title, body, data=None: calls.append(login) or 1)
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "@Боб, ответь"}, headers=a)
+    assert "bob" in calls
+
+
+# ── §D12: автоматические системные каналы (оценки/объявления/расписание) ────────────
+def test_d12_grade_posted_creates_personal_channel(client):
+    """Выставление оценки (Phase B /web/teacher/grade) само создаёт «Мои оценки» и
+    публикует туда пост от лица «Вектора» — без ручного создания канала."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    #Занятие по группе Боба (см. _make_student — группа "К-24").
+    r = client.post("/web/teacher/lesson", json={
+        "group": "К-24", "subject": "Математика", "type": "Практика",
+        "number": 1, "topic": "Тема", "date": "2026-01-10",
+    }, headers=a)
+    assert r.status_code == 200, r.text
+    lesson_id = r.json()["id"]
+    r = client.post("/web/teacher/grade",
+                    json={"surname": "Боб", "name": "Бобов", "lesson_id": lesson_id, "grade": "5"},
+                    headers=a)
+    assert r.status_code == 200, r.text
+
+    conv_id = f"sys:grades:{b_id}"
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert any(c["conversation_id"] == conv_id for c in chats), "канал должен сам появиться у студента"
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["sender_name"] == "Вектор" and "5" in msgs[0]["body"] and "Математика" in msgs[0]["body"]
+    #Читатель — не писатель: пробовать написать туда самому нельзя.
+    assert client.post(f"/web/messenger/chats/{conv_id}/messages",
+                       json={"body": "спасибо"}, headers=b).status_code == 403
+
+
+def test_d12_teacher_opens_announcements_channel(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    r = client.post("/web/messenger/channels/announcements/К-24", headers=a)
+    assert r.status_code == 200, r.text
+    conv_id = r.json()["conversation_id"]
+    #Преподаватель (писатель) публикует ОБЫЧНЫМ send — отдельный эндпоинт не нужен.
+    r2 = client.post(f"/web/messenger/chats/{conv_id}/messages",
+                     json={"body": "Завтра пары не будет"}, headers=a)
+    assert r2.status_code == 200, r2.text
+    #Студенты той же группы видят объявление как читатели.
+    chats_b = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert any(x["conversation_id"] == conv_id for x in chats_b)
+    #Студент не может постить в канал объявлений (только читатель).
+    assert client.post(f"/web/messenger/chats/{conv_id}/messages",
+                       json={"body": "можно вопрос?"}, headers=b).status_code == 403
+
+
+def test_d12_announcements_forbidden_for_student(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.post("/web/messenger/channels/announcements/К-24", headers=b).status_code == 403
+
+
+def test_d12_schedule_publish_posts_to_channel(client):
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    r = client.post("/web/admin/schedule/publish", json={"group": "К-24"}, headers=admin)
+    assert r.status_code == 200, r.text
+    conv_id = "sys:schedule:К-24"
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1 and "К-24" in msgs[0]["body"] and msgs[0]["sender_name"] == "Вектор"
+
+
+# ── Команда /vector — docs/MESSENGER-ADDON-PLAN-GPT.md (заметка в конце файла): «AI-поиск
+# по смыслу» реализован переиспользованием УЖЕ существующего анти-галлюцинационного Вектора
+# (/web/vector/ask), а не отдельной embedding-инфраструктурой — как и предложено в заметке.
+def test_vector_command_answers_publicly_in_chat(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/vector привет"}, headers=b)
+    assert r.status_code == 200, r.text
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["body"] == "/vector привет" and msgs[0]["sender_id"] == b_id
+    assert msgs[1]["sender_id"] == "system" and msgs[1]["kind"] == "text" and msgs[1]["body"]
+    #Тот же факт-движок, что у выделенной вкладки «ИИ Помощник» — слово в слово.
+    direct = client.post("/web/vector/ask", json={"message": "привет"}, headers=b).json()
+    assert msgs[1]["body"] == direct["text"]
+
+
+def test_vector_command_ignored_without_question(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "/vector"}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1, "команда без вопроса — ИИ-ответа быть не должно"
+
+
+def test_vector_command_scoped_to_caller_role(client):
+    """Роль вызывающего скоупит данные — как и в дедике /web/vector/ask: ответ считается по
+    ВЫЗЫВАЮЩЕМУ (студенту b), а не по собеседнику (c), даже если команда написана в его чате."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{c_id}", headers=b).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/vector сколько у меня оценок"}, headers=b)
+    assert r.status_code == 200
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 2 and msgs[1]["sender_id"] == "system"
+
+
+def test_vector_command_does_not_trigger_on_normal_message(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "просто привет"}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1
+
+
+# ── Организация списка чатов: закреп/архив/избранное (docs/MESSENGER-ADDON-PLAN-GPT*.md) ─
+def test_pin_and_unpin_chat(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert next(c for c in chats if c["conversation_id"] == conv)["pinned"] is False
+
+    assert client.post(f"/web/messenger/chats/{conv}/pin", headers=b).status_code == 200
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert next(c for c in chats if c["conversation_id"] == conv)["pinned"] is True
+    #Личное состояние: у собеседника (a) чат НЕ закреплён.
+    chats_a = client.get("/web/messenger/chats", headers=a).json()["chats"]
+    assert next(c for c in chats_a if c["conversation_id"] == conv)["pinned"] is False
+
+    assert client.delete(f"/web/messenger/chats/{conv}/pin", headers=b).status_code == 200
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert next(c for c in chats if c["conversation_id"] == conv)["pinned"] is False
+
+
+def test_pinned_chat_sorts_above_recent(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv_old = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv_old}/pin", headers=b)
+    conv_new = client.post(f"/web/messenger/chats/direct/{c_id}", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv_new}/messages", json={"body": "привет"}, headers=b)
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert chats[0]["conversation_id"] == conv_old, "закреплённый — всегда сверху, даже если старее"
+
+
+def test_archive_and_unarchive_chat(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    assert client.post(f"/web/messenger/chats/{conv}/archive", headers=b).status_code == 200
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    row = next(c for c in chats if c["conversation_id"] == conv)
+    assert row["archived"] is True
+    #Архив — НЕ удаление: сообщения/доступ никуда не делись.
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=b).status_code == 200
+    #Собеседника архив не касается (личное состояние).
+    chats_a = client.get("/web/messenger/chats", headers=a).json()["chats"]
+    assert next(c for c in chats_a if c["conversation_id"] == conv)["archived"] is False
+
+    assert client.delete(f"/web/messenger/chats/{conv}/archive", headers=b).status_code == 200
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    assert next(c for c in chats if c["conversation_id"] == conv)["archived"] is False
+
+
+def test_saved_messages_is_personal_and_pinned(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    r = client.post("/web/messenger/chats/saved", headers=b)
+    assert r.status_code == 200, r.text
+    conv = r.json()["conversation_id"]
+    #Идемпотентно — повторный вызов возвращает ТУ ЖЕ беседу.
+    assert client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"] == conv
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    row = next(c for c in chats if c["conversation_id"] == conv)
+    assert row["kind"] == "saved" and row["pinned"] is True and row["title"] == "Избранное"
+    #Заметка себе — обычная отправка, инфраструктура полностью переиспользуется.
+    r2 = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "не забыть про лабу"}, headers=b)
+    assert r2.status_code == 200, r2.text
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1 and msgs[0]["body"] == "не забыть про лабу"
+    #Чужой (a) доступа к моему «Избранному» не имеет.
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=a).status_code == 403
+
+
+# ── Треды: ответы на сообщение (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ─────────────
+def test_thread_reply_count_and_view(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    root = client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "как решать задачу 3?"}, headers=b).json()
+    client.post(f"/web/messenger/chats/{conv}/messages",
+               json={"body": "смотри теорему 2", "reply_to_id": root["id"]}, headers=a)
+    client.post(f"/web/messenger/chats/{conv}/messages",
+               json={"body": "спасибо, разобрался", "reply_to_id": root["id"]}, headers=b)
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    root_out = next(m for m in msgs if m["id"] == root["id"])
+    assert root_out["reply_count"] == 2
+
+    thread = client.get(f"/web/messenger/chats/{conv}/messages/thread/{root['id']}", headers=b).json()
+    assert len(thread["messages"]) == 2
+    assert [m["body"] for m in thread["messages"]] == ["смотри теорему 2", "спасибо, разобрался"]
+
+
+# ── Поиск внутри чата ─────────────────────────────────────────────────────────────────
+def test_search_within_chat_case_insensitive(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "Когда экзамен по Математике?"}, headers=b)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "Завтра пара по физике"}, headers=a)
+
+    r = client.get(f"/web/messenger/chats/{conv}/messages/search", params={"q": "МАТЕМАТИКЕ"}, headers=b)
+    assert r.status_code == 200
+    found = r.json()["messages"]
+    assert len(found) == 1 and "Математике" in found[0]["body"]
+
+    empty = client.get(f"/web/messenger/chats/{conv}/messages/search", params={"q": "химия"}, headers=b).json()
+    assert empty["messages"] == []
+
+
+def test_search_within_chat_forbidden_for_non_participant(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    assert client.get(f"/web/messenger/chats/{conv}/messages/search",
+                      params={"q": "х"}, headers=c).status_code == 403
+
+
+# ── Кто прочитал сообщение (переиспользует last_read_at) ─────────────────────────────────
+def test_read_by_reflects_participant_read_state(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    m = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "видел объявление?"}, headers=b).json()
+    #Пока препод не читал беседу — среди прочитавших не найдётся никого (кроме автора).
+    before = client.get(f"/web/messenger/messages/{m['id']}/read_by", headers=b).json()
+    assert before["users"] == []
+    #Препод открывает беседу и читает до последнего сообщения.
+    client.post(f"/web/messenger/chats/{conv}/read", headers=a)
+    after = client.get(f"/web/messenger/messages/{m['id']}/read_by", headers=b).json()
+    assert len(after["users"]) == 1 and after["users"][0]["id"] == a_id
+
+
+# ── Шаблоны быстрых ответов преподавателя ────────────────────────────────────────────
+def test_teacher_templates_crud(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.get("/web/messenger/templates", headers=a).json()["templates"] == []
+
+    r = client.post("/web/messenger/templates", json={"body": "Работа принята"}, headers=a)
+    assert r.status_code == 200, r.text
+    tid = r.json()["id"]
+    templates = client.get("/web/messenger/templates", headers=a).json()["templates"]
+    assert templates == [{"id": tid, "body": "Работа принята"}]
+
+    assert client.delete(f"/web/messenger/templates/{tid}", headers=a).status_code == 200
+    assert client.get("/web/messenger/templates", headers=a).json()["templates"] == []
+
+
+def test_teacher_templates_forbidden_for_student(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.post("/web/messenger/templates", json={"body": "тест"}, headers=b).status_code == 403
+    #Список — читать может кто угодно (пустой), запрет только на создание.
+    assert client.get("/web/messenger/templates", headers=b).json()["templates"] == []

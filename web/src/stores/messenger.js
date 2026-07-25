@@ -141,12 +141,36 @@ export const useMessengerStore = defineStore('messenger', () => {
 
   // Возвращает true при успехе; false — если сервер отклонил (анти-флуд 429 / мьют 403 и пр.),
   // чтобы вызывающий вернул текст в поле ввода. Причину показываем плашкой (notice).
+  // §D10: UUID для идемпотентности — ретрай с тем же nonce (обрыв сети/двойной клик по
+  // «Отправить») не создаст на сервере дубль сообщения.
+  function _nonce() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+
+  // §D2: «маскот-замедление» — сервер шлёт 429 с {mascot:true, cooldown_seconds}. Вместо
+  // холодной плашки-ошибки показываем Вектора с фразой и на cooldown.seconds блокируем
+  // композер (обратный отсчёт — remaining).
+  const mascotCooldown = ref({ active: false, seconds: 0, remaining: 0 })
+  let cooldownTimer = null
+  function _startCooldown(seconds) {
+    clearInterval(cooldownTimer)
+    mascotCooldown.value = { active: true, seconds, remaining: seconds }
+    cooldownTimer = setInterval(() => {
+      mascotCooldown.value.remaining -= 1
+      if (mascotCooldown.value.remaining <= 0) {
+        clearInterval(cooldownTimer)
+        mascotCooldown.value = { active: false, seconds: 0, remaining: 0 }
+      }
+    }, 1000)
+  }
+
   async function send(text) {
     const body = (text || '').trim()
     if (!body || !activeId.value || sending.value) return false
     sending.value = true
     try {
-      const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0)
+      const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
       messages.value.push(data)
       replyTo.value = null
       setNotice('')
@@ -154,7 +178,12 @@ export const useMessengerStore = defineStore('messenger', () => {
       return true
     } catch (e) {
       const st = e?.response?.status
-      if (st === 429 || st === 403) setNotice(e?.response?.data?.detail || 'Сообщение не отправлено.')
+      const detail = e?.response?.data?.detail
+      if (st === 429 && detail && typeof detail === 'object' && detail.mascot) {
+        _startCooldown(detail.cooldown_seconds || 8)
+      } else if (st === 429 || st === 403) {
+        setNotice((typeof detail === 'string' && detail) || 'Сообщение не отправлено.')
+      }
       return false
     } finally { sending.value = false }
   }
@@ -259,7 +288,8 @@ export const useMessengerStore = defineStore('messenger', () => {
   function clearActive() {
     activeId.value = ''; activePeer.value = null; messages.value = []
     replyTo.value = null; pinned.value = []; activeInfo.value = null
-    isModeration.value = false; clearSelection(); setNotice('')
+    isModeration.value = false; clearSelection(); closeThread(); clearSearch()
+    setNotice('')
   }
 
   // Полный сброс стора — при выходе/смене аккаунта. Иначе список чатов, активная беседа и
@@ -303,9 +333,46 @@ export const useMessengerStore = defineStore('messenger', () => {
       await _enterChat(data.conversation_id, { full_name: '', role: 'channel' })
     } catch { /* noop */ }
   }
+  // §D12: открыть/создать канал «Объявления · Группа» (teacher/admin) и перейти в него —
+  // дальше публикация обычным send(), отдельного «отправить объявление» не нужно.
+  async function openAnnouncementsChannel(groupName) {
+    const g = (groupName || '').trim()
+    if (!g) return false
+    try {
+      const { data } = await messengerApi.ensureAnnouncementsChannel(g)
+      await loadChats()
+      await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
+      return true
+    } catch { return false }
+  }
+
   async function leaveActive() {
     if (!activeId.value) return
     try { await messengerApi.leave(activeId.value); clearActive(); await loadChats() } catch { /* noop */ }
+  }
+  // §D6: переименовать активную группу/канал (owner/admin) — сервер сам допишет системное
+  // сообщение "title_changed:…" в ленту.
+  async function renameActive(title, about) {
+    if (!activeId.value) return false
+    try {
+      await messengerApi.renameChat(activeId.value, title, about)
+      await loadConvInfo()
+      await loadChats()
+      return true
+    } catch { return false }
+  }
+
+  // §D7: мой статус (поверх presence) — dnd/studying/away + текст (только у преподавателя).
+  const myStatus = ref({ kind: '', custom_text: '' })
+  async function loadMyStatus() {
+    try { const { data } = await messengerApi.getStatus(); myStatus.value = data } catch { /* noop */ }
+  }
+  async function setMyStatus(kind, customText = '') {
+    try {
+      const { data } = await messengerApi.setStatus(kind, customText)
+      myStatus.value = { kind: data.kind, custom_text: data.custom_text }
+      return true
+    } catch { return false }
   }
 
   // ── Действия над сообщением (Фаза 3) ────────────────────────────────────────────────
@@ -351,6 +418,128 @@ export const useMessengerStore = defineStore('messenger', () => {
     try { await messengerApi.report(id, reasonCode, description); return true } catch { return false }
   }
 
+  // §D3: поставить/снять реакцию-эмодзи. Обновляем локально ОПТИМИСТИЧНО (сервер отвечает
+  // просто {ok:true}, без свежего списка реакций) — лишний перезапрос истории не нужен.
+  async function toggleReaction(mid, emoji) {
+    const msg = messages.value.find(x => x.id === mid)
+    if (!msg) return
+    const list = msg.reactions || []
+    const cell = list.find(r => r.emoji === emoji)
+    const wasMine = !!cell?.mine
+    try {
+      if (wasMine) await messengerApi.removeReaction(mid, emoji)
+      else await messengerApi.addReaction(mid, emoji)
+    } catch { return }
+    if (wasMine) {
+      cell.count -= 1
+      msg.reactions = list.filter(r => r.count > 0)
+    } else if (cell) {
+      cell.count += 1; cell.mine = true
+    } else {
+      msg.reactions = [...list, { emoji, count: 1, mine: true }]
+    }
+  }
+
+  // §D11: история редактирования сообщения (для попапа «(ред.)» → версии).
+  async function messageHistory(mid) {
+    try { const { data } = await messengerApi.messageHistory(mid); return data.versions || [] }
+    catch { return [] }
+  }
+
+  // ── Организация списка чатов: закреп/архив/избранное (docs/MESSENGER-ADDON-PLAN-GPT*.md) ─
+  async function togglePinChat(convId, on) {
+    try {
+      if (on) await messengerApi.pinChat(convId); else await messengerApi.unpinChat(convId)
+      await loadChats()
+      return true
+    } catch { return false }
+  }
+  async function toggleArchiveChat(convId, on) {
+    try {
+      if (on) await messengerApi.archiveChat(convId); else await messengerApi.unarchiveChat(convId)
+      if (on && activeId.value === convId) clearActive()   //ушли в архив — закрыть открытый тред
+      await loadChats()
+      return true
+    } catch { return false }
+  }
+  // «Избранное» (Saved Messages) — личный чат с самим собой: заметки/ссылки/код себе, без
+  // отдельной сущности заметок (переиспользуем всю инфраструктуру сообщений). Ленивое
+  // создание на сервере при первом входе, закреплён по умолчанию (см. openSaved на сервере).
+  async function openSaved() {
+    try {
+      const { data } = await messengerApi.openSaved()
+      await loadChats()
+      await _enterChat(data.conversation_id, { full_name: 'Избранное', role: 'saved' })
+      return true
+    } catch { return false }
+  }
+
+  // ── Черновики (клиент-only, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики») ──────────────
+  // Мессенджер и так не синкует состояние между устройствами (см. §5.4 CLAUDE.md) —
+  // серверное хранилище черновика было бы лишней сущностью ради того же эффекта.
+  const _DRAFTS_KEY = 'gb_msg_drafts'
+  function _loadDraftsMap() {
+    try { return JSON.parse(localStorage.getItem(_DRAFTS_KEY) || '{}') } catch { return {} }
+  }
+  function draftFor(convId) {
+    return convId ? (_loadDraftsMap()[convId] || '') : ''
+  }
+  function saveDraft(convId, text) {
+    if (!convId) return
+    const map = _loadDraftsMap()
+    const t = (text || '')
+    if (t.trim()) map[convId] = t; else delete map[convId]
+    try { localStorage.setItem(_DRAFTS_KEY, JSON.stringify(map)) } catch { /* приватный режим — не критично */ }
+  }
+  function clearDraft(convId) { saveDraft(convId, '') }
+
+  // ── Шаблоны быстрых ответов преподавателя ───────────────────────────────────────────
+  const templates = ref([])
+  async function loadTemplates() {
+    try { const { data } = await messengerApi.templates(); templates.value = data.templates || [] }
+    catch { templates.value = [] }
+  }
+  async function addTemplate(body) {
+    const t = (body || '').trim()
+    if (!t) return false
+    try { const { data } = await messengerApi.createTemplate(t); templates.value.push(data); return true }
+    catch { return false }
+  }
+  async function removeTemplate(id) {
+    try { await messengerApi.deleteTemplate(id); templates.value = templates.value.filter(x => x.id !== id) }
+    catch { /* noop */ }
+  }
+
+  // ── Треды: просмотр ответов на сообщение (переиспользует reply_to_id, без нового
+  // «тредового» состояния на сервере — см. docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ────
+  const activeThread = ref(null)   // { parentId, messages: [] } | null
+  async function openThread(messageId) {
+    if (!activeId.value) return
+    try {
+      const { data } = await messengerApi.thread(activeId.value, messageId)
+      activeThread.value = { parentId: messageId, messages: data.messages || [] }
+    } catch { activeThread.value = { parentId: messageId, messages: [] } }
+  }
+  function closeThread() { activeThread.value = null }
+
+  // ── Поиск внутри активного чата ──────────────────────────────────────────────────────
+  const searchResults = ref(null)   // null — поиск закрыт; [] — открыт, но пусто
+  const searching = ref(false)
+  async function searchInActive(q) {
+    if (!activeId.value || !(q || '').trim()) { searchResults.value = null; return }
+    searching.value = true
+    try { const { data } = await messengerApi.searchInChat(activeId.value, q); searchResults.value = data.messages || [] }
+    catch { searchResults.value = [] }
+    finally { searching.value = false }
+  }
+  function clearSearch() { searchResults.value = null }
+
+  // Кто прочитал сообщение — по запросу (попап под сообщением), в общее состояние не кладём.
+  async function readBy(mid) {
+    try { const { data } = await messengerApi.readBy(mid); return data.users || [] }
+    catch { return [] }
+  }
+
   // ── Множественный выбор («Выделить») ────────────────────────────────────────────────
   function enterSelection(firstId = 0) {
     selectionMode.value = true
@@ -369,13 +558,22 @@ export const useMessengerStore = defineStore('messenger', () => {
   return {
     chats, activeId, activePeer, messages, loadingChats, loadingMessages, sending,
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, channels, dir,
-    peerTyping, totalUnread, notice, activeChat,
+    peerTyping, totalUnread, notice, activeChat, mascotCooldown,
     loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     deleteConversation, selectAll, selectNone,
     editMessage, setPinned, removeMessage, forwardMessages, reportMessage,
+    toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
-    createGroup, createChannel, loadChannels, joinChannel, leaveActive,
+    createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
+    openAnnouncementsChannel,
+    myStatus, loadMyStatus, setMyStatus,
+    togglePinChat, toggleArchiveChat, openSaved,
+    draftFor, saveDraft, clearDraft,
+    templates, loadTemplates, addTemplate, removeTemplate,
+    activeThread, openThread, closeThread,
+    searchResults, searching, searchInActive, clearSearch,
+    readBy,
   }
 })

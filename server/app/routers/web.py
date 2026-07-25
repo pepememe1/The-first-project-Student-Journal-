@@ -210,14 +210,19 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     _require("student", user)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
+    is_archive = bool((year or "").strip() and semester)   #явно выбран прошлый семестр
     lessons = W.group_lessons(db, user.group_name, year=ty, semester=ts)
     records = W.student_records(db, user.surname, user.name, user.group_name)
+    #Долги и пропуски в ДЕФОЛТНОМ виде считаем по ВСЕМ занятиям группы (как overview): иначе
+    #легаси-занятия без штампа термина (десктоп до штампа) выпадают из фильтра текущего
+    #термина, и реальные долги/пропуски «исчезают». В архиве — строго по выбранному термину.
+    dl = lessons if is_archive else W.group_lessons(db, user.group_name)
     return {
         "term": {"year": ty, "semester": ts},
         "average": W.average(lessons, records, cfg),
         "per_subject": W.per_subject_averages(lessons, records, cfg),
-        "absences": W.absences(lessons, records),
-        "debts": W.debts(lessons, records),
+        "absences": W.absences(dl, records),
+        "debts": W.debts(dl, records),
     }
 
 
@@ -1171,6 +1176,15 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
             continue        #без логина уведомлять некого (внешний ростер преподавателя)
         rustore_push.notify_schedule_changed(db, person.login, role=role, group=group)
         sent += 1
+    #§D12: тот же факт — постом в канал «Расписание · Группа» (мессенджер). Изолировано
+    #try/except: сбой мессенджера не должен мешать основной рассылке пушей выше.
+    try:
+        from .messenger import ensure_group_schedule_channel, _post_system_channel_message
+        conv_id = ensure_group_schedule_channel(db, group, [s.id for s in students])
+        _post_system_channel_message(
+            db, conv_id, f"⚠️ Расписание группы **{group}** изменилось — проверьте актуальные пары.")
+    except Exception:
+        pass
     audit.log(db, actor=user.login, role="admin", action="schedule.publish",
               target=group, detail=f"уведомлено: {sent}")
     return {"ok": True, "notified": sent,
@@ -1198,14 +1212,13 @@ _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
                      "about_vsgutu", "about_college", "schedule", "weather", "howto"}
 
 
-@router.post("/vector/ask")
-def vector_ask(payload: dict = Body(...),
-               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Серверный «Вектор». ПРИНЦИП тот же, что в десктопе: цифры берутся из реальных
-    данных (SQL) — модель их НЕ выдумывает. Фактический текст собирает `_vector_facts`,
-    затем LLM-провайдер (GigaChat/Ollama/оффлайн — из СИНХРОНИЗИРОВАННОГО конфига админа)
-    лишь ПЕРЕФОРМУЛИРУЕТ его в стиле Вектора. Студент видит только свои данные."""
-    question = (payload.get("message") or "").strip()
+def answer_vector_question(question: str, user: User, db: Session) -> dict:
+    """Общая логика ответа Вектора (вынесена из `vector_ask`, чтобы её мог переиспользовать
+    мессенджер — команда `/vector <вопрос>` в любом чате, см. `routers/messenger.py`).
+    Тот же принцип, что в десктопе: цифры берутся из реальных данных (SQL) — модель их НЕ
+    выдумывает. Фактический текст собирает `_vector_facts`, затем LLM-провайдер
+    (GigaChat/Ollama/оффлайн — из СИНХРОНИЗИРОВАННОГО конфига админа) лишь ПЕРЕФОРМУЛИРУЕТ
+    его в стиле Вектора. Роль вызывающего (`user.role`) скоупит данные, как и в дедике."""
     cfg = W.load_config(db)
     result = _vector_facts(question.lower(), user, db, cfg)
     intent = result.get("intent")
@@ -1222,6 +1235,14 @@ def vector_ask(payload: dict = Body(...),
         result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
     result.pop("no_voice", None)   #внутренний флаг наружу не отдаём
     return result
+
+
+@router.post("/vector/ask")
+def vector_ask(payload: dict = Body(...),
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Серверный «Вектор» — см. `answer_vector_question`. Студент видит только свои данные."""
+    question = (payload.get("message") or "").strip()
+    return answer_vector_question(question, user, db)
 
 
 # ── Голосовой ввод (Speech-to-Text) — ЗАГОТОВКА, распознаёт на ХОСТЕ ────────────────
@@ -1763,6 +1784,14 @@ def teacher_set_grade(payload: dict = Body(...),
         else:
             rustore_push.notify_new_grade(db, stud.login, subject=lesson.subject,
                                           lesson_id=lesson_id, value=value)
+        #§D12: тот же факт — постом в личный канал «Мои оценки» (мессенджер). Отдельная
+        #подсистема от пуша выше; сбой здесь НИКОГДА не должен мешать выставлению оценки.
+        try:
+            from .messenger import notify_grade_posted
+            notify_grade_posted(db, stud.id, user.full_name or user.name or user.login,
+                               lesson.subject, value)
+        except Exception:
+            pass
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",

@@ -4,9 +4,9 @@
 // доступна на ЛЮБОЙ ширине — боковая ProfilePanel показывается только с xl и на
 // десктопе/телефоне была не видна.
 // Здесь же — выход из группы/канала и удаление переписки у себя.
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck } from '@lucide/vue'
+import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -40,6 +40,22 @@ const title = computed(() => {
   if (isGroupOrChannel.value) return activeInfo.value?.title || 'Беседа'
   return activePeer.value?.full_name || 'Диалог'
 })
+
+// §D6: переименование группы/канала — только owner/admin.
+const canRename = computed(() => isGroupOrChannel.value && ['owner', 'admin'].includes(activeInfo.value?.my_role))
+const editing = ref(false)
+const titleDraft = ref('')
+const aboutDraft = ref('')
+function startEdit() {
+  titleDraft.value = activeInfo.value?.title || ''
+  aboutDraft.value = activeInfo.value?.about || ''
+  editing.value = true
+}
+async function saveEdit() {
+  const t = titleDraft.value.trim()
+  if (!t) return
+  if (await m.renameActive(t, aboutDraft.value.trim())) editing.value = false
+}
 
 async function leave() {
   if (!window.confirm(`Выйти из ${kind.value === 'channel' ? 'канала' : 'группы'}?`)) return
@@ -79,6 +95,11 @@ async function clearHistory() {
               {{ kind === 'channel' ? 'подписчиков' : 'участников' }}</span>
           </p>
         </div>
+        <!-- §D6: переименовать (owner/admin) -->
+        <button v-if="canRename && !editing" type="button" @click="startEdit" aria-label="Переименовать"
+                class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+          <Pencil class="size-4" />
+        </button>
         <button type="button" @click="emit('close')" aria-label="Закрыть"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <X class="size-5" />
@@ -86,6 +107,20 @@ async function clearHistory() {
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
+        <!-- §D6: форма переименования -->
+        <div v-if="editing" class="mb-4 space-y-2 rounded-lg border border-border2 bg-card2 p-3">
+          <input v-model="titleDraft" placeholder="Название" maxlength="120"
+                 class="w-full rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
+          <textarea v-model="aboutDraft" placeholder="Описание (необязательно)" rows="2" maxlength="500"
+                    class="w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
+          <div class="flex justify-end gap-2">
+            <button type="button" @click="editing = false" class="rounded-md px-3 py-1.5 text-xs text-text3 hover:bg-bg2">Отмена</button>
+            <button type="button" @click="saveEdit" :disabled="!titleDraft.trim()"
+                    class="flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
+              <Check class="size-3.5" />Сохранить
+            </button>
+          </div>
+        </div>
         <p v-if="activeInfo?.about" class="mb-4 text-sm text-text2">{{ activeInfo.about }}</p>
 
         <!-- Личный чат: карточка собеседника с его плашкой и «О себе» -->

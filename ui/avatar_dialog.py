@@ -8,8 +8,12 @@ avatar_dialog.py — загрузка/обрезка аватарки на ДЕ�
 """
 import base64
 
+#Общий помощник стилизованных кнопок — чтобы «Изменить…» выглядела как остальной интерфейс,
+#а не как системная серая кнопка (правка внешнего вида по просьбе).
+from widgets import btn as _btn
+
 from PySide6.QtCore import Qt, QPoint, QRect, QBuffer, QByteArray
-from PySide6.QtGui import QPixmap, QPainter, QImage, QPainterPath, QColor
+from PySide6.QtGui import QPixmap, QPainter, QImage, QPainterPath, QColor, QPen
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider, QFileDialog,
     QTextEdit,
@@ -214,11 +218,11 @@ class AvatarSection(QWidget):
         title = QLabel("Аватарка")
         title.setStyleSheet("font-weight:700;font-size:14px;")
         col.addWidget(title)
-        btn = QPushButton("Изменить…")
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedWidth(140)
-        btn.clicked.connect(self._edit)
-        col.addWidget(btn)
+        change_btn = _btn("Изменить…", "ghost")
+        change_btn.setCursor(Qt.PointingHandCursor)
+        change_btn.setFixedWidth(150)
+        change_btn.clicked.connect(self._edit)
+        col.addWidget(change_btn)
         col.addStretch(1)
         row.addLayout(col)
         row.addStretch(1)
@@ -376,35 +380,52 @@ class AvatarSection(QWidget):
         import avatar_service
         self._color = preset_id
         self._paint_swatches()
+        self._refresh()                    #сразу показать новый цвет ВЛАДЕЛЬЦУ (обводка/кружок аватара)
         avatar_service.save_profile(self._role, self._identity, color=preset_id)
 
-    def _circle(self, pix) -> QPixmap:
-        """64×64 круглый pixmap: аватар (если есть) либо аккуратный серый плейсхолдер."""
+    def _color_hex(self):
+        """HEX выбранного цвета профиля (по пресету) — чтобы ВЛАДЕЛЕЦ видел свой цвет, а не
+        только другие в мессенджере. Раньше цвет был «write-only»: сохранялся, но локально
+        нигде не отображался."""
+        for pid, (_b, accent) in getattr(self, "_swatches", {}).items():
+            if pid == getattr(self, "_color", ""):
+                return accent
+        return None
+
+    def _circle(self, pix, color_hex=None) -> QPixmap:
+        """64×64 круглый аватар: фото (если есть) или кружок ЦВЕТА ПРОФИЛЯ, всегда с
+        обводкой цвета профиля — так владелец сразу видит выбранный цвет."""
         out = QPixmap(64, 64)
         out.fill(Qt.transparent)
         p = QPainter(out)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         path = QPainterPath()
-        path.addEllipse(0, 0, 64, 64)
+        path.addEllipse(2, 2, 60, 60)              #оставляем 2px под обводку
         p.setClipPath(path)
         if pix is not None and not pix.isNull():
-            p.drawPixmap(0, 0, 64, 64, pix)
+            p.drawPixmap(2, 2, 60, 60, pix)
         else:
-            p.fillRect(0, 0, 64, 64, QColor("#dfe6e8"))
-            p.setPen(QColor("#6b8085"))
-            f = p.font()
-            f.setPixelSize(11)
-            p.setFont(f)
+            p.fillRect(0, 0, 64, 64, QColor(color_hex or "#dfe6e8"))
+            p.setPen(QColor("#ffffff" if color_hex else "#6b8085"))
+            f = p.font(); f.setPixelSize(11); p.setFont(f)
             p.drawText(0, 0, 64, 64, Qt.AlignCenter, "фото")
         p.end()
+        #Обводка цветом профиля (видна и с фото, и без) — визуальный индикатор выбора.
+        if color_hex:
+            p2 = QPainter(out)
+            p2.setRenderHint(QPainter.Antialiasing)
+            p2.setPen(QPen(QColor(color_hex), 3))
+            p2.setBrush(Qt.NoBrush)
+            p2.drawEllipse(2, 2, 59, 59)
+            p2.end()
         return out
 
     def _refresh(self):
         import avatar_service
         data_url = avatar_service.get_avatar(self._role, self._identity)
         pix = _pixmap_from_dataurl(data_url) if data_url else QPixmap()
-        self._preview.setPixmap(self._circle(pix if not pix.isNull() else None))
+        self._preview.setPixmap(self._circle(pix if not pix.isNull() else None, self._color_hex()))
 
     def _edit(self):
         import avatar_service
