@@ -99,6 +99,7 @@ def init_db():
     _ensure_user_curated_groups_column()
     _ensure_grade_student_id_columns()
     _ensure_notify_event_columns()
+    _ensure_participant_state_columns()
 
 
 def _ensure_user_prefs_column():
@@ -186,6 +187,34 @@ def default_term() -> tuple:
     if m <= 6:
         return f"{y - 1}/{y}", 2
     return f"{y}/{y + 1}", 1        #июль–август: наступающая осень
+
+
+def _ensure_participant_state_columns():
+    """Идемпотентная мини-миграция: столбцы conversation_participants.muted / .pinned
+    (мьют беседы и закрепление чата у пользователя). На свежей БД их создаёт create_all;
+    на базе, где таблица участников появилась раньше этих полей, добавляем ALTER-ом —
+    иначе запрос/запись p.muted упали бы. Таблицы может не быть (мессенджер не
+    инициализирован) — тогда просто выходим."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("conversation_participants")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её со всеми столбцами
+    with engine.begin() as conn:
+        if "muted" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN muted BOOLEAN DEFAULT 0"))
+        if "pinned" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN pinned BOOLEAN DEFAULT 0"))
+        #«Удалить переписку у себя»: граница видимости истории и скрытие чата из списка.
+        if "cleared_at" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN cleared_at VARCHAR DEFAULT ''"))
+        if "hidden" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN hidden BOOLEAN DEFAULT 0"))
 
 
 def _ensure_grade_student_id_columns():

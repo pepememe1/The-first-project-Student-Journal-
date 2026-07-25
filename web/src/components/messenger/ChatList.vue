@@ -6,10 +6,16 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Search, Plus, Users, Radio } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
+import { useAuthStore } from '@/stores/auth'
 import CreateChatDialog from './CreateChatDialog.vue'
+import Avatar from '@/components/ui/Avatar.vue'
 
 const m = useMessengerStore()
+const auth = useAuthStore()
 const { chats, dir, channels, activeId, loadingChats } = storeToRefs(m)
+// Группы и каналы создают ТОЛЬКО преподаватели (и админ) — у студента кнопку «+» прячем
+// (сервер тоже вернёт 403, см. create_group/create_channel). Личные чаты студенту доступны.
+const canCreate = computed(() => ['teacher', 'admin'].includes(auth.role))
 
 const tab = ref('chats')            // chats | teacher | student | channels
 const q = ref('')
@@ -59,7 +65,10 @@ onMounted(() => { m.loadChats() })
 </script>
 
 <template>
-  <aside class="flex h-full w-full flex-col border-r border-border bg-card sm:w-80 sm:shrink-0">
+  <!-- На мобилке при открытом чате прячем список — иначе он (w-full) перекрывает тред, и
+       по тапу «ничего не происходит». С sm — обе колонки видны рядом. -->
+  <aside class="h-full w-full flex-col border-r border-border bg-card sm:w-80 sm:shrink-0"
+         :class="activeId ? 'hidden sm:flex' : 'flex'">
     <!-- Поиск + «Новый» -->
     <div class="shrink-0 border-b border-border p-2.5">
       <div class="flex items-center gap-2">
@@ -68,7 +77,7 @@ onMounted(() => { m.loadChats() })
           <input v-model="q" placeholder="Поиск по ФИО…"
                  class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
         </div>
-        <div class="relative">
+        <div v-if="canCreate" class="relative">
           <button type="button" @click="showNew = !showNew" aria-label="Создать"
                   class="grid size-9 place-items-center rounded-lg bg-accent text-white hover:bg-accent2"><Plus class="size-5" /></button>
           <div v-if="showNew" class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
@@ -91,18 +100,17 @@ onMounted(() => { m.loadChats() })
       <!-- Чаты -->
       <template v-if="tab === 'chats'">
         <p v-if="!loadingChats && !shownChats.length" class="p-4 text-center text-sm text-text3">
-          Пока нет переписок. Найдите человека или создайте группу/канал кнопкой «+».
+          Пока нет переписок. Найдите человека через поиск<span v-if="canCreate"> или создайте группу/канал кнопкой «+»</span>.
         </p>
         <button v-for="c in shownChats" :key="c.conversation_id" type="button" @click="m.selectChat(c)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors"
                 :class="activeId === c.conversation_id ? 'bg-accent-glow' : 'hover:bg-bg2'">
-          <div class="relative shrink-0">
-            <div class="grid size-10 place-items-center rounded-full text-sm font-bold text-white"
-                 :class="c.kind === 'channel' ? 'bg-accent2' : c.kind === 'group' ? 'bg-blue' : 'bg-accent'">
-              {{ initials(c.title) }}
-            </div>
-            <span v-if="c.peer && c.peer.online" title="в сети"
-                  class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card" style="background:#2e9e5b"></span>
+          <!-- Личный чат — аватар собеседника; группа/канал — цветной кружок с инициалами. -->
+          <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title"
+                  :online="!!c.peer?.online" :size="40" />
+          <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
+               :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
+            {{ initials(c.title) }}
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center justify-between gap-2">
@@ -125,10 +133,7 @@ onMounted(() => { m.loadChats() })
         <p v-else-if="!dir.users.length" class="p-4 text-center text-sm text-text3">Никого не найдено.</p>
         <button v-for="u in dir.users" :key="u.id" type="button" @click="m.openWith(u)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
-          <div class="relative shrink-0">
-            <div class="grid size-10 place-items-center rounded-full bg-accent2 text-sm font-bold text-white">{{ initials(u.full_name) }}</div>
-            <span v-if="u.online" title="в сети" class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card" style="background:#2e9e5b"></span>
-          </div>
+          <Avatar :src="u.avatar" :name="u.full_name" :online="!!u.online" :size="40" />
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-semibold text-text">{{ u.full_name }}</div>
             <div class="truncate text-xs text-text3">{{ u.role === 'teacher' ? ((u.subjects || []).join(', ') || 'Преподаватель') : ('Группа ' + (u.group_name || '—')) }}</div>

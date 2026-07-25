@@ -24,10 +24,6 @@ backups/
 # шаблон .env.example коммитим (реальные секреты — нет)
 !.env.example
 
-# ── Внутренние инструкции для ассистента (в публичный репозиторий не нужны) ──
-# Файл остаётся локально (его читает Claude Code), но в репозиторий не попадает.
-CLAUDE.md
-
 # ── Python ──
 __pycache__/
 *.py[cod]
@@ -80,6 +76,7 @@ web/android/keystore.properties
 Sdk.zip
 caddy.exe
 nuitka_out/
+nuitka-crash-report.xml
 web/*.zip
 # Dependency Walker для Nuitka-сборки под Windows (depends.exe и пр.) — тулчейн, а не код.
 x86_64/

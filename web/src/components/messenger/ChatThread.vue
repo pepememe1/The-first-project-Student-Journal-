@@ -4,14 +4,23 @@
 // выделения, ответ/пересылка/удаление(у себя|у всех)/жалоба. ⚙-чат модерации — Фаза 4.
 import { ref, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings } from '@lucide/vue'
+import { Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
+import { useAuthStore } from '@/stores/auth'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
+import ConversationInfo from './ConversationInfo.vue'
+import Avatar from '@/components/ui/Avatar.vue'
+import { profilePlate } from '@/theme/palette'
 
 const m = useMessengerStore()
-const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping } = storeToRefs(m)
+const auth = useAuthStore()
+const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat } = storeToRefs(m)
+// Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
+const isAdmin = computed(() => auth.role === 'admin')
+// Замьючена ли текущая беседа у меня (без пушей). Кнопка-колокольчик — в шапке.
+const muted = computed(() => !!activeChat.value?.muted)
 
 // Тип беседы и права (для шапки/композера групп и каналов).
 const kind = computed(() => activeInfo.value?.kind || 'direct')
@@ -31,6 +40,9 @@ const reportMsg = ref(null)                 // сообщение, на кото
 const forwardState = ref({ open: false, ids: [] })
 const deleteTargets = ref(null)             // [message,…] для выбора «у себя/у всех» (все свои)
 const copied = ref(false)
+const showInfo = ref(false)                 // панель «О беседе» (участники/владелец)
+// Все ли видимые сообщения уже выделены — для кнопки «Выбрать всё / Снять всё».
+const allSelected = computed(() => messages.value.length > 0 && selectedIds.value.length === messages.value.length)
 
 async function scrollDown() {
   await nextTick()
@@ -48,10 +60,70 @@ function quoted(id) {
   return src ? (src.deleted ? 'Сообщение удалено' : src.body) : ''
 }
 
-// Тап по сообщению: в режиме выделения — отметить; иначе — открыть оверлей действий.
-function onMessageClick(msg, e) {
-  if (selectionMode.value) { m.toggleSelect(msg.id); return }
-  overlay.value = { open: true, message: msg, x: e.clientX, y: e.clientY }
+// ── Жесты над сообщением (как в Telegram) ────────────────────────────────────────────
+// ПК: меню действий — по ПРАВОЙ кнопке (ЛКМ ничего не открывает, чтобы не мешать выделению
+// текста). Мобилка: по ДОЛГОМУ нажатию; свайп вправо по сообщению — быстрый ответ.
+const LONG_PRESS_MS = 450     // сколько держать палец до появления меню
+const SWIPE_REPLY_PX = 60     // насколько сдвинуть сообщение, чтобы сработал ответ
+const swipe = ref({ id: 0, dx: 0 })   // визуальный сдвиг пузыря во время свайпа
+
+let pressTimer = null
+let touchStart = null         // {x, y, msg} — начало касания
+let touchMoved = false        // был ли жест (тогда не считаем его тапом)
+
+function openMenu(msg, x, y) {
+  if (selectionMode.value) return
+  overlay.value = { open: true, message: msg, x, y }
+}
+
+// ЛКМ: только отметка в режиме выделения (меню сюда больше не привязано).
+function onMessageClick(msg) {
+  if (selectionMode.value) m.toggleSelect(msg.id)
+}
+
+// ПКМ на ПК и долгое нажатие в мобильных браузерах (они шлют contextmenu сами).
+function onContextMenu(msg, e) {
+  e.preventDefault()
+  openMenu(msg, e.clientX, e.clientY)
+}
+
+function onTouchStart(msg, e) {
+  const t = e.touches?.[0]
+  if (!t) return
+  touchStart = { x: t.clientX, y: t.clientY, msg }
+  touchMoved = false
+  clearTimeout(pressTimer)
+  // Свой таймер долгого нажатия — в WebView приложения contextmenu приходит не всегда.
+  pressTimer = setTimeout(() => {
+    if (!touchMoved && touchStart) openMenu(msg, touchStart.x, touchStart.y)
+  }, LONG_PRESS_MS)
+}
+
+function onTouchMove(e) {
+  const t = e.touches?.[0]
+  if (!t || !touchStart) return
+  const dx = t.clientX - touchStart.x
+  const dy = t.clientY - touchStart.y
+  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+    touchMoved = true
+    clearTimeout(pressTimer)
+  }
+  // Горизонтальный жест вправо — тянем пузырь за пальцем (вертикальную прокрутку не трогаем).
+  if (Math.abs(dx) > Math.abs(dy) && dx > 0 && !touchStart.msg.deleted) {
+    swipe.value = { id: touchStart.msg.id, dx: Math.min(dx, 90) }
+  }
+}
+
+function onTouchEnd() {
+  clearTimeout(pressTimer)
+  const s = swipe.value
+  const msg = touchStart?.msg
+  swipe.value = { id: 0, dx: 0 }
+  touchStart = null
+  if (msg && s.id === msg.id && s.dx >= SWIPE_REPLY_PX && !msg.deleted) {
+    m.setReply(msg)                       // свайп вправо = ответить
+    nextTick(() => composer.value?.focus())
+  }
 }
 
 async function onPick(action) {
@@ -106,7 +178,8 @@ async function submit() {
   const t = draft.value.trim()
   if (!t) return
   draft.value = ''
-  await m.send(t)
+  const ok = await m.send(t)
+  if (!ok) draft.value = t          // сервер отклонил (анти-флуд/мьют) — вернуть текст
 }
 function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
 
@@ -128,6 +201,34 @@ const subtitle = computed(() => {
   return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
 })
 const topPinned = computed(() => pinned.value[0] || null)
+
+// ── Оформление ленты (как в Telegram) ────────────────────────────────────────────────
+// Свои сообщения — справа, чужие — слева с аватаркой и ФИО. Если человек пишет НЕСКОЛЬКО
+// подряд, шапка (ава + имя) рисуется только у ВЕРХНЕГО сообщения пачки — лента не рябит.
+const runStarts = computed(() => {
+  const starts = new Set()
+  let prev = null
+  for (const msg of messages.value) {
+    if (msg.sender_id !== prev) starts.add(msg.id)
+    prev = msg.sender_id
+  }
+  return starts
+})
+
+// Аватарки отправителей: в группе/канале — из состава беседы, в личном чате — собеседника.
+const avatarBySender = computed(() => {
+  const map = {}
+  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.avatar || ''
+  return map
+})
+function senderAvatar(msg) {
+  return avatarBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.avatar || ''))
+}
+
+// Шапка чата — в цвет плашки, которую собеседник выбрал в своём профиле.
+const headerTint = computed(() =>
+  (!isGroupOrChannel.value && !isModeration.value && activePeer.value?.profile_color)
+    ? profilePlate(activePeer.value.profile_color) : '')
 </script>
 
 <template>
@@ -138,19 +239,39 @@ const topPinned = computed(() => pinned.value[0] || null)
 
     <template v-else>
       <!-- Верхняя полоска / панель выделения -->
-      <div v-if="!selectionMode" class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
+      <!-- Шапка — в цвет плашки собеседника (её выбирает он сам в профиле). -->
+      <div v-if="!selectionMode" class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3"
+           :class="headerTint ? '' : 'bg-card'" :style="headerTint ? { background: headerTint } : {}">
         <button type="button" @click="m.clearActive()" aria-label="Назад"
-                class="grid size-8 place-items-center rounded-md text-text2 hover:bg-bg2 sm:hidden">
+                class="grid size-8 place-items-center rounded-md hover:bg-black/10 sm:hidden"
+                :class="headerTint ? 'text-white' : 'text-text2'">
           <ArrowLeft class="size-5" />
         </button>
-        <div class="min-w-0 flex-1">
-          <div class="truncate font-title text-base font-bold text-text">{{ peerName }}</div>
-          <div class="text-xs text-text3">{{ subtitle }}</div>
-        </div>
+        <!-- Клик по шапке — профиль собеседника / состав беседы (как в Telegram). -->
+        <button type="button" @click="showInfo = true"
+                class="min-w-0 flex-1 rounded-md px-1 py-0.5 text-left transition-colors"
+                :class="headerTint ? 'hover:bg-white/10' : 'hover:bg-bg2'"
+                title="Открыть профиль">
+          <div class="truncate font-title text-base font-bold"
+               :class="headerTint ? 'text-white' : 'text-text'">{{ peerName }}</div>
+          <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
+        </button>
+        <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
+        <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
+                :aria-label="muted ? 'Включить уведомления' : 'Отключить уведомления'"
+                :title="muted ? 'Уведомления выключены' : 'Отключить уведомления'"
+                class="grid size-8 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                  : (muted ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+          <BellOff v-if="muted" class="size-5" />
+          <Bell v-else class="size-5" />
+        </button>
         <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
-        <button v-if="!isModeration" type="button" @click="m.openModeration()"
+        <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
                 aria-label="Модерация" title="Написать модерации"
-                class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+                class="grid size-8 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                  : 'text-text3 hover:bg-bg2 hover:text-text'">
           <Settings class="size-5" />
         </button>
       </div>
@@ -158,6 +279,11 @@ const topPinned = computed(() => pinned.value[0] || null)
         <button type="button" @click="m.clearSelection()" aria-label="Отмена"
                 class="grid size-8 place-items-center rounded-md text-text2 hover:bg-bg2"><X class="size-5" /></button>
         <span class="flex-1 text-sm font-semibold text-text">Выбрано: {{ selectedIds.length }}</span>
+        <!-- «Выбрать всё / Снять всё» — иначе выделять пачку приходилось по одному. -->
+        <button type="button" @click="allSelected ? m.selectNone() : m.selectAll()"
+                class="shrink-0 rounded-md border border-border2 px-2.5 py-1.5 text-xs text-text2 hover:bg-bg2">
+          {{ allSelected ? 'Снять всё' : 'Выбрать всё' }}
+        </button>
         <button type="button" @click="bulkForward" :disabled="!selectedIds.length" aria-label="Переслать"
                 class="grid size-9 place-items-center rounded-md text-text2 hover:bg-bg2 disabled:opacity-40"><Forward class="size-5" /></button>
         <button type="button" @click="bulkDelete" :disabled="!selectedIds.length" aria-label="Удалить"
@@ -175,16 +301,34 @@ const topPinned = computed(() => pinned.value[0] || null)
       </button>
 
       <!-- Лента -->
-      <div ref="scroller" class="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-4">
+      <!-- Отступы задаём НА САМОМ сообщении (mt-*), а не через space-y на контейнере:
+           селектор space-y перебивал бы mt-* по специфичности, и пачки склеивались бы
+           с соседними — визуальной группировки не получалось. -->
+      <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <div v-for="msg in messages" :id="`gb-msg-${msg.id}`" :key="msg.id"
-             class="flex items-center gap-2" :class="msg.mine ? 'justify-end' : 'justify-start'">
+             class="flex items-end gap-2"
+             :class="[msg.mine ? 'justify-end' : 'justify-start',
+                      runStarts.has(msg.id) ? 'mt-4 first:mt-0' : 'mt-0.5']">
           <input v-if="selectionMode" type="checkbox" :checked="selectedIds.includes(msg.id)"
                  @change="m.toggleSelect(msg.id)" class="order-first accent-[var(--gb-accent)]" />
-          <button type="button" @click="onMessageClick(msg, $event)"
-                  class="max-w-[75%] rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm transition-shadow hover:shadow"
-                  :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'">
-            <div v-if="isGroupOrChannel && !msg.mine && msg.sender_name"
-                 class="mb-0.5 text-[11px] font-semibold text-accent">{{ msg.sender_name }}</div>
+          <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
+          <div v-if="!msg.mine" class="w-8 shrink-0">
+            <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
+                    :name="msg.sender_name || activePeer?.full_name || ''" :size="32" />
+          </div>
+          <button type="button" @click="onMessageClick(msg)"
+                  @contextmenu="onContextMenu(msg, $event)"
+                  @touchstart.passive="onTouchStart(msg, $event)"
+                  @touchmove.passive="onTouchMove($event)"
+                  @touchend="onTouchEnd" @touchcancel="onTouchEnd"
+                  class="max-w-[75%] select-none rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm transition-shadow hover:shadow"
+                  :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'"
+                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
+            <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
+            <div v-if="!msg.mine && runStarts.has(msg.id) && (msg.sender_name || activePeer?.full_name)"
+                 class="mb-0.5 text-[11px] font-semibold text-accent">
+              {{ msg.sender_name || activePeer?.full_name }}
+            </div>
             <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
               Переслано от {{ msg.forwarded_from }}
             </div>
@@ -200,6 +344,11 @@ const topPinned = computed(() => pinned.value[0] || null)
             </span>
           </button>
         </div>
+      </div>
+
+      <!-- Плашка анти-флуда/мьюта: «не отправляйте так часто» / «вы ограничены модерацией» -->
+      <div v-if="notice" class="shrink-0 border-t border-border bg-red/10 px-3 py-2 text-center text-xs font-semibold text-red">
+        {{ notice }}
       </div>
 
       <!-- Композер с превью ответа (или плашка для читателя канала) -->
@@ -241,7 +390,10 @@ const topPinned = computed(() => pinned.value[0] || null)
     <div v-if="deleteTargets" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="deleteTargets = null">
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-5 shadow-card">
-        <h3 class="font-title text-base font-bold text-text">Удалить {{ deleteTargets.length > 1 ? `(${deleteTargets.length})` : 'сообщение' }}?</h3>
+        <h3 class="font-title text-base font-bold text-text">
+          Удалить {{ deleteTargets.length > 1 ? `${deleteTargets.length} сообщений` : 'сообщение' }}?
+        </h3>
+        <p class="mt-1 text-xs text-text3">«У всех» сотрёт текст у собеседника, «у себя» — скроет только у вас.</p>
         <div class="mt-4 space-y-2">
           <button type="button" @click="applyDelete('all')"
                   class="w-full rounded-lg bg-red px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Удалить у всех</button>
@@ -252,6 +404,9 @@ const topPinned = computed(() => pinned.value[0] || null)
         </div>
       </div>
     </div>
+
+    <!-- «О беседе»: профиль собеседника / участники группы с владельцем -->
+    <ConversationInfo v-if="showInfo" @close="showInfo = false" />
 
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"

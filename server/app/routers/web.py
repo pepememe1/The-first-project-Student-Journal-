@@ -762,7 +762,7 @@ def admin_server_info(request: Request = None,
     gost_hash = security._openssl_gost_name()
     return {
         "address": domain or (str(request.base_url).rstrip("/") if request else ""),
-        "version": "Pre-release 2.9",
+        "version": "Release 3.0",
         "status": "работает",
         "uptime_sec": int(_time.time() - _SERVER_START_TS),
         "db_kind": "PostgreSQL" if not is_sqlite else "SQLite",

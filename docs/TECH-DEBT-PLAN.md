@@ -205,4 +205,4 @@ data/` + `main_window/main/server_control/fonts`) переведён на фай
 - **`npm audit`** в вебе: 8 уязвимостей в dev-зависимостях — разобрать `npm audit fix`.
 - **Postgres по умолчанию** для прод-сервера (сейчас SQLite/SQLCipher; Postgres для масштаба).
 - **Пересборка .exe с `excludes`** для STT/ML-пакетов (faster-whisper/ctranslate2/av) —
-  вернёт вес ~221 МБ → ~123 МБ (в .exe голос всё равно не работает, см. CLAUDE.md §5.2).
+  вернёт вес ~221 МБ → ~123 МБ (в .exe голос всё равно не работает, см. внутренние заметки §5.2).

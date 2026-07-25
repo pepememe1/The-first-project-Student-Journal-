@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
-from app import throttle, events, connect
+from app import throttle, events, connect, msg_limit
 
 
 @pytest.fixture()
@@ -39,6 +39,7 @@ def client():
     throttle.reset()
     events.reset()
     connect.reset()
+    msg_limit.reset()          #анти-флуд мессенджера — иначе счётчик копится между тестами
     with TestClient(app) as c:
         c.headers.update({"X-Device-Id": HOST_DEVICE_ID})
         yield c

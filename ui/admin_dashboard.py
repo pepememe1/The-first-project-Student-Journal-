@@ -111,6 +111,7 @@ class AdminDashboard(QWidget):
             ("mon",   "activity", "Мониторинг"),
             ("ai",    "bot",      "ИИ Помощник"),
             ("messages", "send",  "Сообщения"),
+            ("moderation", "shield", "Модерация чатов"),
         ]
         self.sidebar = Sidebar(items)
         self.sidebar.tab_clicked.connect(self._switch)
@@ -134,6 +135,7 @@ class AdminDashboard(QWidget):
         self._build_mon()
         self._build_ai()
         self._build_messenger()
+        self._build_moderation()
         self.sidebar.set_active("dash")
 
         #Вектор постоянно слева (⇄ — вправо, — свернуть/вернуть 🐯)
@@ -1632,15 +1634,29 @@ class AdminDashboard(QWidget):
         self.pages["ai"] = ai; self.stack.addWidget(ai)
 
     def _build_messenger(self):
-        """Вкладка «Сообщения» — мессенджер (тот же REST API, что и веб; §13 плана)."""
+        """Вкладка «Сообщения» — веб-мессенджер во встроенном веб-view (Фаза 0 «один UI»,
+        см. ui/messenger_web.py). Онлайн-подсистема (§13), offline-first не нужен."""
         try:
-            from messenger_view import MessengerView
-            mv = MessengerView()
+            from messenger_web import MessengerWebPanel
+            mv = MessengerWebPanel("/admin/messages", "admin")
         except Exception as _e:
             log.get("admin_dashboard").warning(f"[messenger] вкладка не собралась: {_e}")
             from PySide6.QtWidgets import QLabel
             mv = QLabel("Сообщения недоступны")
         self.pages["messages"] = mv
+        self.stack.addWidget(mv)
+
+    def _build_moderation(self):
+        """Вкладка «Модерация чатов» — жалобы + обращения поддержки (веб-view /admin/moderation).
+        Тот же UI, что на сайте: очередь тикетов и входящие в поддержку с ответом модерации."""
+        try:
+            from messenger_web import MessengerWebPanel
+            mv = MessengerWebPanel("/admin/moderation", "admin")
+        except Exception as _e:
+            log.get("admin_dashboard").warning(f"[moderation] вкладка не собралась: {_e}")
+            from PySide6.QtWidgets import QLabel
+            mv = QLabel("Модерация недоступна")
+        self.pages["moderation"] = mv
         self.stack.addWidget(mv)
 
     def _build_theme(self):
@@ -1650,6 +1666,9 @@ class AdminDashboard(QWidget):
         import theme_service
         w = QWidget(); lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+
+        from avatar_dialog import AvatarSection
+        lay.addWidget(AvatarSection("admin", {}))
 
         def _save(s):
             theme_service.save_institution_theme(s)
@@ -2296,7 +2315,7 @@ class AdminDashboard(QWidget):
             #hush_if_vector_hidden ниже), возвращается на остальных.
             dock = getattr(self, "vector_dock", None)
             if dock is not None:
-                dock.suspend() if key in ("ai", "messages") else dock.resume()
+                dock.suspend() if key in ("ai", "messages", "moderation") else dock.resume()
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)

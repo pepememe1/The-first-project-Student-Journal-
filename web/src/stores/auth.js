@@ -12,6 +12,7 @@ import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
 import { registerToken, unregisterToken } from '@/services/push'
 import { loginWithPasskey } from '@/api/webauthn'
+import { useMessengerStore } from '@/stores/messenger'
 
 const LS_USER = 'gb.user'
 
@@ -86,6 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearTokens()
     localStorage.removeItem(LS_USER)
     clearCache()   // стираем оффлайн-кэш — чтобы данные не показались другому юзеру
+    useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     user.value = null
   }
 
@@ -94,6 +96,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearTokens()
     localStorage.removeItem(LS_USER)
     clearCache()
+    useMessengerStore().reset()
     user.value = null
   }
 

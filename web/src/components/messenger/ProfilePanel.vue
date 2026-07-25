@@ -1,13 +1,26 @@
 <script setup>
 // ProfilePanel — карточка собеседника (портфолио) СЛЕВА от чата. Только безопасные поля
 // (см. MESSENGER-PLAN.md §9): ФИО, роль, группа (студент) / предметы (преподаватель).
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { GraduationCap, UserRound, ShieldCheck, Users } from '@lucide/vue'
+import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
+import { profilePlate } from '@/theme/palette'
+import Avatar from '@/components/ui/Avatar.vue'
 
 const m = useMessengerStore()
 const { activePeer, isModeration, activeInfo } = storeToRefs(m)
+
+// Панель можно свернуть — состояние помним между сеансами (кому-то нужен только чат).
+const K_COLLAPSED = 'gb.messenger.profile_collapsed'
+const collapsed = ref(localStorage.getItem(K_COLLAPSED) === '1')
+function toggle() {
+  collapsed.value = !collapsed.value
+  localStorage.setItem(K_COLLAPSED, collapsed.value ? '1' : '0')
+}
+
+// Цвет плашки собеседника (он выбирает его в своём профиле).
+const plate = computed(() => profilePlate(activePeer.value?.profile_color))
 
 function initials(name) {
   const p = (name || '').trim().split(/\s+/)
@@ -20,7 +33,20 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
 </script>
 
 <template>
-  <aside class="hidden w-72 shrink-0 flex-col border-r border-border bg-card xl:flex">
+  <!-- Свёрнутое состояние: узкая полоска с кнопкой «развернуть» -->
+  <aside v-if="collapsed" class="hidden w-10 shrink-0 flex-col items-center border-r border-border bg-card py-2 xl:flex">
+    <button type="button" @click="toggle" title="Показать профиль" aria-label="Показать профиль"
+            class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+      <PanelLeftOpen class="size-5" />
+    </button>
+  </aside>
+
+  <aside v-else class="relative hidden w-72 shrink-0 flex-col border-r border-border bg-card xl:flex">
+    <!-- Свернуть панель (состояние помнится) -->
+    <button type="button" @click="toggle" title="Скрыть профиль" aria-label="Скрыть профиль"
+            class="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md bg-black/20 text-white/80 backdrop-blur-sm hover:bg-black/35 hover:text-white">
+      <PanelLeftClose class="size-4" />
+    </button>
     <!-- Режим модерации: сводка правил + контакты вместо карточки собеседника -->
     <div v-if="isModeration" class="flex flex-col p-6">
       <div class="mb-3 flex items-center gap-2">
@@ -65,28 +91,37 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
       </button>
     </div>
 
-    <div v-else-if="activePeer" class="flex flex-col items-center p-6 text-center">
-      <div class="grid size-24 place-items-center rounded-full bg-accent text-3xl font-bold text-white">
-        {{ initials(activePeer.full_name) }}
+    <div v-else-if="activePeer" class="flex min-h-0 flex-col">
+      <!-- Плашка в цвет, выбранный самим пользователем в его профиле -->
+      <div class="flex flex-col items-center p-6 text-center" :style="{ background: plate }">
+        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="96" />
+        <h2 class="mt-3 font-title text-lg font-bold text-white">{{ activePeer.full_name }}</h2>
+        <span class="mt-1 inline-flex items-center gap-1 text-xs text-white/80">
+          <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
+        </span>
+        <span class="mt-1 inline-flex items-center gap-1.5 text-xs text-white/75">
+          <span class="size-2 rounded-full"
+                :style="activePeer.online ? 'background:#8ef0b4' : 'background:rgba(255,255,255,0.5)'"></span>
+          {{ activePeer.online ? 'в сети' : 'не в сети' }}
+        </span>
       </div>
-      <h2 class="mt-3 font-title text-lg font-bold text-text">{{ activePeer.full_name }}</h2>
-      <span class="mt-1 inline-flex items-center gap-1 text-xs text-text3">
-        <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
-      </span>
-      <span class="mt-1 inline-flex items-center gap-1.5 text-xs"
-            :class="activePeer.online ? 'text-accent' : 'text-text3'">
-        <span class="size-2 rounded-full" :style="activePeer.online ? 'background:#2e9e5b' : 'background:var(--gb-text3)'"></span>
-        {{ activePeer.online ? 'в сети' : 'не в сети' }}
-      </span>
 
-      <div class="mt-5 w-full space-y-3 text-left">
-        <div v-if="!isTeacher" class="rounded-lg border border-border bg-card2 p-3">
-          <p class="text-[11px] uppercase tracking-wide text-text3">Группа</p>
-          <p class="text-sm text-text">{{ activePeer.group_name || '—' }}</p>
+      <div class="min-h-0 flex-1 overflow-y-auto p-6 pt-4">
+        <!-- «О себе» — то, что человек написал о себе в профиле -->
+        <div v-if="activePeer.bio" class="mb-3 rounded-lg border border-border bg-card2 p-3">
+          <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">О себе</p>
+          <p class="whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
         </div>
-        <div v-else class="rounded-lg border border-border bg-card2 p-3">
-          <p class="text-[11px] uppercase tracking-wide text-text3">Ведёт предметы</p>
-          <p class="text-sm text-text">{{ (activePeer.subjects || []).join(', ') || '—' }}</p>
+
+        <div class="w-full space-y-3 text-left">
+          <div v-if="!isTeacher" class="rounded-lg border border-border bg-card2 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-text3">Группа</p>
+            <p class="text-sm text-text">{{ activePeer.group_name || '—' }}</p>
+          </div>
+          <div v-else class="rounded-lg border border-border bg-card2 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-text3">Ведёт предметы</p>
+            <p class="text-sm text-text">{{ (activePeer.subjects || []).join(', ') || '—' }}</p>
+          </div>
         </div>
       </div>
     </div>

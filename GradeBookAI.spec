@@ -36,6 +36,10 @@ for pkg in ('vector', 'schedule'):
 # зависимости, которые импортируются лениво/динамически
 hidden += ['gostcrypto', 'gostcrypto.gostpbkdf', 'requests', 'cryptography',
            'openpyxl', 'win32crypt']
+# QtWebEngine — встроенный веб-view онлайн-вкладок (мессенджер/модерация, ui/messenger_web.py).
+# Импортируется ЛЕНИВО внутри функции, поэтому PyInstaller его статикой не видит — добавляем
+# явно, чтобы хук PySide6 собрал Chromium (QtWebEngineProcess, resources, icudtl, локали).
+hidden += ['PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore']
 # python-docx (Word-экспорт журнала/ведомости) — импортируется лениво (data/exports.py).
 # Пакет ставится как python-docx, а импортируется как `docx`; ему нужны его шаблоны
 # (docx/templates/*.docx), поэтому тянем и submodules, и data-файлы.
@@ -64,6 +68,27 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# ── Обрезка QtWebEngine под лимит размера exe ─────────────────────────────────────────
+# Chromium тянет ~200 МБ сырыми. Убираем то, что конечному пользователю не нужно:
+#  • *.debug.pak / *.debug.bin — отладочные ресурсы (~82 МБ);
+#  • qtwebengine_devtools_resources — DevTools (F12), в проде не нужны (~10 МБ);
+#  • локали WebEngine, кроме ru/en (~38 МБ из 53 языков).
+# Сам Qt6WebEngineCore.dll (193 МБ) обязателен — его не трогаем (сжимается в onefile).
+def _keep_webengine(dest):
+    d = (dest or '').lower().replace('\\', '/')
+    if '.debug.' in d:
+        return False
+    if 'devtools_resources' in d:
+        return False
+    if 'qtwebengine_locales/' in d:
+        name = d.rsplit('/', 1)[-1]
+        return name.startswith(('ru', 'en'))
+    return True
+
+
+a.datas = [t for t in a.datas if _keep_webengine(t[0])]
+a.binaries = [t for t in a.binaries if _keep_webengine(t[0])]
 
 pyz = PYZ(a.pure)
 

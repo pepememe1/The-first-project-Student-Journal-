@@ -76,6 +76,12 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --include-package=vector \
   --include-package=schedule \
   $INC \
+  --include-module=PySide6.QtWebEngineWidgets \
+  --include-module=PySide6.QtWebEngineCore \
+  --noinclude-data-files='*.debug.pak' \
+  --noinclude-data-files='*.debug.bin' \
+  --noinclude-data-files='qtwebengine_devtools_resources.pak' \
+  --noinclude-data-files='qtwebengine_locales/*' \
   --nofollow-import-to=tkinter \
   --nofollow-import-to=matplotlib \
   --nofollow-import-to=PyQt5 \

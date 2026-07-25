@@ -422,6 +422,12 @@ class ConversationParticipant(Base):
     last_read_at = Column(String, default="")          #ISO последней прочитанной метки (непрочитанное)
     muted = Column(Boolean, default=False)             #без пушей по этой беседе
     pinned = Column(Boolean, default=False)            #закреплён ли сам чат в списке у этого юзера
+    #«Удалить переписку У СЕБЯ»: сообщения СТАРШЕ этой метки пользователь больше не видит.
+    #Массовый аналог MessageHidden — не плодит по строке на каждое сообщение. У собеседника
+    #переписка остаётся (личное состояние, как last_read_at).
+    cleared_at = Column(String, default="")
+    #Чат убран из списка до первой новой активности (тогда снимаем флаг и он вернётся).
+    hidden = Column(Boolean, default=False)
 
 
 class Message(Base):
@@ -471,6 +477,18 @@ class MessageReport(Base):
     handled_by = Column(String, default="")
     handled_at = Column(String, default="")
     resolution_note = Column(String, default="")
+
+
+class MutedUser(Base):
+    """Глобальный мьют пользователя МОДЕРАЦИЕЙ: он не может отправлять сообщения и создавать
+    беседы в мессенджере (см. routers/messenger.py). Отдельная СЕРВЕРНАЯ таблица (НЕ в
+    SYNC_MODELS): состояние мьюта не должно уезжать на десктоп обычным pull — мессенджер
+    целиком онлайновый, а _row_to_dict синка отдал бы неизвестную десктопу колонку. Наличие
+    строки = замьючен; снятие мьюта = удаление строки."""
+    __tablename__ = "muted_users"
+    user_id = Column(String, primary_key=True)
+    muted_by = Column(String, default="")              #логин админа, наложившего мьют
+    muted_at = Column(String, default="")
 
 
 def direct_conversation_id(uid_a: str, uid_b: str) -> str:

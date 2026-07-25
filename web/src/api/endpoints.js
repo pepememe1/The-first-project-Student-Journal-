@@ -232,6 +232,13 @@ export const messengerApi = {
   read: (convId, lastMessageId = 0) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/read`,
       { last_message_id: lastMessageId }),
+  // Мьют беседы у себя (без пушей по ней).
+  muteChat: (convId, muted = true) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/mute`, { muted }),
+  // Удалить переписку у себя (clearOnly — только очистить историю, чат остаётся).
+  deleteChat: (convId, clearOnly = false) =>
+    api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}`,
+      { params: { clear_only: clearOnly } }),
   // Действия над сообщением (Фаза 3).
   edit: (id, body) => api.patch(`/web/messenger/messages/${id}`, { body }),
   deleteMessage: (id, scope = 'self') =>
@@ -269,6 +276,11 @@ export const messengerModApi = {
     api.get(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/messages`),
   reply: (id, body) =>
     api.post(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/reply`, { body }),
+  // Глобальный мьют/размьют пользователя модерацией (не может писать никому).
+  muteUser: (uid, muted = true) =>
+    api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/mute`, { muted }),
+  // Удалить любое сообщение у всех (модерация; пишется в аудит).
+  deleteMessage: (mid) => api.delete(`/web/admin/messenger/messages/${mid}`),
 }
 
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).

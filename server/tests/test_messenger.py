@@ -400,6 +400,233 @@ def test_ws_connect_with_valid_token(client):
     #Контекст закрылся без исключений — соединение жило.
 
 
+def test_ws_connect_with_subprotocol(client):
+    """Токен через Sec-WebSocket-Protocol (['bearer', <jwt>]) — не светит в URL/логах."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    token = a["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/web/messenger/ws",
+                                  subprotocols=["bearer", token]) as wsconn:
+        wsconn.send_json({"type": "typing", "conversation_id": "nope"})
+
+
+def test_ws_rejects_bad_subprotocol_token(client):
+    """Мусорный токен в сабпротоколе → соединение отклоняется (не открывается)."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    _setup(client)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/web/messenger/ws",
+                                      subprotocols=["bearer", "not-a-jwt"]):
+            pass
+
+
+# ── Защита от злоупотребления: анти-флуд, мьют, гейт создания, границы модерации ──────
+def test_flood_limit_blocks_burst(client):
+    """Всплеск отправки упирается в 429 (анти-флуд). Живой темп в порог не бьётся, автомат —
+    бьётся. Первые сообщения проходят, дальше сервер просит не частить."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    codes = []
+    for i in range(15):
+        codes.append(client.post(f"/web/messenger/chats/{conv}/messages",
+                                 json={"body": f"m{i}"}, headers=a).status_code)
+    assert 200 in codes and 429 in codes, codes
+    #429 приходит именно ПОСЛЕ пачки успешных, а не сразу.
+    assert codes[0] == 200 and codes[-1] == 429
+
+
+def test_global_mute_blocks_send_and_create(client):
+    """Замьюченный модерацией не может ни писать, ни создавать беседы; снятие мьюта — снова может."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    #Мьютим преподавателя A глобально.
+    r = client.post(f"/web/admin/messenger/users/{a_id}/mute", json={"muted": True}, headers=admin)
+    assert r.status_code == 200 and r.json()["muted"] is True
+    assert client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "нельзя"}, headers=a).status_code == 403
+    assert client.post("/web/messenger/chats/group",
+                       json={"title": "Х"}, headers=a).status_code == 403
+    #Снимаем мьют — запись снова доступна.
+    client.post(f"/web/admin/messenger/users/{a_id}/mute", json={"muted": False}, headers=admin)
+    assert client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "снова можно"}, headers=a).status_code == 200
+
+
+def test_mute_requires_admin_and_not_admin_target(client):
+    """Мьютить может только админ; замьютить администратора нельзя."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    #Преподаватель не может мьютить (require_admin → 403).
+    assert client.post(f"/web/admin/messenger/users/{b_id}/mute",
+                       json={"muted": True}, headers=a).status_code == 403
+    #Замьютить администратора нельзя (модераторы не глушат друг друга) → 400.
+    from app.db import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    try:
+        admin_uid = db.query(User).filter(User.role == "admin").first().id
+    finally:
+        db.close()
+    assert client.post(f"/web/admin/messenger/users/{admin_uid}/mute",
+                       json={"muted": True}, headers=admin).status_code == 400
+
+
+def test_muted_user_flag_visible_to_admin_only(client):
+    """Флаг мьюта видит модерация (в жалобе), но каталог рядовому пользователю его не «зажигает»."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "грубо"}, headers=a).json()["id"]
+    client.post("/web/messenger/reports",
+                json={"message_id": mid, "reason_code": "harassment"}, headers=b)
+    client.post(f"/web/admin/messenger/users/{a_id}/mute", json={"muted": True}, headers=admin)
+    rep = client.get("/web/admin/messenger/reports?status=open", headers=admin).json()["reports"][0]
+    assert rep["reported"]["muted"] is True
+    #В обычном каталоге муты чужого аккаунта всегда False (не палим модерационное состояние).
+    cat = client.get("/web/messenger/users?role=teacher", headers=b).json()["users"]
+    assert all(u["muted"] is False for u in cat)
+
+
+def test_only_teachers_create_groups_and_channels(client):
+    """Группы и каналы создаёт только преподаватель/админ; студент — 403 (личные чаты ему ок)."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    assert client.post("/web/messenger/chats/group",
+                       json={"title": "Студгруппа"}, headers=b).status_code == 403
+    assert client.post("/web/messenger/chats/channel",
+                       json={"title": "Студканал"}, headers=b).status_code == 403
+    assert client.post("/web/messenger/chats/group",
+                       json={"title": "Проект", "member_ids": [b_id]}, headers=a).status_code == 200
+    #Студент всё ещё может открыть личный чат.
+    assert client.post(f"/web/messenger/chats/direct/{c_id}", headers=b).status_code == 200
+
+
+def test_mod_reply_only_into_moderation_chat(client):
+    """Ответ модерации разрешён только в чат обращений (kind='moderation'), не в чужой личный."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    direct = _conv(client, a, b_id)
+    #В приватный 1-на-1 чужих людей админ вписать сообщение НЕ может.
+    assert client.post(f"/web/admin/messenger/conversations/{direct}/reply",
+                       json={"body": "влезаю в личку"}, headers=admin).status_code == 403
+    #А в официальный чат обращений — может.
+    mod = client.get("/web/messenger/moderation", headers=b).json()["conversation_id"]
+    assert client.post(f"/web/admin/messenger/conversations/{mod}/reply",
+                       json={"body": "ответ поддержки"}, headers=admin).status_code == 200
+
+
+def test_delete_conversation_hides_only_for_me(client):
+    """Удаление переписки — ЛИЧНОЕ действие: у меня чат исчезает вместе с историей,
+    у собеседника остаётся целиком."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "старое"}, headers=a)
+    assert client.delete(f"/web/messenger/chats/{conv}", headers=b).status_code == 200
+    #У Боба чата нет и история пуста…
+    assert all(c["conversation_id"] != conv for c in
+               client.get("/web/messenger/chats", headers=b).json()["chats"])
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"] == []
+    #…а у собеседника всё на месте.
+    assert [m["body"] for m in
+            client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]] == ["старое"]
+
+
+def test_deleted_conversation_returns_on_new_message(client):
+    """Новое сообщение возвращает удалённый чат, но СТАРУЮ историю не воскрешает."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "до удаления"}, headers=a)
+    client.delete(f"/web/messenger/chats/{conv}", headers=b)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "после"}, headers=a)
+    chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
+    row = [c for c in chats if c["conversation_id"] == conv]
+    assert row and row[0]["last_message"]["body"] == "после"
+    got = [m["body"] for m in
+           client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]]
+    assert got == ["после"], "старая история не должна возвращаться"
+
+
+def test_clear_history_keeps_chat_in_list(client):
+    """clear_only=1 — история скрыта, но сам чат остаётся в списке."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "текст"}, headers=a)
+    assert client.delete(f"/web/messenger/chats/{conv}?clear_only=true",
+                         headers=b).json()["cleared"] is True
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"] == []
+    assert any(c["conversation_id"] == conv
+               for c in client.get("/web/messenger/chats", headers=b).json()["chats"])
+
+
+def test_delete_group_chat_also_leaves(client):
+    """Удаление группы у себя = выход из неё: доступ к беседе пропадает."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Проект", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    assert client.delete(f"/web/messenger/chats/{conv}", headers=b).status_code == 200
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=b).status_code == 403
+
+
+def test_admin_deletes_any_message_with_audit(client):
+    """Модерация удаляет ЛЮБОЕ сообщение у всех (даже в чужой личке) — с записью в аудит."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "нарушение"}, headers=a).json()["id"]
+    assert client.delete(f"/web/admin/messenger/messages/{mid}", headers=admin).status_code == 200
+    got = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"][0]
+    assert got["deleted"] is True and got["body"] == ""
+    #Не-админу такой эндпоинт закрыт.
+    assert client.delete(f"/web/admin/messenger/messages/{mid}", headers=b).status_code == 403
+    from app.db import SessionLocal
+    from app.models import AuditEvent
+    db = SessionLocal()
+    try:
+        assert db.query(AuditEvent).filter(AuditEvent.action == "msg.moderation.delete").count() >= 1
+    finally:
+        db.close()
+
+
+def test_public_profile_fields_are_clamped_and_shared(client):
+    """«О себе» режется по лимиту на СЕРВЕРЕ (клиента можно обойти) и виден другим."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    client.post("/me/prefs", json={"bio": "x" * 900, "profile_color": "violet"}, headers=a)
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert len(card["bio"]) == 400 and card["profile_color"] == "violet"
+
+
+def test_conversation_info_lists_owner_first_with_avatars(client):
+    """Инфо о беседе: владелец первым, у карточек есть поля для аватарки и контекста."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Г", "member_ids": [b_id, c_id]}, headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
+    assert info["owner_id"] == a_id
+    people = info["participants"]
+    assert people[0]["user_id"] == a_id and people[0]["role"] == "owner"
+    for p in people:
+        assert "avatar" in p and "user_role" in p
+
+
+def test_mute_conversation_endpoint_and_push_suppression(client, monkeypatch):
+    """Мьют беседы у себя: флаг отражается в списке чатов и глушит пуш по этой беседе."""
+    import app.rustore_push as rp
+    calls = []
+    monkeypatch.setattr(rp, "notify_login",
+                        lambda db, login, title, body, data=None: calls.append(login) or 1)
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    #Боб мьютит беседу — флаг виден в его списке чатов.
+    assert client.post(f"/web/messenger/chats/{conv}/mute",
+                       json={"muted": True}, headers=b).json()["muted"] is True
+    row = [x for x in client.get("/web/messenger/chats", headers=b).json()["chats"]
+           if x["conversation_id"] == conv][0]
+    assert row["muted"] is True
+    #Гасим presence Боба (мьют-запрос отметил его онлайн) и шлём — пуш не должен уйти из-за мьюта.
+    from app import events
+    events.reset()
+    calls.clear()
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "тук-тук"}, headers=a)
+    assert "bob" not in calls
+
+
 # ── Фаза 8: пуш офлайн-получателю ────────────────────────────────────────────────────
 def test_push_to_offline_recipient(client, monkeypatch):
     import app.rustore_push as rp

@@ -722,10 +722,11 @@ class StudentDashboard(QWidget):
         self.stack.addWidget(ai)
 
     def _build_messenger(self):
-        """Вкладка «Сообщения» — мессенджер (тот же REST API, что и веб; см. §13 плана)."""
+        """Вкладка «Сообщения» — веб-мессенджер во встроенном веб-view (Фаза 0 «один UI»,
+        см. ui/messenger_web.py). Онлайн-подсистема (§13), offline-first не нужен."""
         try:
-            from messenger_view import MessengerView
-            mv = MessengerView()
+            from messenger_web import MessengerWebPanel
+            mv = MessengerWebPanel("/student/messages", "student")
         except Exception as _e:
             log.get("dashboards").warning(f"[messenger] вкладка не собралась: {_e}")
             from PySide6.QtWidgets import QLabel
@@ -782,6 +783,11 @@ class StudentDashboard(QWidget):
         acc_lay.addWidget(lbl(name or "Студент", 16, C['text'], bold=True))
         acc_lay.addWidget(lbl("Студент" + (f" · {grp}" if grp else ""), 12, C['text3']))
         lay.addWidget(acc)
+
+        from avatar_dialog import AvatarSection
+        lay.addWidget(AvatarSection("student", {"f": self.cur_stud.get("f", ""),
+                                                "n": self.cur_stud.get("n", ""),
+                                                "g": self.cur_stud.get("g", "")}))
 
         lay.addWidget(section_lbl("Уведомления"))
         lay.addWidget(NotificationsView(), 1)

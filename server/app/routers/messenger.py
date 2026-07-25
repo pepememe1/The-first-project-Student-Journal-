@@ -20,13 +20,13 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from .. import audit, events
+from .. import audit, events, msg_limit
 from ..db import get_db, SessionLocal
 from ..deps import get_current_user, require_admin
 from ..security import decode_token
 from ..models import (
     Conversation, ConversationParticipant, Message, MessageHidden, MessageReport,
-    User, direct_conversation_id,
+    MutedUser, User, direct_conversation_id,
 )
 
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
@@ -51,8 +51,10 @@ class _WSManager:
         except RuntimeError:
             self._loop = None
 
-    async def connect(self, uid: str, ws: WebSocket):
-        await ws.accept()
+    async def connect(self, uid: str, ws: WebSocket, subprotocol: str = None):
+        #Если клиент авторизовался через Sec-WebSocket-Protocol, браузер требует, чтобы
+        #сервер ЭХОМ вернул один из предложенных сабпротоколов — иначе рукопожатие рвётся.
+        await ws.accept(subprotocol=subprotocol)
         self._by_user.setdefault(uid, set()).add(ws)
 
     def disconnect(self, uid: str, ws: WebSocket):
@@ -110,6 +112,13 @@ def _notify_recipients(db: Session, conv: Conversation, sender: User):
         ids = [i for i in _participant_ids(db, conv.id) if i != sender.id]
         if not ids:
             return
+        #Получатели, замьютившие ЭТУ беседу, пушей не получают (их выбор — тишина).
+        muted_here = {p.user_id for p in db.query(ConversationParticipant)
+                      .filter(ConversationParticipant.conversation_id == conv.id,
+                              ConversationParticipant.muted == True).all()}  # noqa: E712
+        ids = [i for i in ids if i not in muted_here]
+        if not ids:
+            return
         recips = db.query(User).filter(User.id.in_(ids)).all()
         sender_name = sender.full_name or sender.name or sender.login or "Сообщение"
         title = (conv.title if conv.kind in ("group", "channel") and conv.title else sender_name)
@@ -142,20 +151,76 @@ def _online_logins() -> set:
         return set()
 
 
-def _safe_user(u: User, online_logins: set = None) -> dict:
+def _safe_user(u: User, online_logins: set = None, muted: bool = False) -> dict:
     """Безопасные поля пользователя для карточки/каталога (НИЧЕГО, что помогает входу в
     чужой аккаунт — см. MESSENGER-PLAN.md §9: без логина, почты, телефона, хэша, device-id).
-    У студента — группа; у преподавателя — предметы, которые ведёт. online — по presence."""
+    У студента — группа; у преподавателя — предметы, которые ведёт. online — по presence.
+    `muted` (глобальный мьют модерацией) заполняем ТОЛЬКО в админ-контексте — рядовым
+    пользователям состояние мьюта чужого аккаунта в каталоге ни к чему."""
+    prefs = u.prefs if isinstance(u.prefs, dict) else {}
     d = {
         "id": u.id,
         "full_name": u.full_name or u.name or u.login or "",
         "role": u.role,
         "group_name": u.group_name or "",
         "online": bool(online_logins) and (u.login in online_logins),
+        #Аватарка (обрезанная 256×256 data:URL из prefs) — её видят ВСЕ (карточка, список,
+        #модерация). Это публичное «лицо» аккаунта, не чувствительное поле.
+        "avatar": prefs.get("avatar", "") or "",
+        #Публичная часть профиля, которую человек настраивает сам (см. routers/me.py):
+        #«О себе» и цвет плашки (id пресета палитры — клиент сопоставит его с цветом).
+        "bio": prefs.get("bio", "") or "",
+        "profile_color": prefs.get("profile_color", "") or "",
+        "muted": bool(muted),
     }
     if u.role == "teacher":
         d["subjects"] = u.subjects or []
     return d
+
+
+def _is_muted(db: Session, user_id: str) -> bool:
+    """Замьючен ли пользователь глобально (модерацией). Один индексный поиск по PK."""
+    return db.query(MutedUser).filter(MutedUser.user_id == user_id).first() is not None
+
+
+def _muted_set(db: Session, user_ids) -> set:
+    """Множество замьюченных из набора id — чтобы не бить БД по одному в списках модерации."""
+    ids = {i for i in user_ids if i}
+    if not ids:
+        return set()
+    rows = db.query(MutedUser.user_id).filter(MutedUser.user_id.in_(ids)).all()
+    return {r[0] for r in rows}
+
+
+def _guard_can_write(db: Session, user: User) -> None:
+    """Единый барьер записи в мессенджер: глобальный мьют модерацией (403) + анти-флуд (429).
+    Зовётся из всех точек, создающих сообщения (отправка, пересылка). Порядок: сперва мьют
+    (жёсткий запрет), потом частота."""
+    if _is_muted(db, user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Вы ограничены модерацией и временно не можете отправлять сообщения.")
+    wait = msg_limit.check(user.id)
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail="Не отправляйте сообщения так часто. Подождите немного.",
+            headers={"Retry-After": str(wait)})
+
+
+#Создавать группы и каналы могут ТОЛЬКО преподаватели (и админ как суперпользователь).
+#Требование заказчика: студенты не заводят каналы/группы, чтобы не спамить и не собирать
+#людей без ведома. Личные чаты студентам по-прежнему доступны (open_direct не ограничен).
+_CREATOR_ROLES = ("teacher", "admin")
+
+
+def _guard_can_create(db: Session, user: User) -> None:
+    if user.role not in _CREATOR_ROLES:
+        raise HTTPException(
+            status_code=403, detail="Группы и каналы могут создавать только преподаватели.")
+    if _is_muted(db, user.id):
+        raise HTTPException(
+            status_code=403, detail="Вы ограничены модерацией и не можете создавать беседы.")
 
 
 def _participant(db: Session, conv_id: str, user_id: str):
@@ -304,20 +369,28 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         conv = db.query(Conversation).filter(Conversation.id == p.conversation_id).first()
         if conv is None:
             continue
-        last = (db.query(Message)
-                .filter(Message.conversation_id == conv.id)
-                .order_by(Message.id.desc()).first())
+        #Всё, что старше моей метки очистки, для меня не существует (удалённая переписка).
+        lastq = db.query(Message).filter(Message.conversation_id == conv.id)
+        if p.cleared_at:
+            lastq = lastq.filter(Message.created_at > p.cleared_at)
+        last = lastq.order_by(Message.id.desc()).first()
+        #Чат удалён у меня и с тех пор ничего не приходило — не показываем его в списке.
+        #Появится новое сообщение — вернётся сам (см. _unhide_participants).
+        if p.hidden and last is None:
+            continue
         #Непрочитанное: чужие сообщения позже моей метки прочтения, не удалённые у всех.
         unread = (db.query(Message)
                   .filter(Message.conversation_id == conv.id,
                           Message.sender_id != user.id,
                           Message.deleted_at == "",
-                          Message.created_at > (p.last_read_at or ""))
+                          Message.created_at > (p.last_read_at or ""),
+                          Message.created_at > (p.cleared_at or ""))
                   .count())
         item = {
             "conversation_id": conv.id,
             "kind": conv.kind,
             "pinned": bool(p.pinned),
+            "muted": bool(p.muted),
             "unread": unread,
             "last_message": _msg_out(last, user.id) if last else None,
             "last_at": (last.created_at if last else conv.created_at) or "",
@@ -347,13 +420,16 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
     """Сообщения беседы. `before=<id>` — история вверх (старее указанного), `after=<id>` —
     новые (для опроса). Без параметров — последние `limit`. Скрытые «у себя» не отдаём;
     удалённые у всех — тумбстоуном. Всегда в хронологическом порядке (старые→новые)."""
-    _require_participant(db, conv_id, user)
+    part = _require_participant(db, conv_id, user)
     limit = max(1, min(int(limit or _DEFAULT_PAGE), _MAX_PAGE))
     hidden = _hidden_ids(db, conv_id, user.id)
 
     q = db.query(Message).filter(Message.conversation_id == conv_id)
     if hidden:
         q = q.filter(~Message.id.in_(hidden))
+    #«Удалённая у себя» переписка: всё, что было до очистки, пользователю не показываем.
+    if part.cleared_at:
+        q = q.filter(Message.created_at > part.cleared_at)
 
     if after:
         rows = q.filter(Message.id > after).order_by(Message.id.asc()).limit(limit).all()
@@ -378,6 +454,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
     conv = _conversation(db, conv_id)
     if conv.kind == "channel" and part.role not in _WRITER_ROLES:
         raise HTTPException(status_code=403, detail="В канал могут писать только авторы")
+    _guard_can_write(db, user)               #глобальный мьют (403) + анти-флуд (429)
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
@@ -397,6 +474,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
     db.refresh(m)
     #Отправитель прочитал свою же беседу вплоть до этого сообщения.
     _mark_read(db, conv_id, user.id, m.created_at)
+    _unhide_participants(db, conv_id)        #«удалённый» чат возвращается с новым сообщением
     _broadcast(db, conv_id)                  #живой сигнал участникам (WS)
     _notify_recipients(db, conv, user)       #пуш офлайн-получателям
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
@@ -427,6 +505,52 @@ def mark_read(conv_id: str, payload: dict = Body(default={}),
         upto = last.created_at if last else _now()
     _mark_read(db, conv_id, user.id, upto)
     return {"ok": True, "last_read_at": upto}
+
+
+def _unhide_participants(db: Session, conv_id: str) -> None:
+    """Новая активность возвращает беседу тем, кто «удалил» её у себя: снимаем флаг hidden.
+    Метку cleared_at НЕ трогаем — старая история для них так и остаётся скрытой."""
+    (db.query(ConversationParticipant)
+     .filter(ConversationParticipant.conversation_id == conv_id,
+             ConversationParticipant.hidden == True)                      # noqa: E712
+     .update({"hidden": False}, synchronize_session=False))
+    db.commit()
+
+
+@router.delete("/chats/{conv_id}")
+def delete_conversation(conv_id: str, clear_only: bool = Query(False),
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Удалить переписку У СЕБЯ: история до текущего момента больше не показывается, чат
+    уходит из списка. У собеседника переписка остаётся — это личное действие, а не
+    удаление чужих данных (иначе один человек стирал бы историю другому).
+
+    clear_only=1 — «очистить историю»: сообщения скрываем, но чат остаётся в списке.
+    Группу/канал при удалении ещё и покидаем — иначе беседа вернулась бы с первым же
+    сообщением, хотя пользователь ушёл из неё осознанно."""
+    p = _require_participant(db, conv_id, user)
+    conv = _conversation(db, conv_id)
+    p.cleared_at = _now()
+    p.last_read_at = p.cleared_at          #«хвоста» непрочитанного после очистки нет
+    if clear_only:
+        db.commit()
+        return {"ok": True, "conversation_id": conv_id, "cleared": True}
+    if conv.kind in ("group", "channel"):
+        db.delete(p)                        #выйти из группы/канала = перестать получать
+    else:
+        p.hidden = True                     #личный чат/модерация — просто убрать из списка
+    db.commit()
+    return {"ok": True, "conversation_id": conv_id, "deleted": True}
+
+
+@router.post("/chats/{conv_id}/mute")
+def mute_conversation(conv_id: str, payload: dict = Body(default={}),
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Замьютить/размьютить беседу У СЕБЯ (без пушей по ней; переписка продолжает работать).
+    Это личное состояние участника, на других не влияет."""
+    p = _require_participant(db, conv_id, user)
+    p.muted = bool(payload.get("muted", True))
+    db.commit()
+    return {"ok": True, "conversation_id": conv_id, "muted": bool(p.muted)}
 
 
 # ── Действия над сообщением (см. MESSENGER-PLAN.md §6) ────────────────────────────────
@@ -563,6 +687,7 @@ def forward_messages(payload: dict = Body(...),
     targets = [str(x) for x in (payload.get("to_conversation_ids") or [])]
     if not mids or not targets:
         raise HTTPException(status_code=400, detail="Нужны message_ids и to_conversation_ids")
+    _guard_can_write(db, user)               #пересылка — тоже создание сообщений
     made = 0
     for conv_id in targets:
         if _participant(db, conv_id, user.id) is None:
@@ -629,6 +754,7 @@ def _require_manager(db: Session, conv_id: str, user: User) -> ConversationParti
 def create_group(payload: dict = Body(...), user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     """Создать группу: создатель — owner, выбранные — участники (member)."""
+    _guard_can_create(db, user)
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="Нужно название группы")
@@ -653,6 +779,7 @@ def create_group(payload: dict = Body(...), user: User = Depends(get_current_use
 def create_channel(payload: dict = Body(...), user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
     """Создать канал: создатель — owner, выбранные — writer (пишут); остальные вступают как reader."""
+    _guard_can_create(db, user)
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="Нужно название канала")
@@ -785,12 +912,23 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
     people = []
     for p in parts:
         u = urows.get(p.user_id)
+        prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
         people.append({
             "user_id": p.user_id,
             "full_name": (u.full_name or u.name or u.login) if u else p.user_id,
-            "role": p.role,
+            "role": p.role,                       #owner | admin | writer | member | reader
             "online": bool(u) and u.login in onl,
+            #Карточка участника в панели «О беседе»: аватар и контекст (группа/предметы).
+            "avatar": prefs.get("avatar", "") or "",
+            "bio": prefs.get("bio", "") or "",
+            "profile_color": prefs.get("profile_color", "") or "",
+            "user_role": (u.role if u else ""),   #student | teacher | admin (роль в системе)
+            "group_name": (u.group_name or "") if u else "",
+            "subjects": (u.subjects or []) if (u is not None and u.role == "teacher") else [],
         })
+    #Владелец — первым, дальше по роли и алфавиту: сразу видно, кто создал беседу.
+    _ORDER = {"owner": 0, "admin": 1, "writer": 2, "member": 3, "reader": 4}
+    people.sort(key=lambda x: (_ORDER.get(x["role"], 9), (x["full_name"] or "").lower()))
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
             "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
             "my_role": part.role, "participants": people, "subscribers": len(people)}
@@ -801,6 +939,10 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
 def moderation_chat(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Личная беседа пользователя с командой модерации (создаётся при первом обращении).
     Пользователь пишет как обычно (он участник); отвечает модерация через админ-эндпоинт."""
+    #Админ САМ и есть модерация — обращаться ему некуда (отвечает через /web/admin/messenger).
+    #Иначе появлялся бы бессмысленный чат «админ пишет сам себе в поддержку».
+    if user.role == "admin":
+        raise HTTPException(status_code=403, detail="Администратор отвечает на обращения, а не пишет в них")
     conv_id = f"mod:{user.id}"
     conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
     if conv is None:
@@ -817,12 +959,18 @@ def moderation_chat(user: User = Depends(get_current_user), db: Session = Depend
 def _report_out(db: Session, r: MessageReport) -> dict:
     reporter = db.query(User).filter(User.id == r.reporter_id).first()
     reported = db.query(User).filter(User.id == r.reported_user_id).first()
+    onl = _online_logins()
+    mset = _muted_set(db, [r.reporter_id, r.reported_user_id])
     return {
         "id": r.id, "message_id": r.message_id, "conversation_id": r.conversation_id,
         "message_snapshot": r.message_snapshot, "reason_code": r.reason_code,
         "description": r.description, "created_at": r.created_at, "status": r.status,
         "reporter_name": (reporter.full_name if reporter else r.reporter_id),
         "reported_name": (reported.full_name if reported else r.reported_user_id),
+        #Карточки участников (аватар, ФИО, роль, группа/предметы, состояние мьюта) — админ
+        #в жалобе видит, КТО пожаловался и НА КОГО, с лицом, контекстом и кнопкой мьюта.
+        "reporter": _safe_user(reporter, onl, r.reporter_id in mset) if reporter else None,
+        "reported": _safe_user(reported, onl, r.reported_user_id in mset) if reported else None,
         "handled_by": r.handled_by, "resolution_note": r.resolution_note,
     }
 
@@ -870,19 +1018,24 @@ def mod_conversations(q: str = Query(""), kind: str = Query(""),
         query = query.filter(Conversation.kind == kind)
     convs = query.order_by(Conversation.created_at.desc()).limit(300).all()
     ql = (q or "").strip().lower()
+    onl = _online_logins()
     out = []
     for c in convs:
         parts = (db.query(ConversationParticipant)
                  .filter(ConversationParticipant.conversation_id == c.id).all())
-        names = []
+        names, people = [], []
+        mset = _muted_set(db, [p.user_id for p in parts])
         for p in parts:
             u = db.query(User).filter(User.id == p.user_id).first()
             if u:
                 names.append(u.full_name or u.login)
+                #карточка: аватар, ФИО, роль, группа/предметы + состояние глобального мьюта
+                people.append(_safe_user(u, onl, u.id in mset))
         if ql and not any(ql in n.lower() for n in names):
             continue
         out.append({"conversation_id": c.id, "kind": c.kind,
-                    "title": c.title or " · ".join(names), "participants": names})
+                    "title": c.title or " · ".join(names), "participants": names,
+                    "people": people})
     return {"conversations": out}
 
 
@@ -901,9 +1054,18 @@ def mod_conversation_messages(conv_id: str, request: Request = None,
 @mod_router.post("/conversations/{conv_id}/reply")
 def mod_reply(conv_id: str, payload: dict = Body(...), request: Request = None,
               admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Ответ модерации в беседу (например, в чат модерации пользователя). Отправитель —
-    админ; проверка участия НЕ применяется (это и есть право модерации). Пишется в аудит."""
-    _conversation(db, conv_id)
+    """Ответ модерации в ЧАТ ОБРАЩЕНИЙ пользователя (kind='moderation'). Отправитель — админ;
+    проверка участия НЕ применяется (это и есть право модерации). Пишется в аудит.
+
+    ⚠️ Ограничено kind='moderation': раньше эндпоинт позволял админу вписать сообщение в
+    ЛЮБУЮ беседу, включая приватный 1-на-1 чужих людей, от своего имени — это выходит за
+    рамки «ответа модерации». Модерация читает любую переписку (mod_conversation_messages,
+    с аудитом), но писать может только в официальный чат обращений."""
+    conv = _conversation(db, conv_id)
+    if conv.kind != "moderation":
+        raise HTTPException(
+            status_code=403,
+            detail="Ответ модерации доступен только в чате обращений пользователя.")
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
@@ -918,13 +1080,70 @@ def mod_reply(conv_id: str, payload: dict = Body(...), request: Request = None,
     return _msg_out(m, admin.id)
 
 
+@mod_router.delete("/messages/{mid}")
+def mod_delete_message(mid: int, request: Request = None,
+                       admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Удалить ЛЮБОЕ сообщение у всех (модерация). Обычный DELETE /messages/{id} требует
+    участия в беседе и авторства — админ в чужой переписке не участник, поэтому для
+    модерации отдельный эндпоинт. Сообщение становится тумбстоуном (текст стирается,
+    факт остаётся), закрепление снимается. Пишется в аудит (152-ФЗ, подотчётность)."""
+    m = _message_in_conv(db, mid)
+    if not m.deleted_at:
+        m.deleted_at = _now()
+        m.pinned = False
+        db.commit()
+        _broadcast(db, m.conversation_id)
+    audit.log(db, request, actor=admin.login, role=admin.role,
+              action="msg.moderation.delete", target=str(mid), detail=m.conversation_id)
+    return {"ok": True, "id": mid, "deleted": True}
+
+
+@mod_router.post("/users/{uid}/mute")
+def mod_mute_user(uid: str, payload: dict = Body(default={}), request: Request = None,
+                  admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Глобальный мьют/размьют пользователя модерацией: замьюченный не может отправлять
+    сообщения и создавать беседы (см. _guard_can_write/_guard_can_create). Пишется в аудит.
+    Другого админа мьютить нельзя (модераторы не глушат друг друга)."""
+    target = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
+    if target is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if target.role == "admin":
+        raise HTTPException(status_code=400, detail="Нельзя замьютить администратора")
+    muted = bool(payload.get("muted", True))
+    row = db.query(MutedUser).filter(MutedUser.user_id == uid).first()
+    if muted and row is None:
+        db.add(MutedUser(user_id=uid, muted_by=admin.login, muted_at=_now()))
+    elif not muted and row is not None:
+        db.delete(row)
+    db.commit()
+    audit.log(db, request, actor=admin.login, role=admin.role,
+              action="msg.moderation.mute" if muted else "msg.moderation.unmute", target=uid)
+    return {"ok": True, "user_id": uid, "muted": muted}
+
+
 # ── WebSocket-эндпоинт ───────────────────────────────────────────────────────────────
+def _ws_token(ws: WebSocket, query_token: str) -> tuple:
+    """Достаёт JWT для WS. ПРЕДПОЧТИТЕЛЬНО — из заголовка Sec-WebSocket-Protocol (клиент шлёт
+    ['bearer', <jwt>]): так токен НЕ попадает в URL и, значит, в access-логи прокси. Фолбэк —
+    старый ?token= в query (для уже раздатых клиентов). Возвращает (token, subprotocol_echo):
+    если авторизация прошла через сабпротокол, его надо вернуть эхом в accept()."""
+    raw = ws.headers.get("sec-websocket-protocol", "")
+    if raw:
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        #ожидаем ["bearer", "<jwt>"]; JWT состоит из tchar (base64url + точки) — валидный токен
+        if len(parts) >= 2 and parts[0] == "bearer":
+            return parts[1], "bearer"
+    return query_token, None
+
+
 @router.websocket("/ws")
 async def messenger_ws(ws: WebSocket, token: str = Query("")):
-    """Живой канал событий. Авторизация — JWT в query (?token=), т.к. заголовки WS задать
-    сложнее. Клиент получает {type:'changed', conversation_id} и подтягивает свежее; может
-    слать {type:'typing', conversation_id} — сервер ретранслирует остальным участникам."""
-    payload = decode_token(token) if token else None
+    """Живой канал событий. Авторизация — JWT через Sec-WebSocket-Protocol (не светит токен в
+    логах), с фолбэком на ?token= в query. Клиент получает {type:'changed', conversation_id}
+    и подтягивает свежее; может слать {type:'typing', conversation_id} — сервер ретранслирует
+    остальным участникам."""
+    jwt_token, subproto = _ws_token(ws, token)
+    payload = decode_token(jwt_token) if jwt_token else None
     if not payload:
         await ws.close(code=4401)
         return
@@ -939,7 +1158,7 @@ async def messenger_ws(ws: WebSocket, token: str = Query("")):
         return
 
     ws_manager.bind_loop()
-    await ws_manager.connect(user.id, ws)
+    await ws_manager.connect(user.id, ws, subprotocol=subproto)
     try:
         while True:
             data = await ws.receive_json()

@@ -28,6 +28,26 @@ router = APIRouter(prefix="/me", tags=["me"])
 #авторизованный пользователь не «раздул» свою строку произвольным JSON (защита БД).
 _MAX_PREFS_BYTES = 16 * 1024
 
+#ПУБЛИЧНЫЕ поля профиля (их видят другие пользователи в карточке — см. messenger._safe_user),
+#поэтому режем их на СЕРВЕРЕ, а не только в UI: клиента можно обойти запросом напрямую.
+_MAX_BIO_CHARS = 400        #«О себе» — тот же лимит показывает счётчик в интерфейсе
+_MAX_COLOR_ID = 32          #id пресета палитры ('violet', 'teal', …)
+
+
+def _sanitize_public_profile(prefs: dict) -> None:
+    """Обрезает публичные поля профиля на месте.
+
+    Список цветов НЕ дублируем на сервере: он живёт в палитре клиента
+    (web/src/theme/palette.js и ui/themes.py). Здесь ограничиваем только длину, а
+    неизвестный id клиент сам отобразит стандартным акцентом — так нет второго
+    источника правды, который мог бы разъехаться с первым."""
+    if "bio" in prefs:
+        bio = prefs.get("bio")
+        prefs["bio"] = (bio if isinstance(bio, str) else "").strip()[:_MAX_BIO_CHARS]
+    if "profile_color" in prefs:
+        col = prefs.get("profile_color")
+        prefs["profile_color"] = (col if isinstance(col, str) else "").strip()[:_MAX_COLOR_ID]
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -51,6 +71,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
         incoming = {}
     merged = dict(user.prefs or {})
     merged.update(incoming)
+    _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
     #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))

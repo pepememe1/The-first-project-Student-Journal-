@@ -21,6 +21,17 @@ const messenger = useMessengerStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
+// Embed-режим: тот же SPA, встроенный в ДЕСКТОП (QWebEngineView, см. ui/messenger_web.py).
+// Прячем собственную навигацию/шапку/док — их роль на десктопе играет нативная оболочка,
+// иначе получилась бы «навигация внутри навигации». Десктоп ставит флаг gb.embed ДО
+// загрузки страницы (плюс поддерживаем ?embed=1 в URL). Значение фиксируется на загрузке.
+const embed = (() => {
+  try {
+    const q = new URLSearchParams(window.location.search)
+    return q.get('embed') === '1' || localStorage.getItem('gb.embed') === '1'
+  } catch { return false }
+})()
+
 const title = computed(() => route.meta?.title || '')
 const subtitle = computed(() => route.meta?.subtitle || '')
 // Боковой Вектор виден на всех страницах, КРОМЕ самой вкладки «ИИ Помощник»
@@ -59,11 +70,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full flex-col overflow-hidden">
-    <HeaderBar @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+    <HeaderBar v-if="!embed" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
     <div class="flex min-h-0 flex-1">
       <!-- Десктоп: постоянный сайдбар -->
-      <div class="hidden lg:block">
+      <div v-if="!embed" class="hidden lg:block">
         <Sidebar />
       </div>
 
@@ -82,10 +93,10 @@ onBeforeUnmount(() => {
         <!-- Контент тянется на всю ширину области (как в десктопе — там сетка не
              ограничена узкой колонкой), с очень высоким потолком, чтобы на 4K не
              растягивалось до нечитаемых строк. -->
-        <div class="mx-auto max-w-[1700px] p-4 sm:px-7 sm:py-6">
+        <div :class="embed ? 'h-full p-0' : 'mx-auto max-w-[1700px] p-4 sm:px-7 sm:py-6'">
           <!-- На телефоне заголовок компактнее (меньше кегль и отступы), чтобы не
                «съедал» экран у небольших страниц; с sm — как в десктопе. -->
-          <div v-if="title" class="mb-3 sm:mb-5">
+          <div v-if="title && !embed" class="mb-3 sm:mb-5">
             <h1 class="font-title text-lg font-extrabold text-text sm:text-2xl">{{ title }}</h1>
             <p v-if="subtitle" class="mt-0.5 text-xs text-text3 sm:mt-1 sm:text-sm">{{ subtitle }}</p>
           </div>
@@ -99,13 +110,13 @@ onBeforeUnmount(() => {
 
       <!-- Постоянный боковой Вектор (десктоп): справа поверх всех страниц, кроме вкладки
            «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). Можно скрыть. -->
-      <div v-if="showDock && !vector.collapsed" class="hidden lg:block">
+      <div v-if="!embed && showDock && !vector.collapsed" class="hidden lg:block">
         <VectorDock />
       </div>
     </div>
 
     <!-- Панель скрыта → вкладка-возврат у правого края (десктоп). -->
-    <button v-if="showDock && vector.collapsed" @click="vector.setCollapsed(false)"
+    <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
             aria-label="Показать панель Вектора" title="Показать Вектора"
             class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-border bg-card py-3 pl-2.5 pr-2 text-accent shadow-card transition-colors hover:bg-accent-glow lg:flex">
       <PanelRightOpen class="size-5" />

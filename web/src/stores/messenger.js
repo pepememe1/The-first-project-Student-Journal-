@@ -15,13 +15,14 @@ import { getApiBase } from '@/api/server'
 
 const POLL_MS = 3500
 
-// URL WebSocket-канала мессенджера: та же база, что у REST, но схема ws/wss; токен в query
-// (заголовки WS задать сложнее). Пусто, если нет токена.
-function _wsUrl() {
+// Параметры WebSocket-канала: та же база, что у REST, но схема ws/wss. Токен передаём
+// сабпротоколом (['bearer', <jwt>]) — так он НЕ попадает в URL и, значит, в access-логи
+// прокси. Сервер эхом вернёт 'bearer'. Пусто, если нет токена.
+function _wsConn() {
   const token = getAccess()
-  if (!token) return ''
+  if (!token) return null
   const base = (getApiBase() || window.location.origin).replace(/^http/, 'ws')
-  return `${base}/web/messenger/ws?token=${encodeURIComponent(token)}`
+  return { url: `${base}/web/messenger/ws`, protocols: ['bearer', token] }
 }
 
 export const useMessengerStore = defineStore('messenger', () => {
@@ -41,7 +42,17 @@ export const useMessengerStore = defineStore('messenger', () => {
   const channels = ref([])              // каталог публичных каналов
 
   const peerTyping = ref(false)         // собеседник печатает (по WS)
+  const notice = ref('')                // сервисное уведомление (анти-флуд/мьют) — плашка в UI
   const totalUnread = computed(() => chats.value.reduce((s, c) => s + (c.unread || 0), 0))
+  // Элемент активной беседы в списке чатов — источник её состояния (в т.ч. muted).
+  const activeChat = computed(() => chats.value.find(c => c.conversation_id === activeId.value) || null)
+
+  let noticeTimer = null
+  function setNotice(text) {
+    notice.value = text || ''
+    clearTimeout(noticeTimer)
+    if (text) noticeTimer = setTimeout(() => { notice.value = '' }, 4000)
+  }
 
   // Каталог/поиск людей.
   const dir = ref({ role: 'student', q: '', users: [], loading: false })
@@ -83,6 +94,10 @@ export const useMessengerStore = defineStore('messenger', () => {
     await loadMessages(convId)
     await loadPinned()
     await loadConvInfo()
+    // Модерационную беседу распознаём по ТИПУ, а не только по кнопке ⚙: иначе при открытии
+    // из списка/после перезагрузки она рендерится как обычный личный чат с ролью-заглушкой
+    // «Студент» (см. ProfilePanel). Тип приходит из convInfo (kind='moderation').
+    if (activeInfo.value?.kind === 'moderation') isModeration.value = true
     await markReadActive()
     await loadChats()                    // обновить счётчик непрочитанного в списке
   }
@@ -124,17 +139,43 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch { /* сервер не готов — тихо */ }
   }
 
+  // Возвращает true при успехе; false — если сервер отклонил (анти-флуд 429 / мьют 403 и пр.),
+  // чтобы вызывающий вернул текст в поле ввода. Причину показываем плашкой (notice).
   async function send(text) {
     const body = (text || '').trim()
-    if (!body || !activeId.value || sending.value) return
+    if (!body || !activeId.value || sending.value) return false
     sending.value = true
     try {
       const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0)
       messages.value.push(data)
       replyTo.value = null
+      setNotice('')
       await loadChats()
-    } catch { /* показать ошибку — в UI позже */ }
-    finally { sending.value = false }
+      return true
+    } catch (e) {
+      const st = e?.response?.status
+      if (st === 429 || st === 403) setNotice(e?.response?.data?.detail || 'Сообщение не отправлено.')
+      return false
+    } finally { sending.value = false }
+  }
+
+  // Замьютить/размьютить активную беседу у себя (без пушей по ней).
+  async function muteConversation(muted) {
+    if (!activeId.value) return
+    try { await messengerApi.muteChat(activeId.value, muted); await loadChats() } catch { /* noop */ }
+  }
+
+  // Удалить переписку У СЕБЯ (clearOnly — только очистить историю, чат остаётся в списке).
+  // У собеседника переписка сохраняется — это личное действие.
+  async function deleteConversation(clearOnly = false) {
+    if (!activeId.value) return false
+    try {
+      await messengerApi.deleteChat(activeId.value, clearOnly)
+      if (clearOnly) { messages.value = []; pinned.value = [] }
+      else clearActive()
+      await loadChats()
+      return true
+    } catch { return false }
   }
 
   async function markReadActive() {
@@ -160,10 +201,10 @@ export const useMessengerStore = defineStore('messenger', () => {
 
   // ── WebSocket: живые события (Фаза 7) — опрос остаётся страховкой ───────────────────
   function _connectWS() {
-    const url = _wsUrl()
-    if (!url || ws) return
+    const conn = _wsConn()
+    if (!conn || ws) return
     try {
-      ws = new WebSocket(url)
+      ws = new WebSocket(conn.url, conn.protocols)
       ws.onmessage = (e) => {
         let ev
         try { ev = JSON.parse(e.data) } catch { return }
@@ -218,7 +259,19 @@ export const useMessengerStore = defineStore('messenger', () => {
   function clearActive() {
     activeId.value = ''; activePeer.value = null; messages.value = []
     replyTo.value = null; pinned.value = []; activeInfo.value = null
-    isModeration.value = false; clearSelection()
+    isModeration.value = false; clearSelection(); setNotice('')
+  }
+
+  // Полный сброс стора — при выходе/смене аккаунта. Иначе список чатов, активная беседа и
+  // её сообщения остаются от прошлого юзера (чужой канал «как будто создал ты», чужое
+  // сообщение с mine=true «как будто написал ты»). Пара к clearCache() в auth.logout().
+  function reset() {
+    stopPolling()
+    clearActive()
+    chats.value = []
+    channels.value = []
+    peerTyping.value = false
+    dir.value = { role: 'student', q: '', users: [], loading: false }
   }
 
   // ── Группы и каналы (Фазы 5–6) ──────────────────────────────────────────────────────
@@ -309,14 +362,18 @@ export const useMessengerStore = defineStore('messenger', () => {
     else selectedIds.value.push(id)
   }
   function clearSelection() { selectionMode.value = false; selectedIds.value = [] }
+  // «Выбрать всё / снять всё» — по видимым сообщениям беседы.
+  function selectAll() { selectedIds.value = messages.value.map(x => x.id) }
+  function selectNone() { selectedIds.value = [] }
 
   return {
     chats, activeId, activePeer, messages, loadingChats, loadingMessages, sending,
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, channels, dir,
-    peerTyping, totalUnread,
+    peerTyping, totalUnread, notice, activeChat,
     loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
-    setReply, clearReply, clearActive, loadConvInfo,
+    setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
+    deleteConversation, selectAll, selectNone,
     editMessage, setPinned, removeMessage, forwardMessages, reportMessage,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive,

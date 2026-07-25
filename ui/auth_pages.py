@@ -602,6 +602,27 @@ class LoginPage(QWidget):
         self.pass_inp.returnPressed.connect(self._do_login)
         lay.addWidget(b_go)
 
+        #Вход по учётной записи Windows — показываем ТОЛЬКО если пользователь сам его
+        #включил на этом ПК (см. win_login: пароль под DPAPI, открывается подтверждением
+        #Windows). Не включён — кнопки нет, всё как раньше.
+        self._win_btn = None
+        try:
+            import win_login
+            saved = win_login.enabled_login()
+            if saved:
+                b_win = QPushButton(f"Войти как «{saved}» через Windows")
+                b_win.setCursor(Qt.PointingHandCursor)
+                b_win.setStyleSheet(
+                    f"QPushButton{{background:transparent;border:1px solid {C['border2']};"
+                    f"border-radius:10px;padding:9px 12px;color:{C['text2']};font-size:12px;}}"
+                    f"QPushButton:hover{{border-color:{C['green']};color:{C['green']};}}")
+                b_win.clicked.connect(self._do_windows_login)
+                lay.addSpacing(6)
+                lay.addWidget(b_win)
+                self._win_btn = b_win
+        except Exception as e:
+            log.get("auth_pages").warning(f"[win_login] кнопка не собрана: {e}")
+
         #Сообщение об ошибке
         self.err_lbl = QLabel("")
         self.err_lbl.setWordWrap(True)
@@ -865,33 +886,45 @@ class LoginPage(QWidget):
             return
 
         from data_store import get_store, AccountLocked
+        from app_settings import get_api_url
         store = get_store()
+        api_url = get_api_url()
 
         def _local():
             return store.authenticate(login, pw)
 
-        #1) БЫСТРЫЙ путь — ЛОКАЛЬНАЯ проверка БЕЗ СЕТИ (возвращающийся пользователь).
-        #authenticate при успехе сам запускает фоновый синк, поэтому свежие данные
-        #подтянутся В ФОНЕ — UI не ждёт. Раньше ПЕРЕД проверкой стоял синхронный
-        #_online_bootstrap (health 3с + login + полный pull) на UI-потоке → вход висел
-        #7-10с и прога не отвечала. Теперь сеть трогаем ТОЛЬКО если локально не вышло.
-        try:
-            res = _local()
-        except AccountLocked as e:
-            self._show_err("Слишком много неверных попыток. "
-                           f"Повторите через {e.seconds // 60 + 1} мин.")
-            return
-        except Exception as e:
-            self._show_err(f"Ошибка входа: {e}")
-            return
-
-        #2) Локально не вышло → возможно, ПЕРВЫЙ вход на этом ПК (данных/хеша ещё нет):
-        #только тут идём на сервер, тянем пользователей/хеш и пробуем снова. Плюс
-        #первичная установка пароля администратора (host-ПК, пароля нет нигде).
-        if not res:
-            from app_settings import get_api_url
-            if get_api_url():
+        #1) ОНЛАЙН → проверяем пароль на СЕРВЕРЕ (ГОСТ там C-скорости, доли секунды). На
+        #десктопе OpenSSL GOST-провайдера обычно нет, и локальная проверка серверных хешей
+        #(2000 итераций Стрибога) идёт медленным pure-Python'ом — вход висел секунды. Сервер
+        #подтвердил → собираем сессию из локальных данных БЕЗ повторного хеша. Первый вход на
+        #чистом ПК: подтягиваем пользователей и пробуем снова.
+        res = None
+        server_ok = self._server_login(login, pw) if api_url else None   # True | False | None(офлайн)
+        if server_ok is True:
+            res = store.authenticate_trusted(login, pw)
+            if res is None:
                 self._online_bootstrap(login, pw)
+                res = store.authenticate_trusted(login, pw)
+
+        #2) Офлайн / сервер отверг / данных ещё нет локально → АВТОРИТЕТНАЯ локальная
+        #проверка (offline-first). Медленный pure-Python путь тут редок: обычный онлайн-вход
+        #с верным паролем ушёл выше быстрым путём.
+        if res is None:
+            try:
+                res = _local()
+            except AccountLocked as e:
+                self._show_err("Слишком много неверных попыток. "
+                               f"Повторите через {e.seconds // 60 + 1} мин.")
+                return
+            except Exception as e:
+                self._show_err(f"Ошибка входа: {e}")
+                return
+
+        #3) Локально не вышло, а сервер был НЕДОСТУПЕН (не отверг) → возможно ПЕРВЫЙ вход на
+        #этом ПК (данных/хеша ещё нет): тянем с сервера и пробуем снова. Плюс первичная
+        #установка пароля администратора (host-ПК, пароля нет нигде).
+        if res is None and api_url and server_ok is None:
+            self._online_bootstrap(login, pw)
             if login == store.get_admin_login() and not store.has_admin_password():
                 self._prompt_admin_setup(store)
                 return
@@ -904,10 +937,16 @@ class LoginPage(QWidget):
             except Exception as e:
                 self._show_err(f"Ошибка входа: {e}")
                 return
+        elif res is None and login == store.get_admin_login() and not store.has_admin_password():
+            self._prompt_admin_setup(store)
+            return
 
         if not res:
             self._show_err("Неверный логин или пароль")
             return
+        #Пароль ещё в руках — здесь (и только здесь) можно предложить включить вход по
+        #Windows. Диалог показывается ОДИН раз на аккаунт и по умолчанию отвечает «нет».
+        self._offer_windows_login(login, pw)
         self.login_inp.clear()
         self.pass_inp.clear()
         role = res.get("role")
@@ -924,6 +963,120 @@ class LoginPage(QWidget):
             self.login_teacher.emit(res["name"], res["data"])
         elif role == "student":
             self.login_student.emit(res["stud"])
+
+    def _do_windows_login(self):
+        """Вход по учётной записи Windows: система подтверждает личность (ПИН/лицо/пароль),
+        мы достаём сохранённый под DPAPI пароль и выполняем ОБЫЧНЫЙ вход этим паролем.
+        Пароль нигде не показывается и не попадает в поля формы."""
+        self.err_lbl.hide()
+        try:
+            import win_login
+            hwnd = int(self.window().winId()) if self.window() else 0
+            login, pw = win_login.unlock(hwnd)
+        except Exception as e:
+            log.get("auth_pages").warning(f"[win_login] вход не удался: {e}")
+            self._show_err("Не удалось войти через Windows. Введите логин и пароль.")
+            return
+        if not login or not pw:
+            #Пользователь отменил окно Windows либо оно не подтвердило личность.
+            self._show_err("Windows не подтвердила вход. Попробуйте ещё раз или введите пароль.")
+            return
+        self.login_inp.setText(login)
+        self.pass_inp.setText(pw)
+        try:
+            self._do_login()
+        finally:
+            self.pass_inp.clear()          #пароль в поле не оставляем
+
+    def _offer_windows_login(self, login: str, pw: str):
+        """Однократно предложить включить вход по Windows — с ЧЕСТНЫМ предупреждением.
+
+        Согласие обязательно и осознанно: мы сохраняем пароль (пусть и под DPAPI), а это
+        исключение из общего правила «пароль не хранится». На общем ПК колледжа включать
+        нельзя, о чём прямо и пишем."""
+        try:
+            import win_login
+            from data_store import local_get, local_set
+            if not win_login.available() or win_login.is_enabled_for(login):
+                return
+            asked = local_get("win_login_asked", None) or {}
+            if isinstance(asked, dict) and asked.get(login):
+                return                     #уже спрашивали — не надоедаем
+            from PySide6.QtWidgets import QMessageBox
+            box = QMessageBox(self.window())
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Вход по Windows")
+            box.setText("Входить в GradeBookAI по учётной записи Windows?")
+            box.setInformativeText(
+                "Вместо логина и пароля вы будете подтверждать вход так же, как вход в "
+                "Windows: ПИН, лицо, отпечаток или пароль Windows.\n\n"
+                "⚠️ Как это устроено: ваш пароль от журнала сохранится на этом компьютере "
+                "в зашифрованном виде (Windows DPAPI — привязка к вашей учётной записи "
+                "Windows). Открыть его на другом ПК или под другим пользователем Windows "
+                "нельзя.\n\n"
+                "❗ Включайте только на ЛИЧНОМ компьютере. На общем рабочем месте любой, кто "
+                "знает пароль Windows этого ПК, войдёт в журнал под вами.\n\n"
+                "Отключить и стереть сохранённый пароль можно в настройках в любой момент.")
+            box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            box.setDefaultButton(QMessageBox.No)     #по умолчанию — НЕ включать
+            box.button(QMessageBox.Yes).setText("Включить")
+            box.button(QMessageBox.No).setText("Не сейчас")
+            choice = box.exec()
+            asked = asked if isinstance(asked, dict) else {}
+            asked[login] = True
+            local_set("win_login_asked", asked)
+            if choice == QMessageBox.Yes:
+                win_login.enable(login, pw)
+        except Exception as e:
+            log.get("auth_pages").warning(f"[win_login] предложение не показано: {e}")
+
+    def _server_login(self, login, pw):
+        """Проверить пароль на СЕРВЕРЕ (ГОСТ там на C-скорости — доли секунды, в отличие от
+        медленного pure-Python Стрибога на десктопе). Возвращает:
+          True  — сервер подтвердил пароль;
+          False — сервер ОТВЕРГ креды (неверный логин/пароль);
+          None  — сервер недоступен/иная ошибка (решает локальная проверка, offline-first).
+        Никогда не бросает. Быстрый health (3с) отсекает офлайн, чтобы вход не висел."""
+        try:
+            from app_settings import get_api_url
+            url = get_api_url()
+            if not url:
+                return None
+            import requests
+            from sync_client import SyncClient
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                c = SyncClient(url)
+                if not c.health():
+                    return None                       #офлайн — пусть решает локаль
+                try:
+                    c.login(login, pw)
+                    #JWT, полученный при проверке пароля, СОХРАНЯЕМ. Раньше он молча
+                    #выбрасывался, и сразу после входа онлайн-вкладки (мессенджер и
+                    #модерация в веб-view) видели пустой current_auth() → «Вы не вошли
+                    #в аккаунт»: фоновый синкер авторизуется лишь через несколько секунд,
+                    #а панель строится один раз, в момент сборки дашборда.
+                    try:
+                        import app_settings
+                        if c.token:
+                            app_settings.set_saved_token(login, c.token)
+                        if c.refresh_token:
+                            app_settings.set_saved_refresh_token(login, c.refresh_token)
+                    except Exception:
+                        pass
+                    return True
+                except requests.HTTPError as e:
+                    code = getattr(getattr(e, "response", None), "status_code", 0)
+                    #400/401/403 — сервер осознанно отверг креды; иное (429/5xx/сеть) — не
+                    #трактуем как «неверный пароль», отдаём шанс локальной проверке.
+                    return False if code in (400, 401, 403) else None
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as e:
+            log.get("auth_pages").warning(f"[login] серверная проверка пропущена: {e}")
+            return None
 
     def _online_bootstrap(self, login, pw):
         """Если задан адрес сервера — логинимся к API этими кредами и тянем данные

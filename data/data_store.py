@@ -622,6 +622,36 @@ class LocalStore:
                 log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
         return result
 
+    def authenticate_trusted(self, login: str, password: str) -> Optional[dict]:
+        """Собрать сессию для пользователя, ПАРОЛЬ КОТОРОГО УЖЕ ПРОВЕРЕН СЕРВЕРОМ.
+
+        Зачем: на десктопе (Windows, без OpenSSL GOST-провайдера) локальная проверка
+        серверных гибридных хешей идёт медленным pure-Python Стрибогом (2000 итераций) —
+        вход висел секунды. Когда есть сеть, пароль проверяет сервер (C-скорость), а здесь
+        мы лишь СОБИРАЕМ payload дашборда из локальных данных — БЕЗ повторного хеша.
+        Аудит успеха и фоновый синк — как в authenticate. None, если пользователя ещё нет
+        в локальной базе (первый вход на чистом ПК — сперва нужен pull)."""
+        login = (login or "").strip()
+        sess = self.lookup_session(login)
+        if sess is None:
+            return None
+        role, payload = sess
+        if role == "admin":
+            res = {"role": "admin"}
+        elif role == "teacher":
+            res = {"role": "teacher", "name": payload[0], "data": payload[1]}
+        else:
+            res = {"role": "student", "stud": payload}
+        from audit import register_success, log_event
+        register_success(login)
+        log_event("login_success", login, role)
+        try:
+            from sync_runner import start as _sync_start
+            _sync_start(login, password, role)
+        except Exception as e:
+            log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
+        return res
+
     def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:
         """Сама проверка логина/пароля без аудита и блокировок."""
         if login == self.get_admin_login() and self.check_admin_password(password):
