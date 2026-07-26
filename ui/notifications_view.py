@@ -17,8 +17,10 @@ notifications_view.py — вкладка «Уведомления» на дес�
 import log
 
 from PySide6.QtCore import Qt, QThread, Signal as QSignal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QListWidget, QListWidgetItem, QTextBrowser, QVBoxLayout, QWidget
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QScrollArea, QTextBrowser, QTextEdit, QVBoxLayout, QWidget
 )
 
 from styles import C
@@ -33,22 +35,50 @@ KIND_LABEL = {
     "grade_changed": "Оценка изменена",
     "schedule_changed": "Расписание изменилось",
     "homework": "Домашнее задание",
+    "event": "Мероприятие",
     "reminder": "Напоминание",
 }
 
-#Виды писем, относящиеся к домашним заданиям. Всё остальное — «Система»: оценки и
-#расписание приходят по факту действия преподавателя, а ДЗ — задание лично тебе, и в
-#общем потоке оно теряется среди десятков оценок.
-HOMEWORK_KINDS = ("homework",)
+#Оценки — отдельно от «Система» (по просьбе: системные — только то, что пишет админ
+#вручную/расписание). ДЗ — отдельно, иначе теряется среди оценок. Мероприятия (олимпиады/
+#конкурсы, заводят препод/админ) — тоже отдельно, это не рутинная системная почта.
+KIND_FILTER = {"grade": "grades", "grade_changed": "grades", "homework": "homework", "event": "events"}
 #(ключ фильтра, подпись) — порядок задаёт порядок пунктов в выпадающем списке.
-FILTERS = (("all", "Все"), ("homework", "ДЗ"), ("system", "Система"))
+FILTERS = (("all", "Все"), ("grades", "Оценки"), ("homework", "ДЗ"),
+          ("events", "Мероприятия"), ("system", "Система"))
 
 
 def _in_filter(item: dict, key: str) -> bool:
     if key == "all":
         return True
-    is_hw = (item.get("kind") or "") in HOMEWORK_KINDS
-    return is_hw if key == "homework" else not is_hw
+    return KIND_FILTER.get(item.get("kind") or "", "system") == key
+
+
+#Точки вместо жирного текста для непрочитанного (порт NotificationsInbox.vue): красная
+#закрашенная — непрочитано, серая контурная («выколотая») — прочитано. Иконки маленькие и
+#одинаковые для всех строк — генерируем и кэшируем один раз, а не на каждый addItem.
+_DOT_ICONS = {}
+
+
+def _dot_icon(unread: bool) -> QIcon:
+    if unread in _DOT_ICONS:
+        return _DOT_ICONS[unread]
+    size = 10
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    if unread:
+        p.setBrush(QColor(C.get("red", "#d14343")))
+        p.setPen(Qt.NoPen)
+    else:
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(C.get("text3", "#6b8085")), 1.4))
+    p.drawEllipse(1, 1, size - 2, size - 2)
+    p.end()
+    icon = QIcon(pm)
+    _DOT_ICONS[unread] = icon
+    return icon
 
 
 class _BgWorker(QThread):
@@ -85,10 +115,17 @@ def _client():
 
 
 class NotificationsView(QWidget):
-    """Список уведомлений + чтение письма. Годится и студенту, и преподавателю."""
+    """Список уведомлений + чтение письма. Годится и студенту, и преподавателю.
 
-    def __init__(self, parent=None):
+    `role`/`groups` — только для кнопки «Мероприятие» (§12): создавать её может лишь
+    teacher/admin, а список групп для выбора аудитории берём у вызывающего дашборда
+    (десктоп офлайн-first — своих групп он и так уже знает локально, см. teacher_dashboard.
+    py::_ensure_vector_session, лишний REST-запрос за тем же списком не нужен)."""
+
+    def __init__(self, parent=None, role: str = "", groups=None):
         super().__init__(parent)
+        self._role = role or ""
+        self._groups = list(groups or [])
         self._workers = []
         self._items = []        #все загруженные письма
         self._shown = []        #те, что сейчас в списке (после фильтра) — строка ↔ письмо
@@ -115,12 +152,17 @@ class NotificationsView(QWidget):
         self._filter_box = QComboBox()
         for _key, label in FILTERS:
             self._filter_box.addItem(label)
-        self._filter_box.setToolTip("Показывать только домашние задания или только системные")
+        self._filter_box.setToolTip("Показать только один вид уведомлений")
         self._filter_box.currentIndexChanged.connect(lambda _i: self._fill())
         head.addWidget(self._filter_box)
         head.addStretch()
         self._status = lbl("", 12, C['text3'])
         head.addWidget(self._status)
+        #§12: мероприятие/событие — заводит только препод/админ (сервер тоже проверит роль).
+        if self._role in ("teacher", "admin"):
+            event_b = btn("Мероприятие", "ghost")
+            event_b.clicked.connect(self._open_create_event)
+            head.addWidget(event_b)
         refresh_b = btn("Обновить", "ghost")
         refresh_b.clicked.connect(self.reload)
         head.addWidget(refresh_b)
@@ -185,17 +227,15 @@ class NotificationsView(QWidget):
             title = it.get("title") or KIND_LABEL.get(it.get("kind"), "Уведомление")
             when = (it.get("created_at") or "")[:10]
             row = QListWidgetItem(f"{title}\n{when}")
-            #Шрифт задаём ПОСЛЕ добавления: у элемента вне списка своего шрифта ещё нет,
-            #и правка до addItem() теряется.
+            #Точка вместо жирного (см. _dot_icon): красная закрашенная — непрочитано,
+            #контурная — прочитано.
+            row.setIcon(_dot_icon(not it.get("read_at")))
             self._list.addItem(row)
-            if not it.get("read_at"):
-                f = row.font(); f.setBold(True); row.setFont(f)
         self._list.blockSignals(False)
         if not self._shown:
-            self._text.setPlainText(
-                "Домашних заданий пока нет." if key == "homework"
-                else "Системных уведомлений пока нет." if key == "system"
-                else "Уведомлений пока нет.")
+            _EMPTY = {"homework": "Домашних заданий пока нет.", "grades": "Оценок пока нет.",
+                     "events": "Мероприятий пока нет.", "system": "Системных уведомлений пока нет."}
+            self._text.setPlainText(_EMPTY.get(key, "Уведомлений пока нет."))
 
     #Чтение
 
@@ -218,7 +258,7 @@ class NotificationsView(QWidget):
         it["read_at"] = "now"
         row_item = self._list.item(row)
         if row_item:
-            f = row_item.font(); f.setBold(False); row_item.setFont(f)
+            row_item.setIcon(_dot_icon(False))
         eid = it.get("id") or ""
         if eid:
             self._run(lambda: (_client() or _NoClient()).mark_notification_read(eid),
@@ -232,6 +272,121 @@ class NotificationsView(QWidget):
         self._read_all_b.setEnabled(False)
         self._run(lambda: (_client() or _NoClient()).mark_all_notifications_read(),
                   lambda _r: None, lambda _e: None)
+
+    # ── §12: создать мероприятие/событие (олимпиада, конкурс и т.п.) ────────────────────
+    def _open_create_event(self):
+        dlg = _CreateEventDialog(self._role, self._groups, self)
+        dlg.exec()
+
+
+class _CreateEventDialog(QDialog):
+    """§12: форма «Мероприятие» (олимпиада, конкурс, выступление и т.п.).
+
+    Препод шлёт только своим группам (мультивыбор чекбоксами — свои группы уже
+    известны локально, см. NotificationsView.__init__). Админ может выбрать «Все
+    группы» (groups=[] — сервер трактует пустой список как «всем») или перечислить
+    конкретные группы вручную (у админа на десктопе нет готового списка всех групп
+    под рукой, а тянуть его отдельным REST-запросом ради одной формы избыточно)."""
+
+    def __init__(self, role: str, groups: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Новое мероприятие")
+        self.setMinimumWidth(420)
+        self._role = role
+        self._groups = list(groups or [])
+        self._group_checks = []
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+
+        lay.addWidget(lbl("Заголовок", 12, C['text3']))
+        self._title = QLineEdit()
+        self._title.setPlaceholderText("Например: Олимпиада по программированию")
+        lay.addWidget(self._title)
+
+        lay.addWidget(lbl("Описание", 12, C['text3']))
+        self._body = QTextEdit()
+        self._body.setPlaceholderText("Подробности: когда, где, как участвовать…")
+        self._body.setFixedHeight(100)
+        lay.addWidget(self._body)
+
+        lay.addWidget(lbl("Кому отправить", 12, C['text3']))
+        if self._role == "admin":
+            self._all_groups = QCheckBox("Все группы")
+            self._all_groups.setChecked(True)
+            self._all_groups.toggled.connect(self._toggle_manual)
+            lay.addWidget(self._all_groups)
+            self._manual = QLineEdit()
+            self._manual.setPlaceholderText("Или перечислите группы через запятую")
+            self._manual.setEnabled(False)
+            lay.addWidget(self._manual)
+        else:
+            self._all_groups = None
+            self._manual = None
+            box = QWidget()
+            box_lay = QVBoxLayout(box)
+            box_lay.setContentsMargins(0, 0, 0, 0)
+            box_lay.setSpacing(2)
+            for g in self._groups:
+                cb = QCheckBox(g)
+                cb.setChecked(True)
+                box_lay.addWidget(cb)
+                self._group_checks.append(cb)
+            if not self._groups:
+                box_lay.addWidget(lbl("Нет своих групп — некому отправлять.", 12, C['text3']))
+            scroll = QScrollArea()
+            scroll.setWidget(box)
+            scroll.setWidgetResizable(True)
+            scroll.setMaximumHeight(140)
+            lay.addWidget(scroll)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel_b = btn("Отмена", "ghost")
+        cancel_b.clicked.connect(self.reject)
+        row.addWidget(cancel_b)
+        self._send_b = btn("Отправить", "green")
+        self._send_b.clicked.connect(self._submit)
+        row.addWidget(self._send_b)
+        lay.addLayout(row)
+
+    def _toggle_manual(self, all_checked: bool):
+        self._manual.setEnabled(not all_checked)
+
+    def _selected_groups(self) -> list:
+        if self._role == "admin":
+            if self._all_groups.isChecked():
+                return []
+            return [g.strip() for g in self._manual.text().split(",") if g.strip()]
+        return [cb.text() for cb in self._group_checks if cb.isChecked()]
+
+    def _submit(self):
+        title = self._title.text().strip()
+        body = self._body.toPlainText().strip()
+        if not title or not body:
+            QMessageBox.warning(self, "Мероприятие", "Заполните заголовок и описание.")
+            return
+        groups = self._selected_groups()
+        if self._role != "admin" and not groups:
+            QMessageBox.warning(self, "Мероприятие", "Выберите хотя бы одну группу.")
+            return
+        self._send_b.setEnabled(False)
+        self._send_b.setText("Отправляем…")
+        w = _BgWorker(lambda: (_client() or _NoClient()).create_event(title, body, groups))
+        w.done.connect(lambda _r: self._on_sent())
+        w.error.connect(self._on_failed)
+        self._worker = w
+        w.start()
+
+    def _on_sent(self):
+        QMessageBox.information(self, "Мероприятие", "Отправлено.")
+        self.accept()
+
+    def _on_failed(self, msg: str):
+        self._send_b.setEnabled(True)
+        self._send_b.setText("Отправить")
+        QMessageBox.warning(self, "Мероприятие", f"Не удалось отправить: {msg}")
 
 
 class _NoClient:

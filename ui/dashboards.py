@@ -834,7 +834,7 @@ class StudentDashboard(QWidget):
 
         #Свой заголовок «Уведомления» есть у самого NotificationsView — отдельный section_lbl
         #здесь дал бы задвоение надписи (правка по отчёту).
-        lay.addWidget(NotificationsView(), 1)
+        lay.addWidget(NotificationsView(role="student"), 1)
         self.pages["profile"] = w
         self.stack.addWidget(w)
 

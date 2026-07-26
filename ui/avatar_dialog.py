@@ -11,6 +11,7 @@ import base64
 #Общий помощник стилизованных кнопок — чтобы «Изменить…» выглядела как остальной интерфейс,
 #а не как системная серая кнопка (правка внешнего вида по просьбе).
 from widgets import btn as _btn
+from styles import C
 
 from PySide6.QtCore import Qt, QPoint, QRect, QBuffer, QByteArray
 from PySide6.QtGui import QPixmap, QPainter, QImage, QPainterPath, QColor, QPen
@@ -293,9 +294,18 @@ class AvatarSection(QWidget):
     def _build_bio(self, root):
         import avatar_service
         cap = QLabel("О себе")
-        cap.setStyleSheet("font-weight:700;font-size:14px;")
+        cap.setStyleSheet(f"font-weight:700;font-size:14px;color:{C['text']};")
         root.addWidget(cap)
         self._bio = QTextEdit()
+        #Без явного стиля поле рисуется системной палитрой (белый фон/чёрный текст)
+        #независимо от темы приложения — на тёмной теме получался чёрный текст на
+        #светлом поле. Стиль — как у остальных полей ввода (styles.py «Поля ввода»),
+        #но локально: этот виджет собирается ДО того, как встроится в дерево главного
+        #окна, и не всегда подхватывает каскад APP_STYLE.
+        self._bio.setStyleSheet(
+            f"QTextEdit{{background:{C['card2']};border:1px solid {C['border2']};"
+            f"border-radius:8px;padding:8px;color:{C['text']};font-size:13px;}}"
+            f"QTextEdit:focus{{border:1px solid {C['green']};background:{C['card']};}}")
         self._bio.setPlaceholderText("Короткий текст — его видят другие в вашем профиле.")
         self._bio.setFixedHeight(70)
         self._bio.setPlainText(avatar_service.get_bio(self._role, self._identity))

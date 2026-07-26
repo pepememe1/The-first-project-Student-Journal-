@@ -385,3 +385,12 @@ class SyncClient:
         r = self._req("POST", "/me/events/read-all", timeout=8)
         r.raise_for_status()
         return r.json()
+
+    def create_event(self, title: str, body: str, groups: list = None) -> dict:
+        """§12: мероприятие/событие (олимпиада, конкурс и т.п.) — заводит препод/админ,
+        уходит уведомлением kind="event" выбранной аудитории. groups=[] — все группы
+        (доступно ТОЛЬКО админу; сервер сам проверяет роль и скоуп групп куратора)."""
+        r = self._req("POST", "/web/events",
+                      json={"title": title, "body": body, "groups": groups or []}, timeout=8)
+        r.raise_for_status()
+        return r.json()

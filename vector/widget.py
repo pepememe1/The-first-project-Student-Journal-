@@ -33,7 +33,7 @@ import log
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QPropertyAnimation, QPoint, QTimer, QEasingCurve, QSize
 )
-from PySide6.QtGui import QPixmap, QTransform, QMovie
+from PySide6.QtGui import QPixmap, QTransform, QMovie, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
     QLineEdit, QFrame, QToolButton
@@ -60,6 +60,7 @@ SPEAK_MAX_MS = 7000                   #речь максимум 7 c
 SPEAK_MS_PER_CHAR = 25                #+25 мс за символ ответа (между 5 и 7 c)
 AWAY_DELAY_MS = 2000                  #«ещё пару секунд» idle после ухода курсора
 GREET_MS = 1400                       #сколько машет «приветствием» перед речью (на hello)
+TYPE_MS_PER_CHAR_MIN = 12             #нижняя граница интервала печати (иначе таймер не успевает)
 
 #Состояния машины маскота
 ST_IDLE, ST_THINK, ST_SPEAK, ST_AWAY = "idle", "thinking", "speaking", "away"
@@ -418,6 +419,15 @@ class VectorPanel(QWidget):
         self._tts_driving = False
         self._last_intent = "help"
 
+        #Печать ответа по символам (§12, «бубнёж»-темп) — ТОЛЬКО во вкладке «ИИ Помощник»
+        #(docked=False), как на вебе (VectorDock всегда мгновенно, VectorPage печатает):
+        #боковая шторка мелькает поверх журнала и печать там мешала бы читать оценки.
+        self._typing_timer = QTimer(self)
+        self._typing_timer.timeout.connect(self._advance_typing)
+        self._typing_full = ""
+        self._typing_pos = 0
+        self._typing_fmt = None
+
         if docked:
             self.setFixedWidth(PANEL_WIDTH)
             self.setStyleSheet(
@@ -539,8 +549,15 @@ class VectorPanel(QWidget):
 
         #Проигрываем уже накопленную ОБЩУЮ историю (включая приветствие) — чтобы
         #только что открытая панель показала всю переписку, а не пустой чат.
+        #animate=False: это ПРОШЛЫЕ реплики (панель просто открыли/переоткрыли),
+        #печатать их по новой было бы раздражающим повтором анимации.
         for who, text in self.session.history:
-            self._append(who, text)
+            self._append(who, text, animate=False)
+
+        #Двойной клик по чату — пропустить анимацию печати и показать ответ целиком
+        #(по ТЗ). Ставим фильтр на viewport, а не на сам QTextEdit — так приходят
+        #события мыши.
+        self.chat.viewport().installEventFilter(self)
 
         #Подписываемся на сигналы общей сессии: текст в чат пишем ТОЛЬКО отсюда
         #(не локально в _send) — поэтому обе панели всегда синхронны и без дублей.
@@ -630,10 +647,19 @@ class VectorPanel(QWidget):
                 self._over_cmd_menu = True; self._cmd_hide_timer.stop()
             elif event.type() == QEvent.Leave:
                 self._over_cmd_menu = False; self._cmd_hide_timer.start(240)
+        elif obj is self.chat.viewport():
+            if event.type() == QEvent.MouseButtonDblClick:
+                self._complete_typing()
         return super().eventFilter(obj, event)
 
     #чат
-    def _append(self, who, text):
+    def _append(self, who, text, animate=True):
+        #Новое сообщение ВСЕГДА завершает предыдущую печать сразу (по ТЗ: новый вопрос —
+        #старый ответ мгновенно целиком), даже если это не ответ Вектора, а реплика «Вы».
+        self._complete_typing()
+        if who == "Вектор" and not self.docked and animate:
+            self._start_typing(text)
+            return
         color = C["green"] if who == "Вектор" else C["blue"]
         safe = (text or "").replace("\n", "<br>")
         self.chat.append(
@@ -641,6 +667,61 @@ class VectorPanel(QWidget):
             f'<span style="color:{C["text"]};">{safe}</span><br>')
         sb = self.chat.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _start_typing(self, text):
+        """Печать ответа Вектора по символам, в темпе озвучки (см. speak_duration_ms) —
+        только во вкладке «ИИ Помощник» (см. docked-проверку в _append)."""
+        self._typing_full = text or ""
+        self._typing_pos = 0
+        cur = self.chat.textCursor()
+        cur.movePosition(QTextCursor.End)
+        cur.insertHtml(f'<span style="color:{C["green"]};font-weight:bold;">Вектор:</span> ')
+        self._typing_fmt = QTextCharFormat()
+        self._typing_fmt.setForeground(QColor(C["text"]))
+        self.chat.setTextCursor(cur)
+        sb = self.chat.verticalScrollBar(); sb.setValue(sb.maximum())
+        if not self._typing_full:
+            self._end_typing_block()
+            return
+        dur_ms = speak_duration_ms(self._typing_full)
+        interval = max(TYPE_MS_PER_CHAR_MIN, dur_ms / len(self._typing_full))
+        self._typing_timer.start(int(interval))
+
+    def _advance_typing(self):
+        if self._typing_pos >= len(self._typing_full):
+            self._typing_timer.stop()
+            return
+        ch = self._typing_full[self._typing_pos]
+        self._typing_pos += 1
+        cur = self.chat.textCursor()
+        cur.movePosition(QTextCursor.End)
+        cur.insertText(ch, self._typing_fmt)
+        self.chat.setTextCursor(cur)
+        sb = self.chat.verticalScrollBar(); sb.setValue(sb.maximum())
+        if self._typing_pos >= len(self._typing_full):
+            self._typing_timer.stop()
+            self._end_typing_block()
+
+    def _complete_typing(self):
+        """Мгновенно дописать текущий печатаемый ответ целиком (двойной клик по чату,
+        либо новое сообщение перебивает недопечатанное — оба случая по ТЗ)."""
+        if not self._typing_timer.isActive():
+            return
+        self._typing_timer.stop()
+        remaining = self._typing_full[self._typing_pos:]
+        if remaining:
+            cur = self.chat.textCursor()
+            cur.movePosition(QTextCursor.End)
+            cur.insertText(remaining, self._typing_fmt)
+        self._end_typing_block()
+
+    def _end_typing_block(self):
+        cur = self.chat.textCursor()
+        cur.movePosition(QTextCursor.End)
+        cur.insertHtml("<br>")
+        sb = self.chat.verticalScrollBar(); sb.setValue(sb.maximum())
+        self._typing_full = ""
+        self._typing_pos = 0
 
     def ask_command(self, question: str):
         """Программная отправка готовой команды (кнопки меню)."""

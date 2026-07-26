@@ -61,17 +61,24 @@ def test_letters_are_listed_with_server_text(view):
     assert "Так держать" in view._text.toPlainText()
 
 
-def test_unread_letters_are_bold(view):
+def _is_unread_icon(item) -> bool:
+    """Точки кэшируются по булеву флагу (см. notifications_view._dot_icon) — сравниваем
+    cacheKey, а не пиксели."""
+    import notifications_view as nv
+    return item.icon().cacheKey() == nv._dot_icon(True).cacheKey()
+
+
+def test_unread_letters_get_red_dot(view):
     view._on_loaded({"items": letters(), "unread": 1})
-    assert view._list.item(0).font().bold() is True, "непрочитанное — жирным"
-    assert view._list.item(1).font().bold() is False, "прочитанное — обычным"
+    assert _is_unread_icon(view._list.item(0)), "непрочитанное — красная точка"
+    assert not _is_unread_icon(view._list.item(1)), "прочитанное — контурная точка"
 
 
 def test_opening_letter_marks_it_read(view):
     view._on_loaded({"items": letters(), "unread": 1})
     view._open(0)
     assert view._items[0]["read_at"], "открытое письмо становится прочитанным"
-    assert view._list.item(0).font().bold() is False
+    assert not _is_unread_icon(view._list.item(0))
 
 
 def test_network_failure_keeps_previous_letters(view):
@@ -96,4 +103,36 @@ def test_mark_all_clears_unread_marks(view):
     view._on_loaded({"items": letters(), "unread": 1})
     view._mark_all()
     assert all(i["read_at"] for i in view._items)
-    assert view._list.item(0).font().bold() is False
+    assert not _is_unread_icon(view._list.item(0))
+
+
+def test_event_filter_bucket(view):
+    """§12: «Мероприятия» — отдельная категория, не путается с «Система»."""
+    import notifications_view as nv
+    items = letters() + [{"id": "e3", "kind": "event", "title": "Олимпиада",
+                          "body": "Регистрация до пятницы.",
+                          "created_at": "2026-07-21T08:00:00", "read_at": ""}]
+    view._on_loaded({"items": items, "unread": 2})
+    events_idx = [k for k, _ in nv.FILTERS].index("events")
+    view._filter_box.setCurrentIndex(events_idx)
+    assert view._list.count() == 1
+    assert "Олимпиада" in view._list.item(0).text()
+
+
+def test_create_event_button_only_for_teacher_and_admin(qapp, monkeypatch):
+    """Кнопка «Мероприятие» видна только преподу/админу — сервер тоже проверит роль,
+    но зачем показывать студенту форму, которую он не сможет отправить."""
+    import notifications_view as nv
+    monkeypatch.setattr(nv, "_client", lambda: None)
+    student = nv.NotificationsView(role="student")
+    teacher = nv.NotificationsView(role="teacher", groups=["к74/1"])
+    student._workers.clear()
+    teacher._workers.clear()
+
+    def _has_event_button(view):
+        from PySide6.QtWidgets import QPushButton
+        return any(isinstance(w, QPushButton) and w.text() == "Мероприятие"
+                  for w in view.findChildren(QPushButton))
+
+    assert not _has_event_button(student)
+    assert _has_event_button(teacher)

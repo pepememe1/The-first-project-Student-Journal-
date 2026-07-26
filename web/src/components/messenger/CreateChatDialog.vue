@@ -1,13 +1,15 @@
 <script setup>
 // CreateChatDialog — создание группы или канала (kind). Название + (канал) публичность +
 // выбор участников/писателей через поиск по каталогу. Наверх уходит create-событие.
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { X, Search, Check } from '@lucide/vue'
-import { messengerApi } from '@/api/endpoints'
+import { messengerApi, curatorApi } from '@/api/endpoints'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps({ kind: { type: String, default: 'group' } }) // group | channel
 const emit = defineEmits(['create', 'close'])
 
+const auth = useAuthStore()
 const isChannel = computed(() => props.kind === 'channel')
 const title = ref('')
 const about = ref('')
@@ -32,10 +34,27 @@ function toggle(u) {
 }
 const isChosen = (id) => chosen.value.some(x => x.id === id)
 
+// §12: режим куратора — при создании ГРУППЫ преподаватель-куратор может разом добавить
+// ВСЮ учебную группу (все её студенты станут участниками), вперемешку с отдельными
+// людьми из обычного поиска выше. Список — ТОЛЬКО его собственные curated_groups
+// (сервер тоже это проверит — см. create_group в messenger.py).
+const curatedGroups = ref([])
+const chosenGroups = ref([])
+onMounted(async () => {
+  if (isChannel.value || auth.role !== 'teacher') return
+  try { curatedGroups.value = (await curatorApi.groups()).data.groups || [] } catch { /* не куратор */ }
+})
+function toggleGroup(g) {
+  const i = chosenGroups.value.indexOf(g)
+  if (i >= 0) chosenGroups.value.splice(i, 1)
+  else chosenGroups.value.push(g)
+}
+
 function submit() {
   const t = title.value.trim()
   if (!t) return
-  emit('create', { title: t, ids: chosen.value.map(x => x.id), isPublic: isPublic.value, about: about.value.trim() })
+  emit('create', { title: t, ids: chosen.value.map(x => x.id), isPublic: isPublic.value,
+    about: about.value.trim(), classGroups: chosenGroups.value })
 }
 </script>
 
@@ -57,8 +76,20 @@ function submit() {
           <input type="checkbox" v-model="isPublic" class="accent-[var(--gb-accent)]" /> Публичный (виден в каталоге)
         </label>
 
+        <!-- §12: режим куратора — целые учебные группы одним нажатием. -->
+        <div v-if="!isChannel && curatedGroups.length" class="mb-3">
+          <p class="mb-1 text-xs font-semibold text-text3">Добавить целую группу (куратор)</p>
+          <div class="flex flex-wrap gap-1.5">
+            <button v-for="g in curatedGroups" :key="g" type="button" @click="toggleGroup(g)"
+                    class="rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors"
+                    :class="chosenGroups.includes(g) ? 'border-accent bg-accent-glow text-accent' : 'border-border2 text-text3 hover:bg-bg2'">
+              {{ g }}
+            </button>
+          </div>
+        </div>
+
         <p class="mb-1 mt-2 text-xs font-semibold text-text3">
-          {{ isChannel ? 'Авторы (могут публиковать)' : 'Участники' }}
+          {{ isChannel ? 'Авторы (могут публиковать)' : 'Участники по отдельности' }}
         </p>
         <!-- выбранные чипсами -->
         <div v-if="chosen.length" class="mb-2 flex flex-wrap gap-1">

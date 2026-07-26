@@ -7,7 +7,7 @@ import { storeToRefs } from 'pinia'
 import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
-  Search, Zap, MessageSquare, Eye, Plus, ScrollText,
+  Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -19,6 +19,7 @@ import ForwardPicker from './ForwardPicker.vue'
 import ConversationInfo from './ConversationInfo.vue'
 import MascotCooldown from './MascotCooldown.vue'
 import ReminderDialog from './ReminderDialog.vue'
+import CuratorReportOverlay from './CuratorReportOverlay.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 
@@ -48,6 +49,7 @@ const composer = ref(null)
 // Оверлей действий, модалки.
 const overlay = ref({ open: false, message: null, x: 0, y: 0 })
 const reportMsg = ref(null)                 // сообщение, на которое жалуемся
+const openReportOverlay = ref(null)         // §12: id открытого отчёта куратора (или null)
 const forwardState = ref({ open: false, ids: [] })
 const deleteTargets = ref(null)             // [message,…] для выбора «у себя/у всех» (все свои)
 const copied = ref(false)
@@ -84,6 +86,38 @@ const firstUnreadId = computed(() => {
   if (!lastRead) return null
   const found = messages.value.find(x => x.created_at > lastRead)
   return found ? found.id : null
+})
+
+// Разделитель по датам (как в Telegram): «Сегодня» / «Вчера» / число — граница СУТОК по
+// часовому поясу УСТРОЙСТВА (Date у клиента), а не сервера. Наступление 00:00 у пользователя
+// само переносит вчерашний ярлык в дату — computed пересчитывается при каждом новом сообщении.
+function _dayKey(iso) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toDateString()
+}
+function _dayLabel(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  const key = d.toDateString()
+  if (key === now.toDateString()) return 'Сегодня'
+  if (key === yesterday.toDateString()) return 'Вчера'
+  return d.toLocaleDateString('ru-RU', d.getFullYear() === now.getFullYear()
+    ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' })
+}
+const dateBreaks = computed(() => {
+  const map = new Map()   // msg.id → подпись (первое сообщение НОВЫХ суток)
+  let prevKey = null
+  for (const msg of messages.value) {
+    const key = _dayKey(msg.created_at)
+    if (key && key !== prevKey) {
+      map.set(msg.id, _dayLabel(msg.created_at))
+      prevKey = key
+    }
+  }
+  return map
 })
 
 watch(activeId, async (newId, oldId) => {
@@ -185,7 +219,39 @@ function onComposerKeydown(e) {
     if (e.key === 'u') { e.preventDefault(); wrapSelection('__'); return }
   }
   if (mentionCandidates.value.length && e.key === 'Escape') { mentionQuery.value = null; return }
+  if (slashCandidates.value.length && e.key === 'Escape') { slashQuery.value = null; return }
   onKey(e)
+}
+
+// ── Автодополнение слэш-команд «/» (как в Telegram) ─────────────────────────────────────
+// Команда доступна только если это ВЕСЬ текст от начала сообщения до курсора (без
+// пробела) — как только начат аргумент («/vector когда…»), подсказка сама пропадает.
+// §12: /отчет — только в служебном канале отчётов куратора (system_kind='curator_reports'),
+// и только у того, кто в НЁМ writer (сервер создаёт куратора единственным писателем —
+// см. routers/messenger.py::ensure_curator_reports_channel).
+const canReport = computed(() =>
+  activeInfo.value?.system_kind === 'curator_reports' &&
+  ['owner', 'admin', 'writer'].includes(activeInfo.value?.my_role))
+const SLASH_COMMANDS = computed(() => {
+  const list = []
+  if (isSaved.value) {
+    list.push({ cmd: '/vector', hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике?' })
+  }
+  if (canReport.value) {
+    list.push({ cmd: '/отчет', hint: 'Сформировать отчёт по группе для родителей' })
+  }
+  return list
+})
+const slashQuery = ref(null)     // null — закрыто; иначе введённое после «/»
+const slashCandidates = computed(() => {
+  if (slashQuery.value === null) return []
+  const q = slashQuery.value.toLowerCase()
+  return SLASH_COMMANDS.value.filter((c) => c.cmd.slice(1).toLowerCase().startsWith(q))
+})
+function insertSlashCommand(c) {
+  draft.value = c.cmd + ' '
+  slashQuery.value = null
+  nextTick(() => composer.value?.focus())
 }
 
 // §D8: автодополнение @Фамилия в композере — только среди участников ЭТОЙ беседы.
@@ -197,11 +263,14 @@ function onComposerInput() {
   clearTimeout(draftTimer)
   draftTimer = setTimeout(() => m.saveDraft(activeId.value, draft.value), 400)
   const el = composer.value
-  if (!el) { mentionQuery.value = null; return }
+  if (!el) { mentionQuery.value = null; slashQuery.value = null; return }
   const pos = el.selectionStart ?? draft.value.length
   const before = draft.value.slice(0, pos)
   const at = /(?:^|\s)@([A-Za-zА-Яа-яЁё]*)$/.exec(before)
   mentionQuery.value = at ? at[1] : null
+  // «/» — только пока курсор ещё в первом токене сообщения (аргумент не начат).
+  const slash = /^\/(\S*)$/.exec(before)
+  slashQuery.value = slash ? slash[1] : null
 }
 const mentionCandidates = computed(() => {
   if (mentionQuery.value === null || !isGroupOrChannel.value) return []
@@ -421,6 +490,20 @@ async function showReadBy(msg) {
   readByPopup.value = { open: true, names: users.map(u => u.full_name) }
 }
 
+// ── Галочки отправлено/прочитано в ЛС (как в Telegram) ──────────────────────────────────
+// В группах/каналах читателей несколько — там смысла в одной галочке нет, оставляем
+// попап «Кто прочитал» (см. выше). В ЛС читатель ровно один — сравниваем время своего
+// сообщения с last_read_at собеседника, которое уже приходит в activeInfo.participants
+// (см. server/app/routers/messenger.py::conversation_info) — без похода на сервер за каждым тиком.
+const peerLastReadAt = computed(() => {
+  if (kind.value !== 'direct' || !activePeer.value?.id) return ''
+  const p = (activeInfo.value?.participants || []).find(x => x.user_id === activePeer.value.id)
+  return p?.last_read_at || ''
+})
+function isReadByPeer(msg) {
+  return !!(peerLastReadAt.value && msg.created_at <= peerLastReadAt.value)
+}
+
 function jumpTo(id) {
   const el = document.getElementById(`gb-msg-${id}`)
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -615,6 +698,10 @@ const headerTint = computed(() =>
       <div class="relative min-h-0 flex-1">
       <div ref="scroller" class="h-full overflow-y-auto px-3 py-4" @scroll="onScrollerScroll">
         <template v-for="msg in messages" :key="msg.id">
+          <!-- Разделитель по датам — над «Новые сообщения», если оба совпали на одном msg. -->
+          <div v-if="dateBreaks.has(msg.id)" class="my-3 flex justify-center">
+            <span class="rounded-full bg-card2 px-3 py-1 text-[11px] font-semibold text-text3">{{ dateBreaks.get(msg.id) }}</span>
+          </div>
           <!-- §D5: разделитель «Новые сообщения» — перед первым непрочитанным на момент открытия. -->
           <div v-if="msg.id === firstUnreadId" class="my-3 flex items-center gap-3 text-xs font-semibold text-accent">
             <span class="h-px flex-1 bg-accent/40" /> Новые сообщения <span class="h-px flex-1 bg-accent/40" />
@@ -623,6 +710,16 @@ const headerTint = computed(() =>
           <!-- §D6: системное сообщение — центрированная строка, не пузырь. -->
           <div v-if="msg.kind === 'system'" :id="`gb-msg-${msg.id}`" class="my-1.5 text-center text-xs text-text3">
             {{ formatSystemMessage(msg.body) }}
+          </div>
+
+          <!-- §12: кнопка «Отчёт №N» куратора (канал «Отчёты · Группа»). -->
+          <div v-else-if="msg.kind === 'report' && msg.report" :id="`gb-msg-${msg.id}`"
+               class="my-1 flex" :class="msg.mine ? 'justify-end' : 'justify-start'">
+            <button type="button" @click="openReportOverlay = msg.report.id"
+                    class="flex items-center gap-2 rounded-2xl border border-border2 bg-card px-4 py-2 text-sm font-semibold text-accent shadow-sm hover:bg-bg2">
+              <PieChart class="size-4" />Отчёт №{{ msg.report.seq }}
+              <span v-if="msg.report.archived" class="rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-medium text-text3">Архив</span>
+            </button>
           </div>
 
           <div v-else :id="`gb-msg-${msg.id}`"
@@ -670,8 +767,13 @@ const headerTint = computed(() =>
                 <button v-if="msg.edited_at" type="button" @click.stop="openHistory(msg)"
                         class="underline decoration-dotted hover:opacity-80">изм.</button>
                 {{ fmtTime(msg.created_at) }}
-                <!-- Кто прочитал (переиспользует last_read_at — см. messenger.js::readBy). -->
-                <button v-if="msg.mine" type="button" @click.stop="showReadBy(msg)" title="Кто прочитал"
+                <!-- ЛС: галочки отправлено/прочитано (как в Telegram). -->
+                <template v-if="msg.mine && kind === 'direct'">
+                  <CheckCheck v-if="isReadByPeer(msg)" title="Прочитано" class="ml-0.5 inline size-3" />
+                  <Check v-else title="Отправлено" class="ml-0.5 inline size-3 opacity-70" />
+                </template>
+                <!-- Группа/канал: читателей несколько — попап со списком (см. showReadBy). -->
+                <button v-else-if="msg.mine" type="button" @click.stop="showReadBy(msg)" title="Кто прочитал"
                         class="ml-0.5 inline-flex align-middle hover:opacity-80"><Eye class="size-2.5" /></button>
               </span>
 
@@ -754,6 +856,15 @@ const headerTint = computed(() =>
             <button type="button" title="Быстрые ответы" @click="showQuickReplies = !showQuickReplies"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"
                     :class="{ 'bg-bg2 text-accent': showQuickReplies }"><Zap class="size-4" /></button>
+          </div>
+          <!-- Автодополнение слэш-команд (как в Telegram) — список + краткое пояснение. -->
+          <div v-if="slashCandidates.length" class="border-b border-border p-1.5">
+            <button v-for="c in slashCandidates" :key="c.cmd" type="button"
+                    @mousedown.prevent="insertSlashCommand(c)"
+                    class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-bg2">
+              <span class="text-sm font-semibold text-accent">{{ c.cmd }}</span>
+              <span class="text-xs text-text3">{{ c.hint }}</span>
+            </button>
           </div>
           <!-- §D8: подсказки @Фамилия — только участники ЭТОЙ беседы (группа/канал). -->
           <div v-if="mentionCandidates.length" class="border-b border-border p-1.5">
@@ -920,6 +1031,8 @@ const headerTint = computed(() =>
     <ConversationInfo v-if="showInfo" @close="showInfo = false" />
 
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
+    <!-- §12: оверлей отчёта куратора (круговая + плоские по предметам + дрилл-даун). -->
+    <CuratorReportOverlay v-if="openReportOverlay" :report-id="openReportOverlay" @close="openReportOverlay = null" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"
                    @submit="onForwardSubmit" @close="forwardState = { open: false, ids: [] }" />
 

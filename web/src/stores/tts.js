@@ -180,7 +180,7 @@ export const useTtsStore = defineStore('tts', () => {
   function _speakMumble(text, onStart, onEnd) {
     const c = _ensureCtx()
     const segs = _mumbleSegments(text)
-    if (!c || !segs.some(s => s.speak)) { onStart(); onEnd(); return }
+    if (!c || !segs.some(s => s.speak)) { onStart(0); onEnd(); return }
     if (c.state === 'suspended') c.resume().catch(() => {})
 
     const g = _mumbleGrain()
@@ -211,7 +211,9 @@ export const useTtsStore = defineStore('tts', () => {
     src.onended = () => { if (my === reqGen) { speaking.value = false; stopper = null; onEnd() } }
     stopper = () => { try { src.onended = null; src.stop() } catch { /* уже стоит */ } }
     speaking.value = true
-    onStart()
+    //Длительность бубнежа известна ТОЧНО (сами собрали буфер) — ею синхронизируем
+    //анимацию «печати» ответа в VectorPage (см. vector.js::_startTyping).
+    onStart((total / sr) * 1000)
     src.start(0)
   }
 
@@ -225,7 +227,9 @@ export const useTtsStore = defineStore('tts', () => {
     if (mode.value === 'off' || !t) return
     stop()                              // barge-in
     const my = reqGen
-    const onStart = () => { try { opts.onStart && opts.onStart() } catch { /* noop */ } }
+    // opts.onStart получает длительность озвучки в мс (0/undefined — неизвестна, см.
+    // vector.js::_startTyping, где на этот случай есть запасной темп по числу символов).
+    const onStart = (durationMs) => { try { opts.onStart && opts.onStart(durationMs) } catch { /* noop */ } }
     const onEnd = () => { try { opts.onEnd && opts.onEnd() } catch { /* noop */ } }
 
     if (mode.value === 'mumble') { _speakMumble(t, onStart, onEnd); return }
@@ -233,7 +237,7 @@ export const useTtsStore = defineStore('tts', () => {
     // Режим voice: серверный синтез, откат на speechSynthesis.
     let fellBack = false
     const fallback = () => {
-      if (!fellBack && my === reqGen) { fellBack = true; onStart(); _speakFallback(t, onEnd) }
+      if (!fellBack && my === reqGen) { fellBack = true; onStart(0); _speakFallback(t, onEnd) }
     }
     try {
       const c = _ensureCtx()
@@ -253,7 +257,8 @@ export const useTtsStore = defineStore('tts', () => {
       stopper = () => { try { src.onended = null; src.stop() } catch { /* уже стоит */ } }
       speaking.value = true
       available.value = true
-      onStart()
+      //Реальная длительность буфера — точная синхронизация «печати» текста со звуком.
+      onStart(buf.duration * 1000)
       src.start(0)
     } catch (e) {
       if (my !== reqGen) return

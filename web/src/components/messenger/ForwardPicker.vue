@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { X, Check } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
+import Avatar from '@/components/ui/Avatar.vue'
 
 const props = defineProps({ count: { type: Number, default: 1 } })
 const emit = defineEmits(['submit', 'close'])
@@ -40,7 +41,11 @@ function initials(name) {
         <p v-if="!chats.length" class="p-4 text-center text-sm text-text3">Нет чатов для пересылки.</p>
         <button v-for="c in chats" :key="c.conversation_id" type="button" @click="toggle(c.conversation_id)"
                 class="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-bg2">
-          <div class="grid size-9 shrink-0 place-items-center rounded-full bg-accent text-xs font-bold text-white">
+          <!-- Личный чат — аватар собеседника; группа/канал/избранное — цветной кружок
+               с инициалами (тот же приём, что в ChatList.vue). -->
+          <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title" :size="36" />
+          <div v-else class="grid size-9 shrink-0 place-items-center rounded-full text-xs font-bold text-white"
+               :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
             {{ initials(c.title) }}
           </div>
           <span class="min-w-0 flex-1 truncate text-sm text-text">{{ c.title || 'Диалог' }}</span>

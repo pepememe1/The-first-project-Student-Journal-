@@ -4,7 +4,7 @@
 // чату открывает переписку; по человеку — личный чат; по каналу — вступление/открытие.
 import { ref, computed, watch, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore } from '@lucide/vue'
+import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import CreateChatDialog from './CreateChatDialog.vue'
@@ -71,10 +71,18 @@ async function openAnnouncements() {
   const group = window.prompt('Название группы для объявлений (например, К-24):')
   if (group) await m.openAnnouncementsChannel(group)
 }
+// §12: канал «Отчёты · Группа» — только куратор своей группы, и только если у неё есть
+// хоть один активный родитель (сервер проверяет обе границы; клиент просто предлагает).
+const isCurator = computed(() => auth.role === 'teacher')
+async function openCuratorReports() {
+  showNew.value = false
+  const group = window.prompt('Группа для отчётов родителям (например, К-24):')
+  if (group) await m.openCuratorReportsChannel(group)
+}
 async function onCreate(payload) {
   const kind = createKind.value
   createKind.value = ''
-  if (kind === 'group') await m.createGroup(payload.title, payload.ids, payload.about)
+  if (kind === 'group') await m.createGroup(payload.title, payload.ids, payload.about, payload.classGroups)
   else await m.createChannel(payload.title, payload.ids, payload.isPublic, payload.about)
 }
 
@@ -108,6 +116,8 @@ onMounted(() => { m.loadChats() })
             <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />Новый канал</button>
             <!-- §D12: авто-канал «Объявления · Группа» — студенты группы уже читатели. -->
             <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />Объявления группы</button>
+            <!-- §12: только куратору — отчёты для родителей своей группы. -->
+            <button v-if="isCurator" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />Отчёты для родителей</button>
           </div>
         </div>
       </div>

@@ -461,6 +461,18 @@ def admin_term_rollover(payload: dict = Body(default={}), request: Request = Non
     db.commit()
     audit.log(db, request, actor=_admin.login, role="admin", action="term.rollover",
               detail=f"{cy}·{cs} → {new_year}·{new_sem}")
+    #§12: отчёты куратора «вечны» (кнопки не удаляются), но после rollover'а старого
+    #термина архивируются — новый /отчет уже не берёт значения из term'а, который
+    #только что закрылся. Сбой этой пометки не должен ломать сам rollover.
+    try:
+        from ..models import CuratorReport
+        (db.query(CuratorReport)
+         .filter(CuratorReport.year == cy, CuratorReport.semester == cs,
+                 CuratorReport.archived == False)  # noqa: E712
+         .update({"archived": True}, synchronize_session=False))
+        db.commit()
+    except Exception as e:
+        print(f"[curator_reports] не удалось архивировать отчёты term {cy}·{cs}: {e}")
     return {"ok": True, "previous": {"year": cy, "semester": cs},
             "current": {"year": new_year, "semester": new_sem}}
 
@@ -1960,6 +1972,53 @@ def teacher_create_lesson(payload: dict = Body(...),
     if ltype == "ДЗ":
         _notify_homework(db, group, subject, lid, topic, int(number))
     return {"ok": True, "id": lid, "number": int(number)}
+
+
+@router.post("/events")
+def create_event_notification(payload: dict = Body(...),
+                              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Мероприятие/событие (олимпиада, конкурс, выступление и т.п.) — рассылается
+    выбранной аудитории уведомлением (вкладка «Мероприятия», см. NotificationsInbox.vue).
+    Автор выбирает аудиторию при создании: `groups: []` — вся коллегия (ТОЛЬКО админ,
+    у преподавателя слишком широкий охват для одной кнопки), непустой список — те
+    группы (у преподавателя — не любые: только его группы по предметам, W.teacher_groups —
+    тот же принцип ролевого скоупа, что и везде в приложении)."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    title = (payload.get("title") or "").strip()[:150]
+    body = (payload.get("body") or "").strip()[:2000]
+    if not title or not body:
+        raise HTTPException(status_code=400, detail="Укажите заголовок и текст")
+    groups = [g.strip() for g in (payload.get("groups") or []) if (g or "").strip()]
+    if user.role == "teacher":
+        allowed = set(W.teacher_groups(db, set(user.subjects or [])))
+        if not groups:
+            raise HTTPException(status_code=400, detail="Преподаватель должен выбрать группу(ы)")
+        bad = [g for g in groups if g not in allowed]
+        if bad:
+            raise HTTPException(status_code=403, detail=f"Недоступные группы: {', '.join(bad)}")
+    targets = []
+    seen = set()
+    if groups:
+        for g in groups:
+            for stud in W.students_in_group(db, g):
+                if stud.login and stud.login not in seen:
+                    seen.add(stud.login)
+                    targets.append(stud)
+    else:
+        targets = (db.query(User)
+                   .filter(User.role == "student", User.deleted == False).all())  # noqa: E712
+    sent = 0
+    for stud in targets:
+        if not stud.login:
+            continue
+        try:
+            from .. import rustore_push
+            rustore_push.notify_event(db, stud.login, title, body)
+            sent += 1
+        except Exception as e:      # noqa: BLE001 — рассылка не должна ронять запрос
+            print(f"[events] не удалось уведомить {stud.login}: {e}")
+    return {"ok": True, "sent": sent, "recipients": len(targets)}
 
 
 def _notify_homework(db: Session, group: str, subject: str, lesson_id: str,

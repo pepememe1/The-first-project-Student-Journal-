@@ -44,6 +44,46 @@ export const useVectorStore = defineStore('vector', () => {
   }[state.value] || 'Готов помочь'))
   const cmds = computed(() => QUICK_COMMANDS[auth.role] || QUICK_COMMANDS.student)
 
+  // §2 плана: анимация «печати» ответа по символам — ТОЛЬКО потребляется VectorPage.vue
+  // (вкладка «ИИ Помощник»); VectorDock как показывал messages[].text целиком, так и
+  // показывает — typingReveal ничего в самих messages не меняет, это отдельная надстройка.
+  // index — какое сообщение сейчас «печатается», text — уже открытая часть, done — конец.
+  const typingReveal = ref({ index: -1, text: '', done: true })
+  let typingTimer = null
+  function _stopTypingTimer() {
+    clearInterval(typingTimer)
+    typingTimer = null
+  }
+  // Скорость подстраивается под РЕАЛЬНУЮ длительность озвучки (durationMs из tts.speak —
+  // «поспевать за бубнежом»); нет длительности (TTS выключен/фолбэк) — запасной темп по
+  // числу символов, чтобы анимация всё равно была, просто не идеально в такт звуку.
+  const _FALLBACK_MS_PER_CHAR = 45
+  function _startTyping(index, fullText, durationMs) {
+    _stopTypingTimer()
+    const total = fullText.length
+    if (!total) { typingReveal.value = { index, text: '', done: true }; return }
+    const dur = Math.max(300, durationMs || total * _FALLBACK_MS_PER_CHAR)
+    const startedAt = performance.now()
+    typingReveal.value = { index, text: '', done: false }
+    typingTimer = setInterval(() => {
+      const elapsed = performance.now() - startedAt
+      const n = Math.min(total, Math.floor((elapsed / dur) * total))
+      typingReveal.value = { index, text: fullText.slice(0, n), done: n >= total }
+      if (n >= total) _stopTypingTimer()
+    }, 40)
+  }
+  // Ответ ещё печатался, а уже пришёл новый вопрос — договаривать нечего, показываем
+  // прежнее сообщение целиком (иначе оно навсегда осталось бы недопечатанным).
+  function _completeTyping() {
+    if (typingReveal.value.done) return
+    const idx = typingReveal.value.index
+    const full = messages.value[idx]?.text ?? typingReveal.value.text
+    _stopTypingTimer()
+    typingReveal.value = { index: idx, text: full, done: true }
+  }
+  // Двойной клик по печатающемуся сообщению — сразу показать целиком (см. VectorPage.vue).
+  function skipTyping() { _completeTyping() }
+
   let settleTimer = null
   let speakSafety = null      // бэкстоп: если событие конца звука не придёт — не «говорим» вечно
   function settle() {
@@ -91,11 +131,14 @@ export const useVectorStore = defineStore('vector', () => {
     //Новый вопрос — сразу глушим прежнюю озвучку (barge-in), не дожидаясь нового ответа:
     //Вектор не должен договаривать старое, пока пользователь уже спросил другое.
     tts.stop()
+    //Прошлый ответ ещё «печатался» — договаривать нечего, раз уже спросили новое.
+    _completeTyping()
     messages.value.push({ role: 'user', text: t })
     input.value = ''
     state.value = 'thinking'
     tick.value++
     let answer = null
+    let msgIndex = -1
     try {
       // У родителя свой эндпоинт: факты собираются в скоупе его ребёнка, а обычный
       // /web/vector/ask роль parent не обслуживает (и не должен — там нет его данных).
@@ -105,6 +148,7 @@ export const useVectorStore = defineStore('vector', () => {
       lastMood.value = data.mood || 'neutral'
       lastIntent.value = data.intent || 'help'
       answer = data.text || 'Готово.'
+      msgIndex = messages.value.length
       messages.value.push({ role: 'vector', text: answer })
     } catch (e) {
       const offline = e.response?.status === 404
@@ -133,11 +177,13 @@ export const useVectorStore = defineStore('vector', () => {
       // кончится (onEnd). Если звук не пришёл (медленный/сбой) — обычная выдержка через таймаут.
       if (answer && tts.enabled) {
         let triggered = false
-        const startFrom = (hold) => { if (!triggered) { triggered = true; startSpeaking(hold) } }
+        const startFrom = (hold, durationMs) => {
+          if (!triggered) { triggered = true; startSpeaking(hold); _startTyping(msgIndex, answer, durationMs) }
+        }
         clearTimeout(speakSafety)
         tts.speak(answer, {
-          onStart: () => {
-            startFrom(true)
+          onStart: (durationMs) => {
+            startFrom(true, durationMs)
             //Бэкстоп на случай, если onEnd не придёт (редкий сбой аудио).
             clearTimeout(speakSafety)
             speakSafety = setTimeout(() => {
@@ -152,11 +198,14 @@ export const useVectorStore = defineStore('vector', () => {
         setTimeout(() => startFrom(false), 1800)   // звук не пришёл → обычная выдержка
       } else {
         startSpeaking(false)
+        //Озвучки нет (выключена/ошибка) — печатаем всё равно, запасным темпом по символам.
+        if (answer) _startTyping(msgIndex, answer, null)
       }
     }
   }
   function ask(q) { send(q) }
 
   return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
-           sprite, anim, label, cmds, send, ask, greetSettle, greetOnce }
+           sprite, anim, label, cmds, send, ask, greetSettle, greetOnce,
+           typingReveal, skipTyping }
 })

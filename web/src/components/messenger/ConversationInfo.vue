@@ -36,6 +36,16 @@ function meta(p) {
   return p.user_role === 'admin' ? 'Администратор' : ''
 }
 
+// Та же подпись, но для activePeer (личный чат) — там роль лежит в поле `role`, а не
+// `user_role` (см. _safe_user на сервере vs. participants[] в conversation_info). Раньше
+// админ падал в "иначе" инлайн-тернарника и подписывался «Студент».
+function peerMeta(p) {
+  if (p?.role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
+  if (p?.role === 'admin') return 'Администратор'
+  if (p?.role === 'parent') return 'Родитель'
+  return p?.group_name ? `Группа ${p.group_name}` : 'Студент'
+}
+
 const title = computed(() => {
   if (isSaved.value) return 'Избранное'
   if (isModeration.value) return 'Модерация'
@@ -131,23 +141,34 @@ async function clearHistory() {
           Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда
           <span class="font-semibold text-accent">/vector</span> — спросить ИИ-помощника.
         </p>
+        <!-- Модерация раньше рендерилась как обычная карточка собеседника (activePeer =
+             {full_name:'Модерация', role:'moderation'}) — тоже падала в «Студент». -->
+        <div v-else-if="isModeration" class="rounded-lg border border-border bg-card2 p-4 text-sm text-text2">
+          <div class="mb-2 flex items-center gap-2 text-text">
+            <ShieldCheck class="size-5 text-accent" /><span class="font-semibold">Модерация</span>
+          </div>
+          Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос,
+          нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.
+        </div>
         <template v-else-if="!isGroupOrChannel && activePeer">
           <div class="flex items-center gap-3 rounded-xl p-4" :style="{ background: plate(activePeer) }">
             <Avatar :src="activePeer.avatar" :name="activePeer.full_name"
                     :online="!!activePeer.online" :size="56" />
             <div class="min-w-0">
               <div class="truncate text-base font-bold text-white">{{ activePeer.full_name }}</div>
-              <div class="truncate text-xs text-white/80">
-                {{ activePeer.role === 'teacher'
-                  ? ((activePeer.subjects || []).join(', ') || 'Преподаватель')
-                  : (activePeer.group_name ? 'Группа ' + activePeer.group_name : 'Студент') }}
-              </div>
+              <div class="truncate text-xs text-white/80">{{ peerMeta(activePeer) }}</div>
               <div class="mt-0.5 text-xs text-white/70">
                 {{ activePeer.online ? 'в сети' : 'не в сети' }}
               </div>
             </div>
           </div>
           <p v-if="activePeer.bio" class="mt-3 whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
+          <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
+          <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+            <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Лучше не сюда</p>
+            Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы
+            (оценки, расписание) — своему куратору или преподавателю.
+          </div>
         </template>
 
         <!-- Группа/канал: участники, владелец сверху и с короной -->

@@ -18,10 +18,32 @@ import io
 from . import webdata as W
 
 
-def collect_group(db, group: str, year: str, semester: int, cfg: dict) -> dict:
-    """Сводка по одной группе: студенты × (средние по предметам + посещаемость + долги)."""
+def parse_ddmmyyyy(s: str):
+    """"ДД.ММ.ГГГГ" → кортеж (год,месяц,день) для сравнения, или None — не распознали.
+    Формат дат занятий именно такой (см. teacher_create_lesson)."""
+    try:
+        d, m, y = (s or "").strip().split(".")
+        return (int(y), int(m), int(d))
+    except Exception:
+        return None
+
+
+def collect_group(db, group: str, year: str, semester: int, cfg: dict,
+                  cutoff_date: str = "") -> dict:
+    """Сводка по одной группе: студенты × (средние по предметам + посещаемость + долги).
+
+    `cutoff_date` (опц., "ДД.ММ.ГГГГ") — снимок «на дату включительно»: занятия ПОСЛЕ
+    неё не учитываются. Нужен отчёту куратора в мессенджере (§12 плана) — кнопка
+    «Отчёт №X» должна показывать состояние на момент СОЗДАНИЯ, а не текущее (см.
+    routers/messenger.py::_handle_report_command). Без cutoff_date — как раньше,
+    весь термин целиком (экспорт xlsx/docx куратора этим путём и продолжает ходить)."""
     students = W.students_in_group(db, group)
     lessons = W.group_lessons(db, group, year=year, semester=semester)
+    cutoff = parse_ddmmyyyy(cutoff_date) if cutoff_date else None
+    if cutoff:
+        # Занятие без даты/с нераспознанной датой — оставляем (лучше лишнее, чем
+        # молча потерять данные из-за формата), как и в других местах приложения.
+        lessons = [l for l in lessons if (parse_ddmmyyyy(l.date) or cutoff) <= cutoff]
     subjects = sorted({l.subject for l in lessons if l.subject})
 
     rows = []
@@ -50,6 +72,32 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict) -> dict:
     return {"group": group, "subjects": subjects, "rows": rows,
             "group_avg": group_avg, "subject_group_avg": subject_group_avg,
             "students": len(students)}
+
+
+#Пороги 4.5/3.5/2.5 — ТЕ ЖЕ, что уже использует остальное приложение для цвета/настроения
+#по среднему баллу (vector/mascot.py, ui/dashboards.py, ui/teacher_dashboard.py). Свой
+#набор порогов здесь НЕ придумываем — иначе одна и та же оценка красилась бы по-разному
+#на разных экранах (§12 отчёта куратора в мессенджере).
+def categorize(rows: list) -> dict:
+    """Отличники/хорошисты/успевающие/неуспевающие — по общему среднему баллу студента.
+    Студентов без единой оценки (average == 0) не считаем ни в одну категорию: «нет
+    данных» — это не то же самое, что «неуспевающий»."""
+    buckets = {"excellent": 0, "good": 0, "passing": 0, "failing": 0}
+    counted = 0
+    for r in rows:
+        avg = r.get("average") or 0
+        if not avg:
+            continue
+        counted += 1
+        if avg >= 4.5:
+            buckets["excellent"] += 1
+        elif avg >= 3.5:
+            buckets["good"] += 1
+        elif avg >= 2.5:
+            buckets["passing"] += 1
+        else:
+            buckets["failing"] += 1
+    return {"counts": buckets, "total": counted, "no_data": len(rows) - counted}
 
 
 def _fmt(v) -> str:

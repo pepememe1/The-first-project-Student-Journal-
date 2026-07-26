@@ -314,6 +314,20 @@ def notify_reminder(db, login: str, text: str, conversation_id: str = "") -> int
     )
 
 
+def notify_event(db, login: str, title: str, body: str) -> int:
+    """Мероприятие/событие (олимпиада, конкурс, выступление и т.п.) — заводит
+    преподаватель или админ (см. `POST /web/events`), рассылается выбранной аудитории.
+    Текст пишет автор — как и с ДЗ, это не персональные данные (одинаков для всех
+    получателей), поэтому в НАШЕМ письме он целиком; в сам пуш — только факт события."""
+    event_id = _create_event(db, login, "event", title, body)
+    return notify_login(
+        db, login,
+        title="Новое мероприятие",
+        body="Появилось новое объявление о мероприятии. Откройте приложение, чтобы посмотреть.",
+        data={"type": "event", "event_id": event_id},
+    )
+
+
 def prune_stale(db) -> int:
     """Убирает токены устройств, которые давно не подтверждались.
 

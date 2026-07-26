@@ -708,6 +708,54 @@ def test_d6_system_message_on_join(client):
     assert any(m["body"].startswith("user_joined") and c_id in m["body"] for m in sysm)
 
 
+def test_channels_never_get_join_leave_system_messages(client):
+    """§12: «вступил/вышел» — ТОЛЬКО для групп. Канал может разом набрать много читателей
+    (весь курс), и лента не должна тонуть в системных строчках — в отличие от групп
+    (см. test_d6_system_message_on_join выше, где это ожидаемое поведение)."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/channel",
+                       json={"title": "Курс", "writer_ids": [b_id]}, headers=a).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/members", json={"user_ids": [c_id]}, headers=a)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    sysm = [m for m in msgs if m["kind"] == "system"]
+    assert not any(m["body"].startswith("user_joined") for m in sysm)
+    #Выход тоже без системного сообщения для канала.
+    client.delete(f"/web/messenger/chats/{conv}/members/{c_id}", headers=a)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    sysm = [m for m in msgs if m["kind"] == "system"]
+    assert not any(m["body"].startswith("user_left") for m in sysm)
+
+
+def test_curator_bulk_adds_class_group_to_new_chat_group(client):
+    """§12: режим куратора — при создании ЧАТ-группы куратор указывает УЧЕБНУЮ группу
+    целиком (class_groups), и все её студенты становятся участниками автоматически,
+    вперемешку с индивидуально выбранными member_ids."""
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    #Делаем "a" куратором группы К-24 (оба студента b/c числятся в ней, см. _setup).
+    r = client.post("/sync/push", json={"changes": {"users": [
+        {"id": a_id, "curated_groups": ["К-24"]}]}}, headers=admin)
+    assert r.status_code == 200, r.text
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "К-24 в сборе", "class_groups": ["К-24"]},
+                       headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=a).json()
+    ids = {p["user_id"] for p in info["participants"]}
+    assert b_id in ids and c_id in ids, "оба студента группы должны попасть в чат-группу автоматически"
+
+
+def test_non_curator_class_groups_are_ignored(client):
+    """Учитель БЕЗ curated_groups не может массово затащить чужую группу — сервер
+    молча игнорирует названия групп, которые он не курирует (скоуп проверяется на
+    сервере, не на клиенте)."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Без права", "class_groups": ["К-24"]},
+                       headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=a).json()
+    ids = {p["user_id"] for p in info["participants"]}
+    assert b_id not in ids and c_id not in ids
+
+
 def test_d11_edit_history(client):
     _, (a_id, a), (b_id, b), _ = _setup(client)
     conv = _conv(client, a, b_id)

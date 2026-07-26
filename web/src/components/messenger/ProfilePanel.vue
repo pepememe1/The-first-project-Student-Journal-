@@ -3,7 +3,7 @@
 // (см. MESSENGER-PLAN.md §9): ФИО, роль, группа (студент) / предметы (преподаватель).
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen } from '@lucide/vue'
+import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen, Landmark } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -27,7 +27,11 @@ function initials(name) {
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
 }
 const isTeacher = computed(() => activePeer.value?.role === 'teacher')
-const roleLabel = computed(() => (isTeacher.value ? 'Преподаватель' : 'Студент'))
+//Админ ошибочно попадал в "иначе" этого тернарника и подписывался «Студент» — роль-словарь
+//вместо бинарного teacher/не-teacher, на случай будущих ролей (например, "parent").
+const ROLE_LABELS = { teacher: 'Преподаватель', student: 'Студент', admin: 'Администратор', parent: 'Родитель' }
+const roleLabel = computed(() => ROLE_LABELS[activePeer.value?.role] || 'Студент')
+const isAdminPeer = computed(() => activePeer.value?.role === 'admin')
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeInfo.value?.kind))
 //«Избранное» — блокнот с самим собой: карточка «собеседника» тут показывала бы тебя же
 //(роль, «в сети»), что бессмысленно. Панель для него просто не показываем.
@@ -95,6 +99,28 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
               class="mt-3 rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">
         Покинуть {{ activeInfo.kind === 'channel' ? 'канал' : 'группу' }}
       </button>
+    </div>
+
+    <!-- ЛС с администратором — не «студент/препод», отдельная карточка (по образцу
+         карточки модерации), т.к. личка с админом это другой контекст переписки. -->
+    <div v-else-if="isAdminPeer" class="flex flex-col p-6">
+      <div class="mb-3 flex flex-col items-center text-center">
+        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="72" />
+        <h2 class="mt-3 font-title text-lg font-bold text-text">{{ activePeer.full_name }}</h2>
+        <span class="mt-1 inline-flex items-center gap-1 text-xs text-text3">
+          <Landmark class="size-3.5" />Администратор
+        </span>
+      </div>
+      <div class="rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Можно писать</p>
+        Организационные вопросы: доступ к аккаунту, документы, техническая проблема.
+      </div>
+      <div class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Лучше не сюда</p>
+        Жалобы на пользователей — через «Модерация» (кнопка ⚙ у любого чата, её видят все, в
+        том числе можно пожаловаться на действия самого администратора). Учебные вопросы
+        (оценки, расписание) — своему куратору или преподавателю.
+      </div>
     </div>
 
     <div v-else-if="activePeer" class="flex min-h-0 flex-col">

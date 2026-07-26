@@ -601,6 +601,29 @@ class MessageTemplate(Base):
     created_at = Column(String, default="")
 
 
+class CuratorReport(Base):
+    """§12 плана: отчёт куратора об успеваемости группы для родителей (команда `/отчет`
+    в канале «Отчёты · Группа»). Кнопка «Отчёт №N» — «вечная»: не хранит вычисленные
+    цифры (те считаются ЖИВЬЁМ через curator_report.collect_group при каждом открытии),
+    а только ГРАНИЦУ снимка — термин + дату создания включительно, чтобы отчёт не «дрейфовал»
+    при появлении новых занятий после его выпуска. `archived` ставит rollover семестра
+    (см. routers/web.py::admin_term_rollover) — новый /отчет уже не берёт старый термин,
+    а старые кнопки в списке помечаются как архивные (не удаляются, см. §12 запрос
+    «кнопки должны быть вечными»). НЕ в SYNC_MODELS (та же онлайн-подсистема мессенджера)."""
+    __tablename__ = "curator_reports"
+    id = Column(String, primary_key=True)          #rpt:{group}|{seq}
+    group_name = Column(String, index=True, default="")
+    seq = Column(Integer, default=0)               #номер по порядку от 1, свой на группу
+    year = Column(String, default="")              #термин НА МОМЕНТ создания отчёта
+    semester = Column(Integer, default=0)
+    cutoff_date = Column(String, default="")       #"ДД.ММ.ГГГГ" — занятия ПОСЛЕ неё не входят
+    conversation_id = Column(String, default="")
+    message_id = Column(Integer, default=0)
+    created_by = Column(String, default="")        #id куратора
+    created_at = Column(String, default="")
+    archived = Column(Boolean, default=False)
+
+
 class UserStatus(Base):
     """§D7: статус пользователя ПОВЕРХ presence (online/оффлайн уже даёт events.online()).
     kind='' — статуса нет, показываем просто presence; иначе dnd/studying/away — накладка

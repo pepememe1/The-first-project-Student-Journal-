@@ -294,8 +294,11 @@ export const messengerApi = {
   // Чат с модерацией (кнопка ⚙).
   moderation: () => api.get('/web/messenger/moderation'),
   // Группы и каналы (Фазы 5–6).
-  createGroup: (title, memberIds = [], about = '') =>
-    api.post('/web/messenger/chats/group', { title, member_ids: memberIds, about }),
+  // classGroups (§12, режим куратора) — названия учебных групп, чьи студенты добавятся
+  // автоматически; сервер сам ограничит их курируемыми группами звонящего.
+  createGroup: (title, memberIds = [], about = '', classGroups = []) =>
+    api.post('/web/messenger/chats/group',
+      { title, member_ids: memberIds, about, class_groups: classGroups }),
   createChannel: (title, writerIds = [], isPublic = true, about = '') =>
     api.post('/web/messenger/chats/channel', { title, writer_ids: writerIds, is_public: isPublic, about }),
   channels: (q = '') => api.get('/web/messenger/channels', { params: { q } }),
@@ -345,6 +348,13 @@ export const messengerApi = {
   templates: () => api.get('/web/messenger/templates'),
   createTemplate: (body) => api.post('/web/messenger/templates', { body }),
   deleteTemplate: (id) => api.delete(`/web/messenger/templates/${id}`),
+  // §12: отчёт куратора — канал «Отчёты · Группа», команда /отчет (обычный send()),
+  // данные оверлея (круговая + плоские по предметам) и дрилл-даун по предмету.
+  ensureCuratorReportsChannel: (groupName) =>
+    api.post(`/web/messenger/channels/curator-reports/${encodeURIComponent(groupName)}`),
+  reportOverview: (id) => api.get(`/web/messenger/reports/${encodeURIComponent(id)}`),
+  reportSubject: (id, subject) =>
+    api.get(`/web/messenger/reports/${encodeURIComponent(id)}/subject`, { params: { subject } }),
 }
 
 // МОДЕРАЦИЯ МЕССЕНДЖЕРА (только админ) ─────────────────────────────────────────────
@@ -363,6 +373,12 @@ export const messengerModApi = {
     api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/mute`, { muted }),
   // Удалить любое сообщение у всех (модерация; пишется в аудит).
   deleteMessage: (mid) => api.delete(`/web/admin/messenger/messages/${mid}`),
+}
+
+// Мероприятия/события (олимпиады, конкурсы и т.п.) — заводит преподаватель/админ,
+// уходит уведомлением выбранной аудитории (вкладка «Мероприятия» в NotificationsInbox).
+export const eventsApi = {
+  create: (title, body, groups = []) => api.post('/web/events', { title, body, groups }),
 }
 
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).

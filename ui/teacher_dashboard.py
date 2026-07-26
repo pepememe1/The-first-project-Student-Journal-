@@ -364,9 +364,16 @@ class TeacherDashboard(QWidget):
                 ri = 1
                 while getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', ''):
                     col_defs.append((l, ri)); ri += 1
-        avg_col = 2 + len(col_defs)                     #последний столбец — «Средний»
+        avg_col = 2 + len(col_defs)                     #«Средний»
+        abs_col = avg_col + 1                            #«Пропусков (ч)» — правее среднего
         self.t_table.setRowCount(len(students))
-        self.t_table.setColumnCount(avg_col + 1)
+        self.t_table.setColumnCount(abs_col + 1)
+        #§12: счётчик пропущенных часов — та же логика, что у Вектора/сервера
+        #(vector.intents._count_absences, webdata.absences): строка лекции с «Н/Б/О» —
+        #1 час, у практики считается только «Н» (ДЗ не входит — это «не сдал», не «не был»).
+        #Ленивый импорт — как и остальные обращения к vector.* в этом модуле (см. dashboards.py).
+        from vector.intents import _count_absences as count_absences
+        abs_lessons = [(l.id, l.type) for l in self.book.lessons]
         #Тему в шапке показываем коротко (чтобы столбец не разъезжался), но
         #полную тему кладём в подсказку — наведёшь мышь и прочитаешь целиком.
         def _short(text: str, limit: int = 22) -> str:
@@ -397,6 +404,8 @@ class TeacherDashboard(QWidget):
                 headers.append(f"{l.type or 'Практика'} {l.number}\n{l.date}\n{_short(l.topic)}")
                 tooltips.append(l.topic or "")
         headers.append("Средний"); tooltips.append("")
+        headers.append("Пропусков (ч)")
+        tooltips.append("Пропущено часов: «Н» неуважительно + «Б» болезнь + «О» уважительно")
         self.t_table.setHorizontalHeaderLabels(headers)
         #полная тема в подсказке заголовка
         for c, tip in enumerate(tooltips):
@@ -416,6 +425,16 @@ class TeacherDashboard(QWidget):
             ai.setForeground(QColor(self._avg_color(avg)))
             af = ai.font(); af.setBold(True); af.setPointSize(af.pointSize() + 1); ai.setFont(af)
             self.t_table.setItem(r, avg_col, ai)
+            #Столбец «Пропусков (ч)» — считаем по фактическим отметкам, не по col_defs
+            #(там дублируются строки пересдач, которые пропусками не являются).
+            absc = count_absences(abs_lessons, s.records)
+            total = absc.get("всего", 0)
+            bi = QTableWidgetItem(str(total) if total else "—")
+            bi.setTextAlignment(Qt.AlignCenter); bi.setFlags(Qt.ItemIsEnabled)
+            bi.setForeground(QColor(C['red'] if total else C['text3']))
+            bi.setToolTip(f"Неуваж. (Н): {absc.get('Н', 0)} · болезнь (Б): {absc.get('Б', 0)} · "
+                         f"уваж. (О): {absc.get('О', 0)}")
+            self.t_table.setItem(r, abs_col, bi)
             for ci, (l, ri) in enumerate(col_defs):
                 col = 2 + ci
                 rk  = l.id + ("_retake" if ri == 1 else f"_retake_{ri}" if ri > 1 else "")
@@ -1325,7 +1344,11 @@ class TeacherDashboard(QWidget):
 
         #Заголовок «Уведомления» уже внутри NotificationsView — без отдельного section_lbl,
         #иначе задваивается (правка по отчёту).
-        lay.addWidget(NotificationsView(), 1)
+        #§12: свои группы — из назначений предмет→группа (тот же источник, что и у Вектора,
+        #см. _ensure_vector_session), чтобы кнопка «Мероприятие» предлагала верный список.
+        ga = self.teacher_data.get("group_assignments", {}) or {}
+        my_groups = sorted({g for g in ga.values() if g})
+        lay.addWidget(NotificationsView(role="teacher", groups=my_groups), 1)
         self.pages["profile"] = w; self.stack.addWidget(w)
 
     def _request_theme_rebuild(self):

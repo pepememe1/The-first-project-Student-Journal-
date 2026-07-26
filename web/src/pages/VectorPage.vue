@@ -11,7 +11,20 @@ import Mascot from '@/components/Mascot.vue'
 import { useVectorStore } from '@/stores/vector'
 
 const vector = useVectorStore()
-const { messages, input, state, anim, label, cmds, tick } = storeToRefs(vector)
+const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
+
+// Анимация «печати» ответа по символам — ТОЛЬКО здесь (в доке остаётся мгновенный вывод,
+// см. docs — правка). Двойной клик по печатающемуся сообщению сразу показывает целиком.
+function displayText(i) {
+  const tr = typingReveal.value
+  return (tr.index === i && !tr.done) ? tr.text : messages.value[i].text
+}
+function isTyping(i) {
+  return typingReveal.value.index === i && !typingReveal.value.done
+}
+function onMessageDblClick(i) {
+  if (isTyping(i)) vector.skipTyping()
+}
 const scroller = ref(null)
 const showQuick = ref(false)
 // На телефоне при вводе (клавиатура открыта) прячем крупный маскот-фон и разворачиваем
@@ -56,8 +69,10 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
           <div v-if="m.role === 'user'" class="flex justify-end">
             <div class="max-w-[80%] rounded-lg bg-accent px-4 py-2 text-sm text-white">{{ m.text }}</div>
           </div>
-          <p v-else class="text-[15px] leading-relaxed text-text">
-            <span class="font-semibold text-accent">Вектор:</span> {{ m.text }}
+          <p v-else class="text-[15px] leading-relaxed text-text" @dblclick="onMessageDblClick(i)"
+             :title="isTyping(i) ? 'Двойной клик — показать целиком' : ''">
+            <span class="font-semibold text-accent">Вектор:</span> {{ displayText(i) }}<span
+              v-if="isTyping(i)" class="animate-pulse text-accent">▍</span>
           </p>
         </template>
         <p v-if="state === 'thinking'" class="text-xs text-text2">Вектор думает…</p>

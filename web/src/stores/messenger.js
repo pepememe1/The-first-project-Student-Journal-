@@ -224,6 +224,10 @@ export const useMessengerStore = defineStore('messenger', () => {
           await markReadActive()
         }
       } catch { /* noop */ }
+      // Галочки «прочитано» в ЛС читают last_read_at собеседника из activeInfo — держим
+      // его свежим на каждый тик опроса/WS-сигнала, иначе галочка сменится только при
+      // повторном входе в чат (см. ChatThread.vue::peerLastReadAt).
+      await loadConvInfo()
     }
     await loadChats()
   }
@@ -305,9 +309,9 @@ export const useMessengerStore = defineStore('messenger', () => {
   }
 
   // ── Группы и каналы (Фазы 5–6) ──────────────────────────────────────────────────────
-  async function createGroup(title, memberIds = [], about = '') {
+  async function createGroup(title, memberIds = [], about = '', classGroups = []) {
     try {
-      const { data } = await messengerApi.createGroup(title, memberIds, about)
+      const { data } = await messengerApi.createGroup(title, memberIds, about, classGroups)
       await loadChats()
       await _enterChat(data.conversation_id, { full_name: data.title, role: 'group' })
       return true
@@ -340,6 +344,18 @@ export const useMessengerStore = defineStore('messenger', () => {
     if (!g) return false
     try {
       const { data } = await messengerApi.ensureAnnouncementsChannel(g)
+      await loadChats()
+      await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
+      return true
+    } catch { return false }
+  }
+  // §12: открыть/создать канал «Отчёты · Группа» (только куратор этой группы, только
+  // если у группы есть активный родитель — сервер сам проверяет обе границы).
+  async function openCuratorReportsChannel(groupName) {
+    const g = (groupName || '').trim()
+    if (!g) return false
+    try {
+      const { data } = await messengerApi.ensureCuratorReportsChannel(g)
       await loadChats()
       await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
       return true
@@ -580,7 +596,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
-    openAnnouncementsChannel,
+    openAnnouncementsChannel, openCuratorReportsChannel,
     myStatus, loadMyStatus, setMyStatus,
     togglePinChat, toggleArchiveChat, openSaved,
     draftFor, saveDraft, clearDraft,

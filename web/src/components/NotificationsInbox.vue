@@ -8,9 +8,12 @@
 // текст сама, веб, десктоп и телефон разъехались бы в формулировках. Клиент решает
 // только КАК показать, но не ЧТО написано.
 import { ref, computed, onMounted } from 'vue'
-import { Bell, Mail, MailOpen, ArrowLeft, CheckCheck } from '@lucide/vue'
-import { meApi } from '@/api/endpoints'
+import { Bell, ArrowLeft, CheckCheck, Megaphone, X } from '@lucide/vue'
+import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
+import { useAuthStore } from '@/stores/auth'
 import AppButton from '@/components/ui/AppButton.vue'
+
+const auth = useAuthStore()
 
 const items = ref([])
 const opened = ref(null)      // открытое письмо (null → показываем список)
@@ -24,24 +27,33 @@ const KIND_LABEL = {
   grade_changed: 'Оценка изменена',
   schedule_changed: 'Расписание изменилось',
   homework: 'Домашнее задание',
+  event: 'Мероприятие',
   reminder: 'Напоминание',
 }
 
-// Фильтр по видам. «Система» — всё, что не ДЗ: оценки и расписание приходят от системы
-// по факту действия преподавателя, а домашка — это задание лично тебе, и смешивать их
-// в одном потоке неудобно (ДЗ теряется среди десятков оценок).
-const HOMEWORK_KINDS = ['homework']
+// Фильтр по видам. Оценки — отдельно от «Система» (по просьбе: оценки идут в свою
+// вкладку, всё, что пишет админ вручную — в «Система»). Домашка — отдельно, иначе
+// теряется среди оценок. Мероприятия (олимпиады/конкурсы, заводят препод/админ) — тоже
+// отдельно, это не рутинная системная почта.
+const KIND_TAB = { grade: 'grades', grade_changed: 'grades', homework: 'homework', event: 'events' }
 const TABS = [
   { key: 'all', label: 'Все' },
+  { key: 'grades', label: 'Оценки' },
   { key: 'homework', label: 'ДЗ' },
+  { key: 'events', label: 'Мероприятия' },
   { key: 'system', label: 'Система' },
 ]
+const EMPTY_LABEL = {
+  grades: 'Оценок пока нет',
+  homework: 'Домашних заданий пока нет',
+  events: 'Мероприятий пока нет',
+  system: 'Системных уведомлений пока нет',
+}
 const tab = ref('all')
 
+function tabOf(item) { return KIND_TAB[item.kind] || 'system' }
 function inTab(item, key) {
-  if (key === 'all') return true
-  const isHw = HOMEWORK_KINDS.includes(item.kind)
-  return key === 'homework' ? isHw : !isHw
+  return key === 'all' || tabOf(item) === key
 }
 
 const visible = computed(() => items.value.filter((i) => inTab(i, tab.value)))
@@ -103,6 +115,54 @@ async function markAll() {
 }
 
 onMounted(load)
+
+// ── Создать мероприятие/событие (олимпиада, конкурс и т.п.) — препод/админ ──────────────
+// Автор выбирает аудиторию сам: у преподавателя — только его группы (по предметам, тот
+// же скоуп, что и в журнале); у админа — ещё и «все группы» (широковещательно).
+const canCreateEvent = computed(() => ['teacher', 'admin'].includes(auth.role))
+const showCreate = ref(false)
+const evTitle = ref('')
+const evBody = ref('')
+const evAll = ref(false)          // «Все группы» — только у админа
+const evGroups = ref([])          // выбранные группы
+const availableGroups = ref([])
+const evSending = ref(false)
+const evDone = ref('')
+
+async function openCreate() {
+  showCreate.value = true
+  evDone.value = ''
+  try {
+    if (auth.role === 'admin') {
+      const { data } = await adminApi.groups()
+      availableGroups.value = (data.groups || []).map((g) => g.name)
+    } else {
+      const { data } = await teacherApi.overview()
+      availableGroups.value = data.groups || []
+    }
+  } catch { availableGroups.value = [] }
+}
+function toggleGroup(g) {
+  const i = evGroups.value.indexOf(g)
+  if (i >= 0) evGroups.value.splice(i, 1)
+  else evGroups.value.push(g)
+}
+async function submitEvent() {
+  const title = evTitle.value.trim()
+  const body = evBody.value.trim()
+  if (!title || !body) return
+  if (!evAll.value && !evGroups.value.length) return
+  evSending.value = true
+  try {
+    const { data } = await eventsApi.create(title, body, evAll.value ? [] : evGroups.value)
+    evDone.value = `Отправлено: ${data.sent} из ${data.recipients}`
+    evTitle.value = ''; evBody.value = ''; evGroups.value = []; evAll.value = false
+  } catch (e) {
+    evDone.value = e?.response?.data?.detail || 'Не удалось отправить.'
+  } finally {
+    evSending.value = false
+  }
+}
 </script>
 
 <template>
@@ -135,6 +195,36 @@ onMounted(load)
                 class="ml-1 text-tiny"
                 :class="tab === t.key ? 'text-bg opacity-80' : 'text-accent'">{{ tabUnread(t.key) }}</span>
         </button>
+        <AppButton v-if="canCreateEvent" variant="ghost" class="ml-auto" @click="openCreate">
+          <Megaphone class="mr-1.5 inline size-4" />Создать мероприятие
+        </AppButton>
+      </div>
+
+      <!-- Форма создания мероприятия/события (препод/админ) -->
+      <div v-if="showCreate" class="mb-4 rounded-lg border border-border2 bg-card2 p-3">
+        <div class="mb-2 flex items-center justify-between">
+          <p class="text-sm font-semibold text-text">Новое мероприятие</p>
+          <button type="button" @click="showCreate = false" aria-label="Закрыть"
+                  class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
+        </div>
+        <input v-model="evTitle" placeholder="Заголовок (напр. «Олимпиада по математике»)" maxlength="150"
+               class="mb-2 w-full rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
+        <textarea v-model="evBody" placeholder="Текст объявления" rows="3" maxlength="2000"
+                  class="mb-2 w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
+        <label v-if="auth.role === 'admin'" class="mb-2 flex items-center gap-2 text-sm text-text2">
+          <input type="checkbox" v-model="evAll" class="accent-[var(--gb-accent)]" />Все группы
+        </label>
+        <div v-if="!evAll" class="mb-2 flex flex-wrap gap-1.5">
+          <button v-for="g in availableGroups" :key="g" type="button" @click="toggleGroup(g)"
+                  class="rounded-full border px-2.5 py-1 text-xs transition-colors"
+                  :class="evGroups.includes(g) ? 'border-accent bg-accent-glow text-accent' : 'border-border2 text-text2 hover:bg-bg2'">
+            {{ g }}
+          </button>
+          <p v-if="!availableGroups.length" class="text-xs text-text3">Нет доступных групп.</p>
+        </div>
+        <p v-if="evDone" class="mb-2 text-xs text-text3">{{ evDone }}</p>
+        <AppButton :disabled="evSending || !evTitle.trim() || !evBody.trim() || (!evAll && !evGroups.length)"
+                   @click="submitEvent">Отправить</AppButton>
       </div>
 
       <div v-if="unread" class="mb-3 flex items-center justify-between">
@@ -152,11 +242,7 @@ onMounted(load)
 
       <div v-else-if="!visible.length" class="py-10 text-center">
         <Bell class="mx-auto mb-3 size-8 text-text3 opacity-50" />
-        <p class="text-sm text-text3">
-          {{ tab === 'homework' ? 'Домашних заданий пока нет'
-             : tab === 'system' ? 'Системных уведомлений пока нет'
-             : 'Уведомлений пока нет' }}
-        </p>
+        <p class="text-sm text-text3">{{ EMPTY_LABEL[tab] || 'Уведомлений пока нет' }}</p>
       </div>
 
       <ul v-else class="divide-y divide-border">
@@ -164,14 +250,12 @@ onMounted(load)
           <button type="button"
                   class="flex w-full items-start gap-3 px-1 py-3 text-left transition-colors hover:bg-card2"
                   @click="open(item)">
-            <component :is="item.read_at ? MailOpen : Mail"
-                       class="mt-0.5 size-4 shrink-0"
-                       :class="item.read_at ? 'text-text3' : 'text-accent'" />
+            <!-- Красная точка — непрочитано; выколотая (контурная) — прочитано. -->
+            <span class="mt-1.5 size-2.5 shrink-0 rounded-full"
+                  :class="item.read_at ? 'border-2 border-text3' : 'bg-red'"
+                  :aria-label="item.read_at ? 'Прочитано' : 'Непрочитано'" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm"
-                    :class="item.read_at ? 'text-text' : 'font-bold text-text'">
-                {{ titleOf(item) }}
-              </span>
+              <span class="block truncate text-sm text-text">{{ titleOf(item) }}</span>
               <span class="mt-0.5 block truncate text-tiny text-text3">{{ bodyOf(item) }}</span>
             </span>
             <span class="shrink-0 text-tiny text-text3">{{ fmtWhen(item.created_at) }}</span>
