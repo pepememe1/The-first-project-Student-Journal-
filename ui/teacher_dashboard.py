@@ -151,10 +151,10 @@ class TeacherDashboard(QWidget):
         #переносит на новую строку.
         btn_row = FlowLayout(h_spacing=6, v_spacing=6)
         self._edit_buttons = []
-        _EDIT_LABELS = {"+ Лекция/Практика", "+ Экзамен", "+ Студент",
+        _EDIT_LABELS = {"+ Лекция/Практика/ДЗ", "+ Экзамен", "+ Студент",
                         "💾 Сохранить", "🎓 Аттестация", "📥 Импорт"}
         for txt, style, cb in [
-            ("+ Лекция/Практика", "green",  self._add_lesson),
+            ("+ Лекция/Практика/ДЗ", "green",  self._add_lesson),
             ("+ Экзамен",         "blue",   self._add_exam),
             ("+ Студент",         "ghost",  self._add_student),
             ("💾 Сохранить",      "ghost",  self._save),
@@ -178,6 +178,11 @@ class TeacherDashboard(QWidget):
         self._archive_lbl.setWordWrap(True)
         self._archive_lbl.hide()
         lay.addWidget(self._archive_lbl)
+        #«Пройдено X из Y ч» по открытому предмету. Скрыт, пока админ не задал план —
+        #показывать «пройдено 24 из 0» хуже, чем не показывать ничего.
+        self._hours_lbl = lbl("", 12, C['text3'])
+        self._hours_lbl.hide()
+        lay.addWidget(self._hours_lbl)
         #Таблица
         self.t_table = QTableWidget()
         self.t_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -284,12 +289,26 @@ class TeacherDashboard(QWidget):
             self._archive_lbl.show()
         else:
             self._archive_lbl.hide()
+        self._update_hours_label()
         #Вектор отвечает по той группе/предмету, что открыты сейчас
         if getattr(self, "vector_engine", None):
             self.vector_engine.scope.group = group
             self.vector_engine.scope.subject = subj
         self._sync_students_from_store()
         self._update_table()
+
+    def _update_hours_label(self):
+        """Обновить строку «Пройдено X из Y ч» под шапкой журнала."""
+        import study_hours
+        text = ""
+        if self.book:
+            try:
+                done, total = self.book.hours_progress()
+                text = study_hours.format_progress(done, total)
+            except Exception:
+                text = ""      #часы — справочная строка, ронять из-за неё журнал нельзя
+        self._hours_lbl.setText(text)
+        self._hours_lbl.setVisible(bool(text))
 
     def _sync_students_from_store(self):
         """Подтянуть студентов из общего хранилища и добавить недостающих в журнал."""
@@ -334,6 +353,9 @@ class TeacherDashboard(QWidget):
 
     def _update_table(self):
         if not self.book: return
+        #Часы пересчитываем здесь: сюда сходятся все пути правки журнала (добавили
+        #занятие, удалили, переключили семестр), и счётчик не отстанет от таблицы.
+        self._update_hours_label()
         students = self.book.spisok_stud
         col_defs = []
         for l in self.book.lessons:
@@ -369,7 +391,10 @@ class TeacherDashboard(QWidget):
                 headers.append(f"Экзамен №{l.number}\n{l.date}\n{_short(l.topic)}")
                 tooltips.append(l.topic or "")
             else:
-                headers.append(f"Практика {l.number}\n{l.date}\n{_short(l.topic)}")
+                #Ветка «всё остальное» исторически подписывалась «Практика». С появлением
+                #ДЗ (и семинаров/лабораторных с веба) это врало бы в заголовке — берём
+                #настоящий тип занятия, а «Практика» остаётся дефолтом для пустого типа.
+                headers.append(f"{l.type or 'Практика'} {l.number}\n{l.date}\n{_short(l.topic)}")
                 tooltips.append(l.topic or "")
         headers.append("Средний"); tooltips.append("")
         self.t_table.setHorizontalHeaderLabels(headers)
@@ -628,12 +653,18 @@ class TeacherDashboard(QWidget):
     def _add_lesson(self):
         if not self._journal_ready():
             return
-        t, ok = QInputDialog.getItem(self, "Тип", "Выберите тип:", ["Лекция", "Практика"], 0, False)
+        t, ok = QInputDialog.getItem(self, "Тип", "Выберите тип:",
+                                     ["Лекция", "Практика", "ДЗ"], 0, False)
         if not ok: return
         d = ui_date.ask_date(self, "Дата занятия", "Когда занятие:",
                              default=ui_date.today_str())
         if not d: return
-        tp, ok3 = QInputDialog.getText(self, "Тема", "Тема занятия:")
+        #У ДЗ «тема» — это текст самого задания: он же уходит студентам в уведомление.
+        if t == "ДЗ":
+            tp, ok3 = QInputDialog.getText(self, "Домашнее задание",
+                                           "Что задано (например: создать базу данных):")
+        else:
+            tp, ok3 = QInputDialog.getText(self, "Тема", "Тема занятия:")
         if not ok3: return
         try:
             self.book.add_lesson(t, topic=tp.strip(), date=d)

@@ -173,8 +173,18 @@ class DBManager:
         try:
             import time as _time
             backups = cls.list_backups()      #свежие первыми, элемент = (имя,путь,размер,mtime)
-            if backups and (_time.time() - backups[0][3]) < min_interval_sec:
-                return ""                     #ещё рано — последний бэкап свежий
+            if backups:
+                elapsed = _time.time() - backups[0][3]
+                #⚠️ elapsed может быть ОТРИЦАТЕЛЬНЫМ — метка файла оказывается «в будущем».
+                #Это не экзотика: на Windows NTFS хранит время с точностью 100 нс, а
+                #time.time() читает системный таймер с шагом ~15 мс, и только что созданный
+                #файл регулярно выглядит новее текущего момента (воспроизводится примерно в
+                #14% случаев). Наивное `elapsed < min_interval` считало такой бэкап «слишком
+                #свежим» и молча пропускало копию. Тот же эффект даёт шаг часов назад после
+                #синхронизации по NTP — тогда бэкапы переставали делаться на часы вперёд.
+                #Правило то же, что у лага дельта-push: лучше лишняя копия, чем пропущенная.
+                if 0 <= elapsed < min_interval_sec:
+                    return ""                 #ещё рано — последний бэкап действительно свежий
             return cls.backup(reason=reason)
         except Exception as e:
             log.get("core").warning(f"[DBManager] backup_if_due: {e}")
@@ -402,6 +412,13 @@ class DBManager:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
             except Exception:
                 pass
+        #Плановые учебные часы предмета на семестр. Задаёт админ (на сайте), сюда
+        #приезжают синком — журнал показывает «пройдено X из Y ч». Ключ детерминированный
+        #(hrs:группа|предмет|год|семестр), как у остальных синкуемых сущностей.
+        cur.execute("""CREATE TABLE IF NOT EXISTS subject_hours
+            (id TEXT PRIMARY KEY, group_name TEXT, subject TEXT, year TEXT,
+             semester INTEGER DEFAULT 0, hours_total INTEGER DEFAULT 0,
+             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS students
             (f TEXT, n TEXT, group_name TEXT, PRIMARY KEY(f, n, group_name))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS grades
@@ -804,6 +821,30 @@ class GradeBook:
             student.records = {row[0]: row[1] for row in cur.fetchall()}
             self.spisok_stud.append(student)
         conn.close()
+
+    def hours_progress(self) -> tuple:
+        """(пройдено, план) академических часов по этому журналу.
+
+        Пройденное считает общий с сервером study_hours (лекция = пара из двух строк,
+        практика = одна строка, обе дают по 2 часа). План приходит от админа синком; его
+        нет — возвращаем 0, и интерфейс просто не показывает строку. Придумывать план
+        нельзя: «пройдено 24 из 0» выглядит как поломка данных."""
+        import study_hours
+        from contextlib import closing
+        done = study_hours.hours_done(self.lessons)
+        total = 0
+        try:
+            hid = f"hrs:{self.group}|{self.subject}|{self.year}|{int(self.semester or 0)}"
+            with closing(DBManager.get_conn()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT COALESCE(hours_total,0) FROM subject_hours "
+                            "WHERE id=? AND COALESCE(deleted,0)=0", (hid,))
+                row = cur.fetchone()
+                total = int(row[0]) if row else 0
+        except Exception:
+            #Нет таблицы (старая база до первого синка) — молча считаем «план не задан».
+            total = 0
+        return done, total
 
     def calculate_average(self, student: Student, cfg=None) -> float:
         """Средний балл через единый модуль grading (та же формула, что у Вектора).

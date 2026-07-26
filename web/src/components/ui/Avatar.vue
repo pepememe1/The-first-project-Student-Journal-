@@ -8,6 +8,10 @@ const props = defineProps({
   name: { type: String, default: '' },
   size: { type: Number, default: 40 },
   online: { type: Boolean, default: false },
+  //Какую часть картинки оставлять при кадрировании в круг. Аватарки людей обрезаны по
+  //центру ещё при загрузке, а спрайт маскота — фигура в полный рост: без 'top' в кружок
+  //попало бы туловище вместо морды.
+  position: { type: String, default: 'center' },
 })
 
 const initials = computed(() => {
@@ -19,7 +23,8 @@ const initials = computed(() => {
 <template>
   <div class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
     <div class="size-full overflow-hidden rounded-full bg-accent">
-      <img v-if="src" :src="src" alt="" class="size-full object-cover" />
+      <img v-if="src" :src="src" alt="" class="size-full object-cover"
+           :style="{ objectPosition: position }" />
       <span v-else class="grid size-full place-items-center font-bold text-white"
             :style="{ fontSize: Math.round(size * 0.4) + 'px' }">{{ initials }}</span>
     </div>

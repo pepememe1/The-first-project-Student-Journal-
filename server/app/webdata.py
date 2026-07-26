@@ -20,8 +20,10 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 import grading  # noqa: E402
+import study_hours  # noqa: E402  — общее с десктопом правило учебных часов
 
-from .models import User, Lesson, Grade, ConfigKV  # noqa: E402
+from .models import (User, Lesson, Grade, ConfigKV, SubjectHours,  # noqa: E402
+                     subject_hours_id)
 
 
 def load_config(db) -> dict:
@@ -124,6 +126,28 @@ def lesson_pairs(lessons):
     return [(l.id, l.type) for l in lessons]
 
 
+def hours_done(lessons) -> int:
+    """Пройденные академические часы — через общий с десктопом study_hours."""
+    return study_hours.hours_done(lessons)
+
+
+def hours_plan(db, group: str, subject: str, year: str, semester) -> int:
+    """Плановые часы предмета для группы на семестр (0 — админ ещё не задавал)."""
+    row = db.get(SubjectHours, subject_hours_id(group, subject, year, semester))
+    if row is None or row.deleted:
+        return 0
+    return int(row.hours_total or 0)
+
+
+def hours_progress(db, group: str, subject: str, lessons, year: str, semester) -> dict:
+    """{done, total} — «пройдено X из Y часов» для шапки журнала.
+
+    total=0 означает «часы не заданы»: клиент в этом случае просто не показывает строку,
+    а не рисует «24 из 0». Придумывать план за администратора нельзя."""
+    return {"done": hours_done(lessons),
+            "total": hours_plan(db, group, subject, year, semester)}
+
+
 def average(lessons, records, cfg) -> float:
     """Средний балл — единый расчёт grading.practice_average."""
     return grading.practice_average(lesson_pairs(lessons), records, cfg)
@@ -146,10 +170,13 @@ def debts(lessons, records):
     """Причины задолженности (порт vector/intents._is_debt)."""
     reasons = []
     for l in lessons:
-        if l.type == "Практика":
+        if grading.is_practice(l.type):
             v = records.get(l.id)
             if v in ("2", "Н"):
-                reasons.append(f"практика №{l.number} не сдана ({v})")
+                #ДЗ — тоже долг: «Н» на домашней работе значит «не сдал», а не «не был».
+                what = "ДЗ" if l.type == "ДЗ" else "практика"
+                ending = "о" if l.type == "ДЗ" else "а"
+                reasons.append(f"{what} №{l.number} не сдан{ending} ({v})")
         elif l.type == "Экзамен":
             v = grading.latest_exam_value(l.id, records)
             if grading.is_failed(v):   #единый источник fail-логики (см. grading.is_failed)
@@ -158,7 +185,11 @@ def debts(lessons, records):
 
 
 def absences(lessons, records):
-    """Пропуски (порт vector/intents._count_absences). Строка лекции = 1 час."""
+    """Пропуски (порт vector/intents._count_absences). Строка лекции = 1 час.
+
+    ⚠️ ДЗ здесь НЕ учитывается, хотя в средний балл идёт наравне с практикой: «Н» на
+    домашней работе означает «не сдал», а не «не был на занятии». Записать это в пропуски
+    значило бы наказать студента посещаемостью за несданную домашку."""
     res = {"Н": 0, "Б": 0, "О": 0}
     for l in lessons:
         v = records.get(l.id)

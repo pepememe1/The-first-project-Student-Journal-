@@ -9,6 +9,7 @@ import { studentApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
 import Mascot from '@/components/Mascot.vue'
 import InsightCards from '@/components/InsightCards.vue'
+import ParentConsent from '@/components/ParentConsent.vue'
 import { dashboardEmote } from '@/config/mascot'
 
 const loading = ref(true)
@@ -89,6 +90,9 @@ onBeforeUnmount(() => clearInterval(tipTimer))
       </div>
 
       <div class="space-y-5">
+        <!-- Заявки родителей на доступ к журналу. Стоит ВЫШЕ статистики намеренно: это
+             решение о собственных персональных данных, и его нельзя прятать в подвал. -->
+        <ParentConsent />
         <InsightCards :cards="insights" />
         <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard label="Предметов" :value="data?.subjects_count ?? '—'" accent />

@@ -928,9 +928,10 @@ def test_d12_schedule_publish_posts_to_channel(client):
 # ── Команда /vector — docs/MESSENGER-ADDON-PLAN-GPT.md (заметка в конце файла): «AI-поиск
 # по смыслу» реализован переиспользованием УЖЕ существующего анти-галлюцинационного Вектора
 # (/web/vector/ask), а не отдельной embedding-инфраструктурой — как и предложено в заметке.
-def test_vector_command_answers_publicly_in_chat(client):
+def test_vector_command_answers_in_saved(client):
+    """`/vector` работает в «Избранном» — личном чате с самим собой."""
     _, (a_id, a), (b_id, b), _ = _setup(client)
-    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
     r = client.post(f"/web/messenger/chats/{conv}/messages",
                     json={"body": "/vector привет"}, headers=b)
     assert r.status_code == 200, r.text
@@ -943,6 +944,33 @@ def test_vector_command_answers_publicly_in_chat(client):
     assert msgs[1]["body"] == direct["text"]
 
 
+def test_vector_command_ignored_outside_saved(client):
+    """В ОБЫЧНОМ чате команда не срабатывает: ответ Вектора публиковался бы всем участникам,
+    а роль-скоуп считается по спросившему — соседи увидели бы чужую выборку. Сообщение при
+    этом остаётся обычным текстом, отправку не ломаем."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/vector привет"}, headers=b)
+    assert r.status_code == 200, r.text
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 1, "в обычном чате ИИ-ответа быть не должно"
+    assert all(m["sender_id"] != "system" for m in msgs)
+
+
+def test_saved_chat_cannot_be_deleted_only_cleared(client):
+    """«Избранное» — один на пользователя и всегда в списке: удаление сводится к очистке."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "заметка"}, headers=b)
+    r = client.delete(f"/web/messenger/chats/{conv}", headers=b)
+    assert r.status_code == 200 and r.json().get("cleared") is True
+    #История очищена, но сам раздел остался в списке чатов.
+    assert client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"] == []
+    assert any(c["conversation_id"] == conv
+               for c in client.get("/web/messenger/chats", headers=b).json()["chats"])
+
+
 def test_vector_command_ignored_without_question(client):
     _, (a_id, a), (b_id, b), _ = _setup(client)
     conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
@@ -951,11 +979,72 @@ def test_vector_command_ignored_without_question(client):
     assert len(msgs) == 1, "команда без вопроса — ИИ-ответа быть не должно"
 
 
+def test_vector_context_includes_saved_notes(client):
+    """Команда /vector получает предыдущие заметки как контекст — иначе «а это когда?»
+    отвечать не по чему."""
+    from app.routers import messenger as M
+    from app.db import SessionLocal
+    from app.models import User
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "экзамен по сетям 14 июня"}, headers=b)
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "принести зачётку"}, headers=b)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == b_id).first()
+        ctx = M._saved_context(db, conv, user)
+    finally:
+        db.close()
+    assert "экзамен по сетям 14 июня" in ctx and "принести зачётку" in ctx
+    assert ctx.count("Я:") >= 2, "заметки помечаются автором"
+
+
+def test_vector_context_masks_real_names(client):
+    """⚠️ 152-ФЗ: заметки уходят в облачную модель, поэтому ФИО реальных людей обязаны
+    быть замаскированы (продукт публично обещает, что ПДн в облако не уходят)."""
+    from app.routers import messenger as M
+    from app.db import SessionLocal
+    from app.models import User
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "спросить у Кэрол Кэровой про долг"}, headers=b)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == b_id).first()
+        ctx = M._saved_context(db, conv, user)
+    finally:
+        db.close()
+    assert "Кэрол" not in ctx and "Кэрова" not in ctx, "ФИО не должно уехать в модель"
+    assert "Студент" in ctx and "про долг" in ctx, "смысл заметки при этом сохраняется"
+
+
+def test_vector_context_respects_cleared_history(client):
+    """Очищенные заметки в контекст не попадают — иначе очистка была бы фикцией."""
+    from app.routers import messenger as M
+    from app.db import SessionLocal
+    from app.models import User
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "старая тайна"}, headers=b)
+    client.delete(f"/web/messenger/chats/{conv}", headers=b)          #у saved = очистка
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "новая заметка"}, headers=b)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == b_id).first()
+        ctx = M._saved_context(db, conv, user)
+    finally:
+        db.close()
+    assert "старая тайна" not in ctx and "новая заметка" in ctx
+
+
 def test_vector_command_scoped_to_caller_role(client):
     """Роль вызывающего скоупит данные — как и в дедике /web/vector/ask: ответ считается по
-    ВЫЗЫВАЮЩЕМУ (студенту b), а не по собеседнику (c), даже если команда написана в его чате."""
+    ВЫЗЫВАЮЩЕМУ (студенту b). Личный чат делает это безопасным: выборку видит только он."""
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
-    conv = client.post(f"/web/messenger/chats/direct/{c_id}", headers=b).json()["conversation_id"]
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
     r = client.post(f"/web/messenger/chats/{conv}/messages",
                     json={"body": "/vector сколько у меня оценок"}, headers=b)
     assert r.status_code == 200

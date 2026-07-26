@@ -7,7 +7,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { vectorApi } from '@/api/endpoints'
+import { vectorApi, parentApi } from '@/api/endpoints'
 import { chatEmote } from '@/config/mascot'
 import { QUICK_COMMANDS } from '@/config/vectorCommands'
 import { useAuthStore } from './auth'
@@ -97,7 +97,11 @@ export const useVectorStore = defineStore('vector', () => {
     tick.value++
     let answer = null
     try {
-      const { data } = await vectorApi.ask(t)
+      // У родителя свой эндпоинт: факты собираются в скоупе его ребёнка, а обычный
+      // /web/vector/ask роль parent не обслуживает (и не должен — там нет его данных).
+      const { data } = auth.role === 'parent'
+        ? await parentApi.vectorAsk(t)
+        : await vectorApi.ask(t)
       lastMood.value = data.mood || 'neutral'
       lastIntent.value = data.intent || 'help'
       answer = data.text || 'Готово.'

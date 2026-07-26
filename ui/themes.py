@@ -175,16 +175,29 @@ def swatch_colors(spec: dict) -> tuple:
     return cols["green"], cols["blue"], cols["card2"]
 
 
+#Последняя ПРИМЕНЁННАЯ тема. Нужна тем, кто должен показать ровно то, что видит
+#пользователь сейчас (встроенный веб-view прокидывает её в SPA, чтобы страница не
+#открывалась в светлой теме и не перекрашивалась на глазах).
+_ACTIVE_SPEC: dict = {}
+
+
+def active_spec() -> dict:
+    """Тема, применённая в приложении прямо сейчас ({} — ещё ничего не применяли)."""
+    return dict(_ACTIVE_SPEC)
+
+
 def apply_spec(spec: dict) -> dict:
     """Применяет тему «вживую»: пересобирает палитру styles.C и глобальный QSS.
 
     Возвращает нормализованный spec (тот, что реально применили)."""
+    global _ACTIVE_SPEC
     spec = normalize_spec(spec)
     palette = build_palette(spec)
     styles.apply_palette(palette)
     app = QApplication.instance()
     if app is not None:
         app.setStyleSheet(styles.APP_STYLE)
+    _ACTIVE_SPEC = dict(spec)
     return spec
 
 

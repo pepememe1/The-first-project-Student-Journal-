@@ -640,6 +640,8 @@ class LocalStore:
             res = {"role": "admin"}
         elif role == "teacher":
             res = {"role": "teacher", "name": payload[0], "data": payload[1]}
+        elif role == "parent":
+            res = {"role": "parent", "parent": payload}
         else:
             res = {"role": "student", "stud": payload}
         from audit import register_success, log_event
@@ -671,6 +673,13 @@ class LocalStore:
                         "g": s.get("group", ""),
                     }}
                 return None
+
+        #Родитель. Его кабинет на десктопе — веб-представление (онлайн-раздел), но САМ
+        #ВХОД должен работать так же, как у остальных ролей: строка пользователя приезжает
+        #обычным синком в таблицу users, и хеш пароля тут тот же гибридный.
+        for p in self.get_parents():
+            if (p.get("login") or "").strip() == login:
+                return {"role": "parent", "parent": p} if self._verify(p, password) else None
         return None
 
     def lookup_session(self, login: str):
@@ -694,7 +703,19 @@ class LocalStore:
             if (s.get("login") or "").strip() == login:
                 return ("student", {"f": s.get("surname", ""), "n": s.get("name", ""),
                                     "g": s.get("group", "")})
+        for p in self.get_parents():
+            if (p.get("login") or "").strip() == login:
+                return ("parent", p)
         return None
+
+    def get_parents(self) -> list:
+        """Родители из таблицы users (без надгробий).
+
+        Отдаём «серверную» форму как есть: десктопу от родителя нужны только логин, ФИО и
+        хеш пароля — его кабинет целиком живёт в веб-представлении, локальных данных у
+        него нет и быть не должно (журнал ребёнка — онлайн-раздел с проверкой согласия)."""
+        return [dict(u) for u in _users_table_read()
+                if u.get("role") == "parent" and not u.get("deleted")]
 
     #Внутреннее
     @staticmethod

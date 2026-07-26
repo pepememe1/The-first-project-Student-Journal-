@@ -72,6 +72,10 @@ const isNumericGrade = (g) => !!GRADE_BG[(g || '').trim().split(' ')[0]]
     <template v-else>
       <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
         <template #header>
+          <!-- Часы показываем, только если админ задал план: «24 из 0» выглядело бы поломкой -->
+          <Badge v-if="s.hours?.total" variant="blue">
+            Пройдено {{ s.hours.done }} из {{ s.hours.total }} ч
+          </Badge>
           <Badge variant="green">Средний {{ s.average || '—' }}</Badge>
         </template>
         <div class="overflow-x-auto">

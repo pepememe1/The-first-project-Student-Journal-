@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
 from .config import ALLOWED_ORIGINS
-from .routers import auth, sync, me, admin, web, vector, messenger
+from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
@@ -117,6 +117,7 @@ app.include_router(vector.router)
 app.include_router(connect_router.router)
 app.include_router(webauthn_router.router)
 app.include_router(web.router)
+app.include_router(parent.router)          # кабинет родителя + согласие студента (/web/parent/*)
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
 app.include_router(messenger.mod_router)   # модерация мессенджера (/web/admin/messenger/*)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)

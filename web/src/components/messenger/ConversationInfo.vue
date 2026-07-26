@@ -22,6 +22,7 @@ const { activeInfo, activePeer, isModeration } = storeToRefs(m)
 
 const kind = computed(() => activeInfo.value?.kind || 'direct')
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(kind.value))
+const isSaved = computed(() => kind.value === 'saved')
 const people = computed(() => activeInfo.value?.participants || [])
 const ownerId = computed(() => activeInfo.value?.owner_id || '')
 
@@ -36,6 +37,7 @@ function meta(p) {
 }
 
 const title = computed(() => {
+  if (isSaved.value) return 'Избранное'
   if (isModeration.value) return 'Модерация'
   if (isGroupOrChannel.value) return activeInfo.value?.title || 'Беседа'
   return activePeer.value?.full_name || 'Диалог'
@@ -124,7 +126,12 @@ async function clearHistory() {
         <p v-if="activeInfo?.about" class="mb-4 text-sm text-text2">{{ activeInfo.about }}</p>
 
         <!-- Личный чат: карточка собеседника с его плашкой и «О себе» -->
-        <template v-if="!isGroupOrChannel && activePeer">
+        <!-- В «Избранном» карточки «собеседника» нет: это ты сам. -->
+        <p v-if="isSaved" class="text-sm text-text2">
+          Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда
+          <span class="font-semibold text-accent">/vector</span> — спросить ИИ-помощника.
+        </p>
+        <template v-else-if="!isGroupOrChannel && activePeer">
           <div class="flex items-center gap-3 rounded-xl p-4" :style="{ background: plate(activePeer) }">
             <Avatar :src="activePeer.avatar" :name="activePeer.full_name"
                     :online="!!activePeer.online" :size="56" />
@@ -180,7 +187,9 @@ async function clearHistory() {
                 class="flex items-center gap-1.5 rounded-lg border border-border2 px-3 py-2 text-sm text-text2 hover:bg-bg2">
           <LogOut class="size-4" />Покинуть
         </button>
-        <button type="button" @click="removeChat"
+        <!-- «Избранное» удалить нельзя: оно одно на пользователя и всегда есть в списке
+             (как в Telegram). Для него доступна только очистка — кнопка выше. -->
+        <button v-if="!isSaved" type="button" @click="removeChat"
                 class="ml-auto flex items-center gap-1.5 rounded-lg border border-red/40 px-3 py-2 text-sm font-semibold text-red hover:bg-red/10">
           <Trash2 class="size-4" />Удалить переписку
         </button>

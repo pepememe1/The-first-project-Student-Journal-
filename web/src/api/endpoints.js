@@ -140,6 +140,9 @@ export const adminApi = {
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
   // Привязать предметы из расписания ко ВСЕМ группам (+ пополнить каталог).
   bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
+  // Учебные часы группы: план на семестр по каждому предмету + уже пройденное.
+  groupHours: (group) => api.get('/web/admin/group-hours', { params: { group } }),
+  saveGroupHours: (group, hours) => api.post('/web/admin/group-hours', { group, hours }),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
@@ -201,6 +204,34 @@ export const scheduleApi = {
   // расписания (портал + правки админа), что показано на сайте.
   exportFile: (group, fmt = 'xlsx') =>
     api.get('/web/schedule/export', { params: { group, fmt }, responseType: 'blob' }),
+}
+
+// РОДИТЕЛЬ — самый ограниченный кабинет: журнал своих детей и Вектор по ним же.
+// Доступ открывает не привязка сотрудника, а подтверждение самого студента, поэтому
+// journal/vector отвечают 403, пока согласия нет (см. server/app/routers/parent.py).
+export const parentApi = {
+  children: () => api.get('/web/parent/children'),
+  journal: (studentId = '', year = '', semester = 0) =>
+    api.get('/web/parent/journal', { params: { student_id: studentId, year, semester } }),
+  vectorAsk: (message, studentId = '') =>
+    api.post('/web/parent/vector/ask', { message, student_id: studentId }),
+}
+
+// Согласие студента на доступ родителя к его журналу (152-ФЗ) — в кабинете студента.
+export const consentApi = {
+  links: () => api.get('/web/student/parent-links'),
+  decide: (linkId, approve) =>
+    api.post(`/web/student/parent-links/${encodeURIComponent(linkId)}/decide`, { approve }),
+}
+
+// Привязка родителей сотрудником (админ — любые группы, куратор — только свои).
+export const staffParentApi = {
+  parents: () => api.get('/web/staff/parents'),
+  links: (group = '') => api.get('/web/staff/parent-links', { params: { group } }),
+  link: (parentId, studentId) =>
+    api.post('/web/staff/parent-links', { parent_id: parentId, student_id: studentId }),
+  unlink: (linkId) => api.delete(`/web/staff/parent-links/${encodeURIComponent(linkId)}`),
+  create: (payload) => api.post('/web/admin/parents', payload),
 }
 
 // «ВЕКТОР» — серверный анти-галлюцинационный конвейер (intents→SQL→анонимизация→LLM)
@@ -293,6 +324,21 @@ export const messengerApi = {
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages/thread/${messageId}`),
   searchInChat: (convId, q) =>
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages/search`, { params: { q } }),
+  // §17: поиск по СМЫСЛУ. Модель расширяет ЗАПРОС словоформами и синонимами; сама
+  // переписка ей не показывается (сопоставление делает сервер). Нет модели — результат
+  // совпадает с обычным searchInChat, поле expanded приходит пустым.
+  aiSearchInChat: (convId, q) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages/ai-search`, { params: { q } }),
+  // §18: сводка переписки. Запускается ТОЛЬКО кнопкой (запрос к модели на каждый вход в
+  // чат — заметная нагрузка на одноядерный VPS). ФИО маскируются на сервере до отправки.
+  chatSummary: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/summary`),
+  // §19: напоминания. Дату из текста разбирает СЕРВЕР детерминированно, без модели.
+  reminderSuggest: (mid) => api.get(`/web/messenger/messages/${mid}/reminder-suggest`),
+  createReminder: (mid, when = '') =>
+    api.post(`/web/messenger/messages/${mid}/reminder`, when ? { when } : {}),
+  reminders: () => api.get('/web/messenger/reminders'),
+  deleteReminder: (rid) => api.delete(`/web/messenger/reminders/${rid}`),
   // Кто прочитал конкретное сообщение (переиспользует last_read_at участников).
   readBy: (mid) => api.get(`/web/messenger/messages/${mid}/read_by`),
   // Личные шаблоны быстрых ответов преподавателя.

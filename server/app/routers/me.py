@@ -210,6 +210,35 @@ def get_notify_event(event_id: str,
             "payload": row.payload or {}, "read_at": row.read_at or ""}
 
 
+def _fire_due_reminders(db: Session, user: User) -> int:
+    """Превратить наступившие напоминания в обычные события. Возвращает их число.
+
+    Полностью в try/except: напоминания — вспомогательная фича, и её сбой не имеет права
+    лишить человека уведомлений об оценках, ради которых он сюда и пришёл."""
+    try:
+        from datetime import datetime, timezone
+        from ..models import Reminder
+        now = datetime.now(timezone.utc).isoformat()
+        due = (db.query(Reminder)
+               .filter(Reminder.login == (user.login or ""),
+                       Reminder.fired_at == "",
+                       Reminder.remind_at <= now)
+               .all())
+        if not due:
+            return 0
+        from .. import rustore_push
+        for r in due:
+            #Пуш шлём тем же путём, что и остальные события: человек мог поставить
+            #напоминание неделю назад и приложение с тех пор не открывать.
+            rustore_push.notify_reminder(db, user.login, r.text, r.conversation_id)
+            r.fired_at = now
+        db.commit()
+        return len(due)
+    except Exception as e:      # noqa: BLE001
+        print(f"[reminders] не удалось обработать напоминания: {e}")
+        return 0
+
+
 @router.get("/events")
 def list_events(filter_: str = Query("unread", alias="filter"),
                 limit: int = Query(50, ge=1, le=100),
@@ -222,6 +251,11 @@ def list_events(filter_: str = Query("unread", alias="filter"),
     эндпоинт уже вызывают установленные Android-приложения (см. web/src/services/push.js
     и нативную часть), а у пользователей на телефонах старый бандл. Полный список для
     вкладки «Уведомления» запрашивается явно: ?filter=all."""
+    #Напоминания (§D19) срабатывают ЗДЕСЬ, а не по расписанию: планировщик ради одной
+    #фичи означал бы вечный фоновый поток на одноядерном VPS. Проверка — один запрос по
+    #индексу (login + remind_at), и делать её логично ровно там, где человек всё равно
+    #пришёл за уведомлениями.
+    _fire_due_reminders(db, user)
     q = db.query(NotifyEvent).filter(NotifyEvent.login == (user.login or ""))
     if filter_ != "all":
         q = q.filter(NotifyEvent.read_at == "")

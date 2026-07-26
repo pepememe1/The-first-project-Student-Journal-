@@ -193,7 +193,18 @@ async function ctxRetake() {
 }
 
 // ── Занятия: создание и правка (дата — сегодня по умолчанию) ────────────────────
-const LESSON_TYPES = ['Практика', 'Лекция', 'Экзамен', 'Семинар', 'Лабораторная', 'Зачёт']
+const LESSON_TYPES = ['Практика', 'Лекция', 'ДЗ', 'Экзамен', 'Семинар', 'Лабораторная', 'Зачёт']
+// У ДЗ «тема» — это текст самого задания, он же уходит студенту в уведомление.
+const topicLabel = computed(() => (lessonForm.value.type === 'ДЗ' ? 'Домашнее задание' : 'Тема (полностью)'))
+const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? 'создать базу данных' : 'Тема занятия'))
+
+// Следующий номер — МАКСИМУМ+1 внутри типа, как считают сервер и десктоп.
+// Не количество строк: лекция лежит в базе двумя строками (по академическому часу),
+// и счётчик выдавал бы каждой следующей лекции номер вдвое больше настоящего.
+function nextNumber(t) {
+  const nums = (data.value?.lessons || []).filter((l) => l.type === t).map((l) => l.number || 0)
+  return nums.length ? Math.max(...nums) + 1 : 1
+}
 const showLesson = ref(false)
 const editingLesson = ref(null)   // null — создание, иначе id занятия
 const lessonForm = ref({ type: 'Практика', number: 1, topic: '', date: '', hour: 0, retake_date: '' })
@@ -202,8 +213,7 @@ const lessonError = ref('')
 
 function openLesson() {
   editingLesson.value = null
-  const sameType = (data.value?.lessons || []).filter((l) => l.type === 'Практика').length
-  lessonForm.value = { type: 'Практика', number: sameType + 1, topic: '', date: plusDays(0), hour: 0, retake_date: '' }
+  lessonForm.value = { type: 'Практика', number: nextNumber('Практика'), topic: '', date: plusDays(0), hour: 0, retake_date: '' }
   lessonError.value = ''
   showLesson.value = true
 }
@@ -215,8 +225,7 @@ function openEditLesson(l) {
 }
 watch(() => lessonForm.value.type, (t) => {
   if (editingLesson.value) return
-  const n = (data.value?.lessons || []).filter((l) => l.type === t).length
-  lessonForm.value.number = n + 1
+  lessonForm.value.number = nextNumber(t)
 })
 async function saveLesson() {
   if (!group.value || !subject.value) { lessonError.value = 'Выберите группу и предмет'; return }
@@ -334,6 +343,10 @@ async function downloadVedomost(fmt) {
       <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">Сохранение…</span>
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
         Студентов: {{ data.students?.length || 0 }} · занятий: {{ data.lessons?.length || 0 }}
+        <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
+        <span v-if="data.hours?.total" class="text-accent">
+          · пройдено {{ data.hours.done }} из {{ data.hours.total }} ч
+        </span>
       </span>
       <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
         <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 Аттестация</AppButton>
@@ -448,8 +461,8 @@ async function downloadVedomost(fmt) {
               <input v-model.number="lessonForm.number" type="number" min="1"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тема (полностью)</span>
-            <textarea v-model="lessonForm.topic" rows="2" placeholder="Тема занятия"
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ topicLabel }}</span>
+            <textarea v-model="lessonForm.topic" rows="2" :placeholder="topicPlaceholder"
                       class="w-full resize-none rounded-sm border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent"></textarea></label>
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Дата</span>

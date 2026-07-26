@@ -313,6 +313,7 @@ def collect_local(since: str = "") -> dict:
         "grades": _filter_since(_collect_grades(), since),
         "term_grades": _filter_since(_collect_term_grades(), since),
         "schedule_overrides": _filter_since(_collect_schedule_overrides(), since),
+        "subject_hours": _filter_since(_collect_subject_hours(), since),
     }
 
 
@@ -355,6 +356,9 @@ def apply_remote(changes: dict):
     #Правки расписания (overlay) — общие веб↔десктоп, прямой LWW-upsert (как группы).
     if changes.get("schedule_overrides"):
         _merge_schedule_overrides(changes["schedule_overrides"])
+    #Плановые часы предметов — задаёт админ, десктоп показывает «пройдено X из Y».
+    if changes.get("subject_hours"):
+        _merge_subject_hours(changes["subject_hours"])
 
 
 def _merge_lessons(remote: list):
@@ -487,6 +491,67 @@ def _merge_schedule_overrides(remote: list):
                  int(o.get("pair_no") or 0), o.get("action", "set"), o.get("subject", ""),
                  o.get("time", ""), o.get("room", ""), o.get("teacher", ""), o.get("kind", ""),
                  o.get("updated_at", ""), 1 if rdel else 0))
+        conn.commit()
+
+
+def _ensure_hours_table(cur):
+    cur.execute("CREATE TABLE IF NOT EXISTS subject_hours (id TEXT PRIMARY KEY, "
+                "group_name TEXT, subject TEXT, year TEXT, semester INTEGER DEFAULT 0, "
+                "hours_total INTEGER DEFAULT 0, updated_at TEXT DEFAULT '', "
+                "deleted INTEGER DEFAULT 0)")
+
+
+def _collect_subject_hours() -> list:
+    """Плановые часы из локальной таблицы — прямой upsert в синк (как правки расписания).
+
+    Десктоп их обычно только ЧИТАЕТ (задаёт админ на сайте), но отдаём в push всё равно:
+    иначе локально заведённая строка навсегда осталась бы на одной машине."""
+    from contextlib import closing
+    from core import DBManager
+    rows = []
+    try:
+        with closing(DBManager.get_conn()) as conn:
+            cur = conn.cursor()
+            _ensure_hours_table(cur)
+            cur.execute("SELECT id,group_name,subject,year,COALESCE(semester,0),"
+                        "COALESCE(hours_total,0),COALESCE(updated_at,''),COALESCE(deleted,0) "
+                        "FROM subject_hours")
+            rows = cur.fetchall()
+    except Exception as e:
+        _log.error("не удалось прочитать учебные часы для синка: %s", e)
+    out = []
+    for r in rows:
+        out.append({"id": r[0], "group_name": r[1], "subject": r[2], "year": r[3],
+                    "semester": int(r[4] or 0), "hours_total": int(r[5] or 0),
+                    #Пустую метку подменяем на now — как во всех остальных коллекторах
+                    #(иначе строка считалась бы самой старой и её затирало бы что угодно).
+                    "updated_at": r[6] or _now(), "deleted": bool(r[7])})
+    return out
+
+
+def _merge_subject_hours(remote: list):
+    """Слияние учебных часов с сервера — прямой LWW-upsert (как правки расписания)."""
+    from contextlib import closing
+    from core import DBManager
+    with closing(DBManager.get_conn()) as conn:
+        cur = conn.cursor()
+        _ensure_hours_table(cur)
+        for h in remote:
+            hid = h.get("id")
+            if not hid:
+                continue
+            rdel = bool(h.get("deleted"))
+            cur.execute("SELECT COALESCE(updated_at,'') FROM subject_hours WHERE id=?", (hid,))
+            row = cur.fetchone()
+            if not (row is None or _should_apply(h.get("updated_at", ""), row[0] or "", rdel)):
+                continue
+            cur.execute(
+                "INSERT OR REPLACE INTO subject_hours "
+                "(id,group_name,subject,year,semester,hours_total,updated_at,deleted) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (hid, h.get("group_name", ""), h.get("subject", ""), h.get("year", ""),
+                 int(h.get("semester") or 0), int(h.get("hours_total") or 0),
+                 h.get("updated_at", ""), 1 if rdel else 0))
         conn.commit()
 
 

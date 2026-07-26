@@ -69,3 +69,31 @@ def test_backup_if_due_throttles(fresh_db):
     p3 = DBManager.backup_if_due(min_interval_sec=0)              #интервал истёк
     assert p3 and p3 != p1
     assert len(DBManager.list_backups()) == 2
+
+
+def test_backup_if_due_survives_future_mtime(fresh_db, monkeypatch):
+    """Метка последнего бэкапа «в будущем» НЕ должна отменять новую копию.
+
+    Так бывает штатно: NTFS хранит время с точностью 100 нс, а time.time() читает
+    системный таймер с шагом ~15 мс, и свежесозданный файл регулярно выглядит новее
+    текущего момента. Тот же эффект даёт перевод часов назад по NTP. Наивная проверка
+    `elapsed < interval` в этом случае молча переставала делать бэкапы — именно она и
+    роняла соседний тест раз в несколько полных прогонов.
+    """
+    p1 = DBManager.backup_if_due(min_interval_sec=0)
+    assert p1
+
+    real_list = DBManager.list_backups
+
+    def list_with_future_mtime():
+        rows = real_list()
+        #Сдвигаем метку самого свежего бэкапа на минуту ВПЕРЁД от текущего момента.
+        return [(n, p, s, m + 60) for (n, p, s, m) in rows]
+
+    monkeypatch.setattr(DBManager, "list_backups", staticmethod(list_with_future_mtime))
+    p2 = DBManager.backup_if_due(min_interval_sec=0)
+    assert p2 and p2 != p1, "бэкап пропущен из-за метки в будущем"
+
+    #А вот честно свежий бэкап при непустом интервале по-прежнему тормозит новый.
+    monkeypatch.setattr(DBManager, "list_backups", staticmethod(real_list))
+    assert DBManager.backup_if_due(min_interval_sec=1800) == ""

@@ -33,6 +33,10 @@ from ..models import (
 )
 
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
+#Кэш сводок: {(беседа, id последнего сообщения) → текст}. В ПАМЯТИ и намеренно: сводка
+#дёшево пересоздаётся, переживать перезапуск ей незачем, а лишняя таблица на боевом VPS
+#(1 ядро, 960 МБ) стоит дороже. Новое сообщение меняет ключ — устаревшее не отдастся.
+_SUMMARY_CACHE = {}
 #Модерация — ТОЛЬКО админ (require_admin), отдельный префикс. Каждый просмотр чужой
 #переписки пишется в аудит (152-ФЗ, подотчётность — см. MESSENGER-PLAN.md §3, §10).
 mod_router = APIRouter(prefix="/web/admin/messenger", tags=["messenger-moderation"])
@@ -265,6 +269,47 @@ def _guard_can_create(db: Session, user: User) -> None:
             status_code=403, detail="Вы ограничены модерацией и не можете создавать беседы.")
 
 
+def _parent_group_names(db: Session, parent: User) -> set:
+    """Группы, к которым родитель причастен через ПОДТВЕРЖДЁННЫХ детей.
+
+    Именно они определяют, с кем родителю вообще можно переписываться: с родителями той же
+    группы и с её куратором. Группы непривязанных или неподтверждённых детей сюда не
+    попадают — доступ даёт согласие студента, а не заявка сотрудника."""
+    from .parent import active_children
+    return {s.group_name for s in active_children(db, parent) if s.group_name}
+
+
+def _guard_direct_allowed(db: Session, user: User, peer: User) -> None:
+    """Кому вообще можно написать лично. Ограничение существует только вокруг РОДИТЕЛЕЙ.
+
+    Родитель — не участник учебного процесса, а внешний человек с доступом к данным своего
+    ребёнка. Пускать его в переписку со всем колледжем нельзя: это ни студентам, ни
+    преподавателям не нужно, а поводов для конфликтов даёт много. Поэтому родителю открыты
+    только два направления: родители той же группы и куратор этой группы. Симметрично: и
+    написать родителю может только тот, кому родитель мог бы написать сам."""
+    if "parent" not in (user.role, peer.role):
+        return
+    parent, other = (user, peer) if user.role == "parent" else (peer, user)
+    groups = _parent_group_names(db, parent)
+    if not groups:
+        raise HTTPException(
+            status_code=403,
+            detail="Переписка станет доступна, когда студент подтвердит доступ к журналу.")
+    if other.role == "parent":
+        #Двум родителям нужна ОБЩАЯ группа (их дети учатся вместе).
+        if groups & _parent_group_names(db, other):
+            return
+        raise HTTPException(status_code=403,
+                            detail="Писать можно только родителям своей группы.")
+    if other.role == "teacher" and groups & set(other.curated_groups or []):
+        return          #куратор группы ребёнка
+    if other.role == "admin":
+        return          #обращение в администрацию колледжа закрывать не за чем
+    raise HTTPException(status_code=403,
+                        detail="Родителю доступна переписка только с куратором и "
+                               "родителями своей группы.")
+
+
 def _participant(db: Session, conv_id: str, user_id: str):
     """Участие пользователя в беседе (или None). Это же — проверка доступа к беседе."""
     return (db.query(ConversationParticipant)
@@ -430,6 +475,18 @@ def _peer_of_direct(db: Session, conv_id: str, me_id: str):
 _PAGE_USERS = 30
 
 
+def _may_list_parent(db: Session, viewer: User, parent: User) -> bool:
+    """Показывать ли этого родителя в каталоге у данного пользователя."""
+    if viewer.role == "admin":
+        return True
+    groups = _parent_group_names(db, parent)
+    if viewer.role == "teacher":
+        return bool(groups & set(viewer.curated_groups or []))
+    if viewer.role == "parent":
+        return bool(groups & _parent_group_names(db, viewer))
+    return False
+
+
 @router.get("/users")
 def directory(role: str = Query("student"), q: str = Query(""), page: int = Query(0),
               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -438,10 +495,25 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
 
     Поиск и сортировку делаем в Python (не SQL ilike): SQLite без ICU не умеет
     регистронезависимый LIKE для кириллицы, а датасет колледжа умещается в память.
-    На PostgreSQL позже можно перейти на ILIKE + индекс. Себя из списка исключаем."""
-    role = role if role in ("student", "teacher") else "student"
+    На PostgreSQL позже можно перейти на ILIKE + индекс. Себя из списка исключаем.
+
+    ⚠️ Роли отбираются по БЕЛОМУ списку. Благодаря этому роль `parent` невидима по
+    построению: чтобы кого-то скрыть, ничего делать не нужно — нужно явно РАЗРЕШИТЬ.
+    Вкладка «Родители» открыта только куратору и администратору, причём куратору видны
+    лишь родители его групп."""
+    allowed = ("student", "teacher")
+    if user.role == "admin" or (user.role == "teacher" and (user.curated_groups or [])):
+        allowed += ("parent",)
+    #Сам родитель ищет только других родителей — списка студентов и преподавателей у него нет.
+    if user.role == "parent":
+        allowed = ("parent",)
+    role = role if role in allowed else allowed[0]
     rows = (db.query(User)
             .filter(User.role == role, User.deleted == False, User.id != user.id).all())  # noqa: E712
+    if role == "parent":
+        #Показываем только тех, с кем переписка реально разрешена — иначе каталог обещал
+        #бы собеседника, а открытие чата отвечало бы 403.
+        rows = [u for u in rows if _may_list_parent(db, user, u)]
     ql = (q or "").strip().lower()
     if ql:
         rows = [u for u in rows if ql in (u.full_name or u.name or "").lower()]
@@ -461,6 +533,10 @@ def user_profile(user_id: str, _user: User = Depends(get_current_user),
     """Публичная карточка (портфолио) — только безопасные поля."""
     u = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
     if u is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    #Родитель невидим и здесь. Иначе скрытие в каталоге обходилось бы прямым запросом по
+    #id: карточка отдаёт ФИО и «О себе», то есть ровно то, что мы прячем.
+    if u.role == "parent" and u.id != _user.id and not _may_list_parent(db, _user, u):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     sm = _status_map(db, [user_id])
     return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id))}
@@ -548,6 +624,9 @@ def open_direct(user_id: str, user: User = Depends(get_current_user),
     peer = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
     if peer is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    #Проверяем ЗДЕСЬ, а не только в каталоге: id собеседника можно подставить руками, и
+    #фильтр в поиске сам по себе ничего не защищает (инвариант «UI-скрытие — не защита»).
+    _guard_direct_allowed(db, user, peer)
 
     conv_id = direct_conversation_id(user.id, peer.id)
     conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
@@ -580,7 +659,9 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             continue
         #Всё, что старше моей метки очистки, для меня не существует (удалённая переписка).
         lastq = db.query(Message).filter(Message.conversation_id == conv.id)
-        if p.cleared_at:
+        if p.cleared_upto_id:
+            lastq = lastq.filter(Message.id > p.cleared_upto_id)
+        if p.cleared_at:                     #legacy-строки, очищенные до появления id-границы
             lastq = lastq.filter(Message.created_at > p.cleared_at)
         last = lastq.order_by(Message.id.desc()).first()
         #Чат удалён у меня и с тех пор ничего не приходило — не показываем его в списке.
@@ -593,7 +674,8 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
                           Message.sender_id != user.id,
                           Message.deleted_at == "",
                           Message.created_at > (p.last_read_at or ""),
-                          Message.created_at > (p.cleared_at or ""))
+                          Message.created_at > (p.cleared_at or ""),
+                          Message.id > (p.cleared_upto_id or 0))
                   .count())
         item = {
             "conversation_id": conv.id,
@@ -701,7 +783,9 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
     if hidden:
         q = q.filter(~Message.id.in_(hidden))
     #«Удалённая у себя» переписка: всё, что было до очистки, пользователю не показываем.
-    if part.cleared_at:
+    if part.cleared_upto_id:
+        q = q.filter(Message.id > part.cleared_upto_id)
+    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
         q = q.filter(Message.created_at > part.cleared_at)
 
     if after:
@@ -752,7 +836,9 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     qq = (db.query(Message)
           .filter(Message.conversation_id == conv_id, Message.deleted_at == "",
                   Message.kind == "text"))
-    if part.cleared_at:
+    if part.cleared_upto_id:
+        qq = qq.filter(Message.id > part.cleared_upto_id)
+    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
         qq = qq.filter(Message.created_at > part.cleared_at)
     if hidden:
         qq = qq.filter(~Message.id.in_(hidden))
@@ -762,6 +848,200 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     names = _names_for(db, [m.sender_id for m in matched])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
     return {"messages": out}
+
+
+def _visible_messages_query(db: Session, conv_id: str, part, user_id: str):
+    """Базовая выборка ВИДИМЫХ пользователю сообщений беседы (границы очистки и скрытия).
+
+    Вынесено из search_messages, чтобы умный поиск и сводка не собирали те же условия
+    заново: забытая граница `cleared_upto_id` означала бы показ переписки, которую человек
+    у себя удалил."""
+    hidden = _hidden_ids(db, conv_id, user_id)
+    qq = (db.query(Message)
+          .filter(Message.conversation_id == conv_id, Message.deleted_at == "",
+                  Message.kind == "text"))
+    if part.cleared_upto_id:
+        qq = qq.filter(Message.id > part.cleared_upto_id)
+    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
+        qq = qq.filter(Message.created_at > part.cleared_at)
+    if hidden:
+        qq = qq.filter(~Message.id.in_(hidden))
+    return qq
+
+
+@router.get("/chats/{conv_id}/messages/ai-search")
+def ai_search_messages(conv_id: str, q: str = Query(""), limit: int = Query(30),
+                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """§17: поиск по СМЫСЛУ внутри беседы.
+
+    Как это устроено и почему именно так: модель получает ТОЛЬКО поисковый запрос и
+    придумывает к нему словоформы и синонимы («домашка» → «дз», «задание», «задали»), а
+    сопоставление с сообщениями делаем мы сами. Переписка модели не показывается вовсе.
+
+    Настоящий семантический поиск (эмбеддинги + векторный индекс) потребовал бы
+    проиндексировать всю переписку и держать индекс в памяти — на боевом одноядерном VPS
+    с 960 МБ это не поедет, а отправлять чужие сообщения в облако ради поиска тем более
+    нельзя. Расширение запроса даёт основную пользу без обеих этих цен.
+
+    Модель недоступна → `expanded` пуст и результат совпадает с обычным поиском."""
+    part = _require_participant(db, conv_id, user)
+    needle = (q or "").strip().lower()
+    if not needle:
+        return {"messages": [], "expanded": []}
+
+    from ..webdata import load_config
+    from .. import messenger_ai
+    extra = messenger_ai.expand_query(load_config(db), needle)
+
+    rows = (_visible_messages_query(db, conv_id, part, user.id)
+            .order_by(Message.id.desc()).limit(2000).all())
+    scored = []
+    for m in rows:
+        score = messenger_ai.match_score(m.body, needle, extra)
+        if score:
+            scored.append((score, m))
+    #Сортировка: сначала релевантность, при равной — свежие выше (id убывает).
+    scored.sort(key=lambda p: (p[0], p[1].id), reverse=True)
+    limit = max(1, min(int(limit or 30), 100))
+    matched = [m for _s, m in scored[:limit]]
+    names = _names_for(db, [m.sender_id for m in matched])
+    return {"messages": [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched],
+            "expanded": extra}
+
+
+@router.get("/chats/{conv_id}/summary")
+def chat_summary(conv_id: str, user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """§18: краткая сводка переписки.
+
+    Запускается ТОЛЬКО кнопкой. Автоматическая сводка при открытии чата означала бы запрос
+    к модели на каждый вход в диалог — на одноядерном VPS это заметная нагрузка и лишние
+    деньги за токены ради текста, который чаще всего никто не прочтёт.
+
+    ФИО реальных людей маскируются ДО отправки (messenger_ai.mask_names): сообщения здесь
+    модели действительно нужны, но персональные данные в облако уезжать не должны.
+
+    Результат кэшируется по (беседа, id последнего сообщения) — пока в чат никто не
+    написал, повторное нажатие отдаёт готовое и ничего не стоит."""
+    part = _require_participant(db, conv_id, user)
+    rows = (_visible_messages_query(db, conv_id, part, user.id)
+            .order_by(Message.id.asc()).all())
+    if len(rows) < 3:
+        return {"summary": "", "reason": "too_short", "messages": len(rows)}
+
+    #В ключ входит и МЕТКА последнего сообщения, не только его id. Причина не
+    #теоретическая: id — автоинкремент внутри базы, и после восстановления сервера из
+    #бэкапа они начинают выдаваться заново. Кэш в памяти процесса это переживёт и отдал бы
+    #сводку ЧУЖОГО (уже несуществующего) разговора. Метка времени такой коллизии не даёт.
+    cache_key = (conv_id, rows[-1].id, rows[-1].created_at)
+    cached = _SUMMARY_CACHE.get(cache_key)
+    if cached is not None:
+        return {"summary": cached, "cached": True, "messages": len(rows)}
+
+    from ..webdata import load_config
+    from .. import messenger_ai
+    names = _names_for(db, [m.sender_id for m in rows])
+    transcript = messenger_ai.build_transcript(db, rows, names)
+    summary = messenger_ai.summarize(load_config(db), transcript)
+    if not summary:
+        #Честно говорим, что не получилось, вместо выдуманного текста.
+        return {"summary": "", "reason": "no_model", "messages": len(rows)}
+    #Кэш маленький и в памяти: переживать перезапуск ему незачем, а место на VPS дорого.
+    if len(_SUMMARY_CACHE) > 200:
+        _SUMMARY_CACHE.clear()
+    _SUMMARY_CACHE[cache_key] = summary
+    return {"summary": summary, "cached": False, "messages": len(rows)}
+
+
+# ── §19. Напоминания из сообщений ───────────────────────────────────────────────────
+# Разбор даты ДЕТЕРМИНИРОВАННЫЙ (reminder_parse.py в корне репо), без модели — несмотря на
+# название фичи в плане. Причина та же, что у записи оценок голосом: «завтра в 15:00»
+# регулярка разбирает надёжнее, чем LLM, а модель ошибается МОЛЧА — напоминание, съехавшее
+# на день, хуже ненайденного, потому что на него уже положились. Плюс это приватность:
+# текст личной переписки никуда не уезжает.
+
+def _reminder_out(r) -> dict:
+    return {"id": r.id, "conversation_id": r.conversation_id, "message_id": r.message_id,
+            "text": r.text, "remind_at": r.remind_at, "fired_at": r.fired_at or ""}
+
+
+@router.get("/messages/{mid}/reminder-suggest")
+def reminder_suggest(mid: int, user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Что предложить напомнить по этому сообщению. `when` пустой — даты не нашли.
+
+    Функция намеренно консервативна: не уверена — не предлагает. Ложная подсказка
+    раздражает сильнее, чем её отсутствие."""
+    m = db.query(Message).filter(Message.id == mid).first()
+    if m is None or m.deleted_at:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    _require_participant(db, m.conversation_id, user)
+    import reminder_parse
+    found = reminder_parse.parse_reminder(m.body or "", datetime.now(timezone.utc))
+    if not found:
+        return {"when": "", "matched": ""}
+    return {"when": found["when"].isoformat(), "matched": found["matched"]}
+
+
+@router.post("/messages/{mid}/reminder")
+def reminder_create(mid: int, payload: dict = Body(default={}),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Поставить напоминание по сообщению. `when` (ISO) — явно выбранное время; без него
+    берём разобранное из текста."""
+    from ..models import Reminder
+    m = db.query(Message).filter(Message.id == mid).first()
+    if m is None or m.deleted_at:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    _require_participant(db, m.conversation_id, user)
+
+    when = (payload.get("when") or "").strip()
+    if not when:
+        import reminder_parse
+        found = reminder_parse.parse_reminder(m.body or "", datetime.now(timezone.utc))
+        if not found:
+            raise HTTPException(status_code=400,
+                                detail="В сообщении нет даты — укажите время вручную.")
+        when = found["when"].isoformat()
+    try:
+        parsed = datetime.fromisoformat(when)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Неверный формат времени")
+    if parsed.tzinfo is None:
+        #Клиент прислал локальное время без зоны. Считаем его UTC — иначе сравнение с
+        #remind_at (тоже UTC) было бы сдвинуто на часовой пояс.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    #Текст храним СНИМКОМ: автор может отредактировать или удалить сообщение, а напоминание
+    #должно остаться тем, на что человек рассчитывал.
+    row = Reminder(login=user.login or "", conversation_id=m.conversation_id,
+                   message_id=m.id, text=(m.body or "")[:1000],
+                   remind_at=parsed.isoformat(), created_at=_now(), fired_at="")
+    db.add(row)
+    db.commit()
+    return {"ok": True, "reminder": _reminder_out(row)}
+
+
+@router.get("/reminders")
+def reminders_list(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Мои ещё не сработавшие напоминания (ближайшие сверху)."""
+    from ..models import Reminder
+    rows = (db.query(Reminder)
+            .filter(Reminder.login == (user.login or ""), Reminder.fired_at == "")
+            .order_by(Reminder.remind_at.asc()).limit(100).all())
+    return {"reminders": [_reminder_out(r) for r in rows]}
+
+
+@router.delete("/reminders/{rid}")
+def reminder_delete(rid: int, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Отменить напоминание. Чужое не трогаем — 404 одинаков для «нет» и «не твоё»."""
+    from ..models import Reminder
+    row = db.get(Reminder, rid)
+    if row is None or row.login != (user.login or ""):
+        raise HTTPException(status_code=404, detail="Напоминание не найдено")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/messages/{mid}/read_by")
@@ -839,24 +1119,82 @@ def send_message(conv_id: str, payload: dict = Body(...),
 
 _VECTOR_CMD_RE = re.compile(r"^/vector(?:@\w+)?\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
+#Сколько последних заметок отдаём Вектору как контекст и сколько символов максимум.
+#Ограничение не косметическое: длинный контекст — это и деньги за токены, и риск, что
+#модель начнёт отвечать по заметке вместо журнала.
+_CTX_MESSAGES = 20
+_CTX_CHARS = 1500
+
+
+def _mask_names(db: Session, text: str) -> str:
+    """Заменяет ФИО реальных пользователей на «Студент»/«Преподаватель».
+
+    ⚠️ ОБЯЗАТЕЛЬНО перед отправкой в облачную модель: заметки — свободный текст, и в них
+    легко попадают фамилии одногруппников. Продукт публично обещает, что ПДн в облако не
+    уходят (README, §6), и заметки — не исключение. Маскируем от длинных совпадений к
+    коротким, иначе «Иванов» съел бы «Иванов Иван» и остаток имени утёк бы."""
+    rows = db.query(User).filter(User.deleted == False).all()          # noqa: E712
+    pairs = []
+    for u in rows:
+        label = "Преподаватель" if u.role == "teacher" else "Студент"
+        for name in (u.full_name, u.surname, u.name):
+            if name and len(name.strip()) >= 3:
+                pairs.append((name.strip(), label))
+    for name, label in sorted(pairs, key=lambda p: -len(p[0])):
+        if name.lower() in text.lower():
+            text = re.sub(re.escape(name), label, text, flags=re.IGNORECASE)
+    return text
+
+
+def _saved_context(db: Session, conv_id: str, user: User) -> str:
+    """Последние заметки «Избранного» — контекст для команды /vector.
+
+    Зачем: без него вопрос «а когда это?» или «что я писал про экзамен» опирается только на
+    формулировку самого вопроса. Берём ТОЛЬКО этот личный чат (он виден одному человеку),
+    свежие сообщения, без удалённых, и обезличиваем перед отправкой в модель."""
+    part = _participant(db, conv_id, user.id)
+    q = db.query(Message).filter(Message.conversation_id == conv_id,
+                                 Message.deleted_at == "")
+    if part is not None and part.cleared_upto_id:
+        q = q.filter(Message.id > part.cleared_upto_id)      #очищенное не воскрешаем
+    rows = q.order_by(Message.id.desc()).limit(_CTX_MESSAGES).all()
+    rows.reverse()
+    lines = []
+    for m in rows:
+        body = (m.body or "").strip()
+        #Сами команды в контекст не тянем — это шум, а не заметка.
+        if not body or _VECTOR_CMD_RE.match(body):
+            continue
+        who = "Вектор" if m.sender_id == "system" else "Я"
+        lines.append(f"{who}: {body}")
+    text = "\n".join(lines)[-_CTX_CHARS:]
+    return _mask_names(db, text) if text else ""
+
 
 def _handle_vector_command(db: Session, conv_id: str, body: str, user: User) -> None:
     """`docs/MESSENGER-ADDON-PLAN-GPT.md`: «AI-поиск по смыслу» — реализован не как отдельная
     embedding-инфраструктура (её негде держать на 1-ядерном VPS), а как переиспользование УЖЕ
     существующего анти-галлюцинационного Вектора (`web.py::answer_vector_question`, тот же
-    код, что у `/web/vector/ask`). Команда `/vector <вопрос>` в ЛЮБОМ чате — ответ приходит
-    публично, от лица «Вектора», как обычное сообщение (все участники его видят, как в
-    Discord/Slack ботах). try/except: сбой ИИ-ответа не должен мешать самой отправке
-    сообщения — она уже прошла и закоммичена выше."""
+    код, что у `/web/vector/ask`). try/except: сбой ИИ-ответа не должен мешать самой
+    отправке сообщения — она уже прошла и закоммичена выше.
+
+    ⚠️ ТОЛЬКО в «Избранном» (личный чат с собой). Раньше команда работала в ЛЮБОМ чате, и
+    ответ Вектора публиковался всем участникам: в общей беседе это и шум, и утечка контекста
+    вопроса, а роль-скоуп ответа считается по СПРОСИВШЕМУ — соседи по чату увидели бы
+    выборку, к которой сами доступа не имеют. Личный чат снимает оба вопроса сразу."""
     match = _VECTOR_CMD_RE.match(body.strip())
     if not match:
+        return
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is None or conv.kind != "saved":
         return
     question = match.group(1).strip()
     if not question:
         return
     try:
         from .web import answer_vector_question
-        answer = answer_vector_question(question, user, db)
+        answer = answer_vector_question(question, user, db,
+                                        context=_saved_context(db, conv_id, user))
         text = (answer.get("text") or "").strip()
         if text:
             _post_system_channel_message(db, conv_id, text)
@@ -913,8 +1251,19 @@ def delete_conversation(conv_id: str, clear_only: bool = Query(False),
     сообщением, хотя пользователь ушёл из неё осознанно."""
     p = _require_participant(db, conv_id, user)
     conv = _conversation(db, conv_id)
-    p.cleared_at = _now()
-    p.last_read_at = p.cleared_at          #«хвоста» непрочитанного после очистки нет
+    #Границу ставим по НОМЕРУ последнего сообщения, а не по времени: сообщение, пришедшее
+    #в тот же тик часов, что и очистка, иначе исчезло бы у пользователя навсегда.
+    #cleared_at гасим — он остаётся только у строк, очищенных до появления этого поля.
+    last = (db.query(Message).filter(Message.conversation_id == conv_id)
+            .order_by(Message.id.desc()).first())
+    p.cleared_upto_id = last.id if last else 0
+    p.cleared_at = ""
+    p.last_read_at = _now()                #«хвоста» непрочитанного после очистки нет
+    #«Избранное» — не переписка, а личный блокнот: он один на пользователя и всегда есть в
+    #списке (как в Telegram). Удалять его нечего и незачем — любое удаление сводим к очистке.
+    if conv.kind == "saved":
+        db.commit()
+        return {"ok": True, "conversation_id": conv_id, "cleared": True}
     if clear_only:
         db.commit()
         return {"ok": True, "conversation_id": conv_id, "cleared": True}
@@ -1520,6 +1869,61 @@ def ensure_group_schedule_channel(db: Session, group_name: str, student_ids) -> 
                           "Автоматические изменения расписания вашей группы.",
                           reader_ids=student_ids)
     return conv_id
+
+
+def notify_substitution(db: Session, group_name: str, text: str) -> None:
+    """§D12(4): «Замены · Группа» — read-only канал точечных правок расписания.
+
+    Почему отдельно от «Расписание · Группа», хотя источник данных общий: тот канал
+    рассылается ОДНИМ постом на публикацию («расписание изменилось — проверьте»), а замена
+    — это конкретная пара, которую нужно увидеть до выхода из дома. Смешав их, мы бы либо
+    спамили общий канал каждой правкой ячейки, либо утопили замену в общем «что-то
+    поменялось». Публичная точка входа для routers/web.py; ВЫЗЫВАЮЩИЙ оборачивает
+    в try/except — сбой мессенджера не должен ронять правку расписания."""
+    group_name = (group_name or "").strip()
+    if not group_name or not text:
+        return
+    students = [u.id for u in db.query(User).filter(
+        User.role == "student", User.group_name == group_name,
+        User.deleted == False).all()]  # noqa: E712
+    if not students:
+        return
+    conv_id = f"sys:substitute:{group_name}"
+    _ensure_system_channel(db, conv_id, f"Замены · {group_name}",
+                           "Точечные изменения пар: переносы, замены, отмены.",
+                           reader_ids=students)
+    _post_system_channel_message(db, conv_id, text)
+
+
+@router.post("/channels/practice/{group_name}")
+def ensure_practice_channel(group_name: str, user: User = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """§D12(5): «Практика · Группа» — канал производственной практики.
+
+    В отличие от остальных системных каналов он НЕ автоматический: данных о практике в
+    журнале нет, и выдумывать их нельзя. Это канал, который ведёт руками учебная часть
+    (админ) или куратор группы — направления, договоры, сроки сдачи дневника. От обычного
+    канала отличается тем, что появляется у студентов сам и его нельзя покинуть."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    group_name = group_name.strip()
+    if not group_name:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    #Куратор ведёт практику только своих групп; администрация — любых.
+    if user.role == "teacher" and group_name not in (user.curated_groups or []):
+        raise HTTPException(status_code=403, detail="Эта группа вами не курируется")
+    students = [u.id for u in db.query(User).filter(
+        User.role == "student", User.group_name == group_name,
+        User.deleted == False).all()]  # noqa: E712
+    writers = [user.id]
+    if user.role != "admin":
+        writers += [a.id for a in db.query(User).filter(
+            User.role == "admin", User.deleted == False).all()]  # noqa: E712
+    conv_id = f"sys:practice:{group_name}"
+    _ensure_system_channel(db, conv_id, f"Практика · {group_name}",
+                           "Производственная практика: направления, сроки, документы.",
+                           reader_ids=students, writer_ids=writers)
+    return {"ok": True, "conversation_id": conv_id}
 
 
 @router.post("/channels/announcements/{group_name}")

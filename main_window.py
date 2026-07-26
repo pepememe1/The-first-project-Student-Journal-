@@ -85,6 +85,7 @@ class MainAppWindow(QMainWindow):
         self._login.login_student.connect(self._on_student_login)
         self._login.login_teacher.connect(self._on_teacher_login)
         self._login.login_admin.connect(self._on_admin_login)
+        self._login.login_parent.connect(self._on_parent_login)
         self._stack.addWidget(self._login)
 
         #Начальное состояние — страница входа
@@ -396,6 +397,12 @@ class MainAppWindow(QMainWindow):
             #показываем ПОЛНОЕ ФИО (раньше была только фамилия name.split()[0]);
             #длинные ФИО шапка сама укоротит эллипсисом (ElidingLabel)
             return TeacherDashboard(name, data), ("Учитель", name)
+        if role == "parent":
+            #Кабинет родителя — целиком веб-представление (§11 «один UI»): офлайн ему не
+            #нужен, а нативный порт журнала и Вектора ради этой роли не окупается.
+            from parent_dashboard import ParentDashboard
+            dash = ParentDashboard(payload)
+            return dash, ("Родитель", dash.display_name())
         if role == "admin":
             if AdminDashboard is None:
                 raise RuntimeError("Модуль AdminDashboard не загружен")
@@ -406,14 +413,24 @@ class MainAppWindow(QMainWindow):
     def _open_dashboard(self):
         """Применяет тему, собирает дашборд текущей сессии и показывает его.
         Используется и при входе, и при пересборке после смены темы."""
+        #Замеры этапов: вход собирает ВЕСЬ дашборд синхронно, и если он «думает» секунды —
+        #по этим строкам в логе видно, какой именно этап виноват (а не гадать).
+        import time as _t
+        _t0 = _t.perf_counter()
+        _lg = log.get("main_window")
         #тему ставим ДО сборки — первая отрисовка сразу в нужной палитре
         self._apply_session_theme()
+        _t_theme = _t.perf_counter()
         #убираем прежние дашборды (всё, кроме страницы входа — она всегда первая)
         while self._stack.count() > 1:
             w = self._stack.widget(self._stack.count() - 1)
             self._stack.removeWidget(w)
             w.deleteLater()
+        _t_clean = _t.perf_counter()
         dash, (role_text, user_text) = self._build_dashboard()
+        _t_build = _t.perf_counter()
+        _lg.warning("[тайминг входа] тема %.2f c · очистка %.2f c · сборка дашборда %.2f c · ИТОГО %.2f c",
+                    _t_theme - _t0, _t_clean - _t_theme, _t_build - _t_clean, _t_build - _t0)
         self._stack.addWidget(dash)
         self._stack.setCurrentWidget(dash)
         #шапка создаётся один раз и не пересобирается с дашбордом — красим её явно
@@ -512,6 +529,14 @@ class MainAppWindow(QMainWindow):
             self._open_dashboard()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть журнал:\n{e}")
+
+    def _on_parent_login(self, info: dict):
+        """Обработать вход родителя (кабинет открывается веб-представлением)."""
+        try:
+            self._session = ("parent", info or {})
+            self._open_dashboard()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть кабинет:\n{e}")
 
     def _on_admin_login(self):
         """Обработать вход администратора"""

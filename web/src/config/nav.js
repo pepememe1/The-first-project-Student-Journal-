@@ -9,7 +9,7 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert,
+  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound,
 } from '@lucide/vue'
 
 export const NAV = {
@@ -30,6 +30,7 @@ export const NAV = {
     { key: 'journal', label: 'Журнал', icon: BookOpen, to: '/teacher' },
     { key: 'students', label: 'Студенты', icon: Users, to: '/teacher/students' },
     { key: 'curator', label: 'Курирование', icon: ClipboardCheck, to: '/teacher/curator', curatorOnly: true },
+    { key: 'parents', label: 'Родители', icon: UsersRound, to: '/teacher/parents', curatorOnly: true },
     { key: 'schedule', label: 'Расписание', icon: CalendarDays, to: '/teacher/schedule' },
     { key: 'stats', label: 'Статистика', icon: BarChart3, to: '/teacher/stats' },
     { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/teacher/vector' },
@@ -38,11 +39,24 @@ export const NAV = {
     { key: 'profile', label: 'Профиль', icon: User, to: '/teacher/profile' },
     { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/teacher/settings' },
   ],
+  // РОДИТЕЛЬ — ровно пять пунктов и ничего сверх. Ни списка студентов, ни статистики
+  // группы, ни расписания преподавателей: это внешний человек, которому открыт доступ
+  // к данным своего ребёнка, и всё лишнее здесь — расширение доступа к чужим ПДн.
+  parent: [
+    { section: 'Ребёнок' },
+    { key: 'journal', label: 'Журнал', icon: ClipboardList, to: '/parent' },
+    { key: 'ai', label: 'ИИ Помощник', icon: Bot, to: '/parent/vector' },
+    { key: 'messages', label: 'Сообщения', icon: MessagesSquare, to: '/parent/messages', badge: 'messagesUnread' },
+    { section: 'Личное' },
+    { key: 'profile', label: 'Профиль', icon: User, to: '/parent/profile' },
+    { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/parent/settings' },
+  ],
   admin: [
     { section: 'Управление' },
     { key: 'dash', label: 'Дашборд', icon: LayoutDashboard, to: '/admin' },
     { key: 'teachers', label: 'Преподаватели', icon: GraduationCap, to: '/admin/teachers' },
     { key: 'students', label: 'Студенты', icon: Users, to: '/admin/students' },
+    { key: 'parents', label: 'Родители', icon: UsersRound, to: '/admin/parents' },
     { key: 'registrations', label: 'Заявки на регистрацию', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', icon: Library, to: '/admin/subjects' },
@@ -63,4 +77,5 @@ export const NAV = {
   ],
 }
 
-export const HOME_BY_ROLE = { student: '/student', teacher: '/teacher', admin: '/admin' }
+export const HOME_BY_ROLE = { student: '/student', teacher: '/teacher', admin: '/admin',
+  parent: '/parent' }

@@ -27,6 +27,13 @@ except Exception:
 PRACTICE_VALUES = {"2", "3", "4", "5"}
 
 
+def _grading():
+    """Ленивый доступ к единому модулю расчёта (тот же приём, что в _practice_average:
+    grading лежит в КОРНЕ репо и попадает в sys.path только после _bootstrap)."""
+    import grading
+    return grading
+
+
 #Контекст доступа
 @dataclass
 class VectorScope:
@@ -118,10 +125,13 @@ def _is_debt(lessons: List[tuple], records: Dict[str, str]) -> List[str]:
     """Возвращает список причин задолженности (пусто — долгов нет)."""
     reasons = []
     for lid, ltype, num, *_ in lessons:
-        if ltype == "Практика":
+        if _grading().is_practice(ltype):
             v = records.get(lid)
             if v in ("2", "Н"):
-                reasons.append(f"практика №{num} не сдана ({v})")
+                #ДЗ — тоже долг: «Н» на домашней работе значит «не сдал», а не «не был».
+                what = "ДЗ" if ltype == "ДЗ" else "практика"
+                ending = "о" if ltype == "ДЗ" else "а"
+                reasons.append(f"{what} №{num} не сдан{ending} ({v})")
         elif ltype == "Экзамен":
             v = _latest_exam_value(lid, records)
             if v and ("Не зачтено" in v or v.strip().startswith(("2", "Н"))):
@@ -130,7 +140,10 @@ def _is_debt(lessons: List[tuple], records: Dict[str, str]) -> List[str]:
 
 
 def _count_absences(lessons: List[tuple], records: Dict[str, str]) -> Dict[str, int]:
-    """Считает пропуски. Каждая строка лекции = 1 час."""
+    """Считает пропуски. Каждая строка лекции = 1 час.
+
+    ⚠️ ДЗ здесь НЕ учитывается, хотя в средний балл идёт наравне с практикой: «Н» на
+    домашней работе означает «не сдал», а не «не был на занятии»."""
     res = {"Н": 0, "Б": 0, "О": 0}
     for lid, ltype, *_ in lessons:
         v = records.get(lid)
@@ -257,14 +270,14 @@ def intent_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     marks = []
     for lid, ltype, _num, *_ in lessons:
         v = recs.get(lid)
-        if ltype == "Практика" and v in PRACTICE_VALUES:
+        if _grading().is_practice(ltype) and v in PRACTICE_VALUES:
             marks.append(v)
     name = f"{f} {n}".strip()
     avg = _practice_average(lessons, recs)
     if marks:
-        txt = f"{name}: оценки по практикам — {', '.join(marks)}; средний {avg}."
+        txt = f"{name}: оценки по практикам и ДЗ — {', '.join(marks)}; средний {avg}."
     else:
-        txt = f"{name}: оценок по практикам пока нет."
+        txt = f"{name}: оценок по практикам и ДЗ пока нет."
     return Facts("grades", txt, names=[name, f],
                  data={"student": name, "marks": marks, "average": avg},
                  mood_value=avg or None)
@@ -480,7 +493,7 @@ def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
     conn.close()
     counts = {"5": 0, "4": 0, "3": 0, "2": 0}
     for lid, ltype, *_ in lessons:
-        if ltype == "Практика":
+        if _grading().is_practice(ltype):
             v = recs.get(lid)
             if v in counts:
                 counts[v] += 1
@@ -505,11 +518,11 @@ def intent_subject_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     recs = _records(conn, f, n)
     conn.close()
     marks = [recs.get(lid) for lid, ltype, *_ in lessons
-             if ltype == "Практика" and recs.get(lid) in ("2", "3", "4", "5")]
+             if _grading().is_practice(ltype) and recs.get(lid) in ("2", "3", "4", "5")]
     avg = _practice_average(lessons, recs)
     if not avg:
         return Facts("subject_grades",
-                     f"По предмету «{scope.subject}» оценок по практикам пока нет.",
+                     f"По предмету «{scope.subject}» оценок по практикам и ДЗ пока нет.",
                      data={"subject": scope.subject})
     body = ", ".join(marks) if marks else "—"
     return Facts("subject_grades", f"По предмету «{scope.subject}»: средний {avg}. "

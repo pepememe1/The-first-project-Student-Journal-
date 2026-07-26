@@ -4,7 +4,7 @@
 // (своё/чужое, закреплено ли, удалено ли) — см. MESSENGER-PLAN.md §6.8. Эмитит выбранное
 // действие наверх (ChatThread выполняет), сам ничего не делает с данными.
 import { computed } from 'vue'
-import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag } from '@lucide/vue'
+import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock } from '@lucide/vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -33,6 +33,10 @@ const items = computed(() => {
     : { key: 'pin', label: 'Закрепить', icon: Pin })
   if (!d) list.push({ key: 'copy', label: 'Копировать текст', icon: Copy })
   if (!d) list.push({ key: 'forward', label: 'Переслать', icon: Forward })
+  // §D19: «Напомнить» показываем ВСЕГДА, а не только когда в тексте нашлась дата —
+  // человек может захотеть напомнить себе о сообщении без всякой даты. Разобранную из
+  // текста дату диалог просто подставит в поле как готовый вариант.
+  if (!d) list.push({ key: 'remind', label: 'Напомнить', icon: AlarmClock })
   list.push({ key: 'select', label: 'Выделить', icon: ListChecks })
   list.push({ key: 'delete', label: 'Удалить', icon: Trash2, danger: true })
   if (!m.value.mine && !d) list.push({ key: 'report', label: 'Пожаловаться', icon: Flag, danger: true })

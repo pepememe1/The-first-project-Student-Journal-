@@ -39,6 +39,8 @@ import MonitorPage from '@/pages/admin/MonitorPage.vue'
 import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
 import AdminServer from '@/pages/admin/AdminServer.vue'
 import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
+import ParentJournal from '@/pages/parent/ParentJournal.vue'
+import AdminParents from '@/pages/admin/AdminParents.vue'
 
 const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
 
@@ -77,6 +79,8 @@ const routes = [
       { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам' } },
       page('students', TeacherStudents, 'Студенты группы'),
       page('curator', CuratorView, 'Курирование', 'Ваши курируемые группы'),
+      // Куратор привязывает родителей к студентам СВОИХ групп (скоуп режет сервер).
+      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу'),
       page('schedule', SchedulePage, 'Расписание'),
       page('stats', TeacherStats, 'Статистика группы'),
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
@@ -93,6 +97,7 @@ const routes = [
       { path: '', component: AdminDashboard, meta: { title: 'Панель администратора' } },
       page('teachers', AdminTeachers, 'Преподаватели'),
       page('students', AdminStudents, 'Студенты'),
+      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу'),
       page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов'),
       page('groups', AdminGroups, 'Группы'),
       page('subjects', AdminSubjects, 'Предметы'),
@@ -108,6 +113,20 @@ const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
       page('moderation', AdminMessenger, 'Модерация чатов', 'Жалобы и просмотр переписок'),
+    ],
+  },
+
+  // РОДИТЕЛЬ ─────────────────────────────────────────────
+  // Пять страниц и ни одной больше. Guard по роли ниже не пустит его в чужую ветку, но
+  // на защиту это не влияет: каждый серверный эндпоинт проверяет роль сам (инвариант §6).
+  {
+    path: '/parent', component: AppShell, meta: { requiresAuth: true, role: 'parent' },
+    children: [
+      { path: '', component: ParentJournal, meta: { title: 'Журнал', subtitle: 'Успеваемость ребёнка' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
+      page('profile', Profile, 'Профиль'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
     ],
   },
 

@@ -29,12 +29,18 @@ function initials(name) {
 const isTeacher = computed(() => activePeer.value?.role === 'teacher')
 const roleLabel = computed(() => (isTeacher.value ? 'Преподаватель' : 'Студент'))
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeInfo.value?.kind))
+//«Избранное» — блокнот с самим собой: карточка «собеседника» тут показывала бы тебя же
+//(роль, «в сети»), что бессмысленно. Панель для него просто не показываем.
+const isSaved = computed(() => activeInfo.value?.kind === 'saved')
 const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
 </script>
 
 <template>
+  <!-- В «Избранном» боковой панели нет вовсе: показывать карточку самого себя незачем. -->
+  <aside v-if="isSaved" class="hidden"></aside>
+
   <!-- Свёрнутое состояние: узкая полоска с кнопкой «развернуть» -->
-  <aside v-if="collapsed" class="hidden w-10 shrink-0 flex-col items-center border-r border-border bg-card py-2 xl:flex">
+  <aside v-else-if="collapsed" class="hidden w-10 shrink-0 flex-col items-center border-r border-border bg-card py-2 xl:flex">
     <button type="button" @click="toggle" title="Показать профиль" aria-label="Показать профиль"
             class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
       <PanelLeftOpen class="size-5" />

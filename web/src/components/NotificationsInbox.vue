@@ -23,6 +23,31 @@ const KIND_LABEL = {
   grade: 'Новая оценка',
   grade_changed: 'Оценка изменена',
   schedule_changed: 'Расписание изменилось',
+  homework: 'Домашнее задание',
+  reminder: 'Напоминание',
+}
+
+// Фильтр по видам. «Система» — всё, что не ДЗ: оценки и расписание приходят от системы
+// по факту действия преподавателя, а домашка — это задание лично тебе, и смешивать их
+// в одном потоке неудобно (ДЗ теряется среди десятков оценок).
+const HOMEWORK_KINDS = ['homework']
+const TABS = [
+  { key: 'all', label: 'Все' },
+  { key: 'homework', label: 'ДЗ' },
+  { key: 'system', label: 'Система' },
+]
+const tab = ref('all')
+
+function inTab(item, key) {
+  if (key === 'all') return true
+  const isHw = HOMEWORK_KINDS.includes(item.kind)
+  return key === 'homework' ? isHw : !isHw
+}
+
+const visible = computed(() => items.value.filter((i) => inTab(i, tab.value)))
+// Счётчик у вкладки — только непрочитанные, иначе он теряет смысл уже на второй день.
+function tabUnread(key) {
+  return items.value.filter((i) => !i.read_at && inTab(i, key)).length
 }
 
 const unread = computed(() => items.value.filter((i) => !i.read_at).length)
@@ -100,6 +125,18 @@ onMounted(load)
 
     <!-- ── Список писем ──────────────────────────────────────────────────────── -->
     <div v-else>
+      <div class="mb-3 flex flex-wrap items-center gap-1">
+        <button v-for="t in TABS" :key="t.key" type="button"
+                class="rounded-sm px-3 py-1.5 text-sm transition-colors"
+                :class="tab === t.key ? 'bg-accent font-bold text-bg' : 'text-text3 hover:bg-card2 hover:text-text'"
+                @click="tab = t.key">
+          {{ t.label }}
+          <span v-if="tabUnread(t.key)"
+                class="ml-1 text-tiny"
+                :class="tab === t.key ? 'text-bg opacity-80' : 'text-accent'">{{ tabUnread(t.key) }}</span>
+        </button>
+      </div>
+
       <div v-if="unread" class="mb-3 flex items-center justify-between">
         <p class="text-sm text-text3">Непрочитанных: {{ unread }}</p>
         <AppButton variant="ghost" @click="markAll">
@@ -113,13 +150,17 @@ onMounted(load)
         Не удалось получить уведомления. Проверьте связь и обновите страницу.
       </p>
 
-      <div v-else-if="!items.length" class="py-10 text-center">
+      <div v-else-if="!visible.length" class="py-10 text-center">
         <Bell class="mx-auto mb-3 size-8 text-text3 opacity-50" />
-        <p class="text-sm text-text3">Уведомлений пока нет</p>
+        <p class="text-sm text-text3">
+          {{ tab === 'homework' ? 'Домашних заданий пока нет'
+             : tab === 'system' ? 'Системных уведомлений пока нет'
+             : 'Уведомлений пока нет' }}
+        </p>
       </div>
 
       <ul v-else class="divide-y divide-border">
-        <li v-for="item in items" :key="item.id">
+        <li v-for="item in visible" :key="item.id">
           <button type="button"
                   class="flex w-full items-start gap-3 px-1 py-3 text-left transition-colors hover:bg-card2"
                   @click="open(item)">

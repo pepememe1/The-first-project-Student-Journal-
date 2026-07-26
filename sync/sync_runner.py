@@ -89,6 +89,28 @@ class SyncManager:
             token = app_settings.get_saved_token(self._login)
         return url, (token or "")
 
+    def fresh_auth(self):
+        """(url, token) с ГАРАНТИРОВАННО живым токеном: если текущий протух, тихо
+        обновляет его по refresh-токену (та же цепочка, что у фонового синка).
+
+        Нужно встроенному веб-view мессенджера: JWT живёт жёстко 5 ч, и просроченный
+        токен SPA просто отвергает — внутри десктопа показывалась ВЕБ-ФОРМА ВХОДА, хотя
+        человек в программу уже вошёл. current_auth() отдаёт токен как есть и для этого
+        не годится. Сеть недоступна — вернём что есть (решает вызывающий)."""
+        url = get_api_url()
+        if not url:
+            return "", ""
+        try:
+            from sync_client import is_token_expired
+            _, token = self.current_auth()
+            if token and not is_token_expired(token):
+                return url, token
+            if self._ensure_auth(url) and self._client and self._client.token:
+                return url, self._client.token
+        except Exception as e:
+            _log.warning("обновление токена для веб-view не удалось: %s", e)
+        return self.current_auth()
+
     def start(self, login: str, password: str, role: str):
         """Запустить фоновую синхронизацию для вошедшего пользователя.
 
@@ -137,7 +159,7 @@ class SyncManager:
         import random
         time.sleep(random.uniform(0, max_s))
 
-    def _ensure_auth(self, url: str) -> bool:
+    def _ensure_auth(self, url: str, allow_jitter: bool = True) -> bool:
         """Гарантирует наличие ГОДНОГО токена. Порядок (от дешёвого к дорогому):
           1) уже есть непросроченный access — берём его;
           2) сохранённый access (без дорогого PBKDF2), если он ещё жив;
@@ -178,9 +200,12 @@ class SyncManager:
         #пользователь войдёт заново с паролем (data_store передаст его в start()).
         if not (self._password or "").strip():
             return False
-        #Перед входом — jitter (размазать герд входов в 9:00).
+        #Перед входом — jitter (размазать герд входов в 9:00). ⚠️ ТОЛЬКО в фоновом потоке:
+        #flush_now() зовётся из _on_quit в ГЛАВНОМ потоке, и сон до 8 c там задерживал бы
+        #закрытие программы (в логе это выглядело как «зависла на выходе»).
         self._client.token = None
-        self._apply_login_jitter()
+        if allow_jitter:
+            self._apply_login_jitter()
         try:
             self._client.login(self._login, self._password)
             self._save_tokens()
@@ -333,7 +358,8 @@ class SyncManager:
             if not url:
                 return
             self._url = url
-            if self._ensure_auth(url):
+            #На выходе jitter не применяем — иначе закрытие ждало бы случайную паузу.
+            if self._ensure_auth(url, allow_jitter=False):
                 #Быстрая проверка доступности (health, таймаут 3с): если сервер молчит —
                 #НЕ вешаем закрытие программы полным push/pull (5+30с таймаут). Данные уже
                 #в локальной БД (offline-first) и уедут при следующем запуске.
@@ -389,6 +415,11 @@ def flush():
 def current_auth():
     """(url, token) текущей сессии для админских запросов из UI ('', '' — нет входа)."""
     return _manager.current_auth()
+
+
+def fresh_auth():
+    """(url, token) с живым токеном: протухший обновляется по refresh. Для веб-view."""
+    return _manager.fresh_auth()
 
 
 def push_my_prefs(prefs: dict):

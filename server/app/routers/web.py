@@ -21,7 +21,8 @@ from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                       AuthSession, ConfigKV, TermGrade, ScheduleOverride,
-                      ScheduleJointMark, schedule_override_id, joint_mark_id)
+                      ScheduleJointMark, schedule_override_id, joint_mark_id,
+                      SubjectHours, subject_hours_id)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -196,7 +197,9 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
                 entry["latest"] = W.grading.latest_exam_value(l.id, records)
             items.append(entry)
         subjects.append({"subject": subj, "lessons": items,
-                         "average": W.average(ls, records, cfg)})
+                         "average": W.average(ls, records, cfg),
+                         #«Пройдено X из Y часов» по этому предмету (0 total — не задано).
+                         "hours": W.hours_progress(db, user.group_name, subj, ls, ty, ts)})
 
     return {"group": user.group_name, "subjects": subjects, "term": {"year": ty, "semester": ts},
             "methodology": W.grading.methodology_text(cfg)}
@@ -372,6 +375,8 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
                      "retake_date": l.retake_date, "extra": l.extra or {}}
                     for l in lessons],
         "students": rows,
+        #«Пройдено X из Y часов» — считается из тех же занятий, отдельный запрос не нужен.
+        "hours": W.hours_progress(db, group, subject, lessons, ty, ts),
     }
 
 
@@ -711,7 +716,9 @@ def admin_students(group: str = Query(""),
     info = _contact_info(db, [u.login for u in rows])
     #name отдаём как есть (полная форма — совместимость), плюс имя и отчество РАЗДЕЛЬНО.
     return {"students": [dict(
-        {"login": u.login, "surname": u.surname, "name": u.name,
+        #id нужен для привязки родителя: связь ведётся по НЕИЗМЕНЯЕМОМУ users.id, а не по
+        #ФИО (фамилия меняется — см. §12 миграции оценок, там это уже стоило истории).
+        {"id": u.id, "login": u.login, "surname": u.surname, "name": u.name,
          "first_name": W.first_name(u), "patronymic": W.patronymic_of(u),
          "group": u.group_name},
         **info.get(u.login, {})) for u in rows]}
@@ -726,6 +733,71 @@ def admin_groups(_admin: User = Depends(require_admin), db: Session = Depends(ge
                                   User.deleted == False).count()  # noqa: E712
         out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n})
     return {"groups": out}
+
+
+# --- Учебные часы группы (план на семестр) ------------------------------------------
+@router.get("/admin/group-hours")
+def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: int = Query(0),
+                      _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Предметы группы с плановыми и уже пройденными часами за семестр.
+
+    Пройденные показываем и админу: без них поле «часов на семестр» заполняется вслепую,
+    а «занятий уже 30, а план 24» — единственный способ заметить опечатку сразу."""
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    lessons = W.group_lessons(db, group, year=ty, semester=ts)
+    by_subject = {}
+    for l in lessons:
+        by_subject.setdefault(l.subject, []).append(l)
+    out = []
+    for subj in list(grp.subjects or []):
+        out.append({"subject": subj,
+                    "hours_total": W.hours_plan(db, group, subj, ty, ts),
+                    "hours_done": W.hours_done(by_subject.get(subj, []))})
+    return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
+
+
+@router.post("/admin/group-hours")
+def admin_set_group_hours(payload: dict = Body(...),
+                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Сохранить часы по предметам группы: {group, year, semester, hours: {предмет: N}}.
+
+    Пишем ПАЧКОЙ (кнопка «Сохранить» в админке правит сразу несколько предметов) — иначе
+    полтора десятка запросов на одно нажатие и половинчатое состояние при обрыве связи."""
+    group = (payload.get("group") or "").strip()
+    hours = payload.get("hours") or {}
+    if not group or not isinstance(hours, dict):
+        raise HTTPException(status_code=400, detail="Нужны group и hours")
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    saved = 0
+    for subject, value in hours.items():
+        subject = (subject or "").strip()
+        if not subject:
+            continue
+        try:
+            total = max(0, int(value or 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=f"Часы по предмету «{subject}» должны быть числом")
+        hid = subject_hours_id(group, subject, ty, ts)
+        row = db.get(SubjectHours, hid)
+        if row is None:
+            row = SubjectHours(id=hid, group_name=group, subject=subject, year=ty, semester=ts)
+            db.add(row)
+        row.hours_total = total
+        row.updated_at = _now_iso()
+        #Ноль — это «план снят», а не удаление строки: надгробие уехало бы на десктоп и
+        #там часы просто исчезли бы, вместо того чтобы показать «не задано».
+        row.deleted = False
+        saved += 1
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.hours",
+              target=group, detail=f"предметов: {saved}")
+    return {"ok": True, "saved": saved, "term": {"year": ty, "semester": ts}}
 
 
 @router.get("/admin/subjects")
@@ -971,7 +1043,47 @@ def admin_schedule_override(payload: dict = Body(...), user: User = Depends(requ
     audit.log(db, actor=user.login, role="admin", action="schedule.override",
               target=f"{row.group_name} {row.day} н{row.week} п{row.pair_no} "
                      f"[{row.action}] {row.subject}")
+    _post_substitution(db, row)
     return {"ok": True, "id": row.id}
+
+
+def _post_substitution(db: Session, row) -> None:
+    """Опубликовать правку пары в канал «Замены · Группа» (§D12).
+
+    Целиком в try/except: расписание УЖЕ сохранено, и сбой мессенджера не имеет права
+    превращать успешную правку в ошибку — то же правило, что у остальных системных
+    каналов и у рассылки ДЗ."""
+    try:
+        from .messenger import notify_substitution
+        where = f"{row.day}, {row.pair_no}-я пара (неделя {row.week})"
+        if row.action == "remove":
+            text = f"❌ **{where}** — пара отменена."
+        else:
+            parts = [p for p in (row.subject, row.room and f"ауд. {row.room}",
+                                 row.teacher, row.time) if p]
+            text = f"🔁 **{where}** — теперь {', '.join(parts) or 'изменено'}."
+        notify_substitution(db, row.group_name, text)
+    except Exception as e:      # noqa: BLE001
+        print(f"[substitution] пост о замене не опубликован: {e}")
+
+
+def _post_substitutions_batch(db: Session, rows) -> None:
+    """Один пост на группу по пачке правок: перечисляем изменённые пары списком."""
+    try:
+        from .messenger import notify_substitution
+        by_group = {}
+        for row in rows:
+            by_group.setdefault(row.group_name, []).append(row)
+        for group, items in by_group.items():
+            lines = []
+            for row in sorted(items, key=lambda r: (r.week, r.day, r.pair_no)):
+                where = f"{row.day}, {row.pair_no}-я пара (неделя {row.week})"
+                lines.append(f"• ❌ {where} — отменена" if row.action == "remove"
+                             else f"• 🔁 {where} — {row.subject or 'изменено'}")
+            notify_substitution(db, group,
+                                "**Изменения в расписании:**\n" + "\n".join(lines))
+    except Exception as e:      # noqa: BLE001
+        print(f"[substitution] пост о заменах не опубликован: {e}")
 
 
 @router.post("/admin/schedule/overrides")
@@ -987,12 +1099,18 @@ def admin_schedule_overrides(payload: dict = Body(...), user: User = Depends(req
         raise HTTPException(400, "overrides: непустой список правок")
     if len(items) > 500:
         raise HTTPException(400, "слишком много правок за раз")
-    ids = []
+    ids, rows = [], []
     for it in items:
         if not isinstance(it, dict):
             raise HTTPException(400, "каждая правка должна быть объектом")
-        ids.append(_apply_override_row(db, it).id)
+        row = _apply_override_row(db, it)
+        ids.append(row.id)
+        rows.append(row)
     db.commit()
+    #В канал «Замены» из пачки уходит ОДИН пост на группу, а не по посту на ячейку:
+    #админ правит расписание сразу на неделю, и поячеечная рассылка была бы спамом,
+    #после которого канал просто замьютят — вместе с действительно важными заменами.
+    _post_substitutions_batch(db, rows)
     groups = sorted({(it.get("group") or "").strip() for it in items if it.get("group")})
     audit.log(db, actor=user.login, role="admin", action="schedule.override",
               target=f"пачка {len(ids)} правок: {', '.join(groups)}")
@@ -1212,7 +1330,8 @@ _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
                      "about_vsgutu", "about_college", "schedule", "weather", "howto"}
 
 
-def answer_vector_question(question: str, user: User, db: Session) -> dict:
+def answer_vector_question(question: str, user: User, db: Session, context: str = "",
+                           voice_role: str = "") -> dict:
     """Общая логика ответа Вектора (вынесена из `vector_ask`, чтобы её мог переиспользовать
     мессенджер — команда `/vector <вопрос>` в любом чате, см. `routers/messenger.py`).
     Тот же принцип, что в десктопе: цифры берутся из реальных данных (SQL) — модель их НЕ
@@ -1222,17 +1341,23 @@ def answer_vector_question(question: str, user: User, db: Session) -> dict:
     cfg = W.load_config(db)
     result = _vector_facts(question.lower(), user, db, cfg)
     intent = result.get("intent")
+    #voice_role меняет ТОЛЬКО тон обращения, но не скоуп данных. Нужен кабинету родителя:
+    #факты там собираются от лица РЕБЁНКА (иначе пришлось бы дублировать весь студенческий
+    #скоуп и однажды разойтись с ним), а говорить «твой средний балл» родителю — странно.
+    role = voice_role or user.role
     #Вопрос НЕ из пула (unknown) — свободный small-talk: пара фраз + мягкий возврат к учёбе,
     #без решения задач (см. vector_llm.free_chat). Данные журнала тут не выдумываем.
     if intent == "unknown":
-        result["text"] = vector_llm.free_chat(cfg, question, user.role)
+        #context — обезличенные заметки из «Избранного» (пусто для обычного /web/vector/ask):
+        #помогает понять «а это когда?», но цифры успеваемости из него брать запрещено.
+        result["text"] = vector_llm.free_chat(cfg, question, role, context)
     #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
     #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
     #Приветствие/справку/благодарность/расписание НЕ озвучиваем (см. _NO_VOICE_INTENTS).
     elif intent not in _NO_VOICE_INTENTS and not result.get("no_voice"):
         #no_voice — ответ содержит фактический список (имена, причины), который LLM исказил
         #бы или отказался озвучивать. Отдаём как есть.
-        result["text"] = vector_llm.voice(cfg, result.get("text", ""), user.role, question)
+        result["text"] = vector_llm.voice(cfg, result.get("text", ""), role, question)
     result.pop("no_voice", None)   #внутренний флаг наружу не отдаём
     return result
 
@@ -1823,15 +1948,36 @@ def teacher_create_lesson(payload: dict = Body(...),
     lid = str(_uuid.uuid4())
     #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр).
     ty, ts = W.current_term(W.load_config(db))
+    topic = (payload.get("topic") or "").strip()
     db.add(Lesson(id=lid, group_name=group, subject=subject, type=ltype,
-                  number=int(number), topic=(payload.get("topic") or "").strip(),
+                  number=int(number), topic=topic,
                   date=(payload.get("date") or "").strip(),
                   retake_date=(payload.get("retake_date") or "").strip(),
                   hour=int(payload.get("hour") or 0), extra={},
                   year=ty, semester=ts,
                   updated_at=_now_iso(), deleted=False))
     db.commit()
+    if ltype == "ДЗ":
+        _notify_homework(db, group, subject, lid, topic, int(number))
     return {"ok": True, "id": lid, "number": int(number)}
+
+
+def _notify_homework(db: Session, group: str, subject: str, lesson_id: str,
+                     task: str, number: int) -> None:
+    """Разослать студентам группы уведомление о заданном ДЗ.
+
+    Обёрнуто в try/except целиком: занятие УЖЕ создано и закоммичено, и падение
+    рассылки не имеет права превращать успешное действие преподавателя в ошибку 500.
+    То же правило, что у постов в системные каналы ниже по файлу."""
+    try:
+        from .. import rustore_push
+        for stud in W.students_in_group(db, group):
+            if not stud.login:
+                continue        #без логина уведомлять некого
+            rustore_push.notify_homework(db, stud.login, subject=subject,
+                                         lesson_id=lesson_id, task=task, number=number)
+    except Exception as e:      # noqa: BLE001 — намеренно глушим любую беду рассылки
+        print(f"[homework] не удалось разослать уведомления о ДЗ: {e}")
 
 
 @router.put("/teacher/lesson/{lesson_id}")

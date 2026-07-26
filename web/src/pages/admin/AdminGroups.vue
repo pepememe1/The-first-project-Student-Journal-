@@ -81,6 +81,44 @@ async function del(g) {
   try { await adminApi.deleteGroup(g.name); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
 }
+// ── Учебные часы группы («пройдено X из Y») ─────────────────────────────────────
+// Часы задаются на СЕМЕСТР и по КАЖДОМУ предмету, поэтому это отдельное окно, а не поле
+// в форме группы. Сохраняем пачкой одним запросом: одно нажатие «Сохранить» не должно
+// превращаться в полтора десятка запросов с половинчатым результатом при обрыве связи.
+const showHours = ref(false)
+const hoursGroup = ref('')
+const hoursRows = ref([])          // [{subject, hours_total, hours_done}]
+const hoursTerm = ref(null)
+const hoursLoading = ref(false)
+const hoursSaving = ref(false)
+
+async function openHours(g) {
+  hoursGroup.value = g.name
+  hoursRows.value = []
+  showHours.value = true
+  hoursLoading.value = true
+  try {
+    const r = (await adminApi.groupHours(g.name)).data
+    hoursRows.value = r.subjects || []
+    hoursTerm.value = r.term || null
+  } catch (e) {
+    toast.error(e?.response?.data?.detail || 'Не удалось загрузить часы')
+    showHours.value = false
+  } finally { hoursLoading.value = false }
+}
+
+async function saveHours() {
+  hoursSaving.value = true
+  try {
+    const hours = {}
+    hoursRows.value.forEach((r) => { hours[r.subject] = Number(r.hours_total) || 0 })
+    await adminApi.saveGroupHours(hoursGroup.value, hours)
+    toast.success('Часы сохранены')
+    showHours.value = false
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить') }
+  finally { hoursSaving.value = false }
+}
+
 // «Из расписания» — привязывает к каждой группе предметы ИЗ её расписания (портал
 // ВСГУТУ) и пополняет каталог. Снимок строится на сервере лениво (~минута): если он
 // ещё готовится — просим нажать позже.
@@ -141,12 +179,46 @@ async function importParsed() {
               </div>
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
+              <button class="mr-3 text-text3 hover:text-accent" title="Учебные часы по предметам" @click="openHours(g)">🕐</button>
               <button class="mr-3 text-text3 hover:text-accent" title="Изменить" @click="openEdit(g)">✎</button>
               <button class="text-text3 hover:text-red" title="Удалить" @click="del(g)">✕</button>
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- ── Учебные часы группы ─────────────────────────────────────────────────── -->
+    <div v-if="showHours" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showHours = false">
+      <div class="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="font-title text-lg font-bold text-text">Учебные часы · {{ hoursGroup }}</h3>
+        <p class="mb-4 mt-1 text-xs text-text3">
+          Часы на семестр по каждому предмету. Пройденное считается по лекциям и практикам
+          (одно занятие — 2 академических часа); домашние задания в часы не входят.
+          <span v-if="hoursTerm"> Период: {{ hoursTerm.year }} · {{ hoursTerm.semester === 1 ? 'осенний' : 'весенний' }}.</span>
+        </p>
+
+        <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">Загрузка…</p>
+        <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
+          У группы нет предметов — сначала задайте их кнопкой ✎.
+        </p>
+        <div v-else class="max-h-80 space-y-1 overflow-y-auto">
+          <div v-for="r in hoursRows" :key="r.subject"
+               class="flex items-center gap-3 rounded-sm px-1 py-1.5 hover:bg-bg2">
+            <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
+            <span class="shrink-0 text-xs text-text3">пройдено {{ r.hours_done }} ч</span>
+            <input v-model.number="r.hours_total" type="number" min="0" step="2"
+                   class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
+          </div>
+        </div>
+
+        <div class="mt-5 flex justify-end gap-2">
+          <AppButton variant="ghost" size="sm" @click="showHours = false">Отмена</AppButton>
+          <AppButton variant="green" size="sm" :disabled="hoursSaving || hoursLoading || !hoursRows.length" @click="saveHours">
+            {{ hoursSaving ? 'Сохранение…' : 'Сохранить' }}
+          </AppButton>
+        </div>
+      </div>
     </div>
 
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">

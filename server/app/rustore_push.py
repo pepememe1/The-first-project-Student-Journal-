@@ -258,6 +258,62 @@ def notify_schedule_changed(db, login: str, role: str = "student",
     )
 
 
+def notify_homework(db, login: str, subject: str = "", lesson_id: str = "",
+                    task: str = "", number: int = 0) -> int:
+    """Преподаватель задал домашнее задание. Уходит ВСЕМ студентам группы.
+
+    В отличие от оценки, текст задания — не персональные данные: он одинаков для всей
+    группы и не говорит ничего о конкретном человеке. Поэтому в письмо (которое хранится
+    у нас) он попадает целиком — студенту важно видеть суть, не открывая журнал.
+
+    А вот в САМ ПУШ задание всё равно не кладём: пуш идёт через серверы RuStore, и общее
+    правило модуля — наружу отдаём только «есть новое» + id события. Заодно это защищает
+    от неожиданности: преподаватель мог вписать в задание фамилии или ссылку на внутренний
+    ресурс, и предугадать это на стороне отправки нельзя."""
+    title, body = _homework_words(subject, task, number)
+    event_id = _create_event(db, login, "homework", title, body,
+                             subject=subject, lesson_id=lesson_id,
+                             payload={"task": task, "number": number})
+    return notify_login(
+        db, login,
+        title="Новое домашнее задание",
+        body="Вам задали домашнее задание. Откройте приложение, чтобы посмотреть.",
+        data={"type": "homework", "event_id": event_id},
+    )
+
+
+def _homework_words(subject: str, task: str, number: int = 0) -> tuple:
+    """(заголовок, тело) письма о ДЗ. Заголовок — с предметом, чтобы в списке уведомлений
+    было понятно без открытия; тело — сам текст задания."""
+    subj = (subject or "").strip()
+    task = (task or "").strip()
+    head = f"ДЗ по «{subj}»" if subj else "Домашнее задание"
+    if not task:
+        #Преподаватель мог не заполнить текст. Пустое письмо бессмысленно — зовём в журнал.
+        return (head, "Преподаватель задал домашнее задание. Загляните в журнал.")
+    return (head, f"Задание №{number}: {task}" if number else task)
+
+
+def notify_reminder(db, login: str, text: str, conversation_id: str = "") -> int:
+    """§D19: наступило напоминание, поставленное самим пользователем.
+
+    Текст он написал (или выбрал) сам, так что в НАШЕМ письме он есть целиком. В пуш, как
+    и везде, уходит только «есть напоминание» + id события: тело идёт через RuStore, а в
+    сообщении переписки может оказаться что угодно."""
+    snippet = (text or "").strip()
+    body = snippet if len(snippet) <= 300 else snippet[:297] + "…"
+    event_id = _create_event(db, login, "reminder", "Напоминание",
+                             body or "Вы просили напомнить.",
+                             payload={"conversation_id": conversation_id})
+    return notify_login(
+        db, login,
+        title="Напоминание",
+        body="Сработало напоминание. Откройте приложение, чтобы посмотреть.",
+        data={"type": "reminder", "event_id": event_id,
+              "conversation_id": conversation_id},
+    )
+
+
 def prune_stale(db) -> int:
     """Убирает токены устройств, которые давно не подтверждались.
 

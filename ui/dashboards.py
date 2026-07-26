@@ -12,7 +12,13 @@ from PySide6.QtWidgets import (
 )
 
 from core import GradeBook
+from grading import PRACTICE_TYPES
 from styles import C
+
+#Типы занятий, из которых собирается статистика оценок студента (распределение,
+#списки баллов). Экзамен идёт сюда всегда — это оценка, даже если в средний балл он
+#по методике не входит (см. grading.avg_include_exam). ДЗ приехало из PRACTICE_TYPES.
+GRADED_TYPES = tuple(PRACTICE_TYPES) + ("Экзамен",)
 from widgets import (
     lbl, title_lbl, section_lbl, stat_card, card, btn, separator,
     vector_unavailable_widget
@@ -161,14 +167,19 @@ class StudentDashboard(QWidget):
         body.addWidget(self.stack, 1)
         lay.addLayout(body)
 
-        self._build_dash()
-        self._build_journal()
-        self._build_schedule()
-        self._build_stats()
-        self._build_ai_page()
-        self._build_messenger()
-        self._build_profile()
-        self._build_settings()
+        #Все вкладки строятся синхронно при входе — если какая-то «думает» секунды, из
+        #этой строки видно какая именно (иначе долгий вход приходится искать вслепую).
+        import time as _t
+        _marks, _prev = [], _t.perf_counter()
+        for _name, _fn in (("дашборд", self._build_dash), ("журнал", self._build_journal),
+                           ("расписание", self._build_schedule), ("статистика", self._build_stats),
+                           ("ИИ", self._build_ai_page), ("сообщения", self._build_messenger),
+                           ("профиль", self._build_profile), ("настройки", self._build_settings)):
+            _fn()
+            _now = _t.perf_counter()
+            _marks.append(f"{_name} {_now - _prev:.2f}")
+            _prev = _now
+        log.get("dashboards").warning("[тайминг вкладок] %s c", " · ".join(_marks))
 
         self.sidebar.set_active("dash")
 
@@ -300,7 +311,7 @@ class StudentDashboard(QWidget):
                 continue
             
             for l in book.lessons:
-                if l.type in ("Практика", "Экзамен"):
+                if l.type in GRADED_TYPES:
                     v = s.records.get(l.id, "")
                     try:
                         total_g.append(int(v.split()[0]))
@@ -338,7 +349,7 @@ class StudentDashboard(QWidget):
             gs = []
             if s:
                 for l in book.lessons:
-                    if l.type in ("Практика", "Экзамен"):
+                    if l.type in GRADED_TYPES:
                         v = s.records.get(l.id, "")
                         try:
                             gs.append(int(v.split()[0]))
@@ -656,7 +667,7 @@ class StudentDashboard(QWidget):
             
             gs = []
             for l in book.lessons:
-                if l.type in ("Практика", "Экзамен"):
+                if l.type in GRADED_TYPES:
                     v = s.records.get(l.id, "")
                     try:
                         g = int(v.split()[0])

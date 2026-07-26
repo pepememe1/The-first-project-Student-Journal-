@@ -496,6 +496,9 @@ class LoginPage(QWidget):
     login_student = QSignal(dict)
     login_teacher = QSignal(str, dict)
     login_admin   = QSignal()
+    #Родитель: его кабинет открывается веб-представлением (см. ui/parent_dashboard.py),
+    #в payload нужны только логин и ФИО для шапки.
+    login_parent  = QSignal(dict)
 
     def __init__(self, teachers_db: dict, parent=None):
         super().__init__(parent)
@@ -963,6 +966,8 @@ class LoginPage(QWidget):
             self.login_teacher.emit(res["name"], res["data"])
         elif role == "student":
             self.login_student.emit(res["stud"])
+        elif role == "parent":
+            self.login_parent.emit(res.get("parent") or {})
 
     def _do_windows_login(self):
         """Вход по учётной записи Windows: система подтверждает личность (ПИН/лицо/пароль),

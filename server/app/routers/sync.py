@@ -252,6 +252,29 @@ def _normalize_grade_key(db, name: str, item: dict, lesson_group: dict) -> str:
                          item.get("semester", 0))
 
 
+def _notify_homework_from_sync(db: Session, lesson: dict) -> None:
+    """Разослать студентам группы уведомление о ДЗ, приехавшем с десктопа.
+
+    Полностью в try/except: изменения УЖЕ приняты и закоммичены, и сбой рассылки не имеет
+    права превратить успешный синк в ошибку — клиент решил бы, что push не прошёл, и
+    отправил бы всё заново."""
+    try:
+        from .. import rustore_push
+        from ..webdata import students_in_group
+        group = lesson.get("group_name") or ""
+        if not group:
+            return
+        for stud in students_in_group(db, group):
+            if not stud.login:
+                continue
+            rustore_push.notify_homework(
+                db, stud.login, subject=lesson.get("subject") or "",
+                lesson_id=lesson.get("id") or "", task=lesson.get("topic") or "",
+                number=int(lesson.get("number") or 0))
+    except Exception as e:      # noqa: BLE001 — рассылка не должна ронять синк
+        print(f"[homework] рассылка уведомлений о ДЗ из синка не удалась: {e}")
+
+
 @router.post("/push")
 def push(payload: dict = Body(...), request: Request = None,
          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -277,6 +300,7 @@ def push(payload: dict = Body(...), request: Request = None,
     server_ts = _now()
     applied = {}
     rejected = {}
+    new_homework = []    #ДЗ, впервые приехавшие с клиента — разослать после commit
 
     #Построчная авторизация преподавателя — по его предметам. Для admin проверки нет
     #(он вправе писать всё). Карту lesson→subject строим один раз на запрос.
@@ -328,6 +352,14 @@ def push(payload: dict = Body(...), request: Request = None,
                 data["updated_at"] = server_ts   #метка — серверная
                 db.add(model(**data))
                 count += 1
+                #Домашнее задание, созданное на десктопе, доезжает сюда обычным push'ем —
+                #и студентов надо уведомить так же, как при создании с сайта. Копим и
+                #рассылаем ПОСЛЕ commit: рассылка не должна ни удлинять транзакцию, ни
+                #уронить приём изменений. Условие «строки ещё не было» и есть защита от
+                #повторов: полный снимок push'ится заново каждые N циклов, и без него
+                #группа получала бы одно и то же ДЗ снова и снова.
+                if name == "lessons" and (data.get("type") or "") == "ДЗ" and not data.get("deleted"):
+                    new_homework.append(data)
                 continue
             #Применяем, только если контент реально отличается от хранимого —
             #иначе не трогаем (иначе каждая синхронизация бы «омолаживала» всё).
@@ -344,6 +376,8 @@ def push(payload: dict = Body(...), request: Request = None,
             rejected[name] = rej
 
     db.commit()
+    for hw in new_homework:
+        _notify_homework_from_sync(db, hw)
     #Преподаватель попытался записать НЕ свой предмет — это нарушение прав, поэтому
     #видно в админской консоли (а не молча игнорируется).
     if rejected:

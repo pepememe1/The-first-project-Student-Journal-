@@ -39,6 +39,11 @@ _ROLE_HINT = {
     "student": "Обращаешься к студенту лично, поддерживающе.",
     "teacher": "Обращаешься к преподавателю как к коллеге, по-деловому.",
     "admin":   "Обращаешься к администратору, сухо и по существу.",
+    #Родитель спрашивает о СВОЁМ РЕБЁНКЕ: факты те же, что у студента, но обращаться на
+    #«ты» к самому студенту здесь нельзя — читает взрослый человек о другом человеке.
+    "parent":  ("Обращаешься к родителю студента: вежливо, спокойно, о его ребёнке в "
+                "третьем лице. Не оценивай личность студента и не давай воспитательных "
+                "советов — только факты успеваемости и, если уместно, спокойный вывод."),
 }
 
 
@@ -114,8 +119,18 @@ _SMALLTALK_RULES = """\
 Коротко, на русском, максимум один эмодзи."""
 
 
-def _freechat_messages(question: str, role: str) -> list:
+def _freechat_messages(question: str, role: str, context: str = "") -> list:
     system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "") + "\n\n" + _SMALLTALK_RULES
+    if context:
+        #Заметки пользователя из «Избранного» — чтобы понимать, о чём речь в «а это когда?»
+        #и «что я писал про экзамен». ⚠️ Прямо запрещаем выводить из них ЦИФРЫ успеваемости:
+        #оценки и средний балл берутся ТОЛЬКО из SQL (анти-галлюцинационный инвариант),
+        #заметка же могла устареть или быть чужой выпиской.
+        system += ("\n\nНИЖЕ — личные заметки пользователя (его раздел «Избранное»). "
+                   "Используй их, чтобы понять контекст вопроса. НЕ выводи из них оценки, "
+                   "средний балл и прочие показатели успеваемости — эти цифры приходят "
+                   "только из журнала. Если в заметках ответа нет, так и скажи.\n"
+                   "--- заметки ---\n" + context + "\n--- конец заметок ---")
     return [{"role": "system", "content": system}, {"role": "user", "content": question}]
 
 
@@ -124,7 +139,7 @@ def _free_offline(role: str) -> str:
             "спроси про оценки, средний балл, пропуски или расписание. 🐯")
 
 
-def _chat_gigachat(cfg: dict, messages: list) -> str:
+def _chat_gigachat(cfg: dict, messages: list, temperature: float = 0.5) -> str:
     from gigachat import GigaChat
     from gigachat.models import Chat, Messages
     creds = cfg.get("gigachat_credentials", "")
@@ -134,32 +149,58 @@ def _chat_gigachat(cfg: dict, messages: list) -> str:
                   model=cfg.get("gigachat_model", "GigaChat"),
                   verify_ssl_certs=False, timeout=25.0) as client:
         chat = Chat(messages=[Messages(role=m["role"], content=m["content"]) for m in messages],
-                    temperature=0.5)
+                    temperature=temperature)
         return client.chat(chat).choices[0].message.content.strip()
 
 
-def _chat_ollama(cfg: dict, messages: list) -> str:
+def _chat_ollama(cfg: dict, messages: list, temperature: float = 0.5) -> str:
     import requests
     host = (cfg.get("local_host") or "http://localhost:11434").rstrip("/")
     r = requests.post(host + "/api/chat",
                       json={"model": cfg.get("local_model", "qwen2.5:3b"),
                             "messages": messages, "stream": False,
-                            "options": {"temperature": 0.5}}, timeout=60)
+                            "options": {"temperature": temperature}}, timeout=60)
     return r.json()["message"]["content"].strip()
 
 
-def free_chat(cfg: dict, question: str, role: str = "student") -> str:
+def complete(cfg: dict, messages: list, temperature: float = 0.3) -> str:
+    """Прогнать ГОТОВЫЙ диалог через выбранного провайдера (GigaChat/Ollama).
+
+    Низкоуровневая точка входа для задач, которые не являются «озвучкой фактов Вектора»:
+    сводка переписки, расширение поискового запроса (см. messenger_ai.py). Возвращает ''
+    при отсутствии провайдера или любой ошибке — ВЫЗЫВАЮЩИЙ обязан иметь запасной путь.
+    Молча подставлять выдумку вместо ответа нельзя, а ронять запрос из-за недоступной
+    модели — тем более: это вспомогательные функции поверх работающего без них чата."""
+    cfg = cfg or {}
+    if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
+        return ""
+    kind = (cfg.get("vector_llm") or "offline").strip()
+    try:
+        if kind == "gigachat":
+            return _chat_gigachat(cfg, messages, temperature=temperature)
+        if kind in ("local", "ollama"):
+            return _chat_ollama(cfg, messages, temperature=temperature)
+    except Exception as e:
+        print(f"[vector_llm] complete не удался ({kind}): {e}")
+    return ""
+
+
+def free_chat(cfg: dict, question: str, role: str = "student", context: str = "") -> str:
     """Свободный ответ на НЕжурнальный вопрос: короткий small-talk → возврат к учёбе, без
-    решения задач. Нет провайдера/ошибка → мягкий офлайн-редирект (чат не ломается)."""
+    решения задач. Нет провайдера/ошибка → мягкий офлайн-редирект (чат не ломается).
+
+    `context` — личные заметки пользователя (см. `_freechat_messages`). Передаётся только
+    из «Избранного» и ТОЛЬКО обезличенным: ФИО маскирует вызывающий код
+    (`messenger._saved_context`), иначе персональные данные уехали бы в облачную модель."""
     cfg = cfg or {}
     if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
         return _free_offline(role)
     kind = (cfg.get("vector_llm") or "offline").strip()
     try:
         if kind == "gigachat":
-            return _chat_gigachat(cfg, _freechat_messages(question, role)) or _free_offline(role)
+            return _chat_gigachat(cfg, _freechat_messages(question, role, context)) or _free_offline(role)
         if kind in ("local", "ollama"):
-            return _chat_ollama(cfg, _freechat_messages(question, role)) or _free_offline(role)
+            return _chat_ollama(cfg, _freechat_messages(question, role, context)) or _free_offline(role)
     except Exception as e:
         print(f"[vector_llm] free_chat не удался ({kind}): {e}")
     return _free_offline(role)

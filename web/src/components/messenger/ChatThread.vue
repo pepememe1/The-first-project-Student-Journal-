@@ -7,8 +7,9 @@ import { storeToRefs } from 'pinia'
 import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
-  Search, Zap, MessageSquare, Eye, Plus,
+  Search, Zap, MessageSquare, Eye, Plus, ScrollText,
 } from '@lucide/vue'
+import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownLite } from '@/utils/markdownLite'
@@ -17,12 +18,13 @@ import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
 import ConversationInfo from './ConversationInfo.vue'
 import MascotCooldown from './MascotCooldown.vue'
+import ReminderDialog from './ReminderDialog.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
-const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, mascotCooldown, templates, activeThread, searchResults, searching } = storeToRefs(m)
+const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
 const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
 const isAdmin = computed(() => auth.role === 'admin')
@@ -297,6 +299,31 @@ async function onPick(action) {
   else if (action === 'select') m.enterSelection(msg.id)
   else if (action === 'delete') requestDelete([msg])
   else if (action === 'report') reportMsg.value = msg
+  else if (action === 'remind') remindMsg.value = msg
+}
+
+// §D19: напоминание о сообщении. Дату из текста разбирает сервер (детерминированно),
+// диалог только показывает её и даёт поправить.
+const remindMsg = ref(null)
+
+// §D18: сводка переписки. Запускается ТОЛЬКО кнопкой — автоматический пересказ при каждом
+// открытии чата стоил бы запроса к модели на каждый вход, а прочитали бы его единицы.
+const summary = ref({ open: false, text: '', loading: false, note: '' })
+async function openSummary() {
+  summary.value = { open: true, text: '', loading: true, note: '' }
+  try {
+    const { data } = await messengerApi.chatSummary(activeId.value)
+    if (data.summary) summary.value = { open: true, text: data.summary, loading: false, note: '' }
+    else summary.value = {
+      open: true, text: '', loading: false,
+      // Честно говорим, ЧТО не так, вместо выдуманного пересказа.
+      note: data.reason === 'too_short'
+        ? 'В переписке пока слишком мало сообщений, чтобы было что пересказывать.'
+        : 'ИИ-модель сейчас недоступна — сводку сделать не удалось. Настройки модели у администратора.',
+    }
+  } catch (e) {
+    summary.value = { open: true, text: '', loading: false, note: 'Не удалось получить сводку.' }
+  }
 }
 
 function flashCopied() { copied.value = true; setTimeout(() => { copied.value = false }, 1200) }
@@ -399,7 +426,10 @@ function jumpTo(id) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
+// «Избранное» — личный блокнот, а не переписка: ни собеседника, ни его статуса тут нет.
+const isSaved = computed(() => kind.value === 'saved')
 const peerName = computed(() => {
+  if (isSaved.value) return 'Избранное'
   if (isModeration.value) return 'Модерация'
   if (isGroupOrChannel.value) return activeInfo.value?.title || activePeer.value?.full_name || 'Беседа'
   return activePeer.value?.full_name || 'Диалог'
@@ -407,6 +437,8 @@ const peerName = computed(() => {
 // §D7: подпись статуса поверх presence (dnd/studying/away + текст преподавателя).
 const STATUS_RU = { dnd: 'Не беспокоить', studying: 'Готовится/учится', away: 'Отошёл(а)' }
 const subtitle = computed(() => {
+  //Свой блокнот: показывать «в сети»/роль бессмысленно — это ты сам.
+  if (isSaved.value) return 'Заметки только для вас'
   if (isModeration.value) return 'Официальная поддержка'
   if (peerTyping.value) return 'печатает…'
   if (kind.value === 'channel') return `${activeInfo.value?.subscribers || 0} подписчиков`
@@ -416,6 +448,10 @@ const subtitle = computed(() => {
   return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
 })
 const topPinned = computed(() => pinned.value[0] || null)
+//Подсказка в поле ввода: разметку показывают кнопки тулбара, поэтому в ней только то,
+//что иначе не найти — команда Вектора, и лишь в «Избранном», где она и работает.
+const composerHint = computed(() =>
+  isSaved.value ? 'Заметка… (/vector — спросить ИИ)' : 'Сообщение…')
 
 // ── Оформление ленты (как в Telegram) ────────────────────────────────────────────────
 // Свои сообщения — справа, чужие — слева с аватаркой и ФИО. Если человек пишет НЕСКОЛЬКО
@@ -436,8 +472,19 @@ const avatarBySender = computed(() => {
   for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.avatar || ''
   return map
 })
+// Ответы Вектора приходят от служебного отправителя 'system'. Его нет в справочнике
+// пользователей, поэтому подпись и аватар подставлялись от СОБЕСЕДНИКА — в «Избранном»
+// это ты сам, и ответ ИИ выглядел как твоё же сообщение с твоей аватаркой.
+const VECTOR_SENDER = 'system'
+const VECTOR_AVATAR = '/mascot/neutral-idle.png'   //арт Арины, кадрируем по голове
+function isVector(msg) { return msg.sender_id === VECTOR_SENDER }
 function senderAvatar(msg) {
+  if (isVector(msg)) return VECTOR_AVATAR
   return avatarBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.avatar || ''))
+}
+function senderName(msg) {
+  if (isVector(msg)) return 'Вектор'
+  return msg.sender_name || (isSaved.value ? '' : (activePeer.value?.full_name || ''))
 }
 
 // Шапка чата — в цвет плашки, которую собеседник выбрал в своём профиле.
@@ -479,6 +526,15 @@ const headerTint = computed(() =>
                   : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
           <Search class="size-5" />
         </button>
+        <!-- §D18: сводка переписки — ТОЛЬКО по кнопке. Автоматический пересказ при каждом
+             открытии чата означал бы запрос к модели на каждый вход. -->
+        <button type="button" @click="openSummary"
+                aria-label="Краткая сводка переписки" title="Краткая сводка переписки"
+                class="grid size-8 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                  : 'text-text3 hover:bg-bg2 hover:text-text'">
+          <ScrollText class="size-5" />
+        </button>
         <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
         <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
                 :aria-label="muted ? 'Включить уведомления' : 'Отключить уведомления'"
@@ -518,11 +574,17 @@ const headerTint = computed(() =>
       <div v-if="showSearch" class="shrink-0 border-b border-border bg-card">
         <div class="flex items-center gap-2 px-3 py-2">
           <Search class="size-4 shrink-0 text-text3" />
-          <input v-model="searchQ" @input="onSearchInput" autofocus placeholder="Поиск по сообщениям…"
+          <input v-model="searchQ" @input="onSearchInput" autofocus placeholder="Поиск по смыслу…"
                  class="h-8 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
           <button type="button" @click="closeSearchPanel" aria-label="Закрыть поиск"
                   class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
         </div>
+        <!-- Показываем, чем модель дополнила запрос: иначе непонятно, почему нашлось
+             сообщение, в котором искомого слова нет. -->
+        <p v-if="searchExpanded.length && searchQ.trim()"
+           class="border-t border-border px-3 py-1.5 text-[11px] text-text3">
+          Ищем также: {{ searchExpanded.join(', ') }}
+        </p>
         <div v-if="searchQ.trim()" class="max-h-56 overflow-y-auto border-t border-border">
           <p v-if="searching" class="p-3 text-center text-xs text-text3">Ищем…</p>
           <p v-else-if="!searchResults?.length" class="p-3 text-center text-xs text-text3">Ничего не найдено.</p>
@@ -572,7 +634,8 @@ const headerTint = computed(() =>
             <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
             <div v-if="!msg.mine" class="w-8 shrink-0">
               <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
-                      :name="msg.sender_name || activePeer?.full_name || ''" :size="32" />
+                      :name="senderName(msg)" :size="32"
+                      :position="isVector(msg) ? 'top' : 'center'" />
             </div>
             <!-- div, а не button: внутри есть свои интерактивные элементы (реакции) —
                  кнопка-в-кнопке невалидна. Жесты (клик/ПКМ/тач) не завязаны на семантику тега. -->
@@ -586,9 +649,9 @@ const headerTint = computed(() =>
                  :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'"
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
-              <div v-if="!msg.mine && runStarts.has(msg.id) && (msg.sender_name || activePeer?.full_name)"
+              <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
                    class="mb-0.5 text-[11px] font-semibold text-accent">
-                {{ msg.sender_name || activePeer?.full_name }}
+                {{ senderName(msg) }}
               </div>
               <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
                 Переслано от {{ msg.forwarded_from }}
@@ -722,7 +785,9 @@ const headerTint = computed(() =>
             </form>
           </div>
           <form class="flex items-end gap-2 p-2.5" @submit.prevent="submit">
-            <textarea ref="composer" v-model="draft" rows="1" placeholder="Сообщение… (**жирный**, *курсив*, `код`, @Фамилия, /vector — спросить ИИ)"
+            <!-- Разметку подсказывать не нужно: над полем есть кнопки B/I/U/S/код/цитата.
+               Про /vector говорим только там, где команда работает — в «Избранном». -->
+          <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
                       @keydown="onComposerKeydown" @input="onComposerInput" :disabled="mascotCooldown.active"
                       class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60" />
             <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" aria-label="Отправить"
@@ -764,6 +829,30 @@ const headerTint = computed(() =>
                 class="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2">Ответить</button>
       </div>
     </div>
+
+    <!-- §D18: сводка переписки -->
+    <div v-if="summary.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+         style="background: var(--gb-overlay)" @click.self="summary.open = false">
+      <div class="flex max-h-[80vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
+        <div class="mb-2 flex items-center gap-2">
+          <ScrollText class="size-4 text-accent" />
+          <h3 class="flex-1 font-title text-sm font-bold text-text">Краткая сводка</h3>
+          <button type="button" @click="summary.open = false" aria-label="Закрыть"
+                  class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
+        </div>
+        <p v-if="summary.loading" class="py-6 text-center text-sm text-text3">Читаем переписку…</p>
+        <p v-else-if="summary.note" class="py-4 text-sm text-text3">{{ summary.note }}</p>
+        <div v-else class="min-h-0 flex-1 overflow-y-auto whitespace-pre-line text-sm leading-relaxed text-text">
+          {{ summary.text }}
+        </div>
+        <p v-if="summary.text" class="mt-3 border-t border-border pt-2 text-[11px] text-text3">
+          Составлено ИИ по переписке. Имена обезличены перед отправкой в модель.
+        </p>
+      </div>
+    </div>
+
+    <!-- §D19: напоминание о сообщении -->
+    <ReminderDialog v-if="remindMsg" :message="remindMsg" @close="remindMsg = null" />
 
     <!-- Кто прочитал сообщение -->
     <div v-if="readByPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"

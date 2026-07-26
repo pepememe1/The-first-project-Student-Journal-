@@ -282,6 +282,24 @@ def test_create_lesson_no_topic_warns():
     assert r.kind == "lesson" and (not r.lesson.topic) and r.warnings
 
 
+def test_create_homework():
+    r = b("задай домашнее задание по теме Создать базу данных")
+    assert r.kind == "lesson" and r.lesson.type == "ДЗ", r.lesson.type
+    assert "базу данных" in r.lesson.topic
+
+
+def test_homework_wins_over_other_type_words():
+    """«ДЗ по практике» — это ДЗ, а не практика: основа «домашн»/«дз» проверяется первой."""
+    r = b("создай дз по практике номер 2")
+    assert r.kind == "lesson" and r.lesson.type == "ДЗ", r.lesson.type
+
+
+def test_short_stem_dz_does_not_match_inside_words():
+    """«дз» ищется как отдельное слово. Иначе «создай лекцию про надзор» стала бы ДЗ."""
+    r = b("создай лекцию по теме государственный надзор")
+    assert r.kind == "lesson" and r.lesson.type == "Лекция", r.lesson.type
+
+
 # ═══ БУРЯТСКИЕ ФИО (Самбуева, Гындынова, Цыбенов… + имена Бато, Арюна, Баянжаргал) ═══
 BUR = [("Самбуева", "Арюна"), ("Халзанова", "Дарина"), ("Гындынова", "Оюна"),
        ("Цыбенов", "Ардан"), ("Бомбаров", "Бато"), ("Дашиев", "Баянжаргал"),

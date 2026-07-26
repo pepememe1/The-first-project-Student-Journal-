@@ -120,6 +120,39 @@ class TermGrade(Base):
     student_id = Column(String, index=True, default="")
 
 
+class ParentLink(Base):
+    """Связь «родитель → студент»: кто из родителей вправе видеть журнал этого студента.
+
+    Привязку создаёт СОТРУДНИК (админ или куратор своей группы), но сама по себе она
+    доступа НЕ даёт: пока студент не подтвердил её в своём кабинете, статус `pending` и
+    родитель журнала не видит. Причина не техническая, а правовая — в колледже учатся и
+    совершеннолетние, и для них доступ родителя без их согласия нарушает 152-ФЗ. Схема с
+    подтверждением работает для любого возраста, поэтому дату рождения ради этой проверки
+    хранить не нужно вовсе (меньше персональных данных — меньше рисков).
+
+    Связь всегда по НЕИЗМЕНЯЕМЫМ users.id. По ФИО нельзя: фамилия меняется (см. §12
+    миграции оценок), и связь бы осиротела ровно тогда, когда она нужнее всего.
+
+    НЕ входит в SYNC_MODELS: кабинет родителя — онлайн-раздел (на десктопе он открывается
+    тем же веб-представлением, что мессенджер), и десктопу эта таблица не нужна."""
+    __tablename__ = "parent_links"
+    id = Column(String, primary_key=True)              #plink:{parent_id}|{student_id}
+    parent_id = Column(String, index=True, default="")
+    student_id = Column(String, index=True, default="")
+    #pending — ждёт согласия студента; active — согласие дано; revoked — отозвано/отклонено.
+    #Отозванную связь НЕ удаляем: должно остаться видно, что доступ был и когда его сняли.
+    status = Column(String, index=True, default="pending")
+    created_at = Column(String, default="")
+    created_by = Column(String, default="")            #логин сотрудника (для разбора)
+    decided_at = Column(String, default="")            #когда студент подтвердил/отклонил
+
+
+def parent_link_id(parent_id: str, student_id: str) -> str:
+    """Детерминированный ключ: повторная привязка тех же двоих ЗАМЕНЯЕТ запись, а не
+    плодит вторую (иначе отозванная связь соседствовала бы с новой активной)."""
+    return f"plink:{parent_id}|{student_id}"
+
+
 class ConfigKV(Base):
     """Глобальные настройки (ключ → JSON): API-ключи, методика оценок и т.п."""
     __tablename__ = "config"
@@ -259,6 +292,38 @@ class ScheduleOverride(Base):
 def schedule_override_id(group: str, week, day: str, pair_no) -> str:
     """Детерминированный id ячейки — одинаков на вебе и десктопе (ключ синка)."""
     return f"sovr:{group}|{int(week)}|{day}|{int(pair_no)}"
+
+
+class SubjectHours(Base):
+    """Плановые учебные часы предмета для группы на семестр.
+
+    Задаёт администратор («Группы» → группа → предмет → часов на семестр); преподаватель
+    и студент видят «пройдено X из Y часов». ПРОЙДЕННЫЕ часы здесь НЕ хранятся — они
+    считаются из занятий (см. webdata.hours_progress). Хранимый счётчик пришлось бы
+    править при каждом удалении занятия, и он бы неминуемо разъехался с журналом.
+
+    ВХОДИТ в SYNC_MODELS: журнал на десктопе нативный и работает офлайн, а счётчик часов
+    нужен именно там, где преподаватель ведёт занятия. Без синка он был бы пустым на
+    единственной платформе, где он по-настоящему нужен.
+
+    ⚠️ Почему ОТДЕЛЬНАЯ таблица, а не колонка в `groups`: часы зависят ещё и от предмета,
+    года и семестра, то есть одной строкой на группу не описываются. Плюс урок таблицы
+    `muted_users` — `_row_to_dict` синка отдал бы десктопу неизвестную ему колонку."""
+    __tablename__ = "subject_hours"
+    id = Column(String, primary_key=True)      #hrs:{группа}|{предмет}|{год}|{семестр}
+    group_name = Column(String, index=True, default="")
+    subject = Column(String, index=True, default="")
+    year = Column(String, index=True, default="")
+    semester = Column(Integer, index=True, default=0)
+    hours_total = Column(Integer, default=0)   #сколько часов запланировано на семестр
+    updated_at = Column(String, default="", index=True)
+    deleted = Column(Boolean, default=False)
+
+
+def subject_hours_id(group: str, subject: str, year: str, semester) -> str:
+    """Детерминированный ключ (как sovr:/grp:/subj:) — автоинкремент столкнулся бы между
+    ПК. Повторное сохранение часов ЗАМЕНЯЕТ строку, а не плодит дубли."""
+    return f"hrs:{group}|{subject}|{year}|{int(semester or 0)}"
 
 
 class ScheduleJointMark(Base):
@@ -430,6 +495,13 @@ class ConversationParticipant(Base):
     #Массовый аналог MessageHidden — не плодит по строке на каждое сообщение. У собеседника
     #переписка остаётся (личное состояние, как last_read_at).
     cleared_at = Column(String, default="")
+    #Граница очистки по НОМЕРУ сообщения. Метка времени для этого не годится: сообщение,
+    #пришедшее в ТОТ ЖЕ тик часов, что и очистка, проваливалось бы под условие «строго
+    #позже» и исчезало для пользователя НАВСЕГДА (на Windows тик ~16 мс — ловилось
+    #плавающим падением теста). id автоинкрементный и от часов не зависит.
+    #0 = очистки не было. Старые строки (очищены до этого поля) продолжают жить на
+    #cleared_at — оба фильтра применяются вместе, см. routers/messenger.py.
+    cleared_upto_id = Column(Integer, default=0)
     #Чат убран из списка до первой новой активности (тогда снимаем флаг и он вернётся).
     hidden = Column(Boolean, default=False)
     #Архив: чат убран из основного списка БЕЗ удаления (в отличие от hidden — не возвращается
@@ -480,6 +552,31 @@ class MessageReaction(Base):
     user_id = Column(String, index=True, default="")
     emoji = Column(String, default="")
     created_at = Column(String, default="")
+
+
+class Reminder(Base):
+    """§D19: напоминание, созданное пользователем из сообщения переписки.
+
+    Срабатывание СОБЫТИЙНОЕ, без планировщика: при запросе своих уведомлений сервер
+    материализует все просроченные напоминания этого пользователя в обычные NotifyEvent
+    (см. routers/me.py). Так фича не требует ни cron, ни фонового цикла — а на боевом
+    одноядерном VPS лишний вечный поток стоит дороже, чем проверка одной строки по индексу.
+    Плата за это — напоминание видно с момента, когда человек откроет приложение, но
+    уведомления он и так читает только там.
+
+    Текст храним СНИМКОМ, а не ссылкой на сообщение: автор может его отредактировать или
+    удалить, а напоминание должно остаться тем, на что человек рассчитывал.
+
+    НЕ входит в SYNC_MODELS: мессенджер — онлайн-подсистема, десктопу таблица не нужна."""
+    __tablename__ = "reminders"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    login = Column(String, index=True, default="")      #чьё напоминание
+    conversation_id = Column(String, default="")        #куда вернуть по клику
+    message_id = Column(Integer, default=0)
+    text = Column(String, default="")                   #снимок текста сообщения
+    remind_at = Column(String, index=True, default="")  #ISO UTC — когда напомнить
+    created_at = Column(String, default="")
+    fired_at = Column(String, default="")               #когда материализовано в событие
 
 
 class MessageEdit(Base):
@@ -570,5 +667,6 @@ SYNC_MODELS = {
     "grades": Grade,
     "term_grades": TermGrade,
     "schedule_overrides": ScheduleOverride,   #правки расписания — общие веб↔десктоп
+    "subject_hours": SubjectHours,            #плановые часы — нужны нативному журналу ПК
     "config": ConfigKV,
 }

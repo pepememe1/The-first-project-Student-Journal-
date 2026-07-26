@@ -257,6 +257,10 @@ def _ensure_participant_state_columns():
         if "archived" not in columns:
             conn.execute(text(
                 "ALTER TABLE conversation_participants ADD COLUMN archived BOOLEAN DEFAULT 0"))
+        #Граница очистки по номеру сообщения (устойчива к совпадению тика часов).
+        if "cleared_upto_id" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN cleared_upto_id INTEGER DEFAULT 0"))
 
 
 def _ensure_grade_student_id_columns():

@@ -52,8 +52,9 @@ def test_offtopic_goes_to_free_chat_not_canned_help(client, monkeypatch):
     редиректом к учёбе), а не в шаблонную справку. Данные журнала при этом НЕ выдумываются
     (их дают интенты). free_chat замокан — проверяем сам МАРШРУТ."""
     from app import vector_llm
+    #context — необязательный 4-й аргумент (заметки «Избранного»), у обычного /vector/ask пуст.
     monkeypatch.setattr(vector_llm, "free_chat",
-                        lambda cfg, q, role: f"SMALLTALK:{role}")
+                        lambda cfg, q, role, context="": f"SMALLTALK:{role}")
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
     #Пример НАРОЧНО не про погоду: с появлением реальных метеоданных «какая погода»

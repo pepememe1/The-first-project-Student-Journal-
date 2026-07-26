@@ -18,7 +18,7 @@ import log
 
 from PySide6.QtCore import Qt, QThread, Signal as QSignal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QListWidget, QListWidgetItem, QTextBrowser, QVBoxLayout, QWidget
+    QComboBox, QHBoxLayout, QListWidget, QListWidgetItem, QTextBrowser, QVBoxLayout, QWidget
 )
 
 from styles import C
@@ -32,7 +32,23 @@ KIND_LABEL = {
     "grade": "Новая оценка",
     "grade_changed": "Оценка изменена",
     "schedule_changed": "Расписание изменилось",
+    "homework": "Домашнее задание",
+    "reminder": "Напоминание",
 }
+
+#Виды писем, относящиеся к домашним заданиям. Всё остальное — «Система»: оценки и
+#расписание приходят по факту действия преподавателя, а ДЗ — задание лично тебе, и в
+#общем потоке оно теряется среди десятков оценок.
+HOMEWORK_KINDS = ("homework",)
+#(ключ фильтра, подпись) — порядок задаёт порядок пунктов в выпадающем списке.
+FILTERS = (("all", "Все"), ("homework", "ДЗ"), ("system", "Система"))
+
+
+def _in_filter(item: dict, key: str) -> bool:
+    if key == "all":
+        return True
+    is_hw = (item.get("kind") or "") in HOMEWORK_KINDS
+    return is_hw if key == "homework" else not is_hw
 
 
 class _BgWorker(QThread):
@@ -52,9 +68,16 @@ class _BgWorker(QThread):
 
 
 def _client():
-    """Клиент с текущей сессией или None (не вошли / нет адреса сервера)."""
+    """Клиент с ЖИВОЙ сессией или None (не вошли / нет адреса сервера).
+
+    Берём fresh_auth, а не current_auth: access живёт жёстко 5 ч, и с протухшим токеном
+    /me/events отвечал 401 — уведомления «не загрузились», хотя человек в программе.
+    fresh_auth тихо продлевает сессию по refresh-токену, без ввода пароля."""
     import sync_runner
-    url, token = sync_runner.current_auth()
+    try:
+        url, token = sync_runner.fresh_auth()
+    except Exception:
+        url, token = sync_runner.current_auth()
     if not url or not token:
         return None
     from sync_client import SyncClient
@@ -67,7 +90,8 @@ class NotificationsView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._workers = []
-        self._items = []
+        self._items = []        #все загруженные письма
+        self._shown = []        #те, что сейчас в списке (после фильтра) — строка ↔ письмо
         self._loading = False
         self._build()
         #НЕ грузим здесь: при сборке дашборда серверная сессия ещё не готова → первый запрос
@@ -87,6 +111,13 @@ class NotificationsView(QWidget):
 
         head = QHBoxLayout()
         head.addWidget(title_lbl("Уведомления", 20))
+        head.addSpacing(12)
+        self._filter_box = QComboBox()
+        for _key, label in FILTERS:
+            self._filter_box.addItem(label)
+        self._filter_box.setToolTip("Показывать только домашние задания или только системные")
+        self._filter_box.currentIndexChanged.connect(lambda _i: self._fill())
+        head.addWidget(self._filter_box)
         head.addStretch()
         self._status = lbl("", 12, C['text3'])
         head.addWidget(self._status)
@@ -144,9 +175,13 @@ class NotificationsView(QWidget):
         self._status.setText("Нет связи с сервером — показаны загруженные ранее")
 
     def _fill(self):
+        key = FILTERS[max(0, self._filter_box.currentIndex())][0]
+        #Отдельный список показанных писем: при включённом фильтре номер строки больше
+        #не совпадает с индексом в self._items, и _open открывал бы чужое письмо.
+        self._shown = [it for it in self._items if _in_filter(it, key)]
         self._list.blockSignals(True)
         self._list.clear()
-        for it in self._items:
+        for it in self._shown:
             title = it.get("title") or KIND_LABEL.get(it.get("kind"), "Уведомление")
             when = (it.get("created_at") or "")[:10]
             row = QListWidgetItem(f"{title}\n{when}")
@@ -156,15 +191,18 @@ class NotificationsView(QWidget):
             if not it.get("read_at"):
                 f = row.font(); f.setBold(True); row.setFont(f)
         self._list.blockSignals(False)
-        if not self._items:
-            self._text.setPlainText("Уведомлений пока нет.")
+        if not self._shown:
+            self._text.setPlainText(
+                "Домашних заданий пока нет." if key == "homework"
+                else "Системных уведомлений пока нет." if key == "system"
+                else "Уведомлений пока нет.")
 
     #Чтение
 
     def _open(self, row: int):
-        if row < 0 or row >= len(self._items):
+        if row < 0 or row >= len(self._shown):
             return
-        it = self._items[row]
+        it = self._shown[row]
         title = it.get("title") or KIND_LABEL.get(it.get("kind"), "Уведомление")
         body = it.get("body") or "Откройте журнал, чтобы посмотреть подробности."
         when = (it.get("created_at") or "").replace("T", " ")[:16]

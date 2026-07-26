@@ -49,10 +49,14 @@ class MessengerWebPanel(QWidget):
     route_path — путь внутри SPA ('/admin/messages', '/admin/moderation', '/teacher/messages',
     '/student/messages'); role — роль текущего пользователя (для gb.user и роут-гарда SPA)."""
 
-    def __init__(self, route_path: str, role: str, parent=None):
+    def __init__(self, route_path: str, role: str, parent=None, embed: bool = True):
         super().__init__(parent)
         self._route = route_path
         self._role = role
+        #embed=False — показать SPA целиком, ВМЕСТЕ с её собственной навигацией. Нужно
+        #кабинету родителя: там Qt-оболочки с вкладками нет вовсе, и спрятанный сайдбар
+        #оставил бы человека на одной странице без возможности уйти с неё.
+        self._embed = bool(embed)
         self._view = None
         self._built = False
         #Защита от ПОВТОРНОГО входа в сборку: создание QWebEngineView прокручивает цикл
@@ -141,10 +145,23 @@ class MessengerWebPanel(QWidget):
         if self._built or self._building:
             return
         try:
-            from sync_runner import current_auth
-            url, token = current_auth()
+            #ЖИВОЙ токен: JWT живёт жёстко 5 ч, и просроченный SPA отвергает — внутри
+            #десктопа показывалась веб-форма входа, хотя человек в программу уже вошёл.
+            #fresh_auth сам обновит его по refresh-токену (тихо, без пароля).
+            from sync_runner import fresh_auth
+            url, token = fresh_auth()
         except Exception:
             url, token = ("", "")
+        #Токен есть, но мёртв и обновить не вышло — честное сообщение вместо чужой формы.
+        if token:
+            try:
+                from sync_client import is_token_expired
+                if is_token_expired(token):
+                    self._message("Сессия устарела. Выйдите из аккаунта и войдите снова, "
+                                  "чтобы открыть сообщения.")
+                    return
+            except Exception:
+                pass
         if not url:
             self._message("Не задан адрес сервера. Укажите сервер в настройках и войдите.")
             return
@@ -181,14 +198,35 @@ class MessengerWebPanel(QWidget):
 
         login = _decode_login(token)
         user = json.dumps({"login": login, "role": self._role, "name": login})
-        #Кладём сессию в localStorage ДО загрузки SPA (DocumentCreation): токен = refresh,
-        #сам объект пользователя, флаг embed. json.dumps даёт корректные JS-строковые литералы.
+        #НАСТОЯЩИЙ refresh-токен, а не копия access. Раньше сюда клался access: SPA не могла
+        #обновить сессию, и через 5 ч (жёсткий TTL access) первый же 401 гасил сессию —
+        #внутри десктопа появлялась ВЕБ-ФОРМА ВХОДА, хотя человек в программу уже вошёл.
+        refresh = ""
+        try:
+            import app_settings
+            refresh = app_settings.get_saved_refresh_token(login) or ""
+        except Exception:
+            pass
+        #ТЕМА десктопа — тем же ключом, что использует веб-стор (gb.theme, формат spec общий:
+        #палитра портирована из десктопа). Без этого SPA стартовала в СВЕТЛОЙ теме по
+        #умолчанию и перекрашивалась через ~секунду — на тёмной теме это била по глазам.
+        theme_js = ""
+        try:
+            import themes
+            spec = themes.active_spec()          #ровно то, что видит пользователь сейчас
+            if spec:
+                theme_js = f"localStorage.setItem('gb.theme',{json.dumps(json.dumps(spec))});"
+        except Exception:
+            pass
+        #Кладём сессию в localStorage ДО загрузки SPA (DocumentCreation): пара токенов,
+        #сам объект пользователя, тема, флаг embed. json.dumps даёт корректные JS-литералы.
         js = (
             "try{"
             f"localStorage.setItem('gb.access',{json.dumps(token)});"
-            f"localStorage.setItem('gb.refresh',{json.dumps(token)});"
+            f"localStorage.setItem('gb.refresh',{json.dumps(refresh or token)});"
             f"localStorage.setItem('gb.user',{json.dumps(user)});"
-            "localStorage.setItem('gb.embed','1');"
+            f"{theme_js}"
+            f"localStorage.setItem('gb.embed',{json.dumps('1' if self._embed else '0')});"
             "}catch(e){}"
         )
         script = QWebEngineScript()

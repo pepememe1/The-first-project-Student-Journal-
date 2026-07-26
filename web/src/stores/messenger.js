@@ -525,14 +525,27 @@ export const useMessengerStore = defineStore('messenger', () => {
   // ── Поиск внутри активного чата ──────────────────────────────────────────────────────
   const searchResults = ref(null)   // null — поиск закрыт; [] — открыт, но пусто
   const searching = ref(false)
+  // §17: слова, которыми модель расширила запрос («домашка» → дз, задание). Показываем их
+  // пользователю — иначе непонятно, почему нашлось сообщение без искомого слова.
+  const searchExpanded = ref([])
   async function searchInActive(q) {
-    if (!activeId.value || !(q || '').trim()) { searchResults.value = null; return }
+    if (!activeId.value || !(q || '').trim()) { searchResults.value = null; searchExpanded.value = []; return }
     searching.value = true
-    try { const { data } = await messengerApi.searchInChat(activeId.value, q); searchResults.value = data.messages || [] }
-    catch { searchResults.value = [] }
-    finally { searching.value = false }
+    try {
+      // Умный поиск: сервер спрашивает у модели словоформы и синонимы к ЗАПРОСУ (саму
+      // переписку она не видит) и ищет по всем вариантам сразу. Модель недоступна —
+      // сервер вернёт то же, что обычный поиск, и expanded придёт пустым.
+      const { data } = await messengerApi.aiSearchInChat(activeId.value, q)
+      searchResults.value = data.messages || []
+      searchExpanded.value = data.expanded || []
+    } catch {
+      // Умный поиск не ответил вовсе — откатываемся на обычный, а не показываем пустоту.
+      searchExpanded.value = []
+      try { const { data } = await messengerApi.searchInChat(activeId.value, q); searchResults.value = data.messages || [] }
+      catch { searchResults.value = [] }
+    } finally { searching.value = false }
   }
-  function clearSearch() { searchResults.value = null }
+  function clearSearch() { searchResults.value = null; searchExpanded.value = [] }
 
   // Кто прочитал сообщение — по запросу (попап под сообщением), в общее состояние не кладём.
   async function readBy(mid) {
@@ -573,7 +586,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     draftFor, saveDraft, clearDraft,
     templates, loadTemplates, addTemplate, removeTemplate,
     activeThread, openThread, closeThread,
-    searchResults, searching, searchInActive, clearSearch,
+    searchResults, searching, searchExpanded, searchInActive, clearSearch,
     readBy,
   }
 })
