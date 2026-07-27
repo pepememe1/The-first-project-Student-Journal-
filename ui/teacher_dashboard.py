@@ -1099,7 +1099,12 @@ class TeacherDashboard(QWidget):
 
         self._cur_table = QTableWidget()
         self._cur_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._cur_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        #Interactive + горизонтальная прокрутка — как у собственного журнала (t_table),
+        #а не Stretch: при многих занятиях Stretch сжимал колонки до нечитаемых полосок
+        #(ни номер, ни тема не влезали) вместо честной прокрутки вбок.
+        self._cur_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._cur_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._cur_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         lay.addWidget(self._cur_table, 1)
         self.pages["curator"] = w; self.stack.addWidget(w)
         self._on_curator_group()
@@ -1185,6 +1190,13 @@ class TeacherDashboard(QWidget):
             avg = grading.practice_average(pairs, st.records, cfg)
             table.setItem(r, 2 + len(lessons),
                           QTableWidgetItem(f"{avg:.2f}" if avg else "—"))
+        #Ширины по содержимому + минимум, как в t_table._update_table — иначе Interactive
+        #по умолчанию даёт всем колонкам одинаковую узкую ширину, и текст всё равно обрезан.
+        table.resizeColumnsToContents()
+        table.setColumnWidth(0, max(table.columnWidth(0) + 16, 120))
+        table.setColumnWidth(1, max(table.columnWidth(1) + 16, 100))
+        for c in range(2, table.columnCount()):
+            table.setColumnWidth(c, max(table.columnWidth(c), 112))
 
     def _build_schedule(self):
         """Вкладка «Расписание» — пары преподавателя (инверсия групповых расписаний

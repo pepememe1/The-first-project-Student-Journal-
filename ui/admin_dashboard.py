@@ -9,7 +9,7 @@ import os
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QScrollArea, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QFrame
@@ -26,6 +26,7 @@ from PySide6.QtCore import QThread, Signal as QSignal
 
 from core import DBManager
 from subjects import load_subjects
+from utils import get_groups
 from data_store import get_store
 from audit import log_event, read_events
 
@@ -65,6 +66,27 @@ def _subject_picker(parent, selected: list[str]) -> QListWidget:
     return lw
 
 
+def _group_picker(parent, selected: list[str]) -> QListWidget:
+    """QListWidget с чекбоксами для выбора учебных групп — для «Курирование групп»
+    (непустой список = куратор, см. User.curated_groups). Зеркалит _subject_picker."""
+    lw = QListWidget(parent)
+    lw.setSelectionMode(QAbstractItemView.NoSelection)
+    lw.setStyleSheet(
+        f"QListWidget{{background:{C['card2']};border:1px solid {C['border2']};"
+        f"border-radius:8px;padding:4px;color:{C['text']};font-size:12px;}}"
+        f"QListWidget::item{{padding:4px 8px;border-radius:4px;}}"
+        f"QListWidget::item:hover{{background:rgba(20,124,139,0.08);}}"
+    )
+    #get_groups() может вернуть строки или dict — нормализуем (как в teacher_dashboard.py).
+    names = sorted({g["name"] if isinstance(g, dict) else str(g) for g in (get_groups() or [])})
+    for name in names:
+        it = QListWidgetItem(name)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked if name in selected else Qt.Unchecked)
+        lw.addItem(it)
+    return lw
+
+
 def _get_checked(lw: QListWidget) -> list[str]:
     """Возвращает список отмеченных предметов из QListWidget."""
     return [lw.item(i).text() for i in range(lw.count())
@@ -98,6 +120,7 @@ class AdminDashboard(QWidget):
             ("dash",     "home",         "Дашборд"),
             ("teachers", "presentation", "Преподаватели"),
             ("students", "users",        "Студенты"),
+            ("parents",  "users",        "Родители"),
             ("groups",   "school",       "Группы"),
             ("subjects", "book",         "Предметы"),
             ("schedule", "calendar",     "Расписание"),
@@ -123,6 +146,7 @@ class AdminDashboard(QWidget):
         self._build_dash()
         self._build_teachers()
         self._build_students()
+        self._build_parents()
         self._build_groups()
         self._build_subjects()
         self._build_schedule()
@@ -310,6 +334,8 @@ class AdminDashboard(QWidget):
                 login = data.get("login", "")
                 c = contacts.get(login, {})
                 line = f"{has_pw}  {name}"
+                if data.get("curated_groups"):
+                    line += "  👑 куратор"
                 if login:
                     line += f"   ·   {login}"
                 cl = self._contact_line(c)
@@ -323,7 +349,7 @@ class AdminDashboard(QWidget):
         gh = get_store()
         teachers = gh.get_teachers() if gh else {}
         data = teachers.get(name, {})
-        d = QDialog(self); d.setWindowTitle(f"Преподаватель: {name}"); d.resize(420, 520)
+        d = QDialog(self); d.setWindowTitle(f"Преподаватель: {name}"); d.resize(420, 640)
         lay = QVBoxLayout(d); lay.setSpacing(12); lay.setContentsMargins(24, 20, 24, 20)
         lay.addWidget(title_lbl(name, 18))
         nm_edit  = field_input(name); nm_edit.setText(name)
@@ -332,6 +358,17 @@ class AdminDashboard(QWidget):
         subj_lw  = _subject_picker(d, data.get("subjects", []))
         for lb, w in [("ФИО", nm_edit), ("Логин", lg_edit), ("Новый пароль", pw_edit), ("Предметы", subj_lw)]:
             lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(w)
+        #Куратор: непустой curated_groups. Чекбокс отмечен по умолчанию, если уже куратор —
+        #список групп показываем/разрешаем редактировать только пока чекбокс отмечен.
+        cur_groups = data.get("curated_groups", []) or []
+        cur_chk = QCheckBox("Куратор")
+        cur_chk.setChecked(bool(cur_groups))
+        lay.addWidget(cur_chk)
+        group_lw = _group_picker(d, cur_groups)
+        group_lw.setEnabled(bool(cur_groups))
+        lay.addWidget(lbl("КУРИРУЕМЫЕ ГРУППЫ", 10, C['text3']))
+        lay.addWidget(group_lw)
+        cur_chk.toggled.connect(group_lw.setEnabled)
         btns  = QHBoxLayout()
         del_b = btn("Удалить", "red", icon_name="trash")
         def _del():
@@ -351,6 +388,7 @@ class AdminDashboard(QWidget):
             nd["login"] = lg_edit.text().strip()
             if pw: nd["password"] = pw
             nd["subjects"] = _get_checked(subj_lw)
+            nd["curated_groups"] = _get_checked(group_lw) if cur_chk.isChecked() else []
             if new_name != name: ts.pop(name, None)
             ts[new_name] = nd
             if gh: gh.set_teachers(ts)
@@ -361,7 +399,7 @@ class AdminDashboard(QWidget):
         lay.addLayout(btns); d.exec()
 
     def _add_teacher(self):
-        d = QDialog(self); d.setWindowTitle("Новый преподаватель"); d.resize(420, 480)
+        d = QDialog(self); d.setWindowTitle("Новый преподаватель"); d.resize(420, 600)
         lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
         lay.addWidget(title_lbl("Добавить преподавателя", 18))
         nm = field_input("Фамилия Имя Отчество")
@@ -370,6 +408,13 @@ class AdminDashboard(QWidget):
         sj = _subject_picker(d, [])
         for lb, w in [("ФИО", nm), ("Логин", lg), ("Пароль", pw), ("Предметы", sj)]:
             lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(w)
+        cur_chk = QCheckBox("Куратор")
+        lay.addWidget(cur_chk)
+        group_lw = _group_picker(d, [])
+        group_lw.setEnabled(False)
+        lay.addWidget(lbl("КУРИРУЕМЫЕ ГРУППЫ", 10, C['text3']))
+        lay.addWidget(group_lw)
+        cur_chk.toggled.connect(group_lw.setEnabled)
         btns   = QHBoxLayout()
         save   = btn("Добавить", "green")
         cancel = btn("Отмена",   "ghost")
@@ -386,6 +431,7 @@ class AdminDashboard(QWidget):
                 "password": p,
                 "subjects": _get_checked(sj),
                 "group_assignments": {},
+                "curated_groups": _get_checked(group_lw) if cur_chk.isChecked() else [],
             }
             if gh: gh.set_teachers(ts)
             d.accept(); self._render_teachers(); self._refresh_dash()
@@ -681,6 +727,315 @@ class AdminDashboard(QWidget):
             f"Групп добавлено: {added}, обновлено (привязаны предметы): {updated}.\n"
             f"Предметов из расписания: {len(all_subjects)}.")
 
+    #Родители (§12): аккаунты + привязки к студентам. Сама роль (кабинет родителя,
+    #согласие студента, ограничения в мессенджере) уже полностью на сервере/вебе и в
+    #ui/parent_dashboard.py — здесь не хватало только УПРАВЛЕНИЯ: завести родителя и
+    #привязать его к студенту без похода на сайт. ParentLink НЕ в SYNC_MODELS (как и
+    #мессенджер) — только прямые REST-вызовы через SyncClient, не generic push.
+    def _build_parents(self):
+        w = QScrollArea(); w.setWidgetResizable(True); w.setStyleSheet("border:none;")
+        inner = QWidget(); lay = QVBoxLayout(inner)
+        lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(14)
+        hdr = QHBoxLayout(); hdr.addWidget(title_lbl("Родители"), 1)
+        add_p = btn("+ Родитель", "green"); add_p.clicked.connect(self._add_parent)
+        add_l = btn("+ Привязать студента", "ghost"); add_l.clicked.connect(self._add_parent_link)
+        refresh_b = btn("Обновить", "ghost"); refresh_b.clicked.connect(self._reload_parents)
+        hdr.addWidget(add_p); hdr.addWidget(add_l); hdr.addWidget(refresh_b)
+        lay.addLayout(hdr)
+        hint = lbl("Родитель получает доступ к журналу студента только после того, как "
+                   "СТУДЕНТ подтвердит привязку у себя в профиле — согласие обязательно "
+                   "и его нельзя выдать за него. «Отвязать» снимает доступ сразу.",
+                   11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+
+        pc = card(); pl = QVBoxLayout(pc); pl.setContentsMargins(18, 16, 18, 16); pl.setSpacing(8)
+        self._parents_title = section_lbl("Аккаунты родителей")
+        pl.addWidget(self._parents_title)
+        self._parents_status = lbl("", 11, C['text3']); self._parents_status.setWordWrap(True)
+        pl.addWidget(self._parents_status)
+        #Как у преподавателей/студентов: двойной клик открывает данные на просмотр/правку.
+        self._parents_list = QListWidget()
+        self._parents_list.itemDoubleClicked.connect(
+            lambda it: self._open_parent(it.data(Qt.UserRole)))
+        pl.addWidget(self._parents_list)
+        pl.addWidget(lbl("Двойной клик по родителю — посмотреть/изменить/написать.",
+                        10, C['text3']))
+        lay.addWidget(pc)
+
+        lc = card(); ll = QVBoxLayout(lc); ll.setContentsMargins(18, 16, 18, 16); ll.setSpacing(8)
+        self._links_title = section_lbl("Привязки к студентам")
+        ll.addWidget(self._links_title)
+        self._links_box = QVBoxLayout(); self._links_box.setSpacing(6)
+        ll.addLayout(self._links_box)
+        lay.addWidget(lc)
+        lay.addStretch()
+        w.setWidget(inner)
+        self.pages["parents"] = w; self.stack.addWidget(w)
+
+    def _clear_links_rows(self):
+        while self._links_box.count():
+            it = self._links_box.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+
+    def _reload_parents(self):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            self._parents_list.clear(); self._clear_links_rows()
+            self._parents_status.setText("Сервер не подключён.")
+            return
+
+        def _do():
+            from sync_client import SyncClient
+            c = SyncClient(url, token=token)
+            return c.list_parents(), c.list_parent_links()
+
+        def _apply(payload):
+            parents, links = payload
+            self._render_parents(parents)
+            self._render_parent_links(links)
+
+        def _err(e):
+            self._parents_list.clear(); self._clear_links_rows()
+            self._parents_status.setText(f"⚠️ Не удалось получить данные: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
+    def _render_parents(self, data):
+        rows = (data or {}).get("parents", [])
+        self._parents_title.setText(f"Аккаунты родителей: {len(rows)}")
+        self._parents_status.setText("" if rows else "— родителей пока нет —")
+        self._parents_list.clear()
+        for p in rows:
+            it = QListWidgetItem(f"👤 {p.get('full_name') or '—'}   ·   {p.get('login', '')}")
+            it.setData(Qt.UserRole, p)
+            self._parents_list.addItem(it)
+
+    _LINK_STATUS_LABEL = {"pending": "⏳ ждёт подтверждения студента",
+                          "active": "✅ доступ выдан", "revoked": "⛔ отозвано"}
+    _LINK_STATUS_COLOR = {"pending": "yellow", "active": "green", "revoked": "text3"}
+
+    def _render_parent_links(self, data):
+        rows = (data or {}).get("links", [])
+        self._links_title.setText(f"Привязки к студентам: {len(rows)}")
+        self._clear_links_rows()
+        if not rows:
+            self._links_box.addWidget(lbl("— привязок пока нет —", 12, C['text3']))
+            return
+        for link in rows:
+            self._links_box.addWidget(self._make_link_row(link))
+
+    def _make_link_row(self, link: dict) -> QFrame:
+        student = link.get("student", {}) or {}
+        parent = link.get("parent", {}) or {}
+        status = link.get("status", "")
+        f = QFrame(); f.setObjectName("card")
+        h = QHBoxLayout(f); h.setContentsMargins(14, 10, 14, 10); h.setSpacing(10)
+        info = (f"🎓 {student.get('full_name') or '—'}   ·   🏫 {student.get('group') or '—'}\n"
+               f"👤 {parent.get('full_name') or '—'}   ·   "
+               f"{self._LINK_STATUS_LABEL.get(status, status)}")
+        info_lbl = lbl(info, 12, C[self._LINK_STATUS_COLOR.get(status, "text")])
+        info_lbl.setWordWrap(True)
+        h.addWidget(info_lbl, 1)
+        if status != "revoked":
+            unlink_b = btn("Отвязать", "red", icon_name="x")
+            unlink_b.clicked.connect(lambda _=0, i=link.get("id", ""): self._revoke_parent_link(i))
+            h.addWidget(unlink_b)
+        return f
+
+    def _add_parent(self):
+        d = QDialog(self); d.setWindowTitle("Новый родитель"); d.resize(380, 320)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl("Добавить родителя", 18))
+        sn = field_input("Фамилия")
+        nm = field_input("Имя Отчество")
+        lg = field_input("login")
+        pw = field_input("Пароль", password=True)
+        for lb, wdg in [("Фамилия", sn), ("Имя Отчество", nm), ("Логин", lg), ("Пароль", pw)]:
+            lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(wdg)
+        btns = QHBoxLayout()
+        save = btn("Добавить", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(save)
+        lay.addLayout(btns)
+
+        def _add():
+            surname = sn.text().strip(); name = nm.text().strip()
+            login = lg.text().strip(); password = pw.text().strip()
+            if not (surname and login and password):
+                QMessageBox.warning(d, "Ошибка", "Нужны фамилия, логин и пароль"); return
+            import sync_runner
+            url, token = sync_runner.current_auth()
+            if not url or not token:
+                QMessageBox.warning(d, "Сервер", "Сервер не подключён."); return
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).create_parent(surname, name, login, password)
+
+            def _apply(_res):
+                d.accept(); self._reload_parents()
+
+            def _err(e):
+                QMessageBox.warning(d, "Ошибка", f"Не удалось завести родителя: {e}")
+
+            self._run_bg(_do, _apply, _err)
+        save.clicked.connect(_add)
+        d.exec()
+
+    def _open_parent(self, p: dict):
+        """Двойной клик по родителю — просмотр/правка, по аналогии с преподавателем/
+        студентом (_open_teacher). Логин НЕ редактируется здесь (см. серверный docstring
+        admin_update_parent) — только ФИО/пароль. Написать родителю можно из вкладки
+        «Сообщения» (кнопка «Родители» в каталоге, видна admin/куратору) — отдельной
+        кнопки здесь больше нет (осознанно убрана по решению Влада)."""
+        if not p:
+            return
+        pid = p.get("id", "")
+        d = QDialog(self); d.setWindowTitle(f"Родитель: {p.get('full_name', '')}"); d.resize(380, 360)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl(p.get('full_name') or 'Родитель', 18))
+        lay.addWidget(lbl(f"Логин: {p.get('login', '')}", 11, C['text3']))
+        #ФИО отдельными полями — «Фамилия»/«Имя Отчество», как при создании; полное имя
+        #одной строкой разбираем по первому пробелу (та же конвенция, что и у студента).
+        full = (p.get("full_name") or "").strip()
+        surname0, _, rest0 = full.partition(" ")
+        sn = field_input("Фамилия"); sn.setText(surname0)
+        nm = field_input("Имя Отчество"); nm.setText(rest0)
+        pw = field_input("Новый пароль", password=True)
+        for lb, wdg in [("Фамилия", sn), ("Имя Отчество", nm), ("Новый пароль", pw)]:
+            lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(wdg)
+
+        btns = QHBoxLayout()
+        del_b = btn("Удалить", "red", icon_name="trash")
+        def _del():
+            if QMessageBox.question(
+                    d, "Удалить?", f"Удалить аккаунт родителя «{p.get('full_name', '')}»?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            import sync_runner
+            url, token = sync_runner.current_auth()
+            if not url or not token:
+                QMessageBox.warning(d, "Сервер", "Сервер не подключён."); return
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).delete_parent(pid)
+
+            def _apply(_res):
+                d.accept(); self._reload_parents()
+
+            def _err(e):
+                QMessageBox.warning(d, "Ошибка", f"Не удалось удалить: {e}")
+
+            self._run_bg(_do, _apply, _err)
+        del_b.clicked.connect(_del)
+        btns.addWidget(del_b); btns.addStretch()
+        save_b = btn("Сохранить", "green")
+        def _save():
+            import sync_runner
+            url, token = sync_runner.current_auth()
+            if not url or not token:
+                QMessageBox.warning(d, "Сервер", "Сервер не подключён."); return
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).update_parent(
+                    pid, surname=sn.text().strip(), name=nm.text().strip(),
+                    password=pw.text().strip())
+
+            def _apply(_res):
+                d.accept(); self._reload_parents()
+
+            def _err(e):
+                QMessageBox.warning(d, "Ошибка", f"Не удалось сохранить: {e}")
+
+            self._run_bg(_do, _apply, _err)
+        save_b.clicked.connect(_save)
+        btns.addWidget(btn("Отмена", "ghost")); btns.addWidget(save_b)
+        lay.addLayout(btns)
+        d.exec()
+
+    def _add_parent_link(self):
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+        try:
+            from sync_client import SyncClient
+            parents = SyncClient(url, token=token).list_parents().get("parents", [])
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось получить список родителей: {e}")
+            return
+        if not parents:
+            QMessageBox.information(self, "Родители", "Сначала заведите хотя бы одного родителя.")
+            return
+        gh = get_store()
+        students = gh.get_students() if gh else []
+        if not students:
+            QMessageBox.information(self, "Студенты", "Список студентов пуст."); return
+
+        d = QDialog(self); d.setWindowTitle("Привязать родителя к студенту"); d.resize(380, 260)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl("Привязать студента", 18))
+        p_combo = combo([f"{p.get('full_name') or p.get('login')}" for p in parents])
+        s_labels = [f"{s.get('surname', '')} {s.get('name', '')} ({s.get('group', '')})".strip()
+                   for s in students]
+        s_combo = combo(s_labels)
+        for lb, wdg in [("Родитель", p_combo), ("Студент", s_combo)]:
+            lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(wdg)
+        btns = QHBoxLayout()
+        save = btn("Привязать", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(save)
+        lay.addLayout(btns)
+
+        def _link():
+            pi = p_combo.currentIndex(); si = s_combo.currentIndex()
+            if pi < 0 or si < 0:
+                return
+            parent_id = parents[pi].get("id", "")
+            student_id = students[si].get("id", "")
+            if not (parent_id and student_id):
+                QMessageBox.warning(d, "Ошибка", "Не удалось определить id студента/родителя")
+                return
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).create_parent_link(parent_id, student_id)
+
+            def _apply(_res):
+                d.accept(); self._reload_parents()
+
+            def _err(e):
+                QMessageBox.warning(d, "Ошибка", f"Не удалось создать привязку: {e}")
+
+            self._run_bg(_do, _apply, _err)
+        save.clicked.connect(_link)
+        d.exec()
+
+    def _revoke_parent_link(self, link_id: str):
+        if not link_id:
+            return
+        if QMessageBox.question(
+                self, "Отвязать", "Снять доступ родителя к журналу этого студента?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        def _do():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).revoke_parent_link(link_id)
+
+        def _apply(_res):
+            self._reload_parents()
+
+        def _err(e):
+            QMessageBox.warning(self, "Ошибка", f"Не удалось отвязать: {e}")
+
+        self._run_bg(_do, _apply, _err)
+
     #Группы
 
     def _build_groups(self):
@@ -697,6 +1052,10 @@ class AdminDashboard(QWidget):
         self._g_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
         self._g_table.setColumnWidth(2, 60)
         self._g_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        #Двойной клик — посмотреть/поправить предметы группы (по аналогии с
+        #преподавателями/студентами/родителями).
+        self._g_table.itemDoubleClicked.connect(
+            lambda it: self._open_group(self._g_table.item(it.row(), 0).text()))
         lay.addWidget(self._g_table, 1)
         self.pages["groups"] = w; self.stack.addWidget(w)
 
@@ -747,6 +1106,36 @@ class AdminDashboard(QWidget):
         gs = [g for g in (store.get_groups() if store else []) if g["name"] != name]
         if store: store.set_groups(gs)
         self._render_groups(); self._refresh_dash()
+
+    def _open_group(self, name: str):
+        """Двойной клик по группе — посмотреть/поправить прикреплённые предметы. Само
+        название группы здесь НЕ редактируем — переименование задним числом переключало
+        бы ключи журналов, это отдельная задача с последствиями."""
+        store = get_store()
+        gs = store.get_groups() if store else []
+        g = next((x for x in gs if x["name"] == name), None)
+        if g is None:
+            return
+        d = QDialog(self); d.setWindowTitle(f"Группа: {name}"); d.resize(380, 420)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl(name, 18))
+        sj = _subject_picker(d, g.get("subjects", []))
+        lay.addWidget(lbl("ПРЕДМЕТЫ", 10, C['text3'])); lay.addWidget(sj)
+        btns = QHBoxLayout()
+        save = btn("Сохранить", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(save)
+
+        def _save():
+            store2 = get_store()
+            gs2 = store2.get_groups() if store2 else []
+            for x in gs2:
+                if x["name"] == name:
+                    x["subjects"] = _get_checked(sj)
+                    break
+            if store2: store2.set_groups(gs2)
+            d.accept(); self._render_groups(); self._refresh_dash()
+        save.clicked.connect(_save)
+        lay.addLayout(btns); d.exec()
 
     #Предметы
 
@@ -2303,6 +2692,7 @@ class AdminDashboard(QWidget):
             if key == "dash":     self._refresh_dash()
             if key == "teachers": self._render_teachers()
             if key == "students": self._refresh_students_combo(); self._render_students()
+            if key == "parents":  self._reload_parents()
             if key == "groups":   self._render_groups()
             if key == "subjects": self._render_subjects()
             if key == "api":      self._refresh_vector_cfg()

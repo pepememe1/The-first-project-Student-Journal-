@@ -1,35 +1,47 @@
 # update-vps.ps1 — обновить сайт И серверный код на VPS одной командой.
 #
-# ЗАПУСКАТЬ НА СВОЁМ КОМПЬЮТЕРЕ (локальный PowerShell в VS Code), НЕ на VPS.
-# Скрипт: (1) собирает сайт, (2) заливает сборку и обновлённый серверный код на VPS,
-# (3) перезапускает сервер и Caddy. Спросит пароль root от VPS несколько раз — это норм.
+# ЗАПУСКАТЬ НА СВОЁМ КОМПЬЮТЕРЕ (PowerShell в VS Code), НЕ на VPS. Требует Git Bash
+# (обычно уже стоит вместе с Git for Windows) — вызывает bash-скрипты deploy/*.sh.
 #
-# Что НЕ трогаем на VPS: .env (JWT-секрет, HOST_DEVICE_ID), базу данных — только код.
-param(
-  [string]$VpsIp = "194.226.120.74",
-  [string]$RemoteDir = "/root/gb-deploy"
-)
+# ⚠️ Windows по умолчанию ЗАПРЕЩАЕТ запуск .ps1 (execution policy = Restricted) —
+# при обычном запуске файла будет "выполнение сценариев отключено в этой системе",
+# это НЕ ошибка в самом скрипте. Два варианта:
+#   powershell -ExecutionPolicy Bypass -File web\deploy\update-vps.ps1
+#   ИЛИ проще — вызвать сами bash-скрипты напрямую из Git Bash, без .ps1 вообще:
+#     bash deploy/deploy-web.sh && bash deploy/deploy-server.sh
+#
+# ⚠️ ИСПРАВЛЕНО (была причина «код есть локально, а сервер всё равно 404/405»):
+#   1) Раньше скрипт считал web/ и server/ ДВУМЯ отдельными репозиториями рядом
+#      друг с другом (наследие до-монорепо структуры) — путь `$ServerRepo` вёл в
+#      несуществующую папку, и на самом деле НИКОГДА не находил server/app/routers/web.py
+#      в актуальном виде (либо падал, либо тянул не то).
+#   2) Даже когда путь совпадал, скрипт заливал ТОЛЬКО ОДИН файл — routers/web.py.
+#      Любая правка в ДРУГОМ файле (routers/parent.py, routers/messenger.py,
+#      models.py — как в этой сессии) на сервер никогда не попадала: 404/405 на
+#      новых эндпоинтах при полностью готовом и протестированном локальном коде.
+# Теперь скрипт — тонкая обёртка над deploy/deploy-web.sh (весь web/dist, одним
+# архивом) и deploy/deploy-server.sh (ВЕСЬ server/app/, тем же надёжным способом,
+# не трогая server/.env и БД) — оба уже держат путь монорепо и полную папку, а не
+# один файл.
 $ErrorActionPreference = "Stop"
-$WebDir = Split-Path $PSScriptRoot -Parent                  # корень веб-репозитория
-# Десктоп-репозиторий с серверным кодом лежит рядом (папка над GradeBookAI-Web-Edition).
-$ServerRepo = Join-Path (Split-Path $WebDir -Parent) "The-first-project-Student-Journal-"
-$ServerWeb  = Join-Path $ServerRepo "server\app\routers\web.py"
+# Split-Path/Join-Path — только нативные Windows-пути (обратный слэш), без ручной
+# склейки строк со слэшем: смешение \ и / в одном литерале — частый источник
+# «то работает, то нет» на разных версиях Git Bash/MSYS2.
+$RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent   # корень монорепо
+$DeployWebSh    = Join-Path $RepoRoot "deploy\deploy-web.sh"
+$DeployServerSh = Join-Path $RepoRoot "deploy\deploy-server.sh"
 
-if (-not (Test-Path $ServerWeb)) { throw "Не найден серверный web.py: $ServerWeb" }
+$Bash = (Get-Command bash -ErrorAction SilentlyContinue)
+if (-not $Bash) {
+  throw "bash не найден в PATH — нужен Git Bash (ставится вместе с Git for Windows)."
+}
 
-Write-Host "== [1/4] Сборка сайта ==" -ForegroundColor Cyan
-Push-Location $WebDir
-npm run build
-Pop-Location
+Write-Host "== Деплой сайта (web/dist) ==" -ForegroundColor Cyan
+& bash $DeployWebSh
+if ($LASTEXITCODE -ne 0) { throw "deploy-web.sh завершился с ошибкой (код $LASTEXITCODE)" }
 
-Write-Host "== [2/4] Заливка сайта (dist) — введи пароль root ==" -ForegroundColor Cyan
-ssh "root@$VpsIp" "rm -rf $RemoteDir/webdist"
-scp -r "$WebDir\dist" "root@${VpsIp}:$RemoteDir/webdist"
-
-Write-Host "== [3/4] Заливка серверного web.py — введи пароль root ==" -ForegroundColor Cyan
-scp "$ServerWeb" "root@${VpsIp}:$RemoteDir/server/app/routers/web.py"
-
-Write-Host "== [4/4] Перезапуск сервера и Caddy — введи пароль root ==" -ForegroundColor Cyan
-ssh "root@$VpsIp" "systemctl restart gradebook caddy"
+Write-Host "== Деплой сервера (server/app) ==" -ForegroundColor Cyan
+& bash $DeployServerSh
+if ($LASTEXITCODE -ne 0) { throw "deploy-server.sh завершился с ошибкой (код $LASTEXITCODE)" }
 
 Write-Host "Готово. Обновлено на https://esstu-gradebook.ru" -ForegroundColor Green

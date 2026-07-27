@@ -7,6 +7,7 @@ import { storeToRefs } from 'pinia'
 import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
+import { curatorApi } from '@/api/endpoints'
 import CreateChatDialog from './CreateChatDialog.vue'
 import MyStatusPicker from './MyStatusPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -50,8 +51,16 @@ const shownChats = computed(() => {
   return ql ? base.filter(c => (c.title || '').toLowerCase().includes(ql)) : base
 })
 
+// §12: вкладка «Родители» — ТОЛЬКО у admin и настоящего куратора (canSearchParents, см. ниже).
+const catalogTabs = computed(() => {
+  const t = [['chats', 'Чаты'], ['teacher', 'Препод.'], ['student', 'Студенты']]
+  if (canSearchParents.value) t.push(['parent', 'Родители'])
+  t.push(['channels', 'Каналы'])
+  return t
+})
+
 function refresh() {
-  if (tab.value === 'teacher' || tab.value === 'student') m.searchUsers(tab.value, q.value)
+  if (['teacher', 'student', 'parent'].includes(tab.value)) m.searchUsers(tab.value, q.value)
   else if (tab.value === 'channels') m.loadChannels(q.value)
 }
 watch(tab, refresh)
@@ -74,6 +83,16 @@ async function openAnnouncements() {
 // §12: канал «Отчёты · Группа» — только куратор своей группы, и только если у неё есть
 // хоть один активный родитель (сервер проверяет обе границы; клиент просто предлагает).
 const isCurator = computed(() => auth.role === 'teacher')
+// §12: вкладка «Родители» в каталоге мессенджера — ТОЛЬКО admin и настоящий куратор
+// (curated_groups непустой, а не просто role==='teacher' — та проверка выше нужна лишь
+// для пункта меню «Отчёты», где сервер и так отклонит не-куратора). Обычным
+// преподавателям/студентам родителей в поиске не видно — сервер (messenger.py::
+// directory) и так их скрывает, это лишь клиентский гейт вкладки.
+const myCuratedGroups = ref([])
+if (auth.role === 'teacher') {
+  curatorApi.groups().then(r => { myCuratedGroups.value = r.data.groups || [] }).catch(() => {})
+}
+const canSearchParents = computed(() => auth.role === 'admin' || myCuratedGroups.value.length > 0)
 async function openCuratorReports() {
   showNew.value = false
   const group = window.prompt('Группа для отчётов родителям (например, К-24):')
@@ -122,7 +141,7 @@ onMounted(() => { m.loadChats() })
         </div>
       </div>
       <div class="mt-2 flex gap-1">
-        <button v-for="t in [['chats','Чаты'],['teacher','Препод.'],['student','Студенты'],['channels','Каналы']]"
+        <button v-for="t in catalogTabs"
                 :key="t[0]" type="button" @click="tab = t[0]"
                 class="flex-1 rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors"
                 :class="tab === t[0] ? 'bg-accent-glow text-accent' : 'text-text3 hover:bg-bg2 hover:text-text'">
@@ -206,7 +225,7 @@ onMounted(() => { m.loadChats() })
       </template>
 
       <!-- Каталог людей -->
-      <template v-else-if="tab === 'teacher' || tab === 'student'">
+      <template v-else-if="tab === 'teacher' || tab === 'student' || tab === 'parent'">
         <p v-if="dir.loading" class="p-4 text-center text-sm text-text3">Поиск…</p>
         <p v-else-if="!dir.users.length" class="p-4 text-center text-sm text-text3">Никого не найдено.</p>
         <button v-for="u in dir.users" :key="u.id" type="button" @click="m.openWith(u)"
@@ -214,7 +233,11 @@ onMounted(() => { m.loadChats() })
           <Avatar :src="u.avatar" :name="u.full_name" :online="!!u.online" :size="40" />
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-semibold text-text">{{ u.full_name }}</div>
-            <div class="truncate text-xs text-text3">{{ u.role === 'teacher' ? ((u.subjects || []).join(', ') || 'Преподаватель') : ('Группа ' + (u.group_name || '—')) }}</div>
+            <div class="truncate text-xs text-text3">
+              <template v-if="u.role === 'teacher'">{{ (u.subjects || []).join(', ') || 'Преподаватель' }}</template>
+              <template v-else-if="u.role === 'parent'">{{ u.groups?.length ? 'род. ' + u.groups.join(', ') : 'Родитель' }}</template>
+              <template v-else>Группа {{ u.group_name || '—' }}</template>
+            </div>
           </div>
         </button>
       </template>

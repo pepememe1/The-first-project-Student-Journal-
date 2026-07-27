@@ -168,6 +168,25 @@ def test_plain_teacher_without_curated_groups_sees_no_parents(client):
     assert client.get("/web/staff/parents", headers=teach).status_code == 403
 
 
+def test_curator_directory_shows_parent_group_annotation(client):
+    """§12: поиск родителей в мессенджере (каталог/создание группы) подписывает
+    родителя группой его АКТИВНОГО ребёнка — «род. <группа>» на клиенте."""
+    admin, sid, pid, link_id = _setup(client)
+    teach = make_teacher(client, admin, subjects=["Математика"])
+    client.put("/web/admin/teachers/teacher1", json={"curated_groups": ["ИС-21"]}, headers=admin)
+
+    #Пока связь не подтверждена студентом, родитель вообще не виден куратору в поиске
+    #(_may_list_parent требует АКТИВНОЙ связи — та же граница, что и для переписки).
+    r = client.get("/web/messenger/users?role=parent", headers=teach)
+    assert r.status_code == 200, r.text
+    assert all(u["id"] != pid for u in r.json()["users"]), r.json()
+
+    _approve(client, _headers(client, "ivanova", "studpass1"), link_id)
+    r = client.get("/web/messenger/users?role=parent", headers=teach)
+    row = next(u for u in r.json()["users"] if u["id"] == pid)
+    assert row["groups"] == ["ИС-21"], row
+
+
 # ── Изоляция данных родителя ────────────────────────────────────────────────────────
 def test_parent_cannot_read_other_students_journal(client):
     admin, sid, pid, link_id = _setup(client)
@@ -276,3 +295,56 @@ def test_parent_cannot_create_groups_or_channels(client):
     for url in ("/web/messenger/chats/group", "/web/messenger/chats/channel"):
         r = client.post(url, json={"title": "Родители ИС-21"}, headers=ph)
         assert r.status_code == 403, (url, r.text)
+
+
+# ── Редактор родителей в админке (§12) ──────────────────────────────────────────────
+def test_admin_can_edit_parent_name_and_password(client):
+    admin = make_admin(client)
+    pid = _parent(client, admin, "parent1", surname="Сидорова", name="Анна")
+
+    r = client.put(f"/web/admin/parents/{pid}",
+                   json={"surname": "Петрова", "name": "Ольга"}, headers=admin)
+    assert r.status_code == 200, r.text
+    row = next(p for p in client.get("/web/staff/parents", headers=admin).json()["parents"]
+              if p["id"] == pid)
+    assert row["full_name"] == "Петрова Ольга"
+
+    #Пустой пароль в payload — прежний хеш не трогаем, старый пароль всё ещё работает.
+    r = client.put(f"/web/admin/parents/{pid}", json={}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert client.post("/auth/login",
+                       json={"login": "parent1", "password": "parentpass1"}).status_code == 200
+
+    r = client.put(f"/web/admin/parents/{pid}", json={"password": "newpass123"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert client.post("/auth/login",
+                       json={"login": "parent1", "password": "newpass123"}).status_code == 200
+    assert client.post("/auth/login",
+                       json={"login": "parent1", "password": "parentpass1"}).status_code == 401
+
+
+def test_admin_update_parent_rejects_unknown_or_deleted(client):
+    admin = make_admin(client)
+    assert client.put("/web/admin/parents/par:u:nope", json={"surname": "X"},
+                      headers=admin).status_code == 404
+
+
+def test_non_admin_cannot_edit_or_delete_parent(client):
+    admin = make_admin(client)
+    pid = _parent(client, admin, "parent1")
+    teach = make_teacher(client, admin, subjects=["Математика"])
+    assert client.put(f"/web/admin/parents/{pid}", json={"surname": "X"},
+                      headers=teach).status_code == 403
+    assert client.delete(f"/web/admin/parents/{pid}", headers=teach).status_code == 403
+
+
+def test_admin_can_delete_parent_soft(client):
+    admin = make_admin(client)
+    pid = _parent(client, admin, "parent1")
+    r = client.delete(f"/web/admin/parents/{pid}", headers=admin)
+    assert r.status_code == 200, r.text
+    ids = [p["id"] for p in client.get("/web/staff/parents", headers=admin).json()["parents"]]
+    assert pid not in ids
+    #Мягкое удаление — повторное обращение к тому же id как к «не родителю».
+    assert client.put(f"/web/admin/parents/{pid}", json={"surname": "X"},
+                      headers=admin).status_code == 404

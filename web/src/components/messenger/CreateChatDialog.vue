@@ -40,8 +40,11 @@ const isChosen = (id) => chosen.value.some(x => x.id === id)
 // (сервер тоже это проверит — см. create_group в messenger.py).
 const curatedGroups = ref([])
 const chosenGroups = ref([])
+//Куратора проверяем ВСЕГДА (группа и канал) — от неё зависит не только блок «целая
+//группа» (он группо-only, см. v-if ниже), но и вкладка «Родители» в поиске участников/
+//авторов (roleTabs), которая нужна и при создании канала тоже.
 onMounted(async () => {
-  if (isChannel.value || auth.role !== 'teacher') return
+  if (auth.role !== 'teacher') return
   try { curatedGroups.value = (await curatorApi.groups()).data.groups || [] } catch { /* не куратор */ }
 })
 function toggleGroup(g) {
@@ -49,6 +52,11 @@ function toggleGroup(g) {
   if (i >= 0) chosenGroups.value.splice(i, 1)
   else chosenGroups.value.push(g)
 }
+const roleTabs = computed(() => {
+  const t = [['student', 'Студенты'], ['teacher', 'Преподаватели']]
+  if (curatedGroups.value.length) t.push(['parent', 'Родители'])
+  return t
+})
 
 function submit() {
   const t = title.value.trim()
@@ -99,7 +107,7 @@ function submit() {
           </span>
         </div>
         <div class="mb-2 flex gap-1">
-          <button v-for="r in [['student','Студенты'],['teacher','Преподаватели']]" :key="r[0]" type="button"
+          <button v-for="r in roleTabs" :key="r[0]" type="button"
                   @click="role = r[0]" class="rounded-md px-2 py-1 text-xs font-semibold"
                   :class="role === r[0] ? 'bg-accent-glow text-accent' : 'text-text3 hover:bg-bg2'">{{ r[1] }}</button>
         </div>
@@ -110,7 +118,10 @@ function submit() {
         <div class="max-h-52 overflow-y-auto rounded-lg border border-border">
           <button v-for="u in found" :key="u.id" type="button" @click="toggle(u)"
                   class="flex w-full items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
-            <span class="truncate text-text">{{ u.full_name }}</span>
+            <span class="min-w-0 truncate text-text">
+              {{ u.full_name }}
+              <span v-if="u.role === 'parent' && u.groups?.length" class="text-text3"> · род. {{ u.groups.join(', ') }}</span>
+            </span>
             <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                   :class="isChosen(u.id) ? 'border-accent bg-accent text-white' : 'border-border2'">
               <Check v-if="isChosen(u.id)" class="size-3.5" />

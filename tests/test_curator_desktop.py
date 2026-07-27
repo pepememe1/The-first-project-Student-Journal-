@@ -107,3 +107,29 @@ def test_uncurated_group_is_not_offered(qapp, fresh_db):
     offered = [dash._cur_group_combo.itemText(i)
                for i in range(dash._cur_group_combo.count())]
     assert offered == ["ИС-21"]
+
+
+def test_many_lessons_scroll_instead_of_shrinking(qapp, fresh_db):
+    """§12: раньше Stretch сжимал ВСЕ колонки под ширину виджета — с большим числом
+    занятий не влезали ни номер, ни тема. Теперь Interactive + resizeColumnsToContents
+    держит честную минимальную ширину, а таблица прокручивается вбок (см. t_table)."""
+    from PySide6.QtWidgets import QHeaderView, QAbstractItemView
+    from core import GradeBook
+    book = GradeBook("ИС-21", "Математика")
+    for i in range(15):
+        book.add_lesson("Практика", topic=f"Длинная тема занятия номер {i + 1}", date="01.09.2025")
+    st = Student(n="Мария", f="Иванова", group="ИС-21")
+    book.add_student(st)
+    book.save_to_db()
+
+    dash = _make_dashboard(["ИС-21"])
+    dash._cur_group_combo.setCurrentText("ИС-21")
+    dash._on_curator_group()
+
+    table = dash._cur_table
+    assert table.horizontalHeader().sectionResizeMode(2) == QHeaderView.Interactive, \
+        "Stretch сжимал бы все колонки под ширину виджета вместо честной прокрутки"
+    assert table.horizontalScrollMode() == QAbstractItemView.ScrollPerPixel
+    #Ни одна колонка занятия не сжата ниже минимума, заданного при наполнении.
+    for c in range(2, table.columnCount()):
+        assert table.columnWidth(c) >= 112, f"колонка {c} сжата: {table.columnWidth(c)}px"

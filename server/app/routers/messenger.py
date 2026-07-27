@@ -543,8 +543,15 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
     chunk = rows[page * _PAGE_USERS:(page + 1) * _PAGE_USERS]
     onl = _online_logins()
     sm = _status_map(db, [u.id for u in chunk])
-    return {"users": [_safe_user(u, onl, status=sm.get(u.id)) for u in chunk],
-            "total": total, "page": page, "page_size": _PAGE_USERS}
+    out = [_safe_user(u, onl, status=sm.get(u.id)) for u in chunk]
+    if role == "parent":
+        #§12: подпись «род. <группа>» в каталоге — куратор видит родителя, но не всегда
+        #знает, чей он, пока не откроет карточку. Только АКТИВНЫЕ/подтверждённые дети
+        #(та же логика, что определяет саму видимость родителя, см. _may_list_parent).
+        groups_by_id = {u.id: sorted(_parent_group_names(db, u)) for u in chunk}
+        for d in out:
+            d["groups"] = groups_by_id.get(d["id"], [])
+    return {"users": out, "total": total, "page": page, "page_size": _PAGE_USERS}
 
 
 @router.get("/users/{user_id}/profile")

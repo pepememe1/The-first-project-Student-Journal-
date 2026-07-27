@@ -832,6 +832,12 @@ class StudentDashboard(QWidget):
                                                 "n": self.cur_stud.get("n", ""),
                                                 "g": self.cur_stud.get("g", "")}))
 
+        #§12: заявки родителей на доступ к журналу — согласие только САМОГО студента,
+        #поэтому карточка живёт здесь же (рядом с уведомлениями), не в админке. Пусто у
+        #большинства студентов → виджет сам скрывается, места не занимает.
+        from parent_links_card import ParentLinksCard
+        lay.addWidget(ParentLinksCard())
+
         #Свой заголовок «Уведомления» есть у самого NotificationsView — отдельный section_lbl
         #здесь дал бы задвоение надписи (правка по отчёту).
         lay.addWidget(NotificationsView(role="student"), 1)

@@ -329,3 +329,43 @@ def admin_create_parent(payload: dict = Body(...),
     db.commit()
     audit.log(db, actor=admin.login, role="admin", action="parent.create", target=login)
     return {"ok": True, "id": uid, "login": login}
+
+
+@router.put("/admin/parents/{parent_id}")
+def admin_update_parent(parent_id: str, payload: dict = Body(...),
+                        admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Правка родителя (id — ключ, как у student/teacher). Меняем ФИО/пароль — ЛОГИН
+    не редактируем (в отличие от ФИО, логин участвует в проверке уникальности при
+    создании, и смена задним числом рискует коллизией; отдельная форма для этого не
+    заказывалась)."""
+    row = db.get(User, parent_id)
+    if row is None or row.deleted or row.role != "parent":
+        raise HTTPException(status_code=404, detail="Родитель не найден")
+    if "surname" in payload:
+        row.surname = (payload.get("surname") or "").strip()
+    if "name" in payload:
+        row.name = (payload.get("name") or "").strip()
+    row.full_name = f"{row.surname or ''} {row.name or ''}".strip()
+    password = payload.get("password") or ""
+    if password:
+        from ..security import hash_password
+        row.password_hash = hash_password(password)
+    row.updated_at = _now_iso()
+    db.commit()
+    audit.log(db, actor=admin.login, role="admin", action="parent.update", target=row.login)
+    return {"ok": True, "id": parent_id}
+
+
+@router.delete("/admin/parents/{parent_id}")
+def admin_delete_parent(parent_id: str,
+                        admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Мягкое удаление (deleted=1), как у student/teacher. Существующие ParentLink
+    намеренно не трогаем — soft-delete в проекте нигде не каскадирует смежные данные."""
+    row = db.get(User, parent_id)
+    if row is None or row.deleted or row.role != "parent":
+        raise HTTPException(status_code=404, detail="Родитель не найден")
+    row.deleted = True
+    row.updated_at = _now_iso()
+    db.commit()
+    audit.log(db, actor=admin.login, role="admin", action="parent.delete", target=row.login)
+    return {"ok": True, "id": parent_id}

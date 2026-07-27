@@ -327,6 +327,77 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    #Роль «родитель» (§12) — ParentLink НЕ в SYNC_MODELS (онлайн-only, как мессенджер),
+    #поэтому это прямые REST-вызовы, а не generic push. Управление доступно admin/куратору
+    #(сервер сам ограничивает куратора его curated_groups — см. server/app/routers/parent.py).
+    def create_parent(self, surname: str, name: str, login: str, password: str) -> dict:
+        """Завести аккаунт родителя (admin-only на сервере). {ok,id,login}."""
+        r = self._req("POST", "/web/admin/parents",
+                      json={"surname": surname, "name": name, "login": login, "password": password},
+                      timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def list_parents(self) -> dict:
+        """Справочник аккаунтов-родителей. {parents:[{id,login,full_name}]}."""
+        r = self._req("GET", "/web/staff/parents", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def update_parent(self, parent_id: str, surname: str = "", name: str = "",
+                      password: str = "") -> dict:
+        """Правка ФИО/пароля родителя (логин не редактируется — см. серверный docstring
+        admin_update_parent). Пустые строки — поле не меняем. {ok,id}."""
+        payload = {}
+        if surname:
+            payload["surname"] = surname
+        if name:
+            payload["name"] = name
+        if password:
+            payload["password"] = password
+        r = self._req("PUT", f"/web/admin/parents/{parent_id}", json=payload, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def delete_parent(self, parent_id: str) -> dict:
+        """Мягкое удаление аккаунта родителя. {ok,id}."""
+        r = self._req("DELETE", f"/web/admin/parents/{parent_id}", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def list_parent_links(self, group: str = "") -> dict:
+        """Связи родитель↔студент (куратору — только его группы). {links:[...]}."""
+        r = self._req("GET", "/web/staff/parent-links", params={"group": group or ""}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def create_parent_link(self, parent_id: str, student_id: str) -> dict:
+        """Привязать родителя к студенту — создаётся в статусе pending, ждёт согласия
+        студента. {ok,id,status}."""
+        r = self._req("POST", "/web/staff/parent-links",
+                      json={"parent_id": parent_id, "student_id": student_id}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def revoke_parent_link(self, link_id: str) -> dict:
+        """Снять доступ родителя (мягкий отзыв, строка остаётся с status=revoked). {ok}."""
+        r = self._req("DELETE", f"/web/staff/parent-links/{link_id}", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def my_parent_links(self) -> dict:
+        """(студент) Заявки родителей на доступ к МОЕМУ журналу + уже выданные. {links:[...]}."""
+        r = self._req("GET", "/web/student/parent-links", timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def decide_parent_link(self, link_id: str, approve: bool) -> dict:
+        """(студент) Подтвердить/отозвать доступ родителя к своему журналу. {ok,status}."""
+        r = self._req("POST", f"/web/student/parent-links/{link_id}/decide",
+                      json={"approve": bool(approve)}, timeout=8)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

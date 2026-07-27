@@ -64,6 +64,19 @@ def test_users_remote_upsert_and_tombstone(fresh_db):
     assert st.get_students() == []
 
 
+def test_parent_remote_upsert(fresh_db):
+    """§12: роль parent обязана доехать до локальной таблицы так же, как student/teacher —
+    иначе вход родителя на десктопе проваливался (сервер подтверждал пароль верным,
+    lookup_session/get_parents не находили строку локально после _online_bootstrap)."""
+    st = get_store()
+    sync_engine.apply_remote({"users": [{
+        "id": "par:u:1", "role": "parent", "login": "roditel1", "password_hash": "h",
+        "surname": "Сидорова", "name": "Анна", "prefs": {},
+        "updated_at": "2030-01-01T00:00:00+00:00", "deleted": False}]})
+    parents = st.get_parents()
+    assert len(parents) == 1 and parents[0]["login"] == "roditel1"
+
+
 def test_full_round_trip_preserves_login(fresh_db):
     """set → collect → (стереть) → apply → get: данные и рабочий хеш сохранены."""
     st = get_store()

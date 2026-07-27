@@ -410,7 +410,10 @@ def _merge_users(remote: list):
                     "updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, blob TEXT DEFAULT '')")
         for u in remote:
             role = u.get("role")
-            if role not in ("student", "teacher"):
+            #§12: роль parent тоже должна доехать до локальной таблицы — иначе вход
+            #родителя на десктопе всегда проваливался: сервер подтверждал пароль верным,
+            #а lookup_session/get_parents (data_store.py) не находили строку локально.
+            if role not in ("student", "teacher", "parent"):
                 continue
             uid = u.get("id")
             if not uid:
