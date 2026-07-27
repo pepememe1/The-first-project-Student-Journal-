@@ -27,7 +27,7 @@ from ..db import get_db, SessionLocal
 from ..deps import get_current_user, require_admin
 from ..security import decode_token
 from ..models import (
-    Conversation, ConversationParticipant, CuratorReport, Message, MessageHidden,
+    Conversation, ConversationParticipant, CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser, ParentLink,
     UserStatus, User, Lesson, direct_conversation_id,
 )
@@ -641,6 +641,22 @@ def delete_template(tid: int, user: User = Depends(get_current_user), db: Sessio
 
 
 # ── Открыть/создать личный чат ───────────────────────────────────────────────────────
+def _ensure_direct(db: Session, user: User, peer: User) -> str:
+    """id личного чата пары (создать, если его ещё нет). Идемпотентно: id детерминирован.
+    ⚠️ Границы переписки (_guard_direct_allowed) проверяет ВЫЗЫВАЮЩИЙ — тут только беседа."""
+    conv_id = direct_conversation_id(user.id, peer.id)
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is None:
+        now = _now()
+        db.add(Conversation(id=conv_id, kind="direct", created_at=now))
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="member", joined_at=now))
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=peer.id,
+                                       role="member", joined_at=now))
+        db.commit()
+    return conv_id
+
+
 @router.post("/chats/direct/{user_id}")
 def open_direct(user_id: str, user: User = Depends(get_current_user),
                 db: Session = Depends(get_db)):
@@ -655,17 +671,7 @@ def open_direct(user_id: str, user: User = Depends(get_current_user),
     #фильтр в поиске сам по себе ничего не защищает (инвариант «UI-скрытие — не защита»).
     _guard_direct_allowed(db, user, peer)
 
-    conv_id = direct_conversation_id(user.id, peer.id)
-    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
-    if conv is None:
-        now = _now()
-        conv = Conversation(id=conv_id, kind="direct", created_at=now)
-        db.add(conv)
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
-                                       role="member", joined_at=now))
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=peer.id,
-                                       role="member", joined_at=now))
-        db.commit()
+    conv_id = _ensure_direct(db, user, peer)
     sm = _status_map(db, [peer.id])
     return {"conversation_id": conv_id, "kind": "direct",
             "peer": _safe_user(peer, _online_logins(), status=sm.get(peer.id))}
@@ -696,14 +702,28 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         if p.hidden and last is None:
             continue
         #Непрочитанное: чужие сообщения позже моей метки прочтения, не удалённые у всех.
+        #Служебные события («вступил в беседу», «закреплено») в счётчик НЕ идут: это не
+        #обращение к тебе, а отметка в ленте, а красный кружок непрочитанного заставляет
+        #открыть чат — в канале на сотню читателей он не гас бы никогда.
         unread = (db.query(Message)
                   .filter(Message.conversation_id == conv.id,
                           Message.sender_id != user.id,
+                          Message.kind != "system",
                           Message.deleted_at == "",
                           Message.created_at > (p.last_read_at or ""),
                           Message.created_at > (p.cleared_at or ""),
                           Message.id > (p.cleared_upto_id or 0))
                   .count())
+        #Имя автора последнего сообщения нужно списку чатов (в группе/канале строка
+        #выглядит как «Иванов: текст» — без имени непонятно, кто написал). В личном чате
+        #и у своих сообщений имя не нужно: клиент подписывает их «Вы».
+        sender_name = ""
+        if last is not None and conv.kind in ("group", "channel") and last.sender_id != user.id:
+            if last.sender_id == "system":
+                sender_name = SYSTEM_SENDER_NAME
+            else:
+                su = db.query(User).filter(User.id == last.sender_id).first()
+                sender_name = (su.full_name or su.name or "") if su else ""
         item = {
             "conversation_id": conv.id,
             "kind": conv.kind,
@@ -711,7 +731,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             "archived": bool(p.archived),
             "muted": bool(p.muted),
             "unread": unread,
-            "last_message": _msg_out(last, user.id) if last else None,
+            "last_message": _msg_out(last, user.id, sender_name) if last else None,
             "last_at": (last.created_at if last else conv.created_at) or "",
         }
         if conv.kind == "direct":
@@ -721,6 +741,9 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         else:
             item["title"] = conv.title or ""
         out.append(item)
+    #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
+    #сырой id из тела сообщения.
+    _attach_report_meta(db, [x["last_message"] for x in out if x["last_message"]])
     #Сортировка: сначала закреплённые, потом по времени последней активности (новые выше).
     out.sort(key=lambda x: (not x["pinned"], _neg_key(x["last_at"])))
     return {"chats": out}
@@ -775,23 +798,27 @@ def _saved_conv_id(user_id: str) -> str:
     return f"saved:{user_id}"
 
 
+def _ensure_saved(db: Session, user: User) -> str:
+    """id «Избранного» пользователя (создать лениво при первом обращении)."""
+    conv_id = _saved_conv_id(user.id)
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv is None:
+        now = _now()
+        db.add(Conversation(id=conv_id, kind="saved", title="Избранное",
+                            owner_id=user.id, created_at=now))
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="owner", joined_at=now, pinned=True))
+        db.commit()
+    return conv_id
+
+
 @router.post("/chats/saved")
 def open_saved(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """«Избранное» (Saved Messages) — личный чат с самим собой: заметки, ссылки, код себе,
     без надобности заводить отдельную сущность заметок — переиспользуем ВСЮ инфраструктуру
     сообщений (Markdown, реакции, правка, пересылка). Один на пользователя, создаётся лениво
     при первом открытии. Закреплён по умолчанию — как в Telegram, всегда сверху списка."""
-    conv_id = _saved_conv_id(user.id)
-    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
-    if conv is None:
-        now = _now()
-        conv = Conversation(id=conv_id, kind="saved", title="Избранное",
-                            owner_id=user.id, created_at=now)
-        db.add(conv)
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
-                                       role="owner", joined_at=now, pinned=True))
-        db.commit()
-    return {"conversation_id": conv_id}
+    return {"conversation_id": _ensure_saved(db, user)}
 
 
 # ── История и новые сообщения ────────────────────────────────────────────────────────
@@ -1109,6 +1136,15 @@ def send_message(conv_id: str, payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Пустое сообщение")
     if len(body) > _MAX_MSG_CHARS:
         body = body[:_MAX_MSG_CHARS]
+    #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
+    #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
+    #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
+    rep_msg = _handle_report_command(db, conv_id, body, user)
+    if rep_msg is not None:
+        out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
+        _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
+        return out
+
     reply_to = int(payload.get("reply_to_id") or 0)
     if reply_to:
         ok = (db.query(Message)
@@ -1142,7 +1178,6 @@ def send_message(conv_id: str, payload: dict = Body(...),
     silent_ids = {mm["user_id"] for mm in mentions if mm.get("silent")}
     _notify_recipients(db, conv, user, skip_ids=silent_ids)   #пуш офлайн — минус тихие упоминания
     _handle_vector_command(db, conv_id, body, user)
-    _handle_report_command(db, conv_id, body, user)
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
 
 
@@ -1536,10 +1571,18 @@ def forward_messages(payload: dict = Body(...),
                 continue
             if _participant(db, src.conversation_id, user.id) is None:
                 continue                   #нельзя переслать то, что не видишь
+            #§12: отчёт по группе — это оценки ВСЕЙ группы. Куда он поедет дальше, решает
+            #куратор/администрация; родитель или студент, получивший кнопку, переслать её
+            #уже не может (иначе успеваемость группы разошлась бы по чужим чатам).
+            if (src.kind or "") == "report" and user.role not in ("teacher", "admin"):
+                continue
             sender = db.query(User).filter(User.id == src.sender_id).first()
             #Источник пересылки — исходный автор оригинала (а не тот, кто раньше переслал).
             db.add(Message(
                 conversation_id=conv_id, sender_id=user.id, body=src.body, created_at=_now(),
+                #Тип и формат обязаны переехать вместе с телом: без них пересланная кнопка
+                #отчёта превращалась в текстовое сообщение с сырым id («rpt:К75/1|3»).
+                kind=(src.kind or "text"), body_format=(src.body_format or "markdown"),
                 fwd_from_sender_id=(src.fwd_from_sender_id or src.sender_id),
                 fwd_from_conv_id=(src.fwd_from_conv_id or src.conversation_id),
                 fwd_from_created_at=(src.fwd_from_created_at or src.created_at),
@@ -1985,6 +2028,39 @@ def ensure_practice_channel(group_name: str, user: User = Depends(get_current_us
     return {"ok": True, "conversation_id": conv_id}
 
 
+@router.get("/my-groups")
+def my_groups(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Группы, которые сотрудник может адресовать в мессенджере (объявления, отчёты).
+
+    Нужен для ВЫПАДАЮЩЕГО СПИСКА вместо ручного ввода: имена групп колледжа вида «К75/1»
+    набирали с ошибкой (лишний пробел, латинская «K»), канал не находился, и со стороны
+    это выглядело как «не работает». Флаг `curated` отличает курируемые группы —
+    отчёты для родителей доступны только по ним."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    curated = set(user.curated_groups or [])
+    if user.role == "admin":
+        names = [g.name for g in db.query(Group)
+                 .filter(Group.deleted == False).order_by(Group.name).all()]  # noqa: E712
+    else:
+        #Преподаватель: группы своей нагрузки (по занятиям его предметов) + курируемые.
+        from .. import webdata as W
+        names = sorted(set(W.teacher_groups(db, list(user.subjects or []))) | curated)
+    return {"groups": [{"name": n, "curated": n in curated} for n in names]}
+
+
+@router.post("/channels/announcements")
+def ensure_announcements_channel_q(group: str = Query(...),
+                                   user: User = Depends(get_current_user),
+                                   db: Session = Depends(get_db)):
+    """То же, что ниже, но имя группы — в QUERY, а не в пути.
+
+    Причина ровно та же, что у /web/curator/subjects: имена групп содержат слэш («К75/1»),
+    в пути он приезжает как %2F, Starlette декодирует его обратно в «/», и роут с одним
+    сегментом перестаёт совпадать — эндпоинт молча 404-ил."""
+    return ensure_announcements_channel(group, user, db)
+
+
 @router.post("/channels/announcements/{group_name}")
 def ensure_announcements_channel(group_name: str, user: User = Depends(get_current_user),
                                  db: Session = Depends(get_db)):
@@ -2035,6 +2111,14 @@ def _active_parent_ids_for_group(db: Session, group_name: str) -> list:
     return [r[0] for r in rows]
 
 
+@router.post("/channels/curator-reports")
+def ensure_curator_reports_channel_q(group: str = Query(...),
+                                     user: User = Depends(get_current_user),
+                                     db: Session = Depends(get_db)):
+    """Имя группы в QUERY — см. пояснение у ensure_announcements_channel_q (слэш в «К75/1»)."""
+    return ensure_curator_reports_channel(group, user, db)
+
+
 @router.post("/channels/curator-reports/{group_name}")
 def ensure_curator_reports_channel(group_name: str, user: User = Depends(get_current_user),
                                    db: Session = Depends(get_db)):
@@ -2060,51 +2144,205 @@ def ensure_curator_reports_channel(group_name: str, user: User = Depends(get_cur
     return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
 
 
-_REPORT_CMD_RE = re.compile(r"^/отч[её]т\b", re.IGNORECASE)
+#Аргумент необязателен: «/отчет», «/отчёт К75/1», «/отчет "К75/1"».
+_REPORT_CMD_RE = re.compile(r"^/отч[её]т\b\s*(.*)$", re.IGNORECASE | re.DOTALL)
 
 
-def _handle_report_command(db: Session, conv_id: str, body: str, user: User) -> None:
-    """`/отчет` в канале «Отчёты · Группа» (см. §12 плана): создаёт «вечную» кнопку
-    «Отчёт №N» — снимок ГРАНИЦЫ (термин + дата ВКЛЮЧИТЕЛЬНО), а не готовых цифр: сами
-    цифры пересчитываются живьём при каждом открытии (curator_report.collect_group),
-    ограниченные этой границей. Группа определяется КАНАЛОМ (sys:curator_reports:{группа}),
-    поэтому аргумент команды (если есть) игнорируется — двусмысленности тут нет.
-    ТОЛЬКО куратор (writer этого канала) и ТОЛЬКО пока у группы есть активный родитель."""
-    if not _REPORT_CMD_RE.match(body.strip()):
-        return
-    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
-    if conv is None or conv.system_kind != "curator_reports":
-        return
-    part = _participant(db, conv_id, user.id)
-    if part is None or part.role not in _WRITER_ROLES:
-        return
-    group_name = conv_id.split(":", 2)[-1]
-    if not _active_parent_ids_for_group(db, group_name):
-        return   #группа успела лишиться последнего родителя — отчёт для родителей терять смысл
-    try:
-        from .. import webdata as W
-        cfg = W.load_config(db)
-        year, semester = W.current_term(cfg)
-        seq = (db.query(func.count(CuratorReport.id))
-               .filter(CuratorReport.group_name == group_name).scalar() or 0) + 1
-        rid = f"rpt:{group_name}|{seq}"
-        now = _now()
-        db.add(CuratorReport(id=rid, group_name=group_name, seq=seq, year=year,
-                             semester=semester, cutoff_date=_iso_to_ddmmyyyy(now),
-                             created_by=user.id, created_at=now, conversation_id=conv_id))
-        db.commit()
-        m = Message(conversation_id=conv_id, sender_id=user.id, body=rid,
-                   created_at=_now(), kind="report", body_format="plain")
+def _report_groups_for(db: Session, user: User) -> list:
+    """Группы, по которым этот человек вправе выпускать отчёт: куратору — его группы,
+    администрации — любые. Список нужен ещё и для внятной ошибки («ваши группы: …»)."""
+    if user.role == "admin":
+        return [g.name for g in db.query(Group)
+                .filter(Group.deleted == False).order_by(Group.name).all()]  # noqa: E712
+    if user.role == "teacher":
+        return list(user.curated_groups or [])
+    return []
+
+
+def _resolve_report_group(arg: str, conv: Conversation, allowed: list) -> str:
+    """Какая группа имеется в виду: аргумент команды → канал отчётов → единственная
+    курируемая группа. Угадывать при неоднозначности нельзя — отчёт не по той группе
+    это выдача чужих оценок, поэтому в спорном случае просим уточнить."""
+    arg = (arg or "").strip().strip('«»"\'').strip()
+    if arg:
+        hit = [g for g in allowed if g.strip().lower() == arg.lower()]
+        if not hit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Группа «{arg}» не найдена. Доступны: {', '.join(allowed) or '—'}")
+        return hit[0]
+    if conv is not None and conv.system_kind == "curator_reports":
+        return conv.id.split(":", 2)[-1]
+    if len(allowed) == 1:
+        return allowed[0]
+    raise HTTPException(
+        status_code=400,
+        detail=f"Укажите группу: /отчет {allowed[0] if allowed else 'К75/1'}. "
+               f"Доступны: {', '.join(allowed) or '—'}")
+
+
+def _create_report(db: Session, group_name: str, user: User, conv_ids: list) -> Message:
+    """Создать отчёт по группе и положить кнопку «Отчёт №N» в каждую из бесед.
+
+    Хранится СНИМОК ГРАНИЦЫ (термин + дата включительно), а не готовые цифры: они
+    пересчитываются живьём при каждом открытии (curator_report.collect_group) в пределах
+    этой границы. Кнопка одна и та же во всех беседах — id отчёта общий, поэтому
+    пересылка не плодит копий данных и не расходится с оригиналом.
+    Возвращает сообщение в ПЕРВОЙ беседе (её открывает клиент после создания)."""
+    from .. import webdata as W
+    cfg = W.load_config(db)
+    year, semester = W.current_term(cfg)
+    seq = (db.query(func.count(CuratorReport.id))
+           .filter(CuratorReport.group_name == group_name).scalar() or 0) + 1
+    rid = f"rpt:{group_name}|{seq}"
+    now = _now()
+    db.add(CuratorReport(id=rid, group_name=group_name, seq=seq, year=year,
+                         semester=semester, cutoff_date=_iso_to_ddmmyyyy(now),
+                         created_by=user.id, created_at=now, conversation_id=conv_ids[0]))
+    db.commit()
+    first = None
+    for cid in conv_ids:
+        m = Message(conversation_id=cid, sender_id=user.id, body=rid,
+                    created_at=_now(), kind="report", body_format="plain")
         db.add(m)
         db.commit()
         db.refresh(m)
-        rep = db.query(CuratorReport).filter(CuratorReport.id == rid).first()
-        if rep is not None:
-            rep.message_id = m.id
-            db.commit()
-        _broadcast(db, conv_id)
-    except Exception:
-        pass
+        if first is None:
+            first = m
+            rep = db.query(CuratorReport).filter(CuratorReport.id == rid).first()
+            if rep is not None:
+                rep.message_id = m.id
+                db.commit()
+        _unhide_participants(db, cid)      #«удалённый» чат возвращается с новым сообщением
+        _broadcast(db, cid)
+    return first
+
+
+def _handle_report_command(db: Session, conv_id: str, body: str, user: User):
+    """`/отчет [группа]` — команда куратора, а не обычное сообщение.
+
+    Работает в ЛЮБОЙ беседе, где автор может писать: в канале «Отчёты · Группа» (группа
+    берётся из канала), в чате родителей или в личной переписке — тогда группу называют
+    прямо в команде («/отчет К75/1»), и отчёт публикуется СРАЗУ сюда же.
+
+    Ошибки поднимаем HTTP 400/403, а не глотаем: раньше команда молча ничего не делала —
+    ни отчёта, ни объяснения, и это выглядело как «отчёты не работают».
+    Возвращает созданное сообщение-кнопку (его и отдаёт /messages вместо текста команды)."""
+    mt = _REPORT_CMD_RE.match(body.strip())
+    if not mt:
+        return None
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    allowed = _report_groups_for(db, user)
+    if not allowed:
+        raise HTTPException(status_code=403,
+                            detail="Отчёт по группе выпускает её куратор или администрация")
+    group_name = _resolve_report_group(mt.group(1), conv, allowed)
+    #В КАНАЛЕ отчётов аудитория — родители, и без единой подтверждённой связи публиковать
+    #там нечего. В обычном чате это ограничение не действует: адресата выбрал сам куратор.
+    if conv is not None and conv.system_kind == "curator_reports" \
+            and not _active_parent_ids_for_group(db, group_name):
+        raise HTTPException(
+            status_code=400,
+            detail="У группы нет ни одного подтверждённого родителя — отчёт для родителей "
+                   "публиковать некому")
+    return _create_report(db, group_name, user, [conv_id])
+
+
+@router.post("/curator-reports")
+def create_curator_report(payload: dict = Body(...), user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Создать отчёт по группе и отправить его СООБЩЕНИЕМ — в личные чаты родителей
+    (`to_user_ids`), в конкретные беседы (`to_conversation_ids`) или, если не указано
+    ничего, себе в «Избранное», откуда его можно переслать кому угодно.
+
+    Кнопку отчёта можно пересылать: доступ даёт участие в ЛЮБОЙ беседе, где она лежит
+    (см. _require_report_access), а не только в исходной."""
+    group_name = (payload.get("group") or "").strip()
+    allowed = _report_groups_for(db, user)
+    if not allowed:
+        raise HTTPException(status_code=403,
+                            detail="Отчёт по группе выпускает её куратор или администрация")
+    if group_name not in allowed:
+        raise HTTPException(status_code=403, detail="Эта группа вами не курируется")
+    _guard_can_write(db, user)                       #мьют/анти-флуд — как у обычной отправки
+
+    conv_ids = []
+    for uid in [str(x) for x in (payload.get("to_user_ids") or [])]:
+        peer = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
+        if peer is None or peer.id == user.id:
+            continue
+        _guard_direct_allowed(db, user, peer)        #те же границы, что у обычной переписки
+        conv_ids.append(_ensure_direct(db, user, peer))
+    for cid in [str(x) for x in (payload.get("to_conversation_ids") or [])]:
+        part = _participant(db, cid, user.id)
+        if part is None:
+            continue                                 #в чужую беседу отчёт не положишь
+        conv = _conversation(db, cid)
+        if conv.kind == "channel" and part.role not in _WRITER_ROLES:
+            continue
+        conv_ids.append(cid)
+    if not conv_ids:
+        #Ничего не выбрано — кладём себе в «Избранное»: отчёт создан, дальше его пересылают.
+        conv_ids = [_ensure_saved(db, user)]
+
+    seen, targets = set(), []
+    for cid in conv_ids:
+        if cid not in seen:
+            seen.add(cid)
+            targets.append(cid)
+    m = _create_report(db, group_name, user, targets)
+    return {"ok": True, "report_id": m.body, "message_id": m.id,
+            "conversation_id": targets[0], "conversation_ids": targets}
+
+
+@router.get("/report-recipients")
+def report_recipients(group: str = Query(...), user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Кому предложить отчёт по группе: родители с ПОДТВЕРЖДЁННОЙ связью (личные чаты) и
+    уже существующие беседы группы (канал отчётов, чат родителей). Список — подсказка для
+    диалога отправки; права всё равно проверяются при создании отчёта."""
+    group = group.strip()
+    allowed = _report_groups_for(db, user)
+    if group not in allowed:
+        raise HTTPException(status_code=403, detail="Эта группа вами не курируется")
+    parent_ids = _active_parent_ids_for_group(db, group)
+    onl = _online_logins()
+    parents = [_safe_user(p, onl) for p in db.query(User)
+               .filter(User.id.in_(parent_ids)).order_by(User.surname, User.name).all()] \
+        if parent_ids else []
+    #Беседы, которые уместно предложить: системные каналы этой группы + групповые чаты,
+    #где куратор состоит (чат родителей он заводит сам обычной «Новой группой»).
+    convs = []
+    for p in db.query(ConversationParticipant).filter(
+            ConversationParticipant.user_id == user.id).all():
+        conv = db.query(Conversation).filter(Conversation.id == p.conversation_id).first()
+        if conv is None or conv.kind not in ("group", "channel"):
+            continue
+        if conv.kind == "channel" and p.role not in _WRITER_ROLES:
+            continue
+        if conv.is_system and not conv.id.endswith(f":{group}"):
+            continue                                 #чужой группы системный канал не предлагаем
+        convs.append({"conversation_id": conv.id, "title": conv.title or "",
+                      "kind": conv.kind, "system": bool(conv.is_system)})
+    convs.sort(key=lambda c: (not c["system"], c["title"]))
+    return {"parents": parents, "conversations": convs}
+
+
+def _require_report_access(db: Session, rep: CuratorReport, user: User) -> None:
+    """Доступ к отчёту = участие в ЛЮБОЙ беседе, где лежит его кнопка.
+
+    Привязка к ОДНОЙ исходной беседе делала пересылку бессмысленной: у адресата в личке
+    кнопка была, а по нажатию приходило 403. Отчёт при этом не «публичный» — чтобы кнопка
+    попала в беседу, туда её должен положить или переслать тот, у кого доступ уже есть."""
+    conv_ids = {r[0] for r in db.query(Message.conversation_id)
+                .filter(Message.kind == "report", Message.body == rep.id,
+                        Message.deleted_at == "").all()}
+    if rep.conversation_id:
+        conv_ids.add(rep.conversation_id)
+    for cid in conv_ids:
+        if _participant(db, cid, user.id) is not None:
+            return
+    raise HTTPException(status_code=403, detail="Нет доступа к этому отчёту")
 
 
 def _iso_to_ddmmyyyy(iso: str) -> str:
@@ -2127,7 +2365,7 @@ def report_overview(report_id: str, user: User = Depends(get_current_user),
     rep = db.query(CuratorReport).filter(CuratorReport.id == report_id).first()
     if rep is None:
         raise HTTPException(status_code=404, detail="Отчёт не найден")
-    _require_participant(db, rep.conversation_id, user)   #доступ = участник канала отчётов
+    _require_report_access(db, rep, user)   #участник ЛЮБОЙ беседы, где лежит эта кнопка
     from .. import webdata as W
     from .. import curator_report as CR
     cfg = W.load_config(db)
@@ -2152,7 +2390,7 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
     rep = db.query(CuratorReport).filter(CuratorReport.id == report_id).first()
     if rep is None:
         raise HTTPException(status_code=404, detail="Отчёт не найден")
-    _require_participant(db, rep.conversation_id, user)
+    _require_report_access(db, rep, user)
     from .. import webdata as W
     from .. import curator_report as CR
     cfg = W.load_config(db)

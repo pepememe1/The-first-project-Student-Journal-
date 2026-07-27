@@ -12,8 +12,11 @@ const m = useMessengerStore()
 const { activePeer, isModeration, activeInfo } = storeToRefs(m)
 
 // Панель можно свернуть — состояние помним между сеансами (кому-то нужен только чат).
+// По умолчанию СВЁРНУТА: карточка собеседника и список участников нужны изредка, а места
+// они съедают столько же, сколько сама переписка. Разворачивается кнопкой и с тех пор
+// помнится — поэтому сравниваем с '0', а не с '1' (пустой ключ = «ещё не решал» = скрыто).
 const K_COLLAPSED = 'gb.messenger.profile_collapsed'
-const collapsed = ref(localStorage.getItem(K_COLLAPSED) === '1')
+const collapsed = ref(localStorage.getItem(K_COLLAPSED) !== '0')
 function toggle() {
   collapsed.value = !collapsed.value
   localStorage.setItem(K_COLLAPSED, collapsed.value ? '1' : '0')

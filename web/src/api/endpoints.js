@@ -312,10 +312,25 @@ export const messengerApi = {
   getStatus: () => api.get('/web/messenger/status'),
   setStatus: (kind, customText = '') =>
     api.post('/web/messenger/status', { kind, custom_text: customText }),
+  // Группы, которые сотрудник может адресовать (объявления/отчёты) — для выпадающего
+  // списка вместо ручного ввода.
+  myGroups: () => api.get('/web/messenger/my-groups'),
   // §D12: открыть/создать системный канал «Объявления · Группа» (teacher/admin), дальше
   // публикация — обычным send() в этот же чат (это просто kind='channel').
+  // ⚠️ Группа идёт в QUERY, а не в путь: имена вида «К75/1» в пути превращались в %2F,
+  // Starlette декодировал его обратно в «/», роут не совпадал и запрос молча 404-ил.
   ensureAnnouncementsChannel: (groupName) =>
-    api.post(`/web/messenger/channels/announcements/${encodeURIComponent(groupName)}`),
+    api.post('/web/messenger/channels/announcements', null, { params: { group: groupName } }),
+  // §12: канал «Отчёты · Группа» (куратор). Группа — тоже в query, причина та же.
+  ensureCuratorReportsChannel: (groupName) =>
+    api.post('/web/messenger/channels/curator-reports', null, { params: { group: groupName } }),
+  // §12: кому предложить отчёт (родители с подтверждённой связью + подходящие беседы).
+  reportRecipients: (group) =>
+    api.get('/web/messenger/report-recipients', { params: { group } }),
+  // §12: создать отчёт и отправить его сообщением. Без адресатов — себе в «Избранное».
+  createReport: (group, toUserIds = [], toConversationIds = []) =>
+    api.post('/web/messenger/curator-reports',
+      { group, to_user_ids: toUserIds, to_conversation_ids: toConversationIds }),
   // Организация списка чатов (docs/MESSENGER-ADDON-PLAN-GPT*.md): закреп/архив/избранное.
   pinChat: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
   unpinChat: (convId) => api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
@@ -348,10 +363,7 @@ export const messengerApi = {
   templates: () => api.get('/web/messenger/templates'),
   createTemplate: (body) => api.post('/web/messenger/templates', { body }),
   deleteTemplate: (id) => api.delete(`/web/messenger/templates/${id}`),
-  // §12: отчёт куратора — канал «Отчёты · Группа», команда /отчет (обычный send()),
-  // данные оверлея (круговая + плоские по предметам) и дрилл-даун по предмету.
-  ensureCuratorReportsChannel: (groupName) =>
-    api.post(`/web/messenger/channels/curator-reports/${encodeURIComponent(groupName)}`),
+  // §12: данные оверлея отчёта (круговая + плоские по предметам) и дрилл-даун по предмету.
   reportOverview: (id) => api.get(`/web/messenger/reports/${encodeURIComponent(id)}`),
   reportSubject: (id, subject) =>
     api.get(`/web/messenger/reports/${encodeURIComponent(id)}/subject`, { params: { subject } }),

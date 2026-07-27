@@ -8,7 +8,10 @@ import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { curatorApi } from '@/api/endpoints'
+import { messagePreview } from '@/utils/messagePreview'
 import CreateChatDialog from './CreateChatDialog.vue'
+import GroupPickDialog from './GroupPickDialog.vue'
+import CuratorReportDialog from './CuratorReportDialog.vue'
 import MyStatusPicker from './MyStatusPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 
@@ -72,31 +75,64 @@ watch(q, () => {
 
 function startCreate(kind) { showNew.value = false; createKind.value = kind }
 
-// §D12: канал «Объявления · Группа» — существующие читатели уже подписаны (студенты
-// группы), пост уходит обычным send() дальше в ChatThread. Ввод группы — простым prompt,
-// пока в мессенджере нет отдельного выбора «мои группы» (см. журнал/расписание за списком).
-async function openAnnouncements() {
-  showNew.value = false
-  const group = window.prompt('Название группы для объявлений (например, К-24):')
-  if (group) await m.openAnnouncementsChannel(group)
+// Строка предпросмотра в списке. Разбор общий с лентой (utils/messagePreview): служебные
+// события здесь показывались сырым шаблоном («user_joined␟admin:admin␟…»).
+function preview(c) {
+  return messagePreview(c.last_message, { withSender: c.kind !== 'direct' })
+    || (c.kind === 'saved' ? 'Заметки, ссылки, код себе' : 'Нет сообщений')
 }
-// §12: канал «Отчёты · Группа» — только куратор своей группы, и только если у неё есть
-// хоть один активный родитель (сервер проверяет обе границы; клиент просто предлагает).
-const isCurator = computed(() => auth.role === 'teacher')
-// §12: вкладка «Родители» в каталоге мессенджера — ТОЛЬКО admin и настоящий куратор
-// (curated_groups непустой, а не просто role==='teacher' — та проверка выше нужна лишь
-// для пункта меню «Отчёты», где сервер и так отклонит не-куратора). Обычным
-// преподавателям/студентам родителей в поиске не видно — сервер (messenger.py::
+
+// §D12: канал «Объявления · Группа» — существующие читатели уже подписаны (студенты
+// группы), пост уходит обычным send() дальше в ChatThread. Группу выбирают из списка:
+// ручной ввод давал опечатки в именах вида «К75/1», и канал молча не открывался.
+const showGroupPick = ref(false)
+const dialogError = ref('')
+const dialogBusy = ref(false)
+function openAnnouncements() {
+  showNew.value = false
+  dialogError.value = ''
+  showGroupPick.value = true
+}
+async function onGroupPicked(group) {
+  dialogBusy.value = true
+  const err = await m.openAnnouncementsChannel(group)
+  dialogBusy.value = false
+  dialogError.value = err
+  if (!err) showGroupPick.value = false
+}
+// §12: вкладка «Родители» в каталоге мессенджера и пункт «Отчёт для родителей» — ТОЛЬКО
+// admin и НАСТОЯЩИЙ куратор (curated_groups непустой, а не просто role==='teacher':
+// обычному преподавателю пункт меню открывал бы окно, где всё равно нечего выбрать).
+// Обычным преподавателям/студентам родителей в поиске не видно — сервер (messenger.py::
 // directory) и так их скрывает, это лишь клиентский гейт вкладки.
 const myCuratedGroups = ref([])
 if (auth.role === 'teacher') {
   curatorApi.groups().then(r => { myCuratedGroups.value = r.data.groups || [] }).catch(() => {})
 }
 const canSearchParents = computed(() => auth.role === 'admin' || myCuratedGroups.value.length > 0)
-async function openCuratorReports() {
+// §12: отчёт — обычное сообщение-кнопка, а не отдельный канал: выбираем группу и
+// адресатов (родители в ЛС / беседы), либо не выбираем никого — тогда он ляжет в
+// «Избранное», откуда его пересылают.
+const showReport = ref(false)
+function openCuratorReports() {
   showNew.value = false
-  const group = window.prompt('Группа для отчётов родителям (например, К-24):')
-  if (group) await m.openCuratorReportsChannel(group)
+  dialogError.value = ''
+  showReport.value = true
+}
+async function onCreateReport({ group, userIds, convIds, channel }) {
+  dialogBusy.value = true
+  const targets = [...convIds]
+  if (channel) {
+    //Канал заводим ДО отчёта: если сервер откажет (у группы нет подтверждённых родителей),
+    //отчёт не создаём вовсе — иначе он ушёл бы «наполовину», и было бы непонятно куда.
+    const { id, error } = await m.ensureReportsChannel(group)
+    if (error) { dialogBusy.value = false; dialogError.value = error; return }
+    targets.push(id)
+  }
+  const err = await m.createReport(group, userIds, targets)
+  dialogBusy.value = false
+  dialogError.value = err
+  if (!err) showReport.value = false
 }
 async function onCreate(payload) {
   const kind = createKind.value
@@ -135,8 +171,8 @@ onMounted(() => { m.loadChats() })
             <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />Новый канал</button>
             <!-- §D12: авто-канал «Объявления · Группа» — студенты группы уже читатели. -->
             <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />Объявления группы</button>
-            <!-- §12: только куратору — отчёты для родителей своей группы. -->
-            <button v-if="isCurator" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />Отчёты для родителей</button>
+            <!-- §12: только куратору — отчёт по успеваемости своей группы для родителей. -->
+            <button v-if="canSearchParents" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />Отчёт для родителей</button>
           </div>
         </div>
       </div>
@@ -163,7 +199,7 @@ onMounted(() => { m.loadChats() })
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-accent2 text-white"><Star class="size-5" /></div>
           <div class="min-w-0 flex-1">
             <div class="text-sm font-semibold text-text">Избранное</div>
-            <div class="truncate text-xs text-text3">{{ savedChat?.last_message ? (savedChat.last_message.deleted ? 'Сообщение удалено' : savedChat.last_message.body) : 'Заметки, ссылки, код себе' }}</div>
+            <div class="truncate text-xs text-text3">{{ savedChat ? preview(savedChat) : 'Заметки, ссылки, код себе' }}</div>
           </div>
         </button>
         <button v-if="tab === 'chats' && archivedCount" type="button" @click="tab = 'archive'"
@@ -199,7 +235,7 @@ onMounted(() => { m.loadChats() })
               </div>
               <div class="flex items-center justify-between gap-2">
                 <span class="truncate text-xs text-text3">
-                  {{ c.last_message ? (c.last_message.deleted ? 'Сообщение удалено' : c.last_message.body) : 'Нет сообщений' }}
+                  {{ preview(c) }}
                 </span>
                 <span v-if="c.unread" class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">{{ c.unread }}</span>
               </div>
@@ -261,5 +297,11 @@ onMounted(() => { m.loadChats() })
     </div>
 
     <CreateChatDialog v-if="createKind" :kind="createKind" @create="onCreate" @close="createKind = ''" />
+    <GroupPickDialog v-if="showGroupPick" title="Объявления группы" submit-label="Открыть канал"
+                     hint="Канал «Объявления · Группа». Студенты группы уже подписаны."
+                     :error="dialogError" :busy="dialogBusy"
+                     @pick="onGroupPicked" @close="showGroupPick = false" />
+    <CuratorReportDialog v-if="showReport" :error="dialogError" :busy="dialogBusy"
+                         @create="onCreateReport" @close="showReport = false" />
   </aside>
 </template>

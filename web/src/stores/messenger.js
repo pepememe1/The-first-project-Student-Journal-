@@ -102,11 +102,20 @@ export const useMessengerStore = defineStore('messenger', () => {
     await loadChats()                    // обновить счётчик непрочитанного в списке
   }
 
-  async function loadConvInfo() {
-    activeInfo.value = null
-    if (!activeId.value) return
-    try { const { data } = await messengerApi.convInfo(activeId.value); activeInfo.value = data }
-    catch { /* личный чат может не отдавать расширенное инфо — не критично */ }
+  // reset=true — вход в ДРУГУЮ беседу (старую карточку показывать нельзя, чистим сразу).
+  // reset=false — обновление на тике опроса: карточку НЕ гасим.
+  // Раньше гасили всегда, и на каждом опросе (раз в 3.5 с) панель на время сетевого
+  // запроса оставалась без activeInfo — группа/канал «моргали» и подменялись карточкой
+  // собеседника. Пустое значение показываем только когда правда не знаем, что за беседа.
+  async function loadConvInfo(reset = true) {
+    if (!activeId.value) { activeInfo.value = null; return }
+    if (reset) activeInfo.value = null
+    const convId = activeId.value
+    try {
+      const { data } = await messengerApi.convInfo(convId)
+      //Ответ мог прийти уже после перехода в другой чат — тогда он не про эту беседу.
+      if (activeId.value === convId) activeInfo.value = data
+    } catch { /* личный чат может не отдавать расширенное инфо — не критично */ }
   }
 
   // Открыть беседу из СПИСКА чатов (peer уже в элементе списка).
@@ -181,7 +190,9 @@ export const useMessengerStore = defineStore('messenger', () => {
       const detail = e?.response?.data?.detail
       if (st === 429 && detail && typeof detail === 'object' && detail.mascot) {
         _startCooldown(detail.cooldown_seconds || 8)
-      } else if (st === 429 || st === 403) {
+      } else if ([400, 403, 429].includes(st)) {
+        //400 сюда попал не для полноты: так отвечает разбор команд («/отчет чужая-группа»),
+        //и без плашки человек видел ровно ничего — сообщение исчезало без объяснений.
         setNotice((typeof detail === 'string' && detail) || 'Сообщение не отправлено.')
       }
       return false
@@ -226,8 +237,9 @@ export const useMessengerStore = defineStore('messenger', () => {
       } catch { /* noop */ }
       // Галочки «прочитано» в ЛС читают last_read_at собеседника из activeInfo — держим
       // его свежим на каждый тик опроса/WS-сигнала, иначе галочка сменится только при
-      // повторном входе в чат (см. ChatThread.vue::peerLastReadAt).
-      await loadConvInfo()
+      // повторном входе в чат (см. ChatThread.vue::peerLastReadAt). Без сброса (reset=false):
+      // иначе панель справа моргает на каждом тике.
+      await loadConvInfo(false)
     }
     await loadChats()
   }
@@ -341,25 +353,40 @@ export const useMessengerStore = defineStore('messenger', () => {
   // дальше публикация обычным send(), отдельного «отправить объявление» не нужно.
   async function openAnnouncementsChannel(groupName) {
     const g = (groupName || '').trim()
-    if (!g) return false
+    if (!g) return 'Выберите группу'
     try {
       const { data } = await messengerApi.ensureAnnouncementsChannel(g)
       await loadChats()
       await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
-      return true
-    } catch { return false }
+      return ''
+    } catch (e) { return _errText(e, 'Не удалось открыть канал объявлений') }
   }
-  // §12: открыть/создать канал «Отчёты · Группа» (только куратор этой группы, только
-  // если у группы есть активный родитель — сервер сам проверяет обе границы).
-  async function openCuratorReportsChannel(groupName) {
+  // §12: найти/создать канал «Отчёты · Группа» и вернуть его id (только куратор этой
+  // группы и только если у группы есть активный родитель — сервер проверяет обе границы).
+  // Нужен диалогу отчёта: канал — один из возможных адресатов, наравне с личными чатами.
+  async function ensureReportsChannel(groupName) {
     const g = (groupName || '').trim()
-    if (!g) return false
+    if (!g) return { id: '', error: 'Выберите группу' }
     try {
       const { data } = await messengerApi.ensureCuratorReportsChannel(g)
+      return { id: data.conversation_id, error: '' }
+    } catch (e) { return { id: '', error: _errText(e, 'Не удалось открыть канал отчётов') } }
+  }
+  // §12: создать отчёт по группе и отправить его сообщением (в ЛС родителям и/или в
+  // выбранные беседы; без адресатов — себе в «Избранное»). Возвращает текст ошибки или ''.
+  // Ошибку ОБЯЗАТЕЛЬНО показываем: молчание в ответ на «Создать» и читалось как «не работает».
+  async function createReport(group, userIds = [], convIds = []) {
+    try {
+      const { data } = await messengerApi.createReport(group, userIds, convIds)
       await loadChats()
-      await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
-      return true
-    } catch { return false }
+      await _enterChat(data.conversation_id, { full_name: '', role: '' })
+      return ''
+    } catch (e) { return _errText(e, 'Не удалось создать отчёт') }
+  }
+  //Текст ошибки от сервера (detail) — он написан для человека, а не «Request failed 400».
+  function _errText(e, fallback) {
+    const d = e?.response?.data?.detail
+    return (typeof d === 'string' && d) ? d : fallback
   }
 
   async function leaveActive() {
@@ -596,7 +623,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
-    openAnnouncementsChannel, openCuratorReportsChannel,
+    openAnnouncementsChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus,
     togglePinChat, toggleArchiveChat, openSaved,
     draftFor, saveDraft, clearDraft,

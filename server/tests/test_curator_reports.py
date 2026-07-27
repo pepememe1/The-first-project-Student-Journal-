@@ -146,9 +146,13 @@ def test_report_sequence_increments_per_group(client):
     assert seqs == [1, 2]
 
 
-def test_report_command_ignored_if_group_loses_last_parent(client):
-    """Родитель отозвал согласие — команда больше не публикует отчёт (группа перестала
-    быть «группой с родителями»), но сам канал/кнопки прошлых отчётов никуда не деваются."""
+def test_report_command_refused_if_group_loses_last_parent(client):
+    """Родитель отозвал согласие — в КАНАЛЕ отчётов команда больше не публикует отчёт
+    (публиковать его там некому), но сам канал и кнопки прошлых отчётов никуда не деваются.
+
+    Отвечаем 400 с объяснением, а НЕ молчаливым «ок»: раньше куратор жал отправку, ничего
+    не происходило, и это выглядело как поломка. В обычном чате ограничения нет — там
+    адресата выбирает сам куратор (см. test_report_command_in_direct_chat)."""
     admin, teach, sh, ph = _setup_group_with_parent(client)
     conv_id = _ensure_channel(client, teach)
     #Студент отзывает согласие.
@@ -158,7 +162,8 @@ def test_report_command_ignored_if_group_loses_last_parent(client):
 
     r = client.post(f"/web/messenger/chats/{conv_id}/messages",
                     json={"body": "/отчет"}, headers=teach)
-    assert r.status_code == 200   #само сообщение отправляется
+    assert r.status_code == 400
+    assert "родител" in r.json()["detail"].lower()
     msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=teach).json()["messages"]
     assert not any(m["kind"] == "report" for m in msgs)
 
@@ -270,3 +275,173 @@ def test_new_report_after_rollover_is_not_archived(client):
     assert len(reports) == 2
     assert reports[0]["archived"] is True    #отчёт из ЗАКРЫВШЕГОСЯ термина
     assert reports[1]["archived"] is False   #новый — из текущего термина
+
+
+# ── Отчёт как обычное сообщение: ЛС, произвольный чат, пересылка ─────────────────────
+def _parent_id_of(client, admin, login="parent1"):
+    r = client.get("/web/staff/parents", headers=admin)
+    assert r.status_code == 200, r.text
+    for p in r.json()["parents"]:
+        if p["login"] == login:
+            return p["id"]
+    raise AssertionError("родитель не найден")
+
+
+def test_create_report_goes_to_parent_direct_chat(client):
+    """«+ → Отчёт»: отчёт уезжает СООБЩЕНИЕМ в личный чат родителя, без всякого канала."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    _seed_lesson_and_grade(client, admin, teach, "ИС-21", "Математика", "5")
+    pid = _parent_id_of(client, admin)
+
+    r = client.post("/web/messenger/curator-reports",
+                    json={"group": "ИС-21", "to_user_ids": [pid]}, headers=teach)
+    assert r.status_code == 200, r.text
+    conv_id = r.json()["conversation_id"]
+
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    reports = [m for m in msgs if m["kind"] == "report"]
+    assert len(reports) == 1 and reports[0]["report"]["group"] == "ИС-21"
+    #И родитель этот отчёт может открыть — доступ даёт участие в ЛИЧНОМ чате.
+    rid = reports[0]["report"]["id"]
+    assert client.get(f"/web/messenger/reports/{rid}", headers=ph).status_code == 200
+
+
+def test_create_report_without_targets_lands_in_saved(client):
+    """Адресат не выбран — отчёт кладём себе в «Избранное», оттуда его пересылают."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    r = client.post("/web/messenger/curator-reports", json={"group": "ИС-21"}, headers=teach)
+    assert r.status_code == 200, r.text
+    assert r.json()["conversation_id"].startswith("saved:")
+
+
+def test_create_report_requires_curated_group(client):
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    r = client.post("/web/messenger/curator-reports", json={"group": "ЭК-11"}, headers=teach)
+    assert r.status_code == 403
+
+
+def test_forwarded_report_stays_a_button_and_opens(client):
+    """Пересылка отчёта: у адресата это КНОПКА (а не текст «rpt:…»), и она открывается."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    _seed_lesson_and_grade(client, admin, teach, "ИС-21", "Математика", "5")
+    r = client.post("/web/messenger/curator-reports", json={"group": "ИС-21"}, headers=teach)
+    saved_id, mid = r.json()["conversation_id"], r.json()["message_id"]
+
+    pid = _parent_id_of(client, admin)
+    direct = client.post(f"/web/messenger/chats/direct/{pid}", headers=teach).json()["conversation_id"]
+    r = client.post("/web/messenger/messages/forward",
+                    json={"message_ids": [mid], "to_conversation_ids": [direct]}, headers=teach)
+    assert r.status_code == 200 and r.json()["forwarded"] == 1
+
+    msgs = client.get(f"/web/messenger/chats/{direct}/messages", headers=ph).json()["messages"]
+    fwd = [m for m in msgs if m["kind"] == "report"]
+    assert len(fwd) == 1, "пересланный отчёт должен остаться кнопкой (kind='report')"
+    assert fwd[0]["report"] and fwd[0]["report"]["seq"] == 1
+    assert client.get(f"/web/messenger/reports/{fwd[0]['report']['id']}", headers=ph).status_code == 200
+    assert saved_id.startswith("saved:")
+
+
+def test_parent_cannot_forward_report_further(client):
+    """Родителю отчёт по группе прислали — дальше он его не рассылает (оценки всей группы)."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    pid = _parent_id_of(client, admin)
+    r = client.post("/web/messenger/curator-reports",
+                    json={"group": "ИС-21", "to_user_ids": [pid]}, headers=teach)
+    conv_id = r.json()["conversation_id"]
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    mid = next(m["id"] for m in msgs if m["kind"] == "report")
+
+    saved = client.post("/web/messenger/chats/saved", headers=ph).json()["conversation_id"]
+    r = client.post("/web/messenger/messages/forward",
+                    json={"message_ids": [mid], "to_conversation_ids": [saved]}, headers=ph)
+    assert r.status_code == 200 and r.json()["forwarded"] == 0
+
+
+def test_report_command_with_group_argument_posts_here(client):
+    """`/отчет ИС-21` в ЛИЧНОМ чате публикует отчёт СРАЗУ в эту переписку."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    pid = _parent_id_of(client, admin)
+    conv_id = client.post(f"/web/messenger/chats/direct/{pid}", headers=teach).json()["conversation_id"]
+
+    r = client.post(f"/web/messenger/chats/{conv_id}/messages",
+                    json={"body": "/отчет ИС-21"}, headers=teach)
+    assert r.status_code == 200, r.text
+    assert r.json()["kind"] == "report"
+
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    #Текст самой команды в ленте не остаётся — только кнопка.
+    assert [m["kind"] for m in msgs] == ["report"]
+
+
+def test_report_command_rejects_foreign_group(client):
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    pid = _parent_id_of(client, admin)
+    conv_id = client.post(f"/web/messenger/chats/direct/{pid}", headers=teach).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv_id}/messages",
+                    json={"body": "/отчет ЭК-11"}, headers=teach)
+    assert r.status_code == 400
+    assert "ЭК-11" in r.json()["detail"]
+
+
+def test_report_command_from_student_is_refused(client):
+    """Команда — не «магическое слово»: у студента она не сработает даже в своих заметках."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    conv_id = client.post("/web/messenger/chats/saved", headers=sh).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv_id}/messages",
+                    json={"body": "/отчет ИС-21"}, headers=sh)
+    assert r.status_code == 403
+
+
+# ── Выпадающий список групп (вместо ручного ввода) ───────────────────────────────────
+def test_my_groups_marks_curated(client):
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    r = client.get("/web/messenger/my-groups", headers=teach)
+    assert r.status_code == 200, r.text
+    names = {g["name"]: g["curated"] for g in r.json()["groups"]}
+    assert names.get("ИС-21") is True
+
+
+def test_channel_endpoints_accept_group_with_slash(client):
+    """Имя группы со слэшем («К75/1») в ПУТИ ломало роутинг — теперь оно идёт в query."""
+    admin = make_admin(client)
+    teach = _make_curator(client, admin, group="К75/1")
+    _student(client, admin, "ivanova", "Иванова", "Мария", group="К75/1")
+    r = client.post("/web/messenger/channels/announcements", params={"group": "К75/1"},
+                    headers=teach)
+    assert r.status_code == 200, r.text
+    assert r.json()["conversation_id"] == "sys:announce:К75/1"
+
+
+# ── Строка чата в списке (предпросмотр) ──────────────────────────────────────────────
+def test_chat_list_gives_sender_and_report_meta(client):
+    """Списку чатов нужны имя автора (в группе/канале) и номер отчёта — иначе слева
+    показывался сырой шаблон служебного сообщения и id отчёта вместо кнопки."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    conv_id = _ensure_channel(client, teach)
+    client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
+
+    chats = client.get("/web/messenger/chats", headers=ph).json()["chats"]
+    row = next(c for c in chats if c["conversation_id"] == conv_id)
+    last = row["last_message"]
+    assert last["kind"] == "report"
+    assert last["report"] and last["report"]["seq"] == 1     #номер для «📊 Отчёт №1»
+    assert last["sender_name"], "в канале нужно имя автора последнего сообщения"
+    assert last["mine"] is False
+
+
+def test_system_events_do_not_count_as_unread(client):
+    """«Вступил в беседу» — отметка в ленте, а не сообщение тебе: непрочитанным не считается."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    r = client.post("/web/messenger/chats/group", json={
+        "title": "Кураторская", "member_ids": []}, headers=teach)
+    assert r.status_code == 200, r.text
+    conv_id = r.json()["conversation_id"]
+    sid = _user_id(client, admin, "ivanova")
+    r = client.post(f"/web/messenger/chats/{conv_id}/members",
+                    json={"user_ids": [sid]}, headers=teach)
+    assert r.status_code == 200, r.text
+
+    chats = client.get("/web/messenger/chats", headers=sh).json()["chats"]
+    row = next(c for c in chats if c["conversation_id"] == conv_id)
+    assert row["last_message"]["kind"] == "system"
+    assert row["unread"] == 0

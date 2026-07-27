@@ -13,6 +13,7 @@ import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownLite } from '@/utils/markdownLite'
+import { formatSystemMessage } from '@/utils/messagePreview'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
@@ -155,22 +156,8 @@ function quoted(id) {
 }
 
 // §D6: системные сообщения (вступил/вышел/переименовано/закреп) — сервер шлёт шаблон
-// "событие:аргументы", здесь превращаем в человеческий текст.
-function formatSystemMessage(body) {
-  // Разделитель полей — \x1f (Unit Separator), НЕ ':': id участника сам вида "stud:login"
-  // и split(':') расклеивал бы его на куски (баг — простое ':' совпадало с id).
-  const parts = String(body || '').split('\x1f')
-  const type = parts[0]
-  const rest = parts.slice(1)
-  if (type === 'user_joined' || type === 'user_left') {
-    const name = rest[1] || rest[0] || 'Участник'
-    return type === 'user_joined' ? `${name} вступил(а) в беседу` : `${name} покинул(а) беседу`
-  }
-  if (type === 'title_changed') return `Название изменено на «${rest[0] || ''}»`
-  if (type === 'pin_added') return '📌 Сообщение закреплено'
-  if (type === 'pin_removed') return 'Сообщение откреплено'
-  return body
-}
+// "событие\x1fаргументы". Разбор общий с левым списком чатов (utils/messagePreview):
+// две копии разбора уже разъезжались — в ленте текст был человеческий, а в списке сырой.
 
 // §D1: рендер тела сообщения (Markdown-lite → безопасный HTML для v-html).
 // §D8: подсветка @Фамилия/@!Фамилия — визуальная, ПОСЛЕ Markdown (безопасно: результат
@@ -226,19 +213,31 @@ function onComposerKeydown(e) {
 // ── Автодополнение слэш-команд «/» (как в Telegram) ─────────────────────────────────────
 // Команда доступна только если это ВЕСЬ текст от начала сообщения до курсора (без
 // пробела) — как только начат аргумент («/vector когда…»), подсказка сама пропадает.
-// §12: /отчет — только в служебном канале отчётов куратора (system_kind='curator_reports'),
-// и только у того, кто в НЁМ writer (сервер создаёт куратора единственным писателем —
-// см. routers/messenger.py::ensure_curator_reports_channel).
-const canReport = computed(() =>
-  activeInfo.value?.system_kind === 'curator_reports' &&
-  ['owner', 'admin', 'writer'].includes(activeInfo.value?.my_role))
+// §12: /отчет доступен куратору (и администрации) в ЛЮБОЙ беседе, где он пишет: «/отчет
+// К75/1» публикует отчёт СРАЗУ сюда — например в чат родителей. В канале «Отчёты · Группа»
+// группу называть не нужно, она известна из самого канала.
+const reportGroups = ref([])
+onMounted(async () => {
+  if (!['teacher', 'admin'].includes(auth.role)) return
+  try {
+    const all = (await messengerApi.myGroups()).data.groups || []
+    reportGroups.value = (auth.role === 'admin' ? all : all.filter(g => g.curated)).map(g => g.name)
+  } catch { /* не куратор — команды просто не будет */ }
+})
+const inReportsChannel = computed(() => activeInfo.value?.system_kind === 'curator_reports')
+const canReport = computed(() => reportGroups.value.length > 0)
 const SLASH_COMMANDS = computed(() => {
   const list = []
   if (isSaved.value) {
     list.push({ cmd: '/vector', hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике?' })
   }
   if (canReport.value) {
-    list.push({ cmd: '/отчет', hint: 'Сформировать отчёт по группе для родителей' })
+    list.push({
+      cmd: '/отчет',
+      hint: inReportsChannel.value
+        ? 'Отчёт по успеваемости группы этого канала'
+        : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0]}`,
+    })
   }
   return list
 })
