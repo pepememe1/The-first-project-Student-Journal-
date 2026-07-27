@@ -18,9 +18,9 @@ function plate(u) {
 
 const emit = defineEmits(['close'])
 const m = useMessengerStore()
-const { activeInfo, activePeer, isModeration } = storeToRefs(m)
+const { activeInfo, activePeer, isModeration, activeKind } = storeToRefs(m)
 
-const kind = computed(() => activeInfo.value?.kind || 'direct')
+const kind = computed(() => activeKind.value)
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(kind.value))
 const isSaved = computed(() => kind.value === 'saved')
 const people = computed(() => activeInfo.value?.participants || [])

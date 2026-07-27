@@ -26,7 +26,7 @@ import { profilePlate } from '@/theme/palette'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
-const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
+const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
 const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
 const isAdmin = computed(() => auth.role === 'admin')
@@ -34,7 +34,9 @@ const isAdmin = computed(() => auth.role === 'admin')
 const muted = computed(() => !!activeChat.value?.muted)
 
 // Тип беседы и права (для шапки/композера групп и каналов).
-const kind = computed(() => activeInfo.value?.kind || 'direct')
+//Тип беседы берём из стора (activeKind): он известен ещё до ответа /chats/{id}, иначе
+//«Избранное» и группы на долю секунды рисовались как личный чат («был(а) недавно»).
+const kind = computed(() => activeKind.value)
 const isGroupOrChannel = computed(() => kind.value === 'group' || kind.value === 'channel')
 const canPost = computed(() => {
   if (kind.value !== 'channel') return true
@@ -226,21 +228,25 @@ onMounted(async () => {
 })
 const inReportsChannel = computed(() => activeInfo.value?.system_kind === 'curator_reports')
 const canReport = computed(() => reportGroups.value.length > 0)
-const SLASH_COMMANDS = computed(() => {
-  const list = []
-  if (isSaved.value) {
-    list.push({ cmd: '/vector', hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике?' })
-  }
-  if (canReport.value) {
-    list.push({
-      cmd: '/отчет',
-      hint: inReportsChannel.value
-        ? 'Отчёт по успеваемости группы этого канала'
-        : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0]}`,
-    })
-  }
-  return list
-})
+// По «/» показываем ВСЕ команды мессенджера, а не только годные здесь: иначе в обычном
+// чате список выходил пустым, и выглядело так, будто команд нет вовсе. Недоступные
+// показываем блёклыми и с причиной — сразу видно, где команда сработает.
+const SLASH_COMMANDS = computed(() => [
+  {
+    cmd: '/vector',
+    hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике?',
+    ok: isSaved.value,
+    why: 'Работает в «Избранном» — это ваши личные заметки',
+  },
+  {
+    cmd: '/отчет',
+    hint: inReportsChannel.value
+      ? 'Отчёт по успеваемости группы этого канала'
+      : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0] || 'К74/1'}`,
+    ok: canReport.value,
+    why: 'Отчёт по группе выпускает её куратор или администрация',
+  },
+])
 const slashQuery = ref(null)     // null — закрыто; иначе введённое после «/»
 const slashCandidates = computed(() => {
   if (slashQuery.value === null) return []
@@ -248,6 +254,7 @@ const slashCandidates = computed(() => {
   return SLASH_COMMANDS.value.filter((c) => c.cmd.slice(1).toLowerCase().startsWith(q))
 })
 function insertSlashCommand(c) {
+  if (!c.ok) return          //недоступную здесь команду не подставляем — сервер её отклонит
   draft.value = c.cmd + ' '
   slashQuery.value = null
   nextTick(() => composer.value?.focus())
@@ -711,12 +718,21 @@ const headerTint = computed(() =>
             {{ formatSystemMessage(msg.body) }}
           </div>
 
-          <!-- §12: кнопка «Отчёт №N» куратора (канал «Отчёты · Группа»). -->
+          <!-- §12: кнопка «Отчёт №N» куратора. Группу и дату границы пишем НА кнопке:
+               без них подряд лежащие отчёты неразличимы, и непонятно, сработала ли
+               команда — куратор жал «/отчет» ещё раз и плодил дубли. -->
           <div v-else-if="msg.kind === 'report' && msg.report" :id="`gb-msg-${msg.id}`"
                class="my-1 flex" :class="msg.mine ? 'justify-end' : 'justify-start'">
             <button type="button" @click="openReportOverlay = msg.report.id"
                     class="flex items-center gap-2 rounded-2xl border border-border2 bg-card px-4 py-2 text-sm font-semibold text-accent shadow-sm hover:bg-bg2">
-              <PieChart class="size-4" />Отчёт №{{ msg.report.seq }}
+              <PieChart class="size-4 shrink-0" />
+              <span class="flex flex-col items-start leading-tight">
+                <span>Отчёт №{{ msg.report.seq }}<span v-if="msg.report.group" class="text-text2"> · {{ msg.report.group }}</span></span>
+                <span class="text-[11px] font-medium text-text3">
+                  {{ msg.report.cutoff_date ? `на ${msg.report.cutoff_date}` : 'успеваемость группы' }}
+                  · {{ fmtTime(msg.created_at) }}
+                </span>
+              </span>
               <span v-if="msg.report.archived" class="rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-medium text-text3">Архив</span>
             </button>
           </div>
@@ -860,9 +876,10 @@ const headerTint = computed(() =>
           <div v-if="slashCandidates.length" class="border-b border-border p-1.5">
             <button v-for="c in slashCandidates" :key="c.cmd" type="button"
                     @mousedown.prevent="insertSlashCommand(c)"
-                    class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-bg2">
-              <span class="text-sm font-semibold text-accent">{{ c.cmd }}</span>
-              <span class="text-xs text-text3">{{ c.hint }}</span>
+                    class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left"
+                    :class="c.ok ? 'hover:bg-bg2' : 'cursor-default opacity-50'">
+              <span class="text-sm font-semibold" :class="c.ok ? 'text-accent' : 'text-text3'">{{ c.cmd }}</span>
+              <span class="text-xs text-text3">{{ c.ok ? c.hint : c.why }}</span>
             </button>
           </div>
           <!-- §D8: подсказки @Фамилия — только участники ЭТОЙ беседы (группа/канал). -->

@@ -456,6 +456,8 @@ def _attach_report_meta(db: Session, msgs: list) -> None:
         r = by_id.get(m["body"])
         if r is not None:
             m["report"] = {"id": r.id, "seq": r.seq, "group": r.group_name,
+                           #Дата границы — на кнопке: два отчёта подряд иначе неразличимы.
+                           "cutoff_date": r.cutoff_date or "",
                            "archived": bool(r.archived)}
 
 
@@ -1136,15 +1138,6 @@ def send_message(conv_id: str, payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Пустое сообщение")
     if len(body) > _MAX_MSG_CHARS:
         body = body[:_MAX_MSG_CHARS]
-    #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
-    #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
-    #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
-    rep_msg = _handle_report_command(db, conv_id, body, user)
-    if rep_msg is not None:
-        out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
-        _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
-        return out
-
     reply_to = int(payload.get("reply_to_id") or 0)
     if reply_to:
         ok = (db.query(Message)
@@ -1159,7 +1152,21 @@ def send_message(conv_id: str, payload: dict = Body(...),
         dup = (db.query(Message)
                .filter(Message.conversation_id == conv_id, Message.client_nonce == nonce).first())
         if dup is not None:
-            return _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
+            out = _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
+            _attach_report_meta(db, [out])
+            return out
+
+    #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
+    #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
+    #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
+    #⚠️ ПОСЛЕ проверки nonce: отчёт — это запись в БД, и повтор запроса (ретрай сети,
+    #двойное нажатие) не должен плодить второй такой же. Тот же nonce уезжает и в
+    #сообщение-кнопку, поэтому ретрай находит её выше и возвращает как есть.
+    rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
+    if rep_msg is not None:
+        out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
+        _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
+        return out
 
     #§D8: упоминания — среди участников ЭТОЙ беседы (иначе @Фамилия постороннего человека
     #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
@@ -1990,7 +1997,7 @@ def notify_substitution(db: Session, group_name: str, text: str) -> None:
         User.deleted == False).all()]  # noqa: E712
     if not students:
         return
-    conv_id = f"sys:substitute:{group_name}"
+    conv_id = f"sys:substitute:{_gtoken(group_name)}"
     _ensure_system_channel(db, conv_id, f"Замены · {group_name}",
                            "Точечные изменения пар: переносы, замены, отмены.",
                            reader_ids=students)
@@ -2021,7 +2028,7 @@ def ensure_practice_channel(group_name: str, user: User = Depends(get_current_us
     if user.role != "admin":
         writers += [a.id for a in db.query(User).filter(
             User.role == "admin", User.deleted == False).all()]  # noqa: E712
-    conv_id = f"sys:practice:{group_name}"
+    conv_id = f"sys:practice:{_gtoken(group_name)}"
     _ensure_system_channel(db, conv_id, f"Практика · {group_name}",
                            "Производственная практика: направления, сроки, документы.",
                            reader_ids=students, writer_ids=writers)
@@ -2039,14 +2046,27 @@ def my_groups(user: User = Depends(get_current_user), db: Session = Depends(get_
     if user.role not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
     curated = set(user.curated_groups or [])
+    known = [g.name for g in db.query(Group)
+             .filter(Group.deleted == False).order_by(Group.name).all()]  # noqa: E712
     if user.role == "admin":
-        names = [g.name for g in db.query(Group)
-                 .filter(Group.deleted == False).order_by(Group.name).all()]  # noqa: E712
+        names = known
     else:
         #Преподаватель: группы своей нагрузки (по занятиям его предметов) + курируемые.
         from .. import webdata as W
         names = sorted(set(W.teacher_groups(db, list(user.subjects or []))) | curated)
-    return {"groups": [{"name": n, "curated": n in curated} for n in names]}
+    #Одна и та же группа могла записаться по-разному («К74/1» в занятиях и «к74/1» в
+    #кураторстве) — в списке она двоилась. Схлопываем по регистру и пробелам, показывая
+    #написание из СПРАВОЧНИКА групп: журнал ключуется именно им.
+    canon = {n.strip().lower(): n for n in known}
+    out, seen = [], set()
+    for n in names:
+        key = (n or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        name = canon.get(key, n)
+        out.append({"name": name, "curated": key in {c.strip().lower() for c in curated}})
+    return {"groups": out}
 
 
 @router.post("/channels/announcements")
@@ -2082,7 +2102,7 @@ def ensure_announcements_channel(group_name: str, user: User = Depends(get_curre
         if set(t.subjects or []) & subjects_here] if subjects_here else []
     if user.role == "teacher" and user.id not in teachers:
         teachers.append(user.id)     #админ мог создать канал раньше, чем завёл занятия
-    conv_id = f"sys:announce:{group_name}"
+    conv_id = f"sys:announce:{_gtoken(group_name)}"
     conv = _ensure_system_channel(db, conv_id, f"Объявления · {group_name}",
                                   "Объявления от преподавателей и администрации.",
                                   reader_ids=students, writer_ids=teachers)
@@ -2096,6 +2116,27 @@ def ensure_announcements_channel(group_name: str, user: User = Depends(get_curre
 
 
 # ── §12: отчёты куратора для родителей («Отчёты · Группа») ──────────────────────────────
+def _gtoken(group: str) -> str:
+    """Имя группы → безопасный кусок ИДЕНТИФИКАТОРА беседы/отчёта.
+
+    ⚠️ Слэш в id — это сломанный адрес, а не косметика. Группы колледжа называются
+    «К74/1», и id вида «sys:announce:К74/1» в URL приезжает как %2F; Starlette
+    раскодирует его ОБРАТНО в «/» ещё до подбора роута, путь распадается на лишний
+    сегмент и не совпадает ни с одним эндпоинтом мессенджера — GET проваливался в
+    SPA-фолбэк (клиент получал HTML вместо JSON и показывал пустоту), а POST отвечал
+    405. Из-за этого у групп со слэшем не открывались отчёты и не работали объявления,
+    хотя на «ИС-21» всё было исправно.
+
+    «~» выбран потому, что он unreserved в RFC 3986 (в URL не кодируется вовсе) и в
+    названиях групп не встречается. Обратное преобразование — _gname."""
+    return (group or "").replace("/", "~")
+
+
+def _gname(token: str) -> str:
+    """Обратно к имени группы (см. _gtoken)."""
+    return (token or "").replace("~", "/")
+
+
 def _active_parent_ids_for_group(db: Session, group_name: str) -> list:
     """«Группа с родителями» — есть хотя бы одна АКТИВНАЯ (подтверждённая студентом)
     связь родитель→студент этой группы. Пересчитываем каждый раз (не кэшируем): группа
@@ -2137,7 +2178,7 @@ def ensure_curator_reports_channel(group_name: str, user: User = Depends(get_cur
     students = [u.id for u in db.query(User).filter(
         User.role == "student", User.group_name == group_name,
         User.deleted == False).all()]  # noqa: E712
-    conv_id = f"sys:curator_reports:{group_name}"
+    conv_id = f"sys:curator_reports:{_gtoken(group_name)}"
     conv = _ensure_system_channel(db, conv_id, f"Отчёты · {group_name}",
                                   "Отчёты об успеваемости группы для родителей.",
                                   reader_ids=students + parent_ids, writer_ids=[user.id])
@@ -2172,7 +2213,7 @@ def _resolve_report_group(arg: str, conv: Conversation, allowed: list) -> str:
                 detail=f"Группа «{arg}» не найдена. Доступны: {', '.join(allowed) or '—'}")
         return hit[0]
     if conv is not None and conv.system_kind == "curator_reports":
-        return conv.id.split(":", 2)[-1]
+        return _gname(conv.id.split(":", 2)[-1])
     if len(allowed) == 1:
         return allowed[0]
     raise HTTPException(
@@ -2181,7 +2222,8 @@ def _resolve_report_group(arg: str, conv: Conversation, allowed: list) -> str:
                f"Доступны: {', '.join(allowed) or '—'}")
 
 
-def _create_report(db: Session, group_name: str, user: User, conv_ids: list) -> Message:
+def _create_report(db: Session, group_name: str, user: User, conv_ids: list,
+                   nonce: str = "") -> Message:
     """Создать отчёт по группе и положить кнопку «Отчёт №N» в каждую из бесед.
 
     Хранится СНИМОК ГРАНИЦЫ (термин + дата включительно), а не готовые цифры: они
@@ -2194,7 +2236,7 @@ def _create_report(db: Session, group_name: str, user: User, conv_ids: list) -> 
     year, semester = W.current_term(cfg)
     seq = (db.query(func.count(CuratorReport.id))
            .filter(CuratorReport.group_name == group_name).scalar() or 0) + 1
-    rid = f"rpt:{group_name}|{seq}"
+    rid = f"rpt:{_gtoken(group_name)}|{seq}"
     now = _now()
     db.add(CuratorReport(id=rid, group_name=group_name, seq=seq, year=year,
                          semester=semester, cutoff_date=_iso_to_ddmmyyyy(now),
@@ -2203,7 +2245,10 @@ def _create_report(db: Session, group_name: str, user: User, conv_ids: list) -> 
     first = None
     for cid in conv_ids:
         m = Message(conversation_id=cid, sender_id=user.id, body=rid,
-                    created_at=_now(), kind="report", body_format="plain")
+                    created_at=_now(), kind="report", body_format="plain",
+                    #nonce ставим только ПЕРВОМУ сообщению: он уникален на беседу, и
+                    #повтор запроса найдёт именно его (см. проверку в send_message).
+                    client_nonce=(nonce if first is None else ""))
         db.add(m)
         db.commit()
         db.refresh(m)
@@ -2218,7 +2263,8 @@ def _create_report(db: Session, group_name: str, user: User, conv_ids: list) -> 
     return first
 
 
-def _handle_report_command(db: Session, conv_id: str, body: str, user: User):
+def _handle_report_command(db: Session, conv_id: str, body: str, user: User,
+                           nonce: str = ""):
     """`/отчет [группа]` — команда куратора, а не обычное сообщение.
 
     Работает в ЛЮБОЙ беседе, где автор может писать: в канале «Отчёты · Группа» (группа
@@ -2245,7 +2291,7 @@ def _handle_report_command(db: Session, conv_id: str, body: str, user: User):
             status_code=400,
             detail="У группы нет ни одного подтверждённого родителя — отчёт для родителей "
                    "публиковать некому")
-    return _create_report(db, group_name, user, [conv_id])
+    return _create_report(db, group_name, user, [conv_id], nonce)
 
 
 @router.post("/curator-reports")
@@ -2320,7 +2366,7 @@ def report_recipients(group: str = Query(...), user: User = Depends(get_current_
             continue
         if conv.kind == "channel" and p.role not in _WRITER_ROLES:
             continue
-        if conv.is_system and not conv.id.endswith(f":{group}"):
+        if conv.is_system and not conv.id.endswith(f":{_gtoken(group)}"):
             continue                                 #чужой группы системный канал не предлагаем
         convs.append({"conversation_id": conv.id, "title": conv.title or "",
                       "kind": conv.kind, "system": bool(conv.is_system)})

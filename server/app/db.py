@@ -102,6 +102,7 @@ def init_db():
     _ensure_participant_state_columns()
     _ensure_message_addon_columns()
     _ensure_conversation_system_columns()
+    _migrate_slash_in_ids()
 
 
 def _ensure_message_addon_columns():
@@ -364,3 +365,45 @@ def _ensure_notify_event_columns():
             if name not in columns:
                 conn.execute(text(
                     f"ALTER TABLE notify_events ADD COLUMN {name} {coltype}"))
+
+
+def _migrate_slash_in_ids():
+    """Убирает «/» из идентификаторов бесед и отчётов (см. messenger._gtoken).
+
+    Группы колледжа называются «К74/1», и слэш попадал в id системного канала
+    («sys:announce:К74/1») и отчёта («rpt:К74/1|3»). В URL он приезжает как %2F,
+    Starlette раскодирует его обратно ДО подбора роута, путь распадается на лишний
+    сегмент — и запрос не совпадает ни с одним эндпоинтом мессенджера: GET проваливался
+    в SPA-фолбэк (клиент получал HTML вместо JSON — оверлей отчёта открывался и тут же
+    закрывался), POST отвечал 405. У групп без слэша всё работало, поэтому баг долго
+    выглядел как «иногда не открывается».
+
+    Меняем «/» на «~» ВЕЗДЕ, где такой id хранится, одной транзакцией: сама беседа,
+    участники, сообщения, отчёты и их кнопки (тело сообщения kind='report' — это id
+    отчёта), напоминания. Строки без слэша не трогаем, повторный запуск безвреден."""
+    from sqlalchemy import text
+    #Что чиним: (таблица, столбец, условие отбора). Порядок неважен — это одна транзакция.
+    targets = [
+        ("conversations", "id", "id LIKE 'sys:%' AND id LIKE '%/%'"),
+        ("conversation_participants", "conversation_id",
+         "conversation_id LIKE 'sys:%' AND conversation_id LIKE '%/%'"),
+        ("messages", "conversation_id",
+         "conversation_id LIKE 'sys:%' AND conversation_id LIKE '%/%'"),
+        ("curator_reports", "id", "id LIKE 'rpt:%' AND id LIKE '%/%'"),
+        ("curator_reports", "conversation_id",
+         "conversation_id LIKE 'sys:%' AND conversation_id LIKE '%/%'"),
+        ("messages", "body", "kind = 'report' AND body LIKE 'rpt:%' AND body LIKE '%/%'"),
+        ("reminders", "conversation_id",
+         "conversation_id LIKE 'sys:%' AND conversation_id LIKE '%/%'"),
+    ]
+    fixed = 0
+    with engine.begin() as conn:
+        for table, column, where in targets:
+            try:
+                res = conn.execute(text(
+                    f"UPDATE {table} SET {column} = replace({column}, '/', '~') WHERE {where}"))
+                fixed += res.rowcount or 0
+            except Exception:
+                continue        #таблицы ещё нет (свежая БД) — чинить нечего
+    if fixed:
+        print(f"[db] id со слэшем починены: {fixed} строк (см. _migrate_slash_in_ids)")

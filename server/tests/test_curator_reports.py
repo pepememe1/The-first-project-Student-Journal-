@@ -409,7 +409,8 @@ def test_channel_endpoints_accept_group_with_slash(client):
     r = client.post("/web/messenger/channels/announcements", params={"group": "К75/1"},
                     headers=teach)
     assert r.status_code == 200, r.text
-    assert r.json()["conversation_id"] == "sys:announce:К75/1"
+    #Слэша в id нет НАМЕРЕННО (см. messenger._gtoken): иначе беседа недоступна по HTTP.
+    assert r.json()["conversation_id"] == "sys:announce:К75~1"
 
 
 # ── Строка чата в списке (предпросмотр) ──────────────────────────────────────────────
@@ -445,3 +446,89 @@ def test_system_events_do_not_count_as_unread(client):
     row = next(c for c in chats if c["conversation_id"] == conv_id)
     assert row["last_message"]["kind"] == "system"
     assert row["unread"] == 0
+
+
+def test_report_command_is_idempotent_by_nonce(client):
+    """Повтор запроса с тем же client_nonce (ретрай сети, двойное нажатие) НЕ создаёт
+    второй отчёт: разбор команды стоит ПОСЛЕ проверки nonce, и кнопка несёт этот nonce."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    conv_id = _ensure_channel(client, teach)
+    payload = {"body": "/отчет", "client_nonce": "same-nonce-1"}
+
+    a = client.post(f"/web/messenger/chats/{conv_id}/messages", json=payload, headers=teach)
+    b = client.post(f"/web/messenger/chats/{conv_id}/messages", json=payload, headers=teach)
+    assert a.status_code == 200 and b.status_code == 200, (a.text, b.text)
+    assert a.json()["id"] == b.json()["id"], "повтор должен вернуть ту же кнопку"
+    assert b.json()["kind"] == "report" and b.json()["report"]["seq"] == 1
+
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=teach).json()["messages"]
+    assert len([m for m in msgs if m["kind"] == "report"]) == 1
+
+
+def test_report_button_carries_group_and_cutoff(client):
+    """На кнопке видно группу и дату границы — иначе два отчёта подряд неразличимы."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    conv_id = _ensure_channel(client, teach)
+    client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    rep = next(m["report"] for m in msgs if m["kind"] == "report")
+    assert rep["group"] == "ИС-21"
+    assert rep["cutoff_date"] and rep["cutoff_date"].count(".") == 2
+
+
+# ── Слэш в имени группы («К74/1») — id беседы и отчёта обязаны оставаться адресуемыми ──
+def test_group_with_slash_channel_and_report_are_addressable(client):
+    """Главный баг «отчёт открывается и тут же закрывается»: слэш из имени группы попадал
+    в id («sys:announce:К74/1», «rpt:К74/1|1»), в URL приезжал как %2F, Starlette
+    раскодировал его обратно — путь распадался на лишний сегмент и не совпадал ни с одним
+    эндпоинтом: GET уходил в SPA-фолбэк (HTML вместо JSON), POST отвечал 405."""
+    from urllib.parse import quote
+    admin, teach, sh, ph = _setup_group_with_parent(client, group="К74/1")
+    _seed_lesson_and_grade(client, admin, teach, "К74/1", "Математика", "5")
+
+    conv_id = client.post("/web/messenger/channels/announcements",
+                          params={"group": "К74/1"}, headers=teach).json()["conversation_id"]
+    assert "/" not in conv_id, "слэш в id беседы делает её недоступной по HTTP"
+    enc = quote(conv_id, safe="")
+    assert client.post(f"/web/messenger/chats/{enc}/messages",
+                       json={"body": "линейка в 9:00"}, headers=teach).status_code == 200
+
+    r = client.post("/web/messenger/curator-reports", json={"group": "К74/1"}, headers=teach)
+    assert r.status_code == 200, r.text
+    rid = r.json()["report_id"]
+    assert "/" not in rid, "слэш в id отчёта ломает его открытие"
+    r = client.get(f"/web/messenger/reports/{quote(rid, safe='')}", headers=teach)
+    assert r.status_code == 200, r.text
+    assert r.json()["group"] == "К74/1"        #имя группы восстанавливается из id
+    r = client.get(f"/web/messenger/reports/{quote(rid, safe='')}/subject",
+                   params={"subject": "Математика"}, headers=teach)
+    assert r.status_code == 200, r.text
+
+
+def test_report_command_in_channel_of_group_with_slash(client):
+    """`/отчет` в канале «Отчёты · К74/1» — группу берём из id канала, слэш возвращаем."""
+    admin, teach, sh, ph = _setup_group_with_parent(client, group="К74/1")
+    conv_id = client.post("/web/messenger/channels/curator-reports",
+                          params={"group": "К74/1"}, headers=teach).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv_id}/messages",
+                    json={"body": "/отчет"}, headers=teach)
+    assert r.status_code == 200, r.text
+    assert r.json()["report"]["group"] == "К74/1"
+
+
+def test_my_groups_collapses_duplicate_spellings(client):
+    """«К74/1» в занятиях и «к74/1» в кураторстве — это одна группа, а не две в списке."""
+    admin = make_admin(client)
+    teach = make_teacher(client, admin, login="t9", subjects=["Математика"])
+    client.post("/web/admin/groups", json={"name": "К74/1", "subjects": ["Математика"]},
+                headers=admin)
+    client.post("/sync/push", json={"changes": {"lessons": [
+        {"id": "LX", "group_name": "К74/1", "subject": "Математика", "type": "Практика",
+         "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
+    r = client.put("/web/admin/teachers/t9", json={"curated_groups": ["к74/1"]}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    groups = client.get("/web/messenger/my-groups", headers=teach).json()["groups"]
+    names = [g["name"] for g in groups]
+    assert names.count("К74/1") == 1 and "к74/1" not in names, names
+    assert groups[names.index("К74/1")]["curated"] is True

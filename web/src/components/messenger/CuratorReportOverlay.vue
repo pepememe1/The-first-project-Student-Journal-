@@ -33,6 +33,10 @@ async function loadOverview() {
   failed.value = false
   try {
     const { data } = await messengerApi.reportOverview(props.reportId)
+    //Ответ обязан быть ОБЪЕКТОМ с категориями. Проверяем явно: при кривом адресе сервер
+    //отдаёт не 404, а страницу SPA (index.html), и строка вместо данных роняла разметку —
+    //оверлей открывался и тут же схлопывался, без единого сообщения об ошибке.
+    if (!data || typeof data !== 'object' || !data.categories) throw new Error('bad payload')
     overview.value = data
   } catch { failed.value = true }
   finally { loading.value = false }
@@ -89,7 +93,8 @@ async function openSubject(s) {
   subjectData.value = null
   try {
     const { data } = await messengerApi.reportSubject(props.reportId, s)
-    subjectData.value = data
+    //Та же проверка, что и в loadOverview: строка (страница SPA) вместо данных роняла вид.
+    subjectData.value = (data && typeof data === 'object' && data.rows) ? data : null
   } catch { subjectData.value = null }
   finally { subjectLoading.value = false }
 }

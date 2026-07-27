@@ -46,6 +46,17 @@ export const useMessengerStore = defineStore('messenger', () => {
   const totalUnread = computed(() => chats.value.reduce((s, c) => s + (c.unread || 0), 0))
   // Элемент активной беседы в списке чатов — источник её состояния (в т.ч. muted).
   const activeChat = computed(() => chats.value.find(c => c.conversation_id === activeId.value) || null)
+  // Тип беседы (direct | group | channel | saved | moderation), известный СРАЗУ — не
+  // дожидаясь ответа /chats/{id}. Раньше и лента, и боковая панель читали тип только из
+  // activeInfo, а пока он не приехал, подставляли 'direct': «Избранное» на долю секунды
+  // показывалось как переписка с человеком («был(а) недавно»), группа — как личный чат.
+  // Тип берём по порядку надёжности: подробности беседы → строка списка чатов →
+  // детерминированный префикс id («saved:<user>», см. _saved_conv_id на сервере).
+  const activeKind = computed(() =>
+    activeInfo.value?.kind || activeChat.value?.kind
+    || (activeId.value.startsWith('saved:') ? 'saved' : '')
+    || (activeId.value.startsWith('mod:') ? 'moderation' : '')
+    || 'direct')
 
   let noticeTimer = null
   function setNotice(text) {
@@ -613,7 +624,8 @@ export const useMessengerStore = defineStore('messenger', () => {
 
   return {
     chats, activeId, activePeer, messages, loadingChats, loadingMessages, sending,
-    replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, channels, dir,
+    replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, activeKind,
+    channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
     loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,

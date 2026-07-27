@@ -9,7 +9,7 @@ import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const m = useMessengerStore()
-const { activePeer, isModeration, activeInfo } = storeToRefs(m)
+const { activePeer, isModeration, activeInfo, activeKind } = storeToRefs(m)
 
 // Панель можно свернуть — состояние помним между сеансами (кому-то нужен только чат).
 // По умолчанию СВЁРНУТА: карточка собеседника и список участников нужны изредка, а места
@@ -35,10 +35,14 @@ const isTeacher = computed(() => activePeer.value?.role === 'teacher')
 const ROLE_LABELS = { teacher: 'Преподаватель', student: 'Студент', admin: 'Администратор', parent: 'Родитель' }
 const roleLabel = computed(() => ROLE_LABELS[activePeer.value?.role] || 'Студент')
 const isAdminPeer = computed(() => activePeer.value?.role === 'admin')
-const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeInfo.value?.kind))
+const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeKind.value))
 //«Избранное» — блокнот с самим собой: карточка «собеседника» тут показывала бы тебя же
 //(роль, «в сети»), что бессмысленно. Панель для него просто не показываем.
-const isSaved = computed(() => activeInfo.value?.kind === 'saved')
+const isSaved = computed(() => activeKind.value === 'saved')
+//Заголовок группы/канала: подробности могут ещё не приехать, но название беседы уже есть
+//в строке списка чатов — берём его, чтобы шапка не была пустой.
+const headTitle = computed(() =>
+  activeInfo.value?.title || m.activeChat?.title || activePeer.value?.full_name || 'Беседа')
 const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
 </script>
 
@@ -79,19 +83,23 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
       </div>
     </div>
 
-    <!-- Группа / канал: описание + участники + покинуть -->
+    <!-- Группа / канал: описание + участники + покинуть.
+         Везде activeInfo?. — тип беседы известен раньше подробностей (activeKind), и на
+         этот короткий промежуток панель уже нарисована, а участников ещё нет. -->
     <div v-else-if="isGroupOrChannel" class="flex min-h-0 flex-col p-5">
       <div class="mb-3 flex items-center gap-2">
         <Users class="size-6 text-accent" />
         <div class="min-w-0">
-          <h2 class="truncate font-title text-lg font-bold text-text">{{ activeInfo.title }}</h2>
-          <p class="text-xs text-text3">{{ activeInfo.kind === 'channel' ? 'Канал' : 'Группа' }} · {{ activeInfo.subscribers }}</p>
+          <h2 class="truncate font-title text-lg font-bold text-text">{{ headTitle }}</h2>
+          <p class="text-xs text-text3">
+            {{ activeKind === 'channel' ? 'Канал' : 'Группа' }}<span v-if="activeInfo"> · {{ activeInfo.subscribers }}</span>
+          </p>
         </div>
       </div>
-      <p v-if="activeInfo.about" class="mb-3 text-sm text-text2">{{ activeInfo.about }}</p>
+      <p v-if="activeInfo?.about" class="mb-3 text-sm text-text2">{{ activeInfo.about }}</p>
       <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Участники</p>
       <div class="min-h-0 flex-1 space-y-1 overflow-y-auto">
-        <div v-for="p in activeInfo.participants" :key="p.user_id"
+        <div v-for="p in activeInfo?.participants || []" :key="p.user_id"
              class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg2">
           <div class="grid size-7 shrink-0 place-items-center rounded-full bg-accent2 text-[11px] font-bold text-white">{{ initials(p.full_name) }}</div>
           <span class="min-w-0 flex-1 truncate text-sm text-text">{{ p.full_name }}</span>
@@ -100,7 +108,7 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
       </div>
       <button type="button" @click="m.leaveActive()"
               class="mt-3 rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">
-        Покинуть {{ activeInfo.kind === 'channel' ? 'канал' : 'группу' }}
+        Покинуть {{ activeKind === 'channel' ? 'канал' : 'группу' }}
       </button>
     </div>
 
