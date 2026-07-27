@@ -262,6 +262,13 @@ def _ensure_participant_state_columns():
         if "cleared_upto_id" not in columns:
             conn.execute(text(
                 "ALTER TABLE conversation_participants ADD COLUMN cleared_upto_id INTEGER DEFAULT 0"))
+        #§ролей (3.1.5): кастомная роль беседы + «/mute»-заглушка модератора.
+        if "custom_role_id" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN custom_role_id VARCHAR"))
+        if "silenced" not in columns:
+            conn.execute(text(
+                "ALTER TABLE conversation_participants ADD COLUMN silenced BOOLEAN DEFAULT 0"))
 
 
 def _ensure_grade_student_id_columns():

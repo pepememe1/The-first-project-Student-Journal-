@@ -275,9 +275,10 @@ def test_moderation_chat_user_and_admin_reply(client):
     admin, (a_id, a), (b_id, b), _ = _setup(client)
     conv = client.get("/web/messenger/moderation", headers=b).json()["conversation_id"]
     client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "помогите"}, headers=b)
-    #Админ читает беседу и отвечает.
+    #Админ читает беседу и отвечает — видит ФИО автора (иначе не понять, кто писал).
     msgs = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()["messages"]
     assert [x["body"] for x in msgs] == ["помогите"]
+    assert msgs[0]["sender_name"] == "Боб Бобов"
     assert client.post(f"/web/admin/messenger/conversations/{conv}/reply",
                        json={"body": "разберёмся"}, headers=admin).status_code == 200
     #Пользователь видит ответ модерации в своём чате.

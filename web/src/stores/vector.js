@@ -44,9 +44,10 @@ export const useVectorStore = defineStore('vector', () => {
   }[state.value] || 'Готов помочь'))
   const cmds = computed(() => QUICK_COMMANDS[auth.role] || QUICK_COMMANDS.student)
 
-  // §2 плана: анимация «печати» ответа по символам — ТОЛЬКО потребляется VectorPage.vue
-  // (вкладка «ИИ Помощник»); VectorDock как показывал messages[].text целиком, так и
-  // показывает — typingReveal ничего в самих messages не меняет, это отдельная надстройка.
+  // Анимация «печати» ответа по символам — потребляется И VectorPage.vue (вкладка «ИИ
+  // Помощник»), И VectorDock.vue (боковая шторка): состояние общее на весь мессенджер
+  // Вектора. typingReveal ничего в самих messages не меняет, это отдельная надстройка
+  // поверх общего списка сообщений — каждый потребитель сам решает, как её показывать.
   // index — какое сообщение сейчас «печатается», text — уже открытая часть, done — конец.
   const typingReveal = ref({ index: -1, text: '', done: true })
   let typingTimer = null

@@ -398,6 +398,28 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    #Учебные часы группы (план на семестр по предметам) — та же REST-пара, что уже
+    #использует веб-редактор («Группы» → 🕐, web/src/pages/admin/AdminGroups.vue).
+    #SubjectHours ХОДИТ в SYNC_MODELS (десктоп читает план локально после пулла), но
+    #«пройдено X ч» считается сервером по ВСЕМ занятиям группы у ВСЕХ преподавателей —
+    #у самого админа локально этих занятий нет, поэтому редактор идёт через REST, а не
+    #через локальный store, как «Группы»/«Предметы».
+    def group_hours(self, group: str, year: str = "", semester: int = 0) -> dict:
+        """Предметы группы с плановыми и уже пройденными часами за семестр.
+        {group, term:{year,semester}, subjects:[{subject,hours_total,hours_done}]}."""
+        r = self._req("GET", "/web/admin/group-hours",
+                      params={"group": group, "year": year or "", "semester": semester or 0},
+                      timeout=8)
+        r.raise_for_status()
+        return r.json()
+
+    def save_group_hours(self, group: str, hours: dict) -> dict:
+        """Сохранить часы пачкой: {предмет: часов}. {ok, saved, term}."""
+        r = self._req("POST", "/web/admin/group-hours",
+                      json={"group": group, "hours": hours}, timeout=10)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

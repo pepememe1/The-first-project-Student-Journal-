@@ -232,6 +232,9 @@ export const staffParentApi = {
     api.post('/web/staff/parent-links', { parent_id: parentId, student_id: studentId }),
   unlink: (linkId) => api.delete(`/web/staff/parent-links/${encodeURIComponent(linkId)}`),
   create: (payload) => api.post('/web/admin/parents', payload),
+  //Логин не редактируется (сервер это и не поддерживает — см. admin_update_parent).
+  update: (id, payload) => api.put(`/web/admin/parents/${encodeURIComponent(id)}`, payload),
+  remove: (id) => api.delete(`/web/admin/parents/${encodeURIComponent(id)}`),
 }
 
 // «ВЕКТОР» — серверный анти-галлюцинационный конвейер (intents→SQL→анонимизация→LLM)
@@ -308,6 +311,24 @@ export const messengerApi = {
   // §D6: переименовать группу/канал (owner/admin) — пишет системное сообщение.
   renameChat: (convId, title, about) =>
     api.patch(`/web/messenger/chats/${encodeURIComponent(convId)}`, { title, about }),
+  // §ролей: выгнать участника (право kick), назначить билдовую/кастомную роль, кастомные
+  // роли беседы, личный игнор (не модерация — см. модель ConversationIgnore).
+  removeMember: (convId, userId) =>
+    api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/members/${encodeURIComponent(userId)}`),
+  setMemberRole: (convId, userId, { role, customRoleId } = {}) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members/${encodeURIComponent(userId)}/role`,
+      customRoleId ? { custom_role_id: customRoleId } : { role }),
+  roles: (convId) => api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/roles`),
+  createRole: (convId, name, permissions) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/roles`, { name, permissions }),
+  updateRole: (convId, roleId, payload) =>
+    api.put(`/web/messenger/chats/${encodeURIComponent(convId)}/roles/${encodeURIComponent(roleId)}`, payload),
+  deleteRole: (convId, roleId) =>
+    api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/roles/${encodeURIComponent(roleId)}`),
+  ignoreMember: (convId, userId) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/ignore/${encodeURIComponent(userId)}`),
+  unignoreMember: (convId, userId) =>
+    api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/ignore/${encodeURIComponent(userId)}`),
   // §D7: статус (поверх presence) — dnd/studying/away + текст (только у преподавателя).
   getStatus: () => api.get('/web/messenger/status'),
   setStatus: (kind, customText = '') =>

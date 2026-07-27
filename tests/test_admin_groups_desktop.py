@@ -87,3 +87,85 @@ def test_save_subjects_via_set_groups(qapp, fresh_db):
     gh.set_groups(gs)
 
     assert gh.get_groups()[0]["subjects"] == ["Физика", "История"]
+
+
+#Учебные часы группы («🕐») — REST через SyncClient (не локальный store, см.
+#_open_group_hours: «пройдено X ч» считает сервер по занятиям ВСЕХ преподавателей).
+
+
+def test_hours_button_wired(qapp, fresh_db):
+    """Клик по «🕐» в строке группы вызывает _open_group_hours с именем группы, не
+    просто _open_group (по аналогии с test_double_click_dialog_double_click_wired)."""
+    from data_store import get_store
+    gh = get_store()
+    gh.set_groups([{"name": "к74/1", "subjects": []}])
+    from admin_dashboard import AdminDashboard
+    dash = AdminDashboard(lambda: None)
+
+    opened = []
+    dash._open_group_hours = lambda name: opened.append(name)
+    dash._render_groups()
+
+    import time
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and dash._g_table.rowCount() == 0:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert dash._g_table.rowCount() == 1
+
+    actions = dash._g_table.cellWidget(0, 2)
+    hrs_button = actions.findChildren(__import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)[0]
+    hrs_button.click()
+    assert opened == ["к74/1"]
+
+
+class _FakeHoursSyncClient:
+    saved = []
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def group_hours(self, group):
+        return {"group": group, "term": {"year": "2025", "semester": 1},
+                "subjects": [{"subject": "Математика", "hours_total": 24, "hours_done": 10}]}
+
+    def save_group_hours(self, group, hours):
+        type(self).saved.append((group, dict(hours)))
+        return {"ok": True, "saved": len(hours)}
+
+
+def test_group_hours_load_and_save_via_sync_client(qapp, fresh_db, monkeypatch):
+    """SyncClient.group_hours/save_group_hours — тот же путь, что использует
+    _open_group_hours (диалог не открываем — d.exec() блокирует поток, см. решение
+    в других тестах этой сессии)."""
+    _FakeHoursSyncClient.saved = []
+    monkeypatch.setattr("sync_runner.current_auth", lambda: ("http://test", "tok"))
+    import sync_client
+    monkeypatch.setattr(sync_client, "SyncClient", _FakeHoursSyncClient)
+    from admin_dashboard import AdminDashboard
+    dash = AdminDashboard(lambda: None)
+
+    loaded = {}
+
+    def _load():
+        from sync_client import SyncClient
+        return SyncClient("http://test", token="tok").group_hours("к74/1")
+    dash._run_bg(_load, lambda r: loaded.update(r))
+
+    import time
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not loaded:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert loaded["subjects"] == [{"subject": "Математика", "hours_total": 24, "hours_done": 10}]
+
+    def _save():
+        from sync_client import SyncClient
+        return SyncClient("http://test", token="tok").save_group_hours("к74/1", {"Математика": 26})
+    dash._run_bg(_save, lambda _r: None)
+
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not _FakeHoursSyncClient.saved:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert _FakeHoursSyncClient.saved == [("к74/1", {"Математика": 26})]

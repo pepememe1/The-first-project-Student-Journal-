@@ -12,10 +12,24 @@ import { useTtsStore } from '@/stores/tts'
 
 const vector = useVectorStore()
 const tts = useTtsStore()
-const { messages, input, state, anim, label, cmds, tick } = storeToRefs(vector)
+const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
 const { enabled: ttsEnabled, speaking } = storeToRefs(tts)
 const scroller = ref(null)
 const showQuick = ref(false)
+
+// Печать ответа по символам — та же логика, что в VectorPage.vue (переписка и
+// typingReveal общие через один store). Двойной клик по печатающемуся сообщению
+// сразу показывает его целиком.
+function displayText(i) {
+  const tr = typingReveal.value
+  return (tr.index === i && !tr.done) ? tr.text : messages.value[i].text
+}
+function isTyping(i) {
+  return typingReveal.value.index === i && !typingReveal.value.done
+}
+function onMessageDblClick(i) {
+  if (isTyping(i)) vector.skipTyping()
+}
 
 async function scrollDown() {
   await nextTick()
@@ -68,8 +82,10 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
           <div v-if="m.role === 'user'" class="flex justify-end">
             <div class="max-w-[85%] rounded-lg bg-accent px-3 py-1.5 text-sm text-white">{{ m.text }}</div>
           </div>
-          <p v-else class="text-sm leading-snug text-text">
-            <span class="font-semibold text-accent">Вектор:</span> {{ m.text }}
+          <p v-else class="text-sm leading-snug text-text" @dblclick="onMessageDblClick(i)"
+             :title="isTyping(i) ? 'Двойной клик — показать целиком' : ''">
+            <span class="font-semibold text-accent">Вектор:</span> {{ displayText(i) }}<span
+              v-if="isTyping(i)" class="animate-pulse text-accent">▍</span>
           </p>
         </template>
         <p v-if="state === 'thinking'" class="text-xs text-text2">Вектор думает…</p>

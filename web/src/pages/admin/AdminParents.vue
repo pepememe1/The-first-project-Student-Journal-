@@ -109,6 +109,49 @@ async function unlink(l) {
   try { await staffParentApi.unlink(l.id); await load() }
   catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось снять') }
 }
+
+// ── Правка/удаление аккаунта родителя (зеркало десктопного _open_parent) ─────────
+const showEdit = ref(false)
+const editTarget = ref(null)
+const editForm = ref({ surname: '', name: '', password: '' })
+const savingEdit = ref(false)
+const editError = ref('')
+
+function openEdit(p) {
+  editTarget.value = p
+  const full = (p.full_name || '').trim()
+  const [surname0, ...rest0] = full.split(' ')
+  editForm.value = { surname: surname0 || '', name: rest0.join(' '), password: '' }
+  editError.value = ''
+  showEdit.value = true
+}
+async function saveEdit() {
+  const f = editForm.value
+  savingEdit.value = true; editError.value = ''
+  try {
+    await staffParentApi.update(editTarget.value.id, {
+      surname: f.surname.trim(), name: f.name.trim(), password: f.password,
+    })
+    showEdit.value = false
+    await load()
+    toast.success('Сохранено')
+  } catch (e) { editError.value = e?.response?.data?.detail || 'Не удалось сохранить' }
+  finally { savingEdit.value = false }
+}
+async function deleteEdit() {
+  const p = editTarget.value
+  const ok = await confirm({
+    title: 'Удалить аккаунт родителя?',
+    message: `«${p.full_name || p.login}» больше не сможет войти. Привязки к студентам останутся в списке как отозванные.`,
+    okText: 'Удалить', danger: true,
+  })
+  if (!ok) return
+  try {
+    await staffParentApi.remove(p.id)
+    showEdit.value = false
+    await load()
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
+}
 </script>
 
 <template>
@@ -122,6 +165,29 @@ async function unlink(l) {
       <AppButton variant="green" size="sm" :disabled="!parents.length" @click="openLink">
         Привязать к студенту
       </AppButton>
+    </div>
+
+    <!-- ── Аккаунты родителей (правка/удаление — только админ) ────────────────────── -->
+    <div v-if="isAdmin" class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
+            <th class="px-4 py-2.5 font-semibold">Аккаунты родителей</th>
+            <th class="px-4 py-2.5 font-semibold">Логин</th>
+            <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="!loading && !parents.length"><td colspan="3" class="px-4 py-6 text-center text-text3">Родителей пока нет</td></tr>
+          <tr v-for="p in parents" :key="p.id" class="border-b border-border last:border-0 hover:bg-bg2/60">
+            <td class="px-4 py-2.5 text-text">{{ p.full_name || '—' }}</td>
+            <td class="px-4 py-2.5 text-text2">{{ p.login }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-right">
+              <button class="text-text3 hover:text-accent" title="Изменить" @click="openEdit(p)">✎</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
@@ -209,6 +275,35 @@ async function unlink(l) {
           <AppButton variant="green" size="sm" :disabled="linking" @click="createLink">
             {{ linking ? 'Привязка…' : 'Привязать' }}
           </AppButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Правка родителя ─────────────────────────────────────────────────────── -->
+    <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showEdit = false">
+      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="mb-1 font-title text-lg font-bold text-text">{{ editTarget?.full_name || 'Родитель' }}</h3>
+        <p class="mb-4 text-xs text-text3">Логин: {{ editTarget?.login }}</p>
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Фамилия</span>
+              <input v-model="editForm.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Имя Отчество</span>
+              <input v-model="editForm.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          </div>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Новый пароль</span>
+            <input v-model="editForm.password" type="text" placeholder="Оставьте пустым, чтобы не менять"
+                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <p v-if="editError" class="text-sm text-red">{{ editError }}</p>
+        </div>
+        <div class="mt-5 flex items-center justify-between gap-2">
+          <AppButton variant="red" size="sm" @click="deleteEdit">Удалить</AppButton>
+          <div class="flex gap-2">
+            <AppButton variant="ghost" size="sm" @click="showEdit = false">Отмена</AppButton>
+            <AppButton variant="green" size="sm" :disabled="savingEdit" @click="saveEdit">
+              {{ savingEdit ? 'Сохранение…' : 'Сохранить' }}
+            </AppButton>
+          </div>
         </div>
       </div>
     </div>

@@ -1,10 +1,10 @@
 """
 test_vector_widget_typing.py — печать ответа Вектора по символам (§12 из плана правок).
 
-Только вкладка «ИИ Помощник» (docked=False) печатает по символам, как веб-версия
-(VectorDock — мгновенно, VectorPage — печатает, см. CLAUDE.md §5.3). Боковая шторка
-(docked=True) не участвует: она мелькает поверх журнала, и анимация там мешала бы
-читать оценки.
+Печатает ВЕЗДЕ — и во вкладке «ИИ Помощник», и в боковой шторке (docked=True), как и
+веб-версия (VectorDock и VectorPage теперь оба печатают, см. CLAUDE.md §5.3). Раньше
+шторка была исключением («мелькает поверх журнала»), но это решение пересмотрено — по
+явной просьбе, docked больше не влияет на то, печатается ли ответ.
 
 Стаб-сессия ниже НЕ ходит ни в БД, ни в сеть — VectorPanel при сборке трогает только
 `session.history`/`session.engine.scope.role` и подписывается на сигналы; реального
@@ -55,11 +55,17 @@ def _panel(qapp, docked, history=None):
     return VectorPanel(session, docked=docked)
 
 
-def test_docked_panel_appends_instantly(qapp):
+def test_docked_panel_types_gradually_too(qapp):
+    """Боковая шторка (docked=True) печатает по символам так же, как вкладка."""
     p = _panel(qapp, docked=True)
-    p._append("Вектор", "Готовый ответ целиком")
+    text = "Готовый ответ целиком"
+    p._append("Вектор", text)
+    assert p._typing_timer.isActive(), "шторка тоже должна печатать, а не показывать сразу"
+    assert text not in p.chat.toPlainText()
+    for _ in range(len(text) + 2):
+        p._advance_typing()
     assert not p._typing_timer.isActive()
-    assert "Готовый ответ целиком" in p.chat.toPlainText()
+    assert text in p.chat.toPlainText()
 
 
 def test_tab_panel_types_gradually(qapp):

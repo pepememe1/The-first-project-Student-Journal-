@@ -22,6 +22,12 @@ export function formatSystemMessage(body) {
   if (type === 'title_changed') return `Название изменено на «${rest[0] || ''}»`
   if (type === 'pin_added') return '📌 Сообщение закреплено'
   if (type === 'pin_removed') return 'Сообщение откреплено'
+  //§ролей: /mute и /clear тоже постят системную строку — тот же приём, что «вступил/вышел».
+  if (type === 'muted' || type === 'unmuted') {
+    const name = rest[1] || rest[0] || 'Участник'
+    return type === 'muted' ? `${name} заглушён(а) в этой беседе (/mute)` : `${name} снова может писать`
+  }
+  if (type === 'cleared') return `🧹 Удалено сообщений: ${rest[0] || '0'} (/clear)`
   return body
 }
 

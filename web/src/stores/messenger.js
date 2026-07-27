@@ -416,6 +416,28 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch { return false }
   }
 
+  // §ролей: выгнать/выдать роль/игнор — действуют на АКТИВНУЮ беседу, перегружают
+  // activeInfo (там же лежат my_permissions/participants[].custom_role_id).
+  async function kickMember(userId) {
+    if (!activeId.value) return false
+    try { await messengerApi.removeMember(activeId.value, userId); await loadConvInfo(); return true }
+    catch { return false }
+  }
+  async function setMemberRole(userId, opts) {
+    if (!activeId.value) return false
+    try { await messengerApi.setMemberRole(activeId.value, userId, opts); await loadConvInfo(); return true }
+    catch { return false }
+  }
+  async function toggleIgnore(userId, ignored) {
+    if (!activeId.value) return false
+    try {
+      if (ignored) await messengerApi.unignoreMember(activeId.value, userId)
+      else await messengerApi.ignoreMember(activeId.value, userId)
+      await loadConvInfo()
+      return true
+    } catch { return false }
+  }
+
   // §D7: мой статус (поверх presence) — dnd/studying/away + текст (только у преподавателя).
   const myStatus = ref({ kind: '', custom_text: '' })
   async function loadMyStatus() {
@@ -635,6 +657,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
+    kickMember, setMemberRole, toggleIgnore,
     openAnnouncementsChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus,
     togglePinChat, toggleArchiveChat, openSaved,

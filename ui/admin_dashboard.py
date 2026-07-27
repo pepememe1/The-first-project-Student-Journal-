@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QScrollArea, QStackedWidget,
+    QScrollArea, QSpinBox, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QFrame
 )
 
@@ -1050,7 +1050,7 @@ class AdminDashboard(QWidget):
         self._g_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._g_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self._g_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
-        self._g_table.setColumnWidth(2, 60)
+        self._g_table.setColumnWidth(2, 90)
         self._g_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         #Двойной клик — посмотреть/поправить предметы группы (по аналогии с
         #преподавателями/студентами/родителями).
@@ -1070,9 +1070,14 @@ class AdminDashboard(QWidget):
                 subj_str = ", ".join(g.get("subjects", [])[:4])
                 if len(g.get("subjects", [])) > 4: subj_str += "…"
                 self._g_table.setItem(r, 1, QTableWidgetItem(subj_str))
+                actions = QWidget(); ah = QHBoxLayout(actions)
+                ah.setContentsMargins(0, 0, 0, 0); ah.setSpacing(4)
+                hrs_b = QPushButton("🕐"); hrs_b.setToolTip("Учебные часы по предметам")
+                hrs_b.clicked.connect(lambda _, n=g["name"]: self._open_group_hours(n))
                 del_b = QPushButton("✕"); del_b.setStyleSheet(BTN["sm_red"])
                 del_b.clicked.connect(lambda _, n=g["name"]: self._del_group(n))
-                self._g_table.setCellWidget(r, 2, del_b)
+                ah.addWidget(hrs_b); ah.addWidget(del_b)
+                self._g_table.setCellWidget(r, 2, actions)
         self._run_bg(_fetch, _apply)
 
     def _add_group(self):
@@ -1135,6 +1140,91 @@ class AdminDashboard(QWidget):
             if store2: store2.set_groups(gs2)
             d.accept(); self._render_groups(); self._refresh_dash()
         save.clicked.connect(_save)
+        lay.addLayout(btns); d.exec()
+
+    def _open_group_hours(self, name: str):
+        """«🕐» — плановые учебные часы группы по предметам на текущий семестр.
+
+        Единственный редактор часов, который раньше существовал только на сайте
+        (see AdminGroups.vue::openHours/saveHours) — здесь тот же REST-путь через
+        SyncClient, а не локальный store: «пройдено X ч» считается сервером по
+        занятиям ВСЕХ преподавателей группы, локально этих данных у админа нет."""
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        d = QDialog(self); d.setWindowTitle(f"Учебные часы: {name}"); d.resize(420, 480)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl(f"Учебные часы · {name}", 16))
+        hint = lbl("Часы на семестр по каждому предмету. Пройденное считается по лекциям "
+                  "и практикам (занятие — 2 ч); ДЗ в часы не входит.", 11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+        term_lbl = lbl("", 11, C['text3']); lay.addWidget(term_lbl)
+
+        rows_box = QVBoxLayout(); rows_box.setSpacing(4)
+        rows_host = QWidget(); rows_host.setLayout(rows_box)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(rows_host)
+        lay.addWidget(scroll, 1)
+        status = lbl("Загрузка…", 12, C['text3']); rows_box.addWidget(status)
+
+        btns = QHBoxLayout()
+        save = btn("Сохранить", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(save)
+        save.setEnabled(False)
+
+        spins: dict[str, QSpinBox] = {}
+
+        def _load():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).group_hours(name)
+
+        def _apply(data):
+            term = data.get("term") or {}
+            if term:
+                sem = "осенний" if term.get("semester") == 1 else "весенний"
+                term_lbl.setText(f"Период: {term.get('year', '')} · {sem} семестр")
+            while rows_box.count():
+                item = rows_box.takeAt(0)
+                if item.widget(): item.widget().deleteLater()
+            subjects = data.get("subjects") or []
+            if not subjects:
+                rows_box.addWidget(lbl("У группы нет предметов — сначала задайте их "
+                                       "двойным кликом по группе.", 12, C['text3']))
+                return
+            for s in subjects:
+                row = QHBoxLayout()
+                nm = lbl(s.get("subject", ""), 12, C['text']); nm.setWordWrap(True)
+                done = lbl(f"пройдено {s.get('hours_done', 0)} ч", 10, C['text3'])
+                sp = QSpinBox(); sp.setRange(0, 999); sp.setSingleStep(2)
+                sp.setValue(int(s.get("hours_total") or 0))
+                spins[s.get("subject", "")] = sp
+                row.addWidget(nm, 1); row.addWidget(done); row.addWidget(sp)
+                w = QWidget(); w.setLayout(row)
+                rows_box.addWidget(w)
+            save.setEnabled(True)
+
+        def _err(e):
+            status.setText(f"⚠️ Не удалось загрузить: {e}")
+
+        self._run_bg(_load, _apply, _err)
+
+        def _save():
+            hours = {subj: sp.value() for subj, sp in spins.items()}
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).save_group_hours(name, hours)
+
+            def _saved(_res):
+                d.accept()
+
+            def _save_err(e):
+                QMessageBox.warning(d, "Ошибка", f"Не удалось сохранить: {e}")
+
+            self._run_bg(_do, _saved, _save_err)
+        save.clicked.connect(_save)
+
         lay.addLayout(btns); d.exec()
 
     #Предметы

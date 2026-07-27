@@ -228,6 +228,23 @@ onMounted(async () => {
 })
 const inReportsChannel = computed(() => activeInfo.value?.system_kind === 'curator_reports')
 const canReport = computed(() => reportGroups.value.length > 0)
+// §ролей: доступность /mute и /clear решает my_permissions из conversation_info — то же
+// поле, что гейтит кнопки «Выгнать»/«Выдать роль» в ConversationInfo.vue.
+const myPermissions = computed(() => new Set(activeInfo.value?.my_permissions || []))
+const canMute = computed(() => myPermissions.value.has('cmd_mute'))
+const canClear = computed(() => myPermissions.value.has('cmd_clear'))
+// §ролей: игнор — по клику раскрывается ЛОКАЛЬНО (revealedIds), снова прячется повторным
+// кликом; сервер тут не участвует, это личное удобство, а не приватность (как в Discord).
+const myIgnoredIds = computed(() => new Set(activeInfo.value?.my_ignored_user_ids || []))
+const revealedIds = ref(new Set())
+function isHiddenByIgnore(msg) {
+  return myIgnoredIds.value.has(msg.sender_id) && !revealedIds.value.has(msg.id)
+}
+function toggleReveal(id) {
+  const next = new Set(revealedIds.value)
+  if (next.has(id)) next.delete(id); else next.add(id)
+  revealedIds.value = next
+}
 // По «/» показываем ВСЕ команды мессенджера, а не только годные здесь: иначе в обычном
 // чате список выходил пустым, и выглядело так, будто команд нет вовсе. Недоступные
 // показываем блёклыми и с причиной — сразу видно, где команда сработает.
@@ -245,6 +262,18 @@ const SLASH_COMMANDS = computed(() => [
       : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0] || 'К74/1'}`,
     ok: canReport.value,
     why: 'Отчёт по группе выпускает её куратор или администрация',
+  },
+  {
+    cmd: '/mute',
+    hint: 'Заглушить участника в этой беседе — например: /mute @Иванов (повтор снимает)',
+    ok: canMute.value,
+    why: 'Право есть у владельца/админа беседы или роли с ним',
+  },
+  {
+    cmd: '/clear',
+    hint: 'Удалить последние N сообщений беседы — например: /clear 20',
+    ok: canClear.value,
+    why: 'Право есть у владельца/админа беседы или роли с ним',
   },
 ])
 const slashQuery = ref(null)     // null — закрыто; иначе введённое после «/»
@@ -774,6 +803,10 @@ const headerTint = computed(() =>
                 {{ quoted(msg.reply_to_id) }}
               </div>
               <span v-if="msg.deleted" class="italic opacity-70">Сообщение удалено</span>
+              <!-- §ролей: игнор — ЛИЧНОЕ, не модерация; сервер текст отдаёт как обычно,
+                   прячем и раскрываем на клиенте (клик по плейсхолдеру). -->
+              <button v-else-if="isHiddenByIgnore(msg)" type="button" @click.stop="toggleReveal(msg.id)"
+                      class="italic opacity-70 underline decoration-dotted">Скрыто (игнор) — показать</button>
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)" />
               <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">

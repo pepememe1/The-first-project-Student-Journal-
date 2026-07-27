@@ -4,12 +4,14 @@
 // доступна на ЛЮБОЙ ширине — боковая ProfilePanel показывается только с xl и на
 // десктопе/телефоне была не видна.
 // Здесь же — выход из группы/канала и удаление переписки у себя.
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check } from '@lucide/vue'
+import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
+import { useToast } from '@/composables/useToast'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
+import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 
 // Цвет плашки профиля выбирает сам человек (id пресета) — см. palette.profilePlate.
 function plate(u) {
@@ -18,7 +20,44 @@ function plate(u) {
 
 const emit = defineEmits(['close'])
 const m = useMessengerStore()
+const toast = useToast()
 const { activeInfo, activePeer, isModeration, activeKind } = storeToRefs(m)
+
+// §ролей: права звонящего в ЭТОЙ беседе + личный игнор-лист + мой user_id — всё уже
+// приезжает в conversation_info (см. routers/messenger.py::conversation_info). Свой id
+// клиент иначе не знает (в JWT/сторе только логин+роль, см. комментарий у _msg_out).
+const myPermissions = computed(() => new Set(activeInfo.value?.my_permissions || []))
+const myIgnoredIds = computed(() => new Set(activeInfo.value?.my_ignored_user_ids || []))
+const myUserId = computed(() => activeInfo.value?.my_user_id || '')
+const canKick = computed(() => myPermissions.value.has('kick'))
+const canManageRoles = computed(() => myPermissions.value.has('manage_roles'))
+const openMenuFor = ref(null)
+const roleDialogFor = ref(null)
+
+function toggleMenu(uid) { openMenuFor.value = openMenuFor.value === uid ? null : uid }
+// Клик вне меню участника — закрыть (нет глобальной v-click-outside директивы в проекте,
+// делаем локально одним слушателем на весь компонент).
+function onDocClick(e) {
+  if (openMenuFor.value && !e.target.closest('[data-role-menu]')) openMenuFor.value = null
+}
+onMounted(() => document.addEventListener('click', onDocClick))
+onUnmounted(() => document.removeEventListener('click', onDocClick))
+
+async function kick(p) {
+  openMenuFor.value = null
+  if (!window.confirm(`Выгнать ${p.full_name} из беседы?`)) return
+  const ok = await m.kickMember(p.user_id)
+  if (!ok) toast.error('Не удалось выгнать участника')
+}
+async function toggleIgnore(p) {
+  openMenuFor.value = null
+  const ok = await m.toggleIgnore(p.user_id, myIgnoredIds.value.has(p.user_id))
+  if (!ok) toast.error('Не удалось изменить игнор')
+}
+function openRoleDialog(p) {
+  openMenuFor.value = null
+  roleDialogFor.value = p
+}
 
 const kind = computed(() => activeKind.value)
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(kind.value))
@@ -178,25 +217,50 @@ async function clearHistory() {
           </p>
           <div class="space-y-1">
             <div v-for="p in people" :key="p.user_id"
-                 class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-bg2">
+                 class="relative flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-bg2">
               <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online" :size="36" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
                   <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
                          class="size-3.5 shrink-0 text-accent" aria-label="Владелец" />
+                  <span v-if="p.silenced" title="Заглушён(а) — /mute" class="shrink-0 text-xs">🔇</span>
                 </div>
                 <div class="truncate text-[11px] text-text3">{{ meta(p) }}</div>
               </div>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
                     :class="(p.user_id === ownerId || p.role === 'owner')
                       ? 'bg-accent-glow text-accent' : 'bg-bg2 text-text3'">
-                {{ ROLE_RU[p.role] || p.role }}
+                {{ p.custom_role_name || ROLE_RU[p.role] || p.role }}
               </span>
+              <!-- §ролей: меню участника — кик/игнор/роль. Игнор доступен всем (личное),
+                   кик/роль — по правам. Себя выгнать/игнорировать нельзя из этого меню. -->
+              <button v-if="p.user_id !== myUserId" type="button" data-role-menu @click.stop="toggleMenu(p.user_id)"
+                      aria-label="Действия" class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+                <MoreVertical class="size-4" />
+              </button>
+              <div v-if="openMenuFor === p.user_id" data-role-menu
+                   class="absolute right-2 top-10 z-10 w-44 rounded-lg border border-border2 bg-card p-1 shadow-card">
+                <button type="button" @click="toggleIgnore(p)"
+                        class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">
+                  {{ myIgnoredIds.has(p.user_id) ? 'Показать сообщения' : 'Игнорировать' }}
+                </button>
+                <button v-if="canManageRoles && p.role !== 'owner'" type="button" @click="openRoleDialog(p)"
+                        class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">
+                  Выдать роль
+                </button>
+                <button v-if="canKick && p.role !== 'owner'" type="button" @click="kick(p)"
+                        class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-red hover:bg-red/10">
+                  Выгнать
+                </button>
+              </div>
             </div>
           </div>
         </template>
       </div>
+
+      <RoleManagerDialog v-if="roleDialogFor" :user-id="roleDialogFor.user_id"
+                         :user-name="roleDialogFor.full_name" @close="roleDialogFor = null" />
 
       <!-- Действия -->
       <div class="flex flex-wrap gap-2 border-t border-border p-3">

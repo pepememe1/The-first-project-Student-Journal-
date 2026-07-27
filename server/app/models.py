@@ -507,6 +507,44 @@ class ConversationParticipant(Base):
     #Архив: чат убран из основного списка БЕЗ удаления (в отличие от hidden — не возвращается
     #сам новым сообщением, только явной расархивацией). Личное состояние, как pinned/muted.
     archived = Column(Boolean, default=False)
+    #Роли и права (§ролей): если задана — переопределяет права, вычисленные из билдовой
+    #`role`, см. routers/messenger.py::_permissions_for. Билдовая `role` остаётся (нужна
+    #direct/channel-логике и порядку сортировки), custom_role_id — надстройка ТОЛЬКО для
+    #групп/каналов. NULL = участник живёт на правах по умолчанию для своей билдовой role.
+    custom_role_id = Column(String, index=True, default=None, nullable=True)
+    #«/mute» модератора ЦЕЛИ (НЕ путать с `muted` выше — тот «я не хочу пуши от этого
+    #чата», личная настройка САМОГО участника). silenced=True — участник не может писать
+    #В ЭТУ беседу (см. send_message), независимо от того, что видит сам заглушённый.
+    silenced = Column(Boolean, default=False)
+
+
+class ConversationRole(Base):
+    """Кастомная роль ВНУТРИ одной беседы (группы/канала) — Discord-style права.
+
+    Права — фиксированный небольшой набор строк-ключей (kick/manage_roles/cmd_mute/
+    cmd_clear), не гранулярная матрица: ровно то, что просили, без раздувания. Билдовые
+    роли (owner/admin/writer/member/reader) НЕ переносим сюда — они остаются в
+    ConversationParticipant.role как раньше; эта таблица — только для КАСТОМНЫХ ролей,
+    которые создатель/обладатель manage_roles заводит сверху (см. _permissions_for)."""
+    __tablename__ = "conversation_roles"
+    id = Column(String, primary_key=True)              #crole:{uuid4}
+    conversation_id = Column(String, index=True, default="")
+    name = Column(String, default="")
+    permissions = Column(JSON, default=list)            #["kick","manage_roles","cmd_mute","cmd_clear"]
+    created_at = Column(String, default="")
+
+
+class ConversationIgnore(Base):
+    """«Игнорировать участника» — ЛИЧНОЕ решение зрителя, не модерация: сообщения от
+    ignored_user_id в этой беседе клиент прячет за плейсхолдер «Скрыто» (с раскрытием по
+    клику), сервер текст всё равно отдаёт как обычно (это удобство, а не приватность —
+    как в Discord). Действует и на БУДУЩИЕ сообщения — поэтому не строка на сообщение,
+    как MessageHidden (та таблица — для «удалить у себя» уже существующих сообщений)."""
+    __tablename__ = "conversation_ignores"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    viewer_id = Column(String, index=True, default="")
+    ignored_user_id = Column(String, index=True, default="")
 
 
 class Message(Base):

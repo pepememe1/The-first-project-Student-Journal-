@@ -239,7 +239,10 @@ function fmt(iso) {
           <template v-if="viewer.mode !== 'inbox'">
             <div v-for="mm in viewer.messages" :key="mm.id" class="group flex items-start gap-2 text-sm">
               <span class="shrink-0 text-text3">[{{ fmt(mm.created_at) }}]</span>
-              <span class="min-w-0 flex-1 break-words text-text">{{ mm.deleted ? '(удалено)' : mm.body }}</span>
+              <span class="min-w-0 flex-1 break-words text-text">
+                <span v-if="mm.sender_name" class="font-semibold text-text2">{{ mm.sender_name }}:</span>
+                {{ mm.deleted ? '(удалено)' : mm.body }}
+              </span>
               <!-- Удалить нарушающее сообщение у всех (модерация). -->
               <button v-if="!mm.deleted" type="button" @click="deleteMessage(mm)"
                       title="Удалить у всех"

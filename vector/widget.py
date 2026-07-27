@@ -419,9 +419,9 @@ class VectorPanel(QWidget):
         self._tts_driving = False
         self._last_intent = "help"
 
-        #Печать ответа по символам (§12, «бубнёж»-темп) — ТОЛЬКО во вкладке «ИИ Помощник»
-        #(docked=False), как на вебе (VectorDock всегда мгновенно, VectorPage печатает):
-        #боковая шторка мелькает поверх журнала и печать там мешала бы читать оценки.
+        #Печать ответа по символам (§12, «бубнёж»-темп) — ВЕЗДЕ, включая боковую шторку
+        #(docked=True), как на вебе (VectorDock и VectorPage теперь оба печатают). Раньше
+        #в шторке печать была отключена («мелькает поверх журнала»), но решение пересмотрено.
         self._typing_timer = QTimer(self)
         self._typing_timer.timeout.connect(self._advance_typing)
         self._typing_full = ""
@@ -657,7 +657,7 @@ class VectorPanel(QWidget):
         #Новое сообщение ВСЕГДА завершает предыдущую печать сразу (по ТЗ: новый вопрос —
         #старый ответ мгновенно целиком), даже если это не ответ Вектора, а реплика «Вы».
         self._complete_typing()
-        if who == "Вектор" and not self.docked and animate:
+        if who == "Вектор" and animate:
             self._start_typing(text)
             return
         color = C["green"] if who == "Вектор" else C["blue"]

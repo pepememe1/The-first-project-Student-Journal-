@@ -27,7 +27,8 @@ from ..db import get_db, SessionLocal
 from ..deps import get_current_user, require_admin
 from ..security import decode_token
 from ..models import (
-    Conversation, ConversationParticipant, CuratorReport, Group, Message, MessageHidden,
+    Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
+    CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser, ParentLink,
     UserStatus, User, Lesson, direct_conversation_id,
 )
@@ -472,14 +473,19 @@ _REACTIONS = {"👍", "✅", "❤️", "😂", "👀", "🔥", "💯", "❓", "�
 _SYS_SEP = "\x1f"
 
 
-def _system(db: Session, conv_id: str, event: str, *args: str) -> None:
+def _system(db: Session, conv_id: str, event: str, *args: str) -> Message:
     """§D6: вставить СИСТЕМНОЕ сообщение в ленту (вступил/вышел/закрепил/…). Тело —
     'событие\\x1fаргумент\\x1f...', клиент рендерит по-человечески. Не шлёт пуш, но
-    триггерит WS-обновление."""
+    триггерит WS-обновление (см. вызывающий код — broadcast делает он сам).
+    Возвращает созданную строку — нужна командам (/mute), которые отдают её клиенту
+    как результат отправки, а не только «побочным эффектом»."""
     body = _SYS_SEP.join((event, *args))
-    db.add(Message(conversation_id=conv_id, sender_id="system", body=body,
-                   created_at=_now(), kind="system"))
+    m = Message(conversation_id=conv_id, sender_id="system", body=body,
+               created_at=_now(), kind="system")
+    db.add(m)
     db.commit()
+    db.refresh(m)
+    return m
 
 
 def _peer_of_direct(db: Session, conv_id: str, me_id: str):
@@ -1132,6 +1138,8 @@ def send_message(conv_id: str, payload: dict = Body(...),
     conv = _conversation(db, conv_id)
     if conv.kind == "channel" and part.role not in _WRITER_ROLES:
         raise HTTPException(status_code=403, detail="В канал могут писать только авторы")
+    if part.silenced:                        #«/mute»-заглушка модератора — не глобальный мьют
+        raise HTTPException(status_code=403, detail="Вы заглушены в этой беседе")
     _guard_can_write(db, user)               #глобальный мьют (403) + анти-флуд (429)
     body = (payload.get("body") or "").strip()
     if not body:
@@ -1167,6 +1175,15 @@ def send_message(conv_id: str, payload: dict = Body(...),
         out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
         _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
         return out
+
+    #/mute, /clear — тоже команды, не сообщения: разбираем ДО сохранения текста (как
+    #/отчет выше), иначе литеральная строка команды осела бы в ленте мусором.
+    mute_msg = _handle_mute_command(db, conv_id, body, user, part)
+    if mute_msg is not None:
+        return _msg_out(mute_msg, user.id, "")
+    clear_msg = _handle_clear_command(db, conv_id, body, user, part)
+    if clear_msg is not None:
+        return _msg_out(clear_msg, user.id, "")
 
     #§D8: упоминания — среди участников ЭТОЙ беседы (иначе @Фамилия постороннего человека
     #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
@@ -1363,6 +1380,27 @@ def mute_conversation(conv_id: str, payload: dict = Body(default={}),
 # ── Действия над сообщением (см. MESSENGER-PLAN.md §6) ────────────────────────────────
 _MANAGER_ROLES = ("owner", "admin")
 _WRITER_ROLES = ("owner", "admin", "writer")
+
+# ── Роли и права внутри беседы (кастомные роли групп/каналов) ─────────────────────────
+# Фиксированный небольшой набор прав — ровно то, что просили (кик, выдача ролей, две
+# модераторские команды), без раздувания в гранулярную матрицу.
+_ALL_PERMISSIONS = ("kick", "manage_roles", "cmd_mute", "cmd_clear")
+#Дефолт для БИЛДОВЫХ ролей, когда участнику не назначена кастомная ConversationRole —
+#эквивалент того, что раньше жёстко проверял _MANAGER_ROLES (owner/admin), чтобы уже
+#существующие беседы без единой кастомной роли продолжали работать ровно как раньше.
+_DEFAULT_ROLE_PERMISSIONS = {"owner": set(_ALL_PERMISSIONS), "admin": set(_ALL_PERMISSIONS)}
+
+
+def _permissions_for(db: Session, part: ConversationParticipant) -> set:
+    """Права участника В ЭТОЙ беседе. owner — всегда полный набор (создателя не разжаловать
+    этим путём). Иначе — кастомная роль, если назначена; иначе — дефолт по билдовой role."""
+    if part.role == "owner":
+        return set(_ALL_PERMISSIONS)
+    if part.custom_role_id:
+        cr = db.query(ConversationRole).filter(ConversationRole.id == part.custom_role_id).first()
+        if cr is not None:
+            return set(cr.permissions or [])
+    return set(_DEFAULT_ROLE_PERMISSIONS.get(part.role, ()))
 
 
 def _conversation(db: Session, conv_id: str) -> Conversation:
@@ -1638,6 +1676,15 @@ def _require_manager(db: Session, conv_id: str, user: User) -> ConversationParti
     return p
 
 
+def _require_permission(db: Session, conv_id: str, user: User, permission: str) -> ConversationParticipant:
+    """Как _require_manager, но по гранулярному праву (kick/manage_roles/cmd_mute/
+    cmd_clear) — учитывает кастомную роль участника, а не только билдовую owner/admin."""
+    p = _require_participant(db, conv_id, user)
+    if permission not in _permissions_for(db, p):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    return p
+
+
 @router.post("/chats/group")
 def create_group(payload: dict = Body(...), user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
@@ -1785,9 +1832,10 @@ def add_members(conv_id: str, payload: dict = Body(...),
 @router.delete("/chats/{conv_id}/members/{uid}")
 def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)):
-    """Убрать участника (owner/admin); себя может убрать любой (=покинуть). Владельца не трогаем."""
+    """Убрать участника (право kick — owner/admin по умолчанию, либо кастомная роль с этим
+    правом); себя может убрать любой (=покинуть). Владельца не трогаем."""
     if uid != user.id:
-        _require_manager(db, conv_id, user)
+        _require_permission(db, conv_id, user, "kick")
     else:
         _require_participant(db, conv_id, user)
     conv = _conversation(db, conv_id)
@@ -1806,19 +1854,129 @@ def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user)
 @router.post("/chats/{conv_id}/members/{uid}/role")
 def set_member_role(conv_id: str, uid: str, payload: dict = Body(...),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Назначить роль участнику (только owner). Владельца не понижаем этим эндпоинтом."""
-    p = _require_participant(db, conv_id, user)
-    if p.role != "owner":
-        raise HTTPException(status_code=403, detail="Роли меняет только владелец")
-    role = payload.get("role")
-    if role not in ("admin", "member", "writer", "reader"):
-        raise HTTPException(status_code=400, detail="Некорректная роль")
+    """Назначить роль участнику — билдовую (`role`) ИЛИ кастомную (`custom_role_id`,
+    взаимоисключающе). Право manage_roles — по умолчанию owner/admin, либо обладатель
+    кастомной роли с этим правом (см. _permissions_for). Владельца не понижаем этим путём."""
+    _require_permission(db, conv_id, user, "manage_roles")
     tp = _participant(db, conv_id, uid)
     if tp is None:
         raise HTTPException(status_code=404, detail="Участник не найден")
     if tp.role == "owner":
         raise HTTPException(status_code=400, detail="Нельзя изменить роль владельца")
-    tp.role = role
+    custom_role_id = payload.get("custom_role_id")
+    if custom_role_id:
+        cr = (db.query(ConversationRole)
+              .filter(ConversationRole.id == custom_role_id,
+                      ConversationRole.conversation_id == conv_id).first())
+        if cr is None:
+            raise HTTPException(status_code=404, detail="Роль не найдена")
+        tp.custom_role_id = custom_role_id
+    else:
+        role = payload.get("role")
+        if role not in ("admin", "member", "writer", "reader"):
+            raise HTTPException(status_code=400, detail="Некорректная роль")
+        tp.role = role
+        tp.custom_role_id = None
+    db.commit()
+    return {"ok": True}
+
+
+# ── Кастомные роли беседы (§ролей) ─────────────────────────────────────────────────────
+_ROLE_TEMPLATES = [
+    {"name": "Студент", "permissions": []},
+    {"name": "Староста", "permissions": ["kick", "cmd_mute", "cmd_clear"]},
+    {"name": "Преподаватель", "permissions": ["kick", "manage_roles", "cmd_mute", "cmd_clear"]},
+]
+
+
+@router.get("/chats/{conv_id}/roles")
+def list_roles(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Кастомные роли беседы + шаблоны для быстрого создания (не хранятся, пока не
+    сохранены — см. create_role)."""
+    _require_participant(db, conv_id, user)
+    rows = (db.query(ConversationRole)
+            .filter(ConversationRole.conversation_id == conv_id)
+            .order_by(ConversationRole.created_at).all())
+    return {"roles": [{"id": r.id, "name": r.name, "permissions": r.permissions or []} for r in rows],
+            "templates": _ROLE_TEMPLATES, "all_permissions": list(_ALL_PERMISSIONS)}
+
+
+@router.post("/chats/{conv_id}/roles")
+def create_role(conv_id: str, payload: dict = Body(...),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_permission(db, conv_id, user, "manage_roles")
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно название роли")
+    perms = [p for p in (payload.get("permissions") or []) if p in _ALL_PERMISSIONS]
+    role = ConversationRole(id=f"crole:{uuid4().hex}", conversation_id=conv_id,
+                            name=name[:60], permissions=perms, created_at=_now())
+    db.add(role)
+    db.commit()
+    return {"id": role.id, "name": role.name, "permissions": role.permissions}
+
+
+@router.put("/chats/{conv_id}/roles/{role_id}")
+def update_role(conv_id: str, role_id: str, payload: dict = Body(...),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_permission(db, conv_id, user, "manage_roles")
+    role = (db.query(ConversationRole)
+            .filter(ConversationRole.id == role_id, ConversationRole.conversation_id == conv_id).first())
+    if role is None:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Нужно название роли")
+        role.name = name[:60]
+    if "permissions" in payload:
+        role.permissions = [p for p in (payload.get("permissions") or []) if p in _ALL_PERMISSIONS]
+    db.commit()
+    return {"id": role.id, "name": role.name, "permissions": role.permissions}
+
+
+@router.delete("/chats/{conv_id}/roles/{role_id}")
+def delete_role(conv_id: str, role_id: str, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Удалить кастомную роль — участники с ней откатываются на билдовую member."""
+    _require_permission(db, conv_id, user, "manage_roles")
+    role = (db.query(ConversationRole)
+            .filter(ConversationRole.id == role_id, ConversationRole.conversation_id == conv_id).first())
+    if role is None:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+    (db.query(ConversationParticipant)
+     .filter(ConversationParticipant.conversation_id == conv_id,
+             ConversationParticipant.custom_role_id == role_id)
+     .update({"custom_role_id": None, "role": "member"}))
+    db.delete(role)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Игнор участника (личное, см. модель ConversationIgnore) ────────────────────────────
+@router.post("/chats/{conv_id}/ignore/{uid}")
+def ignore_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    _require_participant(db, conv_id, user)
+    exists = (db.query(ConversationIgnore)
+              .filter(ConversationIgnore.conversation_id == conv_id,
+                      ConversationIgnore.viewer_id == user.id,
+                      ConversationIgnore.ignored_user_id == uid).first())
+    if exists is None:
+        db.add(ConversationIgnore(conversation_id=conv_id, viewer_id=user.id, ignored_user_id=uid))
+        db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/ignore/{uid}")
+def unignore_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    _require_participant(db, conv_id, user)
+    (db.query(ConversationIgnore)
+     .filter(ConversationIgnore.conversation_id == conv_id,
+             ConversationIgnore.viewer_id == user.id,
+             ConversationIgnore.ignored_user_id == uid)
+     .delete())
     db.commit()
     return {"ok": True}
 
@@ -1835,6 +1993,10 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
         User.id.in_([p.user_id for p in parts]))} if parts else {}
     onl = _online_logins()
     sm = _status_map(db, [p.user_id for p in parts])
+    #Кастомные роли участников — одним запросом, а не по одной на строку.
+    crole_ids = {p.custom_role_id for p in parts if p.custom_role_id}
+    croles = {r.id: r.name for r in (db.query(ConversationRole)
+              .filter(ConversationRole.id.in_(crole_ids)).all())} if crole_ids else {}
     people = []
     for p in parts:
         u = urows.get(p.user_id)
@@ -1844,6 +2006,9 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "user_id": p.user_id,
             "full_name": (u.full_name or u.name or u.login) if u else p.user_id,
             "role": p.role,                       #owner | admin | writer | member | reader
+            "custom_role_id": p.custom_role_id or None,
+            "custom_role_name": croles.get(p.custom_role_id, "") if p.custom_role_id else "",
+            "silenced": bool(p.silenced),          #«/mute» модератора — не путать с muted
             "online": bool(u) and u.login in onl,
             #Карточка участника в панели «О беседе»: аватар и контекст (группа/предметы).
             "avatar": prefs.get("avatar", "") or "",
@@ -1862,9 +2027,19 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
     #Владелец — первым, дальше по роли и алфавиту: сразу видно, кто создал беседу.
     _ORDER = {"owner": 0, "admin": 1, "writer": 2, "member": 3, "reader": 4}
     people.sort(key=lambda x: (_ORDER.get(x["role"], 9), (x["full_name"] or "").lower()))
+    my_ignored = [r[0] for r in (db.query(ConversationIgnore.ignored_user_id)
+                                 .filter(ConversationIgnore.conversation_id == conv_id,
+                                         ConversationIgnore.viewer_id == user.id).all())]
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
             "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
             "my_role": part.role, "participants": people, "subscribers": len(people),
+            #Свой id клиент иначе не знает (в JWT/сторе только логин+роль) — нужен, чтобы
+            #не рисовать кнопки «Выгнать»/«Игнорировать» на собственной строке участника.
+            "my_user_id": user.id,
+            #Права участника в ЭТОЙ беседе (§ролей) — веб решает по ним, показывать ли
+            #«Выгнать»/«Выдать роль» и доступность /mute, /clear в слэш-автодополнении.
+            "my_permissions": sorted(_permissions_for(db, part)),
+            "my_ignored_user_ids": my_ignored,
             #§D5: метка прочтения ДО открытия чата — клиент строит по ней разделитель
             #«Новые сообщения» (снимаем ДО markReadActive, иначе она бы уже сдвинулась).
             "my_last_read_at": part.last_read_at or "",
@@ -2294,6 +2469,79 @@ def _handle_report_command(db: Session, conv_id: str, body: str, user: User,
     return _create_report(db, group_name, user, [conv_id], nonce)
 
 
+_MUTE_CMD_RE = re.compile(r'^/mute\s+"?@?([^"\s]+)"?\s*$', re.IGNORECASE)
+_CLEAR_CMD_RE = re.compile(r'^/clear\s+"?(\d+)"?\s*$', re.IGNORECASE)
+_CLEAR_MAX_N = 100
+
+
+def _resolve_participant_by_name(db: Session, conv_id: str, token: str):
+    """Находит участника беседы по первому слову ФИО (та же простая эвристика, что у
+    @упоминаний, см. _parse_mentions) — токен без ведущего @/кавычек."""
+    token = (token or "").lstrip("@").strip().lower()
+    if not token:
+        return None
+    ids = _participant_ids(db, conv_id)
+    if not ids:
+        return None
+    for u in db.query(User).filter(User.id.in_(ids)).all():
+        first = (u.full_name or u.name or "").split(" ", 1)[0].strip().lower()
+        if first == token:
+            return u
+    return None
+
+
+def _handle_mute_command(db: Session, conv_id: str, body: str, user: User,
+                         part: ConversationParticipant):
+    """`/mute "@username"` — переключатель: заглушает/снова разрешает цели писать В ЭТУ
+    беседу (НЕ путать с личным `muted` — «я не хочу пуши»). Право cmd_mute — owner/admin
+    по умолчанию, либо обладатель кастомной роли с этим правом."""
+    mt = _MUTE_CMD_RE.match(body.strip())
+    if not mt:
+        return None
+    if "cmd_mute" not in _permissions_for(db, part):
+        raise HTTPException(status_code=403, detail="Нет права /mute в этой беседе")
+    target = _resolve_participant_by_name(db, conv_id, mt.group(1))
+    if target is None:
+        raise HTTPException(status_code=404, detail="Участник не найден в этой беседе")
+    tp = _participant(db, conv_id, target.id)
+    if tp is None:
+        raise HTTPException(status_code=404, detail="Участник не найден в этой беседе")
+    if tp.role == "owner":
+        raise HTTPException(status_code=400, detail="Нельзя заглушить владельца беседы")
+    tp.silenced = not tp.silenced
+    db.commit()
+    name = target.full_name or target.name or target.login
+    sysmsg = _system(db, conv_id, "muted" if tp.silenced else "unmuted", target.id, name)
+    _broadcast(db, conv_id)
+    return sysmsg
+
+
+def _handle_clear_command(db: Session, conv_id: str, body: str, user: User,
+                          part: ConversationParticipant):
+    """`/clear "N"` — томбстоунит последние N сообщений беседы (тот же механизм, что
+    модераторское удаление, не hard-delete). Право cmd_clear, лимит _CLEAR_MAX_N от
+    случайного /clear 999999."""
+    mt = _CLEAR_CMD_RE.match(body.strip())
+    if not mt:
+        return None
+    if "cmd_clear" not in _permissions_for(db, part):
+        raise HTTPException(status_code=403, detail="Нет права /clear в этой беседе")
+    n = min(int(mt.group(1)), _CLEAR_MAX_N)
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество сообщений больше нуля")
+    rows = (db.query(Message)
+            .filter(Message.conversation_id == conv_id, Message.deleted_at == "")
+            .order_by(Message.id.desc()).limit(n).all())
+    now = _now()
+    for row in rows:
+        row.deleted_at = now
+        row.pinned = False
+    db.commit()
+    sysmsg = _system(db, conv_id, "cleared", str(len(rows)))
+    _broadcast(db, conv_id)
+    return sysmsg
+
+
 @router.post("/curator-reports")
 def create_curator_report(payload: dict = Body(...), user: User = Depends(get_current_user),
                           db: Session = Depends(get_db)):
@@ -2579,9 +2827,12 @@ def mod_conversation_messages(conv_id: str, request: Request = None,
     _conversation(db, conv_id)
     rows = (db.query(Message).filter(Message.conversation_id == conv_id)
             .order_by(Message.id.asc()).all())
+    #ФИО автора — иначе в переписке с 2+ участниками (жалоба, групповой чат) не видно,
+    #кто что написал (тот же _names_for, что уже используют обычные списки сообщений).
+    names = _names_for(db, [m.sender_id for m in rows])
     audit.log(db, request, actor=admin.login, role=admin.role,
               action="msg.moderation.view", target=conv_id)
-    return {"messages": [_msg_out(m) for m in rows]}
+    return {"messages": [_msg_out(m, sender_name=names.get(m.sender_id, "")) for m in rows]}
 
 
 @mod_router.post("/conversations/{conv_id}/reply")
