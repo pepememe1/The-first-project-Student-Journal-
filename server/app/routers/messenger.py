@@ -160,10 +160,14 @@ def _notify_loud_mentions(db: Session, conv: Conversation, sender: User, mention
     if not loud_ids:
         return
     try:
-        muted_here = {p.user_id for p in db.query(ConversationParticipant)
+        #Тишину просили двумя способами, оба уважаем: мьют беседы и УХОД ЕЁ В АРХИВ.
+        #Архив — это «я к этому вернусь потом», и звонок оттуда противоречит самому смыслу
+        #действия: человек убрал чат с глаз, а тот всё равно звенит.
+        quiet_here = {p.user_id for p in db.query(ConversationParticipant)
                       .filter(ConversationParticipant.conversation_id == conv.id,
-                              ConversationParticipant.muted == True).all()}  # noqa: E712
-        loud_ids -= muted_here
+                              (ConversationParticipant.muted == True)      # noqa: E712
+                              | (ConversationParticipant.archived == True)).all()}  # noqa: E712
+        loud_ids -= quiet_here
         loud_ids.discard(sender.id)          #отметить самого себя — не событие
         if not loud_ids:
             return
@@ -440,6 +444,12 @@ def _parse_mentions(db: Session, body: str, participant_ids) -> list:
     rows = db.query(User).filter(User.id.in_(ids)).all()
     surnames = {}
     for u in rows:
+        #Администрацию (она же модерация) отметить НЕЛЬЗЯ. Отметка — это способ дёрнуть
+        #человека лично, и для обращения к модерации есть отдельная дверь: чат ⚙ и жалоба
+        #на сообщение. Иначе один @Фамилия в общей беседе превращается в звонок админу,
+        #причём мимо всякой очереди и без темы обращения.
+        if u.role == "admin":
+            continue
         first = (u.full_name or u.name or "").split(" ", 1)[0].strip().lower()
         if first:
             surnames.setdefault(first, u.id)
@@ -834,7 +844,11 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
                      .order_by(Message.id.asc()).limit(_MENTION_SCAN_LIMIT).all()):
             hit = next((x for x in (cand.mentions or []) if x.get("user_id") == user.id), None)
             if hit:
-                mention_id, mention_loud = cand.id, bool(hit.get("loud"))
+                #Значок «@» показываем всегда (отметка была — это факт), а вот ЗВУК гасим
+                #для замьюченной и АРХИВНОЙ беседы: звук включает клиент по этому флагу,
+                #и без гашения архив звенел бы, хотя человек убрал чат с глаз намеренно.
+                mention_id = cand.id
+                mention_loud = bool(hit.get("loud")) and not (p.muted or p.archived)
                 break
         item = {
             "conversation_id": conv.id,
@@ -1415,10 +1429,30 @@ def _handle_vector_command(db: Session, conv_id: str, body: str, user: User,
         answer = answer_vector_question(question, user, db,
                                         context=_saved_context(db, conv_id, user))
         text = (answer.get("text") or "").strip()
+        #Разговор идёт ЛЕНТОЙ, а классификатор каждый вопрос разбирает с чистого листа —
+        #поэтому на второе «привет» Вектор выдавал ту же самую полную справку «Привет! Я
+        #Вектор. Спросите про…», как будто знакомится заново. В живой переписке это
+        #читается как потеря памяти. Здороваемся ОДИН раз за беседу: дальше — короткий
+        #отклик. Проверяем по самой ленте, отдельного состояния заводить не нужно.
+        if text and answer.get("intent") == "hello" and _vector_already_greeted(db, conv_id):
+            text = "Я тут. Спрашивайте. 🐯"
         if text:
             _post_system_channel_message(db, conv_id, text)
     except Exception:
         pass
+
+
+def _vector_already_greeted(db: Session, conv_id: str) -> bool:
+    """Здоровался ли Вектор в этой беседе раньше (есть ли хоть одна его реплика).
+
+    Смотрим на ленту, а не на отдельный флаг: лента и есть память разговора, а флаг
+    пришлось бы отдельно сбрасывать при очистке истории — и он бы разошёлся с тем, что
+    человек видит на экране."""
+    return db.query(Message).filter(
+        Message.conversation_id == conv_id,
+        Message.sender_id == SYSTEM_SENDER_ID,
+        Message.kind == "text",
+        Message.deleted_at == "").first() is not None
 
 
 # ── Прочтение ────────────────────────────────────────────────────────────────────────
@@ -2663,10 +2697,30 @@ def _handle_clear_command(db: Session, conv_id: str, body: str, user: User,
     rows = (db.query(Message)
             .filter(Message.conversation_id == conv_id, Message.deleted_at == "")
             .order_by(Message.id.desc()).limit(n).all())
-    now = _now()
-    for row in rows:
-        row.deleted_at = now
-        row.pinned = False
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    #В «Избранном» удаляем ФИЗИЧЕСКИ, а не тумбстоуном. Тумбстоун существует ради ДРУГИХ
+    #участников: он показывает, что сообщение было и его убрали. В личном блокноте другого
+    #участника нет — и десяток строк «Сообщение удалено» просто засоряют то, что человек
+    #только что попросил очистить. Заодно уносим сопутствующие строки (реакции, правки,
+    #скрытия), иначе они остались бы висеть на несуществующих id.
+    if conv is not None and conv.kind == "saved":
+        ids = [row.id for row in rows]
+        if ids:
+            for model in (MessageReaction, MessageEdit, MessageHidden):
+                db.query(model).filter(model.message_id.in_(ids)).delete(synchronize_session=False)
+            (db.query(Message).filter(Message.id.in_(ids))
+             .delete(synchronize_session=False))
+            #Убираем удалённые строки из сессии ВРУЧНУЮ. Физическое удаление освобождает
+            #автоинкремент, и следующее сообщение (системная строка об очистке ниже) может
+            #получить ТОТ ЖЕ id — тогда SQLAlchemy ругается на конфликт в identity map и
+            #подменяет объект. Массовый delete() сам сессию не чистит, поэтому явно.
+            for row in rows:
+                db.expunge(row)
+    else:
+        now = _now()
+        for row in rows:
+            row.deleted_at = now
+            row.pinned = False
     db.commit()
     sysmsg = _system(db, conv_id, "cleared", str(len(rows)))
     _broadcast(db, conv_id)

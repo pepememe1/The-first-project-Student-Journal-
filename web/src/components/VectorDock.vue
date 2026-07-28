@@ -13,7 +13,9 @@ import { useTtsStore } from '@/stores/tts'
 const vector = useVectorStore()
 const tts = useTtsStore()
 const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
-const { enabled: ttsEnabled, speaking } = storeToRefs(tts)
+//Звук ШТОРКИ — отдельный выключатель: раньше кнопка дёргала общий режим, и
+//тишина в шторке гасила озвучку заодно во вкладке «ИИ Помощник».
+const { dockEnabled, speaking } = storeToRefs(tts)
 const scroller = ref(null)
 const showQuick = ref(false)
 
@@ -54,12 +56,12 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Озвучка: вкл/выкл. Когда играет — иконка подсвечена. Клик по выключенной
              также гасит текущую речь (внутри setEnabled). -->
-        <button type="button" @click="tts.setEnabled(!ttsEnabled)"
-                :aria-label="ttsEnabled ? 'Выключить озвучку' : 'Включить озвучку'"
-                :title="ttsEnabled ? 'Озвучка включена' : 'Озвучка выключена'"
+        <button type="button" @click="tts.setDockEnabled(!dockEnabled)"
+                :aria-label="dockEnabled ? 'Выключить озвучку в панели' : 'Включить озвучку в панели'"
+                :title="dockEnabled ? 'Озвучка в панели включена' : 'Озвучка в панели выключена'"
                 class="grid size-7 place-items-center rounded-md transition-colors hover:bg-bg2"
-                :class="ttsEnabled ? (speaking ? 'text-accent' : 'text-text2 hover:text-text') : 'text-text3'">
-          <component :is="ttsEnabled ? Volume2 : VolumeX" class="size-4" />
+                :class="dockEnabled ? (speaking ? 'text-accent' : 'text-text2 hover:text-text') : 'text-text3'">
+          <component :is="dockEnabled ? Volume2 : VolumeX" class="size-4" />
         </button>
         <button type="button" @click="vector.setCollapsed(true)" aria-label="Скрыть панель Вектора"
                 title="Скрыть панель"

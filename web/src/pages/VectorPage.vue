@@ -4,7 +4,7 @@
 // полупрозрачным слоем ПОВЕРХ него. Маскот РЕАГИРУЕТ: приветствие → «думает» →
 // эмоция по настроению ответа → покой. Цифры считает СЕРВЕР (/web/vector/ask).
 // Чат живёт в общем store — ОДНА переписка с боковым доком (как в десктопе).
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
@@ -37,7 +37,10 @@ async function scrollDown() {
 }
 watch(tick, scrollDown)
 // greetOnce — приветствие голосом ровно при открытии этой вкладки (не на бургер-меню).
-onMounted(() => { vector.greetSettle(); scrollDown(); vector.greetOnce() })
+//Пока открыта эта вкладка, звук подчиняется ОБЩЕЙ настройке озвучки, а не
+//выключателю боковой шторки (у неё он свой) — см. vector.setSurface.
+onMounted(() => { vector.setSurface('page'); vector.greetSettle(); scrollDown(); vector.greetOnce() })
+onUnmounted(() => vector.setSurface('dock'))
 
 function send() { vector.send() }
 function ask(q) { showQuick.value = false; vector.ask(q) }

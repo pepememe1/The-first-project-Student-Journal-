@@ -81,8 +81,14 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict,
 def categorize(rows: list) -> dict:
     """Отличники/хорошисты/успевающие/неуспевающие — по общему среднему баллу студента.
     Студентов без единой оценки (average == 0) не считаем ни в одну категорию: «нет
-    данных» — это не то же самое, что «неуспевающий»."""
+    данных» — это не то же самое, что «неуспевающий».
+
+    Кроме счётчиков отдаём ПОИМЁННЫЕ списки (`names`): круговая диаграмма показывала
+    только доли, и куратор видел «неуспевающих трое», но не мог узнать, кто это, — ради
+    фамилий приходилось открывать полный отчёт. Внутри категории сортируем по среднему
+    по убыванию: у границы категории видно, кто ближе всего к переходу."""
     buckets = {"excellent": 0, "good": 0, "passing": 0, "failing": 0}
+    names = {"excellent": [], "good": [], "passing": [], "failing": []}
     counted = 0
     for r in rows:
         avg = r.get("average") or 0
@@ -90,14 +96,20 @@ def categorize(rows: list) -> dict:
             continue
         counted += 1
         if avg >= 4.5:
-            buckets["excellent"] += 1
+            key = "excellent"
         elif avg >= 3.5:
-            buckets["good"] += 1
+            key = "good"
         elif avg >= 2.5:
-            buckets["passing"] += 1
+            key = "passing"
         else:
-            buckets["failing"] += 1
-    return {"counts": buckets, "total": counted, "no_data": len(rows) - counted}
+            key = "failing"
+        buckets[key] += 1
+        full = " ".join(x for x in (r.get("surname"), r.get("name")) if x).strip()
+        names[key].append({"name": full, "average": avg})
+    for key in names:
+        names[key].sort(key=lambda x: -x["average"])
+    return {"counts": buckets, "names": names,
+            "total": counted, "no_data": len(rows) - counted}
 
 
 def _fmt(v) -> str:

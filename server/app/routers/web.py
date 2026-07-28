@@ -1516,6 +1516,23 @@ def _known_subjects(user: User, db: Session) -> list:
         return []
 
 
+def _group_subject_list(db: Session, group: str, lessons=None) -> list:
+    """ВСЕ предметы группы, а не только те, где уже стоят оценки.
+
+    Источник правды — справочник группы (`Group.subjects`, его ведёт админ): именно он
+    отвечает на вопрос «какие у меня предметы». Занятия добавляем сверху на случай, когда
+    преподаватель успел завести пару по предмету, которого в справочнике ещё нет —
+    показать реально существующий предмет важнее, чем держать список стерильным."""
+    names = set()
+    grp = db.get(Group, f"grp:{group}") if group else None
+    if grp is not None and not grp.deleted:
+        names.update(s for s in (grp.subjects or []) if s)
+    for l in (lessons if lessons is not None else []):
+        if l.subject:
+            names.add(l.subject)
+    return sorted(names)
+
+
 def _known_surnames(user: User, db: Session) -> list:
     """Фамилии студентов в области видимости (для «пропуски у Иванова»). Студенту —
     пусто (только о себе); преподавателю — студенты его групп; админу — все студенты."""
@@ -1659,8 +1676,21 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
 
     # Общие для всех ролей: приветствие / помощь / благодарность / факты о заведении.
     if intent == "hello":
-        return {"text": f"{_HELLO_PREFIX[role]} {help_text}", "mood": "happy",
-                "intent": "hello", "facts": {}}
+        #Погодная реплика — только когда погода ДЕЙСТВИТЕЛЬНО заметная (мороз/жара/ливень),
+        #см. weather.note(). Улан-Удэ с его резко континентальным климатом даёт такие дни
+        #регулярно, и «−34, одевайся теплее» в приветствии — то, что делает помощника
+        #местным, а не абстрактным. Цифра — от метеослужбы, не выдумана; нет связи —
+        #note() вернёт пусто, и приветствие останется обычным.
+        note = ""
+        try:
+            import weather as _w
+            note = _w.note()
+        except Exception:
+            note = ""
+        text = f"{_HELLO_PREFIX[role]} {help_text}"
+        if note:
+            text = f"{_HELLO_PREFIX[role]} {note} {help_text}"
+        return {"text": text, "mood": "happy", "intent": "hello", "facts": {}}
     if intent in ("help", "unknown"):
         return {"text": help_text, "mood": "happy" if intent == "help" else "neutral",
                 "intent": "help" if intent == "help" else "unknown", "facts": {}}
@@ -1730,6 +1760,21 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
                     "mood": _mood_by_avg(p["average"]), "intent": "subject_grades",
                     "facts": {"subject": subject, "average": p["average"]}}
+        if intent == "subjects":
+            #«Какие у меня предметы» — ВЕСЬ список группы, включая те, где оценок ещё нет.
+            #Раньше такого интента не было, вопрос падал в grades и отвечал только по
+            #предметам с отметками: предмет без единой оценки Вектор как будто не видел.
+            subs = _group_subject_list(db, group, lessons)
+            if not subs:
+                return {"text": "Предметы для твоей группы пока не заведены.",
+                        "mood": "neutral", "intent": "subjects", "facts": {"count": 0}}
+            per = {p["subject"]: p["average"] for p in W.per_subject_averages(lessons, records, cfg)}
+            #Помечаем средним те, где уже что-то стоит: список остаётся полным, но по нему
+            #сразу видно, где пусто, — иначе пришлось бы задавать второй вопрос.
+            parts = [f"{s} — {per[s]}" if per.get(s) else f"{s} — оценок нет" for s in subs]
+            return {"text": f"У тебя {len(subs)} предметов: " + "; ".join(parts) + ".",
+                    "mood": "neutral", "intent": "subjects",
+                    "facts": {"count": len(subs), "subjects": subs}}
         if intent == "grades" or intent == "subject_grades":
             per = W.per_subject_averages(lessons, records, cfg)
             graded = [p for p in per if p["average"]]
@@ -1737,8 +1782,14 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                 return {"text": "Оценок по практикам пока нет — как появятся, покажу. 🐯",
                         "mood": "neutral", "intent": "grades", "facts": {}}
             body = "; ".join(f"{p['subject']} — {p['average']}" for p in graded)
-            return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
-                    "intent": "grades", "facts": {"subjects": len(graded)}}
+            #Договариваем про предметы БЕЗ оценок. Без этой строки ответ выглядел так,
+            #будто у студента их вообще нет — а он просто ещё ничего по ним не получил.
+            has_grade = {p["subject"] for p in graded}
+            rest = [s for s in _group_subject_list(db, group, lessons) if s not in has_grade]
+            tail = f" Пока без оценок: {', '.join(rest)}." if rest else ""
+            return {"text": f"Твой средний по предметам: {body}.{tail}", "mood": "neutral",
+                    "intent": "grades",
+                    "facts": {"subjects": len(graded), "ungraded": len(rest)}}
         # average и всё остальное (at_risk/roster/teachers/group_stats недоступны студенту)
         avg = W.average(lessons, records, cfg)
         if intent in ("at_risk", "roster", "teachers", "group_stats"):
@@ -1762,6 +1813,12 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         if intent == "groups":
             return {"text": "Ваши группы: " + ", ".join(groups) + ".", "mood": "neutral",
                     "intent": "groups", "facts": {"groups": len(groups)}}
+        if intent == "subjects":
+            subs = sorted(tsubjects)
+            return {"text": ("Ваши предметы: " + ", ".join(subs) + "."
+                             if subs else "За вами не закреплено ни одного предмета."),
+                    "mood": "neutral", "intent": "subjects",
+                    "facts": {"count": len(subs), "subjects": subs}}
         if intent == "roster":
             g = groups[0]
             names = [W.display_name(s) for s in W.students_in_group(db, g)]
@@ -1850,6 +1907,12 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         body = ", ".join(names) if names else "групп нет"
         return {"text": f"Группы колледжа ({len(names)}): {body}.", "mood": "neutral",
                 "intent": "groups", "facts": {"count": len(names)}}
+    if intent == "subjects":
+        rows = db.query(Subject).filter(Subject.deleted == False).all()  # noqa: E712
+        names = sorted({s.name for s in rows if s.name})
+        body = ", ".join(names) if names else "каталог пуст"
+        return {"text": f"Предметы колледжа ({len(names)}): {body}.", "mood": "neutral",
+                "intent": "subjects", "facts": {"count": len(names), "subjects": names}}
     n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
     n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
     n_groups = db.query(Group).filter(Group.deleted == False).count()  # noqa: E712

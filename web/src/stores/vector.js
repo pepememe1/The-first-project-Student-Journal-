@@ -34,6 +34,16 @@ export const useVectorStore = defineStore('vector', () => {
   // Счётчик отправленных — компоненты по нему скроллят свой чат вниз (у каждого свой контейнер).
   const tick = ref(0)
 
+  // Где Вектор показан ПРЯМО СЕЙЧАС: 'page' — вкладка «ИИ Помощник», 'dock' — боковая
+  // шторка. Одновременно они не живут (AppShell прячет док на вкладке ИИ), поэтому
+  // хватает одного значения. Нужно для звука: у шторки свой выключатель, и «тихо в
+  // шторке» не должно означать «тихо во вкладке» (см. tts.dockEnabled).
+  const surface = ref('dock')
+  function setSurface(s) { surface.value = s === 'page' ? 'page' : 'dock' }
+  // Говорить ли вслух в текущем месте: общий режим озвучки И (для шторки) её выключатель.
+  const voiceOn = computed(() =>
+    tts.enabled && (surface.value === 'page' || tts.dockEnabled))
+
   const sprite = computed(() => chatEmote(state.value, lastMood.value, lastIntent.value))
   // Анимация чата = само состояние (greeting|idle|thinking|speaking) — имена совпадают
   // с файлами /mascot/anim/*.webp. Это «действие» Вектора (гибрид: анимации в чате,
@@ -82,8 +92,17 @@ export const useVectorStore = defineStore('vector', () => {
     _stopTypingTimer()
     typingReveal.value = { index: idx, text: full, done: true }
   }
-  // Двойной клик по печатающемуся сообщению — сразу показать целиком (см. VectorPage.vue).
-  function skipTyping() { _completeTyping() }
+  // Двойной клик по печатающемуся сообщению — «пропустить». Раньше пропускалась ТОЛЬКО
+  // печать: текст появлялся целиком, а Вектор продолжал говорить вслух и шевелить губами
+  // ещё полминуты — то есть просьбу «покажи сразу» выполняла лишь треть реплики.
+  // Пропуск обрывает ВСЮ речь: текст целиком, звук — стоп, анимация — сразу в покой.
+  function skipTyping() {
+    _completeTyping()
+    tts.stop()
+    clearTimeout(settleTimer)
+    clearTimeout(speakSafety)
+    state.value = 'idle'
+  }
 
   let settleTimer = null
   let speakSafety = null      // бэкстоп: если событие конца звука не придёт — не «говорим» вечно
@@ -117,7 +136,7 @@ export const useVectorStore = defineStore('vector', () => {
     if (greeted) return
     greeted = true
     tts.unlock()
-    if (tts.enabled && !messages.value.some(m => m.role === 'user')) {
+    if (voiceOn.value && !messages.value.some(m => m.role === 'user')) {
       const g = messages.value.find(m => m.role === 'vector')
       if (g) tts.speak(g.text)
     }
@@ -176,7 +195,7 @@ export const useVectorStore = defineStore('vector', () => {
       // Есть ответ и озвучка включена → маскот ДЕРЖИТ «думает», пока синтез едет, начинает
       // говорить РОВНО со стартом звука (onStart) и держит анимацию речи, ПОКА звук не
       // кончится (onEnd). Если звук не пришёл (медленный/сбой) — обычная выдержка через таймаут.
-      if (answer && tts.enabled) {
+      if (answer && voiceOn.value) {
         let triggered = false
         const startFrom = (hold, durationMs) => {
           if (!triggered) { triggered = true; startSpeaking(hold); _startTyping(msgIndex, answer, durationMs) }
@@ -207,6 +226,7 @@ export const useVectorStore = defineStore('vector', () => {
   function ask(q) { send(q) }
 
   return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
+           surface, setSurface, voiceOn,
            sprite, anim, label, cmds, send, ask, greetSettle, greetOnce,
            typingReveal, skipTyping }
 })

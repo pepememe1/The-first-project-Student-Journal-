@@ -9,7 +9,9 @@ import { Menu, Moon, Sun, LogOut, ChevronDown } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useMessengerStore } from '@/stores/messenger'
+import { STATUS_KINDS, statusColor, myStatusLabel } from '@/config/status'
 import BrandLogo from '@/components/BrandLogo.vue'
+import FarewellOverlay from '@/components/FarewellOverlay.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
 const router = useRouter()
@@ -31,22 +33,21 @@ const showName = computed(() => {
 const online = ref(navigator.onLine)
 function updateOnline() { online.value = navigator.onLine }
 
-// §D7: СВОЙ статус — в правом верхнем углу, а не только в шапке списка чатов.
-// Раньше переключатель жил внутри вкладки «Сообщения», и со стороны выглядело, что
-// смена статуса ни на что не влияет: сам её автор нигде свой статус больше не видел.
-// Здесь он на всех страницах и меняется одним кликом.
-const STATUS_KINDS = [
-  ['', 'Обычный', '#3ddc84'],
-  ['dnd', 'Не беспокоить', '#ef4444'],
-  ['studying', 'Готовлюсь/учусь', '#f59e0b'],
-  ['away', 'Отошёл(а)', '#94a3b8'],
-]
+// §D7: СВОЙ статус в шапке — ОДНА плашка, а не две. Раньше рядом висели «Онлайн»
+// (presence) и отдельный переключатель статуса, и они противоречили друг другу:
+// «🟢 Онлайн  🔴 Не беспокоить» читается как два взаимоисключающих состояния сразу.
+// Присутствие и статус — про одно и то же («могу ли я сейчас отвечать»), поэтому
+// показываем одну плашку: выбранный статус, а если он не задан — обычное «Онлайн».
+// Связь с сетью при этом не теряем: без неё плашка становится «Офлайн» независимо
+// от статуса — техническая недоступность важнее выбранной пометки.
 const statusOpen = ref(false)
-const myStatus = computed(() =>
-  STATUS_KINDS.find(k => k[0] === messenger.myStatus.kind) || STATUS_KINDS[0])
-// Свой текст преподавателя («принимаю до 15:00») информативнее ярлыка — показываем его.
-const statusText = computed(() =>
-  (messenger.myStatus.custom_text || '').trim() || myStatus.value[1])
+const myKind = computed(() => messenger.myStatus.kind || '')
+const statusPill = computed(() => {
+  if (!online.value) return { color: '#ff8a8a', text: 'Офлайн' }
+  if (!myKind.value) return { color: '#3ddc84', text: 'Онлайн' }
+  return { color: statusColor(myKind.value),
+           text: myStatusLabel(myKind.value, messenger.myStatus.custom_text) }
+})
 async function pickStatus(kind) {
   statusOpen.value = false
   // Текст статуса задаётся в мессенджере (там же его и видно рядом с полем) — здесь
@@ -64,9 +65,16 @@ onBeforeUnmount(() => {
   window.removeEventListener('offline', updateOnline)
 })
 
+// Прощание: Вектор машет ~1.2 с, потом уходим на форму входа. Выход при этом ВЫПОЛНЯЕТСЯ
+// сразу — анимация не задерживает ни сам logout, ни очистку токенов: если что-то пойдёт
+// не так, человек всё равно окажется разлогинен. Задержка — только на переход экрана.
+const FAREWELL_MS = 1200
+const farewell = ref(false)
 async function onLogout() {
-  await auth.logout()
-  router.push('/login')
+  farewell.value = true
+  try { await auth.logout() } finally {
+    setTimeout(() => router.push('/login'), FAREWELL_MS)
+  }
 }
 </script>
 
@@ -96,32 +104,24 @@ async function onLogout() {
 
     <div class="min-w-2 flex-1" />
 
-    <!-- Индикатор связи с сервером (онлайн/офлайн) — как в десктопной шапке -->
-    <span class="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 sm:inline-flex"
-          style="background: rgba(255,255,255,0.12);"
-          :title="online ? 'Есть связь с сервером колледжа.' : 'Нет связи с сетью — данные подтянутся, когда связь вернётся.'">
-      <span class="text-[14px] leading-none" :style="{ color: online ? '#3ddc84' : '#ff8a8a' }">●</span>
-      {{ online ? 'Онлайн' : 'Офлайн' }}
-    </span>
-
-    <!-- §D7: свой статус — виден и меняется с любой страницы. Кружок в цвет статуса,
-         подпись прячем на узких экранах (там за неё говорит цвет). -->
+    <!-- §D7: ОДНА плашка — присутствие и статус вместе (раньше их было две, и они
+         противоречили друг другу). Клик открывает выбор статуса; виден на всех страницах. -->
     <div class="relative shrink-0">
       <button type="button" @click="statusOpen = !statusOpen"
-              :title="`Мой статус: ${statusText}`" aria-label="Мой статус"
+              :title="`Мой статус: ${statusPill.text}`" aria-label="Мой статус"
               class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 hover:bg-white/15"
               style="background: rgba(255,255,255,0.12);">
-        <span class="size-2.5 shrink-0 rounded-full" :style="{ background: myStatus[2] }" />
-        <span class="hidden max-w-[160px] truncate md:inline">{{ statusText }}</span>
+        <span class="size-2.5 shrink-0 rounded-full" :style="{ background: statusPill.color }" />
+        <span class="hidden max-w-[160px] truncate sm:inline">{{ statusPill.text }}</span>
         <ChevronDown class="size-3.5 shrink-0" />
       </button>
       <div v-if="statusOpen"
            class="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
-        <button v-for="k in STATUS_KINDS" :key="k[0]" type="button" @click="pickStatus(k[0])"
+        <button v-for="k in STATUS_KINDS" :key="k.kind" type="button" @click="pickStatus(k.kind)"
                 class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-text hover:bg-bg2"
-                :class="{ 'bg-accent-glow': messenger.myStatus.kind === k[0] }">
-          <span class="size-2.5 shrink-0 rounded-full" :style="{ background: k[2] }" />
-          {{ k[1] }}
+                :class="{ 'bg-accent-glow': myKind === k.kind }">
+          <span class="size-2.5 shrink-0 rounded-full" :style="{ background: k.color }" />
+          {{ k.self }}
         </button>
       </div>
       <!-- Клик мимо меню закрывает его (глобальной директивы click-outside в проекте нет). -->
@@ -159,4 +159,7 @@ async function onLogout() {
       <span class="hidden sm:inline">Выйти</span>
     </button>
   </header>
+
+  <!-- Прощание Вектора — закрывает ту же рамку, что открывает вход. -->
+  <FarewellOverlay v-if="farewell" :name="showName" />
 </template>

@@ -115,6 +115,30 @@ def set_enabled(on: bool) -> None:
     set_mode("voice" if on else "off")
 
 
+def dock_enabled() -> bool:
+    """Озвучен ли Вектор в БОКОВОЙ ШТОРКЕ — отдельный от общего режима выключатель.
+
+    Зачем отдельно: шторка висит поверх журнала, где голос чаще мешает, а во вкладку «ИИ
+    Помощник» за ним и приходят. Общий выключатель на кнопку в шторке означал бы, что
+    локальное «тише» молча гасит озвучку и на вкладке (ровно этот баг был на вебе).
+    Настройка — этого ПК (local_set), как и остальные параметры озвучки."""
+    try:
+        from data_store import local_get
+        return str(local_get("tts_dock", "on")) != "off"
+    except Exception:
+        return True
+
+
+def set_dock_enabled(on: bool) -> None:
+    try:
+        from data_store import local_set
+        local_set("tts_dock", "on" if on else "off")
+    except Exception:
+        pass
+    if not on:
+        stop()          #выключили при играющем звуке — замолкаем сразу
+
+
 def get_voice() -> str:
     """Выбранный голос ('male' по умолчанию)."""
     try:

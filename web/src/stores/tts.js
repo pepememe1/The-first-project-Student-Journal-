@@ -26,6 +26,11 @@ import { MUMBLE_B64, MUMBLE_SR } from '@/config/mumbleData'
 const LS_MODE = 'gb.tts.mode'
 const LS_VOICE = 'gb.tts.voice'
 const LS_ENABLED_OLD = 'gb.tts.enabled'   // старый ключ (миграция вкл/выкл → режим)
+// Отдельная громкость БОКОВОЙ ШТОРКИ. Кнопка в шторке дёргала общий режим, и «выключил
+// звук в шторке» гасило озвучку и во вкладке «ИИ Помощник» — то есть локальное действие
+// молча меняло глобальную настройку. Это разные ситуации: шторка висит поверх журнала,
+// где голос мешает, а на вкладке ИИ за ним и приходят.
+const LS_DOCK = 'gb.tts.dock'
 
 const MODES = ['voice', 'mumble', 'off']
 
@@ -48,6 +53,15 @@ export const useTtsStore = defineStore('tts', () => {
   const speaking = ref(false)
 
   const enabled = computed(() => mode.value !== 'off')   // совместимость с прежним API
+  // Озвучка в боковой шторке — СВОЙ выключатель, независимый от общего режима.
+  const dockEnabled = ref((() => {
+    try { return localStorage.getItem(LS_DOCK) !== 'off' } catch { return true }
+  })())
+  function setDockEnabled(v) {
+    dockEnabled.value = !!v
+    try { localStorage.setItem(LS_DOCK, v ? 'on' : 'off') } catch { /* приватный режим */ }
+    if (!v) stop()          //выключили при играющем звуке — замолкаем сразу
+  }
 
   let ctx = null           // единственный AudioContext (разбуженный, играет всегда)
   let stopper = null       // как остановить текущую озвучку (barge-in): голос ИЛИ бубнеж
@@ -268,5 +282,6 @@ export const useTtsStore = defineStore('tts', () => {
   }
 
   return { mode, enabled, voice, available, speaking, modeLabel,
+           dockEnabled, setDockEnabled,
            setMode, cycleMode, setEnabled, setVoice, refreshStatus, speak, stop, unlock }
 })

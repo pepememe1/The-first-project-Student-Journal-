@@ -10,6 +10,7 @@ import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, Mor
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import { profilePlate } from '@/theme/palette'
+import { statusColor, statusLabel } from '@/config/status'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 
@@ -71,22 +72,9 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
 // §D7: статус поверх presence. Сервер отдаёт его и в карточке собеседника (_safe_user),
 // и у каждого участника (conversation_info) — но панель их не показывала вовсе, и со
 // стороны это читалось как «смена статуса не работает»: человек его выбрал, а никто не
-// видит. Цвета — те же, что в MyStatusPicker (один смысл — один цвет).
-const STATUS = {
-  dnd: ['Не беспокоить', '#ef4444'],
-  studying: ['Готовится/учится', '#f59e0b'],
-  away: ['Отошёл(а)', '#94a3b8'],
-}
-// Название статуса: у преподавателя может быть свой текст («принимаю до 15:00»), тогда
-// показываем его — он информативнее ярлыка. Пусто = статуса нет, остаётся online/оффлайн.
-function statusLabel(p) {
-  const kind = p?.status_kind
-  if (!kind) return ''
-  return (p.status_text || '').trim() || (STATUS[kind]?.[0] || kind)
-}
-function statusColor(p) {
-  return STATUS[p?.status_kind]?.[1] || '#94a3b8'
-}
+// видит. Названия и цвета — из общего config/status.js (раньше набор жил пятью копиями).
+function label(p) { return statusLabel(p?.status_kind, p?.status_text) }
+function color(p) { return statusColor(p?.status_kind) }
 
 // Подпись под именем: у преподавателя — предметы, у студента — группа.
 function meta(p) {
@@ -212,18 +200,17 @@ async function clearHistory() {
         <template v-else-if="!isGroupOrChannel && activePeer">
           <div class="flex items-center gap-3 rounded-xl p-4" :style="{ background: plate(activePeer) }">
             <Avatar :src="activePeer.avatar" :name="activePeer.full_name"
-                    :online="!!activePeer.online" :size="56" />
+                    :online="!!activePeer.online" :status="activePeer.status_kind"
+                    :status-text="activePeer.status_text" :size="56" />
             <div class="min-w-0">
               <div class="truncate text-base font-bold text-white">{{ activePeer.full_name }}</div>
               <div class="truncate text-xs text-white/80">{{ peerMeta(activePeer) }}</div>
               <!-- Статус, который человек выбрал сам, ВАЖНЕЕ presence: «не беспокоить»
                    при этом остаётся «в сети», и показать только «в сети» — значит
-                   потерять ровно то, что он просил передать. Кружок в цвет статуса. -->
+                   потерять ровно то, что он просил передать. Кружок рисует Avatar. -->
               <div class="mt-0.5 flex items-center gap-1.5 text-xs text-white/70">
-                <template v-if="statusLabel(activePeer)">
-                  <span class="size-2.5 shrink-0 rounded-full ring-1 ring-white/50"
-                        :style="{ background: statusColor(activePeer) }" />
-                  <span class="truncate">{{ statusLabel(activePeer) }}</span>
+                <template v-if="label(activePeer)">
+                  <span class="truncate">{{ label(activePeer) }}</span>
                   <span class="shrink-0 text-white/50">· {{ activePeer.online ? 'в сети' : 'не в сети' }}</span>
                 </template>
                 <template v-else>{{ activePeer.online ? 'в сети' : 'не в сети' }}</template>
@@ -247,7 +234,8 @@ async function clearHistory() {
           <div class="space-y-1">
             <div v-for="p in people" :key="p.user_id"
                  class="relative flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-bg2">
-              <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online" :size="36" />
+              <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online"
+                      :status="p.status_kind" :status-text="p.status_text" :size="36" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
@@ -256,10 +244,10 @@ async function clearHistory() {
                   <span v-if="p.silenced" title="Заглушён(а) — /mute" class="shrink-0 text-xs">🔇</span>
                 </div>
                 <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
-                  <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
-                  <span v-if="statusLabel(p)" class="size-2 shrink-0 rounded-full"
-                        :style="{ background: statusColor(p) }" />
-                  <span class="truncate">{{ statusLabel(p) || meta(p) }}</span>
+                  <!-- Статус участника — кружок уже на аватарке, здесь только подпись. -->
+                  <span v-if="label(p)" class="size-2 shrink-0 rounded-full"
+                        :style="{ background: color(p) }" />
+                  <span class="truncate">{{ label(p) || meta(p) }}</span>
                 </div>
               </div>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"

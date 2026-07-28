@@ -107,11 +107,21 @@ class _AvatarChatOverlay(QWidget):
     #Доля высоты ФИГУРЫ, на которой начинается чат сверху: 0 — голова, 1 — ноги.
     #~0.42 = примерно уровень туловища: голова и плечи Вектора открыты, чат лежит ниже.
     CHAT_TOP_FRACTION = 0.42
+    #Поля вокруг стеклянной карточки чата и её предел по ширине — 1:1 с вебом
+    #(VectorPage.vue: inset-x-8 bottom-4, max-w-3xl). Без предела на широком мониторе
+    #переписка растягивалась во всю ширину и читалась строками по полтора метра.
+    CHAT_MARGIN_X = 32
+    CHAT_MARGIN_BOTTOM = 16
+    CHAT_MAX_WIDTH = 768
 
-    def __init__(self, avatar: "VectorAvatar", chat: QWidget, parent=None):
+    def __init__(self, avatar: "VectorAvatar", chat: QWidget, parent=None, grow: bool = False):
         super().__init__(parent)
         self.avatar = avatar
         self.chat = chat
+        #grow=True — маскот тянется под высоту контейнера (вкладка «ИИ Помощник», как на
+        #сайте). В боковой шторке фигура остаётся фиксированной: там ширина панели задана
+        #жёстко, и растягивать нечего.
+        self.grow = grow
         self.avatar.setParent(self)
         self.chat.setParent(self)
         self.avatar.lower()
@@ -121,13 +131,24 @@ class _AvatarChatOverlay(QWidget):
 
     def resizeEvent(self, event):
         w, h = self.width(), self.height()
+        if self.grow:
+            #Фигура занимает всю высоту области, но не шире самой области — иначе на
+            #низком и широком окне маскот вылезал бы за края по бокам.
+            target = min(h, int(w / AVATAR_AR)) if w else h
+            self.avatar.set_height(max(160, target))
         aw, ah = self.avatar.width(), self.avatar.height()
         #маскот СВЕРХУ, по центру по горизонтали — голова и плечи всегда видны.
         self.avatar.move(max(0, (w - aw) // 2), 0)
         #чат СНИЗУ и полупрозрачный: его верхний край — примерно на уровне туловища
         #Вектора, поэтому переписка лежит на нижней части фигуры, не закрывая лицо.
         chat_top = int(ah * self.CHAT_TOP_FRACTION)
-        self.chat.setGeometry(0, chat_top, w, max(150, h - chat_top))
+        if self.grow:
+            cw = min(self.CHAT_MAX_WIDTH, max(240, w - 2 * self.CHAT_MARGIN_X))
+            cx = (w - cw) // 2
+            ch = max(120, h - chat_top - self.CHAT_MARGIN_BOTTOM)
+            self.chat.setGeometry(cx, chat_top, cw, ch)
+        else:
+            self.chat.setGeometry(0, chat_top, w, max(150, h - chat_top))
         super().resizeEvent(event)
 
 
@@ -177,6 +198,25 @@ class VectorAvatar(QWidget):
         self.set_state(ST_AWAY)   #по умолчанию курсор не над чатом
 
     #публичные хуки
+    def set_height(self, height: int):
+        """Перезадать высоту фигуры (ширина считается по пропорции).
+
+        Нужно вкладке «ИИ Помощник»: там маскот должен РАСТИ вместе с окном, как на
+        сайте, а не сидеть в жёстких AVATAR_H_TAB пикселей — на широком мониторе
+        фиксированная фигура терялась в пустоте. Перерисовываем только при реальном
+        изменении: resizeEvent прилетает пачками, и лишний _render дёргал бы QMovie."""
+        height = max(120, int(height))
+        if height == self._h:
+            return
+        self._h = height
+        width = int(height * AVATAR_AR)
+        self.setFixedSize(width, height)
+        self._face.setFixedSize(width, height)
+        self._face.move(0, 0)
+        self._mouth.setFixedWidth(width)
+        self._mouth.move(0, height - 26)
+        self._render()
+
     def set_mirrored(self, mirrored: bool):
         """Зеркалит спрайт по горизонтали (панель перенесена вправо)."""
         if self._mirrored != mirrored:
@@ -363,6 +403,31 @@ class VectorSession(QObject):
         self._thread.failed.connect(self._on_fail)
         self._thread.start()
 
+    def register_panel(self, panel) -> None:
+        """Панель сообщает сессии о себе — нужно, чтобы понять, ГДЕ Вектор сейчас виден
+        (вкладка «ИИ Помощник» или боковая шторка) и какой выключатель звука применять."""
+        if not hasattr(self, "_panels"):
+            self._panels = []
+        self._panels.append(panel)
+
+    def _voice_on(self) -> bool:
+        """Озвучивать ли ответ прямо сейчас.
+
+        У шторки СВОЙ выключатель звука (tts.dock_enabled): выключенный в ней звук не
+        должен молчать во вкладке «ИИ Помощник» — туда за голосом и приходят. Смотрим,
+        видна ли сейчас полноэкранная панель (docked=False): если да — решает общий режим
+        озвучки, иначе — выключатель шторки."""
+        from . import tts
+        if not tts.is_enabled():
+            return False
+        for p in list(getattr(self, "_panels", [])):
+            try:
+                if not p.docked and p.isVisible():
+                    return True
+            except RuntimeError:
+                continue          #панель уже удалена на стороне C++ — просто пропускаем
+        return tts.dock_enabled()
+
     def _on_answer(self, text, mood, intent):
         self.busy = False
         self._add("Вектор", text)
@@ -371,6 +436,8 @@ class VectorSession(QObject):
         #(панелей несколько, а озвучивать нужно однократно). Изолировано: сбой не ломает чат.
         try:
             from . import tts
+            if not self._voice_on():
+                return
             #on_start/on_end — границы фактического звука. Прокидываем их наружу сигналами,
             #чтобы каждая панель держала анимацию речи ровно пока играет озвучка. Эмит из
             #фонового потока безопасен: Qt поставит вызов в очередь GUI-потока.
@@ -449,11 +516,18 @@ class VectorPanel(QWidget):
         name = QLabel("Вектор")
         name.setStyleSheet(f"color:{C['text']};font-size:15px;font-weight:bold;")
         bar.addWidget(name, 1)
+        #Звук ШТОРКИ — свой выключатель (как на вебе, VectorDock.vue): шторка висит поверх
+        #журнала, где голос чаще мешает, а на вкладку «ИИ Помощник» за ним и приходят.
+        #Общий тумблер озвучки живёт в настройках и этой кнопкой НЕ трогается.
+        self._snd_btn = QToolButton()
+        self._snd_btn.setToolTip("Озвучка в этой панели")
+        self._snd_btn.clicked.connect(self._toggle_dock_sound)
+        self._sync_sound_btn()
         side_b = QToolButton(); side_b.setText("⇄"); side_b.setToolTip("Перенести в другую сторону")
         side_b.clicked.connect(self.move_side.emit)
         hide_b = QToolButton(); hide_b.setText("—"); hide_b.setToolTip("Свернуть")
         hide_b.clicked.connect(self.hide_me.emit)
-        for b in (side_b, hide_b):
+        for b in (self._snd_btn, side_b, hide_b):
             b.setStyleSheet(
                 f"QToolButton{{color:{C['text3']};border:none;font-size:16px;"
                 f"padding:2px 6px;}}QToolButton:hover{{color:{C['green']};}}")
@@ -466,14 +540,20 @@ class VectorPanel(QWidget):
         #ОВЕРЛЕЙ: маскот фоном, история чата — полупрозрачным слоем ПОВЕРХ него.
         self.avatar = VectorAvatar(height=(AVATAR_H if self.docked else AVATAR_H_TAB))
         self.chat = QTextEdit(); self.chat.setReadOnly(True)
-        #Подложка чата ПОЛУПРОЗРАЧНАЯ — нижняя часть фигуры Вектора мягко просвечивает
-        #сквозь переписку (чат лежит на туловище/ногах, лицо сверху открыто).
+        #Стеклянная карточка чата — 1:1 с вебом (VectorPage.vue: bg-card/70 + рамка +
+        #скругление). Во вкладке подложка чуть плотнее и поля крупнее, чем в шторке: там
+        #текста больше и он должен читаться поверх крупной фигуры.
+        alpha = 0.72 if self.docked else 0.78
+        radius = 12 if self.docked else 14
+        pad = 10 if self.docked else 16
         self.chat.setStyleSheet(
-            f"QTextEdit{{background:{_rgba(C['card'], 0.72)};"
-            f"border:1px solid {_rgba(C['border'], 0.6)};border-radius:12px;"
-            f"padding:10px;font-size:12.5px;color:{C['text']};}}")
+            f"QTextEdit{{background:{_rgba(C['card'], alpha)};"
+            f"border:1px solid {_rgba(C['border'], 0.6)};border-radius:{radius}px;"
+            f"padding:{pad}px;font-size:{'12.5' if self.docked else '13.5'}px;color:{C['text']};}}")
         self.chat.viewport().setStyleSheet("background:transparent;")  #чтобы rgba-подложка просвечивала
-        self._overlay = _AvatarChatOverlay(self.avatar, self.chat)
+        #Во вкладке «ИИ Помощник» фигура РАСТЁТ вместе с окном (как на сайте), в шторке —
+        #фиксированная: ширина панели задана жёстко, тянуть нечего.
+        self._overlay = _AvatarChatOverlay(self.avatar, self.chat, grow=not self.docked)
         lay.addWidget(self._overlay, 1)
 
         #Ввод + квадратная кнопка команд (всплывающее меню, как в телеграме)
@@ -559,6 +639,12 @@ class VectorPanel(QWidget):
         #события мыши.
         self.chat.viewport().installEventFilter(self)
 
+        #Сессия должна знать о панели: по видимости полноэкранной панели она решает, какой
+        #выключатель звука применять — общий или «звук шторки» (см. _voice_on).
+        try:
+            self.session.register_panel(self)
+        except Exception:
+            pass
         #Подписываемся на сигналы общей сессии: текст в чат пишем ТОЛЬКО отсюда
         #(не локально в _send) — поэтому обе панели всегда синхронны и без дублей.
         self.session.messageAdded.connect(self._append)
@@ -568,6 +654,25 @@ class VectorPanel(QWidget):
         #Границы реального звука → анимация речи длится ровно сколько играет озвучка.
         self.session.speechStarted.connect(self._on_speech_started)
         self.session.speechEnded.connect(self._on_speech_ended)
+
+    def _sync_sound_btn(self):
+        """Значок кнопки звука — по текущему состоянию выключателя ШТОРКИ."""
+        try:
+            from . import tts
+            on = tts.dock_enabled()
+        except Exception:
+            on = True
+        self._snd_btn.setText("🔊" if on else "🔇")
+        self._snd_btn.setToolTip("Озвучка в этой панели включена" if on
+                                 else "Озвучка в этой панели выключена")
+
+    def _toggle_dock_sound(self):
+        try:
+            from . import tts
+            tts.set_dock_enabled(not tts.dock_enabled())
+        except Exception:
+            pass
+        self._sync_sound_btn()
 
     #Всплывающее меню быстрых команд (телеграм-стиль: висит над кнопкой команд)
     def _build_command_menu(self) -> QFrame:
@@ -649,8 +754,26 @@ class VectorPanel(QWidget):
                 self._over_cmd_menu = False; self._cmd_hide_timer.start(240)
         elif obj is self.chat.viewport():
             if event.type() == QEvent.MouseButtonDblClick:
-                self._complete_typing()
+                self._skip_speech()
         return super().eventFilter(obj, event)
+
+    def _skip_speech(self):
+        """Двойной клик по чату — «пропустить реплику ЦЕЛИКОМ».
+
+        Раньше пропускалась только ПЕЧАТЬ: текст мгновенно дописывался, а Вектор ещё
+        полминуты говорил вслух и шевелил губами — то есть просьбу «покажи сразу»
+        выполняла лишь треть реплики. Теперь обрываем и звук, и анимацию речи: маскот
+        сразу уходит в покой (статика)."""
+        self._complete_typing()
+        try:
+            from . import tts
+            tts.stop()
+        except Exception:
+            pass
+        self._tts_driving = False
+        self._speak_start_timer.stop()
+        self._speak_end_timer.stop()
+        self._finish_speaking()
 
     #чат
     def _append(self, who, text, animate=True):
@@ -923,18 +1046,40 @@ class VectorHost:
         self.side = "left"
         self._collapsed = False        #свёрнут до полоски 🐯?
         self._suspended = None         #состояние, спрятанное на время вкладки «ИИ»
-        #Тонкая полоска для разворачивания, когда свёрнут
+        #«Язычок» для разворачивания, когда шторка свёрнута. Раньше это была полоса 🐯 во
+        #ВСЮ высоту окна — она читалась как вторая колонка интерфейса и заметно съедала
+        #поле зрения ради одной кнопки. Теперь компактная вкладка у края, по вертикали
+        #посередине (как на сайте), а полоса-контейнер прозрачная.
         self.restore = QToolButton()
         self.restore.setText("🐯")
         self.restore.setToolTip("Показать Вектора")
-        self.restore.setFixedWidth(28)
-        self.restore.setStyleSheet(
-            f"QToolButton{{background:{C['card2']};border:none;font-size:18px;}}"
-            f"QToolButton:hover{{background:{C['bg']};}}")
+        self.restore.setCursor(Qt.PointingHandCursor)
+        self.restore.setFixedSize(22, 76)
         self.restore.hide()
         self.restore.clicked.connect(self.show_panel)
+        #Контейнер держит язычок по центру высоты и сам ничего не рисует.
+        self.restore_host = QWidget()
+        self.restore_host.setFixedWidth(22)
+        _rv = QVBoxLayout(self.restore_host)
+        _rv.setContentsMargins(0, 0, 0, 0)
+        _rv.addStretch(1)
+        _rv.addWidget(self.restore)
+        _rv.addStretch(1)
+        self.restore_host.hide()
+        self._style_restore("left")
         self.panel.move_side.connect(self.toggle_side)
         self.panel.hide_me.connect(self.hide_panel)
+
+    def _style_restore(self, side: str):
+        """Скругляем язычок с той стороны, которой он «торчит» в контент: у левого края
+        закруглён правый бок, у правого — левый. Так он читается как вкладка, вытянутая
+        из-за края экрана, а не как обрезанная кнопка."""
+        r = "border-top-right-radius:8px;border-bottom-right-radius:8px;" if side == "left" \
+            else "border-top-left-radius:8px;border-bottom-left-radius:8px;"
+        self.restore.setStyleSheet(
+            f"QToolButton{{background:{C['card2']};border:1px solid {C['border']};"
+            f"font-size:14px;{r}}}"
+            f"QToolButton:hover{{background:{C['bg2']};border-color:{C['green']};}}")
 
     def _insert(self, w, side):
         if side == "left":
@@ -945,18 +1090,20 @@ class VectorHost:
     def mount(self, side="left"):
         self.side = side
         self._insert(self.panel, side)
-        self._insert(self.restore, side)
-        self.restore.hide()
+        self._insert(self.restore_host, side)
+        self.restore_host.hide()
+        self._style_restore(side)
         self._collapsed = False
         self.panel.set_side(side)
 
     def toggle_side(self):
         self.body.removeWidget(self.panel)
-        self.body.removeWidget(self.restore)
+        self.body.removeWidget(self.restore_host)
         self.side = "right" if self.side == "left" else "left"
         self._insert(self.panel, self.side)
-        self._insert(self.restore, self.side)
-        self.restore.setVisible(not self.panel.isVisible())
+        self._insert(self.restore_host, self.side)
+        self.restore_host.setVisible(not self.panel.isVisible())
+        self._style_restore(self.side)
         #зеркалим маскота, когда панель справа (по ТЗ)
         self.panel.set_side(self.side)
 
@@ -968,7 +1115,7 @@ class VectorHost:
     def hide_panel(self):
         #картинки маскота скрываются вместе со всей панелью (по ТЗ)
         self.panel.hide()
-        self.restore.show()
+        self.restore_host.show()
         self._collapsed = True
         #Закрыли шторку — Вектора больше не видно, глушим озвучку (как на вебе: пропал
         #последний видимый Вектор → тишина). Кнопка «скрыть» доступна только вне вкладки
@@ -980,7 +1127,7 @@ class VectorHost:
             pass
 
     def show_panel(self):
-        self.restore.hide()
+        self.restore_host.hide()
         self.panel.show()
         self._collapsed = False
 
@@ -995,7 +1142,7 @@ class VectorHost:
         #запоминаем: была ли свёрнута и с какой стороны
         self._suspended = {"collapsed": self._collapsed, "side": self.side}
         self.panel.hide()
-        self.restore.hide()
+        self.restore_host.hide()
 
     def resume(self):
         """Вернуть шторку в прежнее состояние (ушли с вкладки «ИИ»). Идемпотентно."""
@@ -1006,9 +1153,9 @@ class VectorHost:
         self._collapsed = was["collapsed"]
         if self._collapsed:
             self.panel.hide()
-            self.restore.show()
+            self.restore_host.show()
         else:
-            self.restore.hide()
+            self.restore_host.hide()
             self.panel.show()
 
 

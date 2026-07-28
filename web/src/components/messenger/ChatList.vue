@@ -221,7 +221,8 @@ onMounted(() => { m.loadChats() })
           <button type="button" @click="m.selectChat(c)" class="flex min-w-0 flex-1 items-center gap-3 text-left">
             <!-- Личный чат — аватар собеседника; группа/канал — цветной кружок с инициалами. -->
             <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title"
-                    :online="!!c.peer?.online" :size="40" />
+                    :online="!!c.peer?.online" :status="c.peer?.status_kind"
+                    :status-text="c.peer?.status_text" :size="40" />
             <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
                  :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
               {{ initials(c.title) }}
@@ -274,7 +275,8 @@ onMounted(() => { m.loadChats() })
         <p v-else-if="!dir.users.length" class="p-4 text-center text-sm text-text3">Никого не найдено.</p>
         <button v-for="u in dir.users" :key="u.id" type="button" @click="m.openWith(u)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
-          <Avatar :src="u.avatar" :name="u.full_name" :online="!!u.online" :size="40" />
+          <Avatar :src="u.avatar" :name="u.full_name" :online="!!u.online"
+                  :status="u.status_kind" :status-text="u.status_text" :size="40" />
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-semibold text-text">{{ u.full_name }}</div>
             <div class="truncate text-xs text-text3">

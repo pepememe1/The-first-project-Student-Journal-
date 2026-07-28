@@ -1400,3 +1400,72 @@ def test_teacher_templates_forbidden_for_student(client):
     assert client.post("/web/messenger/templates", json={"body": "тест"}, headers=b).status_code == 403
     #Список — читать может кто угодно (пустой), запрет только на создание.
     assert client.get("/web/messenger/templates", headers=b).json()["templates"] == []
+
+
+def test_admin_cannot_be_mentioned(client):
+    """Администрацию (она же модерация) отметить нельзя: для обращения к ней есть чат ⚙
+    и жалоба на сообщение, а @Фамилия дёргала бы админа мимо всякой очереди."""
+    from app.db import SessionLocal
+    from app.models import User
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    db = SessionLocal()
+    try:
+        admin_id = db.query(User).filter(User.role == "admin").first().id
+    finally:
+        db.close()
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Группа", "member_ids": [b_id, admin_id]},
+                       headers=a).json()["conversation_id"]
+    #Админ ТОЧНО в беседе — и всё равно не отмечается (в отличие от студента рядом).
+    info = client.get(f"/web/messenger/chats/{conv}", headers=a).json()
+    assert admin_id in [p["user_id"] for p in info["participants"]], info
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/@!Админ и /@!Боб — оба тут"}, headers=a)
+    assert r.status_code == 200, r.text
+    mentioned = [m["user_id"] for m in r.json()["mentions"]]
+    assert admin_id not in mentioned, r.json()
+    assert b_id in mentioned, "обычного участника отметить по-прежнему можно"
+
+
+def test_clear_in_saved_removes_messages_completely(client):
+    """`/clear` в «Избранном» удаляет ФИЗИЧЕСКИ: тумбстоуны «Сообщение удалено» нужны
+    ради других участников, а в личном блокноте их нет — там это просто мусор."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    for i in range(3):
+        client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": f"заметка {i}"}, headers=b)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": '/clear "3"'}, headers=b)
+    assert r.status_code == 200, r.text
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    #Остаётся только системная строка об очистке — ни одного тумбстоуна.
+    assert [m for m in msgs if m["deleted"]] == [], msgs
+    assert all(not m["body"].startswith("заметка") for m in msgs), msgs
+
+
+def test_clear_in_group_keeps_tombstones(client):
+    """В ОБЫЧНОЙ беседе поведение прежнее — тумбстоун, а не физическое удаление:
+    собеседник должен видеть, что сообщение было и его убрали."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Группа", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "привет"}, headers=a)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": '/clear "1"'}, headers=a)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert any(m["deleted"] for m in msgs), msgs
+
+
+def test_vector_greets_only_once_per_conversation(client):
+    """Второе «привет» не должно давать ту же полную справку-знакомство: в ленте это
+    читается как потеря памяти."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "/vector привет"}, headers=b)
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "/vector привет"}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    vector_msgs = [m["body"] for m in msgs if m["sender_id"] == "system" and m["kind"] == "text"]
+    assert len(vector_msgs) == 2, msgs
+    assert vector_msgs[0] != vector_msgs[1], vector_msgs

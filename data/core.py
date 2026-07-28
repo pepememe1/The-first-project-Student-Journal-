@@ -17,7 +17,7 @@ from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-APP_VERSION = "Release 3.3"
+APP_VERSION = "Release 3.3.1"
 
 import os as _os
 import sys as _sys

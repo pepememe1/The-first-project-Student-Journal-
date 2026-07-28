@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownLite } from '@/utils/markdownLite'
 import { formatSystemMessage } from '@/utils/messagePreview'
 import { copyText } from '@/utils/clipboard'
+import { statusLabel } from '@/config/status'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
@@ -358,6 +359,9 @@ const mentionCandidates = computed(() => {
   const myId = activeInfo.value?.my_user_id || ''
   return (activeInfo.value?.participants || [])
     .filter(p => p.user_id !== myId)
+    //Администрацию отметить нельзя (сервер такие отметки игнорирует — см. _parse_mentions):
+    //не предлагаем её и в подсказках, иначе выбор молча ни к чему не приводил бы.
+    .filter(p => p.user_role !== 'admin')
     // Сужаем по ЛЮБОМУ слову ФИО, а не только по фамилии: человека ищут и по имени
     // («Влад…»), а раньше такой ввод давал пустой список.
     .filter(p => !q || (p.full_name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(q)))
@@ -647,7 +651,7 @@ const peerName = computed(() => {
   return activePeer.value?.full_name || 'Диалог'
 })
 // §D7: подпись статуса поверх presence (dnd/studying/away + текст преподавателя).
-const STATUS_RU = { dnd: 'Не беспокоить', studying: 'Готовится/учится', away: 'Отошёл(а)' }
+//Подписи статусов — из общего config/status.js (см. комментарий там же).
 const subtitle = computed(() => {
   //Свой блокнот: показывать «в сети»/роль бессмысленно — это ты сам.
   if (isSaved.value) return 'Заметки только для вас'
@@ -655,8 +659,8 @@ const subtitle = computed(() => {
   if (peerTyping.value) return 'печатает…'
   if (kind.value === 'channel') return `${activeInfo.value?.subscribers || 0} подписчиков`
   if (kind.value === 'group') return `${activeInfo.value?.subscribers || 0} участников`
-  const sk = activePeer.value?.status_kind
-  if (sk) return activePeer.value?.status_text || STATUS_RU[sk] || sk
+  const sk = statusLabel(activePeer.value?.status_kind, activePeer.value?.status_text)
+  if (sk) return sk
   return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
 })
 const topPinned = computed(() => pinned.value[0] || null)

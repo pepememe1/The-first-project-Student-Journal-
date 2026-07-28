@@ -65,9 +65,19 @@ const categories = computed(() => {
   if (!c || !c.total) return []
   return CATS.value.map(([key, label, color]) => {
     const count = c.counts[key] || 0
-    return { key, label, color, count, pct: Math.round((count / c.total) * 100) }
+    // names — поимённый состав категории (сервер отдаёт отсортированным по среднему).
+    // Диаграмма показывала только доли: «неуспевающих трое» видно, а кто это — нет.
+    return { key, label, color, count, names: c.names?.[key] || [],
+             pct: Math.round((count / c.total) * 100) }
   })
 })
+
+// Раскрытие состава категории. Наведение — для мыши, клик — для тача и для того, чтобы
+// список не убегал, пока его читают (на телефоне hover не существует вовсе).
+const hoverCat = ref('')
+const pinnedCat = ref('')
+const shownCat = computed(() => pinnedCat.value || hoverCat.value)
+function toggleCat(key) { pinnedCat.value = pinnedCat.value === key ? '' : key }
 // conic-gradient по сегментам ПОДРЯД, встык (без промежутков): conic-gradient
 // интерполирует ЦВЕТ между несмежными стопами, а не заливает зазор фоном, поэтому
 // «зазор в градусах» на практике дал бы смазанный переход, а не чистую границу —
@@ -149,12 +159,33 @@ function fmtGrade(v) {
                 </div>
               </div>
             </div>
-            <!-- Легенда — обязательна для ≥2 категорий; подписи цифрой, а не только цветом. -->
+            <!-- Легенда — обязательна для ≥2 категорий; подписи цифрой, а не только цветом.
+                 Наведение (или тап) на строку раскрывает СОСТАВ категории: без этого по
+                 диаграмме видно «сколько», но не «кто», а куратору нужны фамилии. -->
             <ul class="w-full space-y-1.5 text-sm">
-              <li v-for="c in categories" :key="c.key" class="flex items-center gap-2">
-                <span class="size-2.5 shrink-0 rounded-full" :style="{ background: c.color }" />
-                <span class="flex-1 text-text">{{ c.label }}</span>
-                <span class="text-text3">{{ c.count }} · {{ c.pct }}%</span>
+              <li v-for="c in categories" :key="c.key">
+                <button type="button" :disabled="!c.count"
+                        @click="toggleCat(c.key)"
+                        @mouseenter="hoverCat = c.key" @mouseleave="hoverCat = ''"
+                        @focus="hoverCat = c.key" @blur="hoverCat = ''"
+                        :aria-expanded="shownCat === c.key"
+                        :title="c.count ? 'Показать студентов' : ''"
+                        class="flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors disabled:cursor-default"
+                        :class="c.count ? 'hover:bg-bg2' : 'opacity-60'">
+                  <span class="size-2.5 shrink-0 rounded-full" :style="{ background: c.color }" />
+                  <span class="flex-1 text-text">{{ c.label }}</span>
+                  <span class="text-text3">{{ c.count }} · {{ c.pct }}%</span>
+                </button>
+                <!-- Состав категории. Слева — полоска её цветом, чтобы список нельзя было
+                     спутать с соседним при быстром переходе мышью. -->
+                <ul v-if="shownCat === c.key && c.names.length"
+                    class="mt-1 space-y-0.5 border-l-2 pl-3 text-xs"
+                    :style="{ borderColor: c.color }">
+                  <li v-for="s in c.names" :key="s.name" class="flex items-center gap-2">
+                    <span class="min-w-0 flex-1 truncate text-text2">{{ s.name }}</span>
+                    <span class="shrink-0 text-text3">{{ s.average.toFixed(2) }}</span>
+                  </li>
+                </ul>
               </li>
               <li v-if="overview.categories.no_data" class="pt-1 text-xs text-text3">
                 Без оценок: {{ overview.categories.no_data }}

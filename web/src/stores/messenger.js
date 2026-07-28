@@ -227,6 +227,15 @@ export const useMessengerStore = defineStore('messenger', () => {
     messages.value.push(msg)
   }
 
+  // `/clear` меняет УЖЕ ЗАГРУЖЕННЫЕ сообщения (тумбстоун или удаление), а опрос тянет
+  // только то, что НОВЕЕ последнего id — поэтому лента оставалась прежней до перезахода
+  // в чат. Ловим системное событие «cleared» и перечитываем историю целиком: это редкая
+  // команда, один лишний запрос на неё дешевле, чем гонять полную ленту на каждом тике.
+  const _SYS_SEP = '\x1f'
+  function _isClearEvent(msg) {
+    return msg?.kind === 'system' && (msg.body || '').split(_SYS_SEP)[0] === 'cleared'
+  }
+
   async function send(text) {
     const body = (text || '').trim()
     if (!body || !activeId.value || sending.value) return false
@@ -234,6 +243,8 @@ export const useMessengerStore = defineStore('messenger', () => {
     try {
       const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
       _appendUnique(data)
+      //Свой же /clear — перечитать ленту сразу, не дожидаясь тика опроса.
+      if (_isClearEvent(data)) await loadMessages(activeId.value)
       replyTo.value = null
       setNotice('')
       await loadChats()
@@ -284,6 +295,8 @@ export const useMessengerStore = defineStore('messenger', () => {
         const fresh = data.messages || []
         if (fresh.length) {
           for (const msg of fresh) _appendUnique(msg)
+          //Кто-то выполнил /clear — старые сообщения изменились, дельты тут мало.
+          if (fresh.some(_isClearEvent)) await loadMessages(activeId.value)
           await markReadActive()
         }
       } catch { /* noop */ }
