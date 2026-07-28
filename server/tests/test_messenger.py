@@ -862,6 +862,29 @@ def test_d7_status_visible_in_directory_and_conv_info(client):
     assert person["status_kind"] == "dnd" and person["status_text"] == "Занят"
 
 
+def test_d7_status_follows_peer_in_chat_list(client):
+    """Статус собеседника приходит в СПИСКЕ чатов и обновляется при смене.
+
+    Карточка собеседника в вебе бралась один раз при входе в чат и дальше не
+    перечитывалась, поэтому смена статуса доезжала только после повторного открытия
+    переписки — со стороны это выглядело как «статус не работает». Клиент теперь
+    обновляет её из этого же списка, который и так опрашивается на каждом тике."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "привет"}, headers=a)
+
+    def _peer():
+        rows = client.get("/web/messenger/chats", headers=b).json()["chats"]
+        return [c for c in rows if c["conversation_id"] == conv][0]["peer"]
+
+    assert _peer()["status_kind"] == ""
+    client.post("/web/messenger/status", json={"kind": "away"}, headers=a)
+    assert _peer()["status_kind"] == "away"
+    #Сброс в «Обычный» тоже должен доехать, иначе статус «залипал» бы навсегда.
+    client.post("/web/messenger/status", json={"kind": ""}, headers=a)
+    assert _peer()["status_kind"] == ""
+
+
 # ── §D8: упоминания (@Фамилия — обычное, @!Фамилия — тихое, без пуша) ────────────────
 def test_d8_mention_parsed_in_group(client):
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
@@ -870,7 +893,7 @@ def test_d8_mention_parsed_in_group(client):
     r = client.post(f"/web/messenger/chats/{conv}/messages",
                     json={"body": "@Боб, посмотри домашку"}, headers=a)
     msg = r.json()
-    assert msg["mentions"] == [{"user_id": b_id, "silent": False}]
+    assert msg["mentions"] == [{"user_id": b_id, "silent": False, "loud": False}]
 
 
 def test_d8_silent_mention_marked(client):
@@ -878,7 +901,82 @@ def test_d8_silent_mention_marked(client):
     conv = _conv(client, a, b_id)
     r = client.post(f"/web/messenger/chats/{conv}/messages",
                     json={"body": "@!Боб, не срочно, просто на будущее"}, headers=a)
-    assert r.json()["mentions"] == [{"user_id": b_id, "silent": True}]
+    #Историческая форма «@!Фамилия» остаётся ТИХОЙ: такие сообщения уже есть в
+    #переписках, и переворачивать их смысл задним числом нельзя (см. _parse_mentions).
+    assert r.json()["mentions"] == [{"user_id": b_id, "silent": True, "loud": False}]
+
+
+# ── Пинги: /@Фамилия — тихо, /@!Фамилия и /!@Фамилия — громко ───────────────────────
+def test_slash_mention_is_quiet(client):
+    """`/@Фамилия` отмечает, но не звонит: ни звука, ни письма в «Систему»."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/@Боб глянь когда сможешь"}, headers=a)
+    assert r.json()["mentions"] == [{"user_id": b_id, "silent": True, "loud": False}]
+    #Письма во вкладке «Уведомления» быть не должно — это и есть «тихо».
+    events = client.get("/me/events?filter=all", headers=b).json()["items"]
+    assert [e for e in events if e["kind"] == "mention"] == []
+
+
+def test_loud_mention_creates_system_notification(client):
+    """`/@!Фамилия` — громкая отметка: письмо во вкладку «Система» получателю."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/@!Боб срочно нужен ответ"}, headers=a)
+    assert r.json()["mentions"] == [{"user_id": b_id, "silent": False, "loud": True}]
+    events = client.get("/me/events?filter=all", headers=b).json()["items"]
+    mention = [e for e in events if e["kind"] == "mention"]
+    assert len(mention) == 1, events
+    assert "отметил" in mention[0]["body"].lower()
+    #Автору письмо не приходит: отметить кого-то — не событие для самого отметившего.
+    mine = client.get("/me/events?filter=all", headers=a).json()["items"]
+    assert [e for e in mine if e["kind"] == "mention"] == []
+
+
+def test_loud_mention_accepts_both_bang_orders(client):
+    """`/!@Фамилия` — та же громкая отметка, что и `/@!Фамилия`.
+
+    Порядок двух подряд идущих символов не запоминается, а цена ошибки несимметрична:
+    вместо звонка человек получил бы тишину и не увидел срочное сообщение."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "/!@Боб посмотри пожалуйста"}, headers=a)
+    assert r.json()["mentions"] == [{"user_id": b_id, "silent": False, "loud": True}]
+
+
+def test_loud_mention_respects_conversation_mute(client):
+    """Замьютивший беседу просил тишины — «громкость» отметки это не обходит."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    assert client.post(f"/web/messenger/chats/{conv}/mute",
+                       json={"muted": True}, headers=b).status_code == 200
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "/@!Боб отзовись"}, headers=a)
+    events = client.get("/me/events?filter=all", headers=b).json()["items"]
+    assert [e for e in events if e["kind"] == "mention"] == []
+
+
+def test_chat_list_reports_unread_mention(client):
+    """Список чатов отдаёт id САМОГО РАННЕГО непрочитанного упоминания — по нему клиент
+    рисует «@» вместо счётчика и перематывает ленту к отметке."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    first = client.post(f"/web/messenger/chats/{conv}/messages",
+                        json={"body": "/@!Боб первое"}, headers=a).json()["id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "/@Боб второе"}, headers=a)
+    row = [c for c in client.get("/web/messenger/chats", headers=b).json()["chats"]
+           if c["conversation_id"] == conv][0]
+    assert row["mention_message_id"] == first
+    assert row["mention_loud"] is True
+    #Прочитали — значок гаснет (иначе он висел бы вечно).
+    client.post(f"/web/messenger/chats/{conv}/read", json={}, headers=b)
+    row2 = [c for c in client.get("/web/messenger/chats", headers=b).json()["chats"]
+            if c["conversation_id"] == conv][0]
+    assert row2["mention_message_id"] == 0
 
 
 def test_d8_mention_ignores_non_participant(client):
@@ -1004,6 +1102,56 @@ def test_vector_command_ignored_outside_saved(client):
     assert r.status_code == 200, r.text
     msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
     assert len(msgs) == 1, "в обычном чате ИИ-ответа быть не должно"
+    assert all(m["sender_id"] != "system" for m in msgs)
+
+
+def test_reply_to_vector_continues_conversation_without_prefix(client):
+    """Ответ на реплику Вектора — следующий вопрос ему же, БЕЗ повторного «/vector».
+
+    Цепочка уточнений иначе требовала писать префикс на каждой строке, хотя адресат из
+    ответа однозначен."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "/vector привет"}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    vector_msg = msgs[1]
+    assert vector_msg["sender_id"] == "system"
+
+    #Отвечаем на сообщение Вектора обычным текстом — без «/vector».
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "а какой у меня средний балл",
+                          "reply_to_id": vector_msg["id"]}, headers=b)
+    assert r.status_code == 200, r.text
+    msgs2 = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs2) == 4, msgs2
+    assert msgs2[3]["sender_id"] == "system" and msgs2[3]["body"]
+
+
+def test_reply_to_own_note_does_not_call_vector(client):
+    """Ответ на СВОЮ заметку — обычная цитата: личные записи не должны внезапно уходить
+    в модель только потому, что на них ответили."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post("/web/messenger/chats/saved", headers=b).json()["conversation_id"]
+    mine = client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "купить тетрадь"}, headers=b).json()
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "и ручку", "reply_to_id": mine["id"]}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert len(msgs) == 2
+    assert all(m["sender_id"] != "system" for m in msgs)
+
+
+def test_reply_to_vector_outside_saved_stays_silent(client):
+    """Граница «только Избранное» действует и для цепочки: в обычном чате ответ на любое
+    сообщение остаётся обычным ответом."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
+    first = client.post(f"/web/messenger/chats/{conv}/messages",
+                        json={"body": "привет"}, headers=b).json()
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "какой средний балл", "reply_to_id": first["id"]}, headers=b)
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
     assert all(m["sender_id"] != "system" for m in msgs)
 
 

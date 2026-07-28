@@ -14,6 +14,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownLite } from '@/utils/markdownLite'
 import { formatSystemMessage } from '@/utils/messagePreview'
+import { copyText } from '@/utils/clipboard'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
@@ -166,7 +167,10 @@ function quoted(id) {
 // markdownLite уже экранирован, «@Слово» — обычный текст ни в одном из вставленных тегов).
 function renderBody(msg) {
   const html = renderMarkdownLite(msg.body, isChannel.value)
-  return html.replace(/@!?[A-Za-zА-Яа-яЁё]+/g, (hit) => `<span class="mention">${hit}</span>`)
+  //Подсвечиваем ВСЕ формы отметки, включая «/@» и «/@!» — иначе тихий и громкий пинги
+  //в ленте выглядели обычным текстом со слэшем. Набор форм — как у сервера (_MENTION_RE).
+  return html.replace(/\/?(?:@!?|!@)[A-Za-zА-Яа-яЁё]+/g,
+                      (hit) => `<span class="mention">${hit}</span>`)
 }
 
 // §D3: клик по реакции — поставить/снять свою.
@@ -251,7 +255,8 @@ function toggleReveal(id) {
 const SLASH_COMMANDS = computed(() => [
   {
     cmd: '/vector',
-    hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике?',
+    hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? '
+      + 'Дальше отвечайте на его сообщения — префикс больше не нужен.',
     ok: isSaved.value,
     why: 'Работает в «Избранном» — это ваши личные заметки',
   },
@@ -262,6 +267,20 @@ const SLASH_COMMANDS = computed(() => [
       : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0] || 'К74/1'}`,
     ok: canReport.value,
     why: 'Отчёт по группе выпускает её куратор или администрация',
+  },
+  //Отметки — тоже «команды с /»: иначе про них никто не узнает. Доступны всегда, где
+  //есть кого отмечать (в «Избранном» человек один — ты сам, отмечать некого).
+  {
+    cmd: '/@',
+    hint: 'Тихо отметить участника — например: /@Иванов (только значок «@» у него в списке)',
+    ok: !isSaved.value,
+    why: 'В личных заметках отмечать некого',
+  },
+  {
+    cmd: '/@!',
+    hint: 'Громко отметить — звук у собеседника и письмо во вкладку «Уведомления»',
+    ok: !isSaved.value,
+    why: 'В личных заметках отмечать некого',
   },
   {
     cmd: '/mute',
@@ -284,14 +303,29 @@ const slashCandidates = computed(() => {
 })
 function insertSlashCommand(c) {
   if (!c.ok) return          //недоступную здесь команду не подставляем — сервер её отклонит
-  draft.value = c.cmd + ' '
+  //Отметка склеена с именем («/@Иванов»), пробел после префикса её бы разорвал — сразу
+  //за подстановкой открываем список участников, чтобы имя выбиралось, а не набиралось.
+  const isMention = c.cmd.includes('@')
+  draft.value = isMention ? c.cmd : c.cmd + ' '
   slashQuery.value = null
-  nextTick(() => composer.value?.focus())
+  nextTick(() => {
+    composer.value?.focus()
+    if (isMention) onComposerInput()
+  })
 }
 
-// §D8: автодополнение @Фамилия в композере — только среди участников ЭТОЙ беседы.
-// Разбор всплывает, когда курсор стоит сразу после "@буквы" (без пробела внутри).
+// §D8: автодополнение отметки в композере — среди участников ЭТОЙ беседы.
+// Ловим ВСЕ формы, которые понимает сервер (_parse_mentions в routers/messenger.py):
+//   @Фам   — обычная (пуш есть)      /@Фам   — тихая (только значок «@»)
+//   @!Фам  — тихая, старая форма     /@!Фам, /!@Фам — громкая (звук + письмо в «Систему»)
+// Прежняя регулярка требовала пробел (или начало строки) ПЕРЕД «@», поэтому после «/»
+// список участников не открывался вовсе — а именно так отметку и начинают набирать.
+// Группа 1 — сам префикс (его сохраняем при подстановке, иначе «громко» стало бы «тихо»),
+// группа 2 — уже набранные буквы имени.
+const _MENTION_TOKEN_RE = /(?:^|\s)(\/?(?:@!?|!@))([A-Za-zА-Яа-яЁё]*)$/
 const mentionQuery = ref(null)     // null — закрыто; иначе набранное после «@»
+const mentionPrefix = ref('@')     // чем человек начал отметку — подставляем обратно как есть
+const mentionStart = ref(0)        // индекс начала токена в тексте (по нему и заменяем)
 let draftTimer = null
 function onComposerInput() {
   m.sendTyping()
@@ -301,29 +335,67 @@ function onComposerInput() {
   if (!el) { mentionQuery.value = null; slashQuery.value = null; return }
   const pos = el.selectionStart ?? draft.value.length
   const before = draft.value.slice(0, pos)
-  const at = /(?:^|\s)@([A-Za-zА-Яа-яЁё]*)$/.exec(before)
-  mentionQuery.value = at ? at[1] : null
-  // «/» — только пока курсор ещё в первом токене сообщения (аргумент не начат).
+  const at = _MENTION_TOKEN_RE.exec(before)
+  if (at) {
+    mentionPrefix.value = at[1]
+    mentionQuery.value = at[2]
+    mentionStart.value = pos - at[1].length - at[2].length
+  } else {
+    mentionQuery.value = null
+  }
+  // «/» — только пока курсор ещё в первом токене сообщения (аргумент не начат). Когда
+  // «/» уже перешёл в отметку («/@…»), список команд не нужен — там своё меню.
   const slash = /^\/(\S*)$/.exec(before)
-  slashQuery.value = slash ? slash[1] : null
+  slashQuery.value = (slash && mentionQuery.value === null) ? slash[1] : null
 }
+// Кого можно отметить. Раньше список показывался ТОЛЬКО в группах и каналах, и в личной
+// переписке «@» просто ничего не открывал. Отмечать собеседника в ЛС осмысленно — это
+// адресное «обрати внимание» в длинной ветке, и сервер такие отметки уже принимает.
+// Себя из списка убираем: отметить самого себя нечем помочь (и пинг себе не уходит).
 const mentionCandidates = computed(() => {
-  if (mentionQuery.value === null || !isGroupOrChannel.value) return []
+  if (mentionQuery.value === null) return []
   const q = mentionQuery.value.toLowerCase()
+  const myId = activeInfo.value?.my_user_id || ''
   return (activeInfo.value?.participants || [])
-    .filter(p => (p.full_name || '').trim().split(/\s+/)[0]?.toLowerCase().startsWith(q))
-    .slice(0, 6)
+    .filter(p => p.user_id !== myId)
+    // Сужаем по ЛЮБОМУ слову ФИО, а не только по фамилии: человека ищут и по имени
+    // («Влад…»), а раньше такой ввод давал пустой список.
+    .filter(p => !q || (p.full_name || '').toLowerCase().split(/\s+/).some(w => w.startsWith(q)))
+    .slice(0, 8)
 })
+// Что произойдёт при выбранном префиксе — та же таблица, что у сервера в _parse_mentions.
+const mentionKindHint = computed(() => {
+  const p = mentionPrefix.value
+  if (p === '/@!' || p === '/!@') return 'Громкая отметка: звук и уведомление в «Системе»'
+  if (p === '/@' || p === '@!') return 'Тихая отметка: только значок «@» в списке чатов'
+  return 'Обычная отметка'
+})
+// Подпись справа в списке: у преподавателя — предметы, у студента — группа. Тот же
+// принцип, что в карточке участника (ConversationInfo.vue::meta) — однофамильцев в
+// колледже хватает, и без контекста непонятно, кого отмечаешь.
+function meta(p) {
+  if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
+  if (p.user_role === 'admin') return 'Администратор'
+  return p.group_name || ''
+}
 function insertMention(p) {
+  //Сервер сопоставляет отметку по ПЕРВОМУ слову ФИО — подставляем ровно его.
   const first = (p.full_name || '').trim().split(/\s+/)[0] || ''
+  if (!first) return
   const el = composer.value
   const pos = el?.selectionStart ?? draft.value.length
-  const before = draft.value.slice(0, pos)
-  const at = before.lastIndexOf('@')
-  if (at < 0) return
-  draft.value = draft.value.slice(0, at) + '@' + first + ' ' + draft.value.slice(pos)
+  const start = mentionStart.value
+  draft.value = draft.value.slice(0, start) + mentionPrefix.value + first + ' '
+    + draft.value.slice(pos)
   mentionQuery.value = null
-  nextTick(() => el?.focus())
+  slashQuery.value = null
+  nextTick(() => {
+    el?.focus()
+    //Курсор — сразу за подставленным именем, а не в конце строки: иначе продолжение
+    //фразы приходилось бы доводить мышью.
+    const caret = start + mentionPrefix.value.length + first.length + 1
+    el?.setSelectionRange(caret, caret)
+  })
 }
 
 // ── Жесты над сообщением (как в Telegram) ────────────────────────────────────────────
@@ -398,7 +470,13 @@ async function onPick(action) {
   if (action === 'reply') { m.setReply(msg); await nextTick(); composer.value?.focus() }
   else if (action === 'pin') await m.setPinned(msg.id, true)
   else if (action === 'unpin') await m.setPinned(msg.id, false)
-  else if (action === 'copy') { try { await navigator.clipboard.writeText(msg.body || '') ; flashCopied() } catch { /* нет доступа к буферу */ } }
+  //Копирование — через utils/clipboard (с фолбэком): в десктопном веб-виде и по HTTP
+  //navigator.clipboard недоступен. Неудачу ПОКАЗЫВАЕМ: раньше ошибку глотал пустой
+  //catch, и кнопка молча «просто нажималась».
+  else if (action === 'copy') {
+    if (await copyText(msg.body || '')) flashCopied()
+    else m.setNotice('Не удалось скопировать: браузер не дал доступ к буферу обмена.')
+  }
   else if (action === 'forward') forwardState.value = { open: true, ids: [msg.id] }
   else if (action === 'select') m.enterSelection(msg.id)
   else if (action === 'delete') requestDelete([msg])
@@ -544,6 +622,22 @@ function jumpTo(id) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
+// ── Отметки: перемотка к сообщению, где меня упомянули ────────────────────────────────
+// Само сообщение приходит в строке списка чатов (mention_message_id) — сервер уже нашёл
+// самое РАННЕЕ непрочитанное упоминание, второй раз искать его на клиенте незачем.
+const mentionMessageId = computed(() => activeChat.value?.mention_message_id || 0)
+const mentionLoud = computed(() => !!activeChat.value?.mention_loud)
+const flashMentionId = ref(0)
+function jumpToMention() {
+  const id = mentionMessageId.value
+  if (!id) return
+  jumpTo(id)
+  // Подсветка на пару секунд: без неё после прокрутки непонятно, какое именно сообщение
+  // искали — в плотной переписке центр экрана ни на что не указывает.
+  flashMentionId.value = id
+  setTimeout(() => { if (flashMentionId.value === id) flashMentionId.value = 0 }, 2500)
+}
+
 // «Избранное» — личный блокнот, а не переписка: ни собеседника, ни его статуса тут нет.
 const isSaved = computed(() => kind.value === 'saved')
 const peerName = computed(() => {
@@ -568,8 +662,10 @@ const subtitle = computed(() => {
 const topPinned = computed(() => pinned.value[0] || null)
 //Подсказка в поле ввода: разметку показывают кнопки тулбара, поэтому в ней только то,
 //что иначе не найти — команда Вектора, и лишь в «Избранном», где она и работает.
-const composerHint = computed(() =>
-  isSaved.value ? 'Заметка… (/vector — спросить ИИ)' : 'Сообщение…')
+const composerHint = computed(() => {
+  if (replyingToVector.value) return 'Спросите Вектора дальше…'
+  return isSaved.value ? 'Заметка… (/vector — спросить ИИ)' : 'Сообщение…'
+})
 
 // ── Оформление ленты (как в Telegram) ────────────────────────────────────────────────
 // Свои сообщения — справа, чужие — слева с аватаркой и ФИО. Если человек пишет НЕСКОЛЬКО
@@ -596,6 +692,8 @@ const avatarBySender = computed(() => {
 const VECTOR_SENDER = 'system'
 const VECTOR_AVATAR = '/mascot/neutral-idle.png'   //арт Арины, кадрируем по голове
 function isVector(msg) { return msg.sender_id === VECTOR_SENDER }
+//Отвечаем на реплику Вектора → это продолжение разговора с ним, а не обычная цитата.
+const replyingToVector = computed(() => isSaved.value && !!replyTo.value && isVector(replyTo.value))
 function senderAvatar(msg) {
   if (isVector(msg)) return VECTOR_AVATAR
   return avatarBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.avatar || ''))
@@ -787,7 +885,8 @@ const headerTint = computed(() =>
                  @touchmove.passive="onTouchMove($event)"
                  @touchend="onTouchEnd" @touchcancel="onTouchEnd"
                  class="max-w-[75%] select-none rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm outline-none transition-shadow hover:shadow"
-                 :class="msg.mine ? 'bg-accent text-white' : 'bg-card text-text'"
+                 :class="[msg.mine ? 'bg-accent text-white' : 'bg-card text-text',
+                          flashMentionId === msg.id ? 'ring-2 ring-accent' : '']"
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
               <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
@@ -849,6 +948,20 @@ const headerTint = computed(() =>
         </template>
       </div>
 
+      <!-- Кнопка «@» — НАД стрелкой вниз: перематывает к сообщению, где вас отметили.
+           Нужна именно отдельная кнопка: отметка легко теряется в переписке, а «вниз»
+           уводит в конец — то есть мимо неё. Видна, пока отметка не прочитана. -->
+      <transition name="fade">
+        <button v-if="mentionMessageId" type="button" @click="jumpToMention"
+                aria-label="К сообщению, где вас отметили" title="Вас отметили — перейти"
+                class="absolute bottom-16 right-3 grid size-10 place-items-center rounded-full border text-lg font-bold shadow-card"
+                :class="mentionLoud
+                  ? 'border-red/50 bg-red text-white hover:opacity-90'
+                  : 'border-border2 bg-card text-accent hover:bg-bg2'">
+          @
+        </button>
+      </transition>
+
       <!-- §D5: плавающая кнопка «вниз» с числом непрочитанных — видна, когда прокручено вверх.
            Вне scroller (в relative-обёртке) — не уезжает вместе с содержимым при скролле. -->
       <transition name="fade">
@@ -877,7 +990,13 @@ const headerTint = computed(() =>
           <div v-if="replyTo" class="flex items-center gap-2 border-b border-border px-3 py-1.5">
             <ReplyIcon class="size-4 shrink-0 text-accent" />
             <div class="min-w-0 flex-1">
-              <div class="text-[11px] font-semibold text-accent">Ответ</div>
+              <!-- Ответ на реплику Вектора — это следующий вопрос ему же (сервер разберёт
+                   его без префикса «/vector», см. _handle_vector_command). Подписываем
+                   явно: иначе непонятно, что цепочка продолжится, и человек снова пишет
+                   «/vector». -->
+              <div class="text-[11px] font-semibold text-accent">
+                {{ replyingToVector ? 'Вопрос Вектору — можно без «/vector»' : 'Ответ' }}
+              </div>
               <div class="truncate text-xs text-text3">{{ replyTo.deleted ? 'Сообщение удалено' : replyTo.body }}</div>
             </div>
             <button type="button" @click="m.clearReply()" aria-label="Отменить ответ"
@@ -915,13 +1034,17 @@ const headerTint = computed(() =>
               <span class="text-xs text-text3">{{ c.ok ? c.hint : c.why }}</span>
             </button>
           </div>
-          <!-- §D8: подсказки @Фамилия — только участники ЭТОЙ беседы (группа/канал). -->
+          <!-- §D8: подсказки отметки — участники ЭТОЙ беседы (в ЛС это вы и собеседник). -->
           <div v-if="mentionCandidates.length" class="border-b border-border p-1.5">
+            <!-- Подпись «какой это будет пинг»: по одному «!» в наборе понять нельзя,
+                 а разница слышимая — громкий звонит человеку и пишет ему в «Систему». -->
+            <p class="px-2 pb-1 text-[11px] text-text3">{{ mentionKindHint }}</p>
             <button v-for="p in mentionCandidates" :key="p.user_id" type="button"
                     @mousedown.prevent="insertMention(p)"
                     class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg2">
               <Avatar :src="p.avatar" :name="p.full_name" :size="24" />
-              {{ p.full_name }}
+              <span class="min-w-0 flex-1 truncate">{{ p.full_name }}</span>
+              <span class="shrink-0 text-[11px] text-text3">{{ meta(p) }}</span>
             </button>
           </div>
           <!-- Панель быстрых ответов: фиксированный универсальный набор + (препод/админ)

@@ -78,3 +78,59 @@ def test_older_remote_row_does_not_override_newer_local():
 
     book = GradeBook("К74/1", "Физика")
     assert book.hours_progress()[1] == 72
+
+
+def test_student_journal_shows_hours_badge():
+    """НАТИВНЫЙ журнал студента показывает «Пройдено X из Y ч» — как карточка на сайте.
+
+    Часы уже лежали локально (subject_hours синкуется), но экран студента их не выводил:
+    подпись была только у преподавателя. Проверяем сам источник подписи — то, что
+    StudentDashboard подставляет в карточку предмета и в шапку открытого предмета.
+    """
+    from dashboards import StudentDashboard
+
+    book = GradeBook("К74/1", "Математика")
+    book.add_lesson("Лекция", topic="л1")        #пара = 2 ч (две строки, один зачёт)
+    assert StudentDashboard._hours_text(book) == "", "плана нет — подписи быть не должно"
+
+    se.apply_remote({"subject_hours": [
+        {"id": "hrs:К74/1|Математика||0", "group_name": "К74/1", "subject": "Математика",
+         "year": "", "semester": 0, "hours_total": 67,
+         "updated_at": "2026-07-28T10:00:00+00:00", "deleted": False}]})
+
+    book = GradeBook("К74/1", "Математика")
+    assert StudentDashboard._hours_text(book) == "Пройдено 2 из 67 ч"
+
+
+def test_plan_saved_with_term_is_found_by_termless_journal():
+    """План, сохранённый АДМИНОМ С САЙТА, виден журналу, открытому без периода.
+
+    Веб пишет часы ключом с учебным периодом (`hrs:Группа|Предмет|2025/2026|1`), а
+    экраны студента открывают журнал без периода и искали `hrs:Группа|Предмет||0` —
+    ключи не совпадали, и часы на ПК не появлялись вовсе."""
+    import terms
+    year, sem = terms.current_term()
+
+    book = GradeBook("К74/1", "История")
+    book.add_lesson("Практика", topic="п1")
+
+    se.apply_remote({"subject_hours": [
+        {"id": f"hrs:К74/1|История|{year}|{sem}", "group_name": "К74/1",
+         "subject": "История", "year": year, "semester": sem, "hours_total": 40,
+         "updated_at": "2026-07-28T10:00:00+00:00", "deleted": False}]})
+
+    book = GradeBook("К74/1", "История")          #как открывает журнал студент — без периода
+    assert book.hours_progress() == (2, 40)
+
+
+def test_archive_term_does_not_borrow_current_plan():
+    """Журнал ПРОШЛОГО семестра не подставляет план текущего — это была бы чужая цифра."""
+    import terms
+    year, sem = terms.current_term()
+    se.apply_remote({"subject_hours": [
+        {"id": f"hrs:К74/1|Химия|{year}|{sem}", "group_name": "К74/1", "subject": "Химия",
+         "year": year, "semester": sem, "hours_total": 60,
+         "updated_at": "2026-07-28T10:00:00+00:00", "deleted": False}]})
+
+    old = GradeBook("К74/1", "Химия", "2019/2020", 2)
+    assert old.hours_progress()[1] == 0

@@ -131,3 +131,53 @@ def test_server_uses_shared_lexicon():
                         ("когда математика", "schedule"),
                         ("у кого долги", "debtors")]:
         assert vector_nlu.classify(q, subjects=["Информатика", "Математика"])["intent"] == expected
+
+
+def test_vector_teacher_group_stats(client):
+    """Преподаватель спрашивает про средний/статистику — раньше это падало в 500.
+
+    В ответе стояла переменная `risk`, которой в функции нет: любой вопрос про средний
+    балл, статистику или оценки давал NameError, и Вектор выглядел «не видящим базу».
+    """
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+    th = make_teacher(client, admin, login="t1", subjects=["Математика", "Физика"])
+
+    for q in ("какой средний по группам", "статистика по группе", "покажи оценки"):
+        r = client.post("/web/vector/ask", json={"message": q}, headers=th)
+        assert r.status_code == 200, (q, r.text)
+        body = r.json()
+        assert body["intent"] == "group_stats", (q, body)
+        assert "ИС-21" in body["text"], (q, body)
+
+
+def test_vector_teacher_counts_students(client):
+    """«сколько студентов» преподавателю отвечает ЧИСЛОМ студентов его групп."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+    _mk_student(client, admin, "pe", "Петров", "Пётр", "ИС-21")
+    th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+
+    r = client.post("/web/vector/ask", json={"message": "сколько студентов"}, headers=th)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["facts"]["students"] == 2, body
+
+
+def test_vector_admin_counts_survive_wording(client):
+    """Живые формулировки счётных вопросов доходят до счётчиков, а не в «не понял».
+
+    Раньше лексикон искал слитную подстроку «сколько студентов», поэтому «сколько У НАС
+    студентов» и «сколько ВСЕГО студентов» уходили в unknown и получали общую справку —
+    со стороны это и читается как «Вектор не видит базу»."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+
+    for q in ("сколько студентов", "сколько у нас студентов",
+              "сколько всего студентов", "количество студентов в колледже"):
+        body = client.post("/web/vector/ask", json={"message": q}, headers=admin).json()
+        assert body["intent"] == "group_stats", (q, body)
+        assert body["facts"].get("students") == 1, (q, body)

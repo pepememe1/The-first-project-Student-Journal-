@@ -241,6 +241,22 @@ class MessengerWebPanel(QWidget):
         #Посмотреть код») выдавало десктопную обёртку и перебивало контекстное меню
         #сообщения. Пользователю нужно меню мессенджера, а не браузера.
         view.setContextMenuPolicy(Qt.NoContextMenu)
+        #Доступ JS к буферу обмена. По умолчанию QtWebEngine его ЗАПРЕЩАЕТ, и
+        #navigator.clipboard.writeText молча отклонялся — пункт «Копировать текст» в меню
+        #сообщения нажимался, но ничего не копировал. Своё контекстное меню Chromium мы
+        #отключили выше, поэтому копировать в десктопе больше нечем: разрешение нужно.
+        #Риск ограничен — страница здесь всегда наша собственная SPA с сервера колледжа.
+        try:
+            from PySide6.QtWebEngineCore import QWebEngineSettings
+            s = view.settings()
+            s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
+            #Без «вставки» разрешение на запись в части сборок Qt не применяется: оба
+            #флага проверяются вместе (см. QtWebEngine ClipboardPermission).
+            s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
+        except Exception:
+            #Старая сборка Qt без этих атрибутов — фолбэк на execCommand в самой SPA
+            #(web/src/utils/clipboard.js) всё равно отработает.
+            pass
         #Фон страницы — из активной палитры. По умолчанию QtWebEngine красит холст БЕЛЫМ,
         #и на тёмной теме при открытии вкладки резко вспыхивал белый экран, пока SPA не
         #отрисуется. Берём C динамически: палитра меняется (тема по расписанию).

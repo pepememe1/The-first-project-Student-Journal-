@@ -459,6 +459,10 @@ class StudentDashboard(QWidget):
         dhdr.addWidget(back)
         self._detail_title = title_lbl("", 20)
         dhdr.addWidget(self._detail_title, 1)
+        #«Пройдено X из Y ч» — та же подпись, что в списке предметов и на сайте.
+        self._detail_hours = lbl("", 13, C['blue'], True)
+        self._detail_hours.setVisible(False)
+        dhdr.addWidget(self._detail_hours)
         self._detail_avg = lbl("", 14, C['text3'])
         dhdr.addWidget(self._detail_avg)
         dp.addLayout(dhdr)
@@ -519,9 +523,24 @@ class StudentDashboard(QWidget):
                       if x.f.lower() == self.cur_stud['f'].lower()), None)
             avg = book.calculate_average(s, cfg) if s else 0.0
             self._subj_btns_lay.insertWidget(self._subj_btns_lay.count() - 1,
-                                             self._subject_card(subj, avg))
+                                             self._subject_card(subj, avg, self._hours_text(book)))
 
-    def _subject_card(self, subj: str, avg: float) -> QFrame:
+    @staticmethod
+    def _hours_text(book) -> str:
+        """«Пройдено X из Y ч» для карточки предмета — тем же общим правилом, что на сайте.
+
+        План (Y) приезжает синком в subject_hours и лежит локально, поэтому цифра
+        считается офлайн и НЕ требует сервера — как и остальной нативный журнал.
+        План не задан → пустая строка, и подпись просто не рисуется (не «X из 0»)."""
+        import study_hours
+        try:
+            done, total = book.hours_progress()
+            return study_hours.format_progress(done, total)
+        except Exception:
+            #Часы — справочная подпись: сломанная таблица не должна валить весь журнал.
+            return ""
+
+    def _subject_card(self, subj: str, avg: float, hours: str = "") -> QFrame:
         #ВАЖНО: карточка — QFrame, а НЕ QPushButton: Qt не рисует дочерние QLabel внутри
         #QPushButton (кнопка перекрывает их), поэтому надписи пропадали. Кликабельность —
         #через mousePressEvent (тот же приём, что у строк на «Главной»).
@@ -533,6 +552,12 @@ class StudentDashboard(QWidget):
         name = lbl(subj, 16, C['text'], True); name.setWordWrap(True)
         name.setAttribute(Qt.WA_TransparentForMouseEvents)
         h.addWidget(name, 1)
+        #«Пройдено X из Y ч» — паритет с карточкой предмета на сайте (StudentJournal.vue).
+        #Пусто = план часов админом не задан, тогда подписи нет вовсе.
+        if hours:
+            hrs = lbl(hours, 12, C['blue'], True)
+            hrs.setAttribute(Qt.WA_TransparentForMouseEvents)
+            h.addWidget(hrs)
         badge = lbl(f"{avg:.2f}" if avg > 0 else "—", 20, self._avg_color(avg), True)
         badge.setAttribute(Qt.WA_TransparentForMouseEvents)
         h.addWidget(badge)
@@ -553,6 +578,11 @@ class StudentDashboard(QWidget):
         s = next((x for x in book.spisok_stud
                   if x.f.lower() == self.cur_stud['f'].lower()), None)
         avg = book.calculate_average(s, self._avg_cfg()) if s else 0.0
+        #Часы — и в шапке открытого предмета: в списке они видны до клика, а внутри
+        #журнала это ровно тот вопрос, ради которого туда и заходят («сколько осталось»).
+        hours = self._hours_text(book)
+        self._detail_hours.setText(hours)
+        self._detail_hours.setVisible(bool(hours))
         self._detail_avg.setText(f"Средний: {avg:.2f}" if avg > 0 else "Средний: —")
         self._detail_avg.setStyleSheet(f"color:{self._avg_color(avg)};font-weight:700;")
         self._fill_subject_table(book, s)

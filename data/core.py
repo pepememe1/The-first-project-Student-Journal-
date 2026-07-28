@@ -17,7 +17,7 @@ from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-APP_VERSION = "Release 3.2"
+APP_VERSION = "Release 3.3"
 
 import os as _os
 import sys as _sys
@@ -822,6 +822,33 @@ class GradeBook:
             self.spisok_stud.append(student)
         conn.close()
 
+    def _hours_plan_keys(self) -> list:
+        """Ключи subject_hours, по которым ищем план — в порядке убывания точности.
+
+        Журнал открыт с ЯВНЫМ периодом (архив прошлого семестра) — берём только его:
+        подставить туда план текущего семестра значило бы показать чужую цифру.
+
+        Периода нет (так журнал открывают экраны студента и часть экранов препода) —
+        сначала пробуем ТЕКУЩИЙ термин, и только потом бестерминный ключ. Это и есть
+        причина, по которой часы не появлялись на ПК: админ сохраняет их с сайта, а там
+        период подставляется всегда (`hrs:Группа|Предмет|2025/2026|1`), тогда как журнал
+        без периода искал `hrs:Группа|Предмет||0` — ключи не совпадали никогда.
+        Бестерминный вариант оставляем запасным: с ним лежат строки, заведённые до
+        появления учебных периодов."""
+        def _key(year, semester):
+            return f"hrs:{self.group}|{self.subject}|{year}|{int(semester or 0)}"
+        if self.year and self.semester:
+            return [_key(self.year, self.semester)]
+        keys = []
+        try:
+            import terms
+            y, s = terms.current_term()
+            keys.append(_key(y, s))
+        except Exception:
+            pass          #нет модуля/конфига — обойдёмся бестерминным ключом ниже
+        keys.append(_key("", 0))
+        return keys
+
     def hours_progress(self) -> tuple:
         """(пройдено, план) академических часов по этому журналу.
 
@@ -834,13 +861,15 @@ class GradeBook:
         done = study_hours.hours_done(self.lessons)
         total = 0
         try:
-            hid = f"hrs:{self.group}|{self.subject}|{self.year}|{int(self.semester or 0)}"
             with closing(DBManager.get_conn()) as conn:
                 cur = conn.cursor()
-                cur.execute("SELECT COALESCE(hours_total,0) FROM subject_hours "
-                            "WHERE id=? AND COALESCE(deleted,0)=0", (hid,))
-                row = cur.fetchone()
-                total = int(row[0]) if row else 0
+                for hid in self._hours_plan_keys():
+                    cur.execute("SELECT COALESCE(hours_total,0) FROM subject_hours "
+                                "WHERE id=? AND COALESCE(deleted,0)=0", (hid,))
+                    row = cur.fetchone()
+                    if row:
+                        total = int(row[0])
+                        break
         except Exception:
             #Нет таблицы (старая база до первого синка) — молча считаем «план не задан».
             total = 0

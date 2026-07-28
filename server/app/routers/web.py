@@ -1824,9 +1824,17 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                     "facts": {"at_risk": len(risky)}, "no_voice": True}
         if intent in ("average", "group_stats", "grades"):
             body = "; ".join(f"{g}: {ga}" for g, ga in per)
-            return {"text": f"Средний по вашим группам — {body}. Студентов в зоне риска: {risk}.",
+            #len(risky), а не «risk»: такой переменной здесь нет и никогда не было —
+            #вопрос преподавателя про средний балл/статистику падал с NameError в 500,
+            #и Вектор выглядел «не видящим базу». Держит test_vector_teacher_group_stats.
+            n_risky = len(risky)
+            #Сколько СТУДЕНТОВ в группах преподавателя — прямой ответ на «сколько
+            #студентов»: раньше на этот вопрос отдавались только средние по группам.
+            n_students = sum(len(W.students_in_group(db, g)) for g in groups)
+            return {"text": f"Средний по вашим группам — {body}. "
+                            f"Всего студентов: {n_students}. В зоне риска: {n_risky}.",
                     "mood": "neutral", "intent": "group_stats",
-                    "facts": {"groups": len(per), "at_risk": risk}}
+                    "facts": {"groups": len(per), "students": n_students, "at_risk": n_risky}}
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
     # ── АДМИН: агрегаты по заведению + справочники ─────────────────────────────────

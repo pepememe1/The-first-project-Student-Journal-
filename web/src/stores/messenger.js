@@ -12,6 +12,7 @@ import { ref, computed } from 'vue'
 import { messengerApi } from '@/api/endpoints'
 import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
+import { playMentionPing } from '@/utils/pingSound'
 
 const POLL_MS = 3500
 
@@ -77,13 +78,44 @@ export const useMessengerStore = defineStore('messenger', () => {
     return messages.value.length ? messages.value[messages.value.length - 1].id : 0
   }
 
+  // Громкие отметки (`/@!Фамилия`), по которым уже звонили. Держим id САМИХ СООБЩЕНИЙ, а
+  // не бесед: иначе вторая отметка в том же чате прошла бы молча. Сбрасывается вместе со
+  // стором при выходе (reset) — новому аккаунту чужие «уже звонили» не нужны.
+  const _pinged = new Set()
+
   async function loadChats() {
     loadingChats.value = true
     try {
       const { data } = await messengerApi.chats()
       chats.value = data.chats || []
+      _refreshActivePeer()
+      _ringLoudMentions()
     } catch { /* сервер ещё не поднят / оффлайн — пустой список */ }
     finally { loadingChats.value = false }
+  }
+
+  // Карточка собеседника бралась ОДИН раз при входе в чат и дальше не обновлялась: смена
+  // статуса («не беспокоить», «отошёл») или уход в оффлайн доезжали только после
+  // повторного открытия переписки — со стороны это и выглядело как «статус не работает».
+  // Свежие данные и так приходят в списке чатов на каждом тике — берём их оттуда, без
+  // отдельного запроса.
+  function _refreshActivePeer() {
+    if (!activeId.value || !activePeer.value) return
+    const fresh = chats.value.find(c => c.conversation_id === activeId.value)?.peer
+    if (fresh) activePeer.value = fresh
+  }
+
+  // Звук громкой отметки. Живёт в СТОРЕ, а не в компоненте чата: список чатов обновляется
+  // на всех страницах (AppShell держит фоновый опрос), и «вас позвали» должно быть слышно
+  // из журнала или расписания — иначе смысл громкого пинга теряется.
+  // Замьюченные беседы сервер сюда не присылает как loud (см. _notify_loud_mentions).
+  function _ringLoudMentions() {
+    for (const c of chats.value) {
+      if (!c.mention_loud || !c.mention_message_id) continue
+      if (_pinged.has(c.mention_message_id)) continue
+      _pinged.add(c.mention_message_id)
+      playMentionPing()
+    }
   }
 
   async function loadMessages(convId) {
@@ -185,13 +217,23 @@ export const useMessengerStore = defineStore('messenger', () => {
     }, 1000)
   }
 
+  // Добавить сообщение в ленту, если его там ещё нет. Дедуп обязателен: сервер шлёт
+  // WS-сигнал «changed» ДО того, как вернёт ответ на POST /send, и тик опроса успевает
+  // притащить наше же сообщение раньше, чем resolve'нется этот await. Ярче всего это
+  // видно на «/vector»: ответ ИИ считается ПОСЛЕ отправки, POST висит секунды, и
+  // сообщение гарантированно приезжает опросом первым — в ленте появлялся дубль.
+  function _appendUnique(msg) {
+    if (!msg || messages.value.some(x => x.id === msg.id)) return
+    messages.value.push(msg)
+  }
+
   async function send(text) {
     const body = (text || '').trim()
     if (!body || !activeId.value || sending.value) return false
     sending.value = true
     try {
       const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
-      messages.value.push(data)
+      _appendUnique(data)
       replyTo.value = null
       setNotice('')
       await loadChats()
@@ -241,8 +283,7 @@ export const useMessengerStore = defineStore('messenger', () => {
         const { data } = await messengerApi.messages(activeId.value, { after: _lastId() })
         const fresh = data.messages || []
         if (fresh.length) {
-          const have = new Set(messages.value.map(m => m.id))
-          for (const m of fresh) if (!have.has(m.id)) messages.value.push(m)
+          for (const msg of fresh) _appendUnique(msg)
           await markReadActive()
         }
       } catch { /* noop */ }
@@ -328,6 +369,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     chats.value = []
     channels.value = []
     peerTyping.value = false
+    _pinged.clear()          //чужие «уже звонили» новому аккаунту не наследуем
     dir.value = { role: 'student', q: '', users: [], loading: false }
   }
 
@@ -649,7 +691,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, activeKind,
     channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
-    loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned,
+    loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned, setNotice,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     deleteConversation, selectAll, selectNone,

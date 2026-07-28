@@ -68,6 +68,26 @@ const ownerId = computed(() => activeInfo.value?.owner_id || '')
 const KIND_RU = { group: 'Группа', channel: 'Канал', moderation: 'Модерация', direct: 'Личный чат' }
 const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
 
+// §D7: статус поверх presence. Сервер отдаёт его и в карточке собеседника (_safe_user),
+// и у каждого участника (conversation_info) — но панель их не показывала вовсе, и со
+// стороны это читалось как «смена статуса не работает»: человек его выбрал, а никто не
+// видит. Цвета — те же, что в MyStatusPicker (один смысл — один цвет).
+const STATUS = {
+  dnd: ['Не беспокоить', '#ef4444'],
+  studying: ['Готовится/учится', '#f59e0b'],
+  away: ['Отошёл(а)', '#94a3b8'],
+}
+// Название статуса: у преподавателя может быть свой текст («принимаю до 15:00»), тогда
+// показываем его — он информативнее ярлыка. Пусто = статуса нет, остаётся online/оффлайн.
+function statusLabel(p) {
+  const kind = p?.status_kind
+  if (!kind) return ''
+  return (p.status_text || '').trim() || (STATUS[kind]?.[0] || kind)
+}
+function statusColor(p) {
+  return STATUS[p?.status_kind]?.[1] || '#94a3b8'
+}
+
 // Подпись под именем: у преподавателя — предметы, у студента — группа.
 function meta(p) {
   if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
@@ -196,8 +216,17 @@ async function clearHistory() {
             <div class="min-w-0">
               <div class="truncate text-base font-bold text-white">{{ activePeer.full_name }}</div>
               <div class="truncate text-xs text-white/80">{{ peerMeta(activePeer) }}</div>
-              <div class="mt-0.5 text-xs text-white/70">
-                {{ activePeer.online ? 'в сети' : 'не в сети' }}
+              <!-- Статус, который человек выбрал сам, ВАЖНЕЕ presence: «не беспокоить»
+                   при этом остаётся «в сети», и показать только «в сети» — значит
+                   потерять ровно то, что он просил передать. Кружок в цвет статуса. -->
+              <div class="mt-0.5 flex items-center gap-1.5 text-xs text-white/70">
+                <template v-if="statusLabel(activePeer)">
+                  <span class="size-2.5 shrink-0 rounded-full ring-1 ring-white/50"
+                        :style="{ background: statusColor(activePeer) }" />
+                  <span class="truncate">{{ statusLabel(activePeer) }}</span>
+                  <span class="shrink-0 text-white/50">· {{ activePeer.online ? 'в сети' : 'не в сети' }}</span>
+                </template>
+                <template v-else>{{ activePeer.online ? 'в сети' : 'не в сети' }}</template>
               </div>
             </div>
           </div>
@@ -226,7 +255,12 @@ async function clearHistory() {
                          class="size-3.5 shrink-0 text-accent" aria-label="Владелец" />
                   <span v-if="p.silenced" title="Заглушён(а) — /mute" class="shrink-0 text-xs">🔇</span>
                 </div>
-                <div class="truncate text-[11px] text-text3">{{ meta(p) }}</div>
+                <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
+                  <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
+                  <span v-if="statusLabel(p)" class="size-2 shrink-0 rounded-full"
+                        :style="{ background: statusColor(p) }" />
+                  <span class="truncate">{{ statusLabel(p) || meta(p) }}</span>
+                </div>
               </div>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
                     :class="(p.user_id === ownerId || p.role === 'owner')

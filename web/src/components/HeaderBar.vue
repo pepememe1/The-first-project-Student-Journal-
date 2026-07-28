@@ -5,15 +5,17 @@
 // роли, имя пользователя, выход. На телефоне — кнопка-гамбургер.
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Menu, Moon, Sun, LogOut } from '@lucide/vue'
+import { Menu, Moon, Sun, LogOut, ChevronDown } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { useMessengerStore } from '@/stores/messenger'
 import BrandLogo from '@/components/BrandLogo.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
 const router = useRouter()
 const auth = useAuthStore()
 const theme = useThemeStore()
+const messenger = useMessengerStore()
 
 const ROLE_LABEL = { student: 'Студент', teacher: 'Преподаватель', admin: 'Администратор' }
 const roleLabel = computed(() => ROLE_LABEL[auth.role] || '')
@@ -28,9 +30,34 @@ const showName = computed(() => {
 // слово. На вебе состояние берём из navigator.onLine (есть ли у браузера сеть).
 const online = ref(navigator.onLine)
 function updateOnline() { online.value = navigator.onLine }
+
+// §D7: СВОЙ статус — в правом верхнем углу, а не только в шапке списка чатов.
+// Раньше переключатель жил внутри вкладки «Сообщения», и со стороны выглядело, что
+// смена статуса ни на что не влияет: сам её автор нигде свой статус больше не видел.
+// Здесь он на всех страницах и меняется одним кликом.
+const STATUS_KINDS = [
+  ['', 'Обычный', '#3ddc84'],
+  ['dnd', 'Не беспокоить', '#ef4444'],
+  ['studying', 'Готовлюсь/учусь', '#f59e0b'],
+  ['away', 'Отошёл(а)', '#94a3b8'],
+]
+const statusOpen = ref(false)
+const myStatus = computed(() =>
+  STATUS_KINDS.find(k => k[0] === messenger.myStatus.kind) || STATUS_KINDS[0])
+// Свой текст преподавателя («принимаю до 15:00») информативнее ярлыка — показываем его.
+const statusText = computed(() =>
+  (messenger.myStatus.custom_text || '').trim() || myStatus.value[1])
+async function pickStatus(kind) {
+  statusOpen.value = false
+  // Текст статуса задаётся в мессенджере (там же его и видно рядом с полем) — здесь
+  // только вид статуса, поэтому уже заданный текст сохраняем как есть.
+  await messenger.setMyStatus(kind, messenger.myStatus.custom_text || '')
+}
+
 onMounted(() => {
   window.addEventListener('online', updateOnline)
   window.addEventListener('offline', updateOnline)
+  messenger.loadMyStatus()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('online', updateOnline)
@@ -76,6 +103,30 @@ async function onLogout() {
       <span class="text-[14px] leading-none" :style="{ color: online ? '#3ddc84' : '#ff8a8a' }">●</span>
       {{ online ? 'Онлайн' : 'Офлайн' }}
     </span>
+
+    <!-- §D7: свой статус — виден и меняется с любой страницы. Кружок в цвет статуса,
+         подпись прячем на узких экранах (там за неё говорит цвет). -->
+    <div class="relative shrink-0">
+      <button type="button" @click="statusOpen = !statusOpen"
+              :title="`Мой статус: ${statusText}`" aria-label="Мой статус"
+              class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 hover:bg-white/15"
+              style="background: rgba(255,255,255,0.12);">
+        <span class="size-2.5 shrink-0 rounded-full" :style="{ background: myStatus[2] }" />
+        <span class="hidden max-w-[160px] truncate md:inline">{{ statusText }}</span>
+        <ChevronDown class="size-3.5 shrink-0" />
+      </button>
+      <div v-if="statusOpen"
+           class="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
+        <button v-for="k in STATUS_KINDS" :key="k[0]" type="button" @click="pickStatus(k[0])"
+                class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-text hover:bg-bg2"
+                :class="{ 'bg-accent-glow': messenger.myStatus.kind === k[0] }">
+          <span class="size-2.5 shrink-0 rounded-full" :style="{ background: k[2] }" />
+          {{ k[1] }}
+        </button>
+      </div>
+      <!-- Клик мимо меню закрывает его (глобальной директивы click-outside в проекте нет). -->
+      <div v-if="statusOpen" class="fixed inset-0 z-20" @click="statusOpen = false" />
+    </div>
 
     <!-- Переключатель темы (тёмная/светлая) -->
     <button

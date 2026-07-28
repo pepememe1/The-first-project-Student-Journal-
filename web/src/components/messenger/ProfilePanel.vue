@@ -44,6 +44,19 @@ const isSaved = computed(() => activeKind.value === 'saved')
 const headTitle = computed(() =>
   activeInfo.value?.title || m.activeChat?.title || activePeer.value?.full_name || 'Беседа')
 const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
+// §D7: статус собеседника (dnd/studying/away + свой текст у преподавателя). Цвета — те
+// же, что в MyStatusPicker и ConversationInfo: один смысл должен иметь один цвет.
+const STATUS = {
+  dnd: ['Не беспокоить', '#ef4444'],
+  studying: ['Готовится/учится', '#f59e0b'],
+  away: ['Отошёл(а)', '#94a3b8'],
+}
+const statusLabel = computed(() => {
+  const p = activePeer.value
+  if (!p?.status_kind) return ''
+  return (p.status_text || '').trim() || (STATUS[p.status_kind]?.[0] || p.status_kind)
+})
+const statusColor = computed(() => STATUS[activePeer.value?.status_kind]?.[1] || '#94a3b8')
 </script>
 
 <template>
@@ -142,9 +155,15 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-white/80">
           <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
         </span>
+        <!-- §D7: выбранный человеком статус ВЫШЕ presence — «не беспокоить» при этом
+             остаётся «в сети», и показать одно лишь «в сети» значит потерять просьбу. -->
         <span class="mt-1 inline-flex items-center gap-1.5 text-xs text-white/75">
           <span class="size-2 rounded-full"
-                :style="activePeer.online ? 'background:#8ef0b4' : 'background:rgba(255,255,255,0.5)'"></span>
+                :style="statusLabel ? { background: statusColor }
+                        : (activePeer.online ? 'background:#8ef0b4' : 'background:rgba(255,255,255,0.5)')"></span>
+          {{ statusLabel || (activePeer.online ? 'в сети' : 'не в сети') }}
+        </span>
+        <span v-if="statusLabel" class="text-[11px] text-white/55">
           {{ activePeer.online ? 'в сети' : 'не в сети' }}
         </span>
       </div>

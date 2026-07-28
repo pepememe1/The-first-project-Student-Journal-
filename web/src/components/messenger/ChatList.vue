@@ -237,7 +237,15 @@ onMounted(() => { m.loadChats() })
                 <span class="truncate text-xs text-text3">
                   {{ preview(c) }}
                 </span>
-                <span v-if="c.unread" class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">{{ c.unread }}</span>
+                <!-- Меня отметили в непрочитанном — вместо ЧИСЛА сообщений показываем «@».
+                     Число говорит «сколько тут болтали», «@» — «обращались лично к тебе»,
+                     и второе важнее: именно оно решает, открывать чат сейчас или потом.
+                     Громкая отметка (/@!) выделена цветом — она и звонила. -->
+                <span v-if="c.mention_message_id"
+                      :title="c.mention_loud ? 'Вас отметили (со звуком)' : 'Вас отметили'"
+                      class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold text-white"
+                      :class="c.mention_loud ? 'bg-red' : 'bg-accent'">@</span>
+                <span v-else-if="c.unread" class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">{{ c.unread }}</span>
               </div>
             </div>
           </button>

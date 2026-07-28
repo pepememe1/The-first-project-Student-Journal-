@@ -29,7 +29,8 @@ from ..security import decode_token
 from ..models import (
     Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
     CuratorReport, Group, Message, MessageHidden,
-    MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser, ParentLink,
+    MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
+    NotifyEvent, ParentLink,
     UserStatus, User, Lesson, direct_conversation_id,
 )
 
@@ -139,6 +140,59 @@ def _notify_recipients(db: Session, conv: Conversation, sender: User, skip_ids: 
                                       {"type": "message", "conversation_id": conv.id})
     except Exception:
         pass
+
+def _notify_loud_mentions(db: Session, conv: Conversation, sender: User, mentions: list) -> None:
+    """ГРОМКАЯ отметка (`/@!Фамилия`): письмо во вкладку «Уведомления» → «Система» + пуш.
+
+    Почему письмо, а не только значок в чате: смысл громкого пинга — «увидь это, даже
+    если сейчас не в мессенджере». Значок «@» в списке чатов увидит лишь тот, кто и так
+    открыл вкладку сообщений, а `NotifyEvent` доезжает до всех платформ разом (веб,
+    десктоп, телефон) уже существующим механизмом уведомлений.
+
+    Текст письма собирается ЗДЕСЬ, на сервере, как и остальные уведомления (см. модель
+    NotifyEvent): тон и формулировка не должны разъезжаться по платформам, а история
+    обязана остаться правдивой, даже если шаблон потом поправят.
+
+    ⚠️ Мьют беседы уважаем: замьютивший её просил тишины, и «громкость» отметки — не
+    повод это обойти. Best-effort: сбой уведомления не роняет уже отправленное сообщение.
+    """
+    loud_ids = {m["user_id"] for m in mentions if m.get("loud")}
+    if not loud_ids:
+        return
+    try:
+        muted_here = {p.user_id for p in db.query(ConversationParticipant)
+                      .filter(ConversationParticipant.conversation_id == conv.id,
+                              ConversationParticipant.muted == True).all()}  # noqa: E712
+        loud_ids -= muted_here
+        loud_ids.discard(sender.id)          #отметить самого себя — не событие
+        if not loud_ids:
+            return
+        sender_name = sender.full_name or sender.name or sender.login or "Собеседник"
+        where = (conv.title if conv.kind in ("group", "channel") and conv.title
+                 else f"переписке с {sender_name}")
+        title = "Вас отметили"
+        body = f"{sender_name} отметил(а) вас в чате «{where}»."
+        online = _online_logins()
+        for u in db.query(User).filter(User.id.in_(loud_ids)).all():
+            if not u.login:
+                continue
+            db.add(NotifyEvent(id=str(uuid4()), login=u.login, kind="mention",
+                               subject="", lesson_id="", created_at=_now(), read_at="",
+                               title=title, body=body,
+                               payload={"conversation_id": conv.id}))
+            if u.login not in online:
+                from .. import rustore_push
+                rustore_push.notify_login(db, u.login, title, body,
+                                          {"type": "message", "conversation_id": conv.id})
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+#Сколько непрочитанных сообщений со «@» просматриваем в поисках отметки (см. list_chats).
+#Отметка ищется САМАЯ РАННЯЯ, поэтому лимит режет хвост очень старых непрочитанных — а
+#там значок «@» уже не помогает: чат в таком состоянии открывают целиком, а не по кнопке.
+_MENTION_SCAN_LIMIT = 200
 
 _MAX_MSG_CHARS = 4000          #лимит длины сообщения (защита БД от «простыней»/спама)
 _DEFAULT_PAGE = 50            #сколько сообщений отдаём за один запрос истории
@@ -354,14 +408,32 @@ def _names_for(db: Session, sender_ids) -> dict:
     return out
 
 
-_MENTION_RE = re.compile(r"@(!?)([A-Za-zА-Яа-яЁё]+)")
+#Отправитель служебных постов (ответы Вектора, системные каналы). Не настоящий User —
+#строка-заглушка, поэтому её не найти в справочнике; клиент подписывает такие сообщения
+#как «Вектор» (SYSTEM_SENDER_NAME ниже).
+SYSTEM_SENDER_ID = "system"
+
+#§D8 + «пинги»: три формы отметки, они же — то, что подставляет автодополнение по «/@».
+#  @Фамилия      — обычная отметка: подсветка + пуш офлайн-получателю (как было);
+#  /@Фамилия     — ТИХАЯ: только подсветка и значок «@» в списке чатов, без пуша;
+#  /@!Фамилия    — ГРОМКАЯ: звуковой сигнал у получателя + письмо во вкладку «Система»
+#  /!@Фамилия      («Вас отметили в чате …») + пуш. Обе перестановки «!» принимаются:
+#                  вспомнить порядок двух подряд идущих символов невозможно, а ошибиться
+#                  в громкости отметки — неприятно (либо звонит зря, либо молчит нужное).
+#Историческая форма @!Фамилия (тихая, без слэша) сохранена — она уже в переписках.
+_MENTION_RE = re.compile(r"(/)?(?:@(!?)|(!)@)([A-Za-zА-Яа-яЁё]+)")
 
 
 def _parse_mentions(db: Session, body: str, participant_ids) -> list:
-    """§D8: находит @Фамилия / @!Фамилия (тихое, без пуша) среди УЧАСТНИКОВ беседы.
+    """§D8: находит отметки среди УЧАСТНИКОВ беседы (формы — см. _MENTION_RE выше).
+
     Сопоставление — по ПЕРВОМУ слову ФИО (фамилии), регистронезависимо, без разбора
     склонений: осознанно просто, как и остальной MVP мессенджера (см. MESSENGER-PLAN
-    §D8 — точный морфологический разбор там же не предполагался)."""
+    §D8 — точный морфологический разбор там же не предполагался).
+
+    Возвращает [{user_id, silent, loud}]: `silent` глушит пуш (как раньше), `loud`
+    дополнительно даёт звук и письмо в «Систему». Одного поля мало — «громко» это не
+    «не тихо»: обычная @Фамилия остаётся посередине (пуш есть, звонка нет)."""
     ids = [i for i in participant_ids if i]
     if not ids or "@" not in body:
         return []
@@ -373,10 +445,17 @@ def _parse_mentions(db: Session, body: str, participant_ids) -> list:
             surnames.setdefault(first, u.id)
     out, seen = [], set()
     for m in _MENTION_RE.finditer(body):
-        uid = surnames.get(m.group(2).lower())
-        if uid and uid not in seen:
-            seen.add(uid)
-            out.append({"user_id": uid, "silent": bool(m.group(1))})
+        slash, bang_after, bang_before, name = m.group(1), m.group(2), m.group(3), m.group(4)
+        uid = surnames.get(name.lower())
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        bang = bool(bang_after or bang_before)
+        #«!» без слэша — историческая ТИХАЯ форма (@!Фамилия), её смысл не меняем: в
+        #переписках уже есть такие сообщения, и переворачивать их задним числом нельзя.
+        loud = bool(slash) and bang
+        silent = (bang and not slash) or (bool(slash) and not bang)
+        out.append({"user_id": uid, "silent": silent, "loud": loud})
     return out
 
 
@@ -732,6 +811,31 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             else:
                 su = db.query(User).filter(User.id == last.sender_id).first()
                 sender_name = (su.full_name or su.name or "") if su else ""
+        #Непрочитанная ОТМЕТКА меня: список чатов рисует «@» вместо числа сообщений, а
+        #сам чат — кнопку перемотки к этому сообщению. Ищем самое РАННЕЕ непрочитанное
+        #упоминание, а не последнее: перематывать нужно к началу пропущенного разговора,
+        #иначе всё, что писали до отметки, так и останется непрочитанным.
+        #mentions — JSON-список [{user_id, silent, loud}], поэтому фильтруем в Python:
+        #переносимого способа искать по элементу JSON-массива в SQLite и PostgreSQL
+        #одновременно нет (тот же приём, что в directory()).
+        #⚠️ Список чатов опрашивается раз в 3.5 с, поэтому выборку сужаем ДО Python:
+        #`body LIKE '%@%'` отсекает подавляющее большинство строк (отметка по построению
+        #содержит «@» в тексте — mentions собирается из него же), а лимит держит запрос
+        #дешёвым даже в канале на сотню непрочитанных. Без этого на одноядерном VPS
+        #каждый тик вычитывал бы всю непрочитанную переписку по всем беседам сразу.
+        mention_id, mention_loud = 0, False
+        for cand in (db.query(Message)
+                     .filter(Message.conversation_id == conv.id,
+                             Message.sender_id != user.id,
+                             Message.deleted_at == "",
+                             Message.body.like("%@%"),
+                             Message.created_at > (p.last_read_at or ""),
+                             Message.id > (p.cleared_upto_id or 0))
+                     .order_by(Message.id.asc()).limit(_MENTION_SCAN_LIMIT).all()):
+            hit = next((x for x in (cand.mentions or []) if x.get("user_id") == user.id), None)
+            if hit:
+                mention_id, mention_loud = cand.id, bool(hit.get("loud"))
+                break
         item = {
             "conversation_id": conv.id,
             "kind": conv.kind,
@@ -739,6 +843,8 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             "archived": bool(p.archived),
             "muted": bool(p.muted),
             "unread": unread,
+            "mention_message_id": mention_id,     #0 — меня не отмечали
+            "mention_loud": mention_loud,
             "last_message": _msg_out(last, user.id, sender_name) if last else None,
             "last_at": (last.created_at if last else conv.created_at) or "",
         }
@@ -1201,7 +1307,11 @@ def send_message(conv_id: str, payload: dict = Body(...),
     _broadcast(db, conv_id)                  #живой сигнал участникам (WS)
     silent_ids = {mm["user_id"] for mm in mentions if mm.get("silent")}
     _notify_recipients(db, conv, user, skip_ids=silent_ids)   #пуш офлайн — минус тихие упоминания
-    _handle_vector_command(db, conv_id, body, user)
+    #Громкая отметка (`/@!Фамилия`) — звук у получателя (его включает клиент по флагу
+    #`loud` в mentions) + письмо в «Систему». Ставим ПОСЛЕ обычной рассылки: обычный пуш
+    #о сообщении и «вас отметили» — разные события, и второе не должно съесть первое.
+    _notify_loud_mentions(db, conv, user, mentions)
+    _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
 
 
@@ -1259,7 +1369,17 @@ def _saved_context(db: Session, conv_id: str, user: User) -> str:
     return _mask_names(db, text) if text else ""
 
 
-def _handle_vector_command(db: Session, conv_id: str, body: str, user: User) -> None:
+def _is_vector_message(db: Session, conv_id: str, message_id: int) -> bool:
+    """Является ли сообщение ответом Вектора в ЭТОЙ беседе (отправитель — 'system')."""
+    if not message_id:
+        return False
+    row = (db.query(Message)
+           .filter(Message.id == message_id, Message.conversation_id == conv_id).first())
+    return row is not None and row.sender_id == SYSTEM_SENDER_ID
+
+
+def _handle_vector_command(db: Session, conv_id: str, body: str, user: User,
+                           reply_to: int = 0) -> None:
     """`docs/MESSENGER-ADDON-PLAN-GPT.md`: «AI-поиск по смыслу» — реализован не как отдельная
     embedding-инфраструктура (её негде держать на 1-ядерном VPS), а как переиспользование УЖЕ
     существующего анти-галлюцинационного Вектора (`web.py::answer_vector_question`, тот же
@@ -1269,14 +1389,25 @@ def _handle_vector_command(db: Session, conv_id: str, body: str, user: User) -> 
     ⚠️ ТОЛЬКО в «Избранном» (личный чат с собой). Раньше команда работала в ЛЮБОМ чате, и
     ответ Вектора публиковался всем участникам: в общей беседе это и шум, и утечка контекста
     вопроса, а роль-скоуп ответа считается по СПРОСИВШЕМУ — соседи по чату увидели бы
-    выборку, к которой сами доступа не имеют. Личный чат снимает оба вопроса сразу."""
-    match = _VECTOR_CMD_RE.match(body.strip())
-    if not match:
-        return
+    выборку, к которой сами доступа не имеют. Личный чат снимает оба вопроса сразу.
+
+    ДВА способа спросить, оба только в «Избранном»:
+      • `/vector <вопрос>` — как раньше, начало разговора;
+      • ОТВЕТ (reply) на реплику Вектора — продолжение цепочки БЕЗ повторного префикса.
+    Второй способ добавлен потому, что диалог из нескольких уточнений требовал писать
+    «/vector» на каждой строке, хотя адресат из ответа и так однозначен. Отвечать на
+    СВОЁ сообщение при этом ничего не запускает: адресат там не Вектор, и обычная
+    цитата в личных заметках не должна внезапно уходить в модель."""
     conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
     if conv is None or conv.kind != "saved":
         return
-    question = match.group(1).strip()
+    match = _VECTOR_CMD_RE.match(body.strip())
+    if match:
+        question = match.group(1).strip()
+    elif _is_vector_message(db, conv_id, reply_to):
+        question = body.strip()          #ответ на реплику Вектора — весь текст и есть вопрос
+    else:
+        return
     if not question:
         return
     try:
