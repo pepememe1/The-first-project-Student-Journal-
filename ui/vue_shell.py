@@ -68,6 +68,14 @@ class VueShell(QWidget):
             #Один origin: адрес API не задаём вовсе — SPA пойдёт к тому же серверу,
             #с которого её саму и отдали.
             self._api_base = ""
+            #Токены — ЛОКАЛЬНЫЕ: боевой подписан чужим секретом, и этот сервер обязан
+            #его отвергнуть (см. issue_local_session). Без этого общий интерфейс внутри
+            #программы показывал форму входа, хотя человек уже вошёл.
+            try:
+                import local_api as _la
+                self._local_tokens = _la.issue_local_session(self._current_login(), self._role)
+            except Exception:
+                self._local_tokens = ("", "")
             try:
                 self._build_view(api.url(self._route), token_cookie="", token="")
                 self.ok = True
@@ -103,6 +111,16 @@ class VueShell(QWidget):
         except Exception as e:
             _LOG.warning(f"[vue-shell] локальный API недоступен: {e}")
             return None
+
+    @staticmethod
+    def _current_login() -> str:
+        """Логин вошедшего пользователя — берём из боевого JWT (claim sub)."""
+        try:
+            from sync_runner import fresh_auth
+            from ui.messenger_web import _decode_login
+            return _decode_login(fresh_auth()[1] or "")
+        except Exception:
+            return ""
 
     @staticmethod
     def _remote_base() -> str:
@@ -201,6 +219,11 @@ class VueShell(QWidget):
         #Когда появится локальный API поверх десктопного SQLite, поменяется РОВНО эта
         #строка, и офлайн заработает целиком — остальной интерфейс трогать не придётся.
         api_base = getattr(self, "_api_base", base or "")
+        #Локальный путь — свои токены (см. выше). Запасной (статика + боевой сервер)
+        #продолжает пользоваться боевыми.
+        local_access, local_refresh = getattr(self, "_local_tokens", ("", ""))
+        if local_access:
+            access, refresh = local_access, local_refresh
         return (
             "try{"
             f"localStorage.setItem('gb.access',{json.dumps(access or '')});"

@@ -187,6 +187,51 @@ class LocalAPI:
         return f"http://127.0.0.1:{self.port}{route}"
 
 
+def issue_local_session(login: str, role: str) -> tuple:
+    """Выпустить пару токенов ДЛЯ ЛОКАЛЬНОГО сервера. Возвращает (access, refresh).
+
+    ⚠️ ЗАЧЕМ ЭТО ВООБЩЕ НУЖНО. Токен, которым десктоп ходит на боевой сервер, подписан
+    БОЕВЫМ секретом, а локальный сервер подписывает своим — и обязан такой токен
+    отвергнуть. Без своего токена общий интерфейс внутри программы показывал форму
+    входа, хотя человек в программу уже вошёл.
+
+    Права это не ослабляет: токен выпускается ТОЛЬКО для уже вошедшего пользователя и
+    только на его роль, а сам локальный сервер доступен исключительно с этого
+    компьютера (127.0.0.1). Проще говоря, здесь мы не обходим проверку, а признаём уже
+    состоявшийся вход — второй раз спрашивать пароль за ту же сессию незачем.
+
+    Заодно заводим запись сессии (AuthSession): без неё сервер отвергает токен с jti как
+    отозванный. Побочная польза — локальный выход и отзыв работают ровно как на бою.
+
+    Пустая пара — если что-то не удалось (тогда SPA просто попросит войти)."""
+    try:
+        from app.security import create_token_full
+        from app.models import AuthSession
+        from app.db import SessionLocal
+        from datetime import datetime, timezone
+    except Exception as e:
+        _LOG.warning(f"[local-api] локальную сессию выпустить не удалось: {e}")
+        return "", ""
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        out = []
+        for kind in ("access", "refresh"):
+            token, jti, exp = create_token_full(login, role, kind)
+            db.merge(AuthSession(jti=jti, login=login, role=role, kind=kind,
+                                 device_id="local", ip="127.0.0.1",
+                                 issued_at=now, expires_at=exp, revoked=False))
+            out.append(token)
+        db.commit()
+        return out[0], out[1]
+    except Exception as e:
+        db.rollback()
+        _LOG.warning(f"[local-api] сессия не записана: {e}")
+        return "", ""
+    finally:
+        db.close()
+
+
 _instance = LocalAPI()
 
 

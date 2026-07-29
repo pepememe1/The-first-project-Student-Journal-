@@ -97,3 +97,44 @@ def test_local_db_is_separate_file():
     assert url.startswith("sqlite:///")
     assert "local_app.db" in url
     assert "vsgutu_grades" not in url
+
+
+# ── Локальная сессия ────────────────────────────────────────────────────────────────
+def test_local_session_opens_protected_endpoint(api):
+    """Токен боевого сервера подписан ЧУЖИМ секретом — локальный обязан его отвергнуть.
+    Поэтому для общего интерфейса выпускается СВОЙ токен; без него внутри программы
+    показывалась форма входа, хотя человек уже вошёл."""
+    from app.db import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    db.merge(User(id="stud:t", login="t", role="student", surname="Тестов", name="Тест",
+                  group_name="К74/1", deleted=False,
+                  updated_at="2026-07-01T00:00:00+00:00"))
+    db.commit()
+    db.close()
+
+    access, refresh = local_api.issue_local_session("t", "student")
+    assert access and refresh
+
+    url = api.url("/web/student/overview")
+    assert _get(url, headers={"X-Client": "web"})[0] == 401, "без токена — 401"
+    code, _ = _get(url, headers={"X-Client": "web",
+                                 "Authorization": f"Bearer {access}"})
+    assert code == 200, "со своим токеном локальный сервер обязан пустить"
+
+
+def test_local_session_registers_auth_session(api):
+    """Токен с jti сервер считает отозванным, пока нет записи сессии — поэтому её
+    заводим. Побочная польза: локальный выход и отзыв работают как на бою."""
+    from app.db import SessionLocal
+    from app.models import AuthSession
+    access, _ = local_api.issue_local_session("t", "student")
+    from app.security import decode_token
+    jti = decode_token(access).get("jti")
+    db = SessionLocal()
+    try:
+        row = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+        assert row is not None and not row.revoked
+        assert row.login == "t" and row.kind == "access"
+    finally:
+        db.close()
