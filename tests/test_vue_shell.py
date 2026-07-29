@@ -6,8 +6,35 @@ test_vue_shell.py — правила показа ОБЩЕГО Vue-интерф�
 КАКОЙ логин берём и ЧТО делаем, если локальная копия базы ещё не готова.
 """
 import inspect
+import json
+import re
 
 import vue_shell
+
+
+def _shell(role="student"):
+    """VueShell без Qt-конструктора: проверяем решения, а не отрисовку."""
+    sh = vue_shell.VueShell.__new__(vue_shell.VueShell)
+    sh._role = role
+    sh._embed = True
+    sh._api_base = ""
+    sh._local_tokens = ("acc", "ref")
+    return sh
+
+
+def test_user_goes_to_storage_as_string(monkeypatch):
+    """`gb.user` обязан лечь в localStorage СТРОКОЙ.
+
+    Ловит опечатку ценой в целую вкладку: с одним json.dumps в страницу попадал
+    объектный литерал JS, браузер сохранял его как «[object Object]», разбор падал —
+    и SPA показывала форму входа человеку, который уже вошёл. Внешне это выглядело как
+    «локальный сервер не пускает», хотя сервер был совершенно ни при чём."""
+    monkeypatch.setattr(vue_shell.VueShell, "_current_login", staticmethod(lambda: "ivanov"))
+    js = _shell()._bootstrap_js()
+    raw = re.search(r"localStorage\.setItem\('gb\.user',(.+?)\);", js).group(1)
+    assert raw.startswith('"'), "значение обязано быть строковым литералом JS"
+    user = json.loads(json.loads(raw))          # как это сделает сама SPA
+    assert user["login"] == "ivanov" and user["role"] == "student"
 
 
 def test_page_loads_lazily_on_first_show():

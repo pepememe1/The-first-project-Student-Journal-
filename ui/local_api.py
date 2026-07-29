@@ -275,6 +275,33 @@ def issue_local_session(login: str, role: str) -> tuple:
         db.close()
 
 
+def session_works(access: str) -> bool:
+    """Пустит ли локальный сервер с этим токеном (проверка ДО показа страницы).
+
+    Причина существовать: SPA на отказ авторизации молча показывает форму входа —
+    ошибка выглядит как «ничего не сделали», и разбираться приходится по логам. Один
+    запрос по петле стоит миллисекунды и превращает молчаливый провал в честный выбор:
+    не пускает — открываем вкладку с боевого сервера, человек видит данные."""
+    if not access or not _instance.running:
+        return False
+    import urllib.error
+    import urllib.request
+    #`/me/prefs` — самый дешёвый эндпоинт за тем же барьером: не зависит от роли и не
+    #требует, чтобы у человека уже были оценки, занятия или группа.
+    req = urllib.request.Request(_instance.url("/me/prefs"),
+                                 headers={"X-Client": "web",
+                                          "Authorization": f"Bearer {access}"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        _LOG.warning(f"[local-api] локальная сессия не принята сервером: HTTP {e.code}")
+        return False
+    except Exception as e:
+        _LOG.warning(f"[local-api] локальную сессию проверить не удалось: {e}")
+        return False
+
+
 _instance = LocalAPI()
 
 

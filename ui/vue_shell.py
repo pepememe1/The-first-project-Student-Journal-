@@ -122,6 +122,13 @@ class VueShell(QWidget):
         self._source = "static"
         #Статическая раздача данных не отдаёт — за ними SPA идёт на боевой сервер.
         self._api_base = self._remote_base()
+        if not self._remote_token():
+            #Ни локальной сессии, ни боевого токена. Показать SPA сейчас — значит
+            #показать ЧУЖУЮ форму входа внутри программы, куда человек уже вошёл. Честнее
+            #сказать, что происходит, чем делать вид, будто его выкинуло из аккаунта.
+            self._message("Нет связи с сервером — вкладка откроется, когда появится "
+                          "соединение. Остальная программа работает как обычно.")
+            return
         try:
             self._build_view(srv.url(self._route), TOKEN_COOKIE, srv.token)
             self.ok = True
@@ -146,11 +153,17 @@ class VueShell(QWidget):
                 _LOG.info(f"[vue-shell] «{login}» ещё не в локальной копии — работаем с боевого сервера")
                 return "", ""
             tokens = _la.issue_local_session(login, self._role)
+            #Проверяем ДО показа: SPA на отказ авторизации молча покажет форму входа,
+            #и человек решит, что вкладка сломана. Не приняли — уходим на боевой сервер.
+            if tokens[0] and not _la.session_works(tokens[0]):
+                _LOG.warning("[vue-shell] локальная сессия не работает — вкладка пойдёт "
+                             "на боевой сервер")
+                return "", ""
         except Exception as e:
             _LOG.warning(f"[vue-shell] локальная сессия не выпущена: {e}")
             return "", ""
         _LOG.info(f"[vue-shell] локальная сессия для «{login}»: "
-                  f"{'выпущена' if tokens[0] else 'НЕ выпущена'}")
+                  f"{'готова' if tokens[0] else 'НЕ выпущена'}")
         return tokens
 
     @staticmethod
@@ -168,10 +181,19 @@ class VueShell(QWidget):
     def _current_login() -> str:
         """Логин вошедшего пользователя.
 
-        Сначала боевой JWT (claim sub), затем СОХРАНЁННАЯ сессия. Второй источник не
-        запасной «на всякий случай»: живого токена может не быть — вкладки собираются
-        сразу после входа, а офлайн его не будет вовсе. Сохранённая сессия есть всегда,
-        когда человек в программу вошёл."""
+        ТРИ источника по убыванию надёжности, и ни один не лишний:
+          1. логин текущей сессии программы — известен с момента входа ВСЕГДА;
+          2. claim `sub` живого токена — если синк почему-то не запущен;
+          3. сохранённая сессия на диске — последняя соломинка.
+        Третий источник сам по себе обманчив: при выходе запись стирается, и «вошедший
+        человек» с диска выглядит как отсутствующий. Поэтому он и не первый."""
+        try:
+            from sync_runner import current_login
+            login = current_login()
+            if login:
+                return login
+        except Exception:
+            pass
         try:
             from sync_runner import fresh_auth
             from ui.messenger_web import _decode_login
@@ -183,6 +205,15 @@ class VueShell(QWidget):
         try:
             import app_settings
             return (app_settings.get_saved_session() or {}).get("login", "") or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _remote_token() -> str:
+        """Живой токен боевого сервера ('' — офлайн либо вход не выполнялся)."""
+        try:
+            from sync_runner import fresh_auth
+            return fresh_auth()[1] or ""
         except Exception:
             return ""
 
@@ -271,7 +302,11 @@ class VueShell(QWidget):
                 theme_js = f"localStorage.setItem('gb.theme',{json.dumps(json.dumps(spec))});"
         except Exception:
             pass
-        user = json.dumps({"login": login, "role": self._role, "name": login})
+        #⚠️ dumps ДВАЖДЫ, и это не описка. Внутренний даёт JSON, который SPA потом
+        #разбирает; внешний превращает его в СТРОКОВЫЙ литерал JS. С одним dumps в код
+        #попадал объектный литерал, localStorage сохранял его как «[object Object]»,
+        #разбор падал — и SPA считала, что никто не вошёл, показывая форму входа.
+        user = json.dumps(json.dumps({"login": login, "role": self._role, "name": login}))
         #`gb.api_base` — КУДА SPA ходит за данными (ключ задан в web/src/api/server.js).
         #Задать его здесь ОБЯЗАТЕЛЬНО: страница открыта с 127.0.0.1, и пустое значение
         #означало бы «тот же origin», то есть запросы ушли бы в нашу статическую
