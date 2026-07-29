@@ -37,6 +37,18 @@ def test_user_goes_to_storage_as_string(monkeypatch):
     assert user["login"] == "ivanov" and user["role"] == "student"
 
 
+def test_embed_mode_is_a_known_string(monkeypatch):
+    """Режимов встраивания ТРИ, и SPA различает их по строке: '1' — одна страница,
+    'nav' — весь кабинет (меню своё, шапка от окна), '0' — обычный сайт. Булево значение
+    сюда попасть не должно: в JS оно превратится в `true`, а такого режима нет."""
+    monkeypatch.setattr(vue_shell.VueShell, "_current_login", staticmethod(lambda: "ivanov"))
+    for given, expected in ((True, "1"), ("nav", "nav"), (False, "0")):
+        sh = _shell()
+        sh._embed = vue_shell.VueShell._embed_mode(given)
+        js = sh._bootstrap_js()
+        assert f"localStorage.setItem('gb.embed',\"{expected}\")" in js
+
+
 def test_page_loads_lazily_on_first_show():
     """Вкладки собираются сразу после входа — в этот момент живого токена может ещё не
     быть, и локальная сессия выпускалась на пустой логин. Грузим при первом ПОКАЗЕ."""

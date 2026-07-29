@@ -39,7 +39,7 @@ class VueShell(QWidget):
         super().__init__(parent)
         self._route = route
         self._role = role
-        self._embed = bool(embed)
+        self._embed = self._embed_mode(embed)
         self._view = None
         self._loaded = False   #страницу грузим при ПЕРВОМ показе, а не при сборке
         self.ok = False        #удалось ли показать интерфейс (иначе — нативный запасной)
@@ -48,6 +48,18 @@ class VueShell(QWidget):
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
         self.ok = self._probe()
+
+    @staticmethod
+    def _embed_mode(embed) -> str:
+        """Режим встраивания СТРОКОЙ, как его читает SPA (см. AppShell.vue).
+
+        '1' — встроена одна страница: меню SPA прячем, вокруг нативные вкладки;
+        'nav' — встроен весь кабинет: меню оставляем (иначе застрять на одной странице),
+                прячем только шапку — её роль играет заголовок окна;
+        '0' — не встроено."""
+        if embed == "nav":
+            return "nav"
+        return "1" if embed else "0"
 
     def showEvent(self, event):
         """Страницу грузим ЛЕНИВО — при первом реальном показе вкладки.
@@ -326,6 +338,6 @@ class VueShell(QWidget):
             f"localStorage.setItem('gb.user',{user});"
             f"localStorage.setItem('gb.api_base',{json.dumps(api_base)});"
             f"{theme_js}"
-            f"localStorage.setItem('gb.embed',{json.dumps('1' if self._embed else '0')});"
+            f"localStorage.setItem('gb.embed',{json.dumps(self._embed)});"
             "}catch(e){}"
         )

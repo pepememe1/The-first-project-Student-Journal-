@@ -25,12 +25,21 @@ const sidebarOpen = ref(false)
 // Прячем собственную навигацию/шапку/док — их роль на десктопе играет нативная оболочка,
 // иначе получилась бы «навигация внутри навигации». Десктоп ставит флаг gb.embed ДО
 // загрузки страницы (плюс поддерживаем ?embed=1 в URL). Значение фиксируется на загрузке.
-const embed = (() => {
+// ⚠️ ТРИ режима, а не два. Когда десктоп показывает ВЕСЬ кабинет одним веб-видом, своя
+// навигация SPA нужна (иначе человек застрянет на одной странице), а вот шапка — нет:
+// её роль играет заголовок окна программы, и две шапки подряд выглядят как ошибка.
+//   '1'   — встроена одна страница: прячем и шапку, и меню (вокруг нативные вкладки);
+//   'nav' — встроен весь кабинет: прячем ТОЛЬКО шапку, меню оставляем;
+//   иначе — обычный сайт/телефон, всё своё.
+const embedMode = (() => {
   try {
     const q = new URLSearchParams(window.location.search)
-    return q.get('embed') === '1' || localStorage.getItem('gb.embed') === '1'
-  } catch { return false }
+    const v = q.get('embed') || localStorage.getItem('gb.embed') || ''
+    return v === '1' || v === 'nav' ? v : ''
+  } catch { return '' }
 })()
+const embed = embedMode === '1'                 //прятать навигацию (одна страница)
+const chromeless = embedMode !== ''             //прятать шапку (любой режим внутри окна)
 
 const title = computed(() => route.meta?.title || '')
 const subtitle = computed(() => route.meta?.subtitle || '')
@@ -58,7 +67,11 @@ watch(vectorShown, (now, was) => { if (was && !now) tts.stop() })
 // На самой вкладке мессенджера свой опрос чаще — этот лишь держит бейдж свежим глобально.
 let _unreadTimer = null
 onMounted(() => {
-  theme.loadFromPrefs()
+  // ⚠️ ВНУТРИ ДЕСКТОПА тему с сервера НЕ подтягиваем. Оболочка окна уже покрашена в
+  // тему, выбранную в самой программе, и роуминг перекрашивал бы страницу в другую —
+  // в одном окне получались два разных оформления. Снаружи (сайт, телефон) роуминг
+  // нужен и работает как раньше: там окна нет и спорить не с кем.
+  if (!chromeless) theme.loadFromPrefs()
   messenger.loadChats()
   _unreadTimer = setInterval(() => messenger.loadChats(), 20000)
 })
@@ -70,7 +83,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full flex-col overflow-hidden">
-    <HeaderBar v-if="!embed" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+    <HeaderBar v-if="!chromeless" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
     <div class="flex min-h-0 flex-1">
       <!-- Десктоп: постоянный сайдбар -->

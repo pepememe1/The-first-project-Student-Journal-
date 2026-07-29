@@ -385,10 +385,35 @@ class MainAppWindow(QMainWindow):
         except Exception as e:
             log.get("main_window").warning(f"[theme] тема пользователя пропущена: {e}")
 
+    @staticmethod
+    def _try_vue_dashboard(role: str):
+        """Кабинет общим Vue-интерфейсом (None — строить нативный).
+
+        Отдельным методом, а не строкой в `_build_dashboard`: сюда же будут подключаться
+        остальные роли по мере того, как их десктопные способности (голосовые оценки у
+        преподавателя, хостинг сервера у админа) появятся в общем интерфейсе."""
+        try:
+            import vue_dashboard
+            if not vue_dashboard.available_for(role):
+                return None
+            dash = vue_dashboard.VueDashboard(role)
+            if dash.ok:
+                return dash
+            dash.deleteLater()
+        except Exception as e:
+            log.get("main_window").warning(f"[vue] общий кабинет не открылся: {e}")
+        return None
+
     def _build_dashboard(self):
         """Создаёт виджет дашборда по текущей сессии (роль + данные)."""
         role, payload = self._session
         if role == "student":
+            #ОБЩИЙ интерфейс целиком (§11 «один UI»): те же страницы и то же меню, что на
+            #сайте, но с локального сервера — поэтому офлайн сохраняется. Не открылся —
+            #строим нативный кабинет: остаться без экрана человек не должен.
+            web = self._try_vue_dashboard(role)
+            if web is not None:
+                return web, ("Ученик", f"{payload['f']} {payload['n']}")
             return StudentDashboard(payload), ("Ученик", f"{payload['f']} {payload['n']}")
         if role == "teacher":
             name, data = payload
