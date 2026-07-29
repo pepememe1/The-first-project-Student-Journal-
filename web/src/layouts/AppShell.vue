@@ -52,11 +52,19 @@ const showDock = computed(() => !onVectorPage.value)
 // только на широком экране lg, на мобиле её нет). Озвучка звучит, пока виден хоть один
 // Вектор, и обрывается РОВНО когда пропал последний: ушли на вкладку без шторки — тишина;
 // на вкладке шторка открыта — Вектор договаривает; закрыли шторку — тишина.
-const isLg = ref(typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
+// ⚠️ Порог шторки — 2xl (1536px), а НЕ lg (1024). Меню (~250px) и шторка (~370px)
+// вместе съедают больше 600px: в окне 1300px странице оставалось меньше половины, и
+// расписание с журналом сплющивались в нечитаемые колонки с горизонтальной прокруткой.
+// Шторка — спутник, а не соперник содержимого: нет запаса ширины — её просто нет, и
+// открыть Вектора можно вкладкой у края или его собственной страницей. Значение должно
+// совпадать с классами `2xl:` ниже — иначе появится состояние «место посчитали, а класс
+// не показал».
+const DOCK_MIN_WIDTH = '(min-width:1536px)'
+const isLg = ref(typeof window !== 'undefined' && window.matchMedia(DOCK_MIN_WIDTH).matches)
 let _mq = null
 const _onMq = (e) => { isLg.value = e.matches }
 if (typeof window !== 'undefined') {
-  _mq = window.matchMedia('(min-width:1024px)')
+  _mq = window.matchMedia(DOCK_MIN_WIDTH)
   _mq.addEventListener('change', _onMq)
 }
 const dockShown = computed(() => showDock.value && !vector.collapsed && isLg.value)
@@ -123,7 +131,7 @@ onBeforeUnmount(() => {
 
       <!-- Постоянный боковой Вектор (десктоп): справа поверх всех страниц, кроме вкладки
            «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). Можно скрыть. -->
-      <div v-if="!embed && showDock && !vector.collapsed" class="hidden lg:block">
+      <div v-if="!embed && showDock && !vector.collapsed" class="hidden 2xl:block">
         <VectorDock />
       </div>
     </div>
@@ -131,7 +139,7 @@ onBeforeUnmount(() => {
     <!-- Панель скрыта → вкладка-возврат у правого края (десктоп). -->
     <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
             aria-label="Показать панель Вектора" title="Показать Вектора"
-            class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-border bg-card py-3 pl-2.5 pr-2 text-accent shadow-card transition-colors hover:bg-accent-glow lg:flex">
+            class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-border bg-card py-3 pl-2.5 pr-2 text-accent shadow-card transition-colors hover:bg-accent-glow 2xl:flex">
       <PanelRightOpen class="size-5" />
       <span class="text-xs font-semibold" style="writing-mode: vertical-rl; transform: rotate(180deg)">Вектор</span>
     </button>
