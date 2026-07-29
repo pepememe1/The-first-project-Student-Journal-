@@ -42,7 +42,12 @@ _WATERMARK_KEY = "local_mirror_since"
 
 
 def _local_session():
-    """Сессия ЛОКАЛЬНОЙ базы (той, что обслуживает локальное приложение)."""
+    """Сессия ЛОКАЛЬНОЙ базы (той, что обслуживает локальное приложение).
+
+    `prepare_env` обязателен и здесь: без него `app.db` открыл бы базу разработчика, и
+    зеркало наполняло бы НЕ ТОТ файл — незаметно, потому что ошибок при этом не будет."""
+    import local_api
+    local_api.prepare_env()
     from app.db import SessionLocal          # noqa: WPS433 — server-пакет уже в sys.path
     return SessionLocal()
 

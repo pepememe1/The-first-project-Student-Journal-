@@ -71,6 +71,48 @@ def local_db_url() -> str:
     return f"sqlite:///{path}"
 
 
+def ensure_server_path() -> None:
+    """Положить `server/` в sys.path, чтобы был импортируем пакет `app`.
+
+    Каталог ищем ДВУМЯ путями, и это не перестраховка: `app_paths.app_dir()`
+    отталкивается от точки запуска, а она разная — у .exe это папка рядом с ним, а под
+    pytest вообще каталог самого pytest, и тогда `server/` не находится вовсе. Поэтому
+    сначала пробуем путь ОТ ЭТОГО ФАЙЛА (ui/ → корень репозитория), который от точки
+    запуска не зависит."""
+    import sys
+    candidates = []
+    here = os.path.dirname(os.path.abspath(__file__))          # …/ui
+    candidates.append(os.path.join(os.path.dirname(here), "server"))
+    try:
+        import app_paths
+        candidates.append(os.path.join(app_paths.app_dir(), "server"))
+    except Exception:
+        pass
+    for server_dir in candidates:
+        if os.path.isdir(server_dir):
+            if server_dir not in sys.path:
+                sys.path.insert(0, server_dir)
+            return
+
+
+def prepare_env() -> None:
+    """Указать серверному пакету на ЛОКАЛЬНУЮ базу. Зовётся ПЕРЕД любым обращением к
+    `app.db` — не только при старте сервера.
+
+    Иначе легко получить тихую подмену: `app.db` без этой переменной откроет базу
+    разработчика, и проверка «есть ли такой человек» ответит по чужому файлу. Один раз
+    это уже стоило нам вечной формы входа во вкладке. Функция идемпотентна.
+
+    Заодно делаем пакет `app` импортируемым: без этого те же вызовы падали бы на
+    ImportError и — из-за мягкой обработки ошибок — отвечали бы «человека нет»."""
+    ensure_server_path()
+    os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url())
+    #Локальная база — файл на диске пользователя. Шифрование БД (SQLCipher) здесь
+    #НЕ включаем: ключ пришлось бы хранить рядом с самой базой, что защиты не даёт.
+    #ПДн на десктопе защищает существующий слой (Fernet + DPAPI, §6) — его и оставляем.
+    os.environ.pop("GRADEBOOK_DB_KEY", None)
+
+
 class LocalAPI:
     """Серверное приложение, поднятое на этом компьютере. start() идемпотентен."""
 
@@ -87,11 +129,7 @@ class LocalAPI:
     def _prepare_env(self):
         """Переменные окружения ДО импорта серверного приложения: config читает их на
         импорте, позже менять поздно."""
-        os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url())
-        #Локальная база — файл на диске пользователя. Шифрование БД (SQLCipher) здесь
-        #НЕ включаем: ключ пришлось бы хранить рядом с самой базой, что защиты не даёт.
-        #ПДн на десктопе защищает существующий слой (Fernet + DPAPI, §6) — его и оставляем.
-        os.environ.pop("GRADEBOOK_DB_KEY", None)
+        prepare_env()
 
     def start(self) -> bool:
         """Поднять локальный сервер. False — если серверный пакет недоступен."""
@@ -126,27 +164,8 @@ class LocalAPI:
         return True
 
     def _load_app(self):
-        """Импорт серверного приложения (пакет `app` лежит внутри `server/`).
-
-        Каталог ищем ДВУМЯ путями, и это не перестраховка: `app_paths.app_dir()`
-        отталкивается от точки запуска, а она разная — у .exe это папка рядом с ним, а
-        под pytest вообще каталог самого pytest, и тогда `server/` не находится вовсе.
-        Поэтому сначала пробуем путь ОТ ЭТОГО ФАЙЛА (ui/ → корень репозитория), который
-        от точки запуска не зависит."""
-        import sys
-        candidates = []
-        here = os.path.dirname(os.path.abspath(__file__))          # …/ui
-        candidates.append(os.path.join(os.path.dirname(here), "server"))
-        try:
-            import app_paths
-            candidates.append(os.path.join(app_paths.app_dir(), "server"))
-        except Exception:
-            pass
-        for server_dir in candidates:
-            if os.path.isdir(server_dir):
-                if server_dir not in sys.path:
-                    sys.path.insert(0, server_dir)
-                break
+        """Импорт серверного приложения (пакет `app` лежит внутри `server/`)."""
+        ensure_server_path()
         from app.main import app          # noqa: WPS433 — импорт намеренно ленивый
         return app
 
@@ -187,6 +206,29 @@ class LocalAPI:
         return f"http://127.0.0.1:{self.port}{route}"
 
 
+def user_exists(login: str) -> bool:
+    """Есть ли такой человек в ЛОКАЛЬНОЙ копии базы.
+
+    Нужно перед выпуском локальной сессии: токен может быть безупречен, но если зеркало
+    ещё не докачало самого пользователя, любой `/web/*` ответит «требуется авторизация»,
+    и человек увидит форму входа. Лучше в этот момент честно уйти на боевой сервер."""
+    if not login:
+        return False
+    try:
+        prepare_env()
+        from app.db import SessionLocal
+        from app.models import User
+    except Exception:
+        return False
+    db = SessionLocal()
+    try:
+        return db.query(User).filter(User.login == login).first() is not None
+    except Exception:
+        return False
+    finally:
+        db.close()
+
+
 def issue_local_session(login: str, role: str) -> tuple:
     """Выпустить пару токенов ДЛЯ ЛОКАЛЬНОГО сервера. Возвращает (access, refresh).
 
@@ -205,6 +247,7 @@ def issue_local_session(login: str, role: str) -> tuple:
 
     Пустая пара — если что-то не удалось (тогда SPA просто попросит войти)."""
     try:
+        prepare_env()
         from app.security import create_token_full
         from app.models import AuthSession
         from app.db import SessionLocal

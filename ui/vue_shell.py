@@ -41,12 +41,26 @@ class VueShell(QWidget):
         self._role = role
         self._embed = bool(embed)
         self._view = None
+        self._loaded = False   #страницу грузим при ПЕРВОМ показе, а не при сборке
         self.ok = False        #удалось ли показать интерфейс (иначе — нативный запасной)
         self._source = ""      #откуда взят интерфейс: local_api | static
         self._api_base = ""    #куда SPA ходит за данными ('' = тот же origin)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
-        self._build()
+        self.ok = self._probe()
+
+    def showEvent(self, event):
+        """Страницу грузим ЛЕНИВО — при первом реальном показе вкладки.
+
+        Это не оптимизация, а исправление: вкладки собираются сразу после входа, и в
+        этот момент живой токен сессии ещё может быть не готов. Сессию для локального
+        сервера мы выпускаем по логину вошедшего — на пустом логине сервер её законно
+        отвергал, и внутри программы показывалась ФОРМА ВХОДА, хотя человек уже вошёл.
+        К моменту, когда человек открывает вкладку, сессия заведомо на месте."""
+        super().showEvent(event)
+        if not self._loaded:
+            self._loaded = True
+            self._build()
 
     def _message(self, text: str):
         lbl = QLabel(text)
@@ -54,35 +68,49 @@ class VueShell(QWidget):
         lbl.setAlignment(Qt.AlignCenter)
         self._lay.addWidget(lbl)
 
+    def _probe(self) -> bool:
+        """Есть ли чем показать вкладку. Отвечаем ДО загрузки страницы: вызывающий по
+        этому флагу решает, строить ли нативный запасной экран, и решение нужно ему
+        сразу при сборке — а сама страница грузится позже, при первом показе."""
+        if self._start_local_api() is not None:
+            return True
+        try:
+            from local_ui_server import instance
+            return bool(instance().start())
+        except Exception as e:
+            _LOG.warning(f"[vue-shell] интерфейс недоступен: {e}")
+            return False
+
     def _build(self):
-        """Выбираем источник интерфейса.
+        """Выбираем источник интерфейса и грузим страницу.
 
         ОСНОВНОЙ путь — локальное серверное приложение (`local_api`): оно отдаёт и SPA,
         и `/web/*` с ОДНОГО адреса, поэтому интерфейс и данные живут на одном origin, а
         офлайн работает целиком. ЗАПАСНОЙ — статическая раздача (`local_ui_server`):
-        если серверный пакет почему-то недоступен, интерфейс всё равно откроется и
-        возьмёт данные с боевого сервера, как раньше."""
+        данные берутся с боевого сервера, как раньше.
+
+        ⚠️ Локальный путь выбираем, ТОЛЬКО если для него удалось выпустить сессию.
+        Иначе он гарантированно покажет форму входа (боевой токен подписан чужим
+        секретом), а запасной путь в это же время прекрасно работает: лучше отдать
+        онлайн-интерфейс, чем офлайн-способный, но пустой."""
         api = self._start_local_api()
         if api is not None:
-            self._source = "local_api"
-            #Один origin: адрес API не задаём вовсе — SPA пойдёт к тому же серверу,
-            #с которого её саму и отдали.
-            self._api_base = ""
             #Токены — ЛОКАЛЬНЫЕ: боевой подписан чужим секретом, и этот сервер обязан
-            #его отвергнуть (см. issue_local_session). Без этого общий интерфейс внутри
-            #программы показывал форму входа, хотя человек уже вошёл.
-            try:
-                import local_api as _la
-                self._local_tokens = _la.issue_local_session(self._current_login(), self._role)
-            except Exception:
-                self._local_tokens = ("", "")
-            try:
-                self._build_view(api.url(self._route), token_cookie="", token="")
-                self.ok = True
-                return
-            except Exception as e:
-                _LOG.warning(f"[vue-shell] веб-вид поверх локального API не собрался: {e}")
+            #его отвергнуть (см. issue_local_session).
+            self._local_tokens = self._issue_local_session()
+            if self._local_tokens[0]:
+                self._source = "local_api"
+                #Один origin: адрес API не задаём вовсе — SPA пойдёт к тому же серверу,
+                #с которого её саму и отдали.
+                self._api_base = ""
+                try:
+                    self._build_view(api.url(self._route), token_cookie="", token="")
+                    self.ok = True
+                    return
+                except Exception as e:
+                    _LOG.warning(f"[vue-shell] веб-вид поверх локального API не собрался: {e}")
 
+        self._local_tokens = ("", "")
         from local_ui_server import instance, TOKEN_COOKIE
         srv = instance()
         if not srv.start():
@@ -101,6 +129,30 @@ class VueShell(QWidget):
             _LOG.warning(f"[vue-shell] веб-вид не собрался: {e}")
             self._message("Не удалось открыть интерфейс. Работают нативные вкладки.")
 
+    def _issue_local_session(self) -> tuple:
+        """Сессия для локального сервера ('', '' — не удалось, тогда запасной путь).
+
+        Дополнительно проверяем, что человек ЕСТЬ в локальной копии базы: сразу после
+        первого входа зеркало ещё могло не докачаться, и тогда даже правильный токен
+        привёл бы к форме входа. В этом случае честнее уйти на боевой сервер и
+        переехать на локальный при следующем открытии вкладки."""
+        login = self._current_login()
+        if not login:
+            _LOG.warning("[vue-shell] не удалось определить логин — вкладка пойдёт на боевой сервер")
+            return "", ""
+        try:
+            import local_api as _la
+            if not _la.user_exists(login):
+                _LOG.info(f"[vue-shell] «{login}» ещё не в локальной копии — работаем с боевого сервера")
+                return "", ""
+            tokens = _la.issue_local_session(login, self._role)
+        except Exception as e:
+            _LOG.warning(f"[vue-shell] локальная сессия не выпущена: {e}")
+            return "", ""
+        _LOG.info(f"[vue-shell] локальная сессия для «{login}»: "
+                  f"{'выпущена' if tokens[0] else 'НЕ выпущена'}")
+        return tokens
+
     @staticmethod
     def _start_local_api():
         """Локальное серверное приложение (или None, если поднять не удалось)."""
@@ -114,11 +166,23 @@ class VueShell(QWidget):
 
     @staticmethod
     def _current_login() -> str:
-        """Логин вошедшего пользователя — берём из боевого JWT (claim sub)."""
+        """Логин вошедшего пользователя.
+
+        Сначала боевой JWT (claim sub), затем СОХРАНЁННАЯ сессия. Второй источник не
+        запасной «на всякий случай»: живого токена может не быть — вкладки собираются
+        сразу после входа, а офлайн его не будет вовсе. Сохранённая сессия есть всегда,
+        когда человек в программу вошёл."""
         try:
             from sync_runner import fresh_auth
             from ui.messenger_web import _decode_login
-            return _decode_login(fresh_auth()[1] or "")
+            login = _decode_login(fresh_auth()[1] or "")
+            if login:
+                return login
+        except Exception:
+            pass
+        try:
+            import app_settings
+            return (app_settings.get_saved_session() or {}).get("login", "") or ""
         except Exception:
             return ""
 
@@ -193,11 +257,7 @@ class VueShell(QWidget):
             base, access = fresh_auth()
         except Exception:
             base = ""
-        try:
-            from ui.messenger_web import _decode_login       # noqa: WPS436 — общий разбор JWT
-            login = _decode_login(access)
-        except Exception:
-            login = ""
+        login = self._current_login()
         try:
             import app_settings
             refresh = app_settings.get_saved_refresh_token(login) or ""

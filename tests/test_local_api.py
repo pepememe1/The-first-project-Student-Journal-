@@ -123,6 +123,16 @@ def test_local_session_opens_protected_endpoint(api):
     assert code == 200, "со своим токеном локальный сервер обязан пустить"
 
 
+def test_user_exists_tells_whether_mirror_caught_up(api):
+    """Сразу после первого входа зеркало могло не докачать самого человека. Токен тогда
+    безупречен, а `/web/*` всё равно отвечает «требуется авторизация» — и внутри
+    программы появляется форма входа. Поэтому наличие человека проверяем ЗАРАНЕЕ и в
+    этом случае показываем вкладку с боевого сервера."""
+    assert local_api.user_exists("t") is True
+    assert local_api.user_exists("ghost-no-such-login") is False
+    assert local_api.user_exists("") is False
+
+
 def test_local_session_registers_auth_session(api):
     """Токен с jti сервер считает отозванным, пока нет записи сессии — поэтому её
     заводим. Побочная польза: локальный выход и отзыв работают как на бою."""
