@@ -239,6 +239,19 @@ class SyncManager:
         if self._client.refresh_token:
             app_settings.set_saved_refresh_token(self._login, self._client.refresh_token)
 
+    def _mirror_for_vue(self):
+        """Обновить локальную копию серверной базы — ту, на которой работает общий
+        Vue-интерфейс (см. ui/local_mirror.py).
+
+        Полностью изолировано: любая ошибка тут не должна ронять обычный синк, ради
+        которого цикл и существует. Модуль опционален — в окружении без серверного
+        пакета его просто нет, и это штатная ситуация, а не сбой."""
+        try:
+            import local_mirror
+            local_mirror.mirror_once(client=self._client)
+        except Exception as e:
+            log.get("sync_runner").debug(f"[mirror] пропущено: {e}")
+
     def _loop(self):
         import sync_engine
         while self._running:
@@ -265,6 +278,13 @@ class SyncManager:
                     #флаг «уже сделано» не нужен — он соврал бы на свежей установке,
                     #где справочник ещё не приехал и клеить было не с чем.
                     student_link.backfill_quietly()
+                    #Зеркало для ОБЩЕГО Vue-интерфейса: тем же успешным циклом
+                    #обновляем локальную копию серверной базы (ui/local_mirror.py).
+                    #Именно здесь, а не отдельным таймером: раз сеть только что была
+                    #доступна и токен свеж, второй раз это выяснять незачем. Зеркало
+                    #берёт СВОЮ дельту и своим клиентом, поэтому на обычный синк не
+                    #влияет; сбой внутри проглатывается там же и цикл не роняет.
+                    self._mirror_for_vue()
                     #Успех: сбрасываем бэкофф и помечаем «онлайн».
                     self._fail_count = 0
                     self._set_online(True)
