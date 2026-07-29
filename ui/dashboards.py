@@ -658,7 +658,38 @@ class StudentDashboard(QWidget):
         self.stack.addWidget(w)
 
     def _build_stats(self):
-        """Построить страницу статистики"""
+        """Статистика студента.
+
+        ПЕРВАЯ вкладка, переехавшая на ОБЩИЙ Vue-интерфейс (см. ui/vue_shell.py): дальше
+        по одной переедут остальные. Начали именно с неё осознанно — она только ЧИТАЕТ и
+        показывает производные цифры, поэтому сбой здесь ничего не портит, в отличие от
+        журнала, где преподаватель выставляет оценки.
+
+        Нативная версия остаётся ЗАПАСНОЙ и вызывается, если общий интерфейс поднять не
+        удалось (нет собранного web/dist, не встал локальный сервер). Так переезд не
+        может оставить человека без экрана вовсе — а это главный риск миграции по одной
+        вкладке."""
+        if self._try_vue_page("stats", "/student/stats"):
+            return
+        self._build_stats_native()
+
+    def _try_vue_page(self, key: str, route: str) -> bool:
+        """Показать вкладку общим Vue-интерфейсом. False — если не вышло (тогда
+        вызывающий строит нативную версию)."""
+        try:
+            from vue_shell import VueShell
+            w = VueShell(route, "student")
+            if not w.ok:
+                return False
+            self.pages[key] = w
+            self.stack.addWidget(w)
+            return True
+        except Exception as e:
+            log.get("dashboards").warning(f"[vue] вкладка {key} не собралась: {e}")
+            return False
+
+    def _build_stats_native(self):
+        """Нативная статистика (запасной путь, пока переезд не завершён)."""
         w = QScrollArea()
         w.setWidgetResizable(True)
         w.setStyleSheet("border:none;")

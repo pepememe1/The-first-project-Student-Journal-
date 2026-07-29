@@ -41,6 +41,7 @@ class VueShell(QWidget):
         self._role = role
         self._embed = bool(embed)
         self._view = None
+        self.ok = False        #удалось ли показать интерфейс (иначе — нативный запасной)
         self._source = ""      #откуда взят интерфейс: local_api | static
         self._api_base = ""    #куда SPA ходит за данными ('' = тот же origin)
         self._lay = QVBoxLayout(self)
@@ -69,6 +70,7 @@ class VueShell(QWidget):
             self._api_base = ""
             try:
                 self._build_view(api.url(self._route), token_cookie="", token="")
+                self.ok = True
                 return
             except Exception as e:
                 _LOG.warning(f"[vue-shell] веб-вид поверх локального API не собрался: {e}")
@@ -86,6 +88,7 @@ class VueShell(QWidget):
         self._api_base = self._remote_base()
         try:
             self._build_view(srv.url(self._route), TOKEN_COOKIE, srv.token)
+            self.ok = True
         except Exception as e:
             _LOG.warning(f"[vue-shell] веб-вид не собрался: {e}")
             self._message("Не удалось открыть интерфейс. Работают нативные вкладки.")
