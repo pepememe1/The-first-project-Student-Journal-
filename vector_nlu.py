@@ -18,6 +18,9 @@ import unicodedata
 from typing import Dict, List, Tuple
 
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+#Ведущие буквы в коде группы («К74/1» → «74 1»): люди часто называют группу
+#без буквенного префикса, а сопоставлять всё равно нужно с полным названием.
+_GROUP_PREFIX_RE = re.compile(r"^[^\d]+", re.UNICODE)
 _WS_RE = re.compile(r"\s+")
 
 
@@ -323,6 +326,39 @@ def match_surname(question: str, surnames: List[str]) -> str:
     return ""
 
 
+def match_group(question: str, groups: List[str]) -> str:
+    """Находит НАЗВАНИЕ ГРУППЫ, упомянутое в вопросе («список студентов К74/1»).
+
+    Зачем отдельно от фамилий и предметов: у администратора нет «своей» группы, и без
+    разбора названия из вопроса ЛЮБОЙ вопрос про состав группы упирался в пустой
+    scope.group — Вектор отвечал «группа не выбрана», хотя она названа прямо в тексте.
+
+    Сопоставляем по нормализованной строке (регистр, «ё», пунктуация уже сняты), но
+    ВНИМАНИЕ: normalize() выкидывает «/» и «-», поэтому «К74/1» превращается в «к74 1» —
+    ищем именно нормализованный вариант, иначе точное имя группы никогда не совпадёт.
+    Сначала пробуем длинные названия: «К74/1» не должно съедаться группой «К74»."""
+    q = " " + normalize(question) + " "
+    best = ""
+    for name in groups or []:
+        n = normalize(name)
+        if not n:
+            continue
+        if (" " + n + " ") in q and len(n) > len(normalize(best)):
+            best = name
+    if best:
+        return best
+    # Люди часто опускают буквенный префикс: «список студентов 74/1» вместо «К74/1».
+    # Пробуем сопоставить по хвосту БЕЗ ведущих букв — но только если такой хвост
+    # указывает РОВНО на одну группу. Двусмысленность не разрешаем догадкой (то же
+    # правило, что и с однофамильцами): лучше переспросить, чем показать чужой состав.
+    hits = []
+    for name in groups or []:
+        tail = _GROUP_PREFIX_RE.sub("", normalize(name)).strip()
+        if len(tail) >= 2 and (" " + tail + " ") in q:
+            hits.append(name)
+    return hits[0] if len(hits) == 1 else ""
+
+
 def detect_day(question: str):
     """Для расписания: какой день спрашивают. Возвращает ('today'|'tomorrow'|<0-6>|'')."""
     q = normalize(question)
@@ -336,7 +372,8 @@ def detect_day(question: str):
     return ""
 
 
-def classify(question: str, surnames: List[str] = (), subjects: List[str] = ()) -> Dict:
+def classify(question: str, surnames: List[str] = (), subjects: List[str] = (),
+             groups: List[str] = ()) -> Dict:
     """ЕДИНЫЙ разбор запроса → словарь:
         {intent, score, surname, subject, day}
 
@@ -352,7 +389,14 @@ def classify(question: str, surnames: List[str] = (), subjects: List[str] = ()) 
         intent, score = counted, _COUNT_SCORE
     subject = match_subject(question, list(subjects))
     surname = match_surname(question, list(surnames))
+    group = match_group(question, list(groups))
     day = detect_day(question) if intent == "schedule" else ""
+    # Название группы в вопросе — сильный сигнал «покажи состав», даже если формулировка
+    # короткая («студенты К74/1»): без этого такой вопрос набирал мало баллов и уходил
+    # в unknown, то есть в общую справку.
+    if group and intent in ("unknown", "groups") and any(
+            s in q for s in ("студент", "ученик", "состав", "списк", "кто ")):
+        intent, score = "roster", max(score, _COUNT_SCORE)
 
     # Уточнения по контексту предмета:
     if subject:
@@ -365,4 +409,4 @@ def classify(question: str, surnames: List[str] = (), subjects: List[str] = ()) 
     if score < MIN_SCORE:
         intent = "unknown"
     return {"intent": intent, "score": score, "surname": surname,
-            "subject": subject, "day": day}
+            "subject": subject, "day": day, "group": group}

@@ -64,11 +64,28 @@ class VectorEngine:
         except Exception:
             return []
 
+    def _known_groups(self) -> List[str]:
+        """Названия всех групп — чтобы vector_nlu распознал группу, НАЗВАННУЮ в вопросе.
+
+        Берём из таблицы students, а не из справочника групп: она есть в локальной базе
+        у любой роли, и именно её состав Вектор потом и показывает. У администратора
+        своей группы нет вовсе — без этого списка «список студентов К74/1» упирался в
+        пустой scope.group и отвечал «группа не выбрана»."""
+        try:
+            conn = sqlite3.connect(self.scope.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT group_name FROM students")
+            res = [r[0] for r in cur.fetchall() if r[0]]
+            conn.close()
+            return res
+        except Exception:
+            return []
+
     #основной вызов
     def ask(self, question: str) -> VectorResponse:
         surnames = self._known_surnames()
-        intent, asked, subject, day = intents.classify(question, surnames,
-                                                        self._known_subjects())
+        intent, asked, subject, day, group = intents.classify(
+            question, surnames, self._known_subjects(), self._known_groups())
         #Распознанный предмет кладём в scope — subject-фильтрующие обработчики (оценки,
         #средний, счёт) подхватят его. Сырой вопрос — для матча предмета в расписании.
         self.scope.subject = subject or self._base_subject   #сброс, чтобы не «залипал»
@@ -114,7 +131,7 @@ class VectorEngine:
                 text = anon.deanonymize(text)
             return VectorResponse(text=text, mood=self._mood, intent="unknown")
 
-        facts = intents.run_intent(intent, self.scope, asked, day)
+        facts = intents.run_intent(intent, self.scope, asked, day, group)
 
         #настроение по среднему баллу, если интент его дал
         if facts.mood_value is not None:

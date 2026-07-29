@@ -1533,6 +1533,21 @@ def _group_subject_list(db: Session, group: str, lessons=None) -> list:
     return sorted(names)
 
 
+def _known_groups(user: User, db: Session) -> list:
+    """Названия групп в области видимости — для распознавания группы, названной в вопросе.
+    Студенту — только своя (чужие составы ему всё равно закрыты), преподавателю — его
+    группы, админу — все."""
+    try:
+        if user.role == "student":
+            return [user.group_name] if user.group_name else []
+        if user.role == "teacher":
+            return list(W.teacher_groups(db, set(user.subjects or [])))
+        rows = db.query(Group.name).filter(Group.deleted == False).all()  # noqa: E712
+        return [r[0] for r in rows if r[0]]
+    except Exception:
+        return []
+
+
 def _known_surnames(user: User, db: Session) -> list:
     """Фамилии студентов в области видимости (для «пропуски у Иванова»). Студенту —
     пусто (только о себе); преподавателю — студенты его групп; админу — все студенты."""
@@ -1670,8 +1685,13 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
     role = user.role if user.role in ("student", "teacher", "admin") else "student"
     subjects = _known_subjects(user, db)
     surnames = _known_surnames(user, db)
-    nlu = vector_nlu.classify(msg, surnames=surnames, subjects=subjects)
+    #Названия групп нужны, чтобы распознать группу, НАЗВАННУЮ в вопросе («студенты К74/1»).
+    #У администратора своей группы нет, и без этого любой вопрос про состав упирался
+    #в пустоту. Список берём по роли — тем же скоупом, что и всё остальное.
+    known_groups = _known_groups(user, db)
+    nlu = vector_nlu.classify(msg, surnames=surnames, subjects=subjects, groups=known_groups)
     intent, subject, surname, day = nlu["intent"], nlu["subject"], nlu["surname"], nlu["day"]
+    asked_group = nlu["group"]
     help_text = _HELP_BY_ROLE[role]
 
     # Общие для всех ролей: приветствие / помощь / благодарность / факты о заведении.
@@ -1820,7 +1840,9 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                     "mood": "neutral", "intent": "subjects",
                     "facts": {"count": len(subs), "subjects": subs}}
         if intent == "roster":
-            g = groups[0]
+            #Названная в вопросе группа важнее «первой попавшейся»: у преподавателя их
+            #обычно несколько, и раньше он всегда получал состав groups[0].
+            g = asked_group if asked_group in groups else groups[0]
             names = [W.display_name(s) for s in W.students_in_group(db, g)]
             body = ", ".join(names) if names else "список пуст"
             return {"text": f"Студенты группы {g} ({len(names)}): {body}.", "mood": "neutral",
@@ -1907,6 +1929,24 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         body = ", ".join(names) if names else "групп нет"
         return {"text": f"Группы колледжа ({len(names)}): {body}.", "mood": "neutral",
                 "intent": "groups", "facts": {"count": len(names)}}
+    if intent == "roster":
+        #У администратора своей группы нет — отвечаем по НАЗВАННОЙ. Не названа — не
+        #«нет данных», а подсказка, из чего выбирать: вопрос почти всегда продолжается.
+        if asked_group:
+            names = [W.display_name(s) for s in W.students_in_group(db, asked_group)]
+            body = ", ".join(names) if names else "список пуст"
+            return {"text": f"Студенты группы {asked_group} ({len(names)}): {body}.",
+                    "mood": "neutral", "intent": "roster",
+                    "facts": {"group": asked_group, "count": len(names)}}
+        all_groups = sorted(_known_groups(user, db))
+        if not all_groups:
+            return {"text": "Группы ещё не заведены — списка студентов пока нет.",
+                    "mood": "neutral", "intent": "roster", "facts": {"count": 0}}
+        head = ", ".join(all_groups[:12]) + (" и др." if len(all_groups) > 12 else "")
+        return {"text": f"Уточните группу — например «список студентов {all_groups[0]}». "
+                        f"Всего групп: {len(all_groups)} ({head}).",
+                "mood": "neutral", "intent": "roster",
+                "facts": {"groups": len(all_groups)}}
     if intent == "subjects":
         rows = db.query(Subject).filter(Subject.deleted == False).all()  # noqa: E712
         names = sorted({s.name for s in rows if s.name})

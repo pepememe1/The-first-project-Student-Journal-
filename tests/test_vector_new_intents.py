@@ -47,10 +47,10 @@ def _scope(db):
 
 def test_classify_returns_subject_and_day(db_path):
     """classify теперь отдаёт (intent, surname, subject, day) из общего vector_nlu."""
-    i, a, subj, day = intents.classify("оценки по физике", ["Иванов"],
+    i, a, subj, day, _g = intents.classify("оценки по физике", ["Иванов"],
                                        ["Математика", "Физика"])
     assert i == "subject_grades" and subj == "Физика"     # склонение «физике» распознано
-    i2, _, _, day2 = intents.classify("что завтра", ["Иванов"], [])
+    i2, _, _, day2, _g2 = intents.classify("что завтра", ["Иванов"], [])
     assert i2 == "schedule" and day2 == "tomorrow"
 
 

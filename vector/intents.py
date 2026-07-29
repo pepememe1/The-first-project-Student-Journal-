@@ -401,21 +401,45 @@ def intent_teachers(scope: VectorScope, asked_name: str = "") -> Facts:
     return Facts("teachers", f"Преподаватели ({len(names)}): " + "; ".join(lines) + ".")
 
 
-def intent_roster(scope: VectorScope, asked_name: str = "") -> Facts:
-    """Список студентов группы. Студенту НЕ выдаём (чужие ПДн). Препод/админ — да."""
+def intent_roster(scope: VectorScope, asked_name: str = "", group: str = "") -> Facts:
+    """Список студентов группы. Студенту НЕ выдаём (чужие ПДн). Препод/админ — да.
+
+    `group` — группа, НАЗВАННАЯ В ВОПРОСЕ («список студентов К74/1»). Она важнее
+    scope.group: у администратора своей группы нет вовсе, и раньше любой такой вопрос
+    получал «группа не выбрана», хотя название стояло прямо в тексте."""
     if scope.role == "student":
         return Facts("roster", "Список одногруппников и их данные я не показываю — "
                                "это персональные данные других студентов. "
                                "Зато покажу твои оценки, пропуски и долги.")
+    target = (group or scope.group or "").strip()
+    if not target:
+        #Группа не названа и своей нет (типичный случай администратора) — не отвечаем
+        #«нет данных», а показываем, из чего выбирать: вопрос почти всегда продолжается.
+        known = _known_group_names()
+        if known:
+            return Facts("roster", "Уточните группу — например «список студентов "
+                                   f"{known[0]}». Всего групп: {len(known)} "
+                                   f"({', '.join(known[:12])}"
+                                   f"{' и др.' if len(known) > 12 else ''}).")
+        return Facts("roster", "Группы ещё не заведены — списка студентов пока нет.")
     conn = _conn(scope)
-    studs = _students(conn, scope.group)
+    studs = _students(conn, target)
     conn.close()
     if not studs:
-        return Facts("roster", f"В группе {scope.group or '—'} студентов пока нет "
-                               f"(или группа не выбрана).")
+        return Facts("roster", f"В группе {target} студентов пока нет.")
     names = [f"{f} {n}".strip() for f, n in studs]
-    return Facts("roster", f"Студенты группы {scope.group} ({len(names)}): "
+    return Facts("roster", f"Студенты группы {target} ({len(names)}): "
                            f"{', '.join(names)}.", names=names)
+
+
+def _known_group_names() -> List[str]:
+    """Названия всех групп из локального справочника (пусто, если store недоступен)."""
+    try:
+        store = _store()
+        return sorted({(g.get("name") or "").strip()
+                       for g in (store.get_groups() or []) if (g.get("name") or "").strip()})
+    except Exception:
+        return []
 
 
 def intent_about_vsgutu(scope: VectorScope, asked_name: str = "") -> Facts:
@@ -468,15 +492,19 @@ def intent_unknown(scope: VectorScope, asked_name: str = "") -> Facts:
 #Если суммарный вес совпадений ниже порога — интент «unknown», и engine
 #передаёт вопрос живой ИИ-модели (если она подключена).
 def classify(question: str, known_surnames: List[str],
-             known_subjects: List[str] = ()) -> Tuple[str, str, str, object]:
-    """Возвращает (intent, asked_surname, subject, day). Чисто локально, без сети.
+             known_subjects: List[str] = (),
+             known_groups: List[str] = ()) -> Tuple[str, str, str, object, str]:
+    """Возвращает (intent, asked_surname, subject, day, group). Чисто локально, без сети.
 
     Делегирует ЕДИНОМУ классификатору vector_nlu (тот же, что на сервере) — раньше здесь
     была своя копия разбора, из-за чего десктоп и веб расходились. subject/day нужны новым
-    интентам (оценки по предмету, расписание). intent=="unknown" → дорога к LLM."""
+    интентам (оценки по предмету, расписание). group — названная в вопросе группа: у
+    администратора своей группы нет, и без неё «список студентов К74/1» упирался в пустой
+    scope.group. intent=="unknown" → дорога к LLM."""
     import vector_nlu
-    r = vector_nlu.classify(question, known_surnames, list(known_subjects))
-    return r["intent"], r["surname"], r["subject"], r["day"]
+    r = vector_nlu.classify(question, known_surnames, list(known_subjects),
+                            list(known_groups))
+    return r["intent"], r["surname"], r["subject"], r["day"], r["group"]
 
 
 def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
@@ -638,8 +666,11 @@ _HANDLERS = {
 }
 
 
-def run_intent(intent: str, scope: VectorScope, asked_name: str = "", day="") -> Facts:
+def run_intent(intent: str, scope: VectorScope, asked_name: str = "", day="",
+               group: str = "") -> Facts:
     if intent == "schedule":
         return intent_schedule(scope, asked_name, day)
+    if intent == "roster":
+        return intent_roster(scope, asked_name, group)
     handler = _HANDLERS.get(intent, intent_help)
     return handler(scope, asked_name)
