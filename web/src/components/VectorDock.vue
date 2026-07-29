@@ -7,6 +7,7 @@ import { ref, watch, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid, PanelRightClose, Volume2, VolumeX } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
+import MicButton from '@/components/vector/MicButton.vue'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
 
@@ -41,6 +42,11 @@ watch(tick, scrollDown)
 onMounted(() => { vector.greetSettle(); scrollDown(); tts.refreshStatus() })
 
 function send() { vector.send() }
+
+// Распознанное кладём в поле, а не отправляем сразу — человек должен увидеть, что
+// понято (Whisper путает фамилии и числа). Та же логика, что на вкладке «ИИ Помощник».
+function onVoice(text) { vector.input = text }
+function onVoiceError(msg) { window.alert(msg) }
 function ask(q) { showQuick.value = false; vector.ask(q) }
 </script>
 
@@ -115,6 +121,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
           <LayoutGrid class="size-4" />
         </button>
+        <MicButton @text="onVoice" @error="onVoiceError" class="!size-10" />
         <input v-model="input" placeholder="Спросите Вектора…" @focus="showQuick = false"
                class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent focus:bg-card" />
         <button type="submit" aria-label="Отправить"

@@ -67,6 +67,7 @@ class MainAppWindow(QMainWindow):
         #Верхняя панель (скрыта на странице входа)
         self._header = HeaderBar()
         self._header.logout_clicked.connect(self._logout)
+        self._header.tools_clicked.connect(self._open_desktop_tools)
         self._header.hide()
 
         #Обёртка (заголовок + содержимое)
@@ -437,6 +438,12 @@ class MainAppWindow(QMainWindow):
             dash = ParentDashboard(payload)
             return dash, ("Родитель", dash.display_name())
         if role == "admin":
+            #Кабинет — общий Vue; то, что относится к ЭТОМУ компьютеру (сервер, БД,
+            #обслуживание), живёт в отдельном окне «Инструменты ПК» из шапки: в браузере
+            #такие вещи не воспроизводятся в принципе, а не «пока не сделаны».
+            web = self._try_vue_dashboard(role)
+            if web is not None:
+                return web, ("Администратор", "Администратор")
             if AdminDashboard is None:
                 raise RuntimeError("Модуль AdminDashboard не загружен")
             return (AdminDashboard(back_to_login_cb=self._logout),
@@ -469,6 +476,14 @@ class MainAppWindow(QMainWindow):
         #шапка создаётся один раз и не пересобирается с дашбордом — красим её явно
         self._header.refresh_theme()
         self._header.set_role(role_text, user_text)
+        #Дверь к инструментам этого ПК — только админу и только когда кабинет ВЕБОВЫЙ:
+        #в нативной админке эти разделы и так на месте, вторая дверь была бы лишней.
+        try:
+            role_now = (self._session or (None,))[0]
+            self._header.show_tools(role_now == "admin"
+                                    and type(dash).__name__ == "VueDashboard")
+        except Exception:
+            pass
         self._header.show()
         self._refresh_applied_mode()   #синхронизируем «текущий режим» для таймера расписания
 
@@ -591,6 +606,14 @@ class MainAppWindow(QMainWindow):
             import traceback
             traceback.print_exc()  # полный стек в консоль
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть панель администратора:\n{e}")
+
+    def _open_desktop_tools(self):
+        """Окно инструментов этого ПК (сервер, БД, обслуживание) — только у админа."""
+        try:
+            import desktop_tools
+            desktop_tools.open_tools(self)
+        except Exception as e:
+            log.get("main_window").warning(f"[tools] не удалось открыть инструменты: {e}")
 
     def _logout(self):
         """Выход из системы.

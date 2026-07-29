@@ -81,6 +81,7 @@ class HeaderBar(QFrame):
     
     from PySide6.QtCore import Signal as QSignal
     logout_clicked = QSignal()
+    tools_clicked = QSignal()          #десктопные инструменты (админ)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -145,6 +146,22 @@ class HeaderBar(QFrame):
         sep.setFixedHeight(20)
         lay.addWidget(sep)
 
+        #Дверь к ДЕСКТОПНЫМ инструментам (только админ, показывается через show_tools()).
+        #Место выбрано осознанно: это шапка ОКНА ПРОГРАММЫ, а не накладка поверх
+        #страницы. Хостинг сервера и настройка БД — про ЭТОТ компьютер, в браузере
+        #такого понятия нет вовсе, поэтому и живут они в оболочке, а не в кабинете.
+        self.tools_btn = QPushButton("Инструменты ПК")
+        self.tools_btn.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.15);color:#FFFFFF;"
+            "border:1px solid rgba(255,255,255,0.5);border-radius:8px;padding:5px 14px;font-size:12px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.28);}"
+        )
+        self.tools_btn.setCursor(Qt.PointingHandCursor)
+        self.tools_btn.setToolTip("Сервер, база данных и другие настройки этого компьютера")
+        self.tools_btn.clicked.connect(self.tools_clicked)
+        self.tools_btn.hide()
+        lay.addWidget(self.tools_btn)
+
         #Logout button
         logout = QPushButton("Выйти")
         logout.setStyleSheet(
@@ -155,6 +172,10 @@ class HeaderBar(QFrame):
         logout.setCursor(Qt.PointingHandCursor)
         logout.clicked.connect(self.logout_clicked)
         lay.addWidget(logout)
+
+    def show_tools(self, visible: bool):
+        """Показать/скрыть дверь к десктопным инструментам (нужна только админу)."""
+        self.tools_btn.setVisible(bool(visible))
 
     def set_online(self, online: bool):
         """Показать состояние связи с сервером: маленький цветной кружок + короткое слово.

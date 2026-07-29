@@ -8,6 +8,7 @@ import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
+import MicButton from '@/components/vector/MicButton.vue'
 import { useVectorStore } from '@/stores/vector'
 
 const vector = useVectorStore()
@@ -43,6 +44,12 @@ onMounted(() => { vector.setSurface('page'); vector.greetSettle(); scrollDown();
 onUnmounted(() => vector.setSurface('dock'))
 
 function send() { vector.send() }
+
+// Распознанное НЕ отправляем сразу: Whisper иногда путает фамилии и числа, а у Вектора
+// вопрос — это в том числе запрос к реальным данным. Кладём в поле, человек видит, что
+// понято, и жмёт «отправить» сам. Тот же принцип, что в десктопе (подтверждение всегда).
+function onVoice(text) { vector.input = text }
+function onVoiceError(msg) { vector.pushSystem?.(msg) || window.alert(msg) }
 function ask(q) { showQuick.value = false; vector.ask(q) }
 </script>
 
@@ -103,6 +110,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
           <LayoutGrid class="size-5" />
         </button>
+        <MicButton @text="onVoice" @error="onVoiceError" />
         <input v-model="input" placeholder="Спросите Вектора…"
                @focus="showQuick = false; focused = true" @blur="focused = false"
                class="h-11 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none focus:border-accent focus:bg-card" />
