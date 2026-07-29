@@ -1,24 +1,23 @@
 """
 vue_shell.py — показ ОБЩЕГО Vue-интерфейса внутри десктопа.
 
-Шаг 2 объединения платформ (шаг 1 — `ui/local_ui_server.py`, приватная раздача статики).
 Здесь та же Vue-SPA, что и на сайте, открывается со СВОЕГО адреса 127.0.0.1, а не с
 боевого домена. Разница принципиальная и ровно ради offline-first: страница, взятая с
 сайта, без интернета не откроется вообще, а взятая со своего компьютера — откроется
-всегда, и дальше уже её дело, куда ходить за данными.
+всегда.
+
+ДВА ИСТОЧНИКА, в порядке предпочтения:
+  1. `local_api` — НАСТОЯЩЕЕ серверное приложение, запущенное на этом компьютере. Отдаёт
+     и SPA, и `/web/*` с ОДНОГО адреса, поэтому интерфейс и данные приходят с одного
+     origin (без CORS и без «адреса сервера»), а офлайн работает целиком. Главный путь.
+  2. `local_ui_server` — только статика Vue, данные с боевого сервера. Запасной путь на
+     случай, если серверный пакет рядом недоступен: интерфейс всё равно откроется.
 
 ⚠️ ОТЛИЧИЕ ОТ `ui/messenger_web.py`. Тот встраивает SPA с БОЕВОГО сервера и годится
 только онлайн-разделам (мессенджер и модерация — они и так без сети бессмысленны).
-Этот модуль — путь к тому, чтобы на Vue переехал ВЕСЬ интерфейс, включая офлайн-разделы.
-Пока оба сосуществуют: messenger_web остаётся рабочим, пока переезд не завершён.
-
-Что уже делает этот модуль и что осознанно НЕ делает:
-  • раздаёт и открывает SPA локально, без окон и без выхода в сеть — ГОТОВО;
-  • прокидывает сессию, тему и токен раздачи в localStorage до загрузки — ГОТОВО;
-  • ЛОКАЛЬНОГО API поверх десктопного SQLite здесь НЕТ. Пока его нет, SPA берёт данные
-    у боевого сервера (как сейчас), то есть офлайн покажет интерфейс, но не данные.
-    Это следующий шаг миграции, и до него нативные офлайн-разделы (журнал, Вектор)
-    остаются как есть — иначе мы бы сломали главный инвариант проекта ради красоты.
+Этот модуль — дорога к тому, чтобы на Vue переехал ВЕСЬ интерфейс, включая офлайн-разделы.
+Пока оба сосуществуют: messenger_web остаётся рабочим, пока переезд не завершён —
+одномоментная замена сломала бы журнал у всех сразу.
 """
 import json
 
@@ -42,6 +41,8 @@ class VueShell(QWidget):
         self._role = role
         self._embed = bool(embed)
         self._view = None
+        self._source = ""      #откуда взят интерфейс: local_api | static
+        self._api_base = ""    #куда SPA ходит за данными ('' = тот же origin)
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._build()
@@ -53,6 +54,25 @@ class VueShell(QWidget):
         self._lay.addWidget(lbl)
 
     def _build(self):
+        """Выбираем источник интерфейса.
+
+        ОСНОВНОЙ путь — локальное серверное приложение (`local_api`): оно отдаёт и SPA,
+        и `/web/*` с ОДНОГО адреса, поэтому интерфейс и данные живут на одном origin, а
+        офлайн работает целиком. ЗАПАСНОЙ — статическая раздача (`local_ui_server`):
+        если серверный пакет почему-то недоступен, интерфейс всё равно откроется и
+        возьмёт данные с боевого сервера, как раньше."""
+        api = self._start_local_api()
+        if api is not None:
+            self._source = "local_api"
+            #Один origin: адрес API не задаём вовсе — SPA пойдёт к тому же серверу,
+            #с которого её саму и отдали.
+            self._api_base = ""
+            try:
+                self._build_view(api.url(self._route), token_cookie="", token="")
+                return
+            except Exception as e:
+                _LOG.warning(f"[vue-shell] веб-вид поверх локального API не собрался: {e}")
+
         from local_ui_server import instance, TOKEN_COOKIE
         srv = instance()
         if not srv.start():
@@ -61,13 +81,35 @@ class VueShell(QWidget):
             self._message("Интерфейс не собран. Выполните «npm run build» в папке web "
                           "или используйте нативные вкладки.")
             return
+        self._source = "static"
+        #Статическая раздача данных не отдаёт — за ними SPA идёт на боевой сервер.
+        self._api_base = self._remote_base()
         try:
-            self._build_view(srv, TOKEN_COOKIE)
+            self._build_view(srv.url(self._route), TOKEN_COOKIE, srv.token)
         except Exception as e:
             _LOG.warning(f"[vue-shell] веб-вид не собрался: {e}")
             self._message("Не удалось открыть интерфейс. Работают нативные вкладки.")
 
-    def _build_view(self, srv, token_cookie: str):
+    @staticmethod
+    def _start_local_api():
+        """Локальное серверное приложение (или None, если поднять не удалось)."""
+        try:
+            import local_api
+            api = local_api.instance()
+            return api if api.start() else None
+        except Exception as e:
+            _LOG.warning(f"[vue-shell] локальный API недоступен: {e}")
+            return None
+
+    @staticmethod
+    def _remote_base() -> str:
+        try:
+            from sync_runner import fresh_auth
+            return fresh_auth()[0] or ""
+        except Exception:
+            return ""
+
+    def _build_view(self, url: str, token_cookie: str = "", token: str = ""):
         from PySide6.QtWebEngineWidgets import QWebEngineView
         from PySide6.QtWebEngineCore import (QWebEngineScript, QWebEngineSettings,
                                              QWebEngineProfile)
@@ -93,16 +135,19 @@ class VueShell(QWidget):
         except Exception:
             pass
 
-        #ТОКЕН РАЗДАЧИ — кукой. Заголовок тут не годится: за скриптами, стилями и
-        #картинками браузер ходит сам, и наш заголовок к этим запросам не подставится,
-        #а без токена локальный сервер их отклонит (см. local_ui_server._token_ok).
-        profile = view.page().profile()
-        cookie = QNetworkCookie(token_cookie.encode(), srv.token.encode())
-        cookie.setDomain("127.0.0.1")
-        cookie.setPath("/")
-        #HttpOnly НЕ ставим: кука должна уходить с обычными запросами страницы, а не
-        #читаться из JS — на её секретность это не влияет (страница и так наша).
-        profile.cookieStore().setCookie(cookie, QUrl(srv.url("/")))
+        #ТОКЕН СТАТИЧЕСКОЙ РАЗДАЧИ — кукой (нужен только запасному пути). Заголовок тут
+        #не годится: за скриптами, стилями и картинками браузер ходит сам, и наш
+        #заголовок к этим запросам не подставится, а без токена статический сервер их
+        #отклонит (см. local_ui_server._token_ok). У локального API своя защита — JWT,
+        #поэтому там кука не нужна.
+        if token_cookie and token:
+            profile = view.page().profile()
+            cookie = QNetworkCookie(token_cookie.encode(), token.encode())
+            cookie.setDomain("127.0.0.1")
+            cookie.setPath("/")
+            #HttpOnly НЕ ставим: кука должна уходить с обычными запросами страницы, а не
+            #читаться из JS — на её секретность это не влияет (страница и так наша).
+            profile.cookieStore().setCookie(cookie, QUrl(url))
 
         #Сессия/тема/флаги — в localStorage ДО загрузки страницы, иначе роут-гард SPA
         #успеет увести на форму входа. Тот же приём, что в messenger_web.
@@ -114,13 +159,14 @@ class VueShell(QWidget):
         script.setSourceCode(self._bootstrap_js())
         view.page().scripts().insert(script)
 
-        view.load(QUrl(srv.url(self._route)))
+        view.load(QUrl(url))
         self._lay.addWidget(view)
         self._view = view
 
     def _bootstrap_js(self) -> str:
         """JS, выполняемый до загрузки SPA: сессия, тема, режим встраивания, адрес API."""
         access = refresh = login = ""
+        base = ""
         try:
             from sync_runner import fresh_auth
             base, access = fresh_auth()
@@ -151,7 +197,7 @@ class VueShell(QWidget):
         #раздачу, где никакого API нет. Пока это боевой сервер — как и раньше.
         #Когда появится локальный API поверх десктопного SQLite, поменяется РОВНО эта
         #строка, и офлайн заработает целиком — остальной интерфейс трогать не придётся.
-        api_base = base or ""
+        api_base = getattr(self, "_api_base", base or "")
         return (
             "try{"
             f"localStorage.setItem('gb.access',{json.dumps(access or '')});"
