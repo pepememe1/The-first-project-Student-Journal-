@@ -15,7 +15,12 @@ defineProps({
       <p class="text-[10px] font-medium uppercase tracking-wide text-text2">{{ label }}</p>
       <component :is="icon" v-if="icon" class="size-5" :class="accent ? 'text-accent' : 'text-text2'" />
     </div>
-    <p class="mt-2 font-title text-[28px] font-extrabold leading-none" :class="accent ? 'text-accent' : 'text-text'">
+    <!-- ⚠️ Цифра — ОСНОВНЫМ шрифтом (DM Sans), не заголовочным. У Syne декоративные
+         цифры: «3», «6», «7» с изломами, а «1» и «4» обычные — в ряду карточек одна
+         метрика выглядела нарисованной, соседняя набранной, и читалось это как сбой
+         шрифта. tabular-nums держит одинаковую ширину знаков, чтобы числа не «прыгали»
+         при обновлении данных. -->
+    <p class="mt-2 text-[28px] font-extrabold leading-none tabular-nums" :class="accent ? 'text-accent' : 'text-text'">
       {{ value }}
     </p>
     <p v-if="hint" class="mt-1.5 text-xs text-text3">{{ hint }}</p>

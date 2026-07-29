@@ -386,7 +386,7 @@ class MainAppWindow(QMainWindow):
             log.get("main_window").warning(f"[theme] тема пользователя пропущена: {e}")
 
     @staticmethod
-    def _try_vue_dashboard(role: str):
+    def _try_vue_dashboard(role: str, context: dict = None):
         """Кабинет общим Vue-интерфейсом (None — строить нативный).
 
         Отдельным методом, а не строкой в `_build_dashboard`: сюда же будут подключаться
@@ -396,7 +396,7 @@ class MainAppWindow(QMainWindow):
             import vue_dashboard
             if not vue_dashboard.available_for(role):
                 return None
-            dash = vue_dashboard.VueDashboard(role)
+            dash = vue_dashboard.VueDashboard(role, context=context)
             if dash.ok:
                 return dash
             dash.deleteLater()
@@ -417,6 +417,14 @@ class MainAppWindow(QMainWindow):
             return StudentDashboard(payload), ("Ученик", f"{payload['f']} {payload['n']}")
         if role == "teacher":
             name, data = payload
+            #Свои группы — из назначений предмет→группа, а не весь колледж: этим списком
+            #Вектор отвечает на «какие у меня группы». Раньше он читался из выпадающих
+            #списков нативного журнала, которых в общем кабинете нет, — передаём явно.
+            ga = (data or {}).get("group_assignments", {}) or {}
+            web = self._try_vue_dashboard(
+                role, {"teacher_groups": sorted({g for g in ga.values() if g})})
+            if web is not None:
+                return web, ("Учитель", name)
             if TeacherDashboard is None:
                 raise RuntimeError("Модуль TeacherDashboard не загружен")
             #показываем ПОЛНОЕ ФИО (раньше была только фамилия name.split()[0]);

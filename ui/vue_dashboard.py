@@ -21,14 +21,17 @@ vue_dashboard.py — ВЕСЬ кабинет одним веб-представ�
 Не собран `web/dist`, не поднялся локальный сервер, нет сети при первом входе — кабинет
 остаётся нативным. Общий интерфейс не должен уметь оставить человека без экрана вовсе.
 """
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 import log
 
 _LOG = log.get("vue_dashboard")
 
 #Роли, чей кабинет уже показывается общим интерфейсом (см. шапку про остальные).
-VUE_ROLES = {"student"}
+#Преподаватель здесь ТОЛЬКО потому, что его десктопная способность (голосовые оценки)
+#сохранена нативным слоем рядом — см. `_add_desktop_extras`. Админ ждёт своей: хостинг
+#сервера с этой машины в вебе не воспроизводится в принципе.
+VUE_ROLES = {"student", "teacher"}
 
 #Стартовый маршрут SPA для роли. Дальше человек ходит по её собственному меню.
 _HOME = {
@@ -49,11 +52,12 @@ class VueDashboard(QWidget):
     `ok` — удалось ли открыть. False означает «строй нативный кабинет»: это не авария,
     а обычный запасной путь."""
 
-    def __init__(self, role: str, parent=None):
+    def __init__(self, role: str, parent=None, context: dict = None):
         super().__init__(parent)
         self._role = role
+        self._context = context or {}
         self.ok = False
-        lay = QVBoxLayout(self)
+        lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         try:
@@ -61,11 +65,34 @@ class VueDashboard(QWidget):
             #embed='nav': меню SPA нужно (без него кабинет застрянет на одной странице),
             #а шапка — нет, её роль играет заголовок окна программы.
             shell = VueShell(_HOME.get(role, "/"), role, self, embed="nav")
-            if shell.ok:
-                lay.addWidget(shell)
-                self._shell = shell
-                self.ok = True
+            if not shell.ok:
+                shell.deleteLater()
                 return
-            shell.deleteLater()
+            lay.addWidget(shell, 1)
+            self._shell = shell
+            self.ok = True
         except Exception as e:
             _LOG.warning(f"[vue-dash] кабинет не открылся: {e}")
+            return
+        self._add_desktop_extras()
+
+    def _add_desktop_extras(self):
+        """Нативный слой со способностями, которых в вебе нет (сейчас — микрофон).
+
+        Молча пропускаем, если голосового ввода на машине нет: пустая шторка ради
+        кнопки, которая ничего не делает, только отнимала бы ширину у страницы."""
+        if self._role != "teacher":
+            return
+        try:
+            import desktop_extras
+            if not desktop_extras.voice_available():
+                _LOG.info("[vue-dash] голосовой ввод недоступен — нативный слой не нужен")
+                return
+            overlay = desktop_extras.VoiceVectorOverlay(self._role, self._context, self)
+            if overlay.ok:
+                self.layout().addWidget(overlay)
+                self._extras = overlay
+            else:
+                overlay.deleteLater()
+        except Exception as e:
+            _LOG.warning(f"[vue-dash] нативный слой не добавлен: {e}")
