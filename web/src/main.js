@@ -42,7 +42,16 @@ if (Capacitor.isNativePlatform()) {
 
 // PWA: регистрируем service worker (офлайн-оболочка + «установить приложение»).
 // Только для https/localhost и если браузер поддерживает — иначе тихо пропускаем.
-if ('serviceWorker' in navigator) {
+// ⚠️ ВНУТРИ ДЕСКТОПА не регистрируем вовсе. Там оболочка своя (QWebEngineView), офлайн
+// обеспечивает локальный сервер приложения, а «установить приложение» бессмысленно —
+// оно уже установлено. Регистрация там только падала с DOMException и сыпала в лог.
+const _inDesktop = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('embed') === '1'
+      || localStorage.getItem('gb.embed') === '1'
+  } catch { return false }
+})()
+if ('serviceWorker' in navigator && !_inDesktop) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch((e) => {
       console.warn('[PWA] service worker не зарегистрирован:', e)

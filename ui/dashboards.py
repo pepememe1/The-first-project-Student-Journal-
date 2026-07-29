@@ -709,7 +709,14 @@ class StudentDashboard(QWidget):
         self.stack.addWidget(w)
 
     def _refresh_stats(self):
-        """Обновить статистику"""
+        """Обновить НАТИВНУЮ статистику.
+
+        Вкладка могла переехать на общий Vue-интерфейс — тогда нативной разметки нет
+        вовсе, и обновлять нечего: Vue перечитывает данные сам. Молча выходим.
+        ⚠️ Без этой проверки переключение вкладки падало ДО `setCurrentWidget`, и экран
+        оставался на предыдущей вкладке — со стороны «нажал, но ничего не открылось»."""
+        if not hasattr(self, "_stats_content"):
+            return
         while self._stats_content.count():
             it = self._stats_content.takeAt(0)
             if it.widget():
@@ -911,12 +918,20 @@ class StudentDashboard(QWidget):
             return
         self._switching = True
         try:
-            if key == "stats":
-                self._refresh_stats()
-            #Журнал открываем со списка предметов (со свежими средними после синка).
-            if key == "journal" and hasattr(self, "_journal_stack"):
-                self._refresh_subject_list()
-                self._journal_stack.setCurrentIndex(0)
+            #Подготовка данных вкладки ОТДЕЛЕНА от самого переключения. Раньше сбой в
+            #любом из этих хуков ронял весь метод ДО setCurrentWidget, и человек видел
+            #прежний экран — «нажал, а ничего не открылось», причём без единого намёка,
+            #что виновата подготовка. Показать вкладку важнее, чем освежить её данные:
+            #пустой экран чинится повторным заходом, застрявший интерфейс — нет.
+            try:
+                if key == "stats":
+                    self._refresh_stats()
+                #Журнал открываем со списка предметов (со свежими средними после синка).
+                if key == "journal" and hasattr(self, "_journal_stack"):
+                    self._refresh_subject_list()
+                    self._journal_stack.setCurrentIndex(0)
+            except Exception as e:
+                log.get("dashboards").warning(f"[вкладка {key}] обновление данных: {e}")
             if key in self.pages:
                 self.stack.setCurrentWidget(self.pages[key])
                 self.sidebar.set_active(key)
