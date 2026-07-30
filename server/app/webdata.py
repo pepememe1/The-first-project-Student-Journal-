@@ -298,7 +298,8 @@ def students_in_group(db, group: str):
         User.deleted == False).order_by(User.surname, User.name).all()  # noqa: E712
 
 
-def teacher_assignments(db, teacher_id: str, year: str, semester) -> list:
+def teacher_assignments(db, teacher_id: str, year: str, semester,
+                        allow_fallback: bool = True) -> list:
     """Пары (группа, предмет), ЯВНО назначенные преподавателю на этот термин —
     ЕДИНЫЙ источник правды «какие группы видит препод» (см. models.SubjectHours.
     teacher_id). Заменяет старую teacher_groups()/«предмет числится у препода» —
@@ -316,7 +317,43 @@ def teacher_assignments(db, teacher_id: str, year: str, semester) -> list:
                     SubjectHours.year == (year or ""),
                     SubjectHours.semester == int(semester or 0),
                     SubjectHours.deleted == False).all())  # noqa: E712
-    return sorted({(r.group_name, r.subject) for r in rows if r.group_name and r.subject})
+    pairs = sorted({(r.group_name, r.subject) for r in rows if r.group_name and r.subject})
+    if pairs or not allow_fallback:
+        return pairs
+    #⚠️ НОЛЬ назначений — это НЕ «админ назначил пусто», и разница стоила боевого простоя.
+    #30.07.2026 нагрузка обнулилась сразу у ВСЕХ преподавателей (проверено на живых
+    #аккаунтах Saha/ddxd/Dixm/Artur/Golubev): в базе 13 строк SubjectHours, teacher_id
+    #пуст во всех — до появления редактора назначений заполнять его было нечем. Пустой
+    #журнал получили и сайт, и десктоп (он ходит в тот же API), и офлайн-копия: строгий
+    #скоуп заодно перестал привозить группы в /sync/pull.
+    #Решение тимлида: до расстановки назначений работаем по ПРЕЖНЕМУ правилу. Замысел
+    #точного скоупа цел — появилось хоть одно назначение, и работают ТОЛЬКО они (return
+    #выше), поэтому «препод видит чужие группы» не возвращается. Это мост на время ввода
+    #данных, а не режим: снимается удалением этой ветки, когда назначения расставлены.
+    return _assignments_fallback(db, teacher_id)
+
+
+def _assignments_fallback(db, teacher_id: str) -> list:
+    """Пары (группа, предмет) по прежнему правилу — для преподавателя БЕЗ назначений.
+
+    Два источника, как было до перехода на явные назначения: группы его РЕАЛЬНЫХ занятий
+    и группы, где его предмет числится в справочнике. Второй нужен новичку — у него ещё
+    нет ни одного занятия, и без этого он не смог бы создать первое."""
+    from .models import Group
+    user = db.get(User, teacher_id)
+    subjects = {s for s in ((user.subjects if user else None) or []) if s}
+    if not subjects:
+        return []
+    pairs = set()
+    for g_name, subj in (db.query(Lesson.group_name, Lesson.subject)
+                         .filter(Lesson.subject.in_(subjects),
+                                 Lesson.deleted == False).distinct().all()):  # noqa: E712
+        if g_name and subj:
+            pairs.add((g_name, subj))
+    for g in db.query(Group).filter(Group.deleted == False).all():  # noqa: E712
+        for subj in subjects & set(g.subjects or []):
+            pairs.add((g.name, subj))
+    return sorted(pairs)
 
 
 def teacher_group_names(db, teacher_id: str, year: str, semester) -> list:

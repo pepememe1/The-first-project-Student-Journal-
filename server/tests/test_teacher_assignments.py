@@ -18,15 +18,22 @@ def _push_lesson(client, admin, group, subject, lesson_id="L1"):
     assert r.status_code == 200, r.text
 
 
-def test_teacher_with_many_subjects_sees_no_groups_without_assignment(client):
-    """5 предметов, ни одного назначения — 0 групп, а не «все группы этих предметов»."""
+def test_without_assignment_journal_falls_back_instead_of_going_blank(client):
+    """ПЕРЕСМОТРЕНО 30.07.2026 (решение тимлида). Раньше здесь проверялось «0 групп без
+    назначения». На бою это дало простой: teacher_id был пуст во ВСЕХ строках часов —
+    заполнять его было нечем до появления редактора назначений, — и нагрузка обнулилась
+    сразу у всех восьми преподавателей, на сайте и в программе.
+    Теперь до расстановки назначений работает прежнее правило. Точный скоуп при этом жив:
+    как только назначение появилось, видно ТОЛЬКО его (соседний тест), а выгрузка данных
+    на чужой компьютер остаётся строгой всегда (test_sync_pull_... ниже)."""
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["A", "B", "C", "D", "E"])
     for i, subj in enumerate(["A", "B", "C", "D", "E"]):
         _push_lesson(client, admin, f"G{i}", subj, lesson_id=f"L{i}")
 
     data = client.get("/web/teacher/overview", headers=th).json()
-    assert data["groups"] == [] and data["subjects"] == [] and data["assignments"] == []
+    assert data["groups"], "без назначений журнал не должен быть пустым"
+    assert set(data["subjects"]) <= {"A", "B", "C", "D", "E"}, "только свои предметы"
 
 
 def test_assignment_shows_exactly_that_pair_not_other_groups_with_same_subject(client):
@@ -69,14 +76,20 @@ def test_teacher_can_teach_different_subjects_to_different_groups(client):
                       headers=th).status_code == 403
 
 
-def test_journal_without_assignment_is_403_not_empty(client):
-    """Раньше — пустой журнал («у группы нет оценок»), выглядело как баг. Теперь честный 403."""
+def test_journal_of_foreign_subject_is_still_403(client):
+    """ПЕРЕСМОТРЕНО вместе с тестом выше: свой предмет без назначения теперь открывается
+    (иначе журнал недоступен всем, см. простой 30.07.2026). А ЧУЖОЙ предмет — по-прежнему
+    403: мост касается только видимости своего, права он не расширяет."""
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Математика"])
     _push_lesson(client, admin, "G1", "Математика")
-    r = client.get("/web/teacher/journal", params={"group": "G1", "subject": "Математика"},
-                   headers=th)
-    assert r.status_code == 403
+    _push_lesson(client, admin, "G1", "Химия", "L9")      # предмета у него НЕТ
+    own = client.get("/web/teacher/journal", params={"group": "G1", "subject": "Математика"},
+                     headers=th)
+    assert own.status_code == 200, own.text
+    foreign = client.get("/web/teacher/journal", params={"group": "G1", "subject": "Химия"},
+                         headers=th)
+    assert foreign.status_code == 403
 
 
 def test_sync_pull_without_assignment_brings_no_groups_or_lessons(client):

@@ -63,12 +63,48 @@ def _free_loopback_port() -> int:
         s.close()
 
 
-def local_db_url() -> str:
-    """Адрес ЛОКАЛЬНОЙ базы приложения (схема сервера). Лежит в папке данных рядом с
-    остальным, чтобы портативный .exe оставался портативным."""
+def local_db_file(login: str = "") -> str:
+    """Путь к локальной базе КОНКРЕТНОГО пользователя.
+
+    ⚠️ Файл СВОЙ на каждого вошедшего, и это не удобство, а защита. Раньше файл был один
+    на машину, и в нём одновременно оказывались данные разных ролей: после сеанса
+    преподавателя в базе оставались оценки всей группы, а следующий вошедший студент
+    получал к ним доступ (проверено: 44 оценки шести студентов на машине студента).
+    Имя файла — хеш логина, а не сам логин: имя учётной записи — тоже персональные
+    данные, и светить его в имени файла незачем."""
+    import hashlib
     import app_paths
-    path = app_paths.data_file("local_app.db").replace("\\", "/")
-    return f"sqlite:///{path}"
+    who = hashlib.sha256((login or "anon").encode("utf-8")).hexdigest()[:16]
+    return app_paths.data_file(f"local_app_{who}.db")
+
+
+def local_db_url(login: str = "") -> str:
+    """Адрес локальной базы (схема сервера) в папке данных — .exe остаётся портативным."""
+    return "sqlite:///" + local_db_file(login).replace("\\", "/")
+
+
+def wipe_local_db(login: str = "") -> bool:
+    """Стереть локальную копию — ПО ЯВНОМУ ТРЕБОВАНИЮ, а НЕ при каждом выходе.
+
+    ⚠️ Стирать на выходе НЕЛЬЗЯ: копия и есть offline-first. Без неё следующий запуск без
+    сети не покажет ни журнала, ни расписания — то самое обещание, ради которого локальный
+    сервер и появился. Поэтому копия живёт между сеансами.
+    Изоляцию даёт не стирание, а РАЗДЕЛЬНЫЕ файлы (см. local_db_file): чужую копию
+    следующий вошедший просто не открывает. Эта функция — для «выйти и забыть меня»,
+    отвязки устройства и очистки перед передачей компьютера другому человеку.
+    Вместе с файлом уходит и метка дельты (она внутри базы), поэтому следующий вход
+    честно скачает копию заново."""
+    import os
+    path = local_db_file(login)
+    ok = True
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            if os.path.exists(path + suffix):
+                os.remove(path + suffix)
+        except OSError as e:
+            ok = False
+            _LOG.warning(f"[local-api] копию не удалось стереть: {e}")
+    return ok
 
 
 def ensure_server_path() -> None:
@@ -106,7 +142,16 @@ def prepare_env() -> None:
     Заодно делаем пакет `app` импортируемым: без этого те же вызовы падали бы на
     ImportError и — из-за мягкой обработки ошибок — отвечали бы «человека нет»."""
     ensure_server_path()
-    os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url())
+    #Логин берём из ЖИВОЙ сессии: у каждого вошедшего своя копия базы (см. local_db_file).
+    #setdefault, а не присваивание: если сервер уже поднят на чьей-то базе, менять адрес
+    #на ходу нельзя — SQLAlchemy держит движок с прежним файлом.
+    login = ""
+    try:
+        from sync_runner import current_login
+        login = current_login()
+    except Exception:
+        pass
+    os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url(login))
     #Локальная база — файл на диске пользователя. Шифрование БД (SQLCipher) здесь
     #НЕ включаем: ключ пришлось бы хранить рядом с самой базой, что защиты не даёт.
     #ПДн на десктопе защищает существующий слой (Fernet + DPAPI, §6) — его и оставляем.
@@ -155,6 +200,13 @@ class LocalAPI:
                 self.error = str(e)
                 _LOG.warning(f"[local-api] серверное приложение не загрузилось: {e}")
                 return False
+
+            #Онлайн-подсистемы (мессенджер) — пересылаем на бой: их данных в локальной
+            #копии нет по замыслу, и без этого чаты в программе открывались пустыми.
+            try:
+                install_remote_proxy(app)
+            except Exception as e:
+                _LOG.warning(f"[local-api] прокси онлайн-подсистем не встал: {e}")
 
             import uvicorn
             self.port = _free_loopback_port()
@@ -320,3 +372,62 @@ _instance = LocalAPI()
 
 def instance() -> LocalAPI:
     return _instance
+
+
+#━━ ПРОКСИ ОНЛАЙН-ПОДСИСТЕМ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#Мессенджер сознательно НЕ входит в синхронизацию (§5.4): переписка живёт только на
+#сервере, в локальной копии её нет и быть не должно. Поэтому внутри программы чаты
+#открывались ПУСТЫМИ — данных в локальной базе просто нет.
+#Ходить за ними напрямую с 127.0.0.1 нельзя: браузер режет кросс-доменный запрос по
+#CORS, а раздавать боевому серверу Access-Control-Allow-Origin ради десктопа —
+#открывать его любому чужому origin'у. Поэтому пересылает САМ локальный сервер: для
+#страницы это тот же адрес (CORS не при чём), а наружу идёт обычный серверный запрос.
+#Токен подменяем на БОЕВОЙ: локальный подписан своим секретом, бой его отвергнет.
+_PROXY_PREFIXES = ("/web/messenger", "/messenger")
+
+
+def _remote_auth():
+    """(база, боевой токен) текущей сессии ('', '' — офлайн)."""
+    try:
+        from sync_runner import fresh_auth
+        base, token = fresh_auth()
+        return (base or "").rstrip("/"), token or ""
+    except Exception:
+        return "", ""
+
+
+def install_remote_proxy(app) -> None:
+    """Переслать онлайн-подсистемы на боевой сервер. Ошибку НЕ прячем: пустой чат без
+    объяснения читается как «сообщения пропали»."""
+    from fastapi import Request, Response
+
+    @app.middleware("http")
+    async def _proxy_online_subsystems(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith(_PROXY_PREFIXES):
+            return await call_next(request)
+        base, token = _remote_auth()
+        if not base or not token:
+            return Response(content='{"detail":"Нет связи с сервером сообщений."}'.encode(),
+                            status_code=503, media_type="application/json")
+        import httpx
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "authorization", "content-length",
+                                        "accept-encoding")}
+        headers["Authorization"] = f"Bearer {token}"
+        headers["X-Client"] = "web"
+        try:
+            async with httpx.AsyncClient(timeout=25) as cli:
+                r = await cli.request(request.method, f"{base}{path}",
+                                      params=dict(request.query_params),
+                                      content=await request.body(), headers=headers)
+            #Заголовки ответа фильтруем: hop-by-hop и кодирование относятся к ТОМУ
+            #соединению, а не к нашему — иначе браузер получит битое тело.
+            skip = ("content-encoding", "transfer-encoding", "content-length",
+                    "connection")
+            out = {k: v for k, v in r.headers.items() if k.lower() not in skip}
+            return Response(content=r.content, status_code=r.status_code, headers=out)
+        except Exception as e:
+            _LOG.warning(f"[proxy] {path}: {e}")
+            return Response(content='{"detail":"Сервер сообщений не ответил."}'.encode(),
+                            status_code=502, media_type="application/json")

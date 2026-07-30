@@ -143,7 +143,11 @@ def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
     from .. import webdata as W
     login = user.login or ""
     ty, ts = W.current_term(W.load_config(db))
-    pairs = set(W.teacher_assignments(db, user.id, ty, ts))
+    #⚠️ БЕЗ моста (allow_fallback=False), в отличие от журнала. Здесь скоуп не «что
+    #показать», а «что отдать на чужой компьютер»: без назначения офлайн-копия не должна
+    #привозить группы и занятия вовсе. Мост существует ради видимости журнала, и
+    #распространять его на выгрузку данных нельзя.
+    pairs = set(W.teacher_assignments(db, user.id, ty, ts, allow_fallback=False))
     groups = {g for g, _s in pairs}
     changes["users"] = [u for u in (changes.get("users") or [])
                         if u.get("login") == login
