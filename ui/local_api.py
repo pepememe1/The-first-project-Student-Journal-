@@ -461,6 +461,33 @@ def _remote_auth():
         return "", ""
 
 
+def _local_caller_ok(authorization: str) -> bool:
+    """Пришёл ли запрос от вошедшего человека (проверка ЛОКАЛЬНОГО токена).
+
+    Прокси уходит на бой с чужими правами, поэтому пускать в него можно только того, кто
+    уже прошёл вход в программе. Логин из токена обязан совпасть с логином сессии: иначе
+    старый токен от прошлого пользователя открывал бы переписку нового."""
+    prefix = "bearer "
+    if not authorization or not authorization.lower().startswith(prefix):
+        return False
+    token = authorization[len(prefix):].strip()
+    try:
+        prepare_env()
+        from app.security import decode_token
+        data = decode_token(token) or {}
+    except Exception:
+        return False
+    login = (data.get("sub") or "").strip()
+    if not login:
+        return False
+    try:
+        from sync_runner import current_login
+        expected = current_login()
+    except Exception:
+        expected = ""
+    return bool(expected) and login == expected
+
+
 def install_remote_proxy(app) -> None:
     """Переслать онлайн-подсистемы на боевой сервер. Ошибку НЕ прячем: пустой чат без
     объяснения читается как «сообщения пропали»."""
@@ -471,6 +498,15 @@ def install_remote_proxy(app) -> None:
         path = request.url.path
         if not path.startswith(_PROXY_PREFIXES):
             return await call_next(request)
+        #🔒 СНАЧАЛА проверяем, КТО спрашивает, и только потом подставляем боевой токен.
+        #Без этой проверки прокси был дырой: он подменял Authorization токеном вошедшего,
+        #не глядя на присланный, — значит переписку мог прочитать (и писать от лица
+        #человека) ЛЮБОЙ процесс на этом компьютере, а с браузерной страницы это ещё и
+        #обычный CSRF: адрес петли доступен любому сайту, открытому у пользователя.
+        #Барьер тот же, что у остальных эндпоинтов локального сервера, — свой токен.
+        if not _local_caller_ok(request.headers.get("authorization", "")):
+            return Response(content='{"detail":"Требуется авторизация"}'.encode(),
+                            status_code=401, media_type="application/json")
         base, token = _remote_auth()
         if not base or not token:
             return Response(content='{"detail":"Нет связи с сервером сообщений."}'.encode(),
