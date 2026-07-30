@@ -262,6 +262,13 @@ class VueShell(QWidget):
             s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
         except Exception:
             pass
+        #🎤 РАЗРЕШЕНИЕ НА МИКРОФОН. Без обработки этого запроса движок молча ОТКАЗЫВАЕТ,
+        #и голосовой ввод «нажимается, но не слушает» — самая обидная поломка: выглядит
+        #как неисправный микрофон и правится днями. Спрашивать человека незачем: страница
+        #здесь всегда НАША, с локального адреса, а звук не покидает компьютер (152-ФЗ) —
+        #он уходит на 127.0.0.1, где его распознаёт наш же сервер.
+        #Разрешаем ТОЛЬКО звук: камера журналу не нужна, и давать её не за что.
+        self._allow_microphone(view)
         #Фон под тему: иначе на тёмной теме при открытии вспыхивает белый холст.
         try:
             from PySide6.QtGui import QColor
@@ -308,6 +315,45 @@ class VueShell(QWidget):
         view.load(QUrl(url))
         self._lay.addWidget(view)
         self._view = view
+
+    @staticmethod
+    def _allow_microphone(view):
+        """Выдать странице доступ к микрофону (Qt 6.8+ и более старые — разные API).
+
+        В новых сборках Qt пришёл  с объектом разрешения, в прежних
+        был  с парой (origin, feature). Поддерживаем оба: на
+        машинах колледжа стоят разные версии, и пропустить одну — значит лишить часть
+        людей голосового ввода без единой ошибки в логе."""
+        page = view.page()
+        try:
+            from PySide6.QtWebEngineCore import QWebEnginePermission
+
+            def _on_permission(perm):
+                try:
+                    if perm.permissionType() == QWebEnginePermission.PermissionType.MediaAudioCapture:
+                        perm.grant()
+                    else:
+                        perm.deny()
+                except Exception:
+                    pass
+
+            page.permissionRequested.connect(_on_permission)
+            return
+        except Exception:
+            pass
+        try:
+            from PySide6.QtWebEngineCore import QWebEnginePage as _P
+
+            def _on_feature(origin, feature):
+                allowed = (feature == _P.Feature.MediaAudioCapture)
+                page.setFeaturePermission(
+                    origin, feature,
+                    _P.PermissionPolicy.PermissionGrantedByUser if allowed
+                    else _P.PermissionPolicy.PermissionDeniedByUser)
+
+            page.featurePermissionRequested.connect(_on_feature)
+        except Exception as e:
+            _LOG.warning(f"[vue-shell] разрешение микрофона не настроено: {e}")
 
     def _bootstrap_js(self) -> str:
         """JS, выполняемый до загрузки SPA: сессия, тема, режим встраивания, адрес API."""

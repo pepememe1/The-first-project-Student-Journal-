@@ -11,14 +11,25 @@ import { recordingSupported, sttAvailable, startRecording } from '@/utils/voiceI
 
 const emit = defineEmits(['text', 'error'])
 
-const available = ref(false)
+// Кнопку показываем, если браузер УМЕЕТ записывать. Готовность распознавателя влияет
+// только на активность, а не на видимость: пока она решала «показывать ли», человек не
+// мог отличить «функции нет» от «функция не настроена» — искал микрофон и не находил.
+// Так и вышло на проверке: движок и распознаватель были готовы, а кнопки не было.
+const supported = ref(false)
+const ready = ref(false)
+const reason = ref('')
 const recording = ref(false)
 const busy = ref(false)
 let session = null
 
 onMounted(async () => {
-  if (!recordingSupported()) return
-  available.value = await sttAvailable()
+  supported.value = recordingSupported()
+  if (!supported.value) {
+    reason.value = 'Этот браузер не умеет записывать звук.'
+    return
+  }
+  ready.value = await sttAvailable()
+  if (!ready.value) reason.value = 'Распознавание речи не настроено на сервере.'
 })
 
 // Микрофон нужно отпустить, даже если человек ушёл со страницы во время записи —
@@ -27,6 +38,7 @@ onUnmounted(() => { if (session) session.stop().catch(() => {}) })
 
 async function toggle() {
   if (busy.value) return
+  if (!ready.value) { emit('error', reason.value); return }
   if (!recording.value) {
     try {
       session = await startRecording()
@@ -52,13 +64,15 @@ async function toggle() {
 </script>
 
 <template>
-  <button v-if="available" type="button" @click="toggle" :disabled="busy"
+  <button v-if="supported" type="button" @click="toggle" :disabled="busy"
           :aria-label="recording ? 'Остановить запись' : 'Голосовой ввод'"
-          :title="recording ? 'Остановить и распознать' : 'Сказать голосом'"
+          :title="!ready ? reason : (recording ? 'Остановить и распознать' : 'Сказать голосом')"
           class="grid size-11 shrink-0 place-items-center rounded-sm border transition-colors disabled:opacity-50"
           :class="recording
             ? 'animate-pulse border-red bg-red/15 text-red'
-            : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
+            : (ready
+              ? 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'
+              : 'border-border2 bg-card2 text-text3 opacity-60')">
     <Square v-if="recording" class="size-4" />
     <Mic v-else class="size-5" />
   </button>
