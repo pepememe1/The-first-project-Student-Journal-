@@ -35,15 +35,22 @@ _remembered = []
 #Оригинал держим отдельно: тест ниже читает ЕГО исходник, а модульный атрибут на время
 #прогона подменён заглушкой.
 _ORIGINAL_REMEMBER = local_api._remember_session
+_ORIGINAL_SWITCH = local_api.switch_user_db
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _no_real_session():
+    #Переключение на личную копию проверяется ОТДЕЛЬНО (ниже). Здесь его гасим: иначе
+    #вход уводил бы сервер на другую базу прямо посреди прогона, и тесты проверяли бы
+    #пустую копию вместо подготовленной фикстурой.
+    original_switch = local_api.switch_user_db
+    local_api.switch_user_db = lambda login: False
     original = local_api._remember_session
     local_api._remember_session = lambda login, password, role: _remembered.append(
         (login, role))
     yield
     local_api._remember_session = original
+    local_api.switch_user_db = original_switch
 
 
 @pytest.fixture(scope="module")
@@ -170,3 +177,44 @@ def test_password_is_not_persisted_by_the_bridge(api):
     src = inspect.getsource(_ORIGINAL_REMEMBER)
     assert "set_saved_session(login" in src, "сохраняем логин и роль"
     assert "password" not in src.split("set_saved_session")[1], "пароль на диск не уходит"
+
+
+# ── Личная копия базы: изоляция данных ──────────────────────────────────────────────
+def test_login_switches_to_the_personal_copy(api, monkeypatch):
+    local_api.switch_user_db = _ORIGINAL_SWITCH
+    """После входа сервер обязан перейти на ЛИЧНУЮ копию базы этого человека.
+
+    Форма входа веб-овая, значит сервер поднимается ДО того, как известно, кто войдёт —
+    на «анонимной» базе. Без переключения данные вошедшего легли бы в общий файл, и
+    следующий вошедший на этом компьютере прочитал бы чужие оценки. Ровно эта утечка уже
+    была найдена на живой машине (44 оценки шести студентов), раздельные копии её
+    закрыли — и веб-вход чуть не вернул её обратно."""
+    switched = []
+    monkeypatch.setattr(local_api, "_ensure_copy_openable", lambda login, enc: None)
+    from app import db as real_db
+    monkeypatch.setattr(real_db, "DATABASE_URL", "sqlite:///anon.db")
+    monkeypatch.setattr(real_db, "rebind", lambda url, key="": switched.append(url))
+
+    assert local_api.switch_user_db("ivanov") is True
+    assert switched and "local_app_" in switched[0], switched
+    #Ключ логина попал в ИМЯ файла хешем, а не открытым текстом (логин — тоже ПДн).
+    assert "ivanov" not in switched[0]
+
+
+def test_switch_is_skipped_when_already_on_that_copy(api, monkeypatch):
+    local_api.switch_user_db = _ORIGINAL_SWITCH
+    """Повторный вход тем же человеком не должен пересоздавать движок БД: лишняя
+    перепривязка рвёт открытые соединения на ровном месте."""
+    calls = []
+    from app import db as real_db
+    monkeypatch.setattr(real_db, "DATABASE_URL", local_api.local_db_url("ivanov"))
+    monkeypatch.setattr(real_db, "rebind", lambda url, key="": calls.append(url))
+
+    assert local_api.switch_user_db("ivanov") is True
+    assert calls == [], "переключать нечего — база уже личная"
+
+
+def test_switch_without_login_does_nothing(api):
+    local_api.switch_user_db = _ORIGINAL_SWITCH
+    """Пустой логин — не повод трогать привязку базы."""
+    assert local_api.switch_user_db("") is False

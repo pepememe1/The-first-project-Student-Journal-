@@ -788,6 +788,15 @@ def install_login_bridge(app) -> None:
             _remember_session(login, password, local.get("role", ""))
             return JSONResponse(local)
 
+        #Человека в текущей копии нет — возможно, она ещё «анонимная» (сервер поднялся
+        #до входа). Переключаемся на ЕГО базу и пробуем ещё раз: вдруг он уже заходил на
+        #этой машине и его копия лежит готовая — тогда вход останется офлайновым.
+        if switch_user_db(login):
+            local = _try_local_login(login, password)
+            if local is not None:
+                _remember_session(login, password, local.get("role", ""))
+                return JSONResponse(local)
+
         remote = _try_remote_login(login, password)
         if remote is None:
             #Ни локально, ни на бою. Причину не разделяем на «нет сети» и «неверный
@@ -798,6 +807,11 @@ def install_login_bridge(app) -> None:
 
         role = remote.get("role") or "student"
         _remember_session(login, password, role)
+        #🔒 ГЛАВНОЕ: до синхронизации переключаем базу на ЛИЧНУЮ копию этого человека.
+        #Без этого его данные легли бы в общий «анонимный» файл, и следующий вошедший на
+        #этом компьютере увидел бы чужие оценки — ровно та утечка, ради которой копии и
+        #сделаны раздельными (см. local_db_file).
+        switch_user_db(login)
         #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
         #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
         #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
@@ -897,3 +911,35 @@ def _wait_for_mirror(login: str, seconds: int = 12) -> bool:
             return True
         time.sleep(0.5)
     return user_exists(login)
+
+
+def switch_user_db(login: str) -> bool:
+    """Переключить локальный сервер на ЛИЧНУЮ копию базы этого пользователя.
+
+    Зачем это вообще нужно. Форма входа стала веб-овой, значит сервер поднимается ДО
+    того, как известно, кто войдёт, — на «анонимной» базе. А копия у каждого своя
+    (изоляция данных). Значит после входа привязку надо сменить, иначе всё ляжет в общий
+    файл и следующий вошедший прочитает чужие оценки.
+
+    Возвращает True, если после переключения база готова к работе. Ошибку не поднимаем:
+    вход важнее, а без переключения кабинет всё равно откроется (просто на прежней базе),
+    и это лучше, чем не пустить человека вовсе.
+    """
+    if not login:
+        return False
+    try:
+        prepare_env()
+        target = local_db_url(login)
+        from app import db as _db
+        if getattr(_db, "DATABASE_URL", "") == target:
+            return True                     #уже на нужной базе — переключать нечего
+        #Копию могли зашифровать другим ключом/другим запуском — проверяем ДО привязки,
+        #иначе сервер упадёт на первом же обращении («file is not a database»).
+        _ensure_copy_openable(login, bool(_local_db_key()))
+        _db.rebind(target, os.environ.get("GRADEBOOK_DB_KEY", ""))
+        os.environ["GRADEBOOK_DB_URL"] = target
+        _LOG.info("[local-api] база переключена на личную копию пользователя")
+        return True
+    except Exception as e:      # noqa: BLE001 — не пускать человека из-за этого нельзя
+        _LOG.warning(f"[local-api] не удалось переключить базу на личную копию: {e}")
+        return False

@@ -15,7 +15,7 @@ _IS_SQLITE = DATABASE_URL.startswith("sqlite")
 _connect_args = {"check_same_thread": False} if _IS_SQLITE else {}
 
 
-def _build_engine():
+def _build_engine(url: str = None, key: str = None):
     """Движок БД. Если задан GRADEBOOK_DB_KEY и доступен драйвер sqlcipher3 — поднимаем
     движок поверх SQLCipher: файл БД шифруется ЦЕЛИКОМ (AES-256), ПДн at rest (152-ФЗ).
     Ключ (64 hex, raw 256-bit) задаётся PRAGMA key ПЕРВОЙ операцией КАЖДОГО соединения.
@@ -56,22 +56,66 @@ def _build_engine():
 engine = _build_engine()
 
 
-if _IS_SQLITE:
-    @event.listens_for(engine, "connect")
-    def _sqlite_pragmas(dbapi_conn, _rec):
-        """Настраиваем КАЖДОЕ SQLite-соединение под конкурентную нагрузку.
+def rebind(url: str, key: str = "") -> None:
+    """Переключить ВЕСЬ доступ к базе на другой файл — БЕЗ перезапуска процесса.
 
-        Зачем: под утренним «гердом» входов колледжа несколько запросов пишут в БД
-        одновременно (вход теперь ещё и создаёт строки сессии — auth_sessions). Без
-        этих PRAGMA SQLite сериализует запись и при конфликте СРАЗУ падает «database is
-        locked». С WAL читатели не блокируют писателя, а busy_timeout заставляет
-        писателей ЖДАТЬ освобождения блокировки, а не падать. (Как в десктопном core.py.)
-        Для настоящего масштаба всё равно PostgreSQL — но SQLite так держится дольше."""
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")     #параллельные читатели + один писатель
-        cur.execute("PRAGMA busy_timeout=5000")    #ждать блокировку до 5 c, а не падать
-        cur.execute("PRAGMA synchronous=NORMAL")   #безопасно и быстрее при WAL
-        cur.close()
+    ━━ ЗАЧЕМ ЭТО ЕСТЬ ━━
+    Нужно РОВНО ОДНОМУ потребителю — локальному серверу внутри десктопа
+    (`ui/local_api.py`). Там форма входа теперь веб-овая, значит сервер обязан
+    подняться ДО того, как известно, кто войдёт. А копия базы у каждого пользователя
+    СВОЯ (изоляция данных: иначе следующий вошедший видит оценки предыдущего). Раньше
+    из-за этого всё ложилось в общий «анонимный» файл — та самая утечка, которую
+    раздельные файлы и должны были закрыть.
+
+    ⚠️ НА БОЮ НЕ ВЫЗЫВАЕТСЯ НИКОГДА: там база одна на процесс и задаётся окружением.
+    Функция существует только ради десктопного сценария «сначала окно, потом вход».
+
+    Почему это безопасно сделать на живом приложении:
+      • `SessionLocal.configure()` меняет привязку У СУЩЕСТВУЮЩЕГО объекта, поэтому все
+        модули, сделавшие `from .db import SessionLocal`, автоматически видят новую базу.
+        Пересоздать `SessionLocal` было бы НЕЛЬЗЯ: у них остались бы ссылки на старый.
+      • Старый движок закрываем (`dispose`), иначе его соединения продолжали бы держать
+        прежний файл открытым — на Windows это мешает даже переименовать копию.
+      • PRAGMA-хук вешаем на НОВЫЙ движок: он привязан к конкретному движку, а не к модулю.
+    """
+    global engine, DATABASE_URL, DB_KEY, _IS_SQLITE, _connect_args
+    old = engine
+    DATABASE_URL = url
+    DB_KEY = key or ""
+    _IS_SQLITE = DATABASE_URL.startswith("sqlite")
+    _connect_args = {"check_same_thread": False} if _IS_SQLITE else {}
+    engine = _build_engine()
+    if _IS_SQLITE:
+        event.listen(engine, "connect", _sqlite_pragmas)
+    SessionLocal.configure(bind=engine)
+    try:
+        old.dispose()
+    except Exception:
+        pass
+    init_db()          #создать таблицы и прогнать идемпотентные мини-миграции
+
+
+def _sqlite_pragmas(dbapi_conn, _rec):
+    """Настраиваем КАЖДОЕ SQLite-соединение под конкурентную нагрузку.
+
+    Зачем: под утренним «гердом» входов колледжа несколько запросов пишут в БД
+    одновременно (вход теперь ещё и создаёт строки сессии — auth_sessions). Без
+    этих PRAGMA SQLite сериализует запись и при конфликте СРАЗУ падает «database is
+    locked». С WAL читатели не блокируют писателя, а busy_timeout заставляет
+    писателей ЖДАТЬ освобождения блокировки, а не падать. (Как в десктопном core.py.)
+    Для настоящего масштаба всё равно PostgreSQL — но SQLite так держится дольше.
+
+    ⚠️ Обычная функция, а не @event.listens_for: тот же хук нужно навесить и на НОВЫЙ
+    движок после `rebind()` — декоратор привязал бы его только к первому."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")     #параллельные читатели + один писатель
+    cur.execute("PRAGMA busy_timeout=5000")    #ждать блокировку до 5 c, а не падать
+    cur.execute("PRAGMA synchronous=NORMAL")   #безопасно и быстрее при WAL
+    cur.close()
+
+
+if _IS_SQLITE:
+    event.listen(engine, "connect", _sqlite_pragmas)
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

@@ -16,6 +16,12 @@ import tempfile
 _TMP_DB = os.path.join(tempfile.gettempdir(), "gradebook_test.db")
 os.environ["GRADEBOOK_DB_URL"] = "sqlite:///" + _TMP_DB.replace("\\", "/")
 os.environ["GRADEBOOK_JWT_SECRET"] = "test-secret-not-for-production"
+#⚠️ Ключ шифрования БД гасим ЯВНО (пустой строкой, а не удалением). `app/config.py`
+#дочитывает `server/.env` через `os.environ.setdefault`, то есть занимает любую
+#ОТСУТСТВУЮЩУЮ переменную — и тестовая база начинала открываться боевым ключом из
+#.env, как только на машине появлялся драйвер sqlcipher3. Тесты падали «file is not a
+#database» на ровном месте, причём только у того, кто драйвер поставил.
+os.environ["GRADEBOOK_DB_KEY"] = ""
 #Барьер подтверждения устройств: даём тестам предсказуемый device_id хоста, чтобы
 #обычные запросы проходили барьер «как хост» (connect.device_allowed). Тесты самого
 #барьера используют ДРУГИЕ device_id, чтобы проверить отказ/одобрение.
