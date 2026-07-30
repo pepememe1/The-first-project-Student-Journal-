@@ -165,3 +165,22 @@ def test_only_admin_can_assign_teacher(client):
                     json={"group": "G1", "teachers": {"Математика": "teach:teacher1"}},
                     headers=th)
     assert r.status_code == 403
+
+
+def test_fallback_prefers_real_lessons_over_subject_directory(client):
+    """Мост не должен показывать ВЕСЬ колледж.
+
+    «Предмет числится у группы» — слабый признак: предметы вроде «Компьютерные сети» стоят
+    у десятков групп, и преподаватель получал в выборе весь колледж вместо своих групп
+    (замечено на бою 30.07.2026). Поэтому справочник групп берётся только когда занятий
+    нет НИ ОДНОГО — иначе видно ровно те группы, где он действительно ведёт."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, subjects=["Компьютерные сети"])
+    _push_lesson(client, admin, "К74/1", "Компьютерные сети", "L1")   # его занятие
+    # ещё три группы, где предмет просто числится в справочнике
+    client.post("/sync/push", json={"changes": {"groups": [
+        {"id": f"grp:X{i}", "name": f"X{i}", "subjects": ["Компьютерные сети"]}
+        for i in range(3)]}}, headers=admin)
+
+    data = client.get("/web/teacher/overview", headers=th).json()
+    assert data["groups"] == ["К74/1"], f"лишние группы колледжа: {data['groups']}"

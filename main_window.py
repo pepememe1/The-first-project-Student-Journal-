@@ -387,7 +387,7 @@ class MainAppWindow(QMainWindow):
             log.get("main_window").warning(f"[theme] тема пользователя пропущена: {e}")
 
     @staticmethod
-    def _try_vue_dashboard(role: str, context: dict = None):
+    def _try_vue_dashboard(role: str, context: dict = None, on_logout=None):
         """Кабинет общим Vue-интерфейсом (None — строить нативный, это НЕ авария —
         обычный запасной путь, см. ui/vue_dashboard.py).
 
@@ -398,7 +398,8 @@ class MainAppWindow(QMainWindow):
             import vue_dashboard
             if not vue_dashboard.available_for(role):
                 return None
-            dash = vue_dashboard.VueDashboard(role, context=context)
+            dash = vue_dashboard.VueDashboard(role, context=context,
+                                              on_logout=on_logout)
             if dash.ok:
                 return dash
             dash.deleteLater()
@@ -413,13 +414,19 @@ class MainAppWindow(QMainWindow):
             #ОБЩИЙ интерфейс целиком (§11 «один UI»): те же страницы и то же меню, что на
             #сайте, но с локального сервера — поэтому офлайн сохраняется. Не открылся —
             #строим нативный кабинет: остаться без экрана человек не должен.
-            web = self._try_vue_dashboard(role)
+            web = self._try_vue_dashboard(role, on_logout=self._logout)
             if web is not None:
                 return web, ("Ученик", f"{payload['f']} {payload['n']}")
             return StudentDashboard(payload), ("Ученик", f"{payload['f']} {payload['n']}")
         if role == "teacher":
             name, data = payload
-            web = self._try_vue_dashboard(role)
+            #Свои группы — из назначений предмет→группа, а не весь колледж: этим списком
+            #Вектор отвечает на «какие у меня группы». Раньше он читался из выпадающих
+            #списков нативного журнала, которых в общем кабинете нет, — передаём явно.
+            ga = (data or {}).get("group_assignments", {}) or {}
+            web = self._try_vue_dashboard(
+                role, {"teacher_groups": sorted({g for g in ga.values() if g})},
+                on_logout=self._logout)
             if web is not None:
                 return web, ("Учитель", name)
             if TeacherDashboard is None:
@@ -437,7 +444,7 @@ class MainAppWindow(QMainWindow):
             #Кабинет — общий Vue; то, что относится к ЭТОМУ компьютеру (сервер, БД,
             #обслуживание), живёт в отдельном окне «Инструменты ПК» из шапки: в браузере
             #такие вещи не воспроизводятся в принципе, а не «пока не сделаны».
-            web = self._try_vue_dashboard(role)
+            web = self._try_vue_dashboard(role, on_logout=self._logout)
             if web is not None:
                 return web, ("Администратор", "Администратор")
             if AdminDashboard is None:
@@ -480,7 +487,11 @@ class MainAppWindow(QMainWindow):
         except Exception:
             pass
         self._header.set_role(role_text, user_text)
-        self._header.show()
+        #ВЕБ-кабинет несёт СВОЮ шапку (ту же, что на сайте) — нативную не показываем,
+        #иначе две панели подряд: сверху старая, под ней новая. У нативных кабинетов она
+        #остаётся: без неё оттуда не выйти из аккаунта.
+        self._web_cabinet = type(dash).__name__ == "VueDashboard"
+        self._header.setVisible(not self._web_cabinet)
         self._refresh_applied_mode()   #синхронизируем «текущий режим» для таймера расписания
 
     def reapply_current(self):

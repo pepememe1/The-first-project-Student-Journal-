@@ -344,12 +344,22 @@ def _assignments_fallback(db, teacher_id: str) -> list:
     subjects = {s for s in ((user.subjects if user else None) or []) if s}
     if not subjects:
         return []
+    #Сначала — группы, где у него РЕАЛЬНО есть занятия. Это и есть его нагрузка.
     pairs = set()
     for g_name, subj in (db.query(Lesson.group_name, Lesson.subject)
                          .filter(Lesson.subject.in_(subjects),
                                  Lesson.deleted == False).distinct().all()):  # noqa: E712
         if g_name and subj:
             pairs.add((g_name, subj))
+    if pairs:
+        return sorted(pairs)
+    #⚠️ Справочник групп — ТОЛЬКО если занятий нет ни одного, и вот почему.
+    #«Предмет числится у группы» — очень слабый признак: предметы вроде «Компьютерные
+    #сети» стоят у десятков групп колледжа, и преподаватель получал в выборе весь
+    #колледж вместо своих трёх групп (замечено на бою 30.07.2026). Пользоваться таким
+    #списком нельзя — своё в нём не найти.
+    #Но и убирать его целиком нельзя: у НОВОГО преподавателя занятий ещё нет, и без этой
+    #ветки он не смог бы создать первое. Поэтому она — последняя, а не равноправная.
     for g in db.query(Group).filter(Group.deleted == False).all():  # noqa: E712
         for subj in subjects & set(g.subjects or []):
             pairs.add((g.name, subj))

@@ -27,7 +27,9 @@ vue_dashboard.py — ВЕСЬ кабинет одним веб-представ�
 Не собран `web/dist`, не поднялся локальный сервер, нет сети при первом входе — кабинет
 остаётся нативным. Общий интерфейс не должен уметь оставить человека без экрана вовсе.
 """
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QHBoxLayout, QPushButton, QVBoxLayout,
+                               QWidget)
 
 import log
 
@@ -58,24 +60,60 @@ class VueDashboard(QWidget):
     `ok` — удалось ли открыть. False означает «строй нативный кабинет»: это не авария,
     а обычный запасной путь."""
 
-    def __init__(self, role: str, parent=None, context: dict = None):
+    def __init__(self, role: str, parent=None, context: dict = None, on_logout=None):
         super().__init__(parent)
         self._role = role
         self._context = context or {}
+        self._on_logout = on_logout
         self.ok = False
-        lay = QHBoxLayout(self)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         try:
             from vue_shell import VueShell
-            #embed='nav': меню SPA нужно (без него кабинет застрянет на одной странице),
-            #а шапка — нет, её роль играет заголовок окна программы.
-            shell = VueShell(_HOME.get(role, "/"), role, self, embed="nav")
+            #embed=False: у кабинета СВОЯ веб-шапка и своё меню — то же, что видит
+            #человек на сайте. Раньше стояло 'nav' (шапку прятали, её роль играла
+            #нативная), и получалось смешение: страницы новые, а панель сверху старая.
+            #Нативную шапку окна для таких кабинетов скрывает main_window.
+            shell = VueShell(_HOME.get(role, "/"), role, self, embed=False,
+                             on_logout=on_logout)
             if not shell.ok:
                 shell.deleteLater()
                 return
+            self._add_desktop_strip(lay)
             lay.addWidget(shell, 1)
             self._shell = shell
             self.ok = True
         except Exception as e:
             _LOG.warning(f"[vue-dash] кабинет не открылся: {e}")
+
+    def _add_desktop_strip(self, lay):
+        """Узкая нативная полоска над кабинетом — вход к тому, чего в браузере нет.
+
+        Сейчас это только «Инструменты ПК» админа (хостинг сервера, БД). Полоска нативная
+        осознанно: страницами такие вещи не выражаются, они про ЭТОТ компьютер. Всем
+        остальным ролям полоски нет вовсе — лишняя панель ради пустоты хуже её отсутствия.
+        Раньше кнопка жила в нативной шапке, но шапку у веб-кабинетов мы убрали (она
+        дублировала веб-шапку), и без этой полоски админ потерял бы доступ к серверу."""
+        if self._role != "admin":
+            return
+        btn = QPushButton("Инструменты ПК")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip("Сервер, база данных и другие настройки этого компьютера")
+        btn.setFixedHeight(26)
+        btn.clicked.connect(self._open_tools)
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.addStretch(1)
+        row.addWidget(btn)
+        bar.setFixedHeight(34)
+        lay.addWidget(bar)
+
+    @staticmethod
+    def _open_tools():
+        try:
+            import desktop_tools
+            desktop_tools.open_tools()
+        except Exception as e:
+            _LOG.warning(f"[vue-dash] инструменты не открылись: {e}")

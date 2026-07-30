@@ -35,8 +35,13 @@ class VueShell(QWidget):
     route — путь внутри SPA («/student/journal»); role — роль для роут-гарда SPA.
     embed=True прячет собственный сайдбар SPA (когда вокруг есть нативная навигация)."""
 
-    def __init__(self, route: str, role: str, parent=None, embed: bool = True):
+    def __init__(self, route: str, role: str, parent=None, embed: bool = True,
+                 on_logout=None):
         super().__init__(parent)
+        #Выход человек нажимает в ВЕБ-шапке, а закрыть сессию должна ПРОГРАММА: SPA лишь
+        #гасит свои токены и уходит на свой /login. Без этого мостика внутри окна
+        #показывалась бы веб-форма входа вместо родного экрана программы.
+        self._on_logout = on_logout
         self._route = route
         self._role = role
         self._embed = self._embed_mode(embed)
@@ -288,6 +293,17 @@ class VueShell(QWidget):
         script.setRunsOnSubFrames(False)
         script.setSourceCode(self._bootstrap_js())
         view.page().scripts().insert(script)
+
+        #Ловим уход SPA на свой /login — это и есть «человек нажал Выйти» (либо сессия
+        #истекла). Отдаём событие программе, чтобы она вернулась на родной экран входа.
+        if self._on_logout is not None:
+            def _watch(qurl):
+                if qurl.path().rstrip("/").endswith("/login") or qurl.path() == "/login":
+                    try:
+                        self._on_logout()
+                    except Exception as e:
+                        _LOG.warning(f"[vue-shell] выход не обработан: {e}")
+            view.urlChanged.connect(_watch)
 
         view.load(QUrl(url))
         self._lay.addWidget(view)
