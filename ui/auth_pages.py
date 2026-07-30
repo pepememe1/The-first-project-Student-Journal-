@@ -145,6 +145,8 @@ class _LoginMascot(QLabel):
         self._movie_state = None
         self._hovered = False
         self._greeted = False
+        #Закрытые глаза (набран пароль) — состояние ВЫШЕ покоя и «думает», см. set_eyes_shut.
+        self._eyes = ""            #"" | "eyes_close" | "eyes_open"
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("background:transparent;")
         if self._anim.get("idle"):
@@ -166,8 +168,40 @@ class _LoginMascot(QLabel):
             QTimer.singleShot(1600, self._settle_to_idle)
 
     def _settle_to_idle(self):
-        if not self._hovered:
+        if not self._hovered and not self._eyes:
             self._play("idle")
+
+    #Длительность «убирает лапы»: 10 кадров при 12 fps (tools/build_mascot_anim.py) —
+    #~830 мс, берём с запасом, чтобы покой не начался раньше опущенных лап.
+    _EYES_OPEN_MS = 900
+
+    def set_eyes_shut(self, shut: bool):
+        """Закрыть/открыть глаза лапами — Вектор показывает, что не подсматривает пароль.
+
+        Зовётся из поля пароля по НАЛИЧИЮ символов (а не по наведению мыши): важно, что
+        пароль введён, а не куда смотрит курсор.
+
+        ⚠️ Обратный ход — ОТДЕЛЬНЫЙ файл `eyes_open` (реверс того же ролика на сборке):
+        QMovie, как и браузер, не умеет проигрывать анимацию назад."""
+        if shut:
+            if self._eyes == "eyes_close":
+                return                      #уже закрыты — не перезапускать на каждый символ
+            self._eyes = "eyes_close"
+            self._play("eyes_close")
+            return
+        if not self._eyes:
+            return                          #не закрывались — открывать нечего
+        self._eyes = "eyes_open"
+        self._play("eyes_open")
+        QTimer.singleShot(self._EYES_OPEN_MS, self._release_eyes)
+
+    def _release_eyes(self):
+        #За время анимации пароль могли набрать заново — тогда глаза уже закрыты снова,
+        #и возвращать покой нельзя.
+        if self._eyes != "eyes_open":
+            return
+        self._eyes = ""
+        self._play("thinking" if self._hovered else "idle")
 
     def _play(self, state: str):
         """Проигрывает анимированный WebP состояния (idle/greeting/thinking) через QMovie.
@@ -193,7 +227,9 @@ class _LoginMascot(QLabel):
 
     def enterEvent(self, event):
         self._hovered = True
-        if self._anim.get("thinking"):
+        if self._eyes:
+            pass                        #глаза закрыты — «думает» не перебивает обещание
+        elif self._anim.get("thinking"):
             self._play("thinking")      #«задумался» — пока курсор над Вектором
         elif self._think is not None and not self._think.isNull():
             self.setPixmap(self._think)
@@ -205,7 +241,9 @@ class _LoginMascot(QLabel):
 
     def leaveEvent(self, event):
         self._hovered = False
-        if self._anim.get("idle"):
+        if self._eyes:
+            pass                        #пока пароль набран, покой не возвращаем
+        elif self._anim.get("idle"):
             self._play("idle")
         elif self._default is not None:
             self.setPixmap(self._default)
@@ -597,6 +635,10 @@ class LoginPage(QWidget):
         lay.addSpacing(8)
         lay.addWidget(self._mk_label("Пароль"))
         self.pass_inp = self._mk_input("••••••••", password=True)
+        #Вектор закрывает глаза лапами, пока в поле есть символы, и убирает их (обратная
+        #анимация), когда поле опустело. Привязка к НАЛИЧИЮ символов, а не к фокусу: жест
+        #означает «не подсматриваю пароль», а не «курсор в поле».
+        self.pass_inp.textChanged.connect(self._on_password_typed)
         lay.addWidget(self.pass_inp)
         lay.addSpacing(12)
         b_go = self._mk_btn("Войти")
@@ -695,7 +737,8 @@ class LoginPage(QWidget):
             #ПРИОРИТЕТ — анимированный Вектор (тот же WebP, что в чате и на вебе):
             #появление «приветствие» → покой idle (с паузой-покоем), наведение → «думает».
             if speech.has_anim():
-                anim = {s: speech.anim_path(s) for s in ("idle", "thinking", "greeting")}
+                anim = {s: speech.anim_path(s) for s in
+                        ("idle", "thinking", "greeting", "eyes_close", "eyes_open")}
                 if anim.get("idle"):
                     return _LoginMascot(H, self._on_mascot_enter, self._on_mascot_leave,
                                         anim=anim)
@@ -813,6 +856,17 @@ class LoginPage(QWidget):
         ask_server_address(self, first_run=False)
 
     #Helper methods
+    def _on_password_typed(self, text: str):
+        """Поле пароля изменилось → глаза маскота. Молча выходим, если маскота нет:
+        на узком окне он не создаётся, и вход не должен от этого падать."""
+        mascot = getattr(self, "_mascot", None)
+        if mascot is None or not hasattr(mascot, "set_eyes_shut"):
+            return
+        try:
+            mascot.set_eyes_shut(bool(text))
+        except Exception as e:      # noqa: BLE001 — украшение не имеет права мешать входу
+            log.get("auth").debug(f"[mascot] глаза не переключились: {e}")
+
     def _mk_label(self, text: str) -> QLabel:
         l = QLabel(text)
         l.setStyleSheet(

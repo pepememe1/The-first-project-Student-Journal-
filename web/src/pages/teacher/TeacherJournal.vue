@@ -17,6 +17,8 @@ import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   
 import { scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1)
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import MicButton from '@/components/vector/MicButton.vue'
+import VoiceCommandDialog from '@/components/vector/VoiceCommandDialog.vue'
 
 const toast = useToast()
 const { confirm, prompt } = useConfirm()
@@ -149,6 +151,65 @@ const groupAverage = computed(() => {
   const vals = (data.value?.students || []).map((s) => Number(s.average) || 0).filter((v) => v > 0)
   return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—'
 })
+
+// ── Голосовые команды преподавателя («Иванову пять», «всей группе четыре») ─────────
+// Разбор делает СЕРВЕР (общий модуль `voice_command.py`, тот же, что на десктопе), запись —
+// обычный `setGrade` ниже. Отдельного «голосового» пути записи НЕТ намеренно: он означал
+// бы вторую проверку прав и второй формат ключа оценки.
+//
+// ⚠️ Между «расслышал» и «записал» ВСЕГДА стоит подтверждение человеком. Распознавание
+// ошибается тихо, и неверная оценка в журнале может остаться незамеченной надолго.
+const voiceResult = ref(null)      // разобранная команда (открывает диалог)
+const voiceWriting = ref(false)
+
+async function onVoiceText(text) {
+  if (!group.value || !subject.value) {
+    toast.error('Сначала выберите группу и предмет')
+    return
+  }
+  try {
+    const { data } = await teacherApi.voiceCommand(text, group.value, subject.value)
+    // Вопрос — не команда журнала: отправляем человека к «Вектору», а не пишем оценки.
+    if (data.kind === 'question') {
+      toast.info('Это вопрос — задайте его «Вектору» на вкладке помощника')
+      return
+    }
+    // Создание занятия голосом на сайте пока не поддержано: занятие заводится своей
+    // формой (там тема, дата, номер и тип), и дублировать её в диалоге подтверждения
+    // значило бы делать вторую форму создания. Показываем, что расслышали, честно.
+    if (data.kind === 'lesson') {
+      toast.info('Создание занятия голосом пока только в программе — заведите его кнопкой «+»')
+      return
+    }
+    voiceResult.value = data
+  } catch (e) {
+    toast.error(e?.response?.data?.detail || 'Не удалось разобрать команду')
+  }
+}
+
+async function writeVoiceItems(items) {
+  const lessonId = voiceResult.value?.lesson_id
+  if (!lessonId) return
+  voiceWriting.value = true
+  let ok = 0
+  const failed = []
+  try {
+    // По одной записи, тем же эндпоинтом, что и ручная простановка. Последовательно, а не
+    // пачкой: при сбое на середине важно знать, что именно записалось.
+    for (const it of items) {
+      try {
+        await teacherApi.setGrade(it.surname, it.name, lessonId, it.grade)
+        ok += 1
+      } catch { failed.push(it.who) }
+    }
+    await load()
+    if (failed.length) toast.error(`Записано ${ok}, не удалось: ${failed.join(', ')}`)
+    else toast.success(`Записано: ${ok}`)
+  } finally {
+    voiceWriting.value = false
+    voiceResult.value = null
+  }
+}
 
 // ── Запись оценки (селект → сервер → перезагрузка: средний считает сервер) ──────
 async function setGrade(s, key, value) {
@@ -364,6 +425,10 @@ async function downloadVedomost(fmt) {
               :class="isArchive ? 'border-orange text-orange' : ''">
         <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
       </select>
+      <!-- Голосом можно ставить оценки и отмечать пропуски. Кнопка здесь, а не у
+           «Вектора»: команде нужны группа и предмет, а они выбраны именно на этой
+           странице. Тумблер и выбор микрофона — в настройках. -->
+      <MicButton @text="onVoiceText" @error="(m) => toast.error(m)" />
       <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">Сохранение…</span>
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
         Студентов: {{ data.students?.length || 0 }} · занятий: {{ data.lessons?.length || 0 }}
@@ -547,5 +612,9 @@ async function downloadVedomost(fmt) {
         </div>
       </div>
     </div>
+
+    <!-- Подтверждение голосовой команды: между «расслышал» и «записал». -->
+    <VoiceCommandDialog v-if="voiceResult" :result="voiceResult" :busy="voiceWriting"
+                        @confirm="writeVoiceItems" @cancel="voiceResult = null" />
   </div>
 </template>

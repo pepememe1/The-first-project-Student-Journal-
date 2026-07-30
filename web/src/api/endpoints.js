@@ -85,6 +85,9 @@ export const teacherApi = {
   stats: (group, subject, params = {}) => api.get('/web/teacher/stats', { params: { group, subject, ...params } }),
   insights: (group) => api.get('/web/teacher/insights', { params: { group } }),
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
+  // Разбор голосовой команды (только предложение — записывает setGrade ниже).
+  voiceCommand: (text, group, subject) =>
+    api.post('/web/vector/voice/command', { text, group, subject }),
   setGrade: (surname, name, lesson_id, grade) =>
     api.post('/web/teacher/grade', { surname, name, lesson_id, grade }),
   // Занятия/пары (Phase B): наполнение журнала. id = uuid на сервере.
@@ -129,6 +132,25 @@ export const curatorApi = {
 // АДМИН ──────────────────────────────────────────────────────────────────────────
 export const adminApi = {
   overview: () => api.get('/web/admin/overview'),
+
+  // ── Данные и резервные копии (AdminData.vue) ─────────────────────────────────────
+  // Выгрузка = резервная копия: один формат на оба применения, чтобы скачанное
+  // «на всякий случай» гарантированно принималось обратно.
+  dataDatasets: () => api.get('/web/admin/data/datasets'),
+  dataExport: (sets = '') =>
+    api.get('/web/admin/data/export', { params: { sets }, responseType: 'blob' }),
+  dataInspect: (file) => {
+    //Отдельный шаг «что в файле» ДО записи: см. пояснение в AdminData.vue.
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/web/admin/data/inspect', form)
+  },
+  dataImport: (file, sets) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('sets', sets)
+    return api.post('/web/admin/data/import', form)
+  },
   teachers: () => api.get('/web/admin/teachers'),
   students: (group = '') => api.get('/web/admin/students', { params: { group } }),
   groups: () => api.get('/web/admin/groups'),
@@ -431,6 +453,8 @@ export const messengerModApi = {
 // уходит уведомлением выбранной аудитории (вкладка «Мероприятия» в NotificationsInbox).
 export const eventsApi = {
   create: (title, body, groups = []) => api.post('/web/events', { title, body, groups }),
+  //Что Я разослал — одна строка на рассылку (только препод/админ).
+  sent: (limit = 50) => api.get('/web/events/sent', { params: { limit } }),
 }
 
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).

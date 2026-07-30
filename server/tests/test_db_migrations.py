@@ -13,7 +13,8 @@ column» на любой группе/канале. Здесь эта ветка
 from sqlalchemy import text, inspect
 
 from app.db import (engine, _ensure_participant_state_columns,
-                    _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column)
+                    _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
+                    _ensure_notify_event_columns)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -82,3 +83,31 @@ def test_ensure_subject_hours_zet_column_adds_to_old_schema(client):
     cols = {c["name"] for c in inspect(engine).get_columns("subject_hours")}
     assert "zet" in cols
     _ensure_subject_hours_zet_column()  # идемпотентность — второй вызов не падает
+
+
+def test_ensure_notify_event_columns_adds_author_columns_to_old_schema(client):
+    """Таблица без author_login/batch_id (схема ДО вкладки «Отправленные»).
+
+    Ровно тот случай из шапки файла: notify_events живёт на проде с самых пушей об
+    оценках, и create_all новые столбцы в неё не добавит. Без ALTER-а вкладка
+    «Отправленные» падала бы «no such column: author_login» у каждого преподавателя, а
+    заодно сломалась бы ЛЮБАЯ отправка уведомления — запись события идёт тем же путём."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE notify_events"))
+        conn.execute(text("""CREATE TABLE notify_events (
+            id VARCHAR PRIMARY KEY, login VARCHAR, kind VARCHAR,
+            subject VARCHAR, lesson_id VARCHAR, created_at VARCHAR, read_at VARCHAR,
+            title VARCHAR DEFAULT '', body VARCHAR DEFAULT '', payload JSON
+        )"""))
+    engine.dispose()          #см. пояснение про тёплый пул в тесте выше
+    _ensure_notify_event_columns()
+    cols = {c["name"] for c in inspect(engine).get_columns("notify_events")}
+    assert "author_login" in cols and "batch_id" in cols
+
+
+def test_ensure_notify_event_columns_is_idempotent(client):
+    """Второй прогон на уже актуальной схеме не должен падать «duplicate column»:
+    миграции гоняются при КАЖДОМ старте сервера, а не один раз."""
+    engine.dispose()
+    _ensure_notify_event_columns()
+    _ensure_notify_event_columns()

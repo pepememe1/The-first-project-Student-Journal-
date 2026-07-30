@@ -2,7 +2,7 @@
 // LoginPage — экран входа (порт ui/auth_pages.py): светлый фон-«соты», три колонки —
 // «Вектор» слева (наведение → поза «думает» + облачко-совет с ротацией), карточка
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Download, Fingerprint } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
@@ -75,8 +75,39 @@ function onEnter() { hovered.value = true; tipIndex.value = (tipIndex.value + 1)
 // успокаивается в покой (idle) — задержка убирает мелькание greeting↔idle. Наведение
 // мыши → «думает». Все три состояния — тот же анимированный WebP, что и в чате.
 const greetingDone = ref(false)
-const loginAnim = computed(() =>
-  hovered.value ? 'thinking' : (greetingDone.value ? 'idle' : 'greeting'))
+
+// ── Вектор закрывает глаза, пока набран пароль ──────────────────────────────────────
+// Жест смысловой, а не декоративный: маскот показывает, что НЕ подсматривает. Поэтому
+// он привязан к наличию символов в поле, а не к наведению мыши — важно, что пароль
+// введён, а не куда смотрит курсор.
+//
+// ⚠️ Обратный ход — ОТДЕЛЬНЫЙ файл `eyes_open` (собран реверсом того же ролика, см.
+// tools/build_mascot_anim.py): ни браузер, ни Qt не умеют отматывать анимированный WebP
+// назад. Поэтому «убирает лапы» — это проигрывание второго файла, после которого сами
+// возвращаемся в покой (в самом WebP loop=1, он застывает на последнем кадре).
+const eyesState = ref('')            // '' | 'eyes_close' | 'eyes_open'
+// 10 кадров при FPS=12 в сборщике → ~830 мс. Держим с небольшим запасом, чтобы покой
+// не начался раньше, чем лапы действительно опустились.
+const EYES_OPEN_MS = 900
+let eyesTimer = null
+
+watch(() => password.value.length > 0, (typed) => {
+  clearTimeout(eyesTimer)
+  if (typed) { eyesState.value = 'eyes_close'; return }
+  // Поле опустело. Если глаза и не закрывались (страница только открылась), открывать
+  // нечего — иначе на пустой форме проигрывалось бы «убирает лапы» из ниоткуда.
+  if (!eyesState.value) return
+  eyesState.value = 'eyes_open'
+  eyesTimer = setTimeout(() => { eyesState.value = '' }, EYES_OPEN_MS)
+})
+onBeforeUnmount(() => clearTimeout(eyesTimer))
+
+// Закрытые глаза ВАЖНЕЕ «думает» при наведении: пока пароль в поле, маскот не
+// подсматривает — это обещание, а подсказка при наведении может и подождать.
+const loginAnim = computed(() => {
+  if (eyesState.value) return eyesState.value
+  return hovered.value ? 'thinking' : (greetingDone.value ? 'idle' : 'greeting')
+})
 
 const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
 

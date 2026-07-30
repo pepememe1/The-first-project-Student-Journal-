@@ -399,7 +399,12 @@ def _ensure_notify_event_columns():
     #откажет на попытке добавить уже существующий.
     wanted = (("title", "VARCHAR DEFAULT ''"),
               ("body", "VARCHAR DEFAULT ''"),
-              ("payload", "JSONB" if is_pg else "JSON"))
+              ("payload", "JSONB" if is_pg else "JSON"),
+              #Автор и метка партии — для вкладки «Отправленные». У писем, накопленных
+              #до этой правки, останутся пустыми: кто их отправил, задним числом не
+              #восстановить, и придумывать автора нельзя.
+              ("author_login", "VARCHAR DEFAULT ''"),
+              ("batch_id", "VARCHAR DEFAULT ''"))
     with engine.begin() as conn:
         for name, coltype in wanted:
             if name not in columns:

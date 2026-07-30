@@ -9,8 +9,7 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound,
-} from '@lucide/vue'
+  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -67,6 +66,7 @@ export const NAV = {
     { section: 'Система' },
     { key: 'api', label: 'Настройки ИИ', icon: Settings, to: '/admin/api' },
     { key: 'server', label: 'Сервер', icon: Server, to: '/admin/server' },
+    { key: 'data', label: 'Данные и копии', icon: Database, to: '/admin/data' },
     { key: 'requests', label: 'Запросы на подключение', icon: MonitorSmartphone, to: '/admin/requests' },
     { key: 'sessions', label: 'Сессии и доступ', icon: ShieldCheck, to: '/admin/access' },
     { key: 'settings', label: 'Настройки', icon: SlidersHorizontal, to: '/admin/settings' },

@@ -18,22 +18,131 @@ export function recordingSupported() {
   return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder)
 }
 
-/** Готов ли сервер распознавать (false — кнопку не показываем). */
-export async function sttAvailable() {
+/** Умеет ли САМ браузер распознавать речь (Web Speech API, Chrome/Edge). */
+export function browserRecognitionSupported() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+}
+
+/**
+ * Чем распознавать: спрашиваем СЕРВЕР, а не решаем на клиенте.
+ * Возвращает { available, engine, reason }: engine — 'whisper' | 'browser' | ''.
+ *
+ * Почему решает сервер. Во-первых, у администратора есть переключатель «распознавать на
+ * сервере для всех» — клиент не может его знать. Во-вторых, десктоп и сайт обязаны вести
+ * себя одинаково, а «есть ли на хосте Whisper» видно только хосту.
+ */
+export async function sttStatus() {
   try {
     const { data } = await api.get('/web/vector/stt/status')
-    return !!data?.available
+    const engine = data?.engine || ''
+    //Сервер отдал 'browser', но браузер этого не умеет (Firefox/Safari) — честно
+    //сообщаем, а не оставляем кнопку, которая ничего не сделает.
+    if (engine === 'browser' && !browserRecognitionSupported()) {
+      return { available: false, engine: '',
+               reason: 'Этот браузер не умеет распознавать речь. Откройте в Chrome или Edge.' }
+    }
+    return { available: !!data?.available && !!engine, engine, reason: data?.reason || '' }
   } catch {
-    return false
+    return { available: false, engine: '', reason: 'Не удалось узнать, доступен ли голосовой ввод.' }
+  }
+}
+
+/** Совместимость с прежним вызовом: просто «доступен ли голосовой ввод». */
+export async function sttAvailable() {
+  return (await sttStatus()).available
+}
+
+/**
+ * Список микрофонов для выбора в настройках: [{ deviceId, label }].
+ *
+ * ⚠️ Браузер скрывает НАЗВАНИЯ устройств, пока не выдано разрешение на микрофон — до
+ * этого приходит список пустых «label». Поэтому `ask=true` (только из жеста человека)
+ * коротко открывает поток и сразу закрывает: это штатный способ узнать названия, другого
+ * нет. Без разрешения возвращаем то, что есть, с честными подписями «Микрофон 1/2/…» —
+ * пустой список выглядел бы как «микрофонов нет», хотя они есть.
+ */
+export async function listMicrophones(ask = false) {
+  if (!navigator.mediaDevices?.enumerateDevices) return []
+  if (ask) {
+    //Поток нужен на мгновение — ровно чтобы браузер раскрыл названия. Дорожки закрываем
+    //в том же вызове, иначе у человека останется горящий индикатор записи.
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true })
+    probe.getTracks().forEach((t) => t.stop())
+  }
+  const all = await navigator.mediaDevices.enumerateDevices()
+  return all
+    .filter((d) => d.kind === 'audioinput')
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Микрофон ${i + 1}` }))
+}
+
+/**
+ * Начать распознавание ТЕМ движком, который назначил сервер. Единая точка входа для
+ * интерфейса: кнопка микрофона не должна знать, кто именно распознаёт.
+ */
+export async function startVoice(engine, deviceId = '') {
+  return engine === 'browser'
+    ? startBrowserRecognition()
+    : startRecording(deviceId)
+}
+
+/**
+ * Распознавание СИЛАМИ БРАУЗЕРА (Web Speech API).
+ *
+ * ⚠️ Важное отличие от Whisper: браузер (Chrome/Edge) отправляет звук на серверы Google,
+ * то есть третьей стороне. Для журнала с ПДн это допустимо ТОЛЬКО потому, что здесь
+ * распознаётся вопрос помощнику, а не данные студентов, — и потому что это осознанный
+ * выбор администратора (режим `browser`). Основной путь — Whisper на своём хосте.
+ *
+ * Интерфейс намеренно ТОТ ЖЕ, что у записи на сервер ({ stop }): кнопка микрофона не
+ * должна знать, кто распознаёт.
+ */
+export function startBrowserRecognition() {
+  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!Ctor) throw new Error('Этот браузер не умеет распознавать речь.')
+  const rec = new Ctor()
+  rec.lang = 'ru-RU'
+  rec.continuous = true          //не обрывать на первой паузе: команда бывает длинной
+  rec.interimResults = false     //нужен итог, черновые варианты только мигали бы
+  let text = ''
+  let failure = ''
+  rec.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i += 1) {
+      if (e.results[i].isFinal) text += `${e.results[i][0].transcript} `
+    }
+  }
+  rec.onerror = (e) => {
+    //Запоминаем причину, но НЕ бросаем здесь: обработчик события — не наш стек вызова,
+    //исключение из него до кнопки не дойдёт и человек увидит «просто ничего».
+    failure = e?.error === 'not-allowed'
+      ? 'Нет доступа к микрофону. Разрешите запись в настройках.'
+      : 'Не удалось распознать речь.'
+  }
+  rec.start()
+
+  return {
+    async stop() {
+      const done = new Promise((resolve) => { rec.onend = resolve })
+      rec.stop()
+      await done
+      if (failure && !text.trim()) throw new Error(failure)
+      return text.trim()
+    },
   }
 }
 
 /**
- * Пишет с микрофона, пока не позовут stop(). Возвращает { stop } — stop() отдаёт
- * распознанный текст (или бросает ошибку с человеческой причиной).
+ * Пишет с микрофона, пока не позовут stop(); распознаёт на СЕРВЕРЕ (Whisper).
+ * Возвращает { stop } — stop() отдаёт текст (или бросает ошибку с человеческой причиной).
+ *
+ * `deviceId` — выбранный в настройках микрофон; пусто = системный по умолчанию.
  */
-export async function startRecording() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+export async function startRecording(deviceId = '') {
+  //`exact` НЕ используем осознанно: с ним исчезнувшее устройство (отключили гарнитуру)
+  //даёт OverconstrainedError и голосовой ввод просто перестаёт работать. Без `exact`
+  //браузер сам берёт системный микрофон — лучше записать не тем, чем ничем.
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: deviceId ? { deviceId } : true,
+  })
   // webm/opus — то, что умеют все актуальные браузеры и понимает ffmpeg на стороне
   // распознавателя. Явный тип, а не «по умолчанию»: умолчание у браузеров разное.
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')

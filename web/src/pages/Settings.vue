@@ -3,10 +3,11 @@
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, onMounted } from 'vue'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { useTtsStore } from '@/stores/tts'
+import { useVoiceStore } from '@/stores/voice'
 import { useAuthStore } from '@/stores/auth'
 import { SCALES } from '@/utils/grading'
 import Card from '@/components/ui/Card.vue'
@@ -15,6 +16,7 @@ import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 
 const tts = useTtsStore()
 const auth = useAuthStore()
+const voice = useVoiceStore()
 
 // ── Шкала оценивания (§ролей, 3.3.1) — только препод: в ЧЁМ он вводит/видит оценки.
 // Средний балл/итоговая всё равно всегда в 5-балльной — сервер сам конвертирует.
@@ -63,6 +65,10 @@ async function loadPasskeys() {
 }
 onMounted(async () => {
   tts.refreshStatus()
+  //Список микрофонов — БЕЗ запроса разрешения (ask=false): всплывающее окно «разрешить
+  //микрофон» при простом заходе в настройки выглядит как попытка подслушать. Названия
+  //подтянутся по кнопке «Обновить список», то есть по осознанному действию.
+  voice.refresh(false)
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
   if (auth.role === 'teacher') await loadGradingScale()
@@ -136,6 +142,71 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         <p class="text-xs text-text3">Имитация речи короткими сигналами (как голоса в играх), без интернета.</p>
         <AppButton variant="ghost" @click="previewMumble">Проверить</AppButton>
       </div>
+    </Card>
+
+    <!-- Голосовой ввод: тумблер + выбор микрофона (настройка ЭТОГО устройства). -->
+    <Card title="Голосовой ввод" subtitle="Микрофон для «Вектора»: сказать вместо набора текста">
+      <div v-if="!voice.supported"
+           class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
+        <MicOff class="mt-0.5 size-4 shrink-0" />
+        <p>Это устройство не умеет записывать звук — голосовой ввод недоступен.</p>
+      </div>
+
+      <template v-else>
+        <button type="button" @click="voice.toggle()"
+                class="flex w-full items-center gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-left transition-colors hover:border-accent">
+          <span class="grid size-10 shrink-0 place-items-center rounded-md"
+                :class="voice.enabled ? 'bg-accent-glow text-accent' : 'bg-card2 text-text3'">
+            <Mic v-if="voice.enabled" class="size-5" />
+            <MicOff v-else class="size-5" />
+          </span>
+          <span class="flex-1">
+            <span class="block text-sm font-semibold text-text">
+              {{ voice.enabled ? 'Включён' : 'Выключен' }}
+            </span>
+            <span class="block text-xs text-text3">
+              {{ voice.enabled
+                 ? 'Кнопка 🎤 доступна рядом с полем вопроса'
+                 : 'Кнопка микрофона скрыта' }}
+            </span>
+          </span>
+          <span class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+                :class="voice.enabled ? 'bg-accent' : 'bg-border2'">
+            <span class="absolute top-0.5 size-5 rounded-full bg-white transition-all"
+                  :class="voice.enabled ? 'left-[22px]' : 'left-0.5'" />
+          </span>
+        </button>
+
+        <!-- Выбор устройства. Названия микрофонов браузер раскрывает только после
+             разрешения, поэтому запрашиваем его кнопкой — то есть из жеста человека. -->
+        <div v-if="voice.enabled" class="mt-4">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <span class="text-sm font-medium text-text2">Микрофон</span>
+            <button type="button" :disabled="voice.loading" @click="voice.refresh(true)"
+                    class="text-xs text-accent hover:underline disabled:opacity-50">
+              {{ voice.loading ? 'Ищем…' : 'Обновить список' }}
+            </button>
+          </div>
+
+          <select :value="voice.deviceId" @change="voice.setDevice($event.target.value)"
+                  class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+            <option value="">Как в системе</option>
+            <option v-for="d in voice.devices" :key="d.deviceId" :value="d.deviceId">{{ d.label }}</option>
+          </select>
+
+          <p v-if="voice.denied" class="mt-2 text-xs text-red">
+            Доступ к микрофону запрещён. Разрешите запись в настройках браузера или системы.
+          </p>
+          <p v-else-if="!voice.devices.length" class="mt-2 text-xs text-text3">
+            Нажмите «Обновить список», чтобы выбрать конкретный микрофон — до разрешения
+            браузер не сообщает их названия.
+          </p>
+          <p v-else class="mt-2 text-xs text-text3">
+            Речь распознаёт сервер, с которого открыт интерфейс. Внутри программы это
+            локальный сервер на вашем компьютере — запись его не покидает.
+          </p>
+        </div>
+      </template>
     </Card>
 
     <!-- Шкала оценивания — только преподаватель. -->

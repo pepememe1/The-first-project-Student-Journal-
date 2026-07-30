@@ -5,11 +5,15 @@
 // нет вовсе: микрофон, который записывает и молча ничего не даёт, хуже отсутствующего.
 // Внутри программы запрос уходит на локальный сервер (127.0.0.1) — запись не покидает
 // компьютер; на сайте это сервер колледжа. Код один, разница только в адресе.
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Mic, Square } from '@lucide/vue'
-import { recordingSupported, sttAvailable, startRecording } from '@/utils/voiceInput'
+import { recordingSupported, browserRecognitionSupported, sttStatus, startVoice } from '@/utils/voiceInput'
+import { useVoiceStore } from '@/stores/voice'
 
 const emit = defineEmits(['text', 'error'])
+
+//Настройки устройства: тумблер и выбранный микрофон (см. `stores/voice.js`).
+const voice = useVoiceStore()
 
 // Кнопку показываем, если браузер УМЕЕТ записывать. Готовность распознавателя влияет
 // только на активность, а не на видимость: пока она решала «показывать ли», человек не
@@ -22,14 +26,26 @@ const recording = ref(false)
 const busy = ref(false)
 let session = null
 
+//Выключенный в настройках голосовой ввод убирает кнопку СОВСЕМ, а не гасит её. Здесь это
+//не «функция не настроена» (тогда полезно объяснить), а прямое решение человека — вечная
+//серая кнопка была бы напоминанием о том, что он только что отключил.
+const visible = computed(() => supported.value && voice.enabled)
+
+//Каким движком распознавать — говорит сервер (Whisper на хосте или сам браузер).
+const engine = ref('')
+
 onMounted(async () => {
-  supported.value = recordingSupported()
+  //Браузерному распознаванию MediaRecorder не нужен — оно само работает с микрофоном.
+  //Поэтому «умеет записывать» = либо запись, либо встроенное распознавание.
+  supported.value = recordingSupported() || browserRecognitionSupported()
   if (!supported.value) {
     reason.value = 'Этот браузер не умеет записывать звук.'
     return
   }
-  ready.value = await sttAvailable()
-  if (!ready.value) reason.value = 'Распознавание речи не настроено на сервере.'
+  const st = await sttStatus()
+  engine.value = st.engine
+  ready.value = st.available
+  if (!ready.value) reason.value = st.reason || 'Распознавание речи не настроено на сервере.'
 })
 
 // Микрофон нужно отпустить, даже если человек ушёл со страницы во время записи —
@@ -41,7 +57,7 @@ async function toggle() {
   if (!ready.value) { emit('error', reason.value); return }
   if (!recording.value) {
     try {
-      session = await startRecording()
+      session = await startVoice(engine.value, voice.effectiveDeviceId)
       recording.value = true
     } catch {
       emit('error', 'Нет доступа к микрофону. Разрешите запись в настройках.')
@@ -64,7 +80,7 @@ async function toggle() {
 </script>
 
 <template>
-  <button v-if="supported" type="button" @click="toggle" :disabled="busy"
+  <button v-if="visible" type="button" @click="toggle" :disabled="busy"
           :aria-label="recording ? 'Остановить запись' : 'Голосовой ввод'"
           :title="!ready ? reason : (recording ? 'Остановить и распознать' : 'Сказать голосом')"
           class="grid size-11 shrink-0 place-items-center rounded-sm border transition-colors disabled:opacity-50"

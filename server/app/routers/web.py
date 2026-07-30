@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
-                     UploadFile, File)
+                     UploadFile, File, Form)
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -22,7 +22,8 @@ from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                       AuthSession, ConfigKV, TermGrade, ScheduleOverride,
                       ScheduleJointMark, schedule_override_id, joint_mark_id,
-                      SubjectHours, subject_hours_id, ZetThreshold, zet_threshold_id)
+                      SubjectHours, subject_hours_id, ZetThreshold, zet_threshold_id,
+                      NotifyEvent)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -1605,12 +1606,54 @@ def vector_ask(payload: dict = Body(...),
 
 
 # ── Голосовой ввод (Speech-to-Text) — ЗАГОТОВКА, распознаёт на ХОСТЕ ────────────────
+def _stt_installed() -> bool:
+    """Стоит ли движок распознавания на ЭТОМ хосте (faster-whisper)."""
+    try:
+        from .. import stt_service
+        return bool(stt_service.is_available())
+    except Exception:
+        return False
+
+
+#Режимы голосового ввода (настройка админа `stt_mode`):
+#  auto    — Whisper, если он есть на хосте; иначе распознаёт сам браузер. По умолчанию:
+#            у кого локально стоит — тот и получает Whisper, никого не заставляя качать.
+#  server  — ТОЛЬКО Whisper на сервере. Это «задел на продажу»: на боевом VPS движка нет
+#            (1 ядро, 960 МБ — модель туда не влезает), поэтому режим честно отвечает
+#            «недоступно», пока у колледжа не появится машина с видеокартой.
+#  browser — ТОЛЬКО встроенное распознавание браузера, даже если Whisper установлен.
+_STT_MODES = ("auto", "server", "browser")
+
+
 @router.get("/vector/stt/status")
-def vector_stt_status(user: User = Depends(get_current_user)):
-    """Доступен ли голосовой ввод на сервере-хосте (стоит ли faster-whisper). По этому
-    флагу веб-клиент показывает/прячет кнопку микрофона."""
-    from .. import stt_service
-    return {"available": stt_service.is_available()}
+def vector_stt_status(user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Каким движком распознавать речь и доступен ли он.
+
+    Решение принимает СЕРВЕР, а не клиент: иначе десктоп и сайт разошлись бы в поведении,
+    а админ не смог бы включить Whisper «для всех» одним переключателем.
+
+    `engine`: 'whisper' — шлём аудио на `/web/vector/stt`; 'browser' — клиент распознаёт
+    сам; '' — голосовой ввод недоступен, и тогда `reason` объясняет, почему именно."""
+    installed = _stt_installed()
+    mode = (W.load_config(db).get("stt_mode") or "auto").strip()
+    if mode not in _STT_MODES:
+        mode = "auto"
+    if mode == "browser":
+        return {"available": True, "mode": mode, "engine": "browser",
+                "installed": installed, "reason": ""}
+    if installed:
+        return {"available": True, "mode": mode, "engine": "whisper",
+                "installed": True, "reason": ""}
+    if mode == "server":
+        #Жёстко выбран Whisper, а его нет — молча подменять браузерным нельзя: админ
+        #включил распознавание НА СЕРВЕРЕ осознанно (ПДн не должны уходить в облако
+        #браузера), и тихая подмена нарушила бы именно это решение.
+        return {"available": False, "mode": mode, "engine": "",
+                "installed": False,
+                "reason": "Распознавание на сервере включено, но движок на нём не установлен."}
+    return {"available": True, "mode": mode, "engine": "browser",
+            "installed": False, "reason": ""}
 
 
 def _stt_context(db: Session, user: User) -> str:
@@ -1629,8 +1672,8 @@ def _stt_context(db: Session, user: User) -> str:
             words += sorted({s for _g, s in pairs})[:12]
             for group in sorted({g for g, _s in pairs})[:4]:
                 words += [st.surname for st in W.students_in_group(db, group)][:30]
-        elif user.role == "student":
-            words += sorted(W._group_subject_list(db, user.group_name or ""))[:12]                 if hasattr(W, "_group_subject_list") else []
+        elif user.role == "student" and hasattr(W, "_group_subject_list"):
+            words += sorted(W._group_subject_list(db, user.group_name or ""))[:12]
     except Exception:
         pass
     #Уникальные, порядок сохраняем: первым идёт то, что важнее узнать.
@@ -1641,6 +1684,71 @@ def _stt_context(db: Session, user: User) -> str:
             seen.add(w.lower())
             out.append(w)
     return ", ".join(out[:60])
+
+
+@router.post("/vector/voice/command")
+def vector_voice_command(payload: dict = Body(...),
+                         user: User = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    """Разобрать РАСПОЗНАННУЮ фразу преподавателя в НАМЕРЕНИЕ (оценки / занятие / вопрос).
+
+    ⚠️ ЭТОТ ЭНДПОИНТ НИЧЕГО НЕ ПИШЕТ. Он только предлагает — запись выполняет уже
+    существующий `POST /web/teacher/grade` после того, как преподаватель подтвердил
+    список в диалоге. Отдельного «голосового» пути записи НЕТ намеренно: второй путь
+    означал бы вторую проверку прав и второй формат ключа оценки, а именно из-за
+    расползания таких копий ключи оценок когда-то собирались в семи местах.
+
+    LLM в цепочке НЕ участвует: разбор детерминированный (общий модуль `voice_command.py`,
+    тот же, что на десктопе). Модель ошибается молча, а оценка не тому студенту — худшее,
+    что может сделать журнал.
+
+    Роль-скоуп обычный: только преподаватель и только своя группа+предмет.
+    """
+    _require("teacher", user)
+    text = (payload.get("text") or "").strip()
+    group = (payload.get("group") or "").strip()
+    subject = (payload.get("subject") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Пустая фраза")
+    if not (group and subject):
+        raise HTTPException(status_code=400, detail="Нужны группа и предмет")
+
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    #Право на ЭТУ группу и ЭТОТ предмет — до любого разбора: подсказывать состав чужой
+    #группы (а ростер уходит в подсказку распознавателя) мы не имеем права.
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
+
+    students = W.students_in_group(db, group)
+    roster = [(st.surname or "", st.name or "") for st in students]
+
+    #Занятия ЗА СЕГОДНЯ по этому предмету — к ним привяжутся оценки. Дата в базе хранится
+    #как ДД.ММ.ГГГГ (формат десктопа), поэтому сравниваем строкой в том же виде.
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).astimezone().strftime("%d.%m.%Y")
+    todays = [{"id": l.id, "label": f"{l.type} №{l.number}"}
+              for l in db.query(Lesson).filter(
+                  Lesson.group_name == group, Lesson.subject == subject,
+                  Lesson.date == today, Lesson.year == ty, Lesson.semester == ts,
+                  Lesson.deleted == False).all()]      # noqa: E712
+
+    import voice_command
+    res = voice_command.parse_batch(text, roster, todays)
+    return {
+        "kind": res.kind,
+        "is_question": bool(res.is_question),
+        "heard": res.heard,
+        "error": res.error,
+        "warnings": list(res.warnings),
+        "lesson_id": res.lesson_id,
+        "lesson_label": res.lesson_label,
+        #Плоский список правок — ровно в том виде, в котором клиент затем отправит их в
+        #`/web/teacher/grade` (surname/name/grade). Ничего додумывать ему не придётся.
+        "items": [{"surname": i.surname, "name": i.name, "who": i.who,
+                   "action": i.action, "grade": i.value} for i in res.items],
+        "lesson": ({"type": res.lesson.type, "topic": res.lesson.topic,
+                    "number": res.lesson.number} if res.lesson else None),
+    }
 
 
 @router.post("/vector/stt")
@@ -1654,6 +1762,12 @@ async def vector_stt(file: UploadFile = File(...),
     if not stt_service.is_available():
         raise HTTPException(status_code=503,
                             detail="Голосовой ввод не настроен на сервере.")
+    #Уважаем выбор админа: при режиме «распознаёт браузер» серверный движок не работает,
+    #даже если установлен. Иначе настройка была бы декоративной — устаревший клиент
+    #продолжал бы грузить хост, хотя администратор это запретил.
+    if (W.load_config(db).get("stt_mode") or "auto").strip() == "browser":
+        raise HTTPException(status_code=503,
+                            detail="Распознавание на сервере отключено администратором.")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Пустой аудиофайл.")
@@ -2290,7 +2404,8 @@ def teacher_create_lesson(payload: dict = Body(...),
                   updated_at=_now_iso(), deleted=False))
     db.commit()
     if ltype == "ДЗ":
-        _notify_homework(db, group, subject, lid, topic, int(number))
+        _notify_homework(db, group, subject, lid, topic, int(number),
+                         author_login=user.login)
     return {"ok": True, "id": lid, "number": int(number)}
 
 
@@ -2329,33 +2444,93 @@ def create_event_notification(payload: dict = Body(...),
     else:
         targets = (db.query(User)
                    .filter(User.role == "student", User.deleted == False).all())  # noqa: E712
+    #Одна метка на всю рассылку: письмо ложится строкой на каждого получателя, и без неё
+    #вкладка «Отправленные» не смогла бы отличить одно объявление на 30 человек от
+    #тридцати разных (см. NotifyEvent.batch_id).
+    import uuid
+    batch = str(uuid.uuid4())
     sent = 0
     for stud in targets:
         if not stud.login:
             continue
         try:
             from .. import rustore_push
-            rustore_push.notify_event(db, stud.login, title, body)
+            rustore_push.notify_event(db, stud.login, title, body,
+                                      author_login=user.login, batch_id=batch)
             sent += 1
         except Exception as e:      # noqa: BLE001 — рассылка не должна ронять запрос
             print(f"[events] не удалось уведомить {stud.login}: {e}")
-    return {"ok": True, "sent": sent, "recipients": len(targets)}
+    return {"ok": True, "sent": sent, "recipients": len(targets), "batch_id": batch}
+
+
+@router.get("/events/sent")
+def list_sent_notifications(limit: int = 50,
+                            user: User = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    """Что Я разослал: одна строка на РАССЫЛКУ, а не на получателя.
+
+    Доступно только тем, кто в принципе может отправлять (преподаватель/админ) — у
+    студента раздел не имел бы смысла, и лишняя пустая вкладка хуже её отсутствия.
+
+    Видно ровно СВОИ рассылки: письма коллеги — это его переписка с его группами, а не
+    общая сводка (тот же ролевой скоуп, что и везде). Админ тоже видит только свои: для
+    надзора есть аудит, а не чужая вкладка «Отправленные».
+
+    Автоматические письма (оценка, расписание) сюда не попадают по построению: у них
+    `author_login` пуст, автора-человека у них нет."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    rows = (db.query(NotifyEvent)
+            .filter(NotifyEvent.author_login == user.login)
+            .order_by(NotifyEvent.created_at.desc())
+            .limit(max(1, min(limit, 200)) * 200)      #с запасом: строк на партию много
+            .all())
+    #Схлопываем по партии В PYTHON, а не в SQL: нужен и счётчик получателей, и сколько из
+    #них ПРОЧИТАЛО — на SQLite это два разных агрегата с group by, а объём здесь мал
+    #(письма одного автора). Тем же приёмом и по той же причине собран `directory()`.
+    batches: dict = {}
+    for r in rows:
+        #У писем до появления метки партии её нет — тогда партия это само письмо.
+        key = r.batch_id or f"one:{r.id}"
+        b = batches.get(key)
+        if b is None:
+            b = batches[key] = {
+                "batch_id": r.batch_id or "", "kind": r.kind,
+                "title": r.title or "", "body": r.body or "",
+                "subject": r.subject or "", "created_at": r.created_at or "",
+                "recipients": 0, "read": 0,
+            }
+        b["recipients"] += 1
+        if r.read_at:
+            b["read"] += 1
+        #Время рассылки — самое РАННЕЕ письмо партии: рассылка на сотню человек пишется
+        #не мгновенно, и по последнему письму дата уехала бы.
+        if r.created_at and r.created_at < b["created_at"]:
+            b["created_at"] = r.created_at
+    items = sorted(batches.values(), key=lambda x: x["created_at"], reverse=True)
+    return {"items": items[:max(1, min(limit, 200))]}
 
 
 def _notify_homework(db: Session, group: str, subject: str, lesson_id: str,
-                     task: str, number: int) -> None:
+                     task: str, number: int, author_login: str = "") -> None:
     """Разослать студентам группы уведомление о заданном ДЗ.
 
     Обёрнуто в try/except целиком: занятие УЖЕ создано и закоммичено, и падение
     рассылки не имеет права превращать успешное действие преподавателя в ошибку 500.
-    То же правило, что у постов в системные каналы ниже по файлу."""
+    То же правило, что у постов в системные каналы ниже по файлу.
+
+    `author_login` — чтобы ДЗ попало в его вкладку «Отправленные» одной строкой на всю
+    группу (метка партии, см. NotifyEvent.batch_id)."""
     try:
+        import uuid
         from .. import rustore_push
+        batch = str(uuid.uuid4())
         for stud in W.students_in_group(db, group):
             if not stud.login:
                 continue        #без логина уведомлять некого
             rustore_push.notify_homework(db, stud.login, subject=subject,
-                                         lesson_id=lesson_id, task=task, number=number)
+                                         lesson_id=lesson_id, task=task, number=number,
+                                         author_login=author_login, batch_id=batch)
     except Exception as e:      # noqa: BLE001 — намеренно глушим любую беду рассылки
         print(f"[homework] не удалось разослать уведомления о ДЗ: {e}")
 
@@ -2937,7 +3112,87 @@ def admin_audit(limit: int = Query(200, ge=1, le=1000), action: str = Query(""),
 # в обе стороны). Пишем с серверной меткой updated_at (LWW, §3) → ключ админа, заданный
 # на ПК, доедет на веб и наоборот.
 _AI_CFG_KEYS = ("vector_llm", "gigachat_credentials", "gigachat_scope",
-                "gigachat_model", "local_model", "tts_enabled", "tts_engine")
+                "gigachat_model", "local_model", "tts_enabled", "tts_engine",
+                "stt_mode")
+
+
+# ── Выгрузка/загрузка данных и резервные копии (админка) ────────────────────────────
+@router.get("/admin/data/datasets")
+def admin_data_datasets(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Какие наборы данных есть и сколько в каждом записей — для галочек в интерфейсе.
+
+    Считаем ЗДЕСЬ, а не на клиенте: администратор должен видеть объём до выгрузки («0
+    родителей» объясняет, почему файл пустой, лучше, чем сам пустой файл)."""
+    from .. import data_transfer as DT
+    out = []
+    for name, _f, model, label in DT.DATASETS:
+        out.append({"name": name, "label": label,
+                    "count": len(DT._query(db, name, model))})
+    return {"datasets": out}
+
+
+@router.get("/admin/data/export")
+def admin_data_export(sets: str = "", request: Request = None,
+                      _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """ZIP со всеми (или отмеченными) наборами данных — он же резервная копия.
+
+    `sets` — имена через запятую; пусто = всё. Пароли в архив не попадают никогда
+    (см. `data_transfer._SECRET_FIELDS`), поэтому выгрузка не является способом увести
+    учётные записи. Действие аудируется: скачивание справочников с ПДн — событие, о
+    котором должна остаться запись."""
+    from .. import data_transfer as DT
+    picked = [s.strip() for s in (sets or "").split(",") if s.strip()]
+    from fastapi.responses import Response
+    blob = DT.export_zip(db, picked or None)
+    audit.log(db, request, actor=_admin.login, role="admin", action="data.export",
+              detail=",".join(picked) if picked else "all")
+    stamp = _now_iso()[:10]
+    return Response(content=blob, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="gradebook-data-{stamp}.zip"'})
+
+
+@router.post("/admin/data/inspect")
+async def admin_data_inspect(file: UploadFile = File(...),
+                             _admin: User = Depends(require_admin)):
+    """Что лежит в присланном архиве — БЕЗ записи в базу.
+
+    Обязательный шаг перед импортом: сначала показать состав, потом дать отметить, что
+    вливать. Импорт «сразу при выборе файла» перезаписал бы боевые данные одним кликом."""
+    from .. import data_transfer as DT
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    try:
+        return DT.inspect_zip(blob)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/admin/data/import")
+async def admin_data_import(file: UploadFile = File(...), sets: str = Form(""),
+                            request: Request = None,
+                            _admin: User = Depends(require_admin),
+                            db: Session = Depends(get_db)):
+    """Влить ОТМЕЧЕННЫЕ наборы из архива (слияние по id, без очистки существующего).
+
+    `sets` обязателен: импорт без явного выбора — это «залить всё, что было в файле», а
+    такого умолчания у операции, меняющей боевые данные, быть не должно."""
+    from .. import data_transfer as DT
+    blob = await file.read()
+    if not blob:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    picked = [s.strip() for s in (sets or "").split(",") if s.strip()]
+    if not picked:
+        raise HTTPException(status_code=400, detail="Не выбрано ни одного набора данных")
+    try:
+        result = DT.import_zip(db, blob, picked, _now_iso())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:      # noqa: BLE001 — битый архив не должен ронять сервер 500-кой
+        raise HTTPException(status_code=400, detail=f"Не удалось прочитать архив: {e}")
+    audit.log(db, request, actor=_admin.login, role="admin", action="data.import",
+              detail=",".join(f"{k}={v}" for k, v in result["written"].items()))
+    return {"ok": True, **result}
 
 
 @router.get("/admin/ai-config")
@@ -2952,6 +3207,10 @@ def admin_get_ai_config(_admin: User = Depends(require_admin), db: Session = Dep
         "local_model": cfg.get("local_model", "qwen2.5:3b"),
         "tts_enabled": cfg.get("tts_enabled", True),
         "tts_engine": cfg.get("tts_engine", "silero"),
+        "stt_mode": cfg.get("stt_mode", "auto"),
+        #Что реально стоит НА ЭТОМ хосте — чтобы админ выбирал, видя правду, а не
+        #включал распознавание на машине, где движка нет.
+        "stt_installed": _stt_installed(),
     }
 
 

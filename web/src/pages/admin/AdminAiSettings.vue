@@ -16,6 +16,8 @@ const cfg = ref({
   gigachat_model: 'GigaChat',
   local_model: 'qwen2.5:3b',
   tts_enabled: true,
+  stt_mode: 'auto',
+  stt_installed: false,     //только чтение: что реально стоит на хосте
 })
 const showKey = ref(false)
 const loading = ref(false)
@@ -29,6 +31,19 @@ const PROVIDERS = [
   { id: 'local', name: 'Ollama (локально)', hint: 'Своя модель на сервере, если поднят Ollama. Данные никуда не уходят.' },
 ]
 const SCOPES = ['GIGACHAT_API_PERS', 'GIGACHAT_API_B2B', 'GIGACHAT_API_CORP']
+
+// Голосовой ввод: чем распознавать речь. Три режима — см. `_STT_MODES` на сервере.
+const STT_MODES = [
+  { id: 'auto', name: 'Автоматически (рекомендуется)',
+    hint: 'Whisper — там, где он установлен; на остальных машинах распознаёт браузер. ' +
+          'Никого не заставляет ничего скачивать.' },
+  { id: 'server', name: 'OpenAI Whisper на сервере — для всех',
+    hint: 'Звук распознаёт только наш сервер, наружу не уходит. Требует машину с ' +
+          'видеокартой: на нынешнем хостинге движок не поместится.' },
+  { id: 'browser', name: 'Обычный голосовой ввод (браузер)',
+    hint: 'Распознаёт браузер (Chrome/Edge) силами Google. Нагрузки на сервер нет, ' +
+          'но звук уходит третьей стороне.' },
+]
 const inputCls =
   'h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card'
 
@@ -79,6 +94,37 @@ async function test() {
         <span class="text-sm text-text">Разрешить озвучку на сервере</span>
         <input type="checkbox" v-model="cfg.tts_enabled" class="size-5 accent-[var(--gb-accent)]" />
       </label>
+    </Card>
+
+    <!-- Голосовой ввод (STT): чем распознавать речь у всех пользователей. -->
+    <Card title="Голосовой ввод (распознавание речи)"
+          subtitle="Чем превращать речь в текст. Настройка общая: действует и на сайте, и в программе, и в телефоне.">
+      <div class="space-y-2.5">
+        <label v-for="m in STT_MODES" :key="m.id"
+               class="flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors"
+               :class="cfg.stt_mode === m.id ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
+          <input type="radio" :value="m.id" v-model="cfg.stt_mode" class="mt-1 accent-[var(--gb-accent)]" />
+          <span>
+            <span class="block text-sm font-semibold text-text">{{ m.name }}</span>
+            <span class="mt-0.5 block text-xs text-text3">{{ m.hint }}</span>
+          </span>
+        </label>
+      </div>
+
+      <!-- Честное состояние хоста. Без этой строки админ включил бы «Whisper для всех»
+           на машине, где движка нет, и голосовой ввод пропал бы у всего колледжа. -->
+      <div class="mt-3 rounded-md border px-3 py-2.5 text-xs"
+           :class="cfg.stt_installed ? 'border-accent/40 text-text2' : 'border-orange/40 text-text2'">
+        <template v-if="cfg.stt_installed">
+          ✅ Whisper установлен на этом сервере — режим «для всех» будет работать.
+        </template>
+        <template v-else>
+          ⚠️ Whisper на этом сервере <b>не установлен</b>. Режим «для всех» станет доступен,
+          когда журнал переедет на машину колледжа с видеокартой — до тех пор он честно
+          покажет пользователям, что распознавание недоступно, а не подменит его тихо
+          браузерным.
+        </template>
+      </div>
     </Card>
 
     <!-- GigaChat: ключ + скоуп -->

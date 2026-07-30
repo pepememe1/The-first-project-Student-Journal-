@@ -7,8 +7,8 @@
 // (студенту дружелюбно, преподавателю официально), и если бы каждая платформа лепила
 // текст сама, веб, десктоп и телефон разъехались бы в формулировках. Клиент решает
 // только КАК показать, но не ЧТО написано.
-import { ref, computed, onMounted } from 'vue'
-import { Bell, ArrowLeft, CheckCheck, Megaphone, X } from '@lucide/vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { Bell, ArrowLeft, CheckCheck, Megaphone, X, Send, BookOpen } from '@lucide/vue'
 import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -36,13 +36,24 @@ const KIND_LABEL = {
 // теряется среди оценок. Мероприятия (олимпиады/конкурсы, заводят препод/админ) — тоже
 // отдельно, это не рутинная системная почта.
 const KIND_TAB = { grade: 'grades', grade_changed: 'grades', homework: 'homework', event: 'events' }
-const TABS = [
+
+//⚠️ «ДЗ» — вкладка ПОЛУЧАТЕЛЯ задания, то есть студента (и родителя, который смотрит
+//глазами ребёнка). Преподаватель домашних заданий не получает — он их ЗАДАЁТ, и у него
+//этот раздел всегда был пустым: вкладка со счётчиком «0» выглядела как поломка. То, что
+//он задал, теперь видно в «Отправленных».
+const ALL_TABS = [
   { key: 'all', label: 'Все' },
   { key: 'grades', label: 'Оценки' },
-  { key: 'homework', label: 'ДЗ' },
+  { key: 'homework', label: 'ДЗ', roles: ['student', 'parent'] },
   { key: 'events', label: 'Мероприятия' },
   { key: 'system', label: 'Система' },
+  //«Отправленные» — не почта, а журнал своих рассылок: список приходит отдельным
+  //запросом и в общий `items` не попадает (у писем разная природа — у полученных есть
+  //«прочитано», у отправленных «сколько прочитали»).
+  { key: 'sent', label: 'Отправленные', roles: ['teacher', 'admin'] },
 ]
+const TABS = computed(() =>
+  ALL_TABS.filter((t) => !t.roles || t.roles.includes(auth.role)))
 const EMPTY_LABEL = {
   grades: 'Оценок пока нет',
   homework: 'Домашних заданий пока нет',
@@ -51,14 +62,36 @@ const EMPTY_LABEL = {
 }
 const tab = ref('all')
 
+// ── «Отправленные»: свои рассылки (одна строка на рассылку, а не на получателя) ──────
+const sentItems = ref([])
+const sentLoading = ref(false)
+const sentFailed = ref(false)
+
+async function loadSent() {
+  sentLoading.value = true
+  sentFailed.value = false
+  try {
+    sentItems.value = (await eventsApi.sent(50)).data.items || []
+  } catch {
+    sentFailed.value = true
+    sentItems.value = []
+  } finally { sentLoading.value = false }
+}
+// Грузим ЛЕНИВО, при первом заходе на вкладку: у преподавателя рассылок может не быть
+// вовсе, и тянуть их при каждом открытии уведомлений — лишний запрос на пустоту.
+watch(tab, (t) => { if (t === 'sent' && !sentItems.value.length) loadSent() })
+
 function tabOf(item) { return KIND_TAB[item.kind] || 'system' }
 function inTab(item, key) {
-  return key === 'all' || tabOf(item) === key
+  if (key === 'all') return tabOf(item) !== 'sent'
+  return tabOf(item) === key
 }
 
 const visible = computed(() => items.value.filter((i) => inTab(i, tab.value)))
 // Счётчик у вкладки — только непрочитанные, иначе он теряет смысл уже на второй день.
+// У «Отправленных» его нет по смыслу: свои письма человек не «читает».
 function tabUnread(key) {
+  if (key === 'sent') return 0
   return items.value.filter((i) => !i.read_at && inTab(i, key)).length
 }
 
@@ -157,6 +190,8 @@ async function submitEvent() {
     const { data } = await eventsApi.create(title, body, evAll.value ? [] : evGroups.value)
     evDone.value = `Отправлено: ${data.sent} из ${data.recipients}`
     evTitle.value = ''; evBody.value = ''; evGroups.value = []; evAll.value = false
+    //Своя рассылка должна появиться в «Отправленных» сразу, а не после перезахода.
+    await loadSent()
   } catch (e) {
     evDone.value = e?.response?.data?.detail || 'Не удалось отправить.'
   } finally {
@@ -227,6 +262,42 @@ async function submitEvent() {
                    @click="submitEvent">Отправить</AppButton>
       </div>
 
+      <!-- ── «Отправленные»: свои рассылки ──────────────────────────────────────── -->
+      <template v-if="tab === 'sent'">
+        <p v-if="sentLoading" class="py-8 text-center text-sm text-text3">Загружаем…</p>
+        <p v-else-if="sentFailed" class="py-8 text-center text-sm text-text3">
+          Не удалось получить список отправленного. Проверьте связь.
+        </p>
+        <div v-else-if="!sentItems.length" class="py-10 text-center">
+          <Send class="mx-auto mb-3 size-8 text-text3 opacity-50" />
+          <p class="text-sm text-text3">Вы пока ничего не рассылали</p>
+          <p class="mt-1 text-tiny text-text3">
+            Здесь появятся мероприятия и домашние задания, о которых вы уведомили студентов.
+          </p>
+        </div>
+        <ul v-else class="divide-y divide-border">
+          <li v-for="s in sentItems" :key="s.batch_id || s.title + s.created_at"
+              class="flex items-start gap-3 px-1 py-3">
+            <span class="mt-1 shrink-0 text-text3">
+              <BookOpen v-if="s.kind === 'homework'" class="size-4" />
+              <Megaphone v-else class="size-4" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm text-text">{{ s.title || KIND_LABEL[s.kind] }}</span>
+              <span class="mt-0.5 block truncate text-tiny text-text3">{{ s.body }}</span>
+              <!-- «Прочитали X из Y» — единственная причина, по которой автору вообще
+                   интересен свой же список: понять, дошло ли. -->
+              <span class="mt-1 block text-tiny"
+                    :class="s.read >= s.recipients ? 'text-accent' : 'text-text3'">
+                Прочитали {{ s.read }} из {{ s.recipients }}
+              </span>
+            </span>
+            <span class="shrink-0 text-tiny text-text3">{{ fmtWhen(s.created_at) }}</span>
+          </li>
+        </ul>
+      </template>
+
+      <template v-else>
       <div v-if="unread" class="mb-3 flex items-center justify-between">
         <p class="text-sm text-text3">Непрочитанных: {{ unread }}</p>
         <AppButton variant="ghost" @click="markAll">
@@ -262,6 +333,7 @@ async function submitEvent() {
           </button>
         </li>
       </ul>
+      </template>
     </div>
   </div>
 </template>

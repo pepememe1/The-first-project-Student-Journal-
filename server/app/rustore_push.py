@@ -182,7 +182,8 @@ def _schedule_words(role: str, group: str) -> tuple:
 
 
 def _create_event(db, login: str, kind: str, title: str, body: str,
-                  subject: str = "", lesson_id: str = "", payload: dict | None = None) -> str:
+                  subject: str = "", lesson_id: str = "", payload: dict | None = None,
+                  author_login: str = "", batch_id: str = "") -> str:
     """Сохраняет событие и возвращает его id ("" — если сохранить не удалось).
 
     Пустой id не отменяет отправку пуша: человек всё равно узнает, что что-то новое
@@ -194,6 +195,7 @@ def _create_event(db, login: str, kind: str, title: str, body: str,
         db.add(NotifyEvent(id=event_id, login=login, kind=kind,
                            subject=subject or "", lesson_id=lesson_id or "",
                            title=title, body=body, payload=payload or {},
+                           author_login=author_login or "", batch_id=batch_id or "",
                            created_at=_now_iso()))
         db.commit()
     except Exception as e:
@@ -259,7 +261,8 @@ def notify_schedule_changed(db, login: str, role: str = "student",
 
 
 def notify_homework(db, login: str, subject: str = "", lesson_id: str = "",
-                    task: str = "", number: int = 0) -> int:
+                    task: str = "", number: int = 0,
+                    author_login: str = "", batch_id: str = "") -> int:
     """Преподаватель задал домашнее задание. Уходит ВСЕМ студентам группы.
 
     В отличие от оценки, текст задания — не персональные данные: он одинаков для всей
@@ -273,7 +276,8 @@ def notify_homework(db, login: str, subject: str = "", lesson_id: str = "",
     title, body = _homework_words(subject, task, number)
     event_id = _create_event(db, login, "homework", title, body,
                              subject=subject, lesson_id=lesson_id,
-                             payload={"task": task, "number": number})
+                             payload={"task": task, "number": number},
+                             author_login=author_login, batch_id=batch_id)
     return notify_login(
         db, login,
         title="Новое домашнее задание",
@@ -314,12 +318,14 @@ def notify_reminder(db, login: str, text: str, conversation_id: str = "") -> int
     )
 
 
-def notify_event(db, login: str, title: str, body: str) -> int:
+def notify_event(db, login: str, title: str, body: str,
+                 author_login: str = "", batch_id: str = "") -> int:
     """Мероприятие/событие (олимпиада, конкурс, выступление и т.п.) — заводит
     преподаватель или админ (см. `POST /web/events`), рассылается выбранной аудитории.
     Текст пишет автор — как и с ДЗ, это не персональные данные (одинаков для всех
     получателей), поэтому в НАШЕМ письме он целиком; в сам пуш — только факт события."""
-    event_id = _create_event(db, login, "event", title, body)
+    event_id = _create_event(db, login, "event", title, body,
+                             author_login=author_login, batch_id=batch_id)
     return notify_login(
         db, login,
         title="Новое мероприятие",

@@ -45,15 +45,27 @@ const statusText = computed(() =>
   myStatusLabel(messenger.myStatus.kind, messenger.myStatus.custom_text))
 async function pickStatus(kind) {
   statusOpen.value = false
-  // Текст статуса задаётся в мессенджере (там же его и видно рядом с полем) — здесь
-  // только вид статуса, поэтому уже заданный текст сохраняем как есть.
+  // Вид статуса меняем, УЖЕ ЗАДАННЫЙ ТЕКСТ сохраняем: «не беспокоить» не должно молча
+  // стирать пояснение «принимаю до 15:00».
   await messenger.setMyStatus(kind, messenger.myStatus.custom_text || '')
 }
 
-onMounted(() => {
+// Свой текст статуса задаёт только преподаватель — то же правило, что в мессенджере
+// (MyStatusPicker.vue): у студента такого поля нет ни там, ни здесь.
+const canSetStatusText = computed(() => auth.role === 'teacher')
+const statusDraft = ref('')
+async function saveStatusText() {
+  statusOpen.value = false
+  await messenger.setMyStatus(messenger.myStatus.kind, statusDraft.value)
+}
+
+onMounted(async () => {
   window.addEventListener('online', updateOnline)
   window.addEventListener('offline', updateOnline)
-  messenger.loadMyStatus()
+  await messenger.loadMyStatus()
+  // Поле открываем с текущим текстом, а не пустым: пустое читается как «текста нет» и
+  // человек стёр бы свой статус, просто нажав «Сохранить».
+  statusDraft.value = messenger.myStatus.custom_text || ''
 })
 onBeforeUnmount(() => {
   window.removeEventListener('online', updateOnline)
@@ -99,12 +111,16 @@ async function onLogout() {
 
     <div class="min-w-2 flex-1" />
 
-    <!-- Индикатор связи с сервером (онлайн/офлайн) — как в десктопной шапке -->
-    <span class="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 sm:inline-flex"
+    <!-- ⚠️ Постоянного бейджа «Онлайн» здесь БОЛЬШЕ НЕТ. Рядом с выбираемым статусом
+         стояли два кружка подряд, и человек читал их как один составной статус — при
+         «Не беспокоить» шапка всё равно говорила «Онлайн». Наличие связи вообще не
+         статус, а состояние сети, и сообщать о нём стоит лишь когда оно ПЛОХОЕ. -->
+    <span v-if="!online"
+          class="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 sm:inline-flex"
           style="background: rgba(255,255,255,0.12);"
-          :title="online ? 'Есть связь с сервером колледжа.' : 'Нет связи с сетью — данные подтянутся, когда связь вернётся.'">
-      <span class="text-[14px] leading-none" :style="{ color: online ? '#3ddc84' : '#ff8a8a' }">●</span>
-      {{ online ? 'Онлайн' : 'Офлайн' }}
+          title="Нет связи с сетью — данные подтянутся, когда связь вернётся.">
+      <span class="text-[14px] leading-none" style="color:#ff8a8a">●</span>
+      Офлайн
     </span>
 
     <!-- §D7: свой статус — виден и меняется с любой страницы. Кружок в цвет статуса,
@@ -126,6 +142,19 @@ async function onLogout() {
           <span class="size-2.5 shrink-0 rounded-full" :style="{ background: k.color }" />
           {{ k.self }}
         </button>
+
+        <!-- Свой текст статуса — только преподавателю (как в мессенджере, тот же лимит).
+             Раньше поле было ТОЛЬКО внутри вкладки «Сообщения»: статус висел в шапке на
+             всех страницах, а поменять его текст можно было лишь уйдя в мессенджер. -->
+        <div v-if="canSetStatusText" class="mt-1 border-t border-border pt-1.5">
+          <input v-model="statusDraft" placeholder="Текст статуса (видят другие)" maxlength="80"
+                 @keydown.enter="saveStatusText"
+                 class="w-full rounded-md border border-border2 bg-card2 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
+          <button type="button" @click="saveStatusText"
+                  class="mt-1 w-full rounded-md bg-accent px-2 py-1 text-xs font-semibold text-white hover:bg-accent2">
+            Сохранить текст
+          </button>
+        </div>
       </div>
       <!-- Клик мимо меню закрывает его (глобальной директивы click-outside в проекте нет). -->
       <div v-if="statusOpen" class="fixed inset-0 z-20" @click="statusOpen = false" />

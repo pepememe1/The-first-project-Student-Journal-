@@ -43,6 +43,11 @@ STATE_ANIM = {
     "idle": "idle",
     "away": "idle",
     "greeting": "greeting",
+    #Экран входа: закрывает глаза лапами, пока набран пароль, и убирает их обратно.
+    #`eyes_open` — реверс того же ролика (см. tools/build_mascot_anim.py): ни QMovie, ни
+    #браузер не проигрывают анимированный WebP назад, поэтому обратный ход — свой файл.
+    "eyes_close": "eyes_close",
+    "eyes_open": "eyes_open",
 }
 DEFAULT_STATE = "idle"
 

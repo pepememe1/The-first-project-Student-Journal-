@@ -36,7 +36,10 @@ async function loadZetReport() {
     zetThresholdDraft.value = zetReport.value.min_zet ?? ''
   } catch { zetReport.value = null } finally { zetLoading.value = false }
 }
-watch([group, term, viewMode], () => { if (viewMode.value === 'zet') loadZetReport() })
+// ⚠️ Наблюдатель за ЗЕТ-отчётом заводится НИЖЕ, после объявления `term` (см. конец
+// блока «Учебный период»). Здесь его быть не может: `const term` не поднимается, и
+// обращение к нему выше объявления валит ВЕСЬ setup — вкладка «Курирование» открывалась
+// пустой страницей, а не «нет данных».
 
 async function saveThreshold() {
   const v = zetThresholdDraft.value
@@ -87,6 +90,9 @@ function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осен�
 function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
 function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
 function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
+
+//Здесь, а не рядом с `loadZetReport`: наблюдателю нужен уже объявленный `term`.
+watch([group, term, viewMode], () => { if (viewMode.value === 'zet') loadZetReport() })
 
 onMounted(async () => {
   try { groups.value = (await curatorApi.groups()).data.groups || [] } catch { groups.value = [] }
