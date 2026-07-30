@@ -148,12 +148,61 @@ def hours_progress(db, group: str, subject: str, lessons, year: str, semester) -
             "total": hours_plan(db, group, subject, year, semester)}
 
 
-def average(lessons, records, cfg) -> float:
-    """Средний балл — единый расчёт grading.practice_average."""
-    return grading.practice_average(lesson_pairs(lessons), records, cfg)
+def teacher_scale(user) -> str:
+    """Шкала ОДНОГО преподавателя (§ролей, 3.3.1) — для мест, где все lessons в списке
+    заведомо ведёт ОН ЖЕ (журнал/статистика по своим назначениям): дешевле, чем
+    lesson_scale_map, лишних запросов не требует."""
+    sc = (user.prefs or {}).get("grading_scale") or grading.DEFAULT_SCALE
+    return sc if sc in grading.SCALES else grading.DEFAULT_SCALE
 
 
-def per_subject_averages(lessons, records, cfg):
+def lesson_scale_map(db, lessons) -> dict:
+    """{lesson_id: шкала} — какой шкалой (§ролей, 3.3.1) вводил оценку преподаватель,
+    ведущий именно ЭТО занятие. Разрешение — через ТО ЖЕ назначение препод↔предмет↔
+    группа, что и видимость групп (SubjectHours.teacher_id, см. teacher_assignments):
+    занятие → (группа,предмет,термин) → назначенный преподаватель → его User.prefs
+    ["grading_scale"]. Без назначения ИЛИ без выбора шкалы — DEFAULT_SCALE ("5"),
+    то есть сегодняшнее поведение бит-в-бит. Нужен именно СЛОВАРЬ (не одна строка на
+    все lessons), потому что список занятий часто смешивает НЕСКОЛЬКО предметов
+    разом (общий средний студента/группы по всем предметам) — у каждого предмета
+    может быть свой преподаватель со своей шкалой."""
+    if not lessons:
+        return {}
+    pair_terms = {(l.group_name, l.subject, l.year or "", int(l.semester or 0))
+                  for l in lessons}
+    year_sem = {(y, s) for (_g, _sub, y, s) in pair_terms}
+    hours_rows = []
+    for y, s in year_sem:
+        hours_rows.extend(db.query(SubjectHours).filter(
+            SubjectHours.year == y, SubjectHours.semester == s,
+            SubjectHours.deleted == False).all())  # noqa: E712
+    teacher_by_pair = {}
+    for r in hours_rows:
+        if r.teacher_id:
+            teacher_by_pair[(r.group_name, r.subject, r.year or "",
+                             int(r.semester or 0))] = r.teacher_id
+    teacher_ids = set(teacher_by_pair.values())
+    scale_by_teacher = {}
+    if teacher_ids:
+        for u in db.query(User).filter(User.id.in_(teacher_ids)).all():
+            sc = (u.prefs or {}).get("grading_scale") or grading.DEFAULT_SCALE
+            scale_by_teacher[u.id] = sc if sc in grading.SCALES else grading.DEFAULT_SCALE
+    out = {}
+    for l in lessons:
+        key = (l.group_name, l.subject, l.year or "", int(l.semester or 0))
+        tid = teacher_by_pair.get(key)
+        out[l.id] = scale_by_teacher.get(tid, grading.DEFAULT_SCALE)
+    return out
+
+
+def average(lessons, records, cfg, scale=None) -> float:
+    """Средний балл — единый расчёт grading.practice_average. scale — {lesson_id:
+    шкала} из lesson_scale_map (или None/строка — тогда как раньше, "5" для всех)."""
+    return grading.practice_average(lesson_pairs(lessons), records, cfg,
+                                    scale=scale if scale is not None else grading.DEFAULT_SCALE)
+
+
+def per_subject_averages(lessons, records, cfg, scale=None):
     """Список {subject, average, lessons} — средний по каждому предмету группы."""
     from collections import OrderedDict
     buckets = OrderedDict()
@@ -161,18 +210,22 @@ def per_subject_averages(lessons, records, cfg):
         buckets.setdefault(l.subject, []).append(l)
     out = []
     for subj, ls in buckets.items():
-        out.append({"subject": subj, "average": average(ls, records, cfg),
+        out.append({"subject": subj, "average": average(ls, records, cfg, scale=scale),
                     "lessons": len(ls)})
     return out
 
 
-def debts(lessons, records):
-    """Причины задолженности (порт vector/intents._is_debt)."""
+def debts(lessons, records, scale=None):
+    """Причины задолженности (порт vector/intents._is_debt). scale — {lesson_id: шкала}
+    из lesson_scale_map, для распознавания «завалено» в шкале ведущего преподавателя."""
     reasons = []
+    scale_map = scale if isinstance(scale, dict) else None
     for l in lessons:
         if grading.is_practice(l.type):
             v = records.get(l.id)
-            if v in ("2", "Н"):
+            lscale = (scale_map.get(l.id, grading.DEFAULT_SCALE) if scale_map is not None
+                     else (scale or grading.DEFAULT_SCALE))
+            if v == "Н" or (v and grading.is_failed_scaled(v, lscale)):
                 #ДЗ — тоже долг: «Н» на домашней работе значит «не сдал», а не «не был».
                 what = "ДЗ" if l.type == "ДЗ" else "практика"
                 ending = "о" if l.type == "ДЗ" else "а"
@@ -201,6 +254,43 @@ def absences(lessons, records):
     return res
 
 
+def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, semester) -> dict:
+    """Сводка ЗЕТ студента за термин (docs/PLAN-ZET.md) — {earned,total,pct,subjects[]}.
+    Собирает занятия/оценки/шкалы преподавателей и сводит через ЧИСТЫЕ функции
+    study_hours (та же логика для студента/куратора/родителя, один расчёт)."""
+    lessons = group_lessons(db, group, year=year, semester=semester)
+    records = student_records(db, surname, name, group)
+    scale_map = lesson_scale_map(db, lessons)
+    hrows = {r.subject: r for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == (year or ""),
+        SubjectHours.semester == int(semester or 0), SubjectHours.deleted == False).all()}  # noqa: E712
+    from collections import OrderedDict
+    by_subject = OrderedDict()
+    for l in lessons:
+        by_subject.setdefault(l.subject, []).append(l)
+    rows = []
+    for subj, ls in by_subject.items():
+        row = hrows.get(subj)
+        zet = row.zet if row is not None else None
+        if zet is None:
+            continue
+        scale = scale_map.get(ls[0].id, grading.DEFAULT_SCALE) if ls else grading.DEFAULT_SCALE
+        earned = study_hours.subject_zet_earned(ls, records, zet, scale=scale)
+        rows.append({"subject": subj, "zet": zet, "earned": earned})
+    return study_hours.zet_summary(rows)
+
+
+def group_zet_report(db, group: str, year: str, semester, min_zet) -> list:
+    """Отчёт группы для кнопки перевода на курс (docs/PLAN-ZET.md §7.4) — по каждому
+    студенту сводит zet_summary_for_student, дальше решает study_hours.group_zet_report."""
+    students = []
+    for s in students_in_group(db, group):
+        students.append({"student_id": s.id, "display_name": display_name(s),
+                         "summary": zet_summary_for_student(db, s.surname, s.name, group,
+                                                            year, semester)})
+    return study_hours.group_zet_report(students, min_zet)
+
+
 def students_in_group(db, group: str):
     """Студенты группы — это пользователи с ролью student и этой group_name."""
     return db.query(User).filter(
@@ -208,26 +298,31 @@ def students_in_group(db, group: str):
         User.deleted == False).order_by(User.surname, User.name).all()  # noqa: E712
 
 
-def teacher_groups(db, subjects) -> list:
-    """Группы, доступные преподавателю по его предметам. ДВА источника (объединение):
-      1) группы, где уже есть его занятия (журнал наполнен);
-      2) группы, у которых его предмет числится в списке предметов ГРУППЫ (после
-         «Обновить группы» предметы привязаны к группам). Без п.2 НОВЫЙ преподаватель
-         (у него ещё нет ни одного занятия) видел пустой журнал — не мог выбрать группу
-         и создать первое занятие."""
-    from .models import Group
-    subjects = set(s for s in (subjects or []) if s)
-    if not subjects:
+def teacher_assignments(db, teacher_id: str, year: str, semester) -> list:
+    """Пары (группа, предмет), ЯВНО назначенные преподавателю на этот термин —
+    ЕДИНЫЙ источник правды «какие группы видит препод» (см. models.SubjectHours.
+    teacher_id). Заменяет старую teacher_groups()/«предмет числится у препода» —
+    та отдавала ЛЮБУЮ группу, где предмет вообще упоминался, даже группам, которых
+    препод в глаза не видел (баг, найденный в 3.3.1: препод с 5 предметами видел
+    все группы этих предметов, а не только свои).
+
+    Без назначения на семестр (админ ещё не расставил) — пустой список: это НЕ
+    «видно всё», а «видно ничего, пока не назначили» — осознанно строже старого
+    поведения, ошибка в другую сторону (спрятать своё) тут безопаснее."""
+    if not teacher_id:
         return []
-    result = set()
-    for r in db.query(Lesson.group_name).filter(
-            Lesson.subject.in_(subjects), Lesson.deleted == False).distinct().all():  # noqa: E712
-        if r[0]:
-            result.add(r[0])
-    for g in db.query(Group).filter(Group.deleted == False).all():  # noqa: E712
-        if subjects & set(g.subjects or []):
-            result.add(g.name)
-    return sorted(result)
+    rows = (db.query(SubjectHours)
+            .filter(SubjectHours.teacher_id == teacher_id,
+                    SubjectHours.year == (year or ""),
+                    SubjectHours.semester == int(semester or 0),
+                    SubjectHours.deleted == False).all())  # noqa: E712
+    return sorted({(r.group_name, r.subject) for r in rows if r.group_name and r.subject})
+
+
+def teacher_group_names(db, teacher_id: str, year: str, semester) -> list:
+    """Только имена групп из teacher_assignments — для мест, которым предмет не нужен
+    (аудитория уведомлений, список групп для создания чата и т.п.)."""
+    return sorted({g for g, _s in teacher_assignments(db, teacher_id, year, semester)})
 
 
 def display_name(user) -> str:

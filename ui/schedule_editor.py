@@ -52,15 +52,23 @@ class _BgWorker(QThread):
 
 
 class _PairDialog(QDialog):
-    """Добавить/изменить пару. Время авто-подставляется по номеру слота, но правится."""
+    """Добавить/изменить пару. §ролей: предмет — из списка предметов ГРУППЫ (не текст),
+    преподаватель — автоматом из назначения (webdata.teacher_assignments), не вводится
+    руками. «Время» отдельным полем больше нет — оно всегда равно номеру пары (единая
+    графа «№ пары» на веб-редакторе уже так устроена, здесь убираем расхождение: раньше
+    поле МОЖНО было отредактировать вручную после автоподстановки и оно расходилось
+    с номером пары)."""
 
-    def __init__(self, parent=None, *, day="Пнд", slot=1, subject="", room="", teacher="",
-                 pair_times=None):
+    def __init__(self, parent=None, *, day="Пнд", slot=1, subject="", room="",
+                 pair_times=None, subjects=None, subject_teacher=None):
         super().__init__(parent)
         self.setWindowTitle("Пара")
         self.setModal(True)
         self.setMinimumWidth(360)
         self._pair_times = pair_times or list(DEFAULT_PAIR_TIMES)
+        #{предмет: имя препода} — резолвится вызывающим (ScheduleEditor), т.к. только он
+        #знает текущую группу/термин; здесь только подстановка в поле по выбору предмета.
+        self._subject_teacher = subject_teacher or {}
         form = QFormLayout(self)
         self.day = combo(WEEKDAYS)
         self.day.setCurrentText(day if day in WEEKDAYS else "Пнд")
@@ -68,18 +76,23 @@ class _PairDialog(QDialog):
         for i, t in enumerate(self._pair_times, start=1):
             self.slot.addItem(f"{i} ({t})", i)
         self.slot.setCurrentIndex(max(0, int(slot) - 1))
-        self.slot.currentIndexChanged.connect(self._sync_time)
-        self.subject = field_input("Предмет");  self.subject.setText(subject)
-        self.time = field_input("10:45-12:20")
-        self.time.setText(self._time_for(slot))
+        self.subject = QComboBox()
+        for s in (subjects or []):
+            self.subject.addItem(s)
+        if subject:
+            idx = self.subject.findText(subject)
+            if idx >= 0: self.subject.setCurrentIndex(idx)
+        self.subject.currentTextChanged.connect(self._sync_teacher)
         self.room = field_input("Аудитория");    self.room.setText(room)
-        self.teacher = field_input("Преподаватель (необязательно)"); self.teacher.setText(teacher)
+        self.teacher_lbl = lbl("", 12, C['text3'])
+        self._sync_teacher()
         form.addRow("День", self.day)
         form.addRow("№ пары", self.slot)
         form.addRow("Предмет", self.subject)
-        form.addRow("Время", self.time)
         form.addRow("Аудитория", self.room)
-        form.addRow("Преподаватель", self.teacher)
+        form.addRow("Преподаватель", self.teacher_lbl)
+        if not (subjects or []):
+            form.addRow(lbl("У группы нет предметов — задайте их в «Группы».", 10, C['yellow'], wrap=True))
         row = QHBoxLayout()
         row.addStretch(1)
         cancel = btn("Отмена", "ghost"); cancel.clicked.connect(self.reject)
@@ -91,21 +104,23 @@ class _PairDialog(QDialog):
         idx = int(slot) - 1
         return self._pair_times[idx] if 0 <= idx < len(self._pair_times) else ""
 
-    def _sync_time(self):
-        #При смене слота подставляем его время (если пользователь его не менял вручную —
-        #перезаписываем всегда, это ожидаемое поведение «время под номер пары»).
-        self.time.setText(self._time_for(self.slot.currentData()))
+    def _sync_teacher(self):
+        name = self._subject_teacher.get(self.subject.currentText(), "")
+        self.teacher_lbl.setText(name or "— не назначен —")
+        self._teacher_value = name
 
     def _accept(self):
-        if not self.subject.text().strip():
+        if not self.subject.currentText().strip():
             QMessageBox.warning(self, "Пара", "Укажите предмет.")
             return
         self.accept()
 
     def value(self) -> dict:
-        return {"day": self.day.currentText(), "slot": int(self.slot.currentData()),
-                "subject": self.subject.text().strip(), "time": self.time.text().strip(),
-                "room": self.room.text().strip(), "teacher": self.teacher.text().strip()}
+        slot = int(self.slot.currentData())
+        return {"day": self.day.currentText(), "slot": slot,
+                "subject": self.subject.currentText().strip(), "time": self._time_for(slot),
+                "room": self.room.text().strip(),
+                "teacher": self._subject_teacher.get(self.subject.currentText().strip(), "")}
 
 
 class _Grid(QTableWidget):
@@ -261,10 +276,15 @@ class ScheduleEditor(QWidget):
     # ── данные ──────────────────────────────────────────────────────────────────────
     def _load_groups(self):
         names = []
+        self._group_subjects = {}   #§ролей: {группа: [предметы]} — для выпадающего списка в форме
         try:
             from data_store import get_store
             st = get_store()
-            names = sorted({g.get("name") for g in (st.get_groups() if st else []) if g.get("name")})
+            for g in (st.get_groups() if st else []):
+                n = g.get("name")
+                if n:
+                    self._group_subjects[n] = list(g.get("subjects") or [])
+            names = sorted(self._group_subjects.keys())
         except Exception as e:
             log.get("schedule_editor").warning(f"[editor] группы: {e}")
         if not names:
@@ -290,6 +310,28 @@ class ScheduleEditor(QWidget):
     def _time_for(self, slot: int) -> str:
         pts = self._pair_times()
         return pts[slot - 1] if 0 <= slot - 1 < len(pts) else ""
+
+    def _subject_teacher_map(self, group: str) -> dict:
+        """§ролей: {предмет: ФИО препода}, чтобы форма пары подставляла преподавателя
+        автоматом (webdata.teacher_assignments, локально — subject_hours.teacher_id)."""
+        out = {}
+        try:
+            from data_store import get_store
+            st = get_store()
+            if not st:
+                return out
+            names = {}
+            for full_name, t in (st.get_teachers() or {}).items():
+                tid = t.get("id", "")
+                if tid:
+                    names[tid] = full_name
+            for subj in self._group_subjects.get(group, []):
+                tid = st.get_subject_teacher_id(group, subj)
+                if tid:
+                    out[subj] = names.get(tid, "")
+        except Exception as e:
+            log.get("schedule_editor").warning(f"[editor] назначения препода: {e}")
+        return out
 
     def _slot_count(self) -> int:
         n = 6
@@ -408,9 +450,12 @@ class ScheduleEditor(QWidget):
 
     def _on_cell_activated(self, day, slot):
         cell = self._cell(day, slot)
+        group = self._cur()
         dlg = _PairDialog(self, day=day, slot=slot,
                           subject=(cell or {}).get("subject", ""), room=(cell or {}).get("room", ""),
-                          teacher=(cell or {}).get("teacher", ""), pair_times=self._pair_times())
+                          pair_times=self._pair_times(),
+                          subjects=self._group_subjects.get(group, []),
+                          subject_teacher=self._subject_teacher_map(group))
         if dlg.exec() != QDialog.Accepted:
             return
         v = dlg.value()

@@ -8,7 +8,7 @@ test_push_notifications.py — пуши о новой оценке: достав
 """
 import pytest
 
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,9 @@ def _seed(client, admin):
     client.post("/sync/push", json={"changes": {"lessons": [
         {"id": "L1", "group_name": "ИС-21", "subject": "Математика", "type": "Практика",
          "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
-    return make_teacher(client, admin, subjects=["Математика"])
+    teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
+    return teach
 
 
 def _student_headers(client):

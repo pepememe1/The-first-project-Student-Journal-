@@ -39,6 +39,13 @@ const week = ref(1)
 const base = ref(null)        // слитое расписание с сервера {weeks, pair_times}
 const savedKeys = ref(new Set())   // ячейки с УЖЕ сохранёнными правками (бейдж «сохранено»)
 const loading = ref(false)
+// §ролей: предмет — из СПИСКА предметов группы (не свободный текст), преподаватель —
+// автоматом из назначения (webdata.teacher_assignments), а не ручной ввод ФИО.
+const teacherBySubject = ref({})   // {предмет: {id, name}} для ТЕКУЩЕЙ группы/термина
+const groupSubjects = computed(() => {
+  const g = groups.value.find((x) => (x.name || x) === group.value)
+  return g?.subjects || []
+})
 
 // Черновик: ключ «неделя|день|слот» → {action:'set'|'remove', ...поля}. Пусто = нет правок.
 const pending = reactive({})
@@ -101,6 +108,16 @@ async function load() {
     savedKeys.value = new Set((r.overrides || []).map((o) => `${o.week}|${o.day}|${o.pair_no}`))
     clearDraft()
   } catch { toast.error('Не удалось загрузить расписание') } finally { loading.value = false }
+  //Назначения препод↔предмет для автозаполнения графы «Преподаватель» — тот же
+  //источник, что и в редакторе часов («Группы» → 🕐), не блокирует основную загрузку.
+  try {
+    const hr = (await adminApi.groupHours(group.value)).data
+    const map = {}
+    for (const s of (hr.subjects || [])) {
+      if (s.teacher_id) map[s.subject] = { id: s.teacher_id, name: s.teacher_name }
+    }
+    teacherBySubject.value = map
+  } catch { teacherBySubject.value = {} }
 }
 
 function clearDraft() {
@@ -176,6 +193,12 @@ async function checkSlot(day, slot, op) {
 const showForm = ref(false)
 const form = reactive({ day: 'Пнд', slot: 1, subject: '', room: '', teacher: '', origin: null })
 
+// Предмет выбран/сменился → преподаватель подставляется автоматом из назначения.
+// Не найдено назначения — поле остаётся пустым (не блокирует сохранение: расписание
+// можно вести и до кадрового назначения).
+function onFormSubjectChange() {
+  form.teacher = teacherBySubject.value[form.subject]?.name || ''
+}
 function openAdd(day, slot) {
   Object.assign(form, { day, slot, subject: '', room: '', teacher: '', origin: null })
   showForm.value = true
@@ -183,9 +206,10 @@ function openAdd(day, slot) {
 function openEdit(day, slot) {
   const c = cell(day, slot)
   if (!c) return openAdd(day, slot)
+  const subject = c.subject || c.raw || ''
   Object.assign(form, {
-    day, slot, subject: c.subject || c.raw || '', room: c.room || '',
-    teacher: c.teacher || '', origin: { day, slot },
+    day, slot, subject, room: c.room || '',
+    teacher: teacherBySubject.value[subject]?.name || c.teacher || '', origin: { day, slot },
   })
   showForm.value = true
 }
@@ -198,7 +222,9 @@ async function submitForm() {
   }
   const op = {
     action: 'set', subject: form.subject.trim(), room: form.room.trim(),
-    teacher: form.teacher.trim(), kind: '', time: timeForSlot(form.slot),
+    //Преподаватель — ставится автоматом из назначения (не ручной ввод, см. onFormSubjectChange).
+    teacher: (teacherBySubject.value[form.subject]?.name || '').trim(), kind: '',
+    time: timeForSlot(form.slot),
   }
   pending[key(form.day, form.slot)] = op
   showForm.value = false
@@ -439,13 +465,23 @@ function isHover(day, slot) {
             </select>
           </label>
           <label class="col-span-2 text-sm">Предмет
-            <input v-model="form.subject" placeholder="Например: Математика" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+            <select v-model="form.subject" @change="onFormSubjectChange"
+                    class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+              <option value="" disabled>Выберите предмет</option>
+              <option v-for="s in groupSubjects" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <p v-if="!groupSubjects.length" class="mt-1 text-tiny text-text3">
+              У группы нет предметов — задайте их во вкладке «Группы».
+            </p>
           </label>
           <label class="text-sm">Аудитория
             <input v-model="form.room" placeholder="101" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
           </label>
+          <!-- §ролей: преподаватель — ставится АВТОМАТОМ из назначения (не ручной ввод),
+               см. onFormSubjectChange / webdata.teacher_assignments. -->
           <label class="text-sm">Преподаватель
-            <input v-model="form.teacher" placeholder="ФИО (необязательно)" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+            <input :value="form.teacher || '— не назначен —'" disabled
+                   class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2/60 px-2 text-sm text-text3 outline-none" />
           </label>
         </div>
         <div class="mt-5 flex items-center justify-between">

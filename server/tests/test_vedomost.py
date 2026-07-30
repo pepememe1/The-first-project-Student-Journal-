@@ -2,7 +2,7 @@
 test_vedomost.py — Итоговые оценки (TermGrade) + экспорт журнала и ведомости в
 двух форматах (xlsx/docx), единый стиль TNR 14 ч/б.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 from app.security import hash_password
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -16,6 +16,7 @@ def _push(client, h, **ent):
 def test_term_grade_and_exports_both_formats(client):
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
+    assign_teacher(client, admin, "teach:teacher1", "G1", "Мат")
     L = {"id": "L1", "group_name": "G1", "subject": "Мат", "type": "Практика", "number": 1}
     stud = {"id": "stud:s1", "role": "student", "login": "s1", "surname": "Пуп",
             "name": "Пётр", "group_name": "G1", "password_hash": hash_password("p")}

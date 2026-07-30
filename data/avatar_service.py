@@ -99,6 +99,52 @@ def get_profile_color(role: str, identity: dict = None) -> str:
     return _synced_pref(role, identity, "profile_color")
 
 
+def get_grading_scale(role: str, identity: dict = None) -> str:
+    """Шкала оценивания преподавателя (§ролей, 3.3.1) — в чём он вводит/видит оценки
+    за практику/ДЗ. Тот же роуминг-паттерн, что и bio/цвет: локальный кэш → синк-запись
+    → дефолт "5" (сегодняшнее поведение, если препод ничего не выбрал)."""
+    identity = identity or {}
+    cached = local_get(f"my_grading_scale:{_ident_token(role, identity)}", None)
+    if isinstance(cached, str) and cached:
+        return cached
+    return _synced_pref(role, identity, "grading_scale") or "5"
+
+
+def get_subject_grading_scale(group: str, subject: str, year: str = "", semester=None) -> str:
+    """Шкала преподавателя, ВЕДУЩЕГО (группа,предмет) — для журнала/экспорта СТУДЕНТА
+    (тот смотрит чужой предмет, не свой). Разрешение через то же назначение препод↔
+    предмет↔группа (data_store.get_subject_teacher_id), что и на сервере
+    (webdata.lesson_scale_map) — единый источник, не отдельная копия. Без назначения
+    или у назначенного препода нет своей строки в локальных teachers — "5"."""
+    import grading
+    from data_store import get_store
+    try:
+        store = get_store()
+        tid = store.get_subject_teacher_id(group, subject, year, semester)
+        if not tid:
+            return grading.DEFAULT_SCALE
+        for rec in store.get_teachers().values():
+            if rec.get("id") == tid:
+                sc = (rec.get("prefs") or {}).get("grading_scale") or grading.DEFAULT_SCALE
+                return sc if sc in grading.SCALES else grading.DEFAULT_SCALE
+    except Exception:
+        pass
+    return grading.DEFAULT_SCALE
+
+
+def save_grading_scale(scale: str, role: str, identity: dict = None) -> None:
+    """Сохранить шкалу: локальный кэш + prefs на сервер (роуминг, тот же формат, что на
+    вебе — POST /me/prefs). Как save_profile, self-scope."""
+    identity = identity or {}
+    scale = (scale or "5").strip()
+    local_set(f"my_grading_scale:{_ident_token(role, identity)}", scale)
+    try:
+        import sync_runner
+        sync_runner.push_my_prefs({"grading_scale": scale})
+    except Exception as e:
+        log.get("avatar_service").warning(f"[grading_scale] отправка в prefs пропущена: {e}")
+
+
 def save_profile(role: str, identity: dict = None, bio: str = None, color: str = None) -> None:
     """Сохранить публичный профиль: локальный кэш + prefs на сервер (роуминг, тот же
     формат, что на вебе). Передавайте только те поля, которые меняете."""

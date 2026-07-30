@@ -22,7 +22,7 @@ from ..deps import get_current_user, require_admin
 from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                       AuthSession, ConfigKV, TermGrade, ScheduleOverride,
                       ScheduleJointMark, schedule_override_id, joint_mark_id,
-                      SubjectHours, subject_hours_id)
+                      SubjectHours, subject_hours_id, ZetThreshold, zet_threshold_id)
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
@@ -108,6 +108,7 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     lessons = W.group_lessons(db, user.group_name)
     by_id = {l.id: l for l in lessons}
     records = W.student_records(db, user.surname, user.name, user.group_name)
+    scale_map = W.lesson_scale_map(db, lessons)
 
     #Свежие оценки — по серверной метке времени, только реальные занятия СВОЕЙ группы.
     #Скоуп по lesson_id группы нужен и здесь: иначе оценки тёзки из другой группы могли
@@ -159,14 +160,14 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     return {
         "name": W.display_name(user),
         "group": user.group_name,
-        "average": W.average(lessons, records, cfg),
+        "average": W.average(lessons, records, cfg, scale=scale_map),
         "grades_month": grades_month,
         "grades_total": grades_total,
         "subjects": subjects,
         "subjects_count": len(subjects),
         "attendance": attendance,
         "next_lesson": None,  # появится с интеграцией расписания
-        "debts": len(W.debts(lessons, records)),
+        "debts": len(W.debts(lessons, records, scale=scale_map)),
         "recent": recent,
     }
 
@@ -181,6 +182,7 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
     ty, ts = _resolve_term(cfg, year, semester)
     lessons = W.group_lessons(db, user.group_name, year=ty, semester=ts)
     records = W.student_records(db, user.surname, user.name, user.group_name)
+    scale_map = W.lesson_scale_map(db, lessons)
 
     from collections import OrderedDict
     buckets = OrderedDict()
@@ -197,7 +199,7 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
                 entry["latest"] = W.grading.latest_exam_value(l.id, records)
             items.append(entry)
         subjects.append({"subject": subj, "lessons": items,
-                         "average": W.average(ls, records, cfg),
+                         "average": W.average(ls, records, cfg, scale=scale_map),
                          #«Пройдено X из Y часов» по этому предмету (0 total — не задано).
                          "hours": W.hours_progress(db, user.group_name, subj, ls, ty, ts)})
 
@@ -220,12 +222,13 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     #легаси-занятия без штампа термина (десктоп до штампа) выпадают из фильтра текущего
     #термина, и реальные долги/пропуски «исчезают». В архиве — строго по выбранному термину.
     dl = lessons if is_archive else W.group_lessons(db, user.group_name)
+    scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
     return {
         "term": {"year": ty, "semester": ts},
-        "average": W.average(lessons, records, cfg),
-        "per_subject": W.per_subject_averages(lessons, records, cfg),
+        "average": W.average(lessons, records, cfg, scale=scale_map),
+        "per_subject": W.per_subject_averages(lessons, records, cfg, scale=scale_map),
         "absences": W.absences(dl, records),
-        "debts": W.debts(dl, records),
+        "debts": W.debts(dl, records, scale=scale_map),
     }
 
 
@@ -237,10 +240,11 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     cfg = W.load_config(db)
     lessons = W.group_lessons(db, user.group_name)
     records = W.student_records(db, user.surname, user.name, user.group_name)
-    avg = W.average(lessons, records, cfg)
+    scale_map = W.lesson_scale_map(db, lessons)
+    avg = W.average(lessons, records, cfg, scale=scale_map)
     cards = []
 
-    d = W.debts(lessons, records)
+    d = W.debts(lessons, records, scale=scale_map)
     if d:
         cards.append({"severity": "warn", "icon": "⚠️", "title": "Незакрытые задолженности",
                       "detail": "; ".join(d[:3]) + ("…" if len(d) > 3 else "") + ".",
@@ -278,6 +282,22 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     return {"cards": cards, "mood": _mood_by_avg(avg)}
 
 
+@router.get("/student/zet")
+def student_zet(year: str = Query(""), semester: int = Query(0),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """ЗЕТ студента за термин (docs/PLAN-ZET.md). Пусто — ни один предмет группы ещё
+    не получил ЗЕТ от администратора (интерфейс тогда не показывает строку вовсе).
+    min_zet — порог перевода группы (для «до перевода: X ЗЕТ» в дашборде), null — куратор/
+    админ его ещё не задавал."""
+    _require("student", user)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    threshold = db.get(ZetThreshold, zet_threshold_id(user.group_name, ty, ts))
+    min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
+    return {"term": {"year": ty, "semester": ts}, "min_zet": min_zet,
+            **W.zet_summary_for_student(db, user.surname, user.name, user.group_name, ty, ts)}
+
+
 @router.get("/teacher/insights")
 def teacher_insights(group: str = Query(...),
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -289,14 +309,15 @@ def teacher_insights(group: str = Query(...),
     lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
     studs = W.students_in_group(db, group)
     cards = []
+    tscale = W.teacher_scale(user)
 
     vals, debtors, risky, absc_total = [], 0, 0, 0
     for s in studs:
         recs = W.student_records(db, s.surname, s.name, group)
-        a = W.average(lessons, recs, cfg)
+        a = W.average(lessons, recs, cfg, scale=tscale)
         if a > 0:
             vals.append(a)
-        if W.debts(lessons, recs):
+        if W.debts(lessons, recs, scale=tscale):
             debtors += 1
         if 0 < a < 3:
             risky += 1
@@ -330,15 +351,27 @@ def teacher_insights(group: str = Query(...),
 @router.get("/teacher/overview")
 def teacher_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _require("teacher", user)
-    subjects = list(user.subjects or [])
-    return {"name": W.display_name(user), "subjects": subjects,
-            "groups": W.teacher_groups(db, subjects)}
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    #assignments — ЯВНОЕ назначение (группа,предмет), выставленное админом в «часы по
+    #предмету». groups/subjects — плоские уникальные списки для мест, которым пары не
+    #нужны (Вектор-подсказки и т.п.). ⚠️ ЭТО НЕ user.subjects: препод может числиться
+    #мастером пяти предметов, но видеть только те группы, что ему реально назначили —
+    #баг 3.3.1, когда «предмет есть у препода» ошибочно значило «видны все группы предмета».
+    pairs = W.teacher_assignments(db, user.id, ty, ts)
+    return {"name": W.display_name(user),
+            "assignments": [{"group": g, "subject": s} for g, s in pairs],
+            "groups": sorted({g for g, _s in pairs}),
+            "subjects": sorted({s for _g, s in pairs}),
+            "term": {"year": ty, "semester": ts}}
 
 
-def _teacher_check_subject(user: User, subject: str):
-    """Преподаватель работает только со СВОИМИ предметами (row-level scope, как в push)."""
-    if subject not in (user.subjects or []):
-        raise HTTPException(status_code=403, detail="Предмет вне вашей нагрузки")
+def _teacher_check_assignment(db, user: User, group: str, subject: str, year: str, semester):
+    """Преподаватель работает только со СВОИМИ назначениями (группа+предмет за термин),
+    а не с любой группой, где просто числится его предмет — см. teacher_assignments."""
+    pairs = W.teacher_assignments(db, user.id, year, semester)
+    if (group, subject) not in pairs:
+        raise HTTPException(status_code=403, detail="Эта группа/предмет вам не назначены")
 
 
 @router.get("/teacher/journal")
@@ -348,9 +381,10 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
     """Журнал группы по одному предмету преподавателя: студенты × занятия × оценки.
     По умолчанию — текущий семестр; year+semester открывают архив."""
     _require("teacher", user)
-    _teacher_check_subject(user, subject)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
+    tscale = W.teacher_scale(user)
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
     #Ключи пересдач экзаменов (как в десктопе: <id>_retake, дальше — _retake_N по extra).
@@ -367,9 +401,12 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         grades.update({k: recs.get(k, "") for k in retake_keys})
         rows.append({"surname": s.surname, "name": s.name, "grades": grades,
-                     "average": W.average(lessons, recs, cfg)})
+                     "average": W.average(lessons, recs, cfg, scale=tscale)})
     return {
         "group": group, "subject": subject, "term": {"year": ty, "semester": ts},
+        #Шкала ЭТОГО преподавателя (§ролей, 3.3.1) — клиент строит из неё варианты
+        #ввода оценки (grading.SCALES[scale]["values"] / scale_values(scale)).
+        "scale": tscale, "scale_values": list(W.grading.scale_values(tscale)),
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
                      "topic": l.topic, "date": l.date, "hour": l.hour,
                      "retake_date": l.retake_date, "extra": l.extra or {}}
@@ -386,14 +423,19 @@ def teacher_students(group: str = Query(...),
     """Студенты группы со средним по предметам преподавателя (в этой группе)."""
     _require("teacher", user)
     cfg = W.load_config(db)
-    subjects = set(user.subjects or [])
-    #Средний считаем только по занятиям СВОИХ предметов — чужие данные не раскрываем.
+    ty, ts = W.current_term(cfg)
+    #Средний считаем только по НАЗНАЧЕННЫМ этому преподу в ЭТОЙ группе предметам —
+    #не по всем его предметам вообще (см. teacher_assignments).
+    subjects = {s for g, s in W.teacher_assignments(db, user.id, ty, ts) if g == group}
+    if not subjects:
+        raise HTTPException(status_code=403, detail="Эта группа вам не назначена")
     lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+    tscale = W.teacher_scale(user)
     out = []
     for s in W.students_in_group(db, group):
         recs = W.student_records(db, s.surname, s.name, group)
         out.append({"surname": s.surname, "name": s.name,
-                    "average": W.average(lessons, recs, cfg)})
+                    "average": W.average(lessons, recs, cfg, scale=tscale)})
     return {"group": group, "students": out}
 
 
@@ -403,12 +445,14 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Средний по группе за предмет преподавателя (по умолчанию — текущий семестр)."""
     _require("teacher", user)
-    _teacher_check_subject(user, subject)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
-    vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group), cfg) for s in studs]
+    tscale = W.teacher_scale(user)
+    vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group), cfg, scale=tscale)
+            for s in studs]
     vals = [v for v in vals if v > 0]
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
     return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
@@ -522,6 +566,8 @@ def curator_group_subject(group: str = Query(...), subject: str = Query(...),
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
+    #Куратор смотрит ЧУЖОЙ предмет — шкала ведущего его преподавателя, не куратора.
+    scale_map = W.lesson_scale_map(db, lessons)
     studs = W.students_in_group(db, group)
     rows = []
     for s in studs:
@@ -529,13 +575,133 @@ def curator_group_subject(group: str = Query(...), subject: str = Query(...),
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         rows.append({"surname": s.surname, "name": s.name,
                      "first_name": W.first_name(s), "patronymic": W.patronymic_of(s),
-                     "grades": grades, "average": W.average(lessons, recs, cfg)})
+                     "grades": grades, "average": W.average(lessons, recs, cfg, scale=scale_map)})
     return {
         "group": group, "subject": subject, "term": {"year": ty, "semester": ts},
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
                      "topic": l.topic, "date": l.date} for l in lessons],
         "students": rows,
     }
+
+
+@router.get("/curator/zet-report")
+def curator_zet_report(group: str = Query(...), year: str = Query(""), semester: int = Query(0),
+                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Таблица перевода на курс по ЗЕТ (docs/PLAN-ZET.md §7.4) — «главная фича» отчёта
+    куратора. group — QUERY (не path): имена групп содержат слэш («К75/1»), см. урок
+    у /curator/subjects. Порог — ZetThreshold этой группы/термина, если куратор/админ
+    его ещё не задал — eligible получают все (см. study_hours.group_zet_report)."""
+    _require("teacher", user)
+    _curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    threshold = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
+    min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
+    return {"group": group, "term": {"year": ty, "semester": ts}, "min_zet": min_zet,
+            "students": W.group_zet_report(db, group, ty, ts, min_zet)}
+
+
+def _admin_or_curator_check(user: User, group: str):
+    """Порог перевода и сама кнопка «Перевести» (docs/PLAN-ZET.md) — админ ИЛИ КУРАТОР
+    именно этой группы. В отличие от журнала (куратор строго read-only), решение о
+    переводе на курс — то, что куратор принимает по своим студентам каждый семестр;
+    держать его только за админом означало бы гонять администратора за каждой группой."""
+    if user.role == "admin":
+        return
+    if user.role == "teacher" and group in (user.curated_groups or []):
+        return
+    raise HTTPException(status_code=403, detail="Доступно администратору или куратору группы")
+
+
+@router.get("/admin/zet-thresholds")
+def admin_get_zet_threshold(group: str = Query(...), year: str = Query(""),
+                            semester: int = Query(0),
+                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Порог перевода группы на курс (docs/PLAN-ZET.md §7.2). group — QUERY (слэш в имени
+    группы, тот же урок, что и везде)."""
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    row = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
+    min_zet = row.min_zet if (row and not row.deleted) else None
+    return {"group": group, "term": {"year": ty, "semester": ts}, "min_zet": min_zet}
+
+
+@router.post("/admin/zet-thresholds")
+def admin_set_zet_threshold(payload: dict = Body(...),
+                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сохранить (или снять — min_zet=null) порог перевода: {group, year, semester, min_zet}."""
+    group = (payload.get("group") or "").strip()
+    if not group:
+        raise HTTPException(status_code=400, detail="Нужна group")
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    hid = zet_threshold_id(group, ty, ts)
+    mz = payload.get("min_zet")
+    row = db.get(ZetThreshold, hid)
+    if mz is None or mz == "":
+        if row is not None:
+            row.deleted = True
+            row.updated_at = _now_iso()
+            db.commit()
+        return {"ok": True, "min_zet": None, "term": {"year": ty, "semester": ts}}
+    try:
+        mz = float(mz)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="min_zet должен быть числом")
+    if mz < 0:
+        raise HTTPException(status_code=400, detail="min_zet не может быть отрицательным")
+    if row is None:
+        row = ZetThreshold(id=hid, group_name=group, year=ty, semester=ts)
+        db.add(row)
+    row.min_zet = mz
+    row.updated_by = user.login
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    return {"ok": True, "min_zet": mz, "term": {"year": ty, "semester": ts}}
+
+
+@router.post("/admin/groups/promote")
+def admin_promote_group(payload: dict = Body(...), request: Request = None,
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Перевод на следующий курс (docs/PLAN-ZET.md §7.4) — только явной кнопкой, только
+    студентов с eligible=true (сервер САМ перепроверяет, клиентскому флагу не доверяет).
+    group/year/semester/student_ids — В ТЕЛЕ (не в пути — слэш в имени группы)."""
+    group = (payload.get("group") or "").strip()
+    student_ids = payload.get("student_ids") or []
+    if not group or not isinstance(student_ids, list) or not student_ids:
+        raise HTTPException(status_code=400, detail="Нужны group и student_ids")
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    threshold = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
+    min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
+    report = {r["student_id"]: r for r in W.group_zet_report(db, group, ty, ts, min_zet)}
+    promoted, rejected = [], []
+    for sid in student_ids:
+        r = report.get(sid)
+        if r is None:
+            rejected.append({"student_id": sid, "reason": "не в группе"})
+        elif not r["eligible"]:
+            rejected.append({"student_id": sid, "reason": f"не хватает {r['missing_zet']} ЗЕТ"})
+        else:
+            promoted.append(r)
+    if promoted:
+        names = ", ".join(r["display_name"] for r in promoted)
+        audit.log(db, request, actor=user.login, role=user.role, action="group.promote",
+                  target=group, detail=f"переведено: {len(promoted)} ({names})")
+        try:
+            from .messenger import _post_system_channel_message, _gtoken
+            _post_system_channel_message(
+                db, f"sys:announce:{_gtoken(group)}",
+                f"Студенты переведены на следующий курс: {names}.")
+        except Exception:
+            pass
+    return {"promoted": [{"student_id": r["student_id"], "display_name": r["display_name"]}
+                         for r in promoted],
+            "rejected": rejected}
 
 
 @router.get("/curator/report")
@@ -600,8 +766,8 @@ def teacher_set_term_grade(payload: dict = Body(...),
     form = (payload.get("form") or "").strip()
     if not (surname and name and subject and group):
         raise HTTPException(status_code=400, detail="Нужны surname, name, subject, group")
-    _teacher_check_subject(user, subject)
     ty, ts = W.current_term(W.load_config(db))
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
     stud = db.query(User).filter(
         User.role == "student", User.surname == surname, User.name == name,
         User.group_name == group, User.deleted == False).first()  # noqa: E712
@@ -632,8 +798,8 @@ def teacher_term_grades(group: str = Query(...), subject: str = Query(...),
                         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Итоговые оценки группы по предмету за термин: {«surname|name»: {grade, form}}."""
     _require("teacher", user)
-    _teacher_check_subject(user, subject)
     ty, ts = _resolve_term(W.load_config(db), year, semester)
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
     rows = db.query(TermGrade).filter(
         TermGrade.subject == subject, TermGrade.year == ty,
         TermGrade.semester == ts, TermGrade.deleted == False).all()  # noqa: E712
@@ -666,8 +832,8 @@ def teacher_vedomost(group: str = Query(...), subject: str = Query(...),
     """Экзаменационно-зачётная ведомость (fmt=xlsx|docx): студенты + итоговая оценка +
     форма + дата + строка подписи. Единый стиль TNR 14, ч/б. Итоговые — из TermGrade."""
     _require("teacher", user)
-    _teacher_check_subject(user, subject)
     ty, ts = _resolve_term(W.load_config(db), year, semester)
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
     tg = {f"{r.student_f}|{r.student_n}": r for r in db.query(TermGrade).filter(
         TermGrade.subject == subject, TermGrade.year == ty,
         TermGrade.semester == ts, TermGrade.deleted == False).all()}  # noqa: E712
@@ -713,8 +879,8 @@ def admin_teachers(_admin: User = Depends(require_admin), db: Session = Depends(
         User.role == "teacher", User.deleted == False).order_by(User.full_name).all()  # noqa: E712
     info = _contact_info(db, [u.login for u in rows])
     return {"teachers": [dict(
-        {"login": u.login, "name": W.display_name(u), "subjects": list(u.subjects or []),
-         "curated_groups": list(u.curated_groups or [])},
+        {"id": u.id, "login": u.login, "name": W.display_name(u),
+         "subjects": list(u.subjects or []), "curated_groups": list(u.curated_groups or [])},
         **info.get(u.login, {})) for u in rows]}
 
 
@@ -764,46 +930,98 @@ def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: 
     by_subject = {}
     for l in lessons:
         by_subject.setdefault(l.subject, []).append(l)
+    #Назначения преподов на эту группу за термин — одним запросом, не по одному на предмет.
+    hrows = {r.subject: r for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == ty,
+        SubjectHours.semester == ts, SubjectHours.deleted == False).all()}  # noqa: E712
+    tids = {r.teacher_id for r in hrows.values() if r.teacher_id}
+    tnames = {u.id: W.display_name(u) for u in db.query(User).filter(User.id.in_(tids)).all()} if tids else {}
     out = []
     for subj in list(grp.subjects or []):
-        out.append({"subject": subj,
-                    "hours_total": W.hours_plan(db, group, subj, ty, ts),
-                    "hours_done": W.hours_done(by_subject.get(subj, []))})
+        tid = (hrows.get(subj).teacher_id if subj in hrows else "") or ""
+        hrs = W.hours_plan(db, group, subj, ty, ts)
+        zet = hrows.get(subj).zet if subj in hrows else None
+        out.append({"subject": subj, "hours_total": hrs,
+                    "hours_done": W.hours_done(by_subject.get(subj, [])),
+                    "teacher_id": tid, "teacher_name": tnames.get(tid, ""),
+                    #ЗЕТ (docs/PLAN-ZET.md): zet — уже подтверждённое администратором
+                    #значение (None — не задано, тогда интерфейс строку не показывает);
+                    #zet_hint — ТОЛЬКО подсказка по формуле, никогда не подставляется сама.
+                    "zet": zet, "zet_hint": W.study_hours.zet_hint(hrs)})
     return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
 
 
 @router.post("/admin/group-hours")
 def admin_set_group_hours(payload: dict = Body(...),
                           _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Сохранить часы по предметам группы: {group, year, semester, hours: {предмет: N}}.
+    """Сохранить часы + назначение препода + ЗЕТ по предметам группы:
+    {group, year, semester, hours: {предмет: N}, teachers: {предмет: teacher_id | ""},
+    zet: {предмет: float | null}}.
 
     Пишем ПАЧКОЙ (кнопка «Сохранить» в админке правит сразу несколько предметов) — иначе
-    полтора десятка запросов на одно нажатие и половинчатое состояние при обрыве связи."""
+    полтора десятка запросов на одно нажатие и половинчатое состояние при обрыве связи.
+    `teachers` — §ролей препод↔предмет↔группа: единственный источник правды «кто ведёт
+    какую группу по какому предмету», см. webdata.teacher_assignments. `zet` —
+    docs/PLAN-ZET.md: null (или ключ отсутствует) — не трогать/не задано, число —
+    подтверждённое администратором значение (подсказка zet_hint сюда НЕ подставляется
+    автоматически, только человеком)."""
     group = (payload.get("group") or "").strip()
     hours = payload.get("hours") or {}
-    if not group or not isinstance(hours, dict):
+    teachers = payload.get("teachers") or {}
+    zets = payload.get("zet") or {}
+    if not group or not isinstance(hours, dict) or not isinstance(teachers, dict) \
+            or not isinstance(zets, dict):
         raise HTTPException(status_code=400, detail="Нужны group и hours")
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    #Пустая строка teacher_id / null ЗЕТ = «снять назначение»/«снять ЗЕТ» — ЗНАЧИМОЕ
+    #намерение, поэтому обходим объединение ключей hours∪teachers∪zet, а не только те,
+    #где задано число часов.
+    subjects_touched = ({(s or "").strip() for s in hours}
+                        | {(s or "").strip() for s in teachers}
+                        | {(s or "").strip() for s in zets})
+    subjects_touched.discard("")
     saved = 0
-    for subject, value in hours.items():
-        subject = (subject or "").strip()
-        if not subject:
-            continue
-        try:
-            total = max(0, int(value or 0))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400,
-                                detail=f"Часы по предмету «{subject}» должны быть числом")
+    for subject in subjects_touched:
         hid = subject_hours_id(group, subject, ty, ts)
         row = db.get(SubjectHours, hid)
         if row is None:
             row = SubjectHours(id=hid, group_name=group, subject=subject, year=ty, semester=ts)
             db.add(row)
-        row.hours_total = total
+        if subject in hours:
+            try:
+                row.hours_total = max(0, int(hours[subject] or 0))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400,
+                                    detail=f"Часы по предмету «{subject}» должны быть числом")
+        if subject in teachers:
+            tid = (teachers[subject] or "").strip()
+            if tid:
+                t = db.query(User).filter(User.id == tid, User.role == "teacher",
+                                          User.deleted == False).first()  # noqa: E712
+                if t is None:
+                    raise HTTPException(status_code=404, detail="Преподаватель не найден")
+                if subject not in (t.subjects or []):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"У преподавателя «{W.display_name(t)}» нет предмета «{subject}»")
+            row.teacher_id = tid
+        if subject in zets:
+            zv = zets[subject]
+            if zv is None or zv == "":
+                row.zet = None
+            else:
+                try:
+                    row.zet = float(zv)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400,
+                                        detail=f"ЗЕТ по предмету «{subject}» должен быть числом")
+                if row.zet < 0:
+                    raise HTTPException(status_code=400, detail="ЗЕТ не может быть отрицательным")
         row.updated_at = _now_iso()
-        #Ноль — это «план снят», а не удаление строки: надгробие уехало бы на десктоп и
-        #там часы просто исчезли бы, вместо того чтобы показать «не задано».
+        #Ноль часов — это «план снят», а не удаление строки: надгробие уехало бы на десктоп и
+        #там часы просто исчезли бы, вместо того чтобы показать «не задано». Та же логика
+        #для назначения — снятие препода (tid="") не трогает саму строку часов.
         row.deleted = False
         saved += 1
     db.commit()
@@ -1291,12 +1509,16 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
     students = db.query(User).filter(
         User.role == "student", User.group_name == group,
         User.deleted == False).all()  # noqa: E712
-    #Преподаватель считается ведущим у группы, если у него есть занятия по её предметам.
-    subjects_here = {row.subject for row in db.query(Lesson).filter(
-        Lesson.group_name == group, Lesson.deleted == False).all() if row.subject}  # noqa: E712
+    #Преподаватель считается ведущим у группы, если ему НАЗНАЧЕН предмет этой группы
+    #(SubjectHours.teacher_id) — не «есть занятия по совпавшему названию предмета где-то».
+    ty, ts = W.current_term(W.load_config(db))
+    teacher_ids = {r.teacher_id for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == ty,
+        SubjectHours.semester == ts, SubjectHours.teacher_id != "",
+        SubjectHours.deleted == False).all()}  # noqa: E712
     teachers = [t for t in db.query(User).filter(
         User.role == "teacher", User.deleted == False).all()  # noqa: E712
-        if t.login and (set(t.subjects or []) & subjects_here)]
+        if t.login and t.id in teacher_ids]
 
     from .. import rustore_push
     sent = 0
@@ -1509,7 +1731,8 @@ def _known_subjects(user: User, db: Session) -> list:
         if user.role == "student":
             return sorted({l.subject for l in W.group_lessons(db, user.group_name) if l.subject})
         if user.role == "teacher":
-            return sorted(set(user.subjects or []))
+            ty, ts = W.current_term(W.load_config(db))
+            return sorted({s for _g, s in W.teacher_assignments(db, user.id, ty, ts)})
         rows = db.query(Subject.name).filter(Subject.deleted == False).all()  # noqa: E712
         return sorted({r[0] for r in rows if r[0]})
     except Exception:
@@ -1523,8 +1746,9 @@ def _known_surnames(user: User, db: Session) -> list:
         return []
     try:
         if user.role == "teacher":
+            ty, ts = W.current_term(W.load_config(db))
             out = []
-            for g in W.teacher_groups(db, set(user.subjects or [])):
+            for g in W.teacher_group_names(db, user.id, ty, ts):
                 out += [s.surname for s in W.students_in_group(db, g)]
             return sorted(set(out))
         rows = db.query(User.surname).filter(User.role == "student",
@@ -1534,15 +1758,51 @@ def _known_surnames(user: User, db: Session) -> list:
         return []
 
 
-def _grade_breakdown(lessons, records) -> dict:
-    """Счёт оценок студента: всего практических оценок (2–5) и разбивка по баллам."""
+def _grade_breakdown(lessons, records, scale=None) -> dict:
+    """Счёт оценок студента: всего практических оценок (2–5) и разбивка по баллам.
+    scale — {lesson_id: шкала}/строка/None (§ролей, 3.3.1): сырое значение переводится
+    в 5-балльное ПЕРЕД подсчётом, поэтому «пятёрка» на 100-балльной (90+) тоже считается."""
     counts = {"5": 0, "4": 0, "3": 0, "2": 0}
     ids = {l.id for l in lessons if l.type == "Практика"}
+    scale_map = scale if isinstance(scale, dict) else None
     for lid, v in (records or {}).items():
-        if lid in ids and v in counts:
-            counts[v] += 1
+        if lid not in ids or not v:
+            continue
+        lscale = scale_map.get(lid, W.grading.DEFAULT_SCALE) if scale_map is not None else (scale or W.grading.DEFAULT_SCALE)
+        num = W.grading.to_five_point(v, lscale)
+        key = str(int(num)) if num is not None else None
+        if key in counts:
+            counts[key] += 1
     counts["всего"] = sum(counts[k] for k in ("5", "4", "3", "2"))
     return counts
+
+
+def _zet_facts(db, surname: str, name: str, group: str, cfg: dict) -> dict:
+    """Вектор: «Сколько у меня ЗЕТ / хватит ли для перевода» (docs/PLAN-ZET.md §6).
+    Факты — из того же расчёта, что и /web/student/zet; LLM (если подключена) только
+    переформулирует, порог и цифры не выдумывает."""
+    ty, ts = W.current_term(cfg)
+    summ = W.zet_summary_for_student(db, surname, name, group, ty, ts)
+    if not summ["subjects"]:
+        return {"text": "ЗЕТ по твоим предметам пока не заданы администрацией.",
+                "mood": "neutral", "intent": "zet", "facts": {}}
+    threshold = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
+    min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
+    unsatisfied = [s["subject"] for s in summ["subjects"] if not s["passed"]]
+    parts = [f"У тебя {summ['earned']} из {summ['total']} ЗЕТ за семестр ({summ['pct']}%)."]
+    if min_zet is not None:
+        if summ["earned"] >= min_zet:
+            parts.append(f"Порог для перевода — {min_zet} ЗЕТ, он уже набран.")
+        else:
+            parts.append(f"Порог для перевода — {min_zet} ЗЕТ, не хватает "
+                         f"{round(min_zet - summ['earned'], 1)}.")
+    if unsatisfied:
+        parts.append("Ещё не сдано: " + ", ".join(unsatisfied) + ".")
+    mood = "happy" if (min_zet is None or summ["earned"] >= min_zet) else \
+        ("neutral" if summ["pct"] >= 80 else "sad")
+    return {"text": " ".join(parts), "mood": mood, "intent": "zet",
+            "facts": {"earned": summ["earned"], "total": summ["total"], "pct": summ["pct"],
+                     "min_zet": min_zet, "unsatisfied": unsatisfied}}
 
 
 def _subj_match(detected: str, lesson_subject: str) -> bool:
@@ -1687,6 +1947,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         group = user.group_name
         lessons = W.group_lessons(db, group)
         records = W.student_records(db, user.surname, user.name, group)
+        scale_map = W.lesson_scale_map(db, lessons)
 
         if intent == "schedule":
             text, facts = _schedule_answer(db, group, msg, day)
@@ -1695,7 +1956,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"Твоя группа — {group}." if group else "Группа за тобой не закреплена.",
                     "mood": "neutral", "intent": "groups", "facts": {"group": group}}
         if intent == "debtors":
-            d = W.debts(lessons, records)
+            d = W.debts(lessons, records, scale=scale_map)
             text = "Задолженностей нет — так держать! 🐯" if not d else \
                 "Есть задолженности: " + "; ".join(d) + "."
             return {"text": text, "mood": "happy" if not d else "sad",
@@ -1705,10 +1966,10 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                     "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
         if intent == "grade_count":
-            b = _grade_breakdown(lessons, records)
+            b = _grade_breakdown(lessons, records, scale=scale_map)
             if subject:
                 subj_lessons = [l for l in lessons if l.subject == subject]
-                bs = _grade_breakdown(subj_lessons, records)
+                bs = _grade_breakdown(subj_lessons, records, scale=scale_map)
                 return {"text": f"Оценок по предмету «{subject}» — {bs['всего']} "
                                 f"(5: {bs['5']}, 4: {bs['4']}, 3: {bs['3']}, 2: {bs['2']}).",
                         "mood": "neutral", "intent": "grade_count", "facts": bs}
@@ -1717,21 +1978,22 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                     "mood": "happy" if b["2"] == 0 else "neutral",
                     "intent": "grade_count", "facts": b}
         if intent == "subject_grades" and subject:
-            per = [p for p in W.per_subject_averages(lessons, records, cfg)
+            per = [p for p in W.per_subject_averages(lessons, records, cfg, scale=scale_map)
                    if p["subject"] == subject]
             if not per:
                 return {"text": f"По предмету «{subject}» у тебя пока нет занятий с оценками.",
                         "mood": "neutral", "intent": "subject_grades", "facts": {}}
             p = per[0]
             marks = [records.get(l.id) for l in lessons
-                     if l.subject == subject and l.type == "Практика" and records.get(l.id) in ("2", "3", "4", "5")]
+                     if l.subject == subject and l.type == "Практика"
+                     and W.grading.to_five_point(records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None]
             avg_txt = f"средний {p['average']}" if p["average"] else "оценок ещё нет"
             body = (", ".join(marks)) if marks else "—"
             return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
                     "mood": _mood_by_avg(p["average"]), "intent": "subject_grades",
                     "facts": {"subject": subject, "average": p["average"]}}
         if intent == "grades" or intent == "subject_grades":
-            per = W.per_subject_averages(lessons, records, cfg)
+            per = W.per_subject_averages(lessons, records, cfg, scale=scale_map)
             graded = [p for p in per if p["average"]]
             if not graded:
                 return {"text": "Оценок по практикам пока нет — как появятся, покажу. 🐯",
@@ -1739,8 +2001,10 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             body = "; ".join(f"{p['subject']} — {p['average']}" for p in graded)
             return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
                     "intent": "grades", "facts": {"subjects": len(graded)}}
+        if intent == "zet":
+            return _zet_facts(db, user.surname, user.name, group, cfg)
         # average и всё остальное (at_risk/roster/teachers/group_stats недоступны студенту)
-        avg = W.average(lessons, records, cfg)
+        avg = W.average(lessons, records, cfg, scale=scale_map)
         if intent in ("at_risk", "roster", "teachers", "group_stats"):
             return {"text": "Эти данные — для преподавателя. Я могу показать твой средний балл, "
                             "оценки, пропуски, долги и расписание. 🐯",
@@ -1750,11 +2014,19 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
 
     # ── ПРЕПОДАВАТЕЛЬ: только свои группы/предметы ──────────────────────────────────
     if role == "teacher":
-        tsubjects = set(user.subjects or [])
-        groups = W.teacher_groups(db, tsubjects)
+        ty0, ts0 = W.current_term(cfg)
+        pairs = W.teacher_assignments(db, user.id, ty0, ts0)
+        groups = sorted({g for g, _s in pairs})
+        #Предметы ЭТОГО препода В ЭТОЙ КОНКРЕТНОЙ группе — не весь его набор предметов
+        #(баг 3.3.1: раньше фильтровали занятия группы по ВСЕМ предметам препода, из-за
+        #чего в чужой группе с совпавшим названием предмета тоже что-то находилось).
+        subjects_by_group: dict = {}
+        for g, s in pairs:
+            subjects_by_group.setdefault(g, set()).add(s)
         if not groups:
             return {"text": "За вами пока нет групп с занятиями по вашим предметам. " + help_text,
                     "mood": "neutral", "intent": "help", "facts": {}}
+        tscale = W.teacher_scale(user)
 
         if intent == "schedule":
             text, facts = _schedule_answer(db, groups[0], msg, day)
@@ -1773,14 +2045,14 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             for g in groups:
                 for s in W.students_in_group(db, g):
                     if s.surname == surname:
-                        gl = [l for l in W.group_lessons(db, g) if l.subject in tsubjects]
+                        gl = [l for l in W.group_lessons(db, g) if l.subject in subjects_by_group.get(g, set())]
                         rec = W.student_records(db, s.surname, s.name, g)
                         if intent == "absences":
                             a = W.absences(gl, rec)
                             return {"text": f"{W.display_name(s)}: пропусков {a['всего']} "
                                             f"(Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                                     "mood": "neutral", "intent": "absences", "facts": a}
-                        d = W.debts(gl, rec)
+                        d = W.debts(gl, rec, scale=tscale)
                         txt = (f"У {W.display_name(s)} задолженностей нет." if not d
                                else f"{W.display_name(s)}: " + "; ".join(d) + ".")
                         return {"text": txt, "mood": "happy" if not d else "sad",
@@ -1794,12 +2066,12 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         # и Вектор честно не мог назвать фамилии.
         per, risky = [], []
         for g in groups:
-            gl = [l for l in W.group_lessons(db, g) if l.subject in tsubjects]
+            gl = [l for l in W.group_lessons(db, g) if l.subject in subjects_by_group.get(g, set())]
             vals = []
             for s in W.students_in_group(db, g):
                 rec = W.student_records(db, s.surname, s.name, g)
-                a = W.average(gl, rec, cfg)
-                dbts = W.debts(gl, rec)
+                a = W.average(gl, rec, cfg, scale=tscale)
+                dbts = W.debts(gl, rec, scale=tscale)
                 if dbts or (0 < a < 3):
                     risky.append((W.display_name(s), g, a, dbts))
                 if a > 0:
@@ -1888,7 +2160,8 @@ def teacher_set_grade(payload: dict = Body(...),
         Lesson.id == base_id, Lesson.deleted == False).first()  # noqa: E712
     if not lesson:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
-    _teacher_check_subject(user, lesson.subject)   #только свой предмет
+    _teacher_check_assignment(db, user, lesson.group_name, lesson.subject,
+                              lesson.year, lesson.semester)   #только своё назначение
     _ensure_current_term(W.load_config(db), lesson)   #архив прошлых семестров — read-only
     stud = db.query(User).filter(
         User.role == "student", User.surname == surname, User.name == name,
@@ -1957,7 +2230,10 @@ def teacher_create_lesson(payload: dict = Body(...),
     ltype = (payload.get("type") or "").strip()
     if not (group and subject and ltype):
         raise HTTPException(status_code=400, detail="Нужны group, subject и type")
-    _teacher_check_subject(user, subject)
+    #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр) — тем же
+    #термином и проверяем назначение.
+    ty, ts = W.current_term(W.load_config(db))
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
     number = payload.get("number")
     if not number:
         rows = db.query(Lesson.number).filter(
@@ -1966,8 +2242,6 @@ def teacher_create_lesson(payload: dict = Body(...),
         number = (max((r[0] or 0) for r in rows) + 1) if rows else 1
     import uuid as _uuid
     lid = str(_uuid.uuid4())
-    #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр).
-    ty, ts = W.current_term(W.load_config(db))
     topic = (payload.get("topic") or "").strip()
     db.add(Lesson(id=lid, group_name=group, subject=subject, type=ltype,
                   number=int(number), topic=topic,
@@ -1989,8 +2263,8 @@ def create_event_notification(payload: dict = Body(...),
     выбранной аудитории уведомлением (вкладка «Мероприятия», см. NotificationsInbox.vue).
     Автор выбирает аудиторию при создании: `groups: []` — вся коллегия (ТОЛЬКО админ,
     у преподавателя слишком широкий охват для одной кнопки), непустой список — те
-    группы (у преподавателя — не любые: только его группы по предметам, W.teacher_groups —
-    тот же принцип ролевого скоупа, что и везде в приложении)."""
+    группы (у преподавателя — не любые: только назначенные ему группы, W.teacher_
+    assignments — тот же принцип ролевого скоупа, что и везде в приложении)."""
     if user.role not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
     title = (payload.get("title") or "").strip()[:150]
@@ -1999,7 +2273,8 @@ def create_event_notification(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Укажите заголовок и текст")
     groups = [g.strip() for g in (payload.get("groups") or []) if (g or "").strip()]
     if user.role == "teacher":
-        allowed = set(W.teacher_groups(db, set(user.subjects or [])))
+        ty1, ts1 = W.current_term(W.load_config(db))
+        allowed = set(W.teacher_group_names(db, user.id, ty1, ts1))
         if not groups:
             raise HTTPException(status_code=400, detail="Преподаватель должен выбрать группу(ы)")
         bad = [g for g in groups if g not in allowed]
@@ -2054,7 +2329,7 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     row = db.get(Lesson, lesson_id)
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
-    _teacher_check_subject(user, row.subject)
+    _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
     for field in ("topic", "date", "retake_date"):
         if field in payload:
@@ -2086,7 +2361,7 @@ def teacher_delete_lesson(lesson_id: str,
     row = db.get(Lesson, lesson_id)
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
-    _teacher_check_subject(user, row.subject)
+    _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
     row.deleted = True
     row.updated_at = _now_iso()
@@ -2102,15 +2377,16 @@ def teacher_journal_export(group: str = Query(...), subject: str = Query(...),
     веба: Times New Roman 14, ч/б, титульная шапка, средний по группе, адаптивная
     ширина (текст не обрезается)."""
     _require("teacher", user)
-    _teacher_check_subject(user, subject)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
+    _teacher_check_assignment(db, user, group, subject, ty, ts)
+    tscale = W.teacher_scale(user)
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     rows = []
     for s in W.students_in_group(db, group):
         recs = W.student_records(db, s.surname, s.name, group)
         rows.append({"surname": s.surname, "name": s.name, "records": recs,
-                     "average": W.average(lessons, recs, cfg)})
+                     "average": W.average(lessons, recs, cfg, scale=tscale)})
     if fmt == "docx":
         from .. import docx_export
         data = docx_export.build_journal_docx(group, subject, lessons, rows)

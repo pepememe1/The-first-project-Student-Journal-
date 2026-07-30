@@ -15,6 +15,7 @@ const rows = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
 const parsedGroups = ref([])
+const allTeachers = ref([])   // §ролей: [{id, name, subjects}] — для выбора препода на предмет
 
 // ── Учебный период + перевод на курс (rollover) ─────────────────────────────────
 const currentTerm = ref(null)
@@ -49,7 +50,13 @@ onMounted(async () => {
   await loadTerm()
   try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
   try { parsedGroups.value = (await scheduleApi.groups()).data.groups || [] } catch { /* */ }
+  try { allTeachers.value = (await adminApi.teachers()).data.teachers || [] } catch { /* */ }
 })
+// Преподаватели, у которых ЕСТЬ данный предмет (Влад: «нажали математику — все преподы,
+// у которых указана математика в предметах») — фильтр на клиенте, без нового запроса.
+function teachersFor(subject) {
+  return allTeachers.value.filter((t) => (t.subjects || []).includes(subject))
+}
 
 const showForm = ref(false)
 const editing = ref(null)
@@ -111,8 +118,18 @@ async function saveHours() {
   hoursSaving.value = true
   try {
     const hours = {}
-    hoursRows.value.forEach((r) => { hours[r.subject] = Number(r.hours_total) || 0 })
-    await adminApi.saveGroupHours(hoursGroup.value, hours)
+    const teachers = {}
+    const zet = {}
+    hoursRows.value.forEach((r) => {
+      hours[r.subject] = Number(r.hours_total) || 0
+      teachers[r.subject] = r.teacher_id || ''
+      //ЗЕТ: пусто/не число — снять (null), НЕ подставлять zet_hint автоматически
+      //(docs/PLAN-ZET.md §10 — подсказка, а не источник правды).
+      const zv = r.zet
+      zet[r.subject] = (zv === '' || zv === null || zv === undefined || Number.isNaN(Number(zv)))
+        ? null : Number(zv)
+    })
+    await adminApi.saveGroupHours(hoursGroup.value, hours, teachers, zet)
     toast.success('Часы сохранены')
     showHours.value = false
   } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить') }
@@ -202,13 +219,34 @@ async function importParsed() {
         <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
           У группы нет предметов — сначала задайте их кнопкой ✎.
         </p>
-        <div v-else class="max-h-80 space-y-1 overflow-y-auto">
+        <div v-else class="max-h-80 space-y-2 overflow-y-auto">
           <div v-for="r in hoursRows" :key="r.subject"
-               class="flex items-center gap-3 rounded-sm px-1 py-1.5 hover:bg-bg2">
-            <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
-            <span class="shrink-0 text-xs text-text3">пройдено {{ r.hours_done }} ч</span>
-            <input v-model.number="r.hours_total" type="number" min="0" step="2"
-                   class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
+               class="rounded-sm border border-border2 px-2 py-1.5 hover:bg-bg2">
+            <div class="flex items-center gap-3">
+              <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
+              <span class="shrink-0 text-xs text-text3">пройдено {{ r.hours_done }} ч</span>
+              <input v-model.number="r.hours_total" type="number" min="0" step="2"
+                     class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
+            </div>
+            <!-- ЗЕТ (docs/PLAN-ZET.md): подсказка zet_hint — СЕРАЯ, только placeholder,
+                 автоматом никогда не сохраняется, пока администратор явно не впишет число. -->
+            <div class="mt-1.5 flex items-center gap-2">
+              <span class="shrink-0 text-xs text-text3">ЗЕТ</span>
+              <input v-model="r.zet" type="number" min="0" step="0.1"
+                     :placeholder="r.zet_hint ? String(r.zet_hint) : ''"
+                     class="h-8 w-20 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-xs text-text outline-none placeholder:text-text3 focus:border-accent" />
+              <span v-if="r.zet_hint" class="text-[11px] text-text3">← {{ r.zet_hint }} по формуле (72ч/36)</span>
+            </div>
+            <!-- §ролей: препод, ведущий эту группу по этому предмету — единственный
+                 источник правды «какие группы видит препод» (webdata.teacher_assignments). -->
+            <select v-model="r.teacher_id"
+                    class="mt-1.5 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
+              <option value="">— преподаватель не назначен —</option>
+              <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
+            </select>
+            <p v-if="!teachersFor(r.subject).length" class="mt-1 text-[11px] text-text3">
+              Нет преподавателей с предметом «{{ r.subject }}» — добавьте его во вкладке «Преподаватели».
+            </p>
           </div>
         </div>
 

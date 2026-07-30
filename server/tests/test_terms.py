@@ -5,7 +5,7 @@ test_terms.py — Учебный период (год/семестр): филь�
 Инвариант: year/semester живут на Lesson, оценки наследуют период от занятия — ключ
 оценки не меняется. Текущий термин хранится в config.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 def _push(client, h, **ent):
@@ -22,6 +22,7 @@ def _mk_lesson(client, th, group="G1", subject="Мат", ltype="Практика
 def test_new_lesson_gets_current_term_and_terms_endpoint(client):
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
+    assign_teacher(client, admin, "teach:teacher1", "G1", "Мат")
     _mk_lesson(client, th)
     terms = client.get("/web/terms", headers=th).json()
     assert terms["current"]["year"] and terms["current"]["semester"] in (1, 2)
@@ -32,6 +33,7 @@ def test_new_lesson_gets_current_term_and_terms_endpoint(client):
 def test_rollover_archives_old_term_and_blocks_writes(client):
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
+    assign_teacher(client, admin, "teach:teacher1", "G1", "Мат")
     lid = _mk_lesson(client, th)
     cur = client.get("/web/terms", headers=th).json()["current"]
     old_y, old_s = cur["year"], cur["semester"]
@@ -45,6 +47,10 @@ def test_rollover_archives_old_term_and_blocks_writes(client):
     assert rr.status_code == 200, rr.text
     new = rr.json()["current"]
     assert (new["year"], new["semester"]) != (old_y, old_s)
+    #Назначения — за термин (как и часы): после перевода на курс их нет автоматически,
+    #новый семестр админ размечает заново (то же поведение, что уже было у часов).
+    assign_teacher(client, admin, "teach:teacher1", "G1", "Мат",
+                   year=new["year"], semester=new["semester"])
 
     #теперь текущий термин НОВЫЙ → старое занятие в журнале по умолчанию не видно
     jr2 = client.get("/web/teacher/journal", params={"group": "G1", "subject": "Мат"}, headers=th).json()

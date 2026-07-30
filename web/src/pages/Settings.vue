@@ -3,15 +3,38 @@
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, onMounted } from 'vue'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines } from '@lucide/vue'
-import { authApi } from '@/api/endpoints'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check } from '@lucide/vue'
+import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { useTtsStore } from '@/stores/tts'
+import { useAuthStore } from '@/stores/auth'
+import { SCALES } from '@/utils/grading'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 
 const tts = useTtsStore()
+const auth = useAuthStore()
+
+// ── Шкала оценивания (§ролей, 3.3.1) — только препод: в ЧЁМ он вводит/видит оценки.
+// Средний балл/итоговая всё равно всегда в 5-балльной — сервер сам конвертирует.
+const scaleOptions = Object.entries(SCALES).map(([id, s]) => ({ id, label: s.label }))
+const gradingScale = ref('5')
+const scaleSaving = ref(false)
+async function loadGradingScale() {
+  try {
+    const { data } = await meApi.getPrefs()
+    gradingScale.value = data?.prefs?.grading_scale || '5'
+  } catch { /* дефолт "5" уже стоит */ }
+}
+async function pickScale(id) {
+  if (id === gradingScale.value || scaleSaving.value) return
+  scaleSaving.value = true
+  try {
+    await meApi.setPrefs({ grading_scale: id })
+    gradingScale.value = id
+  } finally { scaleSaving.value = false }
+}
 
 // ── Озвучка Вектора: 3 режима (Голос → Бубнеж → Выкл) + выбор голоса ──────────────
 function cycleVoiceMode() {
@@ -42,6 +65,7 @@ onMounted(async () => {
   tts.refreshStatus()
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
+  if (auth.role === 'teacher') await loadGradingScale()
 })
 
 async function addPasskey() {
@@ -111,6 +135,21 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
       <div v-else-if="tts.mode === 'mumble'" class="mt-4 flex items-center justify-between gap-3 rounded-md border border-border bg-card2 px-3 py-2.5">
         <p class="text-xs text-text3">Имитация речи короткими сигналами (как голоса в играх), без интернета.</p>
         <AppButton variant="ghost" @click="previewMumble">Проверить</AppButton>
+      </div>
+    </Card>
+
+    <!-- Шкала оценивания — только преподаватель. -->
+    <Card v-if="auth.role === 'teacher'" title="Шкала оценивания"
+          subtitle="В чём вы вводите и видите оценки за практики/ДЗ. Средний балл и итоговая — всегда в 5-балльной">
+      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button v-for="s in scaleOptions" :key="s.id" type="button" :disabled="scaleSaving"
+                @click="pickScale(s.id)"
+                class="flex items-center gap-2.5 rounded-md border p-3 text-left transition-colors disabled:opacity-50"
+                :class="gradingScale === s.id ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
+          <GraduationCap class="size-4 shrink-0 text-accent" />
+          <span class="flex-1 text-sm font-medium text-text">{{ s.label }}</span>
+          <Check v-if="gradingScale === s.id" class="size-4 shrink-0 text-accent" />
+        </button>
       </div>
     </Card>
 

@@ -12,6 +12,7 @@ import { useToast } from '@/composables/useToast'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
+import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 
 // Цвет плашки профиля выбирает сам человек (id пресета) — см. palette.profilePlate.
 function plate(u) {
@@ -71,21 +72,12 @@ const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'ав�
 // §D7: статус поверх presence. Сервер отдаёт его и в карточке собеседника (_safe_user),
 // и у каждого участника (conversation_info) — но панель их не показывала вовсе, и со
 // стороны это читалось как «смена статуса не работает»: человек его выбрал, а никто не
-// видит. Цвета — те же, что в MyStatusPicker (один смысл — один цвет).
-const STATUS = {
-  dnd: ['Не беспокоить', '#ef4444'],
-  studying: ['Готовится/учится', '#f59e0b'],
-  away: ['Отошёл(а)', '#94a3b8'],
-}
-// Название статуса: у преподавателя может быть свой текст («принимаю до 15:00»), тогда
-// показываем его — он информативнее ярлыка. Пусто = статуса нет, остаётся online/оффлайн.
+// видит. Общий словарь/цвета — @/config/status (те же, что в MyStatusPicker).
 function statusLabel(p) {
-  const kind = p?.status_kind
-  if (!kind) return ''
-  return (p.status_text || '').trim() || (STATUS[kind]?.[0] || kind)
+  return sharedStatusLabel(p?.status_kind, p?.status_text)
 }
 function statusColor(p) {
-  return STATUS[p?.status_kind]?.[1] || '#94a3b8'
+  return sharedStatusColor(p?.status_kind)
 }
 
 // Подпись под именем: у преподавателя — предметы, у студента — группа.

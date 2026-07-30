@@ -22,7 +22,6 @@ from widgets import (
     vector_unavailable_widget
 )
 from ui_components import Sidebar
-from utils import get_groups
 
 from core import GradeBook, Student
 from data_store import get_store
@@ -37,6 +36,12 @@ class TeacherDashboard(QWidget):
         self._build()
 
     def _build(self):
+        #Назначения (группа,предмет) — читаются ОДИН раз здесь, до сборки любых вкладок:
+        #и журнал (_init_selectors), и профиль (_build_profile), и Вектор (_ensure_
+        #vector_session) на него опираются, а порядок сборки вкладок между ними не должен
+        #иметь значения.
+        store = get_store()
+        self._assignments = store.get_teacher_assignments(self.teacher_data.get("id", "")) if store else []
         lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
         items = [
             ("__label__", "", "Журнал"),
@@ -99,10 +104,9 @@ class TeacherDashboard(QWidget):
             _cfg0 = _gs()._config()
         except Exception:
             _cfg0 = {}
-        #Свои группы преподавателя — из назначений предмет→группа (а не весь колледж),
-        #чтобы Вектор на вопрос «какие у меня группы» отвечал по этому списку.
-        ga = self.teacher_data.get("group_assignments", {}) or {}
-        my_groups = sorted({g for g in ga.values() if g})
+        #Свои группы преподавателя — из ЯВНЫХ назначений (группа,предмет), не весь
+        #колледж, чтобы Вектор на вопрос «какие у меня группы» отвечал по этому списку.
+        my_groups = sorted({g for g, _s in getattr(self, "_assignments", [])})
         eng = VectorEngine(VectorScope(
             role="teacher", group=self._group_combo.currentText(),
             subject=self._subj_combo.currentText() or None,
@@ -122,12 +126,15 @@ class TeacherDashboard(QWidget):
         #сжимались до нечитаемых огрызков.
         lay.addWidget(title_lbl("Журнал преподавателя", 20))
         hdr = FlowLayout(h_spacing=8, v_spacing=6)
-        self._subj_combo = combo(self.teacher_data.get("subjects", []))
-        self._subj_combo.currentTextChanged.connect(self._on_subj_change)
-        raw_groups = get_groups()
-        group_names = [g["name"] if isinstance(g, dict) else str(g) for g in raw_groups]
-        self._group_combo = combo(group_names)
-        self._group_combo.currentTextChanged.connect(self._reload_journal)
+        #Предмет и группа теперь НЕ независимые списки (§ролей, 3.3.1: раньше можно было
+        #выбрать любую группу с любым своим предметом, даже не назначенную) — группа
+        #выбирается из НАЗНАЧЕННЫХ (см. _init_selectors/_on_group_change), а предмет
+        #определяется ЕЮ (обычно один; несколько — если преподу назначено 2 предмета
+        #на одну и ту же группу, тогда предмет тоже выбирается, но уже из суженного списка).
+        self._subj_combo = combo([])
+        self._subj_combo.currentTextChanged.connect(self._reload_journal)
+        self._group_combo = combo([])
+        self._group_combo.currentTextChanged.connect(self._on_group_change)
         #Селектор учебного семестра (как на вебе): текущий по умолчанию, прошлые — архив.
         self._term_combo = combo([])
         self._term_combo.currentIndexChanged.connect(self._on_term_change)
@@ -205,31 +212,21 @@ class TeacherDashboard(QWidget):
         self.pages["journal"] = w; self.stack.addWidget(w)
 
     def _init_selectors(self):
-        subjects = self.teacher_data.get("subjects", [])
-        self._subj_combo.clear(); self._subj_combo.addItems(subjects)
-        if subjects:
-            ga  = self.teacher_data.get("group_assignments", {})
-            grp = ga.get(subjects[0], "")
-            #get_groups() может вернуть строки или dict — нормализуем
-            raw_groups = get_groups()
-            group_names = [
-                g["name"] if isinstance(g, dict) else str(g)
-                for g in raw_groups
-            ]
-            self._group_combo.clear()
-            self._group_combo.addItems(group_names)
-            if grp:
-                idx = self._group_combo.findText(grp)
-                if idx >= 0: self._group_combo.setCurrentIndex(idx)
-        self._reload_journal()
+        #self._assignments уже прочитан в _build() (единственный источник правды, какие
+        #группы видит этот препод — заменяет мёртвый group_assignments).
+        groups = sorted({g for g, _s in self._assignments})
+        self._group_combo.blockSignals(True)
+        self._group_combo.clear(); self._group_combo.addItems(groups)
+        self._group_combo.blockSignals(False)
+        self._on_group_change()
 
-    def _on_subj_change(self):
-        subj = self._subj_combo.currentText()
-        ga   = self.teacher_data.get("group_assignments", {})
-        grp  = ga.get(subj, "")
-        if grp:
-            idx = self._group_combo.findText(grp)
-            if idx >= 0: self._group_combo.setCurrentIndex(idx)
+    def _on_group_change(self):
+        """Группа выбрана → предмет(ы) этой группы У ЭТОГО ПРЕПОДА (обычно один)."""
+        group = self._group_combo.currentText()
+        subs = sorted({s for g, s in self._assignments if g == group})
+        self._subj_combo.blockSignals(True)
+        self._subj_combo.clear(); self._subj_combo.addItems(subs)
+        self._subj_combo.blockSignals(False)
         self._reload_journal()
 
     #Учебные семестры (как на вебе): текущий — редактируемый, прошлые — архив read-only.
@@ -413,13 +410,19 @@ class TeacherDashboard(QWidget):
             if it is not None and tip:
                 it.setToolTip(tip)
         avg_cfg = self._avg_cfg()                       #считаем один раз на перерисовку
+        #Шкала ЭТОГО препода (§ролей, 3.3.1) — для практики/ДЗ; экзамен вне кастомных
+        #шкал (см. grading.py), там всегда литеральная 2-5.
+        import avatar_service
+        import grading
+        scale = avatar_service.get_grading_scale("teacher", {"name": self.teacher_name})
+        scale_opts = [""] + list(grading.scale_values(scale)) + ["Н"]
         self.t_table.blockSignals(True)
         for r, s in enumerate(students):
             fi = QTableWidgetItem(s.f); fi.setForeground(QColor(C['text']))
             ni = QTableWidgetItem(s.n); ni.setForeground(QColor(C['text3']))
             self.t_table.setItem(r, 0, fi); self.t_table.setItem(r, 1, ni)
             #Столбец «Средний» — с учётом тумблера «Н = 2» (визуально, не в config).
-            avg = self.book.calculate_average(s, avg_cfg)
+            avg = self.book.calculate_average(s, avg_cfg, scale=scale)
             ai = QTableWidgetItem(f"{avg:.2f}" if avg > 0 else "—")
             ai.setTextAlignment(Qt.AlignCenter); ai.setFlags(Qt.ItemIsEnabled)
             ai.setForeground(QColor(self._avg_color(avg)))
@@ -446,9 +449,12 @@ class TeacherDashboard(QWidget):
                     cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
                     self.t_table.setCellWidget(r, col, cb)
-                elif l.type == "Практика" and ri == 0:
+                elif grading.is_practice(l.type) and ri == 0:
+                    #Практика/ДЗ — варианты из ШКАЛЫ препода (scale_opts), не литеральные
+                    #2-5: раньше ДЗ сюда не попадало вовсе (сравнение было только с
+                    #"Практика") — ячейка ДЗ оставалась пустой, без редактора оценки.
                     cb = QComboBox()
-                    cb.addItems(["", "2", "3", "4", "5", "Н"])
+                    cb.addItems(scale_opts)
                     cb.setCurrentText(val)
                     cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
@@ -472,6 +478,18 @@ class TeacherDashboard(QWidget):
                     cb.setCurrentText(raw)
                     cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
                     cb.currentTextChanged.connect(lambda v, st=s, le=l, rk=rk_full, ri_=ri: self._set_exam_val(st, le, rk, v, ri_))
+                    self.t_table.setCellWidget(r, col, cb)
+                else:
+                    #«Прочие» типы занятий (Семинар/Лабораторная/Зачёт — заводятся с веба,
+                    #см. TeacherJournal.vue::LESSON_TYPES) раньше вообще не получали
+                    #редактор оценки на десктопе — ни один из веток выше не совпадал, и
+                    #ячейка оставалась пустой. Литеральная 2-5, как у экзамена: эти типы
+                    #вне PRACTICE_TYPES, кастомная шкала на них не распространяется.
+                    cb = QComboBox()
+                    cb.addItems(["", "2", "3", "4", "5", "Н"])
+                    cb.setCurrentText(val)
+                    cb.setStyleSheet(f"background:{C['card2']};border:1px solid {C['border']};border-radius:6px;color:{C['text']};font-size:14px;font-weight:600;padding:4px 6px;")
+                    cb.currentTextChanged.connect(lambda v, st=s, k=l.id: self._set_val(st, k, v))
                     self.t_table.setCellWidget(r, col, cb)
         self.t_table.blockSignals(False)
         #Архив (прошлый семестр) — только просмотр: гасим все редактируемые ячейки.
@@ -766,10 +784,12 @@ class TeacherDashboard(QWidget):
 
     def _journal_rows(self) -> list:
         """Строки журнала для экспорта: [{surname, name, records, average}]."""
+        import avatar_service
+        scale = avatar_service.get_grading_scale("teacher", {"name": self.teacher_name})
         rows = []
         for s in self.book.spisok_stud:
             rows.append({"surname": s.f, "name": s.n, "records": s.records,
-                         "average": round(self.book.calculate_average(s), 2)})
+                         "average": round(self.book.calculate_average(s, scale=scale), 2)})
         return rows
 
     def _patronymic_map(self) -> dict:
@@ -800,7 +820,9 @@ class TeacherDashboard(QWidget):
             return
         try:
             if fmt == "xlsx":
-                self.book.export_to_excel(path)
+                import avatar_service
+                scale = avatar_service.get_grading_scale("teacher", {"name": self.teacher_name})
+                self.book.export_to_excel(path, scale=scale)
             else:
                 import exports
                 data = exports.build_journal_docx(
@@ -1356,10 +1378,9 @@ class TeacherDashboard(QWidget):
 
         #Заголовок «Уведомления» уже внутри NotificationsView — без отдельного section_lbl,
         #иначе задваивается (правка по отчёту).
-        #§12: свои группы — из назначений предмет→группа (тот же источник, что и у Вектора,
-        #см. _ensure_vector_session), чтобы кнопка «Мероприятие» предлагала верный список.
-        ga = self.teacher_data.get("group_assignments", {}) or {}
-        my_groups = sorted({g for g in ga.values() if g})
+        #§ролей: свои группы — из назначений (группа,предмет) (тот же источник, что и у
+        #Вектора, см. _ensure_vector_session), чтобы кнопка «Мероприятие» предлагала верный список.
+        my_groups = sorted({g for g, _s in getattr(self, "_assignments", [])})
         lay.addWidget(NotificationsView(role="teacher", groups=my_groups), 1)
         self.pages["profile"] = w; self.stack.addWidget(w)
 

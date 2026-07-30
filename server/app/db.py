@@ -102,6 +102,8 @@ def init_db():
     _ensure_participant_state_columns()
     _ensure_message_addon_columns()
     _ensure_conversation_system_columns()
+    _ensure_subject_hours_teacher_column()
+    _ensure_subject_hours_zet_column()
     _migrate_slash_in_ids()
 
 
@@ -140,6 +142,37 @@ def _ensure_conversation_system_columns():
         for name, coltype in wanted:
             if name not in columns:
                 conn.execute(text(f"ALTER TABLE conversations ADD COLUMN {name} {coltype}"))
+
+
+def _ensure_subject_hours_teacher_column():
+    """Идемпотентная мини-миграция: subject_hours.teacher_id — назначение препода на
+    пару (группа,предмет) на семестр (см. models.SubjectHours). Тот же паттерн: create_all
+    не досоздаёт колонку в уже существующей таблице на боевой БД, только ALTER."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("subject_hours")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу со столбцом
+    if "teacher_id" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE subject_hours ADD COLUMN teacher_id VARCHAR DEFAULT ''"))
+
+
+def _ensure_subject_hours_zet_column():
+    """Идемпотентная мини-миграция: subject_hours.zet (ЗЕТ, docs/PLAN-ZET.md). NULLABLE
+    без дефолта — NULL значит «администратор не задавал», отличать от 0.0 обязательно."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("subject_hours")}
+    except Exception:
+        return
+    if "zet" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE subject_hours ADD COLUMN zet FLOAT"))
 
 
 def _ensure_user_prefs_column():

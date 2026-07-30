@@ -8,7 +8,7 @@ models.py — Таблицы БД (SQLAlchemy).
   • deleted — «надгробие» (tombstone): удаление не стирает строку, а помечает её,
     чтобы удаление доехало до всех ПК (иначе на других ПК запись «воскресала» бы).
 """
-from sqlalchemy import Column, Integer, String, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Boolean, JSON, Float
 
 from .db import Base
 
@@ -316,6 +316,19 @@ class SubjectHours(Base):
     year = Column(String, index=True, default="")
     semester = Column(Integer, index=True, default=0)
     hours_total = Column(Integer, default=0)   #сколько часов запланировано на семестр
+    #Назначение препода на эту пару (группа,предмет) — та же строка, что и часы, потому
+    #что гранулярность идентична (группа+предмет+год+семестр) и именно здесь уже сидит
+    #админ-редактор («Группы» → 🕐), где Влад просил заводить выбор преподавателя. Пусто —
+    #«не назначено» (обратная совместимость: старые строки без препода работают как раньше,
+    #это ЕДИНСТВЕННЫЙ источник правды «кто ведёт какую группу по какому предмету» —
+    #заменяет неиспользуемый User.group_assignments, см. routers/webdata.py::teacher_assignments).
+    teacher_id = Column(String, index=True, default="")
+    #ЗЕТ (зачётная единица трудоёмкости, ФГОС) предмета на семестр — nullable: NULL значит
+    #«администратор не задавал», и интерфейс НЕ показывает строку ЗЕТ вовсе (см.
+    #docs/PLAN-ZET.md). Задаётся вручную в том же редакторе, что и hours_total — гранулярность
+    #та же (группа+предмет+год+семестр), отдельная колонка в существующей таблице проще,
+    #чем новая сущность.
+    zet = Column(Float, nullable=True)
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 
@@ -324,6 +337,25 @@ def subject_hours_id(group: str, subject: str, year: str, semester) -> str:
     """Детерминированный ключ (как sovr:/grp:/subj:) — автоинкремент столкнулся бы между
     ПК. Повторное сохранение часов ЗАМЕНЯЕТ строку, а не плодит дубли."""
     return f"hrs:{group}|{subject}|{year}|{int(semester or 0)}"
+
+
+class ZetThreshold(Base):
+    """Минимальный порог ЗЕТ за семестр для перевода группы на следующий курс
+    (docs/PLAN-ZET.md). Серверная ПОЛИТИКА куратора/админа, не офлайн-данные студента —
+    НЕ входит в SYNC_MODELS (ровно как ScheduleOverride/CuratorReport — деталь сервера)."""
+    __tablename__ = "zet_thresholds"
+    id = Column(String, primary_key=True)      #zth:{группа}|{год}|{семестр}
+    group_name = Column(String, index=True, default="")
+    year = Column(String, index=True, default="")
+    semester = Column(Integer, index=True, default=0)
+    min_zet = Column(Float, default=0.0)
+    updated_at = Column(String, default="", index=True)
+    updated_by = Column(String, default="")    #login администратора/куратора
+    deleted = Column(Boolean, default=False)
+
+
+def zet_threshold_id(group: str, year: str, semester) -> str:
+    return f"zth:{group}|{year}|{int(semester or 0)}"
 
 
 class ScheduleJointMark(Base):

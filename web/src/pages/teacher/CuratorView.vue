@@ -4,8 +4,13 @@
 // ТОЛЬКО НА ЧТЕНИЕ: группа → предмет → студенты с оценками и средним. Данные — из
 // role-scoped /web/curator/* (сервер проверяет group ∈ curated_groups).
 import { ref, computed, watch, onMounted } from 'vue'
-import { curatorApi, termsApi } from '@/api/endpoints'
+import { curatorApi, adminApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
+
+const { confirm } = useConfirm()
+const toast = useToast()
 
 const groups = ref([])
 const group = ref('')
@@ -13,6 +18,64 @@ const subjects = ref([])
 const subject = ref('')
 const data = ref(null)
 const loading = ref(false)
+
+// ── ЗЕТ / перевод на курс (docs/PLAN-ZET.md §7.4 — «главная фича» отчёта куратора) ──
+const viewMode = ref('journal')   // 'journal' | 'zet'
+const zetReport = ref(null)       // {min_zet, students:[...]}
+const zetLoading = ref(false)
+const zetThresholdDraft = ref('')
+const selectedForPromote = ref([])
+const promoting = ref(false)
+
+async function loadZetReport() {
+  if (!group.value) { zetReport.value = null; return }
+  zetLoading.value = true
+  selectedForPromote.value = []
+  try {
+    zetReport.value = (await curatorApi.zetReport(group.value, termParams())).data
+    zetThresholdDraft.value = zetReport.value.min_zet ?? ''
+  } catch { zetReport.value = null } finally { zetLoading.value = false }
+}
+watch([group, term, viewMode], () => { if (viewMode.value === 'zet') loadZetReport() })
+
+async function saveThreshold() {
+  const v = zetThresholdDraft.value
+  try {
+    await adminApi.setZetThreshold({
+      group: group.value, ...termParams(),
+      min_zet: (v === '' || v === null) ? null : Number(v),
+    })
+    toast.success('Порог сохранён')
+    await loadZetReport()
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить порог') }
+}
+
+const eligibleIds = computed(() =>
+  (zetReport.value?.students || []).filter((s) => s.eligible).map((s) => s.student_id))
+function toggleSelectAllEligible(on) {
+  selectedForPromote.value = on ? eligibleIds.value.slice() : []
+}
+
+async function doPromote() {
+  const names = (zetReport.value.students || [])
+    .filter((s) => selectedForPromote.value.includes(s.student_id))
+    .map((s) => s.display_name)
+  const ok = await confirm({
+    title: 'Перевод на следующий курс',
+    message: `Перевести на следующий курс:\n${names.join(', ')}`,
+    okText: 'Перевести',
+  })
+  if (!ok) return
+  promoting.value = true
+  try {
+    const r = await adminApi.promoteGroup({
+      group: group.value, ...termParams(), student_ids: selectedForPromote.value,
+    })
+    toast.success(`Переведено: ${r.data.promoted.length}`)
+    await loadZetReport()
+  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось перевести') }
+  finally { promoting.value = false }
+}
 
 // Учебный период (архив прошлых семестров)
 const terms = ref([])
@@ -136,7 +199,20 @@ async function exportReport(fmt) {
                 @click="openExport">
           📊 Отчёт успеваемости
         </button>
-        <span class="w-full text-xs text-text3 sm:w-auto sm:self-center">👁 Только просмотр (куратор)</span>
+      </div>
+
+      <!-- Журнал (read-only) / ЗЕТ·Перевод (docs/PLAN-ZET.md §7.4) -->
+      <div class="flex gap-1 border-b border-border">
+        <button type="button" @click="viewMode = 'journal'"
+                class="border-b-2 px-3 py-2 text-sm font-medium"
+                :class="viewMode === 'journal' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
+          Журнал <span class="text-xs">👁</span>
+        </button>
+        <button type="button" @click="viewMode = 'zet'"
+                class="border-b-2 px-3 py-2 text-sm font-medium"
+                :class="viewMode === 'zet' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
+          ЗЕТ · Перевод на курс
+        </button>
       </div>
 
       <!-- Диалог экспорта: формат (Excel/Word) + выбор групп (галочки = одна/несколько/все) -->
@@ -180,38 +256,96 @@ async function exportReport(fmt) {
         </div>
       </div>
 
-      <EmptyState v-if="!subjects.length" title="Нет предметов"
-                  :message="`В группе ${group} за этот семестр нет занятий.`" />
-      <p v-else-if="loading" class="text-sm text-text3">Загрузка…</p>
-      <EmptyState v-else-if="!data?.students?.length" title="Нет студентов" :message="`В группе ${group} нет студентов.`" />
+      <template v-if="viewMode === 'journal'">
+        <p class="text-xs text-text3">👁 Только просмотр (куратор) — оценки ставит преподаватель.</p>
+        <EmptyState v-if="!subjects.length" title="Нет предметов"
+                    :message="`В группе ${group} за этот семестр нет занятий.`" />
+        <p v-else-if="loading" class="text-sm text-text3">Загрузка…</p>
+        <EmptyState v-else-if="!data?.students?.length" title="Нет студентов" :message="`В группе ${group} нет студентов.`" />
 
-      <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
-        <table class="w-max text-sm">
-          <thead>
-            <tr class="border-b-2 border-accent bg-bg2 text-text2">
-              <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
-              <th v-for="l in data.lessons" :key="l.id" class="w-28 border-l border-border align-top px-2 py-2">
-                <div class="text-xs font-bold text-text">{{ l.type }} №{{ l.number }}</div>
-                <div class="text-[11px] font-normal normal-case text-text3">{{ l.date || '—' }}</div>
-              </th>
-              <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(s, i) in data.students" :key="i"
-                class="border-b border-border last:border-0" :class="i % 2 ? 'bg-bg2/50' : ''">
-              <td class="sticky left-0 z-10 whitespace-nowrap px-4 py-2 text-left font-medium text-text" :class="i % 2 ? 'bg-bg2' : 'bg-card'">
-                {{ s.surname }} {{ s.name }}
-              </td>
-              <td v-for="l in data.lessons" :key="l.id" class="border-l border-border px-2 py-2 text-center"
-                  :class="gradeClass(s.grades[l.id])">{{ (s.grades[l.id] || '').split(' ')[0] || '·' }}</td>
-              <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(s.average)">
-                {{ s.average || '—' }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+        <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
+          <table class="w-max text-sm">
+            <thead>
+              <tr class="border-b-2 border-accent bg-bg2 text-text2">
+                <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
+                <th v-for="l in data.lessons" :key="l.id" class="w-28 border-l border-border align-top px-2 py-2">
+                  <div class="text-xs font-bold text-text">{{ l.type }} №{{ l.number }}</div>
+                  <div class="text-[11px] font-normal normal-case text-text3">{{ l.date || '—' }}</div>
+                </th>
+                <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(s, i) in data.students" :key="i"
+                  class="border-b border-border last:border-0" :class="i % 2 ? 'bg-bg2/50' : ''">
+                <td class="sticky left-0 z-10 whitespace-nowrap px-4 py-2 text-left font-medium text-text" :class="i % 2 ? 'bg-bg2' : 'bg-card'">
+                  {{ s.surname }} {{ s.name }}
+                </td>
+                <td v-for="l in data.lessons" :key="l.id" class="border-l border-border px-2 py-2 text-center"
+                    :class="gradeClass(s.grades[l.id])">{{ (s.grades[l.id] || '').split(' ')[0] || '·' }}</td>
+                <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(s.average)">
+                  {{ s.average || '—' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <!-- ЗЕТ · Перевод на курс (docs/PLAN-ZET.md §7.4 — «главная фича») -->
+      <template v-else>
+        <div class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-card">
+          <span class="text-sm text-text2">Порог перевода (ЗЕТ):</span>
+          <input v-model="zetThresholdDraft" type="number" min="0" step="0.5" placeholder="не задан"
+                 class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+          <button type="button" @click="saveThreshold"
+                  class="rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">Сохранить</button>
+        </div>
+
+        <p v-if="zetLoading" class="text-sm text-text3">Загрузка…</p>
+        <EmptyState v-else-if="!zetReport?.students?.length" title="Пока пусто"
+                    message="Ни один предмет группы ещё не получил ЗЕТ от администратора." />
+
+        <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
+          <div class="flex items-center justify-between border-b border-border px-4 py-2">
+            <div class="flex gap-3 text-xs">
+              <button class="text-accent hover:underline" @click="toggleSelectAllEligible(true)">выбрать готовых</button>
+              <button class="text-text3 hover:underline" @click="toggleSelectAllEligible(false)">снять</button>
+            </div>
+            <button type="button" :disabled="!selectedForPromote.length || promoting" @click="doPromote"
+                    class="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+              {{ promoting ? 'Перевод…' : `✅ Перевести выбранных (${selectedForPromote.length})` }}
+            </button>
+          </div>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b-2 border-accent bg-bg2 text-text2">
+                <th class="w-8 px-3 py-2"></th>
+                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
+                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">Набрано</th>
+                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">Не хватает</th>
+                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">Несданные предметы</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in zetReport.students" :key="s.student_id"
+                  class="border-b border-border last:border-0">
+                <td class="px-3 py-2 text-center">
+                  <input type="checkbox" :value="s.student_id" v-model="selectedForPromote"
+                         :disabled="!s.eligible" class="accent-accent" />
+                </td>
+                <td class="px-3 py-2 text-text">
+                  <span :class="s.eligible ? 'text-accent' : 'text-red'">{{ s.eligible ? '✅' : '❌' }}</span>
+                  {{ s.display_name }}
+                </td>
+                <td class="px-3 py-2 text-right text-text2">{{ s.earned }}/{{ s.total }}</td>
+                <td class="px-3 py-2 text-right" :class="s.eligible ? 'text-text3' : 'text-red'">{{ s.eligible ? '—' : s.missing_zet }}</td>
+                <td class="px-3 py-2 text-xs text-text3">{{ s.unsatisfied.join(', ') || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
     </template>
   </div>
 </template>

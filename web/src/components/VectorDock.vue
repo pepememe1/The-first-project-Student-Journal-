@@ -7,11 +7,19 @@ import { ref, watch, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid, PanelRightClose, Volume2, VolumeX } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
+import MicButton from '@/components/vector/MicButton.vue'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
+import { useToast } from '@/composables/useToast'
 
 const vector = useVectorStore()
 const tts = useTtsStore()
+const toast = useToast()
+
+// Голос только ЗАПОЛНЯЕТ поле — отправка всё равно по кнопке/Enter человеком: так
+// можно поправить неверно распознанное слово перед отправкой Вектору.
+function onVoiceText(text) { vector.input = text }
+function onVoiceError(msg) { toast.error(msg) }
 const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
 const { enabled: ttsEnabled, speaking } = storeToRefs(tts)
 const scroller = ref(null)
@@ -113,6 +121,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
           <LayoutGrid class="size-4" />
         </button>
+        <MicButton @text="onVoiceText" @error="onVoiceError" />
         <input v-model="input" placeholder="Спросите Вектора…" @focus="showQuick = false"
                class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent focus:bg-card" />
         <button type="submit" aria-label="Отправить"

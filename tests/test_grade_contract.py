@@ -16,6 +16,8 @@ _CONTRACT = json.loads(
 )
 _CASES = _CONTRACT["is_failed"]
 _RETAKE = _CONTRACT["needs_retake"]
+_TO_FIVE = _CONTRACT["to_five_point"]
+_FAILED_SCALED = _CONTRACT["is_failed_scaled"]
 
 
 def test_is_failed_matches_contract():
@@ -38,3 +40,19 @@ def test_contract_has_edge_cases():
     grades = {c["grade"].strip() for c in _CASES}
     assert "" in grades and "Не зачтено" in grades and "Н" in grades
     assert _RETAKE, "кейсы пересдач должны быть"
+
+
+def test_to_five_point_matches_contract():
+    for case in _TO_FIVE:
+        got = grading.to_five_point(case["raw"], case["scale"])
+        assert got == case["expected"], (
+            f"to_five_point({case['raw']!r}, {case['scale']!r}) = {got}, "
+            f"ожидалось {case['expected']}")
+
+
+def test_is_failed_scaled_matches_contract():
+    for case in _FAILED_SCALED:
+        got = grading.is_failed_scaled(case["raw"], case["scale"])
+        assert got is case["expected"], (
+            f"is_failed_scaled({case['raw']!r}, {case['scale']!r}) = {got}, "
+            f"ожидалось {case['expected']}")

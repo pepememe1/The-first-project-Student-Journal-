@@ -13,8 +13,10 @@ import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownLite } from '@/utils/markdownLite'
+import { extractVideos } from '@/utils/videoEmbed'
 import { formatSystemMessage } from '@/utils/messagePreview'
 import { copyText } from '@/utils/clipboard'
+import { useConfirm } from '@/composables/useConfirm'
 import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
@@ -24,9 +26,11 @@ import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
+import { statusLabel } from '@/config/status'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
+const { confirm } = useConfirm()
 const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
 const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
@@ -171,6 +175,38 @@ function renderBody(msg) {
   //в ленте выглядели обычным текстом со слэшем. Набор форм — как у сервера (_MENTION_RE).
   return html.replace(/\/?(?:@!?|!@)[A-Za-zА-Яа-яЁё]+/g,
                       (hit) => `<span class="mention">${hit}</span>`)
+}
+
+// Фаза 1 ссылок/видео (docs/MESSENGER-ATTACHMENTS-PLAN.md): клик по обычной ссылке в теле
+// сообщения (data-external-link, см. markdownLite.js) — подтверждение «Переадресация»
+// перед уходом с сайта, как договорились (видео из белого списка сюда не попадают —
+// они рендерятся ОТДЕЛЬНОЙ карточкой ниже, см. videoEmbeds()/expandedVideos).
+async function onBodyClick(e) {
+  const a = e.target.closest('a[data-external-link]')
+  if (!a) return
+  e.preventDefault()
+  const url = a.dataset.externalLink
+  const ok = await confirm({
+    title: 'Переадресация',
+    message: `Вы переходите на внешний сайт:\n${url}`,
+    okText: 'Открыть', cancelText: 'Отмена',
+  })
+  if (ok) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+// Видео из белого списка (YouTube/VK/Rutube) — отдельная карточка ПОД текстом сообщения
+// (v-html статичен и не даёт повесить Vue-обработчик внутрь), сворачиваемая по клику.
+const expandedVideos = ref(new Set())
+function videoEmbeds(msg) {
+  if (msg.deleted || isHiddenByIgnore(msg)) return []
+  return extractVideos(msg.body)
+}
+function videoKey(msg, v) { return `${msg.id}:${v.sourceUrl}` }
+function toggleVideo(msg, v) {
+  const key = videoKey(msg, v)
+  const next = new Set(expandedVideos.value)
+  if (next.has(key)) next.delete(key); else next.add(key)
+  expandedVideos.value = next
 }
 
 // §D3: клик по реакции — поставить/снять свою.
@@ -647,7 +683,6 @@ const peerName = computed(() => {
   return activePeer.value?.full_name || 'Диалог'
 })
 // §D7: подпись статуса поверх presence (dnd/studying/away + текст преподавателя).
-const STATUS_RU = { dnd: 'Не беспокоить', studying: 'Готовится/учится', away: 'Отошёл(а)' }
 const subtitle = computed(() => {
   //Свой блокнот: показывать «в сети»/роль бессмысленно — это ты сам.
   if (isSaved.value) return 'Заметки только для вас'
@@ -656,7 +691,7 @@ const subtitle = computed(() => {
   if (kind.value === 'channel') return `${activeInfo.value?.subscribers || 0} подписчиков`
   if (kind.value === 'group') return `${activeInfo.value?.subscribers || 0} участников`
   const sk = activePeer.value?.status_kind
-  if (sk) return activePeer.value?.status_text || STATUS_RU[sk] || sk
+  if (sk) return statusLabel(sk, activePeer.value?.status_text)
   return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
 })
 const topPinned = computed(() => pinned.value[0] || null)
@@ -907,7 +942,22 @@ const headerTint = computed(() =>
               <button v-else-if="isHiddenByIgnore(msg)" type="button" @click.stop="toggleReveal(msg.id)"
                       class="italic opacity-70 underline decoration-dotted">Скрыто (игнор) — показать</button>
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
-              <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)" />
+              <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
+                   @click="onBodyClick" />
+              <!-- Видео из белого списка (YouTube/VK/Rutube, Фаза 1) — карточка ПОД текстом,
+                   сворачиваемая: сама ссылка уже кликабельна выше, плеер — по явному клику. -->
+              <div v-for="v in videoEmbeds(msg)" :key="v.sourceUrl" class="mt-1.5" @click.stop>
+                <iframe v-if="expandedVideos.has(videoKey(msg, v))"
+                        :src="v.embedUrl" class="aspect-video w-full max-w-xs rounded-lg border-0"
+                        sandbox="allow-scripts allow-same-origin allow-presentation"
+                        allowfullscreen />
+                <button v-else type="button" @click="toggleVideo(msg, v)"
+                        class="flex w-full max-w-xs items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors"
+                        :class="msg.mine ? 'border-white/30 hover:bg-white/10' : 'border-border hover:bg-bg2'">
+                  <span class="grid size-7 shrink-0 place-items-center rounded-full bg-black/20 text-sm">▶</span>
+                  <span class="min-w-0 flex-1 truncate">{{ v.provider === 'youtube' ? 'YouTube' : v.provider === 'vk' ? 'VK Видео' : 'Rutube' }} · показать видео</span>
+                </button>
+              </div>
               <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
                 <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />
                 <!-- §D11: «изм.» кликабельно — открывает историю версий. -->

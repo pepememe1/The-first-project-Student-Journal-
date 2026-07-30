@@ -33,8 +33,20 @@ def _book():
 
 
 def _make_dashboard():
+    """§ролей: группа теперь берётся из ЯВНОГО назначения (subject_hours.teacher_id),
+    не из мёртвого group_assignments — заводим синкнутую строку с этим преподом. Термин
+    ДОЛЖЕН совпасть с _book() (terms.current_term()) — иначе назначение не найдётся."""
+    import terms
+    import sync_engine as se
+    year, sem = terms.current_term()
+    teacher_id = "teach:petrov"
+    se.apply_remote({"subject_hours": [
+        {"id": f"hrs:к74/1|Математика|{year}|{sem}", "group_name": "к74/1",
+         "subject": "Математика", "year": year, "semester": sem, "hours_total": 0,
+         "teacher_id": teacher_id,
+         "updated_at": "2026-07-26T10:00:00+00:00", "deleted": False}]})
     from teacher_dashboard import TeacherDashboard
-    data = {"subjects": ["Математика"], "group_assignments": {"Математика": "к74/1"}}
+    data = {"id": teacher_id, "subjects": ["Математика"]}
     return TeacherDashboard("Петров Пётр Петрович", data)
 
 

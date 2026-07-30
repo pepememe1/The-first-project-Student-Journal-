@@ -6,7 +6,7 @@ test_student_id_stage1.py — СЕРВЕР: оценки несут неизме
 Главное, что здесь проверяется, — обратная совместимость. Сервер обновляется раньше
 десктопов, и если бы он требовал новое поле, синк лёг бы у всех непроапгрейженных ПК.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 def _push(client, headers, **entities):
@@ -28,6 +28,7 @@ def test_web_grade_write_fills_student_id(client):
     admin = make_admin(client)
     _seed(client, admin)
     teach = make_teacher(client, admin)
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     r = client.post("/web/teacher/grade", json={
         "lesson_id": "L1", "surname": "Иванова", "name": "Мария", "grade": "5"},
         headers=teach)
@@ -73,6 +74,7 @@ def test_rename_preserves_student_id(client):
     admin = make_admin(client)
     _seed(client, admin)
     teach = make_teacher(client, admin)
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     gr = client.post("/web/teacher/grade", json={
         "lesson_id": "L1", "surname": "Иванова", "name": "Мария", "grade": "5"},
         headers=teach)

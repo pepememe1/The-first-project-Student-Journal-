@@ -231,8 +231,55 @@ class AvatarSection(QWidget):
 
         self._build_bio(root)
         self._build_colors(root)
+        self._build_grading_scale(root)
         self._build_win_login(root)
         self._refresh()
+
+    # ── Шкала оценивания (§ролей, 3.3.1) — только преподаватель ─────────────────────
+    def _build_grading_scale(self, root):
+        """В ЧЁМ препод вводит/видит оценки за практику/ДЗ. Средний балл/итоговая всё
+        равно всегда в 5-балльной — сервер сам конвертирует (grading.to_five_point)."""
+        if self._role != "teacher":
+            return
+        import avatar_service
+        import grading
+        cap = QLabel("Шкала оценивания")
+        cap.setStyleSheet(f"font-weight:700;font-size:14px;color:{C['text']};")
+        root.addWidget(cap)
+        hint = QLabel("Средний балл и итоговая всегда в 5-балльной")
+        hint.setStyleSheet("color:#6b8085;font-size:12px;")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+        self._scale = avatar_service.get_grading_scale(self._role, self._identity)
+        self._scale_btns = {}
+        grid = QHBoxLayout()
+        grid.setSpacing(6)
+        for sid, spec in grading.SCALES.items():
+            b = _btn(spec["label"], "ghost")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, i=sid: self._pick_scale(i))
+            self._scale_btns[sid] = b
+            grid.addWidget(b)
+        grid.addStretch(1)
+        root.addLayout(grid)
+        self._paint_scale_btns()
+
+    def _paint_scale_btns(self):
+        #Своя подсветка выбранного (не Qt-checkable): у "ghost" в styles.BTN нет
+        #псевдо-состояния :checked, поэтому выделяем явной обводкой, как _paint_swatches.
+        from styles import BTN
+        selected = (
+            f"QPushButton{{background:{C['green_glow']};color:{C['green']};"
+            f"border:1px solid {C['green']};border-radius:8px;padding:11px 20px;"
+            f"font-weight:600;}}")
+        for sid, b in getattr(self, "_scale_btns", {}).items():
+            b.setStyleSheet(selected if sid == self._scale else BTN["ghost"])
+
+    def _pick_scale(self, scale_id: str):
+        import avatar_service
+        self._scale = scale_id
+        self._paint_scale_btns()
+        avatar_service.save_grading_scale(scale_id, self._role, self._identity)
 
     # ── Вход по Windows (выключатель + стирание сохранённого пароля) ────────────────
     def _build_win_login(self, root):

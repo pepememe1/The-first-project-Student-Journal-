@@ -12,7 +12,7 @@ test_student_rename.py — смена ФИО студента НЕ ТЕРЯЕТ 
 показа. Поэтому проверяется свойство СИЛЬНЕЕ прежнего: при переименовании ключи не
 двигаются вообще и надгробий не появляется — переносить нечего, значит и терять нечего.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 def _push(client, headers, **entities):
@@ -29,6 +29,7 @@ def _seed_student_with_grades(client, admin):
           lessons=[{"id": "L1", "group_name": "ИС-21", "subject": "Математика",
                     "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2025"}])
     teach = make_teacher(client, admin)
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     r = client.post("/web/teacher/grade", json={
         "lesson_id": "L1", "surname": "Иванова", "name": "Мария", "grade": "5"},
         headers=teach)

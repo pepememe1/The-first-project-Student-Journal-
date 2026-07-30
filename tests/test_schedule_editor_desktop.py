@@ -88,3 +88,70 @@ def test_reset_group_removes_saved_overrides(editor, monkeypatch):
     editor._reset_group()
     live = [o for o in sched_ov.list_overrides("ИС-21") if not o.get("deleted")]
     assert live == [], "после сброса живых правок группы быть не должно"
+
+
+# ── §ролей: предмет из списка группы, преподаватель автоматом, без поля «время» ────────
+def test_pair_dialog_has_no_separate_time_field():
+    """Раньше «Время» было отдельным QLineEdit, который МОГ разойтись с номером пары
+    (перезаписывался при смене слота, но пользователь мог вписать что угодно вручную).
+    Теперь поля нет вовсе — time() всегда равен _time_for(номер_пары)."""
+    from schedule_editor import _PairDialog
+    dlg = _PairDialog(day="Пнд", slot=1, subjects=["Математика"],
+                      subject_teacher={}, pair_times=["09:00-10:35", "10:45-12:20"])
+    assert not hasattr(dlg, "time"), "отдельного поля времени быть не должно"
+    v = dlg.value()
+    assert v["time"] == "09:00-10:35"
+    dlg.slot.setCurrentIndex(1)   # 2-я пара
+    assert dlg.value()["time"] == "10:45-12:20", "время всегда следует за номером пары"
+
+
+def test_pair_dialog_subject_is_dropdown_from_group_subjects():
+    """Предмет — выпадающий список РОВНО предметов группы, не свободный текст."""
+    from schedule_editor import _PairDialog
+    dlg = _PairDialog(day="Пнд", slot=1, subjects=["Математика", "Физика"],
+                      subject_teacher={}, pair_times=["09:00-10:35"])
+    items = [dlg.subject.itemText(i) for i in range(dlg.subject.count())]
+    assert items == ["Математика", "Физика"]
+    assert dlg.value()["subject"] == "Математика"   # первый пункт по умолчанию
+
+
+def test_pair_dialog_teacher_auto_fills_from_subject_and_updates_on_change():
+    """Преподаватель подставляется автоматом по выбранному предмету — не вводится руками."""
+    from schedule_editor import _PairDialog
+    dlg = _PairDialog(day="Пнд", slot=1, subjects=["Математика", "Физика"],
+                      subject_teacher={"Математика": "Иванов И.И.", "Физика": "Петров П.П."},
+                      pair_times=["09:00-10:35"])
+    assert dlg.value()["teacher"] == "Иванов И.И."
+    dlg.subject.setCurrentText("Физика")
+    assert dlg.value()["teacher"] == "Петров П.П."
+
+
+def test_pair_dialog_no_assignment_leaves_teacher_empty():
+    from schedule_editor import _PairDialog
+    dlg = _PairDialog(day="Пнд", slot=1, subjects=["Математика"], subject_teacher={},
+                      pair_times=["09:00-10:35"])
+    assert dlg.value()["teacher"] == ""
+    assert dlg.teacher_lbl.text() == "— не назначен —"
+
+
+def test_subject_teacher_map_reads_local_assignment(editor):
+    """ScheduleEditor._subject_teacher_map — читает локально-синкнутую subject_hours
+    (teacher_id) + локальных преподавателей (имя по id), как это уже делает teacher_
+    dashboard.get_teacher_assignments (обратная сторона того же источника). Термин —
+    ТЕКУЩИЙ (terms.current_term()), как и у самого метода, который его не параметризует."""
+    import terms
+    import sync_engine as se
+    from data_store import get_store
+    year, sem = terms.current_term()
+    get_store().set_teachers({"Иванов Иван Иванович": {
+        "id": "teach:ivanov", "login": "ivanov", "subjects": ["Математика"],
+    }}, stamp=False, wake=False)
+    se.apply_remote({"subject_hours": [
+        {"id": f"hrs:ИС-21|Математика|{year}|{sem}", "group_name": "ИС-21",
+         "subject": "Математика", "year": year, "semester": sem, "hours_total": 0,
+         "teacher_id": "teach:ivanov",
+         "updated_at": "2026-07-26T10:00:00+00:00", "deleted": False}]})
+    editor._group_subjects["ИС-21"] = ["Математика"]
+
+    m = editor._subject_teacher_map("ИС-21")
+    assert m == {"Математика": "Иванов Иван Иванович"}

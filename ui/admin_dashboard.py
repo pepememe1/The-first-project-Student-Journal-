@@ -1149,7 +1149,9 @@ class AdminDashboard(QWidget):
         (see AdminGroups.vue::openHours/saveHours) — здесь тот же REST-путь через
         SyncClient, а не локальный store: «пройдено X ч» считается сервером по
         занятиям ВСЕХ преподавателей группы, локально этих данных у админа нет."""
+        from PySide6.QtWidgets import QComboBox, QDoubleSpinBox
         import sync_runner
+        import study_hours
         url, token = sync_runner.current_auth()
         if not url or not token:
             QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
@@ -1174,12 +1176,16 @@ class AdminDashboard(QWidget):
         save.setEnabled(False)
 
         spins: dict[str, QSpinBox] = {}
+        teacher_combos: dict[str, QComboBox] = {}
+        zet_spins: dict[str, QDoubleSpinBox] = {}
 
         def _load():
             from sync_client import SyncClient
-            return SyncClient(url, token=token).group_hours(name)
+            c = SyncClient(url, token=token)
+            return c.group_hours(name), c.admin_teachers().get("teachers", [])
 
-        def _apply(data):
+        def _apply(payload):
+            data, all_teachers = payload
             term = data.get("term") or {}
             if term:
                 sem = "осенний" if term.get("semester") == 1 else "весенний"
@@ -1193,15 +1199,50 @@ class AdminDashboard(QWidget):
                                        "двойным кликом по группе.", 12, C['text3']))
                 return
             for s in subjects:
+                subj = s.get("subject", "")
+                card_w = QWidget(); card_lay = QVBoxLayout(card_w)
+                card_lay.setContentsMargins(4, 4, 4, 4); card_lay.setSpacing(4)
                 row = QHBoxLayout()
-                nm = lbl(s.get("subject", ""), 12, C['text']); nm.setWordWrap(True)
+                nm = lbl(subj, 12, C['text']); nm.setWordWrap(True)
                 done = lbl(f"пройдено {s.get('hours_done', 0)} ч", 10, C['text3'])
                 sp = QSpinBox(); sp.setRange(0, 999); sp.setSingleStep(2)
                 sp.setValue(int(s.get("hours_total") or 0))
-                spins[s.get("subject", "")] = sp
+                spins[subj] = sp
                 row.addWidget(nm, 1); row.addWidget(done); row.addWidget(sp)
-                w = QWidget(); w.setLayout(row)
-                rows_box.addWidget(w)
+                card_lay.addLayout(row)
+                #ЗЕТ (docs/PLAN-ZET.md) — nullable: -1 = «не задано» (спецтекст вместо
+                #числа), подсказка по формуле часов/36 — СЕРЫМ текстом рядом, никогда не
+                #подставляется автоматически в само поле (решает только человек).
+                zrow = QHBoxLayout()
+                zrow.addWidget(lbl("ЗЕТ", 10, C['text3']))
+                zsp = QDoubleSpinBox(); zsp.setRange(-1, 999); zsp.setSingleStep(0.5)
+                zsp.setDecimals(1); zsp.setSpecialValueText(" ")
+                cur_zet = s.get("zet")
+                zsp.setValue(float(cur_zet) if cur_zet is not None else -1)
+                zet_spins[subj] = zsp
+                zrow.addWidget(zsp)
+                hint_val = study_hours.zet_hint(s.get("hours_total") or 0)
+                if hint_val:
+                    zrow.addWidget(lbl(f"← {hint_val} по формуле (часы/36)", 10, C['text3']))
+                zrow.addStretch(1)
+                card_lay.addLayout(zrow)
+                #§ролей: препод, ведущий эту группу по этому предмету — единственный
+                #источник правды «какие группы видит препод» (webdata.teacher_assignments).
+                tc = QComboBox(); tc.addItem("— преподаватель не назначен —", "")
+                cur_tid = s.get("teacher_id") or ""
+                sel_idx = 0
+                for t in all_teachers:
+                    if subj in (t.get("subjects") or []):
+                        tc.addItem(t.get("name", t.get("login", "")), t.get("id", ""))
+                        if t.get("id") == cur_tid:
+                            sel_idx = tc.count() - 1
+                if tc.count() == 1:
+                    hint = lbl(f"Нет преподавателей с предметом «{subj}»", 10, C['text3'])
+                    card_lay.addWidget(hint)
+                tc.setCurrentIndex(sel_idx)
+                teacher_combos[subj] = tc
+                card_lay.addWidget(tc)
+                rows_box.addWidget(card_w)
             save.setEnabled(True)
 
         def _err(e):
@@ -1211,10 +1252,14 @@ class AdminDashboard(QWidget):
 
         def _save():
             hours = {subj: sp.value() for subj, sp in spins.items()}
+            teachers = {subj: tc.currentData() or "" for subj, tc in teacher_combos.items()}
+            #-1 (спецтекст) = «не задано» → None (снять ЗЕТ), иначе подтверждённое число.
+            zet = {subj: (zsp.value() if zsp.value() >= 0 else None)
+                  for subj, zsp in zet_spins.items()}
 
             def _do():
                 from sync_client import SyncClient
-                return SyncClient(url, token=token).save_group_hours(name, hours)
+                return SyncClient(url, token=token).save_group_hours(name, hours, teachers, zet)
 
             def _saved(_res):
                 d.accept()

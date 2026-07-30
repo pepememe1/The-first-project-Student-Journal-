@@ -47,3 +47,77 @@ def format_progress(done: int, total: int) -> str:
     if not total:
         return ""
     return f"Пройдено {done} из {total} ч"
+
+
+# ── ЗЕТ (зачётные единицы трудоёмкости, ФГОС) — docs/PLAN-ZET.md ────────────────────
+# 1 ЗЕТ = 36 академических часов. Задаёт АДМИНИСТРАТОР вручную (та же строка, что и
+# hours_total, см. models.SubjectHours.zet) — здесь только подсказка-автовычисление и
+# арифметика «сдан ли предмет», НЕ трогаем grading.py (ЗЕТ на средний балл не влияют).
+# Функции ЧИСТЫЕ (без обращения к БД) — тот же принцип, что и у hours_done_from_pairs:
+# и сервер (webdata.py), и десктоп (ui/dashboards.py) сами достают lessons/records и
+# передают сюда, поэтому платформы не могут разойтись в подсчёте.
+ZET_HOURS = 36
+
+
+def zet_hint(total_hours) -> float:
+    """Автовычисление-подсказка для поля ЗЕТ в редакторе часов. НЕ источник правды —
+    сохраняется только то, что явно подтвердил администратор."""
+    return round((total_hours or 0) / ZET_HOURS, 1) if total_hours else 0.0
+
+
+def subject_zet_earned(lessons, records, zet, scale: str = "5"):
+    """ЗЕТ по ОДНОМУ предмету (lessons — занятия ТОЛЬКО этого предмета за термин),
+    если студент его СДАЛ, иначе None. zet=None (администратор не задавал) → всегда
+    None — так вызывающий код по этому же флагу решает, показывать ли предмет вообще.
+
+    Критерий сдачи (docs/PLAN-ZET.md §2): если у предмета есть занятие «Экзамен» —
+    по ПОСЛЕДНЕЙ попытке (с учётом пересдач, как и everywhere в проекте); иначе —
+    средний балл по практике/ДЗ >= 3.0 (используем ЕДИНЫЙ grading.practice_average
+    с шкалой ведущего преподавателя — не изобретаем свою проверку "5/4/3/Зачтено")."""
+    import grading
+    if zet is None:
+        return None
+    exam = next((l for l in lessons if l.type == "Экзамен"), None)
+    if exam is not None:
+        val = grading.latest_exam_value(exam.id, records)
+        passed = bool(val) and not grading.is_failed(val)
+    else:
+        avg = grading.practice_average(grading.pairs_from_objects(lessons), records, scale=scale)
+        passed = avg >= 3.0
+    return float(zet) if passed else None
+
+
+def zet_summary(subject_rows) -> dict:
+    """Сводка ЗЕТ студента за термин. subject_rows — [{"subject","zet","earned"}], где
+    earned уже посчитан вызывающим кодом через subject_zet_earned (этот модуль не хранит
+    занятий/оценок, только сводит готовые числа). Предметы без zet (None) в сводку не
+    попадают — «ЗЕТ не задан» показывать нигде нельзя (docs/PLAN-ZET.md §10)."""
+    rows = [r for r in subject_rows if r.get("zet") is not None]
+    total = sum(r["zet"] for r in rows)
+    earned = sum(r["earned"] for r in rows if r.get("earned") is not None)
+    subjects = [{"subject": r["subject"], "zet": r["zet"], "earned": r.get("earned") or 0.0,
+                "passed": r.get("earned") is not None} for r in rows]
+    return {"earned": round(earned, 1), "total": round(total, 1),
+            "pct": round(earned / total * 100, 1) if total else 0.0,
+            "subjects": subjects}
+
+
+def group_zet_report(students, min_zet) -> list:
+    """Отчёт куратора для кнопки перевода на курс. students — [{"student_id",
+    "display_name", "summary": <результат zet_summary()>}]. min_zet — порог
+    (ZetThreshold.min_zet) или None (порог не задан — тогда все eligible).
+    Сортировка: сначала НЕ готовые (eligible=False), внутри — по earned по возрастанию
+    (меньше набравшие — выше, они нуждаются в внимании куратора в первую очередь)."""
+    out = []
+    for s in students:
+        summ = s["summary"]
+        eligible = (min_zet is None) or (summ["earned"] >= min_zet)
+        out.append({
+            "student_id": s["student_id"], "display_name": s["display_name"],
+            "earned": summ["earned"], "total": summ["total"], "pct": summ["pct"],
+            "eligible": eligible,
+            "missing_zet": round((min_zet or 0) - summ["earned"], 1) if not eligible else 0.0,
+            "unsatisfied": [x["subject"] for x in summ["subjects"] if not x["passed"]],
+        })
+    out.sort(key=lambda x: (x["eligible"], x["earned"]))
+    return out

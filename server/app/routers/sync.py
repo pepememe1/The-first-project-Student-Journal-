@@ -135,25 +135,35 @@ def _scope_for_student(changes: dict, user: User) -> None:
 
 def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
     """Преподаватель получает свою строку + студентов СВОИХ групп (ростер журнала) и
-    занятия/оценки/итоги только СВОИХ предметов. Чужие группы/предметы и чужих
-    преподавателей — не видит. Хеши студентов вырезаем (нужны только имена/группы)."""
+    занятия/оценки/итоги только НАЗНАЧЕННЫХ ему пар (группа,предмет) — не «любая группа,
+    где просто числится его предмет» (баг 3.3.1, утекал и офлайн через этот самый пулл:
+    десктоп-журнал показывал чужие группы с совпавшим названием предмета). Хеши студентов
+    вырезаем (нужны только имена/группы)."""
     from ..models import Lesson
     from .. import webdata as W
     login = user.login or ""
-    subjects = set(user.subjects or [])
-    groups = set(W.teacher_groups(db, subjects))
+    ty, ts = W.current_term(W.load_config(db))
+    pairs = set(W.teacher_assignments(db, user.id, ty, ts))
+    groups = {g for g, _s in pairs}
     changes["users"] = [u for u in (changes.get("users") or [])
                         if u.get("login") == login
                         or (u.get("role") == "student" and u.get("group_name") in groups)]
     _strip_other_hashes(changes["users"], login)
     changes["groups"] = [g for g in (changes.get("groups") or []) if g.get("name") in groups]
     changes["lessons"] = [l for l in (changes.get("lessons") or [])
-                          if l.get("subject") in subjects]
-    lesson_subj = {row[0]: row[1] for row in db.query(Lesson.id, Lesson.subject).all()}
+                          if (l.get("group_name"), l.get("subject")) in pairs]
+    lesson_gs = {row[0]: (row[1], row[2]) for row in
+                db.query(Lesson.id, Lesson.group_name, Lesson.subject).all()}
     changes["grades"] = [gr for gr in (changes.get("grades") or [])
-                         if lesson_subj.get(gr.get("lesson_id")) in subjects]
-    changes["term_grades"] = [t for t in (changes.get("term_grades") or [])
-                              if t.get("subject") in subjects]
+                         if lesson_gs.get(gr.get("lesson_id")) in pairs]
+    #TermGrade хранит только студента+предмет, без группы — группу студента достаём
+    #отдельно (та же схема, что и Grade выше через lesson_gs, только по студенту).
+    student_group = {(row[0], row[1]): row[2] for row in
+                     db.query(User.surname, User.name, User.group_name)
+                     .filter(User.role == "student").all()}
+    changes["term_grades"] = [
+        t for t in (changes.get("term_grades") or [])
+        if (student_group.get((t.get("student_f"), t.get("student_n"))), t.get("subject")) in pairs]
 
 
 def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:

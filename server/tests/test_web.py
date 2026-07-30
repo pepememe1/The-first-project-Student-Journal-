@@ -6,7 +6,7 @@ test_web.py — READ-представления /web/*: корректность
 устройство (conftest шлёт X-Device-Id хоста), поэтому барьер проходят все; проверяем
 именно ролевой scope и совпадение расчёта с grading.py.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 from app.security import hash_password
 
 
@@ -101,6 +101,7 @@ def test_teacher_journal_scoped_by_subject(client):
     admin = make_admin(client)
     _seed(client, admin)
     th = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     ok = client.get("/web/teacher/journal",
                     params={"group": "ИС-21", "subject": "Математика"}, headers=th)
     assert ok.status_code == 200, ok.text
@@ -118,6 +119,7 @@ def test_teacher_overview_lists_groups_from_lessons(client):
     admin = make_admin(client)
     _seed(client, admin)
     th = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     data = client.get("/web/teacher/overview", headers=th).json()
     assert data["subjects"] == ["Математика"]
     assert "ИС-21" in data["groups"]

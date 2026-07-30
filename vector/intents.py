@@ -24,9 +24,6 @@ try:
 except Exception:
     DEFAULT_DB = "vsgutu_grades.db"
 
-PRACTICE_VALUES = {"2", "3", "4", "5"}
-
-
 def _grading():
     """Ленивый доступ к единому модулю расчёта (тот же приём, что в _practice_average:
     grading лежит в КОРНЕ репо и попадает в sys.path только после _bootstrap)."""
@@ -61,23 +58,44 @@ def _conn(scope: VectorScope) -> sqlite3.Connection:
 
 
 def _lessons(conn, group: str, subject: Optional[str]) -> List[tuple]:
+    #Хвостовой subject — для _scale_for (какой препод/шкала ведёт КАЖДОЕ занятие, §ролей
+    #3.3.1). Существующие потребители его не видят (unpack через *_), поэтому добавление
+    #столбца в конец — обратно совместимо.
     cur = conn.cursor()
     #COALESCE(deleted,0)=0 — Вектор не должен ссылаться на удалённые (надгробия) занятия.
     if subject:
         cur.execute(
-            "SELECT id, type, number, topic, date FROM lessons "
+            "SELECT id, type, number, topic, date, subject FROM lessons "
             "WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0 "
             "ORDER BY type, number, hour",
             (group, subject),
         )
     else:
         cur.execute(
-            "SELECT id, type, number, topic, date FROM lessons "
+            "SELECT id, type, number, topic, date, subject FROM lessons "
             "WHERE group_name=? AND COALESCE(deleted,0)=0 "
             "ORDER BY subject, type, number, hour",
             (group,),
         )
     return cur.fetchall()
+
+
+def _scale_for(scope: "VectorScope", lessons: List[tuple]):
+    """Шкала(ы) преподавателя(ей), ведущих LESSONS (§ролей, 3.3.1) — для _practice_average/
+    _is_debt/_grade_breakdown. scope.subject задан (журнал одного предмета) → одна строка
+    (дешевле). Не задан (общий средний по всем предметам группы) → словарь {lesson_id:
+    шкала}, т.к. разные предметы могут вести разные преподы. Разрешение — ЧЕРЕЗ ТО ЖЕ
+    назначение препод↔предмет↔группа, что и на сервере (webdata.lesson_scale_map)."""
+    import avatar_service
+    if scope.subject:
+        return avatar_service.get_subject_grading_scale(scope.group, scope.subject)
+    cache: Dict[str, str] = {}
+    out: Dict[str, str] = {}
+    for lid, _ltype, _num, _topic, _date, subj in lessons:
+        if subj not in cache:
+            cache[subj] = avatar_service.get_subject_grading_scale(scope.group, subj)
+        out[lid] = cache[subj]
+    return out
 
 
 def _records(conn, f: str, n: str) -> Dict[str, str]:
@@ -94,8 +112,9 @@ def _students(conn, group: str) -> List[Tuple[str, str]]:
 
 
 def _practice_average(lessons: List[tuple], records: Dict[str, str],
-                      cfg: Optional[dict] = None) -> float:
-    """Средний балл — через единый модуль grading (та же формула, что в core)."""
+                      cfg: Optional[dict] = None, scale=None) -> float:
+    """Средний балл — через единый модуль grading (та же формула, что в core).
+    scale — из _scale_for: строка (один предмет) или {lesson_id: шкала} (несколько)."""
     import grading
     if cfg is None:
         try:
@@ -103,8 +122,10 @@ def _practice_average(lessons: List[tuple], records: Dict[str, str],
             cfg = get_store()._config()
         except Exception:
             cfg = {}
+    if scale is None:
+        scale = grading.DEFAULT_SCALE
     return grading.practice_average(
-        [(lid, ltype) for lid, ltype, *_ in lessons], records, cfg)
+        [(lid, ltype) for lid, ltype, *_ in lessons], records, cfg, scale=scale)
 
 
 def _latest_exam_value(lid: str, records: Dict[str, str]) -> str:
@@ -121,13 +142,18 @@ def _latest_exam_value(lid: str, records: Dict[str, str]) -> str:
     return val
 
 
-def _is_debt(lessons: List[tuple], records: Dict[str, str]) -> List[str]:
-    """Возвращает список причин задолженности (пусто — долгов нет)."""
+def _is_debt(lessons: List[tuple], records: Dict[str, str], scale=None) -> List[str]:
+    """Возвращает список причин задолженности (пусто — долгов нет).
+    scale — из _scale_for (§ролей, 3.3.1): строка или {lesson_id: шкала}."""
+    grading = _grading()
+    scale_map = scale if isinstance(scale, dict) else None
     reasons = []
     for lid, ltype, num, *_ in lessons:
-        if _grading().is_practice(ltype):
+        if grading.is_practice(ltype):
             v = records.get(lid)
-            if v in ("2", "Н"):
+            lscale = (scale_map.get(lid, grading.DEFAULT_SCALE) if scale_map is not None
+                     else (scale or grading.DEFAULT_SCALE))
+            if v == "Н" or (v and grading.is_failed_scaled(v, lscale)):
                 #ДЗ — тоже долг: «Н» на домашней работе значит «не сдал», а не «не был».
                 what = "ДЗ" if ltype == "ДЗ" else "практика"
                 ending = "о" if ltype == "ДЗ" else "а"
@@ -181,12 +207,13 @@ def _resolve_student(scope: VectorScope, asked_name: str) -> Optional[Tuple[str,
 def intent_average(scope: VectorScope, asked_name: str = "") -> Facts:
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     who = _resolve_student(scope, asked_name)
     if who:
         f, n = who
         recs = _records(conn, f, n)
         conn.close()
-        avg = _practice_average(lessons, recs)
+        avg = _practice_average(lessons, recs, scale=scale)
         name = f"{f} {n}".strip()
         txt = (f"{name}: средний балл {avg}." if avg
                else f"{name}: оценок по практикам пока нет.")
@@ -197,7 +224,7 @@ def intent_average(scope: VectorScope, asked_name: str = "") -> Facts:
     avgs = []
     for f, n in studs:
         recs = _records(conn, f, n)
-        a = _practice_average(lessons, recs)
+        a = _practice_average(lessons, recs, scale=scale)
         if a:
             avgs.append(a)
     conn.close()
@@ -230,6 +257,7 @@ def intent_absences(scope: VectorScope, asked_name: str = "") -> Facts:
 def intent_debtors(scope: VectorScope, asked_name: str = "") -> Facts:
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     studs = ([_resolve_student(scope, "")] if scope.role == "student"
              else _students(conn, scope.group))
     debtors = []
@@ -239,7 +267,7 @@ def intent_debtors(scope: VectorScope, asked_name: str = "") -> Facts:
             continue
         f, n = who
         recs = _records(conn, f, n)
-        reasons = _is_debt(lessons, recs)
+        reasons = _is_debt(lessons, recs, scale=scale)
         if reasons:
             name = f"{f} {n}".strip()
             debtors.append({"student": name, "reasons": reasons})
@@ -260,6 +288,7 @@ def intent_debtors(scope: VectorScope, asked_name: str = "") -> Facts:
 def intent_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     who = _resolve_student(scope, asked_name)
     if not who:
         conn.close()
@@ -267,13 +296,18 @@ def intent_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     f, n = who
     recs = _records(conn, f, n)
     conn.close()
+    grading_mod = _grading()
+    scale_map = scale if isinstance(scale, dict) else None
     marks = []
     for lid, ltype, _num, *_ in lessons:
         v = recs.get(lid)
-        if _grading().is_practice(ltype) and v in PRACTICE_VALUES:
+        if not v or not grading_mod.is_practice(ltype):
+            continue
+        lscale = scale_map.get(lid, grading_mod.DEFAULT_SCALE) if scale_map is not None else scale
+        if grading_mod.to_five_point(v, lscale) is not None:
             marks.append(v)
     name = f"{f} {n}".strip()
-    avg = _practice_average(lessons, recs)
+    avg = _practice_average(lessons, recs, scale=scale)
     if marks:
         txt = f"{name}: оценки по практикам и ДЗ — {', '.join(marks)}; средний {avg}."
     else:
@@ -286,11 +320,12 @@ def intent_grades(scope: VectorScope, asked_name: str = "") -> Facts:
 def intent_at_risk(scope: VectorScope, asked_name: str = "") -> Facts:
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     studs = _students(conn, scope.group)
     risky, names = [], []
     for f, n in studs:
         recs = _records(conn, f, n)
-        avg = _practice_average(lessons, recs)
+        avg = _practice_average(lessons, recs, scale=scale)
         absc = _count_absences(lessons, recs)["всего"]
         if (avg and avg < 3.0) or absc >= 10:
             name = f"{f} {n}".strip()
@@ -309,15 +344,16 @@ def intent_at_risk(scope: VectorScope, asked_name: str = "") -> Facts:
 def intent_group_stats(scope: VectorScope, asked_name: str = "") -> Facts:
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     studs = _students(conn, scope.group)
     avgs, total_abs, debtors = [], 0, 0
     for f, n in studs:
         recs = _records(conn, f, n)
-        a = _practice_average(lessons, recs)
+        a = _practice_average(lessons, recs, scale=scale)
         if a:
             avgs.append(a)
         total_abs += _count_absences(lessons, recs)["всего"]
-        if _is_debt(lessons, recs):
+        if _is_debt(lessons, recs, scale=scale):
             debtors += 1
     conn.close()
     grp_avg = round(sum(avgs) / len(avgs), 2) if avgs else 0.0
@@ -484,6 +520,7 @@ def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
     («сколько у меня оценок», «сколько пятёрок», «сколько оценок по математике»)."""
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)
     who = _resolve_student(scope, asked_name)
     if not who:
         conn.close()
@@ -491,17 +528,93 @@ def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
     f, n = who
     recs = _records(conn, f, n)
     conn.close()
+    grading_mod = _grading()
+    scale_map = scale if isinstance(scale, dict) else None
     counts = {"5": 0, "4": 0, "3": 0, "2": 0}
+    #Практика/ДЗ на кастомной шкале — сырое значение конвертируется в 5-балльное ПЕРЕД
+    #подсчётом (§ролей, 3.3.1): «пятёрка» на 100-балльной (90+) тоже должна считаться.
     for lid, ltype, *_ in lessons:
-        if _grading().is_practice(ltype):
-            v = recs.get(lid)
-            if v in counts:
-                counts[v] += 1
+        v = recs.get(lid)
+        if not v or not grading_mod.is_practice(ltype):
+            continue
+        lscale = scale_map.get(lid, grading_mod.DEFAULT_SCALE) if scale_map is not None else scale
+        num = grading_mod.to_five_point(v, lscale)
+        key = str(int(num)) if num is not None else None
+        if key in counts:
+            counts[key] += 1
     total = sum(counts.values())
     subj = f" по предмету «{scope.subject}»" if scope.subject else ""
     txt = (f"Оценок{subj}: всего {total} (5: {counts['5']}, 4: {counts['4']}, "
            f"3: {counts['3']}, 2: {counts['2']}).")
     return Facts("grade_count", txt, data={"total": total, **counts})
+
+
+def _subject_hours_zet(conn, group: str, year: str, semester) -> Dict[str, float]:
+    """{предмет: ЗЕТ} для группы за термин — прямой SELECT (docs/PLAN-ZET.md). Порог
+    перевода (ZetThreshold) сюда НЕ приезжает синком (серверная политика, не офлайн-
+    данные) — поэтому десктопный Вектор отвечает балансом, без «хватит ли для перевода»."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT subject, zet FROM subject_hours WHERE group_name=? AND year=? "
+            "AND semester=? AND COALESCE(deleted,0)=0 AND zet IS NOT NULL",
+            (group, year, int(semester or 0)))
+        return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
+def intent_zet(scope: VectorScope, asked_name: str = "") -> Facts:
+    """ЗЕТ студента (docs/PLAN-ZET.md §6) — офлайн-баланс. Полный ответ (с порогом
+    перевода) даёт сервер/веб, см. webdata.zet_summary_for_student — здесь то же самое
+    правило (study_hours.subject_zet_earned/zet_summary), только без ZetThreshold."""
+    from collections import namedtuple
+    import terms
+    conn = _conn(scope)
+    year, sem = terms.current_term()
+    zets = _subject_hours_zet(conn, scope.group, year, sem)
+    if not zets:
+        conn.close()
+        return Facts("zet", "ЗЕТ по твоим предметам пока не заданы администрацией.")
+    lessons = _lessons(conn, scope.group, None)
+    who = _resolve_student(scope, asked_name)
+    if not who:
+        conn.close()
+        return Facts("zet", "Уточните фамилию студента — посчитаю его ЗЕТ.")
+    f, n = who
+    recs = _records(conn, f, n)
+    conn.close()
+    study_hours = _study_hours()
+    zl = namedtuple("ZetLesson", "id type")
+    rows = []
+    for subj, zet in zets.items():
+        subj_lessons = [zl(lid, ltype) for lid, ltype, _num, _topic, _date, s in lessons
+                        if s == subj]
+        scale = avatar_service_module().get_subject_grading_scale(scope.group, subj) \
+            if subj_lessons else "5"
+        earned = study_hours.subject_zet_earned(subj_lessons, recs, zet, scale=scale)
+        rows.append({"subject": subj, "zet": zet, "earned": earned})
+    summ = study_hours.zet_summary(rows)
+    name = f"{f} {n}".strip()
+    unsatisfied = [r["subject"] for r in summ["subjects"] if not r["passed"]]
+    txt = f"{name}: {summ['earned']} из {summ['total']} ЗЕТ за семестр ({summ['pct']}%)."
+    if unsatisfied:
+        txt += " Ещё не сдано: " + ", ".join(unsatisfied) + "."
+    return Facts("zet", txt, names=[name, f],
+                data={"earned": summ["earned"], "total": summ["total"], "pct": summ["pct"]})
+
+
+def avatar_service_module():
+    """Ленивый доступ к avatar_service (шкала оценивания преподавателя, §ролей 3.3.1) —
+    тот же приём, что и _grading(): модуль десктопный, импортируем по требованию."""
+    import avatar_service
+    return avatar_service
+
+
+def _study_hours():
+    """Ленивый доступ к study_hours.py (корень репо, как grading.py)."""
+    import study_hours
+    return study_hours
 
 
 def intent_subject_grades(scope: VectorScope, asked_name: str = "") -> Facts:
@@ -510,6 +623,7 @@ def intent_subject_grades(scope: VectorScope, asked_name: str = "") -> Facts:
         return intent_grades(scope, asked_name)
     conn = _conn(scope)
     lessons = _lessons(conn, scope.group, scope.subject)
+    scale = _scale_for(scope, lessons)   #scope.subject задан → строка, не словарь
     who = _resolve_student(scope, asked_name)
     if not who:
         conn.close()
@@ -518,8 +632,9 @@ def intent_subject_grades(scope: VectorScope, asked_name: str = "") -> Facts:
     recs = _records(conn, f, n)
     conn.close()
     marks = [recs.get(lid) for lid, ltype, *_ in lessons
-             if _grading().is_practice(ltype) and recs.get(lid) in ("2", "3", "4", "5")]
-    avg = _practice_average(lessons, recs)
+             if _grading().is_practice(ltype)
+             and _grading().to_five_point(recs.get(lid), scale) is not None]
+    avg = _practice_average(lessons, recs, scale=scale)
     if not avg:
         return Facts("subject_grades",
                      f"По предмету «{scope.subject}» оценок по практикам и ДЗ пока нет.",
@@ -624,6 +739,7 @@ _HANDLERS = {
     "grades": intent_grades,
     "grade_count": intent_grade_count,
     "subject_grades": intent_subject_grades,
+    "zet": intent_zet,
     "groups": intent_groups,
     "teachers": intent_teachers,
     "roster": intent_roster,

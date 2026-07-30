@@ -9,7 +9,7 @@ test_subject_hours.py — учебные часы «пройдено X из Y» 
 Остальное: ДЗ часов не даёт (делается вне аудитории), план задаёт только админ, и
 незаданный план отдаётся нулём, а не выдумывается.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 def _lesson(client, headers, ltype, number, hour=0, group="ИС-21", subject="Математика"):
@@ -30,6 +30,7 @@ def test_lecture_and_practice_give_equal_hours(client):
     """Лекция (2 строки) и практика (1 строка) — это по одной паре, то есть по 2 часа."""
     admin = make_admin(client)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     _lesson(client, teach, "Лекция", 1, hour=1)
     _lesson(client, teach, "Лекция", 1, hour=2)     #та же пара, второй академический час
     _lesson(client, teach, "Практика", 1)
@@ -43,6 +44,7 @@ def test_homework_gives_no_hours(client):
     """ДЗ в счёт часов не идёт: «в счёт часов идут лекции и практики»."""
     admin = make_admin(client)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     _lesson(client, teach, "Практика", 1)
     _lesson(client, teach, "ДЗ", 1)
 
@@ -54,6 +56,7 @@ def test_plan_is_zero_until_admin_sets_it(client):
     """Незаданный план — ноль, а не выдуманное число: клиент по нему прячет строку."""
     admin = make_admin(client)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     _lesson(client, teach, "Практика", 1)
     r = client.get("/web/teacher/journal?group=ИС-21&subject=Математика", headers=teach)
     assert r.json()["hours"]["total"] == 0
@@ -66,7 +69,8 @@ def test_admin_sets_hours_and_teacher_sees_them(client):
     _lesson(client, teach, "Практика", 1)
 
     r = client.post("/web/admin/group-hours",
-                    json={"group": "ИС-21", "hours": {"Математика": 72}}, headers=admin)
+                    json={"group": "ИС-21", "hours": {"Математика": 72},
+                         "teachers": {"Математика": "teach:teacher1"}}, headers=admin)
     assert r.status_code == 200, r.text
 
     r = client.get("/web/teacher/journal?group=ИС-21&subject=Математика", headers=teach)
@@ -78,6 +82,7 @@ def test_admin_sees_plan_and_progress_together(client):
     admin = make_admin(client)
     _group(client, admin)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     _lesson(client, teach, "Лекция", 1, hour=1)
     _lesson(client, teach, "Лекция", 1, hour=2)
     client.post("/web/admin/group-hours",
@@ -86,7 +91,11 @@ def test_admin_sees_plan_and_progress_together(client):
     r = client.get("/web/admin/group-hours?group=ИС-21", headers=admin)
     assert r.status_code == 200, r.text
     row = next(s for s in r.json()["subjects"] if s["subject"] == "Математика")
-    assert row == {"subject": "Математика", "hours_total": 72, "hours_done": 2}, row
+    #§ролей: строка теперь несёт и назначение препода (teacher_id/teacher_name), и ЗЕТ
+    #(docs/PLAN-ZET.md: zet=None — не задано, zet_hint — подсказка по формуле часов/36).
+    assert row == {"subject": "Математика", "hours_total": 72, "hours_done": 2,
+                   "teacher_id": "teach:teacher1", "teacher_name": "Преподаватель",
+                   "zet": None, "zet_hint": 2.0}, row
 
 
 def test_saving_hours_twice_replaces_not_duplicates(client):

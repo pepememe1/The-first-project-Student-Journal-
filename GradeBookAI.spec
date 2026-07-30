@@ -9,8 +9,17 @@
 #  • Арт маскота (emotions/), шрифты (fonts/), иконка — кладём в бандл; код находит их
 #    в _MEIPASS (emotes по модуль-относительным путям, fonts/get_icon — пропатчены).
 #  • subjects.json НЕ бандлим (в subjects.py есть встроенный дефолт).
-#  • Серверный (host) режим --run-server в этот билд НЕ входит — это отдельная сборка;
-#    клиент подключается к готовому серверу (esstu-gradebook.ru).
+#  • ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md, «один UI»): десктоп поднимает НАСТОЯЩЕЕ серверное
+#    приложение (server/app) у себя же на 127.0.0.1 (ui/local_api.py). Поэтому пакет
+#    server/app и собранный web/dist бандлятся как ДАННЫЕ (сырые файлы, не через pyz) —
+#    ровно та же раскладка путей, что и в исходниках репозитория (ui/local_api.py и
+#    server/app/main.py ищут их относительно СВОЕГО расположения, см. ниже). Серверные
+#    Python-зависимости (fastapi/uvicorn/SQLAlchemy/jose/webauthn/httpx) — в hiddenimports:
+#    без них локальный сервер просто не поднимется (ui/local_api.py съест исключение и
+#    десктоп тихо останется на нативных экранах — деградация, не крах, но фичи не будет).
+#  • Серверный ФОНОВЫЙ режим --run-server (server_control.py, «этот ПК как сервер для ЛВС
+#    колледжа») входит туда же: он использует ТОТ ЖЕ бандл server/app, просто с другим
+#    биндом (0.0.0.0) и по кнопке в админке, а не автоматически.
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
@@ -30,12 +39,23 @@ for d in ('ui', 'sync', 'data'):
 # корневые модули, которые тоже импортируются плоско/лениво
 hidden += ['grading', 'subjects', 'server_control', 'fonts', 'app_paths', '_bootstrap',
            'main_window', 'log']
+# reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
+# потребителем: напоминания в мессенджере (server/app/routers/messenger.py, §5.4).
+# Ни один клиентский .py его не импортирует — статический анализ PyInstaller (идёт от
+# main.py) его не увидит, а server/app у нас в datas (сырые файлы), не в code — тоже не
+# подхватит. Обнаружено прогоном СОБРАННОГО Nuitka-exe (та же схема сборки) — там без
+# явного include local_api не поднимался вовсе.
+hidden += ['reminder_parse']
 # пакеты
 for pkg in ('vector', 'schedule'):
     hidden += collect_submodules(pkg)
 # зависимости, которые импортируются лениво/динамически
 hidden += ['gostcrypto', 'gostcrypto.gostpbkdf', 'requests', 'cryptography',
            'openpyxl', 'win32crypt']
+# stdlib email.* (server/app/mailer.py: MIMEText/MIMEMultipart) — тот же случай, что и
+# reminder_parse выше, но со стандартной библиотекой: без явного include Nuitka-сборка
+# (см. build_nuitka.sh) падала на «No module named 'email.mime'» при первом запуске.
+hidden += collect_submodules('email')
 # QtWebEngine — встроенный веб-view онлайн-вкладок (мессенджер/модерация, ui/messenger_web.py).
 # Импортируется ЛЕНИВО внутри функции, поэтому PyInstaller его статикой не видит — добавляем
 # явно, чтобы хук PySide6 собрал Chromium (QtWebEngineProcess, resources, icudtl, локали).
@@ -44,6 +64,15 @@ hidden += ['PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore']
 # Пакет ставится как python-docx, а импортируется как `docx`; ему нужны его шаблоны
 # (docx/templates/*.docx), поэтому тянем и submodules, и data-файлы.
 hidden += collect_submodules('docx')
+# Серверный стек (общий Vue-интерфейс + фоновый хостинг --run-server, см. шапку файла).
+# server/app сам НЕ здесь — он бандлится как ДАННЫЕ (см. datas ниже) и импортируется
+# обычным файловым импортом (ensure_server_path добавляет распакованный server/ в
+# sys.path), поэтому его подмодули статике PyInstaller не нужны. А вот это —
+# настоящие site-packages зависимости, которые FastAPI/uvicorn тянут лениво (роутеры,
+# lifespan, ASGI-протокол) и которые статический анализ main.py не увидит сам.
+for pkg in ('fastapi', 'starlette', 'uvicorn', 'sqlalchemy', 'jose', 'multipart',
+            'webauthn', 'httpx', 'httpcore', 'anyio', 'h11', 'websockets', 'click'):
+    hidden += collect_submodules(pkg)
 
 datas = []
 datas += collect_data_files('docx')   # шаблон default.docx и пр. — иначе Document() падает
@@ -53,6 +82,19 @@ for folder in ('emotions', 'emotes', 'vector_assets', 'fonts'):
 for f in ('icon.ico', 'icon.png'):
     if os.path.isfile(os.path.join(ROOT, f)):
         datas.append((f, '.'))
+# server/app — СЫРЫМИ файлами (не через pyz): ui/local_api.py и server/app/main.py сами
+# находят его через __file__-относительные пути ОТНОСИТЕЛЬНО РАСПАКОВАННОГО _MEIPASS
+# (та же раскладка, что в исходниках репозитория — server/ рядом с корнем). Нет папки на
+# машине сборки (свежий чекаут без server/) — просто пропускаем, фича молча не войдёт.
+_server_app = os.path.join('server', 'app')
+if os.path.isdir(os.path.join(ROOT, _server_app)):
+    datas.append((_server_app, _server_app))
+# Собранный сайт (web/dist) — server/app/main.py::_find_web_dist его ищет по этому же
+# относительному пути; нет сборки (npm run build не запускали) — сервер поднимется
+# как чистый API без SPA, это штатная деградация, не ошибка сборки exe.
+_web_dist = os.path.join('web', 'dist')
+if os.path.isfile(os.path.join(ROOT, _web_dist, 'index.html')):
+    datas.append((_web_dist, _web_dist))
 
 a = Analysis(
     ['main.py'],

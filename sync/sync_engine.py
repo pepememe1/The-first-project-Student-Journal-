@@ -501,7 +501,15 @@ def _ensure_hours_table(cur):
     cur.execute("CREATE TABLE IF NOT EXISTS subject_hours (id TEXT PRIMARY KEY, "
                 "group_name TEXT, subject TEXT, year TEXT, semester INTEGER DEFAULT 0, "
                 "hours_total INTEGER DEFAULT 0, updated_at TEXT DEFAULT '', "
-                "deleted INTEGER DEFAULT 0)")
+                "deleted INTEGER DEFAULT 0, teacher_id TEXT DEFAULT '', zet REAL)")
+    try:
+        cur.execute("ALTER TABLE subject_hours ADD COLUMN teacher_id TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE subject_hours ADD COLUMN zet REAL")
+    except Exception:
+        pass
 
 
 def _collect_subject_hours() -> list:
@@ -517,8 +525,8 @@ def _collect_subject_hours() -> list:
             cur = conn.cursor()
             _ensure_hours_table(cur)
             cur.execute("SELECT id,group_name,subject,year,COALESCE(semester,0),"
-                        "COALESCE(hours_total,0),COALESCE(updated_at,''),COALESCE(deleted,0) "
-                        "FROM subject_hours")
+                        "COALESCE(hours_total,0),COALESCE(updated_at,''),COALESCE(deleted,0),"
+                        "COALESCE(teacher_id,''),zet FROM subject_hours")
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать учебные часы для синка: %s", e)
@@ -528,7 +536,8 @@ def _collect_subject_hours() -> list:
                     "semester": int(r[4] or 0), "hours_total": int(r[5] or 0),
                     #Пустую метку подменяем на now — как во всех остальных коллекторах
                     #(иначе строка считалась бы самой старой и её затирало бы что угодно).
-                    "updated_at": r[6] or _now(), "deleted": bool(r[7])})
+                    "updated_at": r[6] or _now(), "deleted": bool(r[7]), "teacher_id": r[8],
+                    "zet": r[9]})
     return out
 
 
@@ -550,11 +559,12 @@ def _merge_subject_hours(remote: list):
                 continue
             cur.execute(
                 "INSERT OR REPLACE INTO subject_hours "
-                "(id,group_name,subject,year,semester,hours_total,updated_at,deleted) "
-                "VALUES (?,?,?,?,?,?,?,?)",
+                "(id,group_name,subject,year,semester,hours_total,updated_at,deleted,teacher_id,zet) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (hid, h.get("group_name", ""), h.get("subject", ""), h.get("year", ""),
                  int(h.get("semester") or 0), int(h.get("hours_total") or 0),
-                 h.get("updated_at", ""), 1 if rdel else 0))
+                 h.get("updated_at", ""), 1 if rdel else 0, h.get("teacher_id", ""),
+                 h.get("zet")))
         conn.commit()
 
 

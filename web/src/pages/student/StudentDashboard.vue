@@ -7,6 +7,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RotateCw } from '@lucide/vue'
 import { studentApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
+import ZetProgress from '@/components/ui/ZetProgress.vue'
 import Mascot from '@/components/Mascot.vue'
 import InsightCards from '@/components/InsightCards.vue'
 import ParentConsent from '@/components/ParentConsent.vue'
@@ -15,11 +16,13 @@ import { dashboardEmote } from '@/config/mascot'
 const loading = ref(true)
 const data = ref(null)
 const insights = ref([])
+const zet = ref(null)   // docs/PLAN-ZET.md — null/subjects:[] → строка ЗЕТ не рендерится
 
 async function load() {
   loading.value = true
   try { data.value = (await studentApi.overview()).data } catch { data.value = null } finally { loading.value = false }
   try { insights.value = (await studentApi.insights()).data.cards || [] } catch { insights.value = [] }
+  try { zet.value = (await studentApi.zet()).data } catch { zet.value = null }
 }
 onMounted(load)
 
@@ -99,6 +102,11 @@ onBeforeUnmount(() => clearInterval(tipTimer))
           <StatCard label="Средний балл" :value="data?.average || '—'" />
           <StatCard label="Посещаемость" :value="data ? data.attendance + '%' : '—'" />
           <StatCard label="Оценок" :value="data?.grades_total ?? '—'" />
+        </div>
+
+        <!-- ЗЕТ (docs/PLAN-ZET.md) — только если хотя бы один предмет его имеет. -->
+        <div v-if="zet?.subjects?.length" class="rounded-lg border border-border bg-card p-4 shadow-card">
+          <ZetProgress :earned="zet.earned" :total="zet.total" :subjects="zet.subjects" show-details />
         </div>
 
         <div>

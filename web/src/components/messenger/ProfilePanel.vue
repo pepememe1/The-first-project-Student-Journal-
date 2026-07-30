@@ -7,6 +7,7 @@ import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeft
 import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
+import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 
 const m = useMessengerStore()
 const { activePeer, isModeration, activeInfo, activeKind } = storeToRefs(m)
@@ -44,19 +45,11 @@ const isSaved = computed(() => activeKind.value === 'saved')
 const headTitle = computed(() =>
   activeInfo.value?.title || m.activeChat?.title || activePeer.value?.full_name || 'Беседа')
 const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
-// §D7: статус собеседника (dnd/studying/away + свой текст у преподавателя). Цвета — те
-// же, что в MyStatusPicker и ConversationInfo: один смысл должен иметь один цвет.
-const STATUS = {
-  dnd: ['Не беспокоить', '#ef4444'],
-  studying: ['Готовится/учится', '#f59e0b'],
-  away: ['Отошёл(а)', '#94a3b8'],
-}
-const statusLabel = computed(() => {
-  const p = activePeer.value
-  if (!p?.status_kind) return ''
-  return (p.status_text || '').trim() || (STATUS[p.status_kind]?.[0] || p.status_kind)
-})
-const statusColor = computed(() => STATUS[activePeer.value?.status_kind]?.[1] || '#94a3b8')
+// §D7: статус собеседника (dnd/studying/away + свой текст у преподавателя). Общий
+// словарь/цвета — @/config/status (те же, что в MyStatusPicker и ConversationInfo).
+const statusLabel = computed(() =>
+  sharedStatusLabel(activePeer.value?.status_kind, activePeer.value?.status_text))
+const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_kind))
 </script>
 
 <template>

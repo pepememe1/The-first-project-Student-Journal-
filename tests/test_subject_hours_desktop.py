@@ -134,3 +134,33 @@ def test_archive_term_does_not_borrow_current_plan():
 
     old = GradeBook("К74/1", "Химия", "2019/2020", 2)
     assert old.hours_progress()[1] == 0
+
+
+# ── ЗЕТ (docs/PLAN-ZET.md) — desktop offline (SubjectHours.zet синкуется, порог нет) ──
+def test_get_group_zet_reads_synced_column():
+    """data_store.get_group_zet — только предметы с явно заданным (не NULL) ЗЕТ."""
+    import terms
+    from data_store import get_store
+    year, sem = terms.current_term()
+    se.apply_remote({"subject_hours": [
+        {"id": f"hrs:К74/1|Математика|{year}|{sem}", "group_name": "К74/1",
+         "subject": "Математика", "year": year, "semester": sem, "hours_total": 72,
+         "zet": 2.0, "updated_at": "2026-07-29T10:00:00+00:00", "deleted": False},
+        {"id": f"hrs:К74/1|Физика|{year}|{sem}", "group_name": "К74/1",
+         "subject": "Физика", "year": year, "semester": sem, "hours_total": 36,
+         "updated_at": "2026-07-29T10:00:00+00:00", "deleted": False}]})   # zet не задан
+
+    zets = get_store().get_group_zet("К74/1")
+    assert zets == {"Математика": 2.0}, "Физика без ЗЕТ не должна попадать в словарь"
+
+
+def test_subject_zet_earned_offline_uses_exam_result():
+    """Офлайн-расчёт ЗЕТ (тот же study_hours, что и на сервере) — сдал экзамен → ЗЕТ."""
+    book = GradeBook("К74/1", "Математика")
+    lesson = book.add_lesson("Экзамен", topic="итог")
+    records = {lesson.id: "4 (Зачтено)"}
+    earned = study_hours.subject_zet_earned(book.lessons, records, 2.0, scale="5")
+    assert earned == 2.0
+
+    records_failed = {lesson.id: "2 (Не зачтено)"}
+    assert study_hours.subject_zet_earned(book.lessons, records_failed, 2.0, scale="5") is None

@@ -413,10 +413,15 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
-    def save_group_hours(self, group: str, hours: dict) -> dict:
-        """Сохранить часы пачкой: {предмет: часов}. {ok, saved, term}."""
+    def save_group_hours(self, group: str, hours: dict, teachers: dict = None,
+                        zet: dict = None) -> dict:
+        """Сохранить часы + назначение препода + ЗЕТ пачкой: {предмет: часов},
+        {предмет: teacher_id|''} (§ролей препод↔предмет↔группа), {предмет: float|None}
+        (docs/PLAN-ZET.md). {ok, saved, term}."""
         r = self._req("POST", "/web/admin/group-hours",
-                      json={"group": group, "hours": hours}, timeout=10)
+                      json={"group": group, "hours": hours, "teachers": teachers or {},
+                            "zet": zet or {}},
+                      timeout=10)
         r.raise_for_status()
         return r.json()
 

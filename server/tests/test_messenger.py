@@ -5,7 +5,7 @@ test_messenger.py — ядро мессенджера, Фаза 1 (личные 
 роль-скоуп (не-участник не читает/не пишет → 403); список чатов с непрочитанными; опрос
 новых по ?after=; отметку прочтения; связь ответа reply_to_id.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 from app.security import hash_password
 
 
@@ -1018,6 +1018,7 @@ def test_d12_grade_posted_creates_personal_channel(client):
     """Выставление оценки (Phase B /web/teacher/grade) само создаёт «Мои оценки» и
     публикует туда пост от лица «Вектора» — без ручного создания канала."""
     admin, (a_id, a), (b_id, b), _ = _setup(client)
+    assign_teacher(client, admin, a_id, "К-24", "Математика")
     #Занятие по группе Боба (см. _make_student — группа "К-24").
     r = client.post("/web/teacher/lesson", json={
         "group": "К-24", "subject": "Математика", "type": "Практика",

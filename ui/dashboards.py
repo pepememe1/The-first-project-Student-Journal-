@@ -283,6 +283,12 @@ class StudentDashboard(QWidget):
             self._stat_cards[label] = sc
             stats_row.addWidget(sc)
         content.addLayout(stats_row)
+        #ЗЕТ (docs/PLAN-ZET.md) — отдельная строка ПОД карточками, а не пятая карточка:
+        #показывается, ТОЛЬКО если хотя бы один предмет группы имеет ЗЕТ (иначе всей
+        #строки просто нет — «0 из 0» выглядело бы как ошибка данных).
+        self._zet_lbl = lbl("", 12, C['text2'])
+        self._zet_lbl.setVisible(False)
+        content.addWidget(self._zet_lbl)
 
         #Список предметов (в правой колонке, справа от тигра)
         content.addWidget(section_lbl("Мои предметы"))
@@ -324,6 +330,32 @@ class StudentDashboard(QWidget):
         
         avg = f"{sum(total_g) / len(total_g):.1f}" if total_g else "—"
         att = f"{int(lec_p / lec_t * 100)}%" if lec_t else "—%"
+
+        #ЗЕТ (docs/PLAN-ZET.md) — офлайн-баланс через СИНХРОНИЗИРОВАННЫЙ subject_hours.zet;
+        #порог перевода на десктоп не приезжает (серверная политика), поэтому только earned/total.
+        try:
+            import study_hours
+            import avatar_service
+            from data_store import get_store
+            zets = get_store().get_group_zet(self.cur_stud['g'])
+            if zets:
+                rows = []
+                for subj, zval in zets.items():
+                    book = GradeBook(self.cur_stud['g'], subj)
+                    s = next((x for x in book.spisok_stud
+                             if x.f.lower() == self.cur_stud['f'].lower()), None)
+                    scale = avatar_service.get_subject_grading_scale(self.cur_stud['g'], subj)
+                    earned = study_hours.subject_zet_earned(
+                        book.lessons, s.records if s else {}, zval, scale=scale)
+                    rows.append({"subject": subj, "zet": zval, "earned": earned})
+                summ = study_hours.zet_summary(rows)
+                self._zet_lbl.setText(f"ЗЕТ за семестр: {summ['earned']} из {summ['total']} "
+                                      f"({summ['pct']}%)")
+                self._zet_lbl.setVisible(True)
+            else:
+                self._zet_lbl.setVisible(False)
+        except Exception:
+            self._zet_lbl.setVisible(False)
         
         #Обновить карточки статистики
         for c_frame in self._stat_cards.values():
@@ -521,7 +553,9 @@ class StudentDashboard(QWidget):
             book = GradeBook(self.cur_stud['g'], subj)
             s = next((x for x in book.spisok_stud
                       if x.f.lower() == self.cur_stud['f'].lower()), None)
-            avg = book.calculate_average(s, cfg) if s else 0.0
+            import avatar_service
+            scale = avatar_service.get_subject_grading_scale(self.cur_stud['g'], subj)
+            avg = book.calculate_average(s, cfg, scale=scale) if s else 0.0
             self._subj_btns_lay.insertWidget(self._subj_btns_lay.count() - 1,
                                              self._subject_card(subj, avg, self._hours_text(book)))
 
@@ -577,7 +611,9 @@ class StudentDashboard(QWidget):
         book = GradeBook(self.cur_stud['g'], subj)
         s = next((x for x in book.spisok_stud
                   if x.f.lower() == self.cur_stud['f'].lower()), None)
-        avg = book.calculate_average(s, self._avg_cfg()) if s else 0.0
+        import avatar_service
+        scale = avatar_service.get_subject_grading_scale(self.cur_stud['g'], subj)
+        avg = book.calculate_average(s, self._avg_cfg(), scale=scale) if s else 0.0
         #Часы — и в шапке открытого предмета: в списке они видны до клика, а внутри
         #журнала это ровно тот вопрос, ради которого туда и заходят («сколько осталось»).
         hours = self._hours_text(book)
@@ -607,6 +643,8 @@ class StudentDashboard(QWidget):
                     rows.append((l, ri)); ri += 1
         t.setRowCount(len(rows))
         recs = s.records if s else {}
+        import avatar_service
+        scale = avatar_service.get_subject_grading_scale(book.group, book.subject)
         for r, (l, ri) in enumerate(rows):
             if ri > 0:
                 rd = getattr(l, f'retake_date{"" if ri == 1 else "_" + str(ri)}', '')
@@ -627,9 +665,14 @@ class StudentDashboard(QWidget):
                 if c == 3:
                     it.setTextAlignment(Qt.AlignCenter)
                     raw = (text or "").split()[0] if text else ""
-                    if raw in ("5", "4", "3", "2"):
-                        colors = {"5": "#DBF0E4", "4": "#DCEFF2", "3": "#FBEFD6", "2": "#FAE0DE"}
-                        it.setBackground(QColor(colors[raw]))
+                    #Практика/ДЗ на кастомной шкале — цвет по КОНВЕРТИРОВАННОМУ 5-балльному
+                    #(100-балльная «85» тоже красится как «хорошо»). Экзамен — литерально,
+                    #как раньше (шкалы туда не распространяются, см. grading.py).
+                    n = (grading.to_five_point(raw, scale) if grading.is_practice(l.type)
+                        else (float(raw) if raw in ("5", "4", "3", "2") else None))
+                    if n is not None:
+                        colors = {5: "#DBF0E4", 4: "#DCEFF2", 3: "#FBEFD6", 2: "#FAE0DE"}
+                        it.setBackground(QColor(colors.get(int(n), "#FAE0DE")))
                     elif raw == "Н":
                         it.setForeground(QColor(C['red']))
                     elif raw == "✓":

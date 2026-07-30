@@ -12,7 +12,7 @@ test_homework.py — домашнее задание как тип заняти�
 """
 import pytest
 
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +54,7 @@ def test_homework_numbering_starts_at_one_independently(client):
     """У ДЗ своя нумерация: две практики уже есть, а первое ДЗ всё равно №1."""
     admin = make_admin(client)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     for n in (1, 2):
         r = client.post("/web/teacher/lesson", json={
             "group": "ИС-21", "subject": "Математика", "type": "Практика",
@@ -78,6 +79,7 @@ def test_homework_notifies_whole_group_with_task_text(client):
     _student(client, admin)
     _student(client, admin, login="petrov", surname="Петров", name="Пётр")
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
 
     r = client.post("/web/teacher/lesson", json={
         "group": "ИС-21", "subject": "Математика", "type": "ДЗ",
@@ -96,6 +98,7 @@ def test_homework_task_text_not_in_push_body(client, push_on):
     admin = make_admin(client)
     _student(client, admin)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     client.post("/web/teacher/lesson", json={
         "group": "ИС-21", "subject": "Математика", "type": "ДЗ",
         "topic": "секретная тема задания"}, headers=teach)
@@ -109,6 +112,7 @@ def test_homework_from_desktop_sync_notifies_group(client):
     admin = make_admin(client)
     _student(client, admin)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
 
     lesson = {"id": "HW-1", "group_name": "ИС-21", "subject": "Математика", "type": "ДЗ",
               "number": 1, "topic": "сделать лабораторную", "date": "01.09.2025"}
@@ -125,6 +129,7 @@ def test_repeated_full_push_does_not_resend_homework(client):
     admin = make_admin(client)
     _student(client, admin)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
 
     lesson = {"id": "HW-1", "group_name": "ИС-21", "subject": "Математика", "type": "ДЗ",
               "number": 1, "topic": "сделать лабораторную", "date": "01.09.2025"}
@@ -141,6 +146,7 @@ def test_homework_grade_counts_into_average(client):
     admin = make_admin(client)
     _student(client, admin)
     teach = make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
 
     prac = client.post("/web/teacher/lesson", json={
         "group": "ИС-21", "subject": "Математика", "type": "Практика", "topic": "п"},

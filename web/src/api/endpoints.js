@@ -72,6 +72,8 @@ export const studentApi = {
   journal: (params = {}) => api.get('/web/student/journal', { params }),
   stats: (params = {}) => api.get('/web/student/stats', { params }),
   insights: () => api.get('/web/student/insights'),
+  // ЗЕТ (docs/PLAN-ZET.md) — пусто (subjects: []), пока администратор не задал ни одного.
+  zet: (params = {}) => api.get('/web/student/zet', { params }),
 }
 
 // ПРЕПОДАВАТЕЛЬ ───────────────────────────────────────────────────────────────────
@@ -119,6 +121,9 @@ export const curatorApi = {
     api.get('/web/curator/report', {
       params: { groups, fmt, ...params }, responseType: 'blob',
     }),
+  // Таблица перевода на курс по ЗЕТ (docs/PLAN-ZET.md §7.4) — «главная фича» отчёта.
+  zetReport: (group, params = {}) =>
+    api.get('/web/curator/zet-report', { params: { group, ...params } }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
@@ -142,7 +147,11 @@ export const adminApi = {
   bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
   // Учебные часы группы: план на семестр по каждому предмету + уже пройденное.
   groupHours: (group) => api.get('/web/admin/group-hours', { params: { group } }),
-  saveGroupHours: (group, hours) => api.post('/web/admin/group-hours', { group, hours }),
+  // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);
+  // zet — docs/PLAN-ZET.md: {предмет: float | null}. Та же строка subject_hours, что и часы
+  // (см. server/app/routers/web.py::admin_set_group_hours).
+  saveGroupHours: (group, hours, teachers = {}, zet = {}) =>
+    api.post('/web/admin/group-hours', { group, hours, teachers, zet }),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
@@ -187,6 +196,12 @@ export const adminApi = {
   publishSchedule: (group) => api.post('/web/admin/schedule/publish', { group }),
   // Инфо-панель «Сервер и сайт» (адрес, БД, шифрование, ГОСТ, онлайн, период).
   serverInfo: () => api.get('/web/admin/server-info'),
+  // Порог ЗЕТ для перевода группы на курс (docs/PLAN-ZET.md §7.2). min_zet: null — снять.
+  zetThreshold: (group, params = {}) =>
+    api.get('/web/admin/zet-thresholds', { params: { group, ...params } }),
+  setZetThreshold: (payload) => api.post('/web/admin/zet-thresholds', payload),
+  // Перевод выбранных студентов на следующий курс (только eligible, сервер перепроверяет).
+  promoteGroup: (payload) => api.post('/web/admin/groups/promote', payload),
   // Служебное — уже реализовано на сервере:
   online: () => api.get('/admin/online'),
   events: (since = 0) => api.get('/admin/events', { params: { since } }),
@@ -215,6 +230,10 @@ export const parentApi = {
     api.get('/web/parent/journal', { params: { student_id: studentId, year, semester } }),
   vectorAsk: (message, studentId = '') =>
     api.post('/web/parent/vector/ask', { message, student_id: studentId }),
+  // ЗЕТ ребёнка (docs/PLAN-ZET.md §7.6) — та же строка, что у студента, без таблицы
+  // группы и порога перевода (это дело куратора/администрации).
+  zet: (studentId = '', year = '', semester = 0) =>
+    api.get('/web/parent/zet', { params: { student_id: studentId, year, semester } }),
 }
 
 // Согласие студента на доступ родителя к его журналу (152-ФЗ) — в кабинете студента.

@@ -367,8 +367,13 @@ def _teacher_to_server(fullname: str, d: dict) -> dict:
 
 
 def _server_to_teacher(u: dict) -> dict:
-    """Строка users(role=teacher) → значение teachers-dict (ключ — full_name отдельно)."""
+    """Строка users(role=teacher) → значение teachers-dict (ключ — full_name отдельно).
+
+    "id" нужен для teacher_assignments (§ролей препод↔предмет↔группа) — subject_hours.
+    teacher_id хранит именно его, не логин/ФИО, и локальной реконструкцией id не
+    восстановить (формат teach:{login|ФИО} — не всегда логин)."""
     return {
+        "id": u.get("id", ""),
         "login": u.get("login", ""), "password_hash": u.get("password_hash", ""),
         "subjects": u.get("subjects") or [], "group_assignments": u.get("group_assignments") or {},
         "curated_groups": u.get("curated_groups") or [], "prefs": u.get("prefs") or {},
@@ -514,6 +519,75 @@ class LocalStore:
             except Exception:
                 pass
         return True
+
+    #Назначения препод↔предмет↔группа (§ролей, 3.3.1) — читает синкнутую subject_hours
+    #(sync/sync_engine.py::_merge_subject_hours уже пишет teacher_id в неё). Единственный
+    #источник правды «какие группы видит преподаватель» — зеркало серверного
+    #webdata.teacher_assignments, ЗАМЕНЯЕТ мёртвый group_assignments (никогда не
+    #заполнялся, форма «предмет→ОДНА группа» и не позволила бы двух групп на предмет).
+    def get_teacher_assignments(self, teacher_id: str, year: str = "", semester=None) -> list:
+        if not teacher_id:
+            return []
+        if not year or semester is None:
+            import terms
+            year, semester = terms.current_term()
+        conn = DBManager.get_conn(); cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT DISTINCT group_name, subject FROM subject_hours "
+                "WHERE teacher_id=? AND year=? AND semester=? AND COALESCE(deleted,0)=0 "
+                "AND group_name!='' AND subject!=''",
+                (teacher_id, year, int(semester or 0)))
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        finally:
+            conn.close()
+        return sorted({(r[0], r[1]) for r in rows})
+
+    def get_subject_teacher_id(self, group: str, subject: str, year: str = "", semester=None) -> str:
+        """Обратная сторона get_teacher_assignments: по (группа,предмет) — id назначенного
+        препода, '' если не назначен. Используется редактором расписания для автозаполнения
+        графы «Преподаватель» (§ролей)."""
+        if not group or not subject:
+            return ""
+        if not year or semester is None:
+            import terms
+            year, semester = terms.current_term()
+        conn = DBManager.get_conn(); cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT teacher_id FROM subject_hours WHERE group_name=? AND subject=? "
+                "AND year=? AND semester=? AND COALESCE(deleted,0)=0 AND COALESCE(teacher_id,'')!=''",
+                (group, subject, year, int(semester or 0)))
+            row = cur.fetchone()
+        except Exception:
+            row = None
+        finally:
+            conn.close()
+        return row[0] if row else ""
+
+    def get_group_zet(self, group: str, year: str = "", semester=None) -> dict:
+        """{предмет: ЗЕТ} для группы за термин (docs/PLAN-ZET.md) — только предметы, где
+        администратор явно задал значение (NULL пропускается). Порог перевода
+        (ZetThreshold) сюда НЕ приезжает синком — серверная политика, не офлайн-данные,
+        см. server/app/models.py::ZetThreshold."""
+        if not group:
+            return {}
+        if not year or semester is None:
+            import terms
+            year, semester = terms.current_term()
+        conn = DBManager.get_conn(); cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT subject, zet FROM subject_hours WHERE group_name=? AND year=? "
+                "AND semester=? AND COALESCE(deleted,0)=0 AND zet IS NOT NULL",
+                (group, year, int(semester or 0)))
+            return {row[0]: row[1] for row in cur.fetchall()}
+        except Exception:
+            return {}
+        finally:
+            conn.close()
 
     #Группы (в таблице groups; форма API сохранена — UI не трогаем)
     def get_groups(self) -> list:

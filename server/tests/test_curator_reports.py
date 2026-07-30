@@ -6,7 +6,7 @@ test_curator_reports.py — §12 плана: отчёты куратора дл�
 номером по порядку; данные считаются ЖИВЬЁМ, но ограничены датой создания отчёта;
 rollover термина архивирует старые кнопки, не удаляя их.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 def _headers(client, login, password):
@@ -55,6 +55,11 @@ def _make_curator(client, admin, group="ИС-21", login="teacher1", subjects=("�
     r = client.put(f"/web/admin/teachers/{login}",
                    json={"curated_groups": [group]}, headers=admin)
     assert r.status_code == 200, r.text
+    #§ролей: curated_groups (курирование, read-only по ВСЕЙ группе) — отдельная ось прав
+    #от назначения (группа,предмет), которое требуется для /web/teacher/grade и /lesson.
+    #Большинство тестов файла ставят оценки от лица куратора, поэтому назначаем сразу.
+    for subj in subjects:
+        assign_teacher(client, admin, f"teach:{login}", group, subj)
     return teach
 
 

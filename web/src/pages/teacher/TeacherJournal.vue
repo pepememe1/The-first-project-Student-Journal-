@@ -14,6 +14,7 @@ import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
+import { scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1)
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 
@@ -87,11 +88,20 @@ const colDefs = computed(() => {
 })
 
 // ── Значения ячеек (селекты, как комбобоксы десктопа) ───────────────────────────
+// Практика/ДЗ — варианты берутся из ШКАЛЫ преподавателя (data.scale_values, §ролей
+// 3.3.1): «5» даёт как раньше 2-5, другая шкала — свои значения (100-балльная/буквенная/
+// зачёт-незачёт). Экзамен намеренно вне кастомных шкал (см. grading.py) — там литеральная
+// 2-5, как и было. «Н» у практики — не часть шкалы, отдельный маркер непредоставления.
+const PRACTICE_TYPES = ['Практика', 'ДЗ']
 const OPTIONS = {
   'Лекция': ['', '✓', 'Н', 'Б', 'О'],
   'default': ['', '2', '3', '4', '5', 'Н'],
 }
-function cellOptions(l) { return OPTIONS[l.type] || OPTIONS.default }
+function cellOptions(l) {
+  if (l.type === 'Лекция') return OPTIONS['Лекция']
+  if (PRACTICE_TYPES.includes(l.type)) return ['', ...scaleValues(data.value?.scale), 'Н']
+  return OPTIONS.default
+}
 function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено)» → «5» в селекте
 function needsRetake(s, col) { return needsRetakeShared(s.grades, col.l.id, col.ri) }
 
@@ -104,13 +114,27 @@ function shortName(s) {
   return `${s.surname || ''} ${initials}`.trim()
 }
 
-function gradeClass(v) {
-  v = rawValue(v)
-  if (v === '5' || v === '✓') return 'text-accent font-bold'
-  if (v === '4') return 'text-blue font-bold'
-  if (v === '3') return 'text-orange font-bold'
-  if (v === '2' || v === 'Н') return 'text-red font-bold'
-  if (v === 'Б' || v === 'О') return 'text-text3 font-semibold'
+function gradeClass(v, l) {
+  const raw = rawValue(v)
+  if (raw === '✓') return 'text-accent font-bold'
+  if (raw === 'Б' || raw === 'О') return 'text-text3 font-semibold'
+  if (raw === 'Н') return 'text-red font-bold'
+  if (!raw) return 'text-text2'
+  // Практика/ДЗ на кастомной шкале — цвет по КОНВЕРТИРОВАННОМУ 5-балльному значению
+  // (100-балльная «85» тоже должна подсвечиваться как «хорошо»). Экзамен — как раньше,
+  // литеральная 2-5 (шкалы туда намеренно не распространяются, см. grading.py).
+  if (l && PRACTICE_TYPES.includes(l.type)) {
+    const n = toFivePoint(raw, data.value?.scale)
+    if (n === null) return 'text-text2'
+    if (n >= 5) return 'text-accent font-bold'
+    if (n >= 4) return 'text-blue font-bold'
+    if (n >= 3) return 'text-orange font-bold'
+    return 'text-red font-bold'
+  }
+  if (raw === '5') return 'text-accent font-bold'
+  if (raw === '4') return 'text-blue font-bold'
+  if (raw === '3') return 'text-orange font-bold'
+  if (raw === '2') return 'text-red font-bold'
   return 'text-text2'
 }
 function avgClass(a) {
@@ -415,7 +439,7 @@ async function downloadVedomost(fmt) {
             </td>
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
-              <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key])"
+              <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key], col.l)"
                       :title="s.grades[col.key] || ''" :disabled="isArchive"
                       class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
                       @change="onCell(s, col, $event.target.value)">

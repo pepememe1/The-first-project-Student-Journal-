@@ -22,6 +22,34 @@ from PySide6.QtCore import QUrl, QTimer, Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton
 
 _ERR = "Сообщения доступны только онлайн. Проверьте подключение к серверу и вход в аккаунт."
+
+#Фаза 1 ссылок мессенджера (docs/MESSENGER-ATTACHMENTS-PLAN.md): клик по внешней ссылке
+#в ChatThread.vue после подтверждения «Переадресация» делает window.open(url, '_blank').
+#Без переопределения createWindow() у QWebEnginePage это молча ничего не делает (второго
+#окна QtWebEngine у нас нет) — ссылка должна открыться в СИСТЕМНОМ браузере, а не пропасть.
+#Видео-эмбеды (<iframe> с youtube.com/vk.com/rutube.ru) сюда не попадают — это обычная
+#навигация внутри той же страницы, createWindow() при ней не вызывается.
+def _make_messenger_page_class():
+    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtGui import QDesktopServices
+
+    class _ExternalLinkPage(QWebEnginePage):
+        """Одноразовая страница-ловушка: createWindow() возвращает ЕЁ вместо второго
+        окна, она перехватывает целевой URL через urlChanged и сама никогда не рендерится."""
+
+        def __init__(self, profile, parent=None):
+            super().__init__(profile, parent)
+            self.urlChanged.connect(self._open_externally)
+
+        def _open_externally(self, url):
+            QDesktopServices.openUrl(url)
+            self.deleteLater()
+
+    class MessengerPage(QWebEnginePage):
+        def createWindow(self, _window_type):
+            return _ExternalLinkPage(self.profile(), self)
+
+    return MessengerPage
 #Сколько раз и как часто молча пробуем подхватить токен, пока пользователь смотрит на
 #вкладку. Токен появляется не мгновенно: фоновый синкер логинится через пару секунд после
 #входа, и панель, собранная раньше, иначе навсегда осталась бы с надписью «вы не вошли».
@@ -241,6 +269,10 @@ class MessengerWebPanel(QWidget):
         #Посмотреть код») выдавало десктопную обёртку и перебивало контекстное меню
         #сообщения. Пользователю нужно меню мессенджера, а не браузера.
         view.setContextMenuPolicy(Qt.NoContextMenu)
+        #Своя QWebEnginePage — чтобы внешние ссылки (window.open из ChatThread.vue после
+        #подтверждения «Переадресация») открывались в системном браузере, а не пропадали.
+        page_cls = _make_messenger_page_class()
+        view.setPage(page_cls(view))
         #Доступ JS к буферу обмена. По умолчанию QtWebEngine его ЗАПРЕЩАЕТ, и
         #navigator.clipboard.writeText молча отклонялся — пункт «Копировать текст» в меню
         #сообщения нажимался, но ничего не копировал. Своё контекстное меню Chromium мы

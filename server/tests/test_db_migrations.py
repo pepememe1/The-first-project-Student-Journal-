@@ -12,7 +12,8 @@ column» на любой группе/канале. Здесь эта ветка
 """
 from sqlalchemy import text, inspect
 
-from app.db import engine, _ensure_participant_state_columns
+from app.db import (engine, _ensure_participant_state_columns,
+                    _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -46,3 +47,38 @@ def test_ensure_participant_state_columns_is_idempotent(client):
     _ensure_participant_state_columns()
     cols = {c["name"] for c in inspect(engine).get_columns("conversation_participants")}
     assert "custom_role_id" in cols and "silenced" in cols
+
+
+def test_ensure_subject_hours_teacher_column_adds_to_old_schema(client):
+    """Таблица без teacher_id (схема ДО назначений препод↔предмет↔группа) — миграция
+    должна дописать колонку ALTER-ом. Тот же прогретый-пул нюанс, что и выше — dispose()."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE subject_hours"))
+        conn.execute(text("""CREATE TABLE subject_hours (
+            id VARCHAR PRIMARY KEY, group_name VARCHAR, subject VARCHAR,
+            year VARCHAR, semester INTEGER DEFAULT 0, hours_total INTEGER DEFAULT 0,
+            updated_at VARCHAR DEFAULT '', deleted BOOLEAN DEFAULT 0
+        )"""))
+    engine.dispose()
+    _ensure_subject_hours_teacher_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("subject_hours")}
+    assert "teacher_id" in cols
+    _ensure_subject_hours_teacher_column()  # идемпотентность — второй вызов не падает
+
+
+def test_ensure_subject_hours_zet_column_adds_to_old_schema(client):
+    """Таблица без zet (схема ДО ЗЕТ, docs/PLAN-ZET.md) — миграция должна дописать
+    колонку ALTER-ом, как и teacher_id выше."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE subject_hours"))
+        conn.execute(text("""CREATE TABLE subject_hours (
+            id VARCHAR PRIMARY KEY, group_name VARCHAR, subject VARCHAR,
+            year VARCHAR, semester INTEGER DEFAULT 0, hours_total INTEGER DEFAULT 0,
+            updated_at VARCHAR DEFAULT '', deleted BOOLEAN DEFAULT 0,
+            teacher_id VARCHAR DEFAULT ''
+        )"""))
+    engine.dispose()
+    _ensure_subject_hours_zet_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("subject_hours")}
+    assert "zet" in cols
+    _ensure_subject_hours_zet_column()  # идемпотентность — второй вызов не падает

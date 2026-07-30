@@ -11,6 +11,7 @@ import { parentApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ZetProgress from '@/components/ui/ZetProgress.vue'
 
 const children = ref([])
 const pending = ref(0)
@@ -18,6 +19,7 @@ const studentId = ref('')
 const data = ref(null)
 const loading = ref(true)
 const denied = ref(false)
+const zet = ref(null)   // docs/PLAN-ZET.md §7.6 — та же строка, что у студента, без порога
 
 const gradeClass = (g) => {
   const v = (g || '').trim().split(' ')[0]
@@ -49,6 +51,7 @@ async function loadJournal() {
     data.value = null
     denied.value = e?.response?.status === 403
   } finally { loading.value = false }
+  try { zet.value = (await parentApi.zet(studentId.value)).data } catch { zet.value = null }
 }
 
 onMounted(async () => { await loadChildren(); await loadJournal() })
@@ -85,6 +88,9 @@ watch(studentId, loadJournal)
                 message="Когда появятся предметы и оценки, они отобразятся здесь." />
 
     <template v-else>
+      <Card v-if="zet?.subjects?.length" pad>
+        <ZetProgress :earned="zet.earned" :total="zet.total" :subjects="zet.subjects" show-details />
+      </Card>
       <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
         <template #header>
           <Badge v-if="s.hours?.total" variant="blue">

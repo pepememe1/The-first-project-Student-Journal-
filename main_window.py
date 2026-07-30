@@ -67,6 +67,7 @@ class MainAppWindow(QMainWindow):
         #Верхняя панель (скрыта на странице входа)
         self._header = HeaderBar()
         self._header.logout_clicked.connect(self._logout)
+        self._header.tools_clicked.connect(self._open_desktop_tools)
         self._header.hide()
 
         #Обёртка (заголовок + содержимое)
@@ -385,13 +386,42 @@ class MainAppWindow(QMainWindow):
         except Exception as e:
             log.get("main_window").warning(f"[theme] тема пользователя пропущена: {e}")
 
+    @staticmethod
+    def _try_vue_dashboard(role: str, context: dict = None):
+        """Кабинет общим Vue-интерфейсом (None — строить нативный, это НЕ авария —
+        обычный запасной путь, см. ui/vue_dashboard.py).
+
+        Отдельным методом, а не строкой в `_build_dashboard`: сюда же будут подключаться
+        остальные роли по мере того, как их десктопные способности (голосовые оценки у
+        преподавателя, хостинг сервера у админа) появятся в общем интерфейсе."""
+        try:
+            import vue_dashboard
+            if not vue_dashboard.available_for(role):
+                return None
+            dash = vue_dashboard.VueDashboard(role, context=context)
+            if dash.ok:
+                return dash
+            dash.deleteLater()
+        except Exception as e:
+            log.get("main_window").warning(f"[vue] общий кабинет не открылся: {e}")
+        return None
+
     def _build_dashboard(self):
         """Создаёт виджет дашборда по текущей сессии (роль + данные)."""
         role, payload = self._session
         if role == "student":
+            #ОБЩИЙ интерфейс целиком (§11 «один UI»): те же страницы и то же меню, что на
+            #сайте, но с локального сервера — поэтому офлайн сохраняется. Не открылся —
+            #строим нативный кабинет: остаться без экрана человек не должен.
+            web = self._try_vue_dashboard(role)
+            if web is not None:
+                return web, ("Ученик", f"{payload['f']} {payload['n']}")
             return StudentDashboard(payload), ("Ученик", f"{payload['f']} {payload['n']}")
         if role == "teacher":
             name, data = payload
+            web = self._try_vue_dashboard(role)
+            if web is not None:
+                return web, ("Учитель", name)
             if TeacherDashboard is None:
                 raise RuntimeError("Модуль TeacherDashboard не загружен")
             #показываем ПОЛНОЕ ФИО (раньше была только фамилия name.split()[0]);
@@ -404,6 +434,12 @@ class MainAppWindow(QMainWindow):
             dash = ParentDashboard(payload)
             return dash, ("Родитель", dash.display_name())
         if role == "admin":
+            #Кабинет — общий Vue; то, что относится к ЭТОМУ компьютеру (сервер, БД,
+            #обслуживание), живёт в отдельном окне «Инструменты ПК» из шапки: в браузере
+            #такие вещи не воспроизводятся в принципе, а не «пока не сделаны».
+            web = self._try_vue_dashboard(role)
+            if web is not None:
+                return web, ("Администратор", "Администратор")
             if AdminDashboard is None:
                 raise RuntimeError("Модуль AdminDashboard не загружен")
             return (AdminDashboard(back_to_login_cb=self._logout),
@@ -435,6 +471,14 @@ class MainAppWindow(QMainWindow):
         self._stack.setCurrentWidget(dash)
         #шапка создаётся один раз и не пересобирается с дашбордом — красим её явно
         self._header.refresh_theme()
+        #Дверь к инструментам этого ПК — только админу и только когда кабинет ВЕБОВЫЙ:
+        #в нативной админке эти разделы и так на месте, вторая дверь была бы лишней.
+        try:
+            role_now = (self._session or (None,))[0]
+            self._header.show_tools(role_now == "admin"
+                                    and type(dash).__name__ == "VueDashboard")
+        except Exception:
+            pass
         self._header.set_role(role_text, user_text)
         self._header.show()
         self._refresh_applied_mode()   #синхронизируем «текущий режим» для таймера расписания
@@ -558,6 +602,13 @@ class MainAppWindow(QMainWindow):
             import traceback
             traceback.print_exc()  # полный стек в консоль
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть панель администратора:\n{e}")
+
+    def _open_desktop_tools(self):
+        """Открыть «Инструменты ПК» — нативные настройки сервера/базы этого компьютера
+        (см. ui/desktop_tools.py). Кнопка в шапке видна только когда она нужна
+        (admin + Vue-кабинет, см. _open_dashboard), поэтому здесь ничего не проверяем."""
+        import desktop_tools
+        desktop_tools.open_tools(self)
 
     def _logout(self):
         """Выход из системы.

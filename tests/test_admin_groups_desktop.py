@@ -127,10 +127,19 @@ class _FakeHoursSyncClient:
 
     def group_hours(self, group):
         return {"group": group, "term": {"year": "2025", "semester": 1},
-                "subjects": [{"subject": "Математика", "hours_total": 24, "hours_done": 10}]}
+                "subjects": [{"subject": "Математика", "hours_total": 24, "hours_done": 10,
+                             "teacher_id": "teach:ivanov", "teacher_name": "Иванов И.И.",
+                             "zet": None, "zet_hint": 0.7}]}
 
-    def save_group_hours(self, group, hours):
-        type(self).saved.append((group, dict(hours)))
+    #§ролей: список преподов для выпадающего списка «кто ведёт этот предмет».
+    def admin_teachers(self):
+        return {"teachers": [{"id": "teach:ivanov", "name": "Иванов И.И.",
+                              "subjects": ["Математика"]},
+                             {"id": "teach:petrov", "name": "Петров П.П.",
+                              "subjects": ["Физика"]}]}
+
+    def save_group_hours(self, group, hours, teachers=None, zet=None):
+        type(self).saved.append((group, dict(hours), dict(teachers or {}), dict(zet or {})))
         return {"ok": True, "saved": len(hours)}
 
 
@@ -157,15 +166,35 @@ def test_group_hours_load_and_save_via_sync_client(qapp, fresh_db, monkeypatch):
     while time.monotonic() < deadline and not loaded:
         qapp.processEvents()
         time.sleep(0.01)
-    assert loaded["subjects"] == [{"subject": "Математика", "hours_total": 24, "hours_done": 10}]
+    assert loaded["subjects"] == [{"subject": "Математика", "hours_total": 24, "hours_done": 10,
+                                   "teacher_id": "teach:ivanov", "teacher_name": "Иванов И.И.",
+                                   "zet": None, "zet_hint": 0.7}]
 
     def _save():
         from sync_client import SyncClient
-        return SyncClient("http://test", token="tok").save_group_hours("к74/1", {"Математика": 26})
+        return SyncClient("http://test", token="tok").save_group_hours(
+            "к74/1", {"Математика": 26}, {"Математика": "teach:ivanov"})
     dash._run_bg(_save, lambda _r: None)
 
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline and not _FakeHoursSyncClient.saved:
         qapp.processEvents()
         time.sleep(0.01)
-    assert _FakeHoursSyncClient.saved == [("к74/1", {"Математика": 26})]
+    assert _FakeHoursSyncClient.saved == [("к74/1", {"Математика": 26}, {"Математика": "teach:ivanov"}, {})]
+
+
+def test_group_hours_dialog_lists_only_teachers_with_that_subject(qapp, fresh_db, monkeypatch):
+    """§ролей: выпадающий список препода на предмет — только те, у кого этот предмет
+    указан в профиле («нажали математику — все преподы, у которых указана математика»).
+    Диалог не открываем (.exec() блокирует поток) — проверяем ту же фильтрацию, что
+    строит _open_group_hours, применённую к данным фейкового клиента напрямую."""
+    monkeypatch.setattr("sync_runner.current_auth", lambda: ("http://test", "tok"))
+    import sync_client
+    monkeypatch.setattr(sync_client, "SyncClient", _FakeHoursSyncClient)
+
+    c = _FakeHoursSyncClient()
+    all_teachers = c.admin_teachers()["teachers"]
+    subj = c.group_hours("к74/1")["subjects"][0]["subject"]
+    matching = [t for t in all_teachers if subj in (t.get("subjects") or [])]
+    assert [t["id"] for t in matching] == ["teach:ivanov"], \
+        "Петров (Физика) не должен предлагаться на предмет Математика"

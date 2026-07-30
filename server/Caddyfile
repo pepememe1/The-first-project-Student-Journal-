@@ -10,7 +10,10 @@ esstu-gradebook.ru {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
-		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
+		# frame-src — Фаза 1 видео-эмбедов мессенджера (docs/MESSENGER-ATTACHMENTS-PLAN.md):
+		# без него default-src 'self' блокирует ЛЮБОЙ <iframe>, и белый список видеохостингов
+		# (YouTube/VK/Rutube, см. web/src/utils/videoEmbed.js) не открылся бы вовсе.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
 		-Server
 	}
 	# Реальный IP клиента из ПРОВЕРЕННОГО TCP-пира (клиент подделать не может — Caddy

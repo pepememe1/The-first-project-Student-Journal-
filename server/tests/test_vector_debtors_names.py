@@ -6,7 +6,7 @@ test_vector_debtors_names.py — «у кого долги» называет Ф�
 поэтому список их долгов — прямой ответ, а не раскрытие ПДн. Имена отдаются ДОСЛОВНО
 (no_voice), чтобы LLM их не исказил и не отказался называть.
 """
-from conftest import make_admin
+from conftest import make_admin, assign_teacher
 from app.security import hash_password
 
 
@@ -29,6 +29,7 @@ def test_debtors_lists_student_names_for_teacher(client, monkeypatch):
                     "lesson_id": "L1", "grade": "2"}]}}, headers=admin)
     client.post("/web/admin/teachers", json={"full_name": "Пре Под", "login": "t1",
         "password": "pass1234", "subjects": ["Мат"]}, headers=admin)
+    assign_teacher(client, admin, "teach:t1", "G1", "Мат")
     th = _login(client, "t1", "pass1234")
 
     r = client.post("/web/vector/ask", json={"message": "у кого долги"}, headers=th).json()
@@ -51,6 +52,7 @@ def test_no_debtors_message(client, monkeypatch):
                     "lesson_id": "L1", "grade": "5"}]}}, headers=admin)
     client.post("/web/admin/teachers", json={"full_name": "Пре Под", "login": "t1",
         "password": "pass1234", "subjects": ["Мат"]}, headers=admin)
+    assign_teacher(client, admin, "teach:t1", "G1", "Мат")
     th = _login(client, "t1", "pass1234")
     r = client.post("/web/vector/ask", json={"message": "у кого долги"}, headers=th).json()
     assert "нет" in r["text"].lower()

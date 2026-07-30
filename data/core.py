@@ -17,7 +17,7 @@ from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-APP_VERSION = "Release 3.3"
+APP_VERSION = "Release 3.4.1"
 
 import os as _os
 import sys as _sys
@@ -412,13 +412,28 @@ class DBManager:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
             except Exception:
                 pass
-        #Плановые учебные часы предмета на семестр. Задаёт админ (на сайте), сюда
-        #приезжают синком — журнал показывает «пройдено X из Y ч». Ключ детерминированный
-        #(hrs:группа|предмет|год|семестр), как у остальных синкуемых сущностей.
+        #Плановые учебные часы предмета на семестр. Задаёт админ (на сайте/в админке ПК),
+        #сюда приезжают синком — журнал показывает «пройдено X из Y ч». Ключ
+        #детерминированный (hrs:группа|предмет|год|семестр), как у остальных синкуемых
+        #сущностей. teacher_id (§ролей препод↔предмет↔группа, 3.3.1) — та же строка несёт
+        #и назначение препода на эту пару (группа,предмет): единственный источник правды
+        #«какие группы видит преподаватель», см. webdata.teacher_assignments на сервере.
         cur.execute("""CREATE TABLE IF NOT EXISTS subject_hours
             (id TEXT PRIMARY KEY, group_name TEXT, subject TEXT, year TEXT,
              semester INTEGER DEFAULT 0, hours_total INTEGER DEFAULT 0,
-             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, teacher_id TEXT DEFAULT '',
+             zet REAL)""")
+        #Старая база могла завести таблицу ДО teacher_id/zet — CREATE TABLE IF NOT EXISTS
+        #колонку не досоздаёт, нужен ALTER (тот же паттерн, что уже применяем к lessons).
+        try:
+            cur.execute("ALTER TABLE subject_hours ADD COLUMN teacher_id TEXT DEFAULT ''")
+        except Exception:
+            pass
+        #zet — ЗЕТ предмета (docs/PLAN-ZET.md), NULL = администратор не задавал.
+        try:
+            cur.execute("ALTER TABLE subject_hours ADD COLUMN zet REAL")
+        except Exception:
+            pass
         cur.execute("""CREATE TABLE IF NOT EXISTS students
             (f TEXT, n TEXT, group_name TEXT, PRIMARY KEY(f, n, group_name))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS grades
@@ -875,12 +890,15 @@ class GradeBook:
             total = 0
         return done, total
 
-    def calculate_average(self, student: Student, cfg=None) -> float:
+    def calculate_average(self, student: Student, cfg=None, scale=None) -> float:
         """Средний балл через единый модуль grading (та же формула, что у Вектора).
         Методика (Н=вес, учитывать ли пропуск, включать ли экзамены) берётся из config,
         дефолты сохраняют прежнее поведение. cfg можно передать явно — например, чтобы
         ВРЕМЕННО (визуально) отключить учёт пропусков «Н=2» тумблером в интерфейсе, не
-        меняя общий config."""
+        меняя общий config. scale — шкала преподавателя (§ролей, 3.3.1), ведущего эти
+        занятия; без него — "5" (сегодняшнее поведение). Разрешение «чья шкала» — забота
+        вызывающего (teacher_dashboard знает СВОЕГО текущего препода через avatar_service),
+        этот модуль ролей не знает и решать не должен."""
         import grading
         if cfg is None:
             try:
@@ -888,13 +906,17 @@ class GradeBook:
                 cfg = get_store()._config()
             except Exception:
                 cfg = {}
+        if scale is None:
+            scale = grading.DEFAULT_SCALE
         return grading.practice_average(
-            grading.pairs_from_objects(self.lessons), student.records, cfg)
+            grading.pairs_from_objects(self.lessons), student.records, cfg, scale=scale)
 
-    def export_to_excel(self, file_path: str):
+    def export_to_excel(self, file_path: str, scale=None):
         """Экспорт журнала в аккуратный xlsx: титульная шапка (группа/предмет/дата),
         фирменные цвета, рамки, цвет оценок по уровню, закреплённые области и строка
-        «средний по группе». Весь текст — Times New Roman 14 (требование заказчика)."""
+        «средний по группе». Весь текст — Times New Roman 14 (требование заказчика).
+        scale — шкала преподавателя (§ролей, 3.3.1); журнал — один предмет/один препод,
+        поэтому одна строка на весь экспорт (как в calculate_average)."""
         from openpyxl.styles import Border, Side
         from openpyxl.utils import get_column_letter
         from datetime import datetime
@@ -959,7 +981,7 @@ class GradeBook:
                         failed = b.startswith(("2", "Н")) or "Не зачтено" in b
                         rv = "" if failed else "—"
                     row.append(rv)
-            avg = round(self.calculate_average(s), 2)
+            avg = round(self.calculate_average(s, scale=scale), 2)
             averages.append(avg)
             row.append(avg if avg > 0 else "")
             ws.append(row)

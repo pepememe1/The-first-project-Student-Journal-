@@ -27,7 +27,24 @@ gostcrypto>=1.2.5
 gigachat>=0.1         # Vector через GigaChat. Без неё — офлайн-шаблоны / Ollama
 #
 # Синхронизация идёт через REST API-сервер (каталог server/), а не напрямую в БД,
-# поэтому КЛИЕНТУ драйвер PostgreSQL больше не нужен. Зависимости самого сервера
-# (fastapi, uvicorn, sqlalchemy, при необходимости psycopg2) — в server/requirements.txt.
+# поэтому КЛИЕНТУ драйвер PostgreSQL больше не нужен. Полный список зависимостей самого
+# сервера (при необходимости psycopg2, sqlcipher3 и т.п.) — в server/requirements.txt.
 # ⚠️ Боевой сервер с ПДн должен быть в РФ (152-ФЗ ст.18 ч.5): ЛВС колледжа или
 #    российское облако; канал — HTTPS/TLS.
+
+# ---- ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md, «один UI») ----
+# Десктоп поднимает НАСТОЯЩЕЕ серверное приложение (server/app) у себя же на 127.0.0.1
+# (ui/local_api.py) — тем же кодом, что и боевой сервер, показывает ту же Vue SPA офлайн.
+# Тот же стек нужен и фоновому хостингу «этот ПК как сервер» (server_control.py,
+# --run-server). Без этих пакетов ОБЕ фичи молча откатываются: local_api ловит
+# исключение и десктоп остаётся на нативных экранах, --run-server просто не поднимется.
+# НЕ нужны клиенту (в отличие от server/requirements.txt): psycopg2-binary (только
+# SQLite локально) и sqlcipher3-binary (локальную базу не шифруем — см. prepare_env()
+# в ui/local_api.py, ПДн и так под Fernet+DPAPI, §6).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+SQLAlchemy>=2.0
+python-jose[cryptography]>=3.3
+python-multipart>=0.0.9
+webauthn>=2.0
+httpx>=0.27

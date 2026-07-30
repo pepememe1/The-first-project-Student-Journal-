@@ -12,7 +12,7 @@ test_schedule_conflicts.py — сверка расписаний: накладк
 """
 import pytest
 
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 @pytest.fixture(autouse=True)
@@ -215,6 +215,7 @@ def test_publish_letter_tone_differs_for_student_and_teacher(client, push_on):
         {"id": "L1", "group_name": "ИС-21", "subject": "Математика", "type": "Практика",
          "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
     make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
 
     r = client.post("/web/admin/schedule/publish", json={"group": "ИС-21"}, headers=admin)
     assert r.status_code == 200, r.text

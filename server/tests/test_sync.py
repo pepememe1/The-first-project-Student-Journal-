@@ -3,7 +3,7 @@ test_sync.py — Синхронизация: push/pull, права ролей, �
 """
 import time
 
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 
 
 _LESSON = {"id": "L1", "group_name": "ИС-21", "subject": "Математика",
@@ -86,6 +86,7 @@ def test_pull_teacher_row_scope(client):
     хеши студентов и секреты config — вырезаны."""
     admin = make_admin(client)
     th = make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     _push(client, admin,
           groups=[{"id": "grp:ИС-21", "name": "ИС-21", "subjects": ["Математика"]},
                   {"id": "grp:ИС-22", "name": "ИС-22", "subjects": ["Физика"]}],

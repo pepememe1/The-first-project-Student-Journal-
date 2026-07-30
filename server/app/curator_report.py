@@ -45,19 +45,22 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict,
         # молча потерять данные из-за формата), как и в других местах приложения.
         lessons = [l for l in lessons if (parse_ddmmyyyy(l.date) or cutoff) <= cutoff]
     subjects = sorted({l.subject for l in lessons if l.subject})
+    #Группа собирает НЕСКОЛЬКО предметов сразу — у каждого может быть свой преподаватель
+    #со своей шкалой (§ролей, 3.3.1), поэтому карта по занятиям, а не одна строка.
+    scale_map = W.lesson_scale_map(db, lessons)
 
     rows = []
     for s in students:
         recs = W.student_records(db, s.surname, s.name, group)
         per_subj = {d["subject"]: d["average"] for d in
-                    W.per_subject_averages(lessons, recs, cfg)}
+                    W.per_subject_averages(lessons, recs, cfg, scale=scale_map)}
         absc = W.absences(lessons, recs)
         rows.append({
             "surname": s.surname, "name": s.name,
             "subject_avg": per_subj,                       # {предмет: средний}
-            "average": W.average(lessons, recs, cfg),      # общий средний
+            "average": W.average(lessons, recs, cfg, scale=scale_map),      # общий средний
             "absences": absc,                              # {Н,Б,О,всего}
-            "debts": len(W.debts(lessons, recs)),
+            "debts": len(W.debts(lessons, recs, scale=scale_map)),
         })
     # средний по группе — по студентам с ненулевым средним (пустые не занижают)
     vals = [r["average"] for r in rows if r["average"]]

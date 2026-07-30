@@ -34,11 +34,21 @@ def _make_student(client, admin, login, group):
 
 
 def _seed_teacher_group(client, admin, group="ИС-21", subject="Математика"):
-    """Занятие в группе по предмету — так teacher_groups() узнаёт о группе учителя."""
+    """Занятие в группе по предмету + явное назначение препода (webdata.teacher_
+    assignments) — без назначения препод теперь НЕ увидит группу (§ролей препод↔предмет
+    ↔группа, 3.3.1: раньше «предмет числится у препода» ошибочно значило «видны все
+    группы предмета»)."""
     client.post("/sync/push", json={"changes": {"lessons": [
         {"id": "L1", "group_name": group, "subject": subject, "type": "Практика",
          "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
-    return make_teacher(client, admin, subjects=[subject])
+    teach = make_teacher(client, admin, subjects=[subject])  # id детерминирован: teach:teacher1
+    r = client.post("/web/admin/groups", json={"name": group, "subjects": [subject]}, headers=admin)
+    #Группа могла уже существовать (создана раньше в этом же тесте) — тогда 409, не страшно.
+    assert r.status_code in (200, 409), r.text
+    r = client.post("/web/admin/group-hours",
+                    json={"group": group, "teachers": {subject: "teach:teacher1"}}, headers=admin)
+    assert r.status_code == 200, r.text
+    return teach
 
 
 def test_admin_broadcasts_to_all_groups(client):

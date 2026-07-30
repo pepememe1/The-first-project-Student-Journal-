@@ -30,7 +30,7 @@ from ..models import (
     Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
     CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
-    NotifyEvent, ParentLink,
+    NotifyEvent, ParentLink, SubjectHours,
     UserStatus, User, Lesson, direct_conversation_id,
 )
 
@@ -2357,9 +2357,10 @@ def my_groups(user: User = Depends(get_current_user), db: Session = Depends(get_
     if user.role == "admin":
         names = known
     else:
-        #Преподаватель: группы своей нагрузки (по занятиям его предметов) + курируемые.
+        #Преподаватель: НАЗНАЧЕННЫЕ ему группы (не любые с совпавшим предметом) + курируемые.
         from .. import webdata as W
-        names = sorted(set(W.teacher_groups(db, list(user.subjects or []))) | curated)
+        ty, ts = W.current_term(W.load_config(db))
+        names = sorted(set(W.teacher_group_names(db, user.id, ty, ts)) | curated)
     #Одна и та же группа могла записаться по-разному («К74/1» в занятиях и «к74/1» в
     #кураторстве) — в списке она двоилась. Схлопываем по регистру и пробелам, показывая
     #написание из СПРАВОЧНИКА групп: журнал ключуется именно им.
@@ -2401,11 +2402,17 @@ def ensure_announcements_channel(group_name: str, user: User = Depends(get_curre
         raise HTTPException(status_code=400, detail="Нужна группа")
     students = [u.id for u in db.query(User).filter(
         User.role == "student", User.group_name == group_name, User.deleted == False).all()]  # noqa: E712
-    subjects_here = {row.subject for row in db.query(Lesson).filter(
-        Lesson.group_name == group_name, Lesson.deleted == False).all() if row.subject}  # noqa: E712
+    #Авторы канала — преподаватели, которым НАЗНАЧЕНА эта группа (не «есть занятие с
+    #совпавшим названием предмета где-то ещё»), см. §ролей teacher_assignments.
+    from .. import webdata as W
+    ty, ts = W.current_term(W.load_config(db))
+    teacher_ids_here = {r.teacher_id for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group_name, SubjectHours.year == ty,
+        SubjectHours.semester == ts, SubjectHours.teacher_id != "",
+        SubjectHours.deleted == False).all()}  # noqa: E712
     teachers = [t.id for t in db.query(User).filter(
         User.role == "teacher", User.deleted == False).all()  # noqa: E712
-        if set(t.subjects or []) & subjects_here] if subjects_here else []
+        if t.id in teacher_ids_here]
     if user.role == "teacher" and user.id not in teachers:
         teachers.append(user.id)     #админ мог создать канал раньше, чем завёл занятия
     conv_id = f"sys:announce:{_gtoken(group_name)}"
@@ -2827,6 +2834,7 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
         lessons = [l for l in lessons
                   if (CR.parse_ddmmyyyy(l.date) or cutoff) <= cutoff]
     lessons.sort(key=lambda l: (l.number, l.hour))
+    scale_map = W.lesson_scale_map(db, lessons)
     rows = []
     for s in students:
         recs = W.student_records(db, s.surname, s.name, rep.group_name)
@@ -2837,7 +2845,7 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
         rows.append({
             "student": f"{s.surname} {s.name}".strip(),
             "grades": grades,
-            "average": W.average(lessons, recs, cfg),
+            "average": W.average(lessons, recs, cfg, scale=scale_map),
             "missed_hours": absc["всего"], "missed_count": absc["Н"],
         })
     return {"group": rep.group_name, "subject": subject,

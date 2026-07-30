@@ -5,7 +5,7 @@ test_vector_smart.py — «умный» Вектор на сервере: еди
 Проверяем, что веб-Вектор больше не отстаёт от десктопа: 8 интентов рукописной цепочки
 if заменены на общий классификатор. Числа берём из РЕАЛЬНЫХ данных (SQL), не из модели.
 """
-from conftest import make_admin, make_teacher
+from conftest import make_admin, make_teacher, assign_teacher
 from app.security import hash_password
 
 
@@ -97,6 +97,7 @@ def test_teacher_roster_and_groups(client):
     admin = make_admin(client)
     _seed(client, admin)
     th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
     _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
 
     r = _ask(client, th, "список студентов группы")
@@ -143,6 +144,8 @@ def test_vector_teacher_group_stats(client):
     _seed(client, admin)
     _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
     th = make_teacher(client, admin, login="t1", subjects=["Математика", "Физика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Физика")
 
     for q in ("какой средний по группам", "статистика по группе", "покажи оценки"):
         r = client.post("/web/vector/ask", json={"message": q}, headers=th)
@@ -159,6 +162,7 @@ def test_vector_teacher_counts_students(client):
     _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
     _mk_student(client, admin, "pe", "Петров", "Пётр", "ИС-21")
     th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
 
     r = client.post("/web/vector/ask", json={"message": "сколько студентов"}, headers=th)
     assert r.status_code == 200, r.text

@@ -67,3 +67,21 @@ def make_teacher(client, admin_headers, login="teacher1", password="teacherpass1
     r = client.post("/auth/login", json={"login": login, "password": password})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def assign_teacher(client, admin_headers, teacher_id: str, group: str, subject: str,
+                   year: str = "", semester: int = 0):
+    """Назначает преподавателя на (группа,предмет) — §ролей препод↔предмет↔группа (3.3.1).
+
+    С этой миграции ролевой скоуп преподавателя строится ТОЛЬКО по явным назначениям
+    (webdata.teacher_assignments: таблица subject_hours.teacher_id), не по факту «предмет
+    числится у препода» — без этого вызова он не увидит группу вообще (404/403/пустой
+    journal). Группу заводить/иметь Subject-предмет в каталоге НЕ обязательно — назначение
+    не проверяет Group.subjects, только принадлежность предмета преподавателю."""
+    payload = {"group": group, "teachers": {subject: teacher_id}}
+    if year:
+        payload["year"] = year
+    if semester:
+        payload["semester"] = semester
+    r = client.post("/web/admin/group-hours", json=payload, headers=admin_headers)
+    assert r.status_code == 200, r.text

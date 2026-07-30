@@ -133,18 +133,30 @@ def latest_exam_value(lesson_id: str, records: Dict[str, str]) -> str:
 
 def practice_average(items: Iterable[Tuple[str, str]],
                      records: Dict[str, str],
-                     cfg: Optional[dict] = None) -> float:
+                     cfg: Optional[dict] = None,
+                     scale="5") -> float:
     """
     items — итерируемое из пар (lesson_id, lesson_type).
     records — {lesson_id|retake_key: оценка}.
-    cfg — config (методика). Возвращает средний балл, округлённый до 2 знаков.
+    cfg — config (методика). scale — шкала преподавателя, ведущего эти занятия (§ролей,
+    3.3.1) — сырое значение оценки конвертируется в 5-балльное ПЕРЕД суммированием
+    (to_five_point), поэтому средний ВСЕГДА в привычной 5-балльной, независимо от того,
+    в чём препод вводил (100-балльная/буквенная/...). scale="5" (умолчание) даёт
+    результат бит-в-бит как раньше — to_five_point(v, "5") это lead_num(v).
+    scale может быть СТРОКОЙ (одна шкала на все items — журнал одного предмета, где
+    препод один) либо СЛОВАРЁМ {lesson_id: scale} — нужен там, где items смешивает
+    занятия РАЗНЫХ предметов/преподавателей разом (общий средний студента/группы по
+    всем предметам), и каждое занятие может вести препод со своей шкалой.
+    Возвращает средний балл, округлённый до 2 знаков.
     """
     c = avg_config(cfg)
     total, count = 0.0, 0
+    scale_map = scale if isinstance(scale, dict) else None
     for lid, ltype in items:
         if is_practice(ltype):
             v = records.get(lid)
-            num = lead_num(v) if v else None
+            lscale = scale_map.get(lid, DEFAULT_SCALE) if scale_map is not None else scale
+            num = to_five_point(v, lscale) if v else None
             if num is not None:
                 total += num
                 count += 1
@@ -163,3 +175,125 @@ def practice_average(items: Iterable[Tuple[str, str]],
 def pairs_from_objects(lessons) -> List[Tuple[str, str]]:
     """Адаптер для core.Lesson: [(l.id, l.type), ...]."""
     return [(l.id, l.type) for l in lessons]
+
+
+# ── Кастомные шкалы оценок (§ролей, 3.3.1) ──────────────────────────────────────────
+# Каждый преподаватель может выбрать СВОЮ шкалу ввода/просмотра (User.prefs
+# ["grading_scale"], self-service, как тема/цвет плашки). "5" — умолчание и ведёт себя
+# БУКВА В БУКВУ как раньше (identity через уже существующий lead_num) — препод, ничего
+# не выбравший, не заметит разницы. Средний балл/итоговая — ВСЕГДА в переводе на
+# 5-балльную (см. practice_average(scale=...)), чтобы сохранить сопоставимость между
+# преподавателями/предметами, статистику и ответы Вектора едиными.
+#
+# Экзамены/пересдачи НЕ переводятся на кастомные шкалы (осознанное сужение объёма):
+# у них уже есть свой toggle (avg_include_exam) и своя семантика зачёта/пересдачи,
+# смешивать её с произвольной шкалой — отдельная задача с открытыми вопросами
+# («что значит "3 (пересдача)" на буквенной шкале?»), не блокирующая эту.
+
+DEFAULT_SCALE = "5"
+
+
+def _is_failed_5(raw: str) -> bool:
+    return is_failed(raw)
+
+
+def _to_five_100(raw: str) -> Optional[float]:
+    """0..100 → 5-балльная: пороги 90/75/60 (стандартная вузовская привязка)."""
+    if not raw:
+        return None
+    head = raw.strip().split()[0] if raw.strip() else ""
+    try:
+        n = float(head)
+    except ValueError:
+        return None
+    if not (0 <= n <= 100):
+        return None
+    if n >= 90:
+        return 5.0
+    if n >= 75:
+        return 4.0
+    if n >= 60:
+        return 3.0
+    return 2.0
+
+
+def _is_failed_100(raw: str) -> bool:
+    v = _to_five_100(raw)
+    return v is not None and v <= 2.0
+
+
+_LETTER_TO_FIVE = {"A": 5.0, "B": 4.0, "C": 3.0, "D": 2.0, "F": 2.0}
+
+
+def _to_five_letter(raw: str) -> Optional[float]:
+    if not raw:
+        return None
+    head = raw.strip().split()[0].upper() if raw.strip() else ""
+    return _LETTER_TO_FIVE.get(head)
+
+
+def _is_failed_letter(raw: str) -> bool:
+    if not raw:
+        return False
+    head = raw.strip().split()[0].upper() if raw.strip() else ""
+    return head in ("D", "F")
+
+
+def _to_five_pass_fail(raw: str) -> Optional[float]:
+    #Зачёт/незачёт в числовой средний не входит вовсе — та же логика, что у экзаменов
+    #с выключенным avg_include_exam: это статус, а не балл.
+    return None
+
+
+def _is_failed_pass_fail(raw: str) -> bool:
+    v = (raw or "").strip().lower()
+    return v.startswith("не") or v.startswith("незач")
+
+
+#Реестр шкал: values — допустимые сырые значения (для UI-селектов ввода), to_five/
+#is_failed — функции конвертации. Ключ — то же значение, что хранится в User.prefs
+#["grading_scale"].
+SCALES = {
+    "5": {
+        "label": "5-балльная",
+        "values": ("2", "3", "4", "5"),
+        "to_five": lead_num,
+        "is_failed": _is_failed_5,
+    },
+    "100": {
+        "label": "100-балльная",
+        "values": tuple(str(i) for i in range(0, 101)),
+        "to_five": _to_five_100,
+        "is_failed": _is_failed_100,
+    },
+    "letter": {
+        "label": "Буквенная (A–F)",
+        "values": ("A", "B", "C", "D", "F"),
+        "to_five": _to_five_letter,
+        "is_failed": _is_failed_letter,
+    },
+    "pass_fail": {
+        "label": "Зачёт / незачёт",
+        "values": ("Зачтено", "Не зачтено"),
+        "to_five": _to_five_pass_fail,
+        "is_failed": _is_failed_pass_fail,
+    },
+}
+
+
+def scale_values(scale: str = DEFAULT_SCALE) -> tuple:
+    """Допустимые сырые значения шкалы — для UI-селектора ввода оценки."""
+    return SCALES.get(scale, SCALES[DEFAULT_SCALE])["values"]
+
+
+def to_five_point(raw_value: str, scale: str = DEFAULT_SCALE) -> Optional[float]:
+    """Сырое значение оценки (в ШКАЛЕ ПРЕПОДА) → 5-балльный эквивалент для среднего/
+    итоговой. None — значение не распознано этой шкалой (не считается)."""
+    fn = SCALES.get(scale, SCALES[DEFAULT_SCALE])["to_five"]
+    return fn(raw_value)
+
+
+def is_failed_scaled(raw_value: str, scale: str = DEFAULT_SCALE) -> bool:
+    """Провалена ли оценка — версия is_failed(), учитывающая шкалу препода."""
+    fn = SCALES.get(scale, SCALES[DEFAULT_SCALE])["is_failed"]
+    return fn(raw_value)
