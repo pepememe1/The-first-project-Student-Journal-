@@ -93,10 +93,32 @@ def test_start_is_idempotent(api):
 def test_local_db_is_separate_file():
     """Локальная база приложения — ОТДЕЛЬНЫЙ файл, а не десктопный vsgutu_grades.db:
     у них разные схемы, и смешивать их нельзя."""
-    url = local_api.local_db_url()
+    url = local_api.local_db_url("ivanov")
     assert url.startswith("sqlite:///")
-    assert "local_app.db" in url
+    assert "local_app_" in url
     assert "vsgutu_grades" not in url
+
+
+def test_copy_is_separate_per_user():
+    """Файл СВОЙ на каждого вошедшего. Раньше он был один на машину, и после сеанса
+    преподавателя в нём оставались оценки всей группы — следующий вошедший студент их
+    читал (найдено на живой машине: 44 оценки шести студентов)."""
+    a = local_api.local_db_file("ivanov")
+    b = local_api.local_db_file("petrov")
+    assert a != b, "общий файл = чужие данные следующему вошедшему"
+    assert "ivanov" not in a, "логин — тоже ПДн, в имени файла ему не место"
+
+
+def test_copy_is_encrypted_when_driver_present():
+    """Копия ШИФРУЕТСЯ (SQLCipher), ключ — под DPAPI. Без этого ФИО, группы и оценки
+    читались из файла любым просмотрщиком, в т.ч. с украденного диска."""
+    try:
+        import sqlcipher3  # noqa: F401
+    except Exception:
+        pytest.skip("драйвер sqlcipher3 не установлен в этом окружении")
+    assert local_api._local_db_key(), "ключ обязан заводиться, если драйвер есть"
+    local_api.prepare_env()
+    assert os.environ.get("GRADEBOOK_DB_KEY"), "сервер обязан получить ключ"
 
 
 # ── Локальная сессия ────────────────────────────────────────────────────────────────

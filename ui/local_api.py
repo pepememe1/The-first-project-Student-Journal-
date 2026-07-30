@@ -83,6 +83,63 @@ def local_db_url(login: str = "") -> str:
     return "sqlite:///" + local_db_file(login).replace("\\", "/")
 
 
+def _drop_plaintext_copy(login: str = "") -> None:
+    """Снять НЕЗАШИФРОВАННУЮ копию, оставшуюся от прежних версий.
+
+    Драйвер не откроет открытый файл ключом («file is not a database»), а копия — это
+    кэш: её содержимое полностью восстанавливается зеркалом с сервера. Поэтому удалить
+    честнее, чем пытаться конвертировать: ни одна правка пользователя тут не живёт."""
+    path = local_db_file(login)
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path, "rb") as f:
+            if not f.read(16).startswith(b"SQLite format 3"):
+                return          #уже зашифрована — не трогаем
+    except OSError:
+        return
+    _LOG.info("[local-api] прежняя НЕЗАШИФРОВАННАЯ копия удалена — будет скачана заново")
+    wipe_local_db(login)
+
+
+def _local_db_key() -> str:
+    """Ключ шифрования локальной копии ('' — шифровать нечем, работаем как раньше).
+
+    Заводится ОДИН раз на устройство и хранится защищённым DPAPI: сам файл ключа
+    бесполезен на другом компьютере и под другой учётной записью Windows. Ключ случайный —
+    не производный от пароля: пароль в программе не хранится (§4.7), и привязка к нему
+    сделала бы копию нечитаемой после смены пароля.
+
+    Драйвер отсутствует (запуск из исходников без sqlcipher3) — возвращаем пустую строку:
+    интерфейс важнее, чем упасть на старте, а сервер сам сообщит, что база без шифра. В
+    .exe драйвер вшит (см. GradeBookAI.spec), поэтому пользователю ничего доустанавливать
+    не нужно."""
+    try:
+        import sqlcipher3  # noqa: F401 — проверяем ДОСТУПНОСТЬ драйвера
+    except Exception:
+        _LOG.warning("[local-api] драйвера sqlcipher3 нет — копия базы без шифрования")
+        return ""
+    try:
+        import binascii
+        import os as _os
+        import app_paths
+        import security
+        path = app_paths.data_file("local_app.key")
+        if _os.path.exists(path):
+            with open(path, "rb") as f:
+                key = security.os_unprotect(f.read())
+            if key:
+                return key.decode("ascii")
+            _LOG.warning("[local-api] ключ копии не расшифровался — заводим новый")
+        key = binascii.hexlify(_os.urandom(32))
+        with open(path, "wb") as f:
+            f.write(security.os_protect(key))
+        return key.decode("ascii")
+    except Exception as e:
+        _LOG.warning(f"[local-api] ключ шифрования не получен: {e}")
+        return ""
+
+
 def wipe_local_db(login: str = "") -> bool:
     """Стереть локальную копию — ПО ЯВНОМУ ТРЕБОВАНИЮ, а НЕ при каждом выходе.
 
@@ -152,10 +209,18 @@ def prepare_env() -> None:
     except Exception:
         pass
     os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url(login))
-    #Локальная база — файл на диске пользователя. Шифрование БД (SQLCipher) здесь
-    #НЕ включаем: ключ пришлось бы хранить рядом с самой базой, что защиты не даёт.
-    #ПДн на десктопе защищает существующий слой (Fernet + DPAPI, §6) — его и оставляем.
-    os.environ.pop("GRADEBOOK_DB_KEY", None)
+    #🔒 ЛОКАЛЬНАЯ КОПИЯ ШИФРУЕТСЯ (SQLCipher, тот же механизм, что на боевом сервере).
+    #Раньше здесь стоял pop() с рассуждением «ключ пришлось бы держать рядом с базой, а
+    #значит защиты не будет». Рассуждение неверное: ключ лежит не «рядом», а под Windows
+    #DPAPI — расшифровать его может только ЭТА учётная запись Windows на ЭТОЙ машине.
+    #Ровно так в проекте уже защищён ключ Fernet (§6). Без этого копия была обычным
+    #SQLite: ФИО, группы и оценки читались любым просмотрщиком с флешки.
+    key = _local_db_key()
+    if key:
+        os.environ["GRADEBOOK_DB_KEY"] = key
+        _drop_plaintext_copy(login)
+    else:
+        os.environ.pop("GRADEBOOK_DB_KEY", None)
 
 
 class LocalAPI:

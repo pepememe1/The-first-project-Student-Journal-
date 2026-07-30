@@ -46,6 +46,12 @@ hidden += ['grading', 'subjects', 'server_control', 'fonts', 'app_paths', '_boot
 # подхватит. Обнаружено прогоном СОБРАННОГО Nuitka-exe (та же схема сборки) — там без
 # явного include local_api не поднимался вовсе.
 hidden += ['reminder_parse']
+# sqlcipher3 — ШИФРОВАНИЕ локальной копии базы (ui/local_api.py). Модуль самодостаточный:
+# один .pyd со статически влинкованным SQLCipher, внешних DLL не тянет, поэтому вшивается
+# в exe как обычная зависимость — ПОЛЬЗОВАТЕЛЮ КАЧАТЬ НИЧЕГО НЕ НАДО. Импортируется
+# ЛЕНИВО внутри server/app/db.py (а тот лежит в datas сырыми файлами), поэтому статический
+# анализ его не найдёт — нужен явный hiddenimport, иначе копия молча останется открытой.
+hidden += ['sqlcipher3', 'sqlcipher3.dbapi2']
 # пакеты
 for pkg in ('vector', 'schedule'):
     hidden += collect_submodules(pkg)
