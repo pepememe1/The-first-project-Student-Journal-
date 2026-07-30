@@ -170,3 +170,118 @@ def test_local_session_registers_auth_session(api):
         assert row.login == "t" and row.kind == "access"
     finally:
         db.close()
+
+
+# ── Самолечение локальной копии ─────────────────────────────────────────────────────
+def test_unreadable_copy_is_moved_aside_not_deleted(tmp_path, monkeypatch):
+    """Нечитаемая копия НЕ имеет права ронять программу.
+
+    Копия базы — производные данные (истина на сервере, сюда она зеркалится), поэтому
+    единственно верное поведение — начать её заново. Поймано на живой машине: копию
+    однажды зашифровали SQLCipher, а следующий запуск шёл из окружения БЕЗ драйвера —
+    обычный sqlite видел мусор, сервер падал на старте («file is not a database»), и
+    вместе с ним не открывалась ВСЯ программа.
+
+    ⚠️ Файл именно ПЕРЕИМЕНОВЫВАЕТСЯ: в нём могли остаться офлайн-правки, не уехавшие
+    на сервер. Вернуть их из «.unreadable» можно, из небытия — нет."""
+    fake = tmp_path / "local_app_test.db"
+    #Байты «не SQLite» — ровно то, что видит обычный sqlite в зашифрованном файле.
+    fake.write_bytes(b"\x96\xb1\x00\x06not-a-database")
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"local_app_test.db{suffix}").write_bytes(b"garbage")
+    monkeypatch.setattr(local_api, "local_db_file", lambda login="": str(fake))
+
+    local_api._ensure_copy_openable("", encrypted=False)
+
+    assert not fake.exists(), "нечитаемая копия должна уйти с дороги"
+    saved = list(tmp_path.glob("local_app_test.db.unreadable-*"))
+    assert saved, "старый файл обязан СОХРАНИТЬСЯ, а не удалиться"
+    #Спутники -wal/-shm тоже уносим: оставшись рядом, они испортят новый файл.
+    assert not (tmp_path / "local_app_test.db-wal").exists()
+    assert not (tmp_path / "local_app_test.db-shm").exists()
+
+
+def test_healthy_copy_is_left_alone(tmp_path, monkeypatch):
+    """Исправную копию не трогаем: иначе каждый запуск терял бы офлайн-данные."""
+    import sqlite3
+    good = tmp_path / "local_app_ok.db"
+    con = sqlite3.connect(str(good))
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(local_api, "local_db_file", lambda login="": str(good))
+
+    local_api._ensure_copy_openable("", encrypted=False)
+
+    assert good.exists(), "рабочую копию убирать нельзя"
+    assert not list(tmp_path.glob("*.unreadable-*"))
+
+
+def test_env_file_key_cannot_leak_into_the_local_copy(monkeypatch, tmp_path):
+    """Ключ из `server/.env` НЕ должен шифровать личную копию пользователя.
+
+    Серверный пакет читает `.env` через `os.environ.setdefault` — то есть занимает любую
+    переменную, которой нет. Пока `prepare_env` УДАЛЯЛА `GRADEBOOK_DB_KEY`, место
+    освобождалось, и копию начинал шифровать чужой ключ из `.env` вместо DPAPI-ключа
+    этого устройства.
+
+    Последствие было хуже утечки: копия, зашифрованная запуском С драйвером sqlcipher3,
+    не открывалась запуском БЕЗ него — локальный сервер падал на старте («file is not a
+    database»), а с ним не открывалась ВСЯ программа. Поймано на живой машине.
+
+    Поэтому переменная задаётся ЯВНО (пустой строкой), и `setdefault` её не перебьёт."""
+    monkeypatch.setattr(local_api, "_local_db_key", lambda: "")
+    monkeypatch.setenv("GRADEBOOK_DB_KEY", "ключ-из-чужого-env")
+    monkeypatch.setenv("GRADEBOOK_DB_URL", f"sqlite:///{tmp_path / 'x.db'}")
+
+    local_api.prepare_env()
+
+    assert os.environ.get("GRADEBOOK_DB_KEY") == "", "ключ обязан быть ПУСТЫМ, а не отсутствовать"
+    assert "GRADEBOOK_DB_KEY" in os.environ, "переменная должна СУЩЕСТВОВАТЬ, иначе .env её займёт"
+
+
+def test_own_key_is_used_when_driver_present(monkeypatch, tmp_path):
+    """Свой DPAPI-ключ устройства побеждает: копия шифруется им, а не значением из `.env`."""
+    monkeypatch.setattr(local_api, "_local_db_key", lambda: "deadbeef")
+    monkeypatch.setattr(local_api, "_drop_plaintext_copy", lambda login: None)
+    monkeypatch.setenv("GRADEBOOK_DB_KEY", "ключ-из-чужого-env")
+    monkeypatch.setenv("GRADEBOOK_DB_URL", f"sqlite:///{tmp_path / 'y.db'}")
+
+    local_api.prepare_env()
+
+    assert os.environ.get("GRADEBOOK_DB_KEY") == "deadbeef"
+
+
+def test_encrypted_and_plain_copies_have_different_names(monkeypatch):
+    """Зашифрованная и открытая копии — РАЗНЫЕ файлы.
+
+    Одна машина может запускать программу двумя способами: собранным .exe (в нём вшит
+    `sqlcipher3`, копия шифруется) и из исходников (драйвера может не быть, копия
+    открытая). При общем имени они дрались за один файл: копию от .exe запуск из
+    исходников открыть не мог и падал со «file is not a database» — и наоборот.
+    Поймано на живой машине; разные имена разводят их навсегда."""
+    plain = local_api.local_db_file("ivanov", encrypted=False)
+    enc = local_api.local_db_file("ivanov", encrypted=True)
+    assert plain != enc
+    assert enc.endswith(".enc.db") and not plain.endswith(".enc.db")
+
+
+def test_plaintext_cleanup_targets_the_plain_file(monkeypatch, tmp_path):
+    """Уборка открытой копии обязана целиться в ОТКРЫТОЕ имя.
+
+    После разделения имён «удалить незашифрованную» без явного указания снесло бы
+    зашифрованный файл — тот самый, которым программа сейчас работает."""
+    monkeypatch.setattr(local_api, "_local_db_key", lambda: "deadbeef")
+    monkeypatch.setattr(local_api, "local_db_file",
+                        lambda login="", encrypted=None: str(tmp_path / "plain.db")
+                        if encrypted is False else str(tmp_path / "enc.enc.db"))
+    (tmp_path / "plain.db").write_bytes(b"SQLite format 3\x00" + b"0" * 64)
+    (tmp_path / "enc.enc.db").write_bytes(b"\x01\x02random-encrypted")
+
+    #БЕЗ подмены `wipe_local_db`: проверяем НАСТОЯЩЕЕ удаление. Подменённая заглушка
+    #скрыла бы ровно ту ошибку, ради которой тест и написан — уборка звала стирание без
+    #указания файла и сносила бы зашифрованную копию, а открытая с ПДн оставалась лежать.
+    local_api._drop_plaintext_copy("ivanov")
+
+    assert not (tmp_path / "plain.db").exists(), "открытая копия с ПДн обязана исчезнуть"
+    assert (tmp_path / "enc.enc.db").exists(), "зашифрованную копию трогать нельзя"

@@ -49,10 +49,10 @@ def _run_server_entrypoint():
     uvicorn.run("app.main:app", host="0.0.0.0", port=port)
 
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QIcon
-
-from main_window import MainAppWindow
+#⚠️ Qt импортируется ЛЕНИВО, внутри запасного пути (`_run_qt_shell`). На основном пути
+#(окно на системном движке Edge) он не нужен вовсе, а импорт на уровне модуля затянул бы
+#PySide6 и Chromium внутри него в сборку — то есть ~150 МБ ради кода, который не
+#выполняется. Сборщик ориентируется на реальные импорты, а не на намерения.
 
 
 def _get_app_dir() -> str:
@@ -61,7 +61,9 @@ def _get_app_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def get_icon() -> QIcon:
+def get_icon():
+    """Иконка приложения для Qt-оболочки (QIcon). Импорт Qt внутри — см. выше."""
+    from PySide6.QtGui import QIcon
     #onefile: иконка распакована рядом со скомпилированным модулем (Nuitka) или в
     #sys._MEIPASS (PyInstaller); рядом с .exe её нет. Проверяем все базы.
     bases = [_get_app_dir(), os.path.dirname(os.path.abspath(__file__))]
@@ -98,17 +100,14 @@ def _start_local_api_background():
     threading.Thread(target=_boot, name="gb-local-api-boot", daemon=True).start()
 
 
-def main():
-    #Фоновый сервер для собранного .exe: если запущены с --run-server, поднимаем сам
-    #сервер (uvicorn) и НЕ открываем GUI. Проверяем это ПЕРВЫМ делом.
-    if "--run-server" in sys.argv:
-        _run_server_entrypoint()
-        return
+def _run_qt_shell():
+    """ЗАПАСНАЯ оболочка на Qt: нативные экраны, как до перехода на системный движок.
 
-    #Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
-    #(см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
-    from core import DBManager
-    DBManager.init()
+    Открывается, только если WebView2 недоступен (нет Runtime) или не запустился. Весь
+    Qt импортируется ЗДЕСЬ, а не на уровне модуля: на основном пути он не нужен, и
+    сборщик не должен тянуть PySide6 с Chromium внутри (~150 МБ) ради кода, который не
+    выполняется."""
+    from PySide6.QtWidgets import QApplication
 
     #Локальное серверное приложение для ОБЩЕГО Vue-интерфейса (см. ui/local_api.py).
     #Поднимаем ФОНОМ и не ждём результата: первый запуск инициализирует базу и занимает
@@ -174,6 +173,40 @@ def main():
     app.aboutToQuit.connect(_on_quit)
 
     sys.exit(app.exec())
+
+
+def main():
+    #Фоновый сервер для собранного .exe: если запущены с --run-server, поднимаем сам
+    #сервер (uvicorn) и НЕ открываем GUI. Проверяем это ПЕРВЫМ делом.
+    if "--run-server" in sys.argv:
+        _run_server_entrypoint()
+        return
+
+    #Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
+    #(см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
+    from core import DBManager
+    DBManager.init()
+
+    #━━ ВЫБОР ОБОЛОЧКИ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #Интерфейс целиком веб-овый, поэтому окно можно рисовать СИСТЕМНЫМ движком Edge
+    #(WebView2) вместо Chromium внутри Qt — это ~150 МБ разницы в .exe.
+    #
+    #Системный движок — УМОЛЧАНИЕ. Qt остаётся запасным путём: если WebView2 недоступен
+    #(нет Runtime на старой машине) или не запустился, ниже открывается прежняя оболочка.
+    #Откат делается ТОЛЬКО до появления окна — `webview.start()` забирает поток, и после
+    #показа окна второй интерфейс в одном запуске уже невозможен.
+    #Принудительно вернуться на Qt: `GRADEBOOK_UI=qt` (пригодится, если что-то поедет).
+    if (os.environ.get("GRADEBOOK_UI") or "").strip().lower() not in ("qt", "qt5", "qt6",
+                                                                     "native"):
+        try:
+            import webview2_app
+            if webview2_app.run():
+                return                      #окно закрыто — программа отработала
+            print("[ui] WebView2 недоступен — открываем прежнюю оболочку")
+        except Exception as e:      # noqa: BLE001 — отказ движка не имеет права
+            print(f"[ui] WebView2 не запустился ({e}) — открываем прежнюю оболочку")
+
+    _run_qt_shell()
 
 
 if __name__ == "__main__":

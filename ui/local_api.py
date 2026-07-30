@@ -63,7 +63,7 @@ def _free_loopback_port() -> int:
         s.close()
 
 
-def local_db_file(login: str = "") -> str:
+def local_db_file(login: str = "", encrypted=None) -> str:
     """Путь к локальной базе КОНКРЕТНОГО пользователя.
 
     ⚠️ Файл СВОЙ на каждого вошедшего, и это не удобство, а защита. Раньше файл был один
@@ -71,11 +71,21 @@ def local_db_file(login: str = "") -> str:
     преподавателя в базе оставались оценки всей группы, а следующий вошедший студент
     получал к ним доступ (проверено: 44 оценки шести студентов на машине студента).
     Имя файла — хеш логина, а не сам логин: имя учётной записи — тоже персональные
-    данные, и светить его в имени файла незачем."""
+    данные, и светить его в имени файла незачем.
+
+    ⚠️ У ЗАШИФРОВАННОЙ копии ДРУГОЕ ИМЯ («.enc.db»). Одна и та же машина может запускать
+    программу двумя способами: собранным .exe (в нём вшит `sqlcipher3`, копия шифруется) и
+    из исходников (драйвера может не быть, копия открытая). Пока имя было общим, эти два
+    запуска дрались за один файл: копию, зашифрованную .exe, запуск из исходников открыть
+    не мог и падал со «file is not a database» — и наоборот. Разные имена разводят их
+    навсегда, а не лечат каждый раз заново."""
     import hashlib
     import app_paths
     who = hashlib.sha256((login or "anon").encode("utf-8")).hexdigest()[:16]
-    return app_paths.data_file(f"local_app_{who}.db")
+    if encrypted is None:
+        encrypted = bool(_local_db_key())
+    suffix = ".enc" if encrypted else ""
+    return app_paths.data_file(f"local_app_{who}{suffix}.db")
 
 
 def local_db_url(login: str = "") -> str:
@@ -86,10 +96,15 @@ def local_db_url(login: str = "") -> str:
 def _drop_plaintext_copy(login: str = "") -> None:
     """Снять НЕЗАШИФРОВАННУЮ копию, оставшуюся от прежних версий.
 
-    Драйвер не откроет открытый файл ключом («file is not a database»), а копия — это
-    кэш: её содержимое полностью восстанавливается зеркалом с сервера. Поэтому удалить
-    честнее, чем пытаться конвертировать: ни одна правка пользователя тут не живёт."""
-    path = local_db_file(login)
+    Зовётся, только когда шифровать ЕСТЬ ЧЕМ. В этом случае открытая копия — чистая
+    обуза: в ней лежат ФИО, группы и оценки, читаемые любым просмотрщиком (в том числе с
+    украденного диска), а нужды в ней уже нет — рабочая копия зашифрована и лежит под
+    ДРУГИМ именем. Содержимое не теряется: копия это кэш, зеркало скачает его заново.
+
+    ⚠️ Целимся в НЕЗАШИФРОВАННОЕ имя явно (`encrypted=False`). Раньше имя было общим, и
+    после разделения имён функция чистила бы зашифрованный файл — то есть ровно тот,
+    которым сейчас работает программа."""
+    path = local_db_file(login, encrypted=False)
     try:
         if not os.path.exists(path):
             return
@@ -98,8 +113,19 @@ def _drop_plaintext_copy(login: str = "") -> None:
                 return          #уже зашифрована — не трогаем
     except OSError:
         return
-    _LOG.info("[local-api] прежняя НЕЗАШИФРОВАННАЯ копия удалена — будет скачана заново")
-    wipe_local_db(login)
+    #⚠️ ЯВНО указываем, что стираем ОТКРЫТУЮ копию. Без этого удалялся бы файл «по
+    #умолчанию» — то есть зашифрованный, тот самый, с которым программа сейчас работает.
+    if wipe_local_db(login, encrypted=False):
+        _LOG.info("[local-api] прежняя НЕЗАШИФРОВАННАЯ копия удалена — данные приедут заново")
+    else:
+        _LOG.warning("[local-api] НЕЗАШИФРОВАННУЮ копию удалить не удалось — она содержит "
+                     "персональные данные, удалите файл вручную")
+
+
+#Ключ спрашивают часто (в т.ч. на каждое вычисление имени файла), а ответ за время
+#работы процесса не меняется: драйвер не появится, ключ устройства не переедет. Без кеша
+#в лог сыпалось по шесть одинаковых предупреждений на один запуск.
+_key_cache = None
 
 
 def _local_db_key() -> str:
@@ -114,10 +140,14 @@ def _local_db_key() -> str:
     интерфейс важнее, чем упасть на старте, а сервер сам сообщит, что база без шифра. В
     .exe драйвер вшит (см. GradeBookAI.spec), поэтому пользователю ничего доустанавливать
     не нужно."""
+    global _key_cache
+    if _key_cache is not None:
+        return _key_cache
     try:
         import sqlcipher3  # noqa: F401 — проверяем ДОСТУПНОСТЬ драйвера
     except Exception:
         _LOG.warning("[local-api] драйвера sqlcipher3 нет — копия базы без шифрования")
+        _key_cache = ""
         return ""
     try:
         import binascii
@@ -129,18 +159,31 @@ def _local_db_key() -> str:
             with open(path, "rb") as f:
                 key = security.os_unprotect(f.read())
             if key:
-                return key.decode("ascii")
-            _LOG.warning("[local-api] ключ копии не расшифровался — заводим новый")
+                _key_cache = key.decode("ascii")
+                return _key_cache
+            #⚠️ НЕ ЗАВОДИМ НОВЫЙ КЛЮЧ поверх существующего файла. Раньше здесь стояло
+            #«не расшифровался — заводим новый», и это тихо УНИЧТОЖАЛО офлайн-копию:
+            #новый ключ не подходит к уже зашифрованной базе, она превращается в мусор
+            #(«hmac check failed»), а вместе с ней пропадает работа без интернета.
+            #Причина сбоя DPAPI бывает временной (другая учётная запись Windows, профиль
+            #ещё не разблокирован), и терять данные из-за неё нельзя. Честно работаем без
+            #шифрования этот сеанс; ключ и копия остаются нетронутыми до выяснения.
+            _LOG.warning("[local-api] ключ копии не расшифровался — НЕ трогаем его и не "
+                         "перезаписываем базу; этот сеанс без шифрования копии")
+            _key_cache = ""
+            return ""
         key = binascii.hexlify(_os.urandom(32))
         with open(path, "wb") as f:
             f.write(security.os_protect(key))
-        return key.decode("ascii")
+        _key_cache = key.decode("ascii")
+        return _key_cache
     except Exception as e:
         _LOG.warning(f"[local-api] ключ шифрования не получен: {e}")
+        _key_cache = ""
         return ""
 
 
-def wipe_local_db(login: str = "") -> bool:
+def wipe_local_db(login: str = "", encrypted=None) -> bool:
     """Стереть локальную копию — ПО ЯВНОМУ ТРЕБОВАНИЮ, а НЕ при каждом выходе.
 
     ⚠️ Стирать на выходе НЕЛЬЗЯ: копия и есть offline-first. Без неё следующий запуск без
@@ -150,9 +193,13 @@ def wipe_local_db(login: str = "") -> bool:
     следующий вошедший просто не открывает. Эта функция — для «выйти и забыть меня»,
     отвязки устройства и очистки перед передачей компьютера другому человеку.
     Вместе с файлом уходит и метка дельты (она внутри базы), поэтому следующий вход
-    честно скачает копию заново."""
+    честно скачает копию заново.
+
+    `encrypted` — какую именно копию стирать (None = ту, с которой работаем сейчас).
+    Явный выбор нужен уборке открытой копии: у зашифрованной ДРУГОЕ имя, и без указания
+    функция стёрла бы рабочий файл вместо мусорного."""
     import os
-    path = local_db_file(login)
+    path = local_db_file(login, encrypted=encrypted)
     ok = True
     for suffix in ("", "-wal", "-shm"):
         try:
@@ -220,7 +267,98 @@ def prepare_env() -> None:
         os.environ["GRADEBOOK_DB_KEY"] = key
         _drop_plaintext_copy(login)
     else:
-        os.environ.pop("GRADEBOOK_DB_KEY", None)
+        #⚠️ ПУСТАЯ СТРОКА, а не удаление переменной. Серверный пакет читает `server/.env`
+        #через `os.environ.setdefault` — то есть подставляет СВОЙ ключ в любую переменную,
+        #которой нет. Удалив её, мы освобождали место, и локальную копию начинал шифровать
+        #ключ из `.env` (чужой, общий, вообще не наш DPAPI-ключ устройства).
+        #Последствие было хуже утечки: копия, зашифрованная запуском С драйвером
+        #sqlcipher3, не открывалась запуском БЕЗ него — сервер падал на старте
+        #(«file is not a database»), и вместе с ним не открывалась вся программа.
+        #Переменная, заданная явно (пусть и пустой), `setdefault` уже не перебьёт.
+        os.environ["GRADEBOOK_DB_KEY"] = ""
+    #Копия могла остаться от запуска с ДРУГИМ набором пакетов (например, была
+    #зашифрована SQLCipher, а сейчас драйвера нет) — тогда её нельзя даже открыть.
+    _ensure_copy_openable(login, bool(key))
+
+
+def _ensure_copy_openable(login: str, encrypted: bool) -> None:
+    """Убрать в сторону локальную копию, которую НЕЧЕМ открыть, — и дать создать новую.
+
+    Копия базы — ПРОИЗВОДНЫЕ данные: истина живёт на сервере, а сюда она зеркалится
+    (`local_mirror`). Поэтому нечитаемый файл это не потеря, а мусор, и единственно
+    правильное поведение — начать копию заново. Без этой проверки сервер падал на старте
+    («file is not a database»), а вместе с ним не открывалась ВСЯ программа: ровно так и
+    случилось на машине, где копию однажды зашифровали, а потом запустили из окружения
+    без `sqlcipher3`.
+
+    ⚠️ ПЕРЕИМЕНОВЫВАЕМ, а не удаляем. Файл может оказаться единственным местом, где ещё
+    лежат офлайн-правки, не уехавшие на сервер; вернуть их из «.unreadable» можно, из
+    небытия — нет. Заодно уносим -wal/-shm: оставшись рядом, они испортят новый файл."""
+    path = local_db_file(login)
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return
+    if _copy_opens(path, encrypted):
+        return
+    import time
+    #⚠️ ВСЁ ИЛИ НИЧЕГО. Если хоть один файл занят другим процессом, отступаем целиком:
+    #унести основной файл и оставить его -wal рядом значит собрать «разорванную» копию,
+    #которую следующий запуск тоже не откроет. А занятый файл вдобавок означает, что базу
+    #прямо сейчас держит другой экземпляр программы — тогда наш вердикт «нечитаема»
+    #и вовсе ненадёжен, и правильнее ничего не трогать.
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    present = [path + s for s in ("", "-wal", "-shm") if os.path.exists(path + s)]
+    for src in present:
+        try:
+            with open(src, "ab"):
+                pass                    #проверка «файл не занят», не изменяя содержимое
+        except OSError as e:
+            _LOG.warning(f"[local-api] копию держит другой процесс — не трогаем её ({e})")
+            return
+    moved = []
+    for src in present:
+        try:
+            os.replace(src, f"{src}.unreadable-{stamp}")
+            moved.append(os.path.basename(src))
+        except OSError as e:
+            #Успели унести часть — возвращаем обратно, чтобы не оставить половину.
+            for done in moved:
+                try:
+                    os.replace(os.path.join(os.path.dirname(path),
+                                            f"{done}.unreadable-{stamp}"),
+                               os.path.join(os.path.dirname(path), done))
+                except OSError:
+                    pass
+            _LOG.warning(f"[local-api] не удалось убрать нечитаемую копию {src}: {e}")
+            return
+    _LOG.warning("[local-api] локальная копия нечитаема — начинаем заново "
+                 f"(старая сохранена как *.unreadable-{stamp}): {', '.join(moved)}")
+
+
+def _copy_opens(path: str, encrypted: bool) -> bool:
+    """Открывается ли файл тем же способом, каким его откроет серверный пакет."""
+    key = os.environ.get("GRADEBOOK_DB_KEY", "") if encrypted else ""
+    try:
+        if key:
+            try:
+                import sqlcipher3 as _sq
+            except Exception:
+                import sqlite3 as _sq          #драйвера нет — откроется как обычный SQLite
+        else:
+            import sqlite3 as _sq
+        con = _sq.connect(path)
+        try:
+            cur = con.cursor()
+            if key:
+                #Тот же формат ключа, что в server/app/db.py.
+                cur.execute(f"PRAGMA key=\"x'{key}'\"")
+            cur.execute("PRAGMA schema_version")   #дешёвое чтение заголовка
+            cur.fetchone()
+            return True
+        finally:
+            con.close()
+    except Exception as e:
+        _LOG.info(f"[local-api] копия не открывается ({e})")
+        return False
 
 
 class LocalAPI:
@@ -271,8 +409,12 @@ class LocalAPI:
             try:
                 install_desktop_bootstrap(app)
                 install_remote_proxy(app)
+                #Мост входа нужен ЛЮБОЙ оболочке, а не только новой: как только форма
+                #входа становится веб-овой, локальная копия обязана уметь пускать
+                #человека офлайн и сходить на бой при первом входе на этой машине.
+                install_login_bridge(app)
             except Exception as e:
-                _LOG.warning(f"[local-api] прокси онлайн-подсистем не встал: {e}")
+                _LOG.warning(f"[local-api] надстройки локального сервера не встали: {e}")
 
             import uvicorn
             self.port = _free_loopback_port()
@@ -613,3 +755,145 @@ def bootstrap_url(route: str = "/", embed: str = "0") -> str:
     if not _instance.port:
         return ""
     return _instance.url(_BOOTSTRAP_PATH) + "?" + urlencode({"route": route, "embed": embed})
+
+
+#━━ МОСТ ВХОДА: локально, а если человека тут ещё нет — через боевой сервер ━━━━━━━━━━
+#Без него общий интерфейс не может заменить нативный экран входа: локальная копия базы
+#создаётся ПОД конкретного человека, и до первого входа его там просто нет. Форма
+#честно отвечала бы «неверный логин или пароль» тому, у кого всё верно.
+#
+#Порядок «сначала локально» ВАЖЕН и обратный неверен: он и даёт offline-first. Хеш
+#владельца сессии в локальной копии есть (чужие сервер вырезает при выдаче), поэтому без
+#сети человек входит в свой кабинет как обычно. В сеть идём, только когда локально не
+#вышло, — то есть при первом входе на этой машине или после смены пароля.
+def install_login_bridge(app) -> None:
+    """POST /auth/login: локальная проверка → при неудаче боевой сервер → СВОЙ токен."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    @app.post("/auth/login")
+    async def _login(request: Request):
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        login = (body.get("login") or "").strip()
+        password = body.get("password") or ""
+        if not login or not password:
+            return JSONResponse({"detail": "Введите логин и пароль"}, status_code=400)
+
+        local = _try_local_login(login, password)
+        if local is not None:
+            _remember_session(login, password, local.get("role", ""))
+            return JSONResponse(local)
+
+        remote = _try_remote_login(login, password)
+        if remote is None:
+            #Ни локально, ни на бою. Причину не разделяем на «нет сети» и «неверный
+            #пароль» намеренно: подсказка «такой логин есть, но пароль не тот» — это
+            #подсказка и подбирающему тоже.
+            return JSONResponse({"detail": "Неверный логин или пароль, либо нет связи."},
+                                status_code=401)
+
+        role = remote.get("role") or "student"
+        _remember_session(login, password, role)
+        #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
+        #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
+        #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
+        _wait_for_mirror(login, seconds=12)
+        access, refresh = issue_local_session(login, role)
+        if not access:
+            #Локальную сессию выпустить не удалось (человека всё ещё нет в копии) —
+            #отдаём боевые токены: кабинет будет работать через прокси, пока не докачается.
+            return JSONResponse(remote)
+        out = dict(remote)
+        out["access_token"], out["refresh_token"] = access, refresh
+        return JSONResponse(out)
+
+    #В НАЧАЛО: иначе сработает штатный /auth/login серверного приложения (см. тот же
+    #приём и ту же причину у bootstrap-маршрута выше).
+    app.router.routes.insert(0, app.router.routes.pop())
+
+
+def _try_local_login(login: str, password: str):
+    """Проверить пароль по ЛОКАЛЬНОЙ копии. None — не вышло (нет человека/не тот пароль)."""
+    try:
+        prepare_env()
+        from app.db import SessionLocal
+        from app.models import User
+        from app.security import verify_password
+        db = SessionLocal()
+        try:
+            user = (db.query(User)
+                    .filter(User.login == login, User.deleted == False)  # noqa: E712
+                    .first())
+            if user is None or not user.password_hash:
+                return None
+            if not verify_password(password, user.password_hash):
+                return None
+            access, refresh = issue_local_session(user.login, user.role or "student")
+            if not access:
+                return None
+            name = (f"{user.surname or ''} {user.name or ''}".strip() or user.login)
+            return {"access_token": access, "refresh_token": refresh,
+                    "role": user.role or "student", "name": name}
+        finally:
+            db.close()
+    except Exception as e:
+        _LOG.info(f"[login] локальная проверка не удалась: {e}")
+        return None
+
+
+def _try_remote_login(login: str, password: str):
+    """Войти на БОЕВОМ сервере. None — не вышло (нет сети или неверные данные)."""
+    try:
+        import app_settings
+        base = (app_settings.get_api_url() or "").rstrip("/")
+    except Exception:
+        base = ""
+    if not base:
+        return None
+    try:
+        import httpx
+        r = httpx.post(f"{base}/auth/login", json={"login": login, "password": password},
+                       headers={"X-Client": "web"}, timeout=20.0)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception as e:
+        _LOG.info(f"[login] боевой сервер недоступен: {e}")
+        return None
+
+
+def _remember_session(login: str, password: str, role: str) -> None:
+    """Отдать вход слою синхронизации — ровно как это делал нативный экран входа.
+
+    Пароль остаётся В ПАМЯТИ процесса (инвариант §7: на диск он не пишется). Он нужен
+    синхронизации, чтобы переполучать токен: боевой JWT живёт жёстко 5 часов."""
+    try:
+        from sync_runner import start as _sync_start
+        _sync_start(login, password, role or "student")
+    except Exception as e:
+        _LOG.warning(f"[login] синхронизация не запустилась: {e}")
+    try:
+        import app_settings
+        app_settings.set_saved_session(login, role or "student")
+    except Exception:
+        pass
+
+
+def _wait_for_mirror(login: str, seconds: int = 12) -> bool:
+    """Дождаться, пока человек появится в локальной копии (после первого входа)."""
+    import time
+    try:
+        from local_mirror import mirror_once
+        mirror_once()
+    except Exception:
+        pass
+    edge = time.time() + max(1, seconds)
+    while time.time() < edge:
+        if user_exists(login):
+            return True
+        time.sleep(0.5)
+    return user_exists(login)

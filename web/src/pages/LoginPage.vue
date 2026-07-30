@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/auth'
 import { desktopApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
+import { isDesktopApp } from '@/utils/platform'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
@@ -25,8 +26,11 @@ const password = ref('')
 const showPass = ref(false)
 const needApproval = ref(false)
 
-// Секция «скачать десктоп» — только для ПК (мышь), не для телефонов/планшетов (touch).
+// Секция «скачать десктоп» — только для ПК (мышь), не для телефонов/планшетов (touch)
+// и НЕ ВНУТРИ самой десктоп-версии: предлагать скачать программу тому, кто уже в ней,
+// это ошибка, а не реклама.
 const isDesktop = ref(false)
+const insideApp = isDesktopApp()
 const desktop = ref({ available: false })
 // Кнопку «Войти по биометрии» показываем только если на устройстве есть встроенный
 // биометрический аутентификатор (Face ID/отпечаток) и браузер поддерживает passkeys.
@@ -268,8 +272,9 @@ const showRecover = ref(false)
           <p class="mt-4 text-tiny text-text2">GradeBookAI · Web Edition</p>
         </div>
 
-        <!-- Скачать десктоп-версию — только на ПК (мышь), не на телефоне/планшете. -->
-        <div v-if="isDesktop" class="rounded-2xl border border-border bg-card p-5 shadow-card">
+        <!-- Скачать десктоп-версию — только на ПК (мышь), не на телефоне/планшете и
+             не внутри самой программы (там она уже установлена). -->
+        <div v-if="isDesktop && !insideApp" class="rounded-2xl border border-border bg-card p-5 shadow-card">
           <div class="flex items-center gap-2">
             <Monitor class="size-5 text-accent" />
             <h3 class="font-title text-base font-extrabold text-text">Десктоп-версия</h3>

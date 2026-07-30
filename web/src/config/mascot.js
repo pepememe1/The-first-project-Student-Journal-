@@ -42,22 +42,34 @@ export function dashboardEmote({ average = 0, absences = 0 } = {}) {
 // и Вектор «зависает» пустым. Грузим один раз распространённые позы (кэш браузера).
 const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
                  'sad-cheer', 'warn-warn', 'neutral-cheer', 'surprise-idle']
+
+// ⚠️ Та же версия арта, что в Mascot.vue, и по той же причине: файлы в `public/` не
+// получают хеш в имени, поэтому без метки предзагрузка бережно кладёт в кэш СТАРЫЕ файлы.
+// Держать значение синхронным с ART_VERSION в Mascot.vue.
+export const ART_VERSION = 2
 let _preloaded = false
 export function preloadMascots() {
   if (_preloaded || typeof Image === 'undefined') return
   _preloaded = true
-  for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.png` }
+  for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.png?v=${ART_VERSION}` }
 }
 
 // Анимированные состояния чата (WebP с альфой). Состояния store совпадают с именами
 // файлов: greeting | idle | thinking | speaking. Предзагружаем thinking/speaking заранее,
 // чтобы при первом вопросе не было паузы на загрузку (idle грузится сразу как дефолт).
 export const CHAT_ANIMS = ['idle', 'greeting', 'thinking', 'speaking']
+
+// Состояния ЭКРАНА ВХОДА: закрывает глаза лапами, пока набран пароль, и убирает обратно.
+// Предзагружать обязательно: анимация должна начаться на ПЕРВОМ введённом символе, а не
+// после того, как файл доедет по сети — иначе жест опаздывает и выглядит случайным.
+export const LOGIN_ANIMS = ['eyes_close', 'eyes_open']
 let _animsPreloaded = false
 export function preloadAnims() {
   if (_animsPreloaded || typeof Image === 'undefined') return
   _animsPreloaded = true
-  for (const a of CHAT_ANIMS) { const img = new Image(); img.src = `/mascot/anim/${a}.webp` }
+  for (const a of [...CHAT_ANIMS, ...LOGIN_ANIMS]) {
+    const img = new Image(); img.src = `/mascot/anim/${a}.webp?v=${ART_VERSION}`
+  }
 }
 
 /** Спрайт для чата «Вектора» по состоянию/настроению/НАМЕРЕНИЮ — из 30 эмоций.

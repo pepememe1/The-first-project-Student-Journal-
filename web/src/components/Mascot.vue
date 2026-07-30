@@ -7,7 +7,7 @@
 //     (десктоп) — общий формат на все платформы. `anim` имеет приоритет над `sprite`.
 // Смена кадра — настоящий КРОСС-ФЕЙД (оба видны одновременно), без мига пустоты.
 import { computed, onMounted } from 'vue'
-import { preloadMascots, preloadAnims } from '@/config/mascot'
+import { preloadMascots, preloadAnims, ART_VERSION } from '@/config/mascot'
 const props = defineProps({
   sprite: { type: String, default: 'neutral-idle' },
   animate: { type: Boolean, default: true },
@@ -15,10 +15,20 @@ const props = defineProps({
   // Пусто — показываем статичный спрайт эмоции (§5).
   anim: { type: String, default: '' },
 })
+// ⚠️ ВЕРСИЯ АРТА в адресе (`ART_VERSION`, живёт в `config/mascot.js` — одна на проект,
+// её же использует предзагрузчик). Файлы маскота лежат в `public/` и потому НЕ получают
+// хеш в имени при сборке: `idle.webp` остаётся `idle.webp` навсегда, и браузер продолжает
+// показывать копию из кэша даже после нового деплоя. На этом уже обожглись: при пересборке
+// анимаций общий кроп кадра изменился (524→442 px), новые состояния приехали, а старые
+// достались из кэша — и маскот на экране входа менял размер при вводе пароля.
+// Поднимать при КАЖДОЙ пересборке файлов в `public/mascot/`.
+
 // anim (WebP) приоритетнее статичного спрайта. WebP сам зациклен (loop=0) — «дыхание»
 // в этом режиме не нужно (персонаж и так двигается: уши/хвост/рот).
 const src = computed(() =>
-  props.anim ? `/mascot/anim/${props.anim}.webp` : `/mascot/${props.sprite}.png`)
+  props.anim
+    ? `/mascot/anim/${props.anim}.webp?v=${ART_VERSION}`
+    : `/mascot/${props.sprite}.png?v=${ART_VERSION}`)
 onMounted(() => { preloadMascots(); preloadAnims() })
 </script>
 

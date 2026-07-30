@@ -42,11 +42,15 @@ _LOG = log.get("webview2")
 #  disable-sync — синхронизация профиля с учётной записью Microsoft;
 #  disable-features=Translate — отправка текста страницы на перевод;
 #  no-first-run/no-default-browser-check — попытки «познакомиться» с пользователем.
+#⚠️ НАБОР НАМЕРЕННО УЗКИЙ. Раньше сюда входили ещё msWebOOUI/msPdfOOUI (внешние
+#UI-компоненты Edge) и --disable-breakpad. Они не про приватность НАШИХ данных, а про
+#внутреннее устройство движка, и отключение таких компонентов замечено рядом с падением
+#отрисовщика (STATUS_ACCESS_VIOLATION) на пустом месте. Правило простое: выключаем то,
+#что ОТПРАВЛЯЕТ данные наружу, и не трогаем то, на чём движок стоит.
 _PRIVACY_ARGS = (
-    "--disable-features=msSmartScreenProtection,msWebOOUI,msPdfOOUI,Translate,"
-    "AutofillServerCommunication "
+    "--disable-features=msSmartScreenProtection,Translate,AutofillServerCommunication "
     "--disable-sync --disable-background-networking --no-first-run "
-    "--no-default-browser-check --disable-breakpad"
+    "--no-default-browser-check"
 )
 
 
