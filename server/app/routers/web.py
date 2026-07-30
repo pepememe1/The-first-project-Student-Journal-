@@ -1613,6 +1613,36 @@ def vector_stt_status(user: User = Depends(get_current_user)):
     return {"available": stt_service.is_available()}
 
 
+def _stt_context(db: Session, user: User) -> str:
+    """Слова, которые модель должна ожидать: имя маскота, предметы, фамилии своих студентов.
+
+    Это не «улучшение по вкусу»: без такой подсказки Whisper уверенно подменяет редкие
+    имена похожими обычными словами, и распознанное выглядит правдоподобно — а значит
+    ошибку легко не заметить. Ограничиваем список: слишком длинная подсказка размывает
+    внимание модели и начинает мешать."""
+    words = ["Вектор", "ВСГУТУ"]
+    try:
+        cfg = W.load_config(db)
+        ty, ts = W.current_term(cfg)
+        if user.role == "teacher":
+            pairs = W.teacher_assignments(db, user.id, ty, ts)
+            words += sorted({s for _g, s in pairs})[:12]
+            for group in sorted({g for g, _s in pairs})[:4]:
+                words += [st.surname for st in W.students_in_group(db, group)][:30]
+        elif user.role == "student":
+            words += sorted(W._group_subject_list(db, user.group_name or ""))[:12]                 if hasattr(W, "_group_subject_list") else []
+    except Exception:
+        pass
+    #Уникальные, порядок сохраняем: первым идёт то, что важнее узнать.
+    seen, out = set(), []
+    for w in words:
+        w = (w or "").strip()
+        if w and w.lower() not in seen:
+            seen.add(w.lower())
+            out.append(w)
+    return ", ".join(out[:60])
+
+
 @router.post("/vector/stt")
 async def vector_stt(file: UploadFile = File(...),
                      user: User = Depends(get_current_user),
@@ -1630,9 +1660,17 @@ async def vector_stt(file: UploadFile = File(...),
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Аудио слишком большое (макс 10 МБ).")
     cfg = W.load_config(db)
+    #🎯 ПОДСКАЗКА МОДЕЛИ — то, чего здесь не хватало, и из-за чего «Вектор» слышался как
+    #«Виктор», а фамилии студентов превращались в похожие русские слова. Нативная версия
+    #подсказку давала, серверная — нет, поэтому качество на вебе было заметно хуже при
+    #той же модели. Whisper опирается на контекст: список ожидаемых слов резко поднимает
+    #узнавание редких имён (бурятские ФИО — Самбуева, Гындынова, Баянжаргал).
+    #Скоуп ролевой, как везде: студент подсказывает свои предметы, преподаватель — ещё и
+    #фамилии своих студентов. Чужих ФИО в подсказку не попадает.
     res = stt_service.transcribe_bytes(
         data, filename=file.filename or "audio.webm",
-        size=cfg.get("stt_model", "large-v3"), device=cfg.get("stt_device", "auto"))
+        size=cfg.get("stt_model", "large-v3"), device=cfg.get("stt_device", "auto"),
+        context=_stt_context(db, user))
     if not res["ok"]:
         raise HTTPException(status_code=500, detail=res["error"])
     return {"text": res["text"]}

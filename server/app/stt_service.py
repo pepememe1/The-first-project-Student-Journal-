@@ -114,9 +114,16 @@ def transcribe_bytes(data: bytes, filename: str = "audio", language: str = "ru",
             f.write(data)
             path = f.name
         model = _load(size, device)
-        segments, _info = model.transcribe(
-            path, language=language, beam_size=5, vad_filter=True,
-            condition_on_previous_text=False, initial_prompt=context or None)
+        kw = dict(language=language, beam_size=5, vad_filter=True,
+                  condition_on_previous_text=False, initial_prompt=context or None)
+        #hotwords усиливают редкие имена ДОПОЛНИТЕЛЬНО к initial_prompt — тот же приём,
+        #что в нативной версии (vector/stt.py). Параметра нет в старых сборках
+        #faster-whisper, поэтому пробуем и тихо откатываемся: лучше распознать чуть хуже,
+        #чем не распознать вовсе из-за незнакомого аргумента.
+        try:
+            segments, _info = model.transcribe(path, hotwords=context or None, **kw)
+        except TypeError:
+            segments, _info = model.transcribe(path, **kw)
         text = " ".join(s.text.strip() for s in segments).strip()
         return {"ok": True, "text": text, "error": ""}
     except Exception as e:
