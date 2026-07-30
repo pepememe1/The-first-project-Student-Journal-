@@ -269,6 +269,7 @@ class LocalAPI:
             #Онлайн-подсистемы (мессенджер) — пересылаем на бой: их данных в локальной
             #копии нет по замыслу, и без этого чаты в программе открывались пустыми.
             try:
+                install_desktop_bootstrap(app)
                 install_remote_proxy(app)
             except Exception as e:
                 _LOG.warning(f"[local-api] прокси онлайн-подсистем не встал: {e}")
@@ -532,3 +533,83 @@ def install_remote_proxy(app) -> None:
             _LOG.warning(f"[proxy] {path}: {e}")
             return Response(content='{"detail":"Сервер сообщений не ответил."}'.encode(),
                             status_code=502, media_type="application/json")
+
+
+#━━ ПЕРЕДАЧА СЕССИИ ЛЮБОЙ ОБОЛОЧКЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#Раньше сессия попадала в страницу инъекцией JS до загрузки — приём, который умеет
+#именно QtWebEngine (DocumentCreation). Оболочку мы меняем, и опираться на её частную
+#способность больше нельзя: у WebView2 такого хука в нашей обвязке нет.
+#Поэтому сессию отдаёт САМ локальный сервер: короткая страница кладёт всё в localStorage
+#и уходит на нужный маршрут. Работает с любым движком, включая нынешний.
+#🔒 Токенов в АДРЕСЕ нет намеренно: адреса попадают в историю и логи, а сервер и так
+#знает, кто вошёл, — он выпускает сессию сам. Снаружи страница недостижима: сервер
+#слушает только петлю.
+_BOOTSTRAP_PATH = "/desktop/bootstrap"
+
+
+def install_desktop_bootstrap(app) -> None:
+    """Маршрут, который отдаёт странице сессию, тему и режим встраивания."""
+    import json as _json
+
+    from fastapi import Request
+    from fastapi.responses import HTMLResponse
+
+    @app.get(_BOOTSTRAP_PATH, response_class=HTMLResponse)
+    def _bootstrap(request: Request, route: str = "/", embed: str = "0"):
+        login = ""
+        try:
+            from sync_runner import current_login
+            login = current_login()
+        except Exception:
+            pass
+        role = ""
+        try:
+            import app_settings
+            role = (app_settings.get_saved_session() or {}).get("role", "") or ""
+        except Exception:
+            pass
+        access, refresh = ("", "")
+        if login:
+            access, refresh = issue_local_session(login, role or "student")
+        theme = ""
+        try:
+            import themes
+            spec = themes.active_spec()
+            if spec:
+                theme = _json.dumps(spec)
+        except Exception:
+            pass
+        user = _json.dumps({"login": login, "role": role, "name": login})
+        #⚠️ dumps ДВАЖДЫ для gb.user: внутренний даёт JSON, внешний — строковый литерал JS.
+        #С одним dumps браузер сохранял «[object Object]», разбор падал, и SPA показывала
+        #форму входа человеку, который уже вошёл (ловили это в 3.4).
+        #Маршрут прогоняем через json.dumps тоже — он приходит извне, и «"+alert(1)+"» в
+        #нём не должен превратиться в код.
+        parts = [
+            f"localStorage.setItem('gb.access',{_json.dumps(access)});",
+            f"localStorage.setItem('gb.refresh',{_json.dumps(refresh or access)});",
+            f"localStorage.setItem('gb.user',{_json.dumps(user)});",
+            "localStorage.setItem('gb.api_base','');",
+            f"localStorage.setItem('gb.embed',{_json.dumps(embed)});",
+        ]
+        if theme:
+            parts.append(f"localStorage.setItem('gb.theme',{_json.dumps(theme)});")
+        parts.append(f"location.replace({_json.dumps(route or '/')});")
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8><title>GradeBookAI</title>"
+            "<body style='background:#0f1b22'></body>"
+            "<script>try{" + "".join(parts) + "}catch(e){document.body.innerText=e;}</script>")
+
+    #⚠️ В НАЧАЛО списка маршрутов. Приложение раздаёт SPA заглушкой «всё остальное →
+    #index.html», она зарегистрирована раньше и перехватила бы наш адрес: сервер честно
+    #отвечал 200, но отдавал обычную страницу, а сессия не приезжала. Маршруты
+    #сопоставляются по порядку, поэтому свой ставим первым.
+    app.router.routes.insert(0, app.router.routes.pop())
+
+
+def bootstrap_url(route: str = "/", embed: str = "0") -> str:
+    """Адрес страницы-передатчика сессии для оболочки ('' — сервер не поднят)."""
+    from urllib.parse import urlencode
+    if not _instance.port:
+        return ""
+    return _instance.url(_BOOTSTRAP_PATH) + "?" + urlencode({"route": route, "embed": embed})

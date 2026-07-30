@@ -50,3 +50,6 @@ webauthn>=2.0
 httpx>=0.27
 #Шифрование локальной копии базы на десктопе (вшивается в .exe, см. GradeBookAI.spec)
 sqlcipher3>=0.5; sys_platform == "win32"
+#Оболочка окна на СИСТЕМНОМ движке WebView2 (см. ui/webview2_shell.py): позволяет
+#убрать из сборки Chromium и Qt. Рантайм в Windows 10/11 уже установлен системой.
+pywebview>=6.0; sys_platform == "win32"
