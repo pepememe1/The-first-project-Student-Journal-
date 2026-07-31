@@ -108,6 +108,7 @@ def _run_qt_shell():
     сборщик не должен тянуть PySide6 с Chromium внутри (~150 МБ) ради кода, который не
     выполняется."""
     from PySide6.QtWidgets import QApplication
+    from main_window import MainAppWindow
 
     #Локальное серверное приложение для ОБЩЕГО Vue-интерфейса (см. ui/local_api.py).
     #Поднимаем ФОНОМ и не ждём результата: первый запуск инициализирует базу и занимает
