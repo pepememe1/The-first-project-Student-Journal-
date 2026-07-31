@@ -24,8 +24,10 @@ webview2_app.py — ВСЯ программа одним окном систем
 один раз на старте (см. `main.py`).
 """
 import os
+import sys
 import threading
 
+import local_api
 import log
 
 _LOG = log.get("webview2app")
@@ -92,7 +94,6 @@ def run() -> bool:
 
     import webview
     import webview2_shell as shell
-    import local_api
 
     #1. Поднимаем НАСТОЯЩЕЕ серверное приложение на петле. Без него показывать нечего:
     #   и страницы, и данные приходят с одного адреса (поэтому нет ни CORS, ни настройки
@@ -123,7 +124,14 @@ def run() -> bool:
     #Иконка окна — наш гексагон GB. Ставим ПОСЛЕ появления окна: до этого системного окна
     #ещё нет. Без этого в углу и на панели задач висит значок Edge, и программа выглядит
     #чужой — «браузер с сайтом», а не приложение колледжа.
-    window.events.shown += lambda: _apply_window_icon(window)
+    #⚠️ ИКОНКУ СТАВИМ ТОЛЬКО ПРИ ЗАПУСКЕ ИЗ ИСХОДНИКОВ. У собранного .exe значок и так
+    #берётся из ресурсов файла, а обработчик события `shown` выполняется на потоке
+    #интерфейса и делает там `import clr` (инициализация .NET). Импорт с чужого потока в
+    #момент, когда другой поток тоже что-то импортирует, упирается в общий импорт-замок
+    #Python — и процесс встаёт ЦЕЛИКОМ: окно «не отвечает», локальный сервер перестаёт
+    #отвечать даже на /health (проверено на собранном exe). Украшение не стоит риска.
+    if not getattr(sys, "frozen", False) and not _is_compiled():
+        window.events.shown += lambda: _apply_window_icon(window)
     _LOG.info(f"[webview2] окно открыто: {url}")
     try:
         webview.start(gui="edgechromium",
@@ -175,11 +183,15 @@ def _start_url(api) -> str:
 
 
 def local_api_user_ready(login: str) -> bool:
-    import local_api
     try:
         return bool(local_api.user_exists(login))
     except Exception:
         return False
+
+
+def _is_compiled() -> bool:
+    """Собран ли модуль Nuitka (в .exe у окна уже есть иконка из ресурсов файла)."""
+    return "__compiled__" in globals() or bool(getattr(sys, "frozen", False))
 
 
 def _apply_window_icon(window) -> None:

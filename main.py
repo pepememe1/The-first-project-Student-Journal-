@@ -108,6 +108,7 @@ def _run_qt_shell():
     сборщик не должен тянуть PySide6 с Chromium внутри (~150 МБ) ради кода, который не
     выполняется."""
     from PySide6.QtWidgets import QApplication
+    from main_window import MainAppWindow
 
     #Локальное серверное приложение для ОБЩЕГО Vue-интерфейса (см. ui/local_api.py).
     #Поднимаем ФОНОМ и не ждём результата: первый запуск инициализирует базу и занимает
@@ -206,7 +207,15 @@ def main():
         except Exception as e:      # noqa: BLE001 — отказ движка не имеет права
             print(f"[ui] WebView2 не запустился ({e}) — открываем прежнюю оболочку")
 
-    _run_qt_shell()
+    #Qt-оболочки в сборке без PySide НЕТ. Это не авария, а следствие решения: интерфейс
+    #рисует системный движок. Но человек должен увидеть причину, а не трейсбек.
+    try:
+        _run_qt_shell()
+    except ImportError:
+        print("Не удалось открыть окно: на этом компьютере нет системного движка Edge "
+              "(WebView2 Runtime), а запасная оболочка в эту сборку не входит. "
+              "Установите Microsoft Edge WebView2 Runtime и запустите программу снова.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
