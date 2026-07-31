@@ -19,11 +19,11 @@ import ru.rustore.sdk.pushclient.messaging.service.RuStoreMessagingService;
 /**
  * Приём пуш-уведомлений RuStore.
  *
- * Что приходит в сообщении. НИ БАЛЛА, НИ ПРЕДМЕТА, НИ ФИО — только заголовок
- * «Новая оценка» и служебный event_id. Так сделано намеренно: тело уведомления идёт
- * через серверы RuStore, то есть через третью сторону, а успеваемость студента —
- * персональные данные (152-ФЗ). Подробности приложение забирает у нашего сервера
- * по event_id уже после открытия.
+ * Что приходит в сообщении. НИ БАЛЛА, НИ ПРЕДМЕТА, НИ ФИО — только нейтральный
+ * заголовок и служебный event_id. Так сделано намеренно: тело уведомления идёт через
+ * серверы RuStore, то есть через третью сторону, а успеваемость студента —
+ * персональные данные (152-ФЗ). Подробности приложение забирает у нашего сервера по
+ * event_id уже после открытия.
  *
  * Токен устройства НЕ отправляется отсюда: у сервиса нет сессии пользователя, и он не
  * знает, кому телефон принадлежит сейчас. Токен подхватывает веб-слой через мост
@@ -33,7 +33,6 @@ import ru.rustore.sdk.pushclient.messaging.service.RuStoreMessagingService;
 public class GradeBookPushService extends RuStoreMessagingService {
 
     private static final String TAG = "GradeBookPush";
-    private static final String CHANNEL_ID = "grades";
     /** Куда сложить event_id, чтобы MainActivity подхватил его при открытии. */
     public static final String EXTRA_EVENT_ID = "gb_event_id";
 
@@ -41,18 +40,24 @@ public class GradeBookPushService extends RuStoreMessagingService {
     public void onNewToken(String token) {
         //Токен обновился (переустановка, чистка данных). Сохраняем локально — веб-слой
         //заберёт его при следующем запуске и подтвердит на сервере уже с авторизацией.
+        //MainActivity дополнительно спрашивает токен сам: полагаться на одно это
+        //событие нельзя — оно приходит ровно один раз и может быть пропущено.
         Log.i(TAG, "получен новый токен устройства");
-        getSharedPreferences("gb_push", Context.MODE_PRIVATE)
-                .edit().putString("token", token).apply();
+        getSharedPreferences(MainActivity.PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(MainActivity.KEY_TOKEN, token)
+                .putString(MainActivity.KEY_LAST_ERROR, "")
+                .apply();
     }
 
     @Override
     public void onMessageReceived(RemoteMessage message) {
         Map<String, String> data = message.getData();
         String eventId = data != null ? data.get("event_id") : null;
+        String type = data != null ? data.get("type") : null;
 
-        String title = "Новая оценка";
-        String body = "У вас новая оценка. Откройте журнал, чтобы посмотреть.";
+        String title = "GradeBookAI";
+        String body = "Есть новое событие. Откройте приложение, чтобы посмотреть.";
         if (message.getNotification() != null) {
             if (message.getNotification().getTitle() != null) {
                 title = message.getNotification().getTitle();
@@ -61,20 +66,72 @@ public class GradeBookPushService extends RuStoreMessagingService {
                 body = message.getNotification().getBody();
             }
         }
-        showNotification(title, body, eventId);
+        showNotification(title, body, eventId, type);
     }
 
-    private void showNotification(String title, String body, String eventId) {
+    /**
+     * Канал уведомления по типу события.
+     *
+     * Зачем разные каналы, когда раньше был один общий «Оценки»: канал — это ЕДИНИЦА
+     * управления уведомлениями в самой Android (звук, важность, полное отключение
+     * долгим нажатием на уведомление). С одним каналом человек, которому надоели
+     * сообщения из чата, мог отключить только всё сразу — вместе с оценками. Наши
+     * настройки в приложении при этом никуда не деваются: они решают, отправлять ли
+     * пуш вообще, а канал — как показать его на этом телефоне.
+     */
+    private static String channelId(String type) {
+        if (type == null) {
+            return "other";
+        }
+        switch (type) {
+            case "grade":
+            case "grade_changed":
+                return "grades";
+            case "homework":
+                return "homework";
+            case "schedule_changed":
+                return "schedule";
+            case "message":
+                return "messages";
+            case "event":
+                return "events";
+            case "reminder":
+                return "reminders";
+            default:
+                return "other";
+        }
+    }
+
+    private static String channelName(String id) {
+        switch (id) {
+            case "grades":
+                return "Оценки";
+            case "homework":
+                return "Домашние задания";
+            case "schedule":
+                return "Расписание";
+            case "messages":
+                return "Сообщения";
+            case "events":
+                return "Мероприятия";
+            case "reminders":
+                return "Напоминания";
+            default:
+                return "Прочее";
+        }
+    }
+
+    private void showNotification(String title, String body, String eventId, String type) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) {
             return;
         }
+        String channel = channelId(type);
         //Канал обязателен начиная с Android 8; создание идемпотентно.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, "Оценки", NotificationManager.IMPORTANCE_DEFAULT);
-            channel.setDescription("Уведомления о новых оценках в журнале");
-            nm.createNotificationChannel(channel);
+            NotificationChannel ch = new NotificationChannel(
+                    channel, channelName(channel), NotificationManager.IMPORTANCE_DEFAULT);
+            nm.createNotificationChannel(ch);
         }
 
         Intent intent = new Intent(this, MainActivity.class);
@@ -93,10 +150,13 @@ public class GradeBookPushService extends RuStoreMessagingService {
         int requestCode = eventId != null ? eventId.hashCode() : 0;
         PendingIntent pi = PendingIntent.getActivity(this, requestCode, intent, flags);
 
-        Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+        Notification n = new NotificationCompat.Builder(this, channel)
+                .setSmallIcon(R.drawable.ic_stat_notify)
                 .setContentTitle(title)
                 .setContentText(body)
+                //Тексты у нас длиннее одной строки («Не откладывайте: подойдите к
+                //преподавателю…»), а обычный вид обрезает их многоточием.
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
                 .setContentIntent(pi)
                 .build();

@@ -3,6 +3,7 @@ package ru.esstu.gradebook;
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,33 +15,55 @@ import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 
+import org.json.JSONObject;
+
+import ru.rustore.sdk.core.tasks.OnFailureListener;
+import ru.rustore.sdk.core.tasks.OnSuccessListener;
+import ru.rustore.sdk.pushclient.RuStorePushClient;
+
 /**
  * Точка входа приложения + МОСТ между нативными пушами и веб-слоем.
  *
- * Зачем мост, а не плагин Capacitor: нужны ровно две вещи — отдать веб-слою токен
- * устройства и сообщить, что уведомление нажали. Полноценный плагин ради двух функций
- * был бы лишним слоем, который придётся сопровождать при каждом обновлении Capacitor.
+ * ━━ ПОЧЕМУ МОСТ ЖИВЁТ ТОЛЬКО В addJavascriptInterface ━━
+ * Раньше здесь через evaluateJavascript создавался объект `window.GradeBookPush` — и
+ * это была причина, по которой пуши НЕ РАБОТАЛИ НИ У КОГО (в боевой базе не было ни
+ * одного токена устройства). Любая загрузка документа создаёт `window` заново, а
+ * подмена веб-бандла (Capgo OTA) — тем более. Скрипт выполнялся один раз при старте
+ * окна, ДО загрузки страницы, и к моменту запуска Vue объекта уже не существовало:
+ * `registerToken()` молча выходил, потому что «моста нет».
  *
- * Токен НЕ отправляется на сервер отсюда. Здесь нет сессии пользователя, а телефон
+ * Объект, зарегистрированный через addJavascriptInterface, Android подставляет в
+ * КАЖДЫЙ новый документ сам. Поэтому единственный мост — `window.GradeBookPushNative`,
+ * а обёртку веб-слой строит у себя (см. web/src/services/push.js).
+ *
+ * ━━ ПОЧЕМУ НАЖАТИЕ ЗАБИРАЮТ, А НЕ ОТДАЮТ ━━
+ * Нажатие на уведомление случается, когда приложение может быть вообще не запущено, а
+ * веб-слой поднимется через несколько секунд после этого. Колбэк «натив зовёт JS» в
+ * таких условиях — гонка. Поэтому событие кладётся в SharedPreferences (переживает
+ * даже смерть процесса), а веб-слой ЗАБИРАЕТ его, когда готов.
+ *
+ * Токен НЕ отправляется на сервер отсюда: здесь нет сессии пользователя, а телефон
  * должен принадлежать ПОСЛЕДНЕМУ вошедшему аккаунту — иначе студент, вошедший после
- * друга, получал бы чужие уведомления. Поэтому токен забирает веб-слой и шлёт его
- * вместе с авторизацией (см. web/src/services/push.js).
+ * друга, получал бы чужие уведомления.
  */
 public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "GradeBookPush";
     private static final int REQ_NOTIFICATIONS = 4201;
 
-    /** event_id из уведомления, нажатого ДО того, как веб-слой успел подписаться. */
-    private String pendingEventId = null;
-    /** Готов ли веб-слой принимать нажатия. */
-    private boolean tapCallbackReady = false;
+    static final String PREFS = "gb_push";
+    static final String KEY_TOKEN = "token";
+    /** event_id нажатого уведомления, которое веб-слой ещё не забрал. */
+    static final String KEY_PENDING_TAP = "pending_tap";
+    /** Почему токена нет — показывается в «Настройках», чтобы отказ был виден. */
+    static final String KEY_LAST_ERROR = "last_error";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        registerBridge();
+        getBridge().getWebView().addJavascriptInterface(new PushBridge(), "GradeBookPushNative");
         askNotificationPermission();
+        requestTokenFromRuStore();
         //Приложение могли ОТКРЫТЬ нажатием на уведомление («холодный» старт).
         handleIntent(getIntent());
     }
@@ -61,28 +84,58 @@ public class MainActivity extends BridgeActivity {
         if (eventId == null || eventId.isEmpty()) {
             return;
         }
-        //Веб-слой мог ещё не загрузиться — придерживаем событие до его готовности.
-        pendingEventId = eventId;
-        deliverPendingTap();
+        //Не зовём веб-слой, а откладываем: он мог ещё не загрузиться. Заберёт сам.
+        prefs().edit().putString(KEY_PENDING_TAP, eventId).apply();
     }
 
-    private void deliverPendingTap() {
-        if (pendingEventId == null || !tapCallbackReady || getBridge() == null) {
-            return;
+    private SharedPreferences prefs() {
+        return getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    /**
+     * Спросить токен устройства у RuStore напрямую.
+     *
+     * Почему не хватает `onNewToken` в сервисе: тот срабатывает, только когда токен
+     * ВЫДАЛИ ИЛИ СМЕНИЛИ. Если сохранить его не удалось (или данные приложения
+     * почистили), нового события можно ждать вечно — и уведомления не придут никогда,
+     * без единой ошибки. Активный запрос при каждом запуске делает состояние
+     * восстановимым: одного открытия приложения достаточно, чтобы всё починилось.
+     *
+     * Причину отказа записываем: на телефоне без RuStore/VK Push доставки не будет в
+     * принципе, и человек должен видеть это в настройках, а не гадать.
+     */
+    private void requestTokenFromRuStore() {
+        try {
+            RuStorePushClient.INSTANCE.getToken()
+                    .addOnSuccessListener(new OnSuccessListener<String>() {
+                        @Override
+                        public void onSuccess(String result) {
+                            if (result == null || result.isEmpty()) {
+                                prefs().edit().putString(KEY_LAST_ERROR,
+                                        "RuStore не выдал токен устройства").apply();
+                                return;
+                            }
+                            Log.i(TAG, "токен устройства получен");
+                            prefs().edit().putString(KEY_TOKEN, result)
+                                    .putString(KEY_LAST_ERROR, "").apply();
+                        }
+                    })
+                    .addOnFailureListener(new OnFailureListener() {
+                        @Override
+                        public void onFailure(Throwable throwable) {
+                            String why = throwable != null
+                                    ? String.valueOf(throwable.getMessage()) : "";
+                            Log.w(TAG, "токен не получен: " + why);
+                            prefs().edit().putString(KEY_LAST_ERROR,
+                                    why.isEmpty() ? "RuStore Push недоступен" : why).apply();
+                        }
+                    });
+        } catch (Throwable e) {
+            //Сюда попадаем, если SDK не инициализирован (нет project_id в сборке).
+            //Пуши — дополнение: журнал обязан работать и без них.
+            Log.w(TAG, "RuStore Push недоступен: " + e);
+            prefs().edit().putString(KEY_LAST_ERROR, "RuStore Push не инициализирован").apply();
         }
-        final String eventId = pendingEventId;
-        pendingEventId = null;
-        runOnUiThread(() -> {
-            try {
-                //Экранируем спецсимволы: event_id это uuid, но полагаться на форму
-                //данных, пришедших извне, нельзя — это прямой путь к инъекции в JS.
-                String safe = eventId.replace("\\", "\\\\").replace("'", "\\'");
-                getBridge().getWebView().evaluateJavascript(
-                        "window.__gbPushTap && window.__gbPushTap('" + safe + "')", null);
-            } catch (Exception e) {
-                Log.w(TAG, "не удалось передать нажатие в веб-слой: " + e);
-            }
-        });
     }
 
     /** Android 13+ требует явного разрешения на показ уведомлений. */
@@ -98,38 +151,55 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    private void registerBridge() {
-        getBridge().getWebView().addJavascriptInterface(new PushBridge(), "GradeBookPushNative");
-        //Тонкая обёртка над нативным объектом: превращает синхронный вызов в promise и
-        //хранит колбэк нажатия. Веб-слой знает только про window.GradeBookPush —
-        //нативные детали за ним не видны.
-        getBridge().getWebView().post(() -> getBridge().getWebView().evaluateJavascript(
-                "window.GradeBookPush = {"
-                + "  getToken: () => Promise.resolve(window.GradeBookPushNative.getToken()),"
-                + "  onTap: (cb) => { window.__gbPushTap = cb;"
-                + "                   window.GradeBookPushNative.tapReady(); }"
-                + "};", null));
-    }
-
     /** Объект, видимый из JS как window.GradeBookPushNative. */
     public class PushBridge {
 
         /**
-         * Токен устройства, сохранённый сервисом при выдаче/обновлении.
-         * Пустая строка — токена ещё нет (первый запуск до ответа RuStore). Веб-слой
-         * тогда ничего не шлёт и повторит попытку при следующем запуске.
+         * Токен устройства. Пустая строка — токена ещё нет (первый запуск до ответа
+         * RuStore, или на телефоне нет RuStore вовсе). Веб-слой тогда ничего не шлёт
+         * и повторит попытку — он опрашивает мост несколько раз после старта.
          */
         @JavascriptInterface
         public String getToken() {
-            return getSharedPreferences("gb_push", Context.MODE_PRIVATE)
-                    .getString("token", "");
+            return prefs().getString(KEY_TOKEN, "");
         }
 
-        /** Веб-слой сообщил, что готов принимать нажатия. */
+        /**
+         * Забрать нажатое уведомление ("" — нажатий не было).
+         *
+         * ЗАБРАТЬ, а не подсмотреть: событие снимается тем же действием, иначе один
+         * тап срабатывал бы при каждом открытии приложения.
+         */
         @JavascriptInterface
-        public void tapReady() {
-            tapCallbackReady = true;
-            deliverPendingTap();   //нажатие могло прийти ДО готовности — отдаём сейчас
+        public String consumeTap() {
+            SharedPreferences p = prefs();
+            String id = p.getString(KEY_PENDING_TAP, "");
+            if (!id.isEmpty()) {
+                p.edit().remove(KEY_PENDING_TAP).apply();
+            }
+            return id;
+        }
+
+        /**
+         * Состояние пушей для раздела «Настройки»: есть ли токен и почему нет.
+         * Молчаливый отказ — худшее, что может случиться с уведомлениями: и человек, и
+         * мы узнаём о нём только по отсутствию сообщений, то есть никогда.
+         */
+        @JavascriptInterface
+        public String diagnostics() {
+            SharedPreferences p = prefs();
+            JSONObject out = new JSONObject();
+            try {
+                out.put("has_token", !p.getString(KEY_TOKEN, "").isEmpty());
+                out.put("error", p.getString(KEY_LAST_ERROR, ""));
+                out.put("permission", Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                        || ContextCompat.checkSelfPermission(MainActivity.this,
+                                Manifest.permission.POST_NOTIFICATIONS)
+                           == PackageManager.PERMISSION_GRANTED);
+            } catch (Exception e) {
+                return "{}";
+            }
+            return out.toString();
         }
     }
 }
