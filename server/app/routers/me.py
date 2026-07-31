@@ -18,6 +18,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from .. import rustore_push
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import NotifyEvent, PushToken, User
@@ -49,6 +50,26 @@ def _sanitize_public_profile(prefs: dict) -> None:
         prefs["profile_color"] = (col if isinstance(col, str) else "").strip()[:_MAX_COLOR_ID]
 
 
+def _sanitize_notify(prefs: dict) -> None:
+    """Приводит `prefs.notify` к строгому виду: только известные категории, только «да/нет».
+
+    Сюда приходит произвольный JSON от авторизованного клиента, а читает его СЕРВЕР при
+    каждой отправке пуша (`rustore_push.category_enabled`). Мусор в этом поле — это не
+    «некрасиво», а неверное решение о доставке: строка "false" истинна в Python, и
+    выключенная в интерфейсе категория продолжала бы приходить.
+
+    Незнакомые ключи выбрасываем: список категорий задаёт СЕРВЕР, иначе клиент мог бы
+    насорить в поле, которое сам же не читает."""
+    if "notify" not in prefs:
+        return
+    box = prefs.get("notify")
+    if not isinstance(box, dict):
+        prefs.pop("notify", None)
+        return
+    prefs["notify"] = {k: bool(v) for k, v in box.items()
+                       if k in rustore_push.ALL_CATEGORIES}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,6 +93,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     merged = dict(user.prefs or {})
     merged.update(incoming)
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
+    _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
     #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))

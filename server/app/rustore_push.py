@@ -71,14 +71,80 @@ def send_to_token(token: str, title: str, body: str, data: dict | None = None) -
     return _post(payload)
 
 
+#──────────────────────────────────────────────────────────────────────────────────────
+#КАТЕГОРИИ УВЕДОМЛЕНИЙ и их отключение пользователем.
+#
+#Категория выводится из УЖЕ существующего `data["type"]`, который передают все без
+#исключения вызывающие. Второго списка «кто что шлёт» заводить нельзя: он неминуемо
+#разъедется с первым, и человек, отключивший оценки, продолжил бы их получать.
+#
+#Неизвестный тип — РАЗРЕШАЕМ. Ошибка в пользу тишины опаснее: новый вид уведомления
+#молча не доходил бы до всех, и заметить это можно было бы только случайно.
+CATEGORY_BY_TYPE = {
+    "grade": "grades",
+    "grade_changed": "grades",
+    "homework": "homework",
+    "schedule_changed": "schedule",
+    "event": "events",
+    "reminder": "reminders",
+    "message": "messages",
+}
+
+#Все категории, которыми можно управлять из настроек. Клиент рисует свои подписи —
+#здесь только ключи, чтобы не держать тексты в двух местах.
+ALL_CATEGORIES = ("grades", "homework", "schedule", "messages", "events", "reminders")
+
+
+def category_of(data: dict | None) -> str:
+    """Категория уведомления по его полезной нагрузке ('' — не определена)."""
+    kind = str((data or {}).get("type") or "").strip()
+    return CATEGORY_BY_TYPE.get(kind, "")
+
+
+def category_enabled(prefs: dict | None, category: str) -> bool:
+    """Разрешил ли человек уведомления этой категории.
+
+    ОТСУТСТВИЕ ключа значит «да». Настройки приезжают из синка и от старых клиентов,
+    где раздела уведомлений не было вовсе — трактовать пустоту как запрет означало бы
+    молча выключить пуши всему колледжу при первом же обновлении."""
+    if not category:
+        return True
+    box = (prefs or {}).get("notify")
+    if not isinstance(box, dict) or category not in box:
+        return True
+    return bool(box.get(category))
+
+
+def _muted_categories(db, login: str) -> set:
+    """Категории, отключённые этим пользователем. Сбой чтения — считаем, что не отключал
+    ничего: потерять уведомление хуже, чем прислать лишнее."""
+    try:
+        from .models import User
+        row = db.query(User).filter(User.login == login).first()
+        prefs = (row.prefs if row is not None else None) or {}
+    except Exception as e:      # noqa: BLE001
+        log.warning("не удалось прочитать настройки уведомлений: %s", e)
+        return set()
+    return {c for c in ALL_CATEGORIES if not category_enabled(prefs, c)}
+
+
 def notify_login(db, login: str, title: str, body: str, data: dict | None = None) -> int:
     """Разослать на ВСЕ устройства пользователя. Возвращает число успешных отправок.
 
     Не бросает исключений ВООБЩЕ, и это проверяется тестом: функция вызывается из
     обработчика выставления оценки, и сбой доставки не должен мешать преподавателю
     поставить балл. Раньше обещание было только в докстринге — исключение из
-    send_to_token проходило наружу и роняло запрос."""
+    send_to_token проходило наружу и роняло запрос.
+
+    ⚠️ ЗДЕСЬ ЖЕ единственная проверка «человек отключил эту категорию». Ставить её у
+    вызывающих нельзя: пуш отправляется из восьми мест, и достаточно забыть про одно,
+    чтобы отключённые уведомления продолжали приходить. Письмо во вкладке
+    «Уведомления» при этом ОСТАЁТСЯ: отключается то, что дёргает человека, а не история
+    произошедшего — иначе студент, приглушивший телефон, потерял бы факт оценки."""
     if not config.push_enabled():
+        return 0
+    category = category_of(data)
+    if category and category in _muted_categories(db, login):
         return 0
     try:
         from .models import PushToken

@@ -3,7 +3,7 @@
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, onMounted } from 'vue'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { useTtsStore } from '@/stores/tts'
@@ -12,11 +12,103 @@ import { useAuthStore } from '@/stores/auth'
 import { SCALES } from '@/utils/grading'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import ToggleRow from '@/components/ui/ToggleRow.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 
 const tts = useTtsStore()
 const auth = useAuthStore()
 const voice = useVoiceStore()
+
+// ── Уведомления: какие категории человек согласен получать ───────────────────────
+// Настройка АККАУНТА, а не устройства: решение «слать или нет» принимает сервер до
+// отправки (rustore_push.notify_login). Держать её в localStorage было бы бессмысленно —
+// пуш уже прилетел бы на телефон, и выключать его было бы поздно.
+//
+// Ключи обязаны совпадать с rustore_push.ALL_CATEGORIES: сервер знает только их.
+const NOTIFY_KINDS = [
+  { key: 'grades', label: 'Оценки', hint: 'Новая оценка и исправление уже выставленной' },
+  { key: 'homework', label: 'Домашние задания', hint: 'Преподаватель задал работу на дом' },
+  { key: 'schedule', label: 'Расписание', hint: 'Замены и правки в расписании вашей группы' },
+  { key: 'messages', label: 'Сообщения', hint: 'Личные чаты, группы и каналы' },
+  { key: 'events', label: 'Мероприятия', hint: 'Олимпиады, конкурсы, объявления' },
+  { key: 'reminders', label: 'Напоминания', hint: 'То, о чём вы сами просили напомнить' },
+]
+const notify = ref(Object.fromEntries(NOTIFY_KINDS.map((k) => [k.key, true])))
+const notifySaving = ref('')
+const notifyError = ref('')
+
+async function loadNotify() {
+  try {
+    const { data } = await meApi.getPrefs()
+    const box = data?.prefs?.notify || {}
+    // ОТСУТСТВИЕ ключа значит «включено» — ровно как трактует его сервер. Иначе первый
+    // же заход в настройки показал бы всё выключенным, хотя уведомления приходят.
+    for (const k of NOTIFY_KINDS) {
+      notify.value[k.key] = box[k.key] !== false
+    }
+  } catch { /* не загрузилось — показываем значения по умолчанию */ }
+}
+
+async function toggleNotify(key, value) {
+  const prev = notify.value[key]
+  notify.value[key] = value          // отвечаем сразу: переключатель не должен «залипать»
+  notifySaving.value = key
+  notifyError.value = ''
+  try {
+    await meApi.setPrefs({ notify: { ...notify.value } })
+  } catch (e) {
+    // Откатываем ВИДИМОЕ состояние: молча оставить переключатель в новом положении
+    // значит соврать — человек уверен, что отключил, а уведомления продолжают идти.
+    notify.value[key] = prev
+    notifyError.value = e.response?.data?.detail || 'Не удалось сохранить настройку.'
+  } finally {
+    notifySaving.value = ''
+  }
+}
+
+// ── Пуши на этом телефоне: почему их может не быть ───────────────────────────────
+// Уведомления — единственная часть продукта, отказ которой невидим: и человек, и мы
+// узнаём о нём только по отсутствию сообщений, то есть никогда. Поэтому состояние
+// моста показываем явно.
+const pushInfo = ref(null)
+async function loadPushInfo() {
+  try {
+    const push = await import('@/services/push')
+    if (!push.isAvailable()) return          // сайт/десктоп — раздела просто нет
+    pushInfo.value = push.diagnostics() || { has_token: false, error: '', permission: true }
+  } catch { pushInfo.value = null }
+}
+
+// ── Версия веб-части (обновления «по воздуху») ───────────────────────────────────
+const bundle = ref(null)          // { version } | null — вне приложения null
+const bundleBusy = ref(false)
+const bundleMsg = ref('')
+
+async function loadBundle() {
+  try {
+    const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+    const cur = await CapacitorUpdater.current()
+    bundle.value = { version: cur?.bundle?.version || 'встроенная' }
+  } catch { bundle.value = null }
+}
+
+async function checkUpdate() {
+  bundleBusy.value = true
+  bundleMsg.value = ''
+  try {
+    const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+    const latest = await CapacitorUpdater.getLatest()
+    if (!latest?.version || latest.version === bundle.value?.version) {
+      bundleMsg.value = 'У вас последняя версия.'
+    } else {
+      bundleMsg.value = `Доступна версия ${latest.version}. Она установится при следующем запуске приложения.`
+    }
+  } catch (e) {
+    bundleMsg.value = `Не удалось проверить обновление: ${e?.message || e}`
+  } finally {
+    bundleBusy.value = false
+  }
+}
 
 // ── Шкала оценивания (§ролей, 3.3.1) — только препод: в ЧЁМ он вводит/видит оценки.
 // Средний балл/итоговая всё равно всегда в 5-балльной — сервер сам конвертирует.
@@ -69,6 +161,9 @@ onMounted(async () => {
   //микрофон» при простом заходе в настройки выглядит как попытка подслушать. Названия
   //подтянутся по кнопке «Обновить список», то есть по осознанному действию.
   voice.refresh(false)
+  loadNotify()
+  loadPushInfo()
+  loadBundle()
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
   if (auth.role === 'teacher') await loadGradingScale()
@@ -94,12 +189,70 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 </script>
 
 <template>
-  <div class="space-y-6">
+  <!-- flex+gap, а НЕ space-y-*: в Tailwind 4 `space-y` разворачивается в правило с
+       нулевой специфичностью, и любой конкурирующий margin съедает промежуток без следа
+       в разметке (уже ловили на статистике студента). -->
+  <div class="flex flex-col gap-6">
     <!-- Оформление (полный кастомайзер тем: пресеты + свой цвет + режим + расписание). -->
     <div>
       <h2 class="mb-3 font-title text-lg font-extrabold text-text">Оформление</h2>
       <ThemeCustomizer />
     </div>
+
+    <!-- Уведомления: что присылать. Настройка АККАУНТА — решение принимает сервер до
+         отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
+    <Card title="Уведомления" subtitle="Что присылать на телефон">
+      <div class="flex flex-col gap-2">
+        <ToggleRow v-for="k in NOTIFY_KINDS" :key="k.key"
+                   :label="k.label" :hint="k.hint"
+                   :model-value="notify[k.key]"
+                   :disabled="notifySaving === k.key"
+                   @update:model-value="(v) => toggleNotify(k.key, v)" />
+      </div>
+
+      <p v-if="notifyError" class="mt-3 text-sm text-red">{{ notifyError }}</p>
+      <div class="mt-3 flex items-start gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2.5 text-xs text-text3">
+        <BellOff class="mt-0.5 size-4 shrink-0" />
+        <p>Выключенное перестаёт приходить на телефон, но остаётся во вкладке
+           «Уведомления» — историю оценок и заданий выключатель не стирает.</p>
+      </div>
+
+      <!-- Состояние пушей на ЭТОМ телефоне. Отказ доставки иначе невидим: и человек,
+           и мы узнаём о нём только по отсутствию уведомлений, то есть никогда. -->
+      <div v-if="pushInfo" class="mt-3">
+        <div v-if="pushInfo.has_token && pushInfo.permission"
+             class="flex items-start gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2.5 text-xs text-text3">
+          <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
+          <p>Этот телефон подключён к уведомлениям.</p>
+        </div>
+        <div v-else class="flex items-start gap-2.5 rounded-lg border border-red/40 bg-card2 px-3 py-2.5 text-xs text-text2">
+          <TriangleAlert class="mt-0.5 size-4 shrink-0 text-red" />
+          <p v-if="!pushInfo.permission">
+            Показ уведомлений запрещён в настройках телефона — разрешите их для
+            GradeBookAI, иначе ничего не придёт.
+          </p>
+          <p v-else>
+            Телефон пока не подключён к уведомлениям.
+            <template v-if="pushInfo.error"> Причина: {{ pushInfo.error }}.</template>
+            Доставку обеспечивает RuStore — на телефоне без него уведомления работать
+            не будут.
+          </p>
+        </div>
+      </div>
+    </Card>
+
+    <!-- Версия веб-части. Только в приложении: на сайте и десктопе обновление приезжает
+         обычной загрузкой страницы, и показывать номер бандла там не о чем. -->
+    <Card v-if="bundle" title="Версия приложения"
+          subtitle="Интерфейс обновляется сам, без переустановки из магазина">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-text2">Установлена: <span class="font-semibold text-text">{{ bundle.version }}</span></p>
+        <AppButton variant="ghost" :disabled="bundleBusy" @click="checkUpdate">
+          <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? 'Проверяем…' : 'Проверить обновление' }}
+        </AppButton>
+      </div>
+      <p v-if="bundleMsg" class="mt-3 text-sm text-text3">{{ bundleMsg }}</p>
+    </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->
     <Card title="Озвучка Вектора" subtitle="Как Вектор проговаривает свои ответы">
