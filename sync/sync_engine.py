@@ -233,20 +233,22 @@ def _collect_groups() -> list:
         with closing(DBManager.get_conn()) as conn:   #закроется и при исключении
             cur = conn.cursor()
             cur.execute("SELECT id,name,COALESCE(subjects,'[]'),COALESCE(updated_at,''),"
-                        "COALESCE(deleted,0) FROM groups")
+                        "COALESCE(deleted,0),specialty_code,enrollment_year FROM groups")
             rows = cur.fetchall()
     except Exception as e:
         #НЕ глушим молча: при залоченной/битой БД пустой список уехал бы как «нет групп»,
         #и локальные группы просто перестали бы синхронизироваться — без следа в логах.
         _log.error("не удалось прочитать группы для синка: %s", e)
     out = []
-    for gid, name, subj, uat, deleted in rows:
+    for gid, name, subj, uat, deleted, specialty_code, enrollment_year in rows:
         try:
             subjects = _json.loads(subj) if subj else []
         except Exception:
             subjects = []
         out.append({"id": gid or f"grp:{name}", "name": name, "subjects": subjects,
-                    "updated_at": uat or _now(), "deleted": bool(deleted)})
+                    "updated_at": uat or _now(), "deleted": bool(deleted),
+                    "specialty_code": specialty_code or "",
+                    "enrollment_year": enrollment_year})
     return out
 
 
@@ -580,7 +582,8 @@ def _merge_groups(remote: list):
     with closing(DBManager.get_conn()) as conn:
         cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
-                    "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+                    "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, "
+                    "specialty_code TEXT, enrollment_year INTEGER)")
         for g in remote:
             name = g.get("name", "")
             gid = g.get("id") or (f"grp:{name}" if name else "")
@@ -591,10 +594,12 @@ def _merge_groups(remote: list):
             row = cur.fetchone()
             if not (row is None or _should_apply(g.get("updated_at", ""), row[0] or "", rdel)):
                 continue
-            cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
-                        "VALUES (?,?,?,?,?)",
+            cur.execute("INSERT OR REPLACE INTO groups "
+                        "(id,name,subjects,updated_at,deleted,specialty_code,enrollment_year) "
+                        "VALUES (?,?,?,?,?,?,?)",
                         (gid, name, _json.dumps(g.get("subjects") or [], ensure_ascii=False),
-                         g.get("updated_at", ""), 1 if rdel else 0))
+                         g.get("updated_at", ""), 1 if rdel else 0,
+                         g.get("specialty_code") or "", g.get("enrollment_year")))
         conn.commit()
 
 

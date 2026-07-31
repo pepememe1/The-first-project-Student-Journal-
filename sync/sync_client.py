@@ -425,6 +425,27 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def esstu_specialties(self, group: str = "") -> dict:
+        """Справочник специальностей ВСГУТУ (parsers/esstu_parser.py) для диалога
+        импорта учебного плана. {specialties:[...], suggested_code}. Внешний сайт —
+        таймаут щедрее обычного."""
+        r = self._req("GET", "/web/admin/esstu/specialties", params={"group": group},
+                      timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def import_esstu(self, group: str, specialty_code: str, enrollment_year: int) -> dict:
+        """Импорт специальности + учебного плана ВСГУТУ в группу — часы/ЗЕТ ИМЕННО
+        текущего курса/семестра (считается от года поступления на сервере,
+        study_hours.course_and_semester). {ok, course, semester, term, imported,
+        unmapped, saved_hours}. Тянет и парсит PDF на сервере — таймаут щедрый."""
+        r = self._req("POST", "/web/admin/groups/import-esstu",
+                      json={"group": group, "specialty_code": specialty_code,
+                            "enrollment_year": enrollment_year},
+                      timeout=40)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

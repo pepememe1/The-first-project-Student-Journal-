@@ -27,6 +27,7 @@ from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
+from ..parsers import esstu_parser
 import vector_nlu   # общий с десктопом лексикон/классификатор (корень в sys.path через webdata)
 
 
@@ -2890,6 +2891,140 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
             db.add(Subject(id=sid, name=s, updated_at=now, deleted=False))
     db.commit()
     return {"ok": True, "building": building, "bound": bound, "subjects": len(all_subjects)}
+
+
+# --- Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py) ---------
+
+#Список специальностей меняется на сайте колледжа редко — TTL-кэш в памяти процесса
+#(тот же приём, что schedule_web.py уже применяет для похожей задачи: внешний сайт,
+#не свои данные, дёргать его на каждый клик в диалоге импорта незачем).
+_ESSTU_SPECIALTIES_CACHE = {"ts": 0.0, "data": []}
+_ESSTU_SPECIALTIES_TTL = 3 * 3600
+
+
+@router.get("/admin/esstu/specialties")
+def admin_esstu_specialties(group: str = Query(""), _admin: User = Depends(require_admin)):
+    """Справочник специальностей колледжа с сайта ВСГУТУ — для диалога импорта
+    учебного плана. Сайт недоступен/структура страницы изменилась —
+    esstu_parser.get_all_specialties() сама вернёт [] (см. её докстринг), это НЕ
+    ошибка запроса — фронт покажет пустой список и ссылку «повторить».
+
+    group (опц.) — имя группы, для которой открыт диалог: если её буквенный
+    префикс узнаётся (esstu_parser.match_specialty), подсказываем код специальности
+    ОДНИМ источником правды на сервере — а не второй копией того же маппинга в JS."""
+    import time
+    now = time.time()
+    if not (_ESSTU_SPECIALTIES_CACHE["data"]
+           and now - _ESSTU_SPECIALTIES_CACHE["ts"] < _ESSTU_SPECIALTIES_TTL):
+        _ESSTU_SPECIALTIES_CACHE["data"] = esstu_parser.get_all_specialties()
+        _ESSTU_SPECIALTIES_CACHE["ts"] = now
+    specialties = _ESSTU_SPECIALTIES_CACHE["data"]
+    suggested = esstu_parser.match_specialty(group, specialties) if group else None
+    return {"specialties": specialties, "suggested_code": (suggested or {}).get("code", "")}
+
+
+@router.post("/admin/groups/import-esstu")
+def admin_import_esstu(payload: dict = Body(...),
+                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Импорт специальности + учебного плана ВСГУТУ в группу: {group, specialty_code,
+    enrollment_year}. Группа — в BODY, НЕ в пути (инвариант §10 — слэш в имени группы
+    ломает путь URL).
+
+    Подтягивает план целиком (esstu_parser.get_study_plan), считает курс/семестр
+    группы ОТ ГОДА ПОСТУПЛЕНИЯ и ТЕКУЩЕГО термина (study_hours.course_and_semester —
+    не календарные дни, а те же дискретные термины, которыми уже устроена вся
+    остальная система), и заносит в Group.subjects/SubjectHours ТОЛЬКО дисциплины
+    ТЕКУЩЕГО семестра — не всю четырёхлетнюю программу разом (иначе через год
+    список предметов группы пришлось бы перестраивать вручную). Дисциплины, для
+    которых семестр из плана извлечь не удалось (см. esstu_parser — сетка семестров
+    не на каждом документе калибруется), ВСЁ РАВНО попадают в Group.subjects
+    (лучше показать «предмет есть, часов пока нет», чем молча его не показать), но
+    БЕЗ строки SubjectHours — часы по ним админ заполняет вручную, как раньше.
+
+    Как admin_bind_subjects (импорт предметов ИЗ РАСПИСАНИЯ) — та же логика:
+    ЗАМЕНЯЕМ Group.subjects (не объединяем), внешний источник считается основой на
+    момент импорта; повторный импорт пересинхронит с планом."""
+    group = (payload.get("group") or "").strip()
+    specialty_code = (payload.get("specialty_code") or "").strip()
+    enrollment_year = payload.get("enrollment_year")
+    if not group or not specialty_code or not enrollment_year:
+        raise HTTPException(status_code=400,
+                            detail="Нужны group, specialty_code, enrollment_year")
+    try:
+        enrollment_year = int(enrollment_year)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="enrollment_year должен быть числом (год)")
+
+    grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+
+    plan = esstu_parser.get_study_plan(specialty_code, enrollment_year)
+    if not plan:
+        raise HTTPException(status_code=422,
+                            detail="Учебный план не найден для этой специальности/года набора "
+                                   "(сайт ВСГУТУ недоступен, план не опубликован, либо не "
+                                   "распознан — подробности в логе сервера)")
+
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    course, overall_semester = W.study_hours.course_and_semester(enrollment_year, ty, ts)
+
+    current_rows = [r for r in plan if r["hours_by_semester"].get(overall_semester)]
+    unmapped_rows = [r for r in plan if not r["hours_by_semester"]]
+    now = _now_iso()
+
+    #Group.subjects — ЗАМЕНА (как admin_bind_subjects), план — источник истины на
+    #момент импорта. Дубли имён (одно название в разных циклах, напр. «История»)
+    #схлопываются — Group.subjects хранит имена, не индексы дисциплин плана.
+    all_names = sorted({r["subject"] for r in current_rows} | {r["subject"] for r in unmapped_rows})
+    grp.subjects = all_names
+    grp.specialty_code = specialty_code
+    grp.enrollment_year = enrollment_year
+    grp.updated_at = now
+    grp.deleted = False
+
+    saved = 0
+    for row in current_rows:
+        name = row["subject"]
+        #ВАЖНО: hours_total в SubjectHours — часы «на семестр» (см. models.py::
+        #SubjectHours docstring), а НЕ общий итог по дисциплине за все 4 курса —
+        #берём ИМЕННО часы текущего семестра из сетки, не row["hours"] (это было
+        #реальной ошибкой первой версии, поймано тестом: группа получала часы
+        #всей четырёхлетней программы в один семестр).
+        sem_hours = row["hours_by_semester"].get(overall_semester) or 0
+        hid = subject_hours_id(group, name, ty, ts)
+        existing = db.get(SubjectHours, hid)
+        sh = existing or SubjectHours(id=hid, group_name=group, subject=name, year=ty, semester=ts)
+        if existing is None:
+            db.add(sh)
+        sh.hours_total = int(sem_hours)
+        sh.zet = W.study_hours.zet_hint(sem_hours) or None
+        #teacher_id НЕ трогаем: это отдельное ручное назначение администратора
+        #(§ролей препод↔предмет↔группа), к содержимому учебного плана отношения
+        #не имеет — импорт правит только часы/ЗЕТ, а не «кто ведёт».
+        sh.updated_at = now
+        sh.deleted = False
+        saved += 1
+
+    for name in all_names:                                    #пополняем каталог предметов
+        sid = f"subj:{name}"
+        if db.get(Subject, sid) is None:
+            db.add(Subject(id=sid, name=name, updated_at=now, deleted=False))
+
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.import_esstu",
+              target=group, detail=f"{specialty_code} набор {enrollment_year}, курс {course}")
+    return {
+        "ok": True,
+        "group": group,
+        "course": course,
+        "semester": overall_semester,
+        "term": {"year": ty, "semester": ts},
+        "imported": [r["subject"] for r in current_rows],
+        "unmapped": sorted({r["subject"] for r in unmapped_rows} - {r["subject"] for r in current_rows}),
+        "saved_hours": saved,
+    }
 
 
 # --- Предметы (CRUD) --- id=subj:name. NB: на десктопе список предметов аддитивный

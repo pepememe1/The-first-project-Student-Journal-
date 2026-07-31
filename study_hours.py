@@ -65,6 +65,23 @@ def zet_hint(total_hours) -> float:
     return round((total_hours or 0) / ZET_HOURS, 1) if total_hours else 0.0
 
 
+def course_and_semester(enrollment_year: int, term_year: str, term_semester: int) -> tuple:
+    """(курс 1-4, семестр-с-начала-обучения 1-8) по году поступления и ТЕКУЩЕМУ
+    учебному термину (`webdata.current_term()`/`data/terms.py`, формат термина —
+    `"YYYY/YYYY+1"`, semester — 1|2). Считаем не календарными днями от даты
+    поступления, а по этим же дискретным терминам, которыми уже устроена вся
+    остальная система (SubjectHours.year/semester) — иначе получилась бы вторая,
+    несовместимая система координат.
+
+    Не валидируем результат: год поступления введён некорректно (например, в
+    будущем) даст курс <1 или >4 — это сигнал администратору поправить дату, а не
+    повод бросить исключение здесь."""
+    years = int(str(term_year).split("/")[0]) - int(enrollment_year)
+    course = years + 1
+    overall_semester = years * 2 + int(term_semester)
+    return course, overall_semester
+
+
 def subject_zet_earned(lessons, records, zet, scale: str = "5"):
     """ЗЕТ по ОДНОМУ предмету (lessons — занятия ТОЛЬКО этого предмета за термин),
     если студент его СДАЛ, иначе None. zet=None (администратор не задавал) → всегда

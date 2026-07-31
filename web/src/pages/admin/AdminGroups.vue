@@ -136,6 +136,52 @@ async function saveHours() {
   finally { hoursSaving.value = false }
 }
 
+// ── Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py) ────────
+// Отдельно от «Из расписания» выше: тот берёт ТОЛЬКО названия предметов с портала
+// расписания, а это — целиком специальность+год поступления → часы/ЗЕТ по каждому
+// предмету ИМЕННО текущего курса/семестра (курс считается от года поступления,
+// см. серверный study_hours.course_and_semester — счётчик от даты, а не хранимое
+// число, чтобы через год не protaskaть группу вручную).
+const showImport = ref(false)
+const importGroup = ref('')
+const importSpecialties = ref([])
+const importLoadingList = ref(false)
+const importForm = ref({ specialty_code: '', enrollment_year: new Date().getFullYear() })
+const importSaving = ref(false)
+const importError = ref('')
+const importResult = ref(null)   // {course, semester, imported, unmapped, saved_hours}
+
+async function openImport(g) {
+  importGroup.value = g.name
+  importResult.value = null
+  importError.value = ''
+  importForm.value = { specialty_code: '', enrollment_year: new Date().getFullYear() }
+  showImport.value = true
+  importLoadingList.value = true
+  try {
+    const r = (await adminApi.esstuSpecialties(g.name)).data
+    importSpecialties.value = r.specialties || []
+    if (r.suggested_code) importForm.value.specialty_code = r.suggested_code
+  } catch (e) {
+    importError.value = e?.response?.data?.detail || 'Не удалось получить список специальностей'
+  } finally { importLoadingList.value = false }
+}
+
+async function runImport() {
+  const f = importForm.value
+  if (!f.specialty_code || !f.enrollment_year) {
+    importError.value = 'Выберите специальность и год поступления'
+    return
+  }
+  importSaving.value = true; importError.value = ''; importResult.value = null
+  try {
+    const r = (await adminApi.importEsstu(importGroup.value, f.specialty_code, Number(f.enrollment_year))).data
+    importResult.value = r
+    await reload()
+  } catch (e) { importError.value = e?.response?.data?.detail || 'Не удалось импортировать план' }
+  finally { importSaving.value = false }
+}
+
 // «Из расписания» — привязывает к каждой группе предметы ИЗ её расписания (портал
 // ВСГУТУ) и пополняет каталог. Снимок строится на сервере лениво (~минута): если он
 // ещё готовится — просим нажать позже.
@@ -196,6 +242,7 @@ async function importParsed() {
               </div>
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
+              <button class="mr-3 text-text3 hover:text-accent" title="Импорт специальности/плана с сайта ВСГУТУ" @click="openImport(g)">🎓</button>
               <button class="mr-3 text-text3 hover:text-accent" title="Учебные часы по предметам" @click="openHours(g)">🕐</button>
               <button class="mr-3 text-text3 hover:text-accent" title="Изменить" @click="openEdit(g)">✎</button>
               <button class="text-text3 hover:text-red" title="Удалить" @click="del(g)">✕</button>
@@ -254,6 +301,65 @@ async function importParsed() {
           <AppButton variant="ghost" size="sm" @click="showHours = false">Отмена</AppButton>
           <AppButton variant="green" size="sm" :disabled="hoursSaving || hoursLoading || !hoursRows.length" @click="saveHours">
             {{ hoursSaving ? 'Сохранение…' : 'Сохранить' }}
+          </AppButton>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Импорт специальности/учебного плана ВСГУТУ ─────────────────────────────── -->
+    <div v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showImport = false">
+      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
+        <h3 class="font-title text-lg font-bold text-text">Импорт с сайта ВСГУТУ · {{ importGroup }}</h3>
+        <p class="mb-4 mt-1 text-xs text-text3">
+          Подтягивает учебный план специальности и заносит в группу предметы+часы+ЗЕТ
+          ИМЕННО текущего курса/семестра (считается от года поступления). Список
+          предметов группы будет ЗАМЕНЁН — как при обновлении «Из расписания».
+        </p>
+
+        <template v-if="!importResult">
+          <p v-if="importLoadingList" class="py-6 text-center text-sm text-text3">Загрузка специальностей…</p>
+          <div v-else class="space-y-3">
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Специальность</span>
+              <select v-model="importForm.specialty_code"
+                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+                <option value="">— выберите —</option>
+                <option v-for="s in importSpecialties" :key="s.code" :value="s.code">{{ s.code }} — {{ s.name }}</option>
+              </select>
+              <p v-if="!importSpecialties.length" class="mt-1 text-xs text-red">
+                Список специальностей недоступен (сайт ВСГУТУ не ответил) — попробуйте позже.
+              </p>
+            </label>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Год поступления</span>
+              <input v-model.number="importForm.enrollment_year" type="number" min="2000" max="2100"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+            </label>
+            <p v-if="importError" class="text-sm text-red">{{ importError }}</p>
+          </div>
+        </template>
+
+        <!-- Сводка после успешного импорта — что именно подтянулось. -->
+        <div v-else class="space-y-2 text-sm">
+          <p class="text-text">Курс <b>{{ importResult.course }}</b>, семестр с начала обучения
+            <b>{{ importResult.semester }}</b> (текущий период: {{ importResult.term.year }} ·
+            {{ importResult.term.semester === 1 ? 'осенний' : 'весенний' }}).</p>
+          <p class="text-text2">Предметов с часами этого семестра: <b>{{ importResult.imported.length }}</b></p>
+          <div v-if="importResult.imported.length" class="flex flex-wrap gap-1.5">
+            <Badge v-for="s in importResult.imported" :key="s" variant="green">{{ s }}</Badge>
+          </div>
+          <template v-if="importResult.unmapped.length">
+            <p class="pt-1 text-text2">Добавлены без часов (не удалось определить семестр в плане —
+              задайте часы вручную кнопкой 🕐):</p>
+            <div class="flex flex-wrap gap-1.5">
+              <Badge v-for="s in importResult.unmapped" :key="s" variant="muted">{{ s }}</Badge>
+            </div>
+          </template>
+        </div>
+
+        <div class="mt-5 flex justify-end gap-2">
+          <AppButton variant="ghost" size="sm" @click="showImport = false">{{ importResult ? 'Закрыть' : 'Отмена' }}</AppButton>
+          <AppButton v-if="!importResult" variant="green" size="sm"
+                    :disabled="importSaving || importLoadingList || !importSpecialties.length" @click="runImport">
+            {{ importSaving ? 'Импорт…' : 'Импортировать' }}
           </AppButton>
         </div>
       </div>

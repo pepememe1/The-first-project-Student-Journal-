@@ -1072,11 +1072,19 @@ class AdminDashboard(QWidget):
                 self._g_table.setItem(r, 1, QTableWidgetItem(subj_str))
                 actions = QWidget(); ah = QHBoxLayout(actions)
                 ah.setContentsMargins(0, 0, 0, 0); ah.setSpacing(4)
+                #⚠️ Порядок кнопок здесь — не только вид: test_admin_groups_desktop.py::
+                #test_hours_button_wired находит «кнопку часов» как ПЕРВУЮ findChildren
+                #(QPushButton) в этом виджете, без явного отличия по тексту/тултипу — новую
+                #кнопку добавлять ТОЛЬКО после hrs_b, иначе тест кликает по НЕЙ и виснет на
+                #QMessageBox.warning() (модальный диалог ждёт пользователя, которого в
+                #headless-тесте нет — поймано зависанием всего прогона, не просто падением).
                 hrs_b = QPushButton("🕐"); hrs_b.setToolTip("Учебные часы по предметам")
                 hrs_b.clicked.connect(lambda _, n=g["name"]: self._open_group_hours(n))
+                imp_b = QPushButton("🎓"); imp_b.setToolTip("Импорт специальности/плана с сайта ВСГУТУ")
+                imp_b.clicked.connect(lambda _, n=g["name"]: self._open_import_esstu(n))
                 del_b = QPushButton("✕"); del_b.setStyleSheet(BTN["sm_red"])
                 del_b.clicked.connect(lambda _, n=g["name"]: self._del_group(n))
-                ah.addWidget(hrs_b); ah.addWidget(del_b)
+                ah.addWidget(hrs_b); ah.addWidget(imp_b); ah.addWidget(del_b)
                 self._g_table.setCellWidget(r, 2, actions)
         self._run_bg(_fetch, _apply)
 
@@ -1269,6 +1277,99 @@ class AdminDashboard(QWidget):
 
             self._run_bg(_do, _saved, _save_err)
         save.clicked.connect(_save)
+
+        lay.addLayout(btns); d.exec()
+
+    def _open_import_esstu(self, name: str):
+        """«🎓» — импорт специальности + учебного плана ВСГУТУ (parsers/esstu_parser.py):
+        подтягивает часы/ЗЕТ ИМЕННО текущего курса/семестра группы (считается на сервере
+        от года поступления, study_hours.course_and_semester) и заменяет предметы группы.
+        Тот же REST-путь через SyncClient, что и «🕐» — нужен интернет (сайт ВСГУТУ),
+        офлайн-пути здесь нет."""
+        from PySide6.QtWidgets import QComboBox
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        d = QDialog(self); d.setWindowTitle(f"Импорт с сайта ВСГУТУ: {name}"); d.resize(420, 320)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl(f"Импорт с сайта ВСГУТУ · {name}", 16))
+        hint = lbl("Подтягивает предметы+часы+ЗЕТ ИМЕННО текущего курса/семестра "
+                  "(считается от года поступления). Список предметов группы будет "
+                  "ЗАМЕНЁН — как при обновлении «Из расписания».", 11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+
+        lay.addWidget(lbl("СПЕЦИАЛЬНОСТЬ", 10, C['text3']))
+        combo = QComboBox(); combo.addItem("Загрузка…", "")
+        combo.setEnabled(False)
+        lay.addWidget(combo)
+        lay.addWidget(lbl("ГОД ПОСТУПЛЕНИЯ", 10, C['text3']))
+        year_sp = QSpinBox(); year_sp.setRange(2000, 2100)
+        import datetime as _dt
+        year_sp.setValue(_dt.date.today().year)
+        lay.addWidget(year_sp)
+        status = lbl("", 11, C['text3']); status.setWordWrap(True); lay.addWidget(status)
+
+        btns = QHBoxLayout()
+        run = btn("Импортировать", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(run)
+        run.setEnabled(False)
+
+        def _load():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).esstu_specialties(name)
+
+        def _apply(data):
+            combo.clear()
+            specialties = data.get("specialties") or []
+            if not specialties:
+                status.setText("⚠️ Список специальностей недоступен (сайт ВСГУТУ не ответил).")
+                return
+            suggested = data.get("suggested_code") or ""
+            sel_idx = 0
+            for sp in specialties:
+                combo.addItem(f"{sp['code']} — {sp['name']}", sp["code"])
+                if sp["code"] == suggested:
+                    sel_idx = combo.count() - 1
+            combo.setCurrentIndex(sel_idx)
+            combo.setEnabled(True)
+            run.setEnabled(True)
+
+        def _err(e):
+            status.setText(f"⚠️ Не удалось загрузить список специальностей: {e}")
+
+        self._run_bg(_load, _apply, _err)
+
+        def _run():
+            code = combo.currentData()
+            if not code:
+                return
+            run.setEnabled(False)
+            status.setText("Импорт…")
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).import_esstu(name, code, year_sp.value())
+
+            def _done(r):
+                term = r.get("term") or {}
+                sem_word = "осенний" if term.get("semester") == 1 else "весенний"
+                msg = (f"Курс {r.get('course')}, семестр с начала обучения {r.get('semester')} "
+                      f"(период {term.get('year', '')} · {sem_word}).\n"
+                      f"Предметов с часами: {len(r.get('imported') or [])}.")
+                if r.get("unmapped"):
+                    msg += (f"\nБез часов (задайте вручную «🕐»): "
+                           f"{', '.join(r['unmapped'])}")
+                QMessageBox.information(d, "Готово", msg)
+                d.accept(); self._render_groups(); self._refresh_dash()
+
+            def _run_err(e):
+                run.setEnabled(True)
+                status.setText(f"⚠️ Не удалось импортировать: {e}")
+
+            self._run_bg(_do, _done, _run_err)
+        run.clicked.connect(_run)
 
         lay.addLayout(btns); d.exec()
 

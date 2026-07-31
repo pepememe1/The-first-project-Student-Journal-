@@ -174,6 +174,12 @@ export const adminApi = {
   // (см. server/app/routers/web.py::admin_set_group_hours).
   saveGroupHours: (group, hours, teachers = {}, zet = {}) =>
     api.post('/web/admin/group-hours', { group, hours, teachers, zet }),
+  // Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py на сервере):
+  // список специальностей сайта колледжа + сам импорт часов/ЗЕТ текущего семестра в группу.
+  esstuSpecialties: (group = '') => api.get('/web/admin/esstu/specialties', { params: { group } }),
+  importEsstu: (group, specialtyCode, enrollmentYear) =>
+    api.post('/web/admin/groups/import-esstu',
+            { group, specialty_code: specialtyCode, enrollment_year: enrollmentYear }),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
