@@ -180,7 +180,7 @@ function renderBody(msg) {
 // Фаза 1 ссылок/видео (docs/MESSENGER-ATTACHMENTS-PLAN.md): клик по обычной ссылке в теле
 // сообщения (data-external-link, см. markdownLite.js) — подтверждение «Переадресация»
 // перед уходом с сайта, как договорились (видео из белого списка сюда не попадают —
-// они рендерятся ОТДЕЛЬНОЙ карточкой ниже, см. videoEmbeds()/expandedVideos).
+// они рендерятся ОТДЕЛЬНОЙ карточкой ниже, см. videoEmbeds()).
 async function onBodyClick(e) {
   const a = e.target.closest('a[data-external-link]')
   if (!a) return
@@ -195,18 +195,10 @@ async function onBodyClick(e) {
 }
 
 // Видео из белого списка (YouTube/VK/Rutube) — отдельная карточка ПОД текстом сообщения
-// (v-html статичен и не даёт повесить Vue-обработчик внутрь), сворачиваемая по клику.
-const expandedVideos = ref(new Set())
+// (v-html статичен и не даёт повесить Vue-обработчик внутрь), плеер виден сразу.
 function videoEmbeds(msg) {
   if (msg.deleted || isHiddenByIgnore(msg)) return []
   return extractVideos(msg.body)
-}
-function videoKey(msg, v) { return `${msg.id}:${v.sourceUrl}` }
-function toggleVideo(msg, v) {
-  const key = videoKey(msg, v)
-  const next = new Set(expandedVideos.value)
-  if (next.has(key)) next.delete(key); else next.add(key)
-  expandedVideos.value = next
 }
 
 // §D3: клик по реакции — поставить/снять свою.
@@ -945,18 +937,15 @@ const headerTint = computed(() =>
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
                    @click="onBodyClick" />
               <!-- Видео из белого списка (YouTube/VK/Rutube, Фаза 1) — карточка ПОД текстом,
-                   сворачиваемая: сама ссылка уже кликабельна выше, плеер — по явному клику. -->
+                   плеер сразу виден (без лишнего клика «показать видео» — Влад). Шире, чем
+                   было (max-w-xs→max-w-sm): раньше карточка была узкой НАМЕРЕННО — свёрнутая
+                   плашка «показать видео» не нуждалась в размере плеера; теперь, когда плеер
+                   всегда развёрнут, той же ширины не хватает для полной панели управления
+                   YouTube/VK/Rutube (там теснится и громкость, и полноэкранный режим). -->
               <div v-for="v in videoEmbeds(msg)" :key="v.sourceUrl" class="mt-1.5" @click.stop>
-                <iframe v-if="expandedVideos.has(videoKey(msg, v))"
-                        :src="v.embedUrl" class="aspect-video w-full max-w-xs rounded-lg border-0"
-                        sandbox="allow-scripts allow-same-origin allow-presentation"
+                <iframe :src="v.embedUrl" class="aspect-video w-full max-w-sm rounded-lg border-0"
+                        sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
                         allowfullscreen />
-                <button v-else type="button" @click="toggleVideo(msg, v)"
-                        class="flex w-full max-w-xs items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors"
-                        :class="msg.mine ? 'border-white/30 hover:bg-white/10' : 'border-border hover:bg-bg2'">
-                  <span class="grid size-7 shrink-0 place-items-center rounded-full bg-black/20 text-sm">▶</span>
-                  <span class="min-w-0 flex-1 truncate">{{ v.provider === 'youtube' ? 'YouTube' : v.provider === 'vk' ? 'VK Видео' : 'Rutube' }} · показать видео</span>
-                </button>
               </div>
               <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
                 <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />

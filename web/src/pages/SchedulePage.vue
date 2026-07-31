@@ -125,21 +125,42 @@ async function onCategoryChange(key) {
 }
 
 async function loadGroupsList() {
-  try { groups.value = (await scheduleApi.groups(category.value)).data.groups || [] }
-  catch { groups.value = [] }
+  //Категория, ДЛЯ которой запрошен список — не читаем category.value ПОСЛЕ await:
+  //быстрое переключение кнопок-категорий (клик-клик-клик) запускает несколько таких
+  //вызовов одновременно, и более медленный ответ (например, у Заочного 1 список
+  //короче — придёт раньше) мог прилететь ПОСЛЕ более быстрого и молча подменить
+  //список группами не той категории, хотя кнопка уже показывает другую — реальный
+  //баг, со стороны выглядел как «всё перемешано».
+  const forCategory = category.value
+  try {
+    const list = (await scheduleApi.groups(forCategory)).data.groups || []
+    if (forCategory !== category.value) return
+    groups.value = list
+  } catch {
+    if (forCategory === category.value) groups.value = []
+  }
 }
 
 async function load() {
   loading.value = true
+  const forCategory = category.value
+  const forGroup = group.value
   try {
-    const r = (await scheduleApi.get(group.value || undefined, category.value)).data
+    const r = (await scheduleApi.get(forGroup || undefined, forCategory)).data
+    //Та же защита от устаревшего ответа: пока шёл запрос, могли сменить категорию
+    //или группу (см. loadGroupsList выше) — тогда этот ответ уже не про текущий выбор.
+    if (forCategory !== category.value || forGroup !== group.value) return
     data.value = r
     group.value = r.group || group.value
     const wk = Object.keys(r.schedule?.weeks || {}).map(Number).sort((a, b) => a - b)
     //Сессионные категории — своя «текущая» неделя не существует (это не календарная
     //чётность, а порядковый номер сессии) — берём первый реально найденный блок.
     week.value = categoryDated.value ? (wk[0] || 1) : (r.week || 1)
-  } catch { data.value = null } finally { loading.value = false }
+  } catch {
+    if (forCategory === category.value && forGroup === group.value) data.value = null
+  } finally {
+    if (forCategory === category.value && forGroup === group.value) loading.value = false
+  }
 }
 
 let pollTimer = null

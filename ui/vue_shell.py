@@ -25,6 +25,7 @@ from PySide6.QtCore import QUrl, Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 import log
+import webengine_links
 
 _LOG = log.get("vue_shell")
 
@@ -254,6 +255,13 @@ class VueShell(QWidget):
         #Своё меню Chromium («Назад/Обновить/Посмотреть код») выдаёт обёртку и перебивает
         #меню приложения — отдаём ПКМ странице (как в messenger_web).
         view.setContextMenuPolicy(Qt.NoContextMenu)
+        #Внешние ссылки (window.open из ChatThread.vue после «Переадресация») — в СИСТЕМНЫЙ
+        #браузер, а не в никуда. embed='nav' сохраняет собственную навигацию SPA (§11), и
+        #«Сообщения» открываются ВНУТРИ этого же QWebEngineView, а не только через отдельную
+        #вкладку messenger_web.py — без перехвата здесь клик по ссылке молча ничего не делал
+        #(реальный баг: предупреждение показывалось, браузер не открывался). Тот же helper,
+        #что у messenger_web.py — см. ui/webengine_links.py.
+        webengine_links.install(view)
         #Доступ к буферу обмена: без него «Копировать» в SPA молча не работает
         #(QtWebEngine запрещает его по умолчанию — этот баг мы уже ловили в 3.3).
         try:

@@ -398,6 +398,26 @@ class MainAppWindow(QMainWindow):
             import vue_dashboard
             if not vue_dashboard.available_for(role):
                 return None
+            #Локальный сервер общего кабинета мог подняться ДО входа (main.py::
+            #_start_local_api_background, фон при старте) и остаться привязан к
+            #«анонимной» копии базы. Веб-форма входа сама переключает базу на личную
+            #копию (local_api.install_login_bridge → switch_user_db) — но эта, НАТИВНАЯ
+            #форма (запасная Qt-оболочка, когда WebView2 недоступен) так не делает.
+            #Без переключения здесь общий кабинет открывается и работает НА ВИД нормально,
+            #но пишет не в ту копию — правки (например, группы в админке) молча оседают в
+            #чужом файле и пропадают после следующего перезапуска: тот подберёт уже
+            #ПРАВИЛЬНУЮ копию по сохранённой сессии, а «анонимная» останется мёртвым
+            #обрубком. Реальный баг, найденный на живых данных, не гипотетический.
+            #Тот же вызов используется веб-мостом; работает и для восстановления сессии
+            #на перезапуске (логин уже лежит в сохранённой сессии к этому моменту).
+            try:
+                import app_settings
+                login = (app_settings.get_saved_session() or {}).get("login") or ""
+                if login:
+                    import local_api
+                    local_api.switch_user_db(login)
+            except Exception as e:
+                log.get("main_window").warning(f"[vue] переключение локальной базы не удалось: {e}")
             dash = vue_dashboard.VueDashboard(role, context=context,
                                               on_logout=on_logout)
             if dash.ok:

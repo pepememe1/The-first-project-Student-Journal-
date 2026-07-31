@@ -3088,9 +3088,10 @@ def admin_import_schedule_category(payload: dict = Body(...),
     """Заводит группу-каталожную запись из НЕколледжевой категории расписания портала
     (Бакалавриат/Заочное 1/Заочное 2) — {category, group_name}. В отличие от
     admin_bind_subjects (импорт предметов ИЗ расписания уже существующих КОЛЛЕДЖ-групп),
-    здесь предметов/часов/журнала нет вовсе — группа создаётся ЧИСТО как связь с
-    расписанием + точка группировки студентов по категории (§ролей завести таких
-    студентов — обычным путём, этот эндпоинт студентов не трогает).
+    здесь часов/журнала (плана на семестр, ЗЕТ) нет вовсе — учебного плана у этих
+    категорий не существует. Предметы, однако, ставим — ИЗ ТОГО ЖЕ снимка расписания
+    (второго похода на портал не нужно): без них группа выглядела бы пустой каталожной
+    записью без единого предмета, хотя расписание для неё уже разобрано.
 
     group_name сверяется с РЕАЛЬНЫМ списком групп портала для этой категории (тот же
     кэш, что отдаёт GET /schedule/groups) — свободного ввода имени нет специально,
@@ -3108,6 +3109,19 @@ def admin_import_schedule_category(payload: dict = Body(...),
                                 detail="Такой группы нет в текущем снимке расписания этой "
                                        "категории (сайт недоступен либо имя изменилось)")
 
+    #Предметы — уникальные названия ИЗ УЖЕ РАЗОБРАННОГО расписания этой группы (те же
+    #данные, что рисует вкладка «Расписание»). Сайт может быть недоступен именно сейчас —
+    #тогда просто пусто, как и раньше; это не повод отказывать в создании группы.
+    subjects = []
+    try:
+        sched = schedule_web.get_group(group_name, category)
+        if sched:
+            subjects = sorted({ls.get("subject") for days in (sched.get("weeks") or {}).values()
+                               for lessons in days.values() for ls in lessons
+                               if ls.get("subject")})
+    except Exception:
+        subjects = []
+
     gid = f"grp:{group_name}"
     existing = db.get(Group, gid)
     if existing is not None and not existing.deleted:
@@ -3116,7 +3130,7 @@ def admin_import_schedule_category(payload: dict = Body(...),
     if existing is None:
         db.add(row)
     row.name = group_name
-    row.subjects = []
+    row.subjects = subjects
     row.category = category
     row.updated_at = _now_iso()
     row.deleted = False
@@ -3124,6 +3138,69 @@ def admin_import_schedule_category(payload: dict = Body(...),
     audit.log(db, actor=_admin.login, role="admin", action="group.import_schedule_category",
               target=group_name, detail=category)
     return {"ok": True, "name": group_name, "category": category}
+
+
+@router.post("/admin/groups/import-schedule-category-all")
+def admin_import_schedule_category_all(payload: dict = Body(...),
+                                       _admin: User = Depends(require_admin),
+                                       db: Session = Depends(get_db)):
+    """«Все» — массовый импорт ВСЕХ групп категории одним нажатием, а не по одной
+    (Бакалавриат/Заочное 1/2 — 90-220 групп на категорию, кликать по одной неразумно).
+
+    Переиспользует ТОТ ЖЕ полный снимок расписания, что и admin_bind_subjects для
+    колледжа (schedule_web.full_state) — он и так делает всю тяжёлую работу (десятки-
+    сотни GET на портал) лениво и в фоне с флагом building; второй такой crawler
+    писать незачем. Пока снимок не готов — {ok: false, building: true}, клиент
+    покажет статус и нажмёт ещё раз (тот же UX, что у «Обновить группы»).
+
+    Уже существующие группы НЕ пересоздаёт (считает в skipped), но если у такой группы
+    список предметов ПУСТ — доливает его из уже разобранного снимка: закрывает случай
+    «группу когда-то завели по одной ДО того, как импорт стал подставлять предметы»
+    без второго прохода руками. Непустые списки (в т.ч. правленные вручную) не трогает."""
+    category = (payload.get("category") or "").strip()
+    if not category or category not in schedule_parser.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Нужна известная категория расписания")
+    if category == schedule_web.default_category():
+        raise HTTPException(status_code=400,
+                            detail="Массовый импорт — только для категорий вне колледжа")
+
+    snap, building = schedule_web.full_state(category)
+    if snap is None or not snap.groups:
+        return {"ok": False, "building": building, "imported": 0, "skipped": 0, "total": 0}
+
+    now = _now_iso()
+    imported = 0
+    skipped = 0
+    for name, gsched in snap.groups.items():
+        gid = f"grp:{name}"
+        existing = db.get(Group, gid)
+        if existing is not None and not existing.deleted:
+            skipped += 1
+            #Бэкфилл: группа могла быть заведена ДО того, как одиночный/массовый импорт
+            #стали подставлять предметы (или портал не ответил в момент её импорта) —
+            #раз уж расписание всё равно только что разобрано, доливаем предметы
+            #в пустую запись бесплатно. ТОЛЬКО пустую — уже заполненные (в т.ч. вручную
+            #админом) не трогаем, это не re-sync существующих данных.
+            if not existing.subjects:
+                subs = gsched.subjects()
+                if subs:
+                    existing.subjects = subs
+                    existing.updated_at = now
+            continue
+        row = existing or Group(id=gid)
+        if existing is None:
+            db.add(row)
+        row.name = name
+        row.subjects = gsched.subjects()
+        row.category = category
+        row.updated_at = now
+        row.deleted = False
+        imported += 1
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.import_schedule_category_all",
+              target=category, detail=f"imported={imported} skipped={skipped}")
+    return {"ok": True, "building": building, "imported": imported, "skipped": skipped,
+           "total": len(snap.groups)}
 
 
 @router.post("/admin/groups/bind-subjects")

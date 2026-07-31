@@ -172,6 +172,10 @@ export const adminApi = {
   importScheduleCategory: (category, groupName) =>
     api.post('/web/admin/groups/import-schedule-category',
             { category, group_name: groupName }),
+  // «Все» — массовый импорт ВСЕХ групп категории; снимок строится в фоне на сервере
+  // (~минута на первый запрос) — {ok, building, imported, skipped, total}.
+  importScheduleCategoryAll: (category) =>
+    api.post('/web/admin/groups/import-schedule-category-all', { category }),
   // Учебные часы группы: план на семестр по каждому предмету + уже пройденное.
   groupHours: (group) => api.get('/web/admin/group-hours', { params: { group } }),
   // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);

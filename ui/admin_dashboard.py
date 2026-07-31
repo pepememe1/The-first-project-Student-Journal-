@@ -1173,19 +1173,23 @@ class AdminDashboard(QWidget):
         НЕколледжевой категории расписания портала (Бакалавриат/Заочное 1/2):
         выбор из РЕАЛЬНОГО списка групп портала (не свободный ввод — исключает
         опечатки), тот же REST-путь, что и «🎓» (нужен интернет, офлайн-пути нет).
-        Группа заводится ЧИСТО как связь с расписанием — без предметов/часов/
-        журнала, они не имеют смысла вне колледжа."""
+        Предметы сервер подставляет из её же расписания; часов/учебного плана/
+        журнала — нет, они не имеют смысла вне колледжа."""
         import schedule as _sched
         import sync_runner
         url, token = sync_runner.current_auth()
         if not url or not token:
             QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+        #Сентинел «Все» — совпадает с веб-версией (AdminGroups.vue), для единообразия,
+        #хотя оба места читают только свою копию.
+        _IMPORT_ALL_SENTINEL = "__all__"
 
         d = QDialog(self); d.setWindowTitle("Импорт группы по категории"); d.resize(420, 300)
         lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
         lay.addWidget(title_lbl("Импорт группы по категории", 16))
         hint = lbl("Заводит группу как каталожную запись, связанную с расписанием "
-                  "портала — БЕЗ предметов/часов/журнала (для колледжа их даёт "
+                  "портала. Предметы подставятся из её расписания; часов/учебного "
+                  "плана/журнала для этой категории нет (для колледжа их даёт "
                   "«Добавить группу» / «🏫 Из расписания»).", 11, C['text3'])
         hint.setWordWrap(True); lay.addWidget(hint)
 
@@ -1219,17 +1223,29 @@ class AdminDashboard(QWidget):
                 return SyncClient(url, token=token).schedule_groups(code)
 
             def _apply(data):
+                #Категорию могли переключить ЕЩЁ РАЗ, пока запрос летел в фоне — тогда
+                #этот ответ уже не про ТЕКУЩИЙ выбор в cat_combo. Без проверки более
+                #медленный ответ (например, у Заочного 1 короче список) мог прилететь
+                #ПОСЛЕ более быстрого и молча подменить список группами не той категории
+                #(реальный баг: «импорт в Заочное 2 берёт группу из Заочное 1»).
+                if cat_combo.currentData() != code:
+                    return
                 grp_combo.clear()
                 names = data.get("groups") or []
                 if not names:
                     grp_combo.addItem("нет данных с портала", None)
                     return
+                #«Все» — массовый импорт разом (категории по 90-220 групп, по одной
+                #кликать неразумно), сентинел совпадает с веб-версией (AdminGroups.vue).
+                grp_combo.addItem(f"🌐 Все ({len(names)})", _IMPORT_ALL_SENTINEL)
                 for n in names:
                     grp_combo.addItem(n, n)
                 grp_combo.setEnabled(True)
                 run.setEnabled(True)
 
             def _err(e):
+                if cat_combo.currentData() != code:
+                    return
                 grp_combo.clear(); grp_combo.addItem("ошибка загрузки", None)
                 status.setText(f"⚠️ Не удалось загрузить группы портала: {e}")
 
@@ -1238,6 +1254,37 @@ class AdminDashboard(QWidget):
         cat_combo.currentIndexChanged.connect(lambda _i: _load_groups())
         _load_groups()
 
+        def _run_all(code):
+            #Полный снимок категории строится на сервере ЛЕНИВО и В ФОНЕ (десятки-сотни
+            #страниц портала, ~минута на первый запрос — тот же приём, что у расписания
+            #преподавателя): пока не готов, сервер отвечает building=true, и мы САМИ
+            #повторяем запрос через таймер, а не заставляем админа жать кнопку вручную.
+            status.setText("Собираю расписание категории на сервере (~минута)…")
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).import_schedule_category_all(code)
+
+            def _done(r):
+                if cat_combo.currentData() != code:
+                    return   #категорию сменили, пока снимок собирался — результат уже не нужен
+                if r.get("building"):
+                    QTimer.singleShot(5000, lambda: _run_all(code))
+                    return
+                QMessageBox.information(
+                    d, "Готово",
+                    f"Добавлено групп: {r.get('imported', 0)}, уже были: {r.get('skipped', 0)} "
+                    f"(всего в категории {r.get('total', 0)}).")
+                d.accept(); self._render_groups(); self._refresh_dash()
+
+            def _run_err(e):
+                if cat_combo.currentData() != code:
+                    return
+                run.setEnabled(True)
+                status.setText(f"⚠️ Не удалось импортировать: {e}")
+
+            self._run_bg(_do, _done, _run_err)
+
         def _run():
             code = cat_combo.currentData()
             name = grp_combo.currentData()
@@ -1245,6 +1292,10 @@ class AdminDashboard(QWidget):
                 return
             run.setEnabled(False)
             status.setText("Импорт…")
+
+            if name == _IMPORT_ALL_SENTINEL:
+                _run_all(code)
+                return
 
             def _do():
                 from sync_client import SyncClient

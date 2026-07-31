@@ -247,22 +247,43 @@ watch(scheduleImportCategory, async (key) => {
   scheduleImportGroupName.value = ''
   if (!key) return
   scheduleImportLoadingGroups.value = true
-  try { scheduleImportGroups.value = (await scheduleApi.groups(key)).data.groups || [] }
-  catch { /* остаётся пустым — форма покажет «нет данных» */ }
-  finally { scheduleImportLoadingGroups.value = false }
+  try {
+    const groups = (await scheduleApi.groups(key)).data.groups || []
+    //Категорию могли переключить ЕЩЁ РАЗ, пока этот запрос летел (клик по нескольким
+    //кнопкам подряд) — тогда ответ устарел и не про ТЕКУЩИЙ выбор. Без проверки более
+    //медленный (например, Заочное 1 с меньшим списком) ответ мог прилететь ПОСЛЕ более
+    //быстрого и молча подменить список группами не той категории (реальный баг, живьём
+    //выглядел как «импорт в Заочное 2 берёт группу из Заочное 1»).
+    if (key !== scheduleImportCategory.value) return
+    scheduleImportGroups.value = groups
+  } catch {
+    if (key === scheduleImportCategory.value) scheduleImportGroups.value = []
+  } finally {
+    if (key === scheduleImportCategory.value) scheduleImportLoadingGroups.value = false
+  }
 })
 
 function openScheduleImport() {
   scheduleImportError.value = ''
+  scheduleImportSaving.value = false
   showScheduleImport.value = true
   const key = nonCollegeCategories.value[0]?.key || ''
   if (key === scheduleImportCategory.value) scheduleImportCategory.value = ''   // форсируем watch
   scheduleImportCategory.value = key
 }
 
+//Сентинел для пункта «Все» в списке групп — не настоящее имя группы, отдельная ветка
+//в runScheduleImport ниже. Список групп категории — 90-220 штук, кликать по одной
+//неразумно (Влад: «нужен импорт всего»).
+const SCHEDULE_IMPORT_ALL = '__all__'
+
 async function runScheduleImport() {
   if (!scheduleImportCategory.value || !scheduleImportGroupName.value) {
     scheduleImportError.value = 'Выберите категорию и группу'
+    return
+  }
+  if (scheduleImportGroupName.value === SCHEDULE_IMPORT_ALL) {
+    await runScheduleImportAll()
     return
   }
   scheduleImportSaving.value = true; scheduleImportError.value = ''
@@ -273,6 +294,39 @@ async function runScheduleImport() {
     await reload()
   } catch (e) { scheduleImportError.value = e?.response?.data?.detail || 'Не удалось импортировать' }
   finally { scheduleImportSaving.value = false }
+}
+
+//Полный снимок категории строится на сервере ЛЕНИВО и В ФОНЕ (десятки-сотни страниц
+//портала, ~минута на первый запрос — тот же приём, что у расписания преподавателя):
+//пока не готов, сервер отвечает building=true, и мы САМИ повторяем запрос через 5с,
+//вместо того чтобы заставлять админа жать кнопку вручную несколько раз подряд.
+//scheduleImportSaving держим true ВСЁ ЭТО ВРЕМЯ (до готового результата/ошибки) —
+//поэтому сбрасываем его явно в КАЖДОЙ конечной ветке, а не одним finally для всех.
+async function runScheduleImportAll() {
+  const category = scheduleImportCategory.value
+  scheduleImportSaving.value = true; scheduleImportError.value = ''
+  let result
+  try {
+    result = (await adminApi.importScheduleCategoryAll(category)).data
+  } catch (e) {
+    scheduleImportError.value = e?.response?.data?.detail || 'Не удалось импортировать'
+    scheduleImportSaving.value = false
+    return
+  }
+  if (result.building) {
+    toast.info('Собираю расписание категории на сервере (~минута)…')
+    //Категорию могли сменить ИЛИ диалог закрыть (Отмена), пока снимок собирался —
+    //тогда повторный опрос уже не нужен и не ожидается пользователем.
+    setTimeout(() => {
+      if (showScheduleImport.value && scheduleImportCategory.value === category) runScheduleImportAll()
+    }, 5000)
+    return   //scheduleImportSaving остаётся true — кнопка «Импортировать» ждёт результата
+  }
+  scheduleImportSaving.value = false
+  toast.success(`Готово: добавлено групп — ${result.imported}, уже были — ${result.skipped} ` +
+               `(всего в категории ${result.total}).`)
+  showScheduleImport.value = false
+  await reload()
 }
 
 // «Из расписания» — привязывает к каждой группе предметы ИЗ её расписания (портал
@@ -484,9 +538,9 @@ async function importParsed() {
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="font-title text-lg font-bold text-text">Импорт группы по категории</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
-          Заводит группу как каталожную запись, связанную с расписанием портала —
-          БЕЗ предметов/часов/журнала (для колледжа их даёт «Добавить группу» /
-          «Обновить группы»).
+          Заводит группу как каталожную запись, связанную с расписанием портала.
+          Предметы подставятся из её расписания; часов/учебного плана/журнала для
+          этой категории нет (для колледжа их даёт «Добавить группу» / «Обновить группы»).
         </p>
         <div class="space-y-3">
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Категория</span>
@@ -499,11 +553,18 @@ async function importParsed() {
             <select v-model="scheduleImportGroupName" :disabled="scheduleImportLoadingGroups || !scheduleImportGroups.length"
                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
               <option value="">{{ scheduleImportLoadingGroups ? '— загрузка… —' : '— выберите —' }}</option>
+              <option v-if="scheduleImportGroups.length" :value="SCHEDULE_IMPORT_ALL">
+                🌐 Все ({{ scheduleImportGroups.length }})
+              </option>
               <option v-for="n in scheduleImportGroups" :key="n" :value="n">{{ n }}</option>
             </select>
             <p v-if="!scheduleImportLoadingGroups && scheduleImportCategory && !scheduleImportGroups.length"
                class="mt-1 text-xs text-red">
               Нет данных с портала для этой категории (сайт недоступен либо снимок ещё не собран).
+            </p>
+            <p v-if="scheduleImportGroupName === SCHEDULE_IMPORT_ALL" class="mt-1 text-xs text-text3">
+              Заведёт каталожные записи для ВСЕХ групп категории разом (может занять
+              минуту на первый снимок — уже существующие группы не трогает).
             </p>
           </label>
           <p v-if="scheduleImportError" class="text-sm text-red">{{ scheduleImportError }}</p>

@@ -470,6 +470,16 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def import_schedule_category_all(self, category: str) -> dict:
+        """«Все» — массовый импорт ВСЕХ групп категории — {ok, building, imported,
+        skipped, total}. Полный снимок строится на сервере лениво в фоне (десятки-сотни
+        страниц портала, ~минута): пока не готов — ok=false, building=true, вызывающий
+        подождёт и позовёт снова (тот же приём, что у остальных «полных снимков»)."""
+        r = self._req("POST", "/web/admin/groups/import-schedule-category-all",
+                      json={"category": category}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""
