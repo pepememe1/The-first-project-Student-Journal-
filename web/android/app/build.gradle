@@ -15,10 +15,14 @@ android {
         applicationId "ru.esstu.gradebook"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        //RuStore требует БОЛЬШИЙ versionCode на каждую новую сборку. 2 → 3 → 4
+        //RuStore требует БОЛЬШИЙ versionCode на каждую новую сборку. 2 → 3 → 4 → 5 → 6
         //(4 — перезалив после отклонения по скриншотам: контент прежний, версия для перезагрузки).
-        versionCode 5
-        versionName "1.0.4"
+        //6 — первая сборка, где ПУШИ реально работают: мост к нативной части раньше
+        //стирался при загрузке страницы, и токен устройства не доезжал до сервера
+        //(в боевой базе не было ни одного). Здесь же — иконка и заставка из общего
+        //icon.png и снятие service worker'а, из-за которого не приживались OTA-обновления.
+        versionCode 6
+        versionName "1.0.5"
         //project_id из консоли RuStore подставляется в манифест. Держим в
         //gradle.properties (файл вне git), чтобы не зашивать идентификатор в исходники.
         manifestPlaceholders = [
