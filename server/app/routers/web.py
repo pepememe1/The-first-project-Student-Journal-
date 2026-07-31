@@ -29,6 +29,7 @@ from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
 from ..parsers import esstu_parser
 import vector_nlu   # общий с десктопом лексикон/классификатор (корень в sys.path через webdata)
+from schedule import parser as schedule_parser   # CATEGORIES — реестр категорий портала
 
 
 def _contact_info(db: Session, logins: list) -> dict:
@@ -911,7 +912,8 @@ def admin_groups(_admin: User = Depends(require_admin), db: Session = Depends(ge
     for g in rows:
         n = db.query(User).filter(User.role == "student", User.group_name == g.name,
                                   User.deleted == False).count()  # noqa: E712
-        out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n})
+        out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n,
+                    "category": g.category or "college"})
     return {"groups": out}
 
 
@@ -1094,17 +1096,30 @@ def admin_server_info(request: Request = None,
 # РАСПИСАНИЕ ──────────────────────────────────────────────────────────────────────
 # Снимок тянется с portal.esstu.ru серверным парсером (schedule_web, TTL-кэш). Данные
 # публичные, ПДн не участвуют. Оффлайн/ошибка → пустой снимок (200), SPA покажет заглушку.
+@router.get("/schedule/categories")
+def schedule_categories():
+    """Реестр категорий расписания портала (см. schedule/parser.py::CATEGORIES) —
+    один источник правды для кнопок-категорий на фронте, список меток не
+    дублируется в JS."""
+    return {"categories": schedule_web.categories(),
+           "default": schedule_web.default_category()}
+
+
 @router.get("/schedule/groups")
-def schedule_groups(user: User = Depends(get_current_user)):
-    return {"groups": schedule_web.list_groups()}
+def schedule_groups(category: str = Query(""), user: User = Depends(get_current_user)):
+    return {"groups": schedule_web.list_groups(category)}
 
 
 @router.get("/schedule/teacher")
-def schedule_teacher(name: str = Query(""), user: User = Depends(get_current_user)):
+def schedule_teacher(name: str = Query(""), category: str = Query(""),
+                     user: User = Depends(get_current_user)):
     """Расписание ПРЕПОДАВАТЕЛЯ (пункт 2). Без name — пробуем сматчить ФИО текущего
     пользователя со спарсенными преподавателями (фамилия+инициалы). Полный снимок
-    строится лениво в фоне: пока он готовится — {building: true}, клиент подождёт."""
-    snap, building = schedule_web.full_state()
+    строится лениво в фоне: пока он готовится — {building: true}, клиент подождёт.
+    category — по умолчанию колледж (единственная категория с реальными аккаунтами
+    преподавателей); остальные категории тоже можно просмотреть (кто ведёт), просто
+    там некому «самому себе» сматчиться."""
+    snap, building = schedule_web.full_state(category)
     if snap is None:
         return {"available": False, "building": building, "teacher": "", "teachers": [],
                 "week": schedule_web.current_week_parity(), "schedule": None,
@@ -1152,17 +1167,23 @@ def _apply_overrides(db: Session, group: str, data) -> dict:
     return base
 
 
-def _group_schedule(db: Session, group: str):
-    """Расписание группы с наложенными админ-правками — единый источник для студента,
-    Вектора и админ-редактора."""
-    return _apply_overrides(db, group, schedule_web.get_group(group) if group else None)
+def _group_schedule(db: Session, group: str, category: str = ""):
+    """Расписание группы категории — единый источник для студента, Вектора и
+    админ-редактора. Админ-правки (ScheduleOverride) накладываются ТОЛЬКО для
+    колледжа — оверлеи существуют для боевого журнала, у остальных категорий
+    (просмотр без журнала) им взяться неоткуда и незачем."""
+    data = schedule_web.get_group(group, category) if group else None
+    category = category or schedule_web.default_category()
+    if category != schedule_web.default_category():
+        return data
+    return _apply_overrides(db, group, data)
 
 
 @router.get("/schedule")
-def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
-                 db: Session = Depends(get_db)):
+def schedule_get(group: str = Query(""), category: str = Query(""),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = (group or user.group_name or "").strip()
-    data = _group_schedule(db, g) if g else None
+    data = _group_schedule(db, g, category) if g else None
     return {
         "group": g,
         "week": schedule_web.current_week_parity(),
@@ -1172,7 +1193,7 @@ def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
 
 
 @router.get("/schedule/export")
-def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"),
+def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"), category: str = Query(""),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Расписание группы файлом: fmt=xlsx|docx.
 
@@ -1186,7 +1207,7 @@ def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"),
     g = (group or user.group_name or "").strip()
     if not g:
         raise HTTPException(status_code=400, detail="Нужна группа")
-    data = _group_schedule(db, g)
+    data = _group_schedule(db, g, category)
     if not (data and data.get("weeks")):
         raise HTTPException(status_code=404, detail="Расписание для группы недоступно")
 
@@ -2779,6 +2800,14 @@ def admin_delete_student(login: str,
     return {"ok": True, "login": login}
 
 
+def _norm_category(value) -> str:
+    """Категория расписания портала — пусто/неизвестное значение трактуем как
+    "college" (см. Group.category докстринг): единственная категория с реальными
+    аккаунтами, дефолт для всех форм создания групп, если админ её не менял."""
+    key = (value or "").strip()
+    return key if key in schedule_parser.CATEGORIES else "college"
+
+
 # --- Группы (CRUD) --- id=grp:name (как в sync_engine); удаление мягкое (надгробие).
 @router.post("/admin/groups")
 def admin_create_group(payload: dict = Body(...),
@@ -2795,22 +2824,26 @@ def admin_create_group(payload: dict = Body(...),
         db.add(row)
     row.name = name
     row.subjects = payload.get("subjects") or []
+    if "category" in payload:
+        row.category = _norm_category(payload.get("category"))
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="group.create", target=name)
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, "category": row.category or "college"}
 
 
 @router.put("/admin/groups/{name:path}")
 def admin_update_group(name: str, payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Правка группы (название — ключ, не меняем). Меняем список предметов группы."""
+    """Правка группы (название — ключ, не меняем). Меняем список предметов/категорию."""
     row = db.get(Group, f"grp:{name}")
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Группа не найдена")
     if "subjects" in payload:
         row.subjects = payload.get("subjects") or []
+    if "category" in payload:
+        row.category = _norm_category(payload.get("category"))
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "name": name}
@@ -2827,6 +2860,51 @@ def admin_delete_group(name: str,
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="group.delete", target=name)
     return {"ok": True, "name": name}
+
+
+@router.post("/admin/groups/import-schedule-category")
+def admin_import_schedule_category(payload: dict = Body(...),
+                                   _admin: User = Depends(require_admin),
+                                   db: Session = Depends(get_db)):
+    """Заводит группу-каталожную запись из НЕколледжевой категории расписания портала
+    (Бакалавриат/Заочное 1/Заочное 2) — {category, group_name}. В отличие от
+    admin_bind_subjects (импорт предметов ИЗ расписания уже существующих КОЛЛЕДЖ-групп),
+    здесь предметов/часов/журнала нет вовсе — группа создаётся ЧИСТО как связь с
+    расписанием + точка группировки студентов по категории (§ролей завести таких
+    студентов — обычным путём, этот эндпоинт студентов не трогает).
+
+    group_name сверяется с РЕАЛЬНЫМ списком групп портала для этой категории (тот же
+    кэш, что отдаёт GET /schedule/groups) — свободного ввода имени нет специально,
+    чтобы не расходиться с сайтом и не плодить опечатки."""
+    category = (payload.get("category") or "").strip()
+    group_name = (payload.get("group_name") or "").strip()
+    if not category or category not in schedule_parser.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Нужна известная категория расписания")
+    if not group_name:
+        raise HTTPException(status_code=400, detail="Нужно название группы")
+    if category != schedule_web.default_category():
+        real_names = schedule_web.list_groups(category)
+        if group_name not in real_names:
+            raise HTTPException(status_code=422,
+                                detail="Такой группы нет в текущем снимке расписания этой "
+                                       "категории (сайт недоступен либо имя изменилось)")
+
+    gid = f"grp:{group_name}"
+    existing = db.get(Group, gid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Группа с таким названием уже есть")
+    row = existing or Group(id=gid)
+    if existing is None:
+        db.add(row)
+    row.name = group_name
+    row.subjects = []
+    row.category = category
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.import_schedule_category",
+              target=group_name, detail=category)
+    return {"ok": True, "name": group_name, "category": category}
 
 
 @router.post("/admin/groups/bind-subjects")

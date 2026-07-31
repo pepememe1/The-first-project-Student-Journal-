@@ -58,6 +58,14 @@ class Group(Base):
     #производным от него (см. study_hours.course_and_semester), а не хранимым числом.
     specialty_code = Column(String, nullable=True)
     enrollment_year = Column(Integer, nullable=True)
+    #Категория расписания портала (schedule/parser.py::CATEGORIES — "college"/
+    #"bakalavriat"/"zo1"/"zo2"), НЕ путать со specialty_code выше (тот — код СПО с
+    #ДРУГОГО сайта, esstu.ru/uportal, к порталу расписания отношения не имеет).
+    #NULL у всех старых строк — везде по коду трактуется как "college" (единственная
+    #категория с реальными аккаунтами/журналом/оценками; остальные заводятся вручную
+    #или импортом имени с портала — см. POST /web/admin/groups/import-schedule-category
+    #— просто как каталожные записи для просмотра расписания и группировки студентов).
+    category = Column(String, nullable=True)
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 

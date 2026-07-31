@@ -454,6 +454,22 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def schedule_groups(self, category: str = "") -> dict:
+        """Имена групп категории расписания портала (schedule/parser.py::CATEGORIES)
+        — {groups: [...]}. Для выпадающего списка «Импорт группы из категории»."""
+        r = self._req("GET", "/web/schedule/groups", params={"category": category}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def import_schedule_category(self, category: str, group_name: str) -> dict:
+        """Заводит группу-каталожную запись из НЕколледжевой категории расписания
+        (Бакалавриат/Заочное 1/2) — {ok, name, category}. Сервер сверяет group_name с
+        реальным списком портала для этой категории."""
+        r = self._req("POST", "/web/admin/groups/import-schedule-category",
+                      json={"category": category, "group_name": group_name}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

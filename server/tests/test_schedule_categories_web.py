@@ -1,0 +1,104 @@
+"""
+test_schedule_categories_web.py — /web/schedule* с параметром category
+(schedule_web.py + web.py). Сеть замокана — подменяем schedule.parser.fetch_text
+и передаём готовый offline-снимок, как это уже делает test_schedule_parser.py.
+
+Регрессия — без category (или category=college) поведение эндпоинтов не меняется
+ни в одном байте.
+"""
+from app import schedule_web
+from schedule import parser as P
+from conftest import make_admin
+
+
+def _fake_fetch_factory(index_html: str, group_html: str):
+    def _fake_fetch(url, timeout=20):
+        return index_html if url.endswith("raspisan.htm") else group_html
+    return _fake_fetch
+
+
+def setup_function(_):
+    """TTL-кэш schedule_web — модульный, между тестами не сбрасывается сам."""
+    schedule_web.invalidate_all()
+
+
+def test_categories_endpoint_lists_four_with_dated_flags(client):
+    admin = make_admin(client)
+    r = client.get("/web/schedule/categories", headers=admin)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["default"] == "college"
+    keys = {c["key"]: c["dated"] for c in data["categories"]}
+    assert keys == {"college": False, "bakalavriat": False, "zo1": True, "zo2": True}
+
+
+def test_groups_endpoint_uses_category_param(client, monkeypatch):
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">Б165</a><a href="2.htm">Б175</a>'
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, ""))
+
+    r = client.get("/web/schedule/groups", params={"category": "bakalavriat"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert set(r.json()["groups"]) == {"Б165", "Б175"}
+
+
+def test_groups_endpoint_default_is_still_college(client, monkeypatch):
+    """Без category (или college) — старое поведение: только «К», «М» отброшена."""
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">К15/1</a><a href="2.htm">М215</a>'
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, ""))
+
+    r = client.get("/web/schedule/groups", headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"] == ["К15/1"]
+
+
+def test_group_schedule_dated_category_end_to_end(client, monkeypatch):
+    """Полный путь GET /web/schedule?category=zo1: сессионные блоки, дни-даты."""
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">ЗУ-1</a>'
+    group_html = (
+        "<table>"
+        "<tr><td>Пары</td><td>1-я</td></tr>"
+        "<tr><td>Время</td><td>09:00-10:35</td></tr>"
+        "<tr><td>Пнд,06 апреля</td><td>лек.Химия Петров П.П. а.100</td></tr>"
+        "</table>"
+    )
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, group_html))
+
+    r = client.get("/web/schedule", params={"group": "ЗУ-1", "category": "zo1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["available"] is True
+    weeks = data["schedule"]["weeks"]
+    assert list(weeks.keys()) == ["1"]
+    assert "Пнд, 06 апреля" in weeks["1"]
+    lesson = weeks["1"]["Пнд, 06 апреля"][0]
+    assert lesson["subject"] == "Химия"
+    assert lesson["teacher"] == "Петров П.П."
+
+
+def test_overrides_not_applied_outside_college(client, monkeypatch):
+    """Оверлеи (ScheduleOverride) — только для колледжа; для остальных категорий
+    _group_schedule отдаёт портальные данные как есть, без попытки наложить их."""
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">Б165</a>'
+    group_html = (
+        "<table>"
+        "<tr><td>Пары</td><td>1-я</td><td>2-я</td></tr>"
+        "<tr><td>Время</td><td>09:00-10:35</td><td>10:45-12:20</td></tr>"
+        "<tr><td>Пнд</td><td>лек.Физика ИВАНОВ И.И. а.100</td><td>_</td></tr>"
+        "<tr><td>Втр</td><td>_</td><td>_</td></tr>"
+        "<tr><td>Срд</td><td>_</td><td>_</td></tr>"
+        "<tr><td>Чтв</td><td>_</td><td>_</td></tr>"
+        "<tr><td>Птн</td><td>_</td><td>_</td></tr>"
+        "<tr><td>Сбт</td><td>_</td><td>_</td></tr>"
+        "</table>"
+    )
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, group_html))
+
+    r = client.get("/web/schedule", params={"group": "Б165", "category": "bakalavriat"},
+                   headers=admin)
+    assert r.status_code == 200, r.text
+    lesson = r.json()["schedule"]["weeks"]["1"]["Пнд"][0]
+    assert lesson.get("_override") is not True

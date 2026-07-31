@@ -9,6 +9,11 @@ schedule_web.py — Серверная выдача расписания ВСГ�
 
 Парсим по ОДНОЙ группе (быстро), а не весь колледж: браузеру нужна только его группа.
 Любая сетевая ошибка/оффлайн → пустой снимок (эндпоинт отдаёт 200 с пустыми днями).
+
+Категории (schedule/parser.py::CATEGORIES) — «колледж» была единственной изначально,
+теперь портал читается ещё в трёх разделах (бакалавриат/заочное 1/заочное 2). Кэши
+ниже ключуются по категории, дефолт везде — «колледж» (DEFAULT_CATEGORY), поэтому
+любой существующий вызов без явной категории продолжает вести себя как раньше.
 """
 import os
 import sys
@@ -23,14 +28,28 @@ if _ROOT not in sys.path:
 
 _lock = threading.Lock()
 _TTL = 3 * 3600                      # как автo-обновление в десктопе (кэш старше 3ч → рефреш)
-_index = {"ts": 0.0, "pairs": []}    # [(name, href)]
-_groups = {}                         # name -> {"ts": float, "data": dict}
+_index: dict = {}                    # category -> {"ts": float, "pairs": [(name, href)]}
+_groups: dict = {}                   # category -> {name: {"ts": float, "data": dict}}
 
 
 def _parser():
     """Ленивый импорт парсера (изолирует возможные сбои импорта от старта сервера)."""
     from schedule import parser  # noqa: E402  (schedule/__init__ импортит только math/datetime/model)
     return parser
+
+
+def default_category() -> str:
+    return _parser().DEFAULT_CATEGORY
+
+
+def categories() -> list:
+    """[{key, label, dated}] — реестр категорий для фронта (ОДИН источник правды,
+    список меток не дублируется в JS). dated — сессионный формат (Заочное 1/2):
+    дни это календарные даты, а не Пн-Сб, и число «недель» не всегда 2 — фронт
+    должен рендерить сетку иначе (см. SchedulePage.vue)."""
+    p = _parser()
+    return [{"key": k, "label": v["label"], "dated": bool(v["dated"])}
+           for k, v in p.CATEGORIES.items()]
 
 
 def current_week_parity(d: date | None = None) -> int:
@@ -42,74 +61,86 @@ def current_week_parity(d: date | None = None) -> int:
     return 2 if result % 2 == 0 else 1
 
 
-def _load_index(force: bool = False):
+def _load_index(category: str = "", force: bool = False):
+    category = category or default_category()
     with _lock:
-        fresh = _index["pairs"] and (time.time() - _index["ts"] < _TTL)
+        entry = _index.get(category, {"ts": 0.0, "pairs": []})
+        fresh = entry["pairs"] and (time.time() - entry["ts"] < _TTL)
     if fresh and not force:
-        return _index["pairs"]
+        return entry["pairs"]
     p = _parser()
-    html = p.fetch_text(p.COLLEGE_INDEX)
-    pairs = p.list_college_groups(html)
+    html = p.fetch_text(p.category_index_url(category))
+    pairs = p.list_category_groups(html, category)
     with _lock:
-        _index["ts"] = time.time()
-        _index["pairs"] = pairs
+        _index[category] = {"ts": time.time(), "pairs": pairs}
     return pairs
 
 
-def list_groups() -> list:
-    """Имена групп колледжа (на «К»). Пустой список при оффлайне/ошибке."""
+def list_groups(category: str = "") -> list:
+    """Имена групп категории (для college — только «К»). Пустой список при оффлайне/ошибке."""
+    category = category or default_category()
     try:
-        return [name for name, _ in _load_index()]
+        return [name for name, _ in _load_index(category)]
     except Exception:
         return []
 
 
-def _href_for(name: str) -> str:
-    for n, href in _load_index():
+def _href_for(name: str, category: str) -> str:
+    for n, href in _load_index(category):
         if n == name:
             return href
     return ""
 
 
 #Расписание ПРЕПОДАВАТЕЛЯ: нужен ПОЛНЫЙ снимок (teacher_index строится инверсией всех
-#групповых страниц — ~68 GET, десятки секунд). Поэтому ЛЕНИВО и в ФОНЕ: первый запрос
-#запускает сборку потоком и сразу отвечает {building: true}; готовый снимок живёт _TTL.
-_full = {"ts": 0.0, "snap": None, "building": False}
+#групповых страниц категории — десятки-сотни GET). Поэтому ЛЕНИВО и в ФОНЕ: первый
+#запрос запускает сборку потоком и сразу отвечает {building: true}; готовый снимок
+#живёт _TTL. Ключ — категория (college — единственная с реальными аккаунтами
+#преподавателей, остальные — просто просмотр «кто ведёт», без привязки к аккаунту).
+_full: dict = {}                     # category -> {"ts", "snap", "building"}
 
 
-def _build_full_bg():
+def _full_entry(category: str) -> dict:
+    return _full.setdefault(category, {"ts": 0.0, "snap": None, "building": False})
+
+
+def _build_full_bg(category: str):
     try:
         p = _parser()
-        snap = p.build_snapshot()
+        snap = p.build_snapshot(category=category)
         with _lock:
-            _full["snap"] = snap
-            _full["ts"] = time.time()
+            e = _full_entry(category)
+            e["snap"] = snap
+            e["ts"] = time.time()
     except Exception as e:
-        print(f"[schedule_web] полный снимок не собрался: {e}")
+        print(f"[schedule_web] полный снимок ({category}) не собрался: {e}")
     finally:
         with _lock:
-            _full["building"] = False
+            _full_entry(category)["building"] = False
 
 
-def full_state():
+def full_state(category: str = ""):
     """(snapshot | None, building: bool). Устаревший/отсутствующий снимок запускает
     фоновую пересборку; пока она идёт, отдаём прежний снимок (если был)."""
+    category = category or default_category()
     with _lock:
-        snap = _full["snap"]
-        fresh = snap is not None and (time.time() - _full["ts"] < _TTL)
-        if not fresh and not _full["building"]:
-            _full["building"] = True
-            threading.Thread(target=_build_full_bg, daemon=True).start()
-        return snap, _full["building"]
+        e = _full_entry(category)
+        snap = e["snap"]
+        fresh = snap is not None and (time.time() - e["ts"] < _TTL)
+        if not fresh and not e["building"]:
+            e["building"] = True
+            threading.Thread(target=_build_full_bg, args=(category,), daemon=True).start()
+        return snap, e["building"]
 
 
-def warm():
+def warm(category: str = ""):
     """Прогрев снимка расписания при СТАРТЕ сервера: запускаем фоновую сборку заранее,
     чтобы к первому входу преподавателя его расписание по ФИО было уже готово (иначе
     первый заход ждёт десятки секунд сборки полного снимка). Ничего не блокирует —
-    full_state() лишь стартует фоновый поток."""
+    full_state() лишь стартует фоновый поток. По умолчанию греем только колледж —
+    единственную категорию с реальными аккаунтами преподавателей."""
     try:
-        full_state()
+        full_state(category or default_category())
     except Exception as e:
         print(f"[schedule_web] прогрев не удался: {e}")
 
@@ -153,43 +184,46 @@ def teacher_weeks(snap, name: str) -> dict | None:
 
 
 def invalidate_all() -> None:
-    """Сбросить ВЕСЬ кэш портала: индекс групп, снимки групп и полный снимок.
+    """Сбросить ВЕСЬ кэш портала (все категории): индекс групп, снимки групп и полный
+    снимок.
 
     Нужен кнопке «Взять с ВСГУТУ» — форс-обновление основы, поверх которой лежат правки
     администратора. Полный снимок помечаем протухшим (ts=0), но НЕ дёргаем сборку здесь:
     её запустит следующий full_state() в фоне (на одноядерном VPS блокировать нельзя)."""
     with _lock:
-        _index["ts"] = 0.0
-        _index["pairs"] = []
+        _index.clear()
         _groups.clear()
-        _full["ts"] = 0.0
+        _full.clear()
 
 
-def get_group(name: str, force: bool = False) -> dict | None:
-    """Снимок расписания одной группы (dict как GroupSchedule.to_dict) или None.
+def get_group(name: str, category: str = "", force: bool = False) -> dict | None:
+    """Снимок расписания одной группы категории (dict как GroupSchedule.to_dict) или None.
 
     force=True — игнорировать кэш и сходить на портал заново (кнопка «Взять с ВСГУТУ»
     для одной группы). Обычные заходы кэш используют (портал не дёргается на каждый
     просмотр)."""
+    category = category or default_category()
     name = (name or "").strip()
     if not name:
         return None
     if not force:
         with _lock:
-            c = _groups.get(name)
+            c = _groups.get(category, {}).get(name)
             if c and time.time() - c["ts"] < _TTL:
                 return c["data"]
     try:
         if force:
-            _load_index(force=True)   #индекс групп мог устареть — обновляем и его
-        href = _href_for(name)
+            _load_index(category, force=True)   #индекс групп мог устареть — обновляем и его
+        href = _href_for(name, category)
         if not href:
             return None
         p = _parser()
-        html = p.fetch_text(p.BASE_URL + p.COLLEGE_DIR + href)
-        data = p.parse_group_page(html, name=name, href=href).to_dict()
+        dated = p.CATEGORIES[category]["dated"]
+        page_parser = p.parse_group_page_dated if dated else p.parse_group_page
+        html = p.fetch_text(p.category_group_url(category, href))
+        data = page_parser(html, name=name, href=href).to_dict()
         with _lock:
-            _groups[name] = {"ts": time.time(), "data": data}
+            _groups.setdefault(category, {})[name] = {"ts": time.time(), "data": data}
         return data
     except Exception:
         return None

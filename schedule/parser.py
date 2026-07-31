@@ -33,15 +33,54 @@ from .model import (
     Lesson, GroupSchedule, Snapshot, WEEKDAYS, DEFAULT_PAIR_TIMES,
 )
 
-#База сайта и сегмент колледжа/СПО (специалитет).
+#База сайта и РЕЕСТР категорий расписания (см. portal.esstu.ru/menu.htm — там
+#пять ссылок «Расписание занятий студентов», четыре ведут на списки групп в
+#этом же формате сайта, пятая — «Календарный учебный график» — на ДРУГОЙ домен
+#и таблицу с датами семестров, не список групп, поэтому в реестр не входит).
 BASE_URL = "https://portal.esstu.ru/"
-COLLEGE_DIR = "spezialitet/"
+
+#dated=True — «сессионный» формат страницы группы (заголовки дней — конкретные
+#календарные даты «Пнд,06 апреля», а не «Пнд»/«Втр»; см. parse_group_page_dated).
+#prefix=None — на странице этой категории нет посторонних групп, фильтровать
+#по первой букве имени не нужно (в отличие от spezialitet/, где вперемешку с
+#колледжем идёт магистратура).
+CATEGORIES: dict[str, dict] = {
+    "college": {
+        "label": "Магистратура, колледж, ДОУ",
+        "dir": "spezialitet/",
+        "prefix": "К",
+        "dated": False,
+    },
+    "bakalavriat": {
+        "label": "Бакалавриат, специалитет",
+        "dir": "bakalavriat/",
+        "prefix": None,
+        "dated": False,
+    },
+    "zo1": {
+        "label": "Заочное 1",
+        "dir": "zo1/",
+        "prefix": None,
+        "dated": True,
+    },
+    "zo2": {
+        "label": "Заочное 2",
+        "dir": "zo2/",
+        "prefix": None,
+        "dated": True,
+    },
+}
+DEFAULT_CATEGORY = "college"
+
+#Старые имена — производные от реестра, чтобы ничего из уже существующего кода
+#(store.py, schedule_web.py, тесты) не сломалось при переходе на CATEGORIES.
+COLLEGE_DIR = CATEGORIES[DEFAULT_CATEGORY]["dir"]
 COLLEGE_INDEX = BASE_URL + COLLEGE_DIR + "raspisan.htm"
 
 #Группы колледжа начинаются на кириллическую «К» (не латинскую). Имена бывают
 #с дробями и запятыми: К15/1, К14,15.0, К112/2,113.02 — поэтому критерий простой:
 #первый значимый символ имени = «К».
-_COLLEGE_PREFIX = "К"
+_COLLEGE_PREFIX = CATEGORIES[DEFAULT_CATEGORY]["prefix"]
 
 #Тип занятия в начале ячейки: «лек.», «пр.», «лаб.» (точка обязательна).
 _KIND_RE = re.compile(r"^\s*(лек|пр|лаб|сем|конс|зач|экз)\.\s*", re.IGNORECASE)
@@ -54,6 +93,22 @@ _ROOM_RE = re.compile(r"а\.(\S+)")
 #Пример: «ШАГДУРОВА А.И.», «КИМ С.В.». Кириллица + возможный дефис в фамилии.
 _TEACHER_RE = re.compile(
     r"([А-ЯЁ][А-ЯЁ\-]{1,}(?:\s+[А-ЯЁ][А-ЯЁ\-]+)?)\s+([А-ЯЁ]\.\s?[А-ЯЁ]?\.?)"
+)
+
+#То же самое, но фамилия ОБЫЧНЫМ регистром (заглавная первая буква, дальше
+#строчные) — так пишут преподавателя на сессионных страницах (Заочное 1/2):
+#«Прудова Л.Ю.», не «ПРУДОВА Л.Ю.». Проверено живым разбором zo1/1.htm —
+#используется ТОЛЬКО в parse_group_page_dated, не в общем parse_cell по
+#умолчанию, чтобы не плодить ложные срабатывания на обычных страницах.
+#⚠️ БЕЗ «второго слова фамилии» (в отличие от _TEACHER_RE выше): многие реальные
+#предметы — само по себе одно капитализированное слово («Химия», «История»,
+#«Физика»), и опциональное продолжение ловило бы СЛЕДУЮЩЕЕ слово (настоящую
+#фамилию) как «вторую часть фамилии», сдвигая границу предмета в 0 символов —
+#поймано тестом test_group_schedule_dated_category_end_to_end на «Химия Петров
+#П.П.» (без этого урезания фамилия «съедала» весь предмет). Одиночных
+#Title-Case фамилий из двух слов в реальных данных не встречено.
+_TEACHER_RE_DATED = re.compile(
+    r"([А-ЯЁ][а-яё\-]{2,})\s+([А-ЯЁ]\.\s?[А-ЯЁ]?\.?)"
 )
 
 
@@ -138,15 +193,23 @@ def _extract_rows(html: str) -> list[list[str]]:
     return p.rows
 
 
-def parse_cell(text: str, pair_no: int = 0, time: str = "") -> Lesson | None:
+def parse_cell(text: str, pair_no: int = 0, time: str = "",
+              teacher_re: re.Pattern = _TEACHER_RE) -> Lesson | None:
     """Разбирает текст одной клетки в Lesson. Пустая клетка («_») → None.
 
     Разбор best-effort: сначала срезаем тип («лек.»), потом вытаскиваем аудиторию и
     преподавателя, остаток считаем названием предмета. Что не уложилось — в extra.
     Сырой текст всегда сохраняем в raw.
-    """
+
+    teacher_re — сессионные страницы (Заочное) пишут фамилию НЕ капсом
+    («Прудова Л.Ю.», а не «ШАГДУРОВА А.И.» как везде остальном) —
+    parse_group_page_dated передаёт свой вариант регулярки, не трогая дефолт
+    (чтобы не плодить ложные срабатывания на обычных страницах, где регистр
+    внутри названия предмета — единственный сигнал «это не фамилия»)."""
     raw = (text or "").strip()
-    if not raw or raw == "_":
+    #«Окно» — «_», но на сессионных страницах (Заочное) слипшиеся ячейки иногда
+    #дают «_ _»/«_  _» вместо одной «_» — тоже пусто, не реальный текст занятия.
+    if not raw or not raw.strip("_ "):
         return None
 
     rest = raw
@@ -162,10 +225,10 @@ def parse_cell(text: str, pair_no: int = 0, time: str = "") -> Lesson | None:
     if rooms:
         room = rooms[0].strip()
 
-    #Преподаватель: первый «ФАМИЛИЯ И.О.». Из остатка вырезаем найденного
+    #Преподаватель: первый «Фамилия И.О.». Из остатка вырезаем найденного
     #преподавателя и аудиторию, чтобы получить чистое название предмета.
     teacher = ""
-    tm = _TEACHER_RE.search(rest)
+    tm = teacher_re.search(rest)
     if tm:
         teacher = re.sub(r"\s+", " ", f"{tm.group(1)} {tm.group(2)}").strip()
 
@@ -190,15 +253,18 @@ def parse_cell(text: str, pair_no: int = 0, time: str = "") -> Lesson | None:
                   teacher=teacher, room=room, raw=raw, extra=extra)
 
 
-def _find_pair_times(rows: list[list[str]]) -> list[str]:
-    """Ищет строку «Время» и возвращает 6 интервалов (фолбэк — DEFAULT_PAIR_TIMES)."""
+def _find_pair_times(rows: list[list[str]], max_pairs: int = 6) -> list[str]:
+    """Ищет строку «Время» и возвращает интервалы (фолбэк — DEFAULT_PAIR_TIMES).
+
+    max_pairs=8 — сессионные страницы (Заочное) размечают до 8 пар в день,
+    обычные (колледж/бакалавриат) — 6."""
     for row in rows:
         if row and row[0].strip().lower().startswith("время"):
             times = [c.strip() for c in row[1:] if c.strip()]
             #оставляем только похожее на интервал ЧЧ:ММ-ЧЧ:ММ
             times = [t for t in times if re.match(r"\d{1,2}:\d{2}", t)]
             if times:
-                return times[:6]
+                return times[:max_pairs]
     return list(DEFAULT_PAIR_TIMES)
 
 
@@ -243,12 +309,75 @@ def parse_group_page(html: str, name: str = "", href: str = "") -> GroupSchedule
     return GroupSchedule(name=name, href=href, weeks=weeks, pair_times=pair_times)
 
 
-def list_college_groups(html: str) -> list[tuple[str, str]]:
-    """Возвращает [(имя_группы, href)] для групп колледжа (на «К») из индекса.
+def category_index_url(category: str = DEFAULT_CATEGORY) -> str:
+    cat = CATEGORIES[category]
+    return BASE_URL + cat["dir"] + "raspisan.htm"
 
-    Индекс — таблица курсов со ссылками <a href="N.htm">Имя</a>. Берём только
-    те, чьё имя начинается на кириллическую «К».
-    """
+
+def category_group_url(category: str, href: str) -> str:
+    return BASE_URL + CATEGORIES[category]["dir"] + href
+
+
+#Заголовок дня на сессионных страницах (Заочное 1/2): «Пнд,06 апреля» — короткий
+#день + запятая (без пробела перед ней) + дата. Обычные категории такого не дают.
+_WEEKDAY_DATE_RE = re.compile(
+    r"^(Пнд|Втр|Срд|Чтв|Птн|Сбт|Вск),\s*(.+)$")
+
+
+def parse_group_page_dated(html: str, name: str = "", href: str = "") -> GroupSchedule:
+    """Разбирает СЕССИОННУЮ страницу группы (Заочное 1/2, `CATEGORIES[...]["dated"]`).
+
+    Отличия от обычной parse_group_page (живая проверка на реальных страницах
+    zo1/zo2): заголовок дня — не «Пнд», а «Пнд,06 апреля» (конкретная
+    календарная дата, не день недели «вообще»); до 8 пар в день (не 6); строка
+    «Пары»/«Время» ПОВТОРЯЕТСЯ перед каждым следующим блоком Пнд..Вск — это и
+    есть граница сессионной «недели» (в отличие от parse_group_page, где
+    границу ловим по повтору САМОГО дня — здесь день не повторяется НИКОГДА,
+    в заголовке всегда уникальная дата, поэтому нужен другой якорь).
+
+    Возвращает ТУ ЖЕ GroupSchedule/Lesson — `weeks[N]` здесь не чётность, а
+    порядковый номер сессионного блока (1, 2, 3…), `day` — не «Пнд», а сама
+    строка «Пнд, 06 апреля» (её же и показываем в UI как есть)."""
+    rows = _extract_rows(html)
+    pair_times = _find_pair_times(rows, max_pairs=8)
+
+    weeks: dict = {}
+    week = 0
+    for row in rows:
+        if not row:
+            continue
+        head = row[0].strip()
+        if head.lower().startswith("пары"):
+            week += 1
+            continue
+        m = _WEEKDAY_DATE_RE.match(head)
+        if not m:
+            continue
+        day_label = f"{m.group(1)}, {m.group(2)}"
+
+        lessons = []
+        for i in range(1, min(len(row), 9)):        # до 8 пар
+            pair_no = i
+            time = pair_times[i - 1] if i - 1 < len(pair_times) else ""
+            ls = parse_cell(row[i], pair_no=pair_no, time=time,
+                           teacher_re=_TEACHER_RE_DATED)
+            if ls is not None:
+                lessons.append(ls)
+        if lessons:
+            weeks.setdefault(week or 1, {})[day_label] = lessons
+
+    return GroupSchedule(name=name, href=href, weeks=weeks, pair_times=pair_times)
+
+
+def list_category_groups(html: str, category: str = DEFAULT_CATEGORY) -> list[tuple[str, str]]:
+    """Возвращает [(имя_группы, href)] из индекса категории.
+
+    Индекс — таблица курсов со ссылками <a href="N.htm">Имя</a>. Категории с
+    заданным `prefix` (сейчас только college) берут только группы, чьё имя
+    начинается с него (spezialitet/ вперемешку содержит и магистратуру);
+    остальные категории (bakalavriat/zo1/zo2) отдают все ссылки как есть —
+    посторонних групп на их страницах индекса нет."""
+    prefix = CATEGORIES[category]["prefix"]
     groups: list[tuple[str, str]] = []
     seen = set()
     #простой разбор якорей: href + текст
@@ -257,7 +386,7 @@ def list_college_groups(html: str) -> list[tuple[str, str]]:
         href = m.group(1).strip()
         text = re.sub(r"<[^>]+>", "", m.group(2))
         text = re.sub(r"\s+", " ", unescape(text)).strip()
-        if not text or not text.startswith(_COLLEGE_PREFIX):
+        if not text or (prefix and not text.startswith(prefix)):
             continue
         if text in seen:
             continue
@@ -266,27 +395,37 @@ def list_college_groups(html: str) -> list[tuple[str, str]]:
     return groups
 
 
-def build_snapshot(progress_cb=None, fetch=fetch_text) -> Snapshot:
-    """Полный парс: индекс → страницы групп колледжа → агрегация + инверсия.
+def list_college_groups(html: str) -> list[tuple[str, str]]:
+    """Совместимость: то же самое, что list_category_groups(html, "college")."""
+    return list_category_groups(html, DEFAULT_CATEGORY)
 
-    Тяжёлая операция (десятки GET) — вызывать в ФОНОВОМ потоке. progress_cb(done,
+
+def build_snapshot(category: str = DEFAULT_CATEGORY, progress_cb=None,
+                   fetch=fetch_text) -> Snapshot:
+    """Полный парс: индекс категории → страницы её групп → агрегация + инверсия.
+
+    Без аргументов — 100% прежнее поведение (категория «колледж»). Тяжёлая
+    операция (десятки GET) — вызывать в ФОНОВОМ потоке. progress_cb(done,
     total, name) опционально дёргается по ходу для индикатора прогресса. Параметр
     fetch подменяется в тестах (чтобы не ходить в сеть).
     """
     from datetime import datetime, timezone
 
-    index_html = fetch(COLLEGE_INDEX)
-    pairs = list_college_groups(index_html)
+    dated = CATEGORIES[category]["dated"]
+    page_parser = parse_group_page_dated if dated else parse_group_page
+
+    index_html = fetch(category_index_url(category))
+    pairs = list_category_groups(index_html, category)
 
     snap = Snapshot(updated_at=datetime.now(timezone.utc).isoformat())
     subjects: set[str] = set()
     total = len(pairs)
 
     for i, (name, href) in enumerate(pairs):
-        url = BASE_URL + COLLEGE_DIR + href
+        url = category_group_url(category, href)
         try:
             page = fetch(url)
-            gs = parse_group_page(page, name=name, href=href)
+            gs = page_parser(page, name=name, href=href)
         except Exception as e:
             #одна сбойная группа не должна ронять весь снимок
             if progress_cb:
@@ -295,7 +434,7 @@ def build_snapshot(progress_cb=None, fetch=fetch_text) -> Snapshot:
         snap.groups[name] = gs
         for subj in gs.subjects():
             subjects.add(subj)
-        if not snap.pair_times or snap.pair_times == list(DEFAULT_PAIR_TIMES):
+        if not dated and (not snap.pair_times or snap.pair_times == list(DEFAULT_PAIR_TIMES)):
             snap.pair_times = gs.pair_times
         _index_teachers(snap.teacher_index, name, gs)
         if progress_cb:

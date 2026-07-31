@@ -8,7 +8,14 @@ schedule/ — парсинг и хранение расписания занят
         get_identity, set_identity, guess_group, guess_teacher,
         Snapshot, GroupSchedule, Lesson, WEEKDAYS,
         group_schedule, subjects_for_group, subjects_all,
+        CATEGORIES, DEFAULT_CATEGORY, list_category_groups,
     )
+
+Категории (CATEGORIES) — четыре раздела расписания портала (колледж/бакалавриат/
+заочное 1/заочное 2, см. докстринг parser.py). «Колледж» (DEFAULT_CATEGORY) —
+единственная категория с реальным журналом/оценками, у остальных category-функции
+(load_cached/save/group_schedule/…) принимают category как необязательный параметр
+и по умолчанию продолжают вести себя как раньше.
 
 Источник данных — публичный сайт portal.esstu.ru (см. parser.py). Снимок кладётся в
 локальный зашифрованный кэш (store.py), на сервер не уходит.
@@ -27,7 +34,9 @@ __getattr__: на сервере, где к ним не обращаются, st
 """
 from .model import Lesson, GroupSchedule, Snapshot, WEEKDAYS, DEFAULT_PAIR_TIMES
 from .parser import (
-    build_snapshot, parse_group_page, parse_cell, list_college_groups, fetch_text,
+    build_snapshot, parse_group_page, parse_group_page_dated, parse_cell,
+    list_college_groups, list_category_groups, fetch_text,
+    CATEGORIES, DEFAULT_CATEGORY,
 )
 
 #Имена, которые физически живут в store.py (десктопный модуль). Перечислены явно, чтобы
@@ -57,8 +66,9 @@ def __dir__():
 
 __all__ = [
     "Lesson", "GroupSchedule", "Snapshot", "WEEKDAYS", "DEFAULT_PAIR_TIMES",
-    "build_snapshot", "parse_group_page", "parse_cell", "list_college_groups",
-    "fetch_text",
+    "build_snapshot", "parse_group_page", "parse_group_page_dated", "parse_cell",
+    "list_college_groups", "list_category_groups", "fetch_text",
+    "CATEGORIES", "DEFAULT_CATEGORY",
     "save", "load_cached", "cache_age_minutes",
     "current_week_parity", "week_label",
     "get_identity", "set_identity", "guess_group", "guess_teacher",

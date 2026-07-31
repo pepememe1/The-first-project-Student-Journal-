@@ -489,12 +489,14 @@ class DBManager:
         cur.execute("""CREATE TABLE IF NOT EXISTS groups
             (id TEXT PRIMARY KEY, name TEXT, subjects TEXT DEFAULT '[]',
              updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0,
-             specialty_code TEXT, enrollment_year INTEGER)""")
-        #Старая база могла завести таблицу ДО specialty_code/enrollment_year (импорт
-        #учебного плана ВСГУТУ, parsers/esstu_parser.py на сервере) — тот же паттерн
-        #ALTER, что уже применён к subject_hours выше. Десктоп эти поля не показывает,
-        #но приезжают синком вместе с остальной группой (Group уже в SYNC_MODELS).
-        for _col, _decl in (("specialty_code", "TEXT"), ("enrollment_year", "INTEGER")):
+             specialty_code TEXT, enrollment_year INTEGER, category TEXT)""")
+        #Старая база могла завести таблицу ДО specialty_code/enrollment_year/category
+        #(импорт учебного плана ВСГУТУ и категория расписания портала — обе фичи
+        #серверные) — тот же паттерн ALTER, что уже применён к subject_hours выше.
+        #Десктоп эти поля не показывает, но приезжают синком вместе с остальной
+        #группой (Group уже в SYNC_MODELS).
+        for _col, _decl in (("specialty_code", "TEXT"), ("enrollment_year", "INTEGER"),
+                            ("category", "TEXT")):
             try:
                 cur.execute(f"ALTER TABLE groups ADD COLUMN {_col} {_decl}")
             except Exception:
