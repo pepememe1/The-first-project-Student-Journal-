@@ -59,16 +59,74 @@ def test_own_token_is_accepted(monkeypatch):
     assert _ok(f"Bearer {own}") is True
 
 
-def test_without_active_session_nothing_passes(monkeypatch):
-    """Вход не выполнен — прокси закрыт целиком, даже с формально верным токеном:
-    подставлять боевые права некому."""
+def _no_saved_session(monkeypatch):
+    """Убрать сохранённую сессию: НАСТОЯЩИЕ настройки в тестах не трогаем."""
+    import sys
+
+    class _Empty:
+        def get_saved_session(self):
+            return {}
+
+    monkeypatch.setitem(sys.modules, "app_settings", _Empty())
+
+
+def test_without_any_session_nothing_passes(monkeypatch):
+    """Вход не выполнялся ВООБЩЕ — прокси закрыт целиком, даже с формально верным
+    токеном: подставлять боевые права некому."""
     own, _ = local_api.issue_local_session("ivanov", "student")
     monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    _no_saved_session(monkeypatch)
     assert _ok(f"Bearer {own}") is False
 
 
-def test_proxy_only_covers_online_subsystems():
-    """Прокси обязан касаться ТОЛЬКО онлайн-подсистем. Расширение на /web/student или
-    /sync увело бы наружу то, что должно читаться из локальной копии, и тихо убило бы
-    offline-first."""
-    assert local_api._PROXY_PREFIXES == ("/web/messenger", "/messenger")
+def test_saved_session_passes_on_cold_start(monkeypatch):
+    """Холодный старт: живой сессии ещё нет, но человек уже входил на этой машине.
+
+    Раньше здесь был отказ — и это ломало не безопасность, а вход: страница-передатчик
+    выпускала токен для сохранённого пользователя, прокси отвечал 401, страница
+    трактовала 401 как «сессия истекла» и выкидывала человека из аккаунта."""
+    import sys
+
+    class _Saved:
+        def get_saved_session(self):
+            return {"login": "ivanov", "role": "student"}
+
+    own, _ = local_api.issue_local_session("ivanov", "student")
+    monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    monkeypatch.setitem(sys.modules, "app_settings", _Saved())
+    assert _ok(f"Bearer {own}") is True
+    #Строгость не упала: чужой логин не проходит и по сохранённой сессии.
+    other, _ = local_api.issue_local_session("petrov", "student")
+    assert _ok(f"Bearer {other}") is False
+
+
+#Пути, которые обязаны читаться из ЛОКАЛЬНОЙ копии. Пересылка любого из них наружу
+#убивает offline-first молча: в сети всё работает, а без сети журнал становится пустым —
+#и заметят это в аудитории, а не на разработке.
+_MUST_STAY_LOCAL = (
+    "/web/student", "/web/teacher", "/web/parent", "/web/curator", "/web/admin/students",
+    "/web/admin/groups", "/web/admin/teachers", "/web/schedule", "/web/terms",
+    "/sync", "/auth", "/me",
+)
+
+
+def test_proxy_never_covers_offline_capable_data():
+    """Прокси обязан касаться ТОЛЬКО онлайн-подсистем.
+
+    Проверяем не точный список префиксов, а СВОЙСТВО: ни один путь, который должен
+    читаться локально, не должен попадать под пересылку. Точное сравнение кортежа
+    ломалось на каждом законном добавлении и подталкивало «просто обновить ожидание» —
+    то есть ровно к тому, от чего оно защищало."""
+    for path in _MUST_STAY_LOCAL:
+        assert not path.startswith(local_api._PROXY_PREFIXES), \
+            f"{path} уехал бы на сервер — offline-first сломан"
+
+
+def test_proxied_prefixes_are_all_online_only():
+    """Обратная сторона: каждый пересылаемый префикс обязан быть онлайн-подсистемой.
+
+    Мессенджер (§5.4) данных в локальной копии не имеет по замыслу. Раздел «Сервер»
+    рассказывает про БОЕВУЮ машину — локально о ней знать нечего, и без пересылки он
+    показывал диск и базу компьютера администратора вместо VPS."""
+    assert set(local_api._PROXY_PREFIXES) == {
+        "/web/messenger", "/messenger", "/web/admin/server"}

@@ -35,6 +35,7 @@ local_api.py — ЛОКАЛЬНЫЙ сервер приложения внутр
 обслуживать нативные экраны, пока переезд не завершён: одномоментная замена сломала бы
 журнал у всех, а так обе дороги какое-то время сосуществуют.
 """
+import json
 import os
 import socket
 import threading
@@ -246,15 +247,10 @@ def prepare_env() -> None:
     Заодно делаем пакет `app` импортируемым: без этого те же вызовы падали бы на
     ImportError и — из-за мягкой обработки ошибок — отвечали бы «человека нет»."""
     ensure_server_path()
-    #Логин берём из ЖИВОЙ сессии: у каждого вошедшего своя копия базы (см. local_db_file).
+    #Логин — из живой сессии, а если её ещё нет, из СОХРАНЁННОЙ (см. `_session_login`).
     #setdefault, а не присваивание: если сервер уже поднят на чьей-то базе, менять адрес
     #на ходу нельзя — SQLAlchemy держит движок с прежним файлом.
-    login = ""
-    try:
-        from sync_runner import current_login
-        login = current_login()
-    except Exception:
-        pass
+    login = _session_login()
     os.environ.setdefault("GRADEBOOK_DB_URL", local_db_url(login))
     #🔒 ЛОКАЛЬНАЯ КОПИЯ ШИФРУЕТСЯ (SQLCipher, тот же механизм, что на боевом сервере).
     #Раньше здесь стоял pop() с рассуждением «ключ пришлось бы держать рядом с базой, а
@@ -413,6 +409,13 @@ class LocalAPI:
                 #входа становится веб-овой, локальная копия обязана уметь пускать
                 #человека офлайн и сходить на бой при первом входе на этой машине.
                 install_login_bridge(app)
+                #Раздел «Сервер»: управление боевой машиной по SSH. Живёт ТОЛЬКО здесь,
+                #в локальном сервере программы. На бою этого кода нет вовсе — там
+                #работает `routers/serverinfo.py`, который умеет только смотреть.
+                #Граница проходит по наличию кода, а не по проверке роли: роль можно
+                #обойти, отсутствующий код — нельзя (см. шапку ui/server_admin.py).
+                import server_admin
+                server_admin.install(app, _local_caller_ok)
             except Exception as e:
                 _LOG.warning(f"[local-api] надстройки локального сервера не встали: {e}")
 
@@ -477,6 +480,33 @@ class LocalAPI:
         if not route.startswith("/"):
             route = "/" + route
         return f"http://127.0.0.1:{self.port}{route}"
+
+
+def _session_login() -> str:
+    """Кто работает в программе: живая сессия, иначе — сохранённая на этой машине.
+
+    ⚠️ ФОЛБЭК НА СОХРАНЁННУЮ СЕССИЮ ОБЯЗАТЕЛЕН, и вот почему. С появлением ЛИЧНОЙ копии
+    базы у каждого пользователя (файл на логин) сервер на холодном старте поднимался на
+    «анонимной» копии: `current_login()` до входа пуст. В ней нужного человека нет,
+    поэтому `user_exists` отвечал «нет», оболочка не отдавала сессию и открывала форму
+    входа — при живом сохранённом входе и целой личной копии. Со стороны это выглядело
+    как «программа каждый раз разлогинивает и сбрасывает тему»: тема приезжает той же
+    страницей-передатчиком, что и сессия, и вместе с ней не доезжала.
+
+    Доверять сохранённой сессии здесь не новость: `webview2_app._start_url` брал логин
+    ровно оттуда с самого начала — расходились только эти два места."""
+    try:
+        from sync_runner import current_login
+        live = current_login()
+        if live:
+            return live
+    except Exception:      # noqa: BLE001
+        pass
+    try:
+        import app_settings
+        return ((app_settings.get_saved_session() or {}).get("login") or "").strip()
+    except Exception:      # noqa: BLE001
+        return ""
 
 
 def user_exists(login: str) -> bool:
@@ -591,17 +621,93 @@ def instance() -> LocalAPI:
 #открывать его любому чужому origin'у. Поэтому пересылает САМ локальный сервер: для
 #страницы это тот же адрес (CORS не при чём), а наружу идёт обычный серверный запрос.
 #Токен подменяем на БОЕВОЙ: локальный подписан своим секретом, бой его отвергнет.
-_PROXY_PREFIXES = ("/web/messenger", "/messenger")
+#⚠️ «/web/admin/server» ЗДЕСЬ ОБЯЗАТЕЛЕН. Раздел «Сервер» рассказывает про БОЕВУЮ
+#машину, а внутри программы страница говорит с ЛОКАЛЬНЫМ сервером — и без пересылки
+#показывала диск, память и базу компьютера администратора вместо VPS. Со стороны это
+#выглядит как правдоподобная ложь: цифры настоящие, но не про тот компьютер.
+_PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server")
+
+
+#Что именно недоступно — зависит и от пути, и от ПРИЧИНЫ. Два прежних текста врали в
+#самых частых случаях: «Сервер сообщений не ответил» на странице состояния отправляло
+#чинить мессенджер, которого не трогали, а «нет связи» при живом интернете — к
+#провайдеру, тогда как истёк всего лишь пятичасовой токен (§6).
+#Подставляется в винительном падеже («показать состояние», «показать сообщения») —
+#так одна формулировка годится и для среднего рода, и для множественного числа.
+_WHAT = {"/web/admin/server": "состояние", "/web/messenger": "сообщения",
+         "/messenger": "сообщения"}
+
+
+def _offline_reason(path: str, why: str = "offline") -> str:
+    what = next((v for k, v in _WHAT.items() if path.startswith(k)), "эти данные")
+    if why == "expired":
+        return (f"Сессия на сервере истекла — показать {what} сейчас не можем. "
+                "Выйдите и войдите заново, чтобы обновить доступ. "
+                "Журнал и расписание работают и без этого.")
+    if why == "no-url":
+        return "Адрес сервера не задан — укажите его в настройках программы."
+    if why == "no-session":
+        return "Вход в программу не выполнен."
+    return f"Нет связи с сервером — {what} показать не можем."
 
 
 def _remote_auth():
-    """(база, боевой токен) текущей сессии ('', '' — офлайн)."""
+    """(база, боевой токен) текущей сессии ('', '' — связи нет или вход не выполнялся).
+
+    ⚠️ ЖИВОЙ СЕССИИ НА ХОЛОДНОМ СТАРТЕ ЕЩЁ НЕТ. `sync_runner` получает креды в момент
+    входа, а программа, открытая по СОХРАНЁННОЙ сессии, входа не проходит — токен в нём
+    пуст, хотя на диске лежат и access, и refresh. Пока фолбэка не было, любая
+    пересылаемая страница (мессенджер, раздел «Сервер») отвечала «нет связи с сервером»
+    при совершенно живом интернете — а человек шёл проверять сеть и провайдера.
+
+    Порядок тот же, что и везде в этом файле: живое → сохранённое. Протухший access
+    обновляем по refresh и СРАЗУ сохраняем: иначе обновление повторялось бы на каждый
+    запрос, а 5-часовой токен успевает протухнуть между запусками почти всегда.
+
+    Третьим значением возвращаем ПРИЧИНУ отказа. Она не для красоты: «нет связи»,
+    показанное при живом интернете и истёкшей сессии, отправляет человека проверять
+    провайдера вместо того, чтобы просто войти заново."""
+    base = ""
     try:
         from sync_runner import fresh_auth
         base, token = fresh_auth()
-        return (base or "").rstrip("/"), token or ""
-    except Exception:
-        return "", ""
+        base = (base or "").rstrip("/")
+        if token:
+            return base, token, ""
+    except Exception:      # noqa: BLE001
+        pass
+
+    try:
+        import app_settings
+        base = base or (app_settings.get_api_url() or "").rstrip("/")
+        if not base:
+            return "", "", "no-url"
+        login = _session_login()
+        if not login:
+            return base, "", "no-session"
+        token = app_settings.get_saved_token(login) or ""
+        from sync_client import is_token_expired
+        if token and not is_token_expired(token):
+            return base, token, ""
+
+        refresh = app_settings.get_saved_refresh_token(login) or ""
+        if not refresh:
+            return base, "", "expired"
+        from sync_client import SyncClient
+        data = SyncClient(base, token, refresh).refresh() or {}
+        fresh = (data.get("access_token") or "").strip()
+        if not fresh:
+            return base, "", "expired"
+        app_settings.set_saved_token(login, fresh)
+        if data.get("refresh_token"):
+            app_settings.set_saved_refresh_token(login, data["refresh_token"])
+        _LOG.info("[local-api] боевой токен обновлён по сохранённому refresh")
+        return base, fresh, ""
+    except Exception as e:      # noqa: BLE001 — нет сети/отозван токен: это не авария
+        _LOG.info(f"[local-api] боевой токен недоступен: {e}")
+        #401 на refresh — это НЕ сеть, а истёкшая сессия (JWT живёт жёстко 5 ч, §6).
+        expired = "401" in str(e) or "Unauthorized" in str(e)
+        return base, "", ("expired" if expired else "offline")
 
 
 def _local_caller_ok(authorization: str) -> bool:
@@ -623,11 +729,14 @@ def _local_caller_ok(authorization: str) -> bool:
     login = (data.get("sub") or "").strip()
     if not login:
         return False
-    try:
-        from sync_runner import current_login
-        expected = current_login()
-    except Exception:
-        expected = ""
+    #Сверяем с ТЕМ ЖЕ источником, что и всё остальное (`_session_login`): живая сессия,
+    #иначе сохранённая. Раньше здесь стояла ТОЛЬКО живая, и получалось несогласованно —
+    #страница-передатчик выпускала токен для сохранённого пользователя, а прокси этот же
+    #токен отвергал с 401. Для страницы 401 значит «сессия истекла», и она выкидывала
+    #человека из аккаунта ровно в тот момент, когда он открывал раздел «Сервер».
+    #Строгость при этом не падает: чужой логин по-прежнему не проходит, а сохранённая
+    #сессия появляется только после успешного входа на этой машине.
+    expected = _session_login()
     return bool(expected) and login == expected
 
 
@@ -650,10 +759,13 @@ def install_remote_proxy(app) -> None:
         if not _local_caller_ok(request.headers.get("authorization", "")):
             return Response(content='{"detail":"Требуется авторизация"}'.encode(),
                             status_code=401, media_type="application/json")
-        base, token = _remote_auth()
+        base, token, why = _remote_auth()
         if not base or not token:
-            return Response(content='{"detail":"Нет связи с сервером сообщений."}'.encode(),
-                            status_code=503, media_type="application/json")
+            body = json.dumps({"detail": _offline_reason(path, why)}, ensure_ascii=False)
+            #503, а НЕ 401: 401 страница трактует как «сессия истекла» и выкидывает из
+            #аккаунта — а локальная сессия жива, и журнал с расписанием работают.
+            return Response(content=body.encode(), status_code=503,
+                            media_type="application/json")
         import httpx
         headers = {k: v for k, v in request.headers.items()
                    if k.lower() not in ("host", "authorization", "content-length",
@@ -673,8 +785,11 @@ def install_remote_proxy(app) -> None:
             return Response(content=r.content, status_code=r.status_code, headers=out)
         except Exception as e:
             _LOG.warning(f"[proxy] {path}: {e}")
-            return Response(content='{"detail":"Сервер сообщений не ответил."}'.encode(),
-                            status_code=502, media_type="application/json")
+            #Сюда попадаем, когда запрос УЖЕ ушёл и оборвался, — это именно сеть.
+            body = json.dumps({"detail": _offline_reason(path, "offline")},
+                              ensure_ascii=False)
+            return Response(content=body.encode(), status_code=502,
+                            media_type="application/json")
 
 
 #━━ ПЕРЕДАЧА СЕССИИ ЛЮБОЙ ОБОЛОЧКЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -698,12 +813,10 @@ def install_desktop_bootstrap(app) -> None:
 
     @app.get(_BOOTSTRAP_PATH, response_class=HTMLResponse)
     def _bootstrap(request: Request, route: str = "/", embed: str = "0"):
-        login = ""
-        try:
-            from sync_runner import current_login
-            login = current_login()
-        except Exception:
-            pass
+        #Тот же источник, что и у базы (см. `_session_login`): раньше здесь бралась
+        #ТОЛЬКО живая сессия, и на холодном старте логин был пуст — страница отдавала
+        #пустой токен, а SPA показывала форму входа уже вошедшему человеку.
+        login = _session_login()
         role = ""
         try:
             import app_settings
