@@ -1295,6 +1295,14 @@ def send_message(conv_id: str, payload: dict = Body(...),
     #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
     mentions = _parse_mentions(db, body, _participant_ids(db, conv_id))
 
+    #Цензура мата — маскируем звёздочками (НЕ блокируем отправку, как автомодерация
+    #Twitch/Discord). После всех slash-команд (иначе испортили бы их разбор) и ПОСЛЕ
+    #упоминаний (плейсхолдер @Фамилия матом не считается), но ДО сохранения — что легло
+    #в БД, то и видят все читатели постфактум. `body` переиспользуется ниже в
+    #_handle_vector_command — так что и вопрос Вектору уходит уже очищенным.
+    import profanity_filter
+    body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
+
     m = Message(conversation_id=conv_id, sender_id=user.id, body=body,
                 created_at=_now(), reply_to_id=reply_to, mentions=mentions,
                 kind="text", body_format="markdown", client_nonce=nonce)
@@ -1575,6 +1583,11 @@ def edit_message(mid: int, payload: dict = Body(...),
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
+    #Цензура — ДО обрезки по длине (не после): если резать сначала, граница могла бы
+    #попасть внутрь найденного слова и оставить необработанный обрубок незацензуренным
+    #(см. тот же порядок в send_message).
+    import profanity_filter
+    body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
     #§D11: сохраняем текст ДО правки — модерация должна видеть оригинал (автор мог исправить
     #сообщение после жалобы). Пустых снимков не плодим.
     if (m.body or "") and m.body != body[:_MAX_MSG_CHARS]:
@@ -2992,6 +3005,8 @@ def mod_reply(conv_id: str, payload: dict = Body(...), request: Request = None,
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
+    import profanity_filter
+    body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
     m = Message(conversation_id=conv_id, sender_id=admin.id, body=body[:_MAX_MSG_CHARS],
                 created_at=_now())
     db.add(m)

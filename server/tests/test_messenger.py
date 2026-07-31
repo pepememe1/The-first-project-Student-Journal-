@@ -1443,3 +1443,58 @@ def test_teacher_templates_forbidden_for_student(client):
     assert client.post("/web/messenger/templates", json={"body": "тест"}, headers=b).status_code == 403
     #Список — читать может кто угодно (пустой), запрет только на создание.
     assert client.get("/web/messenger/templates", headers=b).json()["templates"] == []
+
+
+# ── Цензура мата (profanity_filter.py) ───────────────────────────────────────────────
+def test_send_message_censors_profanity(client):
+    """Отправка МАСКИРУЕТ найденное слово блоками, а не отклоняет сообщение —
+    как автомодерация Twitch/Discord, а не жёсткий бан на отправку. Маска в
+    мессенджере — НЕ «*» (см. test_messenger_mask_is_not_markdown_syntax ниже)."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "ты хуйню написал"}, headers=a)
+    assert r.status_code == 200, r.text
+    #Маскируется только сам корень («хуй»), а не всё склонённое слово — так и задуман
+    #модуль (см. profanity_filter.py), не расширяем матч руками до границ слова.
+    assert r.json()["body"] == "ты ███ню написал"
+    #Собеседник в истории тоже видит уже зацензуренный текст, не оригинал.
+    hist = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert hist[0]["body"] == "ты ███ню написал"
+
+
+def test_send_message_clean_text_untouched(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "Привет, как дела?"}, headers=a)
+    assert r.json()["body"] == "Привет, как дела?"
+
+
+def test_edit_message_censors_profanity(client):
+    """Правка на матерный текст тоже маскируется, а не проходит как есть."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    mid = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "нормальный текст"}, headers=a).json()["id"]
+    r = client.patch(f"/web/messenger/messages/{mid}", json={"body": "сам ты мудак"}, headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["body"] == "сам ты █████"
+
+
+def test_messenger_mask_is_not_markdown_syntax(client):
+    """Регрессия на реальный баг: два цензурируемых слова в одном сообщении дают ДВА
+    отдельных прогона маски — если маска сама «*», markdownLite.js на клиенте может
+    склеить «**»/«*» одного прогона с другим и превратить текст МЕЖДУ ними в
+    жирный/курсив (проверено эмпирически до фикса). Маска мессенджера обязана не
+    входить ни в один спецсимвол разметки, тогда коллизия невозможна ни при каких
+    соседних символах — не только в конкретно этом примере."""
+    import profanity_filter
+    assert profanity_filter.MESSENGER_SAFE_MASK not in "*_~#>-`"
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "бля, ты мудак"}, headers=a)
+    assert r.status_code == 200, r.text
+    body = r.json()["body"]
+    assert "*" not in body
