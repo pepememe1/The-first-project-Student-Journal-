@@ -177,6 +177,10 @@ export const adminApi = {
   // Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py на сервере):
   // список специальностей сайта колледжа + сам импорт часов/ЗЕТ текущего семестра в группу.
   esstuSpecialties: (group = '') => api.get('/web/admin/esstu/specialties', { params: { group } }),
+  // Реально опубликованные на сайте годы набора для специальности — наполняет
+  // выпадающий список «Год поступления» (вместо ручного ввода числа).
+  esstuPlanYears: (specialtyCode) =>
+    api.get('/web/admin/esstu/plan-years', { params: { specialty_code: specialtyCode } }),
   importEsstu: (group, specialtyCode, enrollmentYear) =>
     api.post('/web/admin/groups/import-esstu',
             { group, specialty_code: specialtyCode, enrollment_year: enrollmentYear }),

@@ -2,7 +2,7 @@
 // AdminGroups — группы + CRUD (Phase B). Создание/правка (список предметов группы) /
 // удаление; кнопка «🏫 Из расписания» добавляет спарсенные группы колледжа (как в
 // десктопе). Пишется в те же таблицы (id=grp:name) → синкается в десктоп.
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -146,22 +146,42 @@ const showImport = ref(false)
 const importGroup = ref('')
 const importSpecialties = ref([])
 const importLoadingList = ref(false)
-const importForm = ref({ specialty_code: '', enrollment_year: new Date().getFullYear() })
+const importForm = ref({ specialty_code: '', enrollment_year: '' })
+const importYears = ref([])          // реальные годы набора с опубликованным планом
+const importLoadingYears = ref(false)
 const importSaving = ref(false)
 const importError = ref('')
 const importResult = ref(null)   // {course, semester, imported, unmapped, saved_hours}
+
+// Год поступления — ВЫБОР из реально опубликованных на сайте планов, а не
+// ручной ввод числа (админ почти всегда промахивался мимо доступных лет —
+// на сайте обычно только 3-5 последних, не с основания колледжа). Список
+// зависит от специальности — перегружаем при каждой её смене.
+watch(() => importForm.value.specialty_code, async (code) => {
+  importYears.value = []
+  importForm.value.enrollment_year = ''
+  if (!code) return
+  importLoadingYears.value = true
+  try {
+    const r = (await adminApi.esstuPlanYears(code)).data
+    importYears.value = r.years || []
+    if (importYears.value.length) importForm.value.enrollment_year = importYears.value[0]
+  } catch { /* остаётся пустым — форма покажет «нет доступных годов» */ }
+  finally { importLoadingYears.value = false }
+})
 
 async function openImport(g) {
   importGroup.value = g.name
   importResult.value = null
   importError.value = ''
-  importForm.value = { specialty_code: '', enrollment_year: new Date().getFullYear() }
+  importYears.value = []
+  importForm.value = { specialty_code: '', enrollment_year: '' }
   showImport.value = true
   importLoadingList.value = true
   try {
     const r = (await adminApi.esstuSpecialties(g.name)).data
     importSpecialties.value = r.specialties || []
-    if (r.suggested_code) importForm.value.specialty_code = r.suggested_code
+    if (r.suggested_code) importForm.value.specialty_code = r.suggested_code   // будит watch выше
   } catch (e) {
     importError.value = e?.response?.data?.detail || 'Не удалось получить список специальностей'
   } finally { importLoadingList.value = false }
@@ -330,8 +350,15 @@ async function importParsed() {
               </p>
             </label>
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Год поступления</span>
-              <input v-model.number="importForm.enrollment_year" type="number" min="2000" max="2100"
-                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+              <select v-model.number="importForm.enrollment_year" :disabled="!importForm.specialty_code || importLoadingYears"
+                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
+                <option value="">{{ importLoadingYears ? '— загрузка… —' : '— выберите —' }}</option>
+                <option v-for="y in importYears" :key="y" :value="y">{{ y }}</option>
+              </select>
+              <p v-if="importForm.specialty_code && !importLoadingYears && !importYears.length"
+                 class="mt-1 text-xs text-red">
+                Для этой специальности на сайте нет опубликованных планов.
+              </p>
             </label>
             <p v-if="importError" class="text-sm text-red">{{ importError }}</p>
           </div>

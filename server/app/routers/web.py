@@ -2923,6 +2923,32 @@ def admin_esstu_specialties(group: str = Query(""), _admin: User = Depends(requi
     return {"specialties": specialties, "suggested_code": (suggested or {}).get("code", "")}
 
 
+#Годы набора, для которых у СПЕЦИАЛЬНОСТИ реально опубликован план — свои на
+#каждый код, тот же TTL-приём, что у справочника специальностей выше. Раньше
+#год поступления вводился руками (число), и легко было промахнуться мимо
+#реально существующих на сайте лет — теперь выбор ограничен тем, что там
+#действительно есть, само перечисление уже умеет _fetch_plan_years.
+_ESSTU_PLAN_YEARS_CACHE: dict = {}
+_ESSTU_PLAN_YEARS_TTL = 3 * 3600
+
+
+@router.get("/admin/esstu/plan-years")
+def admin_esstu_plan_years(specialty_code: str = Query(...),
+                           _admin: User = Depends(require_admin)):
+    """Годы набора с реально опубликованным планом для данной специальности —
+    наполняет выпадающий список «Год поступления» в диалоге импорта (вместо
+    ручного ввода числа, которое почти всегда промахивалось: у специальности
+    обычно доступны только 3-5 последних лет, а не с основания колледжа)."""
+    import time
+    now = time.time()
+    entry = _ESSTU_PLAN_YEARS_CACHE.get(specialty_code)
+    if not entry or now - entry["ts"] >= _ESSTU_PLAN_YEARS_TTL:
+        years = sorted(esstu_parser._fetch_plan_years(specialty_code), reverse=True)
+        entry = {"ts": now, "years": years}
+        _ESSTU_PLAN_YEARS_CACHE[specialty_code] = entry
+    return {"years": entry["years"]}
+
+
 @router.post("/admin/groups/import-esstu")
 def admin_import_esstu(payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -2956,6 +2982,16 @@ def admin_import_esstu(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="enrollment_year должен быть числом (год)")
 
     grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        #Фолбэк по имени: GET /admin/groups отдаёт группы ТОЛЬКО по name (id клиенту
+        #вообще не виден), а название приходит сюда тем же значением без повторного
+        #ввода. Если у строки id почему-то разъехался с `grp:{name}` (старые данные,
+        #ручная правка БД, миграция) — группа видна в списке, но реконструкция id
+        #мимо неё промахивается. Остальные три места с этим лукапом не трогаем: там
+        #расхождение не воспроизведено, а этот фолбэк — расширение, не сужение.
+        grp = (db.query(Group)
+              .filter(Group.name == group, Group.deleted == False)  # noqa: E712
+              .first())
     if grp is None or grp.deleted:
         raise HTTPException(status_code=404, detail="Группа не найдена")
 

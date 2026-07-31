@@ -1305,10 +1305,13 @@ class AdminDashboard(QWidget):
         combo.setEnabled(False)
         lay.addWidget(combo)
         lay.addWidget(lbl("ГОД ПОСТУПЛЕНИЯ", 10, C['text3']))
-        year_sp = QSpinBox(); year_sp.setRange(2000, 2100)
-        import datetime as _dt
-        year_sp.setValue(_dt.date.today().year)
-        lay.addWidget(year_sp)
+        #Выпадающий список РЕАЛЬНО опубликованных на сайте годов, а не ручной ввод
+        #числа — раньше почти всегда промахивались мимо доступных лет (на сайте
+        #обычно только 3-5 последних, не с основания колледжа). Список зависит от
+        #специальности — перегружается при каждой её смене (_load_years).
+        year_combo = QComboBox(); year_combo.addItem("сначала выберите специальность", None)
+        year_combo.setEnabled(False)
+        lay.addWidget(year_combo)
         status = lbl("", 11, C['text3']); status.setWordWrap(True); lay.addWidget(status)
 
         btns = QHBoxLayout()
@@ -1319,6 +1322,42 @@ class AdminDashboard(QWidget):
         def _load():
             from sync_client import SyncClient
             return SyncClient(url, token=token).esstu_specialties(name)
+
+        def _load_years():
+            code = combo.currentData()
+            run.setEnabled(False)
+            year_combo.clear()
+            if not code:
+                year_combo.addItem("сначала выберите специальность", None)
+                year_combo.setEnabled(False)
+                return
+            year_combo.addItem("Загрузка…", None)
+            year_combo.setEnabled(False)
+
+            def _do_years():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).esstu_plan_years(code)
+
+            def _apply_years(data):
+                year_combo.clear()
+                years = data.get("years") or []
+                if not years:
+                    year_combo.addItem("нет опубликованных планов", None)
+                    year_combo.setEnabled(False)
+                    return
+                for y in years:
+                    year_combo.addItem(str(y), y)
+                year_combo.setCurrentIndex(0)
+                year_combo.setEnabled(True)
+                run.setEnabled(True)
+
+            def _err_years(e):
+                year_combo.clear()
+                year_combo.addItem("ошибка загрузки годов", None)
+                year_combo.setEnabled(False)
+                status.setText(f"⚠️ Не удалось загрузить годы набора: {e}")
+
+            self._run_bg(_do_years, _apply_years, _err_years)
 
         def _apply(data):
             combo.clear()
@@ -1334,7 +1373,10 @@ class AdminDashboard(QWidget):
                     sel_idx = combo.count() - 1
             combo.setCurrentIndex(sel_idx)
             combo.setEnabled(True)
-            run.setEnabled(True)
+            #Сигнал подключаем ПОСЛЕ заполнения — иначе addItem() на пустом combo
+            #сам эмитит currentIndexChanged(0) и годы грузились бы дважды подряд.
+            combo.currentIndexChanged.connect(lambda _i: _load_years())
+            _load_years()
 
         def _err(e):
             status.setText(f"⚠️ Не удалось загрузить список специальностей: {e}")
@@ -1343,14 +1385,15 @@ class AdminDashboard(QWidget):
 
         def _run():
             code = combo.currentData()
-            if not code:
+            year = year_combo.currentData()
+            if not code or not year:
                 return
             run.setEnabled(False)
             status.setText("Импорт…")
 
             def _do():
                 from sync_client import SyncClient
-                return SyncClient(url, token=token).import_esstu(name, code, year_sp.value())
+                return SyncClient(url, token=token).import_esstu(name, code, year)
 
             def _done(r):
                 term = r.get("term") or {}

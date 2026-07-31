@@ -434,6 +434,14 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def esstu_plan_years(self, specialty_code: str) -> dict:
+        """Годы набора с реально опубликованным планом для специальности —
+        {years: [...]}, наполняет выпадающий список вместо ручного ввода года."""
+        r = self._req("GET", "/web/admin/esstu/plan-years",
+                      params={"specialty_code": specialty_code}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
     def import_esstu(self, group: str, specialty_code: str, enrollment_year: int) -> dict:
         """Импорт специальности + учебного плана ВСГУТУ в группу — часы/ЗЕТ ИМЕННО
         текущего курса/семестра (считается от года поступления на сервере,

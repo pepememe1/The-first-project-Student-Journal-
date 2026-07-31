@@ -14,6 +14,7 @@ esstu_parser (сеть/PDF) ЗАМОКАН — этот файл проверя�
 от того, в каком месяце его запускают (course_and_semester зависит от даты сервера)."""
 import study_hours
 from app import db as app_db
+from app.models import Group
 from app.parsers import esstu_parser
 from conftest import make_admin, make_teacher, assign_teacher
 
@@ -67,6 +68,32 @@ def test_specialties_endpoint_suggests_by_group_name(client, monkeypatch):
     assert r.json()["suggested_code"] == "09.02.07"
     r2 = client.get("/web/admin/esstu/specialties", params={"group": "К74/1"}, headers=admin)
     assert r2.json()["suggested_code"] == ""
+
+
+def test_plan_years_endpoint_admin_only(client, monkeypatch):
+    monkeypatch.setattr(esstu_parser, "_fetch_plan_years",
+                        lambda code: {2022: "/a", 2023: "/b", 2024: "/c"})
+    admin = make_admin(client)
+    r = client.get("/web/admin/esstu/plan-years", params={"specialty_code": "09.02.07"},
+                   headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["years"] == [2024, 2023, 2022]   # новые сверху
+
+    teacher = make_teacher(client, admin)
+    assert client.get("/web/admin/esstu/plan-years", params={"specialty_code": "09.02.07"},
+                      headers=teacher).status_code == 403
+
+
+def test_plan_years_endpoint_empty_when_nothing_published(client, monkeypatch):
+    #Другой specialty_code, чем в test_plan_years_endpoint_admin_only — у кэша
+    #TTL=3ч, ключ по коду, второй тест с ТЕМ ЖЕ кодом в этом же процессе увидел
+    #бы уже закэшированный (непустой) результат первого.
+    monkeypatch.setattr(esstu_parser, "_fetch_plan_years", lambda code: {})
+    admin = make_admin(client)
+    r = client.get("/web/admin/esstu/plan-years", params={"specialty_code": "43.02.16"},
+                   headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["years"] == []
 
 
 def test_import_replaces_subjects_and_writes_hours_for_current_semester(client, monkeypatch):
@@ -140,6 +167,35 @@ def test_import_unknown_group_is_404(client, monkeypatch):
                     json={"group": "Нет такой", "specialty_code": "09.02.07", "enrollment_year": 2022},
                     headers=admin)
     assert r.status_code == 404
+
+
+def test_import_finds_group_when_id_drifted_from_name(client, monkeypatch):
+    """GET /admin/groups отдаёт группы ПО ИМЕНИ (id клиенту не виден вовсе), а сам
+    эндпоинт лукапит по РЕКОНСТРУИРОВАННОМУ id (grp:{name}). Если у строки в базе id
+    почему-то разошёлся с её же name (старые данные, ручная правка) — группа видна
+    в UI по имени, но реконструкция id мимо неё промахивается и раньше 404-ила на
+    группе, которая точно есть. Заводим ИМЕННО такую строку напрямую (минуя API,
+    который всегда строит id согласованно) и проверяем, что импорт всё равно находит
+    группу по name."""
+    year = 2022
+    monkeypatch.setattr(esstu_parser, "get_study_plan", lambda code, y: _plan_for(year))
+    admin = make_admin(client)
+
+    db = app_db.SessionLocal()
+    try:
+        db.add(Group(id="grp:legacy-id-mismatch", name="К74/1", subjects=[],
+                     updated_at="2020-01-01T00:00:00", deleted=False))
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/web/admin/groups/import-esstu",
+                    json={"group": "К74/1", "specialty_code": "09.02.07", "enrollment_year": year},
+                    headers=admin)
+    assert r.status_code == 200, r.text
+    groups = client.get("/web/admin/groups", headers=admin).json()["groups"]
+    grp = next(g for g in groups if g["name"] == "К74/1")
+    assert set(grp["subjects"]) == {"Русский язык", "Физическая культура"}
 
 
 def test_import_empty_plan_is_422_and_no_side_effects(client, monkeypatch):

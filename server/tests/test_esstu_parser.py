@@ -56,6 +56,15 @@ def plan_09_02_06_pdf():
     return (FIXTURES / "esstu_plan_09_02_06_2022.pdf").read_bytes()
 
 
+@pytest.fixture()
+def plan_09_02_07_2024_pdf():
+    """Новый шаблон ВСГУТУ (2024+): перед колонкой индекса появилась ОДНА
+    пустая служебная колонка — раньше это ловило _detect_hours_column
+    в пустоту и возвращало 0 строк для ЛЮБОГО плана 2024/2025 (см.
+    _detect_index_column)."""
+    return (FIXTURES / "esstu_plan_09_02_07_2024.pdf").read_bytes()
+
+
 # ── get_all_specialties() ───────────────────────────────────────────────────
 
 def test_get_all_specialties_reads_real_table(monkeypatch, college_html):
@@ -110,6 +119,18 @@ def test_get_study_plan_empty_for_unpublished_year(monkeypatch, directions_09_02
     assert P.get_study_plan("09.02.07", 1999) == []
 
 
+# ── _detect_index_column() ───────────────────────────────────────────────────
+
+def test_detect_index_column_old_template_is_zero():
+    rows = [["ОУП", "Общие учебные предметы", "4"], ["ОУП.01", "Русский язык", "12"]]
+    assert P._detect_index_column(rows) == 0
+
+
+def test_detect_index_column_new_template_skips_empty_leading_column():
+    rows = [["", "ОУП", "Общие учебные предметы"], ["", "ОУП.01", "Русский язык"]]
+    assert P._detect_index_column(rows) == 1
+
+
 # ── _parse_pdf_plan() — самая рискованная часть: колонка часов + сетка семестров ──
 
 def test_pdf_hours_match_manually_verified_values(plan_09_02_07_pdf):
@@ -151,6 +172,19 @@ def test_pdf_column_detection_generalizes_to_a_different_specialty(plan_09_02_06
     assert by_index["ОГСЭ.01"]["subject"] == "Основы философии"
     assert by_index["ОГСЭ.01"]["hours"] == 52.0
     assert by_index["ОГСЭ.02"]["hours"] == 36.0
+
+
+def test_pdf_new_template_2024_index_column_shifted_by_one(plan_09_02_07_2024_pdf):
+    """Регрессия на реальный баг: план 2024 парсился в 0 строк, потому что
+    _detect_hours_column искал индекс дисциплины в row[0] (пусто в новом
+    шаблоне — индекс уехал в row[1]). Числа сверены вручную тем же способом,
+    что и у старого шаблона (test_pdf_hours_match_manually_verified_values)."""
+    rows = P._parse_pdf_plan(plan_09_02_07_2024_pdf)
+    assert len(rows) >= 55
+    by_index = {r["index"]: r for r in rows}
+    assert by_index["ОУП.01"]["subject"] == "Русский язык"
+    assert by_index["ОУП.01"]["hours"] == 96.0
+    assert by_index["ОУП.01"]["hours_by_semester"] == {1: 42.0, 2: 54.0}
 
 
 def test_pdf_parse_returns_empty_without_pdfplumber(monkeypatch, plan_09_02_07_pdf):

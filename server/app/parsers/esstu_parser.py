@@ -55,24 +55,22 @@ xlsx может быть основным форматом. xlsx-ветка ос
 поэтому считается ТЕМ ЖЕ способом, что и весь остальной продукт
 (`study_hours.ZET_HOURS` = 36 ч./ЗЕТ), а не берётся из документа.
 
-⚠️ **ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ, важно перед боевым использованием.** У ВСГУТУ есть
-как минимум ДВА разных шаблона PDF — проверено на 09.02.07: годы набора 2022 и
-2023 читаются штатно (61 и 65 строк), а 2024 и 2025 — НЕТ (0 строк, честный лог
-«структура непривычная», см. `_detect_hours_column`). У нового шаблона таблица
-«Учебный план» на каждой странице совмещена с колонкой «Формируемые компетенции»
-(коды ОК/ПК прямо в тех же ячейках, что раньше были отдельной «Матрицей
-компетенций» на своей странице) — структура не просто «другой сдвиг колонки»,
-а другая раскладка целиком, поэтому самопроверка `_detect_hours_column` не
-находит СОВПАДЕНИЙ ВООБЩЕ (не путать с «сетка семестров не откалибровалась» —
-там хотя бы «Всего» находится, здесь не находится и он). Не проверено, для
-какого года набора граница проходит у ДРУГИХ специальностей — вероятно,
-разная (шаблон обновляли по ходу, не единомоментно для всей базы документов).
-Итог: заявленная фича РАБОТАЕТ и безопасна (на неподдержанном шаблоне честно
-отдаёт 422/[], а не выдумывает цифры), но реальную пользу для АКТУАЛЬНЫХ
-(недавно набранных) групп даст только после того, как кто-то разведает новый
-шаблон тем же способом, что этот файл — см. `_detect_hours_column`/
-`_detect_semester_grid` докстринги, тот же метод самопроверки должен сработать
-и здесь, просто заново подобрать, какая колонка/сетка при НОВОЙ раскладке.
+✅ **Шаблон 2024+ поддержан (было ограничением, теперь починено).** Изначально
+план 2024/2025 читался в 0 строк — казалось, что у ВСГУТУ появился ВТОРОЙ,
+совсем другой шаблон PDF. Живая доразведка (после того, как заказчик прогнал
+фичу на реальной группе с годом 2024) показала, что дело куда проще: в
+шаблоне 2024+ перед колонкой индекса дисциплины появилась ОДНА пустая
+служебная колонка (индекс уехал с `row[0]` на `row[1]`, название — с `row[1]`
+на `row[2]`), а `_detect_hours_column`/`_pdf_table_to_rows` жёстко читали
+`row[0]`/`row[1]` — самопроверка агрегатов смотрела в пустую колонку и не
+находила НИЧЕГО, отсюда и походило на «структура совсем другая». Сама сетка
+часов и колонка «Всего» устроены ТАК ЖЕ (та же самопроверка их находит) —
+просто индекс/название сдвинуты. Колонка индекса теперь тоже определяется
+самопроверкой, а не хардкодом — см. `_detect_index_column`: считаем, на какой
+из первых нескольких колонок чаще всего встречаются значения вида «ОУП.01»/
+«ОУП», а не предполагаем «это всегда колонка 0». Проверено на ОБЕИХ
+специальностях (09.02.07, 09.02.06) за все года, для которых на сайте вообще
+есть ссылка на план (2022-2026) — везде читается штатно.
 
 ━━ ЧАСЫ ПО СЕМЕСТРАМ ━━
 Правее «Всего» в тех же строках лежит сетка «Семестр 1» … «Семестр 8» — те же
@@ -471,24 +469,52 @@ _CYCLE_AGGREGATE_RE = re.compile(r"^[A-ZА-ЯЁ]{1,6}$")
 _MIN_GROUP_MATCHES = 2  # меньше — слишком велик риск случайного совпадения
 
 
-def _detect_hours_column(rows: list[list]) -> int | None:
+def _detect_index_column(rows: list[list]) -> int:
+    """Колонка с индексом дисциплины/цикла («ОУП.01», «ОГСЭ») — НЕ ВСЕГДА
+    самая первая колонка таблицы. В шаблоне ВСГУТУ до 2024 г. это была
+    колонка 0; в шаблоне 2024+ перед ней появилась ОДНА пустая служебная
+    колонка (0 всегда пуст, индекс уехал в 1), а колонка «Всего часов»
+    сдвинулась вместе с ним — это и было причиной, по которой самопроверка
+    часов не находила НИЧЕГО на новых планах: она искала агрегаты в row[0],
+    а там пусто. Определяем колонку так же, самопроверкой: где чаще всего
+    встречаются значения вида «ОУП.01»/«ОУП» на первых нескольких колонках
+    (индекс всегда у самого начала строки, дальше — трёхзначные коды
+    компетенций и цифры часов, под тот же паттерн не подходящие)."""
+    max_len = max((len(r) for r in rows if r), default=0)
+    best_col, best_count = 0, -1
+    for col in range(min(max_len, 6)):
+        count = 0
+        for row in rows:
+            if not row or col >= len(row) or not row[col]:
+                continue
+            v = str(row[col]).strip()
+            if _DISCIPLINE_INDEX_RE.match(v) or _CYCLE_AGGREGATE_RE.match(v):
+                count += 1
+        if count > best_count:
+            best_count, best_col = count, col
+    return best_col
+
+
+def _detect_hours_column(rows: list[list], index_col: int = 0) -> int | None:
     """Определяет индекс колонки «Всего часов» САМОПРОВЕРКОЙ: часы цикла-
     агрегата (ОГСЭ) обязаны быть БЛИЗКИ к сумме часов его дисциплин (ОГСЭ.01 +
     ОГСЭ.02 + …) — «близки», а не «равны», потому что у цикла бывают ещё
     строки-сноски без собственного индекса (напр. «Индивидуальный проект»),
     которые в сумму дочерних не попадают, но это всегда ЧАСТЬ родителя, не
-    вычесть в минус, только недобор. Проверено на двух разных специальностях
-    (09.02.07 → колонка 9, 09.02.06 → колонка 8) — колонка НЕ ФИКСИРОВАНА
-    между разными планами, перебор обязателен каждый раз заново."""
+    вычесть в минус, только недобор. Проверено на нескольких специальностях
+    и ДВУХ поколениях шаблона (09.02.07/2022 → колонка 9, 09.02.06/2022 →
+    колонка 8, 09.02.07/2024 → колонка 12) — колонка НЕ ФИКСИРОВАНА между
+    разными планами, перебор обязателен каждый раз заново. index_col — от
+    _detect_index_column, а НЕ обязательно 0 (см. её докстринг)."""
     groups = []
     for i, row in enumerate(rows):
-        if not row or not row[0]:
+        if not row or index_col >= len(row) or not row[index_col]:
             continue
-        idx = str(row[0]).strip()
+        idx = str(row[index_col]).strip()
         if not _CYCLE_AGGREGATE_RE.match(idx):
             continue
-        children = [r for r in rows if r and r[0]
-                   and str(r[0]).strip().startswith(idx + ".")]
+        children = [r for r in rows if r and index_col < len(r) and r[index_col]
+                   and str(r[index_col]).strip().startswith(idx + ".")]
         if len(children) >= _MIN_GROUP_MATCHES:
             groups.append((row, children))
     if not groups:
@@ -496,7 +522,7 @@ def _detect_hours_column(rows: list[list]) -> int | None:
 
     max_len = max(len(r) for r in rows if r)
     best_col, best_score = None, 0
-    for col in range(2, max_len):
+    for col in range(index_col + 2, max_len):
         score = 0
         for agg, children in groups:
             agg_v = _to_number(agg[col]) if col < len(agg) else None
@@ -534,13 +560,14 @@ _MIN_SEMESTER_GRID_HITS = 2
 _MIN_SEMESTER_GRID_SCORE = 3
 
 
-def _detect_semester_grid(rows: list[list], hours_col: int, max_len: int):
+def _detect_semester_grid(rows: list[list], hours_col: int, max_len: int, index_col: int = 0):
     """(base, period) — колонка «Семестр 1» и шаг между семестрами, либо
     (None, None), если сетка не откалибровалась. Тот же приём самопроверки,
     что и у _detect_hours_column, только сумма берётся не по детям цикла, а
     по 8 колонкам-кандидатам одной и той же дисциплины — она обязана сойтись
     с уже известным «Всего» (hours_col) этой же строки."""
-    disc_rows = [r for r in rows if r and r[0] and _DISCIPLINE_INDEX_RE.match(str(r[0]).strip())]
+    disc_rows = [r for r in rows if r and index_col < len(r) and r[index_col]
+                and _DISCIPLINE_INDEX_RE.match(str(r[index_col]).strip())]
     best_score, best_base, best_period = 0, None, None
     for period in _SEMESTER_PERIOD_RANGE:
         for base in range(hours_col + 1, max_len - period):
@@ -581,15 +608,18 @@ def _row_hours_by_semester(row: list, base: int, period: int) -> dict:
     return out
 
 
-def _pdf_table_to_rows(table: list[list], hours_col: int, sem_base=None, sem_period=None) -> list[dict]:
+def _pdf_table_to_rows(table: list[list], hours_col: int, sem_base=None, sem_period=None,
+                       index_col: int = 0) -> list[dict]:
+    name_col = index_col + 1
     out = []
     for row in table:
-        if not row or not row[0]:
+        if not row or index_col >= len(row) or not row[index_col]:
             continue
-        index = str(row[0]).strip()
+        index = str(row[index_col]).strip()
         if not _DISCIPLINE_INDEX_RE.match(index):
             continue
-        name = re.sub(r"\s+", " ", str(row[1] or "").strip())
+        name = re.sub(r"\s+", " ",
+                      str((row[name_col] if name_col < len(row) else "") or "").strip())
         if not name:
             continue
         hours = _to_number(row[hours_col]) if hours_col < len(row) else None
@@ -624,6 +654,7 @@ def _parse_pdf_plan(content: bytes) -> list[dict]:
         return []
 
     anchor_col = None
+    anchor_index_col = None
     anchor_width = None
     anchor_rows = None
     out: list[dict] = []
@@ -641,9 +672,15 @@ def _parse_pdf_plan(content: bytes) -> list[dict]:
                         continue
                     page_tables.append((pi, table))
                     if anchor_col is None:
-                        col = _detect_hours_column(table)
+                        #Колонка индекса — НЕ всегда 0 (см. _detect_index_column: в
+                        #шаблоне 2024+ перед ней есть пустая служебная колонка) —
+                        #определяем её ПЕРЕД поиском часов, иначе самопроверка
+                        #агрегатов смотрит в пустую колонку и не находит ничего.
+                        idx_col = _detect_index_column(table)
+                        col = _detect_hours_column(table, idx_col)
                         if col is not None:
                             anchor_col = col
+                            anchor_index_col = idx_col
                             anchor_width = max(len(r) for r in table if r)
                             anchor_rows = table
 
@@ -657,7 +694,8 @@ def _parse_pdf_plan(content: bytes) -> list[dict]:
             #таблице — see _detect_semester_grid; не откалибровалась — все
             #строки этого плана останутся без hours_by_semester (см. заголовок
             #модуля), но hours/zet (общий итог) это не затрагивает.
-            sem_base, sem_period = _detect_semester_grid(anchor_rows, anchor_col, anchor_width)
+            sem_base, sem_period = _detect_semester_grid(anchor_rows, anchor_col, anchor_width,
+                                                          anchor_index_col)
             if sem_base is None:
                 logger.info("[esstu] сетка часов по семестрам не откалибровалась для этого "
                            "плана — hours_by_semester будет пустым у всех дисциплин")
@@ -668,7 +706,8 @@ def _parse_pdf_plan(content: bytes) -> list[dict]:
             for pi, table in page_tables:
                 width = max((len(r) for r in table if r), default=0)
                 if width == anchor_width:
-                    out.extend(_pdf_table_to_rows(table, anchor_col, sem_base, sem_period))
+                    out.extend(_pdf_table_to_rows(table, anchor_col, sem_base, sem_period,
+                                                  anchor_index_col))
     except Exception as e:
         logger.warning("[esstu] сбой при разборе PDF учебного плана: %s", e)
         return []
