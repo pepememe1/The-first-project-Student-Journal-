@@ -20,6 +20,7 @@ from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
+from .routers import serverinfo
 from . import events, throttle
 
 
@@ -121,6 +122,10 @@ app.include_router(parent.router)          # кабинет родителя + �
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
 app.include_router(messenger.mod_router)   # модерация мессенджера (/web/admin/messenger/*)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
+#Раздел «Сервер» — ТОЛЬКО ПРОСМОТР. Управление (SSH, команды, перенос) живёт в
+#ui/server_admin.py и подключается лишь к локальному серверу программы: на боевой
+#машине этого кода нет вовсе, поэтому дырка в веб-админке не даёт оболочку на VPS.
+app.include_router(serverinfo.router)
 
 
 #Раздача файлов для скачивания (десктоп-клиент GradeBookAI.exe). Файлы кладём в папку

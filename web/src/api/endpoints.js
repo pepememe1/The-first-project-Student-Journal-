@@ -218,6 +218,11 @@ export const adminApi = {
   publishSchedule: (group) => api.post('/web/admin/schedule/publish', { group }),
   // Инфо-панель «Сервер и сайт» (адрес, БД, шифрование, ГОСТ, онлайн, период).
   serverInfo: () => api.get('/web/admin/server-info'),
+  // Состояние МАШИНЫ, на которой работает сервер: диск, память, аптайм, размер базы.
+  // Только просмотр — и на сайте, и в программе (см. server/app/routers/serverinfo.py).
+  serverMetrics: () => api.get('/web/admin/server/metrics'),
+  serverBackups: () => api.get('/web/admin/server/backups'),
+  serverTree: (path = '') => api.get('/web/admin/server/tree', { params: { path } }),
   // Порог ЗЕТ для перевода группы на курс (docs/PLAN-ZET.md §7.2). min_zet: null — снять.
   zetThreshold: (group, params = {}) =>
     api.get('/web/admin/zet-thresholds', { params: { group, ...params } }),
@@ -460,4 +465,52 @@ export const eventsApi = {
 // Десктоп-клиент (публичный эндпоинт: доступность и размер GradeBookAI.exe).
 export const desktopApi = {
   info: () => api.get('/desktop-info'),
+}
+
+// УПРАВЛЕНИЕ СЕРВЕРОМ ПО SSH — ТОЛЬКО В ПРОГРАММЕ ────────────────────────────────
+// Эти маршруты подключает ЛОКАЛЬНЫЙ сервер программы (ui/server_admin.py). На боевом
+// сервере их нет вовсе: там работает только просмотр (adminApi.serverMetrics и рядом).
+// Граница проходит по наличию кода, а не по проверке роли — роль можно обойти,
+// отсутствующий код нельзя.
+//
+// ⚠️ ПРОВЕРЯТЬ ДОСТУПНОСТЬ НАДО ПО ТИПУ ОТВЕТА, А НЕ ПО КОДУ. На сайте неизвестный
+// путь перехватывает заглушка SPA и отдаёт index.html с кодом 200 — «раздел доступен»
+// по коду ответа тут получилось бы всегда.
+export const deskServerApi = {
+  async available() {
+    try {
+      const r = await api.get('/desk/servers')
+      const ct = String(r.headers?.['content-type'] || '')
+      return ct.includes('application/json') && Array.isArray(r.data?.items)
+    } catch { return false }
+  },
+  list: () => api.get('/desk/servers'),
+  // password передаём ТОЛЬКО когда его меняют: пустое поле не значит «сотри» (страница
+  // пароль не показывает, и обычное сохранение имени пришло бы с пустым полем).
+  // Убрать пароль — явным clear_password: true.
+  save: (payload) => api.post('/desk/servers', payload),
+  remove: (id) => api.delete(`/desk/servers/${encodeURIComponent(id)}`),
+  metrics: (id) => api.get(`/desk/servers/${encodeURIComponent(id)}/metrics`),
+  tree: (id, path = '') =>
+    api.get(`/desk/servers/${encodeURIComponent(id)}/tree`, { params: { path } }),
+  // Резервные копии БОЕВОЙ машины (не путать с adminApi.dataExport — то выгрузка
+  // справочников в архив, а это снимок базы вместе с ключом шифрования).
+  backups: (id) => api.get(`/desk/servers/${encodeURIComponent(id)}/backups`),
+  makeBackup: (id) => api.post(`/desk/servers/${encodeURIComponent(id)}/backups`),
+  downloadBackup: (id, name) =>
+    api.post(`/desk/servers/${encodeURIComponent(id)}/backups/download`, { name }),
+  // Положить открытый ключ этого компьютера на сервер — чтобы уйти с пароля на ключ.
+  installKey: (id) => api.post(`/desk/servers/${encodeURIComponent(id)}/install-key`),
+  // Запуск/остановка/перезапуск службы. Останов кладёт сайт для всего колледжа,
+  // поэтому сервер отвечает 409 «confirm-required», пока не подтвердили осознанно.
+  service: (id, name, action, confirm = false) =>
+    api.post(`/desk/servers/${encodeURIComponent(id)}/service`, { name, action, confirm }),
+  // confirm=true нужен для опасных команд: сервер отвечает 409 «confirm-required»,
+  // пока человек не подтвердил осознанно (см. is_dangerous в ui/server_admin.py).
+  exec: (id, command, { confirm = false, long = false } = {}) =>
+    api.post(`/desk/servers/${encodeURIComponent(id)}/exec`, { command, confirm, long }),
+  migrationPlan: (source, target) =>
+    api.post('/desk/servers/migrate/plan', { source, target }),
+  migrationStep: (source, target, step) =>
+    api.post('/desk/servers/migrate/step', { source, target, step }),
 }
