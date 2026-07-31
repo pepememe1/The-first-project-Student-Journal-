@@ -54,7 +54,35 @@ const _inDesktop = (() => {
     return v === '1' || v === 'nav'
   } catch { return false }
 })()
-if ('serviceWorker' in navigator && !_inDesktop) {
+
+// ⚠️ В МОБИЛЬНОМ ПРИЛОЖЕНИИ service worker НЕ НУЖЕН И ВРЕДЕН — из-за него обновления
+// «по воздуху» не доходили до людей МЕСЯЦ. Механика: Capgo подменяет веб-бандл, но
+// адрес остаётся прежним (http://localhost), поэтому уже установленный worker
+// продолжает отдавать СТАРУЮ оболочку и старые ассеты из своего кэша (`/assets/*` он
+// отдаёт cache-first). Приложение исправно скачивало новый бандл при каждом запуске —
+// это видно в логах сервера — и каждый раз показывало прежнюю версию.
+//
+// Оффлайн в приложении обеспечивает не worker, а сам Capacitor: файлы бандла лежат на
+// устройстве и открываются без сети. Так что здесь worker не давал ничего и ломал всё.
+//
+// СНИМАЕМ уже установленный, а не просто «не регистрируем»: на телефонах он давно
+// стоит, и без явного удаления новый бандл до них не доберётся никогда — его же
+// собственный код не запустится, чтобы это исправить.
+if (Capacitor.isNativePlatform()) {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+      .then((done) => {
+        if (done.some(Boolean)) console.info('[PWA] service worker снят (мешал OTA)')
+      })
+      .catch(() => { /* нет доступа — значит и worker'а нет */ })
+  }
+  if (typeof caches !== 'undefined') {
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('gb-')).map((k) => caches.delete(k))))
+      .catch(() => { /* кэша нет — нечего чистить */ })
+  }
+} else if ('serviceWorker' in navigator && !_inDesktop) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch((e) => {
       console.warn('[PWA] service worker не зарегистрирован:', e)
