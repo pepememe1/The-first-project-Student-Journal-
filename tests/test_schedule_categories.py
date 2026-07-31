@@ -1,0 +1,151 @@
+"""
+test_schedule_categories.py — категории расписания (schedule/parser.py::CATEGORIES),
+на СОХРАНЁННЫХ реальных страницах portal.esstu.ru (без сети).
+
+Фикстуры (tests/fixtures/schedule_*):
+  schedule_index_bakalavriat.htm / schedule_group_bakalavriat.htm — «Бакалавриат,
+    специалитет», обычный (недельный) формат — читается СУЩЕСТВУЮЩИМ
+    parse_group_page без единой правки (проверено живой разведкой).
+  schedule_index_zo1.htm / schedule_group_zo1.htm — «Заочное 1», СЕССИОННЫЙ формат
+    (заголовки дней — календарные даты, не Пн-Сб) — нужен parse_group_page_dated.
+
+Числа в тестах на zo1 сверены вручную с сырым HTML (см. историю разведки):
+группа «ЗУ-395-1», Пнд 06 апреля, 5-я пара — «Инженерная и компьютерная графика»
+у «Прудова Л.Ю.», ауд. 732.
+"""
+import os
+
+from schedule import parser as P
+from schedule.model import Snapshot
+
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+
+
+def _load(name: str) -> str:
+    with open(os.path.join(FIXTURES, name), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# ── Реестр категорий ─────────────────────────────────────────────────────────
+
+def test_categories_registry_has_four_entries_with_dated_flags():
+    assert set(P.CATEGORIES) == {"college", "bakalavriat", "zo1", "zo2"}
+    assert P.DEFAULT_CATEGORY == "college"
+    assert P.CATEGORIES["college"]["dated"] is False
+    assert P.CATEGORIES["bakalavriat"]["dated"] is False
+    assert P.CATEGORIES["zo1"]["dated"] is True
+    assert P.CATEGORIES["zo2"]["dated"] is True
+    assert P.CATEGORIES["college"]["prefix"] == "К"
+    assert P.CATEGORIES["bakalavriat"]["prefix"] is None
+
+
+def test_old_constants_still_derive_from_registry():
+    """COLLEGE_DIR/COLLEGE_INDEX/_COLLEGE_PREFIX — обратная совместимость для кода,
+    который их ещё импортирует напрямую."""
+    assert P.COLLEGE_DIR == P.CATEGORIES["college"]["dir"]
+    assert P.COLLEGE_INDEX == P.category_index_url("college")
+    assert P._COLLEGE_PREFIX == "К"
+
+
+# ── list_category_groups / list_college_groups (совместимость) ──────────────
+
+def test_list_category_groups_bakalavriat_takes_all_no_prefix_filter():
+    html = _load("schedule_index_bakalavriat.htm")
+    groups = P.list_category_groups(html, "bakalavriat")
+    assert len(groups) > 100          # реально ~219 на живом снимке
+    names = [n for n, _ in groups]
+    assert "Б165" in names
+    #никакой фильтрации по «К»/«Б» — это не колледж, там нет постороннего набора
+    assert not any(n.startswith("К") for n in names)
+
+
+def test_list_college_groups_unchanged_behavior():
+    """Старая функция — тонкая обёртка над list_category_groups(html, "college"),
+    поведение (фильтр по «К», магистратура «М…» отброшена) не изменилось."""
+    html = ('<a href="1.htm">К15/1</a><a href="69.htm">М215</a><a href="2.htm">К25</a>')
+    names = [n for n, _ in P.list_college_groups(html)]
+    assert names == [n for n, _ in P.list_category_groups(html, "college")]
+    assert "К15/1" in names and "К25" in names
+    assert "М215" not in names
+
+
+# ── parse_group_page на bakalavriat (обычный формат, БЕЗ ПРАВОК) ─────────────
+
+def test_bakalavriat_group_page_parses_with_unmodified_parser():
+    gs = P.parse_group_page(_load("schedule_group_bakalavriat.htm"), name="Б165")
+    assert 1 in gs.weeks and 2 in gs.weeks
+    assert any(l.teacher for w in gs.weeks.values() for ls in w.values() for l in ls), \
+        "хотя бы один преподаватель должен распознаться (формат ФАМИЛИЯ капсом, как в колледже)"
+
+
+# ── parse_group_page_dated на zo1 (сессионный формат) ────────────────────────
+
+def test_dated_parser_finds_multiple_session_blocks():
+    gs = P.parse_group_page_dated(_load("schedule_group_zo1.htm"), name="ЗУ-395-1")
+    assert len(gs.weeks) >= 2          # реально 4 на живом снимке
+    assert len(gs.pair_times) <= 8     # до 8 пар (не 6, как в обычном формате)
+
+
+def test_dated_parser_day_keys_are_dates_not_weekdays():
+    gs = P.parse_group_page_dated(_load("schedule_group_zo1.htm"), name="ЗУ-395-1")
+    days = gs.weeks[1].keys()
+    assert "Пнд, 06 апреля" in days
+    assert "Пнд" not in days            # НЕ короткий день, как в обычном формате
+
+
+def test_dated_parser_known_lesson_manually_verified():
+    """Пнд 06 апреля, 5-я пара — сверено вручную с сырым HTML при разведке."""
+    gs = P.parse_group_page_dated(_load("schedule_group_zo1.htm"), name="ЗУ-395-1")
+    mon = gs.weeks[1]["Пнд, 06 апреля"]
+    p5 = next(l for l in mon if l.pair_no == 5)
+    assert p5.subject == "Инженерная и компьютерная графика"
+    assert p5.teacher == "Прудова Л.Ю."     # НЕ капсом — регрессия на _TEACHER_RE_DATED
+    assert p5.room == "732"
+
+
+def test_dated_parser_ignores_double_underscore_artifact():
+    """Слипшиеся ячейки на сессионных страницах иногда дают «_ _» вместо «_» —
+    тоже пустая клетка, не текст занятия (regression на parse_cell)."""
+    assert P.parse_cell("_ _") is None
+    assert P.parse_cell("_  _") is None
+
+
+def test_dated_parser_does_not_leak_into_regular_parse_cell():
+    """Обычный parse_cell (дефолт _TEACHER_RE, капсом) НЕ должен матчить фамилию
+    в обычном регистре — иначе была бы регрессия для колледжа/бакалавриата."""
+    ls = P.parse_cell("лек.Инженерная и компьютерная графика Прудова Л.Ю. а.732")
+    assert ls is not None
+    assert ls.teacher == ""             # не капсом — дефолтный _TEACHER_RE не находит
+    assert "Прудова" in ls.subject      # осталось в названии предмета как есть
+
+
+# ── build_snapshot(category=...) — офлайн, категория параметризована ────────
+
+def test_build_snapshot_dated_category_offline():
+    index_html = _load("schedule_index_zo1.htm")
+    group_html = _load("schedule_group_zo1.htm")
+
+    def fake_fetch(url, timeout=20):
+        return index_html if url.endswith("raspisan.htm") else group_html
+
+    snap = P.build_snapshot(category="zo1", fetch=fake_fetch)
+    assert "ЗУ-395-1" in snap.groups
+    gs = snap.groups["ЗУ-395-1"]
+    assert len(gs.weeks) >= 2
+
+    #round-trip сериализации не теряет структуру (даты как day-ключи — тоже строки)
+    restored = Snapshot.from_dict(snap.to_dict())
+    assert restored.groups["ЗУ-395-1"].weeks.keys() == gs.weeks.keys()
+
+
+def test_build_snapshot_default_still_means_college():
+    """build_snapshot() без аргументов — 100% прежнее поведение (регрессия)."""
+    index_html = '<a href="1.htm">К15/1</a><a href="69.htm">М215</a>'
+    group_html = _load("group_K15_1.htm")   # существующая фикстура (test_schedule_parser.py)
+
+    def fake_fetch(url, timeout=20):
+        return index_html if url.endswith("raspisan.htm") else group_html
+
+    snap = P.build_snapshot(fetch=fake_fetch)
+    assert "К15/1" in snap.groups
+    assert "М215" not in snap.groups

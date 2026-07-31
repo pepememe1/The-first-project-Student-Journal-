@@ -14,7 +14,7 @@ from sqlalchemy import text, inspect
 
 from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
-                    _ensure_notify_event_columns)
+                    _ensure_notify_event_columns, _ensure_group_category_column)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -83,6 +83,23 @@ def test_ensure_subject_hours_zet_column_adds_to_old_schema(client):
     cols = {c["name"] for c in inspect(engine).get_columns("subject_hours")}
     assert "zet" in cols
     _ensure_subject_hours_zet_column()  # идемпотентность — второй вызов не падает
+
+
+def test_ensure_group_category_column_adds_to_old_schema(client):
+    """Таблица groups без category (схема ДО категорий расписания портала) — миграция
+    должна дописать колонку ALTER-ом, как teacher_id/zet выше."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE groups"))
+        conn.execute(text("""CREATE TABLE groups (
+            id VARCHAR PRIMARY KEY, name VARCHAR, subjects TEXT DEFAULT '[]',
+            updated_at VARCHAR DEFAULT '', deleted BOOLEAN DEFAULT 0,
+            specialty_code VARCHAR, enrollment_year INTEGER
+        )"""))
+    engine.dispose()
+    _ensure_group_category_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("groups")}
+    assert "category" in cols
+    _ensure_group_category_column()  # идемпотентность — второй вызов не падает
 
 
 def test_ensure_notify_event_columns_adds_author_columns_to_old_schema(client):

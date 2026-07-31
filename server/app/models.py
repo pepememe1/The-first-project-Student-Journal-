@@ -49,6 +49,23 @@ class Group(Base):
     id = Column(String, primary_key=True)
     name = Column(String, index=True, default="")
     subjects = Column(JSON, default=list)
+    #Специальность (код классификатора СПО, «09.02.07») и год поступления —
+    #NULLABLE: заполняются импортом учебного плана ВСГУТУ (parsers/esstu_parser.py,
+    #POST /web/admin/groups/import-esstu), у групп без импорта остаются пустыми.
+    #Хранятся именно ЗДЕСЬ (не только в параметрах запроса импорта), чтобы курс и
+    #семестр группы можно было пересчитать ПОЗЖЕ, в любой момент — по мере того как
+    #идёт время, group.enrollment_year не меняется, а «текущий курс» так и остаётся
+    #производным от него (см. study_hours.course_and_semester), а не хранимым числом.
+    specialty_code = Column(String, nullable=True)
+    enrollment_year = Column(Integer, nullable=True)
+    #Категория расписания портала (schedule/parser.py::CATEGORIES — "college"/
+    #"bakalavriat"/"zo1"/"zo2"), НЕ путать со specialty_code выше (тот — код СПО с
+    #ДРУГОГО сайта, esstu.ru/uportal, к порталу расписания отношения не имеет).
+    #NULL у всех старых строк — везде по коду трактуется как "college" (единственная
+    #категория с реальными аккаунтами/журналом/оценками; остальные заводятся вручную
+    #или импортом имени с портала — см. POST /web/admin/groups/import-schedule-category
+    #— просто как каталожные записи для просмотра расписания и группировки студентов).
+    category = Column(String, nullable=True)
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 

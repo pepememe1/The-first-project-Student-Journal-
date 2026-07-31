@@ -113,7 +113,7 @@ def test_hours_button_wired(qapp, fresh_db):
         time.sleep(0.01)
     assert dash._g_table.rowCount() == 1
 
-    actions = dash._g_table.cellWidget(0, 2)
+    actions = dash._g_table.cellWidget(0, 3)   # 0=Название,1=Категория,2=Предметы,3=действия
     hrs_button = actions.findChildren(__import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)[0]
     hrs_button.click()
     assert opened == ["к74/1"]

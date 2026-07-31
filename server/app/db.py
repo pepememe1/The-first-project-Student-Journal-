@@ -148,6 +148,8 @@ def init_db():
     _ensure_conversation_system_columns()
     _ensure_subject_hours_teacher_column()
     _ensure_subject_hours_zet_column()
+    _ensure_group_specialty_columns()
+    _ensure_group_category_column()
     _migrate_slash_in_ids()
 
 
@@ -217,6 +219,40 @@ def _ensure_subject_hours_zet_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE subject_hours ADD COLUMN zet FLOAT"))
+
+
+def _ensure_group_specialty_columns():
+    """Идемпотентная мини-миграция: groups.specialty_code/enrollment_year — импорт
+    учебного плана ВСГУТУ (parsers/esstu_parser.py). Тот же паттерн, что уже трижды
+    применён для subject_hours: create_all не досоздаёт колонки в УЖЕ существующей
+    таблице на боевой БД, только ALTER по одной."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("groups")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу с обеими колонками
+    with engine.begin() as conn:
+        if "specialty_code" not in columns:
+            conn.execute(text("ALTER TABLE groups ADD COLUMN specialty_code VARCHAR"))
+        if "enrollment_year" not in columns:
+            conn.execute(text("ALTER TABLE groups ADD COLUMN enrollment_year INTEGER"))
+
+
+def _ensure_group_category_column():
+    """Идемпотентная мини-миграция: groups.category — категория расписания портала
+    (schedule/parser.py::CATEGORIES), НЕ путать с specialty_code (тот с другого
+    сайта). Тот же паттерн ALTER-по-одной, что и у миграции выше."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("groups")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу с колонкой
+    if "category" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE groups ADD COLUMN category VARCHAR"))
 
 
 def _ensure_user_prefs_column():

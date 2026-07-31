@@ -17,6 +17,28 @@ const q = ref('')
 const groupChoices = ref([])
 const showPass = ref(false)     // показать вводимый пароль в модалке (по глазку)
 
+// ── Категория расписания + фильтр по группе (schedule/parser.py::CATEGORIES) —
+// раньше фильтра по группе в веб-версии не было вообще (только текстовый поиск,
+// десктоп такой фильтр уже имел) — заодно закрывает и этот разрыв.
+const categories = ref([])
+const categoryFilter = ref('')
+const groupFilter = ref('')
+const groupCategory = ref({})   // {имя группы: category}
+async function loadCategories() {
+  try { categories.value = (await scheduleApi.categories()).data.categories || [] }
+  catch { categories.value = [] }
+}
+// Список групп в фильтре сужается под выбранную категорию — иначе можно было бы
+// выбрать «колледж» и группу заочки одновременно и увидеть пусто без понятной причины.
+const groupFilterChoices = computed(() => {
+  if (!categoryFilter.value) return groupChoices.value
+  return groupChoices.value.filter((g) => (groupCategory.value[g] || 'college') === categoryFilter.value)
+})
+function setCategoryFilter(key) {
+  categoryFilter.value = key
+  if (groupFilter.value && !groupFilterChoices.value.includes(groupFilter.value)) groupFilter.value = ''
+}
+
 // Пароль в БД хранится ХЕШЕМ и не показывается — глазок открывает то, что админ ВВОДИТ.
 function fmtDT(iso) {
   if (!iso) return '—'
@@ -31,10 +53,13 @@ async function reload() {
 
 onMounted(async () => {
   await reload()
+  await loadCategories()
   // Список групп для выбора: синкнутые (БД) + спарсенные из расписания, без дублей —
   // как _all_group_choices в десктопе.
   try {
-    const dbG = (await adminApi.groups()).data.groups?.map((g) => g.name) || []
+    const dbGroups = (await adminApi.groups()).data.groups || []
+    const dbG = dbGroups.map((g) => g.name)
+    groupCategory.value = Object.fromEntries(dbGroups.map((g) => [g.name, g.category || 'college']))
     let parsed = []
     try { parsed = (await scheduleApi.groups()).data.groups || [] } catch { /* оффлайн — ок */ }
     groupChoices.value = [...new Set([...dbG, ...parsed].filter(Boolean))]
@@ -43,8 +68,12 @@ onMounted(async () => {
 
 const rows = computed(() => {
   const s = q.value.trim().toLowerCase()
-  if (!s) return all.value
-  return all.value.filter((r) => `${r.surname} ${r.name} ${r.group} ${r.login}`.toLowerCase().includes(s))
+  return all.value.filter((r) => {
+    if (s && !`${r.surname} ${r.name} ${r.group} ${r.login}`.toLowerCase().includes(s)) return false
+    if (groupFilter.value && r.group !== groupFilter.value) return false
+    if (categoryFilter.value && (groupCategory.value[r.group] || 'college') !== categoryFilter.value) return false
+    return true
+  })
 })
 
 // Модалка создания/правки
@@ -101,9 +130,26 @@ async function del(r) {
 
 <template>
   <div class="space-y-4">
+    <!-- Кнопки-категории (та же идея, что в «Расписании»/«Группах») — сужают список
+         групп в фильтре ниже. -->
+    <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+      <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="!categoryFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="setCategoryFilter('')">Все категории</button>
+      <button v-for="c in categories" :key="c.key"
+              class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="setCategoryFilter(c.key)">{{ c.label }}</button>
+    </div>
+
     <div class="flex flex-wrap items-center gap-3">
       <input v-model="q" placeholder="Поиск по ФИО, группе или логину…"
              class="h-10 w-full max-w-sm rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent focus:bg-card" />
+      <select v-model="groupFilter"
+              class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+        <option value="">Все группы</option>
+        <option v-for="g in groupFilterChoices" :key="g" :value="g">{{ g }}</option>
+      </select>
       <AppButton variant="green" size="sm" @click="openCreate">+ Добавить</AppButton>
     </div>
 

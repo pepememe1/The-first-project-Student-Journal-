@@ -425,6 +425,51 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def esstu_specialties(self, group: str = "") -> dict:
+        """Справочник специальностей ВСГУТУ (parsers/esstu_parser.py) для диалога
+        импорта учебного плана. {specialties:[...], suggested_code}. Внешний сайт —
+        таймаут щедрее обычного."""
+        r = self._req("GET", "/web/admin/esstu/specialties", params={"group": group},
+                      timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def esstu_plan_years(self, specialty_code: str) -> dict:
+        """Годы набора с реально опубликованным планом для специальности —
+        {years: [...]}, наполняет выпадающий список вместо ручного ввода года."""
+        r = self._req("GET", "/web/admin/esstu/plan-years",
+                      params={"specialty_code": specialty_code}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def import_esstu(self, group: str, specialty_code: str, enrollment_year: int) -> dict:
+        """Импорт специальности + учебного плана ВСГУТУ в группу — часы/ЗЕТ ИМЕННО
+        текущего курса/семестра (считается от года поступления на сервере,
+        study_hours.course_and_semester). {ok, course, semester, term, imported,
+        unmapped, saved_hours}. Тянет и парсит PDF на сервере — таймаут щедрый."""
+        r = self._req("POST", "/web/admin/groups/import-esstu",
+                      json={"group": group, "specialty_code": specialty_code,
+                            "enrollment_year": enrollment_year},
+                      timeout=40)
+        r.raise_for_status()
+        return r.json()
+
+    def schedule_groups(self, category: str = "") -> dict:
+        """Имена групп категории расписания портала (schedule/parser.py::CATEGORIES)
+        — {groups: [...]}. Для выпадающего списка «Импорт группы из категории»."""
+        r = self._req("GET", "/web/schedule/groups", params={"category": category}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def import_schedule_category(self, category: str, group_name: str) -> dict:
+        """Заводит группу-каталожную запись из НЕколледжевой категории расписания
+        (Бакалавриат/Заочное 1/2) — {ok, name, category}. Сервер сверяет group_name с
+        реальным списком портала для этой категории."""
+        r = self._req("POST", "/web/admin/groups/import-schedule-category",
+                      json={"category": category, "group_name": group_name}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
     #Управление сессиями/токенами (на сервере — require_admin)
     def list_sessions(self, active: bool = True) -> dict:
         """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""

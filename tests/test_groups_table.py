@@ -64,6 +64,37 @@ def test_groups_migrate_from_kv(fresh_db):
     assert _kv_get("groups", None) is None                   #старый kv-ключ убран
 
 
+def test_category_survives_set_groups_round_trip(fresh_db):
+    """Регрессия: get_groups()/set_groups() раньше не знали о category вовсе — любая
+    правка через них (например, редактирование предметов ОДНОЙ группы) молча стирала
+    category у ВСЕХ групп при следующей записи (_groups_write_raw делает DELETE +
+    полный реinsert списком, вернувшимся из get_groups()). category приезжает
+    ТОЛЬКО с сервера (импорт по категории расписания/специальности) — этот тест
+    эмулирует такую строку напрямую и проверяет, что get_groups() её видит и что
+    set_groups() (типичная UI-правка другой группы) её не роняет."""
+    sync_engine.apply_remote({"groups": [
+        {"id": "grp:Б165", "name": "Б165", "subjects": [], "category": "bakalavriat",
+         "updated_at": "2030-01-01T00:00:00+00:00", "deleted": False},
+        {"id": f"grp:{G}", "name": G, "subjects": ["Физика"],
+         "updated_at": "2030-01-01T00:00:00+00:00", "deleted": False},
+    ]})
+    st = get_store()
+    by_name = {g["name"]: g for g in st.get_groups()}
+    assert by_name["Б165"]["category"] == "bakalavriat"
+    assert by_name[G].get("category") in ("", None)   # без категории — не "bakalavriat"
+
+    #Типичная UI-правка: get_groups() → мутировать ОДНУ группу → set_groups(целиком).
+    groups = st.get_groups()
+    for g in groups:
+        if g["name"] == G:
+            g["subjects"] = ["Физика", "Химия"]
+    st.set_groups(groups)
+
+    by_name2 = {g["name"]: g for g in st.get_groups()}
+    assert by_name2["Б165"]["category"] == "bakalavriat"   # НЕ стёрлась чужой правкой
+    assert by_name2[G]["subjects"] == ["Физика", "Химия"]
+
+
 def test_apply_remote_groups_does_not_wake_sync(fresh_db, monkeypatch):
     import sync_runner
     calls = {"n": 0}

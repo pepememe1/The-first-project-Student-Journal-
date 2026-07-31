@@ -31,6 +31,16 @@ _CACHE_KEY = "schedule_cache"
 _IDENTITY_PREFIX = "sched_identity"     # + ":<role>:<login>"
 
 
+def _cache_key(category: str) -> str:
+    """Ключ кэша для категории — «колледж» остаётся БУКВАЛЬНО старым ключом
+    (никакой миграции существующих кэшей пользователей при обновлении),
+    остальные категории получают свой ключ рядом."""
+    from schedule.parser import DEFAULT_CATEGORY
+    if category == DEFAULT_CATEGORY:
+        return _CACHE_KEY
+    return f"{_CACHE_KEY}:{category}"
+
+
 def _ds():
     """Ленивая ссылка на data_store (модуль из data/, импорты плоские).
 
@@ -41,19 +51,22 @@ def _ds():
 
 
 #  Кэш снимка
-def save(snapshot: Snapshot) -> bool:
-    """Сохраняет снимок расписания в локальный зашифрованный кэш."""
+def save(snapshot: Snapshot, category: str = "college") -> bool:
+    """Сохраняет снимок расписания категории в локальный зашифрованный кэш.
+
+    category по умолчанию — «колледж», единственная категория с реальным
+    журналом/оценками; остальные (bakalavriat/zo1/zo2) — только просмотр."""
     try:
-        return _ds().local_set(_CACHE_KEY, snapshot.to_dict())
+        return _ds().local_set(_cache_key(category), snapshot.to_dict())
     except Exception as e:
         log.get("store").warning(f"[schedule] не удалось сохранить кэш расписания: {e}")
         return False
 
 
-def load_cached() -> Snapshot | None:
-    """Возвращает снимок из кэша или None, если его ещё нет/он повреждён."""
+def load_cached(category: str = "college") -> Snapshot | None:
+    """Возвращает снимок категории из кэша или None, если его ещё нет/он повреждён."""
     try:
-        raw = _ds().local_get(_CACHE_KEY, None)
+        raw = _ds().local_get(_cache_key(category), None)
         if not raw:
             return None
         return Snapshot.from_dict(raw)
@@ -62,29 +75,33 @@ def load_cached() -> Snapshot | None:
         return None
 
 
-def refresh_all() -> "Snapshot | None":
-    """Заново скачать ПОЛНЫЙ снимок расписания с портала ВСГУТУ и сохранить в кэш.
+def refresh_all(category: str = "college") -> "Snapshot | None":
+    """Заново скачать ПОЛНЫЙ снимок расписания категории с портала ВСГУТУ и сохранить в кэш.
 
-    Кнопка «Взять с ВСГУТУ (все группы)». Сетевая операция (~68 GET, десятки секунд) —
-    ВЫЗЫВАТЬ ТОЛЬКО ИЗ ФОНОВОГО ПОТОКА, иначе интерфейс замрёт. Правки (overrides) это не
-    трогает — обновляется лишь портальная основа, поверх которой они лежат."""
+    Кнопка «Взять с ВСГУТУ (все группы)». Сетевая операция (десятки-сотни GET,
+    зависит от категории) — ВЫЗЫВАТЬ ТОЛЬКО ИЗ ФОНОВОГО ПОТОКА, иначе интерфейс
+    замрёт. Правки (overrides) это не трогает — обновляется лишь портальная
+    основа, поверх которой они лежат (overrides — только для колледжа)."""
     from schedule import parser
-    snap = parser.build_snapshot()
-    save(snap)
+    snap = parser.build_snapshot(category=category)
+    save(snap, category=category)
     return snap
 
 
-def refresh_group(app_group: str) -> bool:
-    """Обновить с портала ОДНУ группу и вписать её в кэш (остальные не трогаем).
+def refresh_group(app_group: str, category: str = "college") -> bool:
+    """Обновить с портала ОДНУ группу категории и вписать её в кэш (остальные не трогаем).
 
     Кнопка «Взять с ВСГУТУ» для выбранной группы: быстрее полного снимка (1 GET вместо
-    ~68). Тоже сетевая — из фонового потока. teacher_index при этом не пересобирается
+    десятков). Тоже сетевая — из фонового потока. teacher_index при этом не пересобирается
     (он нужен расписаниям преподавателей, а не редактору группы)."""
     from schedule import parser
     from schedule.model import Snapshot
     if not app_group:
         return False
-    pairs = parser.list_college_groups(parser.fetch_text(parser.COLLEGE_INDEX))
+    dated = parser.CATEGORIES[category]["dated"]
+    page_parser = parser.parse_group_page_dated if dated else parser.parse_group_page
+    pairs = parser.list_category_groups(
+        parser.fetch_text(parser.category_index_url(category)), category)
     site_name, href = app_group, None
     for name, h in pairs:
         if name == app_group:
@@ -98,21 +115,23 @@ def refresh_group(app_group: str) -> bool:
                 break
     if href is None:
         return False
-    page = parser.fetch_text(parser.BASE_URL + parser.COLLEGE_DIR + href)
-    gs = parser.parse_group_page(page, name=site_name, href=href)
-    snap = load_cached() or Snapshot()
+    page = parser.fetch_text(parser.category_group_url(category, href))
+    gs = page_parser(page, name=site_name, href=href)
+    snap = load_cached(category) or Snapshot()
     snap.groups[site_name] = gs
-    save(snap)
+    save(snap, category=category)
     return True
 
 
-def subjects_all() -> list:
-    """Все уникальные предметы из снимка расписания (СПАРСЕНЫ С САЙТА ВСГУТУ).
+def subjects_all(category: str = "college") -> list:
+    """Все уникальные предметы из снимка расписания категории (СПАРСЕНЫ С САЙТА
+    ВСГУТУ). По умолчанию — колледж: единственная категория, чьи предметы
+    вообще имеют смысл для журнала/каталога.
 
     Источник правды для списка предметов: вместо «вшитого текстом» перечня берём то,
     что реально стоит в расписании на портале. Пусто — кэша ещё нет (тогда вызывающий
     код откатывается на прежний список). Дедуп + сортировка для стабильного вывода."""
-    snap = load_cached()
+    snap = load_cached(category)
     if not snap:
         return []
     subs = set(snap.subjects or [])
@@ -122,36 +141,39 @@ def subjects_all() -> list:
     return sorted({s.strip() for s in subs if s and s.strip()})
 
 
-def group_schedule(app_group: str):
-    """Расписание группы из кэша портала С НАЛОЖЕННЫМИ админ-правками (overlay). Единый
-    источник для предметов и просмотра (как web._group_schedule). None — нет данных."""
-    snap = load_cached()
+def group_schedule(app_group: str, category: str = "college"):
+    """Расписание группы категории из кэша портала. Для «колледжа» — С НАЛОЖЕННЫМИ
+    админ-правками (overlay), единый источник для предметов и просмотра (как
+    web._group_schedule); остальные категории — правок не имеют вовсе (§10
+    плана — оверлеи только для боевого журнала колледжа). None — нет данных."""
+    snap = load_cached(category)
     g = None
     if snap and app_group:
         site_name = app_group if app_group in snap.groups else guess_group(
             app_group, snap.group_names())
         g = snap.groups.get(site_name)
-    try:
-        from schedule.overrides import apply_to_group, list_overrides
-        if g is not None or list_overrides(app_group):
-            g = apply_to_group(g, app_group)
-    except Exception:
-        pass
+    if category == "college":
+        try:
+            from schedule.overrides import apply_to_group, list_overrides
+            if g is not None or list_overrides(app_group):
+                g = apply_to_group(g, app_group)
+        except Exception:
+            pass
     return g
 
 
-def subjects_for_group(app_group: str) -> list:
-    """Предметы КОНКРЕТНОЙ группы из расписания (+ админ-правки). Пусто — нет кэша или
-    совпадения (вызывающий код откатится на предметы из журнала)."""
+def subjects_for_group(app_group: str, category: str = "college") -> list:
+    """Предметы КОНКРЕТНОЙ группы из расписания (+ админ-правки для колледжа). Пусто —
+    нет кэша или совпадения (вызывающий код откатится на предметы из журнала)."""
     if not app_group:
         return []
-    g = group_schedule(app_group)
+    g = group_schedule(app_group, category=category)
     return g.subjects() if g else []
 
 
-def cache_age_minutes() -> float | None:
-    """Возраст кэша в минутах (None — кэша нет)."""
-    snap = load_cached()
+def cache_age_minutes(category: str = "college") -> float | None:
+    """Возраст кэша категории в минутах (None — кэша нет)."""
+    snap = load_cached(category)
     if not snap or not snap.updated_at:
         return None
     try:

@@ -214,40 +214,60 @@ def _merge_list_tombstones(new_live, old_raw, key_fn):
 #  поэтому UI не трогаем. Имена групп/предметы не ПДн — таблица без шифрования оправдана
 #  (в отличие от users с хешами паролей, которые остаются в зашифрованном kv).
 def _groups_read_raw() -> list:
-    """Все группы из таблицы (вкл. надгробия) в форме [{name, subjects, updated_at, deleted}]."""
+    """Все группы из таблицы (вкл. надгробия) в форме [{name, subjects, updated_at,
+    deleted, category, specialty_code, enrollment_year}].
+
+    Последние три поля пишет только сервер (импорт учебного плана/категории
+    расписания через REST — _open_import_esstu/_open_import_schedule_category),
+    десктопный UI их не редактирует напрямую — но ОБЯЗАН прочитать и вернуть
+    как есть: set_groups() перезаписывает ВСЮ таблицу целиком, и если эти поля
+    не попадут в прочитанный словарь, любая локальная правка (например, правка
+    предметов группы через _open_group) молча обнулила бы их у ВСЕХ групп при
+    следующей записи — не только у редактируемой."""
     _ensure_groups_migrated()
     conn = DBManager.get_conn(); cur = conn.cursor()
     try:
         cur.execute("SELECT name, COALESCE(subjects,'[]'), COALESCE(updated_at,''), "
-                    "COALESCE(deleted,0) FROM groups")
+                    "COALESCE(deleted,0), category, specialty_code, enrollment_year FROM groups")
         rows = cur.fetchall()
     except Exception:
         rows = []
     conn.close()
     out = []
-    for name, subj, uat, deleted in rows:
+    for name, subj, uat, deleted, category, specialty_code, enrollment_year in rows:
         try:
             subjects = json.loads(subj) if subj else []
         except Exception:
             subjects = []
         out.append({"name": name, "subjects": subjects,
-                    "updated_at": uat, "deleted": bool(deleted)})
+                    "updated_at": uat, "deleted": bool(deleted),
+                    "category": category or "", "specialty_code": specialty_code or "",
+                    "enrollment_year": enrollment_year})
     return out
 
 
 def _groups_write_raw(groups: list) -> None:
-    """Полностью перезаписывает таблицу групп СЫРЫМ списком (уже со штампами/надгробиями)."""
+    """Полностью перезаписывает таблицу групп СЫРЫМ списком (уже со штампами/надгробиями).
+
+    category/specialty_code/enrollment_year — см. докстринг _groups_read_raw: ЛЮБОЙ
+    вызывающий код обязан был получить их через get_groups()/get_groups_raw() и
+    передать обратно как есть, здесь просто сохраняем то, что пришло (пусто —
+    значит вызывающий код и не должен был их знать, не наша забота гадать)."""
     conn = DBManager.get_conn(); cur = conn.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT, "
-                "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)")
+                "subjects TEXT DEFAULT '[]', updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0, "
+                "category TEXT, specialty_code TEXT, enrollment_year INTEGER)")
     cur.execute("DELETE FROM groups")
     for g in groups:
         name = g.get("name", "")
-        cur.execute("INSERT OR REPLACE INTO groups (id,name,subjects,updated_at,deleted) "
-                    "VALUES (?,?,?,?,?)",
+        cur.execute("INSERT OR REPLACE INTO groups "
+                    "(id,name,subjects,updated_at,deleted,category,specialty_code,enrollment_year) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (f"grp:{name}", name,
                      json.dumps(g.get("subjects") or [], ensure_ascii=False),
-                     g.get("updated_at", ""), 1 if g.get("deleted") else 0))
+                     g.get("updated_at", ""), 1 if g.get("deleted") else 0,
+                     g.get("category") or None, g.get("specialty_code") or None,
+                     g.get("enrollment_year")))
     conn.commit(); conn.close()
 
 

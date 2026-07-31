@@ -17,7 +17,7 @@ from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-APP_VERSION = "Release 3.5"
+APP_VERSION = "Release 3.5.1"
 
 import os as _os
 import sys as _sys
@@ -488,7 +488,19 @@ class DBManager:
         #синк ходит прямым upsert'ом без переводчика (план техдолга №2, пилот). id=grp:{name}.
         cur.execute("""CREATE TABLE IF NOT EXISTS groups
             (id TEXT PRIMARY KEY, name TEXT, subjects TEXT DEFAULT '[]',
-             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0)""")
+             updated_at TEXT DEFAULT '', deleted INTEGER DEFAULT 0,
+             specialty_code TEXT, enrollment_year INTEGER, category TEXT)""")
+        #Старая база могла завести таблицу ДО specialty_code/enrollment_year/category
+        #(импорт учебного плана ВСГУТУ и категория расписания портала — обе фичи
+        #серверные) — тот же паттерн ALTER, что уже применён к subject_hours выше.
+        #Десктоп эти поля не показывает, но приезжают синком вместе с остальной
+        #группой (Group уже в SYNC_MODELS).
+        for _col, _decl in (("specialty_code", "TEXT"), ("enrollment_year", "INTEGER"),
+                            ("category", "TEXT")):
+            try:
+                cur.execute(f"ALTER TABLE groups ADD COLUMN {_col} {_decl}")
+            except Exception:
+                pass
         #Пользователи (студенты/преподаватели) — в таблице для прямого синка (LWW/надгробия/
         #дельта, как lessons), НО payload лежит ЗАШИФРОВАННЫМ blob'ом (Fernet+DPAPI): хеши
         #паролей и ПДн НЕ оголяются на диске (152-ФЗ; та же защита, что была у kv_store).

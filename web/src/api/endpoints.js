@@ -167,6 +167,11 @@ export const adminApi = {
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
   // Привязать предметы из расписания ко ВСЕМ группам (+ пополнить каталог).
   bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
+  // Завести группу-каталожную запись из НЕколледжевой категории расписания
+  // (Бакалавриат/Заочное 1/2) — имя сверяется с реальным списком портала.
+  importScheduleCategory: (category, groupName) =>
+    api.post('/web/admin/groups/import-schedule-category',
+            { category, group_name: groupName }),
   // Учебные часы группы: план на семестр по каждому предмету + уже пройденное.
   groupHours: (group) => api.get('/web/admin/group-hours', { params: { group } }),
   // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);
@@ -174,6 +179,16 @@ export const adminApi = {
   // (см. server/app/routers/web.py::admin_set_group_hours).
   saveGroupHours: (group, hours, teachers = {}, zet = {}) =>
     api.post('/web/admin/group-hours', { group, hours, teachers, zet }),
+  // Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py на сервере):
+  // список специальностей сайта колледжа + сам импорт часов/ЗЕТ текущего семестра в группу.
+  esstuSpecialties: (group = '') => api.get('/web/admin/esstu/specialties', { params: { group } }),
+  // Реально опубликованные на сайте годы набора для специальности — наполняет
+  // выпадающий список «Год поступления» (вместо ручного ввода числа).
+  esstuPlanYears: (specialtyCode) =>
+    api.get('/web/admin/esstu/plan-years', { params: { specialty_code: specialtyCode } }),
+  importEsstu: (group, specialtyCode, enrollmentYear) =>
+    api.post('/web/admin/groups/import-esstu',
+            { group, specialty_code: specialtyCode, enrollment_year: enrollmentYear }),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
@@ -237,15 +252,19 @@ export const adminApi = {
 }
 
 // РАСПИСАНИЕ (сервер отдаёт снимок с portal.esstu.ru; ПДн не участвуют) ───────────
+// category — один из 4 разделов портала (schedule/parser.py::CATEGORIES); без
+// параметра — «колледж» (DEFAULT_CATEGORY), 100% прежнее поведение.
 export const scheduleApi = {
-  get: (group) => api.get('/web/schedule', { params: { group } }),
-  groups: () => api.get('/web/schedule/groups'),
+  categories: () => api.get('/web/schedule/categories'),
+  get: (group, category = '') => api.get('/web/schedule', { params: { group, category } }),
+  groups: (category = '') => api.get('/web/schedule/groups', { params: { category } }),
   // Расписание преподавателя (пункт 2): без name сервер матчит ФИО текущего юзера.
-  teacher: (name = '') => api.get('/web/schedule/teacher', { params: { name } }),
+  teacher: (name = '', category = '') =>
+    api.get('/web/schedule/teacher', { params: { name, category } }),
   // Выгрузка расписания группы файлом (fmt: xlsx|docx). Строится из ТОГО ЖЕ слитого
   // расписания (портал + правки админа), что показано на сайте.
-  exportFile: (group, fmt = 'xlsx') =>
-    api.get('/web/schedule/export', { params: { group, fmt }, responseType: 'blob' }),
+  exportFile: (group, fmt = 'xlsx', category = '') =>
+    api.get('/web/schedule/export', { params: { group, fmt, category }, responseType: 'blob' }),
 }
 
 // РОДИТЕЛЬ — самый ограниченный кабинет: журнал своих детей и Вектор по ним же.

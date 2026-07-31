@@ -28,7 +28,9 @@ from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
 from .. import webdata as W
 from .. import schedule_web
 from .. import reg_utils, mailer, gost, audit, vector_llm
+from ..parsers import esstu_parser
 import vector_nlu   # общий с десктопом лексикон/классификатор (корень в sys.path через webdata)
+from schedule import parser as schedule_parser   # CATEGORIES — реестр категорий портала
 
 
 def _contact_info(db: Session, logins: list) -> dict:
@@ -911,7 +913,8 @@ def admin_groups(_admin: User = Depends(require_admin), db: Session = Depends(ge
     for g in rows:
         n = db.query(User).filter(User.role == "student", User.group_name == g.name,
                                   User.deleted == False).count()  # noqa: E712
-        out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n})
+        out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n,
+                    "category": g.category or "college"})
     return {"groups": out}
 
 
@@ -1094,17 +1097,30 @@ def admin_server_info(request: Request = None,
 # РАСПИСАНИЕ ──────────────────────────────────────────────────────────────────────
 # Снимок тянется с portal.esstu.ru серверным парсером (schedule_web, TTL-кэш). Данные
 # публичные, ПДн не участвуют. Оффлайн/ошибка → пустой снимок (200), SPA покажет заглушку.
+@router.get("/schedule/categories")
+def schedule_categories():
+    """Реестр категорий расписания портала (см. schedule/parser.py::CATEGORIES) —
+    один источник правды для кнопок-категорий на фронте, список меток не
+    дублируется в JS."""
+    return {"categories": schedule_web.categories(),
+           "default": schedule_web.default_category()}
+
+
 @router.get("/schedule/groups")
-def schedule_groups(user: User = Depends(get_current_user)):
-    return {"groups": schedule_web.list_groups()}
+def schedule_groups(category: str = Query(""), user: User = Depends(get_current_user)):
+    return {"groups": schedule_web.list_groups(category)}
 
 
 @router.get("/schedule/teacher")
-def schedule_teacher(name: str = Query(""), user: User = Depends(get_current_user)):
+def schedule_teacher(name: str = Query(""), category: str = Query(""),
+                     user: User = Depends(get_current_user)):
     """Расписание ПРЕПОДАВАТЕЛЯ (пункт 2). Без name — пробуем сматчить ФИО текущего
     пользователя со спарсенными преподавателями (фамилия+инициалы). Полный снимок
-    строится лениво в фоне: пока он готовится — {building: true}, клиент подождёт."""
-    snap, building = schedule_web.full_state()
+    строится лениво в фоне: пока он готовится — {building: true}, клиент подождёт.
+    category — по умолчанию колледж (единственная категория с реальными аккаунтами
+    преподавателей); остальные категории тоже можно просмотреть (кто ведёт), просто
+    там некому «самому себе» сматчиться."""
+    snap, building = schedule_web.full_state(category)
     if snap is None:
         return {"available": False, "building": building, "teacher": "", "teachers": [],
                 "week": schedule_web.current_week_parity(), "schedule": None,
@@ -1152,17 +1168,23 @@ def _apply_overrides(db: Session, group: str, data) -> dict:
     return base
 
 
-def _group_schedule(db: Session, group: str):
-    """Расписание группы с наложенными админ-правками — единый источник для студента,
-    Вектора и админ-редактора."""
-    return _apply_overrides(db, group, schedule_web.get_group(group) if group else None)
+def _group_schedule(db: Session, group: str, category: str = ""):
+    """Расписание группы категории — единый источник для студента, Вектора и
+    админ-редактора. Админ-правки (ScheduleOverride) накладываются ТОЛЬКО для
+    колледжа — оверлеи существуют для боевого журнала, у остальных категорий
+    (просмотр без журнала) им взяться неоткуда и незачем."""
+    data = schedule_web.get_group(group, category) if group else None
+    category = category or schedule_web.default_category()
+    if category != schedule_web.default_category():
+        return data
+    return _apply_overrides(db, group, data)
 
 
 @router.get("/schedule")
-def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
-                 db: Session = Depends(get_db)):
+def schedule_get(group: str = Query(""), category: str = Query(""),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = (group or user.group_name or "").strip()
-    data = _group_schedule(db, g) if g else None
+    data = _group_schedule(db, g, category) if g else None
     return {
         "group": g,
         "week": schedule_web.current_week_parity(),
@@ -1172,7 +1194,7 @@ def schedule_get(group: str = Query(""), user: User = Depends(get_current_user),
 
 
 @router.get("/schedule/export")
-def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"),
+def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"), category: str = Query(""),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Расписание группы файлом: fmt=xlsx|docx.
 
@@ -1186,7 +1208,7 @@ def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"),
     g = (group or user.group_name or "").strip()
     if not g:
         raise HTTPException(status_code=400, detail="Нужна группа")
-    data = _group_schedule(db, g)
+    data = _group_schedule(db, g, category)
     if not (data and data.get("weeks")):
         raise HTTPException(status_code=404, detail="Расписание для группы недоступно")
 
@@ -2997,6 +3019,14 @@ def admin_delete_student(login: str,
     return {"ok": True, "login": login}
 
 
+def _norm_category(value) -> str:
+    """Категория расписания портала — пусто/неизвестное значение трактуем как
+    "college" (см. Group.category докстринг): единственная категория с реальными
+    аккаунтами, дефолт для всех форм создания групп, если админ её не менял."""
+    key = (value or "").strip()
+    return key if key in schedule_parser.CATEGORIES else "college"
+
+
 # --- Группы (CRUD) --- id=grp:name (как в sync_engine); удаление мягкое (надгробие).
 @router.post("/admin/groups")
 def admin_create_group(payload: dict = Body(...),
@@ -3013,22 +3043,26 @@ def admin_create_group(payload: dict = Body(...),
         db.add(row)
     row.name = name
     row.subjects = payload.get("subjects") or []
+    if "category" in payload:
+        row.category = _norm_category(payload.get("category"))
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="group.create", target=name)
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, "category": row.category or "college"}
 
 
 @router.put("/admin/groups/{name:path}")
 def admin_update_group(name: str, payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Правка группы (название — ключ, не меняем). Меняем список предметов группы."""
+    """Правка группы (название — ключ, не меняем). Меняем список предметов/категорию."""
     row = db.get(Group, f"grp:{name}")
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Группа не найдена")
     if "subjects" in payload:
         row.subjects = payload.get("subjects") or []
+    if "category" in payload:
+        row.category = _norm_category(payload.get("category"))
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "name": name}
@@ -3045,6 +3079,51 @@ def admin_delete_group(name: str,
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="group.delete", target=name)
     return {"ok": True, "name": name}
+
+
+@router.post("/admin/groups/import-schedule-category")
+def admin_import_schedule_category(payload: dict = Body(...),
+                                   _admin: User = Depends(require_admin),
+                                   db: Session = Depends(get_db)):
+    """Заводит группу-каталожную запись из НЕколледжевой категории расписания портала
+    (Бакалавриат/Заочное 1/Заочное 2) — {category, group_name}. В отличие от
+    admin_bind_subjects (импорт предметов ИЗ расписания уже существующих КОЛЛЕДЖ-групп),
+    здесь предметов/часов/журнала нет вовсе — группа создаётся ЧИСТО как связь с
+    расписанием + точка группировки студентов по категории (§ролей завести таких
+    студентов — обычным путём, этот эндпоинт студентов не трогает).
+
+    group_name сверяется с РЕАЛЬНЫМ списком групп портала для этой категории (тот же
+    кэш, что отдаёт GET /schedule/groups) — свободного ввода имени нет специально,
+    чтобы не расходиться с сайтом и не плодить опечатки."""
+    category = (payload.get("category") or "").strip()
+    group_name = (payload.get("group_name") or "").strip()
+    if not category or category not in schedule_parser.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Нужна известная категория расписания")
+    if not group_name:
+        raise HTTPException(status_code=400, detail="Нужно название группы")
+    if category != schedule_web.default_category():
+        real_names = schedule_web.list_groups(category)
+        if group_name not in real_names:
+            raise HTTPException(status_code=422,
+                                detail="Такой группы нет в текущем снимке расписания этой "
+                                       "категории (сайт недоступен либо имя изменилось)")
+
+    gid = f"grp:{group_name}"
+    existing = db.get(Group, gid)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Группа с таким названием уже есть")
+    row = existing or Group(id=gid)
+    if existing is None:
+        db.add(row)
+    row.name = group_name
+    row.subjects = []
+    row.category = category
+    row.updated_at = _now_iso()
+    row.deleted = False
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.import_schedule_category",
+              target=group_name, detail=category)
+    return {"ok": True, "name": group_name, "category": category}
 
 
 @router.post("/admin/groups/bind-subjects")
@@ -3109,6 +3188,176 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
             db.add(Subject(id=sid, name=s, updated_at=now, deleted=False))
     db.commit()
     return {"ok": True, "building": building, "bound": bound, "subjects": len(all_subjects)}
+
+
+# --- Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py) ---------
+
+#Список специальностей меняется на сайте колледжа редко — TTL-кэш в памяти процесса
+#(тот же приём, что schedule_web.py уже применяет для похожей задачи: внешний сайт,
+#не свои данные, дёргать его на каждый клик в диалоге импорта незачем).
+_ESSTU_SPECIALTIES_CACHE = {"ts": 0.0, "data": []}
+_ESSTU_SPECIALTIES_TTL = 3 * 3600
+
+
+@router.get("/admin/esstu/specialties")
+def admin_esstu_specialties(group: str = Query(""), _admin: User = Depends(require_admin)):
+    """Справочник специальностей колледжа с сайта ВСГУТУ — для диалога импорта
+    учебного плана. Сайт недоступен/структура страницы изменилась —
+    esstu_parser.get_all_specialties() сама вернёт [] (см. её докстринг), это НЕ
+    ошибка запроса — фронт покажет пустой список и ссылку «повторить».
+
+    group (опц.) — имя группы, для которой открыт диалог: если её буквенный
+    префикс узнаётся (esstu_parser.match_specialty), подсказываем код специальности
+    ОДНИМ источником правды на сервере — а не второй копией того же маппинга в JS."""
+    import time
+    now = time.time()
+    if not (_ESSTU_SPECIALTIES_CACHE["data"]
+           and now - _ESSTU_SPECIALTIES_CACHE["ts"] < _ESSTU_SPECIALTIES_TTL):
+        _ESSTU_SPECIALTIES_CACHE["data"] = esstu_parser.get_all_specialties()
+        _ESSTU_SPECIALTIES_CACHE["ts"] = now
+    specialties = _ESSTU_SPECIALTIES_CACHE["data"]
+    suggested = esstu_parser.match_specialty(group, specialties) if group else None
+    return {"specialties": specialties, "suggested_code": (suggested or {}).get("code", "")}
+
+
+#Годы набора, для которых у СПЕЦИАЛЬНОСТИ реально опубликован план — свои на
+#каждый код, тот же TTL-приём, что у справочника специальностей выше. Раньше
+#год поступления вводился руками (число), и легко было промахнуться мимо
+#реально существующих на сайте лет — теперь выбор ограничен тем, что там
+#действительно есть, само перечисление уже умеет _fetch_plan_years.
+_ESSTU_PLAN_YEARS_CACHE: dict = {}
+_ESSTU_PLAN_YEARS_TTL = 3 * 3600
+
+
+@router.get("/admin/esstu/plan-years")
+def admin_esstu_plan_years(specialty_code: str = Query(...),
+                           _admin: User = Depends(require_admin)):
+    """Годы набора с реально опубликованным планом для данной специальности —
+    наполняет выпадающий список «Год поступления» в диалоге импорта (вместо
+    ручного ввода числа, которое почти всегда промахивалось: у специальности
+    обычно доступны только 3-5 последних лет, а не с основания колледжа)."""
+    import time
+    now = time.time()
+    entry = _ESSTU_PLAN_YEARS_CACHE.get(specialty_code)
+    if not entry or now - entry["ts"] >= _ESSTU_PLAN_YEARS_TTL:
+        years = sorted(esstu_parser._fetch_plan_years(specialty_code), reverse=True)
+        entry = {"ts": now, "years": years}
+        _ESSTU_PLAN_YEARS_CACHE[specialty_code] = entry
+    return {"years": entry["years"]}
+
+
+@router.post("/admin/groups/import-esstu")
+def admin_import_esstu(payload: dict = Body(...),
+                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Импорт специальности + учебного плана ВСГУТУ в группу: {group, specialty_code,
+    enrollment_year}. Группа — в BODY, НЕ в пути (инвариант §10 — слэш в имени группы
+    ломает путь URL).
+
+    Подтягивает план целиком (esstu_parser.get_study_plan), считает курс/семестр
+    группы ОТ ГОДА ПОСТУПЛЕНИЯ и ТЕКУЩЕГО термина (study_hours.course_and_semester —
+    не календарные дни, а те же дискретные термины, которыми уже устроена вся
+    остальная система), и заносит в Group.subjects/SubjectHours ТОЛЬКО дисциплины
+    ТЕКУЩЕГО семестра — не всю четырёхлетнюю программу разом (иначе через год
+    список предметов группы пришлось бы перестраивать вручную). Дисциплины, для
+    которых семестр из плана извлечь не удалось (см. esstu_parser — сетка семестров
+    не на каждом документе калибруется), ВСЁ РАВНО попадают в Group.subjects
+    (лучше показать «предмет есть, часов пока нет», чем молча его не показать), но
+    БЕЗ строки SubjectHours — часы по ним админ заполняет вручную, как раньше.
+
+    Как admin_bind_subjects (импорт предметов ИЗ РАСПИСАНИЯ) — та же логика:
+    ЗАМЕНЯЕМ Group.subjects (не объединяем), внешний источник считается основой на
+    момент импорта; повторный импорт пересинхронит с планом."""
+    group = (payload.get("group") or "").strip()
+    specialty_code = (payload.get("specialty_code") or "").strip()
+    enrollment_year = payload.get("enrollment_year")
+    if not group or not specialty_code or not enrollment_year:
+        raise HTTPException(status_code=400,
+                            detail="Нужны group, specialty_code, enrollment_year")
+    try:
+        enrollment_year = int(enrollment_year)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="enrollment_year должен быть числом (год)")
+
+    grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        #Фолбэк по имени: GET /admin/groups отдаёт группы ТОЛЬКО по name (id клиенту
+        #вообще не виден), а название приходит сюда тем же значением без повторного
+        #ввода. Если у строки id почему-то разъехался с `grp:{name}` (старые данные,
+        #ручная правка БД, миграция) — группа видна в списке, но реконструкция id
+        #мимо неё промахивается. Остальные три места с этим лукапом не трогаем: там
+        #расхождение не воспроизведено, а этот фолбэк — расширение, не сужение.
+        grp = (db.query(Group)
+              .filter(Group.name == group, Group.deleted == False)  # noqa: E712
+              .first())
+    if grp is None or grp.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+
+    plan = esstu_parser.get_study_plan(specialty_code, enrollment_year)
+    if not plan:
+        raise HTTPException(status_code=422,
+                            detail="Учебный план не найден для этой специальности/года набора "
+                                   "(сайт ВСГУТУ недоступен, план не опубликован, либо не "
+                                   "распознан — подробности в логе сервера)")
+
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    course, overall_semester = W.study_hours.course_and_semester(enrollment_year, ty, ts)
+
+    current_rows = [r for r in plan if r["hours_by_semester"].get(overall_semester)]
+    unmapped_rows = [r for r in plan if not r["hours_by_semester"]]
+    now = _now_iso()
+
+    #Group.subjects — ЗАМЕНА (как admin_bind_subjects), план — источник истины на
+    #момент импорта. Дубли имён (одно название в разных циклах, напр. «История»)
+    #схлопываются — Group.subjects хранит имена, не индексы дисциплин плана.
+    all_names = sorted({r["subject"] for r in current_rows} | {r["subject"] for r in unmapped_rows})
+    grp.subjects = all_names
+    grp.specialty_code = specialty_code
+    grp.enrollment_year = enrollment_year
+    grp.updated_at = now
+    grp.deleted = False
+
+    saved = 0
+    for row in current_rows:
+        name = row["subject"]
+        #ВАЖНО: hours_total в SubjectHours — часы «на семестр» (см. models.py::
+        #SubjectHours docstring), а НЕ общий итог по дисциплине за все 4 курса —
+        #берём ИМЕННО часы текущего семестра из сетки, не row["hours"] (это было
+        #реальной ошибкой первой версии, поймано тестом: группа получала часы
+        #всей четырёхлетней программы в один семестр).
+        sem_hours = row["hours_by_semester"].get(overall_semester) or 0
+        hid = subject_hours_id(group, name, ty, ts)
+        existing = db.get(SubjectHours, hid)
+        sh = existing or SubjectHours(id=hid, group_name=group, subject=name, year=ty, semester=ts)
+        if existing is None:
+            db.add(sh)
+        sh.hours_total = int(sem_hours)
+        sh.zet = W.study_hours.zet_hint(sem_hours) or None
+        #teacher_id НЕ трогаем: это отдельное ручное назначение администратора
+        #(§ролей препод↔предмет↔группа), к содержимому учебного плана отношения
+        #не имеет — импорт правит только часы/ЗЕТ, а не «кто ведёт».
+        sh.updated_at = now
+        sh.deleted = False
+        saved += 1
+
+    for name in all_names:                                    #пополняем каталог предметов
+        sid = f"subj:{name}"
+        if db.get(Subject, sid) is None:
+            db.add(Subject(id=sid, name=name, updated_at=now, deleted=False))
+
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.import_esstu",
+              target=group, detail=f"{specialty_code} набор {enrollment_year}, курс {course}")
+    return {
+        "ok": True,
+        "group": group,
+        "course": course,
+        "semester": overall_semester,
+        "term": {"year": ty, "semester": ts},
+        "imported": [r["subject"] for r in current_rows],
+        "unmapped": sorted({r["subject"] for r in unmapped_rows} - {r["subject"] for r in current_rows}),
+        "saved_hours": saved,
+    }
 
 
 # --- Предметы (CRUD) --- id=subj:name. NB: на десктопе список предметов аддитивный

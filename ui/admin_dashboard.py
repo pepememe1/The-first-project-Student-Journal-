@@ -468,6 +468,7 @@ class AdminDashboard(QWidget):
     #Студенты 
 
     def _build_students(self):
+        import schedule as _sched
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
         hdr = QHBoxLayout(); hdr.addWidget(title_lbl("Студенты"), 1)
         for txt, cb in [
@@ -478,6 +479,24 @@ class AdminDashboard(QWidget):
             b = btn(txt, "ghost" if txt != "+ Добавить" else "green")
             b.clicked.connect(cb); hdr.addWidget(b)
         lay.addLayout(hdr)
+
+        #Кнопки-категории (тот же реестр, что в «Расписании»/«Группах») — сужают
+        #список групп в фильтре ниже. «Все категории» по умолчанию — 100%
+        #сегодняшнее поведение (единственная категория с реальными студентами —
+        #колледж, но фильтр по факту почти всегда покажет то же самое).
+        self._students_category_filter = ""
+        cat_row = QHBoxLayout(); cat_row.setSpacing(6)
+        self._s_cat_btns = {}
+        all_b = QPushButton("Все категории"); all_b.setCheckable(True); all_b.setChecked(True)
+        all_b.clicked.connect(lambda: self._set_students_category_filter(""))
+        cat_row.addWidget(all_b); self._s_cat_btns[""] = all_b
+        for key, meta in _sched.CATEGORIES.items():
+            b = QPushButton(meta["label"]); b.setCheckable(True)
+            b.clicked.connect(lambda _=False, k=key: self._set_students_category_filter(k))
+            cat_row.addWidget(b); self._s_cat_btns[key] = b
+        cat_row.addStretch(1)
+        lay.addLayout(cat_row)
+
         fltr = QHBoxLayout()
         self._s_search = field_input("Поиск..."); self._s_search.textChanged.connect(self._render_students)
         gh = get_store()
@@ -492,20 +511,45 @@ class AdminDashboard(QWidget):
         lay.addWidget(self._s_list, 1)
         self.pages["students"] = w; self.stack.addWidget(w)
 
+    def _set_students_category_filter(self, key: str):
+        self._students_category_filter = key
+        for k, b in self._s_cat_btns.items():
+            b.setChecked(k == key)
+        #Сужаем список ГРУПП в фильтре ниже под выбранную категорию — иначе можно
+        #было бы выбрать «колледж» и группу заочки одновременно, показав пусто без
+        #понятной причины.
+        gh = get_store()
+        groups = gh.get_groups() if gh else []
+        names = [g["name"] for g in groups
+                if not key or (g.get("category") or "college") == key]
+        cur = self._s_grp_filter.currentText()
+        self._s_grp_filter.blockSignals(True)
+        self._s_grp_filter.clear()
+        self._s_grp_filter.addItems(["Все группы"] + names)
+        idx = self._s_grp_filter.findText(cur)
+        self._s_grp_filter.setCurrentIndex(idx if idx >= 0 else 0)
+        self._s_grp_filter.blockSignals(False)
+        self._render_students()
+
     def _render_students(self):
         q   = self._s_search.text().lower()
         grp = self._s_grp_filter.currentText()
+        cat_filter = getattr(self, "_students_category_filter", "")
         def _fetch():
             gh = get_store()
             students = gh.get_students() if gh else []
-            return students, self._server_contacts("students")
+            groups = gh.get_groups() if gh else []
+            cat_by_group = {g["name"]: (g.get("category") or "college") for g in groups}
+            return students, self._server_contacts("students"), cat_by_group
         def _apply(payload):
-            students, contacts = payload
+            students, contacts, cat_by_group = payload
             self._s_list.clear()
             for i, s in enumerate(students):
                 name = f"{s.get('surname', '')} {s.get('name', '')}".strip()
                 if q and q not in name.lower(): continue
                 if grp != "Все группы" and s.get("group", "") != grp: continue
+                if cat_filter and cat_by_group.get(s.get("group", ""), "college") != cat_filter:
+                    continue
                 has_pw = "✅" if (s.get("password_hash") or s.get("password")) else "❌"
                 login = s.get("login", "")
                 c = contacts.get(login, {})
@@ -1041,16 +1085,39 @@ class AdminDashboard(QWidget):
     def _build_groups(self):
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(12)
         hdr = QHBoxLayout(); hdr.addWidget(title_lbl("Группы"), 1)
+        imp_sched_b = btn("🌐 Импорт по категории", "ghost")
+        imp_sched_b.clicked.connect(self._open_import_schedule_category)
+        hdr.addWidget(imp_sched_b)
         imp_b = btn("🏫 Из расписания", "ghost"); imp_b.clicked.connect(self._import_parsed_groups)
         hdr.addWidget(imp_b)
         add_b = btn("Добавить группу", "green", icon_name="plus"); add_b.clicked.connect(self._add_group)
         hdr.addWidget(add_b); lay.addLayout(hdr)
-        self._g_table = QTableWidget(); self._g_table.setColumnCount(3)
-        self._g_table.setHorizontalHeaderLabels(["Название", "Предметы", ""])
+
+        #Кнопки-категории (та же идея и тот же реестр, что в «Расписании» —
+        #schedule.parser.CATEGORIES) — фильтр списка ниже. «Все категории» по
+        #умолчанию (индекс 0) — 100% сегодняшнее поведение (видно всё), пока админ
+        #фильтр не тронул.
+        import schedule as _sched
+        self._groups_category_filter = ""     # "" = все категории
+        cat_row = QHBoxLayout(); cat_row.setSpacing(6)
+        self._g_cat_btns = {}
+        all_b = QPushButton("Все категории"); all_b.setCheckable(True); all_b.setChecked(True)
+        all_b.clicked.connect(lambda: self._set_groups_category_filter(""))
+        cat_row.addWidget(all_b); self._g_cat_btns[""] = all_b
+        for key, meta in _sched.CATEGORIES.items():
+            b = QPushButton(meta["label"]); b.setCheckable(True)
+            b.clicked.connect(lambda _=False, k=key: self._set_groups_category_filter(k))
+            cat_row.addWidget(b); self._g_cat_btns[key] = b
+        cat_row.addStretch(1)
+        lay.addLayout(cat_row)
+
+        self._g_table = QTableWidget(); self._g_table.setColumnCount(4)
+        self._g_table.setHorizontalHeaderLabels(["Название", "Категория", "Предметы", ""])
         self._g_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self._g_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self._g_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
-        self._g_table.setColumnWidth(2, 90)
+        self._g_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._g_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self._g_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self._g_table.setColumnWidth(3, 90)
         self._g_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         #Двойной клик — посмотреть/поправить предметы группы (по аналогии с
         #преподавателями/студентами/родителями).
@@ -1059,34 +1126,153 @@ class AdminDashboard(QWidget):
         lay.addWidget(self._g_table, 1)
         self.pages["groups"] = w; self.stack.addWidget(w)
 
+    def _set_groups_category_filter(self, key: str):
+        self._groups_category_filter = key
+        for k, b in self._g_cat_btns.items():
+            b.setChecked(k == key)
+        self._render_groups()
+
     def _render_groups(self):
         def _fetch():
             gh = get_store()
             return gh.get_groups() if gh else []
         def _apply(groups):
+            import schedule as _sched
+            flt = getattr(self, "_groups_category_filter", "")
+            if flt:
+                groups = [g for g in groups if (g.get("category") or "college") == flt]
             self._g_table.setRowCount(len(groups))
             for r, g in enumerate(groups):
+                cat_key = g.get("category") or "college"
+                cat_label = _sched.CATEGORIES.get(cat_key, {}).get("label", cat_key)
                 self._g_table.setItem(r, 0, QTableWidgetItem(g["name"]))
+                self._g_table.setItem(r, 1, QTableWidgetItem(cat_label))
                 subj_str = ", ".join(g.get("subjects", [])[:4])
                 if len(g.get("subjects", [])) > 4: subj_str += "…"
-                self._g_table.setItem(r, 1, QTableWidgetItem(subj_str))
+                self._g_table.setItem(r, 2, QTableWidgetItem(subj_str))
                 actions = QWidget(); ah = QHBoxLayout(actions)
                 ah.setContentsMargins(0, 0, 0, 0); ah.setSpacing(4)
+                #⚠️ Порядок кнопок здесь — не только вид: test_admin_groups_desktop.py::
+                #test_hours_button_wired находит «кнопку часов» как ПЕРВУЮ findChildren
+                #(QPushButton) в этом виджете, без явного отличия по тексту/тултипу — новую
+                #кнопку добавлять ТОЛЬКО после hrs_b, иначе тест кликает по НЕЙ и виснет на
+                #QMessageBox.warning() (модальный диалог ждёт пользователя, которого в
+                #headless-тесте нет — поймано зависанием всего прогона, не просто падением).
                 hrs_b = QPushButton("🕐"); hrs_b.setToolTip("Учебные часы по предметам")
                 hrs_b.clicked.connect(lambda _, n=g["name"]: self._open_group_hours(n))
+                imp_b = QPushButton("🎓"); imp_b.setToolTip("Импорт специальности/плана с сайта ВСГУТУ")
+                imp_b.clicked.connect(lambda _, n=g["name"]: self._open_import_esstu(n))
                 del_b = QPushButton("✕"); del_b.setStyleSheet(BTN["sm_red"])
                 del_b.clicked.connect(lambda _, n=g["name"]: self._del_group(n))
-                ah.addWidget(hrs_b); ah.addWidget(del_b)
-                self._g_table.setCellWidget(r, 2, actions)
+                ah.addWidget(hrs_b); ah.addWidget(imp_b); ah.addWidget(del_b)
+                self._g_table.setCellWidget(r, 3, actions)
         self._run_bg(_fetch, _apply)
 
+    def _open_import_schedule_category(self):
+        """«🌐 Импорт по категории» — заводит группу-каталожную запись из
+        НЕколледжевой категории расписания портала (Бакалавриат/Заочное 1/2):
+        выбор из РЕАЛЬНОГО списка групп портала (не свободный ввод — исключает
+        опечатки), тот же REST-путь, что и «🎓» (нужен интернет, офлайн-пути нет).
+        Группа заводится ЧИСТО как связь с расписанием — без предметов/часов/
+        журнала, они не имеют смысла вне колледжа."""
+        import schedule as _sched
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        d = QDialog(self); d.setWindowTitle("Импорт группы по категории"); d.resize(420, 300)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl("Импорт группы по категории", 16))
+        hint = lbl("Заводит группу как каталожную запись, связанную с расписанием "
+                  "портала — БЕЗ предметов/часов/журнала (для колледжа их даёт "
+                  "«Добавить группу» / «🏫 Из расписания»).", 11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+
+        lay.addWidget(lbl("КАТЕГОРИЯ", 10, C['text3']))
+        cat_combo = QComboBox()
+        for key, meta in _sched.CATEGORIES.items():
+            if key == _sched.DEFAULT_CATEGORY:
+                continue   # у колледжа группы заводятся иначе — «Добавить группу»/«Из расписания»
+            cat_combo.addItem(meta["label"], key)
+        lay.addWidget(cat_combo)
+        lay.addWidget(lbl("ГРУППА (с портала)", 10, C['text3']))
+        grp_combo = QComboBox(); grp_combo.setEnabled(False)
+        lay.addWidget(grp_combo)
+        status = lbl("", 11, C['text3']); status.setWordWrap(True); lay.addWidget(status)
+
+        btns = QHBoxLayout()
+        run = btn("Импортировать", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(run)
+        run.setEnabled(False)
+
+        def _load_groups():
+            code = cat_combo.currentData()
+            run.setEnabled(False)
+            grp_combo.clear(); grp_combo.setEnabled(False)
+            if not code:
+                return
+            grp_combo.addItem("Загрузка…", None)
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).schedule_groups(code)
+
+            def _apply(data):
+                grp_combo.clear()
+                names = data.get("groups") or []
+                if not names:
+                    grp_combo.addItem("нет данных с портала", None)
+                    return
+                for n in names:
+                    grp_combo.addItem(n, n)
+                grp_combo.setEnabled(True)
+                run.setEnabled(True)
+
+            def _err(e):
+                grp_combo.clear(); grp_combo.addItem("ошибка загрузки", None)
+                status.setText(f"⚠️ Не удалось загрузить группы портала: {e}")
+
+            self._run_bg(_do, _apply, _err)
+
+        cat_combo.currentIndexChanged.connect(lambda _i: _load_groups())
+        _load_groups()
+
+        def _run():
+            code = cat_combo.currentData()
+            name = grp_combo.currentData()
+            if not code or not name:
+                return
+            run.setEnabled(False)
+            status.setText("Импорт…")
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).import_schedule_category(code, name)
+
+            def _done(_r):
+                QMessageBox.information(d, "Готово", f"Группа «{name}» добавлена.")
+                d.accept(); self._render_groups(); self._refresh_dash()
+
+            def _run_err(e):
+                run.setEnabled(True)
+                status.setText(f"⚠️ Не удалось импортировать: {e}")
+
+            self._run_bg(_do, _done, _run_err)
+        run.clicked.connect(_run)
+        d.exec()
+
     def _add_group(self):
-        d = QDialog(self); d.setWindowTitle("Новая группа"); d.resize(420, 480)
+        import schedule as _sched
+        d = QDialog(self); d.setWindowTitle("Новая группа"); d.resize(420, 520)
         lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
         lay.addWidget(title_lbl("Добавить группу", 18))
         nm = field_input("ИС-21")
+        cat_combo = QComboBox()
+        for key, meta in _sched.CATEGORIES.items():
+            cat_combo.addItem(meta["label"], key)
         sj = _subject_picker(d, [])
-        for lb, w in [("Название группы", nm), ("Предметы", sj)]:
+        for lb, w in [("Название группы", nm), ("Категория", cat_combo), ("Предметы", sj)]:
             lay.addWidget(lbl(lb.upper(), 10, C['text3'])); lay.addWidget(w)
         btns   = QHBoxLayout()
         save   = btn("Создать", "green")
@@ -1099,7 +1285,8 @@ class AdminDashboard(QWidget):
             gs = store.get_groups() if store else []
             if any(g["name"] == n for g in gs):
                 QMessageBox.warning(d, "Ошибка", "Группа уже есть"); return
-            gs.append({"name": n, "subjects": _get_checked(sj)})
+            gs.append({"name": n, "subjects": _get_checked(sj),
+                      "category": cat_combo.currentData() or _sched.DEFAULT_CATEGORY})
             if store: store.set_groups(gs)
             d.accept(); self._render_groups(); self._refresh_dash()
         save.clicked.connect(_add); lay.addLayout(btns); d.exec()
@@ -1269,6 +1456,142 @@ class AdminDashboard(QWidget):
 
             self._run_bg(_do, _saved, _save_err)
         save.clicked.connect(_save)
+
+        lay.addLayout(btns); d.exec()
+
+    def _open_import_esstu(self, name: str):
+        """«🎓» — импорт специальности + учебного плана ВСГУТУ (parsers/esstu_parser.py):
+        подтягивает часы/ЗЕТ ИМЕННО текущего курса/семестра группы (считается на сервере
+        от года поступления, study_hours.course_and_semester) и заменяет предметы группы.
+        Тот же REST-путь через SyncClient, что и «🕐» — нужен интернет (сайт ВСГУТУ),
+        офлайн-пути здесь нет."""
+        from PySide6.QtWidgets import QComboBox
+        import sync_runner
+        url, token = sync_runner.current_auth()
+        if not url or not token:
+            QMessageBox.warning(self, "Сервер", "Сервер не подключён."); return
+
+        d = QDialog(self); d.setWindowTitle(f"Импорт с сайта ВСГУТУ: {name}"); d.resize(420, 320)
+        lay = QVBoxLayout(d); lay.setContentsMargins(24, 20, 24, 20); lay.setSpacing(10)
+        lay.addWidget(title_lbl(f"Импорт с сайта ВСГУТУ · {name}", 16))
+        hint = lbl("Подтягивает предметы+часы+ЗЕТ ИМЕННО текущего курса/семестра "
+                  "(считается от года поступления). Список предметов группы будет "
+                  "ЗАМЕНЁН — как при обновлении «Из расписания».", 11, C['text3'])
+        hint.setWordWrap(True); lay.addWidget(hint)
+
+        lay.addWidget(lbl("СПЕЦИАЛЬНОСТЬ", 10, C['text3']))
+        combo = QComboBox(); combo.addItem("Загрузка…", "")
+        combo.setEnabled(False)
+        lay.addWidget(combo)
+        lay.addWidget(lbl("ГОД ПОСТУПЛЕНИЯ", 10, C['text3']))
+        #Выпадающий список РЕАЛЬНО опубликованных на сайте годов, а не ручной ввод
+        #числа — раньше почти всегда промахивались мимо доступных лет (на сайте
+        #обычно только 3-5 последних, не с основания колледжа). Список зависит от
+        #специальности — перегружается при каждой её смене (_load_years).
+        year_combo = QComboBox(); year_combo.addItem("сначала выберите специальность", None)
+        year_combo.setEnabled(False)
+        lay.addWidget(year_combo)
+        status = lbl("", 11, C['text3']); status.setWordWrap(True); lay.addWidget(status)
+
+        btns = QHBoxLayout()
+        run = btn("Импортировать", "green"); cancel = btn("Отмена", "ghost")
+        cancel.clicked.connect(d.reject); btns.addWidget(cancel); btns.addWidget(run)
+        run.setEnabled(False)
+
+        def _load():
+            from sync_client import SyncClient
+            return SyncClient(url, token=token).esstu_specialties(name)
+
+        def _load_years():
+            code = combo.currentData()
+            run.setEnabled(False)
+            year_combo.clear()
+            if not code:
+                year_combo.addItem("сначала выберите специальность", None)
+                year_combo.setEnabled(False)
+                return
+            year_combo.addItem("Загрузка…", None)
+            year_combo.setEnabled(False)
+
+            def _do_years():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).esstu_plan_years(code)
+
+            def _apply_years(data):
+                year_combo.clear()
+                years = data.get("years") or []
+                if not years:
+                    year_combo.addItem("нет опубликованных планов", None)
+                    year_combo.setEnabled(False)
+                    return
+                for y in years:
+                    year_combo.addItem(str(y), y)
+                year_combo.setCurrentIndex(0)
+                year_combo.setEnabled(True)
+                run.setEnabled(True)
+
+            def _err_years(e):
+                year_combo.clear()
+                year_combo.addItem("ошибка загрузки годов", None)
+                year_combo.setEnabled(False)
+                status.setText(f"⚠️ Не удалось загрузить годы набора: {e}")
+
+            self._run_bg(_do_years, _apply_years, _err_years)
+
+        def _apply(data):
+            combo.clear()
+            specialties = data.get("specialties") or []
+            if not specialties:
+                status.setText("⚠️ Список специальностей недоступен (сайт ВСГУТУ не ответил).")
+                return
+            suggested = data.get("suggested_code") or ""
+            sel_idx = 0
+            for sp in specialties:
+                combo.addItem(f"{sp['code']} — {sp['name']}", sp["code"])
+                if sp["code"] == suggested:
+                    sel_idx = combo.count() - 1
+            combo.setCurrentIndex(sel_idx)
+            combo.setEnabled(True)
+            #Сигнал подключаем ПОСЛЕ заполнения — иначе addItem() на пустом combo
+            #сам эмитит currentIndexChanged(0) и годы грузились бы дважды подряд.
+            combo.currentIndexChanged.connect(lambda _i: _load_years())
+            _load_years()
+
+        def _err(e):
+            status.setText(f"⚠️ Не удалось загрузить список специальностей: {e}")
+
+        self._run_bg(_load, _apply, _err)
+
+        def _run():
+            code = combo.currentData()
+            year = year_combo.currentData()
+            if not code or not year:
+                return
+            run.setEnabled(False)
+            status.setText("Импорт…")
+
+            def _do():
+                from sync_client import SyncClient
+                return SyncClient(url, token=token).import_esstu(name, code, year)
+
+            def _done(r):
+                term = r.get("term") or {}
+                sem_word = "осенний" if term.get("semester") == 1 else "весенний"
+                msg = (f"Курс {r.get('course')}, семестр с начала обучения {r.get('semester')} "
+                      f"(период {term.get('year', '')} · {sem_word}).\n"
+                      f"Предметов с часами: {len(r.get('imported') or [])}.")
+                if r.get("unmapped"):
+                    msg += (f"\nБез часов (задайте вручную «🕐»): "
+                           f"{', '.join(r['unmapped'])}")
+                QMessageBox.information(d, "Готово", msg)
+                d.accept(); self._render_groups(); self._refresh_dash()
+
+            def _run_err(e):
+                run.setEnabled(True)
+                status.setText(f"⚠️ Не удалось импортировать: {e}")
+
+            self._run_bg(_do, _done, _run_err)
+        run.clicked.connect(_run)
 
         lay.addLayout(btns); d.exec()
 
