@@ -10,6 +10,7 @@ web.py — READ-представления для веб-версии (SPA). В�
 студентов. Пишем в те же таблицы и в том же формате id, что и синк десктопа — правки
 подхватываются десктопом обычным pull; метку LWW ставит сервер (инвариант §3).
 """
+import os
 import re
 from datetime import datetime, timezone, timedelta
 
@@ -1561,8 +1562,13 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
 #  weather — реальные показания метеослужбы: модель, «озвучивая данные», охотно
 #            меняет числа, а неверная температура в продукте, обещающем не врать,
 #            дороже красивой формулировки.
+#  homework — текст задания написал ПРЕПОДАВАТЕЛЬ, и человек должен прочитать его
+#             дословно; перефразированная домашка это уже другая домашка.
+#  server_state — одни числа (диск, память, размер базы): модель их округляет и меняет
+#             единицы, а по этим цифрам принимают решения.
 _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
-                     "about_vsgutu", "about_college", "schedule", "weather", "howto"}
+                     "about_vsgutu", "about_college", "schedule", "weather", "howto",
+                     "homework", "server_state"}
 
 
 def answer_vector_question(question: str, user: User, db: Session, context: str = "",
@@ -2057,6 +2063,164 @@ def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
             + body, {"day": dname, "count": len(lessons_day)})
 
 
+#Сколько домашних заданий показываем в ответе. Больше — это уже не ответ, а простыня:
+#человек спрашивает «что задали», имея в виду ближайшее, а не всю историю за семестр.
+_HOMEWORK_LIMIT = 5
+
+
+def _homework_answer(lessons, records: dict, subject: str = "") -> dict:
+    """Ответ про домашние задания. Общий для студента, преподавателя и родителя.
+
+    ДЗ — обычный тип занятия (`Lesson.type == "ДЗ"`, §14), текст задания лежит в поле
+    «тема». Раньше на этот вопрос отвечать было нечем: своего интента не существовало, и
+    «что задали по физике» уходило в оценки — то есть Вектор уверенно отвечал НЕ НА ТОТ
+    вопрос. Здесь же показываем и статус («сдано»/«не сдано»), потому что второй вопрос
+    после «что задали» всегда «а я сдал?».
+
+    `records` пуст → статус не показываем (преподаватель спрашивает про группу целиком,
+    и «сдано» относилось бы непонятно к кому)."""
+    hw = [l for l in lessons if (l.type or "").strip().upper() == "ДЗ"]
+    if subject:
+        hw = [l for l in hw if l.subject == subject]
+    if not hw:
+        where = f" по предмету «{subject}»" if subject else ""
+        return {"text": f"Домашних заданий{where} пока нет. 🐯", "mood": "happy",
+                "intent": "homework", "facts": {"count": 0}}
+
+    #Свежие сверху: спрашивают про то, что задали недавно. Дата в формате ДД.ММ.ГГГГ,
+    #поэтому сортируем по перевёрнутому виду, а не по строке как есть.
+    def _key(lesson):
+        parts = (lesson.date or "").split(".")
+        return "".join(reversed(parts)) if len(parts) == 3 else ""
+
+    hw.sort(key=_key, reverse=True)
+    shown, lines = hw[:_HOMEWORK_LIMIT], []
+    for lesson in shown:
+        task = (lesson.topic or "").strip() or "без описания"
+        head = f"{lesson.subject} №{lesson.number}" if lesson.number else lesson.subject
+        when = f" от {lesson.date}" if lesson.date else ""
+        mark = records.get(lesson.id) if records else None
+        status = ""
+        if records:
+            #«Н» на домашней работе значит «не сдал», а не «не был» (§14) — так и пишем.
+            status = " — не сдано" if mark == "Н" else (f" — оценка {mark}" if mark else " — ждёт сдачи")
+        lines.append(f"{head}{when}: {task}{status}")
+    tail = f" Показал последние {len(shown)} из {len(hw)}." if len(hw) > len(shown) else ""
+    return {"text": "Домашние задания:\n• " + "\n• ".join(lines) + "." + tail,
+            "mood": "neutral", "intent": "homework",
+            #no_voice: список заданий содержит формулировки преподавателя, и LLM их
+            #перепишет — а это ровно то, что человек должен прочитать дословно.
+            "no_voice": True, "facts": {"count": len(hw)}}
+
+
+def _human_bytes(n) -> str:
+    """Байты человеку: «1.3 ГБ». Вектор говорит словами, а не числами со степенями."""
+    if not n:
+        return "—"
+    units, value, i = ("Б", "КБ", "МБ", "ГБ", "ТБ"), float(n), 0
+    while value >= 1024 and i < len(units) - 1:
+        value, i = value / 1024, i + 1
+    return f"{round(value)} {units[i]}" if value >= 10 or i == 0 else f"{value:.1f} {units[i]}"
+
+
+def _server_state_facts(db: Session) -> dict:
+    """Состояние машины для администратора: диск, память, база, резервные копии.
+
+    Цифры берутся у самой машины (`hostinfo`) — тем же способом, что их показывает
+    раздел «Сервер». Второго источника не заводим: разойдутся, и человек получит два
+    разных ответа на один вопрос в зависимости от того, где спросил.
+
+    ⚠️ ОТВЕТ НЕ ОЗВУЧИВАЕТСЯ (`no_voice`). Здесь одни числа, а LLM их «оживляет» —
+    округляет, меняет единицы, добавляет несуществующее. Для успеваемости это правило
+    у нас давно, и к состоянию сервера оно относится ровно так же."""
+    from .. import hostinfo
+    from ..routers.serverinfo import _db_file, _deploy_root
+
+    info = hostinfo.summary(_deploy_root())
+    disk, mem = info.get("disk") or {}, info.get("memory") or {}
+    parts = []
+    if disk.get("total"):
+        used = round(disk["used"] / disk["total"] * 100)
+        parts.append(f"диск занят на {used}% ({_human_bytes(disk['free'])} свободно)")
+    if mem.get("total"):
+        used = round(mem["used"] / mem["total"] * 100)
+        parts.append(f"память — {used}% из {_human_bytes(mem['total'])}")
+    days = int((info.get("uptime") or 0) // 86400)
+    hours = int(((info.get("uptime") or 0) % 86400) // 3600)
+    if days or hours:
+        parts.append(f"работает {days} д {hours} ч")
+
+    path, size, encrypted = _db_file(), 0, False
+    try:
+        from ..db import DB_KEY
+        encrypted = bool(DB_KEY)
+        if path and os.path.isfile(path):
+            size = os.path.getsize(path)
+    except Exception:      # noqa: BLE001 — сведения о базе не повод ронять ответ
+        pass
+    if size:
+        parts.append(f"база — {_human_bytes(size)}"
+                     + (", зашифрована" if encrypted else ", БЕЗ шифрования"))
+
+    #Свежесть копий — первое, что админ хочет знать про сервер, и первое, о чём забывают.
+    backup_dir = os.environ.get("GRADEBOOK_BACKUP_DIR") or "/root/gb-backups"
+    latest = ""
+    if os.path.isdir(backup_dir):
+        items = hostinfo.listdir(backup_dir, backup_dir)
+        if items:
+            latest = max(i["mtime"] for i in items)
+    parts.append(f"последняя резервная копия — {latest}" if latest
+                 else "резервных копий НЕ НАЙДЕНО")
+
+    #Тревожное состояние Вектор обязан назвать тревогой, а не спрятать в перечисление.
+    alarm = (not latest) or (disk.get("total") and disk["used"] / disk["total"] > 0.9)
+    return {"text": "Сервер: " + "; ".join(parts) + ".",
+            "mood": "sad" if alarm else "neutral", "intent": "server_state",
+            "no_voice": True,
+            "facts": {"disk": disk, "memory": mem, "db_size": size,
+                      "db_encrypted": encrypted, "latest_backup": latest}}
+
+
+def _admin_risk_facts(db: Session, cfg: dict, intent: str) -> dict:
+    """Кто в зоне риска / у кого долги — по ВСЕМУ колледжу.
+
+    Считаем через те же `webdata`, что и кабинет преподавателя: своя формула здесь
+    означала бы, что у админа и у преподавателя разные списки должников по одному и тому
+    же студенту (инвариант §4.8 — расчёт живёт в одном месте)."""
+    rows = (db.query(User).filter(User.role == "student", User.deleted == False)  # noqa: E712
+            .all())
+    lessons_by_group: dict = {}
+    risky, debtors = [], []
+    for stud in rows:
+        group = stud.group_name or ""
+        if not group:
+            continue
+        if group not in lessons_by_group:
+            lessons_by_group[group] = W.group_lessons(db, group)
+        lessons = lessons_by_group[group]
+        records = W.student_records(db, stud.surname, stud.name, group)
+        if intent == "debtors":
+            if W.debts(lessons, records, scale=W.lesson_scale_map(db, lessons)):
+                debtors.append(f"{W.display_name(stud)} ({group})")
+            continue
+        avg = W.average(lessons, records, cfg, scale=W.lesson_scale_map(db, lessons))
+        #Порог тот же, что красит дашборды (2.5) — свой не придумываем.
+        if avg and avg < 2.5:
+            risky.append(f"{W.display_name(stud)} ({group}) — {avg}")
+
+    found = debtors if intent == "debtors" else risky
+    what = "с задолженностями" if intent == "debtors" else "в зоне риска"
+    if not found:
+        return {"text": f"Студентов {what} нет — по всему колледжу чисто. 🐯",
+                "mood": "happy", "intent": intent, "facts": {"count": 0}}
+    #Список фамилий LLM переписывать не должен — это факты о людях.
+    shown = found[:15]
+    tail = f" И ещё {len(found) - len(shown)}." if len(found) > len(shown) else ""
+    return {"text": f"Студентов {what}: {len(found)}. " + "; ".join(shown) + "." + tail,
+            "mood": "sad", "intent": intent, "no_voice": True,
+            "facts": {"count": len(found)}}
+
+
 def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
     """Фактический ответ (text/mood/intent/facts) по роли из РЕАЛЬНЫХ данных.
 
@@ -2117,6 +2281,8 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             a = W.absences(lessons, records)
             return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                     "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
+        if intent == "homework":
+            return _homework_answer(lessons, records, subject)
         if intent == "grade_count":
             b = _grade_breakdown(lessons, records, scale=scale_map)
             if subject:
@@ -2157,9 +2323,17 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return _zet_facts(db, user.surname, user.name, group, cfg)
         # average и всё остальное (at_risk/roster/teachers/group_stats недоступны студенту)
         avg = W.average(lessons, records, cfg, scale=scale_map)
+        if intent == "server_state":
+            #Состояние сервера — не учебные данные, и студенту их знать незачем. Молчать
+            #нельзя: без явной ветки вопрос про диск проваливался бы в средний балл, то
+            #есть Вектор отвечал бы уверенно и не на тот вопрос.
+            return {"text": "Про сервер знает администратор — это не учебные данные. "
+                            "Я могу показать твой средний балл, оценки, пропуски, долги, "
+                            "домашние задания и расписание. 🐯",
+                    "mood": "neutral", "intent": "help", "facts": {}}
         if intent in ("at_risk", "roster", "teachers", "group_stats"):
             return {"text": "Эти данные — для преподавателя. Я могу показать твой средний балл, "
-                            "оценки, пропуски, долги и расписание. 🐯",
+                            "оценки, пропуски, долги, домашние задания и расписание. 🐯",
                     "mood": "neutral", "intent": "help", "facts": {}}
         return {"text": f"Твой средний балл — {avg}. " + W.grading.methodology_text(cfg),
                 "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}
@@ -2192,6 +2366,15 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             body = ", ".join(names) if names else "список пуст"
             return {"text": f"Студенты группы {g} ({len(names)}): {body}.", "mood": "neutral",
                     "intent": "roster", "facts": {"group": g, "count": len(names)}}
+        if intent == "homework":
+            #Что ЗАДАЛ САМ преподаватель: занятия его групп по его же предметам.
+            #Статуса сдачи нет — вопрос про группу целиком, и «сдано» относилось бы
+            #непонятно к кому; за конкретным студентом идут в журнал.
+            own = []
+            for g in groups:
+                allowed = subjects_by_group.get(g, set())
+                own += [l for l in W.group_lessons(db, g) if l.subject in allowed]
+            return _homework_answer(own, {}, subject)
         if intent in ("absences", "debtors") and surname:
             # пропуски/долги конкретного студента (по фамилии) в группах преподавателя
             for g in groups:
@@ -2259,9 +2442,30 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                             f"Всего студентов: {n_students}. В зоне риска: {n_risky}.",
                     "mood": "neutral", "intent": "group_stats",
                     "facts": {"groups": len(per), "students": n_students, "at_risk": n_risky}}
+        if intent == "server_state":
+            #Сервером занимается администратор. Отвечаем прямо, а не общей справкой:
+            #иначе преподаватель решит, что Вектор просто не понял вопрос.
+            return {"text": "Состояние сервера — к администратору, это не учебные данные. "
+                            "Я могу показать ваши группы, оценки, долги, пропуски, "
+                            "домашние задания и расписание. 🐯",
+                    "mood": "neutral", "intent": "help", "facts": {}}
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
-    # ── АДМИН: агрегаты по заведению + справочники ─────────────────────────────────
+    # ── АДМИН: агрегаты по заведению, справочники и состояние сервера ──────────────
+    #Вопросы, на которые у администратора ответа нет по существу. Раньше они молча
+    #проваливались в счётчики: на «что задали» приходило «студентов — 47», то есть
+    #уверенный ответ не на тот вопрос.
+    if intent in ("homework", "zet", "subject_grades", "grade_count"):
+        return {"text": "Это данные учебного процесса — их видят студент и его "
+                        "преподаватель. Я могу показать справочники, сводку по колледжу "
+                        "и состояние сервера. 🐯",
+                "mood": "neutral", "intent": "help", "facts": {}}
+    if intent == "server_state":
+        return _server_state_facts(db)
+    if intent in ("at_risk", "debtors"):
+        #Общеколледжный срез: раньше эти вопросы у админа падали в счётчики, хотя
+        #«кто в зоне риска» — ровно тот вопрос, ради которого админ и заходит.
+        return _admin_risk_facts(db, cfg, intent)
     if intent == "teachers":
         rows = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
         names = [W.display_name(t) for t in rows]
@@ -2276,11 +2480,26 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                 "intent": "groups", "facts": {"count": len(names)}}
     n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
     n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
+    n_parents = db.query(User).filter(User.role == "parent", User.deleted == False).count()  # noqa: E712
     n_groups = db.query(Group).filter(Group.deleted == False).count()  # noqa: E712
-    return {"text": f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
-                    f"групп — {n_groups}.",
-            "mood": "neutral", "intent": "group_stats",
-            "facts": {"students": n_students, "teachers": n_teachers, "groups": n_groups}}
+    n_subjects = db.query(Subject).filter(Subject.deleted == False).count()  # noqa: E712
+    #Заявки на регистрацию — то, что ТРЕБУЕТ ДЕЙСТВИЯ, а не просто цифра в сводке.
+    #Раньше о них можно было узнать, только зайдя на страницу заявок и вспомнив о ней.
+    pending = 0
+    try:
+        pending = db.query(RegistrationRequest).filter(
+            RegistrationRequest.status == "pending").count()
+    except Exception:      # noqa: BLE001 — сводка не повод ронять ответ
+        pending = 0
+    text = (f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
+            f"родителей — {n_parents}, групп — {n_groups}, предметов — {n_subjects}.")
+    if pending:
+        text += f" ⚠️ Ждут одобрения заявки на регистрацию: {pending}."
+    return {"text": text,
+            "mood": "neutral" if not pending else "surprised", "intent": "group_stats",
+            "facts": {"students": n_students, "teachers": n_teachers,
+                      "parents": n_parents, "groups": n_groups,
+                      "subjects": n_subjects, "pending_registrations": pending}}
 
 
 # ЗАПИСЬ (Phase B) ─────────────────────────────────────────────────────────────────

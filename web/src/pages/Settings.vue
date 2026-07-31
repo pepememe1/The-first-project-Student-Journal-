@@ -83,6 +83,7 @@ async function loadPushInfo() {
 const bundle = ref(null)          // { version } | null — вне приложения null
 const bundleBusy = ref(false)
 const bundleMsg = ref('')
+const otaLog = ref([])            // последние события обновления (см. main.js)
 
 async function loadBundle() {
   try {
@@ -90,6 +91,9 @@ async function loadBundle() {
     const cur = await CapacitorUpdater.current()
     bundle.value = { version: cur?.bundle?.version || 'встроенная' }
   } catch { bundle.value = null }
+  try {
+    otaLog.value = JSON.parse(localStorage.getItem('gb_ota_log') || '[]')
+  } catch { otaLog.value = [] }
 }
 
 async function checkUpdate() {
@@ -252,6 +256,19 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         </AppButton>
       </div>
       <p v-if="bundleMsg" class="mt-3 text-sm text-text3">{{ bundleMsg }}</p>
+
+      <!-- Ход последних обновлений. Нужен, пока не выяснена причина, по которой бандл
+           скачивается и не приживается: она остаётся на устройстве и в логи сервера не
+           попадает. Человеку с телефоном достаточно прочитать строку и назвать её. -->
+      <details v-if="otaLog.length" class="mt-3">
+        <summary class="cursor-pointer text-xs text-text3">Что происходило с обновлениями</summary>
+        <ul class="mt-2 flex flex-col gap-1 font-mono text-tiny text-text3">
+          <li v-for="(e, i) in otaLog" :key="i" class="break-all">
+            {{ e.at?.slice(5, 16).replace('T', ' ') }} · {{ e.kind }}
+            <template v-if="e.data && Object.keys(e.data).length"> · {{ JSON.stringify(e.data) }}</template>
+          </li>
+        </ul>
+      </details>
     </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->

@@ -23,7 +23,28 @@ app.mount('#app')
 // updateUrl → https://esstu-gradebook.ru/app/updates).
 if (Capacitor.isNativePlatform()) {
   import('@capgo/capacitor-updater')
-    .then(({ CapacitorUpdater }) => CapacitorUpdater.notifyAppReady())
+    .then(async ({ CapacitorUpdater }) => {
+      await CapacitorUpdater.notifyAppReady()
+
+      // ⚠️ ЗАПИСЫВАЕМ ХОД ОБНОВЛЕНИЯ. По логам сервера видно, что телефоны качают один
+      // и тот же бандл по три раза за минуту — то есть он скачивается и НЕ приживается.
+      // Причина остаётся на устройстве, и в логи сервера она не попадает никогда.
+      // Складываем последние события в localStorage и показываем их в «Настройках»:
+      // человек с телефоном может просто прочитать причину и назвать её, вместо того
+      // чтобы мы гадали по косвенным признакам.
+      const remember = (kind, data) => {
+        try {
+          const log = JSON.parse(localStorage.getItem('gb_ota_log') || '[]')
+          log.unshift({ kind, at: new Date().toISOString(), data })
+          localStorage.setItem('gb_ota_log', JSON.stringify(log.slice(0, 10)))
+        } catch { /* переполнено хранилище — диагностика не повод падать */ }
+      }
+      for (const kind of ['updateAvailable', 'downloadComplete', 'downloadFailed',
+                          'updateFailed', 'noNeedUpdate', 'majorAvailable']) {
+        CapacitorUpdater.addListener(kind, (state) => remember(kind, state))
+          .catch(() => { /* событие не поддержано этой версией плагина */ })
+      }
+    })
     .catch(() => { /* плагин недоступен — не критично */ })
 
   // Пуш-уведомления. Три вещи по порядку:
