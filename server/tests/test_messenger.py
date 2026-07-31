@@ -415,6 +415,48 @@ def test_ws_connect_with_subprotocol(client):
         wsconn.send_json({"type": "typing", "conversation_id": "nope"})
 
 
+def test_typing_is_not_relayed_into_a_foreign_chat(client, monkeypatch):
+    """Сокет — единственное место мессенджера, где беседу называет САМ клиент.
+
+    Пока участие здесь не проверялось, любой вошедший мог разослать «печатает…» в
+    чужой чат, просто подставив его id: содержимое это не раскрывало, но позволяло
+    перебором проверять существование бесед и подсовывать людям несуществующего
+    собеседника. Во всех остальных эндпоинтах участие сверяет `_require_participant`.
+    """
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = _conv(client, a, b_id)          # беседа преподавателя и Боба, Кэрол в ней нет
+
+    from app.routers import messenger as mod
+    delivered = []
+
+    async def spy(ids, payload):
+        delivered.append((list(ids), payload))
+    monkeypatch.setattr(mod.ws_manager, "send_users", spy)
+
+    token = c["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect(f"/web/messenger/ws?token={token}") as wsconn:
+        wsconn.send_json({"type": "typing", "conversation_id": conv})
+    assert delivered == [], "посторонний не имеет права слать «печатает…» в чужую беседу"
+
+
+def test_typing_still_reaches_the_other_participant(client, monkeypatch):
+    """Проверка участия не должна сломать саму фичу: своим «печатает…» доезжает."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+
+    from app.routers import messenger as mod
+    delivered = []
+
+    async def spy(ids, payload):
+        delivered.append((list(ids), payload))
+    monkeypatch.setattr(mod.ws_manager, "send_users", spy)
+
+    token = a["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect(f"/web/messenger/ws?token={token}") as wsconn:
+        wsconn.send_json({"type": "typing", "conversation_id": conv})
+    assert delivered and delivered[0][0] == [b_id], delivered
+
+
 def test_ws_rejects_bad_subprotocol_token(client):
     """Мусорный токен в сабпротоколе → соединение отклоняется (не открывается)."""
     import pytest

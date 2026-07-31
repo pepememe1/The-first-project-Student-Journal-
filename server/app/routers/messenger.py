@@ -3088,11 +3088,21 @@ async def messenger_ws(ws: WebSocket, token: str = Query("")):
             if isinstance(data, dict) and data.get("type") == "typing" and data.get("conversation_id"):
                 db2 = SessionLocal()
                 try:
-                    ids = [i for i in _participant_ids(db2, data["conversation_id"]) if i != user.id]
+                    #⚠️ УЧАСТИЕ ПРОВЕРЯЕМ ЗДЕСЬ. Это единственное место мессенджера, где
+                    #клиент сам называет беседу, а сокет уже авторизован — и раньше этого
+                    #хватало, чтобы любой вошедший разослал «печатает…» в ЧУЖОЙ чат,
+                    #просто подставив его id. Содержимого это не раскрывало, но давало
+                    #проверять существование бесед перебором и подсовывать людям
+                    #несуществующего собеседника. У всех остальных эндпоинтов участие
+                    #сверяет `_require_participant`; сокет был исключением.
+                    everyone = _participant_ids(db2, data["conversation_id"])
+                    ids = [i for i in everyone if i != user.id] if user.id in everyone else []
                 finally:
                     db2.close()
-                await ws_manager.send_users(
-                    ids, {"type": "typing", "conversation_id": data["conversation_id"], "user_id": user.id})
+                if ids:
+                    await ws_manager.send_users(
+                        ids, {"type": "typing", "conversation_id": data["conversation_id"],
+                              "user_id": user.id})
     except WebSocketDisconnect:
         ws_manager.disconnect(user.id, ws)
     except Exception:
