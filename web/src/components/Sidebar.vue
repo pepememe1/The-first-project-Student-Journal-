@@ -1,4 +1,5 @@
 <script setup>
+import { useLocaleStore } from '@/stores/locale'
 // Sidebar — боковая навигация (порт ui_components.Sidebar). 250px, фон bg2, секции-
 // заголовки (uppercase) + пункты с иконками; активный подсвечен акцентом.
 import { computed, ref, onMounted } from 'vue'
@@ -12,6 +13,7 @@ defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
 
 const auth = useAuthStore()
+const loc = useLocaleStore()
 const messenger = useMessengerStore()
 const route = useRoute()
 // Значение бейджа пункта: непрочитанные сообщения берём из стора мессенджера (живой
@@ -45,7 +47,7 @@ function isActive(to) {
   <aside class="flex h-full w-[250px] shrink-0 flex-col overflow-y-auto border-r border-border bg-bg2 px-2.5 py-4">
     <template v-for="(item, i) in items" :key="i">
       <p v-if="item.section" class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
-        {{ item.section }}
+        {{ item.i18n ? loc.t(item.i18n, item.section) : item.section }}
       </p>
       <RouterLink
         v-else
@@ -59,7 +61,7 @@ function isActive(to) {
         @click="emit('navigate')"
       >
         <component :is="item.icon" class="size-[18px] shrink-0" />
-        <span class="truncate">{{ item.label }}</span>
+        <span class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
         <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
              расписания — красным (требует вмешательства). Ноль не показываем. -->
         <span v-if="item.badge && badgeCount(item.badge)"

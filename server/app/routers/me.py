@@ -33,6 +33,8 @@ _MAX_PREFS_BYTES = 16 * 1024
 #поэтому режем их на СЕРВЕРЕ, а не только в UI: клиента можно обойти запросом напрямую.
 _MAX_BIO_CHARS = 400        #«О себе» — тот же лимит показывает счётчик в интерфейсе
 _MAX_COLOR_ID = 32          #id пресета палитры ('violet', 'teal', …)
+#Языки интерфейса. Коды те же, что в web/src/i18n/dictionaries.js.
+_UI_LOCALES = ("ru", "en", "zh")
 
 
 def _sanitize_public_profile(prefs: dict) -> None:
@@ -85,6 +87,23 @@ def _sanitize_translate(prefs: dict) -> None:
         prefs.pop("translate", None)
 
 
+def _sanitize_locale(prefs: dict) -> None:
+    """Язык интерфейса: только известные коды, флаг перевода — строго «да/нет».
+
+    Значение читает КЛИЕНТ, но приходит оно от него же, поэтому чистим на входе: чужой
+    код языка означал бы интерфейс, у которого нет словаря, — то есть пустые подписи.
+    Список языков держит фронт (`web/src/i18n/dictionaries.js`), здесь только его коды:
+    заводить второй список на сервере значит однажды их разъехать."""
+    if "locale" in prefs:
+        code = str(prefs.get("locale") or "").strip().lower()
+        if code in _UI_LOCALES:
+            prefs["locale"] = code
+        else:
+            prefs.pop("locale", None)
+    if "locale_on" in prefs:
+        prefs["locale_on"] = bool(prefs.get("locale_on"))
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -110,6 +129,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
     _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
     _sanitize_translate(merged)          #коды языков уходят в промпт — только известные
+    _sanitize_locale(merged)             #язык интерфейса — только тот, для которого есть словарь
     #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))

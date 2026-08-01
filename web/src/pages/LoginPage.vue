@@ -6,6 +6,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Download, Fingerprint } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import { desktopApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
@@ -13,6 +14,7 @@ import { isDesktopApp } from '@/utils/platform'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
+import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
 import RegisterDialog from '@/components/RegisterDialog.vue'
@@ -20,6 +22,7 @@ import RecoverDialog from '@/components/RecoverDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const loc = useLocaleStore()
 
 const login = ref('')
 const password = ref('')
@@ -183,30 +186,36 @@ const showRecover = ref(false)
 
       <!-- Карточка входа (центр экрана) -->
       <div class="mx-auto w-full max-w-sm justify-self-center rounded-2xl border border-border bg-card p-7 shadow-card">
+        <!-- Глобус выбора языка. Стоит НА ЭКРАНЕ ВХОДА, до аккаунта: человек, который не
+             читает по-русски, должен переключить язык раньше, чем начнёт разбираться
+             в форме. Выбор переживает вход (см. stores/locale.js). -->
+        <div class="mb-1 flex justify-end">
+          <LanguagePicker />
+        </div>
         <div class="mb-5 flex flex-col items-center text-center">
           <!-- Знак над названием журнала: цвет из темы (кольца — акцентным цветом,
                видны на белой карточке; ядро двухцветное). -->
           <BrandLogo :size="76" oncard />
           <h1 class="mt-3 font-title text-2xl font-extrabold text-text">GradeBookAI</h1>
-          <p class="mt-1 text-sm text-text3">Система учёта успеваемости</p>
-          <p class="mt-1 text-sm font-semibold text-accent">Технологический колледж ВСГУТУ</p>
+          <p class="mt-1 text-sm text-text3">{{ loc.t('app.subtitle') }}</p>
+          <p class="mt-1 text-sm font-semibold text-accent">{{ loc.t('app.college') }}</p>
         </div>
 
         <form class="space-y-4" @submit.prevent="submit">
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-text3">Логин</label>
+            <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.login') }}</label>
             <input v-model="login" id="login" name="username" autocomplete="username"
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card"
-                   placeholder="Введите логин" />
+                   :placeholder="loc.t('login.loginPlaceholder')" />
           </div>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-text3">Пароль</label>
+            <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.password') }}</label>
             <div class="relative">
               <input v-model="password" id="password" name="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
                      class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-11 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                      placeholder="••••••••" />
               <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
-                      :aria-label="showPass ? 'Скрыть' : 'Показать'" @click="showPass = !showPass">
+                      :aria-label="showPass ? loc.t('login.hide') : loc.t('login.show')" @click="showPass = !showPass">
                 <EyeOff v-if="showPass" class="size-4" /><Eye v-else class="size-4" />
               </button>
             </div>
@@ -215,7 +224,7 @@ const showRecover = ref(false)
           <p v-if="auth.error" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ auth.error }}</p>
 
           <AppButton type="submit" class="w-full" :disabled="!canSubmit">
-            {{ auth.loading ? 'Входим…' : 'Войти' }}
+            {{ auth.loading ? loc.t('login.submitting') : loc.t('login.submit') }}
           </AppButton>
         </form>
 
@@ -227,18 +236,18 @@ const showRecover = ref(false)
                   class="flex w-full items-center justify-center gap-2 rounded-sm border border-accent/50 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow disabled:opacity-50"
                   @click="submitPasskey">
             <Fingerprint class="size-4" />
-            {{ isDesktop ? 'Войти по ключу доступа' : 'Войти по Face ID / отпечатку' }}
+            {{ isDesktop ? loc.t('login.passkey') : loc.t('login.biometry') }}
           </button>
           <p class="mt-1.5 text-center text-tiny text-text3">Функция настраивается в настройках профиля</p>
         </div>
 
         <div class="mt-4 border-t border-border pt-3 text-center">
-          <p class="text-xs text-text3">Для обучающихся:</p>
+          <p class="text-xs text-text3">{{ loc.t('login.forStudents') }}</p>
           <div class="mt-1.5 flex flex-wrap items-center justify-center gap-2">
             <button type="button" class="rounded-sm border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow"
-                    @click="showRegister = true">Регистрация</button>
+                    @click="showRegister = true">{{ loc.t('login.register') }}</button>
             <button type="button" class="rounded-sm border border-border2 px-3 py-1.5 text-xs font-medium text-text3 transition-colors hover:border-accent hover:text-accent"
-                    @click="showRecover = true">Восстановление пароля</button>
+                    @click="showRecover = true">{{ loc.t('login.recover') }}</button>
           </div>
           <p class="mt-2 text-tiny text-text3">Преподаватели и админ входят по данным от администратора.</p>
         </div>
@@ -277,7 +286,7 @@ const showRecover = ref(false)
         <div v-if="isDesktop && !insideApp" class="rounded-2xl border border-border bg-card p-5 shadow-card">
           <div class="flex items-center gap-2">
             <Monitor class="size-5 text-accent" />
-            <h3 class="font-title text-base font-extrabold text-text">Десктоп-версия</h3>
+            <h3 class="font-title text-base font-extrabold text-text">{{ loc.t('login.desktop') }}</h3>
           </div>
           <p class="mt-2 text-xs text-text3">
             Полноценный офлайн-first клиент для Windows: работает без интернета, данные

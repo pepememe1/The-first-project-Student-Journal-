@@ -14,10 +14,13 @@ import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import ToggleRow from '@/components/ui/ToggleRow.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
+import LanguagePicker from '@/components/ui/LanguagePicker.vue'
+import { useLocaleStore } from '@/stores/locale'
 
 const tts = useTtsStore()
 const auth = useAuthStore()
 const voice = useVoiceStore()
+const loc = useLocaleStore()
 
 // ── Уведомления: какие категории человек согласен получать ───────────────────────
 // Настройка АККАУНТА, а не устройства: решение «слать или нет» принимает сервер до
@@ -202,6 +205,30 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
       <h2 class="mb-3 font-title text-lg font-extrabold text-text">Оформление</h2>
       <ThemeCustomizer />
     </div>
+
+    <!-- Язык интерфейса. Выбор делается ещё на экране входа (там глобус), здесь его
+         можно сменить и, главное, ВЫКЛЮЧИТЬ перевод — не теряя выбранный язык. -->
+    <Card :title="loc.t('settings.language')" :subtitle="loc.t('settings.languageHint')" pad>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap gap-2">
+          <button v-for="l in loc.locales" :key="l.code" type="button"
+                  class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors"
+                  :class="l.code === loc.locale && loc.translateUi
+                    ? 'border-accent bg-accent-glow text-text' : 'border-border text-text2 hover:border-accent'"
+                  @click="loc.set(l.code)">
+            <span class="text-base leading-none">{{ l.flag }}</span>{{ l.name }}
+          </button>
+        </div>
+        <LanguagePicker />
+      </div>
+
+      <div class="mt-4">
+        <ToggleRow :label="loc.t('settings.languageOff')"
+                   :hint="loc.t('settings.languageOffHint')"
+                   :model-value="!loc.translateUi"
+                   @update:model-value="(v) => loc.setTranslateUi(!v)" />
+      </div>
+    </Card>
 
     <!-- Уведомления: что присылать. Настройка АККАУНТА — решение принимает сервер до
          отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
