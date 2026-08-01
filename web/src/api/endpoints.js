@@ -319,6 +319,13 @@ export const vectorApi = {
 // МЕССЕНДЖЕР (см. docs/MESSENGER-PLAN.md) ─────────────────────────────────────────
 // Отдельная онлайн-подсистема (НЕ через /sync). Фаза 1/2: личные чаты + каталог людей.
 export const messengerApi = {
+  // Перевод сообщений. Идёт через ту же ИИ-модель, что настроена для «Вектора»
+  // (см. server/app/translate_service.py) — отдельного переводчика не заводим.
+  // Эндпоинт не привязан к id сообщения: им пользуется и кнопка на чужой реплике, и
+  // предпросмотр собственного текста до отправки.
+  translate: (text, to, from = 'auto') =>
+    api.post('/web/messenger/translate', { text, to, from }),
+  translateLanguages: () => api.get('/web/messenger/translate/languages'),
   // Каталог/поиск людей для выбора собеседника (role: student|teacher).
   users: (role = 'student', q = '', page = 0) =>
     api.get('/web/messenger/users', { params: { role, q, page } }),

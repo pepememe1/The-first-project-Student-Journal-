@@ -70,6 +70,21 @@ def _sanitize_notify(prefs: dict) -> None:
                        if k in rustore_push.ALL_CATEGORIES}
 
 
+def _sanitize_translate(prefs: dict) -> None:
+    """Приводит `prefs.translate` к строгому виду: только известные языки и «да/нет».
+
+    Это поле читает СЕРВЕР (коды языков уходят в промпт переводчика), поэтому мусор
+    здесь — не косметика: незнакомый код языка попал бы прямо в инструкцию модели."""
+    if "translate" not in prefs:
+        return
+    from .. import translate_service
+    cleaned = translate_service.sanitize_prefs(prefs.get("translate"))
+    if cleaned:
+        prefs["translate"] = cleaned
+    else:
+        prefs.pop("translate", None)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -94,6 +109,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     merged.update(incoming)
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
     _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
+    _sanitize_translate(merged)          #коды языков уходят в промпт — только известные
     #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))

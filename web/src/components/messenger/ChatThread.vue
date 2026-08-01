@@ -8,10 +8,12 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
+  Languages,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
+import { useTranslateStore } from '@/stores/translate'
 import { renderMarkdownLite } from '@/utils/markdownLite'
 import { extractVideos } from '@/utils/videoEmbed'
 import { formatSystemMessage } from '@/utils/messagePreview'
@@ -24,14 +26,20 @@ import ConversationInfo from './ConversationInfo.vue'
 import MascotCooldown from './MascotCooldown.vue'
 import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
+import TranslateDialog from './TranslateDialog.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 import { statusLabel } from '@/config/status'
 
 const m = useMessengerStore()
+const tr = useTranslateStore()
+const showTranslate = ref(false)
 const auth = useAuthStore()
 const { confirm } = useConfirm()
 const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
+//Свой id клиент знает только из conversation_info: в JWT лежат логин и роль.
+//Нужен, чтобы не предлагать перевод СВОЕЙ же реплики.
+const myUserId = computed(() => activeInfo.value?.my_user_id || '')
 const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
 const isAdmin = computed(() => auth.role === 'admin')
@@ -572,8 +580,18 @@ function bulkForward() {
 function bulkDelete() { requestDelete(selectedMsgs.value) }
 
 async function submit() {
-  const t = draft.value.trim()
+  let t = draft.value.trim()
   if (!t) return
+  //Автоперевод исходящих. Делается ЗДЕСЬ, до отправки, а не на сервере: человек обязан
+  //увидеть, что уйдёт собеседнику. Сбой переводчика возвращает исходный текст — съесть
+  //уже написанное сообщение из-за недоступной модели недопустимо (см. stores/translate).
+  if (tr.enabled) {
+    const translated = await tr.outgoing(t)
+    if (translated && translated !== t) {
+      t = translated
+      draft.value = t          //показываем результат в поле: отправляем именно это
+    }
+  }
   draft.value = ''
   m.clearDraft(activeId.value)
   const ok = await m.send(t)
@@ -778,6 +796,16 @@ const headerTint = computed(() =>
                   : 'text-text3 hover:bg-bg2 hover:text-text'">
           <ScrollText class="size-5" />
         </button>
+        <!-- 🌐 — настройки перевода переписки. Ярче обычного, когда автоперевод включён:
+             человек должен видеть, что его сообщения уходят переведёнными, а не гадать. -->
+        <button type="button" @click="showTranslate = true"
+                :aria-label="tr.enabled ? 'Автоперевод включён' : 'Перевод'"
+                :title="tr.enabled ? 'Автоперевод включён' : 'Настроить перевод'"
+                class="grid size-8 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                  : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+          <Languages class="size-5" />
+        </button>
         <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
         <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
                 :aria-label="muted ? 'Включить уведомления' : 'Отключить уведомления'"
@@ -936,6 +964,19 @@ const headerTint = computed(() =>
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
                    @click="onBodyClick" />
+              <!-- Перевод ПОД оригиналом, а не вместо него: подмена чужой реплики
+                   переводом скрывает то, что человек написал на самом деле, и спорить
+                   потом не о чем. Оригинал всегда виден. -->
+              <p v-if="!msg.deleted && tr.shownFor(msg.id)"
+                 class="mt-1.5 border-l-2 border-accent/60 pl-2 text-sm text-text2">
+                {{ tr.shownFor(msg.id) }}
+              </p>
+              <button v-if="!msg.deleted && msg.body && msg.sender_id !== myUserId"
+                      type="button" :disabled="tr.busy"
+                      class="mt-1 text-tiny text-text3 transition-colors hover:text-accent disabled:opacity-50"
+                      @click.stop="tr.toggleMessage(msg.id, msg.body)">
+                {{ tr.shownFor(msg.id) ? 'скрыть перевод' : (tr.busy ? 'переводим…' : 'перевести') }}
+              </button>
               <!-- Видео из белого списка (YouTube/VK/Rutube, Фаза 1) — карточка ПОД текстом,
                    плеер сразу виден (без лишнего клика «показать видео» — Влад). Шире, чем
                    было (max-w-xs→max-w-sm): раньше карточка была узкой НАМЕРЕННО — свёрнутая
@@ -1243,6 +1284,7 @@ const headerTint = computed(() =>
 
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
     <!-- §12: оверлей отчёта куратора (круговая + плоские по предметам + дрилл-даун). -->
+    <TranslateDialog v-if="showTranslate" @close="showTranslate = false" />
     <CuratorReportOverlay v-if="openReportOverlay" :report-id="openReportOverlay" @close="openReportOverlay = null" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"
                    @submit="onForwardSubmit" @close="forwardState = { open: false, ids: [] }" />

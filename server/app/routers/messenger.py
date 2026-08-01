@@ -1234,6 +1234,39 @@ def message_read_by(mid: int, user: User = Depends(get_current_user), db: Sessio
     return {"users": [_safe_user(u, onl) for u in users]}
 
 
+# ── Перевод ──────────────────────────────────────────────────────────────────────────
+@router.post("/translate")
+def translate_text(payload: dict = Body(...),
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Перевести произвольный текст на выбранный язык.
+
+    Эндпоинт НЕ привязан к сообщению намеренно: им пользуется и кнопка «перевести» на
+    чужой реплике, и предпросмотр своего текста до отправки. Привязка к id сообщения
+    добавила бы проверку участия там, где переводится собственный черновик.
+
+    Своего лимита частоты нет: перевод идёт по нажатию человека, а результат кэшируется
+    (одну реплику в групповом чате открывают несколько человек). Автоперевод исходящих
+    ограничен тем же анти-флудом, что и сама отправка."""
+    from .. import translate_service
+    text = (payload.get("text") or "").strip()
+    dst = (payload.get("to") or "").strip().lower()
+    src = (payload.get("from") or translate_service.AUTO).strip().lower()
+    if not text:
+        raise HTTPException(status_code=400, detail="Нужен текст")
+    from ..webdata import load_config
+    return translate_service.translate(load_config(db), text, dst, src)
+
+
+@router.get("/translate/languages")
+def translate_languages(_user: User = Depends(get_current_user)):
+    """Список языков одним источником: клиент не держит свою копию, иначе однажды
+    покажет язык, которого сервер не знает."""
+    from .. import translate_service
+    return {"languages": [{"code": c, "name": n}
+                          for c, n in translate_service.LANGUAGES.items()],
+            "auto": translate_service.AUTO}
+
+
 # ── Отправка ─────────────────────────────────────────────────────────────────────────
 @router.post("/chats/{conv_id}/messages")
 def send_message(conv_id: str, payload: dict = Body(...),
