@@ -44,6 +44,26 @@ export const useGifStore = defineStore('gif', () => {
     }
   }
 
+  // Избранное с УЖЕ ОТПРАВЛЕННОГО сообщения (ChatThread.vue, наведение на картинку,
+  // как в Discord) — у Message нет slug/title/thumb Klipy, только сама ссылка на CDN,
+  // поэтому дедуп здесь по url, а не по slug (пикер продолжает работать по slug выше,
+  // это отдельная, непересекающаяся пара функций).
+  function isFavoriteUrl(url) {
+    return favorites.value.some((f) => f.url === url)
+  }
+
+  async function toggleFavoriteByUrl(url) {
+    error.value = ''
+    favorites.value = isFavoriteUrl(url)
+      ? favorites.value.filter((f) => f.url !== url)
+      : [...favorites.value, { slug: '', title: '', thumb_url: url, url, width: 0, height: 0 }]
+    try {
+      await meApi.setPrefs({ gif_favorites: favorites.value })
+    } catch (e) {
+      error.value = e?.response?.data?.detail || 'Не удалось сохранить избранное'
+    }
+  }
+
   async function categories() {
     const { data } = await messengerApi.gifCategories()
     return data.categories || []
@@ -59,5 +79,6 @@ export const useGifStore = defineStore('gif', () => {
     return data
   }
 
-  return { favorites, error, isFavorite, toggleFavorite, load, categories, trending, search }
+  return { favorites, error, isFavorite, toggleFavorite, isFavoriteUrl, toggleFavoriteByUrl,
+           load, categories, trending, search }
 })

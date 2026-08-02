@@ -74,7 +74,11 @@ export function messagePreview(msg, opts = {}) {
   else if (msg.kind === 'report') {
     const seq = msg.report?.seq
     text = seq ? t('messagePreview.reportWithSeq', { seq, group: msg.report.group || '' }).trim() : t('messagePreview.reportNoSeq', '📊 Отчёт по группе')
-  } else text = stripMarkup(msg.body)
+  }
+  //GIF (Klipy) — тело сообщения это прямая ссылка на CDN, показывать её человеку в
+  //списке чатов нечего (та же логика, что у отчёта выше).
+  else if (msg.kind === 'gif') text = t('messagePreview.gif', 'GIF')
+  else text = stripMarkup(msg.body)
   if (!text) return ''
   if (msg.kind === 'system') return text          //служебные — без подписи автора
   if (msg.mine) return t('messagePreview.youPrefix', { text })

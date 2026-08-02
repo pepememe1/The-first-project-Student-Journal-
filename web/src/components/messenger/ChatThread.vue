@@ -8,14 +8,16 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
-  Languages,
+  Languages, Star,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useTranslateStore } from '@/stores/translate'
+import { useGifStore } from '@/stores/gif'
 import { renderMarkdownLite } from '@/utils/markdownLite'
 import { extractVideos } from '@/utils/videoEmbed'
+import { extractGifLinks } from '@/utils/gifEmbed'
 import { formatSystemMessage } from '@/utils/messagePreview'
 import { copyText } from '@/utils/clipboard'
 import { useConfirm } from '@/composables/useConfirm'
@@ -41,6 +43,7 @@ const tr = useTranslateStore()
 const showTranslate = ref(false)
 const showGifPicker = ref(false)
 const auth = useAuthStore()
+const gif = useGifStore()
 const { confirm } = useConfirm()
 const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
 //Свой id клиент знает только из conversation_info: в JWT лежат логин и роль.
@@ -165,6 +168,10 @@ watch(activeId, async (newId, oldId) => {
 onMounted(() => {
   if (activeId.value) draft.value = m.draftFor(activeId.value)
   m.loadTemplates()
+  //Избранное нужно знать ДО открытия пикера — звезда на уже отправленной гифке (см.
+  //gifEmbeds/msg.kind==='gif' ниже) должна сразу показывать верное состояние, а не
+  //только после первого захода в GifPicker.vue (там тот же load(), идемпотентно).
+  gif.load()
 })
 
 function fmtTime(iso) {
@@ -213,6 +220,15 @@ async function onBodyClick(e) {
 function videoEmbeds(msg) {
   if (msg.deleted || isHiddenByIgnore(msg)) return []
   return extractVideos(msg.body)
+}
+
+// Голая ссылка на CDN Klipy ВНУТРИ обычного текстового сообщения (не через пикер,
+// msg.kind остаётся 'text') — раньше просто лежала мёртвым текстом, теперь тоже
+// картинка, тем же приёмом, что видео выше. msg.kind==='gif' сюда не попадает —
+// у него уже есть свой <img> (тело сообщения — САМА ссылка, дублировать нечего).
+function gifEmbeds(msg) {
+  if (msg.deleted || isHiddenByIgnore(msg) || msg.kind === 'gif') return []
+  return extractGifLinks(msg.body)
 }
 
 // §D3: клик по реакции — поставить/снять свою.
@@ -975,9 +991,20 @@ const headerTint = computed(() =>
                       class="italic opacity-70 underline decoration-dotted">{{ locale.t('chatThread.hiddenByIgnore', 'Скрыто (игнор) — показать') }}</button>
               <!-- GIF (Klipy) — тело сообщения это прямая ссылка на CDN, картинка, а не
                    markdown-текст; ссылку не через renderBody (её незачем делать кликабельной
-                   с подтверждением «Переадресация» — это уже картинка, а не переход). -->
-              <img v-else-if="msg.kind === 'gif'" :src="msg.body" alt="GIF"
-                  class="max-h-64 max-w-full rounded-lg" loading="lazy" />
+                   с подтверждением «Переадресация» — это уже картинка, а не переход).
+                   Звезда — как в пикере (GifPicker.vue): наведение на УЖЕ ОТПРАВЛЕННУЮ гифку
+                   тоже добавляет её в избранное (Discord), дедуп здесь по url — у сообщения
+                   нет slug/title Klipy, только сама ссылка (см. stores/gif.js). -->
+              <span v-else-if="msg.kind === 'gif'" class="group relative block w-fit">
+                <img :src="msg.body" alt="GIF" class="max-h-64 max-w-full rounded-lg" loading="lazy" />
+                <span role="button" tabindex="0" @click.stop="gif.toggleFavoriteByUrl(msg.body)"
+                      :aria-label="gif.isFavoriteUrl(msg.body) ? locale.t('gif.removeFavorite', 'Убрать из избранного') : locale.t('gif.addFavorite', 'В избранное')"
+                      class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-black/50
+                             opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70"
+                      :class="{ '!opacity-100': gif.isFavoriteUrl(msg.body) }">
+                  <Star class="size-3.5" :class="gif.isFavoriteUrl(msg.body) ? 'fill-yellow-400 text-yellow-400' : 'text-white'" />
+                </span>
+              </span>
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
                    @click="onBodyClick" />
@@ -1016,6 +1043,19 @@ const headerTint = computed(() =>
                         referrerpolicy="origin"
                         allowfullscreen />
               </div>
+              <!-- Голая ссылка на CDN Klipy в ОБЫЧНОМ тексте (не через пикер) — та же
+                   картинка, что у msg.kind==='gif', и та же звезда-избранное по наведению. -->
+              <span v-for="g in gifEmbeds(msg)" :key="g.sourceUrl"
+                    class="group relative mt-1.5 block w-fit" @click.stop>
+                <img :src="g.sourceUrl" alt="GIF" class="max-h-64 max-w-full rounded-lg" loading="lazy" />
+                <span role="button" tabindex="0" @click.stop="gif.toggleFavoriteByUrl(g.sourceUrl)"
+                      :aria-label="gif.isFavoriteUrl(g.sourceUrl) ? locale.t('gif.removeFavorite', 'Убрать из избранного') : locale.t('gif.addFavorite', 'В избранное')"
+                      class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-black/50
+                             opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70"
+                      :class="{ '!opacity-100': gif.isFavoriteUrl(g.sourceUrl) }">
+                  <Star class="size-3.5" :class="gif.isFavoriteUrl(g.sourceUrl) ? 'fill-yellow-400 text-yellow-400' : 'text-white'" />
+                </span>
+              </span>
               <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
                 <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />
                 <!-- §D11: «изм.» кликабельно — открывает историю версий. -->
