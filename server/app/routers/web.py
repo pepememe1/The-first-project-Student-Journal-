@@ -3651,6 +3651,85 @@ def admin_create_subject(payload: dict = Body(...),
     return {"ok": True, "name": name}
 
 
+@router.put("/admin/subjects/{name:path}")
+def admin_rename_subject(name: str, payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Переименование предмета — правит НЕ ТОЛЬКО каталог, а ВЕЗДЕ, где имя предмета
+    лежит ПРОСТОЙ СТРОКОЙ (внешнего ключа на Subject.id нигде нет): Group.subjects
+    (JSON-список), Lesson.subject, User.subjects (нагрузка препода), ScheduleOverride.subject
+    и SubjectHours (там имя вдобавок сидит В ID — `hrs:{группа}|{предмет}|{год}|{семестр}`,
+    той же природы, что и id самого Subject, — строку id менять нельзя, переносим на
+    новый id, старую строку гасим, как и каталожную запись). Без каскада переименование
+    выглядело бы наполовину сделанным — каталог показывает новое имя, а везде
+    остальном старое, будто это два разных предмета."""
+    old = (name or "").strip()
+    new = (payload.get("name") or "").strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="Нужно новое название")
+    if new == old:
+        return {"ok": True, "name": new}
+    row = db.get(Subject, f"subj:{old}")
+    if row is None or row.deleted:
+        raise HTTPException(status_code=404, detail="Предмет не найден")
+    new_id = f"subj:{new}"
+    existing = db.get(Subject, new_id)
+    if existing is not None and not existing.deleted:
+        raise HTTPException(status_code=409, detail="Предмет с таким названием уже есть")
+    now = _now_iso()
+
+    #Каталог: id включает имя, физически переименовать нельзя — гасим старую запись,
+    #заводим/оживляем новую (в самой записи, кроме имени, ничего не хранится).
+    row.deleted = True
+    row.updated_at = now
+    if existing is not None:
+        existing.deleted = False
+        existing.updated_at = now
+    else:
+        db.add(Subject(id=new_id, name=new, updated_at=now))
+
+    for g in db.query(Group).filter(Group.deleted == False).all():  # noqa: E712
+        subs = g.subjects or []
+        if old in subs:
+            g.subjects = [new if s == old else s for s in subs]
+            g.updated_at = now
+
+    for u in db.query(User).filter(User.role == "teacher", User.deleted == False).all():  # noqa: E712
+        subs = u.subjects or []
+        if old in subs:
+            u.subjects = [new if s == old else s for s in subs]
+            u.updated_at = now
+
+    db.query(Lesson).filter(Lesson.subject == old, Lesson.deleted == False).update(  # noqa: E712
+        {"subject": new, "updated_at": now}, synchronize_session=False)
+    db.query(ScheduleOverride).filter(
+        ScheduleOverride.subject == old, ScheduleOverride.deleted == False).update(  # noqa: E712
+        {"subject": new, "updated_at": now}, synchronize_session=False)
+
+    #SubjectHours — id сам содержит имя предмета, поэтому переносим построчно на новый id
+    #(а не bulk-UPDATE колонки subject, это бы оставило старый id, конфликтующий по смыслу
+    #с новым содержимым — тот же принцип, что у Subject.id выше).
+    for hr in db.query(SubjectHours).filter(
+            SubjectHours.subject == old, SubjectHours.deleted == False).all():  # noqa: E712
+        new_hid = subject_hours_id(hr.group_name, new, hr.year, hr.semester)
+        target = db.get(SubjectHours, new_hid)
+        if target is None:
+            target = SubjectHours(id=new_hid, group_name=hr.group_name, subject=new,
+                                  year=hr.year, semester=hr.semester)
+            db.add(target)
+        target.hours_total = hr.hours_total
+        target.teacher_id = hr.teacher_id
+        target.zet = hr.zet
+        target.deleted = False
+        target.updated_at = now
+        hr.deleted = True
+        hr.updated_at = now
+
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="subject.rename",
+             target=f"{old} → {new}")
+    return {"ok": True, "name": new}
+
+
 @router.delete("/admin/subjects/{name:path}")
 def admin_delete_subject(name: str,
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):

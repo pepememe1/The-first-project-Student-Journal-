@@ -194,6 +194,7 @@ export const adminApi = {
     api.post('/web/admin/groups/import-esstu',
             { group, specialty_code: specialtyCode, enrollment_year: enrollmentYear }),
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
+  renameSubject: (name, newName) => api.put(`/web/admin/subjects/${encodeURIComponent(name)}`, { name: newName }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
   createTeacher: (payload) => api.post('/web/admin/teachers', payload),

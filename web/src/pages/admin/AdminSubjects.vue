@@ -33,6 +33,25 @@ async function save() {
   catch (e) { formError.value = e?.response?.data?.detail || locale.t('adminSubjects.saveFailed', 'Не удалось сохранить') }
   finally { saving.value = false }
 }
+
+// Правка названия — прямо в строке таблицы (не модалка): рядом с «удалить» уже есть
+// одна иконка-кнопка, второй формы для одного поля не нужно.
+const editingRow = ref(null)   // исходное имя редактируемой строки, null — никто не правит
+const editValue = ref('')
+const renaming = ref(false)
+const renameError = ref('')
+function startEdit(s) { editingRow.value = s.name; editValue.value = s.name; renameError.value = '' }
+function cancelEdit() { editingRow.value = null }
+async function saveEdit(s) {
+  const next = editValue.value.trim()
+  if (!next) { renameError.value = locale.t('adminSubjects.enterName', 'Введите название'); return }
+  if (next === s.name) { editingRow.value = null; return }
+  renaming.value = true; renameError.value = ''
+  try { await adminApi.renameSubject(s.name, next); editingRow.value = null; await reload() }
+  catch (e) { renameError.value = e?.response?.data?.detail || locale.t('adminSubjects.saveFailed', 'Не удалось сохранить') }
+  finally { renaming.value = false }
+}
+
 async function del(s) {
   if (!(await confirm({ title: locale.t('adminSubjects.confirmDelete', { name: s.name }), okText: locale.t('common.delete'), danger: true }))) return
   try { await adminApi.deleteSubject(s.name); await reload() }
@@ -58,9 +77,24 @@ async function del(s) {
           <tr v-if="loading"><td colspan="2" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
           <tr v-else-if="!rows.length"><td colspan="2" class="px-4 py-6 text-center text-text3">{{ locale.t('adminSubjects.noSubjects', 'Предметов нет') }}</td></tr>
           <tr v-for="(s, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
-            <td class="px-4 py-2.5 font-medium text-text">{{ s.name }}</td>
+            <td class="px-4 py-2.5 font-medium text-text">
+              <template v-if="editingRow === s.name">
+                <input v-model="editValue" @keyup.enter="saveEdit(s)" @keyup.esc="cancelEdit"
+                       class="h-8 w-full max-w-xs rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+                <p v-if="renameError" class="mt-1 text-xs text-red">{{ renameError }}</p>
+              </template>
+              <template v-else>{{ s.name }}</template>
+            </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(s)">✕</button>
+              <template v-if="editingRow === s.name">
+                <button class="mr-3 text-text3 hover:text-accent disabled:opacity-50" :disabled="renaming"
+                        :title="locale.t('common.save', 'Сохранить')" @click="saveEdit(s)">✓</button>
+                <button class="text-text3 hover:text-text" :title="locale.t('common.cancel')" @click="cancelEdit">✕</button>
+              </template>
+              <template v-else>
+                <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminSubjects.edit', 'Изменить')" @click="startEdit(s)">✎</button>
+                <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(s)">✕</button>
+              </template>
             </td>
           </tr>
         </tbody>
