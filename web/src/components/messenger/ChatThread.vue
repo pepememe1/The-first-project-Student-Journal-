@@ -1151,32 +1151,36 @@ const headerTint = computed(() =>
                     class="grid size-6 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
           </div>
           <!-- §D1: тулбар форматирования — оборачивает выделение в поле ввода. На мобиле
-               (узкий экран) прячем, чтобы не съедал место — там достаточно ручного синтаксиса. -->
-          <div class="hidden items-center gap-0.5 border-b border-border px-2 py-1 sm:flex">
+               (узкий экран) раньше был скрыт целиком (`hidden sm:flex`) — сам факт скрытия
+               и был багом («нет кнопок над полем ввода»): вместе с ним пропадала и кнопка
+               GIF, которой на телефоне пользоваться ещё нужнее. Теперь виден всегда, а
+               узкий экран лечится горизонтальной прокруткой (`overflow-x-auto` + `shrink-0`
+               на каждой кнопке), а не скрытием функциональности. -->
+          <div class="flex items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1">
             <button type="button" :title="locale.t('chatThread.fmt.bold', 'Жирный (Ctrl+B)')" @click="wrapSelection('**')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Bold class="size-4" /></button>
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Bold class="size-4" /></button>
             <button type="button" :title="locale.t('chatThread.fmt.italic', 'Курсив (Ctrl+I)')" @click="wrapSelection('*')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Italic class="size-4" /></button>
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Italic class="size-4" /></button>
             <button type="button" :title="locale.t('chatThread.fmt.underline', 'Подчёркнутый (Ctrl+U)')" @click="wrapSelection('__')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Underline class="size-4" /></button>
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Underline class="size-4" /></button>
             <button type="button" :title="locale.t('chatThread.fmt.strike', 'Зачёркнутый')" @click="wrapSelection('~~')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Strikethrough class="size-4" /></button>
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Strikethrough class="size-4" /></button>
             <button type="button" :title="locale.t('chatThread.fmt.code', 'Код')" @click="wrapSelection('`')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Code class="size-4" /></button>
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Code class="size-4" /></button>
             <button type="button" :title="locale.t('chatThread.fmt.quote', 'Цитата')" @click="wrapSelection('> ', '')"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Quote class="size-4" /></button>
-            <span class="mx-1 h-4 w-px bg-border2" />
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Quote class="size-4" /></button>
+            <span class="mx-1 h-4 w-px shrink-0 bg-border2" />
             <!-- Быстрые ответы/шаблоны (docs/MESSENGER-ADDON-PLAN-GPT.md) — канонические
                  фразы одним кликом, отправляются СРАЗУ. -->
             <button type="button" :title="locale.t('chatThread.quickReplies', 'Быстрые ответы')" @click="showQuickReplies = !showQuickReplies"
-                    class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"
+                    class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"
                     :class="{ 'bg-bg2 text-accent': showQuickReplies }"><Zap class="size-4" /></button>
-            <span class="mx-1 h-4 w-px bg-border2" />
+            <span class="mx-1 h-4 w-px shrink-0 bg-border2" />
             <!-- Настройки перевода — тоже здесь, рядом с полем ввода (как chat-bar-кнопка
                  в better discord-translator), а не только в шапке беседы. -->
             <button type="button" @click="showTranslate = true"
                     :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
-                    class="grid size-7 place-items-center rounded-md hover:bg-bg2"
+                    class="grid size-7 shrink-0 place-items-center rounded-md hover:bg-bg2"
                     :class="tr.enabled ? 'text-accent' : 'text-text3 hover:text-text'">
               <Languages class="size-4" />
             </button>
@@ -1234,7 +1238,7 @@ const headerTint = computed(() =>
                Про /vector говорим только там, где команда работает — в «Избранном». -->
           <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
                       @keydown="onComposerKeydown" @input="onComposerInput" :disabled="mascotCooldown.active"
-                      class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60" />
+                      class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-base text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60 sm:text-sm" />
             <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" :aria-label="locale.t('chatThread.send', 'Отправить')"
                     class="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
               <Send class="size-5" />

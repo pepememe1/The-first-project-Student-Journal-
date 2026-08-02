@@ -4,8 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- interactive-widget=resizes-content: экранная клавиатура УМЕНЬШАЕТ область
-         контента (а не наезжает поверх) — чат/поле ввода остаются видимыми над ней. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+         контента (а не наезжает поверх) — чат/поле ввода остаются видимыми над ней.
+         maximum-scale=1 + user-scalable=no: сайт НЕ масштабируется (щипок/двойной тап) —
+         только вертикальная прокрутка контента. Без этого фокус на текстовом поле на
+         телефоне (композер мессенджера) заставлял браузер САМ «приближать» экран к полю
+         ввода — так задумано мобильными Safari/Chrome для мелкого текста, при
+         user-scalable=no это поведение подавляется. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#147C8B" />
     <title>Электронный журнал — Технологический колледж ВСГУТУ</title>
