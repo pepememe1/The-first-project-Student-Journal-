@@ -1120,7 +1120,11 @@ def schedule_categories():
 
 @router.get("/schedule/groups")
 def schedule_groups(category: str = Query(""), user: User = Depends(get_current_user)):
-    return {"groups": schedule_web.list_groups(category)}
+    """groups — плоский список (как раньше, ничей код не ломаем); by_course —
+    {курс: [группы]} для кнопок «Курс» (3.5.5) — курс разведан по столбцу
+    таблицы индекса портала, НЕ фиксирован на 4 (см. schedule_web.groups_by_course)."""
+    return {"groups": schedule_web.list_groups(category),
+            "by_course": schedule_web.groups_by_course(category)}
 
 
 @router.get("/schedule/teacher")

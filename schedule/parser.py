@@ -95,6 +95,12 @@ _TEACHER_RE = re.compile(
     r"([А-ЯЁ][А-ЯЁ\-]{1,}(?:\s+[А-ЯЁ][А-ЯЁ\-]+)?)\s+([А-ЯЁ]\.\s?[А-ЯЁ]?\.?)"
 )
 
+#«N курс» — заголовок столбца в индексе категории (разведано вживую на все 4
+#категории, 3.5.5): ОДНА таблица, первая строка — заголовок «1 курс».."N курс"
+#(N не фиксировано — на живых данных встречалось 6), дальше группы, каждая в
+#столбце СВОЕГО курса. Число пробелов вокруг слова непостоянно.
+_COURSE_HEADER_RE = re.compile(r"(\d+)\s*курс", re.IGNORECASE)
+
 #То же самое, но фамилия ОБЫЧНЫМ регистром (заглавная первая буква, дальше
 #строчные) — так пишут преподавателя на сессионных страницах (Заочное 1/2):
 #«Прудова Л.Ю.», не «ПРУДОВА Л.Ю.». Проверено живым разбором zo1/1.htm —
@@ -191,6 +197,67 @@ def _extract_rows(html: str) -> list[list[str]]:
     p.feed(html)
     p.close()
     return p.rows
+
+
+class _IndexTableParser(HTMLParser):
+    """Как _TableRowParser (строка → ячейки), но ЕЩЁ хранит href первой ссылки в
+    каждой ячейке — нужен для индекса категории (3.5.5, курс = позиция колонки),
+    где сам курс определяется столбцом ячейки, а не текстом внутри неё."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[tuple[str, str]]] = []
+        self._row: list[tuple[str, str]] | None = None
+        self._cell: list[str] | None = None
+        self._href = ""
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t == "tr":
+            if self._row is not None:
+                self._flush_cell()
+                self.rows.append(self._row)
+            self._row = []
+            self._cell = None
+        elif t == "td":
+            if self._row is None:
+                self._row = []
+            self._flush_cell()
+            self._cell = []
+            self._href = ""
+        elif t == "a":
+            if self._cell is not None and not self._href:
+                href = dict(attrs).get("href") or ""
+                if href:
+                    self._href = href
+        elif t == "br":
+            if self._cell is not None:
+                self._cell.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "tr" and self._row is not None:
+            self._flush_cell()
+            self.rows.append(self._row)
+            self._row = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def _flush_cell(self):
+        if self._cell is not None and self._row is not None:
+            text = unescape("".join(self._cell))
+            text = re.sub(r"\s+", " ", text).strip()
+            self._row.append((text, self._href))
+        self._cell = None
+        self._href = ""
+
+    def close(self):
+        super().close()
+        if self._row is not None:
+            self._flush_cell()
+            self.rows.append(self._row)
+            self._row = None
 
 
 def parse_cell(text: str, pair_no: int = 0, time: str = "",
@@ -369,30 +436,64 @@ def parse_group_page_dated(html: str, name: str = "", href: str = "") -> GroupSc
     return GroupSchedule(name=name, href=href, weeks=weeks, pair_times=pair_times)
 
 
-def list_category_groups(html: str, category: str = DEFAULT_CATEGORY) -> list[tuple[str, str]]:
-    """Возвращает [(имя_группы, href)] из индекса категории.
+def list_category_groups_with_course(html: str, category: str = DEFAULT_CATEGORY
+                                     ) -> list[tuple[str, str, int]]:
+    """Возвращает [(имя_группы, href, курс)] из индекса категории.
 
-    Индекс — таблица курсов со ссылками <a href="N.htm">Имя</a>. Категории с
-    заданным `prefix` (сейчас только college) берут только группы, чьё имя
-    начинается с него (spezialitet/ вперемешку содержит и магистратуру);
+    Индекс — ОДНА таблица, первая строка — заголовок «1 курс».."N курс» (N не
+    фиксировано, разведано вживую — на живых данных встречалось 6 и не у всех
+    групп он реально занят: 3.5.5, докинута кнопкой курса в «Группах»/
+    «Расписании»). Курс группы — НОМЕР СТОЛБЦА её ссылки, а не число из текста
+    заголовка целиком (тот может быть смещён/иначе размечен) — сверяем со
+    строкой-заголовком по позиции, а если заголовок вдруг не нашёлся, откатываемся
+    на «номер колонки + 1» (лучше приблизительный курс, чем упасть).
+
+    Категории с заданным `prefix` (сейчас только college) берут только группы,
+    чьё имя начинается с него (spezialitet/ вперемешку содержит магистратуру);
     остальные категории (bakalavriat/zo1/zo2) отдают все ссылки как есть —
     посторонних групп на их страницах индекса нет."""
+    p = _IndexTableParser()
+    p.feed(html)
+    p.close()
+    rows = p.rows
     prefix = CATEGORIES[category]["prefix"]
-    groups: list[tuple[str, str]] = []
+
+    #Строка-заголовок — та, где минимум 2 ячейки читаются как «N курс» (одна
+    #могла бы случайно совпасть с чем-то ещё; двух совпадений на живых данных
+    #не бывает нигде, кроме самого заголовка).
+    header: list[tuple[str, str]] | None = None
+    for row in rows:
+        if sum(1 for text, _href in row if _COURSE_HEADER_RE.search(text)) >= 2:
+            header = row
+            break
+
+    groups: list[tuple[str, str, int]] = []
     seen = set()
-    #простой разбор якорей: href + текст
-    for m in re.finditer(r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>', html,
-                         re.IGNORECASE | re.DOTALL):
-        href = m.group(1).strip()
-        text = re.sub(r"<[^>]+>", "", m.group(2))
-        text = re.sub(r"\s+", " ", unescape(text)).strip()
-        if not text or (prefix and not text.startswith(prefix)):
+    for row in rows:
+        if row is header:
             continue
-        if text in seen:
-            continue
-        seen.add(text)
-        groups.append((text, href))
+        for col, (text, href) in enumerate(row):
+            if not href or not text:
+                continue
+            if prefix and not text.startswith(prefix):
+                continue
+            if text in seen:
+                continue
+            seen.add(text)
+            course = col + 1
+            if header is not None and col < len(header):
+                m = _COURSE_HEADER_RE.search(header[col][0])
+                if m:
+                    course = int(m.group(1))
+            groups.append((text, href, course))
     return groups
+
+
+def list_category_groups(html: str, category: str = DEFAULT_CATEGORY) -> list[tuple[str, str]]:
+    """Возвращает [(имя_группы, href)] из индекса категории — БЕЗ курса, для
+    существующих потребителей (курс — см. list_category_groups_with_course)."""
+    return [(name, href) for name, href, _course in
+            list_category_groups_with_course(html, category)]
 
 
 def list_college_groups(html: str) -> list[tuple[str, str]]:

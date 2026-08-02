@@ -93,9 +93,11 @@ def test_group_subjects_collected():
 def test_list_college_groups_filters_K():
     """Из индекса берём только группы на «К» (магистратура «М…» отброшена)."""
     html = (
-        '<a href="1.htm">К15/1</a>'
-        '<a href="69.htm">М215</a>'
-        '<a href="2.htm">К25</a>'
+        '<table><tr>'
+        '<td><a href="1.htm">К15/1</a></td>'
+        '<td><a href="69.htm">М215</a></td>'
+        '<td><a href="2.htm">К25</a></td>'
+        '</tr></table>'
     )
     groups = list_college_groups(html)
     names = [n for n, _ in groups]
@@ -110,7 +112,7 @@ def test_build_snapshot_offline():
     from schedule.parser import build_snapshot
     from schedule.model import Snapshot
 
-    index_html = '<a href="1.htm">К15/1</a><a href="69.htm">М215</a>'
+    index_html = '<table><tr><td><a href="1.htm">К15/1</a></td><td><a href="69.htm">М215</a></td></tr></table>'
     group_html = _load_fixture()
 
     def fake_fetch(url, timeout=20):

@@ -34,7 +34,7 @@ def test_categories_endpoint_lists_four_with_dated_flags(client):
 
 def test_groups_endpoint_uses_category_param(client, monkeypatch):
     admin = make_admin(client)
-    index_html = '<a href="1.htm">Б165</a><a href="2.htm">Б175</a>'
+    index_html = '<table><tr><td><a href="1.htm">Б165</a></td><td><a href="2.htm">Б175</a></td></tr></table>'
     monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, ""))
 
     r = client.get("/web/schedule/groups", params={"category": "bakalavriat"}, headers=admin)
@@ -45,7 +45,7 @@ def test_groups_endpoint_uses_category_param(client, monkeypatch):
 def test_groups_endpoint_default_is_still_college(client, monkeypatch):
     """Без category (или college) — старое поведение: только «К», «М» отброшена."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">К15/1</a><a href="2.htm">М215</a>'
+    index_html = '<table><tr><td><a href="1.htm">К15/1</a></td><td><a href="2.htm">М215</a></td></tr></table>'
     monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, ""))
 
     r = client.get("/web/schedule/groups", headers=admin)
@@ -53,10 +53,27 @@ def test_groups_endpoint_default_is_still_college(client, monkeypatch):
     assert r.json()["groups"] == ["К15/1"]
 
 
+def test_groups_endpoint_returns_by_course(client, monkeypatch):
+    """§3.5.5: /web/schedule/groups отдаёт ЕЩЁ и by_course — {курс: [группы]},
+    курс — реальный столбец таблицы индекса (заголовок «N курс»), не фиксирован."""
+    admin = make_admin(client)
+    index_html = ('<table>'
+                 '<tr><td> 1 курс </td><td> 2 курс </td></tr>'
+                 '<tr><td><a href="1.htm">Б165</a></td><td><a href="2.htm">Б164</a></td></tr>'
+                 '</table>')
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, ""))
+
+    r = client.get("/web/schedule/groups", params={"category": "bakalavriat"}, headers=admin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body["groups"]) == {"Б165", "Б164"}
+    assert body["by_course"] == {"1": ["Б165"], "2": ["Б164"]}
+
+
 def test_group_schedule_dated_category_end_to_end(client, monkeypatch):
     """Полный путь GET /web/schedule?category=zo1: сессионные блоки, дни-даты."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">ЗУ-1</a>'
+    index_html = '<table><tr><td><a href="1.htm">ЗУ-1</a></td></tr></table>'
     group_html = (
         "<table>"
         "<tr><td>Пары</td><td>1-я</td></tr>"
@@ -85,7 +102,7 @@ def test_admin_schedule_resolves_category_from_stored_group_when_not_passed(clie
     ЧЕРЕЗ РЕАЛЬНЫЙ путь импорта (Group.category уже верный в базе) — админ смотрит
     расписание БЕЗ явного category в запросе, сервер обязан сам его подставить."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">Б165</a>'
+    index_html = '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>'
     group_html = (
         "<table>"
         "<tr><td>Пары</td><td>1-я</td></tr>"
@@ -116,7 +133,7 @@ def test_admin_schedule_college_group_unaffected_without_category(client, monkey
     """Регрессия: колледжевая группа (даже вовсе не заведённая как `Group`-строка)
     продолжает резолвиться как раньше, без единого изменения поведения."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">К15/1</a>'
+    index_html = '<table><tr><td><a href="1.htm">К15/1</a></td></tr></table>'
     group_html = (
         "<table>"
         "<tr><td>Пары</td><td>1-я</td></tr>"
@@ -140,7 +157,7 @@ def test_overrides_not_applied_outside_college(client, monkeypatch):
     """Оверлеи (ScheduleOverride) — только для колледжа; для остальных категорий
     _group_schedule отдаёт портальные данные как есть, без попытки наложить их."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">Б165</a>'
+    index_html = '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>'
     group_html = (
         "<table>"
         "<tr><td>Пары</td><td>1-я</td><td>2-я</td></tr>"

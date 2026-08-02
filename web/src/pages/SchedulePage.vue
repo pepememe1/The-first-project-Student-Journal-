@@ -154,6 +154,17 @@ async function onCategoryChange(key) {
   await enterCategory()
 }
 
+// Курс (3.5.5) — сужает список групп ВНУТРИ категории. Разведано с портала (столбец
+// таблицы индекса, schedule_web.groups_by_course) — число курсов НЕ фиксировано на 4.
+const byCourse = ref({})
+const courseFilter = ref('')
+const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((a, b) => a - b))
+const groupsForCourse = computed(() => {
+  if (!courseFilter.value) return groups.value
+  const names = new Set(byCourse.value[courseFilter.value] || [])
+  return groups.value.filter((g) => names.has(g))
+})
+
 async function loadGroupsList() {
   //Категория, ДЛЯ которой запрошен список — не читаем category.value ПОСЛЕ await:
   //быстрое переключение кнопок-категорий (клик-клик-клик) запускает несколько таких
@@ -162,12 +173,14 @@ async function loadGroupsList() {
   //список группами не той категории, хотя кнопка уже показывает другую — реальный
   //баг, со стороны выглядел как «всё перемешано».
   const forCategory = category.value
+  courseFilter.value = ''
   try {
-    const list = (await scheduleApi.groups(forCategory)).data.groups || []
+    const r = (await scheduleApi.groups(forCategory)).data
     if (forCategory !== category.value) return
-    groups.value = list
+    groups.value = r.groups || []
+    byCourse.value = r.by_course || {}
   } catch {
-    if (forCategory === category.value) groups.value = []
+    if (forCategory === category.value) { groups.value = []; byCourse.value = {} }
   }
 }
 
@@ -353,9 +366,14 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
         </template>
 
         <template v-else>
+          <!-- Курс — сужает выпадающий список ниже (3.5.5), не фиксирован на 4. -->
+          <select v-if="courseKeys.length > 1" v-model="courseFilter" class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+            <option value="">{{ locale.t('adminGroups.allCourses', 'Все курсы') }}</option>
+            <option v-for="c in courseKeys" :key="c" :value="c">{{ locale.t('adminGroups.courseN', { n: c }) }}</option>
+          </select>
           <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto" @change="load">
-            <option v-if="!groups.length" :value="group">{{ group || locale.t('schedulePage.groupPlaceholder', 'Группа') }}</option>
-            <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+            <option v-if="!groupsForCourse.length" :value="group">{{ group || locale.t('schedulePage.groupPlaceholder', 'Группа') }}</option>
+            <option v-for="g in groupsForCourse" :key="g" :value="g">{{ g }}</option>
           </select>
           <button v-if="isTeacher" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
             {{ locale.t('schedulePage.backToChoice', '← к выбору') }}

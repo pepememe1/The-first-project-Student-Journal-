@@ -32,14 +32,40 @@ async function loadCategories() {
   try { categories.value = (await scheduleApi.categories()).data.categories || [] }
   catch { categories.value = [] }
 }
-// Список групп в фильтре сужается под выбранную категорию — иначе можно было бы
-// выбрать «колледж» и группу заочки одновременно и увидеть пусто без понятной причины.
+// Курс (3.5.5) — сужает список групп ВНУТРИ категории ЕЩЁ дальше (сортировка
+// колледж/бакалавриат/заочное → курс → группа, как просили). Разведано с портала
+// (столбец таблицы индекса), число курсов НЕ фиксировано на 4.
+const courseFilter = ref('')
+const byCourse = ref({})   // {курс: [имена с портала]} — для ТЕКУЩЕЙ categoryFilter
+async function loadByCourse() {
+  courseFilter.value = ''
+  if (!categoryFilter.value) { byCourse.value = {}; return }
+  try { byCourse.value = (await scheduleApi.groups(categoryFilter.value)).data.by_course || {} }
+  catch { byCourse.value = {} }
+}
+const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((a, b) => a - b))
+
+// Список групп в фильтре сужается под выбранную категорию, затем под курс — иначе
+// можно было бы выбрать «колледж» и группу заочки одновременно и увидеть пусто без
+// понятной причины.
 const groupFilterChoices = computed(() => {
-  if (!categoryFilter.value) return groupChoices.value
-  return groupChoices.value.filter((g) => (groupCategory.value[g] || 'college') === categoryFilter.value)
+  let list = groupChoices.value
+  if (categoryFilter.value) {
+    list = list.filter((g) => (groupCategory.value[g] || 'college') === categoryFilter.value)
+  }
+  if (courseFilter.value) {
+    const names = new Set(byCourse.value[courseFilter.value] || [])
+    list = list.filter((g) => names.has(g))
+  }
+  return list
 })
 function setCategoryFilter(key) {
   categoryFilter.value = key
+  loadByCourse()
+  if (groupFilter.value && !groupFilterChoices.value.includes(groupFilter.value)) groupFilter.value = ''
+}
+function setCourseFilter(c) {
+  courseFilter.value = c
   if (groupFilter.value && !groupFilterChoices.value.includes(groupFilter.value)) groupFilter.value = ''
 }
 
@@ -144,6 +170,18 @@ async function del(r) {
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
               @click="setCategoryFilter(c.key)">{{ c.label }}</button>
+    </div>
+
+    <!-- Кнопки-курсы — ВНУТРИ выбранной категории (3.5.5), число курсов не
+         фиксировано на 4 (разведано с портала). -->
+    <div v-if="categoryFilter && courseKeys.length > 1" class="flex flex-wrap gap-2">
+      <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="!courseFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="setCourseFilter('')">{{ locale.t('adminGroups.allCourses', 'Все курсы') }}</button>
+      <button v-for="c in courseKeys" :key="c"
+              class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="courseFilter === c ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="setCourseFilter(c)">{{ locale.t('adminGroups.courseN', { n: c }) }}</button>
     </div>
 
     <div class="flex flex-wrap items-center gap-3">

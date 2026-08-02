@@ -65,7 +65,7 @@ def test_import_schedule_category_creates_catalog_only_group(client, monkeypatch
     расписание группы РЕАЛЬНО доступно."""
     admin = make_admin(client)
     monkeypatch.setattr(P, "fetch_text",
-                        lambda url, timeout=20: '<a href="1.htm">Б165</a><a href="2.htm">Б175</a>')
+                        lambda url, timeout=20: '<table><tr><td><a href="1.htm">Б165</a></td><td><a href="2.htm">Б175</a></td></tr></table>')
 
     r = client.post("/web/admin/groups/import-schedule-category",
                     json={"category": "bakalavriat", "group_name": "Б165"}, headers=admin)
@@ -82,7 +82,7 @@ def test_import_schedule_category_fills_subjects_from_schedule(client, monkeypat
     """Предметы группа получает ИЗ ЕЁ ЖЕ расписания (то, что уже разобрано парсером) —
     второй сущности «учебный план» для этих категорий нет и не будет."""
     admin = make_admin(client)
-    index_html = '<a href="1.htm">Б165</a>'
+    index_html = '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>'
     group_html = (
         "<table>"
         "<tr><td>Пары</td><td>1-я</td><td>2-я</td></tr>"
@@ -111,7 +111,7 @@ def test_import_schedule_category_fills_subjects_from_schedule(client, monkeypat
 
 def test_import_schedule_category_rejects_name_not_on_portal(client, monkeypatch):
     admin = make_admin(client)
-    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<a href="1.htm">Б165</a>')
+    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>')
 
     r = client.post("/web/admin/groups/import-schedule-category",
                     json={"category": "bakalavriat", "group_name": "Выдуманная-группа"},
@@ -129,7 +129,7 @@ def test_import_schedule_category_rejects_unknown_category(client):
 
 def test_import_schedule_category_conflicts_on_existing_group(client, monkeypatch):
     admin = make_admin(client)
-    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<a href="1.htm">Б165</a>')
+    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>')
     r1 = client.post("/web/admin/groups/import-schedule-category",
                      json={"category": "bakalavriat", "group_name": "Б165"}, headers=admin)
     assert r1.status_code == 200, r1.text
@@ -141,7 +141,7 @@ def test_import_schedule_category_conflicts_on_existing_group(client, monkeypatc
 def test_import_schedule_category_requires_admin(client, monkeypatch):
     admin = make_admin(client)
     teacher = make_teacher(client, admin)
-    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<a href="1.htm">Б165</a>')
+    monkeypatch.setattr(P, "fetch_text", lambda url, timeout=20: '<table><tr><td><a href="1.htm">Б165</a></td></tr></table>')
     r = client.post("/web/admin/groups/import-schedule-category",
                     json={"category": "bakalavriat", "group_name": "Б165"}, headers=teacher)
     assert r.status_code == 403
@@ -160,7 +160,7 @@ def _two_group_snapshot(monkeypatch):
     """Реальный Snapshot двух групп категории (через настоящий build_snapshot +
     подменённый fetch_text) — не собираем dataclass'ы руками, ровно тот же приём,
     что уже применён для одиночного импорта выше в этом файле."""
-    index_html = '<a href="1.htm">Б165</a><a href="2.htm">Б175</a>'
+    index_html = '<table><tr><td><a href="1.htm">Б165</a></td><td><a href="2.htm">Б175</a></td></tr></table>'
     pages = {
         "1.htm": (
             "<table>"

@@ -59,10 +59,80 @@ def test_list_category_groups_bakalavriat_takes_all_no_prefix_filter():
     assert not any(n.startswith("К") for n in names)
 
 
+# ── list_category_groups_with_course (3.5.5, курс = разведано вживую) ───────
+
+def test_course_parsed_from_real_bakalavriat_index():
+    """Реальный снимок portal.esstu.ru/bakalavriat: заголовок «1 курс».."6 курс»,
+    группа сидит в столбце СВОЕГО курса (Б165 — курс 1, у неё есть занятия;
+    подтверждено разведкой 3.5.5)."""
+    html = _load("schedule_index_bakalavriat.htm")
+    triples = P.list_category_groups_with_course(html, "bakalavriat")
+    assert len(triples) > 100
+    by_name = {name: course for name, _href, course in triples}
+    assert by_name["Б165"] == 1
+    assert by_name["Б164"] == 2
+    assert by_name["Б173"] == 3
+    assert by_name["Б112"] == 4
+    #курс не фиксирован на 4 — на бакалавриате реально есть 5-й курс.
+    assert 5 in by_name.values()
+
+
+def test_course_parsing_matches_column_count_regardless_of_header_width():
+    """Заголовок «N курс» может иметь любое число столбцов (разведано: 6 у всех
+    четырёх категорий на живых данных) — курс всегда берётся из ПОЗИЦИИ ссылки,
+    сверенной с текстом заголовка ТОЙ ЖЕ колонки, а не из фиксированного числа."""
+    html = ('<table>'
+            '<tr><td> 1 курс </td><td> 2 курс </td><td> 3 курс </td></tr>'
+            '<tr><td><a href="1.htm">Г1</a></td>'
+            '<td><a href="2.htm">Г2</a></td>'
+            '<td><a href="3.htm">Г3</a></td></tr>'
+            '</table>')
+    triples = P.list_category_groups_with_course(html, "bakalavriat")
+    by_name = {name: course for name, _href, course in triples}
+    assert by_name == {"Г1": 1, "Г2": 2, "Г3": 3}
+
+
+def test_course_falls_back_to_column_position_without_header():
+    """Заголовок не нашёлся (сайт неожиданно поменялся) — не падаем, откатываемся
+    на «номер колонки + 1», лучше приблизительный курс, чем исключение."""
+    html = ('<table>'
+            '<tr><td><a href="1.htm">Г1</a></td>'
+            '<td><a href="2.htm">Г2</a></td></tr>'
+            '</table>')
+    triples = P.list_category_groups_with_course(html, "bakalavriat")
+    by_name = {name: course for name, _href, course in triples}
+    assert by_name == {"Г1": 1, "Г2": 2}
+
+
+def test_empty_cells_are_skipped_not_counted_as_groups():
+    """Пустые ячейки (курс есть, группы в нём нет — реальная картина на живых
+    данных) не должны попадать в список ни именем, ни местом в счётчике."""
+    html = ('<table>'
+            '<tr><td> 1 курс </td><td> 2 курс </td></tr>'
+            '<tr><td><a href="1.htm">Г1</a></td><td><a href="2.htm"></a></td></tr>'
+            '</table>')
+    triples = P.list_category_groups_with_course(html, "bakalavriat")
+    assert [name for name, _href, _course in triples] == ["Г1"]
+
+
+def test_list_category_groups_drops_course_for_old_callers():
+    """list_category_groups (без курса) остаётся тонкой обёрткой — существующие
+    потребители (schedule_web.py и др.) не видят разницы."""
+    html = _load("schedule_index_bakalavriat.htm")
+    old = P.list_category_groups(html, "bakalavriat")
+    new = [(name, href) for name, href, _course in
+          P.list_category_groups_with_course(html, "bakalavriat")]
+    assert old == new
+
+
 def test_list_college_groups_unchanged_behavior():
     """Старая функция — тонкая обёртка над list_category_groups(html, "college"),
     поведение (фильтр по «К», магистратура «М…» отброшена) не изменилось."""
-    html = ('<a href="1.htm">К15/1</a><a href="69.htm">М215</a><a href="2.htm">К25</a>')
+    html = ('<table><tr>'
+            '<td><a href="1.htm">К15/1</a></td>'
+            '<td><a href="69.htm">М215</a></td>'
+            '<td><a href="2.htm">К25</a></td>'
+            '</tr></table>')
     names = [n for n, _ in P.list_college_groups(html)]
     assert names == [n for n, _ in P.list_category_groups(html, "college")]
     assert "К15/1" in names and "К25" in names
@@ -140,7 +210,7 @@ def test_build_snapshot_dated_category_offline():
 
 def test_build_snapshot_default_still_means_college():
     """build_snapshot() без аргументов — 100% прежнее поведение (регрессия)."""
-    index_html = '<a href="1.htm">К15/1</a><a href="69.htm">М215</a>'
+    index_html = '<table><tr><td><a href="1.htm">К15/1</a></td><td><a href="69.htm">М215</a></td></tr></table>'
     group_html = _load("group_K15_1.htm")   # существующая фикстура (test_schedule_parser.py)
 
     def fake_fetch(url, timeout=20):

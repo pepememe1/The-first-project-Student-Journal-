@@ -24,9 +24,28 @@ const allTeachers = ref([])   // §ролей: [{id, name, subjects}] — для
 // категории» по умолчанию — 100% прежнее поведение (видно всё).
 const categories = ref([])
 const categoryFilter = ref('')
+// ── Курс (3.5.5) — сужает список ВНУТРИ выбранной категории. Курс НЕ хранится на
+// Group: это живой, разведанный с портала признак (столбец таблицы индекса, см.
+// schedule_web.groups_by_course), сверяем группы АДМИНА с этим списком по имени —
+// группа, которой на портале нет (заведена вручную), просто не попадёт ни в один курс.
+const courseFilter = ref('')
+const byCourse = ref({})   // {курс: [имена с портала]} — для ТЕКУЩЕЙ categoryFilter
+async function loadByCourse() {
+  courseFilter.value = ''
+  if (!categoryFilter.value) { byCourse.value = {}; return }
+  try { byCourse.value = (await scheduleApi.groups(categoryFilter.value)).data.by_course || {} }
+  catch { byCourse.value = {} }
+}
+watch(categoryFilter, loadByCourse)
+const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((a, b) => a - b))
 const filteredRows = computed(() => {
-  if (!categoryFilter.value) return rows.value
-  return rows.value.filter((g) => (g.category || 'college') === categoryFilter.value)
+  let list = rows.value
+  if (categoryFilter.value) list = list.filter((g) => (g.category || 'college') === categoryFilter.value)
+  if (courseFilter.value) {
+    const names = new Set(byCourse.value[courseFilter.value] || [])
+    list = list.filter((g) => names.has(g.name))
+  }
+  return list
 })
 const nonCollegeCategories = computed(() => categories.value.filter((c) => c.key !== 'college'))
 async function loadCategories() {
@@ -384,6 +403,18 @@ async function importParsed() {
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
               @click="categoryFilter = c.key">{{ c.label }}</button>
+    </div>
+
+    <!-- Кнопки-курсы — ВНУТРИ выбранной категории (3.5.5). Число курсов не
+         фиксировано (на живых данных бакалавриата/заочного бывает 5-6). -->
+    <div v-if="categoryFilter && courseKeys.length > 1" class="flex flex-wrap gap-2">
+      <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="!courseFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="courseFilter = ''">{{ locale.t('adminGroups.allCourses', 'Все курсы') }}</button>
+      <button v-for="c in courseKeys" :key="c"
+              class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="courseFilter === c ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="courseFilter = c">{{ locale.t('adminGroups.courseN', { n: c }) }}</button>
     </div>
 
     <div class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">

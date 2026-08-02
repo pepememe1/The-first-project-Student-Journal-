@@ -62,6 +62,10 @@ def current_week_parity(d: date | None = None) -> int:
 
 
 def _load_index(category: str = "", force: bool = False):
+    """[(имя, href, курс)] категории — курс разведан вживую (3.5.5, столбец
+    таблицы индекса, см. schedule/parser.py::list_category_groups_with_course).
+    Один кэш/один поход на портал на всех потребителей курса и без него —
+    список_groups/_href_for просто игнорируют 3-й элемент кортежа."""
     category = category or default_category()
     with _lock:
         entry = _index.get(category, {"ts": 0.0, "pairs": []})
@@ -70,7 +74,7 @@ def _load_index(category: str = "", force: bool = False):
         return entry["pairs"]
     p = _parser()
     html = p.fetch_text(p.category_index_url(category))
-    pairs = p.list_category_groups(html, category)
+    pairs = p.list_category_groups_with_course(html, category)
     with _lock:
         _index[category] = {"ts": time.time(), "pairs": pairs}
     return pairs
@@ -80,13 +84,28 @@ def list_groups(category: str = "") -> list:
     """Имена групп категории (для college — только «К»). Пустой список при оффлайне/ошибке."""
     category = category or default_category()
     try:
-        return [name for name, _ in _load_index(category)]
+        return [name for name, _href, _course in _load_index(category)]
     except Exception:
         return []
 
 
+def groups_by_course(category: str = "") -> dict:
+    """{курс(int): [имена групп]} категории — для кнопок «Курс» в «Группах»/
+    «Студентах»/«Расписании» (3.5.5). Курс НЕ фиксирован на 4 — реально
+    встречается 5-6 на живых данных бакалавриата/заочного. Пусто при
+    оффлайне/ошибке (тот же принцип деградации, что у list_groups)."""
+    category = category or default_category()
+    out: dict[int, list] = {}
+    try:
+        for name, _href, course in _load_index(category):
+            out.setdefault(course, []).append(name)
+    except Exception:
+        return {}
+    return out
+
+
 def _href_for(name: str, category: str) -> str:
-    for n, href in _load_index(category):
+    for n, href, _course in _load_index(category):
         if n == name:
             return href
     return ""
