@@ -16,6 +16,7 @@ from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
                         decode_token)
+from ..config import JWT_TTL_MIN
 from .. import throttle, events, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -162,6 +163,25 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     if sess is None or sess.revoked:
         #refresh отозван (logout/блокировка админом) или неизвестен — обновлять нечего
         raise HTTPException(status_code=401, detail="Сессия завершена или отозвана")
+    #⚠️ АБСОЛЮТНЫЙ потолок сессии — от РЕАЛЬНОГО момента входа (sess.issued_at, дата в
+    #БД, а не exp из JWT). Без этой проверки «жёсткие 5 часов» держались ТОЛЬКО тем,
+    #что refresh не ротируется и его exp считался как iat+JWT_REFRESH_TTL_MIN — то есть
+    #предположением, что JWT_REFRESH_TTL_MIN всегда равен JWT_TTL_MIN. Токен, выданный
+    #ДО того, как это значение однажды сузили с 30 дней до 5 часов, продолжал бы
+    #обновляться ещё месяц — ровно так и было поймано вживую (простое повторное
+    #открытие сайта держало сессию намного дольше 5 часов). Теперь потолок не зависит
+    #от текущего конфига и не может быть обойдён повторным изменением настройки.
+    try:
+        issued = datetime.fromisoformat(sess.issued_at)
+        if issued.tzinfo is None:
+            issued = issued.replace(tzinfo=timezone.utc)
+        session_age_min = (datetime.now(timezone.utc) - issued).total_seconds() / 60
+    except (TypeError, ValueError):
+        session_age_min = 0      #метка повреждена/отсутствует — не блокируем по этой причине
+    if session_age_min > JWT_TTL_MIN:
+        sess.revoked = True
+        db.commit()
+        raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
     login_str = payload.get("sub", "")
     u = db.query(User).filter(
         User.login == login_str, User.deleted == False  # noqa: E712

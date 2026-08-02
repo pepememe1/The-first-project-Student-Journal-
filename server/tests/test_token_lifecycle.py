@@ -7,8 +7,12 @@ test_token_lifecycle.py — Жизненный цикл токена: refresh, l
   • refresh тихо обновляет access (и гасит прежний access этой пары);
   • logout отзывает токен — сервер сразу перестаёт его принимать;
   • админ видит активные сессии и может отозвать их по логину (экстренная блокировка);
-  • отозванный токен получает 401, даже если по подписи/сроку он ещё «живой».
+  • отозванный токен получает 401, даже если по подписи/сроку он ещё «живой»;
+  • АБСОЛЮТНЫЙ потолок сессии (5 ч от РЕАЛЬНОГО входа) держится даже если refresh-токен
+    по своему собственному exp ещё не истёк (см. auth.py::refresh, живой баг 3.5.5).
 """
+from datetime import datetime, timedelta, timezone
+
 from conftest import make_admin, make_teacher
 
 
@@ -68,6 +72,54 @@ def test_refresh_rejected_when_revoked(client):
     # (проверяем именно, что refresh после отзова не работает)
     assert client.post("/auth/refresh",
                        json={"refresh_token": data["refresh_token"]}).status_code == 401
+
+
+def test_refresh_rejected_past_absolute_ceiling_even_if_token_itself_not_expired(client):
+    """Живой баг 3.5.5: refresh-токен НЕ ротируется, поэтому его собственный `exp`
+    держит потолок сессии, ТОЛЬКО пока JWT_REFRESH_TTL_MIN равен JWT_TTL_MIN. Токен,
+    выданный до того, как это значение когда-то сузили (например, с 30 дней до 5
+    часов), продолжал бы обновляться ещё месяц — простое повторное открытие сайта
+    держало сессию намного дольше 5 часов. Эмулируем это НАПРЯМУЮ (не ждать реальные
+    5 часов): подделываем `issued_at` в БД на 6 часов назад — по exp токен всё ещё
+    валиден (JWT_REFRESH_TTL_MIN в тестах намного больше 6 часов дефолтом), но по
+    РЕАЛЬНОМУ времени входа сессия обязана быть отклонена и отозвана."""
+    from app.db import SessionLocal
+    from app.models import AuthSession
+    from app.security import decode_token
+
+    make_admin(client)
+    data = _login(client, "admin", "adminpass1")
+    refresh_token = data["refresh_token"]
+    jti = decode_token(refresh_token)["jti"]
+
+    db = SessionLocal()
+    try:
+        sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+        assert sess is not None
+        sess.issued_at = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert r.status_code == 401, r.text
+
+    # Сессия помечена отозванной — повторная попытка тоже 401 (не только «протухла»).
+    db = SessionLocal()
+    try:
+        sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+        assert sess.revoked is True
+    finally:
+        db.close()
+
+
+def test_refresh_allowed_well_within_absolute_ceiling(client):
+    """Обратная сторона предыдущего теста: свежий вход (секунды назад) обязан
+    обновляться штатно — потолок не должен ложно срабатывать на реальных сессиях."""
+    make_admin(client)
+    data = _login(client, "admin", "adminpass1")
+    r = client.post("/auth/refresh", json={"refresh_token": data["refresh_token"]})
+    assert r.status_code == 200, r.text
 
 
 def test_admin_lists_and_revokes_sessions(client):
