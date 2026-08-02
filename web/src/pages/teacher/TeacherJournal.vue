@@ -19,9 +19,11 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
 import VoiceCommandDialog from '@/components/vector/VoiceCommandDialog.vue'
+import { useLocaleStore } from '@/stores/locale'
 
 const toast = useToast()
 const { confirm, prompt } = useConfirm()
+const locale = useLocaleStore()
 
 const groups = ref([])
 const subjects = ref([])
@@ -37,7 +39,13 @@ const term = ref(null)
 const currentTerm = ref(null)
 const isArchive = computed(() => term.value && currentTerm.value &&
   (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
-function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+function termLabel(t) {
+  if (!t) return ''
+  const sem = t.semester === 1
+    ? locale.t('teacherJournal.termAutumn', 'осенний')
+    : locale.t('teacherJournal.termSpring', 'весенний')
+  return locale.t('teacherJournal.termLabelFormat', { year: t.year, semester: sem })
+}
 function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
 function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
 function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
@@ -164,26 +172,26 @@ const voiceWriting = ref(false)
 
 async function onVoiceText(text) {
   if (!group.value || !subject.value) {
-    toast.error('Сначала выберите группу и предмет')
+    toast.error(locale.t('teacherJournal.selectGroupSubjectFirst', 'Сначала выберите группу и предмет'))
     return
   }
   try {
     const { data } = await teacherApi.voiceCommand(text, group.value, subject.value)
     // Вопрос — не команда журнала: отправляем человека к «Вектору», а не пишем оценки.
     if (data.kind === 'question') {
-      toast.info('Это вопрос — задайте его «Вектору» на вкладке помощника')
+      toast.info(locale.t('teacherJournal.voiceQuestionHint', 'Это вопрос — задайте его «Вектору» на вкладке помощника'))
       return
     }
     // Создание занятия голосом на сайте пока не поддержано: занятие заводится своей
     // формой (там тема, дата, номер и тип), и дублировать её в диалоге подтверждения
     // значило бы делать вторую форму создания. Показываем, что расслышали, честно.
     if (data.kind === 'lesson') {
-      toast.info('Создание занятия голосом пока только в программе — заведите его кнопкой «+»')
+      toast.info(locale.t('teacherJournal.voiceLessonHint', 'Создание занятия голосом пока только в программе — заведите его кнопкой «+»'))
       return
     }
     voiceResult.value = data
   } catch (e) {
-    toast.error(e?.response?.data?.detail || 'Не удалось разобрать команду')
+    toast.error(e?.response?.data?.detail || locale.t('teacherJournal.voiceParseFailed', 'Не удалось разобрать команду'))
   }
 }
 
@@ -203,8 +211,8 @@ async function writeVoiceItems(items) {
       } catch { failed.push(it.who) }
     }
     await load()
-    if (failed.length) toast.error(`Записано ${ok}, не удалось: ${failed.join(', ')}`)
-    else toast.success(`Записано: ${ok}`)
+    if (failed.length) toast.error(locale.t('teacherJournal.voiceWritePartial', { ok, failed: failed.join(', ') }))
+    else toast.success(locale.t('teacherJournal.voiceWriteSuccess', { ok }))
   } finally {
     voiceWriting.value = false
     voiceResult.value = null
@@ -222,7 +230,7 @@ async function setGrade(s, key, value) {
     await load()
   } catch (e) {
     s.grades[key] = prev
-    toast.error('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message))
+    toast.error(locale.t('teacherJournal.saveFailedPrefix', 'Не удалось сохранить: ') + (e?.response?.data?.detail || e.message))
   } finally { saving.value = false }
 }
 
@@ -239,9 +247,9 @@ async function setExamGrade(s, col, value) {
   if (value === '4' || value === '5') full = `${value} (Зачтено)`
   else if (value === '3') {
     const ok = await confirm({
-      title: `Оценка 3 у ${s.surname}`,
-      message: 'Засчитать или отправить на пересдачу?',
-      okText: 'Зачесть', cancelText: 'На пересдачу',
+      title: locale.t('teacherJournal.grade3Title', { surname: s.surname }),
+      message: locale.t('teacherJournal.grade3Message', 'Засчитать или отправить на пересдачу?'),
+      okText: locale.t('teacherJournal.credit', 'Зачесть'), cancelText: locale.t('teacherJournal.sendToRetake', 'На пересдачу'),
     })
     if (ok) full = '3 (Зачтено)'
     else { full = '3 (Не зачтено)'; scheduleRetake = true }
@@ -250,11 +258,11 @@ async function setExamGrade(s, col, value) {
   if (scheduleRetake) {
     const nextRi = col.ri + 1
     if (nextRi <= 5 && !retakeDate(col.l, nextRi)) {
-      const rd = await prompt({ title: 'Дата пересдачи', placeholder: 'дд.мм.гггг', defaultValue: plusDays(7) })
+      const rd = await prompt({ title: locale.t('teacherJournal.retakeDateTitle', 'Дата пересдачи'), placeholder: locale.t('teacherJournal.datePlaceholder', 'дд.мм.гггг'), defaultValue: plusDays(7) })
       if (rd) {
         const payload = nextRi === 1 ? { retake_date: rd } : { [`retake_date_${nextRi}`]: rd }
         try { await teacherApi.updateLesson(col.l.id, payload); await load() }
-        catch { toast.error('Не удалось назначить пересдачу') }
+        catch { toast.error(locale.t('teacherJournal.retakeAssignFailed', 'Не удалось назначить пересдачу')) }
       }
     }
   }
@@ -273,15 +281,15 @@ function ctxEdit() { openEditLesson(ctx.value.lesson); closeCtx() }
 function ctxDelete() { const l = ctx.value.lesson; closeCtx(); delLesson(l) }
 async function ctxRetake() {
   const l = ctx.value.lesson; closeCtx()
-  const rd = await prompt({ title: 'Дата пересдачи', placeholder: 'дд.мм.гггг', defaultValue: plusDays(7) })
-  if (rd) { try { await teacherApi.updateLesson(l.id, { retake_date: rd }); await load() } catch { toast.error('Не удалось назначить пересдачу') } }
+  const rd = await prompt({ title: locale.t('teacherJournal.retakeDateTitle', 'Дата пересдачи'), placeholder: locale.t('teacherJournal.datePlaceholder', 'дд.мм.гггг'), defaultValue: plusDays(7) })
+  if (rd) { try { await teacherApi.updateLesson(l.id, { retake_date: rd }); await load() } catch { toast.error(locale.t('teacherJournal.retakeAssignFailed', 'Не удалось назначить пересдачу')) } }
 }
 
 // ── Занятия: создание и правка (дата — сегодня по умолчанию) ────────────────────
 const LESSON_TYPES = ['Практика', 'Лекция', 'ДЗ', 'Экзамен', 'Семинар', 'Лабораторная', 'Зачёт']
 // У ДЗ «тема» — это текст самого задания, он же уходит студенту в уведомление.
-const topicLabel = computed(() => (lessonForm.value.type === 'ДЗ' ? 'Домашнее задание' : 'Тема (полностью)'))
-const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? 'создать базу данных' : 'Тема занятия'))
+const topicLabel = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicHomework', 'Домашнее задание') : locale.t('teacherJournal.topicFull', 'Тема (полностью)')))
+const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicPlaceholderHomework', 'создать базу данных') : locale.t('teacherJournal.topicPlaceholderDefault', 'Тема занятия')))
 
 // Следующий номер — МАКСИМУМ+1 внутри типа, как считают сервер и десктоп.
 // Не количество строк: лекция лежит в базе двумя строками (по академическому часу),
@@ -313,7 +321,7 @@ watch(() => lessonForm.value.type, (t) => {
   lessonForm.value.number = nextNumber(t)
 })
 async function saveLesson() {
-  if (!group.value || !subject.value) { lessonError.value = 'Выберите группу и предмет'; return }
+  if (!group.value || !subject.value) { lessonError.value = locale.t('teacherJournal.selectGroupSubject', 'Выберите группу и предмет'); return }
   savingLesson.value = true
   lessonError.value = ''
   try {
@@ -327,18 +335,18 @@ async function saveLesson() {
     }
     showLesson.value = false
     await load()
-  } catch (e) { lessonError.value = e?.response?.data?.detail || 'Не удалось сохранить занятие' }
+  } catch (e) { lessonError.value = e?.response?.data?.detail || locale.t('teacherJournal.saveLessonFailed', 'Не удалось сохранить занятие') }
   finally { savingLesson.value = false }
 }
 async function delLesson(l) {
   const ok = await confirm({
-    title: `Удалить занятие ${l.type} №${l.number}?`,
-    message: 'Оценки этой пары перестанут учитываться.',
-    okText: 'Удалить', danger: true,
+    title: locale.t('teacherJournal.deleteLessonTitle', { type: l.type, number: l.number }),
+    message: locale.t('teacherJournal.deleteLessonMessage', 'Оценки этой пары перестанут учитываться.'),
+    okText: locale.t('common.delete'), danger: true,
   })
   if (!ok) return
   try { await teacherApi.deleteLesson(l.id); await load() }
-  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('teacherJournal.deleteLessonFailed', 'Не удалось удалить')) }
 }
 
 // ── Экспорт журнала/ведомости с выбором формата (Excel / Word) ──────────────────
@@ -367,7 +375,7 @@ async function downloadJournal(fmt) {
   } catch (e) {
     let detail = ''
     try { detail = JSON.parse(await e?.response?.data?.text())?.detail || '' } catch { /* */ }
-    toast.error('Не удалось выгрузить журнал' + (detail ? `: ${detail}` : ''))
+    toast.error(locale.t('teacherJournal.exportJournalFailed', 'Не удалось выгрузить журнал') + (detail ? `: ${detail}` : ''))
   } finally { exporting.value = false }
 }
 
@@ -386,7 +394,7 @@ async function openAtt() {
       surname: s.surname, name: s.name, grade: tg[`${s.surname}|${s.name}`]?.grade || '',
     }))
     showAtt.value = true
-  } catch { toast.error('Не удалось загрузить итоговые оценки') }
+  } catch { toast.error(locale.t('teacherJournal.loadFinalGradesFailed', 'Не удалось загрузить итоговые оценки')) }
 }
 async function saveAtt() {
   attSaving.value = true
@@ -398,15 +406,15 @@ async function saveAtt() {
       })
     }
     showAtt.value = false
-    toast.success('Итоговые оценки сохранены')
-  } catch (e) { toast.error('Не удалось сохранить: ' + (e?.response?.data?.detail || e.message)) }
+    toast.success(locale.t('teacherJournal.finalGradesSaved', 'Итоговые оценки сохранены'))
+  } catch (e) { toast.error(locale.t('teacherJournal.saveFailedPrefix', 'Не удалось сохранить: ') + (e?.response?.data?.detail || e.message)) }
   finally { attSaving.value = false }
 }
 async function downloadVedomost(fmt) {
   try {
     const { data: blob } = await teacherApi.vedomost(group.value, subject.value, { fmt, form: attForm.value, ...termParams() })
     saveBlob(blob, `Ведомость_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
-  } catch { toast.error('Не удалось выгрузить ведомость') }
+  } catch { toast.error(locale.t('teacherJournal.exportVedomostFailed', 'Не удалось выгрузить ведомость')) }
 }
 </script>
 
@@ -429,34 +437,34 @@ async function downloadVedomost(fmt) {
            «Вектора»: команде нужны группа и предмет, а они выбраны именно на этой
            странице. Тумблер и выбор микрофона — в настройках. -->
       <MicButton @text="onVoiceText" @error="(m) => toast.error(m)" />
-      <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">Сохранение…</span>
+      <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">{{ locale.t('teacherJournal.saving', 'Сохранение…') }}</span>
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
-        Студентов: {{ data.students?.length || 0 }} · занятий: {{ data.lessons?.length || 0 }}
+        {{ locale.t('teacherJournal.countsLine', { students: data.students?.length || 0, lessons: data.lessons?.length || 0 }) }}
         <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
         <span v-if="data.hours?.total" class="text-accent">
-          · пройдено {{ data.hours.done }} из {{ data.hours.total }} ч
+          · {{ locale.t('teacherJournal.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
         </span>
       </span>
       <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 Аттестация</AppButton>
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 Ведомость</AppButton>
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 {{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
         <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
-          {{ exporting ? 'Выгрузка…' : '📘 Журнал' }}
+          {{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : `📘 ${locale.t('teacherJournal.journalButton', 'Журнал')}` }}
         </AppButton>
-        <AppButton v-if="!isArchive" variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ Занятие</AppButton>
+        <AppButton v-if="!isArchive" variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
       </div>
     </div>
 
     <div v-if="isArchive" class="rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
-      🔒 Прошлый семестр — архив (только просмотр). Правки доступны в текущем периоде: {{ termLabel(currentTerm) }}.
+      🔒 {{ locale.t('teacherJournal.archiveBanner', { term: termLabel(currentTerm) }) }}
     </div>
 
-    <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки"
-                message="За вами не закреплены группы или предметы." />
-    <p v-else-if="loading" class="text-sm text-text3">Загрузка…</p>
-    <EmptyState v-else-if="!data?.students?.length" title="Нет студентов" :message="`В группе ${group} нет студентов.`" />
-    <EmptyState v-else-if="!data?.lessons?.length" title="Журнал пуст"
-                message="Добавьте первое занятие кнопкой «+ Занятие» — колонки появятся здесь." />
+    <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
+                :message="locale.t('teacherJournal.noWorkloadMessage', 'За вами не закреплены группы или предметы.')" />
+    <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+    <EmptyState v-else-if="!data?.students?.length" :title="locale.t('teacherJournal.noStudentsTitle', 'Нет студентов')" :message="locale.t('teacherJournal.noStudentsMessage', { group })" />
+    <EmptyState v-else-if="!data?.lessons?.length" :title="locale.t('teacherJournal.emptyJournalTitle', 'Журнал пуст')"
+                :message="locale.t('teacherJournal.emptyJournalMessage', 'Добавьте первое занятие кнопкой «+ Занятие» — колонки появятся здесь.')" />
 
     <!-- Таблица компактная и выровнена влево: обёртка не растягивает table (w-max). -->
     <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
@@ -465,15 +473,15 @@ async function downloadVedomost(fmt) {
       <table class="w-max text-sm">
         <thead>
           <tr class="border-b-2 border-accent bg-bg2 text-text2">
-            <th class="sticky left-0 z-10 bg-bg2 px-2 py-3 text-left text-tiny font-semibold uppercase tracking-wide sm:px-4">Студент</th>
+            <th class="sticky left-0 z-10 bg-bg2 px-2 py-3 text-left text-tiny font-semibold uppercase tracking-wide sm:px-4">{{ locale.t('teacherJournal.colStudent', 'Студент') }}</th>
             <th v-for="col in colDefs" :key="col.key"
                 class="w-24 border-l border-border align-top px-2 py-2 sm:w-32"
                 :class="col.ri === 0 ? 'cursor-context-menu' : ''"
-                :title="col.ri === 0 ? 'ПКМ или двойной клик — изменить занятие' : ''"
+                :title="col.ri === 0 ? locale.t('teacherJournal.editHint', 'ПКМ или двойной клик — изменить занятие') : ''"
                 @contextmenu.prevent="col.ri === 0 && openCtx($event, col.l)"
                 @dblclick="col.ri === 0 && openEditLesson(col.l)">
               <template v-if="col.ri > 0">
-                <div class="text-xs font-bold text-orange">Пересдача №{{ col.ri }}</div>
+                <div class="text-xs font-bold text-orange">{{ locale.t('teacherJournal.retakeNumber', { n: col.ri }) }}</div>
                 <div class="text-[11px] font-normal normal-case text-text3">{{ retakeDate(col.l, col.ri) }}</div>
               </template>
               <template v-else>
@@ -485,12 +493,12 @@ async function downloadVedomost(fmt) {
                   {{ col.l.topic }}
                 </div>
                 <div v-if="!isArchive" class="mt-1 flex items-center justify-center gap-3 text-text3">
-                  <button class="hover:text-accent" title="Изменить" @click.stop="openEditLesson(col.l)">✎</button>
-                  <button class="hover:text-red" title="Удалить" @click.stop="delLesson(col.l)">✕</button>
+                  <button class="hover:text-accent" :title="locale.t('teacherJournal.edit', 'Изменить')" @click.stop="openEditLesson(col.l)">✎</button>
+                  <button class="hover:text-red" :title="locale.t('common.delete')" @click.stop="delLesson(col.l)">✕</button>
                 </div>
               </template>
             </th>
-            <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
+            <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('teacherJournal.colAverage', 'Средн.') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -516,7 +524,7 @@ async function downloadVedomost(fmt) {
             </td>
           </tr>
           <tr class="border-t-2 border-accent/40 bg-bg2/70">
-            <td class="sticky left-0 z-10 max-w-[7.5rem] truncate bg-bg2 px-2 py-2.5 text-right text-xs font-semibold uppercase text-text3 sm:max-w-none sm:px-4">Средний по группе</td>
+            <td class="sticky left-0 z-10 max-w-[7.5rem] truncate bg-bg2 px-2 py-2.5 text-right text-xs font-semibold uppercase text-text3 sm:max-w-none sm:px-4">{{ locale.t('teacherJournal.groupAverageRow', 'Средний по группе') }}</td>
             <td :colspan="colDefs.length" class="px-2 py-2.5"></td>
             <td class="border-l-2 border-accent/40 px-4 py-2.5 text-right font-title text-base font-extrabold" :class="avgClass(groupAverage)">{{ groupAverage }}</td>
           </tr>
@@ -527,26 +535,26 @@ async function downloadVedomost(fmt) {
     <!-- Контекстное меню (ПКМ) -->
     <div v-if="ctx.show" class="fixed z-50 min-w-48 rounded-lg border border-border2 bg-card py-1 shadow-card"
          :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @click.stop>
-      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxEdit">✎ Изменить тему / дату</button>
-      <button v-if="ctx.lesson?.type === 'Экзамен'" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxRetake">📅 Назначить пересдачу</button>
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxEdit">✎ {{ locale.t('teacherJournal.ctxEditTopic', 'Изменить тему / дату') }}</button>
+      <button v-if="ctx.lesson?.type === 'Экзамен'" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxRetake">📅 {{ locale.t('teacherJournal.ctxAssignRetake', 'Назначить пересдачу') }}</button>
       <div class="my-1 border-t border-border" />
-      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-red/10" @click="ctxDelete">🗑 Удалить занятие</button>
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-red/10" @click="ctxDelete">🗑 {{ locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие') }}</button>
     </div>
 
     <!-- Модалка занятия: создание и правка (дата — сегодня по умолчанию) -->
     <div v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLesson = false">
       <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">
-          {{ editingLesson ? 'Изменить занятие' : 'Новое занятие' }} · {{ group }}
+          {{ editingLesson ? locale.t('teacherJournal.editLessonTitle', 'Изменить занятие') : locale.t('teacherJournal.newLessonTitle', 'Новое занятие') }} · {{ group }}
         </h3>
         <div class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Тип</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.typeLabel', 'Тип') }}</span>
               <select v-model="lessonForm.type" :disabled="!!editingLesson"
                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent disabled:opacity-60">
                 <option v-for="t in LESSON_TYPES" :key="t" :value="t">{{ t }}</option>
               </select></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">№</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.numberLabel', '№') }}</span>
               <input v-model.number="lessonForm.number" type="number" min="1"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
@@ -554,22 +562,22 @@ async function downloadVedomost(fmt) {
             <textarea v-model="lessonForm.topic" rows="2" :placeholder="topicPlaceholder"
                       class="w-full resize-none rounded-sm border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent"></textarea></label>
           <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Дата</span>
-              <input v-model="lessonForm.date" placeholder="дд.мм.гггг"
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.dateLabel', 'Дата') }}</span>
+              <input v-model="lessonForm.date" :placeholder="locale.t('teacherJournal.datePlaceholder', 'дд.мм.гггг')"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label v-if="lessonForm.type === 'Лекция'" class="block"><span class="mb-1 block text-tiny uppercase text-text3">Часы</span>
+            <label v-if="lessonForm.type === 'Лекция'" class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.hoursLabel', 'Часы') }}</span>
               <input v-model.number="lessonForm.hour" type="number" min="0"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label v-if="lessonForm.type === 'Экзамен'" class="block"><span class="mb-1 block text-tiny uppercase text-text3">Пересдача</span>
-              <input v-model="lessonForm.retake_date" placeholder="дд.мм.гггг"
+            <label v-if="lessonForm.type === 'Экзамен'" class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.retakeLabel', 'Пересдача') }}</span>
+              <input v-model="lessonForm.retake_date" :placeholder="locale.t('teacherJournal.datePlaceholder', 'дд.мм.гггг')"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
           <p v-if="lessonError" class="text-sm text-red">{{ lessonError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showLesson = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showLesson = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="savingLesson" @click="saveLesson">
-            {{ savingLesson ? 'Сохранение…' : (editingLesson ? 'Сохранить' : 'Добавить') }}
+            {{ savingLesson ? locale.t('teacherJournal.saving', 'Сохранение…') : (editingLesson ? locale.t('common.save') : locale.t('teacherJournal.add', 'Добавить')) }}
           </AppButton>
         </div>
       </div>
@@ -578,9 +586,9 @@ async function downloadVedomost(fmt) {
     <!-- Модалка аттестации: итоговые оценки за семестр + форма контроля + ведомость -->
     <div v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
       <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 Итоговые оценки за семестр</h3>
+        <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 {{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
         <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(term) }}</p>
-        <label class="mb-3 block"><span class="mb-1 block text-tiny uppercase text-text3">Форма контроля</span>
+        <label class="mb-3 block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.controlFormLabel', 'Форма контроля') }}</span>
           <select v-model="attForm" class="h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
             <option v-for="f in ATT_FORMS" :key="f" :value="f">{{ f }}</option>
           </select>
@@ -594,9 +602,9 @@ async function downloadVedomost(fmt) {
           </div>
         </div>
         <div class="mt-4 flex flex-wrap justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showAtt = false">Закрыть</AppButton>
-          <AppButton variant="ghost" size="sm" @click="openFmt('vedomost')">📄 Ведомость</AppButton>
-          <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? 'Сохранение…' : 'Сохранить' }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showAtt = false">{{ locale.t('common.close') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+          <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? locale.t('teacherJournal.saving', 'Сохранение…') : locale.t('common.save') }}</AppButton>
         </div>
       </div>
     </div>
@@ -604,11 +612,11 @@ async function downloadVedomost(fmt) {
     <!-- Выбор формата экспорта: Excel или Word -->
     <div v-if="fmtMenu.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="fmtMenu.show = false">
       <div class="w-full max-w-xs rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-1 font-title text-base font-bold text-text">В каком формате?</h3>
-        <p class="mb-4 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? 'Журнал успеваемости' : 'Ведомость' }} · {{ group }} · {{ subject }}</p>
+        <h3 class="mb-1 font-title text-base font-bold text-text">{{ locale.t('teacherJournal.formatTitle', 'В каком формате?') }}</h3>
+        <p class="mb-4 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? locale.t('teacherJournal.journalWord', 'Журнал успеваемости') : locale.t('teacherJournal.vedomostButton', 'Ведомость') }} · {{ group }} · {{ subject }}</p>
         <div class="flex flex-col gap-2">
-          <AppButton variant="ghost" @click="pickFmt('xlsx')">📊 Excel (.xlsx)</AppButton>
-          <AppButton variant="ghost" @click="pickFmt('docx')">📄 Word (.docx)</AppButton>
+          <AppButton variant="ghost" @click="pickFmt('xlsx')">📊 {{ locale.t('teacherJournal.excelOption', 'Excel (.xlsx)') }}</AppButton>
+          <AppButton variant="ghost" @click="pickFmt('docx')">📄 {{ locale.t('teacherJournal.wordOption', 'Word (.docx)') }}</AppButton>
         </div>
       </div>
     </div>

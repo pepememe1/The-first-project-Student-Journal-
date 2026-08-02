@@ -6,7 +6,10 @@ import { adminApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import { useLocaleStore } from '@/stores/locale'
+import { roleLabel } from '@/config/roles'
 
+const locale = useLocaleStore()
 const online = ref([])
 const events = ref([])
 const lastId = ref(0)
@@ -26,7 +29,7 @@ async function tick() {
     }
     error.value = ''
   } catch (e) {
-    error.value = e.response?.status === 404 ? '' : 'Нет связи с сервером мониторинга'
+    error.value = e.response?.status === 404 ? '' : locale.t('monitorPage.noConnection', 'Нет связи с сервером мониторинга')
   }
 }
 
@@ -39,22 +42,22 @@ onUnmounted(() => timer && clearInterval(timer))
 
 <template>
   <div class="grid gap-6 lg:grid-cols-5">
-    <Card class="lg:col-span-2" title="Сейчас онлайн" :subtitle="`${online.length} подключено`">
-      <EmptyState v-if="!online.length" title="Никого онлайн" message="Активность за последние ~90 секунд." />
+    <Card class="lg:col-span-2" :title="locale.t('monitorPage.onlineNow', 'Сейчас онлайн')" :subtitle="locale.t('monitorPage.connectedCount', { n: online.length })">
+      <EmptyState v-if="!online.length" :title="locale.t('monitorPage.nobodyOnline', 'Никого онлайн')" :message="locale.t('monitorPage.onlineHint', 'Активность за последние ~90 секунд.')" />
       <ul v-else class="divide-y divide-border">
         <li v-for="(u, i) in online" :key="i" class="flex items-center justify-between py-2.5">
           <div>
             <p class="text-sm font-medium text-text">{{ u.name || u.login }}</p>
             <p class="text-xs text-text3">{{ u.ip }}</p>
           </div>
-          <Badge variant="muted">{{ u.role }}</Badge>
+          <Badge variant="muted">{{ roleLabel(u.role) }}</Badge>
         </li>
       </ul>
     </Card>
 
-    <Card class="lg:col-span-3" title="Журнал событий" subtitle="Действия и ошибки сервера">
+    <Card class="lg:col-span-3" :title="locale.t('monitorPage.eventLog', 'Журнал событий')" :subtitle="locale.t('monitorPage.eventLogSubtitle', 'Действия и ошибки сервера')">
       <p v-if="error" class="mb-3 text-sm text-red">{{ error }}</p>
-      <EmptyState v-if="!events.length" title="Событий пока нет" message="Здесь появятся входы, синхронизации и ошибки." />
+      <EmptyState v-if="!events.length" :title="locale.t('monitorPage.noEvents', 'Событий пока нет')" :message="locale.t('monitorPage.noEventsHint', 'Здесь появятся входы, синхронизации и ошибки.')" />
       <ul v-else class="space-y-2">
         <li v-for="(e, i) in events" :key="i" class="flex items-start gap-3 text-sm">
           <Badge :variant="LEVEL_VARIANT[e.level] || 'muted'">{{ e.level }}</Badge>

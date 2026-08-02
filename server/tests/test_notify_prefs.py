@@ -167,6 +167,6 @@ def test_categories_match_the_settings_page():
     import re
     page = (pathlib.Path(__file__).resolve().parents[2]
             / "web" / "src" / "pages" / "Settings.vue").read_text(encoding="utf-8")
-    block = page.split("const NOTIFY_KINDS = [", 1)[1].split("]", 1)[0]
+    block = page.split("const NOTIFY_KINDS = computed(() => [", 1)[1].split("]", 1)[0]
     from app import rustore_push
     assert set(re.findall(r"key:\s*'([a-z]+)'", block)) == set(rustore_push.ALL_CATEGORIES)

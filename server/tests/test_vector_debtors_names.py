@@ -17,7 +17,7 @@ def _login(client, l, p):
 def test_debtors_lists_student_names_for_teacher(client, monkeypatch):
     #Отключаем реальную озвучку — не важна, ответ должен быть no_voice в любом случае.
     from app import vector_llm
-    monkeypatch.setattr(vector_llm, "voice", lambda cfg, t, r, q: "VOICED:" + t)
+    monkeypatch.setattr(vector_llm, "voice", lambda cfg, t, r, q, locale="ru": "VOICED:" + t)
     admin = make_admin(client)
     #Студент с несданной практикой (2) → задолженность
     client.post("/sync/push", json={"changes": {
@@ -41,7 +41,7 @@ def test_debtors_lists_student_names_for_teacher(client, monkeypatch):
 
 def test_no_debtors_message(client, monkeypatch):
     from app import vector_llm
-    monkeypatch.setattr(vector_llm, "voice", lambda cfg, t, r, q: t)
+    monkeypatch.setattr(vector_llm, "voice", lambda cfg, t, r, q, locale="ru": t)
     admin = make_admin(client)
     client.post("/sync/push", json={"changes": {
         "lessons": [{"id": "L1", "group_name": "G1", "subject": "Мат", "type": "Практика",

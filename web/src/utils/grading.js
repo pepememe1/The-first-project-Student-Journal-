@@ -7,6 +7,7 @@
 // парные тесты Python (tests/test_grade_contract.py) и JS (web/tests/grades.contract.test.mjs).
 
 import { isFailed as isFailedBase } from './grades.js'
+import { useLocaleStore } from '../stores/locale.js'
 
 export const DEFAULT_SCALE = '5'
 
@@ -60,11 +61,21 @@ function isFailedPassFail(raw) {
   return v.startsWith('не') || v.startsWith('незач')
 }
 
+// ⚠️ `label` — ГЕТТЕР (переводится под текущий язык интерфейса), `values` — НЕТ: это
+// буквальные значения оценок, которые преподаватель ВВОДИТ и которые хранятся в БД
+// («Зачтено»/«Не зачтено» — контракт с `isFailedPassFail`, сравнивающим ровно эти
+// русские строки). Перевод пользовательского ВВОДА — совсем другая, куда более рискованная
+// задача (пришлось бы менять, что физически печатает преподаватель), и не входит в задачу
+// перевода интерфейса.
 export const SCALES = {
-  '5': { label: '5-балльная', values: ['2', '3', '4', '5'], toFive: leadNum, isFailed: isFailedBase },
-  '100': { label: '100-балльная', values: Array.from({ length: 101 }, (_, i) => String(i)), toFive: toFive100, isFailed: isFailed100 },
-  letter: { label: 'Буквенная (A–F)', values: ['A', 'B', 'C', 'D', 'F'], toFive: toFiveLetter, isFailed: isFailedLetter },
-  pass_fail: { label: 'Зачёт / незачёт', values: ['Зачтено', 'Не зачтено'], toFive: toFivePassFail, isFailed: isFailedPassFail },
+  '5': { get label() { return useLocaleStore().t('grading.scale5', '5-балльная') },
+    values: ['2', '3', '4', '5'], toFive: leadNum, isFailed: isFailedBase },
+  '100': { get label() { return useLocaleStore().t('grading.scale100', '100-балльная') },
+    values: Array.from({ length: 101 }, (_, i) => String(i)), toFive: toFive100, isFailed: isFailed100 },
+  letter: { get label() { return useLocaleStore().t('grading.scaleLetter', 'Буквенная (A–F)') },
+    values: ['A', 'B', 'C', 'D', 'F'], toFive: toFiveLetter, isFailed: isFailedLetter },
+  pass_fail: { get label() { return useLocaleStore().t('grading.scalePassFail', 'Зачёт / незачёт') },
+    values: ['Зачтено', 'Не зачтено'], toFive: toFivePassFail, isFailed: isFailedPassFail },
 }
 
 export function scaleValues(scale = DEFAULT_SCALE) {

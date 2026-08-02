@@ -9,8 +9,10 @@ import { Menu, Moon, Sun, LogOut, ChevronDown } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useMessengerStore } from '@/stores/messenger'
+import { useLocaleStore } from '@/stores/locale'
 import BrandLogo from '@/components/BrandLogo.vue'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
+import { roleLabel as roleLabelOf } from '@/config/roles'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
@@ -18,9 +20,9 @@ const router = useRouter()
 const auth = useAuthStore()
 const theme = useThemeStore()
 const messenger = useMessengerStore()
+const locale = useLocaleStore()
 
-const ROLE_LABEL = { student: 'Студент', teacher: 'Преподаватель', admin: 'Администратор' }
-const roleLabel = computed(() => ROLE_LABEL[auth.role] || '')
+const roleLabel = computed(() => roleLabelOf(auth.role))
 // Имя показываем, только если оно есть и не дублирует роль (как set_role в десктопе:
 // у админа «личность» = «Администратор», второй раз не выводим).
 const showName = computed(() => {
@@ -93,7 +95,7 @@ async function onLogout() {
   >
     <button
       class="grid size-9 place-items-center rounded-md text-white/90 hover:bg-white/15 lg:hidden"
-      aria-label="Меню" @click="emit('toggle-sidebar')"
+      :aria-label="locale.t('header.menu', 'Меню')" @click="emit('toggle-sidebar')"
     >
       <Menu class="size-5" />
     </button>
@@ -106,7 +108,7 @@ async function onLogout() {
            Шрифт — основной (DM Sans), как в десктопной шапке. -->
       <p class="text-base font-extrabold tracking-[0.2px]">GradeBookAI</p>
       <!-- Полное название колледжа — только с sm: на телефоне места нет. -->
-      <p class="hidden truncate text-[10px] font-semibold text-white/80 sm:block">Технологический колледж ВСГУТУ</p>
+      <p class="hidden truncate text-[10px] font-semibold text-white/80 sm:block">{{ locale.t('app.college') }}</p>
     </div>
 
     <div class="min-w-2 flex-1" />
@@ -118,16 +120,17 @@ async function onLogout() {
     <span v-if="!online"
           class="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 sm:inline-flex"
           style="background: rgba(255,255,255,0.12);"
-          title="Нет связи с сетью — данные подтянутся, когда связь вернётся.">
+          :title="locale.t('header.offlineHint', 'Нет связи с сетью — данные подтянутся, когда связь вернётся.')">
       <span class="text-[14px] leading-none" style="color:#ff8a8a">●</span>
-      Офлайн
+      {{ locale.t('header.offline', 'Офлайн') }}
     </span>
 
     <!-- §D7: свой статус — виден и меняется с любой страницы. Кружок в цвет статуса,
          подпись прячем на узких экранах (там за неё говорит цвет). -->
     <div class="relative shrink-0">
       <button type="button" @click="statusOpen = !statusOpen"
-              :title="`Мой статус: ${statusText}`" aria-label="Мой статус"
+              :title="locale.t('header.myStatus', { status: statusText })"
+              :aria-label="locale.t('header.myStatusAria', 'Мой статус')"
               class="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white/90 hover:bg-white/15"
               style="background: rgba(255,255,255,0.12);">
         <span class="size-2.5 shrink-0 rounded-full" :style="{ background: myStatus.color }" />
@@ -147,12 +150,12 @@ async function onLogout() {
              Раньше поле было ТОЛЬКО внутри вкладки «Сообщения»: статус висел в шапке на
              всех страницах, а поменять его текст можно было лишь уйдя в мессенджер. -->
         <div v-if="canSetStatusText" class="mt-1 border-t border-border pt-1.5">
-          <input v-model="statusDraft" placeholder="Текст статуса (видят другие)" maxlength="80"
+          <input v-model="statusDraft" :placeholder="locale.t('header.statusTextPlaceholder', 'Текст статуса (видят другие)')" maxlength="80"
                  @keydown.enter="saveStatusText"
                  class="w-full rounded-md border border-border2 bg-card2 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
           <button type="button" @click="saveStatusText"
                   class="mt-1 w-full rounded-md bg-accent px-2 py-1 text-xs font-semibold text-white hover:bg-accent2">
-            Сохранить текст
+            {{ locale.t('header.saveStatusText', 'Сохранить текст') }}
           </button>
         </div>
       </div>
@@ -163,7 +166,7 @@ async function onLogout() {
     <!-- Переключатель темы (тёмная/светлая) -->
     <button
       class="grid size-9 shrink-0 place-items-center rounded-md text-white/90 hover:bg-white/15"
-      :aria-label="theme.isDark ? 'Светлая тема' : 'Тёмная тема'" @click="theme.toggleMode()"
+      :aria-label="theme.isDark ? locale.t('header.lightTheme', 'Светлая тема') : locale.t('header.darkTheme', 'Тёмная тема')" @click="theme.toggleMode()"
     >
       <Sun v-if="theme.isDark" class="size-5" />
       <Moon v-else class="size-5" />
@@ -188,7 +191,7 @@ async function onLogout() {
       @mouseout="(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.15)')"
     >
       <LogOut class="size-4" />
-      <span class="hidden sm:inline">Выйти</span>
+      <span class="hidden sm:inline">{{ locale.t('nav.logout') }}</span>
     </button>
   </header>
   <FarewellOverlay v-if="farewell" :name="showName" />

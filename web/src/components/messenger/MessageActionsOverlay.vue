@@ -4,12 +4,19 @@
 // (своё/чужое, закреплено ли, удалено ли) — см. MESSENGER-PLAN.md §6.8. Эмитит выбранное
 // действие наверх (ChatThread выполняет), сам ничего не делает с данными.
 import { computed } from 'vue'
-import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock } from '@lucide/vue'
+import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages } from '@lucide/vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const props = defineProps({
   message: { type: Object, required: true },
   x: { type: Number, default: 0 },
   y: { type: Number, default: 0 },
+  // Уже показан ли перевод ЭТОГО сообщения (ChatThread — единственный, кто знает
+  // translate-стор) — только чтобы подписать пункт «Перевести»/«Скрыть перевод»,
+  // сам оверлей переводом не занимается (см. докстринг файла).
+  translated: { type: Boolean, default: false },
 })
 const emit = defineEmits(['pick', 'react', 'close'])
 
@@ -27,19 +34,25 @@ const style = computed(() => ({
 const items = computed(() => {
   const d = m.value.deleted
   const list = []
-  if (!d) list.push({ key: 'reply', label: 'Ответить', icon: Reply })
+  if (!d) list.push({ key: 'reply', label: locale.t('msgAction.reply', 'Ответить'), icon: Reply })
   if (!d) list.push(m.value.pinned
-    ? { key: 'unpin', label: 'Открепить', icon: PinOff }
-    : { key: 'pin', label: 'Закрепить', icon: Pin })
-  if (!d) list.push({ key: 'copy', label: 'Копировать текст', icon: Copy })
-  if (!d) list.push({ key: 'forward', label: 'Переслать', icon: Forward })
+    ? { key: 'unpin', label: locale.t('messenger.unpin', 'Открепить'), icon: PinOff }
+    : { key: 'pin', label: locale.t('messenger.pin', 'Закрепить'), icon: Pin })
+  if (!d) list.push({ key: 'copy', label: locale.t('msgAction.copy', 'Копировать текст'), icon: Copy })
+  //Перевод — только ЧУЖИХ сообщений (своё и так на языке, на котором написано);
+  //тот же переключатель, что у ссылки «перевести» под самим сообщением.
+  if (!d && !m.value.mine && m.value.body) {
+    list.push({ key: 'translate', label: props.translated ? locale.t('msgAction.hideTranslation', 'Скрыть перевод') : locale.t('msgAction.translate', 'Перевести'),
+               icon: Languages })
+  }
+  if (!d) list.push({ key: 'forward', label: locale.t('forward.title', 'Переслать'), icon: Forward })
   // §D19: «Напомнить» показываем ВСЕГДА, а не только когда в тексте нашлась дата —
   // человек может захотеть напомнить себе о сообщении без всякой даты. Разобранную из
   // текста дату диалог просто подставит в поле как готовый вариант.
-  if (!d) list.push({ key: 'remind', label: 'Напомнить', icon: AlarmClock })
-  list.push({ key: 'select', label: 'Выделить', icon: ListChecks })
-  list.push({ key: 'delete', label: 'Удалить', icon: Trash2, danger: true })
-  if (!m.value.mine && !d) list.push({ key: 'report', label: 'Пожаловаться', icon: Flag, danger: true })
+  if (!d) list.push({ key: 'remind', label: locale.t('msgAction.remind', 'Напомнить'), icon: AlarmClock })
+  list.push({ key: 'select', label: locale.t('msgAction.select', 'Выделить'), icon: ListChecks })
+  list.push({ key: 'delete', label: locale.t('common.delete'), icon: Trash2, danger: true })
+  if (!m.value.mine && !d) list.push({ key: 'report', label: locale.t('msgAction.report', 'Пожаловаться'), icon: Flag, danger: true })
   return list
 })
 </script>

@@ -8,7 +8,11 @@ import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useLocaleStore } from '@/stores/locale'
 
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
+
+const locale = useLocaleStore()
 const toast = useToast()
 const { confirm } = useConfirm()
 const all = ref([])
@@ -43,7 +47,7 @@ function setCategoryFilter(key) {
 function fmtDT(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
-  return isNaN(d) ? '—' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return isNaN(d) ? '—' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 async function reload() {
@@ -102,8 +106,8 @@ function openEdit(r) {
 
 async function save() {
   const f = form.value
-  if (!f.surname.trim() || !f.name.trim()) { formError.value = 'Введите фамилию и имя'; return }
-  if (!f.login.trim()) { formError.value = 'Введите логин'; return }
+  if (!f.surname.trim() || !f.name.trim()) { formError.value = locale.t('adminStudents.enterSurnameName', 'Введите фамилию и имя'); return }
+  if (!f.login.trim()) { formError.value = locale.t('adminStudents.enterLogin', 'Введите логин'); return }
   saving.value = true
   formError.value = ''
   try {
@@ -115,16 +119,16 @@ async function save() {
     showForm.value = false
     await reload()
   } catch (e) {
-    formError.value = e?.response?.data?.detail || 'Не удалось сохранить'
+    formError.value = e?.response?.data?.detail || locale.t('adminStudents.saveFailed', 'Не удалось сохранить')
   } finally {
     saving.value = false
   }
 }
 
 async function del(r) {
-  if (!(await confirm({ title: `Удалить студента ${r.surname} ${r.name}?`, okText: 'Удалить', danger: true }))) return
+  if (!(await confirm({ title: locale.t('adminStudents.confirmDelete', { name: `${r.surname} ${r.name}` }), okText: locale.t('common.delete'), danger: true }))) return
   try { await adminApi.deleteStudent(r.login); await reload() }
-  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminStudents.deleteFailed', 'Не удалось удалить')) }
 }
 </script>
 
@@ -135,7 +139,7 @@ async function del(r) {
     <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
       <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="!categoryFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
-              @click="setCategoryFilter('')">Все категории</button>
+              @click="setCategoryFilter('')">{{ locale.t('adminStudents.allCategories', 'Все категории') }}</button>
       <button v-for="c in categories" :key="c.key"
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
@@ -143,42 +147,42 @@ async function del(r) {
     </div>
 
     <div class="flex flex-wrap items-center gap-3">
-      <input v-model="q" placeholder="Поиск по ФИО, группе или логину…"
+      <input v-model="q" :placeholder="locale.t('adminStudents.searchPlaceholder', 'Поиск по ФИО, группе или логину…')"
              class="h-10 w-full max-w-sm rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent focus:bg-card" />
       <select v-model="groupFilter"
               class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-        <option value="">Все группы</option>
+        <option value="">{{ locale.t('adminStudents.allGroups', 'Все группы') }}</option>
         <option v-for="g in groupFilterChoices" :key="g" :value="g">{{ g }}</option>
       </select>
-      <AppButton variant="green" size="sm" @click="openCreate">+ Добавить</AppButton>
+      <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminStudents.addAction', '+ Добавить') }}</AppButton>
     </div>
 
     <div class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
-            <th class="px-4 py-2.5 font-semibold">ФИО</th>
-            <th class="px-4 py-2.5 font-semibold">Группа</th>
-            <th class="px-4 py-2.5 font-semibold">Логин</th>
-            <th class="px-4 py-2.5 font-semibold">Телефон</th>
-            <th class="px-4 py-2.5 font-semibold">Посл. вход</th>
-            <th class="px-4 py-2.5 font-semibold">IP</th>
-            <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colFullName', 'ФИО') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colGroup', 'Группа') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colLogin', 'Логин') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colPhone', 'Телефон') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colLastLogin', 'Посл. вход') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colIp', 'IP') }}</th>
+            <th class="px-4 py-2.5 text-right font-semibold">{{ locale.t('adminStudents.colActions', 'Действия') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="7" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
-          <tr v-else-if="!rows.length"><td colspan="7" class="px-4 py-6 text-center text-text3">Студентов нет</td></tr>
+          <tr v-if="loading"><td colspan="7" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
+          <tr v-else-if="!rows.length"><td colspan="7" class="px-4 py-6 text-center text-text3">{{ locale.t('adminStudents.noStudents', 'Студентов нет') }}</td></tr>
           <tr v-for="(r, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ r.surname }} {{ r.name }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.login || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone || '—' }}</td>
-            <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? 'устройство: ' + r.device : ''">{{ fmtDT(r.last_login) }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? locale.t('adminStudents.deviceTitle', { device: r.device }) : ''">{{ fmtDT(r.last_login) }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text3">{{ r.ip || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="mr-3 text-text3 hover:text-accent" title="Изменить" @click="openEdit(r)">✎</button>
-              <button class="text-text3 hover:text-red" title="Удалить" @click="del(r)">✕</button>
+              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminStudents.edit', 'Изменить')" @click="openEdit(r)">✎</button>
+              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(r)">✕</button>
             </td>
           </tr>
         </tbody>
@@ -188,25 +192,25 @@ async function del(r) {
     <!-- Модалка создания/правки -->
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? 'Изменить студента' : 'Добавить студента' }}</h3>
+        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
         <div class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Фамилия</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.surname', 'Фамилия') }}</span>
               <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Имя</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.firstName', 'Имя') }}</span>
               <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Отчество <span class="text-text3 normal-case">(необязательно)</span></span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.patronymic', 'Отчество') }} <span class="text-text3 normal-case">{{ locale.t('adminStudents.optionalHint', '(необязательно)') }}</span></span>
             <input v-model="form.patronymic" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Логин</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colLogin', 'Логин') }}</span>
             <input v-model="form.login" :disabled="!!editing"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Группа</span>
-            <input v-model="form.group" list="admin-group-list" placeholder="Выберите или введите группу"
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colGroup', 'Группа') }}</span>
+            <input v-model="form.group" list="admin-group-list" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
             <datalist id="admin-group-list"><option v-for="g in groupChoices" :key="g" :value="g" /></datalist>
           </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? 'Новый пароль (пусто — не менять)' : 'Пароль' }}</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminStudents.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminStudents.passwordLabel', 'Пароль') }}</span>
             <div class="relative">
               <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
@@ -214,13 +218,13 @@ async function del(r) {
                 {{ showPass ? '🙈' : '👁' }}
               </button>
             </div>
-            <span class="mt-1 block text-tiny text-text3">Пароль в базе хранится хешем — показать можно только новый вводимый.</span></label>
+            <span class="mt-1 block text-tiny text-text3">{{ locale.t('adminStudents.passwordHashHint', 'Пароль в базе хранится хешем — показать можно только новый вводимый.') }}</span></label>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="saving" @click="save">
-            {{ saving ? 'Сохранение…' : (editing ? 'Сохранить' : 'Добавить') }}
+            {{ saving ? locale.t('adminStudents.saving', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminStudents.addAction2', 'Добавить')) }}
           </AppButton>
         </div>
       </div>

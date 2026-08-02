@@ -8,12 +8,14 @@
 //
 // Остановка кладёт сайт для всего колледжа, поэтому она требует подтверждения — сервер
 // отвечает 409 «confirm-required», пока человек не подтвердил осознанно.
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Play, Square, RotateCw, TriangleAlert } from '@lucide/vue'
 import { deskServerApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const props = defineProps({
   serverId: { type: String, required: true },
   // { gradebook: 'active', caddy: 'active' } — состояние с последнего опроса
@@ -21,10 +23,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['changed'])
 
-const LABELS = {
-  gradebook: 'Сервер журнала',
-  caddy: 'Веб-сервер и сертификаты',
-}
+const LABELS = computed(() => ({
+  gradebook: locale.t('serviceControls.gradebook', 'Сервер журнала'),
+  caddy: locale.t('serviceControls.caddy', 'Веб-сервер и сертификаты'),
+}))
 
 const busy = ref('')
 const message = ref('')
@@ -38,7 +40,7 @@ async function act(name, action, confirm = false) {
   try {
     const { data } = await deskServerApi.service(props.serverId, name, action, confirm)
     failed.value = !data.ok
-    message.value = data.hint || (data.ok ? `Готово: ${LABELS[name]} — ${data.state}` : '')
+    message.value = data.hint || (data.ok ? locale.t('serviceControls.done', { label: LABELS.value[name], state: data.state }) : '')
     pending.value = null
     emit('changed')
   } catch (e) {
@@ -46,7 +48,7 @@ async function act(name, action, confirm = false) {
       pending.value = { name, action }
     } else {
       failed.value = true
-      message.value = e?.response?.data?.detail || 'Не удалось выполнить'
+      message.value = e?.response?.data?.detail || locale.t('serviceControls.execFailed', 'Не удалось выполнить')
     }
   } finally {
     busy.value = ''
@@ -63,18 +65,18 @@ async function act(name, action, confirm = false) {
         <span class="block text-tiny text-text3">{{ name }}</span>
       </span>
       <Badge :variant="services[name] === 'active' ? 'green' : 'red'">
-        {{ services[name] || 'неизвестно' }}
+        {{ services[name] || locale.t('serviceControls.unknown', 'неизвестно') }}
       </Badge>
       <span class="flex gap-1.5">
         <AppButton variant="ghost" :disabled="!!busy" @click="act(name, 'restart')">
-          <RotateCw class="mr-1 inline size-4" />Перезапустить
+          <RotateCw class="mr-1 inline size-4" />{{ locale.t('serviceControls.restart', 'Перезапустить') }}
         </AppButton>
         <AppButton v-if="services[name] === 'active'" variant="ghost" :disabled="!!busy"
                    @click="act(name, 'stop')">
-          <Square class="mr-1 inline size-4" />Остановить
+          <Square class="mr-1 inline size-4" />{{ locale.t('serviceControls.stop', 'Остановить') }}
         </AppButton>
         <AppButton v-else variant="ghost" :disabled="!!busy" @click="act(name, 'start')">
-          <Play class="mr-1 inline size-4" />Запустить
+          <Play class="mr-1 inline size-4" />{{ locale.t('serviceControls.start', 'Запустить') }}
         </AppButton>
       </span>
     </div>
@@ -83,13 +85,12 @@ async function act(name, action, confirm = false) {
          class="flex flex-col gap-2 rounded-lg border border-red/50 bg-card2 p-3">
       <p class="flex items-start gap-2 text-sm text-text2">
         <TriangleAlert class="mt-0.5 size-4 shrink-0 text-red" />
-        <span>Остановка «{{ LABELS[pending.name] }}» сделает сайт и приложение
-              недоступными для всего колледжа, пока службу не запустят обратно.</span>
+        <span>{{ locale.t('serviceControls.stopWarning', { label: LABELS[pending.name] }) }}</span>
       </p>
       <div class="flex gap-2">
         <AppButton variant="red" :disabled="!!busy"
-                   @click="act(pending.name, pending.action, true)">Всё равно остановить</AppButton>
-        <AppButton variant="ghost" @click="pending = null">Отмена</AppButton>
+                   @click="act(pending.name, pending.action, true)">{{ locale.t('serviceControls.stopAnyway', 'Всё равно остановить') }}</AppButton>
+        <AppButton variant="ghost" @click="pending = null">{{ locale.t('common.cancel', 'Отмена') }}</AppButton>
       </div>
     </div>
 

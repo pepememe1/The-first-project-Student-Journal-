@@ -9,6 +9,9 @@ import InsightCards from '@/components/InsightCards.vue'
 import Mascot from '@/components/Mascot.vue'
 import { dashboardEmote } from '@/config/mascot'
 import { TrendingUp, Users, BookOpen } from '@lucide/vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const groups = ref([])
 const subjects = ref([])
@@ -46,14 +49,14 @@ const sprite = computed(() => dashboardEmote({ average: Number(data.value?.group
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
       </select>
     </div>
-    <EmptyState v-if="!groups.length || !subjects.length" title="Нет нагрузки" />
+    <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherStats.noWorkload', 'Нет нагрузки')" />
     <template v-else>
       <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div class="space-y-4">
           <div class="grid gap-4 sm:grid-cols-3">
-            <StatCard label="Средний по группе" :value="data?.group_average || '—'" :icon="TrendingUp" accent />
-            <StatCard label="Студентов" :value="data?.students ?? '—'" :icon="Users" />
-            <StatCard label="Занятий" :value="data?.lessons ?? '—'" :icon="BookOpen" />
+            <StatCard :label="locale.t('teacherStats.groupAverage', 'Средний по группе')" :value="data?.group_average || '—'" :icon="TrendingUp" accent />
+            <StatCard :label="locale.t('teacherStats.students', 'Студентов')" :value="data?.students ?? '—'" :icon="Users" />
+            <StatCard :label="locale.t('teacherStats.lessons', 'Занятий')" :value="data?.lessons ?? '—'" :icon="BookOpen" />
           </div>
           <InsightCards :cards="insights" />
         </div>

@@ -47,15 +47,26 @@ _ROLE_HINT = {
 }
 
 
-def _build_voicing_prompt(facts_text: str, role: str, user_question: str) -> list:
-    system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "")
+#Локаль → на каком языке отвечать. 'ru' не добавляет строку в персону вовсе (дефолт
+#модели и так русский, лишняя инструкция ничего не меняет). Коды и названия — те же,
+#что в translate_service.LANGUAGES (переиспользуем, не заводим вторую копию).
+_LOCALE_NAME = {"en": "английском", "zh": "китайском"}
+
+
+def _locale_hint(locale: str) -> str:
+    name = _LOCALE_NAME.get(locale or "ru", "")
+    return f"\n\nОтвечай на {name} языке, независимо от языка вопроса пользователя." if name else ""
+
+
+def _build_voicing_prompt(facts_text: str, role: str, user_question: str, locale: str = "ru") -> list:
+    system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "") + _locale_hint(locale)
     user = (f"Вопрос пользователя: {user_question}\n\n"
             f"ДАННЫЕ (только из них можно брать факты):\n{facts_text}\n\n"
             f"Озвучь ответ по этим данным в стиле Вектора.")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _voice_gigachat(cfg: dict, facts_text: str, role: str, question: str) -> str:
+def _voice_gigachat(cfg: dict, facts_text: str, role: str, question: str, locale: str = "ru") -> str:
     from gigachat import GigaChat
     from gigachat.models import Chat, Messages
     creds = cfg.get("gigachat_credentials", "")
@@ -65,16 +76,16 @@ def _voice_gigachat(cfg: dict, facts_text: str, role: str, question: str) -> str
                   scope=cfg.get("gigachat_scope", "GIGACHAT_API_B2B"),
                   model=cfg.get("gigachat_model", "GigaChat"),
                   verify_ssl_certs=False, timeout=25.0) as client:
-        msgs = _build_voicing_prompt(facts_text, role, question)
+        msgs = _build_voicing_prompt(facts_text, role, question, locale)
         chat = Chat(messages=[Messages(role=m["role"], content=m["content"]) for m in msgs],
                     temperature=0.3)
         return client.chat(chat).choices[0].message.content.strip()
 
 
-def _voice_ollama(cfg: dict, facts_text: str, role: str, question: str) -> str:
+def _voice_ollama(cfg: dict, facts_text: str, role: str, question: str, locale: str = "ru") -> str:
     import requests
     host = (cfg.get("local_host") or "http://localhost:11434").rstrip("/")
-    msgs = _build_voicing_prompt(facts_text, role, question)
+    msgs = _build_voicing_prompt(facts_text, role, question, locale)
     r = requests.post(host + "/api/chat",
                       json={"model": cfg.get("local_model", "qwen2.5:3b"),
                             "messages": msgs, "stream": False,
@@ -82,9 +93,13 @@ def _voice_ollama(cfg: dict, facts_text: str, role: str, question: str) -> str:
     return r.json()["message"]["content"].strip()
 
 
-def voice(cfg: dict, facts_text: str, role: str = "student", question: str = "") -> str:
+def voice(cfg: dict, facts_text: str, role: str = "student", question: str = "",
+          locale: str = "ru") -> str:
     """Озвучить готовый фактический текст выбранным провайдером. Провайдер и ключи — из
-    cfg (синхронизированный конфиг). offline или любая ошибка → вернуть текст как есть."""
+    cfg (синхронизированный конфиг). offline или любая ошибка → вернуть текст как есть.
+
+    `locale` — язык интерфейса (§ролей, полный перевод): один вызов модели сразу
+    озвучивает факты на нужном языке, без второго прохода через переводчик."""
     cfg = cfg or {}
     #Аварийный тумблер: GRADEBOOK_VECTOR_LLM=off принудительно отключает озвучку на бою.
     if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
@@ -92,9 +107,9 @@ def voice(cfg: dict, facts_text: str, role: str = "student", question: str = "")
     kind = (cfg.get("vector_llm") or "offline").strip()
     try:
         if kind == "gigachat":
-            return _voice_gigachat(cfg, facts_text, role, question) or facts_text
+            return _voice_gigachat(cfg, facts_text, role, question, locale) or facts_text
         if kind in ("local", "ollama"):
-            return _voice_ollama(cfg, facts_text, role, question) or facts_text
+            return _voice_ollama(cfg, facts_text, role, question, locale) or facts_text
     except Exception as e:
         #Не роняем ответ: факты уже верные, LLM лишь переформулировка.
         print(f"[vector_llm] озвучка не удалась ({kind}), отдаю факты как есть: {e}")
@@ -119,8 +134,8 @@ _SMALLTALK_RULES = """\
 Коротко, на русском, максимум один эмодзи."""
 
 
-def _freechat_messages(question: str, role: str, context: str = "") -> list:
-    system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "") + "\n\n" + _SMALLTALK_RULES
+def _freechat_messages(question: str, role: str, context: str = "", locale: str = "ru") -> list:
+    system = VECTOR_PERSONA + "\n" + _ROLE_HINT.get(role, "") + _locale_hint(locale) + "\n\n" + _SMALLTALK_RULES
     if context:
         #Заметки пользователя из «Избранного» — чтобы понимать, о чём речь в «а это когда?»
         #и «что я писал про экзамен». ⚠️ Прямо запрещаем выводить из них ЦИФРЫ успеваемости:
@@ -134,9 +149,20 @@ def _freechat_messages(question: str, role: str, context: str = "") -> list:
     return [{"role": "system", "content": system}, {"role": "user", "content": question}]
 
 
-def _free_offline(role: str) -> str:
-    return ("С радостью бы поболтал, но сейчас я без ИИ-модели. Зато точно помогу по журналу: "
-            "спроси про оценки, средний балл, пропуски или расписание. 🐯")
+#Офлайн-редирект тоже переведён вручную (без ИИ-модели переводить и нечем) — те же три
+#языка, что у остального статичного текста Вектора (см. web.py::_STATIC_TEXT).
+_FREE_OFFLINE = {
+    "ru": ("С радостью бы поболтал, но сейчас я без ИИ-модели. Зато точно помогу по журналу: "
+           "спроси про оценки, средний балл, пропуски или расписание. 🐯"),
+    "en": ("I’d love to chat, but I don’t have an AI model right now. I can definitely help "
+           "with the gradebook though: ask about grades, your average, absences or the "
+           "schedule. 🐯"),
+    "zh": "我很想聊聊，但现在没有连接AI模型。不过成绩册方面我肯定能帮忙：可以问我成绩、平均分、缺勤情况或课表。🐯",
+}
+
+
+def _free_offline(role: str, locale: str = "ru") -> str:
+    return _FREE_OFFLINE.get(locale, _FREE_OFFLINE["ru"])
 
 
 def _chat_gigachat(cfg: dict, messages: list, temperature: float = 0.5) -> str:
@@ -185,7 +211,8 @@ def complete(cfg: dict, messages: list, temperature: float = 0.3) -> str:
     return ""
 
 
-def free_chat(cfg: dict, question: str, role: str = "student", context: str = "") -> str:
+def free_chat(cfg: dict, question: str, role: str = "student", context: str = "",
+              locale: str = "ru") -> str:
     """Свободный ответ на НЕжурнальный вопрос: короткий small-talk → возврат к учёбе, без
     решения задач. Нет провайдера/ошибка → мягкий офлайн-редирект (чат не ломается).
 
@@ -194,13 +221,13 @@ def free_chat(cfg: dict, question: str, role: str = "student", context: str = ""
     (`messenger._saved_context`), иначе персональные данные уехали бы в облачную модель."""
     cfg = cfg or {}
     if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
-        return _free_offline(role)
+        return _free_offline(role, locale)
     kind = (cfg.get("vector_llm") or "offline").strip()
     try:
         if kind == "gigachat":
-            return _chat_gigachat(cfg, _freechat_messages(question, role, context)) or _free_offline(role)
+            return _chat_gigachat(cfg, _freechat_messages(question, role, context, locale)) or _free_offline(role, locale)
         if kind in ("local", "ollama"):
-            return _chat_ollama(cfg, _freechat_messages(question, role, context)) or _free_offline(role)
+            return _chat_ollama(cfg, _freechat_messages(question, role, context, locale)) or _free_offline(role, locale)
     except Exception as e:
         print(f"[vector_llm] free_chat не удался ({kind}): {e}")
-    return _free_offline(role)
+    return _free_offline(role, locale)

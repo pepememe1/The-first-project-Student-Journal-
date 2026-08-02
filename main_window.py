@@ -67,7 +67,6 @@ class MainAppWindow(QMainWindow):
         #Верхняя панель (скрыта на странице входа)
         self._header = HeaderBar()
         self._header.logout_clicked.connect(self._logout)
-        self._header.tools_clicked.connect(self._open_desktop_tools)
         self._header.hide()
 
         #Обёртка (заголовок + содержимое)
@@ -461,9 +460,9 @@ class MainAppWindow(QMainWindow):
             dash = ParentDashboard(payload)
             return dash, ("Родитель", dash.display_name())
         if role == "admin":
-            #Кабинет — общий Vue; то, что относится к ЭТОМУ компьютеру (сервер, БД,
-            #обслуживание), живёт в отдельном окне «Инструменты ПК» из шапки: в браузере
-            #такие вещи не воспроизводятся в принципе, а не «пока не сделаны».
+            #Кабинет — общий Vue; раздел «Сервер» (боевая машина по SSH, §16) живёт там же,
+            #в AdminServer.vue — отдельной нативной двери («Инструменты ПК») больше нет,
+            #она открывала устаревшую, не обновлявшуюся вместе с Vue-панель.
             web = self._try_vue_dashboard(role, on_logout=self._logout)
             if web is not None:
                 return web, ("Администратор", "Администратор")
@@ -498,14 +497,6 @@ class MainAppWindow(QMainWindow):
         self._stack.setCurrentWidget(dash)
         #шапка создаётся один раз и не пересобирается с дашбордом — красим её явно
         self._header.refresh_theme()
-        #Дверь к инструментам этого ПК — только админу и только когда кабинет ВЕБОВЫЙ:
-        #в нативной админке эти разделы и так на месте, вторая дверь была бы лишней.
-        try:
-            role_now = (self._session or (None,))[0]
-            self._header.show_tools(role_now == "admin"
-                                    and type(dash).__name__ == "VueDashboard")
-        except Exception:
-            pass
         self._header.set_role(role_text, user_text)
         #ВЕБ-кабинет несёт СВОЮ шапку (ту же, что на сайте) — нативную не показываем,
         #иначе две панели подряд: сверху старая, под ней новая. У нативных кабинетов она
@@ -633,13 +624,6 @@ class MainAppWindow(QMainWindow):
             import traceback
             traceback.print_exc()  # полный стек в консоль
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть панель администратора:\n{e}")
-
-    def _open_desktop_tools(self):
-        """Открыть «Инструменты ПК» — нативные настройки сервера/базы этого компьютера
-        (см. ui/desktop_tools.py). Кнопка в шапке видна только когда она нужна
-        (admin + Vue-кабинет, см. _open_dashboard), поэтому здесь ничего не проверяем."""
-        import desktop_tools
-        desktop_tools.open_tools(self)
 
     def _logout(self):
         """Выход из системы.

@@ -1267,6 +1267,26 @@ def translate_languages(_user: User = Depends(get_current_user)):
             "auto": translate_service.AUTO}
 
 
+# ── GIF-пикер (Klipy) ────────────────────────────────────────────────────────────────
+@router.get("/gifs/categories")
+def gif_categories(_user: User = Depends(get_current_user)):
+    from .. import gif_service
+    return {"categories": gif_service.categories()}
+
+
+@router.get("/gifs/trending")
+def gif_trending(page: int = Query(1, ge=1), _user: User = Depends(get_current_user)):
+    from .. import gif_service
+    return gif_service.trending(page=page)
+
+
+@router.get("/gifs/search")
+def gif_search(q: str = Query(...), page: int = Query(1, ge=1),
+              _user: User = Depends(get_current_user)):
+    from .. import gif_service
+    return gif_service.search(q, page=page)
+
+
 # ── Отправка ─────────────────────────────────────────────────────────────────────────
 @router.post("/chats/{conv_id}/messages")
 def send_message(conv_id: str, payload: dict = Body(...),
@@ -1283,7 +1303,16 @@ def send_message(conv_id: str, payload: dict = Body(...),
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
-    if len(body) > _MAX_MSG_CHARS:
+    #GIF-пикер (Klipy, §messenger_gifs): тело — прямая ссылка на CDN, а не текст, набранный
+    #человеком. Слэш-команды/упоминания/цензура ниже пропускаются целиком для этого вида —
+    #прогонять URL через censor() рискованно: случайное совпадение с корнем матерного слова
+    #испортило бы саму ссылку (censor меняет символы НА МЕСТЕ, длина та же).
+    is_gif = (payload.get("kind") or "").strip() == "gif"
+    if is_gif:
+        from .. import gif_service
+        if not gif_service.is_allowed_url(body):
+            raise HTTPException(status_code=400, detail="Недопустимая ссылка на GIF")
+    elif len(body) > _MAX_MSG_CHARS:
         body = body[:_MAX_MSG_CHARS]
     reply_to = int(payload.get("reply_to_id") or 0)
     if reply_to:
@@ -1303,42 +1332,45 @@ def send_message(conv_id: str, payload: dict = Body(...),
             _attach_report_meta(db, [out])
             return out
 
-    #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
-    #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
-    #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
-    #⚠️ ПОСЛЕ проверки nonce: отчёт — это запись в БД, и повтор запроса (ретрай сети,
-    #двойное нажатие) не должен плодить второй такой же. Тот же nonce уезжает и в
-    #сообщение-кнопку, поэтому ретрай находит её выше и возвращает как есть.
-    rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
-    if rep_msg is not None:
-        out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
-        _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
-        return out
+    mentions = []
+    if not is_gif:
+        #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
+        #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
+        #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
+        #⚠️ ПОСЛЕ проверки nonce: отчёт — это запись в БД, и повтор запроса (ретрай сети,
+        #двойное нажатие) не должен плодить второй такой же. Тот же nonce уезжает и в
+        #сообщение-кнопку, поэтому ретрай находит её выше и возвращает как есть.
+        rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
+        if rep_msg is not None:
+            out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
+            _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
+            return out
 
-    #/mute, /clear — тоже команды, не сообщения: разбираем ДО сохранения текста (как
-    #/отчет выше), иначе литеральная строка команды осела бы в ленте мусором.
-    mute_msg = _handle_mute_command(db, conv_id, body, user, part)
-    if mute_msg is not None:
-        return _msg_out(mute_msg, user.id, "")
-    clear_msg = _handle_clear_command(db, conv_id, body, user, part)
-    if clear_msg is not None:
-        return _msg_out(clear_msg, user.id, "")
+        #/mute, /clear — тоже команды, не сообщения: разбираем ДО сохранения текста (как
+        #/отчет выше), иначе литеральная строка команды осела бы в ленте мусором.
+        mute_msg = _handle_mute_command(db, conv_id, body, user, part)
+        if mute_msg is not None:
+            return _msg_out(mute_msg, user.id, "")
+        clear_msg = _handle_clear_command(db, conv_id, body, user, part)
+        if clear_msg is not None:
+            return _msg_out(clear_msg, user.id, "")
 
-    #§D8: упоминания — среди участников ЭТОЙ беседы (иначе @Фамилия постороннего человека
-    #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
-    mentions = _parse_mentions(db, body, _participant_ids(db, conv_id))
+        #§D8: упоминания — среди участников ЭТОЙ беседы (иначе @Фамилия постороннего человека
+        #молча ни на что бы не сработала, но и не должна давать доступ к чужим данным).
+        mentions = _parse_mentions(db, body, _participant_ids(db, conv_id))
 
-    #Цензура мата — маскируем звёздочками (НЕ блокируем отправку, как автомодерация
-    #Twitch/Discord). После всех slash-команд (иначе испортили бы их разбор) и ПОСЛЕ
-    #упоминаний (плейсхолдер @Фамилия матом не считается), но ДО сохранения — что легло
-    #в БД, то и видят все читатели постфактум. `body` переиспользуется ниже в
-    #_handle_vector_command — так что и вопрос Вектору уходит уже очищенным.
-    import profanity_filter
-    body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
+        #Цензура мата — маскируем звёздочками (НЕ блокируем отправку, как автомодерация
+        #Twitch/Discord). После всех slash-команд (иначе испортили бы их разбор) и ПОСЛЕ
+        #упоминаний (плейсхолдер @Фамилия матом не считается), но ДО сохранения — что легло
+        #в БД, то и видят все читатели постфактум. `body` переиспользуется ниже в
+        #_handle_vector_command — так что и вопрос Вектору уходит уже очищенным.
+        import profanity_filter
+        body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
 
     m = Message(conversation_id=conv_id, sender_id=user.id, body=body,
                 created_at=_now(), reply_to_id=reply_to, mentions=mentions,
-                kind="text", body_format="markdown", client_nonce=nonce)
+                kind="gif" if is_gif else "text",
+                body_format="plain" if is_gif else "markdown", client_nonce=nonce)
     db.add(m)
     db.commit()
     db.refresh(m)
@@ -1352,7 +1384,13 @@ def send_message(conv_id: str, payload: dict = Body(...),
     #`loud` в mentions) + письмо в «Систему». Ставим ПОСЛЕ обычной рассылки: обычный пуш
     #о сообщении и «вас отметили» — разные события, и второе не должно съесть первое.
     _notify_loud_mentions(db, conv, user, mentions)
-    _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
+    if is_gif:
+        #Best-effort, ПОСЛЕ commit — статистика показов Klipy не имеет права мешать уже
+        #созданному сообщению, даже если их API прямо сейчас недоступен.
+        from .. import gif_service
+        gif_service.mark_shared((payload.get("gif_slug") or "").strip())
+    else:
+        _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
 
 
@@ -1452,9 +1490,10 @@ def _handle_vector_command(db: Session, conv_id: str, body: str, user: User,
     if not question:
         return
     try:
-        from .web import answer_vector_question
+        from .web import answer_vector_question, user_ui_locale
         answer = answer_vector_question(question, user, db,
-                                        context=_saved_context(db, conv_id, user))
+                                        context=_saved_context(db, conv_id, user),
+                                        locale=user_ui_locale(user))
         text = (answer.get("text") or "").strip()
         if text:
             _post_system_channel_message(db, conv_id, text)

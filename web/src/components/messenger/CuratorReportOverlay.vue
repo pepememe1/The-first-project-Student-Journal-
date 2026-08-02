@@ -16,10 +16,12 @@ import { ref, computed, watch } from 'vue'
 import { X, ChevronLeft } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useThemeStore } from '@/stores/theme'
+import { useLocaleStore } from '@/stores/locale'
 
 const props = defineProps({ reportId: { type: String, required: true } })
 const emit = defineEmits(['close'])
 const theme = useThemeStore()
+const locale = useLocaleStore()
 
 const overview = ref(null)
 const loading = ref(true)
@@ -49,16 +51,16 @@ loadOverview()
 // (не автоматический инверт), см. заголовок файла.
 const CATS = computed(() => (theme.isDark
   ? [
-      ['excellent', 'Отличники', '#3987e5'],
-      ['good', 'Хорошисты', '#d95926'],
-      ['passing', 'Успевающие', '#199e70'],
-      ['failing', 'Неуспевающие', '#c98500'],
+      ['excellent', locale.t('curatorReport.cat.excellent', 'Отличники'), '#3987e5'],
+      ['good', locale.t('curatorReport.cat.good', 'Хорошисты'), '#d95926'],
+      ['passing', locale.t('curatorReport.cat.passing', 'Успевающие'), '#199e70'],
+      ['failing', locale.t('curatorReport.cat.failing', 'Неуспевающие'), '#c98500'],
     ]
   : [
-      ['excellent', 'Отличники', '#2a78d6'],
-      ['good', 'Хорошисты', '#eb6834'],
-      ['passing', 'Успевающие', '#1baf7a'],
-      ['failing', 'Неуспевающие', '#eda100'],
+      ['excellent', locale.t('curatorReport.cat.excellent', 'Отличники'), '#2a78d6'],
+      ['good', locale.t('curatorReport.cat.good', 'Хорошисты'), '#eb6834'],
+      ['passing', locale.t('curatorReport.cat.passing', 'Успевающие'), '#1baf7a'],
+      ['failing', locale.t('curatorReport.cat.failing', 'Неуспевающие'), '#eda100'],
     ]))
 const categories = computed(() => {
   const c = overview.value?.categories
@@ -110,34 +112,34 @@ function fmtGrade(v) {
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center gap-2 border-b border-border p-4">
-        <button v-if="subject" type="button" @click="backToOverview" aria-label="Назад"
+        <button v-if="subject" type="button" @click="backToOverview" :aria-label="locale.t('curatorReport.back', 'Назад')"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <ChevronLeft class="size-5" />
         </button>
         <div class="min-w-0 flex-1">
           <h3 class="truncate font-title text-base font-bold text-text">
-            {{ subject ? subject : `Отчёт №${overview?.seq ?? ''} · ${overview?.group ?? ''}` }}
+            {{ subject ? subject : locale.t('curatorReport.headerTitle', { seq: overview?.seq ?? '', group: overview?.group ?? '' }) }}
           </h3>
           <p v-if="!subject && overview" class="text-xs text-text3">
-            {{ overview.year }} · {{ overview.semester === 1 ? 'осенний' : 'весенний' }} семестр ·
-            на {{ overview.cutoff_date }}
-            <span v-if="overview.archived" class="ml-1 rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-semibold text-text3">Архив</span>
+            {{ overview.year }} · {{ overview.semester === 1 ? locale.t('curatorReport.fall', 'осенний') : locale.t('curatorReport.spring', 'весенний') }} {{ locale.t('curatorReport.semester', 'семестр') }} ·
+            {{ locale.t('curatorReport.asOf', { date: overview.cutoff_date }) }}
+            <span v-if="overview.archived" class="ml-1 rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-semibold text-text3">{{ locale.t('curatorReport.archived', 'Архив') }}</span>
           </p>
         </div>
-        <button type="button" @click="emit('close')" aria-label="Закрыть"
+        <button type="button" @click="emit('close')" :aria-label="locale.t('common.close')"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <X class="size-5" />
         </button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
-        <p v-if="loading" class="py-10 text-center text-sm text-text3">Считаем…</p>
-        <p v-else-if="failed" class="py-10 text-center text-sm text-text3">Не удалось получить отчёт.</p>
+        <p v-if="loading" class="py-10 text-center text-sm text-text3">{{ locale.t('curatorReport.calculating', 'Считаем…') }}</p>
+        <p v-else-if="failed" class="py-10 text-center text-sm text-text3">{{ locale.t('curatorReport.loadFailed', 'Не удалось получить отчёт.') }}</p>
 
         <!-- ── Общий вид: круговая + плоские диаграммы ─────────────────────────────── -->
         <template v-else-if="!subject && overview">
           <div v-if="!categories.length" class="py-6 text-center text-sm text-text3">
-            У студентов группы пока нет ни одной оценки.
+            {{ locale.t('curatorReport.noGrades', 'У студентов группы пока нет ни одной оценки.') }}
           </div>
           <div v-else class="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-6">
             <!-- Круговая: доля категорий. Центр — общее число студентов (заголовок цифрой). -->
@@ -145,7 +147,7 @@ function fmtGrade(v) {
               <div class="absolute inset-3 grid place-items-center rounded-full bg-card text-center">
                 <div>
                   <div class="font-title text-2xl font-extrabold text-text">{{ overview.students }}</div>
-                  <div class="text-[11px] text-text3">студентов</div>
+                  <div class="text-[11px] text-text3">{{ locale.t('curatorReport.studentsWord', 'студентов') }}</div>
                 </div>
               </div>
             </div>
@@ -157,13 +159,13 @@ function fmtGrade(v) {
                 <span class="text-text3">{{ c.count }} · {{ c.pct }}%</span>
               </li>
               <li v-if="overview.categories.no_data" class="pt-1 text-xs text-text3">
-                Без оценок: {{ overview.categories.no_data }}
+                {{ locale.t('curatorReport.noData', { n: overview.categories.no_data }) }}
               </li>
             </ul>
           </div>
 
           <div v-if="overview.subjects.length" class="mt-6">
-            <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">Средний по предметам · % от 5</p>
+            <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('curatorReport.avgBySubject', 'Средний по предметам · % от 5') }}</p>
             <div class="space-y-2.5">
               <button v-for="s in overview.subjects" :key="s.subject" type="button" @click="openSubject(s.subject)"
                       class="block w-full rounded-md text-left transition-opacity hover:opacity-80">
@@ -181,17 +183,17 @@ function fmtGrade(v) {
 
         <!-- ── Дрилл-даун по предмету: журнал группы ────────────────────────────────── -->
         <template v-else-if="subject">
-          <p v-if="subjectLoading" class="py-10 text-center text-sm text-text3">Загружаем журнал…</p>
+          <p v-if="subjectLoading" class="py-10 text-center text-sm text-text3">{{ locale.t('curatorReport.loadingJournal', 'Загружаем журнал…') }}</p>
           <div v-else-if="subjectData" class="overflow-x-auto">
             <table class="w-full min-w-[480px] border-collapse text-sm">
               <thead>
                 <tr class="border-b border-border text-left text-[11px] uppercase tracking-wide text-text3">
-                  <th class="py-1.5 pr-2">Студент</th>
+                  <th class="py-1.5 pr-2">{{ locale.t('role.student', 'Студент') }}</th>
                   <th v-for="l in subjectData.lessons" :key="l.id" class="px-1.5 py-1.5 text-center font-normal">
                     №{{ l.number }}
                   </th>
-                  <th class="px-2 py-1.5 text-center">Ср.балл</th>
-                  <th class="px-2 py-1.5 text-center">Пропущено</th>
+                  <th class="px-2 py-1.5 text-center">{{ locale.t('curatorReport.avgGrade', 'Ср.балл') }}</th>
+                  <th class="px-2 py-1.5 text-center">{{ locale.t('curatorReport.missed', 'Пропущено') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -202,12 +204,12 @@ function fmtGrade(v) {
                   </td>
                   <td class="px-2 py-1.5 text-center font-semibold text-text">{{ row.average ? row.average.toFixed(2) : '—' }}</td>
                   <td class="px-2 py-1.5 text-center text-text2">
-                    {{ row.missed_hours }} ч. <span class="text-text3">({{ row.missed_count }})</span>
+                    {{ locale.t('curatorReport.hoursShort', { n: row.missed_hours }) }} <span class="text-text3">({{ row.missed_count }})</span>
                   </td>
                 </tr>
               </tbody>
             </table>
-            <p v-if="!subjectData.rows.length" class="py-6 text-center text-sm text-text3">В группе нет студентов.</p>
+            <p v-if="!subjectData.rows.length" class="py-6 text-center text-sm text-text3">{{ locale.t('curatorReport.noStudents', 'В группе нет студентов.') }}</p>
           </div>
         </template>
       </div>

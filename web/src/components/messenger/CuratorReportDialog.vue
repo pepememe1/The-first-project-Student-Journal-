@@ -14,6 +14,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { X, Check, Users, Star } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['create', 'close'])
@@ -34,6 +35,7 @@ const pickedConvs = ref([])
 const loadingTargets = ref(false)
 
 const auth = useAuthStore()
+const locale = useLocaleStore()
 
 onMounted(async () => {
   try {
@@ -43,7 +45,7 @@ onMounted(async () => {
     groups.value = auth.role === 'admin' ? all : all.filter(g => g.curated)
     group.value = groups.value[0]?.name || ''
   } catch (e) {
-    loadError.value = e?.response?.data?.detail || 'Не удалось получить список групп'
+    loadError.value = e?.response?.data?.detail || locale.t('groupPick.loadFailed', 'Не удалось получить список групп')
   } finally { loading.value = false }
 })
 
@@ -85,33 +87,33 @@ const nothingPicked = computed(() =>
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
-        <h3 class="font-title text-lg font-bold text-text">Отчёт для родителей</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('curatorReport.title', 'Отчёт для родителей') }}</h3>
         <button type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
-        <p v-if="loading" class="text-sm text-text3">Загружаем группы…</p>
+        <p v-if="loading" class="text-sm text-text3">{{ locale.t('groupPick.loading', 'Загружаем группы…') }}</p>
         <p v-else-if="!groups.length" class="text-sm text-text3">
-          Вы не курируете ни одной группы — отчёт по группе выпускает её куратор.
+          {{ locale.t('curatorReport.noCurated', 'Вы не курируете ни одной группы — отчёт по группе выпускает её куратор.') }}
         </p>
         <template v-else>
-          <label class="mb-1 block text-xs font-semibold text-text3">Группа</label>
+          <label class="mb-1 block text-xs font-semibold text-text3">{{ locale.t('messenger.groupLabel', 'Группа') }}</label>
           <select v-model="group"
                   class="mb-4 w-full rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent">
             <option v-for="g in groups" :key="g.name" :value="g.name">{{ g.name }}</option>
           </select>
 
-          <p class="mb-1 text-xs font-semibold text-text3">Кому отправить</p>
+          <p class="mb-1 text-xs font-semibold text-text3">{{ locale.t('curatorReport.whomTo', 'Кому отправить') }}</p>
           <p class="mb-2 text-xs text-text3">
-            Никого не выбрали — отчёт ляжет в «Избранное», оттуда его можно переслать.
+            {{ locale.t('curatorReport.nobodyHint', 'Никого не выбрали — отчёт ляжет в «Избранное», оттуда его можно переслать.') }}
           </p>
-          <p v-if="loadingTargets" class="text-sm text-text3">Загружаем адресатов…</p>
+          <p v-if="loadingTargets" class="text-sm text-text3">{{ locale.t('curatorReport.loadingTargets', 'Загружаем адресатов…') }}</p>
           <template v-else>
             <div v-if="parents.length" class="mb-2 overflow-hidden rounded-lg border border-border">
               <button v-for="p in parents" :key="p.id" type="button" @click="toggleUser(p.id)"
                       class="flex w-full items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
                 <Avatar :src="p.avatar" :name="p.full_name" :size="28" />
-                <span class="min-w-0 flex-1 truncate text-text">{{ p.full_name }}<span class="text-text3"> · родитель</span></span>
+                <span class="min-w-0 flex-1 truncate text-text">{{ p.full_name }}<span class="text-text3"> · {{ locale.t('role.parent', 'родитель') }}</span></span>
                 <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                       :class="pickedUsers.includes(p.id) ? 'border-accent bg-accent text-white' : 'border-border2'">
                   <Check v-if="pickedUsers.includes(p.id)" class="size-3.5" />
@@ -119,21 +121,20 @@ const nothingPicked = computed(() =>
               </button>
             </div>
             <p v-else class="mb-2 text-xs text-text3">
-              У группы нет родителей с подтверждённым доступом — отчёт можно отправить в беседу
-              или оставить себе.
+              {{ locale.t('curatorReport.noParents', 'У группы нет родителей с подтверждённым доступом — отчёт можно отправить в беседу или оставить себе.') }}
             </p>
 
             <label v-if="parents.length && !hasReportsChannel"
                    class="mb-2 flex items-center gap-2 text-sm text-text2">
               <input type="checkbox" v-model="useChannel" class="accent-[var(--gb-accent)]" />
-              Опубликовать в канал «Отчёты · {{ group }}» (видят все родители группы)
+              {{ locale.t('curatorReport.publishToChannel', { group }) }}
             </label>
 
             <div v-if="convs.length" class="overflow-hidden rounded-lg border border-border">
               <button v-for="c in convs" :key="c.conversation_id" type="button" @click="toggleConv(c.conversation_id)"
                       class="flex w-full items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
                 <Users class="size-4 shrink-0 text-text3" />
-                <span class="min-w-0 flex-1 truncate text-text">{{ c.title || 'Беседа' }}</span>
+                <span class="min-w-0 flex-1 truncate text-text">{{ c.title || locale.t('curatorReport.conversation', 'Беседа') }}</span>
                 <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                       :class="pickedConvs.includes(c.conversation_id) ? 'border-accent bg-accent text-white' : 'border-border2'">
                   <Check v-if="pickedConvs.includes(c.conversation_id)" class="size-3.5" />
@@ -149,14 +150,14 @@ const nothingPicked = computed(() =>
       <div class="flex items-center justify-between gap-2 border-t border-border p-3">
         <span class="inline-flex items-center gap-1 text-xs text-text3">
           <Star v-if="nothingPicked" class="size-3.5" />
-          {{ nothingPicked ? 'В «Избранное»' : `Адресатов: ${pickedUsers.length + pickedConvs.length}` }}
+          {{ nothingPicked ? locale.t('curatorReport.toSaved', 'В «Избранное»') : locale.t('curatorReport.recipientsCount', { n: pickedUsers.length + pickedConvs.length }) }}
         </span>
         <span class="flex gap-2">
-          <button type="button" @click="emit('close')" class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Отмена</button>
+          <button type="button" @click="emit('close')" class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
           <button type="button" :disabled="!group || busy"
                   @click="emit('create', { group, userIds: [...pickedUsers], convIds: [...pickedConvs], channel: useChannel })"
                   class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-            {{ busy ? 'Создаём…' : 'Создать отчёт' }}
+            {{ busy ? locale.t('curatorReport.creating', 'Создаём…') : locale.t('curatorReport.create', 'Создать отчёт') }}
           </button>
         </span>
       </div>

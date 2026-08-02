@@ -42,7 +42,7 @@ export const NAV = {
   // группы, ни расписания преподавателей: это внешний человек, которому открыт доступ
   // к данным своего ребёнка, и всё лишнее здесь — расширение доступа к чужим ПДн.
   parent: [
-    { section: 'Ребёнок' },
+    { section: 'Ребёнок', i18n: 'nav.section.child' },
     { key: 'journal', label: 'Журнал', i18n: 'nav.teacherJournal', icon: ClipboardList, to: '/parent' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/parent/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/parent/messages', badge: 'messagesUnread' },
@@ -56,7 +56,7 @@ export const NAV = {
     { key: 'teachers', label: 'Преподаватели', i18n: 'nav.teachers', icon: GraduationCap, to: '/admin/teachers' },
     { key: 'students', label: 'Студенты', i18n: 'nav.students', icon: Users, to: '/admin/students' },
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/admin/parents' },
-    { key: 'registrations', label: 'Заявки на регистрацию', icon: UserPlus, to: '/admin/registrations' },
+    { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
@@ -64,11 +64,11 @@ export const NAV = {
     { key: 'issues', label: 'Накладки расписания', icon: AlertTriangle,
       to: '/admin/schedule-issues', badge: 'scheduleIssues' },
     { section: 'Система', i18n: 'nav.sectionSystem' },
-    { key: 'api', label: 'Настройки ИИ', icon: Settings, to: '/admin/api' },
+    { key: 'api', label: 'Настройки ИИ', i18n: 'nav.aiSettings', icon: Settings, to: '/admin/api' },
     { key: 'server', label: 'Сервер', i18n: 'nav.server', icon: Server, to: '/admin/server' },
     { key: 'data', label: 'Данные и копии', i18n: 'nav.data', icon: Database, to: '/admin/data' },
-    { key: 'requests', label: 'Запросы на подключение', icon: MonitorSmartphone, to: '/admin/requests' },
-    { key: 'sessions', label: 'Сессии и доступ', icon: ShieldCheck, to: '/admin/access' },
+    { key: 'requests', label: 'Запросы на подключение', i18n: 'nav.requests', icon: MonitorSmartphone, to: '/admin/requests' },
+    { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: ShieldCheck, to: '/admin/access' },
     { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/admin/settings' },
     { key: 'mon', label: 'Мониторинг', i18n: 'nav.monitor', icon: Activity, to: '/admin/monitor' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/admin/vector' },

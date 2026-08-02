@@ -8,8 +8,10 @@ import { useThemeStore } from '@/stores/theme'
 import { PRESETS, swatchColors } from '@/theme/palette'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useLocaleStore } from '@/stores/locale'
 
 const theme = useThemeStore()
+const locale = useLocaleStore()
 
 const currentId = computed(() => theme.spec.id)
 const customAccent = computed({
@@ -35,7 +37,7 @@ function swatchStyle(id) {
 
 <template>
   <div class="space-y-6">
-    <Card title="Палитра" subtitle="Фирменная тема ВСГУТУ или один из готовых наборов">
+    <Card :title="locale.t('themePage.palette', 'Палитра')" :subtitle="locale.t('themePage.paletteHint', 'Фирменная тема ВСГУТУ или один из готовых наборов')">
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
         <button
           v-for="p in PRESETS"
@@ -50,13 +52,13 @@ function swatchStyle(id) {
               <Check class="size-2.5" />
             </span>
           </span>
-          <span class="truncate text-sm font-medium text-text">{{ p.name }}</span>
+          <span class="truncate text-sm font-medium text-text">{{ locale.t(`theme.preset.${p.id}`, p.name) }}</span>
         </button>
       </div>
     </Card>
 
     <div class="grid gap-6 lg:grid-cols-2">
-      <Card title="Свой цвет" subtitle="Кастомный акцент палитры">
+      <Card :title="locale.t('themePage.customColor', 'Свой цвет')" :subtitle="locale.t('themePage.customColorHint', 'Кастомный акцент палитры')">
         <div class="flex items-center gap-4">
           <input
             v-model="customAccent"
@@ -65,15 +67,15 @@ function swatchStyle(id) {
           />
           <div>
             <p class="text-sm font-medium text-text">{{ customAccent }}</p>
-            <p class="text-xs text-text3">Применяется сразу ко всему интерфейсу</p>
+            <p class="text-xs text-text3">{{ locale.t('themePage.customColorApplies', 'Применяется сразу ко всему интерфейсу') }}</p>
           </div>
         </div>
       </Card>
 
-      <Card title="Режим" subtitle="Светлая или тёмная тема">
+      <Card :title="locale.t('themePage.mode', 'Режим')" :subtitle="locale.t('themePage.modeHint', 'Светлая или тёмная тема')">
         <div class="flex gap-2">
-          <AppButton :variant="theme.isDark ? 'ghost' : 'green'" @click="theme.setMode('light')">Светлая</AppButton>
-          <AppButton :variant="theme.isDark ? 'green' : 'ghost'" @click="theme.setMode('dark')">Тёмная</AppButton>
+          <AppButton :variant="theme.isDark ? 'ghost' : 'green'" @click="theme.setMode('light')">{{ locale.t('themePage.light', 'Светлая') }}</AppButton>
+          <AppButton :variant="theme.isDark ? 'green' : 'ghost'" @click="theme.setMode('dark')">{{ locale.t('themePage.dark', 'Тёмная') }}</AppButton>
         </div>
 
         <div class="mt-5 border-t border-border pt-4">
@@ -84,17 +86,17 @@ function swatchStyle(id) {
               class="size-4 accent-[var(--gb-accent)]"
               @change="theme.setSchedule($event.target.checked, schedule.start, schedule.end)"
             />
-            <span class="text-sm text-text">Тёмная тема по расписанию</span>
+            <span class="text-sm text-text">{{ locale.t('themePage.darkSchedule', 'Тёмная тема по расписанию') }}</span>
           </label>
           <div v-if="schedule.enabled" class="mt-3 flex items-center gap-2 text-sm text-text3">
-            <span>с</span>
+            <span>{{ locale.t('themePage.from', 'с') }}</span>
             <input
               type="time"
               :value="schedule.start"
               class="h-9 rounded-sm border border-border2 bg-card2 px-2 text-text"
               @change="theme.setSchedule(true, $event.target.value, schedule.end)"
             />
-            <span>до</span>
+            <span>{{ locale.t('themePage.to', 'до') }}</span>
             <input
               type="time"
               :value="schedule.end"

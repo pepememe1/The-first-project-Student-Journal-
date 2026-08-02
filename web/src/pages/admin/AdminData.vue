@@ -17,7 +17,9 @@ import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const toast = useToast()
 const { confirm } = useConfirm()
 
@@ -31,7 +33,7 @@ onMounted(async () => {
     datasets.value = (await adminApi.dataDatasets()).data.datasets || []
     // По умолчанию отмечаем ВСЁ: типичный сценарий — полная резервная копия.
     pickedExport.value = datasets.value.map((d) => d.name)
-  } catch { toast.error('Не удалось получить список наборов данных') }
+  } catch { toast.error(locale.t('adminData.datasetsLoadFailed', 'Не удалось получить список наборов данных')) }
 })
 
 const totalRows = computed(() =>
@@ -55,7 +57,7 @@ async function doExport() {
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
-    toast.error(e?.response?.data?.detail || 'Не удалось выгрузить данные')
+    toast.error(e?.response?.data?.detail || locale.t('adminData.exportFailed', 'Не удалось выгрузить данные'))
   } finally { exporting.value = false }
 }
 
@@ -83,7 +85,7 @@ async function onFile(e) {
     pickedImport.value = (data.datasets || [])
       .filter((d) => d.count > 0 && !d.error).map((d) => d.name)
   } catch (err) {
-    toast.error(err?.response?.data?.detail || 'Не удалось прочитать архив')
+    toast.error(err?.response?.data?.detail || locale.t('adminData.inspectFailed', 'Не удалось прочитать архив'))
     chosen.value = null
   } finally { inspecting.value = false }
 }
@@ -108,22 +110,20 @@ async function doImport() {
   // Подтверждение с ПЕРЕЧИСЛЕНИЕМ наборов: операция меняет боевые данные, и человек
   // должен увидеть словами, во что именно он сейчас вливает файл.
   const ok = await confirm({
-    title: 'Загрузить данные в журнал?',
-    message: `Будут обновлены: ${labels.join(', ')}.\n\n`
-      + 'Записи сливаются по совпадению идентификатора — то, чего нет в файле, останется '
-      + 'без изменений. Пароли не затрагиваются.',
-    okText: 'Загрузить',
+    title: locale.t('adminData.importConfirmTitle', 'Загрузить данные в журнал?'),
+    message: locale.t('adminData.importConfirmMessage', { labels: labels.join(', ') }),
+    okText: locale.t('adminData.importConfirmOk', 'Загрузить'),
   })
   if (!ok) return
   importing.value = true
   try {
     const { data } = await adminApi.dataImport(chosen.value, pickedImport.value.join(','))
     const total = Object.values(data.written || {}).reduce((a, b) => a + b, 0)
-    toast.success(`Загружено записей: ${total}`)
+    toast.success(locale.t('adminData.importedCount', { total }))
     ;(data.notes || []).forEach((n) => toast.error(n))
     resetImport()
   } catch (e) {
-    toast.error(e?.response?.data?.detail || 'Не удалось загрузить данные')
+    toast.error(e?.response?.data?.detail || locale.t('adminData.importFailed', 'Не удалось загрузить данные'))
   } finally { importing.value = false }
 }
 </script>
@@ -131,13 +131,13 @@ async function doImport() {
 <template>
   <div class="flex flex-col gap-6">
     <!-- Выгрузка = резервная копия -->
-    <Card title="Резервная копия и выгрузка"
-          subtitle="Архив ZIP: каждый набор данных отдельным файлом. Он же годится для восстановления.">
+    <Card :title="locale.t('adminData.backupCardTitle', 'Резервная копия и выгрузка')"
+          :subtitle="locale.t('adminData.backupCardSubtitle', 'Архив ZIP: каждый набор данных отдельным файлом. Он же годится для восстановления.')">
       <div class="mb-2 flex items-center justify-between">
-        <span class="text-sm font-medium text-text2">Что выгрузить</span>
+        <span class="text-sm font-medium text-text2">{{ locale.t('adminData.whatToExport', 'Что выгрузить') }}</span>
         <div class="flex gap-3 text-xs">
-          <button class="text-accent hover:underline" @click="toggleAllExport(true)">выбрать все</button>
-          <button class="text-text3 hover:underline" @click="toggleAllExport(false)">снять</button>
+          <button class="text-accent hover:underline" @click="toggleAllExport(true)">{{ locale.t('adminData.selectAll', 'выбрать все') }}</button>
+          <button class="text-text3 hover:underline" @click="toggleAllExport(false)">{{ locale.t('adminData.selectNone', 'снять') }}</button>
         </div>
       </div>
 
@@ -153,31 +153,29 @@ async function doImport() {
       <div class="mt-3 flex flex-wrap items-center gap-3">
         <AppButton :disabled="exporting || !pickedExport.length" @click="doExport">
           <Download class="mr-2 inline size-4" />
-          {{ exporting ? 'Готовим архив…' : 'Скачать архив' }}
+          {{ exporting ? locale.t('adminData.preparingArchive', 'Готовим архив…') : locale.t('adminData.downloadArchive', 'Скачать архив') }}
         </AppButton>
-        <span class="text-xs text-text3">Записей в выгрузке: {{ totalRows }}</span>
+        <span class="text-xs text-text3">{{ locale.t('adminData.rowsInExport', { total: totalRows }) }}</span>
       </div>
 
       <div class="mt-3 flex items-start gap-2.5 rounded-md border border-border bg-card2 px-3 py-2.5 text-xs text-text2">
         <ShieldAlert class="mt-0.5 size-4 shrink-0 text-orange" />
-        <p>Пароли в архив не входят — после восстановления их нужно задать заново. Личная
-           переписка мессенджера не выгружается. Архив содержит персональные данные
-           студентов: храните его так же, как саму базу.</p>
+        <p>{{ locale.t('adminData.exportWarning', 'Пароли в архив не входят — после восстановления их нужно задать заново. Личная переписка мессенджера не выгружается. Архив содержит персональные данные студентов: храните его так же, как саму базу.') }}</p>
       </div>
     </Card>
 
     <!-- Загрузка -->
-    <Card title="Загрузка данных из архива"
-          subtitle="Выберите файл — покажем, что внутри, и вы отметите, что именно загрузить.">
+    <Card :title="locale.t('adminData.importCardTitle', 'Загрузка данных из архива')"
+          :subtitle="locale.t('adminData.importCardSubtitle', 'Выберите файл — покажем, что внутри, и вы отметите, что именно загрузить.')">
       <input ref="fileInput" type="file" accept=".zip,application/zip" class="hidden"
              @change="onFile" />
 
       <div v-if="!preview" class="flex flex-wrap items-center gap-3">
         <AppButton variant="ghost" :disabled="inspecting" @click="fileInput?.click()">
           <Upload class="mr-2 inline size-4" />
-          {{ inspecting ? 'Читаем архив…' : 'Выбрать архив' }}
+          {{ inspecting ? locale.t('adminData.readingArchive', 'Читаем архив…') : locale.t('adminData.chooseArchive', 'Выбрать архив') }}
         </AppButton>
-        <span class="text-xs text-text3">Принимается ZIP, полученный этой же страницей.</span>
+        <span class="text-xs text-text3">{{ locale.t('adminData.acceptedFileHint', 'Принимается ZIP, полученный этой же страницей.') }}</span>
       </div>
 
       <template v-else>
@@ -185,7 +183,7 @@ async function doImport() {
           <Database class="size-4 text-accent" />
           <span class="truncate">{{ chosen?.name }}</span>
           <span v-if="preview.created_at" class="shrink-0 text-xs text-text3">
-            · снят {{ preview.created_at.slice(0, 10) }}
+            {{ locale.t('adminData.snapshotDate', { date: preview.created_at.slice(0, 10) }) }}
           </span>
         </div>
 
@@ -208,9 +206,9 @@ async function doImport() {
         <div class="mt-4 flex flex-wrap gap-2">
           <AppButton :disabled="importing || !pickedImport.length" @click="doImport">
             <Check class="mr-2 inline size-4" />
-            {{ importing ? 'Загружаем…' : `Загрузить отмеченное (${pickedImport.length})` }}
+            {{ importing ? locale.t('adminData.importing', 'Загружаем…') : locale.t('adminData.importPicked', { n: pickedImport.length }) }}
           </AppButton>
-          <AppButton variant="ghost" @click="resetImport">Отмена</AppButton>
+          <AppButton variant="ghost" @click="resetImport">{{ locale.t('common.cancel') }}</AppButton>
         </div>
       </template>
     </Card>

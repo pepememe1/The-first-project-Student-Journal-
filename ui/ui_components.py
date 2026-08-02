@@ -81,7 +81,6 @@ class HeaderBar(QFrame):
     
     from PySide6.QtCore import Signal as QSignal
     logout_clicked = QSignal()
-    tools_clicked = QSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -146,22 +145,6 @@ class HeaderBar(QFrame):
         sep.setFixedHeight(20)
         lay.addWidget(sep)
 
-        #«Инструменты ПК» — нативная дверь к серверу/базе этого компьютера, когда кабинет
-        #показан общим Vue-интерфейсом (см. ui/vue_dashboard.py, ui/desktop_tools.py):
-        #эти разделы там не встроены в SPA, а остаются нативными Qt-настройками. Скрыта
-        #по умолчанию — main_window показывает её только админу и только для Vue-кабинета.
-        self.tools_btn = QPushButton("Инструменты ПК")
-        self.tools_btn.setStyleSheet(
-            "QPushButton{background:rgba(255,255,255,0.15);color:#FFFFFF;"
-            "border:1px solid rgba(255,255,255,0.5);border-radius:8px;padding:5px 14px;font-size:12px;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.28);}"
-        )
-        self.tools_btn.setCursor(Qt.PointingHandCursor)
-        self.tools_btn.setToolTip("Сервер, база данных и другие настройки этого компьютера")
-        self.tools_btn.clicked.connect(self.tools_clicked)
-        self.tools_btn.hide()
-        lay.addWidget(self.tools_btn)
-
         #Logout button
         logout = QPushButton("Выйти")
         logout.setStyleSheet(
@@ -200,11 +183,6 @@ class HeaderBar(QFrame):
         else:
             self.user_lbl.set_full_text(name)
             self.user_lbl.show()
-
-    def show_tools(self, visible: bool):
-        """Показать/скрыть кнопку «Инструменты ПК» (только admin + Vue-кабинет, см.
-        main_window.py::_open_dashboard)."""
-        self.tools_btn.setVisible(bool(visible))
 
     def refresh_theme(self):
         """Перекрасить верхнюю полосу в цвет активной темы. Шапка создаётся один раз

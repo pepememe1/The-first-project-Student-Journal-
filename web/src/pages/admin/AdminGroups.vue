@@ -8,9 +8,11 @@ import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useLocaleStore } from '@/stores/locale'
 
 const toast = useToast()
 const { confirm } = useConfirm()
+const locale = useLocaleStore()
 const rows = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
@@ -38,24 +40,32 @@ function categoryLabel(key) {
 // ── Учебный период + перевод на курс (rollover) ─────────────────────────────────
 const currentTerm = ref(null)
 const rolling = ref(false)
-function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+// Сезон/период — общая помощь для всех мест, где семестр показывается человеку
+// (бейдж периода, окно часов, сводка импорта ВСГУТУ) — раньше форма собиралась
+// инлайн-тернарником в каждом месте по отдельности.
+function seasonLabel(semester) {
+  return semester === 1 ? locale.t('adminGroups.seasonFall', 'осенний') : locale.t('adminGroups.seasonSpring', 'весенний')
+}
+function termLabel(t) { return t ? locale.t('adminGroups.termLabel', { year: t.year, semester: seasonLabel(t.semester) }) : '' }
 async function loadTerm() {
   try { currentTerm.value = (await termsApi.list()).data.current } catch { /* */ }
 }
 async function rollover() {
-  const next = currentTerm.value?.semester === 1 ? 'весенний семестр' : 'осенний семестр следующего года'
+  const next = currentTerm.value?.semester === 1
+    ? locale.t('adminGroups.nextSpring', 'весенний семестр')
+    : locale.t('adminGroups.nextFallNextYear', 'осенний семестр следующего года')
   const ok = await confirm({
-    title: `Перевести на следующий учебный период (${next})?`,
-    message: 'Текущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.',
-    okText: 'Перевести',
+    title: locale.t('adminGroups.rolloverConfirmTitle', { next }),
+    message: locale.t('adminGroups.rolloverConfirmMessage', 'Текущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.'),
+    okText: locale.t('adminGroups.rolloverConfirmOk', 'Перевести'),
   })
   if (!ok) return
   rolling.value = true
   try {
     const r = (await adminApi.rolloverTerm()).data
     currentTerm.value = r.current
-    toast.success(`Готово. Текущий период: ${termLabel(r.current)}.`)
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось перевести') }
+    toast.success(locale.t('adminGroups.rolloverDone', { term: termLabel(r.current) }))
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.rolloverFailed', 'Не удалось перевести')) }
   finally { rolling.value = false }
 }
 
@@ -101,19 +111,19 @@ function toggleSubject(s) {
 }
 async function save() {
   const f = form.value
-  if (!f.name.trim()) { formError.value = 'Введите название группы'; return }
+  if (!f.name.trim()) { formError.value = locale.t('adminGroups.enterName', 'Введите название группы'); return }
   saving.value = true; formError.value = ''
   try {
     if (editing.value) await adminApi.updateGroup(editing.value, { subjects: f.subjects, category: f.category })
     else await adminApi.createGroup({ name: f.name.trim(), subjects: f.subjects, category: f.category })
     showForm.value = false; await reload()
-  } catch (e) { formError.value = e?.response?.data?.detail || 'Не удалось сохранить' }
+  } catch (e) { formError.value = e?.response?.data?.detail || locale.t('adminGroups.saveFailed', 'Не удалось сохранить') }
   finally { saving.value = false }
 }
 async function del(g) {
-  if (!(await confirm({ title: `Удалить группу ${g.name}?`, okText: 'Удалить', danger: true }))) return
+  if (!(await confirm({ title: locale.t('adminGroups.confirmDeleteTitle', { name: g.name }), okText: locale.t('common.delete'), danger: true }))) return
   try { await adminApi.deleteGroup(g.name); await reload() }
-  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.deleteFailed', 'Не удалось удалить')) }
 }
 // ── Учебные часы группы («пройдено X из Y») ─────────────────────────────────────
 // Часы задаются на СЕМЕСТР и по КАЖДОМУ предмету, поэтому это отдельное окно, а не поле
@@ -136,7 +146,7 @@ async function openHours(g) {
     hoursRows.value = r.subjects || []
     hoursTerm.value = r.term || null
   } catch (e) {
-    toast.error(e?.response?.data?.detail || 'Не удалось загрузить часы')
+    toast.error(e?.response?.data?.detail || locale.t('adminGroups.hoursLoadFailed', 'Не удалось загрузить часы'))
     showHours.value = false
   } finally { hoursLoading.value = false }
 }
@@ -157,9 +167,9 @@ async function saveHours() {
         ? null : Number(zv)
     })
     await adminApi.saveGroupHours(hoursGroup.value, hours, teachers, zet)
-    toast.success('Часы сохранены')
+    toast.success(locale.t('adminGroups.hoursSaved', 'Часы сохранены'))
     showHours.value = false
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.hoursSaveFailed', 'Не удалось сохранить')) }
   finally { hoursSaving.value = false }
 }
 
@@ -210,14 +220,14 @@ async function openImport(g) {
     importSpecialties.value = r.specialties || []
     if (r.suggested_code) importForm.value.specialty_code = r.suggested_code   // будит watch выше
   } catch (e) {
-    importError.value = e?.response?.data?.detail || 'Не удалось получить список специальностей'
+    importError.value = e?.response?.data?.detail || locale.t('adminGroups.specialtiesLoadFailed', 'Не удалось получить список специальностей')
   } finally { importLoadingList.value = false }
 }
 
 async function runImport() {
   const f = importForm.value
   if (!f.specialty_code || !f.enrollment_year) {
-    importError.value = 'Выберите специальность и год поступления'
+    importError.value = locale.t('adminGroups.selectSpecialtyAndYear', 'Выберите специальность и год поступления')
     return
   }
   importSaving.value = true; importError.value = ''; importResult.value = null
@@ -225,7 +235,7 @@ async function runImport() {
     const r = (await adminApi.importEsstu(importGroup.value, f.specialty_code, Number(f.enrollment_year))).data
     importResult.value = r
     await reload()
-  } catch (e) { importError.value = e?.response?.data?.detail || 'Не удалось импортировать план' }
+  } catch (e) { importError.value = e?.response?.data?.detail || locale.t('adminGroups.importPlanFailed', 'Не удалось импортировать план') }
   finally { importSaving.value = false }
 }
 
@@ -279,7 +289,7 @@ const SCHEDULE_IMPORT_ALL = '__all__'
 
 async function runScheduleImport() {
   if (!scheduleImportCategory.value || !scheduleImportGroupName.value) {
-    scheduleImportError.value = 'Выберите категорию и группу'
+    scheduleImportError.value = locale.t('adminGroups.selectCategoryAndGroup', 'Выберите категорию и группу')
     return
   }
   if (scheduleImportGroupName.value === SCHEDULE_IMPORT_ALL) {
@@ -289,10 +299,10 @@ async function runScheduleImport() {
   scheduleImportSaving.value = true; scheduleImportError.value = ''
   try {
     await adminApi.importScheduleCategory(scheduleImportCategory.value, scheduleImportGroupName.value)
-    toast.success(`Группа «${scheduleImportGroupName.value}» добавлена.`)
+    toast.success(locale.t('adminGroups.groupAdded', { name: scheduleImportGroupName.value }))
     showScheduleImport.value = false
     await reload()
-  } catch (e) { scheduleImportError.value = e?.response?.data?.detail || 'Не удалось импортировать' }
+  } catch (e) { scheduleImportError.value = e?.response?.data?.detail || locale.t('adminGroups.scheduleImportFailed', 'Не удалось импортировать') }
   finally { scheduleImportSaving.value = false }
 }
 
@@ -309,12 +319,12 @@ async function runScheduleImportAll() {
   try {
     result = (await adminApi.importScheduleCategoryAll(category)).data
   } catch (e) {
-    scheduleImportError.value = e?.response?.data?.detail || 'Не удалось импортировать'
+    scheduleImportError.value = e?.response?.data?.detail || locale.t('adminGroups.scheduleImportFailed', 'Не удалось импортировать')
     scheduleImportSaving.value = false
     return
   }
   if (result.building) {
-    toast.info('Собираю расписание категории на сервере (~минута)…')
+    toast.info(locale.t('adminGroups.buildingCategorySchedule', 'Собираю расписание категории на сервере (~минута)…'))
     //Категорию могли сменить ИЛИ диалог закрыть (Отмена), пока снимок собирался —
     //тогда повторный опрос уже не нужен и не ожидается пользователем.
     setTimeout(() => {
@@ -323,8 +333,7 @@ async function runScheduleImportAll() {
     return   //scheduleImportSaving остаётся true — кнопка «Импортировать» ждёт результата
   }
   scheduleImportSaving.value = false
-  toast.success(`Готово: добавлено групп — ${result.imported}, уже были — ${result.skipped} ` +
-               `(всего в категории ${result.total}).`)
+  toast.success(locale.t('adminGroups.scheduleImportAllDone', { imported: result.imported, skipped: result.skipped, total: result.total }))
   showScheduleImport.value = false
   await reload()
 }
@@ -337,14 +346,14 @@ async function importParsed() {
   try {
     const r = (await adminApi.bindSubjects()).data
     if (!r.ok && r.building) {
-      toast.info('Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.')
+      toast.info(locale.t('adminGroups.scheduleIndexBuilding', 'Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.'))
     } else {
-      toast.success(`Готово: групп обновлено — ${r.bound}, предметов в каталоге — ${r.subjects}.` +
-            (r.building ? ' (индекс ещё дообновляется — можно повторить для полноты)' : ''))
+      const suffix = r.building ? locale.t('adminGroups.bindSubjectsBuildingSuffix', ' (индекс ещё дообновляется — можно повторить для полноты)') : ''
+      toast.success(locale.t('adminGroups.bindSubjectsDone', { bound: r.bound, subjects: r.subjects }) + suffix)
       await reload()
       try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
     }
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось выполнить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.actionFailed', 'Не удалось выполнить')) }
   finally { importing.value = false }
 }
 </script>
@@ -353,24 +362,24 @@ async function importParsed() {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center gap-3">
       <div v-if="currentTerm" class="mr-auto flex items-center gap-2 text-sm">
-        <span class="text-text3">Учебный период:</span>
+        <span class="text-text3">{{ locale.t('adminGroups.currentTermLabel', 'Учебный период:') }}</span>
         <Badge variant="green">{{ termLabel(currentTerm) }}</Badge>
       </div>
       <AppButton variant="ghost" size="sm" :disabled="rolling" @click="rollover">
-        {{ rolling ? 'Перевод…' : '⏭ Перевод на курс' }}
+        {{ rolling ? locale.t('adminGroups.rollingBtn', 'Перевод…') : locale.t('adminGroups.rolloverBtn', '⏭ Перевод на курс') }}
       </AppButton>
       <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
-        {{ importing ? 'Обновление…' : 'Обновить группы' }}
+        {{ importing ? locale.t('adminGroups.updatingBtn', 'Обновление…') : locale.t('adminGroups.updateGroupsBtn', 'Обновить группы') }}
       </AppButton>
-      <AppButton variant="ghost" size="sm" @click="openScheduleImport">🌐 Импорт по категории</AppButton>
-      <AppButton variant="green" size="sm" @click="openCreate">+ Добавить</AppButton>
+      <AppButton variant="ghost" size="sm" @click="openScheduleImport">{{ locale.t('adminGroups.importByCategoryBtn', '🌐 Импорт по категории') }}</AppButton>
+      <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminGroups.addBtn', '+ Добавить') }}</AppButton>
     </div>
 
     <!-- Кнопки-категории (та же идея, что в «Расписании») — фильтр таблицы ниже. -->
     <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
       <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="!categoryFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
-              @click="categoryFilter = ''">Все категории</button>
+              @click="categoryFilter = ''">{{ locale.t('adminGroups.allCategories', 'Все категории') }}</button>
       <button v-for="c in categories" :key="c.key"
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
@@ -381,16 +390,16 @@ async function importParsed() {
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
-            <th class="px-4 py-2.5 font-semibold">Группа</th>
-            <th class="px-4 py-2.5 font-semibold">Категория</th>
-            <th class="px-4 py-2.5 text-right font-semibold">Студентов</th>
-            <th class="px-4 py-2.5 font-semibold">Предметы</th>
-            <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminGroups.colGroup', 'Группа') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminGroups.colCategory', 'Категория') }}</th>
+            <th class="px-4 py-2.5 text-right font-semibold">{{ locale.t('adminGroups.colStudents', 'Студентов') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminGroups.colSubjects', 'Предметы') }}</th>
+            <th class="px-4 py-2.5 text-right font-semibold">{{ locale.t('adminGroups.colActions', 'Действия') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="5" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
-          <tr v-else-if="!filteredRows.length"><td colspan="5" class="px-4 py-6 text-center text-text3">Групп нет</td></tr>
+          <tr v-if="loading"><td colspan="5" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
+          <tr v-else-if="!filteredRows.length"><td colspan="5" class="px-4 py-6 text-center text-text3">{{ locale.t('adminGroups.noGroups', 'Групп нет') }}</td></tr>
           <tr v-for="(g, i) in filteredRows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="px-4 py-2.5 font-semibold text-text">{{ g.name }}</td>
             <td class="px-4 py-2.5"><Badge variant="muted">{{ categoryLabel(g.category || 'college') }}</Badge></td>
@@ -403,10 +412,10 @@ async function importParsed() {
               </div>
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="mr-3 text-text3 hover:text-accent" title="Импорт специальности/плана с сайта ВСГУТУ" @click="openImport(g)">🎓</button>
-              <button class="mr-3 text-text3 hover:text-accent" title="Учебные часы по предметам" @click="openHours(g)">🕐</button>
-              <button class="mr-3 text-text3 hover:text-accent" title="Изменить" @click="openEdit(g)">✎</button>
-              <button class="text-text3 hover:text-red" title="Удалить" @click="del(g)">✕</button>
+              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.importEsstuTitle', 'Импорт специальности/плана с сайта ВСГУТУ')" @click="openImport(g)">🎓</button>
+              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.hoursTitle', 'Учебные часы по предметам')" @click="openHours(g)">🕐</button>
+              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.editBtnTitle', 'Изменить')" @click="openEdit(g)">✎</button>
+              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(g)">✕</button>
             </td>
           </tr>
         </tbody>
@@ -416,52 +425,51 @@ async function importParsed() {
     <!-- ── Учебные часы группы ─────────────────────────────────────────────────── -->
     <div v-if="showHours" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showHours = false">
       <div class="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">Учебные часы · {{ hoursGroup }}</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.hoursModalTitle', { group: hoursGroup }) }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
-          Часы на семестр по каждому предмету. Пройденное считается по лекциям и практикам
-          (одно занятие — 2 академических часа); домашние задания в часы не входят.
-          <span v-if="hoursTerm"> Период: {{ hoursTerm.year }} · {{ hoursTerm.semester === 1 ? 'осенний' : 'весенний' }}.</span>
+          {{ locale.t('adminGroups.hoursExplain', 'Часы на семестр по каждому предмету. Пройденное считается по лекциям и практикам (одно занятие — 2 академических часа); домашние задания в часы не входят.') }}
+          <span v-if="hoursTerm"> {{ locale.t('adminGroups.hoursPeriodLabel', { year: hoursTerm.year, season: seasonLabel(hoursTerm.semester) }) }}</span>
         </p>
 
-        <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">Загрузка…</p>
+        <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">{{ locale.t('common.loading') }}</p>
         <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
-          У группы нет предметов — сначала задайте их кнопкой ✎.
+          {{ locale.t('adminGroups.hoursNoSubjects', 'У группы нет предметов — сначала задайте их кнопкой ✎.') }}
         </p>
         <div v-else class="max-h-80 space-y-2 overflow-y-auto">
           <div v-for="r in hoursRows" :key="r.subject"
                class="rounded-sm border border-border2 px-2 py-1.5 hover:bg-bg2">
             <div class="flex items-center gap-3">
               <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
-              <span class="shrink-0 text-xs text-text3">пройдено {{ r.hours_done }} ч</span>
+              <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.hoursDoneLabel', { n: r.hours_done }) }}</span>
               <input v-model.number="r.hours_total" type="number" min="0" step="2"
                      class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
             </div>
             <!-- ЗЕТ (docs/PLAN-ZET.md): подсказка zet_hint — СЕРАЯ, только placeholder,
                  автоматом никогда не сохраняется, пока администратор явно не впишет число. -->
             <div class="mt-1.5 flex items-center gap-2">
-              <span class="shrink-0 text-xs text-text3">ЗЕТ</span>
+              <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.zetLabel', 'ЗЕТ') }}</span>
               <input v-model="r.zet" type="number" min="0" step="0.1"
                      :placeholder="r.zet_hint ? String(r.zet_hint) : ''"
                      class="h-8 w-20 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-xs text-text outline-none placeholder:text-text3 focus:border-accent" />
-              <span v-if="r.zet_hint" class="text-[11px] text-text3">← {{ r.zet_hint }} по формуле (72ч/36)</span>
+              <span v-if="r.zet_hint" class="text-[11px] text-text3">{{ locale.t('adminGroups.zetHintFormula', { hint: r.zet_hint }) }}</span>
             </div>
             <!-- §ролей: препод, ведущий эту группу по этому предмету — единственный
                  источник правды «какие группы видит препод» (webdata.teacher_assignments). -->
             <select v-model="r.teacher_id"
                     class="mt-1.5 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
-              <option value="">— преподаватель не назначен —</option>
+              <option value="">{{ locale.t('adminGroups.teacherNotAssigned', '— преподаватель не назначен —') }}</option>
               <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
             </select>
             <p v-if="!teachersFor(r.subject).length" class="mt-1 text-[11px] text-text3">
-              Нет преподавателей с предметом «{{ r.subject }}» — добавьте его во вкладке «Преподаватели».
+              {{ locale.t('adminGroups.noTeachersForSubject', { subject: r.subject }) }}
             </p>
           </div>
         </div>
 
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showHours = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showHours = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="hoursSaving || hoursLoading || !hoursRows.length" @click="saveHours">
-            {{ hoursSaving ? 'Сохранение…' : 'Сохранить' }}
+            {{ hoursSaving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : locale.t('common.save') }}
           </AppButton>
         </div>
       </div>
@@ -470,35 +478,33 @@ async function importParsed() {
     <!-- ── Импорт специальности/учебного плана ВСГУТУ ─────────────────────────────── -->
     <div v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showImport = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">Импорт с сайта ВСГУТУ · {{ importGroup }}</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.importEsstuModalTitle', { group: importGroup }) }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
-          Подтягивает учебный план специальности и заносит в группу предметы+часы+ЗЕТ
-          ИМЕННО текущего курса/семестра (считается от года поступления). Список
-          предметов группы будет ЗАМЕНЁН — как при обновлении «Из расписания».
+          {{ locale.t('adminGroups.importEsstuExplain', 'Подтягивает учебный план специальности и заносит в группу предметы+часы+ЗЕТ ИМЕННО текущего курса/семестра (считается от года поступления). Список предметов группы будет ЗАМЕНЁН — как при обновлении «Из расписания».') }}
         </p>
 
         <template v-if="!importResult">
-          <p v-if="importLoadingList" class="py-6 text-center text-sm text-text3">Загрузка специальностей…</p>
+          <p v-if="importLoadingList" class="py-6 text-center text-sm text-text3">{{ locale.t('adminGroups.loadingSpecialties', 'Загрузка специальностей…') }}</p>
           <div v-else class="space-y-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Специальность</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.specialtyLabel', 'Специальность') }}</span>
               <select v-model="importForm.specialty_code"
                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-                <option value="">— выберите —</option>
+                <option value="">{{ locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
                 <option v-for="s in importSpecialties" :key="s.code" :value="s.code">{{ s.code }} — {{ s.name }}</option>
               </select>
               <p v-if="!importSpecialties.length" class="mt-1 text-xs text-red">
-                Список специальностей недоступен (сайт ВСГУТУ не ответил) — попробуйте позже.
+                {{ locale.t('adminGroups.specialtiesUnavailable', 'Список специальностей недоступен (сайт ВСГУТУ не ответил) — попробуйте позже.') }}
               </p>
             </label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Год поступления</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.enrollmentYearLabel', 'Год поступления') }}</span>
               <select v-model.number="importForm.enrollment_year" :disabled="!importForm.specialty_code || importLoadingYears"
                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
-                <option value="">{{ importLoadingYears ? '— загрузка… —' : '— выберите —' }}</option>
+                <option value="">{{ importLoadingYears ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
                 <option v-for="y in importYears" :key="y" :value="y">{{ y }}</option>
               </select>
               <p v-if="importForm.specialty_code && !importLoadingYears && !importYears.length"
                  class="mt-1 text-xs text-red">
-                Для этой специальности на сайте нет опубликованных планов.
+                {{ locale.t('adminGroups.noPlansForSpecialty', 'Для этой специальности на сайте нет опубликованных планов.') }}
               </p>
             </label>
             <p v-if="importError" class="text-sm text-red">{{ importError }}</p>
@@ -507,16 +513,15 @@ async function importParsed() {
 
         <!-- Сводка после успешного импорта — что именно подтянулось. -->
         <div v-else class="space-y-2 text-sm">
-          <p class="text-text">Курс <b>{{ importResult.course }}</b>, семестр с начала обучения
-            <b>{{ importResult.semester }}</b> (текущий период: {{ importResult.term.year }} ·
-            {{ importResult.term.semester === 1 ? 'осенний' : 'весенний' }}).</p>
-          <p class="text-text2">Предметов с часами этого семестра: <b>{{ importResult.imported.length }}</b></p>
+          <p class="text-text">{{ locale.t('adminGroups.importResultCourseText', 'Курс') }} <b>{{ importResult.course }}</b>,
+            {{ locale.t('adminGroups.importResultSemesterText', 'семестр с начала обучения') }}
+            <b>{{ importResult.semester }}</b> {{ locale.t('adminGroups.currentPeriodParenthetical', { year: importResult.term.year, season: seasonLabel(importResult.term.semester) }) }}.</p>
+          <p class="text-text2">{{ locale.t('adminGroups.importResultSubjectsCountText', 'Предметов с часами этого семестра:') }} <b>{{ importResult.imported.length }}</b></p>
           <div v-if="importResult.imported.length" class="flex flex-wrap gap-1.5">
             <Badge v-for="s in importResult.imported" :key="s" variant="green">{{ s }}</Badge>
           </div>
           <template v-if="importResult.unmapped.length">
-            <p class="pt-1 text-text2">Добавлены без часов (не удалось определить семестр в плане —
-              задайте часы вручную кнопкой 🕐):</p>
+            <p class="pt-1 text-text2">{{ locale.t('adminGroups.importResultUnmappedText', 'Добавлены без часов (не удалось определить семестр в плане — задайте часы вручную кнопкой 🕐):') }}</p>
             <div class="flex flex-wrap gap-1.5">
               <Badge v-for="s in importResult.unmapped" :key="s" variant="muted">{{ s }}</Badge>
             </div>
@@ -524,10 +529,10 @@ async function importParsed() {
         </div>
 
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showImport = false">{{ importResult ? 'Закрыть' : 'Отмена' }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showImport = false">{{ importResult ? locale.t('common.close') : locale.t('common.cancel') }}</AppButton>
           <AppButton v-if="!importResult" variant="green" size="sm"
                     :disabled="importSaving || importLoadingList || !importSpecialties.length" @click="runImport">
-            {{ importSaving ? 'Импорт…' : 'Импортировать' }}
+            {{ importSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
           </AppButton>
         </div>
       </div>
@@ -536,44 +541,41 @@ async function importParsed() {
     <!-- ── Импорт группы по категории расписания ──────────────────────────────────── -->
     <div v-if="showScheduleImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showScheduleImport = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">Импорт группы по категории</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.scheduleImportModalTitle', 'Импорт группы по категории') }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
-          Заводит группу как каталожную запись, связанную с расписанием портала.
-          Предметы подставятся из её расписания; часов/учебного плана/журнала для
-          этой категории нет (для колледжа их даёт «Добавить группу» / «Обновить группы»).
+          {{ locale.t('adminGroups.scheduleImportExplain', 'Заводит группу как каталожную запись, связанную с расписанием портала. Предметы подставятся из её расписания; часов/учебного плана/журнала для этой категории нет (для колледжа их даёт «Добавить группу» / «Обновить группы»).') }}
         </p>
         <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Категория</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
             <select v-model="scheduleImportCategory"
                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
               <option v-for="c in nonCollegeCategories" :key="c.key" :value="c.key">{{ c.label }}</option>
             </select>
           </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Группа (с портала)</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.groupFromPortalLabel', 'Группа (с портала)') }}</span>
             <select v-model="scheduleImportGroupName" :disabled="scheduleImportLoadingGroups || !scheduleImportGroups.length"
                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
-              <option value="">{{ scheduleImportLoadingGroups ? '— загрузка… —' : '— выберите —' }}</option>
+              <option value="">{{ scheduleImportLoadingGroups ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
               <option v-if="scheduleImportGroups.length" :value="SCHEDULE_IMPORT_ALL">
-                🌐 Все ({{ scheduleImportGroups.length }})
+                {{ locale.t('adminGroups.allGroupsOption', { n: scheduleImportGroups.length }) }}
               </option>
               <option v-for="n in scheduleImportGroups" :key="n" :value="n">{{ n }}</option>
             </select>
             <p v-if="!scheduleImportLoadingGroups && scheduleImportCategory && !scheduleImportGroups.length"
                class="mt-1 text-xs text-red">
-              Нет данных с портала для этой категории (сайт недоступен либо снимок ещё не собран).
+              {{ locale.t('adminGroups.noPortalDataForCategory', 'Нет данных с портала для этой категории (сайт недоступен либо снимок ещё не собран).') }}
             </p>
             <p v-if="scheduleImportGroupName === SCHEDULE_IMPORT_ALL" class="mt-1 text-xs text-text3">
-              Заведёт каталожные записи для ВСЕХ групп категории разом (может занять
-              минуту на первый снимок — уже существующие группы не трогает).
+              {{ locale.t('adminGroups.scheduleImportAllHint', 'Заведёт каталожные записи для ВСЕХ групп категории разом (может занять минуту на первый снимок — уже существующие группы не трогает).') }}
             </p>
           </label>
           <p v-if="scheduleImportError" class="text-sm text-red">{{ scheduleImportError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showScheduleImport = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showScheduleImport = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm"
                     :disabled="scheduleImportSaving || !scheduleImportGroupName" @click="runScheduleImport">
-            {{ scheduleImportSaving ? 'Импорт…' : 'Импортировать' }}
+            {{ scheduleImportSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
           </AppButton>
         </div>
       </div>
@@ -581,34 +583,34 @@ async function importParsed() {
 
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? 'Изменить группу' : 'Добавить группу' }}</h3>
+        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminGroups.editGroupTitle', 'Изменить группу') : locale.t('adminGroups.addGroupTitle', 'Добавить группу') }}</h3>
         <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Название</span>
-            <input v-model="form.name" :disabled="!!editing" list="grp-parsed" placeholder="Выберите или введите"
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.nameLabel', 'Название') }}</span>
+            <input v-model="form.name" :disabled="!!editing" list="grp-parsed" :placeholder="locale.t('adminGroups.namePlaceholder', 'Выберите или введите')"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
             <datalist id="grp-parsed"><option v-for="n in parsedGroups" :key="n" :value="n" /></datalist>
           </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Категория</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
             <select v-model="form.category"
                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
               <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
             </select>
           </label>
           <div>
-            <span class="mb-1 block text-tiny uppercase text-text3">Предметы группы</span>
+            <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.subjectsLabel', 'Предметы группы') }}</span>
             <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
               <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
                 <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />
                 {{ s }}
               </label>
-              <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">Сначала заведите предметы во вкладке «Предметы».</p>
+              <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminGroups.noSubjectsCatalogHint', 'Сначала заведите предметы во вкладке «Предметы».') }}</p>
             </div>
           </div>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">Отмена</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? 'Сохранение…' : (editing ? 'Сохранить' : 'Добавить') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+          <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminGroups.addAction2', 'Добавить')) }}</AppButton>
         </div>
       </div>
     </div>

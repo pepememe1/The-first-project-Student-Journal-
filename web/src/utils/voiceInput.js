@@ -12,6 +12,7 @@
  * хуже отсутствующей.
  */
 import { api } from '@/api/client'
+import { useLocaleStore } from '@/stores/locale'
 
 /** Поддерживает ли браузер запись вообще (в старых и в http-контексте — нет). */
 export function recordingSupported() {
@@ -39,11 +40,11 @@ export async function sttStatus() {
     //сообщаем, а не оставляем кнопку, которая ничего не сделает.
     if (engine === 'browser' && !browserRecognitionSupported()) {
       return { available: false, engine: '',
-               reason: 'Этот браузер не умеет распознавать речь. Откройте в Chrome или Edge.' }
+               reason: useLocaleStore().t('voiceInput.browserUnsupported', 'Этот браузер не умеет распознавать речь. Откройте в Chrome или Edge.') }
     }
     return { available: !!data?.available && !!engine, engine, reason: data?.reason || '' }
   } catch {
-    return { available: false, engine: '', reason: 'Не удалось узнать, доступен ли голосовой ввод.' }
+    return { available: false, engine: '', reason: useLocaleStore().t('voiceInput.statusUnknown', 'Не удалось узнать, доступен ли голосовой ввод.') }
   }
 }
 
@@ -72,7 +73,7 @@ export async function listMicrophones(ask = false) {
   const all = await navigator.mediaDevices.enumerateDevices()
   return all
     .filter((d) => d.kind === 'audioinput')
-    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Микрофон ${i + 1}` }))
+    .map((d, i) => ({ deviceId: d.deviceId, label: d.label || useLocaleStore().t('voiceInput.microphoneN', { n: i + 1 }) }))
 }
 
 /**
@@ -97,10 +98,13 @@ export async function startVoice(engine, deviceId = '') {
  * должна знать, кто распознаёт.
  */
 export function startBrowserRecognition() {
+  const locale = useLocaleStore()
   const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition
-  if (!Ctor) throw new Error('Этот браузер не умеет распознавать речь.')
+  if (!Ctor) throw new Error(locale.t('voiceInput.browserUnsupportedShort', 'Этот браузер не умеет распознавать речь.'))
   const rec = new Ctor()
-  rec.lang = 'ru-RU'
+  // Распознаём НА ЯЗЫКЕ ИНТЕРФЕЙСА: иностранный студент, выбравший английский, не станет
+  // диктовать команды по-русски.
+  rec.lang = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }[locale.active] || 'ru-RU'
   rec.continuous = true          //не обрывать на первой паузе: команда бывает длинной
   rec.interimResults = false     //нужен итог, черновые варианты только мигали бы
   let text = ''
@@ -114,8 +118,8 @@ export function startBrowserRecognition() {
     //Запоминаем причину, но НЕ бросаем здесь: обработчик события — не наш стек вызова,
     //исключение из него до кнопки не дойдёт и человек увидит «просто ничего».
     failure = e?.error === 'not-allowed'
-      ? 'Нет доступа к микрофону. Разрешите запись в настройках.'
-      : 'Не удалось распознать речь.'
+      ? locale.t('voiceInput.micDenied', 'Нет доступа к микрофону. Разрешите запись в настройках.')
+      : locale.t('voiceInput.recognitionFailed', 'Не удалось распознать речь.')
   }
   rec.start()
 
@@ -137,6 +141,7 @@ export function startBrowserRecognition() {
  * `deviceId` — выбранный в настройках микрофон; пусто = системный по умолчанию.
  */
 export async function startRecording(deviceId = '') {
+  const locale = useLocaleStore()
   //`exact` НЕ используем осознанно: с ним исчезнувшее устройство (отключили гарнитуру)
   //даёт OverconstrainedError и голосовой ввод просто перестаёт работать. Без `exact`
   //браузер сам берёт системный микрофон — лучше записать не тем, чем ничем.
@@ -161,7 +166,7 @@ export async function startRecording(deviceId = '') {
       // остаётся гореть индикатор записи, и человек справедливо решит, что его слушают.
       stream.getTracks().forEach((t) => t.stop())
       const blob = new Blob(chunks, { type: mime || 'audio/webm' })
-      if (!blob.size) throw new Error('Ничего не записалось — проверьте микрофон.')
+      if (!blob.size) throw new Error(locale.t('voiceInput.nothingRecorded', 'Ничего не записалось — проверьте микрофон.'))
       const form = new FormData()
       form.append('file', blob, 'audio.webm')
       try {
@@ -169,9 +174,9 @@ export async function startRecording(deviceId = '') {
         return (data?.text || '').trim()
       } catch (e) {
         const status = e.response?.status
-        if (status === 503) throw new Error('Голосовой ввод не настроен на сервере.')
-        if (status === 413) throw new Error('Запись слишком длинная — скажите короче.')
-        throw new Error(e.response?.data?.detail || 'Не удалось распознать речь.')
+        if (status === 503) throw new Error(locale.t('voiceInput.notConfigured', 'Голосовой ввод не настроен на сервере.'))
+        if (status === 413) throw new Error(locale.t('voiceInput.tooLong', 'Запись слишком длинная — скажите короче.'))
+        throw new Error(e.response?.data?.detail || locale.t('voiceInput.recognitionFailed', 'Не удалось распознать речь.'))
       }
     },
   }

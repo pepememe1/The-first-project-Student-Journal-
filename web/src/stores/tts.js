@@ -22,6 +22,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { vectorApi } from '@/api/endpoints'
 import { MUMBLE_B64, MUMBLE_SR } from '@/config/mumbleData'
+import { useLocaleStore } from '@/stores/locale'
 
 const LS_MODE = 'gb.tts.mode'
 const LS_VOICE = 'gb.tts.voice'
@@ -92,9 +93,12 @@ export const useTtsStore = defineStore('tts', () => {
   }
 
   // Человеческая подпись режима — для кнопки в настройках.
-  const modeLabel = computed(() => (
-    mode.value === 'voice' ? 'Голос включён'
-      : mode.value === 'mumble' ? 'Бубнеж' : 'Озвучка выключена'))
+  const modeLabel = computed(() => {
+    const t = useLocaleStore().t
+    return mode.value === 'voice' ? t('settings.ttsModeVoice', 'Голос включён')
+      : mode.value === 'mumble' ? t('settings.ttsModeMumble', 'Бубнеж')
+      : t('settings.ttsModeOff', 'Озвучка выключена')
+  })
 
   async function refreshStatus() {
     try {

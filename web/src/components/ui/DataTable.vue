@@ -2,11 +2,13 @@
 // DataTable — простая таблица под дизайн-систему (тихая шапка, разделители-строки).
 // columns: [{ key, label, align?: 'right' }]; rows: массив объектов. Ячейку можно
 // переопределить слотом cell-<key> (передаётся { row, value }).
+import { useLocaleStore } from '@/stores/locale'
+const locale = useLocaleStore()
 defineProps({
   columns: { type: Array, required: true },
   rows: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
-  empty: { type: String, default: 'Нет данных' },
+  empty: { type: String, default: '' },
 })
 </script>
 
@@ -20,8 +22,8 @@ defineProps({
         </tr>
       </thead>
       <tbody>
-        <tr v-if="loading"><td :colspan="columns.length" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
-        <tr v-else-if="!rows.length"><td :colspan="columns.length" class="px-4 py-8 text-center text-text3">{{ empty }}</td></tr>
+        <tr v-if="loading"><td :colspan="columns.length" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
+        <tr v-else-if="!rows.length"><td :colspan="columns.length" class="px-4 py-8 text-center text-text3">{{ empty || locale.t('common.empty') }}</td></tr>
         <tr v-for="(row, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
           <td v-for="c in columns" :key="c.key" class="px-4 py-3 text-text3"
               :class="c.align === 'right' ? 'text-right' : ''">

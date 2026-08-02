@@ -12,6 +12,9 @@ import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ZetProgress from '@/components/ui/ZetProgress.vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const children = ref([])
 const pending = ref(0)
@@ -62,30 +65,30 @@ watch(studentId, loadJournal)
   <div class="space-y-4">
     <!-- Переключатель детей нужен, только если их несколько -->
     <div v-if="children.length > 1" class="flex flex-wrap items-center gap-2">
-      <span class="text-sm text-text3">Ребёнок:</span>
+      <span class="text-sm text-text3">{{ locale.t('parentJournal.childLabel', 'Ребёнок:') }}</span>
       <select v-model="studentId"
               class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
         <option v-for="c in children" :key="c.id" :value="c.id">{{ c.full_name }} · {{ c.group }}</option>
       </select>
     </div>
     <p v-else-if="child" class="text-sm text-text3">
-      {{ child.full_name }} · группа {{ child.group }}
+      {{ locale.t('parentJournal.childGroupLine', { name: child.full_name, group: child.group }) }}
     </p>
 
     <EmptyState v-if="!children.length && pending"
-                title="Ожидается подтверждение"
-                :message="`Заявок на доступ: ${pending}. Журнал откроется, когда студент подтвердит доступ в своём личном кабинете — это его решение, и изменить его может только он.`" />
+                :title="locale.t('parentJournal.pendingTitle', 'Ожидается подтверждение')"
+                :message="locale.t('parentJournal.pendingMessage', { n: pending })" />
     <EmptyState v-else-if="!children.length"
-                title="Ребёнок не привязан"
-                message="Обратитесь к куратору группы или в учебную часть, чтобы вас привязали к студенту." />
+                :title="locale.t('parentJournal.noChildTitle', 'Ребёнок не привязан')"
+                :message="locale.t('parentJournal.noChildMessage', 'Обратитесь к куратору группы или в учебную часть, чтобы вас привязали к студенту.')" />
 
-    <p v-else-if="loading" class="text-sm text-text3">Загрузка…</p>
+    <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
 
-    <EmptyState v-else-if="denied" title="Доступ не подтверждён"
-                message="Студент ещё не подтвердил доступ к журналу либо отозвал его." />
+    <EmptyState v-else-if="denied" :title="locale.t('parentJournal.deniedTitle', 'Доступ не подтверждён')"
+                :message="locale.t('parentJournal.deniedMessage', 'Студент ещё не подтвердил доступ к журналу либо отозвал его.')" />
 
-    <EmptyState v-else-if="!data?.subjects?.length" title="Пока пусто"
-                message="Когда появятся предметы и оценки, они отобразятся здесь." />
+    <EmptyState v-else-if="!data?.subjects?.length" :title="locale.t('parentJournal.emptyTitle', 'Пока пусто')"
+                :message="locale.t('parentJournal.emptyMessage', 'Когда появятся предметы и оценки, они отобразятся здесь.')" />
 
     <template v-else>
       <Card v-if="zet?.subjects?.length" pad>
@@ -94,18 +97,18 @@ watch(studentId, loadJournal)
       <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
         <template #header>
           <Badge v-if="s.hours?.total" variant="blue">
-            Пройдено {{ s.hours.done }} из {{ s.hours.total }} ч
+            {{ locale.t('parentJournal.hoursProgress', { done: s.hours.done, total: s.hours.total }) }}
           </Badge>
-          <Badge variant="green">Средний {{ s.average || '—' }}</Badge>
+          <Badge variant="green">{{ locale.t('parentJournal.averageBadge', { avg: s.average || '—' }) }}</Badge>
         </template>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-border2 text-left text-tiny uppercase tracking-wide text-text2">
-                <th class="py-2 pr-3 font-semibold">Тип</th>
-                <th class="py-2 pr-3 font-semibold">Тема</th>
-                <th class="py-2 pr-3 font-semibold">Дата</th>
-                <th class="py-2 text-right font-semibold">Оценка</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colType', 'Тип') }}</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colTopic', 'Тема') }}</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colDate', 'Дата') }}</th>
+                <th class="py-2 text-right font-semibold">{{ locale.t('parentJournal.colGrade', 'Оценка') }}</th>
               </tr>
             </thead>
             <tbody>

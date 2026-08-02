@@ -8,7 +8,10 @@ import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
+import { roleLabel as sharedRoleLabel } from '@/config/roles'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const m = useMessengerStore()
 const { activePeer, isModeration, activeInfo, activeKind } = storeToRefs(m)
 
@@ -31,10 +34,7 @@ function initials(name) {
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
 }
 const isTeacher = computed(() => activePeer.value?.role === 'teacher')
-//Админ ошибочно попадал в "иначе" этого тернарника и подписывался «Студент» — роль-словарь
-//вместо бинарного teacher/не-teacher, на случай будущих ролей (например, "parent").
-const ROLE_LABELS = { teacher: 'Преподаватель', student: 'Студент', admin: 'Администратор', parent: 'Родитель' }
-const roleLabel = computed(() => ROLE_LABELS[activePeer.value?.role] || 'Студент')
+const roleLabel = computed(() => sharedRoleLabel(activePeer.value?.role || 'student'))
 const isAdminPeer = computed(() => activePeer.value?.role === 'admin')
 const isGroupOrChannel = computed(() => ['group', 'channel'].includes(activeKind.value))
 //«Избранное» — блокнот с самим собой: карточка «собеседника» тут показывала бы тебя же
@@ -43,8 +43,14 @@ const isSaved = computed(() => activeKind.value === 'saved')
 //Заголовок группы/канала: подробности могут ещё не приехать, но название беседы уже есть
 //в строке списка чатов — берём его, чтобы шапка не была пустой.
 const headTitle = computed(() =>
-  activeInfo.value?.title || m.activeChat?.title || activePeer.value?.full_name || 'Беседа')
-const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
+  activeInfo.value?.title || m.activeChat?.title || activePeer.value?.full_name || locale.t('messenger.dialog', 'Беседа'))
+const ROLE_RU = computed(() => ({
+  owner: locale.t('conversationRole.owner', 'владелец'),
+  admin: locale.t('conversationRole.admin', 'админ'),
+  writer: locale.t('conversationRole.writer', 'автор'),
+  member: locale.t('conversationRole.member', 'участник'),
+  reader: locale.t('conversationRole.reader', 'читатель'),
+}))
 // §D7: статус собеседника (dnd/studying/away + свой текст у преподавателя). Общий
 // словарь/цвета — @/config/status (те же, что в MyStatusPicker и ConversationInfo).
 const statusLabel = computed(() =>
@@ -58,7 +64,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
 
   <!-- Свёрнутое состояние: узкая полоска с кнопкой «развернуть» -->
   <aside v-else-if="collapsed" class="hidden w-10 shrink-0 flex-col items-center border-r border-border bg-card py-2 xl:flex">
-    <button type="button" @click="toggle" title="Показать профиль" aria-label="Показать профиль"
+    <button type="button" @click="toggle" :title="locale.t('profilePanel.show', 'Показать профиль')" :aria-label="locale.t('profilePanel.show', 'Показать профиль')"
             class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
       <PanelLeftOpen class="size-5" />
     </button>
@@ -66,7 +72,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
 
   <aside v-else class="relative hidden w-72 shrink-0 flex-col border-r border-border bg-card xl:flex">
     <!-- Свернуть панель (состояние помнится) -->
-    <button type="button" @click="toggle" title="Скрыть профиль" aria-label="Скрыть профиль"
+    <button type="button" @click="toggle" :title="locale.t('profilePanel.hide', 'Скрыть профиль')" :aria-label="locale.t('profilePanel.hide', 'Скрыть профиль')"
             class="absolute right-1.5 top-1.5 z-10 grid size-8 place-items-center rounded-md bg-black/20 text-white/80 backdrop-blur-sm hover:bg-black/35 hover:text-white">
       <PanelLeftClose class="size-4" />
     </button>
@@ -74,18 +80,16 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
     <div v-if="isModeration" class="flex flex-col p-6">
       <div class="mb-3 flex items-center gap-2">
         <ShieldCheck class="size-6 text-accent" />
-        <h2 class="font-title text-lg font-bold text-text">Модерация</h2>
+        <h2 class="font-title text-lg font-bold text-text">{{ locale.t('nav.moderation', 'Модерация') }}</h2>
       </div>
-      <p class="text-sm text-text2">Сюда можно написать о проблеме: жалоба на пользователя,
-        технический вопрос, нарушение правил.</p>
+      <p class="text-sm text-text2">{{ locale.t('profilePanel.modHint', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил.') }}</p>
       <div class="mt-4 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Что не делать</p>
-        Оскорбления, спам, флуд. Сообщения переписки могут быть просмотрены модерацией в
-        целях безопасности.
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.dontDo', 'Что не делать') }}</p>
+        {{ locale.t('profilePanel.dontDoText', 'Оскорбления, спам, флуд. Сообщения переписки могут быть просмотрены модерацией в целях безопасности.') }}
       </div>
       <div class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Контакты</p>
-        Учебная часть колледжа · ответ обычно в течение рабочего дня.
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.contacts', 'Контакты') }}</p>
+        {{ locale.t('profilePanel.contactsText', 'Учебная часть колледжа · ответ обычно в течение рабочего дня.') }}
       </div>
     </div>
 
@@ -98,12 +102,12 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
         <div class="min-w-0">
           <h2 class="truncate font-title text-lg font-bold text-text">{{ headTitle }}</h2>
           <p class="text-xs text-text3">
-            {{ activeKind === 'channel' ? 'Канал' : 'Группа' }}<span v-if="activeInfo"> · {{ activeInfo.subscribers }}</span>
+            {{ activeKind === 'channel' ? locale.t('messenger.channelWord', 'Канал') : locale.t('messenger.groupLabel', 'Группа') }}<span v-if="activeInfo"> · {{ activeInfo.subscribers }}</span>
           </p>
         </div>
       </div>
       <p v-if="activeInfo?.about" class="mb-3 text-sm text-text2">{{ activeInfo.about }}</p>
-      <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Участники</p>
+      <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.participants', 'Участники') }}</p>
       <div class="min-h-0 flex-1 space-y-1 overflow-y-auto">
         <div v-for="p in activeInfo?.participants || []" :key="p.user_id"
              class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg2">
@@ -114,7 +118,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
       </div>
       <button type="button" @click="m.leaveActive()"
               class="mt-3 rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">
-        Покинуть {{ activeKind === 'channel' ? 'канал' : 'группу' }}
+        {{ activeKind === 'channel' ? locale.t('profilePanel.leaveChannel', 'Покинуть канал') : locale.t('profilePanel.leaveGroup', 'Покинуть группу') }}
       </button>
     </div>
 
@@ -125,18 +129,16 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
         <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="72" />
         <h2 class="mt-3 font-title text-lg font-bold text-text">{{ activePeer.full_name }}</h2>
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-text3">
-          <Landmark class="size-3.5" />Администратор
+          <Landmark class="size-3.5" />{{ locale.t('role.admin', 'Администратор') }}
         </span>
       </div>
       <div class="rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Можно писать</p>
-        Организационные вопросы: доступ к аккаунту, документы, техническая проблема.
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.canWrite', 'Можно писать') }}</p>
+        {{ locale.t('profilePanel.canWriteText', 'Организационные вопросы: доступ к аккаунту, документы, техническая проблема.') }}
       </div>
       <div class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Лучше не сюда</p>
-        Жалобы на пользователей — через «Модерация» (кнопка ⚙ у любого чата, её видят все, в
-        том числе можно пожаловаться на действия самого администратора). Учебные вопросы
-        (оценки, расписание) — своему куратору или преподавателю.
+        <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
+        {{ locale.t('profilePanel.notHereText', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у любого чата, её видят все, в том числе можно пожаловаться на действия самого администратора). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
       </div>
     </div>
 
@@ -154,27 +156,27 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
           <span class="size-2 rounded-full"
                 :style="statusLabel ? { background: statusColor }
                         : (activePeer.online ? 'background:#8ef0b4' : 'background:rgba(255,255,255,0.5)')"></span>
-          {{ statusLabel || (activePeer.online ? 'в сети' : 'не в сети') }}
+          {{ statusLabel || (activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети')) }}
         </span>
         <span v-if="statusLabel" class="text-[11px] text-white/55">
-          {{ activePeer.online ? 'в сети' : 'не в сети' }}
+          {{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}
         </span>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-6 pt-4">
         <!-- «О себе» — то, что человек написал о себе в профиле -->
         <div v-if="activePeer.bio" class="mb-3 rounded-lg border border-border bg-card2 p-3">
-          <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">О себе</p>
+          <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profile.about', 'О себе') }}</p>
           <p class="whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
         </div>
 
         <div class="w-full space-y-3 text-left">
           <div v-if="!isTeacher" class="rounded-lg border border-border bg-card2 p-3">
-            <p class="text-[11px] uppercase tracking-wide text-text3">Группа</p>
+            <p class="text-[11px] uppercase tracking-wide text-text3">{{ locale.t('messenger.groupLabel', 'Группа') }}</p>
             <p class="text-sm text-text">{{ activePeer.group_name || '—' }}</p>
           </div>
           <div v-else class="rounded-lg border border-border bg-card2 p-3">
-            <p class="text-[11px] uppercase tracking-wide text-text3">Ведёт предметы</p>
+            <p class="text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.teaches', 'Ведёт предметы') }}</p>
             <p class="text-sm text-text">{{ (activePeer.subjects || []).join(', ') || '—' }}</p>
           </div>
         </div>
@@ -182,7 +184,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
     </div>
 
     <div v-else class="grid flex-1 place-items-center p-6 text-center text-sm text-text3">
-      Выберите чат, чтобы увидеть карточку собеседника.
+      {{ locale.t('profilePanel.pickChat', 'Выберите чат, чтобы увидеть карточку собеседника.') }}
     </div>
   </aside>
 </template>

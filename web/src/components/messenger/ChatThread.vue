@@ -27,13 +27,19 @@ import MascotCooldown from './MascotCooldown.vue'
 import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
 import TranslateDialog from './TranslateDialog.vue'
+import GifPicker from './GifPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 import { statusLabel } from '@/config/status'
+import { roleLabel as sharedRoleLabel } from '@/config/roles'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 const m = useMessengerStore()
 const tr = useTranslateStore()
 const showTranslate = ref(false)
+const showGifPicker = ref(false)
 const auth = useAuthStore()
 const { confirm } = useConfirm()
 const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
@@ -118,9 +124,9 @@ function _dayLabel(iso) {
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
   const key = d.toDateString()
-  if (key === now.toDateString()) return 'Сегодня'
-  if (key === yesterday.toDateString()) return 'Вчера'
-  return d.toLocaleDateString('ru-RU', d.getFullYear() === now.getFullYear()
+  if (key === now.toDateString()) return locale.t('chatThread.today', 'Сегодня')
+  if (key === yesterday.toDateString()) return locale.t('chatThread.yesterday', 'Вчера')
+  return d.toLocaleDateString(BCP47[locale.active] || 'ru-RU', d.getFullYear() === now.getFullYear()
     ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' })
 }
 const dateBreaks = computed(() => {
@@ -163,11 +169,11 @@ onMounted(() => {
 
 function fmtTime(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(locale.active === 'en' ? 'en-US' : locale.active === 'zh' ? 'zh-CN' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 function quoted(id) {
   const src = messages.value.find(x => x.id === id)
-  return src ? (src.deleted ? 'Сообщение удалено' : src.body) : ''
+  return src ? (src.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : src.body) : ''
 }
 
 // §D6: системные сообщения (вступил/вышел/переименовано/закреп) — сервер шлёт шаблон
@@ -195,9 +201,9 @@ async function onBodyClick(e) {
   e.preventDefault()
   const url = a.dataset.externalLink
   const ok = await confirm({
-    title: 'Переадресация',
-    message: `Вы переходите на внешний сайт:\n${url}`,
-    okText: 'Открыть', cancelText: 'Отмена',
+    title: locale.t('chatThread.redirectTitle', 'Переадресация'),
+    message: locale.t('chatThread.redirectMessage', { url }),
+    okText: locale.t('chatThread.openAction', 'Открыть'), cancelText: locale.t('common.cancel'),
   })
   if (ok) window.open(url, '_blank', 'noopener,noreferrer')
 }
@@ -223,7 +229,7 @@ async function openHistory(msg) {
 }
 function fmtFull(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 // §D1: тулбар форматирования — оборачивает ВЫДЕЛЕНИЕ в textarea нужными символами
@@ -291,44 +297,43 @@ function toggleReveal(id) {
 const SLASH_COMMANDS = computed(() => [
   {
     cmd: '/vector',
-    hint: 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? '
-      + 'Дальше отвечайте на его сообщения — префикс больше не нужен.',
+    hint: locale.t('chatThread.cmd.vectorHint', 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? Дальше отвечайте на его сообщения — префикс больше не нужен.'),
     ok: isSaved.value,
-    why: 'Работает в «Избранном» — это ваши личные заметки',
+    why: locale.t('chatThread.cmd.vectorWhy', 'Работает в «Избранном» — это ваши личные заметки'),
   },
   {
     cmd: '/отчет',
     hint: inReportsChannel.value
-      ? 'Отчёт по успеваемости группы этого канала'
-      : `Отчёт по успеваемости для родителей — например: /отчет ${reportGroups.value[0] || 'К74/1'}`,
+      ? locale.t('chatThread.cmd.reportHintChannel', 'Отчёт по успеваемости группы этого канала')
+      : locale.t('chatThread.cmd.reportHint', { cmd: '/отчет', group: reportGroups.value[0] || 'К74/1' }),
     ok: canReport.value,
-    why: 'Отчёт по группе выпускает её куратор или администрация',
+    why: locale.t('chatThread.cmd.reportWhy', 'Отчёт по группе выпускает её куратор или администрация'),
   },
   //Отметки — тоже «команды с /»: иначе про них никто не узнает. Доступны всегда, где
   //есть кого отмечать (в «Избранном» человек один — ты сам, отмечать некого).
   {
     cmd: '/@',
-    hint: 'Тихо отметить участника — например: /@Иванов (только значок «@» у него в списке)',
+    hint: locale.t('chatThread.cmd.mentionQuietHint', 'Тихо отметить участника — например: /@Иванов (только значок «@» у него в списке)'),
     ok: !isSaved.value,
-    why: 'В личных заметках отмечать некого',
+    why: locale.t('chatThread.cmd.noOneToMention', 'В личных заметках отмечать некого'),
   },
   {
     cmd: '/@!',
-    hint: 'Громко отметить — звук у собеседника и письмо во вкладку «Уведомления»',
+    hint: locale.t('chatThread.cmd.mentionLoudHint', 'Громко отметить — звук у собеседника и письмо во вкладку «Уведомления»'),
     ok: !isSaved.value,
-    why: 'В личных заметках отмечать некого',
+    why: locale.t('chatThread.cmd.noOneToMention', 'В личных заметках отмечать некого'),
   },
   {
     cmd: '/mute',
-    hint: 'Заглушить участника в этой беседе — например: /mute @Иванов (повтор снимает)',
+    hint: locale.t('chatThread.cmd.muteHint', 'Заглушить участника в этой беседе — например: /mute @Иванов (повтор снимает)'),
     ok: canMute.value,
-    why: 'Право есть у владельца/админа беседы или роли с ним',
+    why: locale.t('chatThread.cmd.permWhy', 'Право есть у владельца/админа беседы или роли с ним'),
   },
   {
     cmd: '/clear',
-    hint: 'Удалить последние N сообщений беседы — например: /clear 20',
+    hint: locale.t('chatThread.cmd.clearHint', 'Удалить последние N сообщений беседы — например: /clear 20'),
     ok: canClear.value,
-    why: 'Право есть у владельца/админа беседы или роли с ним',
+    why: locale.t('chatThread.cmd.permWhy', 'Право есть у владельца/админа беседы или роли с ним'),
   },
 ])
 const slashQuery = ref(null)     // null — закрыто; иначе введённое после «/»
@@ -402,16 +407,16 @@ const mentionCandidates = computed(() => {
 // Что произойдёт при выбранном префиксе — та же таблица, что у сервера в _parse_mentions.
 const mentionKindHint = computed(() => {
   const p = mentionPrefix.value
-  if (p === '/@!' || p === '/!@') return 'Громкая отметка: звук и уведомление в «Системе»'
-  if (p === '/@' || p === '@!') return 'Тихая отметка: только значок «@» в списке чатов'
-  return 'Обычная отметка'
+  if (p === '/@!' || p === '/!@') return locale.t('chatThread.mentionLoud', 'Громкая отметка: звук и уведомление в «Системе»')
+  if (p === '/@' || p === '@!') return locale.t('chatThread.mentionQuiet', 'Тихая отметка: только значок «@» в списке чатов')
+  return locale.t('chatThread.mentionNormal', 'Обычная отметка')
 })
 // Подпись справа в списке: у преподавателя — предметы, у студента — группа. Тот же
 // принцип, что в карточке участника (ConversationInfo.vue::meta) — однофамильцев в
 // колледже хватает, и без контекста непонятно, кого отмечаешь.
 function meta(p) {
-  if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
-  if (p.user_role === 'admin') return 'Администратор'
+  if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || sharedRoleLabel('teacher')
+  if (p.user_role === 'admin') return sharedRoleLabel('admin')
   return p.group_name || ''
 }
 function insertMention(p) {
@@ -511,8 +516,9 @@ async function onPick(action) {
   //catch, и кнопка молча «просто нажималась».
   else if (action === 'copy') {
     if (await copyText(msg.body || '')) flashCopied()
-    else m.setNotice('Не удалось скопировать: браузер не дал доступ к буферу обмена.')
+    else m.setNotice(locale.t('chatThread.copyFailed', 'Не удалось скопировать: браузер не дал доступ к буферу обмена.'))
   }
+  else if (action === 'translate') tr.toggleMessage(msg.id, msg.body)
   else if (action === 'forward') forwardState.value = { open: true, ids: [msg.id] }
   else if (action === 'select') m.enterSelection(msg.id)
   else if (action === 'delete') requestDelete([msg])
@@ -536,11 +542,11 @@ async function openSummary() {
       open: true, text: '', loading: false,
       // Честно говорим, ЧТО не так, вместо выдуманного пересказа.
       note: data.reason === 'too_short'
-        ? 'В переписке пока слишком мало сообщений, чтобы было что пересказывать.'
-        : 'ИИ-модель сейчас недоступна — сводку сделать не удалось. Настройки модели у администратора.',
+        ? locale.t('chatThread.summaryTooShort', 'В переписке пока слишком мало сообщений, чтобы было что пересказывать.')
+        : locale.t('chatThread.summaryUnavailable', 'ИИ-модель сейчас недоступна — сводку сделать не удалось. Настройки модели у администратора.'),
     }
   } catch (e) {
-    summary.value = { open: true, text: '', loading: false, note: 'Не удалось получить сводку.' }
+    summary.value = { open: true, text: '', loading: false, note: locale.t('chatThread.summaryFailed', 'Не удалось получить сводку.') }
   }
 }
 
@@ -602,7 +608,13 @@ function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); 
 // ── Быстрые ответы и шаблоны преподавателя (docs/MESSENGER-ADDON-PLAN-GPT.md) ───────────
 // Фиксированный универсальный набор — клиент-only, без AI: короткая типовая реплика одним
 // кликом, отправляется СРАЗУ (как бот-команды в Slack/Teams), а не просто вставляется.
-const FIXED_QUICK_REPLIES = ['👍 Принято', 'Спасибо!', 'Хорошо', 'Понял(а)', 'Уточню и отвечу']
+const FIXED_QUICK_REPLIES = computed(() => [
+  locale.t('chatThread.quick.accepted', '👍 Принято'),
+  locale.t('chatThread.quick.thanks', 'Спасибо!'),
+  locale.t('chatThread.quick.ok', 'Хорошо'),
+  locale.t('chatThread.quick.got', 'Понял(а)'),
+  locale.t('chatThread.quick.willCheck', 'Уточню и отвечу'),
+])
 const showQuickReplies = ref(false)
 const newTemplateText = ref('')
 async function sendQuickReply(text) {
@@ -687,29 +699,29 @@ function jumpToMention() {
 // «Избранное» — личный блокнот, а не переписка: ни собеседника, ни его статуса тут нет.
 const isSaved = computed(() => kind.value === 'saved')
 const peerName = computed(() => {
-  if (isSaved.value) return 'Избранное'
-  if (isModeration.value) return 'Модерация'
-  if (isGroupOrChannel.value) return activeInfo.value?.title || activePeer.value?.full_name || 'Беседа'
-  return activePeer.value?.full_name || 'Диалог'
+  if (isSaved.value) return locale.t('messenger.saved', 'Избранное')
+  if (isModeration.value) return locale.t('nav.moderation', 'Модерация')
+  if (isGroupOrChannel.value) return activeInfo.value?.title || activePeer.value?.full_name || locale.t('messenger.dialog', 'Беседа')
+  return activePeer.value?.full_name || locale.t('conversationInfo.dialog', 'Диалог')
 })
 // §D7: подпись статуса поверх presence (dnd/studying/away + текст преподавателя).
 const subtitle = computed(() => {
   //Свой блокнот: показывать «в сети»/роль бессмысленно — это ты сам.
-  if (isSaved.value) return 'Заметки только для вас'
-  if (isModeration.value) return 'Официальная поддержка'
-  if (peerTyping.value) return 'печатает…'
-  if (kind.value === 'channel') return `${activeInfo.value?.subscribers || 0} подписчиков`
-  if (kind.value === 'group') return `${activeInfo.value?.subscribers || 0} участников`
+  if (isSaved.value) return locale.t('chatThread.notesOnlyForYou', 'Заметки только для вас')
+  if (isModeration.value) return locale.t('chatThread.officialSupport', 'Официальная поддержка')
+  if (peerTyping.value) return locale.t('chatThread.typing', 'печатает…')
+  if (kind.value === 'channel') return locale.t('conversationInfo.subscribersCount', { n: activeInfo.value?.subscribers || 0 })
+  if (kind.value === 'group') return locale.t('conversationInfo.membersCount', { n: activeInfo.value?.subscribers || 0 })
   const sk = activePeer.value?.status_kind
   if (sk) return statusLabel(sk, activePeer.value?.status_text)
-  return activePeer.value?.online ? 'в сети' : 'был(а) недавно'
+  return activePeer.value?.online ? locale.t('profilePanel.online', 'в сети') : locale.t('chatThread.wasRecently', 'был(а) недавно')
 })
 const topPinned = computed(() => pinned.value[0] || null)
 //Подсказка в поле ввода: разметку показывают кнопки тулбара, поэтому в ней только то,
 //что иначе не найти — команда Вектора, и лишь в «Избранном», где она и работает.
 const composerHint = computed(() => {
-  if (replyingToVector.value) return 'Спросите Вектора дальше…'
-  return isSaved.value ? 'Заметка… (/vector — спросить ИИ)' : 'Сообщение…'
+  if (replyingToVector.value) return locale.t('chatThread.askVectorMore', 'Спросите Вектора дальше…')
+  return isSaved.value ? locale.t('chatThread.notePlaceholder', 'Заметка… (/vector — спросить ИИ)') : locale.t('chatThread.messagePlaceholder', 'Сообщение…')
 })
 
 // ── Оформление ленты (как в Telegram) ────────────────────────────────────────────────
@@ -744,7 +756,7 @@ function senderAvatar(msg) {
   return avatarBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.avatar || ''))
 }
 function senderName(msg) {
-  if (isVector(msg)) return 'Вектор'
+  if (isVector(msg)) return locale.t('chatThread.vectorName', 'Вектор')
   return msg.sender_name || (isSaved.value ? '' : (activePeer.value?.full_name || ''))
 }
 
@@ -757,7 +769,7 @@ const headerTint = computed(() =>
 <template>
   <section class="flex min-w-0 flex-1 flex-col bg-bg" :class="{ 'hidden sm:flex': !activeId }">
     <div v-if="!activeId" class="grid flex-1 place-items-center p-6 text-center text-sm text-text3">
-      Выберите чат слева или найдите человека через поиск.
+      {{ locale.t('chatThread.pickChat', 'Выберите чат слева или найдите человека через поиск.') }}
     </div>
 
     <template v-else>
@@ -765,7 +777,7 @@ const headerTint = computed(() =>
       <!-- Шапка — в цвет плашки собеседника (её выбирает он сам в профиле). -->
       <div v-if="!selectionMode" class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3"
            :class="headerTint ? '' : 'bg-card'" :style="headerTint ? { background: headerTint } : {}">
-        <button type="button" @click="m.clearActive()" aria-label="Назад"
+        <button type="button" @click="m.clearActive()" :aria-label="locale.t('chatThread.back', 'Назад')"
                 class="grid size-8 place-items-center rounded-md hover:bg-black/10 sm:hidden"
                 :class="headerTint ? 'text-white' : 'text-text2'">
           <ArrowLeft class="size-5" />
@@ -774,14 +786,14 @@ const headerTint = computed(() =>
         <button type="button" @click="showInfo = true"
                 class="min-w-0 flex-1 rounded-md px-1 py-0.5 text-left transition-colors"
                 :class="headerTint ? 'hover:bg-white/10' : 'hover:bg-bg2'"
-                title="Открыть профиль">
+                :title="locale.t('chatThread.openProfile', 'Открыть профиль')">
           <div class="truncate font-title text-base font-bold"
                :class="headerTint ? 'text-white' : 'text-text'">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
         <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->
         <button type="button" @click="toggleSearchPanel"
-                aria-label="Поиск по чату" title="Поиск по чату"
+                :aria-label="locale.t('chatThread.searchInChat', 'Поиск по чату')" :title="locale.t('chatThread.searchInChat', 'Поиск по чату')"
                 class="grid size-8 shrink-0 place-items-center rounded-md"
                 :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                   : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
@@ -790,7 +802,7 @@ const headerTint = computed(() =>
         <!-- §D18: сводка переписки — ТОЛЬКО по кнопке. Автоматический пересказ при каждом
              открытии чата означал бы запрос к модели на каждый вход. -->
         <button type="button" @click="openSummary"
-                aria-label="Краткая сводка переписки" title="Краткая сводка переписки"
+                :aria-label="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')" :title="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')"
                 class="grid size-8 shrink-0 place-items-center rounded-md"
                 :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                   : 'text-text3 hover:bg-bg2 hover:text-text'">
@@ -799,8 +811,8 @@ const headerTint = computed(() =>
         <!-- 🌐 — настройки перевода переписки. Ярче обычного, когда автоперевод включён:
              человек должен видеть, что его сообщения уходят переведёнными, а не гадать. -->
         <button type="button" @click="showTranslate = true"
-                :aria-label="tr.enabled ? 'Автоперевод включён' : 'Перевод'"
-                :title="tr.enabled ? 'Автоперевод включён' : 'Настроить перевод'"
+                :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
+                :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
                 class="grid size-8 shrink-0 place-items-center rounded-md"
                 :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                   : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
@@ -808,8 +820,8 @@ const headerTint = computed(() =>
         </button>
         <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
         <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
-                :aria-label="muted ? 'Включить уведомления' : 'Отключить уведомления'"
-                :title="muted ? 'Уведомления выключены' : 'Отключить уведомления'"
+                :aria-label="muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
+                :title="muted ? locale.t('chatThread.notifyOff', 'Уведомления выключены') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
                 class="grid size-8 shrink-0 place-items-center rounded-md"
                 :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                   : (muted ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
@@ -818,7 +830,7 @@ const headerTint = computed(() =>
         </button>
         <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
         <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
-                aria-label="Модерация" title="Написать модерации"
+                :aria-label="locale.t('nav.moderation', 'Модерация')" :title="locale.t('chatThread.writeToModeration', 'Написать модерации')"
                 class="grid size-8 shrink-0 place-items-center rounded-md"
                 :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                   : 'text-text3 hover:bg-bg2 hover:text-text'">
@@ -826,17 +838,17 @@ const headerTint = computed(() =>
         </button>
       </div>
       <div v-else class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
-        <button type="button" @click="m.clearSelection()" aria-label="Отмена"
+        <button type="button" @click="m.clearSelection()" :aria-label="locale.t('common.cancel')"
                 class="grid size-8 place-items-center rounded-md text-text2 hover:bg-bg2"><X class="size-5" /></button>
-        <span class="flex-1 text-sm font-semibold text-text">Выбрано: {{ selectedIds.length }}</span>
+        <span class="flex-1 text-sm font-semibold text-text">{{ locale.t('chatThread.selectedCount', { n: selectedIds.length }) }}</span>
         <!-- «Выбрать всё / Снять всё» — иначе выделять пачку приходилось по одному. -->
         <button type="button" @click="allSelected ? m.selectNone() : m.selectAll()"
                 class="shrink-0 rounded-md border border-border2 px-2.5 py-1.5 text-xs text-text2 hover:bg-bg2">
-          {{ allSelected ? 'Снять всё' : 'Выбрать всё' }}
+          {{ allSelected ? locale.t('chatThread.deselectAll', 'Снять всё') : locale.t('chatThread.selectAll', 'Выбрать всё') }}
         </button>
-        <button type="button" @click="bulkForward" :disabled="!selectedIds.length" aria-label="Переслать"
+        <button type="button" @click="bulkForward" :disabled="!selectedIds.length" :aria-label="locale.t('forward.title', 'Переслать')"
                 class="grid size-9 place-items-center rounded-md text-text2 hover:bg-bg2 disabled:opacity-40"><Forward class="size-5" /></button>
-        <button type="button" @click="bulkDelete" :disabled="!selectedIds.length" aria-label="Удалить"
+        <button type="button" @click="bulkDelete" :disabled="!selectedIds.length" :aria-label="locale.t('common.delete')"
                 class="grid size-9 place-items-center rounded-md text-red hover:bg-bg2 disabled:opacity-40"><Trash2 class="size-5" /></button>
       </div>
 
@@ -845,23 +857,23 @@ const headerTint = computed(() =>
       <div v-if="showSearch" class="shrink-0 border-b border-border bg-card">
         <div class="flex items-center gap-2 px-3 py-2">
           <Search class="size-4 shrink-0 text-text3" />
-          <input v-model="searchQ" @input="onSearchInput" autofocus placeholder="Поиск по смыслу…"
+          <input v-model="searchQ" @input="onSearchInput" autofocus :placeholder="locale.t('chatThread.searchByMeaning', 'Поиск по смыслу…')"
                  class="h-8 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
-          <button type="button" @click="closeSearchPanel" aria-label="Закрыть поиск"
+          <button type="button" @click="closeSearchPanel" :aria-label="locale.t('chatThread.closeSearch', 'Закрыть поиск')"
                   class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
         </div>
         <!-- Показываем, чем модель дополнила запрос: иначе непонятно, почему нашлось
              сообщение, в котором искомого слова нет. -->
         <p v-if="searchExpanded.length && searchQ.trim()"
            class="border-t border-border px-3 py-1.5 text-[11px] text-text3">
-          Ищем также: {{ searchExpanded.join(', ') }}
+          {{ locale.t('chatThread.alsoSearching', { terms: searchExpanded.join(', ') }) }}
         </p>
         <div v-if="searchQ.trim()" class="max-h-56 overflow-y-auto border-t border-border">
-          <p v-if="searching" class="p-3 text-center text-xs text-text3">Ищем…</p>
-          <p v-else-if="!searchResults?.length" class="p-3 text-center text-xs text-text3">Ничего не найдено.</p>
+          <p v-if="searching" class="p-3 text-center text-xs text-text3">{{ locale.t('chatThread.searching', 'Ищем…') }}</p>
+          <p v-else-if="!searchResults?.length" class="p-3 text-center text-xs text-text3">{{ locale.t('chatThread.nothingFound', 'Ничего не найдено.') }}</p>
           <button v-for="r in searchResults" :key="r.id" type="button" @click="jumpToSearchResult(r)"
                   class="flex w-full flex-col items-start gap-0.5 border-b border-border/50 px-3 py-2 text-left hover:bg-bg2">
-            <span class="text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? 'Вы' : '') }} · {{ fmtTime(r.created_at) }}</span>
+            <span class="text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? locale.t('chatThread.you', 'Вы') : '') }} · {{ fmtTime(r.created_at) }}</span>
             <span class="line-clamp-2 text-sm text-text">{{ r.body }}</span>
           </button>
         </div>
@@ -872,7 +884,7 @@ const headerTint = computed(() =>
               class="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-left">
         <Pin class="size-4 shrink-0 text-accent" />
         <div class="min-w-0">
-          <div class="text-[11px] font-semibold text-accent">Закреплённое{{ pinned.length > 1 ? ` · ${pinned.length}` : '' }}</div>
+          <div class="text-[11px] font-semibold text-accent">{{ locale.t('chatThread.pinnedLabel', 'Закреплённое') }}{{ pinned.length > 1 ? ` · ${pinned.length}` : '' }}</div>
           <div class="truncate text-xs text-text2">{{ topPinned.body }}</div>
         </div>
       </button>
@@ -892,7 +904,7 @@ const headerTint = computed(() =>
           </div>
           <!-- §D5: разделитель «Новые сообщения» — перед первым непрочитанным на момент открытия. -->
           <div v-if="msg.id === firstUnreadId" class="my-3 flex items-center gap-3 text-xs font-semibold text-accent">
-            <span class="h-px flex-1 bg-accent/40" /> Новые сообщения <span class="h-px flex-1 bg-accent/40" />
+            <span class="h-px flex-1 bg-accent/40" /> {{ locale.t('chatThread.newMessages', 'Новые сообщения') }} <span class="h-px flex-1 bg-accent/40" />
           </div>
 
           <!-- §D6: системное сообщение — центрированная строка, не пузырь. -->
@@ -909,13 +921,13 @@ const headerTint = computed(() =>
                     class="flex items-center gap-2 rounded-2xl border border-border2 bg-card px-4 py-2 text-sm font-semibold text-accent shadow-sm hover:bg-bg2">
               <PieChart class="size-4 shrink-0" />
               <span class="flex flex-col items-start leading-tight">
-                <span>Отчёт №{{ msg.report.seq }}<span v-if="msg.report.group" class="text-text2"> · {{ msg.report.group }}</span></span>
+                <span>{{ locale.t('chatThread.reportNumber', { n: msg.report.seq }) }}<span v-if="msg.report.group" class="text-text2"> · {{ msg.report.group }}</span></span>
                 <span class="text-[11px] font-medium text-text3">
-                  {{ msg.report.cutoff_date ? `на ${msg.report.cutoff_date}` : 'успеваемость группы' }}
+                  {{ msg.report.cutoff_date ? locale.t('curatorReport.asOf', { date: msg.report.cutoff_date }) : locale.t('chatThread.groupPerformance', 'успеваемость группы') }}
                   · {{ fmtTime(msg.created_at) }}
                 </span>
               </span>
-              <span v-if="msg.report.archived" class="rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-medium text-text3">Архив</span>
+              <span v-if="msg.report.archived" class="rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-medium text-text3">{{ locale.t('curatorReport.archived', 'Архив') }}</span>
             </button>
           </div>
 
@@ -949,33 +961,38 @@ const headerTint = computed(() =>
                 {{ senderName(msg) }}
               </div>
               <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
-                Переслано от {{ msg.forwarded_from }}
+                {{ locale.t('chatThread.forwardedFrom', { name: msg.forwarded_from }) }}
               </div>
               <div v-if="msg.reply_to_id && quoted(msg.reply_to_id)"
                    class="mb-1 border-l-2 pl-2 text-xs opacity-80"
                    :class="msg.mine ? 'border-white/60' : 'border-accent'">
                 {{ quoted(msg.reply_to_id) }}
               </div>
-              <span v-if="msg.deleted" class="italic opacity-70">Сообщение удалено</span>
+              <span v-if="msg.deleted" class="italic opacity-70">{{ locale.t('chatThread.deleted', 'Сообщение удалено') }}</span>
               <!-- §ролей: игнор — ЛИЧНОЕ, не модерация; сервер текст отдаёт как обычно,
                    прячем и раскрываем на клиенте (клик по плейсхолдеру). -->
               <button v-else-if="isHiddenByIgnore(msg)" type="button" @click.stop="toggleReveal(msg.id)"
-                      class="italic opacity-70 underline decoration-dotted">Скрыто (игнор) — показать</button>
+                      class="italic opacity-70 underline decoration-dotted">{{ locale.t('chatThread.hiddenByIgnore', 'Скрыто (игнор) — показать') }}</button>
+              <!-- GIF (Klipy) — тело сообщения это прямая ссылка на CDN, картинка, а не
+                   markdown-текст; ссылку не через renderBody (её незачем делать кликабельной
+                   с подтверждением «Переадресация» — это уже картинка, а не переход). -->
+              <img v-else-if="msg.kind === 'gif'" :src="msg.body" alt="GIF"
+                  class="max-h-64 max-w-full rounded-lg" loading="lazy" />
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
                    @click="onBodyClick" />
               <!-- Перевод ПОД оригиналом, а не вместо него: подмена чужой реплики
                    переводом скрывает то, что человек написал на самом деле, и спорить
-                   потом не о чем. Оригинал всегда виден. -->
-              <p v-if="!msg.deleted && tr.shownFor(msg.id)"
+                   потом не о чем. Оригинал всегда виден. GIF — не текст, переводить нечего. -->
+              <p v-if="!msg.deleted && msg.kind !== 'gif' && tr.shownFor(msg.id)"
                  class="mt-1.5 border-l-2 border-accent/60 pl-2 text-sm text-text2">
                 {{ tr.shownFor(msg.id) }}
               </p>
-              <button v-if="!msg.deleted && msg.body && msg.sender_id !== myUserId"
+              <button v-if="!msg.deleted && msg.kind !== 'gif' && msg.body && msg.sender_id !== myUserId"
                       type="button" :disabled="tr.busy"
                       class="mt-1 text-tiny text-text3 transition-colors hover:text-accent disabled:opacity-50"
                       @click.stop="tr.toggleMessage(msg.id, msg.body)">
-                {{ tr.shownFor(msg.id) ? 'скрыть перевод' : (tr.busy ? 'переводим…' : 'перевести') }}
+                {{ tr.shownFor(msg.id) ? locale.t('chatThread.hideTranslationAction', 'скрыть перевод') : (tr.busy ? locale.t('chatThread.translating', 'переводим…') : locale.t('chatThread.translateAction', 'перевести')) }}
               </button>
               <!-- Видео из белого списка (YouTube/VK/Rutube, Фаза 1) — карточка ПОД текстом,
                    плеер сразу виден (без лишнего клика «показать видео» — Влад). Шире, чем
@@ -984,23 +1001,34 @@ const headerTint = computed(() =>
                    всегда развёрнут, той же ширины не хватает для полной панели управления
                    YouTube/VK/Rutube (там теснится и громкость, и полноэкранный режим). -->
               <div v-for="v in videoEmbeds(msg)" :key="v.sourceUrl" class="mt-1.5" @click.stop>
+                <!-- referrerpolicy — ОБЯЗАТЕЛЕН здесь. Сайт целиком отдаёт
+                     `Referrer-Policy: no-referrer` (Caddyfile, 152-ФЗ), и БЕЗ этого
+                     атрибута запрос к youtube.com/vk.com/rutube.ru уходит вовсе без
+                     реферера — плеер YouTube не может проверить контекст встраивания и
+                     падает с нечитаемой «Ошибка 153» (эмпирически найдено — Влад,
+                     воспроизводится и на сайте, не только в десктопе). Атрибут iframe
+                     ПЕРЕБИВАЕТ страничный заголовок только для ЭТОГО запроса — общий
+                     no-referrer для остальной страницы не трогаем. "origin" отдаёт
+                     ТОЛЬКО домен (без пути) — этого плееру достаточно, полный URL
+                     переписки видеохостингу не уходит. -->
                 <iframe :src="v.embedUrl" class="aspect-video w-full max-w-sm rounded-lg border-0"
                         sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+                        referrerpolicy="origin"
                         allowfullscreen />
               </div>
               <span class="ml-2 align-bottom text-[10px]" :class="msg.mine ? 'text-white/70' : 'text-text3'">
                 <Pin v-if="msg.pinned" class="mr-0.5 inline size-2.5" />
                 <!-- §D11: «изм.» кликабельно — открывает историю версий. -->
                 <button v-if="msg.edited_at" type="button" @click.stop="openHistory(msg)"
-                        class="underline decoration-dotted hover:opacity-80">изм.</button>
+                        class="underline decoration-dotted hover:opacity-80">{{ locale.t('chatThread.editedShort', 'изм.') }}</button>
                 {{ fmtTime(msg.created_at) }}
                 <!-- ЛС: галочки отправлено/прочитано (как в Telegram). -->
                 <template v-if="msg.mine && kind === 'direct'">
-                  <CheckCheck v-if="isReadByPeer(msg)" title="Прочитано" class="ml-0.5 inline size-3" />
-                  <Check v-else title="Отправлено" class="ml-0.5 inline size-3 opacity-70" />
+                  <CheckCheck v-if="isReadByPeer(msg)" :title="locale.t('chatThread.readTitle', 'Прочитано')" class="ml-0.5 inline size-3" />
+                  <Check v-else :title="locale.t('chatThread.sentTitle', 'Отправлено')" class="ml-0.5 inline size-3 opacity-70" />
                 </template>
                 <!-- Группа/канал: читателей несколько — попап со списком (см. showReadBy). -->
-                <button v-else-if="msg.mine" type="button" @click.stop="showReadBy(msg)" title="Кто прочитал"
+                <button v-else-if="msg.mine" type="button" @click.stop="showReadBy(msg)" :title="locale.t('chatThread.whoRead', 'Кто прочитал')"
                         class="ml-0.5 inline-flex align-middle hover:opacity-80"><Eye class="size-2.5" /></button>
               </span>
 
@@ -1021,7 +1049,7 @@ const headerTint = computed(() =>
               <button v-if="msg.reply_count" type="button" @click.stop="m.openThread(msg.id)"
                       class="mt-1 flex items-center gap-1 text-xs font-semibold hover:underline"
                       :class="msg.mine ? 'text-white/90' : 'text-accent'">
-                <MessageSquare class="size-3" />{{ msg.reply_count }} {{ msg.reply_count === 1 ? 'ответ' : 'ответа' }}
+                <MessageSquare class="size-3" />{{ locale.t('chatThread.repliesCount', { n: msg.reply_count }) }}
               </button>
             </div>
           </div>
@@ -1033,7 +1061,7 @@ const headerTint = computed(() =>
            уводит в конец — то есть мимо неё. Видна, пока отметка не прочитана. -->
       <transition name="fade">
         <button v-if="mentionMessageId" type="button" @click="jumpToMention"
-                aria-label="К сообщению, где вас отметили" title="Вас отметили — перейти"
+                :aria-label="locale.t('chatThread.mentionJumpAria', 'К сообщению, где вас отметили')" :title="locale.t('chatThread.mentionJumpTitle', 'Вас отметили — перейти')"
                 class="absolute bottom-16 right-3 grid size-10 place-items-center rounded-full border text-lg font-bold shadow-card"
                 :class="mentionLoud
                   ? 'border-red/50 bg-red text-white hover:opacity-90'
@@ -1046,7 +1074,7 @@ const headerTint = computed(() =>
            Вне scroller (в relative-обёртке) — не уезжает вместе с содержимым при скролле. -->
       <transition name="fade">
         <button v-if="showScrollBtn" type="button" @click="scrollDown"
-                aria-label="К последним сообщениям"
+                :aria-label="locale.t('chatThread.toLastMessages', 'К последним сообщениям')"
                 class="absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border border-border2 bg-card shadow-card hover:bg-bg2">
           <ChevronDown class="size-5 text-text2" />
           <span v-if="activeChat?.unread" class="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
@@ -1075,34 +1103,48 @@ const headerTint = computed(() =>
                    явно: иначе непонятно, что цепочка продолжится, и человек снова пишет
                    «/vector». -->
               <div class="text-[11px] font-semibold text-accent">
-                {{ replyingToVector ? 'Вопрос Вектору — можно без «/vector»' : 'Ответ' }}
+                {{ replyingToVector ? locale.t('chatThread.askVectorNoPrefix', 'Вопрос Вектору — можно без «/vector»') : locale.t('chatThread.replyLabel', 'Ответ') }}
               </div>
-              <div class="truncate text-xs text-text3">{{ replyTo.deleted ? 'Сообщение удалено' : replyTo.body }}</div>
+              <div class="truncate text-xs text-text3">{{ replyTo.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : replyTo.body }}</div>
             </div>
-            <button type="button" @click="m.clearReply()" aria-label="Отменить ответ"
+            <button type="button" @click="m.clearReply()" :aria-label="locale.t('chatThread.cancelReply', 'Отменить ответ')"
                     class="grid size-6 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
           </div>
           <!-- §D1: тулбар форматирования — оборачивает выделение в поле ввода. На мобиле
                (узкий экран) прячем, чтобы не съедал место — там достаточно ручного синтаксиса. -->
           <div class="hidden items-center gap-0.5 border-b border-border px-2 py-1 sm:flex">
-            <button type="button" title="Жирный (Ctrl+B)" @click="wrapSelection('**')"
+            <button type="button" :title="locale.t('chatThread.fmt.bold', 'Жирный (Ctrl+B)')" @click="wrapSelection('**')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Bold class="size-4" /></button>
-            <button type="button" title="Курсив (Ctrl+I)" @click="wrapSelection('*')"
+            <button type="button" :title="locale.t('chatThread.fmt.italic', 'Курсив (Ctrl+I)')" @click="wrapSelection('*')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Italic class="size-4" /></button>
-            <button type="button" title="Подчёркнутый (Ctrl+U)" @click="wrapSelection('__')"
+            <button type="button" :title="locale.t('chatThread.fmt.underline', 'Подчёркнутый (Ctrl+U)')" @click="wrapSelection('__')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Underline class="size-4" /></button>
-            <button type="button" title="Зачёркнутый" @click="wrapSelection('~~')"
+            <button type="button" :title="locale.t('chatThread.fmt.strike', 'Зачёркнутый')" @click="wrapSelection('~~')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Strikethrough class="size-4" /></button>
-            <button type="button" title="Код" @click="wrapSelection('`')"
+            <button type="button" :title="locale.t('chatThread.fmt.code', 'Код')" @click="wrapSelection('`')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Code class="size-4" /></button>
-            <button type="button" title="Цитата" @click="wrapSelection('> ', '')"
+            <button type="button" :title="locale.t('chatThread.fmt.quote', 'Цитата')" @click="wrapSelection('> ', '')"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><Quote class="size-4" /></button>
             <span class="mx-1 h-4 w-px bg-border2" />
             <!-- Быстрые ответы/шаблоны (docs/MESSENGER-ADDON-PLAN-GPT.md) — канонические
                  фразы одним кликом, отправляются СРАЗУ. -->
-            <button type="button" title="Быстрые ответы" @click="showQuickReplies = !showQuickReplies"
+            <button type="button" :title="locale.t('chatThread.quickReplies', 'Быстрые ответы')" @click="showQuickReplies = !showQuickReplies"
                     class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"
                     :class="{ 'bg-bg2 text-accent': showQuickReplies }"><Zap class="size-4" /></button>
+            <span class="mx-1 h-4 w-px bg-border2" />
+            <!-- Настройки перевода — тоже здесь, рядом с полем ввода (как chat-bar-кнопка
+                 в better discord-translator), а не только в шапке беседы. -->
+            <button type="button" @click="showTranslate = true"
+                    :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
+                    class="grid size-7 place-items-center rounded-md hover:bg-bg2"
+                    :class="tr.enabled ? 'text-accent' : 'text-text3 hover:text-text'">
+              <Languages class="size-4" />
+            </button>
+            <!-- GIF (Klipy) — подпись буквами, а не иконкой: так и в Discord, «GIF» узнаваем
+                 без пояснения лучше любого символа. -->
+            <button type="button" title="GIF" @click="showGifPicker = !showGifPicker"
+                    class="grid h-7 shrink-0 place-items-center rounded-md px-1.5 text-[11px] font-extrabold tracking-tight hover:bg-bg2"
+                    :class="showGifPicker ? 'bg-bg2 text-accent' : 'text-text3 hover:text-text'">GIF</button>
           </div>
           <!-- Автодополнение слэш-команд (как в Telegram) — список + краткое пояснение. -->
           <div v-if="slashCandidates.length" class="border-b border-border p-1.5">
@@ -1141,9 +1183,9 @@ const headerTint = computed(() =>
               </button>
             </div>
             <form v-if="canManageTemplates" class="mt-1.5 flex items-center gap-1.5" @submit.prevent="addTemplateFromInput">
-              <input v-model="newTemplateText" placeholder="Свой шаблон (напр. «Работа принята»)…"
+              <input v-model="newTemplateText" :placeholder="locale.t('chatThread.customTemplatePlaceholder', 'Свой шаблон (напр. «Работа принята»)…')"
                      class="h-7 min-w-0 flex-1 rounded-md border border-border2 bg-card2 px-2 text-xs text-text outline-none focus:border-accent" />
-              <button type="submit" :disabled="!newTemplateText.trim()" aria-label="Добавить шаблон"
+              <button type="submit" :disabled="!newTemplateText.trim()" :aria-label="locale.t('chatThread.addTemplate', 'Добавить шаблон')"
                       class="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-white disabled:opacity-40"><Plus class="size-3.5" /></button>
             </form>
           </div>
@@ -1153,7 +1195,7 @@ const headerTint = computed(() =>
           <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
                       @keydown="onComposerKeydown" @input="onComposerInput" :disabled="mascotCooldown.active"
                       class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60" />
-            <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" aria-label="Отправить"
+            <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" :aria-label="locale.t('chatThread.send', 'Отправить')"
                     class="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
               <Send class="size-5" />
             </button>
@@ -1161,9 +1203,9 @@ const headerTint = computed(() =>
         </template>
         <!-- Читатель канала: писать нельзя, только подписка -->
         <div v-else class="flex items-center justify-between gap-2 p-3 text-sm text-text3">
-          <span>Вы подписаны на канал</span>
+          <span>{{ locale.t('chatThread.subscribedToChannel', 'Вы подписаны на канал') }}</span>
           <button type="button" @click="m.leaveActive()"
-                  class="rounded-lg border border-border2 px-3 py-1.5 text-text2 hover:bg-bg2">Покинуть</button>
+                  class="rounded-lg border border-border2 px-3 py-1.5 text-text2 hover:bg-bg2">{{ locale.t('conversationInfo.leaveAction', 'Покинуть') }}</button>
         </div>
       </div>
     </template>
@@ -1174,22 +1216,22 @@ const headerTint = computed(() =>
       <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
           <MessageSquare class="size-4 text-accent" />
-          <h3 class="flex-1 font-title text-sm font-bold text-text">Ответы</h3>
-          <button type="button" @click="m.closeThread()" aria-label="Закрыть"
+          <h3 class="flex-1 font-title text-sm font-bold text-text">{{ locale.t('chatThread.repliesTitle', 'Ответы') }}</h3>
+          <button type="button" @click="m.closeThread()" :aria-label="locale.t('common.close')"
                   class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
         </div>
         <div v-if="threadParent" class="mb-2 rounded-md border-l-2 border-accent bg-bg2 px-3 py-2 text-xs text-text2">
-          {{ threadParent.deleted ? 'Сообщение удалено' : threadParent.body }}
+          {{ threadParent.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : threadParent.body }}
         </div>
         <div class="min-h-0 flex-1 space-y-2 overflow-y-auto">
           <div v-for="r in activeThread.messages" :key="r.id" class="rounded-md bg-bg2 px-3 py-2 text-sm">
-            <div class="mb-0.5 text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? 'Вы' : '') }} · {{ fmtTime(r.created_at) }}</div>
-            <div class="text-text">{{ r.deleted ? 'Сообщение удалено' : r.body }}</div>
+            <div class="mb-0.5 text-[11px] font-semibold text-accent">{{ r.sender_name || (r.mine ? locale.t('chatThread.you', 'Вы') : '') }} · {{ fmtTime(r.created_at) }}</div>
+            <div class="text-text">{{ r.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : r.body }}</div>
           </div>
-          <p v-if="!activeThread.messages.length" class="p-2 text-center text-xs text-text3">Пока нет ответов.</p>
+          <p v-if="!activeThread.messages.length" class="p-2 text-center text-xs text-text3">{{ locale.t('chatThread.noRepliesYet', 'Пока нет ответов.') }}</p>
         </div>
         <button type="button" @click="replyInThread"
-                class="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2">Ответить</button>
+                class="mt-3 w-full rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2">{{ locale.t('msgAction.reply', 'Ответить') }}</button>
       </div>
     </div>
 
@@ -1199,17 +1241,17 @@ const headerTint = computed(() =>
       <div class="flex max-h-[80vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
           <ScrollText class="size-4 text-accent" />
-          <h3 class="flex-1 font-title text-sm font-bold text-text">Краткая сводка</h3>
-          <button type="button" @click="summary.open = false" aria-label="Закрыть"
+          <h3 class="flex-1 font-title text-sm font-bold text-text">{{ locale.t('chatThread.summaryTitle', 'Краткая сводка') }}</h3>
+          <button type="button" @click="summary.open = false" :aria-label="locale.t('common.close')"
                   class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
         </div>
-        <p v-if="summary.loading" class="py-6 text-center text-sm text-text3">Читаем переписку…</p>
+        <p v-if="summary.loading" class="py-6 text-center text-sm text-text3">{{ locale.t('chatThread.summaryLoading', 'Читаем переписку…') }}</p>
         <p v-else-if="summary.note" class="py-4 text-sm text-text3">{{ summary.note }}</p>
         <div v-else class="min-h-0 flex-1 overflow-y-auto whitespace-pre-line text-sm leading-relaxed text-text">
           {{ summary.text }}
         </div>
         <p v-if="summary.text" class="mt-3 border-t border-border pt-2 text-[11px] text-text3">
-          Составлено ИИ по переписке. Имена обезличены перед отправкой в модель.
+          {{ locale.t('chatThread.summaryFooter', 'Составлено ИИ по переписке. Имена обезличены перед отправкой в модель.') }}
         </p>
       </div>
     </div>
@@ -1223,19 +1265,20 @@ const headerTint = computed(() =>
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
           <Eye class="size-4 text-accent" />
-          <h3 class="font-title text-sm font-bold text-text">Прочитали</h3>
+          <h3 class="font-title text-sm font-bold text-text">{{ locale.t('chatThread.readByTitle', 'Прочитали') }}</h3>
         </div>
-        <p v-if="!readByPopup.names.length" class="text-sm text-text3">Пока никто не прочитал.</p>
+        <p v-if="!readByPopup.names.length" class="text-sm text-text3">{{ locale.t('chatThread.noOneReadYet', 'Пока никто не прочитал.') }}</p>
         <ul v-else class="space-y-1 text-sm text-text">
           <li v-for="(n, i) in readByPopup.names" :key="i">{{ n }}</li>
         </ul>
         <button type="button" @click="readByPopup.open = false"
-                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Закрыть</button>
+                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.close') }}</button>
       </div>
     </div>
 
     <!-- Оверлей действий -->
     <MessageActionsOverlay v-if="overlay.open" :message="overlay.message" :x="overlay.x" :y="overlay.y"
+                           :translated="!!tr.shownFor(overlay.message?.id)"
                            @pick="onPick" @react="onReact" @close="overlay.open = false" />
 
     <!-- §D11: история редактирования сообщения -->
@@ -1244,19 +1287,19 @@ const headerTint = computed(() =>
       <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
           <History class="size-4 text-accent" />
-          <h3 class="font-title text-sm font-bold text-text">История изменений</h3>
+          <h3 class="font-title text-sm font-bold text-text">{{ locale.t('chatThread.editHistoryTitle', 'История изменений') }}</h3>
         </div>
         <div class="max-h-72 space-y-2 overflow-y-auto">
           <div v-for="(v, i) in historyPopup.versions" :key="i"
                class="rounded-md border border-border bg-bg2 px-3 py-2 text-sm">
             <div class="mb-0.5 text-[11px] text-text3">
-              {{ fmtFull(v.at) }}{{ v.current ? ' · текущая версия' : '' }}
+              {{ fmtFull(v.at) }}{{ v.current ? ' · ' + locale.t('chatThread.currentVersion', 'текущая версия') : '' }}
             </div>
             <div class="text-text">{{ v.body }}</div>
           </div>
         </div>
         <button type="button" @click="historyPopup.open = false"
-                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Закрыть</button>
+                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.close') }}</button>
       </div>
     </div>
 
@@ -1265,16 +1308,16 @@ const headerTint = computed(() =>
          style="background: var(--gb-overlay)" @click.self="deleteTargets = null">
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-5 shadow-card">
         <h3 class="font-title text-base font-bold text-text">
-          Удалить {{ deleteTargets.length > 1 ? `${deleteTargets.length} сообщений` : 'сообщение' }}?
+          {{ deleteTargets.length > 1 ? locale.t('chatThread.deleteManyQuestion', { n: deleteTargets.length }) : locale.t('chatThread.deleteOneQuestion', 'Удалить сообщение?') }}
         </h3>
-        <p class="mt-1 text-xs text-text3">«У всех» сотрёт текст у собеседника, «у себя» — скроет только у вас.</p>
+        <p class="mt-1 text-xs text-text3">{{ locale.t('chatThread.deleteScopeHint', '«У всех» сотрёт текст у собеседника, «у себя» — скроет только у вас.') }}</p>
         <div class="mt-4 space-y-2">
           <button type="button" @click="applyDelete('all')"
-                  class="w-full rounded-lg bg-red px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Удалить у всех</button>
+                  class="w-full rounded-lg bg-red px-4 py-2 text-sm font-semibold text-white hover:opacity-90">{{ locale.t('chatThread.deleteForAll', 'Удалить у всех') }}</button>
           <button type="button" @click="applyDelete('self')"
-                  class="w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text hover:bg-bg2">Удалить у себя</button>
+                  class="w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text hover:bg-bg2">{{ locale.t('chatThread.deleteForSelf', 'Удалить у себя') }}</button>
           <button type="button" @click="deleteTargets = null"
-                  class="w-full rounded-lg px-4 py-2 text-sm text-text3 hover:bg-bg2">Отмена</button>
+                  class="w-full rounded-lg px-4 py-2 text-sm text-text3 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
         </div>
       </div>
     </div>
@@ -1285,6 +1328,7 @@ const headerTint = computed(() =>
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
     <!-- §12: оверлей отчёта куратора (круговая + плоские по предметам + дрилл-даун). -->
     <TranslateDialog v-if="showTranslate" @close="showTranslate = false" />
+    <GifPicker v-if="showGifPicker" @pick="m.sendGif($event)" @close="showGifPicker = false" />
     <CuratorReportOverlay v-if="openReportOverlay" :report-id="openReportOverlay" @close="openReportOverlay = null" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"
                    @submit="onForwardSubmit" @close="forwardState = { open: false, ids: [] }" />
@@ -1292,7 +1336,7 @@ const headerTint = computed(() =>
     <!-- Тост «скопировано» -->
     <transition name="fade">
       <div v-if="copied" class="pointer-events-none fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-text px-3 py-1.5 text-xs text-card shadow-card">
-        Скопировано
+        {{ locale.t('chatThread.copied', 'Скопировано') }}
       </div>
     </transition>
   </section>

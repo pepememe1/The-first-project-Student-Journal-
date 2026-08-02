@@ -20,11 +20,31 @@ import { adminApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useLocaleStore } from '@/stores/locale'
 
 const toast = useToast()
 const { confirm } = useConfirm()
+const locale = useLocaleStore()
 
 const DAYS = ['Пнд', 'Втр', 'Срд', 'Чтв', 'Птн', 'Сбт']
+// Коды дней — те же строки, что отдаёт парсер портала (schedule/parser.py), их менять
+// нельзя: они служат КЛЮЧАМИ в base.value.weeks. Отображаемая подпись переводится
+// отдельно, см. dayLabel() ниже.
+const DAY_LABEL_KEYS = {
+  Пнд: ['adminSchedule.dayMon', 'Пнд'],
+  Втр: ['adminSchedule.dayTue', 'Втр'],
+  Срд: ['adminSchedule.dayWed', 'Срд'],
+  Чтв: ['adminSchedule.dayThu', 'Чтв'],
+  Птн: ['adminSchedule.dayFri', 'Птн'],
+  Сбт: ['adminSchedule.daySat', 'Сбт'],
+}
+function dayLabel(day) {
+  const e = DAY_LABEL_KEYS[day]
+  return e ? locale.t(e[0], e[1]) : day
+}
+function weekLabel(w) {
+  return w === 2 ? locale.t('adminSchedule.week2', 'II неделя') : locale.t('adminSchedule.week1', 'I неделя')
+}
 // Стандартная сетка звонков ВСГУТУ — запасная, если портал не отдал своё расписание пар.
 const DEFAULT_TIMES = ['09:00-10:35', '10:45-12:20', '13:00-14:35',
                        '14:45-16:20', '16:25-18:00', '18:05-19:40']
@@ -107,7 +127,7 @@ async function load() {
     base.value = r.schedule
     savedKeys.value = new Set((r.overrides || []).map((o) => `${o.week}|${o.day}|${o.pair_no}`))
     clearDraft()
-  } catch { toast.error('Не удалось загрузить расписание') } finally { loading.value = false }
+  } catch { toast.error(locale.t('adminSchedule.loadFailed', 'Не удалось загрузить расписание')) } finally { loading.value = false }
   //Назначения препод↔предмет для автозаполнения графы «Преподаватель» — тот же
   //источник, что и в редакторе часов («Группы» → 🕐), не блокирует основную загрузку.
   try {
@@ -136,15 +156,15 @@ async function saveDraft() {
       return { group: group.value, week: Number(w), day, pair_no: Number(slot), ...op }
     })
     await adminApi.saveScheduleOverrides(overrides)
-    toast.success('Расписание сохранено')
+    toast.success(locale.t('adminSchedule.saved', 'Расписание сохранено'))
     await load()
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminSchedule.saveFailed', 'Не удалось сохранить')) }
   finally { saving.value = false }
 }
 
 async function discardDraft() {
   if (!dirty.value) return
-  if (!(await confirm({ title: 'Отменить несохранённые правки?', okText: 'Отменить правки', danger: true }))) return
+  if (!(await confirm({ title: locale.t('adminSchedule.confirmDiscardTitle', 'Отменить несохранённые правки?'), okText: locale.t('adminSchedule.confirmDiscardOk', 'Отменить правки'), danger: true }))) return
   clearDraft()
 }
 
@@ -154,7 +174,7 @@ async function moveCell(from, to) {
   const src = cell(from.day, from.slot)
   if (!src) return
   if (cell(to.day, to.slot)) {
-    toast.error('Слот занят — сначала освободите его')
+    toast.error(locale.t('adminSchedule.slotOccupied', 'Слот занят — сначала освободите его'))
     return
   }
   // Перенос = скрыть исходную ячейку + задать целевую (время под номер целевого слота).
@@ -180,11 +200,13 @@ async function checkSlot(day, slot, op) {
     const clash = (r.room?.length || 0) + (r.teacher?.length || 0)
     if (clash) {
       conflicts.add(key(day, slot))
-      const who = r.room?.length ? `аудитория ${op.room}` : `преподаватель ${op.teacher}`
-      toast.error(`Накладка: ${who} занят(а) в это время у другой группы`)
+      const who = r.room?.length
+        ? locale.t('adminSchedule.conflictRoom', { room: op.room })
+        : locale.t('adminSchedule.conflictTeacher', { teacher: op.teacher })
+      toast.error(locale.t('adminSchedule.conflictMessage', { who }))
     } else {
       conflicts.delete(key(day, slot))
-      if (r.building) toast.info('Проверка неполна: расписание портала ещё собирается')
+      if (r.building) toast.info(locale.t('adminSchedule.checkIncomplete', 'Проверка неполна: расписание портала ещё собирается'))
     }
   } catch { /* сверка не критична — правку не блокируем */ }
 }
@@ -214,7 +236,7 @@ function openEdit(day, slot) {
   showForm.value = true
 }
 async function submitForm() {
-  if (!form.subject.trim()) { toast.error('Укажите предмет'); return }
+  if (!form.subject.trim()) { toast.error(locale.t('adminSchedule.enterSubject', 'Укажите предмет')); return }
   // Сменили день/номер в форме — это тоже перенос: старую ячейку убрать.
   if (form.origin && (form.origin.day !== form.day || form.origin.slot !== form.slot)) {
     pending[key(form.origin.day, form.origin.slot)] = { action: 'remove' }
@@ -238,32 +260,32 @@ function hideFromForm() {
 
 // ── Взять с ВСГУТУ / Сброс ─────────────────────────────────────────────────────────
 async function refreshGroup() {
-  if (dirty.value && !(await confirm({ title: 'Обновить с ВСГУТУ? Несохранённые правки пропадут.', okText: 'Обновить', danger: true }))) return
+  if (dirty.value && !(await confirm({ title: locale.t('adminSchedule.confirmRefreshGroupTitle', 'Обновить с ВСГУТУ? Несохранённые правки пропадут.'), okText: locale.t('common.refresh'), danger: true }))) return
   loading.value = true
-  try { await adminApi.refreshSchedule(group.value); await load(); toast.success('Расписание обновлено с портала') }
-  catch { toast.error('Не удалось обновить'); loading.value = false }
+  try { await adminApi.refreshSchedule(group.value); await load(); toast.success(locale.t('adminSchedule.refreshedFromPortal', 'Расписание обновлено с портала')) }
+  catch { toast.error(locale.t('adminSchedule.refreshFailed', 'Не удалось обновить')); loading.value = false }
 }
 async function refreshAll() {
-  if (!(await confirm({ title: 'Обновить расписание ВСЕХ групп с ВСГУТУ?', message: 'Сборка идёт в фоне (~минуту).', okText: 'Обновить все' }))) return
-  try { await adminApi.refreshSchedule('', true); toast.success('Обновление всех групп запущено (в фоне)') }
-  catch { toast.error('Не удалось запустить обновление') }
+  if (!(await confirm({ title: locale.t('adminSchedule.confirmRefreshAllTitle', 'Обновить расписание ВСЕХ групп с ВСГУТУ?'), message: locale.t('adminSchedule.confirmRefreshAllMessage', 'Сборка идёт в фоне (~минуту).'), okText: locale.t('adminSchedule.confirmRefreshAllOk', 'Обновить все') }))) return
+  try { await adminApi.refreshSchedule('', true); toast.success(locale.t('adminSchedule.refreshAllStarted', 'Обновление всех групп запущено (в фоне)')) }
+  catch { toast.error(locale.t('adminSchedule.refreshAllFailed', 'Не удалось запустить обновление')) }
 }
 async function resetGroup() {
-  if (!(await confirm({ title: `Сбросить правки группы ${group.value}?`, message: 'Расписание снова будет браться с портала.', okText: 'Сбросить', danger: true }))) return
-  try { await adminApi.resetSchedule(group.value); await load(); toast.success('Правки сброшены') }
-  catch { toast.error('Не удалось сбросить') }
+  if (!(await confirm({ title: locale.t('adminSchedule.confirmResetGroupTitle', { group: group.value }), message: locale.t('adminSchedule.confirmResetGroupMessage', 'Расписание снова будет браться с портала.'), okText: locale.t('adminSchedule.confirmResetGroupOk', 'Сбросить'), danger: true }))) return
+  try { await adminApi.resetSchedule(group.value); await load(); toast.success(locale.t('adminSchedule.resetDone', 'Правки сброшены')) }
+  catch { toast.error(locale.t('adminSchedule.resetFailed', 'Не удалось сбросить')) }
 }
 async function resetAll() {
-  if (!(await confirm({ title: 'Сбросить правки ВСЕХ групп?', message: 'Все ручные правки колледжа будут удалены безвозвратно.', okText: 'Далее', danger: true }))) return
-  if (!(await confirm({ title: 'Точно удалить правки всех групп?', message: 'Это действие необратимо.', okText: 'Удалить всё', danger: true }))) return
-  try { const r = await adminApi.resetSchedule('', true); await load(); toast.success(`Сброшено правок: ${r.data.reset}`) }
-  catch { toast.error('Не удалось сбросить') }
+  if (!(await confirm({ title: locale.t('adminSchedule.confirmResetAllTitle', 'Сбросить правки ВСЕХ групп?'), message: locale.t('adminSchedule.confirmResetAllMessage', 'Все ручные правки колледжа будут удалены безвозвратно.'), okText: locale.t('adminSchedule.confirmResetAllOk', 'Далее'), danger: true }))) return
+  if (!(await confirm({ title: locale.t('adminSchedule.confirmResetAllConfirmTitle', 'Точно удалить правки всех групп?'), message: locale.t('adminSchedule.confirmResetAllConfirmMessage', 'Это действие необратимо.'), okText: locale.t('adminSchedule.confirmResetAllConfirmOk', 'Удалить всё'), danger: true }))) return
+  try { const r = await adminApi.resetSchedule('', true); await load(); toast.success(locale.t('adminSchedule.resetAllDone', { n: r.data.reset })) }
+  catch { toast.error(locale.t('adminSchedule.resetFailed', 'Не удалось сбросить')) }
 }
 
 // ── Смена группы/недели с защитой от потери черновика ───────────────────────────────
 async function onGroupChange(e) {
   const next = e.target.value
-  if (dirty.value && !(await confirm({ title: 'Продолжить без сохранения?', message: 'В расписании есть несохранённые правки.', okText: 'Продолжить', danger: true }))) {
+  if (dirty.value && !(await confirm({ title: locale.t('adminSchedule.confirmLeaveTitle', 'Продолжить без сохранения?'), message: locale.t('adminSchedule.confirmLeaveMessage', 'В расписании есть несохранённые правки.'), okText: locale.t('adminSchedule.confirmLeaveOkContinue', 'Продолжить'), danger: true }))) {
     e.target.value = group.value      // вернуть прежний выбор
     return
   }
@@ -273,7 +295,7 @@ async function onGroupChange(e) {
 
 onBeforeRouteLeave(async () => {
   if (!dirty.value) return true
-  return await confirm({ title: 'Продолжить без сохранения?', message: 'В расписании есть несохранённые правки.', okText: 'Уйти без сохранения', danger: true })
+  return await confirm({ title: locale.t('adminSchedule.confirmLeaveTitle', 'Продолжить без сохранения?'), message: locale.t('adminSchedule.confirmLeaveMessage', 'В расписании есть несохранённые правки.'), okText: locale.t('adminSchedule.confirmLeaveOkLeave', 'Уйти без сохранения'), danger: true })
 })
 
 // Уход со страницы через закрытие вкладки/обновление браузера.
@@ -370,41 +392,40 @@ function isHover(day, slot) {
         <option v-for="g in groups" :key="g.name || g" :value="g.name || g">{{ g.name || g }}</option>
       </select>
       <div class="inline-flex overflow-hidden rounded-sm border border-border2">
-        <button class="px-3 py-1.5 text-sm" :class="week === 1 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 1">I неделя</button>
-        <button class="px-3 py-1.5 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">II неделя</button>
+        <button class="px-3 py-1.5 text-sm" :class="week === 1 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 1">{{ locale.t('adminSchedule.week1', 'I неделя') }}</button>
+        <button class="px-3 py-1.5 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">{{ locale.t('adminSchedule.week2', 'II неделя') }}</button>
       </div>
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
-        <AppButton variant="ghost" size="sm" @click="refreshGroup">↻ Взять с ВСГУТУ</AppButton>
-        <AppButton variant="ghost" size="sm" @click="refreshAll">↻ Все группы</AppButton>
-        <AppButton variant="ghost" size="sm" @click="resetGroup">Сброс группы</AppButton>
-        <AppButton variant="ghost" size="sm" @click="resetAll">Сброс всех</AppButton>
+        <AppButton variant="ghost" size="sm" @click="refreshGroup">{{ locale.t('adminSchedule.pullFromPortal', '↻ Взять с ВСГУТУ') }}</AppButton>
+        <AppButton variant="ghost" size="sm" @click="refreshAll">{{ locale.t('adminSchedule.pullAllGroups', '↻ Все группы') }}</AppButton>
+        <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
+        <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
       </div>
     </div>
 
     <!-- Черновик: сохранить / отменить -->
     <div v-if="dirty" class="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/5 px-4 py-2.5">
-      <span class="text-sm font-medium text-accent">Есть несохранённые правки</span>
+      <span class="text-sm font-medium text-accent">{{ locale.t('adminSchedule.unsavedChanges', 'Есть несохранённые правки') }}</span>
       <div class="ml-auto flex gap-2">
-        <AppButton variant="ghost" size="sm" @click="discardDraft">Отменить</AppButton>
-        <AppButton variant="green" size="sm" :disabled="saving" @click="saveDraft">{{ saving ? 'Сохранение…' : 'Сохранить' }}</AppButton>
+        <AppButton variant="ghost" size="sm" @click="discardDraft">{{ locale.t('adminSchedule.discardBtn', 'Отменить') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="saveDraft">{{ saving ? locale.t('adminSchedule.savingBtn', 'Сохранение…') : locale.t('common.save') }}</AppButton>
       </div>
     </div>
 
     <p class="text-xs text-text3">
-      Удерживайте пару ~полсекунды и перетащите на другой слот или день. Время подстроится
-      под номер пары. Тап по паре — правка, тап по пустой ячейке — добавить.
+      {{ locale.t('adminSchedule.dragHint', 'Удерживайте пару ~полсекунды и перетащите на другой слот или день. Время подстроится под номер пары. Тап по паре — правка, тап по пустой ячейке — добавить.') }}
     </p>
 
-    <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
+    <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
 
     <!-- Сетка «слоты × дни» -->
     <div v-else class="overflow-x-auto">
       <table class="w-full min-w-[820px] border-collapse select-none">
         <thead>
           <tr>
-            <th class="w-28 border border-border2 bg-card2 p-2 text-xs font-semibold text-text3">Пара</th>
-            <th v-for="day in DAYS" :key="day" class="border border-border2 bg-card2 p-2 text-sm font-semibold text-text">{{ day }}</th>
+            <th class="w-28 border border-border2 bg-card2 p-2 text-xs font-semibold text-text3">{{ locale.t('adminSchedule.colPair', 'Пара') }}</th>
+            <th v-for="day in DAYS" :key="day" class="border border-border2 bg-card2 p-2 text-sm font-semibold text-text">{{ dayLabel(day) }}</th>
           </tr>
         </thead>
         <tbody>
@@ -431,11 +452,11 @@ function isHover(day, slot) {
                    @pointerdown="onPairPointerDown($event, day, slot)">
                 <p class="truncate text-xs font-semibold text-text">{{ cell(day, slot).subject || cell(day, slot).raw }}</p>
                 <p v-if="cell(day, slot).room || cell(day, slot).teacher" class="truncate text-tiny text-text3">
-                  {{ [cell(day, slot).teacher, cell(day, slot).room ? 'ауд. ' + cell(day, slot).room : ''].filter(Boolean).join(' · ') }}
+                  {{ [cell(day, slot).teacher, cell(day, slot).room ? locale.t('adminSchedule.roomLabel', { room: cell(day, slot).room }) : ''].filter(Boolean).join(' · ') }}
                 </p>
-                <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" title="Накладка">⚠</span>
-                <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" title="Не сохранено">●</span>
-                <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" title="Сохранённая правка">✎</span>
+                <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')">⚠</span>
+                <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')">●</span>
+                <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')">✎</span>
               </div>
             </td>
           </tr>
@@ -452,43 +473,43 @@ function isHover(day, slot) {
     <!-- Форма пары -->
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">Пара — {{ group }}, {{ week === 2 ? 'II' : 'I' }} неделя</h3>
+        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminSchedule.pairFormTitle', { group, week: weekLabel(week) }) }}</h3>
         <div class="grid grid-cols-2 gap-3">
-          <label class="text-sm">День
+          <label class="text-sm">{{ locale.t('adminSchedule.formDay', 'День') }}
             <select v-model="form.day" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="d in DAYS" :key="d" :value="d">{{ d }}</option>
+              <option v-for="d in DAYS" :key="d" :value="d">{{ dayLabel(d) }}</option>
             </select>
           </label>
-          <label class="text-sm">№ пары
+          <label class="text-sm">{{ locale.t('adminSchedule.formSlotNumber', '№ пары') }}
             <select v-model.number="form.slot" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
               <option v-for="s in slots" :key="s" :value="s">{{ s }} ({{ timeForSlot(s) }})</option>
             </select>
           </label>
-          <label class="col-span-2 text-sm">Предмет
+          <label class="col-span-2 text-sm">{{ locale.t('adminSchedule.formSubject', 'Предмет') }}
             <select v-model="form.subject" @change="onFormSubjectChange"
                     class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option value="" disabled>Выберите предмет</option>
+              <option value="" disabled>{{ locale.t('adminSchedule.selectSubject', 'Выберите предмет') }}</option>
               <option v-for="s in groupSubjects" :key="s" :value="s">{{ s }}</option>
             </select>
             <p v-if="!groupSubjects.length" class="mt-1 text-tiny text-text3">
-              У группы нет предметов — задайте их во вкладке «Группы».
+              {{ locale.t('adminSchedule.noSubjectsHint', 'У группы нет предметов — задайте их во вкладке «Группы».') }}
             </p>
           </label>
-          <label class="text-sm">Аудитория
+          <label class="text-sm">{{ locale.t('adminSchedule.formRoom', 'Аудитория') }}
             <input v-model="form.room" placeholder="101" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
           </label>
           <!-- §ролей: преподаватель — ставится АВТОМАТОМ из назначения (не ручной ввод),
                см. onFormSubjectChange / webdata.teacher_assignments. -->
-          <label class="text-sm">Преподаватель
-            <input :value="form.teacher || '— не назначен —'" disabled
+          <label class="text-sm">{{ locale.t('adminSchedule.formTeacher', 'Преподаватель') }}
+            <input :value="form.teacher || locale.t('adminSchedule.notAssigned', '— не назначен —')" disabled
                    class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2/60 px-2 text-sm text-text3 outline-none" />
           </label>
         </div>
         <div class="mt-5 flex items-center justify-between">
-          <button v-if="form.origin" class="text-sm text-red hover:underline" @click="hideFromForm">Скрыть пару</button>
+          <button v-if="form.origin" class="text-sm text-red hover:underline" @click="hideFromForm">{{ locale.t('adminSchedule.hidePair', 'Скрыть пару') }}</button>
           <div class="ml-auto flex gap-2">
-            <AppButton variant="ghost" size="sm" @click="showForm = false">Отмена</AppButton>
-            <AppButton variant="green" size="sm" @click="submitForm">В черновик</AppButton>
+            <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+            <AppButton variant="green" size="sm" @click="submitForm">{{ locale.t('adminSchedule.addToDraft', 'В черновик') }}</AppButton>
           </div>
         </div>
       </div>

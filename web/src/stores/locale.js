@@ -16,7 +16,7 @@
 // может выключить перевод и потом включить обратно, не выбирая язык заново.
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { LOCALES, DEFAULT_LOCALE, MESSAGES } from '@/i18n/dictionaries'
+import { LOCALES, DEFAULT_LOCALE, MESSAGES } from '../i18n/dictionaries.js'
 
 const LS_LOCALE = 'gb.locale'
 const LS_ENABLED = 'gb.locale_on'
@@ -44,10 +44,22 @@ export const useLocaleStore = defineStore('locale', () => {
    * Перевод по ключу. Нет ключа в выбранном языке → РУССКИЙ, а не ключ и не пустота:
    * «login.submit» вместо кнопки выглядит сломанным, русская надпись — просто
    * непереведённое место, и человек всё равно поймёт, куда нажимать.
+   *
+   * Второй аргумент — либо строка-fallback (старое поведение, обратная
+   * совместимость), либо объект плейсхолдеров для строк вида «Сессия {week}
+   * ({first}–{last})» — подстановка делается ПОСЛЕ выбора языка, поэтому значения
+   * (числа, уже переведённые слова) не зависят от порядка слов в конкретном языке.
    */
-  function t(key, fallback = '') {
+  function t(key, paramsOrFallback = '') {
+    const params = paramsOrFallback && typeof paramsOrFallback === 'object'
+      ? paramsOrFallback : null
+    const fallback = params ? '' : paramsOrFallback
     const dict = MESSAGES[active.value] || {}
-    return dict[key] || MESSAGES[DEFAULT_LOCALE][key] || fallback || key
+    let s = dict[key] || MESSAGES[DEFAULT_LOCALE][key] || fallback || key
+    if (params) {
+      for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, v)
+    }
+    return s
   }
 
   function apply() {

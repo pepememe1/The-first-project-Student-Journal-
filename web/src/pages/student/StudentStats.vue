@@ -8,6 +8,9 @@ import StatCard from '@/components/ui/StatCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Gauge from '@/components/ui/Gauge.vue'
 import { TrendingUp } from '@lucide/vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const loading = ref(true)
 const data = ref(null)
@@ -36,21 +39,21 @@ function barColor(v) {
        рядами карточек). `gap` живёт на контейнере: перебить его нечем, и он не зависит от
        того, сколько детей отрисовалось. -->
   <div class="flex flex-col gap-6">
-    <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
+    <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
 
     <template v-else-if="data">
       <div class="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Средний балл" :value="data.average ?? '—'" :icon="TrendingUp" accent />
-        <StatCard label="Пропусков (часов)" :value="data.absences?.всего ?? 0" />
-        <StatCard label="Задолженности" :value="data.debts?.length ?? 0" />
+        <StatCard :label="locale.t('studentStats.average', 'Средний балл')" :value="data.average ?? '—'" :icon="TrendingUp" accent />
+        <StatCard :label="locale.t('studentStats.absencesHours', 'Пропусков (часов)')" :value="data.absences?.всего ?? 0" />
+        <StatCard :label="locale.t('studentStats.debts', 'Задолженности')" :value="data.debts?.length ?? 0" />
       </div>
 
-      <Card title="Успеваемость по предметам">
-        <EmptyState v-if="!perSubject.length" title="Нет данных" />
+      <Card :title="locale.t('studentStats.subjectPerfTitle', 'Успеваемость по предметам')">
+        <EmptyState v-if="!perSubject.length" :title="locale.t('studentStats.noData', 'Нет данных')" />
         <div v-else class="grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
           <div class="flex flex-col items-center justify-center">
             <Gauge :value="Number(data.average) || 0" :size="132" />
-            <p class="mt-1 text-xs text-text3">средний балл</p>
+            <p class="mt-1 text-xs text-text3">{{ locale.t('studentStats.averageCaption', 'средний балл') }}</p>
           </div>
           <ul class="space-y-3">
             <li v-for="p in perSubject" :key="p.subject">
@@ -68,25 +71,25 @@ function barColor(v) {
       </Card>
 
       <div class="grid gap-6 lg:grid-cols-2">
-        <Card title="Пропуски">
+        <Card :title="locale.t('studentStats.absencesTitle', 'Пропуски')">
           <div class="grid grid-cols-3 gap-3 text-center">
             <div class="rounded-md bg-card2 p-3">
               <p class="font-title text-2xl font-extrabold text-text">{{ data.absences?.Н ?? 0 }}</p>
-              <p class="text-xs text-text3">Н (неув.)</p>
+              <p class="text-xs text-text3">{{ locale.t('studentStats.absN', 'Н (неув.)') }}</p>
             </div>
             <div class="rounded-md bg-card2 p-3">
               <p class="font-title text-2xl font-extrabold text-text">{{ data.absences?.Б ?? 0 }}</p>
-              <p class="text-xs text-text3">Б (болезнь)</p>
+              <p class="text-xs text-text3">{{ locale.t('studentStats.absB', 'Б (болезнь)') }}</p>
             </div>
             <div class="rounded-md bg-card2 p-3">
               <p class="font-title text-2xl font-extrabold text-text">{{ data.absences?.О ?? 0 }}</p>
-              <p class="text-xs text-text3">О (уваж.)</p>
+              <p class="text-xs text-text3">{{ locale.t('studentStats.absO', 'О (уваж.)') }}</p>
             </div>
           </div>
         </Card>
 
-        <Card title="Задолженности">
-          <EmptyState v-if="!data.debts?.length" title="Долгов нет" message="Так держать!" />
+        <Card :title="locale.t('studentStats.debts', 'Задолженности')">
+          <EmptyState v-if="!data.debts?.length" :title="locale.t('studentStats.noDebtsTitle', 'Долгов нет')" :message="locale.t('studentStats.noDebtsMessage', 'Так держать!')" />
           <ul v-else class="space-y-2">
             <li v-for="(d, i) in data.debts" :key="i" class="flex items-start gap-2 text-sm text-text">
               <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-red" />
@@ -97,6 +100,6 @@ function barColor(v) {
       </div>
     </template>
 
-    <EmptyState v-else title="Нет данных" />
+    <EmptyState v-else :title="locale.t('studentStats.noData', 'Нет данных')" />
   </div>
 </template>

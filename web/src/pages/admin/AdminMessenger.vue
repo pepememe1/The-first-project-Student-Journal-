@@ -7,19 +7,30 @@
 import { ref, computed, onMounted } from 'vue'
 import { messengerModApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
+import { useLocaleStore } from '@/stores/locale'
+import { roleLabel } from '@/config/roles'
+
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
+
+const locale = useLocaleStore()
 
 // Мета-строка пользователя: студенту — группа, преподавателю — предметы.
 function userMeta(u) {
   if (!u) return ''
-  if (u.role === 'teacher') return (u.subjects || []).join(', ') || 'Преподаватель'
-  if (u.role === 'student') return 'Группа ' + (u.group_name || '—')
-  return u.role === 'admin' ? 'Администратор' : ''
+  if (u.role === 'teacher') return (u.subjects || []).join(', ') || roleLabel('teacher')
+  if (u.role === 'student') return locale.t('adminMessenger.studentGroup', { group: u.group_name || '—' })
+  return u.role === 'admin' ? roleLabel('admin') : ''
 }
 
-const REASON_RU = {
-  spam: 'Спам', harassment: 'Оскорбления', threats: 'Угрозы', fraud: 'Мошенничество',
-  illegal: 'Запрещённый контент', flood: 'Флуд', other: 'Другое',
-}
+const REASON_LABELS = computed(() => ({
+  spam: locale.t('adminMessenger.reasonSpam', 'Спам'),
+  harassment: locale.t('adminMessenger.reasonHarassment', 'Оскорбления'),
+  threats: locale.t('adminMessenger.reasonThreats', 'Угрозы'),
+  fraud: locale.t('adminMessenger.reasonFraud', 'Мошенничество'),
+  illegal: locale.t('adminMessenger.reasonIllegal', 'Запрещённый контент'),
+  flood: locale.t('adminMessenger.reasonFlood', 'Флуд'),
+  other: locale.t('adminMessenger.reasonOther', 'Другое'),
+}))
 
 const view = ref('reports')          // reports | inbox — активная вкладка
 const statusFilter = ref('open')
@@ -55,14 +66,14 @@ function switchView(v) {
 onMounted(load)
 
 async function resolve(r, status) {
-  const note = status === 'dismissed' ? '' : (window.prompt('Заметка модерации (необязательно):') || '')
+  const note = status === 'dismissed' ? '' : (window.prompt(locale.t('adminMessenger.moderationNotePrompt', 'Заметка модерации (необязательно):')) || '')
   try { await messengerModApi.resolve(r.id, status, note); await load() } catch { /* noop */ }
 }
 
 // Удалить сообщение у всех (модерация, пишется в аудит). Работает в любой переписке —
 // в отличие от пользовательского удаления, где нужно быть автором/участником.
 async function deleteMessage(mm) {
-  if (!window.confirm('Удалить это сообщение у всех? Текст будет стёрт безвозвратно.')) return
+  if (!window.confirm(locale.t('adminMessenger.confirmDeleteMessage', 'Удалить это сообщение у всех? Текст будет стёрт безвозвратно.'))) return
   try {
     await messengerModApi.deleteMessage(mm.id)
     const conv = viewer.value.conv
@@ -73,8 +84,10 @@ async function deleteMessage(mm) {
 // Глобальный мьют/размьют пользователя (не сможет писать никому). after — что перечитать.
 async function toggleMute(user, after) {
   if (!user?.id) return
-  const action = user.muted ? 'снять ограничение с' : 'ограничить в переписке'
-  if (!window.confirm(`Точно ${action} «${user.full_name}»?`)) return
+  const message = user.muted
+    ? locale.t('adminMessenger.confirmUnmute', { name: user.full_name })
+    : locale.t('adminMessenger.confirmMute', { name: user.full_name })
+  if (!window.confirm(message)) return
   try { await messengerModApi.muteUser(user.id, !user.muted); if (after) await after() }
   catch { /* noop */ }
 }
@@ -107,7 +120,7 @@ function isModReply(mm) {
 
 function fmt(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 </script>
 
@@ -118,76 +131,76 @@ function fmt(iso) {
       <button type="button" @click="switchView('reports')"
               class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
               :class="view === 'reports' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        Жалобы
+        {{ locale.t('adminMessenger.tabReports', 'Жалобы') }}
       </button>
       <button type="button" @click="switchView('inbox')"
               class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
               :class="view === 'inbox' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        Обращения
+        {{ locale.t('adminMessenger.tabInbox', 'Обращения') }}
       </button>
     </div>
 
     <!-- ── Жалобы (тикеты) ──────────────────────────────────────────────────────────── -->
     <template v-if="view === 'reports'">
       <div class="mb-4 flex items-center gap-2">
-        <label class="text-sm text-text2">Статус:</label>
+        <label class="text-sm text-text2">{{ locale.t('adminMessenger.statusLabel', 'Статус:') }}</label>
         <select v-model="statusFilter" @change="load"
                 class="rounded-md border border-border2 bg-card2 px-3 py-1.5 text-sm text-text outline-none focus:border-accent">
-          <option value="open">Новые</option>
-          <option value="in_review">В работе</option>
-          <option value="resolved">Решённые</option>
-          <option value="dismissed">Отклонённые</option>
-          <option value="">Все</option>
+          <option value="open">{{ locale.t('adminMessenger.statusOpen', 'Новые') }}</option>
+          <option value="in_review">{{ locale.t('adminMessenger.statusInReview', 'В работе') }}</option>
+          <option value="resolved">{{ locale.t('adminMessenger.statusResolved', 'Решённые') }}</option>
+          <option value="dismissed">{{ locale.t('adminMessenger.statusDismissed', 'Отклонённые') }}</option>
+          <option value="">{{ locale.t('adminMessenger.statusAll', 'Все') }}</option>
         </select>
-        <button type="button" @click="load" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">Обновить</button>
+        <button type="button" @click="load" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.refresh') }}</button>
       </div>
 
-      <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
+      <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
       <p v-else-if="!reports.length" class="rounded-lg border border-dashed border-border2 bg-card2/50 px-6 py-12 text-center text-sm text-text3">
-        Жалоб нет.
+        {{ locale.t('adminMessenger.noReports', 'Жалоб нет.') }}
       </p>
 
       <div class="space-y-3">
         <div v-for="r in reports" :key="r.id" class="rounded-lg border border-border bg-card p-4 shadow-card">
           <div class="mb-2 flex flex-wrap items-center gap-2">
-            <span class="rounded-full bg-red/15 px-2.5 py-0.5 text-xs font-semibold text-red">{{ REASON_RU[r.reason_code] || r.reason_code }}</span>
+            <span class="rounded-full bg-red/15 px-2.5 py-0.5 text-xs font-semibold text-red">{{ REASON_LABELS[r.reason_code] || r.reason_code }}</span>
             <span class="text-xs text-text3">{{ fmt(r.created_at) }}</span>
             <span class="ml-auto text-xs text-text3">#{{ r.id }} · {{ r.status }}</span>
           </div>
           <p class="rounded-md border border-border bg-bg2 px-3 py-2 text-sm text-text">«{{ r.message_snapshot }}»</p>
-          <p v-if="r.description" class="mt-2 text-sm text-text2">Комментарий: {{ r.description }}</p>
+          <p v-if="r.description" class="mt-2 text-sm text-text2">{{ locale.t('adminMessenger.commentLabel', 'Комментарий:') }} {{ r.description }}</p>
           <!-- Кто и на кого — с аватаром, ФИО и группой/предметами. -->
           <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div class="flex items-center gap-2 rounded-md border border-border bg-bg2 p-2">
               <Avatar :src="r.reported?.avatar" :name="r.reported?.full_name || r.reported_name" :size="36" />
               <div class="min-w-0">
-                <div class="truncate text-xs font-semibold text-text">На: {{ r.reported?.full_name || r.reported_name }}</div>
+                <div class="truncate text-xs font-semibold text-text">{{ locale.t('adminMessenger.reportedLabel', 'На:') }} {{ r.reported?.full_name || r.reported_name }}</div>
                 <div class="truncate text-[11px] text-text3">{{ userMeta(r.reported) }}</div>
               </div>
             </div>
             <div class="flex items-center gap-2 rounded-md border border-border bg-bg2 p-2">
               <Avatar :src="r.reporter?.avatar" :name="r.reporter?.full_name || r.reporter_name" :size="36" />
               <div class="min-w-0">
-                <div class="truncate text-xs font-semibold text-text">От: {{ r.reporter?.full_name || r.reporter_name }}</div>
+                <div class="truncate text-xs font-semibold text-text">{{ locale.t('adminMessenger.reporterLabel', 'От:') }} {{ r.reporter?.full_name || r.reporter_name }}</div>
                 <div class="truncate text-[11px] text-text3">{{ userMeta(r.reporter) }}</div>
               </div>
             </div>
           </div>
           <div class="mt-3 flex flex-wrap gap-2">
             <button type="button" @click="openConversation(r.conversation_id, 'report')"
-                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">Открыть переписку</button>
+                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('adminMessenger.openConversation', 'Открыть переписку') }}</button>
             <button v-if="r.status === 'open'" type="button" @click="resolve(r, 'in_review')"
-                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">В работу</button>
+                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('adminMessenger.markInReview', 'В работу') }}</button>
             <button type="button" @click="resolve(r, 'resolved')"
-                    class="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent2">Решено</button>
+                    class="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent2">{{ locale.t('adminMessenger.markResolved', 'Решено') }}</button>
             <button type="button" @click="resolve(r, 'dismissed')"
-                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">Отклонить</button>
+                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('adminMessenger.dismiss', 'Отклонить') }}</button>
             <!-- Глобальный мьют автора сообщения (не сможет писать никому). -->
             <button v-if="r.reported && r.reported.role !== 'admin'" type="button"
                     @click="toggleMute(r.reported, load)"
                     class="ml-auto rounded-md border px-3 py-1.5 text-xs font-semibold"
                     :class="r.reported.muted ? 'border-border2 text-text2 hover:bg-bg2' : 'border-red/40 text-red hover:bg-red/10'">
-              {{ r.reported.muted ? 'Снять мьют автора' : 'Замьютить автора' }}
+              {{ r.reported.muted ? locale.t('adminMessenger.unmuteAuthor', 'Снять мьют автора') : locale.t('adminMessenger.muteAuthor', 'Замьютить автора') }}
             </button>
           </div>
         </div>
@@ -197,11 +210,11 @@ function fmt(iso) {
     <!-- ── Обращения (чаты поддержки) ───────────────────────────────────────────────── -->
     <template v-else>
       <div class="mb-4 flex items-center gap-2">
-        <button type="button" @click="loadInbox" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">Обновить</button>
+        <button type="button" @click="loadInbox" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.refresh') }}</button>
       </div>
-      <p v-if="loadingConvs" class="text-sm text-text3">Загрузка…</p>
+      <p v-if="loadingConvs" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
       <p v-else-if="!convs.length" class="rounded-lg border border-dashed border-border2 bg-card2/50 px-6 py-12 text-center text-sm text-text3">
-        Обращений в поддержку нет.
+        {{ locale.t('adminMessenger.noInbox', 'Обращений в поддержку нет.') }}
       </p>
       <div class="space-y-2">
         <div v-for="c in convs" :key="c.conversation_id"
@@ -210,8 +223,8 @@ function fmt(iso) {
                   class="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:opacity-80">
             <Avatar :src="c.people?.[0]?.avatar" :name="c.people?.[0]?.full_name || (c.participants || []).join(', ')" :size="40" />
             <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-semibold text-text">{{ c.people?.[0]?.full_name || (c.participants || []).join(', ') || 'Пользователь' }}</div>
-              <div class="truncate text-xs text-text3">{{ userMeta(c.people?.[0]) || 'Обращение в поддержку' }}</div>
+              <div class="truncate text-sm font-semibold text-text">{{ c.people?.[0]?.full_name || (c.participants || []).join(', ') || locale.t('adminMessenger.unknownUser', 'Пользователь') }}</div>
+              <div class="truncate text-xs text-text3">{{ userMeta(c.people?.[0]) || locale.t('adminMessenger.supportRequestFallback', 'Обращение в поддержку') }}</div>
             </div>
           </button>
           <!-- Глобальный мьют обратившегося (не сможет писать никому). -->
@@ -219,7 +232,7 @@ function fmt(iso) {
                   @click="toggleMute(c.people[0], loadInbox)"
                   class="shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-semibold"
                   :class="c.people[0].muted ? 'border-border2 text-text2 hover:bg-bg2' : 'border-red/40 text-red hover:bg-red/10'">
-            {{ c.people[0].muted ? 'Снять мьют' : 'Замьютить' }}
+            {{ c.people[0].muted ? locale.t('adminMessenger.unmuteShort', 'Снять мьют') : locale.t('adminMessenger.muteShort', 'Замьютить') }}
           </button>
         </div>
       </div>
@@ -230,24 +243,24 @@ function fmt(iso) {
          style="background: var(--gb-overlay)" @click.self="viewer.open = false">
       <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border2 bg-card shadow-card">
         <div class="flex items-center justify-between border-b border-border p-4">
-          <h3 class="font-title text-base font-bold text-text">{{ viewer.mode === 'inbox' ? 'Обращение в поддержку' : 'Переписка' }}</h3>
+          <h3 class="font-title text-base font-bold text-text">{{ viewer.mode === 'inbox' ? locale.t('adminMessenger.supportRequestFallback', 'Обращение в поддержку') : locale.t('adminMessenger.conversationTitle', 'Переписка') }}</h3>
           <button type="button" @click="viewer.open = false" class="text-text3 hover:text-text">✕</button>
         </div>
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
-          <p v-if="viewer.loading" class="text-sm text-text3">Загрузка…</p>
+          <p v-if="viewer.loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
           <!-- Режим тикета: плоский список для чтения -->
           <template v-if="viewer.mode !== 'inbox'">
             <div v-for="mm in viewer.messages" :key="mm.id" class="group flex items-start gap-2 text-sm">
               <span class="shrink-0 text-text3">[{{ fmt(mm.created_at) }}]</span>
               <span class="min-w-0 flex-1 break-words text-text">
                 <span v-if="mm.sender_name" class="font-semibold text-text2">{{ mm.sender_name }}:</span>
-                {{ mm.deleted ? '(удалено)' : mm.body }}
+                {{ mm.deleted ? locale.t('adminMessenger.deletedInline', '(удалено)') : mm.body }}
               </span>
               <!-- Удалить нарушающее сообщение у всех (модерация). -->
               <button v-if="!mm.deleted" type="button" @click="deleteMessage(mm)"
-                      title="Удалить у всех"
+                      :title="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
                       class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100">
-                Удалить
+                {{ locale.t('common.delete') }}
               </button>
             </div>
           </template>
@@ -256,31 +269,31 @@ function fmt(iso) {
             <div v-for="mm in viewer.messages" :key="mm.id" class="group flex items-center gap-2"
                  :class="isModReply(mm) ? 'justify-end' : 'justify-start'">
               <button v-if="!mm.deleted && !isModReply(mm)" type="button" @click="deleteMessage(mm)"
-                      title="Удалить у всех"
+                      :title="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
                       class="order-last shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100">
-                Удалить
+                {{ locale.t('common.delete') }}
               </button>
               <div class="max-w-[80%] rounded-2xl px-3 py-1.5 text-sm"
                    :class="isModReply(mm) ? 'bg-accent text-white' : 'bg-card2 text-text'">
-                <span v-if="mm.deleted" class="italic opacity-70">Сообщение удалено</span>
+                <span v-if="mm.deleted" class="italic opacity-70">{{ locale.t('adminMessenger.messageDeletedItalic', 'Сообщение удалено') }}</span>
                 <span v-else class="whitespace-pre-wrap break-words">{{ mm.body }}</span>
                 <div class="mt-0.5 text-[10px]" :class="isModReply(mm) ? 'text-white/70' : 'text-text3'">
-                  {{ isModReply(mm) ? 'Модерация · ' : '' }}{{ fmt(mm.created_at) }}
+                  {{ isModReply(mm) ? locale.t('adminMessenger.moderationPrefix', 'Модерация · ') : '' }}{{ fmt(mm.created_at) }}
                 </div>
               </div>
             </div>
           </template>
-          <p v-if="!viewer.loading && !viewer.messages.length" class="text-sm text-text3">Пусто.</p>
+          <p v-if="!viewer.loading && !viewer.messages.length" class="text-sm text-text3">{{ locale.t('adminMessenger.emptyDot', 'Пусто.') }}</p>
         </div>
         <!-- Композер ответа модерации (только вкладка «Обращения») -->
         <form v-if="viewer.mode === 'inbox'" class="flex items-end gap-2 border-t border-border p-3"
               @submit.prevent="sendReply">
-          <textarea v-model="replyDraft" rows="1" placeholder="Ответить от лица модерации…"
+          <textarea v-model="replyDraft" rows="1" :placeholder="locale.t('adminMessenger.replyPlaceholder', 'Ответить от лица модерации…')"
                     @keydown.enter.exact.prevent="sendReply"
                     class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card" />
           <button type="submit" :disabled="!replyDraft.trim()"
                   class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-            Ответить
+            {{ locale.t('adminMessenger.sendReply', 'Ответить') }}
           </button>
         </form>
       </div>

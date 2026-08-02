@@ -7,6 +7,8 @@ import { storeToRefs } from 'pinia'
 import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
+import { roleLabel } from '@/config/roles'
 import { curatorApi } from '@/api/endpoints'
 import { messagePreview } from '@/utils/messagePreview'
 import CreateChatDialog from './CreateChatDialog.vue'
@@ -17,6 +19,7 @@ import Avatar from '@/components/ui/Avatar.vue'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
+const locale = useLocaleStore()
 const { chats, dir, channels, activeId, loadingChats } = storeToRefs(m)
 // Группы и каналы создают ТОЛЬКО преподаватели (и админ) — у студента кнопку «+» прячем
 // (сервер тоже вернёт 403, см. create_group/create_channel). Личные чаты студенту доступны.
@@ -33,14 +36,16 @@ function initials(name) {
   const p = (name || '').trim().split(/\s+/)
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
 }
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 function fmtTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const today = new Date()
+  const tag = BCP47[locale.active] || 'ru-RU'
   return d.toDateString() === today.toDateString()
-    ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+    ? d.toLocaleTimeString(tag, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(tag, { day: '2-digit', month: '2-digit' })
 }
 
 // «Чаты» — без архивных (у них отдельная вкладка) и без «Избранного» (оно — отдельной
@@ -56,9 +61,11 @@ const shownChats = computed(() => {
 
 // §12: вкладка «Родители» — ТОЛЬКО у admin и настоящего куратора (canSearchParents, см. ниже).
 const catalogTabs = computed(() => {
-  const t = [['chats', 'Чаты'], ['teacher', 'Препод.'], ['student', 'Студенты']]
-  if (canSearchParents.value) t.push(['parent', 'Родители'])
-  t.push(['channels', 'Каналы'])
+  const t = [['chats', locale.t('messenger.tab.chats', 'Чаты')],
+             ['teacher', locale.t('messenger.tab.teacher', 'Препод.')],
+             ['student', locale.t('messenger.tab.student', 'Студенты')]]
+  if (canSearchParents.value) t.push(['parent', locale.t('messenger.tab.parent', 'Родители')])
+  t.push(['channels', locale.t('messenger.tab.channels', 'Каналы')])
   return t
 })
 
@@ -79,7 +86,8 @@ function startCreate(kind) { showNew.value = false; createKind.value = kind }
 // события здесь показывались сырым шаблоном («user_joined␟admin:admin␟…»).
 function preview(c) {
   return messagePreview(c.last_message, { withSender: c.kind !== 'direct' })
-    || (c.kind === 'saved' ? 'Заметки, ссылки, код себе' : 'Нет сообщений')
+    || (c.kind === 'saved' ? locale.t('messenger.savedHint', 'Заметки, ссылки, код себе')
+                           : locale.t('messenger.noMessages', 'Нет сообщений'))
 }
 
 // §D12: канал «Объявления · Группа» — существующие читатели уже подписаны (студенты
@@ -160,19 +168,19 @@ onMounted(() => { m.loadChats() })
       <div class="flex items-center gap-2">
         <div class="flex flex-1 items-center gap-2 rounded-lg border border-border2 bg-card2 px-3">
           <Search class="size-4 shrink-0 text-text3" />
-          <input v-model="q" placeholder="Поиск по ФИО…"
+          <input v-model="q" :placeholder="locale.t('messenger.searchByName', 'Поиск по ФИО…')"
                  class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
         </div>
         <div v-if="canCreate" class="relative">
-          <button type="button" @click="showNew = !showNew" aria-label="Создать"
+          <button type="button" @click="showNew = !showNew" :aria-label="locale.t('messenger.create', 'Создать')"
                   class="grid size-9 place-items-center rounded-lg bg-accent text-white hover:bg-accent2"><Plus class="size-5" /></button>
           <div v-if="showNew" class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
-            <button type="button" @click="startCreate('group')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Users class="size-4 text-text3" />Новая группа</button>
-            <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />Новый канал</button>
+            <button type="button" @click="startCreate('group')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Users class="size-4 text-text3" />{{ locale.t('messenger.newGroup', 'Новая группа') }}</button>
+            <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />{{ locale.t('messenger.newChannel', 'Новый канал') }}</button>
             <!-- §D12: авто-канал «Объявления · Группа» — студенты группы уже читатели. -->
-            <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />Объявления группы</button>
+            <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />{{ locale.t('messenger.groupAnnouncements', 'Объявления группы') }}</button>
             <!-- §12: только куратору — отчёт по успеваемости своей группы для родителей. -->
-            <button v-if="canSearchParents" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />Отчёт для родителей</button>
+            <button v-if="canSearchParents" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />{{ locale.t('messenger.parentReport', 'Отчёт для родителей') }}</button>
           </div>
         </div>
       </div>
@@ -198,22 +206,22 @@ onMounted(() => { m.loadChats() })
                 :class="savedChat && activeId === savedChat.conversation_id ? 'bg-accent-glow' : 'hover:bg-bg2'">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-accent2 text-white"><Star class="size-5" /></div>
           <div class="min-w-0 flex-1">
-            <div class="text-sm font-semibold text-text">Избранное</div>
-            <div class="truncate text-xs text-text3">{{ savedChat ? preview(savedChat) : 'Заметки, ссылки, код себе' }}</div>
+            <div class="text-sm font-semibold text-text">{{ locale.t('messenger.saved', 'Избранное') }}</div>
+            <div class="truncate text-xs text-text3">{{ savedChat ? preview(savedChat) : locale.t('messenger.savedHint', 'Заметки, ссылки, код себе') }}</div>
           </div>
         </button>
         <button v-if="tab === 'chats' && archivedCount" type="button" @click="tab = 'archive'"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-bg2 text-text3"><Archive class="size-5" /></div>
-          <div class="min-w-0 flex-1 text-sm font-semibold text-text">Архив</div>
+          <div class="min-w-0 flex-1 text-sm font-semibold text-text">{{ locale.t('messenger.archive', 'Архив') }}</div>
           <span class="shrink-0 rounded-full bg-bg2 px-2 py-0.5 text-[11px] font-semibold text-text3">{{ archivedCount }}</span>
         </button>
         <div v-if="tab === 'archive'" class="flex items-center gap-2 border-b border-border/50 px-3 py-2">
-          <button type="button" @click="tab = 'chats'" class="text-xs font-semibold text-accent hover:underline">← Назад к чатам</button>
+          <button type="button" @click="tab = 'chats'" class="text-xs font-semibold text-accent hover:underline">← {{ locale.t('messenger.backToChats', 'Назад к чатам') }}</button>
         </div>
 
         <p v-if="!loadingChats && !shownChats.length" class="p-4 text-center text-sm text-text3">
-          {{ tab === 'archive' ? 'В архиве пусто.' : 'Пока нет переписок. Найдите человека через поиск' }}<span v-if="canCreate && tab === 'chats'"> или создайте группу/канал кнопкой «+»</span>.
+          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'"> {{ locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') }}</span>.
         </p>
         <div v-for="c in shownChats" :key="c.conversation_id"
              class="group relative flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 transition-colors"
@@ -229,7 +237,7 @@ onMounted(() => { m.loadChats() })
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
                 <span class="flex items-center gap-1 truncate text-sm font-semibold text-text">
-                  <Pin v-if="c.pinned" class="size-3 shrink-0 text-text3" />{{ c.title || 'Диалог' }}
+                  <Pin v-if="c.pinned" class="size-3 shrink-0 text-text3" />{{ c.title || locale.t('messenger.dialog', 'Диалог') }}
                 </span>
                 <span class="shrink-0 text-[11px] text-text3">{{ fmtTime(c.last_at) }}</span>
               </div>
@@ -242,7 +250,7 @@ onMounted(() => { m.loadChats() })
                      и второе важнее: именно оно решает, открывать чат сейчас или потом.
                      Громкая отметка (/@!) выделена цветом — она и звонила. -->
                 <span v-if="c.mention_message_id"
-                      :title="c.mention_loud ? 'Вас отметили (со звуком)' : 'Вас отметили'"
+                      :title="c.mention_loud ? locale.t('messenger.mentionedLoud', 'Вас отметили (со звуком)') : locale.t('messenger.mentioned', 'Вас отметили')"
                       class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[11px] font-bold text-white"
                       :class="c.mention_loud ? 'bg-red' : 'bg-accent'">@</span>
                 <span v-else-if="c.unread" class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-bold text-white">{{ c.unread }}</span>
@@ -250,7 +258,7 @@ onMounted(() => { m.loadChats() })
             </div>
           </button>
           <div class="relative shrink-0">
-            <button type="button" @click.stop="toggleMenu(c.conversation_id)" aria-label="Действия"
+            <button type="button" @click.stop="toggleMenu(c.conversation_id)" :aria-label="locale.t('messenger.actions', 'Действия')"
                     class="grid size-7 place-items-center rounded-md text-text3 opacity-0 hover:bg-bg2 hover:text-text group-hover:opacity-100"
                     :class="{ 'opacity-100 bg-bg2': menuFor === c.conversation_id }">
               <MoreVertical class="size-4" />
@@ -258,10 +266,10 @@ onMounted(() => { m.loadChats() })
             <div v-if="menuFor === c.conversation_id"
                  class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
               <button type="button" @click.stop="onPin(c)" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">
-                <component :is="c.pinned ? PinOff : Pin" class="size-4 text-text3" />{{ c.pinned ? 'Открепить' : 'Закрепить' }}
+                <component :is="c.pinned ? PinOff : Pin" class="size-4 text-text3" />{{ c.pinned ? locale.t('messenger.unpin', 'Открепить') : locale.t('messenger.pin', 'Закрепить') }}
               </button>
               <button type="button" @click.stop="onArchive(c)" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">
-                <component :is="c.archived ? ArchiveRestore : Archive" class="size-4 text-text3" />{{ c.archived ? 'Из архива' : 'В архив' }}
+                <component :is="c.archived ? ArchiveRestore : Archive" class="size-4 text-text3" />{{ c.archived ? locale.t('messenger.unarchive', 'Из архива') : locale.t('messenger.archiveAction', 'В архив') }}
               </button>
             </div>
           </div>
@@ -270,17 +278,17 @@ onMounted(() => { m.loadChats() })
 
       <!-- Каталог людей -->
       <template v-else-if="tab === 'teacher' || tab === 'student' || tab === 'parent'">
-        <p v-if="dir.loading" class="p-4 text-center text-sm text-text3">Поиск…</p>
-        <p v-else-if="!dir.users.length" class="p-4 text-center text-sm text-text3">Никого не найдено.</p>
+        <p v-if="dir.loading" class="p-4 text-center text-sm text-text3">{{ locale.t('common.search', 'Поиск') }}…</p>
+        <p v-else-if="!dir.users.length" class="p-4 text-center text-sm text-text3">{{ locale.t('messenger.nobodyFound', 'Никого не найдено.') }}</p>
         <button v-for="u in dir.users" :key="u.id" type="button" @click="m.openWith(u)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
           <Avatar :src="u.avatar" :name="u.full_name" :online="!!u.online" :size="40" />
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-semibold text-text">{{ u.full_name }}</div>
             <div class="truncate text-xs text-text3">
-              <template v-if="u.role === 'teacher'">{{ (u.subjects || []).join(', ') || 'Преподаватель' }}</template>
-              <template v-else-if="u.role === 'parent'">{{ u.groups?.length ? 'род. ' + u.groups.join(', ') : 'Родитель' }}</template>
-              <template v-else>Группа {{ u.group_name || '—' }}</template>
+              <template v-if="u.role === 'teacher'">{{ (u.subjects || []).join(', ') || roleLabel('teacher') }}</template>
+              <template v-else-if="u.role === 'parent'">{{ u.groups?.length ? locale.t('messenger.parentOf', 'род. ') + u.groups.join(', ') : roleLabel('parent') }}</template>
+              <template v-else>{{ locale.t('messenger.groupLabel', 'Группа') }} {{ u.group_name || '—' }}</template>
             </div>
           </div>
         </button>
@@ -288,25 +296,25 @@ onMounted(() => { m.loadChats() })
 
       <!-- Каталог каналов -->
       <template v-else>
-        <p v-if="!channels.length" class="p-4 text-center text-sm text-text3">Публичных каналов пока нет.</p>
+        <p v-if="!channels.length" class="p-4 text-center text-sm text-text3">{{ locale.t('messenger.noPublicChannels', 'Публичных каналов пока нет.') }}</p>
         <button v-for="ch in channels" :key="ch.conversation_id" type="button" @click="m.joinChannel(ch.conversation_id)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-accent2 text-sm font-bold text-white">{{ initials(ch.title) }}</div>
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-semibold text-text">{{ ch.title }}</div>
-            <div class="truncate text-xs text-text3">{{ ch.subscribers }} подписчиков · {{ ch.about || 'канал' }}</div>
+            <div class="truncate text-xs text-text3">{{ locale.t('messenger.subscribersCount', { n: ch.subscribers }) }} · {{ ch.about || locale.t('messenger.channelWord', 'канал') }}</div>
           </div>
           <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
                 :class="ch.joined ? 'bg-bg2 text-text3' : 'bg-accent-glow text-accent'">
-            {{ ch.joined ? 'Открыть' : 'Присоединиться' }}
+            {{ ch.joined ? locale.t('messenger.open', 'Открыть') : locale.t('messenger.join', 'Присоединиться') }}
           </span>
         </button>
       </template>
     </div>
 
     <CreateChatDialog v-if="createKind" :kind="createKind" @create="onCreate" @close="createKind = ''" />
-    <GroupPickDialog v-if="showGroupPick" title="Объявления группы" submit-label="Открыть канал"
-                     hint="Канал «Объявления · Группа». Студенты группы уже подписаны."
+    <GroupPickDialog v-if="showGroupPick" :title="locale.t('messenger.groupAnnouncements', 'Объявления группы')" :submit-label="locale.t('messenger.openChannel', 'Открыть канал')"
+                     :hint="locale.t('messenger.announcementsHint', 'Канал «Объявления · Группа». Студенты группы уже подписаны.')"
                      :error="dialogError" :busy="dialogBusy"
                      @pick="onGroupPicked" @close="showGroupPick = false" />
     <CuratorReportDialog v-if="showReport" :error="dialogError" :busy="dialogBusy"

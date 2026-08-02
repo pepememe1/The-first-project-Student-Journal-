@@ -13,7 +13,9 @@ import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
 import { useMessengerStore } from '@/stores/messenger'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const theme = useThemeStore()
 const vector = useVectorStore()
 const tts = useTtsStore()
@@ -43,8 +45,11 @@ const embedMode = (() => {
 const embed = embedMode === '1'                 //прятать навигацию (одна страница)
 const chromeless = embedMode !== ''             //прятать шапку (любой режим внутри окна)
 
-const title = computed(() => route.meta?.title || '')
-const subtitle = computed(() => route.meta?.subtitle || '')
+// Заголовок/подзаголовок страницы — переводимы через необязательные meta.i18nTitle/
+// i18nSubtitle (см. router/index.js); маршрут без них показывает meta.title как есть
+// (обратная совместимость — так исторически заведено для части страниц).
+const title = computed(() => route.meta?.i18nTitle ? locale.t(route.meta.i18nTitle, route.meta.title) : (route.meta?.title || ''))
+const subtitle = computed(() => route.meta?.i18nSubtitle ? locale.t(route.meta.i18nSubtitle, route.meta.subtitle) : (route.meta?.subtitle || ''))
 // Боковой Вектор виден на всех страницах, КРОМЕ самой вкладки «ИИ Помощник»
 // (там полноразмерный Вектор в контенте). Только десктоп (на мобиле не показываем).
 const onVectorPage = computed(() => route.path.endsWith('/vector'))

@@ -6,6 +6,9 @@ import { studentApi, termsApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const loading = ref(true)
 const data = ref(null)
@@ -16,7 +19,13 @@ const term = ref(null)
 const currentTerm = ref(null)
 const isArchive = computed(() => term.value && currentTerm.value &&
   (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
-function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+function termLabel(t) {
+  if (!t) return ''
+  const sem = t.semester === 1
+    ? locale.t('studentJournal.termAutumn', 'осенний')
+    : locale.t('studentJournal.termSpring', 'весенний')
+  return locale.t('studentJournal.termLabelFormat', { year: t.year, semester: sem })
+}
 function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
 function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
 
@@ -56,36 +65,36 @@ const isNumericGrade = (g) => !!GRADE_BG[(g || '').trim().split(' ')[0]]
 <template>
   <div class="space-y-5">
     <div v-if="terms.length > 1" class="flex items-center gap-2">
-      <span class="text-tiny uppercase text-text3">Семестр:</span>
+      <span class="text-tiny uppercase text-text3">{{ locale.t('studentJournal.semesterLabel', 'Семестр:') }}</span>
       <select :value="termKey(term)" @change="selectTerm($event.target.value)"
               class="h-9 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent"
               :class="isArchive ? 'border-orange text-orange' : ''">
         <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
       </select>
-      <Badge v-if="isArchive" variant="muted">архив</Badge>
+      <Badge v-if="isArchive" variant="muted">{{ locale.t('studentJournal.archiveBadge', 'архив') }}</Badge>
     </div>
 
-    <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
-    <EmptyState v-else-if="!data?.subjects?.length" title="Занятий пока нет"
-                message="Когда появятся предметы и оценки, они отобразятся здесь." />
+    <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+    <EmptyState v-else-if="!data?.subjects?.length" :title="locale.t('studentJournal.noLessonsTitle', 'Занятий пока нет')"
+                :message="locale.t('studentJournal.noLessonsMessage', 'Когда появятся предметы и оценки, они отобразятся здесь.')" />
 
     <template v-else>
       <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
         <template #header>
           <!-- Часы показываем, только если админ задал план: «24 из 0» выглядело бы поломкой -->
           <Badge v-if="s.hours?.total" variant="blue">
-            Пройдено {{ s.hours.done }} из {{ s.hours.total }} ч
+            {{ locale.t('studentJournal.hoursProgress', { done: s.hours.done, total: s.hours.total }) }}
           </Badge>
-          <Badge variant="green">Средний {{ s.average || '—' }}</Badge>
+          <Badge variant="green">{{ locale.t('studentJournal.averageBadge', { avg: s.average || '—' }) }}</Badge>
         </template>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-border2 text-left text-tiny uppercase tracking-wide text-text2">
-                <th class="py-2 pr-3 font-semibold">Тип</th>
-                <th class="py-2 pr-3 font-semibold">Тема</th>
-                <th class="py-2 pr-3 font-semibold">Дата</th>
-                <th class="py-2 text-right font-semibold">Оценка</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colType', 'Тип') }}</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colTopic', 'Тема') }}</th>
+                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colDate', 'Дата') }}</th>
+                <th class="py-2 text-right font-semibold">{{ locale.t('studentJournal.colGrade', 'Оценка') }}</th>
               </tr>
             </thead>
             <tbody>

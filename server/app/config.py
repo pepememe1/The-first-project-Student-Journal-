@@ -98,3 +98,13 @@ def push_enabled() -> bool:
     """Настроены ли пуши. Проверяем ЯВНО, а не по факту ошибки при отправке: без этого
     каждый выставленный балл порождал бы бесполезный сетевой запрос и запись в лог."""
     return bool(RUSTORE_PROJECT_ID and RUSTORE_SERVICE_TOKEN)
+
+
+#GIF-пикер мессенджера (Klipy) — фиксированный инфраструктурный ключ на всё
+#развёртывание (не выбор ИИ-провайдера, поэтому НЕ в /web/admin/ai-config, тот же
+#принцип, что у RuStore выше). Пусто — пикер выключен, чат работает как раньше.
+KLIPY_API_KEY = os.environ.get("GRADEBOOK_KLIPY_API_KEY", "").strip()
+
+
+def klipy_enabled() -> bool:
+    return bool(KLIPY_API_KEY)

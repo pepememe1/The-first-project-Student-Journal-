@@ -8,11 +8,13 @@
 //
 // Кнопка «скачать» существует ради простой мысли: копия, лежащая только на сервере,
 // спасает от испорченных данных, но не от потери самого сервера.
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Archive, Download, Plus, TriangleAlert, Check } from '@lucide/vue'
 import { deskServerApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const props = defineProps({
   serverId: { type: String, required: true },
 })
@@ -26,7 +28,7 @@ async function reload() {
   try {
     data.value = (await deskServerApi.backups(props.serverId)).data
   } catch (e) {
-    data.value = { items: [], error: e?.response?.data?.detail || 'Не удалось получить список' }
+    data.value = { items: [], error: e?.response?.data?.detail || locale.t('serverBackups.listFailed', 'Не удалось получить список') }
   }
 }
 onMounted(reload)
@@ -38,11 +40,11 @@ async function create() {
   try {
     const { data: r } = await deskServerApi.makeBackup(props.serverId)
     failed.value = !r.ok
-    message.value = r.ok ? `Копия создана: ${r.name}. ${r.hint}` : (r.hint || 'Не удалось создать копию')
+    message.value = r.ok ? locale.t('serverBackups.created', { name: r.name, hint: r.hint }) : (r.hint || locale.t('serverBackups.createFailed', 'Не удалось создать копию'))
     await reload()
   } catch (e) {
     failed.value = true
-    message.value = e?.response?.data?.detail || 'Не удалось создать копию'
+    message.value = e?.response?.data?.detail || locale.t('serverBackups.createFailed', 'Не удалось создать копию')
   } finally {
     busy.value = ''
   }
@@ -56,19 +58,24 @@ async function download(name) {
     const { data: r } = await deskServerApi.downloadBackup(props.serverId, name)
     failed.value = !r.ok
     message.value = r.ok
-      ? `Скачано на этот компьютер: ${r.path}`
-      : (r.log || 'Не удалось скачать')
+      ? locale.t('serverBackups.downloaded', { path: r.path })
+      : (r.log || locale.t('serverBackups.downloadFailed', 'Не удалось скачать'))
   } catch (e) {
     failed.value = true
-    message.value = e?.response?.data?.detail || 'Не удалось скачать'
+    message.value = e?.response?.data?.detail || locale.t('serverBackups.downloadFailed', 'Не удалось скачать')
   } finally {
     busy.value = ''
   }
 }
 
+const UNITS = computed(() => [
+  locale.t('serverBackups.unit.b', 'Б'), locale.t('serverBackups.unit.kb', 'КБ'),
+  locale.t('serverBackups.unit.mb', 'МБ'), locale.t('serverBackups.unit.gb', 'ГБ'),
+  locale.t('serverBackups.unit.tb', 'ТБ'),
+])
 function human(n) {
   if (n === null || n === undefined) return '—'
-  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']
+  const units = UNITS.value
   let v = n, i = 0
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
@@ -79,13 +86,13 @@ function human(n) {
   <div class="flex flex-col gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <AppButton :disabled="busy === 'create'" @click="create">
-        <Plus class="mr-1.5 inline size-4" />{{ busy === 'create' ? 'Создаём…' : 'Создать копию' }}
+        <Plus class="mr-1.5 inline size-4" />{{ busy === 'create' ? locale.t('serverBackups.creating', 'Создаём…') : locale.t('serverBackups.createAction', 'Создать копию') }}
       </AppButton>
       <p v-if="data?.latest" class="text-sm text-text3">
-        Самая свежая: <span class="font-medium text-text2">{{ data.latest }}</span>
+        {{ locale.t('serverBackups.latest', 'Самая свежая:') }} <span class="font-medium text-text2">{{ data.latest }}</span>
       </p>
       <p v-if="data?.free" class="text-sm text-text3">
-        Свободно на сервере: {{ human(data.free) }}
+        {{ locale.t('serverBackups.freeSpace', { size: human(data.free) }) }}
       </p>
     </div>
 
@@ -98,13 +105,12 @@ function human(n) {
 
     <div class="flex items-start gap-2.5 rounded-lg border border-yellow/50 bg-card2 p-3 text-xs text-text2">
       <TriangleAlert class="mt-0.5 size-4 shrink-0 text-yellow" />
-      <p>В архиве лежит база вместе с ключом её шифрования. Он равносилен самой базе —
-         не выкладывайте его в облако и не пересылайте почтой.</p>
+      <p>{{ locale.t('serverBackups.keyWarning', 'В архиве лежит база вместе с ключом её шифрования. Он равносилен самой базе — не выкладывайте его в облако и не пересылайте почтой.') }}</p>
     </div>
 
     <p v-if="data?.error" class="text-sm text-red">{{ data.error }}</p>
     <p v-else-if="!data?.items?.length" class="text-sm text-text3">
-      Копий пока нет. Нажмите «Создать копию».
+      {{ locale.t('serverBackups.noneYet', 'Копий пока нет. Нажмите «Создать копию».') }}
     </p>
     <ul v-else class="max-h-64 overflow-y-auto text-sm">
       <li v-for="b in data.items" :key="b.name"
@@ -117,7 +123,7 @@ function human(n) {
           <span class="text-xs text-text3">{{ b.mtime }} · {{ human(b.size) }}</span>
           <button type="button" :disabled="busy === b.name"
                   class="text-accent transition-colors hover:underline disabled:opacity-50"
-                  :aria-label="`Скачать ${b.name}`" @click="download(b.name)">
+                  :aria-label="locale.t('serverBackups.downloadAria', { name: b.name })" @click="download(b.name)">
             <Download class="size-4" />
           </button>
         </span>

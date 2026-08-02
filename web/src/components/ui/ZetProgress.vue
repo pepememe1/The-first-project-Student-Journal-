@@ -3,6 +3,8 @@
 // отчёт куратора, кабинет родителя. Пусто (total=0) — компонент НЕ рендерит себя вовсе,
 // вызывающая сторона должна сама не монтировать его, пока ни один предмет не имеет ЗЕТ
 // (см. docs/PLAN-ZET.md §10 — «не показывать строку ЗЕТ, если поле NULL»).
+import { useLocaleStore } from '@/stores/locale'
+const locale = useLocaleStore()
 defineProps({
   earned: { type: Number, required: true },
   total: { type: Number, required: true },
@@ -33,7 +35,7 @@ function status(earned, total, minZet) {
 <template>
   <div>
     <div class="flex items-baseline justify-between gap-2">
-      <span class="text-sm font-medium text-text2">ЗЕТ за семестр</span>
+      <span class="text-sm font-medium text-text2">{{ locale.t('zetProgress.title', 'ЗЕТ за семестр') }}</span>
       <span class="font-title text-base font-bold"
             :class="STATUS_CLASSES[status(earned, total, minZet)].text">{{ earned }} / {{ total }}</span>
     </div>
@@ -43,15 +45,15 @@ function status(earned, total, minZet) {
            :style="{ width: `${total ? Math.min(100, (earned / total) * 100) : 0}%` }" />
     </div>
     <p v-if="minZet != null" class="mt-1 text-xs text-text3">
-      <template v-if="earned >= minZet">Порог перевода ({{ minZet }} ЗЕТ) набран.</template>
-      <template v-else>До перевода (порог {{ minZet }} ЗЕТ): не хватает {{ Math.round((minZet - earned) * 10) / 10 }} ЗЕТ.</template>
+      <template v-if="earned >= minZet">{{ locale.t('zetProgress.thresholdMet', { min: minZet }) }}</template>
+      <template v-else>{{ locale.t('zetProgress.thresholdMissing', { min: minZet, missing: Math.round((minZet - earned) * 10) / 10 }) }}</template>
     </p>
 
     <ul v-if="showDetails && subjects.length" class="mt-3 space-y-1">
       <li v-for="s in subjects" :key="s.subject" class="flex items-center justify-between text-xs">
         <span class="min-w-0 truncate text-text2" :title="s.subject">{{ s.subject }}</span>
         <span class="shrink-0" :class="s.passed ? 'text-accent' : 'text-red'">
-          {{ s.zet }} ЗЕТ {{ s.passed ? '✅ засчитаны' : '❌ не сдан' }}
+          {{ locale.t('zetProgress.zetCount', { n: s.zet }) }} {{ s.passed ? locale.t('zetProgress.passed', '✅ засчитаны') : locale.t('zetProgress.notPassed', '❌ не сдан') }}
         </span>
       </li>
     </ul>

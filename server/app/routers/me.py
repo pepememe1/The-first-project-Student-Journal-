@@ -104,6 +104,39 @@ def _sanitize_locale(prefs: dict) -> None:
         prefs["locale_on"] = bool(prefs.get("locale_on"))
 
 
+def _sanitize_gif_favorites(prefs: dict) -> None:
+    """Приводит `prefs.gif_favorites` к строгому виду: только записи, чьи ссылки реально
+    ведут на CDN Klipy (та же проверка, что при отправке GIF-сообщения) — иначе в
+    список «Избранного» можно было бы протащить произвольный URL. Отдельного счётчика
+    штук нет: общий лимит размера prefs (_MAX_PREFS_BYTES) и так режет список."""
+    if "gif_favorites" not in prefs:
+        return
+    from .. import gif_service
+    raw = prefs.get("gif_favorites")
+    cleaned = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "")
+            thumb = str(item.get("thumb_url") or "")
+            if not gif_service.is_allowed_url(url) or not gif_service.is_allowed_url(thumb):
+                continue
+            try:
+                width, height = int(item.get("width") or 0), int(item.get("height") or 0)
+            except (TypeError, ValueError):
+                width, height = 0, 0
+            cleaned.append({
+                "id": item.get("id"), "slug": str(item.get("slug") or "")[:200],
+                "title": str(item.get("title") or "")[:200],
+                "thumb_url": thumb, "url": url, "width": width, "height": height,
+            })
+    if cleaned:
+        prefs["gif_favorites"] = cleaned
+    else:
+        prefs.pop("gif_favorites", None)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -130,6 +163,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
     _sanitize_translate(merged)          #коды языков уходят в промпт — только известные
     _sanitize_locale(merged)             #язык интерфейса — только тот, для которого есть словарь
+    _sanitize_gif_favorites(merged)      #только реальные ссылки на CDN Klipy
     #Лимит на размер настроек: не даём авторизованному пользователю раздувать БД.
     try:
         size = len(json.dumps(merged, ensure_ascii=False).encode("utf-8"))

@@ -227,6 +227,20 @@ export const useMessengerStore = defineStore('messenger', () => {
     messages.value.push(msg)
   }
 
+  // Общий хвост и для текста, и для GIF (см. sendGif ниже) — анти-флуд/мьют отвечают
+  // ОДИНАКОВО независимо от вида сообщения, дублировать разбор ошибки незачем.
+  function _handleSendError(e) {
+    const st = e?.response?.status
+    const detail = e?.response?.data?.detail
+    if (st === 429 && detail && typeof detail === 'object' && detail.mascot) {
+      _startCooldown(detail.cooldown_seconds || 8)
+    } else if ([400, 403, 429].includes(st)) {
+      //400 сюда попал не для полноты: так отвечает разбор команд («/отчет чужая-группа»),
+      //и без плашки человек видел ровно ничего — сообщение исчезало без объяснений.
+      setNotice((typeof detail === 'string' && detail) || 'Сообщение не отправлено.')
+    }
+  }
+
   async function send(text) {
     const body = (text || '').trim()
     if (!body || !activeId.value || sending.value) return false
@@ -239,15 +253,27 @@ export const useMessengerStore = defineStore('messenger', () => {
       await loadChats()
       return true
     } catch (e) {
-      const st = e?.response?.status
-      const detail = e?.response?.data?.detail
-      if (st === 429 && detail && typeof detail === 'object' && detail.mascot) {
-        _startCooldown(detail.cooldown_seconds || 8)
-      } else if ([400, 403, 429].includes(st)) {
-        //400 сюда попал не для полноты: так отвечает разбор команд («/отчет чужая-группа»),
-        //и без плашки человек видел ровно ничего — сообщение исчезало без объяснений.
-        setNotice((typeof detail === 'string' && detail) || 'Сообщение не отправлено.')
-      }
+      _handleSendError(e)
+      return false
+    } finally { sending.value = false }
+  }
+
+  // GIF-пикер (Klipy) — отправляется СРАЗУ по клику на превью (как в Discord), а не
+  // вставляется в поле ввода: тело сообщения — прямая ссылка, редактировать её незачем.
+  async function sendGif(item) {
+    if (!item?.url || !activeId.value || sending.value) return false
+    sending.value = true
+    try {
+      const { data } = await messengerApi.send(
+        activeId.value, item.url, replyTo.value?.id || 0, _nonce(),
+        { kind: 'gif', gif_slug: item.slug || '' })
+      _appendUnique(data)
+      replyTo.value = null
+      setNotice('')
+      await loadChats()
+      return true
+    } catch (e) {
+      _handleSendError(e)
       return false
     } finally { sending.value = false }
   }
@@ -691,7 +717,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, activeKind,
     channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
-    loadChats, loadMessages, selectChat, openWith, send, markReadActive, loadPinned, setNotice,
+    loadChats, loadMessages, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     deleteConversation, selectAll, selectNone,

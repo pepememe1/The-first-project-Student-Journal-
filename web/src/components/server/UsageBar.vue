@@ -7,7 +7,9 @@
 // вовремя. Пороги 75/90 % выбраны по боевому VPS: там диск на 73 %, и это ровно то
 // состояние, которое пора замечать, но ещё не авария.
 import { computed } from 'vue'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const props = defineProps({
   label: { type: String, required: true },
   used: { type: Number, default: 0 },
@@ -27,16 +29,21 @@ const tone = computed(() => {
   return 'bg-accent'
 })
 
+const UNITS = computed(() => [
+  locale.t('usageBar.unit.b', 'Б'), locale.t('usageBar.unit.kb', 'КБ'),
+  locale.t('usageBar.unit.mb', 'МБ'), locale.t('usageBar.unit.gb', 'ГБ'),
+  locale.t('usageBar.unit.tb', 'ТБ'),
+])
 function human(n) {
   if (!n && n !== 0) return '—'
-  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']
+  const units = UNITS.value
   let v = n
   let i = 0
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
 }
 
-const right = computed(() => props.note || `${human(props.used)} из ${human(props.total)}`)
+const right = computed(() => props.note || locale.t('usageBar.ofTotal', { used: human(props.used), total: human(props.total) }))
 </script>
 
 <template>

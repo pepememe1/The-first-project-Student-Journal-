@@ -8,9 +8,11 @@ import { curatorApi, adminApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
+import { useLocaleStore } from '@/stores/locale'
 
 const { confirm } = useConfirm()
 const toast = useToast()
+const locale = useLocaleStore()
 
 const groups = ref([])
 const group = ref('')
@@ -48,9 +50,9 @@ async function saveThreshold() {
       group: group.value, ...termParams(),
       min_zet: (v === '' || v === null) ? null : Number(v),
     })
-    toast.success('Порог сохранён')
+    toast.success(locale.t('curatorView.thresholdSaved', 'Порог сохранён'))
     await loadZetReport()
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось сохранить порог') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.thresholdSaveFailed', 'Не удалось сохранить порог')) }
 }
 
 const eligibleIds = computed(() =>
@@ -64,9 +66,9 @@ async function doPromote() {
     .filter((s) => selectedForPromote.value.includes(s.student_id))
     .map((s) => s.display_name)
   const ok = await confirm({
-    title: 'Перевод на следующий курс',
-    message: `Перевести на следующий курс:\n${names.join(', ')}`,
-    okText: 'Перевести',
+    title: locale.t('curatorView.confirmPromoteTitle', 'Перевод на следующий курс'),
+    message: locale.t('curatorView.confirmPromoteMessage', { names: names.join(', ') }),
+    okText: locale.t('curatorView.confirmPromoteOk', 'Перевести'),
   })
   if (!ok) return
   promoting.value = true
@@ -74,9 +76,9 @@ async function doPromote() {
     const r = await adminApi.promoteGroup({
       group: group.value, ...termParams(), student_ids: selectedForPromote.value,
     })
-    toast.success(`Переведено: ${r.data.promoted.length}`)
+    toast.success(locale.t('curatorView.promotedToast', { n: r.data.promoted.length }))
     await loadZetReport()
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось перевести') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.promoteFailed', 'Не удалось перевести')) }
   finally { promoting.value = false }
 }
 
@@ -86,7 +88,13 @@ const term = ref(null)
 const currentTerm = ref(null)
 const isArchive = computed(() => term.value && currentTerm.value &&
   (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
-function termLabel(t) { return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '' }
+function termLabel(t) {
+  if (!t) return ''
+  const sem = t.semester === 1
+    ? locale.t('curatorView.termAutumn', 'осенний')
+    : locale.t('curatorView.termSpring', 'весенний')
+  return locale.t('curatorView.termLabelFormat', { year: t.year, semester: sem })
+}
 function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
 function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
 function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
@@ -184,8 +192,8 @@ async function exportReport(fmt) {
 
 <template>
   <div class="space-y-4">
-    <EmptyState v-if="!groups.length" title="Вы не куратор"
-                message="Администратор пока не назначил вам курируемые группы." />
+    <EmptyState v-if="!groups.length" :title="locale.t('curatorView.noCuratorTitle', 'Вы не куратор')"
+                :message="locale.t('curatorView.noCuratorMessage', 'Администратор пока не назначил вам курируемые группы.')" />
     <template v-else>
       <div class="flex flex-wrap items-center gap-2 sm:gap-3">
         <select v-model="group" @change="loadSubjects"
@@ -203,7 +211,7 @@ async function exportReport(fmt) {
         </select>
         <button class="flex h-10 items-center gap-1.5 rounded-sm border border-accent bg-accent/10 px-3 text-sm font-medium text-accent hover:bg-accent/20 sm:ml-auto"
                 @click="openExport">
-          📊 Отчёт успеваемости
+          📊 {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
         </button>
       </div>
 
@@ -212,12 +220,12 @@ async function exportReport(fmt) {
         <button type="button" @click="viewMode = 'journal'"
                 class="border-b-2 px-3 py-2 text-sm font-medium"
                 :class="viewMode === 'journal' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          Журнал <span class="text-xs">👁</span>
+          {{ locale.t('curatorView.tabJournal', 'Журнал') }} <span class="text-xs">👁</span>
         </button>
         <button type="button" @click="viewMode = 'zet'"
                 class="border-b-2 px-3 py-2 text-sm font-medium"
                 :class="viewMode === 'zet' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          ЗЕТ · Перевод на курс
+          {{ locale.t('curatorView.tabZet', 'ЗЕТ · Перевод на курс') }}
         </button>
       </div>
 
@@ -225,16 +233,16 @@ async function exportReport(fmt) {
       <div v-if="showExport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
            @click.self="showExport = false">
         <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-          <h3 class="mb-3 font-title text-lg font-bold text-text">Отчёт успеваемости</h3>
+          <h3 class="mb-3 font-title text-lg font-bold text-text">{{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}</h3>
           <p class="mb-2 text-xs text-text3">
-            Аналитика по группам: средние по предметам, посещаемость (Н/Б/О), долги, списки.
+            {{ locale.t('curatorView.exportDialogHint', 'Аналитика по группам: средние по предметам, посещаемость (Н/Б/О), долги, списки.') }}
           </p>
 
           <div class="mb-2 flex items-center justify-between">
-            <span class="text-sm font-medium text-text2">Группы</span>
+            <span class="text-sm font-medium text-text2">{{ locale.t('curatorView.groupsLabel', 'Группы') }}</span>
             <div class="flex gap-3 text-xs">
-              <button class="text-accent hover:underline" @click="toggleAllGroups(true)">выбрать все</button>
-              <button class="text-text3 hover:underline" @click="toggleAllGroups(false)">снять</button>
+              <button class="text-accent hover:underline" @click="toggleAllGroups(true)">{{ locale.t('curatorView.selectAll', 'выбрать все') }}</button>
+              <button class="text-text3 hover:underline" @click="toggleAllGroups(false)">{{ locale.t('curatorView.clearSelection', 'снять') }}</button>
             </div>
           </div>
           <div class="mb-4 max-h-44 space-y-1 overflow-y-auto rounded-sm border border-border2 p-2">
@@ -249,36 +257,36 @@ async function exportReport(fmt) {
             <button :disabled="exporting || !pickedGroups.length"
                     class="flex-1 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
                     @click="exportReport('xlsx')">
-              {{ exporting ? 'Готовим…' : '📗 Excel' }}
+              {{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : `📗 ${locale.t('curatorView.excel', 'Excel')}` }}
             </button>
             <button :disabled="exporting || !pickedGroups.length"
                     class="flex-1 rounded-sm bg-blue px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
                     @click="exportReport('docx')">
-              {{ exporting ? 'Готовим…' : '📘 Word' }}
+              {{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : `📘 ${locale.t('curatorView.word', 'Word')}` }}
             </button>
             <button class="rounded-sm border border-border2 px-4 py-2.5 text-sm text-text2 hover:bg-bg2"
-                    @click="showExport = false">Отмена</button>
+                    @click="showExport = false">{{ locale.t('common.cancel') }}</button>
           </div>
         </div>
       </div>
 
       <template v-if="viewMode === 'journal'">
-        <p class="text-xs text-text3">👁 Только просмотр (куратор) — оценки ставит преподаватель.</p>
-        <EmptyState v-if="!subjects.length" title="Нет предметов"
-                    :message="`В группе ${group} за этот семестр нет занятий.`" />
-        <p v-else-if="loading" class="text-sm text-text3">Загрузка…</p>
-        <EmptyState v-else-if="!data?.students?.length" title="Нет студентов" :message="`В группе ${group} нет студентов.`" />
+        <p class="text-xs text-text3">👁 {{ locale.t('curatorView.readOnlyHint', 'Только просмотр (куратор) — оценки ставит преподаватель.') }}</p>
+        <EmptyState v-if="!subjects.length" :title="locale.t('curatorView.noSubjectsTitle', 'Нет предметов')"
+                    :message="locale.t('curatorView.noSubjectsMessage', { group })" />
+        <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+        <EmptyState v-else-if="!data?.students?.length" :title="locale.t('curatorView.noStudentsTitle', 'Нет студентов')" :message="locale.t('curatorView.noStudentsMessage', { group })" />
 
         <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
           <table class="w-max text-sm">
             <thead>
               <tr class="border-b-2 border-accent bg-bg2 text-text2">
-                <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
+                <th class="sticky left-0 z-10 bg-bg2 px-4 py-3 text-left text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colStudent', 'Студент') }}</th>
                 <th v-for="l in data.lessons" :key="l.id" class="w-28 border-l border-border align-top px-2 py-2">
                   <div class="text-xs font-bold text-text">{{ l.type }} №{{ l.number }}</div>
                   <div class="text-[11px] font-normal normal-case text-text3">{{ l.date || '—' }}</div>
                 </th>
-                <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">Средн.</th>
+                <th class="border-l-2 border-accent/40 px-4 py-3 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colAverage', 'Средн.') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -301,36 +309,36 @@ async function exportReport(fmt) {
       <!-- ЗЕТ · Перевод на курс (docs/PLAN-ZET.md §7.4 — «главная фича») -->
       <template v-else>
         <div class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-card">
-          <span class="text-sm text-text2">Порог перевода (ЗЕТ):</span>
-          <input v-model="zetThresholdDraft" type="number" min="0" step="0.5" placeholder="не задан"
+          <span class="text-sm text-text2">{{ locale.t('curatorView.thresholdLabel', 'Порог перевода (ЗЕТ):') }}</span>
+          <input v-model="zetThresholdDraft" type="number" min="0" step="0.5" :placeholder="locale.t('curatorView.thresholdPlaceholder', 'не задан')"
                  class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
           <button type="button" @click="saveThreshold"
-                  class="rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">Сохранить</button>
+                  class="rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ locale.t('common.save') }}</button>
         </div>
 
-        <p v-if="zetLoading" class="text-sm text-text3">Загрузка…</p>
-        <EmptyState v-else-if="!zetReport?.students?.length" title="Пока пусто"
-                    message="Ни один предмет группы ещё не получил ЗЕТ от администратора." />
+        <p v-if="zetLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+        <EmptyState v-else-if="!zetReport?.students?.length" :title="locale.t('curatorView.zetEmptyTitle', 'Пока пусто')"
+                    :message="locale.t('curatorView.zetEmptyMessage', 'Ни один предмет группы ещё не получил ЗЕТ от администратора.')" />
 
         <div v-else class="overflow-x-auto rounded-lg border border-border bg-card shadow-card">
           <div class="flex items-center justify-between border-b border-border px-4 py-2">
             <div class="flex gap-3 text-xs">
-              <button class="text-accent hover:underline" @click="toggleSelectAllEligible(true)">выбрать готовых</button>
-              <button class="text-text3 hover:underline" @click="toggleSelectAllEligible(false)">снять</button>
+              <button class="text-accent hover:underline" @click="toggleSelectAllEligible(true)">{{ locale.t('curatorView.selectEligible', 'выбрать готовых') }}</button>
+              <button class="text-text3 hover:underline" @click="toggleSelectAllEligible(false)">{{ locale.t('curatorView.clearSelection', 'снять') }}</button>
             </div>
             <button type="button" :disabled="!selectedForPromote.length || promoting" @click="doPromote"
                     class="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
-              {{ promoting ? 'Перевод…' : `✅ Перевести выбранных (${selectedForPromote.length})` }}
+              {{ promoting ? locale.t('curatorView.promoting', 'Перевод…') : `✅ ${locale.t('curatorView.promoteSelected', { n: selectedForPromote.length })}` }}
             </button>
           </div>
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b-2 border-accent bg-bg2 text-text2">
                 <th class="w-8 px-3 py-2"></th>
-                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">Студент</th>
-                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">Набрано</th>
-                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">Не хватает</th>
-                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">Несданные предметы</th>
+                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colStudent', 'Студент') }}</th>
+                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colEarned', 'Набрано') }}</th>
+                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colMissing', 'Не хватает') }}</th>
+                <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colUnsatisfied', 'Несданные предметы') }}</th>
               </tr>
             </thead>
             <tbody>

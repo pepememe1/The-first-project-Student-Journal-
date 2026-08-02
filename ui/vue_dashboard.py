@@ -19,17 +19,15 @@ vue_dashboard.py — ВЕСЬ кабинет одним веб-представ�
 поднимает серверное приложение у себя, поэтому звук с микрофона не покидает компьютер
 (152-ФЗ) — и это свойство сохранится, когда браузерная часть будет готова.
 
-Администратор пока нативный, и по другой причине: хостинг сервера и настройка БД — это
-про ЭТОТ компьютер, в браузере такого понятия нет вовсе. Ему нужна отдельная нативная
-дверь, а не перенос страниц.
+Раньше здесь была ещё и нативная полоска-дверь «Инструменты ПК» (переиспользовала
+целиком устаревший, не обновлявшийся вместе с Vue-панелью нативный `AdminDashboard`) —
+убрана: то же самое (сервер, БД, §16) теперь в самой SPA, `AdminServer.vue`.
 
 ━━ ЗАПАСНОЙ ПУТЬ ━━
 Не собран `web/dist`, не поднялся локальный сервер, нет сети при первом входе — кабинет
 остаётся нативным. Общий интерфейс не должен уметь оставить человека без экрана вовсе.
 """
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 import log
 
@@ -80,40 +78,8 @@ class VueDashboard(QWidget):
             if not shell.ok:
                 shell.deleteLater()
                 return
-            self._add_desktop_strip(lay)
             lay.addWidget(shell, 1)
             self._shell = shell
             self.ok = True
         except Exception as e:
             _LOG.warning(f"[vue-dash] кабинет не открылся: {e}")
-
-    def _add_desktop_strip(self, lay):
-        """Узкая нативная полоска над кабинетом — вход к тому, чего в браузере нет.
-
-        Сейчас это только «Инструменты ПК» админа (хостинг сервера, БД). Полоска нативная
-        осознанно: страницами такие вещи не выражаются, они про ЭТОТ компьютер. Всем
-        остальным ролям полоски нет вовсе — лишняя панель ради пустоты хуже её отсутствия.
-        Раньше кнопка жила в нативной шапке, но шапку у веб-кабинетов мы убрали (она
-        дублировала веб-шапку), и без этой полоски админ потерял бы доступ к серверу."""
-        if self._role != "admin":
-            return
-        btn = QPushButton("Инструменты ПК")
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setToolTip("Сервер, база данных и другие настройки этого компьютера")
-        btn.setFixedHeight(26)
-        btn.clicked.connect(self._open_tools)
-        bar = QWidget()
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.addStretch(1)
-        row.addWidget(btn)
-        bar.setFixedHeight(34)
-        lay.addWidget(bar)
-
-    @staticmethod
-    def _open_tools():
-        try:
-            import desktop_tools
-            desktop_tools.open_tools()
-        except Exception as e:
-            _LOG.warning(f"[vue-dash] инструменты не открылись: {e}")

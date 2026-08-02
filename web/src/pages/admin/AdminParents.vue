@@ -15,7 +15,9 @@ import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const auth = useAuthStore()
 const toast = useToast()
 const { confirm } = useConfirm()
@@ -27,11 +29,11 @@ const loading = ref(true)
 
 const isAdmin = computed(() => auth.role === 'admin')
 
-const STATUS = {
-  pending: { label: 'ожидает подтверждения', variant: 'muted' },
-  active: { label: 'доступ открыт', variant: 'green' },
-  revoked: { label: 'отозван', variant: 'red' },
-}
+const STATUS = computed(() => ({
+  pending: { label: locale.t('adminParents.statusPending', 'ожидает подтверждения'), variant: 'muted' },
+  active: { label: locale.t('adminParents.statusActive', 'доступ открыт'), variant: 'green' },
+  revoked: { label: locale.t('adminParents.statusRevoked', 'отозван'), variant: 'red' },
+}))
 
 async function load() {
   loading.value = true
@@ -61,7 +63,7 @@ function openCreate() {
 async function createParent() {
   const f = form.value
   if (!f.login.trim() || !f.surname.trim() || !f.password) {
-    formError.value = 'Нужны логин, фамилия и пароль'
+    formError.value = locale.t('adminParents.needLoginSurnamePassword', 'Нужны логин, фамилия и пароль')
     return
   }
   saving.value = true; formError.value = ''
@@ -69,8 +71,8 @@ async function createParent() {
     await staffParentApi.create({ ...f, login: f.login.trim() })
     showCreate.value = false
     await load()
-    toast.success('Родитель добавлен')
-  } catch (e) { formError.value = e?.response?.data?.detail || 'Не удалось создать' }
+    toast.success(locale.t('adminParents.parentAdded', 'Родитель добавлен'))
+  } catch (e) { formError.value = e?.response?.data?.detail || locale.t('adminParents.createFailed', 'Не удалось создать') }
   finally { saving.value = false }
 }
 
@@ -87,7 +89,7 @@ function openLink() {
 }
 async function createLink() {
   if (!linkForm.value.parent_id || !linkForm.value.student_id) {
-    linkError.value = 'Выберите родителя и студента'
+    linkError.value = locale.t('adminParents.selectParentStudent', 'Выберите родителя и студента')
     return
   }
   linking.value = true; linkError.value = ''
@@ -95,19 +97,19 @@ async function createLink() {
     await staffParentApi.link(linkForm.value.parent_id, linkForm.value.student_id)
     showLink.value = false
     await load()
-    toast.info('Заявка создана. Доступ откроется, когда студент подтвердит её у себя.')
-  } catch (e) { linkError.value = e?.response?.data?.detail || 'Не удалось привязать' }
+    toast.info(locale.t('adminParents.linkCreatedInfo', 'Заявка создана. Доступ откроется, когда студент подтвердит её у себя.'))
+  } catch (e) { linkError.value = e?.response?.data?.detail || locale.t('adminParents.linkFailed', 'Не удалось привязать') }
   finally { linking.value = false }
 }
 async function unlink(l) {
   const ok = await confirm({
-    title: 'Снять доступ?',
-    message: `${l.parent.full_name} перестанет видеть журнал студента ${l.student.full_name}.`,
-    okText: 'Снять', danger: true,
+    title: locale.t('adminParents.unlinkConfirmTitle', 'Снять доступ?'),
+    message: locale.t('adminParents.unlinkConfirmMessage', { parent: l.parent.full_name, student: l.student.full_name }),
+    okText: locale.t('adminParents.unlinkConfirmOk', 'Снять'), danger: true,
   })
   if (!ok) return
   try { await staffParentApi.unlink(l.id); await load() }
-  catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось снять') }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminParents.unlinkFailed', 'Не удалось снять')) }
 }
 
 // ── Правка/удаление аккаунта родителя (зеркало десктопного _open_parent) ─────────
@@ -134,23 +136,23 @@ async function saveEdit() {
     })
     showEdit.value = false
     await load()
-    toast.success('Сохранено')
-  } catch (e) { editError.value = e?.response?.data?.detail || 'Не удалось сохранить' }
+    toast.success(locale.t('adminParents.saved', 'Сохранено'))
+  } catch (e) { editError.value = e?.response?.data?.detail || locale.t('adminParents.saveFailed', 'Не удалось сохранить') }
   finally { savingEdit.value = false }
 }
 async function deleteEdit() {
   const p = editTarget.value
   const ok = await confirm({
-    title: 'Удалить аккаунт родителя?',
-    message: `«${p.full_name || p.login}» больше не сможет войти. Привязки к студентам останутся в списке как отозванные.`,
-    okText: 'Удалить', danger: true,
+    title: locale.t('adminParents.deleteConfirmTitle', 'Удалить аккаунт родителя?'),
+    message: locale.t('adminParents.deleteConfirmMessage', { name: p.full_name || p.login }),
+    okText: locale.t('common.delete'), danger: true,
   })
   if (!ok) return
   try {
     await staffParentApi.remove(p.id)
     showEdit.value = false
     await load()
-  } catch (e) { toast.error(e?.response?.data?.detail || 'Не удалось удалить') }
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminParents.deleteFailed', 'Не удалось удалить')) }
 }
 </script>
 
@@ -158,12 +160,12 @@ async function deleteEdit() {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center gap-3">
       <p class="mr-auto max-w-2xl text-sm text-text3">
-        Привязка создаёт <b class="text-text2">заявку</b>, а не доступ: журнал откроется
-        родителю только после того, как студент подтвердит её в своём кабинете.
+        {{ locale.t('adminParents.linkExplainerBefore', 'Привязка создаёт') }}
+        <b class="text-text2">{{ locale.t('adminParents.linkExplainerRequest', 'заявку') }}</b>{{ locale.t('adminParents.linkExplainerAfter', ', а не доступ: журнал откроется родителю только после того, как студент подтвердит её в своём кабинете.') }}
       </p>
-      <AppButton v-if="isAdmin" variant="ghost" size="sm" @click="openCreate">+ Родитель</AppButton>
+      <AppButton v-if="isAdmin" variant="ghost" size="sm" @click="openCreate">{{ locale.t('adminParents.addParentAction', '+ Родитель') }}</AppButton>
       <AppButton variant="green" size="sm" :disabled="!parents.length" @click="openLink">
-        Привязать к студенту
+        {{ locale.t('adminParents.linkToStudentAction', 'Привязать к студенту') }}
       </AppButton>
     </div>
 
@@ -172,18 +174,18 @@ async function deleteEdit() {
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
-            <th class="px-4 py-2.5 font-semibold">Аккаунты родителей</th>
-            <th class="px-4 py-2.5 font-semibold">Логин</th>
-            <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colAccounts', 'Аккаунты родителей') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colLogin', 'Логин') }}</th>
+            <th class="px-4 py-2.5 text-right font-semibold">{{ locale.t('adminParents.colActions', 'Действия') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="!loading && !parents.length"><td colspan="3" class="px-4 py-6 text-center text-text3">Родителей пока нет</td></tr>
+          <tr v-if="!loading && !parents.length"><td colspan="3" class="px-4 py-6 text-center text-text3">{{ locale.t('adminParents.noParents', 'Родителей пока нет') }}</td></tr>
           <tr v-for="p in parents" :key="p.id" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="px-4 py-2.5 text-text">{{ p.full_name || '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ p.login }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="text-text3 hover:text-accent" title="Изменить" @click="openEdit(p)">✎</button>
+              <button class="text-text3 hover:text-accent" :title="locale.t('adminParents.edit', 'Изменить')" @click="openEdit(p)">✎</button>
             </td>
           </tr>
         </tbody>
@@ -194,16 +196,16 @@ async function deleteEdit() {
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
-            <th class="px-4 py-2.5 font-semibold">Родитель</th>
-            <th class="px-4 py-2.5 font-semibold">Студент</th>
-            <th class="px-4 py-2.5 font-semibold">Группа</th>
-            <th class="px-4 py-2.5 font-semibold">Статус</th>
-            <th class="px-4 py-2.5 text-right font-semibold">Действия</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colParent', 'Родитель') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colStudent', 'Студент') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colGroup', 'Группа') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colStatus', 'Статус') }}</th>
+            <th class="px-4 py-2.5 text-right font-semibold">{{ locale.t('adminParents.colActions', 'Действия') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="5" class="px-4 py-6 text-center text-text3">Загрузка…</td></tr>
-          <tr v-else-if="!links.length"><td colspan="5" class="px-4 py-6 text-center text-text3">Привязок нет</td></tr>
+          <tr v-if="loading"><td colspan="5" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
+          <tr v-else-if="!links.length"><td colspan="5" class="px-4 py-6 text-center text-text3">{{ locale.t('adminParents.noLinks', 'Привязок нет') }}</td></tr>
           <tr v-for="l in links" :key="l.id" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="px-4 py-2.5 text-text">{{ l.parent.full_name || l.parent.login }}</td>
             <td class="px-4 py-2.5 text-text">{{ l.student.full_name }}</td>
@@ -215,7 +217,7 @@ async function deleteEdit() {
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
               <button v-if="l.status !== 'revoked'" class="text-text3 hover:text-red"
-                      title="Снять доступ" @click="unlink(l)">✕</button>
+                      :title="locale.t('adminParents.revokeAccess', 'Снять доступ')" @click="unlink(l)">✕</button>
             </td>
           </tr>
         </tbody>
@@ -225,25 +227,25 @@ async function deleteEdit() {
     <!-- ── Новый родитель ──────────────────────────────────────────────────────── -->
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showCreate = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">Новый родитель</h3>
+        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.newParentTitle', 'Новый родитель') }}</h3>
         <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Логин</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colLogin', 'Логин') }}</span>
             <input v-model="form.login" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Фамилия</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
               <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Имя</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.firstName', 'Имя') }}</span>
               <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Пароль</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.passwordLabel', 'Пароль') }}</span>
             <input v-model="form.password" type="text"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showCreate = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showCreate = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="saving" @click="createParent">
-            {{ saving ? 'Сохранение…' : 'Добавить' }}
+            {{ saving ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('adminParents.addAction2', 'Добавить') }}
           </AppButton>
         </div>
       </div>
@@ -252,28 +254,28 @@ async function deleteEdit() {
     <!-- ── Привязка ────────────────────────────────────────────────────────────── -->
     <div v-if="showLink" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLink = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">Привязать родителя к студенту</h3>
+        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.linkModalTitle', 'Привязать родителя к студенту') }}</h3>
         <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Родитель</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colParent', 'Родитель') }}</span>
             <select v-model="linkForm.parent_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
               <option v-for="p in parents" :key="p.id" :value="p.id">{{ p.full_name || p.login }}</option>
             </select></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Студент</span>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colStudent', 'Студент') }}</span>
             <select v-model="linkForm.student_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
               <option v-for="s in students" :key="s.id" :value="s.id">
                 {{ s.surname }} {{ s.name }} · {{ s.group }}
               </option>
             </select>
             <span v-if="!students.length" class="mt-1 block text-xs text-text3">
-              Список студентов доступен администратору.
+              {{ locale.t('adminParents.studentsAdminOnlyHint', 'Список студентов доступен администратору.') }}
             </span>
           </label>
           <p v-if="linkError" class="text-sm text-red">{{ linkError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showLink = false">Отмена</AppButton>
+          <AppButton variant="ghost" size="sm" @click="showLink = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="linking" @click="createLink">
-            {{ linking ? 'Привязка…' : 'Привязать' }}
+            {{ linking ? locale.t('adminParents.linking', 'Привязка…') : locale.t('adminParents.linkAction2', 'Привязать') }}
           </AppButton>
         </div>
       </div>
@@ -282,26 +284,26 @@ async function deleteEdit() {
     <!-- ── Правка родителя ─────────────────────────────────────────────────────── -->
     <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showEdit = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-1 font-title text-lg font-bold text-text">{{ editTarget?.full_name || 'Родитель' }}</h3>
-        <p class="mb-4 text-xs text-text3">Логин: {{ editTarget?.login }}</p>
+        <h3 class="mb-1 font-title text-lg font-bold text-text">{{ editTarget?.full_name || locale.t('adminParents.parentFallback', 'Родитель') }}</h3>
+        <p class="mb-4 text-xs text-text3">{{ locale.t('adminParents.loginPrefix', 'Логин:') }} {{ editTarget?.login }}</p>
         <div class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Фамилия</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
               <input v-model="editForm.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Имя Отчество</span>
+            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.nameAndPatronymic', 'Имя Отчество') }}</span>
               <input v-model="editForm.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">Новый пароль</span>
-            <input v-model="editForm.password" type="text" placeholder="Оставьте пустым, чтобы не менять"
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.newPassword', 'Новый пароль') }}</span>
+            <input v-model="editForm.password" type="text" :placeholder="locale.t('adminParents.leaveEmptyHint', 'Оставьте пустым, чтобы не менять')"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <p v-if="editError" class="text-sm text-red">{{ editError }}</p>
         </div>
         <div class="mt-5 flex items-center justify-between gap-2">
-          <AppButton variant="red" size="sm" @click="deleteEdit">Удалить</AppButton>
+          <AppButton variant="red" size="sm" @click="deleteEdit">{{ locale.t('common.delete') }}</AppButton>
           <div class="flex gap-2">
-            <AppButton variant="ghost" size="sm" @click="showEdit = false">Отмена</AppButton>
+            <AppButton variant="ghost" size="sm" @click="showEdit = false">{{ locale.t('common.cancel') }}</AppButton>
             <AppButton variant="green" size="sm" :disabled="savingEdit" @click="saveEdit">
-              {{ savingEdit ? 'Сохранение…' : 'Сохранить' }}
+              {{ savingEdit ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('common.save') }}
             </AppButton>
           </div>
         </div>

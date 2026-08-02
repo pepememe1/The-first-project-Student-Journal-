@@ -11,9 +11,11 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { Bell, ArrowLeft, CheckCheck, Megaphone, X, Send, BookOpen } from '@lucide/vue'
 import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import AppButton from '@/components/ui/AppButton.vue'
 
 const auth = useAuthStore()
+const locale = useLocaleStore()
 
 const items = ref([])
 const opened = ref(null)      // открытое письмо (null → показываем список)
@@ -22,14 +24,14 @@ const failed = ref(false)
 
 // Подпись типа события. Старые письма (созданные до появления текста) приходят с
 // пустыми title/body — для них заголовок берём отсюда, чтобы строка не была пустой.
-const KIND_LABEL = {
-  grade: 'Новая оценка',
-  grade_changed: 'Оценка изменена',
-  schedule_changed: 'Расписание изменилось',
-  homework: 'Домашнее задание',
-  event: 'Мероприятие',
-  reminder: 'Напоминание',
-}
+const KIND_LABEL = computed(() => ({
+  grade: locale.t('notifications.kind.grade', 'Новая оценка'),
+  grade_changed: locale.t('notifications.kind.gradeChanged', 'Оценка изменена'),
+  schedule_changed: locale.t('notifications.kind.scheduleChanged', 'Расписание изменилось'),
+  homework: locale.t('notifications.kind.homework', 'Домашнее задание'),
+  event: locale.t('notifications.kind.event', 'Мероприятие'),
+  reminder: locale.t('notifications.kind.reminder', 'Напоминание'),
+}))
 
 // Фильтр по видам. Оценки — отдельно от «Система» (по просьбе: оценки идут в свою
 // вкладку, всё, что пишет админ вручную — в «Система»). Домашка — отдельно, иначе
@@ -41,25 +43,25 @@ const KIND_TAB = { grade: 'grades', grade_changed: 'grades', homework: 'homework
 //глазами ребёнка). Преподаватель домашних заданий не получает — он их ЗАДАЁТ, и у него
 //этот раздел всегда был пустым: вкладка со счётчиком «0» выглядела как поломка. То, что
 //он задал, теперь видно в «Отправленных».
-const ALL_TABS = [
-  { key: 'all', label: 'Все' },
-  { key: 'grades', label: 'Оценки' },
-  { key: 'homework', label: 'ДЗ', roles: ['student', 'parent'] },
-  { key: 'events', label: 'Мероприятия' },
-  { key: 'system', label: 'Система' },
+const ALL_TABS = computed(() => [
+  { key: 'all', label: locale.t('notifications.tab.all', 'Все') },
+  { key: 'grades', label: locale.t('notifications.tab.grades', 'Оценки') },
+  { key: 'homework', label: locale.t('notifications.tab.homework', 'ДЗ'), roles: ['student', 'parent'] },
+  { key: 'events', label: locale.t('notifications.tab.events', 'Мероприятия') },
+  { key: 'system', label: locale.t('notifications.tab.system', 'Система') },
   //«Отправленные» — не почта, а журнал своих рассылок: список приходит отдельным
   //запросом и в общий `items` не попадает (у писем разная природа — у полученных есть
   //«прочитано», у отправленных «сколько прочитали»).
-  { key: 'sent', label: 'Отправленные', roles: ['teacher', 'admin'] },
-]
+  { key: 'sent', label: locale.t('notifications.tab.sent', 'Отправленные'), roles: ['teacher', 'admin'] },
+])
 const TABS = computed(() =>
-  ALL_TABS.filter((t) => !t.roles || t.roles.includes(auth.role)))
-const EMPTY_LABEL = {
-  grades: 'Оценок пока нет',
-  homework: 'Домашних заданий пока нет',
-  events: 'Мероприятий пока нет',
-  system: 'Системных уведомлений пока нет',
-}
+  ALL_TABS.value.filter((t) => !t.roles || t.roles.includes(auth.role)))
+const EMPTY_LABEL = computed(() => ({
+  grades: locale.t('notifications.empty.grades', 'Оценок пока нет'),
+  homework: locale.t('notifications.empty.homework', 'Домашних заданий пока нет'),
+  events: locale.t('notifications.empty.events', 'Мероприятий пока нет'),
+  system: locale.t('notifications.empty.system', 'Системных уведомлений пока нет'),
+}))
 const tab = ref('all')
 
 // ── «Отправленные»: свои рассылки (одна строка на рассылку, а не на получателя) ──────
@@ -98,23 +100,28 @@ function tabUnread(key) {
 const unread = computed(() => items.value.filter((i) => !i.read_at).length)
 
 function titleOf(item) {
-  return item.title || KIND_LABEL[item.kind] || 'Уведомление'
+  return item.title || KIND_LABEL.value[item.kind] || locale.t('notifications.kind.default', 'Уведомление')
 }
 
 function bodyOf(item) {
-  return item.body || 'Откройте журнал, чтобы посмотреть подробности.'
+  return item.body || locale.t('notifications.defaultBody', 'Откройте журнал, чтобы посмотреть подробности.')
 }
 
-// Как в почте: сегодняшнее письмо показывает время, остальные — дату.
+// Как в почте: сегодняшнее письмо показывает время, остальные — дату. Формат дат —
+// под язык интерфейса (BCP47-код), а не жёстко русский: иначе «01.02.26» иностранному
+// студенту при выбранном English/中文 выглядело бы так же чужеродно, как непереведённый
+// текст рядом.
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 function fmtWhen(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const today = new Date()
   const sameDay = d.toDateString() === today.toDateString()
+  const tag = BCP47[locale.active] || 'ru-RU'
   return sameDay
-    ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+    ? d.toLocaleTimeString(tag, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(tag, { day: '2-digit', month: '2-digit', year: '2-digit' })
 }
 
 async function load() {
@@ -188,12 +195,12 @@ async function submitEvent() {
   evSending.value = true
   try {
     const { data } = await eventsApi.create(title, body, evAll.value ? [] : evGroups.value)
-    evDone.value = `Отправлено: ${data.sent} из ${data.recipients}`
+    evDone.value = locale.t('notifications.sentResult', { sent: data.sent, recipients: data.recipients })
     evTitle.value = ''; evBody.value = ''; evGroups.value = []; evAll.value = false
     //Своя рассылка должна появиться в «Отправленных» сразу, а не после перезахода.
     await loadSent()
   } catch (e) {
-    evDone.value = e?.response?.data?.detail || 'Не удалось отправить.'
+    evDone.value = e?.response?.data?.detail || locale.t('notifications.sendFailed', 'Не удалось отправить.')
   } finally {
     evSending.value = false
   }
@@ -207,11 +214,11 @@ async function submitEvent() {
       <button type="button"
               class="mb-4 inline-flex items-center gap-1.5 text-sm text-text3 transition-colors hover:text-accent"
               @click="opened = null">
-        <ArrowLeft class="size-4" /> К списку
+        <ArrowLeft class="size-4" /> {{ locale.t('notifications.backToList', 'К списку') }}
       </button>
       <h3 class="font-title text-lg font-extrabold text-text">{{ titleOf(opened) }}</h3>
       <p class="mt-1 text-tiny text-text3">
-        {{ KIND_LABEL[opened.kind] || 'Уведомление' }}
+        {{ KIND_LABEL[opened.kind] || locale.t('notifications.kind.default', 'Уведомление') }}
         <span v-if="opened.subject"> · {{ opened.subject }}</span>
         <span v-if="opened.created_at"> · {{ fmtWhen(opened.created_at) }}</span>
       </p>
@@ -231,23 +238,23 @@ async function submitEvent() {
                 :class="tab === t.key ? 'text-bg opacity-80' : 'text-accent'">{{ tabUnread(t.key) }}</span>
         </button>
         <AppButton v-if="canCreateEvent" variant="ghost" class="ml-auto" @click="openCreate">
-          <Megaphone class="mr-1.5 inline size-4" />Создать мероприятие
+          <Megaphone class="mr-1.5 inline size-4" />{{ locale.t('notifications.createEvent', 'Создать мероприятие') }}
         </AppButton>
       </div>
 
       <!-- Форма создания мероприятия/события (препод/админ) -->
       <div v-if="showCreate" class="mb-4 rounded-lg border border-border2 bg-card2 p-3">
         <div class="mb-2 flex items-center justify-between">
-          <p class="text-sm font-semibold text-text">Новое мероприятие</p>
-          <button type="button" @click="showCreate = false" aria-label="Закрыть"
+          <p class="text-sm font-semibold text-text">{{ locale.t('notifications.newEvent', 'Новое мероприятие') }}</p>
+          <button type="button" @click="showCreate = false" :aria-label="locale.t('common.close')"
                   class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
         </div>
-        <input v-model="evTitle" placeholder="Заголовок (напр. «Олимпиада по математике»)" maxlength="150"
+        <input v-model="evTitle" :placeholder="locale.t('notifications.titlePlaceholder', 'Заголовок (напр. «Олимпиада по математике»)')" maxlength="150"
                class="mb-2 w-full rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
-        <textarea v-model="evBody" placeholder="Текст объявления" rows="3" maxlength="2000"
+        <textarea v-model="evBody" :placeholder="locale.t('notifications.bodyPlaceholder', 'Текст объявления')" rows="3" maxlength="2000"
                   class="mb-2 w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
         <label v-if="auth.role === 'admin'" class="mb-2 flex items-center gap-2 text-sm text-text2">
-          <input type="checkbox" v-model="evAll" class="accent-[var(--gb-accent)]" />Все группы
+          <input type="checkbox" v-model="evAll" class="accent-[var(--gb-accent)]" />{{ locale.t('notifications.allGroups', 'Все группы') }}
         </label>
         <div v-if="!evAll" class="mb-2 flex flex-wrap gap-1.5">
           <button v-for="g in availableGroups" :key="g" type="button" @click="toggleGroup(g)"
@@ -255,24 +262,24 @@ async function submitEvent() {
                   :class="evGroups.includes(g) ? 'border-accent bg-accent-glow text-accent' : 'border-border2 text-text2 hover:bg-bg2'">
             {{ g }}
           </button>
-          <p v-if="!availableGroups.length" class="text-xs text-text3">Нет доступных групп.</p>
+          <p v-if="!availableGroups.length" class="text-xs text-text3">{{ locale.t('notifications.noGroups', 'Нет доступных групп.') }}</p>
         </div>
         <p v-if="evDone" class="mb-2 text-xs text-text3">{{ evDone }}</p>
         <AppButton :disabled="evSending || !evTitle.trim() || !evBody.trim() || (!evAll && !evGroups.length)"
-                   @click="submitEvent">Отправить</AppButton>
+                   @click="submitEvent">{{ locale.t('notifications.send', 'Отправить') }}</AppButton>
       </div>
 
       <!-- ── «Отправленные»: свои рассылки ──────────────────────────────────────── -->
       <template v-if="tab === 'sent'">
-        <p v-if="sentLoading" class="py-8 text-center text-sm text-text3">Загружаем…</p>
+        <p v-if="sentLoading" class="py-8 text-center text-sm text-text3">{{ locale.t('notifications.loading', 'Загружаем…') }}</p>
         <p v-else-if="sentFailed" class="py-8 text-center text-sm text-text3">
-          Не удалось получить список отправленного. Проверьте связь.
+          {{ locale.t('notifications.sentLoadFailed', 'Не удалось получить список отправленного. Проверьте связь.') }}
         </p>
         <div v-else-if="!sentItems.length" class="py-10 text-center">
           <Send class="mx-auto mb-3 size-8 text-text3 opacity-50" />
-          <p class="text-sm text-text3">Вы пока ничего не рассылали</p>
+          <p class="text-sm text-text3">{{ locale.t('notifications.noSent', 'Вы пока ничего не рассылали') }}</p>
           <p class="mt-1 text-tiny text-text3">
-            Здесь появятся мероприятия и домашние задания, о которых вы уведомили студентов.
+            {{ locale.t('notifications.noSentHint', 'Здесь появятся мероприятия и домашние задания, о которых вы уведомили студентов.') }}
           </p>
         </div>
         <ul v-else class="divide-y divide-border">
@@ -289,7 +296,7 @@ async function submitEvent() {
                    интересен свой же список: понять, дошло ли. -->
               <span class="mt-1 block text-tiny"
                     :class="s.read >= s.recipients ? 'text-accent' : 'text-text3'">
-                Прочитали {{ s.read }} из {{ s.recipients }}
+                {{ locale.t('notifications.readCount', { read: s.read, recipients: s.recipients }) }}
               </span>
             </span>
             <span class="shrink-0 text-tiny text-text3">{{ fmtWhen(s.created_at) }}</span>
@@ -299,21 +306,21 @@ async function submitEvent() {
 
       <template v-else>
       <div v-if="unread" class="mb-3 flex items-center justify-between">
-        <p class="text-sm text-text3">Непрочитанных: {{ unread }}</p>
+        <p class="text-sm text-text3">{{ locale.t('notifications.unreadCount', { n: unread }) }}</p>
         <AppButton variant="ghost" @click="markAll">
-          <CheckCheck class="mr-1.5 inline size-4" />Прочитать все
+          <CheckCheck class="mr-1.5 inline size-4" />{{ locale.t('notifications.markAllRead', 'Прочитать все') }}
         </AppButton>
       </div>
 
-      <p v-if="loading" class="py-8 text-center text-sm text-text3">Загружаем…</p>
+      <p v-if="loading" class="py-8 text-center text-sm text-text3">{{ locale.t('notifications.loading', 'Загружаем…') }}</p>
 
       <p v-else-if="failed" class="py-8 text-center text-sm text-text3">
-        Не удалось получить уведомления. Проверьте связь и обновите страницу.
+        {{ locale.t('notifications.loadFailed', 'Не удалось получить уведомления. Проверьте связь и обновите страницу.') }}
       </p>
 
       <div v-else-if="!visible.length" class="py-10 text-center">
         <Bell class="mx-auto mb-3 size-8 text-text3 opacity-50" />
-        <p class="text-sm text-text3">{{ EMPTY_LABEL[tab] || 'Уведомлений пока нет' }}</p>
+        <p class="text-sm text-text3">{{ EMPTY_LABEL[tab] || locale.t('notifications.emptyDefault', 'Уведомлений пока нет') }}</p>
       </div>
 
       <ul v-else class="divide-y divide-border">
@@ -324,7 +331,7 @@ async function submitEvent() {
             <!-- Красная точка — непрочитано; выколотая (контурная) — прочитано. -->
             <span class="mt-1.5 size-2.5 shrink-0 rounded-full"
                   :class="item.read_at ? 'border-2 border-text3' : 'bg-red'"
-                  :aria-label="item.read_at ? 'Прочитано' : 'Непрочитано'" />
+                  :aria-label="item.read_at ? locale.t('notifications.read', 'Прочитано') : locale.t('notifications.unread', 'Непрочитано')" />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm text-text">{{ titleOf(item) }}</span>
               <span class="mt-0.5 block truncate text-tiny text-text3">{{ bodyOf(item) }}</span>

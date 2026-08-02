@@ -5,6 +5,7 @@
 //   if (await confirm({ message: '...', danger: true })) { ... }      // → boolean
 //   const v = await prompt({ message: '...', defaultValue: '...' })   // → string | null
 import { reactive } from 'vue'
+import { useLocaleStore } from '../stores/locale.js'
 
 export const dialogState = reactive({
   open: false,
@@ -21,6 +22,7 @@ export const dialogState = reactive({
 let resolver = null
 
 function open(mode, opts) {
+  const locale = useLocaleStore()
   return new Promise((resolve) => {
     resolver = resolve
     Object.assign(dialogState, {
@@ -28,8 +30,8 @@ function open(mode, opts) {
       mode,
       title: opts.title || '',
       message: opts.message || '',
-      okText: opts.okText || 'OK',
-      cancelText: opts.cancelText || 'Отмена',
+      okText: opts.okText || locale.t('common.ok', 'OK'),
+      cancelText: opts.cancelText || locale.t('common.cancel'),
       danger: !!opts.danger,
       value: opts.defaultValue || '',
       placeholder: opts.placeholder || '',

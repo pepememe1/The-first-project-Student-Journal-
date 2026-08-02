@@ -43,7 +43,10 @@ import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
 import ParentJournal from '@/pages/parent/ParentJournal.vue'
 import AdminParents from '@/pages/admin/AdminParents.vue'
 
-const page = (path, component, title, subtitle) => ({ path, component, meta: { title, subtitle } })
+// i18nTitle/i18nSubtitle — необязательные ключи словаря (см. AppShell.vue); без них
+// заголовок остаётся русским литералом title/subtitle (обратная совместимость).
+const page = (path, component, title, subtitle, i18nTitle, i18nSubtitle) =>
+  ({ path, component, meta: { title, subtitle, i18nTitle, i18nSubtitle } })
 
 const routes = [
   { path: '/connect', component: ConnectServer, meta: { public: true } },
@@ -63,13 +66,13 @@ const routes = [
       // Главная показывает ИМЯ студента как заголовок (title_lbl в десктопе) — рендерит
       // сама StudentDashboard, поэтому статический title из AppShell тут не нужен.
       { path: '', component: StudentDashboard, meta: {} },
-      page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам'),
-      page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ'),
-      page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости'),
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
-      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
-      page('profile', Profile, 'Профиль'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
+      page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам', 'nav.journal', 'router.journalSubtitle'),
+      page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ', 'nav.schedule', 'router.scheduleSubtitle'),
+      page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости', 'router.myStats', 'router.statsSubtitle'),
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
+      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
     ],
   },
 
@@ -77,17 +80,17 @@ const routes = [
   {
     path: '/teacher', component: AppShell, meta: { requiresAuth: true, role: 'teacher' },
     children: [
-      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам' } },
-      page('students', TeacherStudents, 'Студенты группы'),
-      page('curator', CuratorView, 'Курирование', 'Ваши курируемые группы'),
+      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам', i18nTitle: 'router.teacherJournalTitle', i18nSubtitle: 'router.teacherJournalSubtitle' } },
+      page('students', TeacherStudents, 'Студенты группы', undefined, 'router.groupStudents'),
+      page('curator', CuratorView, 'Курирование', 'Ваши курируемые группы', 'nav.curator', 'router.curatorSubtitle'),
       // Куратор привязывает родителей к студентам СВОИХ групп (скоуп режет сервер).
-      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу'),
-      page('schedule', SchedulePage, 'Расписание'),
-      page('stats', TeacherStats, 'Статистика группы'),
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
-      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
-      page('profile', Profile, 'Профиль'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
+      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
+      page('schedule', SchedulePage, 'Расписание', undefined, 'nav.schedule'),
+      page('stats', TeacherStats, 'Статистика группы', undefined, 'router.groupStats'),
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
+      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
     ],
   },
 
@@ -95,30 +98,30 @@ const routes = [
   {
     path: '/admin', component: AppShell, meta: { requiresAuth: true, role: 'admin' },
     children: [
-      { path: '', component: AdminDashboard, meta: { title: 'Панель администратора' } },
-      page('teachers', AdminTeachers, 'Преподаватели'),
-      page('students', AdminStudents, 'Студенты'),
-      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу'),
-      page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов'),
-      page('groups', AdminGroups, 'Группы'),
-      page('subjects', AdminSubjects, 'Предметы'),
-      page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ'),
+      { path: '', component: AdminDashboard, meta: { title: 'Панель администратора', i18nTitle: 'router.adminDashboardTitle' } },
+      page('teachers', AdminTeachers, 'Преподаватели', undefined, 'nav.teachers'),
+      page('students', AdminStudents, 'Студенты', undefined, 'nav.students'),
+      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
+      page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов', 'nav.registrations', 'router.registrationsSubtitle'),
+      page('groups', AdminGroups, 'Группы', undefined, 'nav.groups'),
+      page('subjects', AdminSubjects, 'Предметы', undefined, 'nav.subjects'),
+      page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ', 'nav.schedule', 'router.adminScheduleSubtitle'),
       page('schedule-issues', AdminScheduleIssues, 'Накладки расписания',
-           'Один преподаватель или аудитория заняты дважды'),
-      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн' } },
+           'Один преподаватель или аудитория заняты дважды', 'router.scheduleIssuesTitle', 'router.scheduleIssuesSubtitle'),
+      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн', i18nTitle: 'router.aiSettingsTitle', i18nSubtitle: 'router.aiSettingsSubtitle' } },
       // В программе на этой же странице появляется управление по SSH (список серверов,
       // команды, перенос). На сайте его нет: маршруты /desk/* подключает только
       // локальный сервер программы — см. шапку AdminServer.vue.
-      page('server', AdminServer, 'Сервер', 'Состояние машины, база, диск, копии'),
+      page('server', AdminServer, 'Сервер', 'Состояние машины, база, диск, копии', 'nav.server', 'router.serverSubtitle'),
       page('data', AdminData, 'Данные и резервные копии',
-           'Выгрузка всех данных в архив и загрузка обратно'),
-      page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств'),
-      page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
-      { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
-      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
-      page('moderation', AdminMessenger, 'Модерация чатов', 'Жалобы и просмотр переписок'),
+           'Выгрузка всех данных в архив и загрузка обратно', 'router.dataTitle', 'router.dataSubtitle'),
+      page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств', 'nav.requests', 'router.requestsSubtitle'),
+      page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв', 'nav.sessions', 'router.accessSubtitle'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
+      { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера', i18nTitle: 'nav.monitor', i18nSubtitle: 'router.monitorSubtitle' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
+      page('moderation', AdminMessenger, 'Модерация чатов', 'Жалобы и просмотр переписок', 'nav.moderation', 'router.moderationSubtitle'),
     ],
   },
 
@@ -128,11 +131,11 @@ const routes = [
   {
     path: '/parent', component: AppShell, meta: { requiresAuth: true, role: 'parent' },
     children: [
-      { path: '', component: ParentJournal, meta: { title: 'Журнал', subtitle: 'Успеваемость ребёнка' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор' } },
-      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения' } },
-      page('profile', Profile, 'Профиль'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка'),
+      { path: '', component: ParentJournal, meta: { title: 'Журнал', subtitle: 'Успеваемость ребёнка', i18nTitle: 'nav.teacherJournal', i18nSubtitle: 'router.childPerformance' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
+      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
     ],
   },
 

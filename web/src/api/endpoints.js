@@ -326,6 +326,10 @@ export const messengerApi = {
   translate: (text, to, from = 'auto') =>
     api.post('/web/messenger/translate', { text, to, from }),
   translateLanguages: () => api.get('/web/messenger/translate/languages'),
+  // GIF-пикер (Klipy) — сервер проксирует запросы, ключ не покидает бэкенд.
+  gifCategories: () => api.get('/web/messenger/gifs/categories'),
+  gifTrending: (page = 1) => api.get('/web/messenger/gifs/trending', { params: { page } }),
+  gifSearch: (q, page = 1) => api.get('/web/messenger/gifs/search', { params: { q, page } }),
   // Каталог/поиск людей для выбора собеседника (role: student|teacher).
   users: (role = 'student', q = '', page = 0) =>
     api.get('/web/messenger/users', { params: { role, q, page } }),
@@ -338,9 +342,11 @@ export const messengerApi = {
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`, { params }),
   // clientNonce (§D10): UUID клиента — повтор с тем же nonce не создаёт дубль на сервере
   // (защита от ретраев при обрыве сети/двойном клике).
-  send: (convId, body, replyToId = 0, clientNonce = '') =>
+  // extra — доп. поля payload (kind/gif_slug для GIF-сообщений, см. GifPicker.vue),
+  // необязательные и не влияют на обычную отправку текста.
+  send: (convId, body, replyToId = 0, clientNonce = '', extra = {}) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/messages`,
-      { body, reply_to_id: replyToId, client_nonce: clientNonce }),
+      { body, reply_to_id: replyToId, client_nonce: clientNonce, ...extra }),
   read: (convId, lastMessageId = 0) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/read`,
       { last_message_id: lastMessageId }),

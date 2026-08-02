@@ -5,6 +5,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore, BIO_LIMIT } from '@/stores/profile'
+import { useLocaleStore } from '@/stores/locale'
+import { roleLabel } from '@/config/roles'
 import { PRESETS, profilePlate } from '@/theme/palette'
 import Card from '@/components/ui/Card.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
@@ -13,7 +15,7 @@ import { Camera, Check } from '@lucide/vue'
 
 const auth = useAuthStore()
 const profile = useProfileStore()
-const ROLE = { student: 'Студент', teacher: 'Преподаватель', admin: 'Администратор' }
+const locale = useLocaleStore()
 const initial = computed(() => (auth.user?.name || '?').trim().charAt(0).toUpperCase())
 
 const editing = ref(false)
@@ -47,8 +49,8 @@ async function pickColor(id) { await profile.saveProfile({ color: id }) }
            :style="{ background: plateColor }">
         <button type="button" @click="editing = true"
                 class="group relative size-16 shrink-0 overflow-hidden rounded-full ring-2 ring-white/60"
-                title="Изменить аватарку">
-          <img v-if="profile.avatar" :src="profile.avatar" alt="Аватарка"
+                :title="locale.t('profile.editAvatar', 'Изменить аватарку')">
+          <img v-if="profile.avatar" :src="profile.avatar" :alt="locale.t('profile.avatarAlt', 'Аватарка')"
                class="size-full object-cover" />
           <span v-else class="grid size-full place-items-center bg-white/20 text-2xl font-extrabold text-white">{{ initial }}</span>
           <span class="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
@@ -57,33 +59,33 @@ async function pickColor(id) { await profile.saveProfile({ color: id }) }
         </button>
         <div class="min-w-0">
           <p class="truncate font-title text-xl font-extrabold text-white">{{ auth.user?.name }}</p>
-          <p class="truncate text-sm text-white/80">{{ ROLE[auth.role] }} · {{ auth.user?.login }}</p>
+          <p class="truncate text-sm text-white/80">{{ roleLabel(auth.role) }} · {{ auth.user?.login }}</p>
         </div>
       </div>
       <p v-if="profile.bio" class="mt-4 whitespace-pre-wrap text-sm text-text2">{{ profile.bio }}</p>
     </Card>
 
     <!-- О себе -->
-    <Card title="О себе" subtitle="Короткий текст — его видят другие в вашем профиле">
+    <Card :title="locale.t('profile.about', 'О себе')" :subtitle="locale.t('profile.aboutHint', 'Короткий текст — его видят другие в вашем профиле')">
       <textarea v-model="draftBio" :maxlength="BIO_LIMIT" rows="3"
-                placeholder="Например: куратор группы К-24, веду сети и базы данных."
+                :placeholder="locale.t('profile.aboutPlaceholder', 'Например: куратор группы К-24, веду сети и базы данных.')"
                 class="w-full resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card" />
       <div class="mt-2 flex items-center gap-3">
         <span class="text-xs" :class="left <= 20 ? 'text-red' : 'text-text3'">
-          Осталось символов: {{ left }}
+          {{ locale.t('profile.charsLeft', { n: left }) }}
         </span>
         <button type="button" @click="saveBio" :disabled="!dirty || profile.saving"
                 class="ml-auto rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          {{ profile.saving ? 'Сохранение…' : 'Сохранить' }}
+          {{ profile.saving ? locale.t('profile.saving', 'Сохранение…') : locale.t('common.save') }}
         </button>
       </div>
     </Card>
 
     <!-- Цвет плашки — те же пресеты, что и у темы оформления -->
-    <Card title="Цвет профиля" subtitle="Фон плашки с вашим именем">
+    <Card :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">
       <div class="flex flex-wrap gap-2">
         <button v-for="p in PRESETS" :key="p.id" type="button" @click="pickColor(p.id)"
-                :title="p.name" :aria-label="p.name"
+                :title="locale.t(`theme.preset.${p.id}`, p.name)" :aria-label="locale.t(`theme.preset.${p.id}`, p.name)"
                 class="grid size-9 place-items-center rounded-full ring-offset-2 ring-offset-[var(--gb-card)] transition-transform hover:scale-110"
                 :class="profile.color === p.id ? 'ring-2 ring-accent' : ''"
                 :style="{ background: p.accent }">
@@ -93,7 +95,7 @@ async function pickColor(id) { await profile.saveProfile({ color: id }) }
     </Card>
 
     <!-- Уведомления (оценки и изменения расписания). -->
-    <Card title="Уведомления" subtitle="Оценки и изменения расписания">
+    <Card :title="locale.t('settings.notifications', 'Уведомления')" :subtitle="locale.t('profile.notificationsHint', 'Оценки и изменения расписания')">
       <NotificationsInbox />
     </Card>
 

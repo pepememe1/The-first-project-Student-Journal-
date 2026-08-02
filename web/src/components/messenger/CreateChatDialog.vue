@@ -5,11 +5,13 @@ import { ref, watch, computed, onMounted } from 'vue'
 import { X, Search, Check } from '@lucide/vue'
 import { messengerApi, curatorApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 
 const props = defineProps({ kind: { type: String, default: 'group' } }) // group | channel
 const emit = defineEmits(['create', 'close'])
 
 const auth = useAuthStore()
+const locale = useLocaleStore()
 const isChannel = computed(() => props.kind === 'channel')
 const title = ref('')
 const about = ref('')
@@ -53,8 +55,8 @@ function toggleGroup(g) {
   else chosenGroups.value.push(g)
 }
 const roleTabs = computed(() => {
-  const t = [['student', 'Студенты'], ['teacher', 'Преподаватели']]
-  if (curatedGroups.value.length) t.push(['parent', 'Родители'])
+  const t = [['student', locale.t('messenger.tab.student', 'Студенты')], ['teacher', locale.t('createChat.teachers', 'Преподаватели')]]
+  if (curatedGroups.value.length) t.push(['parent', locale.t('messenger.tab.parent', 'Родители')])
   return t
 })
 
@@ -71,22 +73,22 @@ function submit() {
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
-        <h3 class="font-title text-lg font-bold text-text">{{ isChannel ? 'Новый канал' : 'Новая группа' }}</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ isChannel ? locale.t('messenger.newChannel', 'Новый канал') : locale.t('messenger.newGroup', 'Новая группа') }}</h3>
         <button type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
-        <input v-model="title" :placeholder="isChannel ? 'Название канала' : 'Название группы'"
+        <input v-model="title" :placeholder="isChannel ? locale.t('createChat.channelName', 'Название канала') : locale.t('createChat.groupName', 'Название группы')"
                class="mb-2 w-full rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent" />
-        <input v-model="about" placeholder="Описание (необязательно)"
+        <input v-model="about" :placeholder="locale.t('createChat.descOptional', 'Описание (необязательно)')"
                class="mb-2 w-full rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent" />
         <label v-if="isChannel" class="mb-3 flex items-center gap-2 text-sm text-text2">
-          <input type="checkbox" v-model="isPublic" class="accent-[var(--gb-accent)]" /> Публичный (виден в каталоге)
+          <input type="checkbox" v-model="isPublic" class="accent-[var(--gb-accent)]" /> {{ locale.t('createChat.public', 'Публичный (виден в каталоге)') }}
         </label>
 
         <!-- §12: режим куратора — целые учебные группы одним нажатием. -->
         <div v-if="!isChannel && curatedGroups.length" class="mb-3">
-          <p class="mb-1 text-xs font-semibold text-text3">Добавить целую группу (куратор)</p>
+          <p class="mb-1 text-xs font-semibold text-text3">{{ locale.t('createChat.addWholeGroup', 'Добавить целую группу (куратор)') }}</p>
           <div class="flex flex-wrap gap-1.5">
             <button v-for="g in curatedGroups" :key="g" type="button" @click="toggleGroup(g)"
                     class="rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors"
@@ -97,7 +99,7 @@ function submit() {
         </div>
 
         <p class="mb-1 mt-2 text-xs font-semibold text-text3">
-          {{ isChannel ? 'Авторы (могут публиковать)' : 'Участники по отдельности' }}
+          {{ isChannel ? locale.t('createChat.authors', 'Авторы (могут публиковать)') : locale.t('createChat.membersIndividually', 'Участники по отдельности') }}
         </p>
         <!-- выбранные чипсами -->
         <div v-if="chosen.length" class="mb-2 flex flex-wrap gap-1">
@@ -113,29 +115,29 @@ function submit() {
         </div>
         <div class="mb-2 flex items-center gap-2 rounded-lg border border-border2 bg-card2 px-3">
           <Search class="size-4 text-text3" />
-          <input v-model="q" placeholder="Поиск по ФИО…" class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
+          <input v-model="q" :placeholder="locale.t('messenger.searchByName', 'Поиск по ФИО…')" class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
         </div>
         <div class="max-h-52 overflow-y-auto rounded-lg border border-border">
           <button v-for="u in found" :key="u.id" type="button" @click="toggle(u)"
                   class="flex w-full items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
             <span class="min-w-0 truncate text-text">
               {{ u.full_name }}
-              <span v-if="u.role === 'parent' && u.groups?.length" class="text-text3"> · род. {{ u.groups.join(', ') }}</span>
+              <span v-if="u.role === 'parent' && u.groups?.length" class="text-text3"> · {{ locale.t('messenger.parentOf', 'род. ') }}{{ u.groups.join(', ') }}</span>
             </span>
             <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                   :class="isChosen(u.id) ? 'border-accent bg-accent text-white' : 'border-border2'">
               <Check v-if="isChosen(u.id)" class="size-3.5" />
             </span>
           </button>
-          <p v-if="!found.length" class="p-3 text-center text-xs text-text3">Никого не найдено.</p>
+          <p v-if="!found.length" class="p-3 text-center text-xs text-text3">{{ locale.t('messenger.nobodyFound', 'Никого не найдено.') }}</p>
         </div>
       </div>
 
       <div class="flex justify-end gap-2 border-t border-border p-3">
-        <button type="button" @click="emit('close')" class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Отмена</button>
+        <button type="button" @click="emit('close')" class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
         <button type="button" :disabled="!title.trim()" @click="submit"
                 class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          Создать
+          {{ locale.t('createChat.create', 'Создать') }}
         </button>
       </div>
     </div>

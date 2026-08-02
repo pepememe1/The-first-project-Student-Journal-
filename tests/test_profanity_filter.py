@@ -163,3 +163,31 @@ def test_prefix_rule_is_about_the_letter_before_the_root():
     assert contains_profanity("объебал")     # приставка «объ»
     assert not contains_profanity("выгребал")  # «гр» — чужой корень
     assert not contains_profanity("колебал")   # «л» — чужой корень
+
+
+# ── Расширение списка (найдено живой проверкой мессенджера) ─────────────────────────
+def test_newly_added_slurs_are_caught():
+    """Оскорбления, замеченные непроцензуренными в живой переписке — гомофобные,
+    этнические и «мягкий» эвфемизм основного корня."""
+    for word in ("хер", "елда", "еблан", "гомосек", "гомодрил", "чурка",
+                "нигер", "негр"):
+        assert contains_profanity(word), f"должно цензуриться: {word}"
+
+
+def test_word_mode_slurs_do_not_eat_unrelated_words():
+    """«хер» словом — «херес»/«херувим» не задеты (тот же принцип, что у «педик»/
+    «педикюр» выше)."""
+    assert not contains_profanity("херес")
+    assert not contains_profanity("херувим")
+
+
+def test_english_slur_latin_root_is_not_derailed_by_cyrillic_normalization():
+    """«nigg» — латиницей, отдельно от кириллической гомоглиф-таблицы: она переводит
+    ТОЛЬКО отдельные буквы («a»→«а»), не весь латинский алфавит, а корень без гласной
+    на конце не зависит от того, что финальная буква слова превратится в кириллицу."""
+    assert contains_profanity("nigga")
+    assert contains_profanity("nigger")
+    assert contains_profanity("niggers")
+    #Растягивание/разрядка работают и для латинского корня — тот же механизм.
+    assert contains_profanity("n-i-g-g-a")
+    assert contains_profanity("niggga")

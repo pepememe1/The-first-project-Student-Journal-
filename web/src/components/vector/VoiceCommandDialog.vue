@@ -11,7 +11,9 @@
 // `voice_command.py`), а запись — существующий `/web/teacher/grade`. Здесь только выбор.
 import { ref, computed, watch } from 'vue'
 import { Mic, AlertTriangle, Check, X } from '@lucide/vue'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const props = defineProps({
   // Ответ эндпоинта разбора (см. vector_voice_command на сервере).
   result: { type: Object, required: true },
@@ -31,13 +33,16 @@ const canWrite = computed(() =>
   props.result?.kind === 'grades' && !!props.result?.lesson_id && picked.value.length > 0)
 
 // Подпись действия человеческим языком: «5» само по себе понятно, а «absent_b» — нет.
-const ACTION_LABEL = {
-  grade: 'оценка',
-  present: 'присутствовал',
-  absent_n: 'пропуск (Н)',
-  absent_b: 'по болезни (Б)',
-  absent_o: 'по уважительной (О)',
-}
+// Буквы (Н)/(Б)/(О) — это ЛИТЕРАЛЬНЫЕ коды посещаемости (те же, что в журнале
+// преподавателя, TeacherJournal.vue::OPTIONS) — они не переводятся, переводится
+// только описание рядом с кодом.
+const ACTION_LABEL = computed(() => ({
+  grade: locale.t('voiceCommandDialog.action.grade', 'оценка'),
+  present: locale.t('voiceCommandDialog.action.present', 'присутствовал'),
+  absent_n: locale.t('voiceCommandDialog.action.absentN', 'пропуск (Н)'),
+  absent_b: locale.t('voiceCommandDialog.action.absentB', 'по болезни (Б)'),
+  absent_o: locale.t('voiceCommandDialog.action.absentO', 'по уважительной (О)'),
+}))
 
 function toggle(i) {
   const at = picked.value.indexOf(i)
@@ -57,12 +62,12 @@ function submit() {
       <div class="mb-3 flex items-start gap-2.5">
         <Mic class="mt-0.5 size-5 shrink-0 text-accent" />
         <div class="min-w-0 flex-1">
-          <h3 class="font-title text-lg font-bold text-text">Подтвердите запись</h3>
+          <h3 class="font-title text-lg font-bold text-text">{{ locale.t('voiceCommandDialog.title', 'Подтвердите запись') }}</h3>
           <!-- Показываем РАСПОЗНАННУЮ фразу: если Вектор ослышался, это видно сразу и
                человек поймёт, почему список выглядит странно. -->
-          <p class="mt-0.5 truncate text-xs text-text3">Расслышано: «{{ result.heard }}»</p>
+          <p class="mt-0.5 truncate text-xs text-text3">{{ locale.t('voiceCommandDialog.heard', { text: result.heard }) }}</p>
         </div>
-        <button type="button" @click="emit('cancel')" aria-label="Закрыть"
+        <button type="button" @click="emit('cancel')" :aria-label="locale.t('common.close', 'Закрыть')"
                 class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2">
           <X class="size-4" />
         </button>
@@ -77,7 +82,7 @@ function submit() {
 
       <template v-else>
         <p v-if="result.lesson_label" class="mb-2 text-xs text-text3">
-          Занятие: <span class="font-semibold text-text2">{{ result.lesson_label }}</span>
+          {{ locale.t('voiceCommandDialog.lesson', 'Занятие:') }} <span class="font-semibold text-text2">{{ result.lesson_label }}</span>
         </p>
 
         <ul class="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border2 p-2">
@@ -91,7 +96,7 @@ function submit() {
             </label>
           </li>
           <li v-if="!items.length" class="px-2 py-1.5 text-sm text-text3">
-            Ничего не разобрано — повторите команду.
+            {{ locale.t('voiceCommandDialog.nothingParsed', 'Ничего не разобрано — повторите команду.') }}
           </li>
         </ul>
 
@@ -109,11 +114,11 @@ function submit() {
         <button type="button" :disabled="!canWrite || busy" @click="submit"
                 class="flex-1 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
           <Check class="mr-1.5 inline size-4" />
-          {{ busy ? 'Записываем…' : `Записать (${picked.length})` }}
+          {{ busy ? locale.t('voiceCommandDialog.writing', 'Записываем…') : locale.t('voiceCommandDialog.writeAction', { n: picked.length }) }}
         </button>
         <button type="button" @click="emit('cancel')"
                 class="rounded-sm border border-border2 px-4 py-2.5 text-sm text-text2 hover:bg-bg2">
-          Отмена
+          {{ locale.t('common.cancel', 'Отмена') }}
         </button>
       </div>
     </div>

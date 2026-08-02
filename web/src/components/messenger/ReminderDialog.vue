@@ -11,11 +11,14 @@ import { ref, computed, onMounted } from 'vue'
 import { AlarmClock, X } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useToast } from '@/composables/useToast'
+import { useLocaleStore } from '@/stores/locale'
 
 const props = defineProps({ message: { type: Object, required: true } })
 const emit = defineEmits(['close'])
 
 const toast = useToast()
+const locale = useLocaleStore()
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 const value = ref('')          // datetime-local: «YYYY-MM-DDTHH:mm»
 const matched = ref('')
 const loading = ref(true)
@@ -32,7 +35,7 @@ const preview = computed(() => {
   const d = new Date(value.value)
   return Number.isNaN(d.getTime())
     ? ''
-    : d.toLocaleString('ru-RU', { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit' })
 })
 
 onMounted(async () => {
@@ -55,16 +58,16 @@ onMounted(async () => {
 
 async function save() {
   const d = new Date(value.value)
-  if (Number.isNaN(d.getTime())) { toast.error('Укажите дату и время'); return }
+  if (Number.isNaN(d.getTime())) { toast.error(locale.t('reminder.needDate', 'Укажите дату и время')); return }
   saving.value = true
   try {
     // Отдаём ISO с зоной: на сервере remind_at хранится в UTC, и «наивное» время
     // клиента сдвинуло бы срабатывание на часовой пояс.
     await messengerApi.createReminder(props.message.id, d.toISOString())
-    toast.success(`Напомним ${preview.value}`)
+    toast.success(locale.t('reminder.willRemind', { when: preview.value }))
     emit('close')
   } catch (e) {
-    toast.error(e?.response?.data?.detail || 'Не удалось поставить напоминание')
+    toast.error(e?.response?.data?.detail || locale.t('reminder.failed', 'Не удалось поставить напоминание'))
   } finally { saving.value = false }
 }
 </script>
@@ -75,8 +78,8 @@ async function save() {
     <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-4 shadow-card">
       <div class="mb-3 flex items-center gap-2">
         <AlarmClock class="size-4 text-accent" />
-        <h3 class="flex-1 font-title text-sm font-bold text-text">Напомнить о сообщении</h3>
-        <button type="button" @click="emit('close')" aria-label="Закрыть"
+        <h3 class="flex-1 font-title text-sm font-bold text-text">{{ locale.t('reminder.title', 'Напомнить о сообщении') }}</h3>
+        <button type="button" @click="emit('close')" :aria-label="locale.t('common.close')"
                 class="grid size-7 place-items-center rounded-md text-text3 hover:bg-bg2">
           <X class="size-4" />
         </button>
@@ -86,24 +89,24 @@ async function save() {
         {{ message.body }}
       </p>
 
-      <p v-if="loading" class="py-3 text-center text-sm text-text3">Ищем дату в тексте…</p>
+      <p v-if="loading" class="py-3 text-center text-sm text-text3">{{ locale.t('reminder.searching', 'Ищем дату в тексте…') }}</p>
       <template v-else>
         <label class="block">
-          <span class="mb-1 block text-tiny uppercase text-text3">Когда напомнить</span>
+          <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('reminder.when', 'Когда напомнить') }}</span>
           <input v-model="value" type="datetime-local"
                  class="h-10 w-full rounded-lg border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
         </label>
         <p v-if="matched" class="mt-1.5 text-xs text-text3">
-          Из текста: «{{ matched }}» — проверьте и поправьте, если нужно.
+          {{ locale.t('reminder.fromText', { matched }) }}
         </p>
       </template>
 
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" @click="emit('close')"
-                class="rounded-lg border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">Отмена</button>
+                class="rounded-lg border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
         <button type="button" :disabled="saving || loading" @click="save"
                 class="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          {{ saving ? 'Ставим…' : 'Напомнить' }}
+          {{ saving ? locale.t('reminder.saving', 'Ставим…') : locale.t('reminder.action', 'Напомнить') }}
         </button>
       </div>
     </div>

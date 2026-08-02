@@ -3,11 +3,14 @@
 // провайдера «Вектора» (Оффлайн/GigaChat/Ollama) и вводит ключ GigaChat. Хранится в той
 // же строке config, что и на десктопе → синхронизируется в обе стороны (ключ, заданный
 // на ПК, приезжает на веб и наоборот).
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Bot, Eye, EyeOff, Check, CircleAlert, CircleCheck } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 const cfg = ref({
   vector_llm: 'offline',
@@ -25,25 +28,24 @@ const saved = ref(false)
 const testMsg = ref('')
 const testOk = ref(null)
 
-const PROVIDERS = [
-  { id: 'offline', name: 'Оффлайн-шаблоны', hint: 'Без внешней LLM — ответы строго по фактам. Работает всегда.' },
-  { id: 'gigachat', name: 'GigaChat (Сбер, РФ)', hint: 'Тёплая переформулировка ответов. Нужен ключ авторизации. Сервер в РФ — GigaChat работает.' },
-  { id: 'local', name: 'Ollama (локально)', hint: 'Своя модель на сервере, если поднят Ollama. Данные никуда не уходят.' },
-]
+// computed, а не const-литерал: t() читается при ОПРЕДЕЛЕНИИ массива, и застывший
+// на языке первого рендера массив не переключался бы вместе с интерфейсом.
+const PROVIDERS = computed(() => [
+  { id: 'offline', name: locale.t('adminAiSettings.provider.offline.name', 'Оффлайн-шаблоны'), hint: locale.t('adminAiSettings.provider.offline.hint', 'Без внешней LLM — ответы строго по фактам. Работает всегда.') },
+  { id: 'gigachat', name: locale.t('adminAiSettings.provider.gigachat.name', 'GigaChat (Сбер, РФ)'), hint: locale.t('adminAiSettings.provider.gigachat.hint', 'Тёплая переформулировка ответов. Нужен ключ авторизации. Сервер в РФ — GigaChat работает.') },
+  { id: 'local', name: locale.t('adminAiSettings.provider.local.name', 'Ollama (локально)'), hint: locale.t('adminAiSettings.provider.local.hint', 'Своя модель на сервере, если поднят Ollama. Данные никуда не уходят.') },
+])
 const SCOPES = ['GIGACHAT_API_PERS', 'GIGACHAT_API_B2B', 'GIGACHAT_API_CORP']
 
 // Голосовой ввод: чем распознавать речь. Три режима — см. `_STT_MODES` на сервере.
-const STT_MODES = [
-  { id: 'auto', name: 'Автоматически (рекомендуется)',
-    hint: 'Whisper — там, где он установлен; на остальных машинах распознаёт браузер. ' +
-          'Никого не заставляет ничего скачивать.' },
-  { id: 'server', name: 'OpenAI Whisper на сервере — для всех',
-    hint: 'Звук распознаёт только наш сервер, наружу не уходит. Требует машину с ' +
-          'видеокартой: на нынешнем хостинге движок не поместится.' },
-  { id: 'browser', name: 'Обычный голосовой ввод (браузер)',
-    hint: 'Распознаёт браузер (Chrome/Edge) силами Google. Нагрузки на сервер нет, ' +
-          'но звук уходит третьей стороне.' },
-]
+const STT_MODES = computed(() => [
+  { id: 'auto', name: locale.t('adminAiSettings.stt.auto.name', 'Автоматически (рекомендуется)'),
+    hint: locale.t('adminAiSettings.stt.auto.hint', 'Whisper — там, где он установлен; на остальных машинах распознаёт браузер. Никого не заставляет ничего скачивать.') },
+  { id: 'server', name: locale.t('adminAiSettings.stt.server.name', 'OpenAI Whisper на сервере — для всех'),
+    hint: locale.t('adminAiSettings.stt.server.hint', 'Звук распознаёт только наш сервер, наружу не уходит. Требует машину с видеокартой: на нынешнем хостинге движок не поместится.') },
+  { id: 'browser', name: locale.t('adminAiSettings.stt.browser.name', 'Обычный голосовой ввод (браузер)'),
+    hint: locale.t('adminAiSettings.stt.browser.hint', 'Распознаёт браузер (Chrome/Edge) силами Google. Нагрузки на сервер нет, но звук уходит третьей стороне.') },
+])
 const inputCls =
   'h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card'
 
@@ -65,14 +67,14 @@ async function test() {
     testMsg.value = data.message
   } catch (e) {
     testOk.value = false
-    testMsg.value = e.response?.data?.detail || 'Не удалось проверить.'
+    testMsg.value = e.response?.data?.detail || locale.t('adminAiSettings.testFailed', 'Не удалось проверить.')
   } finally { loading.value = false }
 }
 </script>
 
 <template>
   <div class="max-w-2xl space-y-6">
-    <Card title="ИИ-помощник «Вектор»" subtitle="Как Вектор озвучивает ответы. Цифры он всегда берёт из реальных данных — LLM лишь переформулирует.">
+    <Card :title="locale.t('adminAiSettings.vectorTitle', 'ИИ-помощник «Вектор»')" :subtitle="locale.t('adminAiSettings.vectorSubtitle', 'Как Вектор озвучивает ответы. Цифры он всегда берёт из реальных данных — LLM лишь переформулирует.')">
       <div class="space-y-2.5">
         <label v-for="p in PROVIDERS" :key="p.id"
                class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
@@ -88,17 +90,17 @@ async function test() {
 
     <!-- Озвучка (TTS): глобальный рубильник. Выключение прячет озвучку у всех
          пользователей. Персональный выбор (вкл/голос) каждый делает в своём профиле. -->
-    <Card title="Озвучка ответов (голос Вектора)"
-          subtitle="Синтез речи на сервере. Выключите, если сервер перегружен — пользователи не увидят озвучку.">
+    <Card :title="locale.t('adminAiSettings.ttsTitle', 'Озвучка ответов (голос Вектора)')"
+          :subtitle="locale.t('adminAiSettings.ttsSubtitle', 'Синтез речи на сервере. Выключите, если сервер перегружен — пользователи не увидят озвучку.')">
       <label class="flex cursor-pointer items-center justify-between gap-3">
-        <span class="text-sm text-text">Разрешить озвучку на сервере</span>
+        <span class="text-sm text-text">{{ locale.t('adminAiSettings.ttsAllow', 'Разрешить озвучку на сервере') }}</span>
         <input type="checkbox" v-model="cfg.tts_enabled" class="size-5 accent-[var(--gb-accent)]" />
       </label>
     </Card>
 
     <!-- Голосовой ввод (STT): чем распознавать речь у всех пользователей. -->
-    <Card title="Голосовой ввод (распознавание речи)"
-          subtitle="Чем превращать речь в текст. Настройка общая: действует и на сайте, и в программе, и в телефоне.">
+    <Card :title="locale.t('adminAiSettings.sttTitle', 'Голосовой ввод (распознавание речи)')"
+          :subtitle="locale.t('adminAiSettings.sttSubtitle', 'Чем превращать речь в текст. Настройка общая: действует и на сайте, и в программе, и в телефоне.')">
       <div class="space-y-2.5">
         <label v-for="m in STT_MODES" :key="m.id"
                class="flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors"
@@ -116,31 +118,28 @@ async function test() {
       <div class="mt-3 rounded-md border px-3 py-2.5 text-xs"
            :class="cfg.stt_installed ? 'border-accent/40 text-text2' : 'border-orange/40 text-text2'">
         <template v-if="cfg.stt_installed">
-          ✅ Whisper установлен на этом сервере — режим «для всех» будет работать.
+          {{ locale.t('adminAiSettings.sttInstalledYes', '✅ Whisper установлен на этом сервере — режим «для всех» будет работать.') }}
         </template>
         <template v-else>
-          ⚠️ Whisper на этом сервере <b>не установлен</b>. Режим «для всех» станет доступен,
-          когда журнал переедет на машину колледжа с видеокартой — до тех пор он честно
-          покажет пользователям, что распознавание недоступно, а не подменит его тихо
-          браузерным.
+          {{ locale.t('adminAiSettings.sttInstalledNo', '⚠️ Whisper на этом сервере не установлен. Режим «для всех» станет доступен, когда журнал переедет на машину колледжа с видеокартой — до тех пор он честно покажет пользователям, что распознавание недоступно, а не подменит его тихо браузерным.') }}
         </template>
       </div>
     </Card>
 
     <!-- GigaChat: ключ + скоуп -->
-    <Card v-if="cfg.vector_llm === 'gigachat'" title="GigaChat" subtitle="Ключ авторизации и scope из личного кабинета GigaChat (Сбер).">
+    <Card v-if="cfg.vector_llm === 'gigachat'" :title="locale.t('adminAiSettings.gigachatTitle', 'GigaChat')" :subtitle="locale.t('adminAiSettings.gigachatSubtitle', 'Ключ авторизации и scope из личного кабинета GigaChat (Сбер).')">
       <div class="space-y-4">
         <div>
-          <label class="mb-1.5 block text-xs font-medium text-text3">КЛЮЧ АВТОРИЗАЦИИ (Credentials)</label>
+          <label class="mb-1.5 block text-xs font-medium text-text3">{{ locale.t('adminAiSettings.credentialsLabel', 'КЛЮЧ АВТОРИЗАЦИИ (Credentials)') }}</label>
           <div class="relative">
             <input v-model="cfg.gigachat_credentials" :type="showKey ? 'text' : 'password'"
-                   :class="inputCls + ' pr-11'" placeholder="вставьте ключ авторизации GigaChat" autocomplete="off" />
+                   :class="inputCls + ' pr-11'" :placeholder="locale.t('adminAiSettings.credentialsPlaceholder', 'вставьте ключ авторизации GigaChat')" autocomplete="off" />
             <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
                     @click="showKey = !showKey"><EyeOff v-if="showKey" class="size-4" /><Eye v-else class="size-4" /></button>
           </div>
         </div>
         <div>
-          <label class="mb-1.5 block text-xs font-medium text-text3">SCOPE</label>
+          <label class="mb-1.5 block text-xs font-medium text-text3">{{ locale.t('adminAiSettings.scopeLabel', 'SCOPE') }}</label>
           <select v-model="cfg.gigachat_scope" :class="inputCls">
             <option v-for="s in SCOPES" :key="s" :value="s">{{ s }}</option>
           </select>
@@ -149,25 +148,25 @@ async function test() {
     </Card>
 
     <!-- Ollama: модель -->
-    <Card v-if="cfg.vector_llm === 'local'" title="Ollama" subtitle="Имя локальной модели (должен быть запущен Ollama на сервере).">
-      <label class="mb-1.5 block text-xs font-medium text-text3">МОДЕЛЬ</label>
-      <input v-model="cfg.local_model" :class="inputCls" placeholder="напр. qwen2.5:3b" />
+    <Card v-if="cfg.vector_llm === 'local'" :title="locale.t('adminAiSettings.ollamaTitle', 'Ollama')" :subtitle="locale.t('adminAiSettings.ollamaSubtitle', 'Имя локальной модели (должен быть запущен Ollama на сервере).')">
+      <label class="mb-1.5 block text-xs font-medium text-text3">{{ locale.t('adminAiSettings.modelLabel', 'МОДЕЛЬ') }}</label>
+      <input v-model="cfg.local_model" :class="inputCls" :placeholder="locale.t('adminAiSettings.modelPlaceholder', 'напр. qwen2.5:3b')" />
     </Card>
 
     <div class="flex flex-wrap items-center gap-3">
       <AppButton variant="green" :disabled="loading" @click="save">
-        <Check class="mr-2 inline size-4" />{{ loading ? 'Сохраняю…' : 'Сохранить' }}
+        <Check class="mr-2 inline size-4" />{{ loading ? locale.t('adminAiSettings.saving', 'Сохраняю…') : locale.t('common.save') }}
       </AppButton>
       <AppButton v-if="cfg.vector_llm !== 'offline'" variant="ghost" :disabled="loading" @click="test">
-        Проверить связь
+        {{ locale.t('adminAiSettings.testConnection', 'Проверить связь') }}
       </AppButton>
-      <span v-if="saved" class="text-sm font-medium text-green">Сохранено — синхронизируется на все ПК.</span>
+      <span v-if="saved" class="text-sm font-medium text-green">{{ locale.t('adminAiSettings.savedSynced', 'Сохранено — синхронизируется на все ПК.') }}</span>
     </div>
 
     <p v-if="testMsg" class="flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
        :class="testOk ? 'border-green/40 bg-green/10 text-text' : 'border-red/40 bg-red/10 text-red'">
       <component :is="testOk ? CircleCheck : CircleAlert" class="mt-0.5 size-4 shrink-0" :class="testOk ? 'text-green' : 'text-red'" />
-      <span>{{ testOk ? 'Связь есть. Пример ответа: ' : '' }}{{ testMsg }}</span>
+      <span>{{ testOk ? locale.t('adminAiSettings.connectionOk', 'Связь есть. Пример ответа: ') : '' }}{{ testMsg }}</span>
     </p>
   </div>
 </template>

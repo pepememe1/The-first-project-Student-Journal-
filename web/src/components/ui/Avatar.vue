@@ -2,6 +2,8 @@
 // Avatar — круглая аватарка: показывает картинку (prefs.avatar) либо инициалы по ФИО.
 // Единый вид во всех местах (список чатов, карточка, каталог людей, модерация).
 import { computed } from 'vue'
+import { useLocaleStore } from '@/stores/locale'
+const locale = useLocaleStore()
 
 const props = defineProps({
   src: { type: String, default: '' },
@@ -28,7 +30,7 @@ const initials = computed(() => {
       <span v-else class="grid size-full place-items-center font-bold text-white"
             :style="{ fontSize: Math.round(size * 0.4) + 'px' }">{{ initials }}</span>
     </div>
-    <span v-if="online" title="в сети"
+    <span v-if="online" :title="locale.t('profilePanel.online', 'в сети')"
           class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card" style="background:#2e9e5b"></span>
   </div>
 </template>

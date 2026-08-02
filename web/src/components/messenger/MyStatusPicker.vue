@@ -8,10 +8,12 @@ import { storeToRefs } from 'pinia'
 import { ChevronDown } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS } from '@/config/status'
 
 const m = useMessengerStore()
 const auth = useAuthStore()
+const locale = useLocaleStore()
 const { myStatus } = storeToRefs(m)
 const isTeacher = computed(() => auth.role === 'teacher')
 
@@ -51,12 +53,12 @@ async function saveText() {
         {{ k.self }}
       </button>
       <div v-if="isTeacher" class="mt-1 border-t border-border pt-1.5">
-        <input v-model="textDraft" placeholder="Текст статуса (видят другие)" maxlength="80"
+        <input v-model="textDraft" :placeholder="locale.t('header.statusTextPlaceholder', 'Текст статуса (видят другие)')" maxlength="80"
                @keydown.enter="saveText"
                class="w-full rounded-md border border-border2 bg-card2 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
         <button type="button" @click="saveText"
                 class="mt-1 w-full rounded-md bg-accent px-2 py-1 text-xs font-semibold text-white hover:bg-accent2">
-          Сохранить текст
+          {{ locale.t('header.saveStatusText', 'Сохранить текст') }}
         </button>
       </div>
     </div>

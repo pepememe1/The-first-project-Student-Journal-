@@ -17,7 +17,9 @@ import { ref } from 'vue'
 import { Check, X, ChevronRight, TriangleAlert } from '@lucide/vue'
 import { deskServerApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const props = defineProps({
   servers: { type: Array, default: () => [] },
 })
@@ -35,12 +37,12 @@ async function buildPlan() {
   error.value = ''
   plan.value = null
   state.value = {}
-  if (!source.value || !target.value) { error.value = 'Выберите оба сервера'; return }
+  if (!source.value || !target.value) { error.value = locale.t('migrationWizard.pickBoth', 'Выберите оба сервера'); return }
   busy.value = true
   try {
     plan.value = (await deskServerApi.migrationPlan(source.value, target.value)).data
   } catch (e) {
-    error.value = e?.response?.data?.detail || 'Не удалось составить план'
+    error.value = e?.response?.data?.detail || locale.t('migrationWizard.planFailed', 'Не удалось составить план')
   } finally {
     busy.value = false
   }
@@ -56,7 +58,7 @@ async function runStep(stepId) {
   } catch (e) {
     state.value = {
       ...state.value,
-      [stepId]: { ok: false, done: true, log: '', hint: e?.response?.data?.detail || 'Шаг не выполнен' },
+      [stepId]: { ok: false, done: true, log: '', hint: e?.response?.data?.detail || locale.t('migrationWizard.stepFailed', 'Шаг не выполнен') },
     }
   } finally {
     busy.value = false
@@ -78,25 +80,25 @@ const named = (id) => props.servers.find((s) => s.id === id)?.name || id
   <div class="flex flex-col gap-4">
     <div class="grid gap-3 sm:grid-cols-2">
       <label class="block">
-        <span class="mb-1 block text-sm font-medium text-text2">Откуда (работает сейчас)</span>
+        <span class="mb-1 block text-sm font-medium text-text2">{{ locale.t('migrationWizard.fromLabel', 'Откуда (работает сейчас)') }}</span>
         <select v-model="source"
                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-          <option value="">— выберите —</option>
+          <option value="">{{ locale.t('migrationWizard.choosePlaceholder', '— выберите —') }}</option>
           <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} · {{ s.host }}</option>
         </select>
       </label>
       <label class="block">
-        <span class="mb-1 block text-sm font-medium text-text2">Куда (новый сервер)</span>
+        <span class="mb-1 block text-sm font-medium text-text2">{{ locale.t('migrationWizard.toLabel', 'Куда (новый сервер)') }}</span>
         <select v-model="target"
                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-          <option value="">— выберите —</option>
+          <option value="">{{ locale.t('migrationWizard.choosePlaceholder', '— выберите —') }}</option>
           <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} · {{ s.host }}</option>
         </select>
       </label>
     </div>
 
     <div class="flex flex-wrap items-center gap-3">
-      <AppButton :disabled="busy" @click="buildPlan">Составить план</AppButton>
+      <AppButton :disabled="busy" @click="buildPlan">{{ locale.t('migrationWizard.buildPlan', 'Составить план') }}</AppButton>
       <p v-if="error" class="text-sm text-red">{{ error }}</p>
     </div>
 
@@ -125,7 +127,7 @@ const named = (id) => props.servers.find((s) => s.id === id)?.name || id
             <AppButton v-if="!state[s.id]?.ok" variant="ghost"
                        :disabled="busy || !unlocked(i)"
                        @click="runStep(s.id)">
-              {{ current === s.id ? 'Выполняем…' : (state[s.id]?.done ? 'Повторить' : 'Выполнить') }}
+              {{ current === s.id ? locale.t('migrationWizard.running', 'Выполняем…') : (state[s.id]?.done ? locale.t('migrationWizard.retry', 'Повторить') : locale.t('migrationWizard.run', 'Выполнить')) }}
               <ChevronRight class="ml-1 inline size-4" />
             </AppButton>
           </div>
@@ -139,12 +141,9 @@ const named = (id) => props.servers.find((s) => s.id === id)?.name || id
 
       <div v-if="plan.steps.every((s) => state[s.id]?.ok)"
            class="rounded-lg border border-accent/50 bg-card2 p-3 text-sm text-text2">
-        <p class="font-semibold text-text">Перенос завершён.</p>
+        <p class="font-semibold text-text">{{ locale.t('migrationWizard.done', 'Перенос завершён.') }}</p>
         <p class="mt-1">
-          Новый сервер ({{ named(target) }}) отвечает. Осталось РУЧНОЕ действие: перевести
-          домен на его адрес в DNS и убедиться, что сертификат выпустился.
-          Старый сервер ({{ named(source) }}) не тронут — пока новый не проверен людьми,
-          не выключайте его.
+          {{ locale.t('migrationWizard.doneDetails', { target: named(target), source: named(source) }) }}
         </p>
       </div>
     </template>

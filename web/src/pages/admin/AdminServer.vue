@@ -28,6 +28,9 @@ import RemoteConsole from '@/components/server/RemoteConsole.vue'
 import MigrationWizard from '@/components/server/MigrationWizard.vue'
 import ServerBackups from '@/components/server/ServerBackups.vue'
 import ServiceControls from '@/components/server/ServiceControls.vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const locale = useLocaleStore()
 
 // ── Просмотр (везде; в программе идёт на боевой сервер через пересылку) ──────────
 const info = ref(null)
@@ -50,7 +53,7 @@ async function reload() {
   tree.value = t.status === 'fulfilled' ? t.value.data : null
   if (!info.value && !metrics.value) {
     error.value = m.reason?.response?.data?.detail
-      || 'Не удалось получить состояние сервера. Нет связи с ним?'
+      || locale.t('adminServer.stateLoadFailed', 'Не удалось получить состояние сервера. Нет связи с ним?')
   }
   loading.value = false
 }
@@ -94,7 +97,7 @@ async function loadRemote() {
       remoteTree.value = (await deskServerApi.tree(picked.value, '/root/gb-deploy')).data
     }
   } catch (e) {
-    remote.value = { ok: false, error: e?.response?.data?.detail || 'Сервер не ответил' }
+    remote.value = { ok: false, error: e?.response?.data?.detail || locale.t('adminServer.serverNoAnswer', 'Сервер не ответил') }
   } finally {
     remoteBusy.value = false
   }
@@ -104,7 +107,7 @@ function newServer() {
   formMsg.value = ''
   // Адрес подставляем тот, на который программа и так синхронизируется: это ровно та
   // машина, состояние которой человек и пришёл смотреть.
-  form.value = { id: '', name: 'Боевой сервер', host: suggestedHost.value, user: 'root',
+  form.value = { id: '', name: locale.t('adminServer.defaultServerName', 'Боевой сервер'), host: suggestedHost.value, user: 'root',
                  port: '22', key: defaultKey.value, password: '', has_password: false,
                  clear_password: false, role: 'prod' }
 }
@@ -125,7 +128,7 @@ async function saveServer() {
     form.value = null
     await loadRemote()
   } catch (e) {
-    formMsg.value = e?.response?.data?.detail || 'Не удалось сохранить сервер'
+    formMsg.value = e?.response?.data?.detail || locale.t('adminServer.saveServerFailed', 'Не удалось сохранить сервер')
   }
 }
 
@@ -142,9 +145,9 @@ async function installKey() {
   keyBusy.value = true; keyMsg.value = ''
   try {
     const { data } = await deskServerApi.installKey(picked.value)
-    keyMsg.value = data.hint || (data.ok ? 'Готово.' : 'Не удалось.')
+    keyMsg.value = data.hint || (data.ok ? locale.t('adminServer.doneShort', 'Готово.') : locale.t('adminServer.failedShort', 'Не удалось.'))
   } catch (e) {
-    keyMsg.value = e?.response?.data?.detail || 'Не удалось положить ключ'
+    keyMsg.value = e?.response?.data?.detail || locale.t('adminServer.installKeyFailed', 'Не удалось положить ключ')
   } finally { keyBusy.value = false }
 }
 
@@ -157,7 +160,11 @@ onMounted(async () => {
 // ── Форматирование ───────────────────────────────────────────────────────────────
 function human(n) {
   if (n === null || n === undefined) return '—'
-  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']
+  const units = [
+    locale.t('adminServer.unitB', 'Б'), locale.t('adminServer.unitKB', 'КБ'),
+    locale.t('adminServer.unitMB', 'МБ'), locale.t('adminServer.unitGB', 'ГБ'),
+    locale.t('adminServer.unitTB', 'ТБ'),
+  ]
   let v = n, i = 0
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
   return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
@@ -167,10 +174,17 @@ function humanUptime(sec) {
   const d = Math.floor(s / 86400); s -= d * 86400
   const h = Math.floor(s / 3600); s -= h * 3600
   const m = Math.floor(s / 60)
-  return [d && `${d} д`, h && `${h} ч`, `${m} мин`].filter(Boolean).join(' ') || '—'
+  const parts = []
+  if (d) parts.push(locale.t('adminServer.unitDays', { n: d }))
+  if (h) parts.push(locale.t('adminServer.unitHours', { n: h }))
+  parts.push(locale.t('adminServer.unitMinutes', { n: m }))
+  return parts.filter(Boolean).join(' ') || '—'
+}
+function seasonLabel(semester) {
+  return semester === 1 ? locale.t('adminServer.seasonFall', 'осенний') : locale.t('adminServer.seasonSpring', 'весенний')
 }
 function termLabel(t) {
-  return t ? `${t.year} · ${t.semester === 1 ? 'осенний' : 'весенний'} семестр` : '—'
+  return t ? locale.t('adminServer.termLabel', { year: t.year, semester: seasonLabel(t.semester) }) : '—'
 }
 const localUptime = computed(() => humanUptime(metrics.value?.uptime || info.value?.uptime_sec))
 const heaviest = computed(() => {
@@ -186,8 +200,8 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
     <!-- ─────────── УПРАВЛЕНИЕ: ТОЛЬКО В ПРОГРАММЕ, И СРАЗУ ─────────── -->
     <!-- Стоит первым намеренно: в программе этот раздел открывают, чтобы ЧТО-ТО
          сделать с сервером, а не почитать про него. -->
-    <Card v-if="desk" title="Управление боевым сервером"
-          subtitle="Подключение по SSH: службы, резервные копии, команды, перенос" pad>
+    <Card v-if="desk" :title="locale.t('adminServer.manageTitle', 'Управление боевым сервером')"
+          :subtitle="locale.t('adminServer.manageSubtitle', 'Подключение по SSH: службы, резервные копии, команды, перенос')" pad>
       <div class="mb-4 flex flex-wrap items-center gap-2">
         <button v-for="s in servers" :key="s.id" type="button"
                 class="flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
@@ -197,15 +211,15 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
           <span>
             <span class="block text-sm font-semibold text-text">{{ s.name }}</span>
             <span class="block text-tiny text-text3">
-              {{ s.user }}@{{ s.host }}<template v-if="s.has_password"> · по паролю</template>
+              {{ s.user }}@{{ s.host }}<template v-if="s.has_password">{{ locale.t('adminServer.byPasswordSuffix', ' · по паролю') }}</template>
             </span>
           </span>
         </button>
         <AppButton variant="ghost" @click="newServer">
-          <Plus class="mr-1 inline size-4" />Добавить сервер
+          <Plus class="mr-1 inline size-4" />{{ locale.t('adminServer.addServerBtn', 'Добавить сервер') }}
         </AppButton>
         <AppButton v-if="pickedServer" variant="ghost" @click="editServer(pickedServer)">
-          Изменить
+          {{ locale.t('adminServer.editBtn', 'Изменить') }}
         </AppButton>
       </div>
 
@@ -213,59 +227,56 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       <div v-if="form" class="mb-4 rounded-lg border border-border bg-card2 p-3">
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label class="block">
-            <span class="mb-1 block text-xs text-text3">Название</span>
-            <input v-model="form.name" placeholder="Боевой сервер"
+            <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.nameLabel', 'Название') }}</span>
+            <input v-model="form.name" :placeholder="locale.t('adminServer.defaultServerName', 'Боевой сервер')"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 text-sm text-text outline-none focus:border-accent" />
           </label>
           <label class="block">
-            <span class="mb-1 block text-xs text-text3">Адрес или домен</span>
+            <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.hostLabel', 'Адрес или домен') }}</span>
             <input v-model="form.host" placeholder="194.226.120.74"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 text-sm text-text outline-none focus:border-accent" />
           </label>
           <label class="block">
-            <span class="mb-1 block text-xs text-text3">Пользователь</span>
+            <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.userLabel', 'Пользователь') }}</span>
             <input v-model="form.user"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 text-sm text-text outline-none focus:border-accent" />
           </label>
           <label class="block">
-            <span class="mb-1 block text-xs text-text3">Порт</span>
+            <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.portLabel', 'Порт') }}</span>
             <input v-model="form.port"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 text-sm text-text outline-none focus:border-accent" />
           </label>
           <label class="block sm:col-span-2">
-            <span class="mb-1 block text-xs text-text3">Файл ключа SSH (если вход по ключу)</span>
+            <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.keyFileLabel', 'Файл ключа SSH (если вход по ключу)') }}</span>
             <input v-model="form.key"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 font-mono text-xs text-text outline-none focus:border-accent" />
           </label>
           <label class="block sm:col-span-2">
             <span class="mb-1 block text-xs text-text3">
-              Пароль{{ form.has_password ? ' (сохранён — оставьте пустым, чтобы не менять)' : '' }}
+              {{ locale.t('adminServer.passwordLabel', 'Пароль') }}{{ form.has_password ? locale.t('adminServer.passwordSavedSuffix', ' (сохранён — оставьте пустым, чтобы не менять)') : '' }}
             </span>
             <input v-model="form.password" type="password" autocomplete="new-password"
-                   :placeholder="form.has_password ? '••••••••' : 'если вход по паролю'"
+                   :placeholder="form.has_password ? '••••••••' : locale.t('adminServer.passwordPlaceholderNew', 'если вход по паролю')"
                    class="h-9 w-full rounded-sm border border-border2 bg-card px-2.5 text-sm text-text outline-none focus:border-accent" />
           </label>
         </div>
 
         <label v-if="form.has_password" class="mt-2 flex items-center gap-2 text-xs text-text2">
           <input v-model="form.clear_password" type="checkbox" class="accent-[var(--gb-accent)]" />
-          Убрать сохранённый пароль (вход пойдёт по ключу)
+          {{ locale.t('adminServer.clearPasswordLabel', 'Убрать сохранённый пароль (вход пойдёт по ключу)') }}
         </label>
 
         <div class="mt-3 flex items-start gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 text-tiny text-text3">
           <TriangleAlert class="mt-0.5 size-4 shrink-0 text-yellow" />
-          <p>Ключ надёжнее пароля. Пароль нужен, когда на новой машине ключа ещё нет:
-             зайдите по паролю, нажмите «Положить ключ на сервер» — и пароль можно убрать.
-             Сохранённый пароль шифруется средствами Windows и на другом компьютере
-             бесполезен; страница его никогда не показывает.</p>
+          <p>{{ locale.t('adminServer.keyPasswordHint', 'Ключ надёжнее пароля. Пароль нужен, когда на новой машине ключа ещё нет: зайдите по паролю, нажмите «Положить ключ на сервер» — и пароль можно убрать. Сохранённый пароль шифруется средствами Windows и на другом компьютере бесполезен; страница его никогда не показывает.') }}</p>
         </div>
 
         <p v-if="formMsg" class="mt-2 text-sm text-red">{{ formMsg }}</p>
         <div class="mt-3 flex flex-wrap gap-2">
-          <AppButton @click="saveServer">Сохранить</AppButton>
-          <AppButton variant="ghost" @click="form = null">Отмена</AppButton>
+          <AppButton @click="saveServer">{{ locale.t('common.save') }}</AppButton>
+          <AppButton variant="ghost" @click="form = null">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton v-if="form.id" variant="red" @click="removeServer(form.id)">
-            <Trash2 class="mr-1 inline size-4" />Убрать из списка
+            <Trash2 class="mr-1 inline size-4" />{{ locale.t('adminServer.removeFromListBtn', 'Убрать из списка') }}
           </AppButton>
         </div>
       </div>
@@ -273,10 +284,10 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       <template v-if="pickedServer">
         <div class="mb-4 flex gap-1 overflow-x-auto border-b border-border">
           <button v-for="t in [
-                    { id: 'state', label: 'Состояние и службы', icon: HardDrive },
-                    { id: 'backups', label: 'Резервные копии', icon: Archive },
-                    { id: 'console', label: 'Команды', icon: Terminal },
-                    { id: 'migrate', label: 'Перенос', icon: ArrowRightLeft }]"
+                    { id: 'state', label: locale.t('adminServer.tabState', 'Состояние и службы'), icon: HardDrive },
+                    { id: 'backups', label: locale.t('adminServer.tabBackups', 'Резервные копии'), icon: Archive },
+                    { id: 'console', label: locale.t('adminServer.tabConsole', 'Команды'), icon: Terminal },
+                    { id: 'migrate', label: locale.t('adminServer.tabMigrate', 'Перенос'), icon: ArrowRightLeft }]"
                   :key="t.id" type="button"
                   class="-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors"
                   :class="tab === t.id ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'"
@@ -289,23 +300,23 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
         <div v-if="tab === 'state'" class="flex flex-col gap-5">
           <div class="flex flex-wrap items-center gap-3">
             <AppButton variant="ghost" :disabled="remoteBusy" @click="loadRemote">
-              <RefreshCw class="mr-1.5 inline size-4" />{{ remoteBusy ? 'Опрашиваем…' : 'Опросить сервер' }}
+              <RefreshCw class="mr-1.5 inline size-4" />{{ remoteBusy ? locale.t('adminServer.pollingBtn', 'Опрашиваем…') : locale.t('adminServer.pollBtn', 'Опросить сервер') }}
             </AppButton>
             <AppButton variant="ghost" :disabled="keyBusy" @click="installKey">
-              <KeyRound class="mr-1.5 inline size-4" />{{ keyBusy ? 'Ставим ключ…' : 'Положить ключ на сервер' }}
+              <KeyRound class="mr-1.5 inline size-4" />{{ keyBusy ? locale.t('adminServer.installingKeyBtn', 'Ставим ключ…') : locale.t('adminServer.installKeyBtn', 'Положить ключ на сервер') }}
             </AppButton>
             <p v-if="keyMsg" class="text-sm text-text3">{{ keyMsg }}</p>
           </div>
 
-          <p v-if="remoteBusy && !remote" class="text-sm text-text3">Подключаемся по SSH…</p>
+          <p v-if="remoteBusy && !remote" class="text-sm text-text3">{{ locale.t('adminServer.connectingSsh', 'Подключаемся по SSH…') }}</p>
           <div v-else-if="remote && !remote.ok"
                class="rounded-lg border border-red/50 bg-card2 p-3 text-sm text-text2">
-            <p class="font-semibold text-red">Не удалось подключиться</p>
+            <p class="font-semibold text-red">{{ locale.t('adminServer.connectFailed', 'Не удалось подключиться') }}</p>
             <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-tiny text-text3">{{ remote.error }}</pre>
             <p class="mt-2 text-xs">
-              Проверьте адрес и пользователя. Если вход по ключу — ваш открытый ключ должен
-              лежать в <code>~/.ssh/authorized_keys</code> на сервере; если по паролю —
-              укажите его в настройках сервера выше.
+              {{ locale.t('adminServer.connectFailedHintPre', 'Проверьте адрес и пользователя. Если вход по ключу — ваш открытый ключ должен лежать в') }}
+              <code>~/.ssh/authorized_keys</code>
+              {{ locale.t('adminServer.connectFailedHintPost', 'на сервере; если по паролю — укажите его в настройках сервера выше.') }}
             </p>
           </div>
 
@@ -313,27 +324,27 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
             <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
               <span class="font-medium text-text">{{ remote.host }}</span>
               <span class="text-text3">{{ remote.system }}</span>
-              <span class="text-text3">работает {{ humanUptime(remote.uptime) }}</span>
+              <span class="text-text3">{{ locale.t('adminServer.uptimeWorkingPrefix', 'работает') }} {{ humanUptime(remote.uptime) }}</span>
               <span class="text-text3">
-                <Cpu class="mr-1 inline size-4" />{{ remote.cpu_count }} ядро(-ер)
-                <template v-if="remote.load?.length"> · загрузка {{ remote.load.join(' / ') }}</template>
+                <Cpu class="mr-1 inline size-4" />{{ locale.t('adminServer.coresLabel', { n: remote.cpu_count }) }}
+                <template v-if="remote.load?.length">{{ locale.t('adminServer.loadLabel', { load: remote.load.join(' / ') }) }}</template>
               </span>
             </div>
 
             <div class="grid gap-5 md:grid-cols-2">
-              <UsageBar v-if="remote.disk?.total" label="Диск"
+              <UsageBar v-if="remote.disk?.total" :label="locale.t('adminServer.diskLabel', 'Диск')"
                         :used="remote.disk.used" :total="remote.disk.total" />
-              <UsageBar v-if="remote.memory?.total" label="Оперативная память"
+              <UsageBar v-if="remote.memory?.total" :label="locale.t('adminServer.ramLabel', 'Оперативная память')"
                         :used="remote.memory.used" :total="remote.memory.total" />
-              <UsageBar v-if="remote.memory?.swap_total" label="Подкачка (swap)"
+              <UsageBar v-if="remote.memory?.swap_total" :label="locale.t('adminServer.swapLabel', 'Подкачка (swap)')"
                         :used="remote.memory.swap_used" :total="remote.memory.swap_total" />
               <div v-if="remote.database?.size">
-                <p class="mb-1.5 text-sm font-medium text-text2">База данных</p>
+                <p class="mb-1.5 text-sm font-medium text-text2">{{ locale.t('adminServer.dbLabel', 'База данных') }}</p>
                 <p class="text-sm text-text3">
                   <Database class="mr-1 inline size-4" />{{ human(remote.database.size) }}
                 </p>
                 <p class="mt-1 text-tiny text-text3">
-                  Свежая копия: {{ remote.latest_backup || 'не найдена' }}
+                  {{ locale.t('adminServer.latestBackupLabel', { name: remote.latest_backup || locale.t('adminServer.notFound', 'не найдена') }) }}
                 </p>
               </div>
             </div>
@@ -342,7 +353,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
                              @changed="loadRemote" />
 
             <div v-if="remoteTree?.items?.length">
-              <p class="mb-2 text-sm font-medium text-text2">Каталог развёртывания</p>
+              <p class="mb-2 text-sm font-medium text-text2">{{ locale.t('adminServer.deployDirLabel', 'Каталог развёртывания') }}</p>
               <ul class="flex flex-col gap-1.5">
                 <li v-for="it in remoteTree.items.slice(0, 10)" :key="it.name"
                     class="flex items-center justify-between gap-3 text-sm">
@@ -371,130 +382,129 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       <!-- Показывается редко: список заводится сам (ensure_seeded в ui/server_admin.py).
            Остаётся для случая, когда адрес сервера в программе не задан вовсе. -->
       <div v-else class="rounded-lg border border-border bg-card2 p-4 text-sm text-text2">
-        <p class="font-semibold text-text">Доступ по SSH ещё не настроен.</p>
+        <p class="font-semibold text-text">{{ locale.t('adminServer.sshNotConfigured', 'Доступ по SSH ещё не настроен.') }}</p>
         <p class="mt-1">
-          Состояние сервера ниже видно и так — оно приходит по обычному защищённому
-          каналу. А чтобы ещё и <b>управлять</b> машиной (резервные копии, перезапуск
-          служб, команды), нужен доступ по SSH: нажмите «Добавить сервер»
-          <template v-if="suggestedHost">— адрес <code>{{ suggestedHost }}</code> уже подставлен</template>.
+          {{ locale.t('adminServer.sshHintPre', 'Состояние сервера ниже видно и так — оно приходит по обычному защищённому каналу. А чтобы ещё и') }}
+          <b>{{ locale.t('adminServer.sshHintManageWord', 'управлять') }}</b>
+          {{ locale.t('adminServer.sshHintPost', 'машиной (резервные копии, перезапуск служб, команды), нужен доступ по SSH: нажмите «Добавить сервер»') }}
+          <template v-if="suggestedHost">— {{ locale.t('adminServer.sshHintAddressPre', 'адрес') }} <code>{{ suggestedHost }}</code> {{ locale.t('adminServer.sshHintAddressPost', 'уже подставлен') }}</template>.
         </p>
       </div>
     </Card>
 
     <!-- ─────────── ПРОСМОТР (одинаково на сайте и в программе) ─────────── -->
-    <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
+    <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
     <p v-else-if="error" class="text-sm text-red">{{ error }}</p>
 
     <template v-else>
       <Card v-if="info" pad>
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div>
-            <p class="text-tiny uppercase text-text3">Адрес сайта</p>
+            <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.siteAddressLabel', 'Адрес сайта') }}</p>
             <a :href="info.address" target="_blank" rel="noopener"
                class="font-title text-lg font-bold text-accent hover:underline">{{ info.address || '—' }}</a>
           </div>
           <div>
-            <p class="text-tiny uppercase text-text3">Статус</p>
+            <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.statusLabel', 'Статус') }}</p>
             <Badge variant="green">● {{ info.status }}</Badge>
           </div>
           <div>
-            <p class="text-tiny uppercase text-text3">Версия</p>
+            <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.versionLabel', 'Версия') }}</p>
             <p class="font-medium text-text">{{ info.version }}</p>
           </div>
           <div>
-            <p class="text-tiny uppercase text-text3">Работает без перезапуска</p>
+            <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.uptimeLabel', 'Работает без перезапуска') }}</p>
             <p class="font-medium text-text">{{ localUptime }}</p>
           </div>
           <div>
-            <p class="text-tiny uppercase text-text3">Учебный период</p>
+            <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.termHeading', 'Учебный период') }}</p>
             <p class="font-medium text-text">{{ termLabel(info.term) }}</p>
           </div>
           <div class="ml-auto">
             <AppButton variant="ghost" @click="reload">
-              <RefreshCw class="mr-1.5 inline size-4" />Обновить
+              <RefreshCw class="mr-1.5 inline size-4" />{{ locale.t('common.refresh') }}
             </AppButton>
           </div>
         </div>
       </Card>
 
-      <Card v-if="metrics" title="Машина, на которой работает сервер"
+      <Card v-if="metrics" :title="locale.t('adminServer.machineCardTitle', 'Машина, на которой работает сервер')"
             :subtitle="`${metrics.host} · ${metrics.system} · Python ${metrics.python}`" pad>
         <div class="grid gap-5 md:grid-cols-2">
-          <UsageBar v-if="metrics.disk?.total" label="Диск"
+          <UsageBar v-if="metrics.disk?.total" :label="locale.t('adminServer.diskLabel', 'Диск')"
                     :used="metrics.disk.used" :total="metrics.disk.total" />
-          <UsageBar v-if="metrics.memory?.total" label="Оперативная память"
+          <UsageBar v-if="metrics.memory?.total" :label="locale.t('adminServer.ramLabel', 'Оперативная память')"
                     :used="metrics.memory.used" :total="metrics.memory.total" />
-          <UsageBar v-if="metrics.memory?.swap_total" label="Подкачка (swap)"
+          <UsageBar v-if="metrics.memory?.swap_total" :label="locale.t('adminServer.swapLabel', 'Подкачка (swap)')"
                     :used="metrics.memory.swap_used" :total="metrics.memory.swap_total" />
           <div>
-            <p class="mb-1.5 text-sm font-medium text-text2">Процессор</p>
+            <p class="mb-1.5 text-sm font-medium text-text2">{{ locale.t('adminServer.processorLabel', 'Процессор') }}</p>
             <p class="text-sm text-text3">
-              <Cpu class="mr-1 inline size-4" />{{ metrics.cpu_count }} ядро(-ер)
-              <template v-if="metrics.load?.length"> · загрузка {{ metrics.load.join(' / ') }}</template>
+              <Cpu class="mr-1 inline size-4" />{{ locale.t('adminServer.coresLabel', { n: metrics.cpu_count }) }}
+              <template v-if="metrics.load?.length">{{ locale.t('adminServer.loadLabel', { load: metrics.load.join(' / ') }) }}</template>
             </p>
             <p v-if="metrics.cpu_count === 1" class="mt-1 text-tiny text-text3">
-              Одно ядро: тяжёлые задачи (распознавание речи, фоновые планировщики)
-              этой машине не по силам.
+              {{ locale.t('adminServer.singleCoreHint', 'Одно ядро: тяжёлые задачи (распознавание речи, фоновые планировщики) этой машине не по силам.') }}
             </p>
           </div>
         </div>
       </Card>
 
       <div class="grid gap-4 md:grid-cols-2">
-        <Card title="База данных · защита ПДн (152-ФЗ)" pad>
+        <Card :title="locale.t('adminServer.dbCardTitle', 'База данных · защита ПДн (152-ФЗ)')" pad>
           <dl class="flex flex-col gap-2.5 text-sm">
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">СУБД</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.dbmsLabel', 'СУБД') }}</dt>
               <dd class="font-medium text-text">{{ info?.db_kind || metrics?.database?.engine || '—' }}</dd>
             </div>
             <div v-if="metrics?.database?.size" class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Размер файла базы</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.dbSizeLabel', 'Размер файла базы') }}</dt>
               <dd class="font-medium text-text">{{ human(metrics.database.size) }}</dd>
             </div>
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Шифрование файла БД (SQLCipher AES-256)</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.dbEncryptionLabel', 'Шифрование файла БД (SQLCipher AES-256)') }}</dt>
               <dd><Badge :variant="(info?.db_file_encrypted ?? metrics?.database?.encrypted) ? 'green' : 'red'">
-                {{ (info?.db_file_encrypted ?? metrics?.database?.encrypted) ? 'включено' : 'выключено' }}
+                {{ (info?.db_file_encrypted ?? metrics?.database?.encrypted) ? locale.t('adminServer.enabledBadge', 'включено') : locale.t('adminServer.disabledBadge', 'выключено') }}
               </Badge></dd>
             </div>
             <div v-if="info" class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Шифрование полей ПДн («Кузнечик»)</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.pdnEncryptionLabel', 'Шифрование полей ПДн («Кузнечик»)') }}</dt>
               <dd><Badge :variant="info.pdn_field_encrypted ? 'green' : 'red'">
-                {{ info.pdn_field_encrypted ? 'включено' : 'выключено' }}</Badge></dd>
+                {{ info.pdn_field_encrypted ? locale.t('adminServer.enabledBadge', 'включено') : locale.t('adminServer.disabledBadge', 'выключено') }}</Badge></dd>
             </div>
           </dl>
         </Card>
 
-        <Card v-if="info" title="Криптография (ГОСТ)" pad>
+        <Card v-if="info" :title="locale.t('adminServer.cryptoCardTitle', 'Криптография (ГОСТ)')" pad>
           <dl class="flex flex-col gap-2.5 text-sm">
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Алгоритм</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.algorithmLabel', 'Алгоритм') }}</dt>
               <dd class="text-right font-medium text-text">{{ info.crypto_algorithm || '—' }}</dd>
             </div>
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Крипто-движок</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.cryptoEngineLabel', 'Крипто-движок') }}</dt>
               <dd class="text-right font-medium text-text">{{ info.crypto_backend || '—' }}</dd>
             </div>
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Хеш пароля (ГОСТ-бэкенд)</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.passwordHashLabel', 'Хеш пароля (ГОСТ-бэкенд)') }}</dt>
               <dd class="text-right font-medium text-text">{{ info.gost_hash_backend }}</dd>
             </div>
             <div class="flex items-center justify-between gap-3">
-              <dt class="text-text3">Сертифицированное СКЗИ</dt>
+              <dt class="text-text3">{{ locale.t('adminServer.certifiedCryptoLabel', 'Сертифицированное СКЗИ') }}</dt>
               <dd><Badge :variant="info.crypto_certified ? 'green' : 'muted'">
-                {{ info.crypto_certified ? 'да (ViPNet)' : 'нет (open-source ГОСТ)' }}</Badge></dd>
+                {{ info.crypto_certified ? locale.t('adminServer.certifiedYes', 'да (ViPNet)') : locale.t('adminServer.certifiedNo', 'нет (open-source ГОСТ)') }}</Badge></dd>
             </div>
           </dl>
         </Card>
       </div>
 
-      <Card v-if="tree" title="Что занимает место" :subtitle="tree.path" pad>
+      <Card v-if="tree" :title="locale.t('adminServer.spaceUsageCardTitle', 'Что занимает место')" :subtitle="tree.path" pad>
         <div v-if="tree.parent" class="mb-3">
           <AppButton variant="ghost" @click="openDir(tree.parent)">
-            <ChevronUp class="mr-1 inline size-4" />Наверх
+            <ChevronUp class="mr-1 inline size-4" />{{ locale.t('adminServer.upBtn', 'Наверх') }}
           </AppButton>
         </div>
-        <div v-if="!heaviest.length" class="text-sm text-text3">Каталог пуст.</div>
+        <div v-if="!heaviest.length" class="text-sm text-text3">{{ locale.t('adminServer.emptyDirText', 'Каталог пуст.') }}</div>
         <ul v-else class="flex flex-col gap-2">
           <li v-for="it in heaviest" :key="it.name">
             <button type="button" class="w-full text-left" :disabled="!it.dir"
@@ -517,19 +527,18 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
         </ul>
       </Card>
 
-      <Card v-if="backups && !desk" title="Резервные копии" :subtitle="backups.dir" pad>
+      <Card v-if="backups && !desk" :title="locale.t('adminServer.backupsCardTitle', 'Резервные копии')" :subtitle="backups.dir" pad>
         <p v-if="!backups.exists" class="text-sm text-red">
-          Каталог резервных копий не найден. Это значит, что копий нет вовсе — восстановить
-          данные при сбое будет нечем.
+          {{ locale.t('adminServer.noBackupsDirWarning', 'Каталог резервных копий не найден. Это значит, что копий нет вовсе — восстановить данные при сбое будет нечем.') }}
         </p>
         <template v-else>
           <div class="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2">
             <div>
-              <p class="text-tiny uppercase text-text3">Самая свежая</p>
-              <p class="font-medium text-text">{{ backups.latest || 'копий нет' }}</p>
+              <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.latestLabel', 'Самая свежая') }}</p>
+              <p class="font-medium text-text">{{ backups.latest || locale.t('adminServer.noBackupsYet', 'копий нет') }}</p>
             </div>
             <div>
-              <p class="text-tiny uppercase text-text3">Всего занимают</p>
+              <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.totalSizeLabel', 'Всего занимают') }}</p>
               <p class="font-medium text-text">{{ human(backups.total_size) }}</p>
             </div>
           </div>
@@ -547,9 +556,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       </Card>
 
       <p v-if="!desk" class="px-1 text-xs text-text3">
-        Создание копий, перезапуск служб и команды доступны только в программе на
-        компьютере. В браузере этих возможностей нет намеренно: доступ к боевому серверу
-        не должен зависеть от того, что кто-то забыл выйти из веб-админки.
+        {{ locale.t('adminServer.desktopOnlyNotice', 'Создание копий, перезапуск служб и команды доступны только в программе на компьютере. В браузере этих возможностей нет намеренно: доступ к боевому серверу не должен зависеть от того, что кто-то забыл выйти из веб-админки.') }}
       </p>
     </template>
   </div>

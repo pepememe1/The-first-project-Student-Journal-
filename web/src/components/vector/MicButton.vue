@@ -9,11 +9,13 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Mic, Square } from '@lucide/vue'
 import { recordingSupported, browserRecognitionSupported, sttStatus, startVoice } from '@/utils/voiceInput'
 import { useVoiceStore } from '@/stores/voice'
+import { useLocaleStore } from '@/stores/locale'
 
 const emit = defineEmits(['text', 'error'])
 
 //Настройки устройства: тумблер и выбранный микрофон (см. `stores/voice.js`).
 const voice = useVoiceStore()
+const locale = useLocaleStore()
 
 // Кнопку показываем, если браузер УМЕЕТ записывать. Готовность распознавателя влияет
 // только на активность, а не на видимость: пока она решала «показывать ли», человек не
@@ -39,13 +41,13 @@ onMounted(async () => {
   //Поэтому «умеет записывать» = либо запись, либо встроенное распознавание.
   supported.value = recordingSupported() || browserRecognitionSupported()
   if (!supported.value) {
-    reason.value = 'Этот браузер не умеет записывать звук.'
+    reason.value = locale.t('micButton.notSupported', 'Этот браузер не умеет записывать звук.')
     return
   }
   const st = await sttStatus()
   engine.value = st.engine
   ready.value = st.available
-  if (!ready.value) reason.value = st.reason || 'Распознавание речи не настроено на сервере.'
+  if (!ready.value) reason.value = st.reason || locale.t('micButton.notConfigured', 'Распознавание речи не настроено на сервере.')
 })
 
 // Микрофон нужно отпустить, даже если человек ушёл со страницы во время записи —
@@ -60,7 +62,7 @@ async function toggle() {
       session = await startVoice(engine.value, voice.effectiveDeviceId)
       recording.value = true
     } catch {
-      emit('error', 'Нет доступа к микрофону. Разрешите запись в настройках.')
+      emit('error', locale.t('micButton.noMicAccess', 'Нет доступа к микрофону. Разрешите запись в настройках.'))
     }
     return
   }
@@ -69,9 +71,9 @@ async function toggle() {
   try {
     const text = await session.stop()
     if (text) emit('text', text)
-    else emit('error', 'Не удалось разобрать речь — попробуйте ещё раз.')
+    else emit('error', locale.t('micButton.noSpeechRecognized', 'Не удалось разобрать речь — попробуйте ещё раз.'))
   } catch (e) {
-    emit('error', e.message || 'Не удалось распознать речь.')
+    emit('error', e.message || locale.t('micButton.recognitionFailed', 'Не удалось распознать речь.'))
   } finally {
     session = null
     busy.value = false
@@ -81,8 +83,8 @@ async function toggle() {
 
 <template>
   <button v-if="visible" type="button" @click="toggle" :disabled="busy"
-          :aria-label="recording ? 'Остановить запись' : 'Голосовой ввод'"
-          :title="!ready ? reason : (recording ? 'Остановить и распознать' : 'Сказать голосом')"
+          :aria-label="recording ? locale.t('micButton.stopRecording', 'Остановить запись') : locale.t('micButton.voiceInput', 'Голосовой ввод')"
+          :title="!ready ? reason : (recording ? locale.t('micButton.stopAndRecognize', 'Остановить и распознать') : locale.t('micButton.speak', 'Сказать голосом'))"
           class="grid size-11 shrink-0 place-items-center rounded-sm border transition-colors disabled:opacity-50"
           :class="recording
             ? 'animate-pulse border-red bg-red/15 text-red'

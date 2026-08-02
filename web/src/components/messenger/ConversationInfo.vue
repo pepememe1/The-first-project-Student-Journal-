@@ -13,6 +13,8 @@ import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
+import { roleLabel as sharedRoleLabel } from '@/config/roles'
+import { useLocaleStore } from '@/stores/locale'
 
 // Цвет плашки профиля выбирает сам человек (id пресета) — см. palette.profilePlate.
 function plate(u) {
@@ -22,6 +24,7 @@ function plate(u) {
 const emit = defineEmits(['close'])
 const m = useMessengerStore()
 const toast = useToast()
+const locale = useLocaleStore()
 const { activeInfo, activePeer, isModeration, activeKind } = storeToRefs(m)
 
 // §ролей: права звонящего в ЭТОЙ беседе + личный игнор-лист + мой user_id — всё уже
@@ -46,14 +49,14 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 async function kick(p) {
   openMenuFor.value = null
-  if (!window.confirm(`Выгнать ${p.full_name} из беседы?`)) return
+  if (!window.confirm(locale.t('conversationInfo.confirmKick', { name: p.full_name }))) return
   const ok = await m.kickMember(p.user_id)
-  if (!ok) toast.error('Не удалось выгнать участника')
+  if (!ok) toast.error(locale.t('conversationInfo.kickFailed', 'Не удалось выгнать участника'))
 }
 async function toggleIgnore(p) {
   openMenuFor.value = null
   const ok = await m.toggleIgnore(p.user_id, myIgnoredIds.value.has(p.user_id))
-  if (!ok) toast.error('Не удалось изменить игнор')
+  if (!ok) toast.error(locale.t('conversationInfo.ignoreFailed', 'Не удалось изменить игнор'))
 }
 function openRoleDialog(p) {
   openMenuFor.value = null
@@ -66,8 +69,19 @@ const isSaved = computed(() => kind.value === 'saved')
 const people = computed(() => activeInfo.value?.participants || [])
 const ownerId = computed(() => activeInfo.value?.owner_id || '')
 
-const KIND_RU = { group: 'Группа', channel: 'Канал', moderation: 'Модерация', direct: 'Личный чат' }
-const ROLE_RU = { owner: 'владелец', admin: 'админ', writer: 'автор', member: 'участник', reader: 'читатель' }
+const KIND_RU = computed(() => ({
+  group: locale.t('messenger.groupLabel', 'Группа'),
+  channel: locale.t('messenger.channelWord', 'Канал'),
+  moderation: locale.t('nav.moderation', 'Модерация'),
+  direct: locale.t('conversationInfo.directChat', 'Личный чат'),
+}))
+const ROLE_RU = computed(() => ({
+  owner: locale.t('conversationRole.owner', 'владелец'),
+  admin: locale.t('conversationRole.admin', 'админ'),
+  writer: locale.t('conversationRole.writer', 'автор'),
+  member: locale.t('conversationRole.member', 'участник'),
+  reader: locale.t('conversationRole.reader', 'читатель'),
+}))
 
 // §D7: статус поверх presence. Сервер отдаёт его и в карточке собеседника (_safe_user),
 // и у каждого участника (conversation_info) — но панель их не показывала вовсе, и со
@@ -82,26 +96,26 @@ function statusColor(p) {
 
 // Подпись под именем: у преподавателя — предметы, у студента — группа.
 function meta(p) {
-  if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
-  if (p.user_role === 'student') return p.group_name ? `Группа ${p.group_name}` : 'Студент'
-  return p.user_role === 'admin' ? 'Администратор' : ''
+  if (p.user_role === 'teacher') return (p.subjects || []).join(', ') || sharedRoleLabel('teacher')
+  if (p.user_role === 'student') return p.group_name ? locale.t('conversationInfo.groupOf', { group: p.group_name }) : sharedRoleLabel('student')
+  return p.user_role === 'admin' ? sharedRoleLabel('admin') : ''
 }
 
 // Та же подпись, но для activePeer (личный чат) — там роль лежит в поле `role`, а не
 // `user_role` (см. _safe_user на сервере vs. participants[] в conversation_info). Раньше
 // админ падал в "иначе" инлайн-тернарника и подписывался «Студент».
 function peerMeta(p) {
-  if (p?.role === 'teacher') return (p.subjects || []).join(', ') || 'Преподаватель'
-  if (p?.role === 'admin') return 'Администратор'
-  if (p?.role === 'parent') return 'Родитель'
-  return p?.group_name ? `Группа ${p.group_name}` : 'Студент'
+  if (p?.role === 'teacher') return (p.subjects || []).join(', ') || sharedRoleLabel('teacher')
+  if (p?.role === 'admin') return sharedRoleLabel('admin')
+  if (p?.role === 'parent') return sharedRoleLabel('parent')
+  return p?.group_name ? locale.t('conversationInfo.groupOf', { group: p.group_name }) : sharedRoleLabel('student')
 }
 
 const title = computed(() => {
-  if (isSaved.value) return 'Избранное'
-  if (isModeration.value) return 'Модерация'
-  if (isGroupOrChannel.value) return activeInfo.value?.title || 'Беседа'
-  return activePeer.value?.full_name || 'Диалог'
+  if (isSaved.value) return locale.t('messenger.saved', 'Избранное')
+  if (isModeration.value) return locale.t('nav.moderation', 'Модерация')
+  if (isGroupOrChannel.value) return activeInfo.value?.title || locale.t('messenger.dialog', 'Беседа')
+  return activePeer.value?.full_name || locale.t('conversationInfo.dialog', 'Диалог')
 })
 
 // §D6: переименование группы/канала — только owner/admin.
@@ -121,22 +135,23 @@ async function saveEdit() {
 }
 
 async function leave() {
-  if (!window.confirm(`Выйти из ${kind.value === 'channel' ? 'канала' : 'группы'}?`)) return
+  const what = kind.value === 'channel' ? locale.t('messenger.channelWord', 'канала').toLowerCase() : locale.t('messenger.groupLabel', 'группы').toLowerCase()
+  if (!window.confirm(locale.t('conversationInfo.confirmLeave', { what }))) return
   await m.leaveActive()
   emit('close')
 }
 
 async function removeChat() {
   const what = isGroupOrChannel.value
-    ? 'Удалить беседу у себя? Вы также выйдете из неё.'
-    : 'Удалить переписку у себя? У собеседника она сохранится.'
+    ? locale.t('conversationInfo.confirmDeleteGroup', 'Удалить беседу у себя? Вы также выйдете из неё.')
+    : locale.t('conversationInfo.confirmDeleteDirect', 'Удалить переписку у себя? У собеседника она сохранится.')
   if (!window.confirm(what)) return
   await m.deleteConversation(false)
   emit('close')
 }
 
 async function clearHistory() {
-  if (!window.confirm('Очистить историю у себя? Сообщения пропадут только у вас.')) return
+  if (!window.confirm(locale.t('conversationInfo.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'))) return
   await m.deleteConversation(true)
   emit('close')
 }
@@ -153,17 +168,17 @@ async function clearHistory() {
         <div class="min-w-0 flex-1">
           <h3 class="truncate font-title text-base font-bold text-text">{{ title }}</h3>
           <p class="text-xs text-text3">
-            {{ KIND_RU[kind] || 'Беседа' }}
+            {{ KIND_RU[kind] || locale.t('messenger.dialog', 'Беседа') }}
             <span v-if="isGroupOrChannel"> · {{ activeInfo?.subscribers || 0 }}
-              {{ kind === 'channel' ? 'подписчиков' : 'участников' }}</span>
+              {{ kind === 'channel' ? locale.t('conversationInfo.subscribersWord', 'подписчиков') : locale.t('conversationInfo.membersWord', 'участников') }}</span>
           </p>
         </div>
         <!-- §D6: переименовать (owner/admin) -->
-        <button v-if="canRename && !editing" type="button" @click="startEdit" aria-label="Переименовать"
+        <button v-if="canRename && !editing" type="button" @click="startEdit" :aria-label="locale.t('conversationInfo.rename', 'Переименовать')"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <Pencil class="size-4" />
         </button>
-        <button type="button" @click="emit('close')" aria-label="Закрыть"
+        <button type="button" @click="emit('close')" :aria-label="locale.t('common.close')"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <X class="size-5" />
         </button>
@@ -172,15 +187,15 @@ async function clearHistory() {
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
         <!-- §D6: форма переименования -->
         <div v-if="editing" class="mb-4 space-y-2 rounded-lg border border-border2 bg-card2 p-3">
-          <input v-model="titleDraft" placeholder="Название" maxlength="120"
+          <input v-model="titleDraft" :placeholder="locale.t('conversationInfo.namePlaceholder', 'Название')" maxlength="120"
                  class="w-full rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
-          <textarea v-model="aboutDraft" placeholder="Описание (необязательно)" rows="2" maxlength="500"
+          <textarea v-model="aboutDraft" :placeholder="locale.t('createChat.descOptional', 'Описание (необязательно)')" rows="2" maxlength="500"
                     class="w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
           <div class="flex justify-end gap-2">
-            <button type="button" @click="editing = false" class="rounded-md px-3 py-1.5 text-xs text-text3 hover:bg-bg2">Отмена</button>
+            <button type="button" @click="editing = false" class="rounded-md px-3 py-1.5 text-xs text-text3 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
             <button type="button" @click="saveEdit" :disabled="!titleDraft.trim()"
                     class="flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-              <Check class="size-3.5" />Сохранить
+              <Check class="size-3.5" />{{ locale.t('common.save') }}
             </button>
           </div>
         </div>
@@ -189,17 +204,16 @@ async function clearHistory() {
         <!-- Личный чат: карточка собеседника с его плашкой и «О себе» -->
         <!-- В «Избранном» карточки «собеседника» нет: это ты сам. -->
         <p v-if="isSaved" class="text-sm text-text2">
-          Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда
-          <span class="font-semibold text-accent">/vector</span> — спросить ИИ-помощника.
+          {{ locale.t('conversationInfo.savedHint1', 'Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда') }}
+          <span class="font-semibold text-accent">/vector</span> {{ locale.t('conversationInfo.savedHint2', '— спросить ИИ-помощника.') }}
         </p>
         <!-- Модерация раньше рендерилась как обычная карточка собеседника (activePeer =
              {full_name:'Модерация', role:'moderation'}) — тоже падала в «Студент». -->
         <div v-else-if="isModeration" class="rounded-lg border border-border bg-card2 p-4 text-sm text-text2">
           <div class="mb-2 flex items-center gap-2 text-text">
-            <ShieldCheck class="size-5 text-accent" /><span class="font-semibold">Модерация</span>
+            <ShieldCheck class="size-5 text-accent" /><span class="font-semibold">{{ locale.t('nav.moderation', 'Модерация') }}</span>
           </div>
-          Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос,
-          нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.
+          {{ locale.t('conversationInfo.modText', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.') }}
         </div>
         <template v-else-if="!isGroupOrChannel && activePeer">
           <div class="flex items-center gap-3 rounded-xl p-4" :style="{ background: plate(activePeer) }">
@@ -216,25 +230,24 @@ async function clearHistory() {
                   <span class="size-2.5 shrink-0 rounded-full ring-1 ring-white/50"
                         :style="{ background: statusColor(activePeer) }" />
                   <span class="truncate">{{ statusLabel(activePeer) }}</span>
-                  <span class="shrink-0 text-white/50">· {{ activePeer.online ? 'в сети' : 'не в сети' }}</span>
+                  <span class="shrink-0 text-white/50">· {{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}</span>
                 </template>
-                <template v-else>{{ activePeer.online ? 'в сети' : 'не в сети' }}</template>
+                <template v-else>{{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}</template>
               </div>
             </div>
           </div>
           <p v-if="activePeer.bio" class="mt-3 whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
           <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
           <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-            <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">Лучше не сюда</p>
-            Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы
-            (оценки, расписание) — своему куратору или преподавателю.
+            <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
+            {{ locale.t('conversationInfo.notHereShort', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
           </div>
         </template>
 
         <!-- Группа/канал: участники, владелец сверху и с короной -->
         <template v-else-if="isGroupOrChannel">
           <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">
-            Участники · {{ people.length }}
+            {{ locale.t('profilePanel.participants', 'Участники') }} · {{ people.length }}
           </p>
           <div class="space-y-1">
             <div v-for="p in people" :key="p.user_id"
@@ -244,8 +257,8 @@ async function clearHistory() {
                 <div class="flex items-center gap-1.5">
                   <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
                   <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
-                         class="size-3.5 shrink-0 text-accent" aria-label="Владелец" />
-                  <span v-if="p.silenced" title="Заглушён(а) — /mute" class="shrink-0 text-xs">🔇</span>
+                         class="size-3.5 shrink-0 text-accent" :aria-label="locale.t('conversationInfo.owner', 'Владелец')" />
+                  <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-xs">🔇</span>
                 </div>
                 <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
                   <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
@@ -262,22 +275,22 @@ async function clearHistory() {
               <!-- §ролей: меню участника — кик/игнор/роль. Игнор доступен всем (личное),
                    кик/роль — по правам. Себя выгнать/игнорировать нельзя из этого меню. -->
               <button v-if="p.user_id !== myUserId" type="button" data-role-menu @click.stop="toggleMenu(p.user_id)"
-                      aria-label="Действия" class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+                      :aria-label="locale.t('messenger.actions', 'Действия')" class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
                 <MoreVertical class="size-4" />
               </button>
               <div v-if="openMenuFor === p.user_id" data-role-menu
                    class="absolute right-2 top-10 z-10 w-44 rounded-lg border border-border2 bg-card p-1 shadow-card">
                 <button type="button" @click="toggleIgnore(p)"
                         class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">
-                  {{ myIgnoredIds.has(p.user_id) ? 'Показать сообщения' : 'Игнорировать' }}
+                  {{ myIgnoredIds.has(p.user_id) ? locale.t('conversationInfo.showMessages', 'Показать сообщения') : locale.t('conversationInfo.ignore', 'Игнорировать') }}
                 </button>
                 <button v-if="canManageRoles && p.role !== 'owner'" type="button" @click="openRoleDialog(p)"
                         class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">
-                  Выдать роль
+                  {{ locale.t('conversationInfo.grantRole', 'Выдать роль') }}
                 </button>
                 <button v-if="canKick && p.role !== 'owner'" type="button" @click="kick(p)"
                         class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-red hover:bg-red/10">
-                  Выгнать
+                  {{ locale.t('conversationInfo.kickAction', 'Выгнать') }}
                 </button>
               </div>
             </div>
@@ -292,17 +305,17 @@ async function clearHistory() {
       <div class="flex flex-wrap gap-2 border-t border-border p-3">
         <button type="button" @click="clearHistory"
                 class="rounded-lg border border-border2 px-3 py-2 text-sm text-text2 hover:bg-bg2">
-          Очистить историю
+          {{ locale.t('conversationInfo.clearHistory', 'Очистить историю') }}
         </button>
         <button v-if="isGroupOrChannel" type="button" @click="leave"
                 class="flex items-center gap-1.5 rounded-lg border border-border2 px-3 py-2 text-sm text-text2 hover:bg-bg2">
-          <LogOut class="size-4" />Покинуть
+          <LogOut class="size-4" />{{ locale.t('conversationInfo.leaveAction', 'Покинуть') }}
         </button>
         <!-- «Избранное» удалить нельзя: оно одно на пользователя и всегда есть в списке
              (как в Telegram). Для него доступна только очистка — кнопка выше. -->
         <button v-if="!isSaved" type="button" @click="removeChat"
                 class="ml-auto flex items-center gap-1.5 rounded-lg border border-red/40 px-3 py-2 text-sm font-semibold text-red hover:bg-red/10">
-          <Trash2 class="size-4" />Удалить переписку
+          <Trash2 class="size-4" />{{ locale.t('conversationInfo.deleteConversation', 'Удалить переписку') }}
         </button>
       </div>
     </div>

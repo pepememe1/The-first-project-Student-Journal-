@@ -2,7 +2,7 @@
 // Settings — «Настройки» (для студента/преподавателя/админа). Сюда вынесены персональные
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
@@ -28,15 +28,15 @@ const loc = useLocaleStore()
 // пуш уже прилетел бы на телефон, и выключать его было бы поздно.
 //
 // Ключи обязаны совпадать с rustore_push.ALL_CATEGORIES: сервер знает только их.
-const NOTIFY_KINDS = [
-  { key: 'grades', label: 'Оценки', hint: 'Новая оценка и исправление уже выставленной' },
-  { key: 'homework', label: 'Домашние задания', hint: 'Преподаватель задал работу на дом' },
-  { key: 'schedule', label: 'Расписание', hint: 'Замены и правки в расписании вашей группы' },
-  { key: 'messages', label: 'Сообщения', hint: 'Личные чаты, группы и каналы' },
-  { key: 'events', label: 'Мероприятия', hint: 'Олимпиады, конкурсы, объявления' },
-  { key: 'reminders', label: 'Напоминания', hint: 'То, о чём вы сами просили напомнить' },
-]
-const notify = ref(Object.fromEntries(NOTIFY_KINDS.map((k) => [k.key, true])))
+const NOTIFY_KINDS = computed(() => [
+  { key: 'grades', label: loc.t('settings.notify.grades.label', 'Оценки'), hint: loc.t('settings.notify.grades.hint', 'Новая оценка и исправление уже выставленной') },
+  { key: 'homework', label: loc.t('settings.notify.homework.label', 'Домашние задания'), hint: loc.t('settings.notify.homework.hint', 'Преподаватель задал работу на дом') },
+  { key: 'schedule', label: loc.t('settings.notify.schedule.label', 'Расписание'), hint: loc.t('settings.notify.schedule.hint', 'Замены и правки в расписании вашей группы') },
+  { key: 'messages', label: loc.t('settings.notify.messages.label', 'Сообщения'), hint: loc.t('settings.notify.messages.hint', 'Личные чаты, группы и каналы') },
+  { key: 'events', label: loc.t('settings.notify.events.label', 'Мероприятия'), hint: loc.t('settings.notify.events.hint', 'Олимпиады, конкурсы, объявления') },
+  { key: 'reminders', label: loc.t('settings.notify.reminders.label', 'Напоминания'), hint: loc.t('settings.notify.reminders.hint', 'То, о чём вы сами просили напомнить') },
+])
+const notify = ref(Object.fromEntries(NOTIFY_KINDS.value.map((k) => [k.key, true])))
 const notifySaving = ref('')
 const notifyError = ref('')
 
@@ -46,7 +46,7 @@ async function loadNotify() {
     const box = data?.prefs?.notify || {}
     // ОТСУТСТВИЕ ключа значит «включено» — ровно как трактует его сервер. Иначе первый
     // же заход в настройки показал бы всё выключенным, хотя уведомления приходят.
-    for (const k of NOTIFY_KINDS) {
+    for (const k of NOTIFY_KINDS.value) {
       notify.value[k.key] = box[k.key] !== false
     }
   } catch { /* не загрузилось — показываем значения по умолчанию */ }
@@ -63,7 +63,7 @@ async function toggleNotify(key, value) {
     // Откатываем ВИДИМОЕ состояние: молча оставить переключатель в новом положении
     // значит соврать — человек уверен, что отключил, а уведомления продолжают идти.
     notify.value[key] = prev
-    notifyError.value = e.response?.data?.detail || 'Не удалось сохранить настройку.'
+    notifyError.value = e.response?.data?.detail || loc.t('settings.notifySaveFailed', 'Не удалось сохранить настройку.')
   } finally {
     notifySaving.value = ''
   }
@@ -92,7 +92,7 @@ async function loadBundle() {
   try {
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
     const cur = await CapacitorUpdater.current()
-    bundle.value = { version: cur?.bundle?.version || 'встроенная' }
+    bundle.value = { version: cur?.bundle?.version || loc.t('settings.bundleBuiltIn', 'встроенная') }
   } catch { bundle.value = null }
   try {
     otaLog.value = JSON.parse(localStorage.getItem('gb_ota_log') || '[]')
@@ -106,12 +106,12 @@ async function checkUpdate() {
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
     const latest = await CapacitorUpdater.getLatest()
     if (!latest?.version || latest.version === bundle.value?.version) {
-      bundleMsg.value = 'У вас последняя версия.'
+      bundleMsg.value = loc.t('settings.bundleUpToDate', 'У вас последняя версия.')
     } else {
-      bundleMsg.value = `Доступна версия ${latest.version}. Она установится при следующем запуске приложения.`
+      bundleMsg.value = loc.t('settings.bundleAvailable', { version: latest.version })
     }
   } catch (e) {
-    bundleMsg.value = `Не удалось проверить обновление: ${e?.message || e}`
+    bundleMsg.value = loc.t('settings.bundleCheckFailed', { error: e?.message || e })
   } finally {
     bundleBusy.value = false
   }
@@ -119,7 +119,7 @@ async function checkUpdate() {
 
 // ── Шкала оценивания (§ролей, 3.3.1) — только препод: в ЧЁМ он вводит/видит оценки.
 // Средний балл/итоговая всё равно всегда в 5-балльной — сервер сам конвертирует.
-const scaleOptions = Object.entries(SCALES).map(([id, s]) => ({ id, label: s.label }))
+const scaleOptions = computed(() => Object.entries(SCALES).map(([id, s]) => ({ id, label: s.label })))
 const gradingScale = ref('5')
 const scaleSaving = ref(false)
 async function loadGradingScale() {
@@ -146,11 +146,11 @@ function cycleVoiceMode() {
 function previewVoice(v) {
   tts.unlock()
   tts.setVoice(v)
-  if (tts.mode === 'voice') tts.speak('Привет! Я Вектор. Буду озвучивать ответы этим голосом.')
+  if (tts.mode === 'voice') tts.speak(loc.t('settings.ttsPreviewVoice', 'Привет! Я Вектор. Буду озвучивать ответы этим голосом.'))
 }
 function previewMumble() {
   tts.unlock()
-  tts.speak('Привет! Я Вектор.')
+  tts.speak(loc.t('settings.ttsPreviewMumble', 'Привет! Я Вектор.'))
 }
 
 // ── Вход по биометрии (passkeys / 2FA) ───────────────────────────────────────────
@@ -179,13 +179,13 @@ onMounted(async () => {
 async function addPasskey() {
   pkBusy.value = true; pkMsg.value = ''
   try {
-    const name = navigator.platform || 'Это устройство'
+    const name = navigator.platform || loc.t('settings.thisDevice', 'Это устройство')
     await enablePasskey(name)
-    pkMsg.value = 'Готово! Теперь можно входить по Face ID / отпечатку.'
+    pkMsg.value = loc.t('settings.passkeyAdded', 'Готово! Теперь можно входить по Face ID / отпечатку.')
     await loadPasskeys()
   } catch (e) {
     if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') pkMsg.value = ''
-    else pkMsg.value = e.response?.data?.detail || 'Не удалось включить биометрию.'
+    else pkMsg.value = e.response?.data?.detail || loc.t('settings.passkeyFailed', 'Не удалось включить биометрию.')
   } finally { pkBusy.value = false }
 }
 async function removePasskey(id) {
@@ -202,7 +202,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
   <div class="flex flex-col gap-6">
     <!-- Оформление (полный кастомайзер тем: пресеты + свой цвет + режим + расписание). -->
     <div>
-      <h2 class="mb-3 font-title text-lg font-extrabold text-text">Оформление</h2>
+      <h2 class="mb-3 font-title text-lg font-extrabold text-text">{{ loc.t('settings.appearance') }}</h2>
       <ThemeCustomizer />
     </div>
 
@@ -232,7 +232,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 
     <!-- Уведомления: что присылать. Настройка АККАУНТА — решение принимает сервер до
          отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
-    <Card title="Уведомления" subtitle="Что присылать на телефон">
+    <Card :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
       <div class="flex flex-col gap-2">
         <ToggleRow v-for="k in NOTIFY_KINDS" :key="k.key"
                    :label="k.label" :hint="k.hint"
@@ -244,8 +244,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
       <p v-if="notifyError" class="mt-3 text-sm text-red">{{ notifyError }}</p>
       <div class="mt-3 flex items-start gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2.5 text-xs text-text3">
         <BellOff class="mt-0.5 size-4 shrink-0" />
-        <p>Выключенное перестаёт приходить на телефон, но остаётся во вкладке
-           «Уведомления» — историю оценок и заданий выключатель не стирает.</p>
+        <p>{{ loc.t('settings.notifyDisabledHint', 'Выключенное перестаёт приходить на телефон, но остаётся во вкладке «Уведомления» — историю оценок и заданий выключатель не стирает.') }}</p>
       </div>
 
       <!-- Состояние пушей на ЭТОМ телефоне. Отказ доставки иначе невидим: и человек,
@@ -254,19 +253,17 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         <div v-if="pushInfo.has_token && pushInfo.permission"
              class="flex items-start gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2.5 text-xs text-text3">
           <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
-          <p>Этот телефон подключён к уведомлениям.</p>
+          <p>{{ loc.t('settings.pushConnected', 'Этот телефон подключён к уведомлениям.') }}</p>
         </div>
         <div v-else class="flex items-start gap-2.5 rounded-lg border border-red/40 bg-card2 px-3 py-2.5 text-xs text-text2">
           <TriangleAlert class="mt-0.5 size-4 shrink-0 text-red" />
           <p v-if="!pushInfo.permission">
-            Показ уведомлений запрещён в настройках телефона — разрешите их для
-            GradeBookAI, иначе ничего не придёт.
+            {{ loc.t('settings.pushNoPermission', 'Показ уведомлений запрещён в настройках телефона — разрешите их для GradeBookAI, иначе ничего не придёт.') }}
           </p>
           <p v-else>
-            Телефон пока не подключён к уведомлениям.
-            <template v-if="pushInfo.error"> Причина: {{ pushInfo.error }}.</template>
-            Доставку обеспечивает RuStore — на телефоне без него уведомления работать
-            не будут.
+            {{ loc.t('settings.pushNotConnected', 'Телефон пока не подключён к уведомлениям.') }}
+            <template v-if="pushInfo.error"> {{ loc.t('settings.pushReason', { error: pushInfo.error }) }}</template>
+            {{ loc.t('settings.pushRustoreHint', 'Доставку обеспечивает RuStore — на телефоне без него уведомления работать не будут.') }}
           </p>
         </div>
       </div>
@@ -274,12 +271,12 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 
     <!-- Версия веб-части. Только в приложении: на сайте и десктопе обновление приезжает
          обычной загрузкой страницы, и показывать номер бандла там не о чем. -->
-    <Card v-if="bundle" title="Версия приложения"
-          subtitle="Интерфейс обновляется сам, без переустановки из магазина">
+    <Card v-if="bundle" :title="loc.t('settings.appVersion', 'Версия приложения')"
+          :subtitle="loc.t('settings.appVersionHint', 'Интерфейс обновляется сам, без переустановки из магазина')">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <p class="text-sm text-text2">Установлена: <span class="font-semibold text-text">{{ bundle.version }}</span></p>
+        <p class="text-sm text-text2">{{ loc.t('settings.installed', 'Установлена:') }} <span class="font-semibold text-text">{{ bundle.version }}</span></p>
         <AppButton variant="ghost" :disabled="bundleBusy" @click="checkUpdate">
-          <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? 'Проверяем…' : 'Проверить обновление' }}
+          <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? loc.t('settings.checking', 'Проверяем…') : loc.t('settings.checkUpdate', 'Проверить обновление') }}
         </AppButton>
       </div>
       <p v-if="bundleMsg" class="mt-3 text-sm text-text3">{{ bundleMsg }}</p>
@@ -288,7 +285,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
            скачивается и не приживается: она остаётся на устройстве и в логи сервера не
            попадает. Человеку с телефоном достаточно прочитать строку и назвать её. -->
       <details v-if="otaLog.length" class="mt-3">
-        <summary class="cursor-pointer text-xs text-text3">Что происходило с обновлениями</summary>
+        <summary class="cursor-pointer text-xs text-text3">{{ loc.t('settings.otaLog', 'Что происходило с обновлениями') }}</summary>
         <ul class="mt-2 flex flex-col gap-1 font-mono text-tiny text-text3">
           <li v-for="(e, i) in otaLog" :key="i" class="break-all">
             {{ e.at?.slice(5, 16).replace('T', ' ') }} · {{ e.kind }}
@@ -299,7 +296,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
     </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->
-    <Card title="Озвучка Вектора" subtitle="Как Вектор проговаривает свои ответы">
+    <Card :title="loc.t('settings.tts')" :subtitle="loc.t('settings.ttsHint', 'Как Вектор проговаривает свои ответы')">
       <button type="button"
               class="flex w-full items-center gap-3 rounded-md border border-border p-3 text-left transition-colors hover:border-accent"
               @click="cycleVoiceMode">
@@ -311,42 +308,42 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         </span>
         <span class="min-w-0 flex-1">
           <span class="block text-sm font-semibold text-text">{{ tts.modeLabel }}</span>
-          <span class="block text-xs text-text3">Нажмите, чтобы переключить: Голос → Бубнеж → Выкл</span>
+          <span class="block text-xs text-text3">{{ loc.t('settings.ttsCycleHint', 'Нажмите, чтобы переключить: Голос → Бубнеж → Выкл') }}</span>
         </span>
       </button>
 
       <!-- Выбор голоса — только в режиме «Голос». -->
       <div v-if="tts.mode === 'voice'" class="mt-4">
-        <p class="mb-2 text-sm font-medium text-text2">Голос</p>
+        <p class="mb-2 text-sm font-medium text-text2">{{ loc.t('settings.voiceLabel', 'Голос') }}</p>
         <div class="flex gap-2">
           <button type="button" @click="previewVoice('male')"
                   class="flex-1 rounded-md border p-3 text-left transition-colors"
                   :class="tts.voice === 'male' ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
-            <span class="block text-sm font-semibold text-text">Мужской</span>
-            <span class="block text-xs text-text3">По умолчанию · нажмите, чтобы услышать</span>
+            <span class="block text-sm font-semibold text-text">{{ loc.t('settings.voiceMale', 'Мужской') }}</span>
+            <span class="block text-xs text-text3">{{ loc.t('settings.voiceMaleHint', 'По умолчанию · нажмите, чтобы услышать') }}</span>
           </button>
           <button type="button" @click="previewVoice('female')"
                   class="flex-1 rounded-md border p-3 text-left transition-colors"
                   :class="tts.voice === 'female' ? 'border-accent bg-accent-glow' : 'border-border hover:border-accent'">
-            <span class="block text-sm font-semibold text-text">Женский</span>
-            <span class="block text-xs text-text3">Нажмите, чтобы услышать</span>
+            <span class="block text-sm font-semibold text-text">{{ loc.t('settings.voiceFemale', 'Женский') }}</span>
+            <span class="block text-xs text-text3">{{ loc.t('settings.voiceFemaleHint', 'Нажмите, чтобы услышать') }}</span>
           </button>
         </div>
       </div>
 
       <!-- Бубнеж — короткое пояснение + проба. -->
       <div v-else-if="tts.mode === 'mumble'" class="mt-4 flex items-center justify-between gap-3 rounded-md border border-border bg-card2 px-3 py-2.5">
-        <p class="text-xs text-text3">Имитация речи короткими сигналами (как голоса в играх), без интернета.</p>
-        <AppButton variant="ghost" @click="previewMumble">Проверить</AppButton>
+        <p class="text-xs text-text3">{{ loc.t('settings.mumbleHint', 'Имитация речи короткими сигналами (как голоса в играх), без интернета.') }}</p>
+        <AppButton variant="ghost" @click="previewMumble">{{ loc.t('settings.tryIt', 'Проверить') }}</AppButton>
       </div>
     </Card>
 
     <!-- Голосовой ввод: тумблер + выбор микрофона (настройка ЭТОГО устройства). -->
-    <Card title="Голосовой ввод" subtitle="Микрофон для «Вектора»: сказать вместо набора текста">
+    <Card :title="loc.t('settings.voice')" :subtitle="loc.t('settings.voiceHint', 'Микрофон для «Вектора»: сказать вместо набора текста')">
       <div v-if="!voice.supported"
            class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <MicOff class="mt-0.5 size-4 shrink-0" />
-        <p>Это устройство не умеет записывать звук — голосовой ввод недоступен.</p>
+        <p>{{ loc.t('settings.voiceUnsupported', 'Это устройство не умеет записывать звук — голосовой ввод недоступен.') }}</p>
       </div>
 
       <template v-else>
@@ -359,12 +356,12 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
           </span>
           <span class="flex-1">
             <span class="block text-sm font-semibold text-text">
-              {{ voice.enabled ? 'Включён' : 'Выключен' }}
+              {{ voice.enabled ? loc.t('settings.on', 'Включён') : loc.t('settings.off', 'Выключен') }}
             </span>
             <span class="block text-xs text-text3">
               {{ voice.enabled
-                 ? 'Кнопка 🎤 доступна рядом с полем вопроса'
-                 : 'Кнопка микрофона скрыта' }}
+                 ? loc.t('settings.voiceButtonShown', 'Кнопка 🎤 доступна рядом с полем вопроса')
+                 : loc.t('settings.voiceButtonHidden', 'Кнопка микрофона скрыта') }}
             </span>
           </span>
           <span class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
@@ -378,37 +375,35 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
              разрешения, поэтому запрашиваем его кнопкой — то есть из жеста человека. -->
         <div v-if="voice.enabled" class="mt-4">
           <div class="mb-2 flex items-center justify-between gap-2">
-            <span class="text-sm font-medium text-text2">Микрофон</span>
+            <span class="text-sm font-medium text-text2">{{ loc.t('settings.microphone', 'Микрофон') }}</span>
             <button type="button" :disabled="voice.loading" @click="voice.refresh(true)"
                     class="text-xs text-accent hover:underline disabled:opacity-50">
-              {{ voice.loading ? 'Ищем…' : 'Обновить список' }}
+              {{ voice.loading ? loc.t('settings.searching', 'Ищем…') : loc.t('settings.refreshList', 'Обновить список') }}
             </button>
           </div>
 
           <select :value="voice.deviceId" @change="voice.setDevice($event.target.value)"
                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-            <option value="">Как в системе</option>
+            <option value="">{{ loc.t('settings.systemDefault', 'Как в системе') }}</option>
             <option v-for="d in voice.devices" :key="d.deviceId" :value="d.deviceId">{{ d.label }}</option>
           </select>
 
           <p v-if="voice.denied" class="mt-2 text-xs text-red">
-            Доступ к микрофону запрещён. Разрешите запись в настройках браузера или системы.
+            {{ loc.t('settings.micDenied', 'Доступ к микрофону запрещён. Разрешите запись в настройках браузера или системы.') }}
           </p>
           <p v-else-if="!voice.devices.length" class="mt-2 text-xs text-text3">
-            Нажмите «Обновить список», чтобы выбрать конкретный микрофон — до разрешения
-            браузер не сообщает их названия.
+            {{ loc.t('settings.micRefreshHint', 'Нажмите «Обновить список», чтобы выбрать конкретный микрофон — до разрешения браузер не сообщает их названия.') }}
           </p>
           <p v-else class="mt-2 text-xs text-text3">
-            Речь распознаёт сервер, с которого открыт интерфейс. Внутри программы это
-            локальный сервер на вашем компьютере — запись его не покидает.
+            {{ loc.t('settings.micPrivacyHint', 'Речь распознаёт сервер, с которого открыт интерфейс. Внутри программы это локальный сервер на вашем компьютере — запись его не покидает.') }}
           </p>
         </div>
       </template>
     </Card>
 
     <!-- Шкала оценивания — только преподаватель. -->
-    <Card v-if="auth.role === 'teacher'" title="Шкала оценивания"
-          subtitle="В чём вы вводите и видите оценки за практики/ДЗ. Средний балл и итоговая — всегда в 5-балльной">
+    <Card v-if="auth.role === 'teacher'" :title="loc.t('settings.gradingScale', 'Шкала оценивания')"
+          :subtitle="loc.t('settings.gradingScaleHint', 'В чём вы вводите и видите оценки за практики/ДЗ. Средний балл и итоговая — всегда в 5-балльной')">
       <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button v-for="s in scaleOptions" :key="s.id" type="button" :disabled="scaleSaving"
                 @click="pickScale(s.id)"
@@ -422,12 +417,11 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
     </Card>
 
     <!-- Вход по биометрии / 2FA — виден только на устройствах с Face ID/отпечатком. -->
-    <Card v-if="canBiometric" title="Вход по биометрии"
-          subtitle="Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля">
+    <Card v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
+          :subtitle="loc.t('settings.biometricHint', 'Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля')">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
-        <p>Приватный ключ хранится в защищённом чипе устройства и никогда его не покидает.
-           Сервер знает только публичную часть. Пароль при таком входе не используется.</p>
+        <p>{{ loc.t('settings.biometricExplain', 'Приватный ключ хранится в защищённом чипе устройства и никогда его не покидает. Сервер знает только публичную часть. Пароль при таком входе не используется.') }}</p>
       </div>
 
       <ul v-if="passkeys.length" class="mt-4 space-y-2">
@@ -435,20 +429,20 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
             class="flex items-center justify-between rounded-md border border-border px-3 py-2">
           <div class="flex items-center gap-2.5 text-sm">
             <Fingerprint class="size-4 text-accent" />
-            <span class="font-medium text-text">{{ k.device_name || 'Устройство' }}</span>
-            <span class="text-tiny text-text3">добавлен {{ fmtDate(k.created_at) }}</span>
+            <span class="font-medium text-text">{{ k.device_name || loc.t('settings.device', 'Устройство') }}</span>
+            <span class="text-tiny text-text3">{{ loc.t('settings.addedOn', { date: fmtDate(k.created_at) }) }}</span>
           </div>
           <button type="button" :disabled="pkBusy" class="text-text3 transition-colors hover:text-red disabled:opacity-50"
-                  aria-label="Удалить ключ" @click="removePasskey(k.id)">
+                  :aria-label="loc.t('settings.removeKey', 'Удалить ключ')" @click="removePasskey(k.id)">
             <Trash2 class="size-4" />
           </button>
         </li>
       </ul>
-      <p v-else class="mt-4 text-sm text-text3">Пока нет ни одного ключа на этом аккаунте.</p>
+      <p v-else class="mt-4 text-sm text-text3">{{ loc.t('settings.noKeys', 'Пока нет ни одного ключа на этом аккаунте.') }}</p>
 
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <AppButton variant="green" :disabled="pkBusy" @click="addPasskey">
-          <Fingerprint class="mr-2 inline size-4" />{{ pkBusy ? 'Настраиваем…' : 'Добавить это устройство' }}
+          <Fingerprint class="mr-2 inline size-4" />{{ pkBusy ? loc.t('settings.settingUp', 'Настраиваем…') : loc.t('settings.addThisDevice', 'Добавить это устройство') }}
         </AppButton>
         <p v-if="pkMsg" class="text-sm font-medium text-accent">{{ pkMsg }}</p>
       </div>

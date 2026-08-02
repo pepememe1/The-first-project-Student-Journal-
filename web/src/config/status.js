@@ -8,16 +8,27 @@
  *
  * Значения kind совпадают с _STATUS_KINDS на сервере (routers/messenger.py) — менять их
  * можно только вместе.
+ *
+ * `label`/`self` — ГЕТТЕРЫ, а не литералы: читают текущий язык через `useLocaleStore().t()`
+ * в момент обращения (не при импорте модуля), поэтому `{{ k.self }}` в шаблоне остаётся
+ * реактивным к переключению языка ровно так же, как обычный вызов `t()` — Vue отслеживает
+ * зависимость по МОМЕНТУ чтения реактивного значения внутри `t()`, а не по тому, где
+ * лежит сам геттер.
  */
+import { useLocaleStore } from '@/stores/locale'
 
 // Цвета намеренно ЖЁСТКИЕ, а не токены темы: статус — это светофор, его смысл считывается
 // цветом (красный «не беспокоить», жёлтый «занят», серый «отошёл»), и подмена акцентом
 // приложения сломала бы узнавание. Значения одинаково читаются в светлой и тёмной теме.
 export const STATUS_KINDS = [
-  { kind: '', label: 'Обычный', color: '#2e9e5b', self: 'Обычный' },
-  { kind: 'dnd', label: 'Не беспокоить', color: '#ef4444', self: 'Не беспокоить' },
-  { kind: 'studying', label: 'Готовится/учится', color: '#f59e0b', self: 'Готовлюсь/учусь' },
-  { kind: 'away', label: 'Отошёл(а)', color: '#94a3b8', self: 'Отошёл(а)' },
+  { kind: '', get label() { return useLocaleStore().t('status.normal.label', 'Обычный') },
+    color: '#2e9e5b', get self() { return useLocaleStore().t('status.normal.self', 'Обычный') } },
+  { kind: 'dnd', get label() { return useLocaleStore().t('status.dnd.label', 'Не беспокоить') },
+    color: '#ef4444', get self() { return useLocaleStore().t('status.dnd.self', 'Не беспокоить') } },
+  { kind: 'studying', get label() { return useLocaleStore().t('status.studying.label', 'Готовится/учится') },
+    color: '#f59e0b', get self() { return useLocaleStore().t('status.studying.self', 'Готовлюсь/учусь') } },
+  { kind: 'away', get label() { return useLocaleStore().t('status.away.label', 'Отошёл(а)') },
+    color: '#94a3b8', get self() { return useLocaleStore().t('status.away.self', 'Отошёл(а)') } },
 ]
 
 const BY_KIND = Object.fromEntries(STATUS_KINDS.map((s) => [s.kind, s]))
@@ -40,5 +51,6 @@ export function statusLabel(kind, customText = '') {
 
 /** Подпись СВОЕГО статуса (первое лицо: «Готовлюсь/учусь», а не «Готовится/учится»). */
 export function myStatusLabel(kind, customText = '') {
-  return (customText || '').trim() || BY_KIND[kind || '']?.self || 'Обычный'
+  return (customText || '').trim() || BY_KIND[kind || '']?.self
+    || useLocaleStore().t('status.normal.self', 'Обычный')
 }

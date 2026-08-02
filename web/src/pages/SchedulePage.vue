@@ -27,14 +27,34 @@ import { RotateCw, GraduationCap, User, Users, Download } from '@lucide/vue'
 import { scheduleApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
+import { useLocaleStore } from '@/stores/locale'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 
-const DAYS = [['Пнд', 'Понедельник'], ['Втр', 'Вторник'], ['Срд', 'Среда'],
-              ['Чтв', 'Четверг'], ['Птн', 'Пятница'], ['Сбт', 'Суббота']]
-const KIND = { лек: ['Лекция', 'blue'], пр: ['Практика', 'green'], лаб: ['Лаборат.', 'muted'],
-               сем: ['Семинар', 'muted'], конс: ['Консульт.', 'muted'], зач: ['Зачёт', 'red'], экз: ['Экзамен', 'red'] }
+const locale = useLocaleStore()
+// Ключ дня ('Пнд' и т.п.) — это ФОРМАТ ДАННЫХ (совпадает с ключами, которые кладёт
+// сервер в schedule/parser.py) и НЕ переводится; переводится только видимая подпись.
+const DAY_KEYS = ['Пнд', 'Втр', 'Срд', 'Чтв', 'Птн', 'Сбт']
+const DAYS = computed(() => [
+  [DAY_KEYS[0], locale.t('schedulePage.day.mon', 'Понедельник')],
+  [DAY_KEYS[1], locale.t('schedulePage.day.tue', 'Вторник')],
+  [DAY_KEYS[2], locale.t('schedulePage.day.wed', 'Среда')],
+  [DAY_KEYS[3], locale.t('schedulePage.day.thu', 'Четверг')],
+  [DAY_KEYS[4], locale.t('schedulePage.day.fri', 'Пятница')],
+  [DAY_KEYS[5], locale.t('schedulePage.day.sat', 'Суббота')],
+])
+// Ключи типа занятия ('лек', 'пр'…) — тоже данные с сервера, не переводятся; цвет
+// варианта Badge — тоже не текст.
+const KIND = computed(() => ({
+  лек: [locale.t('schedulePage.kind.lecture', 'Лекция'), 'blue'],
+  пр: [locale.t('schedulePage.kind.practice', 'Практика'), 'green'],
+  лаб: [locale.t('schedulePage.kind.lab', 'Лаборат.'), 'muted'],
+  сем: [locale.t('schedulePage.kind.seminar', 'Семинар'), 'muted'],
+  конс: [locale.t('schedulePage.kind.consult', 'Консульт.'), 'muted'],
+  зач: [locale.t('schedulePage.kind.pass', 'Зачёт'), 'red'],
+  экз: [locale.t('schedulePage.kind.exam', 'Экзамен'), 'red'],
+}))
 const DEFAULT_CATEGORY = 'college'
 
 const auth = useAuthStore()
@@ -77,12 +97,12 @@ async function downloadSchedule(fmt) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `Расписание_${exportGroup.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`
+    a.download = `${locale.t('schedulePage.fileNamePrefix', 'Расписание')}_${exportGroup.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`
       .replaceAll('/', '-')
     a.click()
     URL.revokeObjectURL(url)
   } catch {
-    toast.error('Не удалось выгрузить расписание')
+    toast.error(locale.t('schedulePage.exportFailed', 'Не удалось выгрузить расписание'))
   } finally { exporting.value = false }
 }
 
@@ -219,13 +239,16 @@ const weekButtons = computed(() => {
 })
 function weekButtonLabel(wk) {
   if (!categoryDated.value) {
-    return (wk === 2 ? 'II неделя' : 'I неделя') + (data.value?.week === wk ? '  · сейчас' : '')
+    const label = wk === 2 ? locale.t('schedulePage.week2', 'II неделя') : locale.t('schedulePage.week1', 'I неделя')
+    return label + (data.value?.week === wk ? locale.t('schedulePage.nowSuffix', '  · сейчас') : '')
   }
   const days = Object.keys(weeks.value[String(wk)] || {})
-  if (!days.length) return `Сессия ${wk}`
+  if (!days.length) return locale.t('schedulePage.sessionN', { n: wk })
   const first = days[0].split(', ').pop()
   const last = days[days.length - 1].split(', ').pop()
-  return first === last ? `Сессия ${wk} (${first})` : `Сессия ${wk} (${first}–${last})`
+  return first === last
+    ? locale.t('schedulePage.sessionNSingle', { n: wk, date: first })
+    : locale.t('schedulePage.sessionNRange', { n: wk, from: first, to: last })
 }
 function dayLessons(dayKey) { return (weeks.value[String(week.value)] || {})[dayKey] || [] }
 const hasAny = computed(() => data.value?.available && Object.keys(weeks.value).length)
@@ -233,7 +256,7 @@ const hasAny = computed(() => data.value?.available && Object.keys(weeks.value).
 // сессионные — реальные даты ТЕКУЩЕЙ недели/сессии, в порядке разбора (уже
 // хронологический — см. schedule/parser.py::parse_group_page_dated).
 const dayColumns = computed(() => {
-  if (!categoryDated.value) return DAYS
+  if (!categoryDated.value) return DAYS.value
   return Object.keys(weeks.value[String(week.value)] || {}).map((d) => [d, d])
 })
 // Преподаватель ещё не выбрал режим и авто-матч не сработал → экран с двумя кнопками
@@ -257,22 +280,22 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
 
     <!-- Преподаватель без авто-совпадения ФИО: две НЕвыбранные кнопки (пункт 2). -->
     <div v-if="teacherChoice" class="flex min-h-[50vh] flex-col items-center justify-center gap-4">
-      <p v-if="loading" class="text-sm text-text3">Загрузка…</p>
+      <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading', 'Загрузка…') }}</p>
       <template v-else>
         <p class="text-sm text-text2">
-          {{ building ? 'Индекс преподавателей ещё готовится на сервере (~минута).' :
-             'Ваше ФИО не найдено в спарсенном расписании — выберите, что показать:' }}
+          {{ building ? locale.t('schedulePage.buildingTeachers', 'Индекс преподавателей ещё готовится на сервере (~минута).') :
+             locale.t('schedulePage.notMatched', 'Ваше ФИО не найдено в спарсенном расписании — выберите, что показать:') }}
         </p>
         <div class="flex flex-wrap justify-center gap-3">
           <AppButton variant="ghost" :disabled="building" @click="chooseTeacherMode">
-            <User class="size-4" /> Расписание преподавателя
+            <User class="size-4" /> {{ locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
           </AppButton>
           <AppButton variant="ghost" @click="chooseGroupMode">
-            <Users class="size-4" /> Расписание группы
+            <Users class="size-4" /> {{ locale.t('schedulePage.groupSchedule', 'Расписание группы') }}
           </AppButton>
         </div>
         <AppButton v-if="building" variant="green" size="sm" @click="loadTeacher('')">
-          <RotateCw class="size-3.5" /> Проверить снова
+          <RotateCw class="size-3.5" /> {{ locale.t('schedulePage.checkAgain', 'Проверить снова') }}
         </AppButton>
       </template>
     </div>
@@ -284,32 +307,32 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
              (админ, либо любая роль вне колледжа) — выбор группы из списка. -->
         <div v-if="isStudent && isDefaultCategory" class="flex h-10 items-center gap-2 rounded-sm border border-border2 bg-card2 px-3 text-sm">
           <GraduationCap class="size-4 text-accent" />
-          <span class="font-medium text-text">{{ group || 'Моя группа' }}</span>
+          <span class="font-medium text-text">{{ group || locale.t('schedulePage.myGroup', 'Моя группа') }}</span>
         </div>
 
         <template v-else-if="isDefaultCategory && isTeacher && mode !== 'group'">
           <div v-if="mode === 'me'" class="flex h-10 items-center gap-2 rounded-sm border border-border2 bg-card2 px-3 text-sm">
             <User class="size-4 text-accent" />
             <span class="font-medium text-text">{{ teacherName }}</span>
-            <span class="text-xs text-text3">· мои пары</span>
+            <span class="text-xs text-text3">· {{ locale.t('schedulePage.myLessons', 'мои пары') }}</span>
           </div>
           <select v-else v-model="teacherName" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:max-w-64"
                   @change="loadTeacher(teacherName)">
-            <option value="" disabled>Преподаватель…</option>
+            <option value="" disabled>{{ locale.t('schedulePage.teacherPlaceholder', 'Преподаватель…') }}</option>
             <option v-for="t in teachers" :key="t" :value="t">{{ t }}</option>
           </select>
           <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseGroupMode">
-            смотреть по группе
+            {{ locale.t('schedulePage.viewByGroup', 'смотреть по группе') }}
           </button>
         </template>
 
         <template v-else>
           <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto" @change="load">
-            <option v-if="!groups.length" :value="group">{{ group || 'Группа' }}</option>
+            <option v-if="!groups.length" :value="group">{{ group || locale.t('schedulePage.groupPlaceholder', 'Группа') }}</option>
             <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
           </select>
           <button v-if="isDefaultCategory && isTeacher" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="mode = ''; data = null">
-            ← к выбору
+            {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
           </button>
         </template>
 
@@ -318,28 +341,28 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
                   :class="week === wk ? 'bg-accent text-white' : 'bg-card2 text-text3'"
                   @click="week = wk">{{ weekButtonLabel(wk) }}</button>
         </div>
-        <AppButton variant="ghost" size="sm" @click="refresh"><RotateCw class="size-3.5" /> Обновить</AppButton>
+        <AppButton variant="ghost" size="sm" @click="refresh"><RotateCw class="size-3.5" /> {{ locale.t('schedulePage.refresh', 'Обновить') }}</AppButton>
 
         <!-- Выгрузка расписания файлом. Показываем только для расписания ГРУППЫ:
              у преподавательского вида группы нет, а сервер выгружает именно её. -->
         <template v-if="exportGroup && hasAny">
           <AppButton variant="ghost" size="sm" :disabled="exporting"
                      @click="downloadSchedule('xlsx')">
-            <Download class="size-3.5" /> Excel
+            <Download class="size-3.5" /> {{ locale.t('schedulePage.exportExcel', 'Excel') }}
           </AppButton>
           <AppButton variant="ghost" size="sm" :disabled="exporting"
                      @click="downloadSchedule('docx')">
-            <Download class="size-3.5" /> Word
+            <Download class="size-3.5" /> {{ locale.t('schedulePage.exportWord', 'Word') }}
           </AppButton>
         </template>
 
-        <span v-if="!categoryDated && data?.week" class="text-xs text-text3">Сейчас: {{ data.week === 2 ? 'II' : 'I' }} неделя</span>
+        <span v-if="!categoryDated && data?.week" class="text-xs text-text3">{{ locale.t('schedulePage.currentWeek', { roman: data.week === 2 ? 'II' : 'I' }) }}</span>
       </div>
 
-      <p v-if="loading" class="text-sm text-text3">Загрузка расписания…</p>
-      <EmptyState v-else-if="!hasAny" title="Расписание недоступно"
-                  :message="building ? 'Индекс расписания готовится на сервере (~минута) — нажмите «Обновить».'
-                            : 'Не удалось получить снимок с портала ВСГУТУ (нет связи или расписание не найдено).'" />
+      <p v-if="loading" class="text-sm text-text3">{{ locale.t('schedulePage.loadingSchedule', 'Загрузка расписания…') }}</p>
+      <EmptyState v-else-if="!hasAny" :title="locale.t('schedulePage.unavailableTitle', 'Расписание недоступно')"
+                  :message="building ? locale.t('schedulePage.buildingHint', 'Индекс расписания готовится на сервере (~минута) — нажмите «Обновить».')
+                            : locale.t('schedulePage.noSnapshotHint', 'Не удалось получить снимок с портала ВСГУТУ (нет связи или расписание не найдено).')" />
 
       <!-- Десктоп показывает дни ОДНИМ горизонтальным рядом; на широком экране
            повторяем (6 колонок), на узких — переносим по 2–3. Для сессионных
@@ -347,7 +370,7 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
       <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <div v-for="[key, full] in dayColumns" :key="key" class="rounded-lg border border-border bg-card p-3 shadow-card">
           <p class="mb-2 font-title text-base font-bold text-text">{{ full }}</p>
-          <p v-if="!dayLessons(key).length" class="py-4 text-center text-xs text-text2">Занятий нет</p>
+          <p v-if="!dayLessons(key).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>
           <ul v-else class="space-y-2">
             <li v-for="(l, i) in dayLessons(key)" :key="i" class="rounded-md border border-border bg-card2 p-2.5">
               <div class="mb-1 flex items-center justify-between gap-2">
@@ -357,7 +380,7 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
               <p class="text-sm font-medium text-text">{{ l.subject || l.raw }}</p>
               <!-- У пары преподавателя показываем ГРУППУ (у кого ведёт), у групповой — преподавателя. -->
               <p v-if="l.group || l.teacher || l.room" class="mt-0.5 text-xs text-text3">
-                {{ l.group ? `Группа ${l.group}` : l.teacher }}<span v-if="l.room"> · ауд. {{ l.room }}</span>
+                {{ l.group ? locale.t('schedulePage.groupLabel', { group: l.group }) : l.teacher }}<span v-if="l.room"> · {{ locale.t('schedulePage.roomLabel', { room: l.room }) }}</span>
               </p>
             </li>
           </ul>

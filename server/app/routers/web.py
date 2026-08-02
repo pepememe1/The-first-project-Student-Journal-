@@ -27,7 +27,7 @@ from ..models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                       NotifyEvent)
 from .. import webdata as W
 from .. import schedule_web
-from .. import reg_utils, mailer, gost, audit, vector_llm
+from .. import reg_utils, mailer, gost, audit, vector_llm, translate_service
 from ..parsers import esstu_parser
 import vector_nlu   # общий с десктопом лексикон/классификатор (корень в sys.path через webdata)
 from schedule import parser as schedule_parser   # CATEGORIES — реестр категорий портала
@@ -1593,14 +1593,27 @@ _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
                      "homework", "server_state"}
 
 
+def user_ui_locale(user: User) -> str:
+    """Язык интерфейса ЭТОГО пользователя ('ru', если перевод выключен/не выбран).
+
+    ⚠️ Вызывать на СВОЁМ `user` того, кто спрашивает, а не на чужой записи — в
+    `parent.py` это родитель, а не ребёнок, чьими данными отвечает Вектор (см.
+    `parent_vector_ask`): иначе Вектор заговорил бы на языке, который родитель не выбирал."""
+    prefs = user.prefs or {}
+    return (prefs.get("locale") or "ru") if prefs.get("locale_on") else "ru"
+
+
 def answer_vector_question(question: str, user: User, db: Session, context: str = "",
-                           voice_role: str = "") -> dict:
+                           voice_role: str = "", locale: str = "ru") -> dict:
     """Общая логика ответа Вектора (вынесена из `vector_ask`, чтобы её мог переиспользовать
     мессенджер — команда `/vector <вопрос>` в любом чате, см. `routers/messenger.py`).
     Тот же принцип, что в десктопе: цифры берутся из реальных данных (SQL) — модель их НЕ
     выдумывает. Фактический текст собирает `_vector_facts`, затем LLM-провайдер
     (GigaChat/Ollama/оффлайн — из СИНХРОНИЗИРОВАННОГО конфига админа) лишь ПЕРЕФОРМУЛИРУЕТ
-    его в стиле Вектора. Роль вызывающего (`user.role`) скоупит данные, как и в дедике."""
+    его в стиле Вектора. Роль вызывающего (`user.role`) скоупит данные, как и в дедике.
+
+    `locale` — язык ИНТЕРФЕЙСА вызывающего (см. `user_ui_locale`), не факт данных: цифры
+    и ФИО остаются теми же, меняется только язык вокруг них (§ролей, полный перевод)."""
     cfg = W.load_config(db)
     result = _vector_facts(question.lower(), user, db, cfg)
     intent = result.get("intent")
@@ -1613,14 +1626,25 @@ def answer_vector_question(question: str, user: User, db: Session, context: str 
     if intent == "unknown":
         #context — обезличенные заметки из «Избранного» (пусто для обычного /web/vector/ask):
         #помогает понять «а это когда?», но цифры успеваемости из него брать запрещено.
-        result["text"] = vector_llm.free_chat(cfg, question, role, context)
-    #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль. Оффлайн или
-    #ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
+        result["text"] = vector_llm.free_chat(cfg, question, role, context, locale)
+    #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль (и, если выбран
+    #другой язык интерфейса, ЯЗЫК ответа — persona получает инструкцию, см. vector_llm).
+    #Оффлайн или ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
     #Приветствие/справку/благодарность/расписание НЕ озвучиваем (см. _NO_VOICE_INTENTS).
     elif intent not in _NO_VOICE_INTENTS and not result.get("no_voice"):
         #no_voice — ответ содержит фактический список (имена, причины), который LLM исказил
         #бы или отказался озвучивать. Отдаём как есть.
-        result["text"] = vector_llm.voice(cfg, result.get("text", ""), role, question)
+        result["text"] = vector_llm.voice(cfg, result.get("text", ""), role, question, locale)
+    elif locale != "ru":
+        #Не озвучиваемый (структурный/фактический) ответ всё равно должен быть на выбранном
+        #языке. Без данных (hello/thanks/help/about_*/howto) — готовый ручной перевод;
+        #с реальными данными (расписание/погода/домашка/сервер/списки) — перевод ГОТОВОГО
+        #русского текста постфактум, факты при этом не пересчитываются.
+        role_for_static = user.role if user.role in ("student", "teacher", "admin") else "student"
+        if intent in _STATIC_TEXT_INTENTS:
+            _localize_static(result, role_for_static, locale)
+        else:
+            _localize_dynamic(result, locale, cfg)
     result.pop("no_voice", None)   #внутренний флаг наружу не отдаём
     return result
 
@@ -1630,7 +1654,7 @@ def vector_ask(payload: dict = Body(...),
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Серверный «Вектор» — см. `answer_vector_question`. Студент видит только свои данные."""
     question = (payload.get("message") or "").strip()
-    return answer_vector_question(question, user, db)
+    return answer_vector_question(question, user, db, locale=user_ui_locale(user))
 
 
 # ── Голосовой ввод (Speech-to-Text) — ЗАГОТОВКА, распознаёт на ХОСТЕ ────────────────
@@ -1901,7 +1925,149 @@ _HELP_BY_ROLE = {
                 "группе <название>». Спрашивай словами или жми кнопки."),
 }
 _HELLO_PREFIX = {"student": "Привет!", "teacher": "Здравствуйте!", "admin": "Здравствуйте!"}
+_THANKS_TEXT = "Всегда рад помочь! 🐯"
 _SCHED_DAYS = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
+
+
+# ── Полный перевод интерфейса: локализация ответов Вектора ─────────────────────────
+# Интенты БЕЗ данных (hello/thanks/help/about_*/howto) переведены вручную и один раз —
+# ни числа, ни ФИО в них не участвуют, поэтому это ровно тот случай, где ручной перевод
+# надёжнее и мгновеннее LLM (см. dictionaries.js на фронте — тот же принцип). Всё
+# ОСТАЛЬНОЕ, что не озвучивается (`_NO_VOICE_INTENTS`/`no_voice=True` — расписание,
+# погода, домашка, состояние сервера, списки должников), — реальные данные, вторую
+# ручную копию для них на 3 языка не пишем, а прогоняем ГОТОВЫЙ русский текст через
+# LLM-перевод постфактум (`_localize_dynamic`) — числа/ФИО от этого не меняются, меняется
+# только язык вокруг них. Нет LLM/сбой перевода → тихо остаётся русский текст.
+_STATIC_TEXT_INTENTS = {"hello", "thanks", "help", "about_vsgutu", "about_college", "howto"}
+
+_STATIC_TEXT = {
+    "en": {
+        "about_vsgutu": (
+            "ESSTU is the East Siberia State University of Technology and Management in "
+            "Ulan-Ude (Republic of Buryatia, Russia). Founded on June 19, 1962 as the East "
+            "Siberian Technological Institute; it became a university in 1994 and was "
+            "renamed ESSTU in 2011. Today it's one of the largest universities in Siberia "
+            "and the Russian Far East — over 15,000 students and more than 1,900 faculty "
+            "and staff. Main address: 40V Klyuchevskaya St."
+        ),
+        "about_college": (
+            "The ESSTU Technological College is a structural unit of the university in "
+            "Ulan-Ude that provides vocational secondary education and trains mid-level "
+            "specialists. After college, you can continue studying at ESSTU itself. "
+            "College groups are labeled with the letter «К» (e.g., К75/1). This "
+            "gradebook is the college's internal system: grades, attendance, resits and "
+            "performance by group."
+        ),
+        "howto": (
+            "How the gradebook works:\n"
+            "• The average is calculated from practicals and exams (lectures aren't "
+            "counted); a retake replaces the previous attempt — only the latest one "
+            "counts.\n"
+            "• A debt is an unpassed practical (a 2 or an absence) or a failed exam.\n"
+            "• Attendance: Н — absent, Б — sick leave, О — excused absence.\n"
+            "• The risk zone is students with an average below 3.\n"
+            "Ask about your numbers in plain words — I pull them from real data, I don't "
+            "make them up."
+        ),
+        "help_by_role": {
+            "student": ("I'm Vector 🐯, I help with your studies using your REAL data (I "
+                        "never make numbers up). Ask in plain words: “my average”, "
+                        "“how many grades do I have”, “grades in computer "
+                        "science”, “do I have any debts”, “how many "
+                        "absences”, “when is math”, “what's "
+                        "tomorrow”. Or use the buttons under the chat."),
+            "teacher": ("I'm Vector 🐯 for teachers — I count strictly from your groups' "
+                        "gradebook. I can: “average by group”, “who's at "
+                        "risk”, “who has debts”, “student list”, "
+                        "“absences for <surname>”, “which groups”, "
+                        "“group schedule”. Ask however's convenient."),
+            "admin": ("I'm Vector 🐯 for administrators. I can summarize the college: "
+                      "“how many students”, “how many teachers”, "
+                      "“which groups”, “teacher list”, “summary "
+                      "for group <name>”. Ask in words or use the buttons."),
+        },
+        "hello_prefix": {"student": "Hi!", "teacher": "Hello!", "admin": "Hello!"},
+        "thanks": "Always happy to help! 🐯",
+    },
+    "zh": {
+        "about_vsgutu": (
+            "东西伯利亚国立技术大学（ESSTU）位于俄罗斯布里亚特共和国乌兰乌德市。始建于1962年6月19日，"
+            "最初名为东西伯利亚技术学院；1994年升格为大学，2011年更名为ESSTU。如今它是西伯利亚和俄罗斯"
+            "远东地区最大的高校之一——在校学生超过15000人，教职工超过1900人。主校区地址：Ключевская街40В号。"
+        ),
+        "about_college": (
+            "ESSTU技术学院是该大学设在乌兰乌德的一个下属机构，提供中等职业教育，培养中级专业人才。"
+            "从学院毕业后可以继续在ESSTU本部深造。学院班级以字母“К”标注（例如К75/1）。"
+            "这个电子成绩册就是学院的内部系统：成绩、出勤、补考和各班级的学习情况。"
+        ),
+        "howto": (
+            "成绩册的工作原理：\n"
+            "• 平均分根据平时成绩和考试计算（不包括讲座）；补考会替换之前的成绩——只计最新一次。\n"
+            "• 欠考是指未通过的平时作业（得2分或缺勤）或未通过的考试。\n"
+            "• 出勤情况：Н——缺勤，Б——病假，О——请假。\n"
+            "• 高危学生是指平均分低于3分的学生。\n"
+            "用你自己的话问我关于你的数据——我从真实数据中获取，不会编造。"
+        ),
+        "help_by_role": {
+            "student": ("我是维克托🐯，会根据你的真实数据帮你学习（绝不编造数字）。用自己的话问我："
+                        "「我的平均分」「我有多少个成绩」「计算机课的成绩」「我有欠考吗」"
+                        "「我缺勤了几次」「数学课什么时候」「明天有什么课」。也可以点击聊天下方的按钮。"),
+            "teacher": ("我是维克托🐯，专为教师服务，严格按照你所带班级的成绩册计算。我可以回答："
+                        "「各班平均分」「谁处于高危」「谁有欠考」「学生名单」「<姓氏>的缺勤情况」"
+                        "「有哪些班级」「班级课表」。随意提问即可。"),
+            "admin": ("我是维克托🐯，为管理员服务。我可以汇总学院信息：「学生总数」「教师总数」"
+                      "「有哪些班级」「教师名单」「<班级名称>的汇总情况」。用文字提问或点击按钮均可。"),
+        },
+        "hello_prefix": {"student": "你好！", "teacher": "您好！", "admin": "您好！"},
+        "thanks": "随时乐意帮忙！🐯",
+    },
+}
+
+
+def _localize_static(result: dict, role_for_static: str, locale: str) -> None:
+    """Подставляет готовый перевод для интентов без данных (см. `_STATIC_TEXT_INTENTS`)."""
+    pack = _STATIC_TEXT.get(locale)
+    if not pack:
+        return
+    intent = result.get("intent")
+    if intent == "hello":
+        result["text"] = f"{pack['hello_prefix'][role_for_static]} {pack['help_by_role'][role_for_static]}"
+    elif intent == "help":
+        result["text"] = pack["help_by_role"][role_for_static]
+    elif intent == "thanks":
+        result["text"] = pack["thanks"]
+    elif intent in ("about_vsgutu", "about_college", "howto"):
+        result["text"] = pack[intent]
+
+
+def _localize_dynamic(result: dict, locale: str, cfg: dict) -> None:
+    """Переводит ГОТОВЫЙ русский ответ с реальными данными (расписание/погода/домашка/
+    состояние сервера/списки должников) через тот же LLM-примитив, что и переводчик
+    сообщений (`vector_llm.complete`) — вторую ручную копию на 3 языка для десятков
+    комбинаций данных не пишем. Числа/ФИО/markdown модель НЕ обязана менять — только язык.
+    Нет провайдера или ошибка → молча остаётся русский текст (та же деградация, что и у
+    переводчика сообщений при недоступной модели)."""
+    text = result.get("text")
+    if not text or locale not in _LANG_NAMES:
+        return
+    prompt = [
+        {"role": "system", "content": (
+            f"Переведи следующий текст на {_LANG_NAMES[locale]} язык. Verbatim: верни "
+            "ТОЛЬКО перевод, без кавычек и пояснений. Сохрани числа, даты, имена, "
+            "маркированные списки (•), переносы строк и эмодзи как есть.")},
+        {"role": "user", "content": text},
+    ]
+    try:
+        out = (vector_llm.complete(cfg, prompt, temperature=0.1) or "").strip()
+    except Exception:
+        out = ""
+    if out:
+        result["text"] = out
+
+
+#Те же коды/названия языков, что у переводчика сообщений (translate_service.LANGUAGES) —
+#не заводим вторую копию, иначе однажды разойдутся списки поддерживаемых языков.
+_LANG_NAMES = {k: v for k, v in translate_service.LANGUAGES.items() if k != "ru"}
 
 
 def _known_subjects(user: User, db: Session) -> list:

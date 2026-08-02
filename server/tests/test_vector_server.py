@@ -30,7 +30,7 @@ def test_static_intents_are_not_voiced_by_llm(client, monkeypatch):
     """
     from app import vector_llm
     monkeypatch.setattr(vector_llm, "voice",
-                        lambda cfg, text, role, question: "LLM_ОЗВУЧИЛ")
+                        lambda cfg, text, role, question, locale="ru": "LLM_ОЗВУЧИЛ")
 
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
@@ -53,8 +53,9 @@ def test_offtopic_goes_to_free_chat_not_canned_help(client, monkeypatch):
     (их дают интенты). free_chat замокан — проверяем сам МАРШРУТ."""
     from app import vector_llm
     #context — необязательный 4-й аргумент (заметки «Избранного»), у обычного /vector/ask пуст.
+    #locale — 5-й, язык интерфейса вызывающего (§ролей, полный перевод), по умолчанию "ru".
     monkeypatch.setattr(vector_llm, "free_chat",
-                        lambda cfg, q, role, context="": f"SMALLTALK:{role}")
+                        lambda cfg, q, role, context="", locale="ru": f"SMALLTALK:{role}")
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
     #Пример НАРОЧНО не про погоду: с появлением реальных метеоданных «какая погода»
