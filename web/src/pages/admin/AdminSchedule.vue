@@ -16,7 +16,8 @@
 // только когда каждый слот — видимая зона сброса, включая пустые.
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { adminApi } from '@/api/endpoints'
+import { RotateCw, User, Users } from '@lucide/vue'
+import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -76,6 +77,72 @@ const groupCategory = computed(() => {
   return g?.category || ''
 })
 
+// ── Режим (преподаватели/группы) + категория портала — как в общем SchedulePage.vue.
+// §3.5.5, живой отзыв: раньше страница ВСЕГДА была редактором группы, категории и
+// выбора «препод/группа» не было вовсе. mode==='' — экран выбора (как заходишь на
+// вкладку в первый раз); дальше — та же логика, что на общей странице: категория
+// видна ТОЛЬКО после выбора режима, режим переживает смену категории.
+const mode = ref('')                 // '' | 'teacher' | 'group'
+const categories = ref([])
+const category = ref('')
+const DEFAULT_CATEGORY = 'college'
+const isCollege = computed(() => !category.value || category.value === DEFAULT_CATEGORY)
+async function loadCategories() {
+  try {
+    const r = (await scheduleApi.categories()).data
+    categories.value = r.categories || []
+    category.value = r.default || DEFAULT_CATEGORY
+  } catch { categories.value = []; category.value = DEFAULT_CATEGORY }
+}
+const groupsForCategory = computed(() =>
+  groups.value.filter((g) => (g.category || DEFAULT_CATEGORY) === category.value))
+
+// Расписание ПРЕПОДАВАТЕЛЯ — только просмотр (правки ScheduleOverride привязаны к
+// ГРУППЕ+ячейке, у препода группы как единицы редактирования нет). Тот же эндпоинт,
+// что у общей страницы (SchedulePage.vue) и у самого препода/студента.
+const teachers = ref([])
+const teacherName = ref('')
+const teacherData = ref(null)
+const teacherLoading = ref(false)
+const teacherBuilding = ref(false)
+async function loadTeacherList(name) {
+  teacherLoading.value = true
+  try {
+    const r = (await scheduleApi.teacher(name, category.value)).data
+    teacherBuilding.value = !!r.building
+    teachers.value = r.teachers || []
+    week.value = r.week || 1
+    teacherData.value = r.available ? r : null
+    if (r.available) teacherName.value = r.teacher
+  } catch { teacherData.value = null } finally { teacherLoading.value = false }
+}
+async function chooseMode(next) {
+  mode.value = next
+  await loadCategories()
+  if (next === 'teacher') { teacherName.value = ''; await loadTeacherList('') }
+  else if (groups.value.length) { await onCategoryChange(category.value, true) }
+}
+async function onCategoryChange(key, force) {
+  if (key === category.value && !force) return
+  category.value = key
+  if (mode.value === 'teacher') { teacherName.value = ''; await loadTeacherList(''); return }
+  //group-режим: переключаемся на первую группу НОВОЙ категории (текущая может не
+  //принадлежать ей вовсе — список ниже был бы пуст, а редактор показывал бы старое).
+  const list = groupsForCategory.value
+  if (list.length && !list.some((g) => (g.name || g) === group.value)) {
+    group.value = list[0].name || list[0]
+  }
+  if (list.length) await load()
+  else { base.value = null }
+}
+
+// Общий рендер ДЛЯ ЧТЕНИЯ (день → пары) — используется и режимом «преподаватель»
+// (всегда только просмотр), и режимом «группа» ВНЕ колледжа (там ScheduleOverride
+// не накладывается — редактор был бы косметикой без эффекта, см. groupCategory выше).
+const readOnlyWeeks = computed(() =>
+  (mode.value === 'teacher' ? teacherData.value?.schedule?.weeks : base.value?.weeks) || {})
+function readOnlyDayLessons(day) { return (readOnlyWeeks.value[String(week.value)] || {})[day] || [] }
+
 // Черновик: ключ «неделя|день|слот» → {action:'set'|'remove', ...поля}. Пусто = нет правок.
 const pending = reactive({})
 // Ключи ячеек, где сверка нашла накладку (для подсветки).
@@ -125,7 +192,6 @@ function isConflict(day, slot) { return conflicts.has(key(day, slot)) }
 // ── Загрузка ──────────────────────────────────────────────────────────────────────
 onMounted(async () => {
   try { groups.value = (await adminApi.groups()).data.groups || [] } catch { groups.value = [] }
-  if (groups.value.length) { group.value = groups.value[0].name || groups.value[0]; await load() }
 })
 
 async function load() {
@@ -394,84 +460,173 @@ function isHover(day, slot) {
 
 <template>
   <div class="space-y-4" style="touch-action: pan-y">
-    <!-- Панель управления -->
-    <div class="flex flex-wrap items-center gap-2">
-      <select :value="group" @change="onGroupChange"
-              class="h-9 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-        <option v-for="g in groups" :key="g.name || g" :value="g.name || g">{{ g.name || g }}</option>
-      </select>
-      <div class="inline-flex overflow-hidden rounded-sm border border-border2">
-        <button class="px-3 py-1.5 text-sm" :class="week === 1 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 1">{{ locale.t('adminSchedule.week1', 'I неделя') }}</button>
-        <button class="px-3 py-1.5 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">{{ locale.t('adminSchedule.week2', 'II неделя') }}</button>
-      </div>
-
-      <div class="ml-auto flex flex-wrap items-center gap-2">
-        <AppButton variant="ghost" size="sm" @click="refreshGroup">{{ locale.t('adminSchedule.pullFromPortal', '↻ Взять с ВСГУТУ') }}</AppButton>
-        <AppButton variant="ghost" size="sm" @click="refreshAll">{{ locale.t('adminSchedule.pullAllGroups', '↻ Все группы') }}</AppButton>
-        <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
-        <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
+    <!-- §3.5.5: заход на вкладку — выбор режима (как в общем SchedulePage.vue), а не
+         сразу редактор группы. Живёт, пока не выйдешь со вкладки. -->
+    <div v-if="mode === ''" class="flex min-h-[40vh] flex-col items-center justify-center gap-4">
+      <p class="text-sm text-text2">{{ locale.t('adminSchedule.chooseMode', 'Что показать?') }}</p>
+      <div class="flex flex-wrap justify-center gap-3">
+        <AppButton variant="ghost" @click="chooseMode('teacher')">
+          <User class="size-4" /> {{ locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
+        </AppButton>
+        <AppButton variant="ghost" @click="chooseMode('group')">
+          <Users class="size-4" /> {{ locale.t('schedulePage.groupSchedule', 'Расписание группы') }}
+        </AppButton>
       </div>
     </div>
 
-    <!-- Черновик: сохранить / отменить -->
-    <div v-if="dirty" class="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/5 px-4 py-2.5">
-      <span class="text-sm font-medium text-accent">{{ locale.t('adminSchedule.unsavedChanges', 'Есть несохранённые правки') }}</span>
-      <div class="ml-auto flex gap-2">
-        <AppButton variant="ghost" size="sm" @click="discardDraft">{{ locale.t('adminSchedule.discardBtn', 'Отменить') }}</AppButton>
-        <AppButton variant="green" size="sm" :disabled="saving" @click="saveDraft">{{ saving ? locale.t('adminSchedule.savingBtn', 'Сохранение…') : locale.t('common.save') }}</AppButton>
+    <template v-else>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <!-- Категории портала — БЕЗ пояснений «преподы/группы» на кнопках, режим уже
+             выбран отдельно выше. -->
+        <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+          <button v-for="c in categories" :key="c.key"
+                  class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+                  :class="category === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+                  @click="onCategoryChange(c.key)">{{ c.label }}</button>
+        </div>
+        <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="mode = ''">
+          {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
+        </button>
       </div>
-    </div>
 
-    <p class="text-xs text-text3">
-      {{ locale.t('adminSchedule.dragHint', 'Удерживайте пару ~полсекунды и перетащите на другой слот или день. Время подстроится под номер пары. Тап по паре — правка, тап по пустой ячейке — добавить.') }}
-    </p>
-
-    <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
-
-    <!-- Сетка «слоты × дни» -->
-    <div v-else class="overflow-x-auto">
-      <table class="w-full min-w-[820px] border-collapse select-none">
-        <thead>
-          <tr>
-            <th class="w-28 border border-border2 bg-card2 p-2 text-xs font-semibold text-text3">{{ locale.t('adminSchedule.colPair', 'Пара') }}</th>
-            <th v-for="day in DAYS" :key="day" class="border border-border2 bg-card2 p-2 text-sm font-semibold text-text">{{ dayLabel(day) }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="slot in slots" :key="slot">
-            <td class="border border-border2 bg-card2 p-2 text-center align-top">
-              <div class="text-sm font-bold text-text">{{ slot }}</div>
-              <div class="text-tiny text-text3">{{ timeForSlot(slot) }}</div>
-            </td>
-            <td v-for="day in DAYS" :key="day" :data-day="day" :data-slot="slot"
-                class="h-20 border border-border2 p-1 align-top transition-colors"
-                :class="[
-                  isHover(day, slot) ? 'bg-accent/15 ring-2 ring-inset ring-accent' : '',
-                  !cell(day, slot) && dragging ? 'bg-card2/50' : '',
-                ]"
-                @click="!cell(day, slot) && !dragging && openAdd(day, slot)">
-              <div v-if="cell(day, slot)"
-                   class="group relative h-full cursor-grab rounded-md border p-1.5 text-left"
-                   :class="[
-                     isConflict(day, slot) ? 'border-red bg-red/10'
-                       : isPending(day, slot) ? 'border-accent bg-accent/10'
-                       : 'border-border bg-card',
-                     isDragSource(day, slot) ? 'opacity-40' : '',
-                   ]"
-                   @pointerdown="onPairPointerDown($event, day, slot)">
-                <p class="truncate text-xs font-semibold text-text">{{ cell(day, slot).subject || cell(day, slot).raw }}</p>
-                <p v-if="cell(day, slot).room || cell(day, slot).teacher" class="truncate text-tiny text-text3">
-                  {{ [cell(day, slot).teacher, cell(day, slot).room ? locale.t('adminSchedule.roomLabel', { room: cell(day, slot).room }) : ''].filter(Boolean).join(' · ') }}
+      <!-- ═══ Режим «преподаватель» — ТОЛЬКО просмотр, правки привязаны к группе ═══ -->
+      <template v-if="mode === 'teacher'">
+        <div class="flex flex-wrap items-center gap-2">
+          <select v-model="teacherName" @change="loadTeacherList(teacherName)"
+                  class="h-9 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:max-w-64">
+            <option value="" disabled>{{ locale.t('schedulePage.teacherPlaceholder', 'Преподаватель…') }}</option>
+            <option v-for="t in teachers" :key="t" :value="t">{{ t }}</option>
+          </select>
+          <div class="inline-flex overflow-hidden rounded-sm border border-border2">
+            <button class="px-3 py-1.5 text-sm" :class="week === 1 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 1">{{ locale.t('adminSchedule.week1', 'I неделя') }}</button>
+            <button class="px-3 py-1.5 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">{{ locale.t('adminSchedule.week2', 'II неделя') }}</button>
+          </div>
+          <template v-if="teacherBuilding && !teachers.length">
+            <span class="text-xs text-text3">{{ locale.t('schedulePage.buildingTeachers', 'Индекс преподавателей ещё готовится на сервере (~минута).') }}</span>
+            <AppButton variant="green" size="sm" @click="loadTeacherList(teacherName)"><RotateCw class="size-3.5" /> {{ locale.t('schedulePage.checkAgain', 'Проверить снова') }}</AppButton>
+          </template>
+        </div>
+        <p v-if="teacherLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+        <div v-else-if="!teacherData" class="text-sm text-text3">{{ locale.t('schedulePage.unavailableTitle', 'Расписание недоступно') }}</div>
+        <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div v-for="day in DAYS" :key="day" class="rounded-lg border border-border bg-card p-3 shadow-card">
+            <p class="mb-2 font-title text-base font-bold text-text">{{ dayLabel(day) }}</p>
+            <p v-if="!readOnlyDayLessons(day).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>
+            <ul v-else class="space-y-2">
+              <li v-for="(l, i) in readOnlyDayLessons(day)" :key="i" class="rounded-md border border-border bg-card2 p-2.5">
+                <p class="text-xs font-semibold text-text3">{{ l.pair_no }}. {{ l.time }}</p>
+                <p class="text-sm font-medium text-text">{{ l.subject || l.raw }}</p>
+                <p v-if="l.group || l.room" class="mt-0.5 text-xs text-text3">
+                  {{ l.group ? locale.t('schedulePage.groupLabel', { group: l.group }) : '' }}<span v-if="l.room"> · {{ locale.t('schedulePage.roomLabel', { room: l.room }) }}</span>
                 </p>
-                <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')">⚠</span>
-                <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')">●</span>
-                <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')">✎</span>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </template>
+
+      <!-- ═══ Режим «группа» — редактор ТОЛЬКО для колледжа (там живут ScheduleOverride);
+           вне колледжа — тот же просмотр, что и у препода/студента. ═══ -->
+      <template v-else>
+        <div class="flex flex-wrap items-center gap-2">
+          <select :value="group" @change="onGroupChange"
+                  class="h-9 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+            <option v-for="g in groupsForCategory" :key="g.name || g" :value="g.name || g">{{ g.name || g }}</option>
+          </select>
+          <div class="inline-flex overflow-hidden rounded-sm border border-border2">
+            <button class="px-3 py-1.5 text-sm" :class="week === 1 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 1">{{ locale.t('adminSchedule.week1', 'I неделя') }}</button>
+            <button class="px-3 py-1.5 text-sm" :class="week === 2 ? 'bg-accent text-white' : 'bg-card2 text-text3'" @click="week = 2">{{ locale.t('adminSchedule.week2', 'II неделя') }}</button>
+          </div>
+
+          <div v-if="isCollege" class="ml-auto flex flex-wrap items-center gap-2">
+            <AppButton variant="ghost" size="sm" @click="refreshGroup">{{ locale.t('adminSchedule.pullFromPortal', '↻ Взять с ВСГУТУ') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="refreshAll">{{ locale.t('adminSchedule.pullAllGroups', '↻ Все группы') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
+          </div>
+          <AppButton v-else variant="ghost" size="sm" class="ml-auto" @click="load"><RotateCw class="size-3.5" /> {{ locale.t('schedulePage.refresh', 'Обновить') }}</AppButton>
+        </div>
+
+        <!-- Черновик: сохранить / отменить — только колледж (только там правки вообще
+             применяются, см. isCollege выше). -->
+        <div v-if="isCollege && dirty" class="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/5 px-4 py-2.5">
+          <span class="text-sm font-medium text-accent">{{ locale.t('adminSchedule.unsavedChanges', 'Есть несохранённые правки') }}</span>
+          <div class="ml-auto flex gap-2">
+            <AppButton variant="ghost" size="sm" @click="discardDraft">{{ locale.t('adminSchedule.discardBtn', 'Отменить') }}</AppButton>
+            <AppButton variant="green" size="sm" :disabled="saving" @click="saveDraft">{{ saving ? locale.t('adminSchedule.savingBtn', 'Сохранение…') : locale.t('common.save') }}</AppButton>
+          </div>
+        </div>
+
+        <p v-if="isCollege" class="text-xs text-text3">
+          {{ locale.t('adminSchedule.dragHint', 'Удерживайте пару ~полсекунды и перетащите на другой слот или день. Время подстроится под номер пары. Тап по паре — правка, тап по пустой ячейке — добавить.') }}
+        </p>
+
+        <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+
+        <!-- Интерактивная сетка «слоты × дни» — ТОЛЬКО колледж. -->
+        <div v-else-if="isCollege" class="overflow-x-auto">
+          <table class="w-full min-w-[820px] border-collapse select-none">
+            <thead>
+              <tr>
+                <th class="w-28 border border-border2 bg-card2 p-2 text-xs font-semibold text-text3">{{ locale.t('adminSchedule.colPair', 'Пара') }}</th>
+                <th v-for="day in DAYS" :key="day" class="border border-border2 bg-card2 p-2 text-sm font-semibold text-text">{{ dayLabel(day) }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="slot in slots" :key="slot">
+                <td class="border border-border2 bg-card2 p-2 text-center align-top">
+                  <div class="text-sm font-bold text-text">{{ slot }}</div>
+                  <div class="text-tiny text-text3">{{ timeForSlot(slot) }}</div>
+                </td>
+                <td v-for="day in DAYS" :key="day" :data-day="day" :data-slot="slot"
+                    class="h-20 border border-border2 p-1 align-top transition-colors"
+                    :class="[
+                      isHover(day, slot) ? 'bg-accent/15 ring-2 ring-inset ring-accent' : '',
+                      !cell(day, slot) && dragging ? 'bg-card2/50' : '',
+                    ]"
+                    @click="!cell(day, slot) && !dragging && openAdd(day, slot)">
+                  <div v-if="cell(day, slot)"
+                       class="group relative h-full cursor-grab rounded-md border p-1.5 text-left"
+                       :class="[
+                         isConflict(day, slot) ? 'border-red bg-red/10'
+                           : isPending(day, slot) ? 'border-accent bg-accent/10'
+                           : 'border-border bg-card',
+                         isDragSource(day, slot) ? 'opacity-40' : '',
+                       ]"
+                       @pointerdown="onPairPointerDown($event, day, slot)">
+                    <p class="truncate text-xs font-semibold text-text">{{ cell(day, slot).subject || cell(day, slot).raw }}</p>
+                    <p v-if="cell(day, slot).room || cell(day, slot).teacher" class="truncate text-tiny text-text3">
+                      {{ [cell(day, slot).teacher, cell(day, slot).room ? locale.t('adminSchedule.roomLabel', { room: cell(day, slot).room }) : ''].filter(Boolean).join(' · ') }}
+                    </p>
+                    <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')">⚠</span>
+                    <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')">●</span>
+                    <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')">✎</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Вне колледжа — тот же просмотр, что у препода/студента, без редактирования
+             (ScheduleOverride там не накладывается, см. _group_schedule на сервере). -->
+        <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div v-for="day in DAYS" :key="day" class="rounded-lg border border-border bg-card p-3 shadow-card">
+            <p class="mb-2 font-title text-base font-bold text-text">{{ dayLabel(day) }}</p>
+            <p v-if="!readOnlyDayLessons(day).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>
+            <ul v-else class="space-y-2">
+              <li v-for="(l, i) in readOnlyDayLessons(day)" :key="i" class="rounded-md border border-border bg-card2 p-2.5">
+                <p class="text-xs font-semibold text-text3">{{ l.pair_no }}. {{ l.time }}</p>
+                <p class="text-sm font-medium text-text">{{ l.subject || l.raw }}</p>
+                <p v-if="l.teacher || l.room" class="mt-0.5 text-xs text-text3">
+                  {{ l.teacher }}<span v-if="l.room"> · {{ locale.t('schedulePage.roomLabel', { room: l.room }) }}</span>
+                </p>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </template>
+    </template>
 
     <!-- Плавающий «призрак» перетаскивания -->
     <div v-if="ghost.show" class="pointer-events-none fixed z-[60] -translate-x-1/2 -translate-y-1/2 rounded-md border border-accent bg-card px-2 py-1 text-xs font-semibold text-text shadow-card"
