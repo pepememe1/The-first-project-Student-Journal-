@@ -11,10 +11,15 @@ import MicButton from '@/components/vector/MicButton.vue'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
 import { useToast } from '@/composables/useToast'
+import { useLocaleStore } from '@/stores/locale'
 
 const vector = useVectorStore()
 const tts = useTtsStore()
 const toast = useToast()
+const locale = useLocaleStore()
+// Те же ключи, что и у вкладки «ИИ Помощник» (VectorPage.vue) — одна переписка, одна
+// конвенция имени/подписей, дублировать словарь не нужно.
+const vectorName = () => locale.t('chatThread.vectorName', 'Вектор')
 
 // Голос только ЗАПОЛНЯЕТ поле — отправка всё равно по кнопке/Enter человеком: так
 // можно поправить неверно распознанное слово перед отправкой Вектору.
@@ -56,21 +61,21 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
     <div class="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
       <div class="flex min-w-0 items-center gap-2">
         <span class="size-2 shrink-0 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
-        <span class="font-title text-sm font-bold text-text">Вектор</span>
+        <span class="font-title text-sm font-bold text-text">{{ vectorName() }}</span>
         <span v-if="label" class="truncate text-[11px] text-text3">· {{ label }}</span>
       </div>
       <div class="flex shrink-0 items-center gap-0.5">
         <!-- Озвучка: вкл/выкл. Когда играет — иконка подсвечена. Клик по выключенной
              также гасит текущую речь (внутри setEnabled). -->
         <button type="button" @click="tts.setEnabled(!ttsEnabled)"
-                :aria-label="ttsEnabled ? 'Выключить озвучку' : 'Включить озвучку'"
-                :title="ttsEnabled ? 'Озвучка включена' : 'Озвучка выключена'"
+                :aria-label="ttsEnabled ? locale.t('vectorDock.muteOn', 'Выключить озвучку') : locale.t('vectorDock.muteOff', 'Включить озвучку')"
+                :title="tts.modeLabel"
                 class="grid size-7 place-items-center rounded-md transition-colors hover:bg-bg2"
                 :class="ttsEnabled ? (speaking ? 'text-accent' : 'text-text2 hover:text-text') : 'text-text3'">
           <component :is="ttsEnabled ? Volume2 : VolumeX" class="size-4" />
         </button>
-        <button type="button" @click="vector.setCollapsed(true)" aria-label="Скрыть панель Вектора"
-                title="Скрыть панель"
+        <button type="button" @click="vector.setCollapsed(true)" :aria-label="locale.t('vectorDock.hidePanel', 'Скрыть панель Вектора')"
+                :title="locale.t('vectorDock.hidePanelShort', 'Скрыть панель')"
                 class="grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-text">
           <PanelRightClose class="size-4" />
         </button>
@@ -91,12 +96,12 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
             <div class="max-w-[85%] rounded-lg bg-accent px-3 py-1.5 text-sm text-white">{{ m.text }}</div>
           </div>
           <p v-else class="text-sm leading-snug text-text" @dblclick="onMessageDblClick(i)"
-             :title="isTyping(i) ? 'Двойной клик — показать целиком' : ''">
-            <span class="font-semibold text-accent">Вектор:</span> {{ displayText(i) }}<span
+             :title="isTyping(i) ? locale.t('vectorPage.dblClickHint', 'Двойной клик — показать целиком') : ''">
+            <span class="font-semibold text-accent">{{ vectorName() }}:</span> {{ displayText(i) }}<span
               v-if="isTyping(i)" class="animate-pulse text-accent">▍</span>
           </p>
         </template>
-        <p v-if="state === 'thinking'" class="text-xs text-text2">Вектор думает…</p>
+        <p v-if="state === 'thinking'" class="text-xs text-text2">{{ locale.t('vectorPage.thinking', { name: vectorName() }) }}</p>
       </div>
     </div>
 
@@ -105,7 +110,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
       <transition name="pop">
         <div v-if="showQuick && cmds.length"
              class="absolute bottom-full left-2.5 right-2.5 mb-2 rounded-lg border border-border2 bg-card p-2 shadow-card">
-          <p class="px-1 pb-1 text-xs font-semibold text-text3">Быстрые команды</p>
+          <p class="px-1 pb-1 text-xs font-semibold text-text3">{{ locale.t('vectorPage.quickCommands', 'Быстрые команды') }}</p>
           <div class="flex flex-col gap-0.5">
             <button v-for="c in cmds" :key="c.label" type="button" @click="ask(c.q)"
                     class="flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-accent-glow hover:text-accent">
@@ -116,15 +121,15 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
       </transition>
 
       <form class="flex items-center gap-1.5" @submit.prevent="send">
-        <button type="button" @click="showQuick = !showQuick" aria-label="Быстрые команды"
+        <button type="button" @click="showQuick = !showQuick" :aria-label="locale.t('vectorPage.quickCommands', 'Быстрые команды')"
                 class="grid size-10 shrink-0 place-items-center rounded-sm border transition-colors"
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
           <LayoutGrid class="size-4" />
         </button>
         <MicButton @text="onVoiceText" @error="onVoiceError" />
-        <input v-model="input" placeholder="Спросите Вектора…" @focus="showQuick = false"
+        <input v-model="input" :placeholder="locale.t('vectorPage.askPlaceholder', { name: vectorName() })" @focus="showQuick = false"
                class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent focus:bg-card" />
-        <button type="submit" aria-label="Отправить"
+        <button type="submit" :aria-label="locale.t('vectorPage.send', 'Отправить')"
                 class="grid size-10 shrink-0 place-items-center rounded-sm bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50"
                 :disabled="state === 'thinking' || !input.trim()">
           <Send class="size-4" />

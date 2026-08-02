@@ -6,20 +6,33 @@
  * маскота и эмоции общие. Цифры считает сервер (/web/vector/ask) из реальных данных.
  */
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { vectorApi, parentApi } from '@/api/endpoints'
 import { chatEmote } from '@/config/mascot'
 import { QUICK_COMMANDS } from '@/config/vectorCommands'
 import { useAuthStore } from './auth'
 import { useTtsStore } from './tts'
+import { useLocaleStore } from './locale'
+
+const GREETING_KEY = 'vectorPage.greeting'
+const GREETING_FALLBACK = 'Привет! Я Вектор. Спросите про средний балл, задолженности или пропуски — я беру цифры из ваших реальных данных.'
 
 export const useVectorStore = defineStore('vector', () => {
   const auth = useAuthStore()
   const tts = useTtsStore()
+  const locale = useLocaleStore()
 
   const messages = ref([
-    { role: 'vector', text: 'Привет! Я Вектор. Спросите про средний балл, задолженности или пропуски — я беру цифры из ваших реальных данных.' },
+    { role: 'vector', text: locale.t(GREETING_KEY, GREETING_FALLBACK) },
   ])
+  // Приветствие — заглушка ДО первого реального ответа сервера (тот уже приходит на
+  // нужном языке через locale_on/prefs.locale). Пока пользователь ничего не спросил,
+  // переключение языка обязано перевести и её — иначе «выбрал English, а текст тот же».
+  watch(() => locale.active, () => {
+    if (messages.value.length === 1 && messages.value[0].role === 'vector') {
+      messages.value[0].text = locale.t(GREETING_KEY, GREETING_FALLBACK)
+    }
+  })
   const input = ref('')
   const state = ref('greeting')      // greeting | idle | thinking | speaking
   const lastMood = ref('neutral')
@@ -40,8 +53,11 @@ export const useVectorStore = defineStore('vector', () => {
   // а статичные эмоции по успеваемости — на дашборде, см. §5).
   const anim = computed(() => state.value)
   const label = computed(() => ({
-    greeting: 'Привет!', thinking: 'Думаю…', speaking: 'Отвечаю', idle: 'Готов помочь',
-  }[state.value] || 'Готов помочь'))
+    greeting: locale.t('vectorPage.labelGreeting', 'Привет!'),
+    thinking: locale.t('vectorPage.labelThinking', 'Думаю…'),
+    speaking: locale.t('vectorPage.labelSpeaking', 'Отвечаю'),
+    idle: locale.t('vectorPage.labelIdle', 'Готов помочь'),
+  }[state.value] || locale.t('vectorPage.labelIdle', 'Готов помочь')))
   const cmds = computed(() => QUICK_COMMANDS[auth.role] || QUICK_COMMANDS.student)
 
   // Анимация «печати» ответа по символам — потребляется И VectorPage.vue (вкладка «ИИ
@@ -148,14 +164,16 @@ export const useVectorStore = defineStore('vector', () => {
         : await vectorApi.ask(t)
       lastMood.value = data.mood || 'neutral'
       lastIntent.value = data.intent || 'help'
-      answer = data.text || 'Готово.'
+      answer = data.text || locale.t('vectorPage.done', 'Готово.')
       msgIndex = messages.value.length
       messages.value.push({ role: 'vector', text: answer })
     } catch (e) {
       const offline = e.response?.status === 404
       messages.value.push({
         role: 'vector',
-        text: offline ? 'Серверный «Вектор» ещё подключается.' : 'Не удалось получить ответ. Попробуйте снова.',
+        text: offline
+          ? locale.t('vectorPage.offline', 'Серверный «Вектор» ещё подключается.')
+          : locale.t('vectorPage.failed', 'Не удалось получить ответ. Попробуйте снова.'),
       })
       lastMood.value = 'neutral'
     } finally {

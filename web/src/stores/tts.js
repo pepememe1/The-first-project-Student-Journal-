@@ -115,17 +115,26 @@ export const useTtsStore = defineStore('tts', () => {
     speaking.value = false
   }
 
-  // Браузерный фолбэк (для режима voice, если сервер недоступен): speechSynthesis.
-  function _speakFallback(text, onEnd) {
+  // Язык интерфейса → тег речи браузера. Silero (серверный «voice») умеет только
+  // русский (v4_ru) — для остальных языков озвучка ВСЕГДА идёт этим фолбэком, иначе
+  // английский/китайский текст произносился бы русской моделью как набор звуков.
+  const _LANG_TAGS = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
+  const _LANG_PREFIX = { ru: 'ru', en: 'en', zh: 'zh' }
+
+  // Браузерный фолбэк (для режима voice, если сервер недоступен ИЛИ язык интерфейса
+  // не русский — см. speak()): speechSynthesis. langCode — код locale.active.
+  function _speakFallback(text, onEnd, langCode = 'ru') {
     const done = () => { speaking.value = false; try { onEnd && onEnd() } catch { /* noop */ } }
     const synth = window.speechSynthesis
     if (!synth || typeof SpeechSynthesisUtterance === 'undefined') { done(); return }
     const u = new SpeechSynthesisUtterance(text)
-    u.lang = 'ru-RU'
-    const vs = synth.getVoices().filter(v => /ru/i.test(v.lang))
+    const tag = _LANG_TAGS[langCode] || _LANG_TAGS.ru
+    const prefix = _LANG_PREFIX[langCode] || _LANG_PREFIX.ru
+    u.lang = tag
+    const vs = synth.getVoices().filter(v => v.lang && v.lang.toLowerCase().startsWith(prefix))
     if (vs.length) {
-      const female = /(irina|milena|katya|elena|alena|female|женск)/i
-      const male = /(pavel|yuri|dmitri|male|мужск)/i
+      const female = /(irina|milena|katya|elena|alena|female|женск|女)/i
+      const male = /(pavel|yuri|dmitri|male|мужск|男)/i
       const want = voice.value === 'female' ? female : male
       u.voice = vs.find(v => want.test(v.name)) || vs[0]
     }
@@ -238,11 +247,16 @@ export const useTtsStore = defineStore('tts', () => {
 
     if (mode.value === 'mumble') { _speakMumble(t, onStart, onEnd); return }
 
-    // Режим voice: серверный синтез, откат на speechSynthesis.
+    // Режим voice: серверный синтез (Silero, ТОЛЬКО русский), откат на speechSynthesis.
+    const localeCode = useLocaleStore().active
     let fellBack = false
     const fallback = () => {
-      if (!fellBack && my === reqGen) { fellBack = true; onStart(0); _speakFallback(t, onEnd) }
+      if (!fellBack && my === reqGen) { fellBack = true; onStart(0); _speakFallback(t, onEnd, localeCode) }
     }
+    // Интерфейс не на русском → Silero озвучил бы английский/китайский текст русской
+    // моделью (набор звуков, не речь) — сразу берём браузерный синтез в нужном языке,
+    // сервер даже не запрашиваем.
+    if (localeCode !== 'ru') { fallback(); return }
     try {
       const c = _ensureCtx()
       if (!c) throw new Error('no-audiocontext')
