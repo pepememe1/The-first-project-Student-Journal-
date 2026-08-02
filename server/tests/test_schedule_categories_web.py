@@ -78,6 +78,64 @@ def test_group_schedule_dated_category_end_to_end(client, monkeypatch):
     assert lesson["teacher"] == "Петров П.П."
 
 
+def test_admin_schedule_resolves_category_from_stored_group_when_not_passed(client, monkeypatch):
+    """§3.5.5: /web/admin/schedule раньше НИКОГДА не знал про category и всегда искал
+    группу в индексе колледжа — импортированная (валидная) бакалавриат/заочная группа
+    отвечала «расписание недоступно», хотя портал её прекрасно отдаёт. Группа заведена
+    ЧЕРЕЗ РЕАЛЬНЫЙ путь импорта (Group.category уже верный в базе) — админ смотрит
+    расписание БЕЗ явного category в запросе, сервер обязан сам его подставить."""
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">Б165</a>'
+    group_html = (
+        "<table>"
+        "<tr><td>Пары</td><td>1-я</td></tr>"
+        "<tr><td>Время</td><td>09:00-10:35</td></tr>"
+        "<tr><td>Пнд</td><td>лек.Физика ИВАНОВ И.И. а.100</td></tr>"
+        "<tr><td>Втр</td><td>_</td></tr>"
+        "<tr><td>Срд</td><td>_</td></tr>"
+        "<tr><td>Чтв</td><td>_</td></tr>"
+        "<tr><td>Птн</td><td>_</td></tr>"
+        "<tr><td>Сбт</td><td>_</td></tr>"
+        "</table>"
+    )
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, group_html))
+
+    r = client.post("/web/admin/groups/import-schedule-category",
+                    json={"category": "bakalavriat", "group_name": "Б165"}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    r2 = client.get("/web/admin/schedule", params={"group": "Б165"}, headers=admin)
+    assert r2.status_code == 200, r2.text
+    data = r2.json()
+    assert data["available"] is True
+    lesson = data["schedule"]["weeks"]["1"]["Пнд"][0]
+    assert lesson["subject"] == "Физика"
+
+
+def test_admin_schedule_college_group_unaffected_without_category(client, monkeypatch):
+    """Регрессия: колледжевая группа (даже вовсе не заведённая как `Group`-строка)
+    продолжает резолвиться как раньше, без единого изменения поведения."""
+    admin = make_admin(client)
+    index_html = '<a href="1.htm">К15/1</a>'
+    group_html = (
+        "<table>"
+        "<tr><td>Пары</td><td>1-я</td></tr>"
+        "<tr><td>Время</td><td>09:00-10:35</td></tr>"
+        "<tr><td>Пнд</td><td>лек.Химия ПЕТРОВ П.П. а.100</td></tr>"
+        "<tr><td>Втр</td><td>_</td></tr>"
+        "<tr><td>Срд</td><td>_</td></tr>"
+        "<tr><td>Чтв</td><td>_</td></tr>"
+        "<tr><td>Птн</td><td>_</td></tr>"
+        "<tr><td>Сбт</td><td>_</td></tr>"
+        "</table>"
+    )
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, group_html))
+
+    r = client.get("/web/admin/schedule", params={"group": "К15/1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["available"] is True
+
+
 def test_overrides_not_applied_outside_college(client, monkeypatch):
     """Оверлеи (ScheduleOverride) — только для колледжа; для остальных категорий
     _group_schedule отдаёт портальные данные как есть, без попытки наложить их."""

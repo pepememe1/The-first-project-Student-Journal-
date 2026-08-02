@@ -554,8 +554,20 @@ def curator_group_subjects(group: str = Query(...), year: str = Query(""), semes
     _curator_check(user, group)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
-    subs = sorted({l.subject for l in W.group_lessons(db, group, year=ty, semester=ts) if l.subject})
-    return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": subs}
+    subs = {l.subject for l in W.group_lessons(db, group, year=ty, semester=ts) if l.subject}
+    #⚠️ §3.5.5: список раньше был ЦЕЛИКОМ производным от Lesson (какие предметы уже
+    #РЕАЛЬНО есть в журнале) — импорт учебного плана/расписания пишет ТОЛЬКО
+    #Group.subjects (см. admin_import_esstu/admin_import_schedule_category), ни одной
+    #Lesson-строки при этом не создаётся. Спарсили в группу с 0 предметов ~12 новых —
+    #куратор продолжал видеть 0, пока хоть один препод не откроет журнал по новому
+    #предмету. Досыпаем Group.subjects, но ТОЛЬКО для ТЕКУЩЕГО термина — архивный
+    #(явно выбранный year/semester) обязан отражать, что реально велось ТОГДА, а не
+    #сегодняшний учебный план, который импорт мог уже заменить.
+    if (ty, ts) == W.current_term(cfg):
+        grp = db.query(Group).filter(Group.name == group, Group.deleted == False).first()  # noqa: E712
+        if grp and grp.subjects:
+            subs |= set(grp.subjects)
+    return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": sorted(subs)}
 
 
 @router.get("/curator/group-subject")
@@ -1225,11 +1237,23 @@ def schedule_export(group: str = Query(""), fmt: str = Query("xlsx"), category: 
 
 # ── Редактор расписания в админке (правки ПОВЕРХ портала) ────────────────────────────
 @router.get("/admin/schedule")
-def admin_schedule_get(group: str = Query(...), user: User = Depends(require_admin),
-                       db: Session = Depends(get_db)):
-    """Слитое расписание группы (портал + правки) + сырой список правок для редактора."""
+def admin_schedule_get(group: str = Query(...), category: str = Query(""),
+                       user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Слитое расписание группы (портал + правки) + сырой список правок для редактора.
+
+    ⚠️ §3.5.5: раньше НИКОГДА не принимал `category` и всегда искал группу в индексе
+    колледжа (`_group_schedule`/`schedule_web.get_group` по умолчанию резолвят пустую
+    категорию в college) — бакалавриат/заочные группы, даже корректно импортированные
+    (`Group.category` уже верный, см. `admin_import_schedule_category`), молча не
+    находились в чужом индексе портала и отдавали «расписание недоступно». Параметр не
+    обязателен: если клиент его не прислал, берём сохранённую категорию ИЗ БАЗЫ — так
+    старые вызовы (без category) для колледжа продолжают работать как раньше."""
     g = (group or "").strip()
-    merged = _group_schedule(db, g)
+    cat = (category or "").strip()
+    if not cat:
+        grp = db.query(Group).filter(Group.name == g, Group.deleted == False).first()  # noqa: E712
+        cat = (grp.category if grp else "") or ""
+    merged = _group_schedule(db, g, cat)
     ovs = db.query(ScheduleOverride).filter(
         ScheduleOverride.group_name == g,
         ScheduleOverride.deleted == False).order_by(  # noqa: E712

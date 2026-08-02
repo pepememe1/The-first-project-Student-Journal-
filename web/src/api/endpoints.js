@@ -212,7 +212,9 @@ export const adminApi = {
   aiConfigTest: (payload) => api.post('/web/admin/ai-config/test', payload),
   // Редактор расписания (правки ПОВЕРХ портала). schedule — слитое расписание + правки;
   // set — задать/заменить/скрыть пару в ячейке; del — убрать правку (вернуться к порталу).
-  schedule: (group) => api.get('/web/admin/schedule', { params: { group } }),
+  //category необязателен — сервер сам возьмёт Group.category из базы, если не передать
+  //(см. admin_schedule_get); передаём явно, когда он уже известен клиенту (AdminSchedule.vue).
+  schedule: (group, category) => api.get('/web/admin/schedule', { params: { group, category } }),
   setScheduleOverride: (payload) => api.post('/web/admin/schedule/override', payload),
   deleteScheduleOverride: (id) => api.delete(`/web/admin/schedule/override/${encodeURIComponent(id)}`),
   // Пачечное сохранение черновика редактора (переносы/правки) — одной транзакцией.

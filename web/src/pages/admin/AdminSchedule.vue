@@ -66,6 +66,15 @@ const groupSubjects = computed(() => {
   const g = groups.value.find((x) => (x.name || x) === group.value)
   return g?.subjects || []
 })
+//§3.5.5: без категории сервер искал ЛЮБУЮ группу в индексе колледжа — бакалавриат/
+//заочные группы (даже с верно импортированным расписанием) отвечали «недоступно».
+//Правки (drag-drop/«Взять с ВСГУТУ»/«Сброс») намеренно остаются college-only — это
+//решение уже заложено на сервере (_group_schedule накладывает ScheduleOverride
+//только для колледжа), здесь чиним именно ПРОСМОТР для остальных категорий.
+const groupCategory = computed(() => {
+  const g = groups.value.find((x) => (x.name || x) === group.value)
+  return g?.category || ''
+})
 
 // Черновик: ключ «неделя|день|слот» → {action:'set'|'remove', ...поля}. Пусто = нет правок.
 const pending = reactive({})
@@ -123,7 +132,7 @@ async function load() {
   if (!group.value) return
   loading.value = true
   try {
-    const r = (await adminApi.schedule(group.value)).data
+    const r = (await adminApi.schedule(group.value, groupCategory.value)).data
     base.value = r.schedule
     savedKeys.value = new Set((r.overrides || []).map((o) => `${o.week}|${o.day}|${o.pair_no}`))
     clearDraft()

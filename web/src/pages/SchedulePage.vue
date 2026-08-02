@@ -123,7 +123,17 @@ async function enterCategory() {
   data.value = null
   week.value = 1
   stopPoll()
-  if (isDefaultCategory.value && isTeacher.value) {
+  //Живой баг 3.5.5: суб-режим «расписание преподавателей» раньше сбрасывался на
+  //«группа» при ЛЮБОМ переключении на неколледжевую категорию — «Расписание
+  //преподавателей» выглядело так, будто для Бакалавриата/Заочного его вообще нет.
+  //Осознанный выбор режима «преподаватель» (mode==='teacher') теперь переживает
+  //смену категории — сервер прекрасно строит teacher-расписание по любой категории
+  //(schedule_web.full_state(category)), просто раньше сюда никогда не доходило.
+  //Авто-матч «мои пары» (mode==='me') НЕ переносим специально: это чистый побочный
+  //эффект удачного совпадения ФИО на конкретной категории, а не осознанный выбор —
+  //переносить его в категорию, где он не пробовался, значило бы врать про «моё».
+  const wasTeacherMode = mode.value === 'teacher'
+  if (isTeacher.value && (wasTeacherMode || (isDefaultCategory.value && mode.value === ''))) {
     mode.value = ''
     await loadTeacher('')
     return
@@ -310,7 +320,9 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
           <span class="font-medium text-text">{{ group || locale.t('schedulePage.myGroup', 'Моя группа') }}</span>
         </div>
 
-        <template v-else-if="isDefaultCategory && isTeacher && mode !== 'group'">
+        <!-- §3.5.5: раньше требовалось isDefaultCategory — режим «расписание преподов»
+             был недостижим вне колледжа, хотя сервер его прекрасно строит по категории. -->
+        <template v-else-if="isTeacher && mode !== 'group'">
           <div v-if="mode === 'me'" class="flex h-10 items-center gap-2 rounded-sm border border-border2 bg-card2 px-3 text-sm">
             <User class="size-4 text-accent" />
             <span class="font-medium text-text">{{ teacherName }}</span>
@@ -331,7 +343,7 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
             <option v-if="!groups.length" :value="group">{{ group || locale.t('schedulePage.groupPlaceholder', 'Группа') }}</option>
             <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
           </select>
-          <button v-if="isDefaultCategory && isTeacher" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="mode = ''; data = null">
+          <button v-if="isTeacher" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
             {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
           </button>
         </template>
