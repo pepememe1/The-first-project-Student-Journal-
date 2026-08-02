@@ -264,16 +264,22 @@ def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, 
     hrows = {r.subject: r for r in db.query(SubjectHours).filter(
         SubjectHours.group_name == group, SubjectHours.year == (year or ""),
         SubjectHours.semester == int(semester or 0), SubjectHours.deleted == False).all()}  # noqa: E712
-    from collections import OrderedDict
-    by_subject = OrderedDict()
+    by_subject = {}
     for l in lessons:
         by_subject.setdefault(l.subject, []).append(l)
+    #⚠️ §3.5.5: перечислять ОБЯЗАНЫ hrows (реальный учебный план — SubjectHours с заданным
+    #ЗЕТ), а НЕ by_subject (что уже есть в журнале). Раньше перебирали by_subject — предмет,
+    #по которому препод ещё не завёл ни одного занятия в этом термине, выпадал не только
+    #из «сдано», но и из ЗНАМЕНАТЕЛЯ («всего ЗЕТ») целиком: группа с 5 предметами по
+    #плану, но занятиями заведёнными только по одному, показывала «всего 2.9» вместо
+    #суммы всех пяти. Пустой список занятий — это ЧЕСТНО «не сдан» (subject_zet_earned
+    #на []), а не повод скрыть предмет из суммы.
     rows = []
-    for subj, ls in by_subject.items():
-        row = hrows.get(subj)
-        zet = row.zet if row is not None else None
+    for subj, row in hrows.items():
+        zet = row.zet
         if zet is None:
             continue
+        ls = by_subject.get(subj, [])
         scale = scale_map.get(ls[0].id, grading.DEFAULT_SCALE) if ls else grading.DEFAULT_SCALE
         earned = study_hours.subject_zet_earned(ls, records, zet, scale=scale)
         rows.append({"subject": subj, "zet": zet, "earned": earned})

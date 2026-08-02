@@ -159,6 +159,30 @@ def test_subject_without_zet_is_absent_from_summary(client):
     assert body["subjects"] == [] and body["total"] == 0.0
 
 
+def test_subject_with_zet_but_no_lessons_yet_still_counts_toward_total(client):
+    """§3.5.5, живой баг: предмет с заданным ЗЕТ, по которому препод ЕЩЁ не завёл ни
+    одного занятия в этом термине, обязан войти в TOTAL (не сдан — да, но он ЧАСТЬ
+    учебного плана семестра), а не исчезнуть из суммы целиком. Раньше пропадал —
+    группа с 5 предметами по плану, но занятиями заведёнными только по одному,
+    показывала «всего 2.9» вместо суммы всех пяти."""
+    admin = make_admin(client)
+    _group(client, admin)
+    make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
+    stud = _student(client, admin)
+    _set_zet(client, admin, "ИС-21", "Математика", 2.0)
+    _set_zet(client, admin, "ИС-21", "Физика", 3.0)     # ни одного занятия по ней ещё нет
+    _push_lesson(client, admin, "E1", "ИС-21", "Математика", "Экзамен")
+    _push_grade(client, admin, "E1", "Иванова", "Мария", "4 (Зачтено)")
+
+    r = client.get("/web/student/zet", headers=stud)
+    body = r.json()
+    assert body["total"] == 5.0             # 2.0 (Математика) + 3.0 (Физика), не 2.0
+    assert body["earned"] == 2.0            # Физика ещё не сдана — занятий нет
+    fiz = next(s for s in body["subjects"] if s["subject"] == "Физика")
+    assert fiz == {"subject": "Физика", "zet": 3.0, "earned": 0.0, "passed": False}
+
+
 def test_zet_sum_and_pct_across_subjects(client):
     admin = make_admin(client)
     _group(client, admin)
