@@ -52,7 +52,9 @@ watch(tick, scrollDown)
 onMounted(() => { vector.greetSettle(); scrollDown(); tts.refreshStatus() })
 
 function send() { vector.send() }
-function ask(q) { showQuick.value = false; vector.ask(q) }
+//cmd — весь объект быстрой команды: q (русский, для классификатора) отдельно от
+//label (переведённая подпись — что реально показываем в СВОЁМ пузыре, см. vector.js::send).
+function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
 </script>
 
 <template>
@@ -112,7 +114,7 @@ function ask(q) { showQuick.value = false; vector.ask(q) }
              class="absolute bottom-full left-2.5 right-2.5 mb-2 rounded-lg border border-border2 bg-card p-2 shadow-card">
           <p class="px-1 pb-1 text-xs font-semibold text-text3">{{ locale.t('vectorPage.quickCommands', 'Быстрые команды') }}</p>
           <div class="flex flex-col gap-0.5">
-            <button v-for="c in cmds" :key="c.label" type="button" @click="ask(c.q)"
+            <button v-for="c in cmds" :key="c.label" type="button" @click="ask(c)"
                     class="flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-accent-glow hover:text-accent">
               <component :is="c.icon" class="size-4 shrink-0 text-accent" />{{ c.label }}
             </button>

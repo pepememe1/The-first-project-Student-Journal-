@@ -139,7 +139,12 @@ export const useVectorStore = defineStore('vector', () => {
     }
   }
 
-  async function send(text) {
+  // displayText — что показать в СВОЁМ пузыре (может быть переводом кнопки быстрой
+  // команды); t — что реально уйдёт в /web/vector/ask. Раздельно потому, что серверный
+  // классификатор (vector_nlu.py) понимает только русские ключевые слова (см.
+  // config/vectorCommands.js) — нельзя ни переводить запрос (сломает распознавание),
+  // ни показывать пользователю русский текст под английской кнопкой (путает).
+  async function send(text, displayText) {
     //Разблокируем автоплей ПРЯМО в жесте (клик/Enter): дальше будет сетевой запрос, и
     //без этого браузер зарежет воспроизведение WAV после паузы (см. tts.unlock).
     tts.unlock()
@@ -150,7 +155,7 @@ export const useVectorStore = defineStore('vector', () => {
     tts.stop()
     //Прошлый ответ ещё «печатался» — договаривать нечего, раз уже спросили новое.
     _completeTyping()
-    messages.value.push({ role: 'user', text: t })
+    messages.value.push({ role: 'user', text: (displayText || '').trim() || t })
     input.value = ''
     state.value = 'thinking'
     tick.value++
@@ -222,7 +227,7 @@ export const useVectorStore = defineStore('vector', () => {
       }
     }
   }
-  function ask(q) { send(q) }
+  function ask(q, displayText) { send(q, displayText) }
 
   return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
            sprite, anim, label, cmds, send, ask, greetSettle, greetOnce,
