@@ -1236,8 +1236,7 @@ def message_read_by(mid: int, user: User = Depends(get_current_user), db: Sessio
 
 # ── Перевод ──────────────────────────────────────────────────────────────────────────
 @router.post("/translate")
-def translate_text(payload: dict = Body(...),
-                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def translate_text(payload: dict = Body(...), user: User = Depends(get_current_user)):
     """Перевести произвольный текст на выбранный язык.
 
     Эндпоинт НЕ привязан к сообщению намеренно: им пользуется и кнопка «перевести» на
@@ -1246,15 +1245,15 @@ def translate_text(payload: dict = Body(...),
 
     Своего лимита частоты нет: перевод идёт по нажатию человека, а результат кэшируется
     (одну реплику в групповом чате открывают несколько человек). Автоперевод исходящих
-    ограничен тем же анти-флудом, что и сама отправка."""
+    ограничен тем же анти-флудом, что и сама отправка. ⚠️ Переводчик — Google Translate
+    (3.5.5, см. translate_service.py), от БД больше не зависит вовсе."""
     from .. import translate_service
     text = (payload.get("text") or "").strip()
     dst = (payload.get("to") or "").strip().lower()
     src = (payload.get("from") or translate_service.AUTO).strip().lower()
     if not text:
         raise HTTPException(status_code=400, detail="Нужен текст")
-    from ..webdata import load_config
-    return translate_service.translate(load_config(db), text, dst, src)
+    return translate_service.translate(text, dst, src)
 
 
 @router.get("/translate/languages")
