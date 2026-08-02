@@ -276,8 +276,11 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
 
 <template>
   <div class="space-y-4">
-    <!-- Категории портала (как на сайте) — видны всегда, независимо от режима ниже. -->
-    <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+    <!-- Категории портала (как на сайте) — видны, КОГДА уже выбран режим (расписание
+         преподавателя/группы). §3.5.5, живой отзыв: до выбора режима категории путали —
+         выглядело так, будто они выбирают что-то ещё до основного выбора; пока препод не
+         решил, что смотреть, эти кнопки нечего показывать. -->
+    <div v-if="categories.length > 1 && !teacherChoice" class="flex flex-wrap gap-2">
       <button v-for="c in categories" :key="c.key"
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="category === c.key
@@ -333,6 +336,17 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
             <option value="" disabled>{{ locale.t('schedulePage.teacherPlaceholder', 'Преподаватель…') }}</option>
             <option v-for="t in teachers" :key="t" :value="t">{{ t }}</option>
           </select>
+          <!-- §3.5.5: живой баг — индекс преподавателей греется ФОНОМ и на первый заход
+               в неколледжевую категорию может ещё не быть готов (~минута на живых
+               данных бакалавриата); подсказка раньше показывалась ТОЛЬКО для колледжа
+               (внутри teacherChoice), и пустой список вне колледжа выглядел так, будто
+               преподавателей там нет вовсе, хотя на портале они есть. -->
+          <template v-if="building && !teachers.length">
+            <span class="text-xs text-text3">{{ locale.t('schedulePage.buildingTeachers', 'Индекс преподавателей ещё готовится на сервере (~минута).') }}</span>
+            <AppButton variant="green" size="sm" @click="loadTeacher(teacherName)">
+              <RotateCw class="size-3.5" /> {{ locale.t('schedulePage.checkAgain', 'Проверить снова') }}
+            </AppButton>
+          </template>
           <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseGroupMode">
             {{ locale.t('schedulePage.viewByGroup', 'смотреть по группе') }}
           </button>
