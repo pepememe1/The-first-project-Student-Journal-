@@ -3,7 +3,7 @@
 // = список предметов, пароль) / удаление. id на сервере = teach:login (как в синке
 // десктопа); удаление мягкое → изменения доезжают до десктопа обычным pull.
 import { ref, computed, onMounted } from 'vue'
-import { adminApi } from '@/api/endpoints'
+import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
@@ -21,6 +21,20 @@ const allSubjects = ref([])
 const allGroups = ref([])
 const q = ref('')
 const showPass = ref(false)
+
+// ── Фильтр по категории расписания (schedule/parser.py::CATEGORIES) — как в
+// AdminStudents.vue, но у преподавателя нет ОДНОЙ своей группы: категорию определяем
+// по его курируемым группам (единственная связь препод→группа, видимая в этом списке).
+// Препод без curated_groups — вообще не курирует, под фильтром по категории не найдётся
+// ни в одной, кроме «Все категории»: это честно, а не баг, второй связи препод↔группа
+// (SubjectHours.teacher_id) этот список не загружает.
+const categories = ref([])
+const categoryFilter = ref('')
+const groupCategory = ref({})   // {имя группы: category}
+async function loadCategories() {
+  try { categories.value = (await scheduleApi.categories()).data.categories || [] }
+  catch { categories.value = [] }
+}
 function fmtDT(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -33,14 +47,25 @@ async function reload() {
 }
 onMounted(async () => {
   await reload()
+  await loadCategories()
   try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
-  try { allGroups.value = (await adminApi.groups()).data.groups?.map((g) => g.name) || [] } catch { /* */ }
+  try {
+    const dbGroups = (await adminApi.groups()).data.groups || []
+    allGroups.value = dbGroups.map((g) => g.name)
+    groupCategory.value = Object.fromEntries(dbGroups.map((g) => [g.name, g.category || 'college']))
+  } catch { /* */ }
 })
 
 const rows = computed(() => {
   const s = q.value.trim().toLowerCase()
-  if (!s) return all.value
-  return all.value.filter((r) => `${r.name} ${r.login}`.toLowerCase().includes(s))
+  return all.value.filter((r) => {
+    if (s && !`${r.name} ${r.login}`.toLowerCase().includes(s)) return false
+    if (categoryFilter.value) {
+      const cats = (r.curated_groups || []).map((g) => groupCategory.value[g] || 'college')
+      if (!cats.includes(categoryFilter.value)) return false
+    }
+    return true
+  })
 })
 
 const showForm = ref(false)
@@ -83,6 +108,18 @@ async function del(t) {
 
 <template>
   <div class="space-y-4">
+    <!-- Кнопки-категории (та же идея, что в «Студентах»/«Расписании») — по курируемым
+         группам преподавателя (единственная видимая здесь связь препод↔группа). -->
+    <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+      <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="!categoryFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="categoryFilter = ''">{{ locale.t('adminTeachers.allCategories', 'Все категории') }}</button>
+      <button v-for="c in categories" :key="c.key"
+              class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+              :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+              @click="categoryFilter = c.key">{{ c.label }}</button>
+    </div>
+
     <div class="flex flex-wrap items-center gap-3">
       <input v-model="q" :placeholder="locale.t('adminTeachers.searchPlaceholder', 'Поиск по ФИО или логину…')"
              class="h-10 w-full max-w-sm rounded-sm border border-border2 bg-card2 px-3.5 text-sm text-text outline-none focus:border-accent focus:bg-card" />
