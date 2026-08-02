@@ -46,6 +46,56 @@ def test_curator_sees_all_group_subjects_readonly(client):
     assert client.get("/web/curator/subjects", params={"group":"G2"}, headers=th).status_code == 403
 
 
+def test_curator_sees_freshly_imported_subjects_before_any_lesson_exists(client):
+    """§3.5.5: импорт учебного плана/расписания (import-esstu/import-schedule-category)
+    пишет ТОЛЬКО Group.subjects, ни одной строки Lesson не создаёт. Куратор раньше видел
+    список предметов ИСКЛЮЧИТЕЛЬНО через Lesson (`group_lessons`) — спарсили в группу с
+    0 предметов дюжину новых, а у куратора всё ещё «0», пока хоть один препод не откроет
+    журнал по новому предмету. Живой баг, поймано на реальном импорте."""
+    admin = make_admin(client)
+    r = client.post("/web/admin/groups", json={"name": "G3", "subjects": []}, headers=admin)
+    assert r.status_code == 200, r.text
+    r = client.post("/web/admin/teachers", json={
+        "full_name": "Кур Атор", "login": "t2", "password": "pass1234",
+        "subjects": [], "curated_groups": ["G3"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    th = _login(client, "t2", "pass1234")
+
+    #Ровно сценарий из отзыва: изначально 0 предметов.
+    subs = client.get("/web/curator/subjects", params={"group": "G3"}, headers=th).json()["subjects"]
+    assert subs == []
+
+    #Админ "спарсил" предметы в Group.subjects — ни одной Lesson-строки при этом нет.
+    r = client.put("/web/admin/groups/G3", json={"subjects": ["Физика", "Химия", "Мат"]}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    subs = client.get("/web/curator/subjects", params={"group": "G3"}, headers=th).json()["subjects"]
+    assert set(subs) == {"Физика", "Химия", "Мат"}
+
+
+def test_curator_subjects_from_archived_term_unaffected_by_current_group_subjects(client):
+    """Регрессия: архивный (явно выбранный year/semester, не текущий термин) список
+    ОБЯЗАН остаться чисто Lesson-based — Group.subjects отражает СЕГОДНЯШНИЙ учебный
+    план, который импорт мог заменить, и подмешивать его в прошлый семестр значило бы
+    приписать группе предметы, которых тогда могло не быть."""
+    admin = make_admin(client)
+    L = {"id": "La", "group_name": "G4", "subject": "История", "type": "Практика",
+        "number": 1, "year": "2020/2021", "semester": 1}
+    assert client.post("/sync/push", json={"changes": {"lessons": [L]}}, headers=admin).status_code == 200
+    r = client.post("/web/admin/groups", json={"name": "G4", "subjects": ["Новый предмет"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    r = client.post("/web/admin/teachers", json={
+        "full_name": "Кур Атор2", "login": "t3", "password": "pass1234",
+        "subjects": [], "curated_groups": ["G4"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    th = _login(client, "t3", "pass1234")
+
+    r = client.get("/web/curator/subjects",
+                   params={"group": "G4", "year": "2020/2021", "semester": 1}, headers=th)
+    assert r.status_code == 200, r.text
+    assert r.json()["subjects"] == ["История"]     #НЕ "Новый предмет" — тот из ТЕКУЩЕГО плана
+
+
 def test_non_curator_teacher_has_no_curator_access(client):
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
