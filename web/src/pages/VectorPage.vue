@@ -4,18 +4,25 @@
 // полупрозрачным слоем ПОВЕРХ него. Маскот РЕАГИРУЕТ: приветствие → «думает» →
 // эмоция по настроению ответа → покой. Цифры считает СЕРВЕР (/web/vector/ask).
 // Чат живёт в общем store — ОДНА переписка с боковым доком (как в десктопе).
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
 import MicButton from '@/components/vector/MicButton.vue'
+import GradesOverview from '@/components/vector/GradesOverview.vue'
 import { useVectorStore } from '@/stores/vector'
+import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 
 const vector = useVectorStore()
+const auth = useAuthStore()
 const toast = useToast()
 const locale = useLocaleStore()
+// Сводка успеваемости — только студенту: она строится на /web/student/stats, у
+// преподавателя и админа такого «своего среднего» нет (у них средние по группам, это
+// другой разговор и другая страница — «Статистика»).
+const showGrades = computed(() => auth.role === 'student')
 // Имя маскота уже переведено в общем ключе (мессенджер показывает те же ответы от
 // его лица) — переиспользуем его, а не заводим вторую копию «Вектор»/«Vector».
 const vectorName = () => locale.t('chatThread.vectorName', 'Вектор')
@@ -44,6 +51,21 @@ const showQuick = ref(false)
 // чат на всю высоту — так клавиатура закрывает пустое место, а не «красивый интерфейс».
 const focused = ref(false)
 
+// ⚠️ Живой баг (отзыв 3.5.6): развёрнутый чат ЗАСТРЕВАЛ поверх маскота после того, как
+// клавиатуру убрали. Причина — режим снимался ТОЛЬКО по @blur, а закрытие клавиатуры
+// системной кнопкой «назад» (Android) или свайпом фокус с поля НЕ снимает: событие blur
+// не приходит никогда, и полупрозрачная панель остаётся развёрнутой навсегда, пока не
+// уйдёшь со страницы. Слушаем САМУ клавиатуру: visualViewport сжимается ровно на её
+// высоту, и её уход — единственный надёжный признак, что режим ввода закончился.
+const KEYBOARD_MIN_PX = 120   //меньше — это адресная строка браузера, а не клавиатура
+function onViewportResize() {
+  const vv = window.visualViewport
+  if (!vv) return
+  if (window.innerHeight - vv.height < KEYBOARD_MIN_PX) focused.value = false
+}
+onMounted(() => window.visualViewport?.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.visualViewport?.removeEventListener('resize', onViewportResize))
+
 async function scrollDown() {
   await nextTick()
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: 'smooth' })
@@ -59,8 +81,17 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
 </script>
 
 <template>
+  <!-- Две колонки на широком экране (3.5.6): слева переписка, справа сводка
+       успеваемости. Раньше вкладка на всю высоту несла ТОЛЬКО чат — правая половина
+       пустовала, хотя это самая просторная страница продукта. Сводка — студенту:
+       у преподавателя и админа «своего среднего балла» не существует, и показывать
+       им пустую карточку было бы хуже, чем не показывать ничего.
+       Высота задана ОДНА на обе колонки (h-full у детей), чтобы кольцо и полосы не
+       уезжали за нижний край рядом с более высокой карточкой чата. -->
+  <div class="grid h-[calc(100dvh-6.5rem)] gap-3 sm:h-[calc(100dvh-7.5rem)] lg:h-[calc(100vh-8rem)]"
+       :class="showGrades ? 'lg:grid-cols-[1fr_320px]' : ''">
   <!-- Одна карточка на всю высоту: шапка · (маскот ФОНОМ + чат поверх) · ввод -->
-  <div class="relative flex h-[calc(100dvh-8rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card sm:h-[calc(100dvh-9.5rem)] lg:h-[calc(100vh-11rem)]">
+  <div class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card">
     <!-- Шапка -->
     <div class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
       <span class="size-2 shrink-0 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
@@ -125,6 +156,13 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
           <Send class="size-5" />
         </button>
       </form>
+    </div>
+  </div>
+
+    <!-- Сводка успеваемости — вторая колонка (скрыта на узких экранах: там она была бы
+         не «использованием места», а лишней прокруткой перед чатом). -->
+    <div v-if="showGrades" class="hidden min-h-0 lg:block">
+      <GradesOverview />
     </div>
   </div>
 </template>

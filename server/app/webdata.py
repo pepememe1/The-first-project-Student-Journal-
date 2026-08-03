@@ -22,7 +22,7 @@ if _ROOT not in sys.path:
 import grading  # noqa: E402
 import study_hours  # noqa: E402  — общее с десктопом правило учебных часов
 
-from .models import (User, Lesson, Grade, ConfigKV, SubjectHours,  # noqa: E402
+from .models import (User, Lesson, Grade, ConfigKV, SubjectHours, Group,  # noqa: E402
                      subject_hours_id)
 
 
@@ -110,6 +110,24 @@ def group_lessons(db, group: str, subject: str | None = None,
     if semester:
         q = q.filter(Lesson.semester == int(semester))
     return q.order_by(Lesson.subject, Lesson.type, Lesson.number, Lesson.hour).all()
+
+
+def group_subject_list(db, group: str) -> list:
+    """Все предметы группы: справочник группы (Group.subjects) + предметы реальных занятий.
+
+    ⚠️ Занятий одного достаточно НЕ БЫЛО: импорт учебного плана ВСГУТУ и импорт из
+    расписания пишут только Group.subjects и не создают ни одной строки Lesson — предмет,
+    по которому преподаватель ещё не открыл журнал, существует, но нигде не показывался.
+    Тот же перекос уже чинили отдельно у куратора (curator_group_subjects) и в ЗЕТ
+    (zet_summary_for_student); это ТРЕТЬЕ место, поэтому источник вынесен сюда — чтобы
+    следующий потребитель брал готовое, а не заводил четвёртую копию правила.
+    """
+    subs = {l.subject for l in group_lessons(db, group) if l.subject}
+    row = db.query(Group).filter(Group.name == group,
+                                 Group.deleted == False).first()  # noqa: E712
+    if row and row.subjects:
+        subs |= {s for s in row.subjects if s}
+    return sorted(subs)
 
 
 def list_terms(db) -> list:

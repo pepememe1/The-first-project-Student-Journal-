@@ -156,6 +156,17 @@ async function onCategoryChange(key) {
 
 // Курс (3.5.5) — сужает список групп ВНУТРИ категории. Разведано с портала (столбец
 // таблицы индекса, schedule_web.groups_by_course) — число курсов НЕ фиксировано на 4.
+// ⚠️ Актуальность ответа сверяем ТОКЕНОМ запроса, а не значениями category/group.
+// Так было раньше (3.5.4) и это дало живой баг: load() ДЛЯ СТУДЕНТА вызывается с пустой
+// group (сервер сам подставляет свою группу студента), а потом САМА ЖЕ присваивает
+// group.value = r.group — то есть к моменту finally запомненное forGroup ('') уже не
+// равно текущему ('К74/1'), сброс loading не срабатывал, и расписание «грузилось»
+// вечно, пока человек не нажмёт «Обновить» (на втором заходе группа уже известна, и
+// сравнение случайно сходилось). Счётчик от этого свободен по построению: он не зависит
+// от данных, которые сама функция и меняет.
+let reqSeq = 0
+const nextReq = () => ++reqSeq
+
 const byCourse = ref({})
 const courseFilter = ref('')
 const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((a, b) => a - b))
@@ -172,27 +183,29 @@ async function loadGroupsList() {
   //короче — придёт раньше) мог прилететь ПОСЛЕ более быстрого и молча подменить
   //список группами не той категории, хотя кнопка уже показывает другую — реальный
   //баг, со стороны выглядел как «всё перемешано».
+  const my = nextReq()
   const forCategory = category.value
   courseFilter.value = ''
   try {
     const r = (await scheduleApi.groups(forCategory)).data
-    if (forCategory !== category.value) return
+    if (my !== reqSeq) return
     groups.value = r.groups || []
     byCourse.value = r.by_course || {}
   } catch {
-    if (forCategory === category.value) { groups.value = []; byCourse.value = {} }
+    if (my === reqSeq) { groups.value = []; byCourse.value = {} }
   }
 }
 
 async function load() {
   loading.value = true
+  const my = nextReq()
   const forCategory = category.value
   const forGroup = group.value
   try {
     const r = (await scheduleApi.get(forGroup || undefined, forCategory)).data
-    //Та же защита от устаревшего ответа: пока шёл запрос, могли сменить категорию
-    //или группу (см. loadGroupsList выше) — тогда этот ответ уже не про текущий выбор.
-    if (forCategory !== category.value || forGroup !== group.value) return
+    //Устаревший ответ отбрасываем: пока шёл запрос, могли сменить категорию или группу
+    //(клик-клик по кнопкам), и более медленный ответ подменил бы уже выбранное.
+    if (my !== reqSeq) return
     data.value = r
     group.value = r.group || group.value
     const wk = Object.keys(r.schedule?.weeks || {}).map(Number).sort((a, b) => a - b)
@@ -200,9 +213,11 @@ async function load() {
     //чётность, а порядковый номер сессии) — берём первый реально найденный блок.
     week.value = categoryDated.value ? (wk[0] || 1) : (r.week || 1)
   } catch {
-    if (forCategory === category.value && forGroup === group.value) data.value = null
+    if (my === reqSeq) data.value = null
   } finally {
-    if (forCategory === category.value && forGroup === group.value) loading.value = false
+    //Спиннер снимает ТОЛЬКО последний запрос — и снимает его всегда, независимо от того,
+    //что успело поменяться в category/group за время ожидания (см. комментарий у reqSeq).
+    if (my === reqSeq) loading.value = false
   }
 }
 
@@ -212,8 +227,12 @@ onBeforeUnmount(stopPoll)
 
 async function loadTeacher(name) {
   loading.value = true
+  const my = nextReq()
   try {
     const r = (await scheduleApi.teacher(name, category.value)).data
+    //Тот же токен, что у load()/loadGroupsList: переключение категории во время
+    //ожидания не должно подменять список преподавателей уже другой категорией.
+    if (my !== reqSeq) return
     building.value = !!r.building
     teachers.value = r.teachers || []
     week.value = r.week || 1
@@ -230,7 +249,11 @@ async function loadTeacher(name) {
     // пока не будет готов. Прогрев при старте сервера делает ожидание редким.
     stopPoll()
     if (building.value) pollTimer = setTimeout(() => loadTeacher(name), 5000)
-  } catch { data.value = null } finally { loading.value = false }
+  } catch {
+    if (my === reqSeq) data.value = null
+  } finally {
+    if (my === reqSeq) loading.value = false
+  }
 }
 
 async function chooseTeacherMode() {
@@ -408,17 +431,24 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
                   :message="building ? locale.t('schedulePage.buildingHint', 'Индекс расписания готовится на сервере (~минута) — нажмите «Обновить».')
                             : locale.t('schedulePage.noSnapshotHint', 'Не удалось получить снимок с портала ВСГУТУ (нет связи или расписание не найдено).')" />
 
-      <!-- Десктоп показывает дни ОДНИМ горизонтальным рядом; на широком экране
-           повторяем (6 колонок), на узких — переносим по 2–3. Для сессионных
-           категорий число колонок не фиксировано — сетка просто перетекает. -->
-      <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <div v-for="[key, full] in dayColumns" :key="key" class="rounded-lg border border-border bg-card p-3 shadow-card">
+      <!-- Десктоп показывает дни ОДНИМ горизонтальным рядом; на узких — переносим.
+           ⚠️ Шесть колонок включаются только с 2xl (1536px). На xl (1280px) за вычетом
+           бокового меню на день оставалось ~170px: время рвалось на две строки, а
+           названия предметов — на два-три слова, и ряд выглядел рваным (поймано
+           скриншотом на 1280). Для сессионных категорий число колонок не фиксировано —
+           сетка просто перетекает.
+           h-full на карточке — чтобы дни в одном ряду были РАВНОЙ высоты: без него
+           карточка тянется по своему содержимому, и ряд «лесенкой» выглядит как сбой
+           вёрстки, хотя данные верные. -->
+      <div v-else class="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+        <div v-for="[key, full] in dayColumns" :key="key" class="flex h-full flex-col rounded-lg border border-border bg-card p-3 shadow-card">
           <p class="mb-2 font-title text-base font-bold text-text">{{ full }}</p>
           <p v-if="!dayLessons(key).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>
           <ul v-else class="space-y-2">
             <li v-for="(l, i) in dayLessons(key)" :key="i" class="rounded-md border border-border bg-card2 p-2.5">
               <div class="mb-1 flex items-center justify-between gap-2">
-                <span class="text-xs font-semibold text-text3">{{ l.pair_no }}. {{ l.time }}</span>
+                <!-- Время не переносим: «10:45–12:20» на двух строках читается как две пары. -->
+                <span class="whitespace-nowrap text-xs font-semibold text-text3">{{ l.pair_no }}. {{ l.time }}</span>
                 <Badge v-if="l.kind" :variant="(KIND[l.kind] || ['', 'muted'])[1]">{{ (KIND[l.kind] || [l.kind])[0] }}</Badge>
               </div>
               <p class="text-sm font-medium text-text">{{ l.subject || l.raw }}</p>

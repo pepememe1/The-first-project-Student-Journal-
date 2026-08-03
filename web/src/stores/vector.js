@@ -39,7 +39,13 @@ export const useVectorStore = defineStore('vector', () => {
   const lastIntent = ref('help')
   // Свёрнут ли боковой док (пользователь может спрятать панель). Запоминаем в localStorage,
   // чтобы состояние держалось между страницами и перезапусками.
-  const collapsed = ref(localStorage.getItem('gb.vectorDock') === 'hidden')
+  // ⚠️ ПО УМОЛЧАНИЮ СВЁРНУТ (с 3.5.6). Раньше умолчанием было «раскрыт», и это было
+  // допустимо, пока шторка РАЗДВИГАЛА страницу: контент сужался, но был виден весь.
+  // Теперь она НАКЛАДЫВАЕТСЯ поверх (см. AppShell.vue) — при раскрытом умолчании человек
+  // на первом же входе видел бы дашборд с закрытой правой третью: карточки статистики и
+  // список предметов уходили под панель. Проверено вживую скриншотом, а не в уме.
+  // Раскрыл сам — запомним и будем открывать (значение 'shown').
+  const collapsed = ref(localStorage.getItem('gb.vectorDock') !== 'shown')
   function setCollapsed(v) {
     collapsed.value = !!v
     try { localStorage.setItem('gb.vectorDock', v ? 'hidden' : 'shown') } catch { /* приватный режим */ }

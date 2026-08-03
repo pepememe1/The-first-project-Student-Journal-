@@ -45,10 +45,10 @@ const embedMode = (() => {
 const embed = embedMode === '1'                 //прятать навигацию (одна страница)
 const chromeless = embedMode !== ''             //прятать шапку (любой режим внутри окна)
 
-// Заголовок/подзаголовок страницы — переводимы через необязательные meta.i18nTitle/
-// i18nSubtitle (см. router/index.js); маршрут без них показывает meta.title как есть
-// (обратная совместимость — так исторически заведено для части страниц).
-const title = computed(() => route.meta?.i18nTitle ? locale.t(route.meta.i18nTitle, route.meta.title) : (route.meta?.title || ''))
+// Подзаголовок страницы — переводим через необязательный meta.i18nSubtitle (см.
+// router/index.js); маршрут без него показывает meta.subtitle как есть.
+// ⚠️ meta.title здесь БОЛЬШЕ НЕ ЧИТАЕТСЯ: имя раздела и так подсвечено в сайдбаре, а на
+// телефоне его показывает мобильная полоса (HeaderBar.vue) — она же и берёт meta.title.
 const subtitle = computed(() => route.meta?.i18nSubtitle ? locale.t(route.meta.i18nSubtitle, route.meta.subtitle) : (route.meta?.subtitle || ''))
 // Боковой Вектор виден на всех страницах, КРОМЕ самой вкладки «ИИ Помощник»
 // (там полноразмерный Вектор в контенте). Только десктоп (на мобиле не показываем).
@@ -89,37 +89,45 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-hidden">
-    <HeaderBar v-if="!chromeless" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+  <!-- Корень — ГОРИЗОНТАЛЬНЫЙ: сайдбар и контент рядом, полосы во всю ширину сверху
+       больше нет (см. HeaderBar.vue — там осталась только мобильная версия). -->
+  <div class="flex h-full overflow-hidden">
+    <!-- Десктоп: постоянный сайдбар -->
+    <div v-if="!embed" class="hidden lg:block">
+      <Sidebar />
+    </div>
 
-    <div class="flex min-h-0 flex-1">
-      <!-- Десктоп: постоянный сайдбар -->
-      <div v-if="!embed" class="hidden lg:block">
-        <Sidebar />
-      </div>
-
-      <!-- Мобайл: выезжающий сайдбар -->
-      <transition name="fade">
-        <div v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
-          <div class="absolute inset-0" style="background: var(--gb-overlay)" @click="sidebarOpen = false" />
-          <div class="absolute inset-y-0 left-0 z-50 shadow-xl" style="top: calc(60px + env(safe-area-inset-top))">
-            <Sidebar :open="sidebarOpen" @navigate="sidebarOpen = false" />
-          </div>
+    <!-- Мобайл: выезжающий сайдбар -->
+    <transition name="fade">
+      <div v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
+        <div class="absolute inset-0" style="background: var(--gb-overlay)" @click="sidebarOpen = false" />
+        <div class="absolute inset-y-0 left-0 z-50 shadow-xl">
+          <Sidebar :open="sidebarOpen" @navigate="sidebarOpen = false" />
         </div>
-      </transition>
+      </div>
+    </transition>
+
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <!-- Компактная полоса — ТОЛЬКО телефон (сама прячется с lg): там сайдбар за
+           бургером, и без неё не было бы ни меню, ни понимания, какой раздел открыт. -->
+      <HeaderBar v-if="!chromeless" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
       <!-- Контент: мягкий фон + сетка (как AnimatedBackground в десктопе) -->
       <main class="app-canvas min-h-0 flex-1 overflow-y-auto" style="padding-bottom: env(safe-area-inset-bottom)">
-        <!-- Контент тянется на всю ширину области (как в десктопе — там сетка не
-             ограничена узкой колонкой), с очень высоким потолком, чтобы на 4K не
-             растягивалось до нечитаемых строк. -->
-        <div :class="embed ? 'h-full p-0' : 'mx-auto max-w-[1700px] p-4 sm:px-7 sm:py-6'">
-          <!-- На телефоне заголовок компактнее (меньше кегль и отступы), чтобы не
-               «съедал» экран у небольших страниц; с sm — как в десктопе. -->
-          <div v-if="title && !embed" class="mb-3 sm:mb-5">
-            <h1 class="font-title text-lg font-extrabold text-text sm:text-2xl">{{ title }}</h1>
-            <p v-if="subtitle" class="mt-0.5 text-xs text-text3 sm:mt-1 sm:text-sm">{{ subtitle }}</p>
-          </div>
+        <!-- Отступы ужаты (3.5.6): было p-4 / sm:px-7 sm:py-6 — «жирная рамка» вокруг
+             активного окна съедала полосу по всему периметру, ничего в ней не показывая. -->
+        <!-- Правый отступ добавляем ТОЛЬКО когда у края висит вкладка-возврат Вектора:
+             она fixed и иначе ложится на последнюю колонку страницы (на расписании
+             накрывала субботу). Панель раскрыта или её нет — отступ не нужен. -->
+        <div :class="[embed ? 'h-full p-0' : 'mx-auto max-w-[1700px] p-3 sm:px-4 sm:py-3.5',
+                      (!embed && showDock && vector.collapsed) ? 'lg:pr-10' : '']">
+          <!-- ⚠️ КРУПНОГО ЗАГОЛОВКА СТРАНИЦЫ ЗДЕСЬ БОЛЬШЕ НЕТ. Он дублировал подсвеченный
+               пункт сайдбара — то же слово, только вчетверо крупнее и с отступами
+               (живой отзыв: «зачем-то огромная надпись, какое окно выбрано»). Остался
+               ТОЛЬКО подзаголовок, где он есть: это пояснение к странице, а не её имя,
+               и его нигде больше не видно. На телефоне имя раздела показывает
+               мобильная полоса выше — там сайдбара на экране нет. -->
+          <p v-if="subtitle && !embed" class="mb-2.5 text-xs text-text3">{{ subtitle }}</p>
           <RouterView v-slot="{ Component }">
             <transition name="fade" mode="out-in">
               <component :is="Component" />
@@ -127,20 +135,29 @@ onBeforeUnmount(() => {
           </RouterView>
         </div>
       </main>
-
-      <!-- Постоянный боковой Вектор (десктоп): справа поверх всех страниц, кроме вкладки
-           «ИИ Помощник». Переписка общая со вкладкой (Pinia-store vector). Можно скрыть. -->
-      <div v-if="!embed && showDock && !vector.collapsed" class="hidden lg:block">
-        <VectorDock />
-      </div>
     </div>
 
-    <!-- Панель скрыта → вкладка-возврат у правого края (десктоп). -->
+    <!-- Боковой Вектор — ОВЕРЛЕЙ поверх страницы, а не колонка в потоке (живой отзыв
+         3.5.6: «ИИ-шторка должна налазить на текущую страницу, а не сдвигать её»).
+         Раньше это был обычный <aside> в той же flex-строке: открытие шторки сжимало
+         контент на 384 px, таблицы журнала перевёрстывались, и человек терял место, на
+         которое смотрел. Теперь она fixed поверх, с тенью и выездом справа. -->
+    <transition name="dock">
+      <div v-if="!embed && dockShown" class="fixed inset-y-0 right-0 z-30 hidden shadow-2xl lg:block">
+        <VectorDock />
+      </div>
+    </transition>
+
+    <!-- Панель скрыта → вкладка-возврат у правого края (десктоп).
+         ⚠️ Раньше рядом с иконкой стояло слово «Вектор», набранное ВЕРТИКАЛЬНО
+         (writing-mode). Вкладка от этого была вдвое шире и заметно ложилась на правую
+         колонку страницы — на расписании накрывала субботу. Осталась одна иконка с
+         подсказкой: назначение читается по ней, а место она занимает вдвое меньше. -->
     <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
-            aria-label="Показать панель Вектора" title="Показать Вектора"
-            class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-border bg-card py-3 pl-2.5 pr-2 text-accent shadow-card transition-colors hover:bg-accent-glow lg:flex">
+            :aria-label="locale.t('vectorDock.showPanel', 'Показать панель Вектора')"
+            :title="locale.t('vectorDock.showPanelShort', 'Показать Вектора')"
+            class="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 place-items-center rounded-l-lg border border-r-0 border-border bg-card px-1.5 py-3 text-accent shadow-card transition-colors hover:bg-accent-glow lg:grid">
       <PanelRightOpen class="size-5" />
-      <span class="text-xs font-semibold" style="writing-mode: vertical-rl; transform: rotate(180deg)">Вектор</span>
     </button>
   </div>
 </template>
@@ -158,4 +175,9 @@ onBeforeUnmount(() => {
 .fade-leave-active { transition: opacity 0.15s ease; }
 .fade-enter-from,
 .fade-leave-to { opacity: 0; }
+/* Шторка Вектора выезжает справа поверх страницы (не раздвигает её). */
+.dock-enter-active,
+.dock-leave-active { transition: transform 0.18s ease, opacity 0.18s ease; }
+.dock-enter-from,
+.dock-leave-to { transform: translateX(16px); opacity: 0; }
 </style>

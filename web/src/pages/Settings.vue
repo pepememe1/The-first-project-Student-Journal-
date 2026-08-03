@@ -3,8 +3,10 @@
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, computed, onMounted } from 'vue'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert } from '@lucide/vue'
+import { useRouter } from 'vue-router'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
+import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { useTtsStore } from '@/stores/tts'
 import { useVoiceStore } from '@/stores/voice'
@@ -21,6 +23,26 @@ const tts = useTtsStore()
 const auth = useAuthStore()
 const voice = useVoiceStore()
 const loc = useLocaleStore()
+const router = useRouter()
+
+// ── Выход из аккаунта ────────────────────────────────────────────────────────────
+// Переехал сюда из шапки (живой отзыв 3.5.6). Причина не косметическая: выход стоял
+// в постоянно видимой полосе рядом с переключателем темы и статусом, то есть рядом с
+// тем, что нажимают по несколько раз в день — а сам он действие редкое и необратимое
+// (JWT живёт жёстко 5 ч, §6: после выхода нужен полный повторный вход с паролем).
+// Здесь он в самом низу страницы, до которой надо осознанно долистать.
+// Прощальная анимация (Вектор машет ~1.2 с) уехала вместе с ним — сам logout при этом
+// выполняется СРАЗУ, анимация задерживает только переход экрана: если что-то пойдёт не
+// так, человек всё равно окажется разлогинен.
+const FAREWELL_MS = 1200
+const farewell = ref(false)
+const farewellName = computed(() => (auth.user?.name || '').trim())
+async function onLogout() {
+  farewell.value = true
+  try { await auth.logout() } finally {
+    setTimeout(() => router.push('/login'), FAREWELL_MS)
+  }
+}
 
 // ── Уведомления: какие категории человек согласен получать ───────────────────────
 // Настройка АККАУНТА, а не устройства: решение «слать или нет» принимает сервер до
@@ -447,5 +469,20 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         <p v-if="pkMsg" class="text-sm font-medium text-accent">{{ pkMsg }}</p>
       </div>
     </Card>
+
+    <!-- ВЫХОД — в самом низу страницы, последним блоком. Раньше жил в шапке рядом с
+         темой и статусом; здесь до него надо осознанно долистать. -->
+    <Card :title="loc.t('settings.account', 'Аккаунт')"
+          :subtitle="loc.t('settings.accountHint', 'Вход в систему на этом устройстве')">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-text3">
+          {{ loc.t('settings.logoutExplain', 'После выхода понадобится снова ввести логин и пароль — сохранённая сессия будет удалена с этого устройства.') }}
+        </p>
+        <AppButton variant="ghost" class="text-red" @click="onLogout">
+          <LogOut class="mr-2 inline size-4" />{{ loc.t('nav.logout', 'Выйти') }}
+        </AppButton>
+      </div>
+    </Card>
   </div>
+  <FarewellOverlay v-if="farewell" :name="farewellName" />
 </template>

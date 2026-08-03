@@ -1,13 +1,23 @@
 <script setup>
 import { useLocaleStore } from '@/stores/locale'
-// Sidebar — боковая навигация (порт ui_components.Sidebar). 250px, фон bg2, секции-
-// заголовки (uppercase) + пункты с иконками; активный подсвечен акцентом.
+// Sidebar — боковая навигация. 250px, фон bg2, секции-заголовки (uppercase) + пункты с
+// иконками; активный подсвечен акцентом.
+//
+// С 3.5.6 сайдбар несёт ТРИ этажа, а не один список (живой отзыв: «сайдбар пустой, а
+// хэдер жирный и бесполезный»):
+//   1) шапка — фирменный знак и название (переехали из акцентной полосы во всю ширину);
+//   2) сам список разделов — растягивается, прокручивается только он;
+//   3) карточка себя (SidebarUserPanel) — аватар/ФИО/логин/роль/статус, компоновка Discord.
+// Из-за этого корневой aside стал flex-колонкой с overflow-y ТОЛЬКО на середине: иначе
+// карточка себя уезжала бы вверх вместе с прокруткой длинного админского меню.
 import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
 import { NAV } from '@/config/nav'
 import { curatorApi, adminApi } from '@/api/endpoints'
+import BrandLogo from '@/components/BrandLogo.vue'
+import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
@@ -44,32 +54,50 @@ function isActive(to) {
 </script>
 
 <template>
-  <aside class="flex h-full w-[250px] shrink-0 flex-col overflow-y-auto border-r border-border bg-bg2 px-2.5 py-4">
-    <template v-for="(item, i) in items" :key="i">
-      <p v-if="item.section" class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
-        {{ item.i18n ? loc.t(item.i18n, item.section) : item.section }}
-      </p>
-      <RouterLink
-        v-else
-        :to="item.to"
-        class="mb-0.5 flex items-center gap-2.5 rounded-sm px-3.5 py-2.5 text-sm transition-colors"
-        :class="
-          isActive(item.to)
-            ? 'bg-accent-glow font-semibold text-accent'
-            : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent'
-        "
-        @click="emit('navigate')"
-      >
-        <component :is="item.icon" class="size-[18px] shrink-0" />
-        <span class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
-        <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
-             расписания — красным (требует вмешательства). Ноль не показываем. -->
-        <span v-if="item.badge && badgeCount(item.badge)"
-              class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-tiny font-bold text-white"
-              :class="item.badge === 'messagesUnread' ? 'bg-accent' : 'bg-red'">
-          {{ badgeCount(item.badge) }}
-        </span>
-      </RouterLink>
-    </template>
+  <aside class="flex h-full w-[250px] shrink-0 flex-col border-r border-border bg-bg2">
+    <!-- 1. Шапка: фирменный знак и название. Раньше стояли в акцентной полосе во всю
+         ширину окна — здесь занимают ту же строку, но не отнимают высоту у контента. -->
+    <div class="flex shrink-0 items-center gap-2.5 px-3 py-3">
+      <BrandLogo :size="32" class="shrink-0" />
+      <div class="min-w-0 leading-tight">
+        <p class="truncate font-title text-[15px] font-extrabold text-text">GradeBookAI</p>
+        <p class="truncate text-[10px] font-semibold text-text3">{{ loc.t('app.college') }}</p>
+      </div>
+    </div>
+    <div class="mx-3 h-px shrink-0 bg-border" />
+
+    <!-- 2. Разделы — единственная прокручиваемая часть. -->
+    <nav class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+      <template v-for="(item, i) in items" :key="i">
+        <p v-if="item.section" class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
+          {{ item.i18n ? loc.t(item.i18n, item.section) : item.section }}
+        </p>
+        <RouterLink
+          v-else
+          :to="item.to"
+          class="mb-0.5 flex items-center gap-2.5 rounded-sm px-3.5 py-2.5 text-sm transition-colors"
+          :class="
+            isActive(item.to)
+              ? 'bg-accent-glow font-semibold text-accent'
+              : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent'
+          "
+          @click="emit('navigate')"
+        >
+          <component :is="item.icon" class="size-[18px] shrink-0" />
+          <span class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
+          <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
+               расписания — красным (требует вмешательства). Ноль не показываем. -->
+          <span v-if="item.badge && badgeCount(item.badge)"
+                class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-tiny font-bold text-white"
+                :class="item.badge === 'messagesUnread' ? 'bg-accent' : 'bg-red'">
+            {{ badgeCount(item.badge) }}
+          </span>
+        </RouterLink>
+      </template>
+    </nav>
+
+    <!-- 3. Карточка себя — прижата к нижнему краю (Discord). Занимает ровно тот угол,
+         который в прежней раскладке пустовал. -->
+    <SidebarUserPanel />
   </aside>
 </template>

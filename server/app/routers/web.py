@@ -1752,8 +1752,11 @@ def _stt_context(db: Session, user: User) -> str:
             words += sorted({s for _g, s in pairs})[:12]
             for group in sorted({g for g, _s in pairs})[:4]:
                 words += [st.surname for st in W.students_in_group(db, group)][:30]
-        elif user.role == "student" and hasattr(W, "_group_subject_list"):
-            words += sorted(W._group_subject_list(db, user.group_name or ""))[:12]
+        elif user.role == "student":
+            #Раньше здесь стояла защита hasattr(W, "_group_subject_list") на функцию,
+            #которой в webdata никогда не существовало — то есть ветка не срабатывала
+            #НИ РАЗУ, и студент молча оставался без подсказки с названиями предметов.
+            words += W.group_subject_list(db, user.group_name or "")[:12]
     except Exception:
         pass
     #Уникальные, порядок сохраняем: первым идёт то, что важнее узнать.
@@ -2103,7 +2106,10 @@ def _known_subjects(user: User, db: Session) -> list:
     Студент — предметы занятий своей группы; преподаватель — свои; админ — все."""
     try:
         if user.role == "student":
-            return sorted({l.subject for l in W.group_lessons(db, user.group_name) if l.subject})
+            #Не только из занятий: предмет из импортированного учебного плана существует
+            #в Group.subjects ещё до того, как по нему заведут первое занятие — иначе
+            #«оценки по <предмету>» не распознавали бы сам предмет (см. group_subject_list).
+            return W.group_subject_list(db, user.group_name or "")
         if user.role == "teacher":
             ty, ts = W.current_term(W.load_config(db))
             return sorted({s for _g, s in W.teacher_assignments(db, user.id, ty, ts)})
@@ -2526,6 +2532,28 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
                     "mood": _mood_by_avg(p["average"]), "intent": "subject_grades",
                     "facts": {"subject": subject, "average": p["average"]}}
+        if intent == "subjects":
+            #Полный список предметов группы — из справочника И занятий (group_subject_list),
+            #а не только из занятий: предмет из импортированного учебного плана появляется
+            #раньше, чем по нему заводят первое занятие, и до этой ветки Вектор о нём молчал.
+            #no_voice — перечень НАЗВАНИЙ: LLM, «озвучивая данные», переставляет и выдумывает
+            #предметы, а это ровно то, что продукт обещает не делать.
+            names = W.group_subject_list(db, group)
+            if not names:
+                return {"text": "Предметы за твоей группой пока не закреплены — их заводит "
+                                "администратор. 🐯",
+                        "mood": "neutral", "intent": "subjects", "facts": {"subjects": 0},
+                        "no_voice": True}
+            graded = {p["subject"] for p in W.per_subject_averages(lessons, records, cfg,
+                                                                   scale=scale_map)
+                      if p["average"]}
+            text = f"Твои предметы ({len(names)}): " + ", ".join(names) + "."
+            no_marks = [n for n in names if n not in graded]
+            if no_marks:
+                text += " Пока без оценок: " + ", ".join(no_marks) + "."
+            return {"text": text, "mood": "neutral", "intent": "subjects",
+                    "facts": {"subjects": len(names), "without_grades": len(no_marks)},
+                    "no_voice": True}
         if intent == "grades" or intent == "subject_grades":
             per = W.per_subject_averages(lessons, records, cfg, scale=scale_map)
             graded = [p for p in per if p["average"]]
@@ -2576,6 +2604,15 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         if intent == "groups":
             return {"text": "Ваши группы: " + ", ".join(groups) + ".", "mood": "neutral",
                     "intent": "groups", "facts": {"groups": len(groups)}}
+        if intent == "subjects":
+            #Предметы ПРЕПОДАВАТЕЛЯ — из назначений (препод↔предмет↔группа), а не весь
+            #каталог группы: чужие предметы той же группы к его нагрузке отношения не имеют.
+            own = sorted({s for _g, s in pairs})
+            body = "; ".join(f"{g} — " + ", ".join(sorted(subjects_by_group.get(g, ())))
+                             for g in groups)
+            return {"text": f"Ваши предметы ({len(own)}): " + ", ".join(own) + f". По группам: {body}.",
+                    "mood": "neutral", "intent": "subjects",
+                    "facts": {"subjects": len(own), "groups": len(groups)}, "no_voice": True}
         if intent == "roster":
             g = groups[0]
             names = [W.display_name(s) for s in W.students_in_group(db, g)]
@@ -2694,6 +2731,13 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         body = ", ".join(names) if names else "групп нет"
         return {"text": f"Группы колледжа ({len(names)}): {body}.", "mood": "neutral",
                 "intent": "groups", "facts": {"count": len(names)}}
+    if intent == "subjects":
+        #Админу — каталог предметов целиком (это его справочник, ровно как «Группы» выше).
+        rows = db.query(Subject).filter(Subject.deleted == False).all()  # noqa: E712
+        names = sorted({s.name for s in rows if s.name})
+        body = ", ".join(names) if names else "каталог пуст"
+        return {"text": f"Предметы колледжа ({len(names)}): {body}.", "mood": "neutral",
+                "intent": "subjects", "facts": {"count": len(names)}, "no_voice": True}
     n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
     n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
     n_parents = db.query(User).filter(User.role == "parent", User.deleted == False).count()  # noqa: E712
