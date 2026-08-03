@@ -20,6 +20,7 @@ from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
+from .routers import desktopupdate
 from .routers import serverinfo
 from . import events, throttle
 
@@ -122,6 +123,7 @@ app.include_router(parent.router)          # кабинет родителя + �
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
 app.include_router(messenger.mod_router)   # модерация мессенджера (/web/admin/messenger/*)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
+app.include_router(desktopupdate.router)   # автообновление десктопа (манифест; файлы — /downloads)
 #Раздел «Сервер» — ТОЛЬКО ПРОСМОТР. Управление (SSH, команды, перенос) живёт в
 #ui/server_admin.py и подключается лишь к локальному серверу программы: на боевой
 #машине этого кода нет вовсе, поэтому дырка в веб-админке не даёт оболочку на VPS.
@@ -148,16 +150,32 @@ def desktop_info():
     return {"available": False}
 
 
-@app.get("/downloads/{fname}", include_in_schema=False)
-def download_file(fname: str):
-    target = os.path.realpath(os.path.join(DOWNLOADS_DIR, fname))
+def _serve_download(relpath: str):
+    """Отдать файл СТРОГО изнутри downloads (общая проверка для обоих роутов ниже)."""
+    target = os.path.realpath(os.path.join(DOWNLOADS_DIR, relpath))
     #защита от path traversal: отдаём только файлы СТРОГО ВНУТРИ downloads. Сравниваем с
     #разделителем на конце (root + os.sep), иначе соседний каталог-префикс (downloads_x)
     #прошёл бы голый startswith.
     _root = os.path.realpath(DOWNLOADS_DIR)
     if (target == _root or target.startswith(_root + os.sep)) and os.path.isfile(target):
-        return FileResponse(target, filename=fname, media_type="application/octet-stream")
+        return FileResponse(target, filename=os.path.basename(target),
+                            media_type="application/octet-stream")
     return JSONResponse(status_code=404, content={"detail": "Файл не найден"})
+
+
+@app.get("/downloads/updates/{fname}", include_in_schema=False)
+def download_update_file(fname: str):
+    """Файлы автообновления десктопа: полный .exe и дельта-патчи (см. desktop_update.py).
+
+    ⚠️ Отдельный роут нужен потому, что `/downloads/{fname}` НЕ матчит подкаталог:
+    у строкового параметра пути слэш не захватывается, и `updates/3.5.5-3.5.6.patch`
+    просто не нашёлся бы — обновления «молча не качались бы». Проверка та же самая."""
+    return _serve_download(os.path.join("updates", fname))
+
+
+@app.get("/downloads/{fname}", include_in_schema=False)
+def download_file(fname: str):
+    return _serve_download(fname)
 
 
 #САЙТ (SPA): отдаём собранный фронтенд с ТОГО ЖЕ адреса, что и API. Монтируем ПОСЛЕ

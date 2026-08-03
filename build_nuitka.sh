@@ -83,6 +83,17 @@ INC="$INC --include-module=reminder_parse"
 # Поэтому включаем ТОЛЬКО если пакет реально стоит в сборочном окружении: жёсткий
 # --include-package уронил бы сборку на машине без него, а это ровно та поломка,
 # которая обнаруживается в момент релиза.
+# Дельта-обновления (data/updater.py): без zstandard программа обновляется полной
+# закачкой .exe — то есть работает, просто тратит больше трафика. Поэтому включаем по
+# тому же правилу, что и paramiko: только если пакет реально стоит в сборочном окружении.
+if "$PYEXE" -c "import zstandard" >/dev/null 2>&1; then
+  INC="$INC --include-package=zstandard"
+  echo "[nuitka] zstandard найден — обновления пойдут дельтой (единицы МБ)"
+else
+  echo "[nuitka] zstandard НЕ найден — обновления будут качать .exe целиком"
+  echo "         (поставить: \"$PYEXE\" -m pip install zstandard)"
+fi
+
 if "$PYEXE" -c "import paramiko" >/dev/null 2>&1; then
   INC="$INC --include-package=paramiko"
   echo "[nuitka] paramiko найден — вход по паролю будет доступен в сборке"
