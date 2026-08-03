@@ -67,6 +67,29 @@ def test_manifest_is_public_no_auth_required(client, tmp_path, monkeypatch):
     assert r.json()["version"] == "3.5.6"
 
 
+def test_update_download_refuses_path_traversal(client, tmp_path, monkeypatch):
+    """Новый роут /downloads/updates/{fname} обязан держать ту же защиту, что старый.
+
+    Проверяем НА УРОВНЕ ФУНКЦИИ, а не запросом: снаружи `..%2f..%2f.env` до роута вообще
+    не доходит (Starlette декодирует %2f ДО роутинга, путь распадается и уезжает в
+    SPA-заглушку — проверено на бою). То есть внешний запрос ничего не доказывает про
+    саму проверку, а сломать её правкой можно незаметно."""
+    from app import main as app_main
+
+    secret = tmp_path / "secret.env"
+    secret.write_text("GRADEBOOK_DB_KEY=не-должно-утечь", encoding="utf-8")
+    downloads = tmp_path / "downloads"
+    (downloads / "updates").mkdir(parents=True)
+    monkeypatch.setattr(app_main, "DOWNLOADS_DIR", str(downloads))
+
+    r = app_main.download_update_file("../../secret.env")
+    assert getattr(r, "status_code", None) == 404, "выход за пределы downloads запрещён"
+
+    #А обычный файл внутри updates отдаётся как ни в чём не бывало.
+    (downloads / "updates" / "ok.patch").write_bytes(b"x")
+    assert getattr(app_main.download_update_file("ok.patch"), "status_code", 200) != 404
+
+
 def test_shared_rules_come_from_root_module():
     """Сервер обязан пользоваться ТЕМ ЖЕ desktop_update.py, что клиент и сборщик —
     иначе имена патчей и сравнение версий разъедутся между сторонами."""
