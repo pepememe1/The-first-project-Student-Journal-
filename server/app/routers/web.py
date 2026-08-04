@@ -280,10 +280,31 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
                       "detail": f"Сейчас {avg}. Есть риск задолженностей по итогам.",
                       "action": "Разберите сложные темы с Вектором"})
 
+    #РИСК ОТЧИСЛЕНИЯ (3.6). Показываем ТОЛЬКО когда он реально есть (порог
+    #dropout_risk.MIN_VISIBLE) — «риск 1 %» пугает без повода и обесценивает настоящий
+    #сигнал. Карточка идёт ПЕРВОЙ: если она появилась, всё остальное на экране менее
+    #важно. Обязательно называем предметы и что делать — индекс без объяснения человеку
+    #бесполезен и воспринимается как приговор.
+    risk = W.dropout_risk_for_student(db, user.surname, user.name, user.group_name,
+                                      cfg=cfg, lessons=lessons, records=records)
+    if risk["visible"]:
+        subj = ", ".join(s["subject"] for s in risk["subjects"][:3])
+        why = "; ".join(f["detail"] for f in risk["factors"][:2])
+        cards.insert(0, {
+            "severity": "alert" if risk["level"] in ("high", "critical") else "warn",
+            "icon": "🎓",
+            "title": f"{risk['level_label']} риск отчисления",
+            "detail": (f"Из-за чего: {why}" + (f" Предметы: {subj}." if subj else "")),
+            "action": risk["advice"],
+        })
+
     if not cards:
         cards.append({"severity": "info", "icon": "✅", "title": "Всё в порядке",
                       "detail": "Долгов и тревожных сигналов нет — так держать!"})
-    return {"cards": cards, "mood": _mood_by_avg(avg)}
+    #risk отдаём отдельным полем (а не только карточкой): интерфейсу нужен уровень для
+    #цвета/иконки, а разбирать его обратно из текста карточки — верный способ разъехаться.
+    return {"cards": cards, "mood": _mood_by_avg(avg),
+            "risk": risk if risk["visible"] else None}
 
 
 @router.get("/student/zet")
@@ -424,7 +445,14 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
 @router.get("/teacher/students")
 def teacher_students(group: str = Query(...),
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Студенты группы со средним по предметам преподавателя (в этой группе)."""
+    """Студенты группы со средним по предметам преподавателя (в этой группе).
+
+    С 3.6 к каждому студенту прикладывается РИСК ОТЧИСЛЕНИЯ (`dropout_risk.py`) —
+    преподаватель обязан видеть в своём списке тех, кто реально на грани. Риск считается
+    ТОЛЬКО по предметам этого преподавателя в этой группе: судить по чужим он всё равно
+    не вправе, а показать ему цифру, собранную из невидимых для него данных, значит
+    показать необъяснимое число. Целостную картину по всем предметам видит куратор
+    (`/curator/risk`)."""
     _require("teacher", user)
     cfg = W.load_config(db)
     ty, ts = W.current_term(cfg)
@@ -438,8 +466,13 @@ def teacher_students(group: str = Query(...),
     out = []
     for s in W.students_in_group(db, group):
         recs = W.student_records(db, s.surname, s.name, group)
+        risk = W.dropout_risk_for_student(db, s.surname, s.name, group,
+                                          cfg=cfg, lessons=lessons, records=recs)
         out.append({"surname": s.surname, "name": s.name,
-                    "average": W.average(lessons, recs, cfg, scale=tscale)})
+                    "average": W.average(lessons, recs, cfg, scale=tscale),
+                    #Ниже порога видимости риска нет вовсе — отдаём null, чтобы клиент
+                    #не решал этот вопрос второй раз своим порогом.
+                    "risk": risk if risk["visible"] else None})
     return {"group": group, "students": out}
 
 
@@ -461,6 +494,61 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
     return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
             "students": len(studs), "group_average": group_avg, "lessons": len(lessons)}
+
+
+@router.get("/teacher/summary")
+def teacher_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сводка преподавателя для вкладки «ИИ Помощник» (3.6): его группы, в каждой —
+    его предметы со средним, плюс сколько студентов в зоне риска.
+
+    ОДИН запрос вместо N. Раньше такую картину можно было собрать только перебором
+    `/teacher/stats` по каждой паре (группа, предмет) — на пяти группах это полтора
+    десятка запросов при открытии страницы, причём каждый заново поднимал бы одни и те
+    же занятия и ведомости из базы. Здесь занятия и записи студентов читаются по РАЗУ
+    на группу и переиспользуются и для средних, и для риска."""
+    _require("teacher", user)
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    tscale = W.teacher_scale(user)
+    pairs = W.teacher_assignments(db, user.id, ty, ts)
+
+    by_group = {}
+    for g, s in pairs:
+        by_group.setdefault(g, set()).add(s)
+
+    groups = []
+    for group in sorted(by_group):
+        subjects = by_group[group]
+        lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+        studs = W.students_in_group(db, group)
+        recs = {s.id: W.student_records(db, s.surname, s.name, group) for s in studs}
+
+        subj_rows = []
+        for subject in sorted(subjects):
+            sl = [l for l in lessons if l.subject == subject]
+            vals = [v for v in (W.average(sl, recs[s.id], cfg, scale=tscale) for s in studs) if v > 0]
+            subj_rows.append({
+                "subject": subject,
+                "average": round(sum(vals) / len(vals), 2) if vals else 0.0,
+                #«По скольким студентам посчитано» — средний по трём из двадцати пяти и
+                #по всем двадцати пяти выглядит одинаково, а значит разное.
+                "graded_students": len(vals),
+                "lessons": len(sl),
+            })
+
+        all_vals = [v for v in (W.average(lessons, recs[s.id], cfg, scale=tscale) for s in studs) if v > 0]
+        at_risk = 0
+        for s in studs:
+            r = W.dropout_risk_for_student(db, s.surname, s.name, group,
+                                           cfg=cfg, lessons=lessons, records=recs[s.id])
+            if r["visible"] and r["level"] in ("medium", "high", "critical"):
+                at_risk += 1
+        groups.append({"group": group, "students": len(studs),
+                       "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
+                       "at_risk": at_risk, "subjects": subj_rows})
+
+    return {"term": {"year": ty, "semester": ts}, "groups": groups,
+            "subjects": sorted({s for _g, s in pairs})}
 
 
 # УЧЕБНЫЙ ПЕРИОД (год/семестр) ───────────────────────────────────────────────────
@@ -539,6 +627,72 @@ def curator_groups(user: User = Depends(get_current_user), db: Session = Depends
     """Группы, которые курирует преподаватель. Пусто → он не куратор (вкладка скрыта)."""
     _require("teacher", user)
     return {"groups": list(user.curated_groups or [])}
+
+
+@router.get("/curator/risk")
+def curator_risk(group: str = Query(...),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Риск отчисления по ВСЕМ студентам курируемой группы (3.6).
+
+    В отличие от списка преподавателя (там риск считается только по ЕГО предметам —
+    иначе он видел бы число, собранное из недоступных ему данных), куратор получает
+    целостную картину: все предметы группы. Это и есть его работа — заметить студента,
+    у которого по каждому предмету «ещё терпимо», а в сумме уже нет.
+
+    Отдаём ТОЛЬКО тех, у кого риск реально есть (`visible`, порог dropout_risk.MIN_VISIBLE):
+    список из тридцати строк, где двадцать восемь — «риска нет», читать невозможно, а
+    именно читаемость и делает эту функцию полезной."""
+    _require("teacher", user)
+    _curator_check(user, group)
+    rows = [r for r in W.group_risk_report(db, group) if r["risk"]["visible"]]
+    #Сортировка по убыванию индекса: первым идёт тот, к кому идти первым.
+    rows.sort(key=lambda r: -r["risk"]["score"])
+    return {"group": group, "students": rows,
+            "total": len(W.students_in_group(db, group)), "at_risk": len(rows)}
+
+
+#Порядок уровней для сравнения «стало хуже» и порог, с которого вообще беспокоим куратора.
+#«Умеренный»/«повышенный» — это повод посмотреть на экран, а не получить уведомление:
+#на группе в 25 человек такие срабатывают у трети, и письмо перестают открывать.
+_RISK_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+_RISK_NOTIFY_FROM = _RISK_ORDER["high"]
+
+
+def _maybe_notify_dropout_risk(db, stud: User, group: str) -> None:
+    """Пересчитать риск студента и написать куратору, ЕСЛИ уровень стал хуже прежнего.
+
+    Вызывается хвостом обработчика выставления оценки — как и остальные хуки мессенджера/
+    пушей, в try/except у вызывающего: сбой уведомления НИКОГДА не должен помешать
+    преподавателю поставить балл.
+
+    Память о прошлом уровне — `DropoutRiskNotice` (одна строка на студента). Без неё
+    куратор получал бы одно и то же письмо после каждой двойки."""
+    from ..models import DropoutRiskNotice
+    risk = W.dropout_risk_for_student(db, stud.surname, stud.name, group)
+    level = _RISK_ORDER.get(risk["level"], 0)
+    row = db.get(DropoutRiskNotice, stud.id)
+    was = _RISK_ORDER.get(row.level, 0) if row else 0
+
+    #Состояние обновляем ВСЕГДА (в том числе вниз): выправился и снова просел — это
+    #снова новость, а не «уже сообщали».
+    if row is None:
+        row = DropoutRiskNotice(id=stud.id)
+        db.add(row)
+    row.group_name = group
+    row.level = risk["level"]
+    row.score = risk["score"]
+    row.updated_at = _now_iso()
+    db.commit()
+
+    if level < _RISK_NOTIFY_FROM or level <= was:
+        return
+    #Кураторы этой группы — те же, кого админ назначил в curated_groups. Отдельного
+    #признака «куратор» в продукте нет, и заводить второй не нужно.
+    curators = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
+    from .. import rustore_push
+    for c in curators:
+        if group in (c.curated_groups or []) and c.login:
+            rustore_push.notify_dropout_risk(db, c.login, W.display_name(stud), group, risk)
 
 
 @router.get("/curator/subjects")
@@ -2841,6 +2995,13 @@ def teacher_set_grade(payload: dict = Body(...),
                                lesson.subject, value)
         except Exception:
             pass
+    #Риск отчисления (3.6): пересчитываем ПОСЛЕ любой правки оценки — в том числе при
+    #снятии (снятая двойка риск снижает, и запомнить это надо, иначе следующий рост не
+    #посчитается новостью). Как и хуки выше — best-effort, ошибка не роняет простановку.
+    try:
+        _maybe_notify_dropout_risk(db, stud, lesson.group_name)
+    except Exception:
+        db.rollback()
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",

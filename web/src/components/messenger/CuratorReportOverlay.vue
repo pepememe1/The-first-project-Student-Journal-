@@ -17,6 +17,7 @@ import { X, ChevronLeft } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useThemeStore } from '@/stores/theme'
 import { useLocaleStore } from '@/stores/locale'
+import { categoricalPalette } from '@/theme/dataviz'
 
 const props = defineProps({ reportId: { type: String, required: true } })
 const emit = defineEmits(['close'])
@@ -49,19 +50,19 @@ loadOverview()
 // перекрашиваются в зависимости от того, какая категория сейчас больше (см. dataviz:
 // «цвет закреплён за сущностью, а не за рангом»). light/dark — разные шаги ТЕХ ЖЕ хью
 // (не автоматический инверт), см. заголовок файла.
-const CATS = computed(() => (theme.isDark
-  ? [
-      ['excellent', locale.t('curatorReport.cat.excellent', 'Отличники'), '#3987e5'],
-      ['good', locale.t('curatorReport.cat.good', 'Хорошисты'), '#d95926'],
-      ['passing', locale.t('curatorReport.cat.passing', 'Успевающие'), '#199e70'],
-      ['failing', locale.t('curatorReport.cat.failing', 'Неуспевающие'), '#c98500'],
-    ]
-  : [
-      ['excellent', locale.t('curatorReport.cat.excellent', 'Отличники'), '#2a78d6'],
-      ['good', locale.t('curatorReport.cat.good', 'Хорошисты'), '#eb6834'],
-      ['passing', locale.t('curatorReport.cat.passing', 'Успевающие'), '#1baf7a'],
-      ['failing', locale.t('curatorReport.cat.failing', 'Неуспевающие'), '#eda100'],
-    ]))
+// Сами цвета переехали в общий web/src/theme/dataviz.js (3.6): их понадобилось второе
+// место (сводка по предметам на вкладке «ИИ Помощник»), а две копии проверенной на
+// различимость палитры — верный способ однажды поправить одну из них. Первые ЧЕТЫРЕ
+// слота там — ровно эти, в этом же порядке, hex не изменился.
+const CATS = computed(() => {
+  const p = categoricalPalette(theme.isDark)
+  return [
+    ['excellent', locale.t('curatorReport.cat.excellent', 'Отличники'), p[0]],
+    ['good', locale.t('curatorReport.cat.good', 'Хорошисты'), p[1]],
+    ['passing', locale.t('curatorReport.cat.passing', 'Успевающие'), p[2]],
+    ['failing', locale.t('curatorReport.cat.failing', 'Неуспевающие'), p[3]],
+  ]
+})
 const categories = computed(() => {
   const c = overview.value?.categories
   if (!c || !c.total) return []

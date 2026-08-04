@@ -69,18 +69,27 @@ onBeforeUnmount(() => clearInterval(tipTimer))
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div>
-      <h2 class="font-title text-2xl font-extrabold text-text">{{ data?.name || '—' }}</h2>
-      <p class="mt-0.5 text-sm text-text3">{{ locale.t('studentDashboard.groupLabel', { group: data?.group || '—' }) }}</p>
+  <div class="space-y-3 sm:space-y-5">
+    <!-- ⚠️ На ТЕЛЕФОНЕ маскот стоит МЕЛКИМ в одной строке с именем, а не отдельным
+         блоком: в прежней раскладке (общая сетка, где на узком экране колонки просто
+         становятся строками) тигр занимал 250 px прямо под шапкой, и до собственно
+         данных — оценок, пропусков, долгов — приходилось прокручивать полэкрана
+         (живой отзыв 3.6: «всё как на десктопе, ничего не влазит»). На lg+ он
+         возвращается на своё место крупным планом — там место есть. -->
+    <div class="flex items-center gap-3">
+      <Mascot :sprite="sprite" class="aspect-[3/4] w-14 shrink-0 lg:hidden" />
+      <div class="min-w-0">
+        <h2 class="truncate font-title text-xl font-extrabold text-text sm:text-2xl">{{ data?.name || '—' }}</h2>
+        <p class="mt-0.5 truncate text-sm text-text3">{{ locale.t('studentDashboard.groupLabel', { group: data?.group || '—' }) }}</p>
+      </div>
     </div>
     <div class="h-px bg-border" />
 
     <!-- Умный совет: много советов, ротация; кнопка — следующий -->
-    <div class="rounded-lg border p-4" style="background: var(--gb-accent-glow); border-color: color-mix(in srgb, var(--gb-accent) 20%, transparent);">
+    <div class="rounded-lg border p-3 sm:p-4" style="background: var(--gb-accent-glow); border-color: color-mix(in srgb, var(--gb-accent) 20%, transparent);">
       <div class="mb-1 flex items-center justify-between">
         <p class="text-sm font-bold text-accent">💡 {{ locale.t('studentDashboard.smartTip', 'Умный совет') }}</p>
-        <button class="grid size-7 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"
+        <button class="grid size-7 shrink-0 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"
                 :title="locale.t('studentDashboard.nextTip', 'Следующий совет')" @click="nextTip">
           <RotateCw class="size-3.5" />
         </button>
@@ -91,13 +100,12 @@ onBeforeUnmount(() => clearInterval(tipTimer))
     <!-- Маскот слева крупным планом; справа — инсайты, статы и предметы ОДНОЙ колонкой,
          поэтому плашки рисков/долгов встают вровень со статами. -->
     <div class="grid gap-6 lg:grid-cols-[minmax(190px,240px)_1fr] xl:grid-cols-[minmax(300px,380px)_1fr]">
-      <div class="flex items-center justify-center">
-        <!-- Тигр во всю ширину колонки; пропорции спрайта 3:4 (460×613) — без пустот.
-             На телефоне ограничиваем, чтобы не занимал пол-экрана. -->
+      <div class="hidden items-center justify-center lg:flex">
+        <!-- Тигр во всю ширину колонки; пропорции спрайта 3:4 (460×613) — без пустот. -->
         <Mascot :sprite="sprite" class="aspect-[3/4] w-full max-w-[190px] lg:max-w-[320px] xl:max-w-[380px]" />
       </div>
 
-      <div class="space-y-5">
+      <div class="space-y-4 sm:space-y-5">
         <!-- Заявки родителей на доступ к журналу. Стоит ВЫШЕ статистики намеренно: это
              решение о собственных персональных данных, и его нельзя прятать в подвал. -->
         <ParentConsent />
@@ -115,14 +123,14 @@ onBeforeUnmount(() => clearInterval(tipTimer))
         </div>
 
         <div>
-          <h3 class="mb-3 font-title text-lg font-bold text-text">{{ locale.t('studentDashboard.mySubjectsTitle', 'Мои предметы') }}</h3>
+          <h3 class="mb-2 font-title text-base font-bold text-text sm:mb-3 sm:text-lg">{{ locale.t('studentDashboard.mySubjectsTitle', 'Мои предметы') }}</h3>
           <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
           <p v-else-if="!data?.subjects?.length" class="text-sm text-text3">{{ locale.t('studentDashboard.noSubjects', 'Предметов пока нет.') }}</p>
-          <ul v-else class="space-y-2">
+          <ul v-else class="space-y-1.5 sm:space-y-2">
             <li v-for="s in data.subjects" :key="s.subject"
-                class="flex items-center justify-between rounded-md border border-border bg-card px-4 py-3 shadow-card">
-              <span class="text-sm font-semibold text-text">{{ s.subject }}</span>
-              <span class="text-xs text-text3">{{ locale.t('studentDashboard.gradesCount', { n: s.grades }) }}</span>
+                class="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 shadow-card sm:px-4 sm:py-3">
+              <span class="min-w-0 truncate text-sm font-semibold text-text">{{ s.subject }}</span>
+              <span class="shrink-0 text-xs text-text3">{{ locale.t('studentDashboard.gradesCount', { n: s.grades }) }}</span>
             </li>
           </ul>
         </div>

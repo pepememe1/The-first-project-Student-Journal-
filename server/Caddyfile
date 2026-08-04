@@ -16,7 +16,12 @@ esstu-gradebook.ru {
 		# img-src static.klipy.com — GIF-пикер мессенджера (3.5.5, gif_service.py): без него
 		# CSP молча блокирует <img> на превью и отправленные GIF (белый список хоста тот же,
 		# что и на сервере — gif_service.is_allowed_url).
-		Content-Security-Policy "default-src 'self'; img-src 'self' data: https://static.klipy.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
+		# ⚠️ fonts.googleapis.com / fonts.gstatic.com УБРАНЫ из style-src/font-src (3.6):
+		# шрифты теперь свои (web/public/fonts, см. @font-face в src/style.css). Разрешение
+		# для внешнего хоста, которым никто не пользуется, — это лишний источник скриптов
+		# и утечка IP пользователей третьей стороне (152-ФЗ). Вернётся сюда, только если
+		# вернётся сама ссылка на CDN.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: https://static.klipy.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
 		-Server
 	}
 	# Реальный IP клиента из ПРОВЕРЕННОГО TCP-пира (клиент подделать не может — Caddy

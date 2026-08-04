@@ -170,6 +170,45 @@ def parent_zet(student_id: str = Query(""), year: str = Query(""), semester: int
             **W.zet_summary_for_student(db, child.surname, child.name, child.group_name, ty, ts)}
 
 
+@router.get("/parent/stats")
+def parent_stats(student_id: str = Query(""), year: str = Query(""), semester: int = Query(0),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Статистика ребёнка — формат ОДИН В ОДИН с /web/student/stats (3.6).
+
+    Заведено ради сводки на вкладке «ИИ Помощник»: родитель обязан видеть ровно то же,
+    что видит его студент. Одинаковый формат — не мелочь: интерфейс переиспользует ту же
+    карточку, и как только формы ответов разъедутся, разъедутся и цифры в двух кабинетах.
+
+    Риск отчисления сюда входит намеренно: родитель — второй человек после куратора,
+    которому есть смысл узнать о нём заранее, и узнать он должен из журнала, а не из
+    приказа."""
+    _require_parent(user)
+    child = _resolve_child(db, user, student_id)
+    cfg = W.load_config(db)
+    from .web import _resolve_term
+    ty, ts = _resolve_term(cfg, year, semester)
+    is_archive = bool((year or "").strip() and semester)
+    lessons = W.group_lessons(db, child.group_name, year=ty, semester=ts)
+    records = W.student_records(db, child.surname, child.name, child.group_name)
+    #Долги/пропуски — по ВСЕМ занятиям (как у студента): занятия без штампа термина
+    #иначе выпадают из фильтра, и реальные долги «исчезают». В архиве — строго по термину.
+    dl = lessons if is_archive else W.group_lessons(db, child.group_name)
+    scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
+    risk = W.dropout_risk_for_student(db, child.surname, child.name, child.group_name,
+                                      cfg=cfg, lessons=dl)
+    return {
+        "student": {"id": child.id,
+                    "full_name": (child.full_name or f"{child.surname} {child.name}").strip(),
+                    "group": child.group_name},
+        "term": {"year": ty, "semester": ts},
+        "average": W.average(lessons, records, cfg, scale=scale_map),
+        "per_subject": W.per_subject_averages(lessons, records, cfg, scale=scale_map),
+        "absences": W.absences(dl, records),
+        "debts": W.debts(dl, records, scale=scale_map),
+        "risk": risk if risk["visible"] else None,
+    }
+
+
 @router.post("/parent/vector/ask")
 def parent_vector_ask(payload: dict = Body(...),
                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):

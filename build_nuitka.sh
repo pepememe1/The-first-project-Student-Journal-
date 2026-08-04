@@ -74,6 +74,11 @@ done
 # (grading/study_hours/vector_nlu/weather) уже импортируются откуда-то из ui/vector/data
 # и потому попадают в сборку сами.
 INC="$INC --include-module=reminder_parse"
+# dropout_risk — та же история (3.6): общий корневой модуль правил риска отчисления,
+# импортируется ТОЛЬКО из server/app/webdata.py, то есть из «данных». Без явного include
+# локальный сервер внутри программы падал бы на импорте webdata, и кабинет не открылся
+# бы вовсе — ровно тот же отказ, что когда-то давал забытый reminder_parse.
+INC="$INC --include-module=dropout_risk"
 
 # paramiko — ЕДИНСТВЕННЫЙ путь входа по ПАРОЛЮ в разделе «Сервер» (ui/server_admin.py).
 # Системный ssh пароль ввести не может: он запускается с BatchMode=yes, а без него

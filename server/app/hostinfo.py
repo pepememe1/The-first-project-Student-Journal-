@@ -173,6 +173,20 @@ def listdir(path: str, root: str) -> list:
     return out
 
 
+#Момент запуска ЭТОГО процесса приложения. Считается один раз при импорте модуля, то
+#есть при старте сервера, — ровно то, что нужно: «когда служба последний раз
+#перезапускалась». Машинный `uptime` на этот вопрос не отвечает (VPS может работать
+#месяцами, а gradebook рестартовали десять минут назад при деплое), и путать эти две
+#величины на экране администратора нельзя — из-за такой путаницы «сервер не обновился»
+#выглядит как «сервер работает нормально».
+_PROCESS_START = time.time()
+
+
+def process_uptime_seconds() -> float:
+    """Сколько работает САМО приложение (не машина)."""
+    return max(0.0, time.time() - _PROCESS_START)
+
+
 def summary(root: str = "") -> dict:
     """Всё сразу — то, что рисует карточка «Сервер» в кабинете администратора."""
     base = root or os.getcwd()
@@ -183,6 +197,8 @@ def summary(root: str = "") -> dict:
         "cpu_count": cpu_count(),
         "load": load_average(),
         "uptime": uptime_seconds(),
+        "process_uptime": process_uptime_seconds(),
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_PROCESS_START)),
         "memory": memory(),
         "disk": disk(base),
         "root": os.path.realpath(base),

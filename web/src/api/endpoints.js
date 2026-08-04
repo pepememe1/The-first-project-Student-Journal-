@@ -82,6 +82,9 @@ export const teacherApi = {
   // params: { year, semester } — архив прошлого семестра; без них — текущий.
   journal: (group, subject, params = {}) => api.get('/web/teacher/journal', { params: { group, subject, ...params } }),
   students: (group) => api.get('/web/teacher/students', { params: { group } }),
+  // Сводка «мои группы × мои предметы» ОДНИМ запросом (для панели на вкладке «ИИ
+  // Помощник»): перебор stats() по каждой паре означал бы десяток запросов на открытие.
+  summary: () => api.get('/web/teacher/summary'),
   stats: (group, subject, params = {}) => api.get('/web/teacher/stats', { params: { group, subject, ...params } }),
   insights: (group) => api.get('/web/teacher/insights', { params: { group } }),
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
@@ -127,6 +130,9 @@ export const curatorApi = {
   // Таблица перевода на курс по ЗЕТ (docs/PLAN-ZET.md §7.4) — «главная фича» отчёта.
   zetReport: (group, params = {}) =>
     api.get('/web/curator/zet-report', { params: { group, ...params } }),
+  // Риск отчисления по ВСЕЙ группе (3.6, dropout_risk.py). Сервер отдаёт только тех, у
+  // кого риск реально есть, и уже отсортированными по убыванию — к кому идти первым.
+  risk: (group) => api.get('/web/curator/risk', { params: { group } }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
@@ -287,6 +293,10 @@ export const parentApi = {
   // группы и порога перевода (это дело куратора/администрации).
   zet: (studentId = '', year = '', semester = 0) =>
     api.get('/web/parent/zet', { params: { student_id: studentId, year, semester } }),
+  // Формат ОДИН В ОДИН со studentApi.stats — сводка успеваемости у родителя и студента
+  // рисуется одной и той же карточкой (см. GradesOverview.vue).
+  stats: (studentId = '', year = '', semester = 0) =>
+    api.get('/web/parent/stats', { params: { student_id: studentId, year, semester } }),
 }
 
 // Согласие студента на доступ родителя к его журналу (152-ФЗ) — в кабинете студента.

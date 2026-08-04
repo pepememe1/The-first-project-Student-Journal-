@@ -56,36 +56,62 @@ PUSH_SCOPE = {
 }
 
 
-def _build_lesson_subject_map(db: Session, changes: dict, allowed_subjects: set) -> dict:
-    """Карта lesson_id → subject для построчной проверки оценок преподавателя.
+def _build_lesson_pair_map(db: Session, changes: dict, allowed_pairs: set,
+                           allowed_subjects: set) -> dict:
+    """Карта lesson_id → (группа, предмет) для построчной проверки оценок преподавателя.
 
-    Берём предметы из уже сохранённых на сервере занятий И из занятий этого же пуша,
-    которые прошли проверку по предмету. Второе нужно, чтобы оценка к НОВОМУ занятию
-    преподавателя принималась в одном пуше вместе с самим занятием (а не отвергалась
-    только потому, что занятие сервер ещё не видел)."""
-    m = {row[0]: row[1] for row in db.query(Lesson.id, Lesson.subject).all()}
+    Берём пары из уже сохранённых на сервере занятий И из занятий этого же пуша,
+    которые прошли проверку. Второе нужно, чтобы оценка к НОВОМУ занятию преподавателя
+    принималась в одном пуше вместе с самим занятием (а не отвергалась только потому,
+    что занятие сервер ещё не видел) — сюда пускаем и по паре, и (для преподавателя без
+    назначений) по одному предмету, тем же мостом, что и `_teacher_may_write`."""
+    m = {row[0]: (row[1], row[2])
+         for row in db.query(Lesson.id, Lesson.group_name, Lesson.subject).all()}
     for item in (changes.get("lessons") or []):
-        if isinstance(item, dict) and item.get("id") and item.get("subject", "") in allowed_subjects:
-            m[item["id"]] = item.get("subject", "")
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        pair = (item.get("group_name", ""), item.get("subject", ""))
+        if pair in allowed_pairs or (not allowed_pairs and pair[1] in allowed_subjects):
+            m[item["id"]] = pair
     return m
 
 
-def _teacher_may_write(name: str, item: dict, allowed_subjects: set,
-                       lesson_subject: dict) -> bool:
-    """Построчная авторизация преподавателя: он вправе менять только СВОИ предметы.
+def _teacher_may_write(name: str, item: dict, allowed_pairs, allowed_subjects: set,
+                       lesson_pairs: dict, student_group: dict) -> bool:
+    """Построчная авторизация преподавателя: он вправе менять только СВОИ (группа, предмет).
 
-    Ограничиваем по предмету, а не по группе: `subjects` у преподавателя реально
-    заполняется при заведении (admin_dashboard), а `group_assignments` часто пусто —
-    проверка по группам отвергала бы и легитимные правки. Это не даёт преподавателю
-    править чужой предмет; разграничение по конкретным группам внутри одного предмета —
-    осознанно вне области этой проверки (нет надёжных данных о владении группой)."""
+    ⚠️ Раньше проверка шла ТОЛЬКО по предмету, и это было слабее, чем на сайте: препод
+    «Математики» мог отправить синком оценки в ЛЮБУЮ группу колледжа, где эта математика
+    вообще числится, — включая группы, которых он в глаза не видел. На вебе тот же
+    сценарий закрыт с 3.3.1 (`_teacher_check_assignment`), а синк остался с прежним,
+    более слабым правилом: явных назначений тогда попросту не существовало.
+
+    Теперь источник прав ОДИН и тот же на обеих дверях — `webdata.teacher_assignments`
+    (SubjectHours.teacher_id).
+
+    ⚠️ `allowed_pairs is None` означает «у этого преподавателя нет НИ ОДНОГО назначения»,
+    и тогда работает ПРЕЖНЕЕ правило по предмету. Это тот же мост, что уже стоит в
+    `teacher_assignments` (allow_fallback), и он здесь обязателен: у колледжа, где админ
+    ещё не расставил нагрузку, строгая проверка молча отвергала бы офлайн-правки — а
+    потерянная оценка хуже лишнего разрешения. Мост односторонний: появилось хоть одно
+    назначение — работают ТОЛЬКО назначения, вернуться к слабому правилу нельзя."""
+    if allowed_pairs is None:
+        if name == "lessons":
+            return item.get("subject", "") in allowed_subjects
+        if name == "grades":
+            return (lesson_pairs.get(item.get("lesson_id", "")) or ("", ""))[1] in allowed_subjects
+        if name == "term_grades":
+            return item.get("subject", "") in allowed_subjects
+        return False
     if name == "lessons":
-        return item.get("subject", "") in allowed_subjects
+        return (item.get("group_name", ""), item.get("subject", "")) in allowed_pairs
     if name == "grades":
-        return lesson_subject.get(item.get("lesson_id", "")) in allowed_subjects
-    #Итоговая оценка за семестр несёт свой предмет — проверяем прямо по нему.
+        return lesson_pairs.get(item.get("lesson_id", "")) in allowed_pairs
+    #Итоговая оценка за семестр несёт предмет, но НЕ группу — группу студента достаём
+    #по ФИО (та же схема, что и в скоупе выдачи для преподавателя).
     if name == "term_grades":
-        return item.get("subject", "") in allowed_subjects
+        group = student_group.get((item.get("student_f", ""), item.get("student_n", "")))
+        return (group, item.get("subject", "")) in allowed_pairs
     return False
 
 
@@ -190,9 +216,20 @@ def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:
                          if not _is_secret_config_key(c.get("key", ""))]
     if user.role == "teacher":
         _scope_for_teacher(changes, user, db)
-    else:
-        #student и любая иная не-админ-роль — по минимуму «только своё».
+    elif user.role == "student":
         _scope_for_student(changes, user)
+    else:
+        #🔒 Любая ОСТАЛЬНАЯ роль (сегодня это `parent`) не получает НИЧЕГО.
+        #Раньше сюда падал общий студенческий скоуп — и это была настоящая, пусть и
+        #узкая, утечка: _scope_for_student отбирает оценки по совпадению ФАМИЛИИ И
+        #ИМЕНИ владельца токена, а у родителя они свои. Родитель-однофамилец (в семье
+        #это буквально норма: «Иванов Пётр» отец и «Иванов Пётр» сын, да и просто
+        #совпадение ФИО с ЧУЖИМ студентом) выкачал бы чужие оценки целиком.
+        #Родителю офлайн-синк не нужен по построению: его кабинет — это веб (§14), а
+        #веб-клиенты сюда и так не допускаются (_deny_web). Пустая выдача — это не
+        #ограничение функции, а честное «этой роли здесь делать нечего».
+        for name in list(changes.keys()):
+            changes[name] = []
 
 
 @router.get("/pull")
@@ -321,13 +358,28 @@ def push(payload: dict = Body(...), request: Request = None,
     rejected = {}
     new_homework = []    #ДЗ, впервые приехавшие с клиента — разослать после commit
 
-    #Построчная авторизация преподавателя — по его предметам. Для admin проверки нет
-    #(он вправе писать всё). Карту lesson→subject строим один раз на запрос.
-    teacher_subjects = None
-    lesson_subject = {}
-    if user.role == "teacher":
-        teacher_subjects = set(user.subjects or [])
-        lesson_subject = _build_lesson_subject_map(db, changes, teacher_subjects)
+    #Построчная авторизация преподавателя — по его НАЗНАЧЕНИЯМ (группа, предмет), тем же
+    #источником, что и на сайте. Для admin проверки нет (он вправе писать всё). Карты
+    #строим по одному разу на запрос.
+    is_teacher = user.role == "teacher"
+    teacher_pairs = None          #None = назначений нет вовсе → прежнее правило по предмету
+    teacher_subjects = set()
+    lesson_pairs = {}
+    student_group = {}
+    if is_teacher:
+        from ..webdata import teacher_assignments, current_term, load_config
+        _ty, _ts = current_term(load_config(db))
+        #allow_fallback=False: мост нам нужен ЯВНЫЙ (ниже), а не спрятанный внутри —
+        #иначе не отличить «назначений нет» от «назначения есть» и не написать про это
+        #в ответе честно.
+        pairs = set(teacher_assignments(db, user.id, _ty, _ts, allow_fallback=False))
+        teacher_pairs = pairs or None
+        teacher_subjects = {s for s in (user.subjects or []) if s}
+        lesson_pairs = _build_lesson_pair_map(db, changes, pairs, teacher_subjects)
+        if changes.get("term_grades"):
+            student_group = {(r[0], r[1]): r[2] for r in
+                             db.query(User.surname, User.name, User.group_name)
+                             .filter(User.role == "student").all()}
 
     #Карта занятие→группа: нужна, чтобы развести ПОЛНЫХ ТЁЗОК при нормализации ключа
     #оценки, пришедшей от старого клиента (без student_id). Двух Ивановых Иванов в одну
@@ -359,9 +411,9 @@ def push(payload: dict = Body(...), request: Request = None,
                 item = dict(item, id=key)
             if not key:
                 continue
-            #Преподаватель не вправе трогать чужой предмет — отбрасываем такие строки.
-            if teacher_subjects is not None and not _teacher_may_write(
-                    name, item, teacher_subjects, lesson_subject):
+            #Преподаватель не вправе трогать чужую пару (группа, предмет) — отбрасываем.
+            if is_teacher and not _teacher_may_write(
+                    name, item, teacher_pairs, teacher_subjects, lesson_pairs, student_group):
                 rej += 1
                 continue
             existing = db.get(model, key)

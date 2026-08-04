@@ -10,6 +10,8 @@ import { Send, LayoutGrid } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
 import MicButton from '@/components/vector/MicButton.vue'
 import GradesOverview from '@/components/vector/GradesOverview.vue'
+import TeacherOverview from '@/components/vector/TeacherOverview.vue'
+import AdminOverview from '@/components/vector/AdminOverview.vue'
 import { useVectorStore } from '@/stores/vector'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
@@ -19,10 +21,22 @@ const vector = useVectorStore()
 const auth = useAuthStore()
 const toast = useToast()
 const locale = useLocaleStore()
-// Сводка успеваемости — только студенту: она строится на /web/student/stats, у
-// преподавателя и админа такого «своего среднего» нет (у них средние по группам, это
-// другой разговор и другая страница — «Статистика»).
-const showGrades = computed(() => auth.role === 'student')
+// Правая колонка — СВОЯ у каждой роли (3.6). Раньше здесь была только сводка студента,
+// а у преподавателя и администратора вкладка «ИИ Помощник» пустовала наполовину, хотя
+// это самая просторная страница продукта. Что кому показываем:
+//   student/parent — успеваемость (общий средний + предметы; родитель видит ровно то же,
+//                    что его студент, по /web/parent/stats того же формата);
+//   teacher        — его группы и предметы со средним + сколько студентов в зоне риска;
+//   admin          — состояние сервера и сколько в системе людей.
+// Сопоставление ролей и компонентов держим ОДНОЙ картой: разбросанные по шаблону
+// v-if="role === ..." разъезжаются при добавлении следующей роли.
+const SIDE_PANELS = {
+  student: GradesOverview,
+  parent: GradesOverview,
+  teacher: TeacherOverview,
+  admin: AdminOverview,
+}
+const sidePanel = computed(() => SIDE_PANELS[auth.role] || null)
 // Имя маскота уже переведено в общем ключе (мессенджер показывает те же ответы от
 // его лица) — переиспользуем его, а не заводим вторую копию «Вектор»/«Vector».
 const vectorName = () => locale.t('chatThread.vectorName', 'Вектор')
@@ -81,15 +95,13 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
 </script>
 
 <template>
-  <!-- Две колонки на широком экране (3.5.6): слева переписка, справа сводка
-       успеваемости. Раньше вкладка на всю высоту несла ТОЛЬКО чат — правая половина
-       пустовала, хотя это самая просторная страница продукта. Сводка — студенту:
-       у преподавателя и админа «своего среднего балла» не существует, и показывать
-       им пустую карточку было бы хуже, чем не показывать ничего.
+  <!-- Две колонки на широком экране: слева переписка, справа сводка ПО РОЛИ (3.6).
+       Раньше вкладка на всю высоту несла ТОЛЬКО чат — правая половина пустовала, хотя
+       это самая просторная страница продукта.
        Высота задана ОДНА на обе колонки (h-full у детей), чтобы кольцо и полосы не
        уезжали за нижний край рядом с более высокой карточкой чата. -->
-  <div class="grid h-[calc(100dvh-6.5rem)] gap-3 sm:h-[calc(100dvh-7.5rem)] lg:h-[calc(100vh-8rem)]"
-       :class="showGrades ? 'lg:grid-cols-[1fr_320px]' : ''">
+  <div class="grid h-[calc(100dvh-var(--gb-page-offset))] gap-3"
+       :class="sidePanel ? 'lg:grid-cols-[1fr_320px]' : ''">
   <!-- Одна карточка на всю высоту: шапка · (маскот ФОНОМ + чат поверх) · ввод -->
   <div class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card">
     <!-- Шапка -->
@@ -159,10 +171,11 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
     </div>
   </div>
 
-    <!-- Сводка успеваемости — вторая колонка (скрыта на узких экранах: там она была бы
-         не «использованием места», а лишней прокруткой перед чатом). -->
-    <div v-if="showGrades" class="hidden min-h-0 lg:block">
-      <GradesOverview />
+    <!-- Сводка роли — вторая колонка (скрыта на узких экранах: там она была бы не
+         «использованием места», а лишней прокруткой перед чатом; на телефоне те же
+         цифры человек видит на «Главной»). -->
+    <div v-if="sidePanel" class="hidden min-h-0 lg:block">
+      <component :is="sidePanel" />
     </div>
   </div>
 </template>

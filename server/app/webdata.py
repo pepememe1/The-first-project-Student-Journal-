@@ -21,6 +21,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 import grading  # noqa: E402
 import study_hours  # noqa: E402  — общее с десктопом правило учебных часов
+import dropout_risk  # noqa: E402  — общие с десктопом правила риска отчисления
 
 from .models import (User, Lesson, Grade, ConfigKV, SubjectHours, Group,  # noqa: E402
                      subject_hours_id)
@@ -220,8 +221,28 @@ def average(lessons, records, cfg, scale=None) -> float:
                                     scale=scale if scale is not None else grading.DEFAULT_SCALE)
 
 
+def graded_count(lessons, records) -> int:
+    """Сколько РЕАЛЬНЫХ отметок стоит у студента по этим занятиям.
+
+    Оценкой считаем непустое значение на оцениваемом занятии (практика/ДЗ/… —
+    `grading.is_practice`, плюс экзамен). Буквы посещаемости («Н»/«Б»/«О») — это тоже
+    непустое значение и тоже отметка в журнале: скрывать «Н» из счётчика значило бы
+    показывать прогульщику «оценок 0» рядом с реально не аттестованным студентом.
+    """
+    n = 0
+    for l in lessons:
+        if grading.is_practice(l.type) or l.type == "Экзамен":
+            if (records.get(l.id) or "").strip():
+                n += 1
+    return n
+
+
 def per_subject_averages(lessons, records, cfg, scale=None):
-    """Список {subject, average, lessons} — средний по каждому предмету группы."""
+    """Список {subject, average, lessons, grades} — средний по каждому предмету группы.
+
+    `grades` (сколько отметок реально стоит) добавлен в 3.6 для сводки на вкладке
+    «ИИ Помощник»: средний без числа оценок вводит в заблуждение — «5.0» по одной
+    работе и «5.0» по двенадцати выглядят одинаково, а значат разное."""
     from collections import OrderedDict
     buckets = OrderedDict()
     for l in lessons:
@@ -229,7 +250,7 @@ def per_subject_averages(lessons, records, cfg, scale=None):
     out = []
     for subj, ls in buckets.items():
         out.append({"subject": subj, "average": average(ls, records, cfg, scale=scale),
-                    "lessons": len(ls)})
+                    "lessons": len(ls), "grades": graded_count(ls, records)})
     return out
 
 
@@ -270,6 +291,108 @@ def absences(lessons, records):
             res["Н"] += 1
     res["всего"] = res["Н"] + res["Б"] + res["О"]
     return res
+
+
+def failed_exam_subjects(lessons, records) -> list:
+    """Предметы с НЕСДАННЫМ экзаменом/зачётом — по ПОСЛЕДНЕЙ попытке.
+
+    Пересдачи учитывает `grading.latest_exam_value` (единственный источник этой логики,
+    инвариант §8): студент, завaливший экзамен и закрывший его пересдачей, задолженности
+    не имеет, и попасть в риск не должен."""
+    out = []
+    for l in lessons:
+        if l.type == "Экзамен":
+            v = grading.latest_exam_value(l.id, records)
+            if grading.is_failed(v) and l.subject not in out:
+                out.append(l.subject)
+    return out
+
+
+def silent_subjects(lessons, records) -> list:
+    """Предметы, где занятия ШЛИ, но нет ни одной отметки.
+
+    ⚠️ Считаем только по ОЦЕНИВАЕМЫМ занятиям (практика/ДЗ/экзамен): предмет из одних
+    лекций отметок не предполагает вовсе, и записывать его в «студент пропал» — ложное
+    срабатывание."""
+    from collections import OrderedDict
+    buckets = OrderedDict()
+    for l in lessons:
+        if grading.is_practice(l.type) or l.type == "Экзамен":
+            buckets.setdefault(l.subject, []).append(l)
+    return [subj for subj, ls in buckets.items() if graded_count(ls, records) == 0]
+
+
+def attendance_hours(lessons, records) -> tuple:
+    """(пропущено, всего, из них неуважительных) в ТЕХ ЖЕ единицах, что `absences`.
+
+    ⚠️ Единица здесь — СТРОКА занятия, а не академический час (известная нестыковка,
+    описанная в доке про отчёт куратора: лекция лежит двумя строками, практика одной).
+    Сознательно НЕ чиним её тут: риск обязан сходиться с цифрой пропусков, которую
+    человек видит рядом на том же экране. Две разные правды хуже одной неточной."""
+    a = absences(lessons, records)
+    total = sum(1 for l in lessons if l.type in ("Лекция", "Практика"))
+    return a["всего"], total, a["Н"]
+
+
+def dropout_risk_for_student(db, surname: str, name: str, group: str,
+                             cfg=None, lessons=None, records=None,
+                             zet_earned=None, zet_min=None) -> dict:
+    """Индекс риска отчисления студента — сбор ФАКТОВ + общий модуль `dropout_risk`.
+
+    Сами правила и веса живут в корневом `dropout_risk.py` (общем с десктопом); здесь
+    только выборка цифр из БД. lessons/records можно передать готовыми — в списке
+    группы они уже посчитаны, и второй поход в базу на каждого студента был бы
+    заметен даже на одноядерном VPS.
+
+    ⚠️ Динамику (`trend_delta`) сознательно НЕ передаём: единственная временная метка
+    у оценки — `updated_at`, которую двигает ЛЮБАЯ правка, в том числе техническая.
+    «Средний упал» по такой метке — это выдуманная цифра, а Вектор и всё вокруг него
+    держатся на правиле «не выдумывать». Появится честная история оценок — фактор в
+    модуле уже готов и включится одной строкой.
+    """
+    if cfg is None:
+        cfg = load_config(db)
+    if lessons is None:
+        lessons = group_lessons(db, group)
+    if records is None:
+        records = student_records(db, surname, name, group)
+    scale_map = lesson_scale_map(db, lessons)
+    missed, total, unexcused = attendance_hours(lessons, records)
+    per_subj = {r["subject"]: r["average"]
+                for r in per_subject_averages(lessons, records, cfg, scale=scale_map)}
+    return dropout_risk.assess(
+        average=average(lessons, records, cfg, scale=scale_map),
+        subject_averages=per_subj,
+        debts=len(debts(lessons, records, scale=scale_map)),
+        failed_exams=failed_exam_subjects(lessons, records),
+        absence_hours=missed, total_hours=total, unexcused_hours=unexcused,
+        silent_subjects=silent_subjects(lessons, records),
+        zet_earned=zet_earned, zet_min=zet_min,
+        has_activity=bool(lessons),
+    )
+
+
+def group_risk_report(db, group: str, cfg=None, subjects=None) -> list:
+    """Риск по ВСЕМ студентам группы — для преподавателя и куратора.
+
+    subjects — ограничить занятия этим набором предметов (преподаватель судит только по
+    СВОИМ: чужой предмет он всё равно не видит, и учитывать его в «риске по моему
+    списку» было бы враньём). None — вся группа целиком (взгляд куратора).
+
+    Занятия группы читаются ОДИН раз на всю группу, а не на каждого студента."""
+    if cfg is None:
+        cfg = load_config(db)
+    lessons = group_lessons(db, group)
+    if subjects is not None:
+        lessons = [l for l in lessons if l.subject in subjects]
+    out = []
+    for s in students_in_group(db, group):
+        recs = student_records(db, s.surname, s.name, group)
+        risk = dropout_risk_for_student(db, s.surname, s.name, group,
+                                        cfg=cfg, lessons=lessons, records=recs)
+        out.append({"surname": s.surname, "name": s.name,
+                    "full_name": display_name(s), "student_id": s.id, "risk": risk})
+    return out
 
 
 def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, semester) -> dict:

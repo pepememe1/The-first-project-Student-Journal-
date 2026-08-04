@@ -27,8 +27,11 @@ onBeforeUnmount(() => { m.stopPolling() })
 </script>
 
 <template>
+  <!-- Высота — от ОДНОЙ переменной оболочки (--gb-page-offset в style.css), а не от
+       собственного набора чисел: свой набор устарел молча после перекомпоновки 3.5.6, и
+       снизу осталась мёртвая полоса в полторы сотни пикселей. -->
   <div class="flex overflow-hidden rounded-lg border border-border bg-card shadow-card"
-       :class="embed ? 'h-full' : 'h-[calc(100dvh-8rem)] sm:h-[calc(100dvh-9.5rem)] lg:h-[calc(100vh-11rem)]'">
+       :class="embed ? 'h-full' : 'h-[calc(100dvh-var(--gb-page-offset))]'">
     <ChatList />
     <ProfilePanel />
     <ChatThread />

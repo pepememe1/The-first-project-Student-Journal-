@@ -106,6 +106,12 @@ def test_saved_session_passes_on_cold_start(monkeypatch):
 _MUST_STAY_LOCAL = (
     "/web/student", "/web/teacher", "/web/parent", "/web/curator", "/web/admin/students",
     "/web/admin/groups", "/web/admin/teachers", "/web/schedule", "/web/terms",
+    #⚠️ «Вектор» обязан отвечать ОФЛАЙН — это его главное обещание. Внутри программы он
+    #работает через ЛОКАЛЬНЫЙ сервер (тот же server/app, та же функция
+    #web.py::answer_vector_question, что и на бою), поэтому пересылать /web/vector на VPS
+    #нельзя: без интернета помощник просто замолчал бы. Сюда же попадает /vector/stt —
+    #звук распознаёт локальная машина, и он не должен покидать ПК (152-ФЗ).
+    "/web/vector",
     "/sync", "/auth", "/me",
 )
 

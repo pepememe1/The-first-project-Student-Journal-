@@ -57,7 +57,14 @@ const NOTIFY_KINDS = computed(() => [
   { key: 'messages', label: loc.t('settings.notify.messages.label', 'Сообщения'), hint: loc.t('settings.notify.messages.hint', 'Личные чаты, группы и каналы') },
   { key: 'events', label: loc.t('settings.notify.events.label', 'Мероприятия'), hint: loc.t('settings.notify.events.hint', 'Олимпиады, конкурсы, объявления') },
   { key: 'reminders', label: loc.t('settings.notify.reminders.label', 'Напоминания'), hint: loc.t('settings.notify.reminders.hint', 'То, о чём вы сами просили напомнить') },
+  // Приходит ТОЛЬКО куратору (о студентах его группы) — остальным ролям строку не
+  // показываем: у студента переключатель «риск отчисления» читался бы как предложение
+  // отключить сам риск, а не уведомление о нём.
+  { key: 'risk', label: loc.t('settings.notify.risk.label', 'Риск отчисления'), hint: loc.t('settings.notify.risk.hint', 'Куратору — о студентах его группы в зоне риска'), roles: ['teacher', 'admin'] },
 ])
+// Что реально показываем этой роли. Ключ без ограничения виден всем.
+const visibleNotifyKinds = computed(() =>
+  NOTIFY_KINDS.value.filter((k) => !k.roles || k.roles.includes(auth.role)))
 const notify = ref(Object.fromEntries(NOTIFY_KINDS.value.map((k) => [k.key, true])))
 const notifySaving = ref('')
 const notifyError = ref('')
@@ -256,7 +263,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
          отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
     <Card :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
       <div class="flex flex-col gap-2">
-        <ToggleRow v-for="k in NOTIFY_KINDS" :key="k.key"
+        <ToggleRow v-for="k in visibleNotifyKinds" :key="k.key"
                    :label="k.label" :hint="k.hint"
                    :model-value="notify[k.key]"
                    :disabled="notifySaving === k.key"

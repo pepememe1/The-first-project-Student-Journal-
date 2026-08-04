@@ -88,11 +88,15 @@ CATEGORY_BY_TYPE = {
     "event": "events",
     "reminder": "reminders",
     "message": "messages",
+    #Риск отчисления (3.6) — СВОЯ категория, а не «events»: приходит только куратору,
+    #и приглушать её вместе с объявлениями об олимпиадах было бы неверно по смыслу.
+    "dropout_risk": "risk",
 }
 
 #Все категории, которыми можно управлять из настроек. Клиент рисует свои подписи —
 #здесь только ключи, чтобы не держать тексты в двух местах.
-ALL_CATEGORIES = ("grades", "homework", "schedule", "messages", "events", "reminders")
+ALL_CATEGORIES = ("grades", "homework", "schedule", "messages", "events", "reminders",
+                  "risk")
 
 
 def category_of(data: dict | None) -> str:
@@ -269,6 +273,37 @@ def _create_event(db, login: str, kind: str, title: str, body: str,
         db.rollback()
         return ""
     return event_id
+
+
+def notify_dropout_risk(db, login: str, student_name: str, group: str, risk: dict) -> int:
+    """Уведомление КУРАТОРУ: у студента его группы вырос риск отчисления (3.6).
+
+    ⚠️ В САМ ПУШ не уходит ни фамилия студента, ни причина — только «в вашей группе»
+    (то же правило, что у оценок: тело пуша идёт через серверы RuStore, а «Иванов на
+    грани отчисления» — сведения о конкретном человеке). Подробности лежат в письме,
+    которое приложение забирает у нас по защищённому каналу.
+
+    Тон официальный: адресат — сотрудник, и просьба здесь по существу его работы."""
+    reasons = "; ".join(f["label"] for f in (risk.get("factors") or [])[:3])
+    subjects = ", ".join(s["subject"] for s in (risk.get("subjects") or [])[:3])
+    body = (f"{student_name} ({group}) — {risk.get('level_label', '').lower()} риск "
+            f"отчисления (индекс {risk.get('score', 0)}).")
+    if reasons:
+        body += f" Причины: {reasons}."
+    if subjects:
+        body += f" Предметы: {subjects}."
+    body += " Стоит поговорить со студентом, пока задолженность не стала формальной."
+    event_id = _create_event(db, login, "dropout_risk",
+                             "Студент в зоне риска отчисления", body,
+                             payload={"group": group, "student": student_name,
+                                      "score": risk.get("score", 0),
+                                      "level": risk.get("level", "")})
+    return notify_login(
+        db, login,
+        title="Риск отчисления",
+        body=f"В вашей группе {group} студент в зоне риска. Откройте «Курирование».",
+        data={"type": "dropout_risk", "event_id": event_id},
+    )
 
 
 def notify_new_grade(db, login: str, subject: str = "", lesson_id: str = "",

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .config import ALLOWED_ORIGINS
+from .config import ALLOWED_ORIGINS, assert_production_secrets
 from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import connect as connect_router
 from .routers import webauthn_router
@@ -27,6 +27,13 @@ from . import events, throttle
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    #🔒 Боевые секреты — ПЕРВЫМ делом, до создания таблиц и до приёма запросов. Сервер с
+    #dev-ключом подписи не должен подняться вовсе (см. config.assert_production_secrets):
+    #он выглядел бы совершенно исправным, раздавая при этом любому желающему право
+    #выпустить себе админский токен.
+    for _w in assert_production_secrets():
+        events.record("warn", "server_config", _w)
+        print(f"[config] ВНИМАНИЕ: {_w}")
     init_db()   # создаём таблицы при старте
     events.record("info", "server_start", "сервер запущен")
     #Прогреваем снимок расписания в фоне, чтобы преподаватель не ждал сборку при входе.

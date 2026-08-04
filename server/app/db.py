@@ -4,6 +4,8 @@ db.py — Подключение к базе (SQLAlchemy).
 Один и тот же код работает и с SQLite (разработка), и с PostgreSQL (боевой
 сервер ВСГУТУ) — отличается только строка подключения GRADEBOOK_DB_URL.
 """
+import re
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import QueuePool
@@ -29,6 +31,14 @@ def _build_engine(url: str = None, key: str = None):
                   "(на Windows-dev это нормально) — БД работает БЕЗ шифрования файла.")
         else:
             path = DATABASE_URL.split("sqlite:///", 1)[-1]
+            #🔒 Ключ подставляется в текст PRAGMA (параметризовать PRAGMA нельзя), поэтому
+            #он ОБЯЗАН быть чистым hex — иначе кавычка внутри значения разрывает строку
+            #запроса. Источник ключа доверенный (server/.env), но опечатка в нём не должна
+            #превращаться в SQL, а «тихо открылось без шифрования» — худший исход из всех.
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", DB_KEY):
+                raise RuntimeError(
+                    "GRADEBOOK_DB_KEY должен быть ровно 64 hex-символа (32 байта). "
+                    "Проверьте server/.env — с неверным ключом база не откроется.")
 
             def _creator():
                 conn = sqlcipher3.connect(path, check_same_thread=False)

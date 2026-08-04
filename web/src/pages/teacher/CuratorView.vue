@@ -6,6 +6,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { curatorApi, adminApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import RiskBadge from '@/components/ui/RiskBadge.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
@@ -22,7 +23,12 @@ const data = ref(null)
 const loading = ref(false)
 
 // ── ЗЕТ / перевод на курс (docs/PLAN-ZET.md §7.4 — «главная фича» отчёта куратора) ──
-const viewMode = ref('journal')   // 'journal' | 'zet'
+const viewMode = ref('journal')   // 'journal' | 'zet' | 'risk'
+// Риск отчисления по группе (3.6). Грузится ОДИН раз на смену группы, а не по открытию
+// вкладки: счётчик на самой вкладке обязан быть верным до того, как на неё нажали, —
+// иначе куратор просто не узнает, что там кто-то есть.
+const riskReport = ref(null)
+const riskLoading = ref(false)
 const zetReport = ref(null)       // {min_zet, students:[...]}
 const zetLoading = ref(false)
 const zetThresholdDraft = ref('')
@@ -118,6 +124,8 @@ onMounted(async () => {
   // (между ними await termsApi), и предметы грузились в гонке с ещё не готовым термином,
   // из-за чего вкладка показывала «нет предметов» даже при наличии занятий.
   await loadSubjects()
+  //Риск грузим сразу: счётчик на вкладке должен быть правдой с первого показа страницы.
+  loadRisk()
 })
 
 async function loadSubjects() {
@@ -129,6 +137,26 @@ async function loadSubjects() {
   } catch { subjects.value = [] }
 }
 watch([group, term], loadSubjects, { immediate: false })
+
+async function loadRisk() {
+  riskReport.value = null
+  if (!group.value) return
+  riskLoading.value = true
+  //Анти-гоночная защита ровно та же, что в расписании (3.5.6): группа, ДЛЯ которой
+  //запрошен ответ, фиксируется ДО await и сверяется ПОСЛЕ. Быстрое переключение групп
+  //иначе показывает риск чужой группы — самый неприятный сорт ошибки в этой функции.
+  const forGroup = group.value
+  try {
+    const { data: r } = await curatorApi.risk(forGroup)
+    if (forGroup !== group.value) return
+    riskReport.value = r
+  } catch {
+    if (forGroup === group.value) riskReport.value = null
+  } finally {
+    if (forGroup === group.value) riskLoading.value = false
+  }
+}
+watch(group, loadRisk)
 
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
@@ -227,6 +255,15 @@ async function exportReport(fmt) {
                 :class="viewMode === 'zet' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
           {{ locale.t('curatorView.tabZet', 'ЗЕТ · Перевод на курс') }}
         </button>
+        <!-- Риск отчисления (3.6). Счётчик стоит прямо на вкладке: куратор обязан
+             увидеть, что там кто-то есть, НЕ открывая её. -->
+        <button type="button" @click="viewMode = 'risk'"
+                class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium"
+                :class="viewMode === 'risk' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
+          {{ locale.t('curatorView.tabRisk', 'Риск отчисления') }}
+          <span v-if="riskReport?.at_risk"
+                class="rounded-full bg-red px-1.5 text-[11px] font-bold text-white">{{ riskReport.at_risk }}</span>
+        </button>
       </div>
 
       <!-- Диалог экспорта: формат (Excel/Word) + выбор групп (галочки = одна/несколько/все) -->
@@ -303,6 +340,37 @@ async function exportReport(fmt) {
               </tr>
             </tbody>
           </table>
+        </div>
+      </template>
+
+      <!-- Риск отчисления по всей группе (3.6, dropout_risk.py) -->
+      <template v-else-if="viewMode === 'risk'">
+        <p class="text-xs text-text3">
+          {{ locale.t('curatorView.riskHint', 'Показаны только те, у кого риск реально есть. Индекс складывается из фактов журнала — наведите на плашку, чтобы увидеть причины.') }}
+        </p>
+        <p v-if="riskLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+        <EmptyState v-else-if="!riskReport?.students?.length"
+                    :title="locale.t('curatorView.riskEmptyTitle', 'В зоне риска никого')"
+                    :message="locale.t('curatorView.riskEmptyMessage', { group })" />
+        <div v-else class="flex flex-col gap-3">
+          <p class="text-sm text-text2">
+            {{ locale.t('curatorView.riskSummary', { n: riskReport.at_risk, total: riskReport.total }) }}
+          </p>
+          <!-- Карточка на студента, а не строка таблицы: причин у каждого несколько, и
+               в ячейку они не помещаются, а без причин индекс — приговор без объяснения. -->
+          <div v-for="r in riskReport.students" :key="r.student_id"
+               class="rounded-lg border border-border bg-card p-4 shadow-card">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="font-title text-base font-bold text-text">{{ r.full_name }}</span>
+              <RiskBadge :risk="r.risk" compact />
+            </div>
+            <ul class="mt-2 flex flex-col gap-1">
+              <li v-for="f in r.risk.factors" :key="f.code" class="text-sm text-text2">
+                <span class="font-semibold text-text">{{ f.label }}.</span> {{ f.detail }}
+              </li>
+            </ul>
+            <p v-if="r.risk.advice" class="mt-2 text-xs text-text3">→ {{ r.risk.advice }}</p>
+          </div>
         </div>
       </template>
 
