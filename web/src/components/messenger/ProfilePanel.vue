@@ -6,12 +6,18 @@ import { storeToRefs } from 'pinia'
 import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen, Landmark } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
+import { nameFontFamily } from '@/config/nameFonts'
 import Avatar from '@/components/ui/Avatar.vue'
+import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
+// §5.4: клик по аватарке/имени собеседника — та же Discord-style карточка, что и из
+// ConversationInfo (там же живёт заметка и кнопка «Сообщение», для которых в узкой
+// панели попросту нет места).
+const profileFor = ref(null)
 const m = useMessengerStore()
 const { activePeer, isModeration, activeInfo, activeKind } = storeToRefs(m)
 
@@ -144,9 +150,11 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
 
     <div v-else-if="activePeer" class="flex min-h-0 flex-col">
       <!-- Плашка в цвет, выбранный самим пользователем в его профиле -->
-      <div class="flex flex-col items-center p-6 text-center" :style="{ background: plate }">
+      <button type="button" @click="profileFor = activePeer"
+              class="flex flex-col items-center p-6 text-center transition-opacity hover:opacity-90"
+              :style="{ background: plate }">
         <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="96" />
-        <h2 class="mt-3 font-title text-lg font-bold text-white">{{ activePeer.full_name }}</h2>
+        <h2 class="mt-3 font-title text-lg font-bold text-white" :style="{ fontFamily: nameFontFamily(activePeer.name_font) }">{{ activePeer.full_name }}</h2>
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-white/80">
           <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
         </span>
@@ -161,7 +169,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
         <span v-if="statusLabel" class="text-[11px] text-white/55">
           {{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}
         </span>
-      </div>
+      </button>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-6 pt-4">
         <!-- «О себе» — то, что человек написал о себе в профиле -->
@@ -187,4 +195,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
       {{ locale.t('profilePanel.pickChat', 'Выберите чат, чтобы увидеть карточку собеседника.') }}
     </div>
   </aside>
+
+  <PeerProfileModal v-if="profileFor" :user-id="profileFor.id || ''" :peer-data="profileFor"
+                    @close="profileFor = null" />
 </template>

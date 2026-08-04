@@ -32,6 +32,7 @@ import TranslateDialog from './TranslateDialog.vue'
 import GifPicker from './GifPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
+import { nameFontFamily } from '@/config/nameFonts'
 import { statusLabel } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
@@ -753,6 +754,21 @@ const runStarts = computed(() => {
   return starts
 })
 
+// §5.4: стиль никнейма отправителя — та же карта, что и аватарки (состав беседы или
+// собеседник ЛС). Применяем ТОЛЬКО здесь и в PeerProfileCard/Profile.vue — заказчик
+// прямо просил не разносить это по остальным вкладкам (журнал/расписание и т.п.).
+const fontBySender = computed(() => {
+  const map = {}
+  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.name_font || ''
+  if (activePeer.value?.id) map[activePeer.value.id] = activePeer.value.name_font || ''
+  return map
+})
+function senderFont(msg) {
+  // Как и senderName(msg) чуть ниже — вызывается ТОЛЬКО для чужих сообщений (шаблон
+  // гейтит `v-if="!msg.mine"`), поэтому свой стиль здесь разбирать не нужно.
+  return nameFontFamily(fontBySender.value[msg.sender_id] ?? (activePeer.value?.name_font || ''))
+}
+
 // Аватарки отправителей: в группе/канале — из состава беседы, в личном чате — собеседника.
 const avatarBySender = computed(() => {
   const map = {}
@@ -973,7 +989,7 @@ const headerTint = computed(() =>
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
               <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
-                   class="mb-0.5 text-[11px] font-semibold text-accent">
+                   class="mb-0.5 text-[11px] font-semibold text-accent" :style="{ fontFamily: senderFont(msg) }">
                 {{ senderName(msg) }}
               </div>
               <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">

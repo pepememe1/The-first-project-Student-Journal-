@@ -31,7 +31,7 @@ from ..models import (
     CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
     NotifyEvent, ParentLink, SubjectHours,
-    UserStatus, User, Lesson, direct_conversation_id,
+    UserStatus, User, UserNote, Lesson, direct_conversation_id,
 )
 
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
@@ -197,6 +197,8 @@ _MENTION_SCAN_LIMIT = 200
 _MAX_MSG_CHARS = 4000          #лимит длины сообщения (защита БД от «простыней»/спама)
 _DEFAULT_PAGE = 50            #сколько сообщений отдаём за один запрос истории
 _MAX_PAGE = 100
+_MAX_NOTE_CHARS = 300           #личная заметка о человеке (UserNote) — короче «О себе»,
+                                #это памятка себе, а не публичный текст
 
 
 def _now() -> str:
@@ -237,6 +239,11 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
         #«О себе» и цвет плашки (id пресета палитры — клиент сопоставит его с цветом).
         "bio": prefs.get("bio", "") or "",
         "profile_color": prefs.get("profile_color", "") or "",
+        #Стиль никнейма (§5.4) — тоже публичный, тем же путём, что цвет плашки: id из
+        #фиксированного списка (routers/me.py::NAME_FONTS), клиент сам сопоставит его со
+        #шрифтом. Пусто — уже проверено на входе (me.py::_sanitize_name_font), но берём
+        #через or "" ещё раз: строки в БД могли остаться от ДО того, как поле завели.
+        "name_font": prefs.get("name_font", "") or "",
         "muted": bool(muted),
         "status_kind": st.get("kind", "") or "",
         "status_text": st.get("custom_text", "") or "",
@@ -654,6 +661,45 @@ def user_profile(user_id: str, _user: User = Depends(get_current_user),
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     sm = _status_map(db, [user_id])
     return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id))}
+
+
+@router.get("/users/{user_id}/note")
+def get_user_note(user_id: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Личная заметка ВЫЗЫВАЮЩЕГО о человеке (Discord-style «Notes») — видна только ему.
+
+    Разрешена и про САМОГО СЕБЯ (author_id == about_user_id == user_id): «памятка себе»
+    на своей же карточке профиля — так просил заказчик, отдельного запрета не заводим.
+    404-проверку существования цели не делаем: заметка — это данные автора, не цели, и
+    её можно писать даже про кого-то, кого только что удалили (текст останется историей)."""
+    row = (db.query(UserNote)
+           .filter(UserNote.author_id == user.id, UserNote.about_user_id == user_id)
+           .first())
+    return {"text": row.text if row else ""}
+
+
+@router.post("/users/{user_id}/note")
+def set_user_note(user_id: str, payload: dict = Body(...),
+                  user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Сохраняет/стирает заметку. Пустой текст после обрезки — УДАЛЯЕТ строку, а не
+    оставляет пустую: иначе таблица копила бы мёртвые записи на каждое «написал и стёр»."""
+    text = str(payload.get("text") or "").strip()[:_MAX_NOTE_CHARS]
+    row = (db.query(UserNote)
+           .filter(UserNote.author_id == user.id, UserNote.about_user_id == user_id)
+           .first())
+    if not text:
+        if row is not None:
+            db.delete(row)
+            db.commit()
+        return {"ok": True, "text": ""}
+    if row is None:
+        row = UserNote(author_id=user.id, about_user_id=user_id)
+        db.add(row)
+    row.text = text
+    row.updated_at = _now()
+    db.commit()
+    return {"ok": True, "text": text}
 
 
 # ── Статус пользователя (§D7) ─────────────────────────────────────────────────────────
@@ -2229,6 +2275,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "avatar": prefs.get("avatar", "") or "",
             "bio": prefs.get("bio", "") or "",
             "profile_color": prefs.get("profile_color", "") or "",
+            "name_font": prefs.get("name_font", "") or "",   #§5.4 «стиль никнейма»
             "user_role": (u.role if u else ""),   #student | teacher | admin (роль в системе)
             "group_name": (u.group_name or "") if u else "",
             "subjects": (u.subjects or []) if (u is not None and u.role == "teacher") else [],

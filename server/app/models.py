@@ -793,6 +793,21 @@ class MutedUser(Base):
     muted_at = Column(String, default="")
 
 
+class UserNote(Base):
+    """Личная заметка о человеке (Discord-style «Notes») — видна ТОЛЬКО автору, даже если
+    заметка о самом себе (self-note, «памятка себе» на своей же карточке профиля — так
+    просил заказчик, отдельно не выпиливаем этот случай). Ключ (author_id, about_user_id):
+    один автор — одна заметка про конкретного человека, повторное сохранение перезаписывает.
+    НЕ в SYNC_MODELS: та же онлайн-подсистема карточки профиля/мессенджера, что и остальное
+    в этом файле ниже User/Group — офлайн-десктопу заметка не нужна."""
+    __tablename__ = "user_notes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    author_id = Column(String, index=True, default="")
+    about_user_id = Column(String, index=True, default="")
+    text = Column(String, default="")
+    updated_at = Column(String, default="")
+
+
 def direct_conversation_id(uid_a: str, uid_b: str) -> str:
     """Детерминированный id личного чата — чтобы пара не плодила дубли (ищем по нему перед
     созданием). Порядок id участников не важен: сортируем."""

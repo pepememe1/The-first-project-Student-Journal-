@@ -17,6 +17,7 @@ export const useProfileStore = defineStore('profile', () => {
   const avatar = ref('')          // data:URL или ''
   const bio = ref('')             // «О себе» — видно другим в карточке профиля
   const color = ref('')           // id пресета палитры для плашки профиля ('' — стандарт)
+  const font = ref('')            // §5.4: id стиля никнейма (@/config/nameFonts) — тоже видно другим
   const saving = ref(false)
   let loaded = false
 
@@ -29,6 +30,7 @@ export const useProfileStore = defineStore('profile', () => {
       avatar.value = p.avatar || ''
       bio.value = p.bio || ''
       color.value = p.profile_color || ''
+      font.value = p.name_font || ''
     } catch { /* офлайн — оставляем что есть */ }
   }
 
@@ -41,15 +43,19 @@ export const useProfileStore = defineStore('profile', () => {
     finally { saving.value = false }
   }
 
-  // Публичная часть профиля: «О себе» + цвет плашки. Обрезаем и здесь (сервер режет тоже).
-  async function saveProfile({ bio: newBio, color: newColor }) {
-    if (newBio != null) bio.value = String(newBio).slice(0, BIO_LIMIT)
-    if (newColor != null) color.value = newColor
+  // Публичная часть профиля: «О себе» + цвет плашки + стиль никнейма. Обрезаем и здесь
+  // (сервер режет тоже) — только те поля, что реально переданы, чтобы клик по одной
+  // палитре не перезаписывал ещё не сохранённый черновик «О себе» в соседней карточке.
+  async function saveProfile({ bio: newBio, color: newColor, font: newFont } = {}) {
+    const payload = {}
+    if (newBio != null) { bio.value = String(newBio).slice(0, BIO_LIMIT); payload.bio = bio.value }
+    if (newColor != null) { color.value = newColor; payload.profile_color = color.value }
+    if (newFont != null) { font.value = newFont; payload.name_font = font.value }
     saving.value = true
-    try { await api.post('/me/prefs', { bio: bio.value, profile_color: color.value }) }
+    try { await api.post('/me/prefs', payload) }
     catch { /* офлайн — уедет позже с синком */ }
     finally { saving.value = false }
   }
 
-  return { avatar, bio, color, saving, load, save, saveProfile }
+  return { avatar, bio, color, font, saving, load, save, saveProfile }
 })

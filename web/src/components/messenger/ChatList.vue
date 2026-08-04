@@ -9,6 +9,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import { roleLabel } from '@/config/roles'
+import { nameFontFamily } from '@/config/nameFonts'
 import { curatorApi } from '@/api/endpoints'
 import { messagePreview } from '@/utils/messagePreview'
 import CreateChatDialog from './CreateChatDialog.vue'
@@ -236,7 +237,8 @@ onMounted(() => { m.loadChats() })
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
-                <span class="flex items-center gap-1 truncate text-sm font-semibold text-text">
+                <span class="flex items-center gap-1 truncate text-sm font-semibold text-text"
+                      :style="c.kind === 'direct' ? { fontFamily: nameFontFamily(c.peer?.name_font) } : {}">
                   <Pin v-if="c.pinned" class="size-3 shrink-0 text-text3" />{{ c.title || locale.t('messenger.dialog', 'Диалог') }}
                 </span>
                 <span class="shrink-0 text-[11px] text-text3">{{ fmtTime(c.last_at) }}</span>

@@ -51,3 +51,23 @@ def test_prefs_roam_via_pull(client):
 def test_prefs_requires_auth(client):
     r = client.post("/me/prefs", json={"theme": {"id": "blue"}})
     assert r.status_code == 401
+
+
+def test_name_font_accepts_known_value(client):
+    admin = make_admin(client)
+    teacher = make_teacher(client, admin)
+
+    r = client.post("/me/prefs", json={"name_font": "caveat"}, headers=teacher)
+    assert r.status_code == 200, r.text
+    assert r.json()["prefs"]["name_font"] == "caveat"
+
+
+def test_name_font_rejects_unknown_value(client):
+    #Проверяем на сервере, не только в UI (§5.4 — публичное поле, другие видят его
+    #в мессенджере и в карточке профиля).
+    admin = make_admin(client)
+    teacher = make_teacher(client, admin)
+
+    r = client.post("/me/prefs", json={"name_font": "comicsans"}, headers=teacher)
+    assert r.status_code == 200, r.text
+    assert r.json()["prefs"]["name_font"] == ""

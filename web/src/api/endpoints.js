@@ -347,6 +347,9 @@ export const messengerApi = {
   users: (role = 'student', q = '', page = 0) =>
     api.get('/web/messenger/users', { params: { role, q, page } }),
   profile: (id) => api.get(`/web/messenger/users/${encodeURIComponent(id)}/profile`),
+  // Личная заметка о человеке (Discord-style «Notes») — видна только автору.
+  note: (id) => api.get(`/web/messenger/users/${encodeURIComponent(id)}/note`),
+  saveNote: (id, text) => api.post(`/web/messenger/users/${encodeURIComponent(id)}/note`, { text }),
   // Чаты.
   chats: () => api.get('/web/messenger/chats'),
   openDirect: (userId) => api.post(`/web/messenger/chats/direct/${encodeURIComponent(userId)}`),

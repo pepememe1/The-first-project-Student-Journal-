@@ -1,104 +1,104 @@
 <script setup>
-// Profile — «Профиль»: плашка (аватарка + ФИО на выбранном цвете), «О себе» и уведомления.
-// Персональные настройки (оформление, биометрия, озвучка) — в отдельной вкладке «Настройки».
-// Цвет плашки и «О себе» ПУБЛИЧНЫ: их видят другие в карточке профиля из мессенджера.
-import { computed, onMounted, ref, watch } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { useProfileStore, BIO_LIMIT } from '@/stores/profile'
+// Profile — «Профиль», по образцу Discord (3.6): слева редактор (аватарка, цвет плашки,
+// заготовки под эффекты/рамку, стиль никнейма), посередине — ЖИВОЙ предпросмотр, который
+// и есть та самая карточка, что видят другие (PeerProfileCard editable — общий компонент
+// с «чужим» профилем в мессенджере, см. его докстринг). Ниже — уведомления, как раньше.
+import { ref } from 'vue'
+import { useProfileStore } from '@/stores/profile'
 import { useLocaleStore } from '@/stores/locale'
-import { roleLabel } from '@/config/roles'
-import { PRESETS, profilePlate } from '@/theme/palette'
+import { PRESETS } from '@/theme/palette'
+import { NAME_FONTS } from '@/config/nameFonts'
+import { useAuthStore } from '@/stores/auth'
 import Card from '@/components/ui/Card.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
-import AvatarCropper from '@/components/AvatarCropper.vue'
-import { Camera, Check } from '@lucide/vue'
+import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
+import { Camera, Check, Sparkles, SquareDashed } from '@lucide/vue'
 
 const auth = useAuthStore()
 const profile = useProfileStore()
 const locale = useLocaleStore()
-const initial = computed(() => (auth.user?.name || '?').trim().charAt(0).toUpperCase())
+const cardRef = ref(null)
 
-const editing = ref(false)
-const draftBio = ref('')
-
-onMounted(async () => {
-  await profile.load()
-  draftBio.value = profile.bio
-})
-// Профиль мог долиться после монтирования — подхватываем текст, пока его не правят.
-watch(() => profile.bio, (v) => { if (!dirty.value) draftBio.value = v })
-
-const left = computed(() => BIO_LIMIT - draftBio.value.length)
-const dirty = computed(() => draftBio.value !== profile.bio)
-// Цвет плашки: id пресета → hex (общий хелпер, см. palette.profilePlate).
-const plateColor = computed(() => profilePlate(profile.color))
-
-async function onSave(dataUrl) {
-  editing.value = false
-  await profile.save(dataUrl)
-}
-async function saveBio() { await profile.saveProfile({ bio: draftBio.value }) }
 async function pickColor(id) { await profile.saveProfile({ color: id }) }
+async function pickFont(id) { await profile.saveProfile({ font: id }) }
 </script>
 
 <template>
   <div class="space-y-6">
-    <!-- Плашка профиля: цвет выбирает сам пользователь, его видят и другие. -->
-    <Card>
-      <div class="-m-5 mb-0 flex items-center gap-4 rounded-t-xl p-5"
-           :style="{ background: plateColor }">
-        <button type="button" @click="editing = true"
-                class="group relative size-16 shrink-0 overflow-hidden rounded-full ring-2 ring-white/60"
-                :title="locale.t('profile.editAvatar', 'Изменить аватарку')">
-          <img v-if="profile.avatar" :src="profile.avatar" :alt="locale.t('profile.avatarAlt', 'Аватарка')"
-               class="size-full object-cover" />
-          <span v-else class="grid size-full place-items-center bg-white/20 text-2xl font-extrabold text-white">{{ initial }}</span>
-          <span class="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-            <Camera class="size-5 text-white" />
-          </span>
-        </button>
-        <div class="min-w-0">
-          <p class="truncate font-title text-xl font-extrabold text-white">{{ auth.user?.name }}</p>
-          <p class="truncate text-sm text-white/80">{{ roleLabel(auth.role) }} · {{ auth.user?.login }}</p>
-        </div>
-      </div>
-      <p v-if="profile.bio" class="mt-4 whitespace-pre-wrap text-sm text-text2">{{ profile.bio }}</p>
-    </Card>
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
+      <!-- Левая колонка: редактор -->
+      <div class="space-y-4 lg:order-1">
+        <Card :title="locale.t('profile.avatarSection', 'Аватарка')" :pad="true">
+          <button type="button" @click="cardRef?.openAvatarEditor()"
+                  class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
+            <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-accent">
+              <Camera class="size-4" />
+            </span>
+            <span class="text-sm font-medium text-text">{{ locale.t('profile.editAvatar', 'Изменить аватарку') }}</span>
+          </button>
+        </Card>
 
-    <!-- О себе -->
-    <Card :title="locale.t('profile.about', 'О себе')" :subtitle="locale.t('profile.aboutHint', 'Короткий текст — его видят другие в вашем профиле')">
-      <textarea v-model="draftBio" :maxlength="BIO_LIMIT" rows="3"
-                :placeholder="locale.t('profile.aboutPlaceholder', 'Например: куратор группы К-24, веду сети и базы данных.')"
-                class="w-full resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent focus:bg-card" />
-      <div class="mt-2 flex items-center gap-3">
-        <span class="text-xs" :class="left <= 20 ? 'text-red' : 'text-text3'">
-          {{ locale.t('profile.charsLeft', { n: left }) }}
-        </span>
-        <button type="button" @click="saveBio" :disabled="!dirty || profile.saving"
-                class="ml-auto rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          {{ profile.saving ? locale.t('profile.saving', 'Сохранение…') : locale.t('common.save') }}
-        </button>
-      </div>
-    </Card>
+        <Card :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">
+          <div class="flex flex-wrap gap-2">
+            <button v-for="p in PRESETS" :key="p.id" type="button" @click="pickColor(p.id)"
+                    :title="locale.t(`theme.preset.${p.id}`, p.name)" :aria-label="locale.t(`theme.preset.${p.id}`, p.name)"
+                    class="grid size-8 place-items-center rounded-full ring-offset-2 ring-offset-[var(--gb-card)] transition-transform hover:scale-110"
+                    :class="profile.color === p.id ? 'ring-2 ring-accent' : ''"
+                    :style="{ background: p.accent }">
+              <Check v-if="profile.color === p.id" class="size-3.5 text-white" />
+            </button>
+          </div>
+        </Card>
 
-    <!-- Цвет плашки — те же пресеты, что и у темы оформления -->
-    <Card :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">
-      <div class="flex flex-wrap gap-2">
-        <button v-for="p in PRESETS" :key="p.id" type="button" @click="pickColor(p.id)"
-                :title="locale.t(`theme.preset.${p.id}`, p.name)" :aria-label="locale.t(`theme.preset.${p.id}`, p.name)"
-                class="grid size-9 place-items-center rounded-full ring-offset-2 ring-offset-[var(--gb-card)] transition-transform hover:scale-110"
-                :class="profile.color === p.id ? 'ring-2 ring-accent' : ''"
-                :style="{ background: p.accent }">
-          <Check v-if="profile.color === p.id" class="size-4 text-white" />
-        </button>
-      </div>
-    </Card>
+        <!-- Стиль никнейма: список шрифтов, КАЖДЫЙ пункт написан ЭТИМ ЖЕ шрифтом текущим
+             именем пользователя — так видно результат ДО выбора, не после сохранения. -->
+        <Card :title="locale.t('profile.nameFont', 'Стиль никнейма')" :subtitle="locale.t('profile.nameFontHint', 'Видно всем — в сообщениях и в вашем профиле')">
+          <div class="space-y-1">
+            <button v-for="f in NAME_FONTS" :key="f.id" type="button" @click="pickFont(f.id)"
+                    class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
+                    :class="profile.font === f.id ? 'border-accent bg-accent-glow' : 'border-border2 hover:bg-bg2'">
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-base text-text" :style="{ fontFamily: f.family }">
+                  {{ auth.user?.name || f.label }}
+                </span>
+                <span class="text-[11px] text-text3">{{ f.label }}</span>
+              </span>
+              <Check v-if="profile.font === f.id" class="size-4 shrink-0 text-accent" />
+            </button>
+          </div>
+        </Card>
 
-    <!-- Уведомления (оценки и изменения расписания). -->
+        <!-- Заготовки — специально НЕ кнопки (без @click, без hover-состояния перехода
+             в другой цвет): заказчик попросил оставить заголовки, но НЕ делать их
+             кликабельными, эффекты/рамки — отдельная задача на будущее. -->
+        <Card :pad="true">
+          <div class="flex items-center justify-between gap-2 py-1">
+            <span class="flex items-center gap-2 text-sm font-medium text-text3">
+              <Sparkles class="size-4" />{{ locale.t('profile.effects', 'Эффекты профиля') }}
+            </span>
+            <span class="rounded-full bg-bg2 px-2 py-0.5 text-[11px] font-semibold text-text3">
+              {{ locale.t('profile.soon', 'Скоро') }}
+            </span>
+          </div>
+          <div class="mt-1 flex items-center justify-between gap-2 border-t border-border py-1 pt-2">
+            <span class="flex items-center gap-2 text-sm font-medium text-text3">
+              <SquareDashed class="size-4" />{{ locale.t('profile.frame', 'Рамка аватарки') }}
+            </span>
+            <span class="rounded-full bg-bg2 px-2 py-0.5 text-[11px] font-semibold text-text3">
+              {{ locale.t('profile.soon', 'Скоро') }}
+            </span>
+          </div>
+        </Card>
+      </div>
+
+      <!-- Центр: живой предпросмотр (= карточка, которую видят другие) -->
+      <div class="lg:order-2">
+        <PeerProfileCard ref="cardRef" editable />
+      </div>
+    </div>
+
     <Card :title="locale.t('settings.notifications', 'Уведомления')" :subtitle="locale.t('profile.notificationsHint', 'Оценки и изменения расписания')">
       <NotificationsInbox />
     </Card>
-
-    <AvatarCropper v-if="editing" :current="profile.avatar" @save="onSave" @close="editing = false" />
   </div>
 </template>

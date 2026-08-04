@@ -36,6 +36,15 @@ _MAX_COLOR_ID = 32          #id пресета палитры ('violet', 'teal',
 #Языки интерфейса. Коды те же, что в web/src/i18n/dictionaries.js.
 _UI_LOCALES = ("ru", "en", "zh")
 
+#Стиль никнейма (§5.4, «стиль никнейма» — Discord-style профиль) — id должен совпадать
+#1:1 с web/src/config/nameFonts.js (там же — font-family на каждый id) и с @font-face в
+#web/src/style.css. '' — «без стиля» (обычный шрифт интерфейса, а не отсутствие имени).
+#Список ИМЕННО здесь (не в messenger.py) по тому же принципу, что и _UI_LOCALES: сюда
+#приходит поле от авторизованного клиента при сохранении, чужой id означал бы CSS
+#font-family на несуществующий шрифт — фолбэк браузера отработал бы тихо, но проверка
+#на входе дешевле, чем гадать потом, откуда в БД мусор.
+NAME_FONTS = ("", "unbounded", "comfortaa", "caveat", "marckscript", "ptserif", "ptmono")
+
 
 def _sanitize_public_profile(prefs: dict) -> None:
     """Обрезает публичные поля профиля на месте.
@@ -50,6 +59,16 @@ def _sanitize_public_profile(prefs: dict) -> None:
     if "profile_color" in prefs:
         col = prefs.get("profile_color")
         prefs["profile_color"] = (col if isinstance(col, str) else "").strip()[:_MAX_COLOR_ID]
+
+
+def _sanitize_name_font(prefs: dict) -> None:
+    """Стиль никнейма — та же логика, что и у цвета плашки (_sanitize_public_profile):
+    ПУБЛИЧНОЕ поле (другие видят его в мессенджере и в карточке профиля, см.
+    messenger._safe_user), поэтому проверяем на сервере, а не только в UI."""
+    if "name_font" not in prefs:
+        return
+    val = prefs.get("name_font")
+    prefs["name_font"] = val if val in NAME_FONTS else ""
 
 
 def _sanitize_notify(prefs: dict) -> None:
@@ -160,6 +179,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     merged = dict(user.prefs or {})
     merged.update(incoming)
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
+    _sanitize_name_font(merged)          #стиль никнейма — тоже виден другим, только из списка
     _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
     _sanitize_translate(merged)          #коды языков уходят в промпт — только известные
     _sanitize_locale(merged)             #язык интерфейса — только тот, для которого есть словарь

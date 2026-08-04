@@ -10,8 +10,10 @@ import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, Mor
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import { profilePlate } from '@/theme/palette'
+import { nameFontFamily } from '@/config/nameFonts'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
+import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
@@ -37,6 +39,10 @@ const canKick = computed(() => myPermissions.value.has('kick'))
 const canManageRoles = computed(() => myPermissions.value.has('manage_roles'))
 const openMenuFor = ref(null)
 const roleDialogFor = ref(null)
+// §5.4: клик по аватарке/имени — открыть Discord-style карточку профиля поверх этой
+// модалки (в неё же вынесена заметка и кнопка «Сообщение», которых в этом плотном
+// списке участников попросту нет места показать).
+const profileFor = ref(null)
 
 function toggleMenu(uid) { openMenuFor.value = openMenuFor.value === uid ? null : uid }
 // Клик вне меню участника — закрыть (нет глобальной v-click-outside директивы в проекте,
@@ -216,11 +222,13 @@ async function clearHistory() {
           {{ locale.t('conversationInfo.modText', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.') }}
         </div>
         <template v-else-if="!isGroupOrChannel && activePeer">
-          <div class="flex items-center gap-3 rounded-xl p-4" :style="{ background: plate(activePeer) }">
+          <button type="button" @click="profileFor = activePeer"
+                  class="flex w-full items-center gap-3 rounded-xl p-4 text-left transition-opacity hover:opacity-90"
+                  :style="{ background: plate(activePeer) }">
             <Avatar :src="activePeer.avatar" :name="activePeer.full_name"
                     :online="!!activePeer.online" :size="56" />
             <div class="min-w-0">
-              <div class="truncate text-base font-bold text-white">{{ activePeer.full_name }}</div>
+              <div class="truncate text-base font-bold text-white" :style="{ fontFamily: nameFontFamily(activePeer.name_font) }">{{ activePeer.full_name }}</div>
               <div class="truncate text-xs text-white/80">{{ peerMeta(activePeer) }}</div>
               <!-- Статус, который человек выбрал сам, ВАЖНЕЕ presence: «не беспокоить»
                    при этом остаётся «в сети», и показать только «в сети» — значит
@@ -235,7 +243,7 @@ async function clearHistory() {
                 <template v-else>{{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}</template>
               </div>
             </div>
-          </div>
+          </button>
           <p v-if="activePeer.bio" class="mt-3 whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
           <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
           <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
@@ -252,21 +260,25 @@ async function clearHistory() {
           <div class="space-y-1">
             <div v-for="p in people" :key="p.user_id"
                  class="relative flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-bg2">
-              <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online" :size="36" />
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-1.5">
-                  <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
-                  <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
-                         class="size-3.5 shrink-0 text-accent" :aria-label="locale.t('conversationInfo.owner', 'Владелец')" />
-                  <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-xs">🔇</span>
+              <!-- §5.4: клик по аватарке/имени — карточка профиля этого участника. -->
+              <button type="button" @click="profileFor = { userId: p.user_id }"
+                      class="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online" :size="36" />
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
+                    <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
+                           class="size-3.5 shrink-0 text-accent" :aria-label="locale.t('conversationInfo.owner', 'Владелец')" />
+                    <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-xs">🔇</span>
+                  </div>
+                  <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
+                    <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
+                    <span v-if="statusLabel(p)" class="size-2 shrink-0 rounded-full"
+                          :style="{ background: statusColor(p) }" />
+                    <span class="truncate">{{ statusLabel(p) || meta(p) }}</span>
+                  </div>
                 </div>
-                <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
-                  <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
-                  <span v-if="statusLabel(p)" class="size-2 shrink-0 rounded-full"
-                        :style="{ background: statusColor(p) }" />
-                  <span class="truncate">{{ statusLabel(p) || meta(p) }}</span>
-                </div>
-              </div>
+              </button>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
                     :class="(p.user_id === ownerId || p.role === 'owner')
                       ? 'bg-accent-glow text-accent' : 'bg-bg2 text-text3'">
@@ -300,6 +312,8 @@ async function clearHistory() {
 
       <RoleManagerDialog v-if="roleDialogFor" :user-id="roleDialogFor.user_id"
                          :user-name="roleDialogFor.full_name" @close="roleDialogFor = null" />
+      <PeerProfileModal v-if="profileFor" :user-id="profileFor.userId || profileFor.id || ''"
+                        :peer-data="profileFor.id ? profileFor : null" @close="profileFor = null" />
 
       <!-- Действия -->
       <div class="flex flex-wrap gap-2 border-t border-border p-3">

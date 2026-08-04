@@ -117,6 +117,10 @@ const routes = [
            'Выгрузка всех данных в архив и загрузка обратно', 'router.dataTitle', 'router.dataSubtitle'),
       page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств', 'nav.requests', 'router.requestsSubtitle'),
       page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв', 'nav.sessions', 'router.accessSubtitle'),
+      // Раньше отсутствовал: SidebarUserOverlay/HeaderBar ссылаются на `/${role}/profile`
+      // безусловно для ВСЕХ ролей — у админа маршрута не было, и переход падал в
+      // catch-all редирект на "/". Найдено при разведке под Discord-style профиль (3.6).
+      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
       page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
       { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера', i18nTitle: 'nav.monitor', i18nSubtitle: 'router.monitorSubtitle' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },

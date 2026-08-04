@@ -653,6 +653,30 @@ def test_conversation_info_lists_owner_first_with_avatars(client):
         assert "avatar" in p and "user_role" in p
 
 
+# ── Стиль никнейма (§5.4, «карточка профиля») ────────────────────────────────────────
+def test_name_font_visible_in_peer_profile(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    client.post("/me/prefs", json={"name_font": "caveat"}, headers=a)
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert card["name_font"] == "caveat"
+
+
+def test_name_font_defaults_to_empty_string(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert card["name_font"] == ""
+
+
+def test_name_font_visible_in_conversation_info(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    client.post("/me/prefs", json={"name_font": "ptmono"}, headers=a)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Г", "member_ids": [b_id, c_id]}, headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
+    owner = next(p for p in info["participants"] if p["user_id"] == a_id)
+    assert owner["name_font"] == "ptmono"
+
+
 def test_mute_conversation_endpoint_and_push_suppression(client, monkeypatch):
     """Мьют беседы у себя: флаг отражается в списке чатов и глушит пуш по этой беседе."""
     import app.rustore_push as rp
@@ -1498,3 +1522,73 @@ def test_messenger_mask_is_not_markdown_syntax(client):
     assert r.status_code == 200, r.text
     body = r.json()["body"]
     assert "*" not in body
+
+
+# ── Личные заметки о людях (Discord-style «Notes», карточка профиля) ─────────────────
+def test_note_roundtrip_and_default_empty(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=a).json()["text"] == ""
+
+    r = client.post(f"/web/messenger/users/{b_id}/note", json={"text": "любит опаздывать"}, headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == "любит опаздывать"
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=a).json()["text"] == "любит опаздывать"
+
+
+def test_note_is_private_to_author(client):
+    """Заметка автора о Бобе не видна ни самому Бобу, ни третьему лицу — у каждого своя."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    client.post(f"/web/messenger/users/{b_id}/note", json={"text": "секрет препода"}, headers=a)
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=b).json()["text"] == ""
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=c).json()["text"] == ""
+    #у самого Боба про Боба (=про себя) — своя, независимая запись
+    client.post(f"/web/messenger/users/{b_id}/note", json={"text": "памятка себе"}, headers=b)
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=a).json()["text"] == "секрет препода"
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=b).json()["text"] == "памятка себе"
+
+
+def test_note_self_note_supported(client):
+    """Заметка про самого себя (author_id == about_user_id) — «памятка себе» на своей же
+    карточке, заказчик отдельно просил не выпиливать этот случай."""
+    _, (a_id, a), _, _ = _setup(client)
+    r = client.post(f"/web/messenger/users/{a_id}/note", json={"text": "не забыть про журнал"}, headers=a)
+    assert r.status_code == 200, r.text
+    assert client.get(f"/web/messenger/users/{a_id}/note", headers=a).json()["text"] == "не забыть про журнал"
+
+
+def test_note_overwrite_upserts(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    client.post(f"/web/messenger/users/{b_id}/note", json={"text": "первая версия"}, headers=a)
+    client.post(f"/web/messenger/users/{b_id}/note", json={"text": "вторая версия"}, headers=a)
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=a).json()["text"] == "вторая версия"
+
+
+def test_note_empty_text_deletes_row(client):
+    """Пустой текст после обрезки — удаляет строку, а не оставляет пустую (не копим
+    мёртвые записи на каждое «написал и стёр»)."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    client.post(f"/web/messenger/users/{b_id}/note", json={"text": "черновик"}, headers=a)
+    r = client.post(f"/web/messenger/users/{b_id}/note", json={"text": "   "}, headers=a)
+    assert r.status_code == 200 and r.json()["text"] == ""
+    assert client.get(f"/web/messenger/users/{b_id}/note", headers=a).json()["text"] == ""
+
+    from app.db import SessionLocal
+    from app.models import UserNote
+    db = SessionLocal()
+    try:
+        assert db.query(UserNote).filter(UserNote.author_id == a_id, UserNote.about_user_id == b_id).count() == 0
+    finally:
+        db.close()
+
+
+def test_note_is_clamped_to_max_chars(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    r = client.post(f"/web/messenger/users/{b_id}/note", json={"text": "x" * 900}, headers=a)
+    assert r.status_code == 200
+    assert len(r.json()["text"]) == 300
+
+
+def test_note_requires_auth(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.get(f"/web/messenger/users/{b_id}/note").status_code == 401
+    assert client.post(f"/web/messenger/users/{b_id}/note", json={"text": "x"}).status_code == 401

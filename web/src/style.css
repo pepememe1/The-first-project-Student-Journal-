@@ -32,6 +32,68 @@
 }
 
 /*
+  ШРИФТЫ СТИЛЯ НИКНЕЙМА (§5.4, «стиль никнейма» — Discord-style профиль, 3.6).
+
+  В ОТЛИЧИЕ от Syne/DM Sans выше, здесь кириллица — не опциональный бонус, а сама суть
+  фичи (человек выбирает шрифт для СВОЕГО имени, которое почти всегда кириллица). Каждый
+  файл проверен на реальный набор кириллических глифов при сборке — см.
+  tools/build_nickname_fonts.py. Список id — server/app/routers/me.py::NAME_FONTS
+  (сервер валидирует по нему при сохранении) и web/src/config/nameFonts.js (клиент
+  сопоставляет id с font-family здесь). Три файла — не переменные (у исходников Google
+  Fonts нет wght-оси), поэтому по одному начертанию на каждый, кроме PT Serif (там
+  два — обычный и жирный, различаются по font-weight).
+*/
+@font-face {
+  font-family: 'GB Nick Unbounded';
+  src: url('/fonts/nickname/Unbounded.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Comfortaa';
+  src: url('/fonts/nickname/Comfortaa.woff2') format('woff2-variations');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Caveat';
+  src: url('/fonts/nickname/Caveat.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Marck';
+  src: url('/fonts/nickname/MarckScript.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick PT Serif';
+  src: url('/fonts/nickname/PTSerif-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick PT Serif';
+  src: url('/fonts/nickname/PTSerif-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick PT Mono';
+  src: url('/fonts/nickname/PTMono.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
   style.css — дизайн-система GradeBookAI для веба (порт desktop `ui/styles.py`).
 
   Цвета живут в runtime-переменных --gb-* (их выставляет theme-store из buildPalette),
