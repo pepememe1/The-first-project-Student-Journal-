@@ -1,0 +1,206 @@
+"""
+admin_read.py — Администратор: справочники и списки (чтение).
+
+Часть пакета `routers/web` (разрезан в 3.6: один файл на 4288 строк правили
+62 коммита за полгода — он и был главным источником конфликтов при
+одновременной работе). Общий роутер и хелперы — в `_common.py`; порядок
+регистрации маршрутов задаёт `__init__.py`.
+"""
+from ._common import *      # noqa: F401,F403 — общий router, модели, хелперы
+
+
+# АДМИНИСТРАТОР ───────────────────────────────────────────────────────────────────
+@router.get("/admin/overview")
+def admin_overview(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Сводка по учреждению — счётчики сущностей."""
+    def count(model, **flt):
+        q = db.query(model).filter(model.deleted == False)  # noqa: E712
+        for k, v in flt.items():
+            q = q.filter(getattr(model, k) == v)
+        return q.count()
+    return {
+        "teachers": count(User, role="teacher"),
+        "students": count(User, role="student"),
+        "admins": count(User, role="admin"),
+        "groups": count(Group),
+        "subjects": count(Subject),
+        "lessons": count(Lesson),
+        "grades": count(Grade),
+    }
+
+
+@router.get("/admin/teachers")
+def admin_teachers(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(User).filter(
+        User.role == "teacher", User.deleted == False).order_by(User.full_name).all()  # noqa: E712
+    info = _contact_info(db, [u.login for u in rows])
+    return {"teachers": [dict(
+        {"id": u.id, "login": u.login, "name": W.display_name(u),
+         "subjects": list(u.subjects or []), "curated_groups": list(u.curated_groups or [])},
+        **info.get(u.login, {})) for u in rows]}
+
+
+@router.get("/admin/students")
+def admin_students(group: str = Query(""),
+                   _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    q = db.query(User).filter(User.role == "student", User.deleted == False)  # noqa: E712
+    if group:
+        q = q.filter(User.group_name == group)
+    rows = q.order_by(User.group_name, User.surname, User.name).all()
+    info = _contact_info(db, [u.login for u in rows])
+    #Курс студента = курс его ГРУППЫ. Считаем по разу на группу, а не на человека:
+    #иначе на списке в несколько сотен строк это сотни одинаковых запросов.
+    #⚠️ Источник ОДИН — webdata.group_course (год поступления + текущий термин). Своей
+    #арифметики здесь нет намеренно: курс уже показывается в расписании и на главной
+    #студента, и третья версия расчёта разъехалась бы с ними (это уже случалось —
+    #см. границу учебного года в db.default_term).
+    cfg = W.load_config(db)
+    course_by_group = {}
+    for g in {u.group_name for u in rows if u.group_name}:
+        course_by_group[g] = W.group_course(db, g, cfg)
+    #name отдаём как есть (полная форма — совместимость), плюс имя и отчество РАЗДЕЛЬНО.
+    return {"students": [dict(
+        #id нужен для привязки родителя: связь ведётся по НЕИЗМЕНЯЕМОМУ users.id, а не по
+        #ФИО (фамилия меняется — см. §12 миграции оценок, там это уже стоило истории).
+        {"id": u.id, "login": u.login, "surname": u.surname, "name": u.name,
+         "first_name": W.first_name(u), "patronymic": W.patronymic_of(u),
+         "group": u.group_name,
+         #null — год поступления группы не задан администратором (сортировка по курсу
+         #такие строки покажет отдельно, а не выдумает им первый курс).
+         "course": course_by_group.get(u.group_name)},
+        **info.get(u.login, {})) for u in rows]}
+
+
+@router.get("/admin/groups")
+def admin_groups(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(Group).filter(Group.deleted == False).order_by(Group.name).all()  # noqa: E712
+    out = []
+    for g in rows:
+        n = db.query(User).filter(User.role == "student", User.group_name == g.name,
+                                  User.deleted == False).count()  # noqa: E712
+        out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n,
+                    "category": g.category or "college"})
+    return {"groups": out}
+
+
+# --- Учебные часы группы (план на семестр) ------------------------------------------
+@router.get("/admin/group-hours")
+def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: int = Query(0),
+                      _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Предметы группы с плановыми и уже пройденными часами за семестр.
+
+    Пройденные показываем и админу: без них поле «часов на семестр» заполняется вслепую,
+    а «занятий уже 30, а план 24» — единственный способ заметить опечатку сразу."""
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    lessons = W.group_lessons(db, group, year=ty, semester=ts)
+    by_subject = {}
+    for l in lessons:
+        by_subject.setdefault(l.subject, []).append(l)
+    #Назначения преподов на эту группу за термин — одним запросом, не по одному на предмет.
+    hrows = {r.subject: r for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == ty,
+        SubjectHours.semester == ts, SubjectHours.deleted == False).all()}  # noqa: E712
+    tids = {r.teacher_id for r in hrows.values() if r.teacher_id}
+    tnames = {u.id: W.display_name(u) for u in db.query(User).filter(User.id.in_(tids)).all()} if tids else {}
+    out = []
+    for subj in list(grp.subjects or []):
+        tid = (hrows.get(subj).teacher_id if subj in hrows else "") or ""
+        hrs = W.hours_plan(db, group, subj, ty, ts)
+        zet = hrows.get(subj).zet if subj in hrows else None
+        out.append({"subject": subj, "hours_total": hrs,
+                    "hours_done": W.hours_done(by_subject.get(subj, [])),
+                    "teacher_id": tid, "teacher_name": tnames.get(tid, ""),
+                    #ЗЕТ (docs/PLAN-ZET.md): zet — уже подтверждённое администратором
+                    #значение (None — не задано, тогда интерфейс строку не показывает);
+                    #zet_hint — ТОЛЬКО подсказка по формуле, никогда не подставляется сама.
+                    "zet": zet, "zet_hint": W.study_hours.zet_hint(hrs)})
+    return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
+
+
+@router.post("/admin/group-hours")
+def admin_set_group_hours(payload: dict = Body(...),
+                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Сохранить часы + назначение препода + ЗЕТ по предметам группы:
+    {group, year, semester, hours: {предмет: N}, teachers: {предмет: teacher_id | ""},
+    zet: {предмет: float | null}}.
+
+    Пишем ПАЧКОЙ (кнопка «Сохранить» в админке правит сразу несколько предметов) — иначе
+    полтора десятка запросов на одно нажатие и половинчатое состояние при обрыве связи.
+    `teachers` — §ролей препод↔предмет↔группа: единственный источник правды «кто ведёт
+    какую группу по какому предмету», см. webdata.teacher_assignments. `zet` —
+    docs/PLAN-ZET.md: null (или ключ отсутствует) — не трогать/не задано, число —
+    подтверждённое администратором значение (подсказка zet_hint сюда НЕ подставляется
+    автоматически, только человеком)."""
+    group = (payload.get("group") or "").strip()
+    hours = payload.get("hours") or {}
+    teachers = payload.get("teachers") or {}
+    zets = payload.get("zet") or {}
+    if not group or not isinstance(hours, dict) or not isinstance(teachers, dict) \
+            or not isinstance(zets, dict):
+        raise HTTPException(status_code=400, detail="Нужны group и hours")
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    #Пустая строка teacher_id / null ЗЕТ = «снять назначение»/«снять ЗЕТ» — ЗНАЧИМОЕ
+    #намерение, поэтому обходим объединение ключей hours∪teachers∪zet, а не только те,
+    #где задано число часов.
+    subjects_touched = ({(s or "").strip() for s in hours}
+                        | {(s or "").strip() for s in teachers}
+                        | {(s or "").strip() for s in zets})
+    subjects_touched.discard("")
+    saved = 0
+    for subject in subjects_touched:
+        hid = subject_hours_id(group, subject, ty, ts)
+        row = db.get(SubjectHours, hid)
+        if row is None:
+            row = SubjectHours(id=hid, group_name=group, subject=subject, year=ty, semester=ts)
+            db.add(row)
+        if subject in hours:
+            try:
+                row.hours_total = max(0, int(hours[subject] or 0))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400,
+                                    detail=f"Часы по предмету «{subject}» должны быть числом")
+        if subject in teachers:
+            tid = (teachers[subject] or "").strip()
+            if tid:
+                t = db.query(User).filter(User.id == tid, User.role == "teacher",
+                                          User.deleted == False).first()  # noqa: E712
+                if t is None:
+                    raise HTTPException(status_code=404, detail="Преподаватель не найден")
+                if subject not in (t.subjects or []):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"У преподавателя «{W.display_name(t)}» нет предмета «{subject}»")
+            row.teacher_id = tid
+        if subject in zets:
+            zv = zets[subject]
+            if zv is None or zv == "":
+                row.zet = None
+            else:
+                try:
+                    row.zet = float(zv)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400,
+                                        detail=f"ЗЕТ по предмету «{subject}» должен быть числом")
+                if row.zet < 0:
+                    raise HTTPException(status_code=400, detail="ЗЕТ не может быть отрицательным")
+        row.updated_at = _now_iso()
+        #Ноль часов — это «план снят», а не удаление строки: надгробие уехало бы на десктоп и
+        #там часы просто исчезли бы, вместо того чтобы показать «не задано». Та же логика
+        #для назначения — снятие препода (tid="") не трогает саму строку часов.
+        row.deleted = False
+        saved += 1
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.hours",
+              target=group, detail=f"предметов: {saved}")
+    return {"ok": True, "saved": saved, "term": {"year": ty, "semester": ts}}
+
+
+@router.get("/admin/subjects")
+def admin_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(Subject).filter(Subject.deleted == False).order_by(Subject.name).all()  # noqa: E712
+    return {"subjects": [{"name": s.name} for s in rows]}

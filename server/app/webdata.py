@@ -122,13 +122,122 @@ def group_subject_list(db, group: str) -> list:
     Тот же перекос уже чинили отдельно у куратора (curator_group_subjects) и в ЗЕТ
     (zet_summary_for_student); это ТРЕТЬЕ место, поэтому источник вынесен сюда — чтобы
     следующий потребитель брал готовое, а не заводил четвёртую копию правила.
+
+    ⚠️ И обратный перекос (3.6): предмет, УБРАННЫЙ из плана, продолжал попадать сюда из
+    старых занятий — Вектор перечислял студенту предметы, которых у него уже нет. Поэтому
+    когда план задан, ОН и есть ответ; занятия досыпаются, только если плана нет вовсе
+    (группы, заведённые до импорта учебного плана). Цена решения: предмет, по которому
+    преподаватель завёл занятия, но админ не внёс его в группу, в список не попадёт —
+    это видно и лечится добавлением предмета в группу, в отличие от бесшумно
+    накапливающегося мусора из отменённых дисциплин.
     """
-    subs = {l.subject for l in group_lessons(db, group) if l.subject}
+    plan = group_plan_subjects(db, group)
+    if plan:
+        return sorted(plan)
+    return sorted({l.subject for l in group_lessons(db, group) if l.subject})
+
+
+def per_subject_with_plan(db, group: str, lessons, records, cfg, scale=None,
+                          is_archive: bool = False):
+    """Средние по предметам + предметы ПЛАНА, по которым занятий ещё нет.
+
+    Одна функция на студента и на родителя СОЗНАТЕЛЬНО: их сводки рисует одна и та же
+    карточка, и стоит формату разойтись — в двух кабинетах будут разные списки предметов
+    по одному и тому же студенту. Такое расхождение уже ловил тест
+    `test_parent_stats_mirrors_student_stats`, поэтому правило вынесено сюда, а не
+    скопировано в оба эндпоинта.
+
+    В архиве план не досыпаем: тогда учились по другому набору предметов."""
+    rows = per_subject_averages(lessons, records, cfg, scale=scale)
+    if is_archive:
+        return rows
+    seen = {r["subject"] for r in rows}
+    for subj in sorted(group_plan_subjects(db, group, cfg) - seen):
+        rows.append({"subject": subj, "average": 0.0, "lessons": 0, "grades": 0})
+    return rows
+
+
+def group_course(db, group: str, cfg=None):
+    """Курс группы (1..N) или None, если посчитать не из чего.
+
+    Считается от ГОДА ПОСТУПЛЕНИЯ (`Group.enrollment_year`, приезжает импортом учебного
+    плана ВСГУТУ) и ТЕКУЩЕГО учебного термина — через общий `study_hours.
+    course_and_semester`, а не своей арифметикой по календарю.
+
+    ⚠️ Почему это вообще отдельная функция. Курс в продукте есть в ДВУХ видах: живой
+    признак с портала (столбец индекса расписания, `schedule/parser.py`) и вычисленный
+    из года поступления. Летом 2026 они расходились ровно на год — термин переключался
+    1 июля, а портал держал прежний учебный год (К74/1: по расписанию 2 курс, по нашей
+    дате 3). Границу термина сдвинули на 25 августа (`db.default_term`), и теперь оба
+    источника сходятся; но саму формулу всё равно держим в ОДНОМ месте, чтобы следующий
+    экран не завёл третью версию курса.
+
+    None — это честно «год поступления не задан», а не «первый курс»: подставлять
+    единицу значило бы приписать группе курс, которого никто не вводил."""
     row = db.query(Group).filter(Group.name == group,
                                  Group.deleted == False).first()  # noqa: E712
-    if row and row.subjects:
-        subs |= {s for s in row.subjects if s}
-    return sorted(subs)
+    if not row or not row.enrollment_year:
+        return None
+    ty, ts = current_term(cfg if cfg is not None else load_config(db))
+    try:
+        course, _sem = study_hours.course_and_semester(int(row.enrollment_year), ty, ts)
+    except (TypeError, ValueError):
+        return None
+    return course if course >= 1 else None
+
+
+def group_plan_subjects(db, group: str, cfg=None) -> set:
+    """ДЕЙСТВУЮЩИЙ учебный план группы — или пустое множество.
+
+    Два источника, оба ведёт АДМИНИСТРАТОР, и оба означают «предмет в программе»:
+      • `Group.subjects` — список предметов группы;
+      • `SubjectHours` за ТЕКУЩИЙ термин — часы/ЗЕТ/назначение преподавателя.
+
+    ⚠️ Второй источник обязателен, и вот почему. Занятие можно завести только по
+    НАЗНАЧЕННОЙ паре (группа, предмет) — а назначение живёт именно в `SubjectHours`.
+    Значит бывает предмет, который админ назначил и по которому уже идут занятия, но в
+    `Group.subjects` внести забыл. Считать его «убранным из плана» и прятать оценки
+    по нему — потеря данных на ровном месте; отличить же его от по-настоящему
+    отменённого предмета по одним занятиям невозможно.
+
+    Пусто значит «плана нет», а НЕ «предметов нет»: у групп, заведённых до импорта
+    учебного плана, ни один из источников не заполняли. Отличать эти два случая
+    обязательно — см. `current_subject_lessons`."""
+    row = db.query(Group).filter(Group.name == group,
+                                 Group.deleted == False).first()  # noqa: E712
+    subs = {s for s in (row.subjects if row else None) or [] if s}
+    ty, ts = current_term(cfg if cfg is not None else load_config(db))
+    subs |= {r.subject for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == (ty or ""),
+        SubjectHours.semester == int(ts or 0),
+        SubjectHours.deleted == False).all() if r.subject}  # noqa: E712
+    return subs
+
+
+def current_subject_lessons(db, group: str, lessons, is_archive: bool = False):
+    """Отсеять занятия по предметам, УБРАННЫМ из учебного плана группы.
+
+    ⚠️ Зачем. Удаление предмета из группы НЕ удаляет уже созданные занятия и оценки —
+    и правильно делает: это история, стирать её нельзя. Но статистика, сводка на вкладке
+    «ИИ Помощник» и ответы Вектора перечисляли предметы ПО ЗАНЯТИЯМ, поэтому исключённый
+    из плана предмет продолжал висеть в диаграммах со своим средним баллом (живой отзыв
+    3.6: «показывает старые предметы, а не актуальные»). Человек видит в списке то, чего
+    у него в этом семестре нет вовсе.
+
+    Правило:
+      • план задан и смотрим ТЕКУЩИЙ термин → показываем только предметы плана;
+      • план пуст (его просто не заполняли) → показываем всё, как раньше. Иначе у групп
+        без импорта плана статистика опустела бы целиком — ошибка куда хуже исходной;
+      • АРХИВ (явно выбранный прошлый семестр) НИКОГДА не фильтруем сегодняшним планом:
+        тогда велись другие предметы, и прятать их — переписывать прошлое задним числом.
+        Тот же принцип уже принят у куратора (`curator_group_subjects`).
+    """
+    if is_archive:
+        return lessons
+    plan = group_plan_subjects(db, group)
+    if not plan:
+        return lessons
+    return [l for l in lessons if l.subject in plan]
 
 
 def list_terms(db) -> list:

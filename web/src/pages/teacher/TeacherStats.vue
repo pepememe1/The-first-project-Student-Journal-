@@ -14,19 +14,32 @@ import { useLocaleStore } from '@/stores/locale'
 const locale = useLocaleStore()
 
 const groups = ref([])
-const subjects = ref([])
+const assignments = ref([])   // [{group, subject}] — назначения ЭТОГО преподавателя
 const group = ref('')
 const subject = ref('')
 const data = ref(null)
 const insights = ref([])
 
+// ⚠️ Предметы — ТОЛЬКО назначенные в ВЫБРАННОЙ группе (3.6). Раньше список был плоским
+// («все мои предметы вообще»), из-за чего он одновременно показывал лишнее (предмет,
+// который ведётся в другой группе) и выглядел неполным при переключении групп, а выбор
+// чужой для группы пары давал 403 от сервера. Пары (группа, предмет) сервер уже отдаёт
+// в overview — второго запроса не нужно.
+const subjects = computed(() =>
+  [...new Set(assignments.value.filter((a) => a.group === group.value).map((a) => a.subject))].sort())
+
 onMounted(async () => {
   try {
     const o = (await teacherApi.overview()).data
-    groups.value = o.groups || []; subjects.value = o.subjects || []
-    group.value = groups.value[0] || ''; subject.value = subjects.value[0] || ''
+    groups.value = o.groups || []
+    assignments.value = o.assignments || []
+    group.value = groups.value[0] || ''
   } catch { /* */ }
 })
+// Сменили группу — предмет мог стать для неё недействительным; берём первый доступный.
+watch(subjects, (list) => {
+  if (!list.includes(subject.value)) subject.value = list[0] || ''
+}, { immediate: true })
 async function load() {
   if (!group.value || !subject.value) return
   try { data.value = (await teacherApi.stats(group.value, subject.value)).data } catch { data.value = null }

@@ -188,11 +188,16 @@ def parent_stats(student_id: str = Query(""), year: str = Query(""), semester: i
     from .web import _resolve_term
     ty, ts = _resolve_term(cfg, year, semester)
     is_archive = bool((year or "").strip() and semester)
-    lessons = W.group_lessons(db, child.group_name, year=ty, semester=ts)
+    #Скоуп ТОТ ЖЕ, что у студента: только предметы действующего плана (отменённые
+    #дисциплины остаются в базе, но в текущую сводку не идут) — см. student_stats.
+    lessons = W.current_subject_lessons(
+        db, child.group_name,
+        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive)
     records = W.student_records(db, child.surname, child.name, child.group_name)
     #Долги/пропуски — по ВСЕМ занятиям (как у студента): занятия без штампа термина
     #иначе выпадают из фильтра, и реальные долги «исчезают». В архиве — строго по термину.
-    dl = lessons if is_archive else W.group_lessons(db, child.group_name)
+    dl = lessons if is_archive else W.current_subject_lessons(
+        db, child.group_name, W.group_lessons(db, child.group_name), is_archive)
     scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
     risk = W.dropout_risk_for_student(db, child.surname, child.name, child.group_name,
                                       cfg=cfg, lessons=dl)
@@ -202,7 +207,8 @@ def parent_stats(student_id: str = Query(""), year: str = Query(""), semester: i
                     "group": child.group_name},
         "term": {"year": ty, "semester": ts},
         "average": W.average(lessons, records, cfg, scale=scale_map),
-        "per_subject": W.per_subject_averages(lessons, records, cfg, scale=scale_map),
+        "per_subject": W.per_subject_with_plan(db, child.group_name, lessons, records,
+                                               cfg, scale=scale_map, is_archive=is_archive),
         "absences": W.absences(dl, records),
         "debts": W.debts(dl, records, scale=scale_map),
         "risk": risk if risk["visible"] else None,

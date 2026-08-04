@@ -43,9 +43,16 @@ def _seed(login="offstud"):
                       deleted=False, updated_at="2026-07-01T00:00:00+00:00"))
         db.merge(Group(id="grp:К74/1", name="К74/1", subjects=["Физика"],
                        deleted=False, updated_at="2026-07-01T00:00:00+00:00"))
+        #⚠️ Термин берём ТЕКУЩИЙ, а не зашитый числом. Раньше здесь стояло
+        #year="2026/2027", semester=1 — и тест сломался, как только сдвинули границу
+        #учебного года (3.6): занятие оказалось в «будущем» термине, журнал по умолчанию
+        #показывал пустой список, а падение выглядело как поломка офлайн-режима, хотя
+        #проверяет он совсем другое — что журнал открывается без сети.
+        from app.db import default_term
+        _ty, _ts = default_term()
         db.merge(Lesson(id="les:off1", group_name="К74/1", subject="Физика",
                         type="Практика", number=1, date="2026-09-01",
-                        year="2026/2027", semester=1, deleted=False,
+                        year=_ty, semester=_ts, deleted=False,
                         updated_at="2026-07-01T00:00:00+00:00"))
         db.merge(Grade(id=f"stud:{login}|les:off1", student_id=f"stud:{login}",
                        student_f="Офлайнов", student_n="Иван", lesson_id="les:off1",

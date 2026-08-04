@@ -127,18 +127,48 @@ def test_admin_sees_subject_catalog(client):
     assert "Химия" in r["text"], r["text"]
 
 
-def test_group_subject_list_merges_plan_and_lessons(client):
-    """Сам источник (webdata.group_subject_list) — объединение плана и занятий без дублей."""
+def test_group_subject_list_is_the_current_plan_not_old_lessons(client):
+    """Источник (webdata.group_subject_list) — ДЕЙСТВУЮЩИЙ план, а не всё, что когда-то велось.
+
+    ⚠️ Контракт изменён в 3.6 по живому отзыву. Раньше список был объединением плана и
+    предметов ЛЮБЫХ занятий — и предмет, УБРАННЫЙ из группы, продолжал висеть у студента
+    в статистике, в сводке на вкладке «ИИ Помощник» и в ответах Вектора вместе со своими
+    старыми оценками. Сами занятия при этом не удаляются (это история) — они просто
+    перестают считаться текущей программой.
+
+    Обратный перекос тоже держим: предмет из плана, по которому занятий ещё нет, в списке
+    ОБЯЗАН быть — это проверяет `test_student_sees_subject_without_any_lesson`."""
     from app import webdata as W
     from app.db import SessionLocal
 
     admin = make_admin(client)
     _group(client, admin, subjects=("Математика", "Физика"))
-    _push_lesson(client, admin, "L1", "ИС-21", "Математика")   #уже есть в плане — не дубль
-    _push_lesson(client, admin, "L2", "ИС-21", "Информатика")  #только в занятиях
+    _push_lesson(client, admin, "L1", "ИС-21", "Математика")   #в плане — остаётся
+    _push_lesson(client, admin, "L2", "ИС-21", "Информатика")  #ОТМЕНЁН: занятия есть, плана нет
 
     db = SessionLocal()
     try:
-        assert W.group_subject_list(db, "ИС-21") == ["Информатика", "Математика", "Физика"]
+        assert W.group_subject_list(db, "ИС-21") == ["Математика", "Физика"]
+    finally:
+        db.close()
+
+
+def test_subject_assigned_by_hours_counts_as_current(client):
+    """Предмет, НАЗНАЧЕННЫЙ преподавателю через часы, считается действующим — даже если
+    админ забыл добавить его в список предметов группы.
+
+    Иначе получилась бы потеря данных: завести занятие можно ТОЛЬКО по назначенной паре
+    (группа, предмет), то есть такой предмет реально ведётся и оценки по нему настоящие."""
+    from app import webdata as W
+    from app.db import SessionLocal
+
+    admin = make_admin(client)
+    _group(client, admin, subjects=("Математика",))
+    make_teacher(client, admin, subjects=["Химия"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Химия")
+
+    db = SessionLocal()
+    try:
+        assert W.group_subject_list(db, "ИС-21") == ["Математика", "Химия"]
     finally:
         db.close()

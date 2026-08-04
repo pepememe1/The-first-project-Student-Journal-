@@ -88,8 +88,15 @@ def _find_web_dist() -> str:
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../server
     root_dir = os.path.dirname(here)                                    # корень десктоп-репо
     parent = os.path.dirname(root_dir)                                  # уровень выше (напр. GB_2_7)
+    #⚠️ Явно заданный GRADEBOOK_WEB_DIST — ОКОНЧАТЕЛЬНЫЙ ответ, даже если по нему ничего
+    #нет. Тихо подставить вместо него какую-то другую найденную папку значит показать
+    #человеку не тот сайт, который он указал, и не сказать об этом ни слова — тот же
+    #принцип, что у режима распознавания речи «server» (честный отказ вместо подмены).
+    forced = os.environ.get("GRADEBOOK_WEB_DIST", "").strip()
+    if forced:
+        return (os.path.realpath(forced)
+                if os.path.isfile(os.path.join(forced, "index.html")) else "")
     candidates = [
-        os.environ.get("GRADEBOOK_WEB_DIST", "").strip(),
         os.path.join(here, "webdist"),
         os.path.join(root_dir, "web", "dist"),                     # монорепо (Pre-Release-2.8+)
         os.path.join(parent, "GradeBookAI-Web-Edition", "dist"),   # старое раздельное расположение
@@ -204,3 +211,32 @@ if WEB_DIST:
         if (target == WEB_DIST or target.startswith(WEB_DIST + os.sep)) and os.path.isfile(target):
             return FileResponse(target)
         return FileResponse(os.path.join(WEB_DIST, "index.html"))
+
+else:
+    #⚠️ САЙТ НЕ СОБРАН. Раньше этот случай не обрабатывался вовсе, и программа,
+    #запущенная ИЗ ИСХОДНИКОВ без `npm run build`, открывала окно на /login и показывала
+    #человеку голое `{"detail":"Not Found"}` — ни причины, ни что делать (поймано на
+    #машине Влада, 3.6). В .exe этого не бывает: dist бандлится внутрь. А вот запуск из
+    #исходников в свежеклонированной папке — обычное дело, и молчаливый 404 в такой
+    #ситуации выглядит как «программа сломана», хотя не хватает одной команды сборки.
+    _NO_DIST_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>GradeBookAI — интерфейс не собран</title>
+<style>body{background:#0f1b22;color:#e8eef1;font:16px/1.6 "Segoe UI",sans-serif;
+margin:0;display:grid;place-items:center;height:100vh}
+.b{max-width:680px;padding:32px}h1{font-size:22px;margin:0 0 12px}
+code{background:#1b2b34;padding:2px 8px;border-radius:6px;display:inline-block}
+p{color:#9fb3bd}</style></head><body><div class="b">
+<h1>Интерфейс ещё не собран</h1>
+<p>Сервер работает, но собранного сайта рядом нет — показывать нечего.
+Это не поломка: при запуске <b>из исходников</b> фронтенд нужно собрать один раз.</p>
+<p><code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code></p>
+<p>После сборки перезапустите программу. В готовом <code>.exe</code> этот шаг не нужен —
+интерфейс уже внутри.</p>
+<p>Проверить, что сервер жив: <code>/health</code></p>
+</div></body></html>"""
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def no_dist_notice(full_path: str):
+        from fastapi.responses import HTMLResponse
+        #503, а не 404: сервер поднят и исправен, отсутствует лишь собранный интерфейс.
+        return HTMLResponse(_NO_DIST_HTML, status_code=503)

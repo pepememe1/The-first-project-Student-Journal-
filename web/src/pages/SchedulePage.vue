@@ -119,7 +119,7 @@ onMounted(async () => {
 // прежнее ролевое поведение (студент/препод авто, админ выбирает); любая другая
 // категория — режим «выбор группы из списка» для ВСЕХ ролей, там нет ни своей
 // группы, ни своего ФИО преподавателя — их просто неоткуда авто-подставить.
-async function enterCategory() {
+async function enterCategory(fromUser = false) {
   data.value = null
   week.value = 1
   stopPoll()
@@ -141,8 +141,15 @@ async function enterCategory() {
   mode.value = 'group'
   group.value = ''
   await loadGroupsList()
-  if (isDefaultCategory.value && isStudent.value) {
-    await load()          // студент — сразу своя группа (сервер сам подставит)
+  //⚠️ 3.6: студент при ВХОДЕ на страницу всегда попадает на СВОЮ группу — независимо от
+  //категории. Раньше условие требовало ещё и колледжа (isDefaultCategory), поэтому
+  //студент бакалавриата/заочного открывал вкладку и упирался в «выберите группу», хотя
+  //его собственная известна серверу. Свою категорию сервер сообщает в ответе (см.
+  //schedule_get) — кнопки категорий переключатся сами.
+  //А вот при РУЧНОЙ смене категории (`fromUser`) своя группа не подставляется: человек
+  //осознанно пошёл смотреть чужую категорию, и там его группы нет.
+  if (isStudent.value && !fromUser) {
+    await load()
   } else {
     loading.value = false // ждём выбора группы из списка
   }
@@ -151,7 +158,7 @@ async function enterCategory() {
 async function onCategoryChange(key) {
   if (key === category.value) return
   category.value = key
-  await enterCategory()
+  await enterCategory(true)
 }
 
 // Курс (3.5.5) — сужает список групп ВНУТРИ категории. Разведано с портала (столбец
@@ -208,6 +215,13 @@ async function load() {
     if (my !== reqSeq) return
     data.value = r
     group.value = r.group || group.value
+    //Категорию СВОЕЙ группы знает только сервер (Group.category). Пришла другая, чем
+    //подсвечена, — переключаем кнопки и догружаем её список групп, иначе человек видит
+    //своё расписание с отмеченной чужой категорией и пустым выпадающим списком.
+    if (r.category && r.category !== category.value) {
+      category.value = r.category
+      loadGroupsList()
+    }
     const wk = Object.keys(r.schedule?.weeks || {}).map(Number).sort((a, b) => a - b)
     //Сессионные категории — своя «текущая» неделя не существует (это не календарная
     //чётность, а порядковый номер сессии) — берём первый реально найденный блок.
@@ -354,14 +368,13 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
         <!-- Студент в категории по умолчанию: своя группа (ярлык). Преподаватель в
              ней же: свои пары / выбор коллеги / выбор группы. Все остальные случаи
              (админ, либо любая роль вне колледжа) — выбор группы из списка. -->
-        <div v-if="isStudent && isDefaultCategory" class="flex h-10 items-center gap-2 rounded-sm border border-border2 bg-card2 px-3 text-sm">
-          <GraduationCap class="size-4 text-accent" />
-          <span class="font-medium text-text">{{ group || locale.t('schedulePage.myGroup', 'Моя группа') }}</span>
-        </div>
-
-        <!-- §3.5.5: раньше требовалось isDefaultCategory — режим «расписание преподов»
-             был недостижим вне колледжа, хотя сервер его прекрасно строит по категории. -->
-        <template v-else-if="isTeacher && mode !== 'group'">
+        <!-- ⚠️ 3.6: у СТУДЕНТА здесь стоял неинтерактивный ярлык с его группой, а не
+             выпадающий список — отсюда живой отзыв «кнопка с выбором группы не работает,
+             смотреть можно везде кроме колледжа»: вне колледжа он попадал в общую ветку
+             со списком, а в своей категории выбора не было вовсе. Теперь список у всех:
+             своя группа подставлена сервером (её же он и открывает при входе), но при
+             желании можно посмотреть чужую. -->
+        <template v-if="mode === 'teacher' || mode === 'me'">
           <div v-if="mode === 'me'" class="flex h-10 items-center gap-2 rounded-sm border border-border2 bg-card2 px-3 text-sm">
             <User class="size-4 text-accent" />
             <span class="font-medium text-text">{{ teacherName }}</span>
@@ -398,8 +411,11 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
             <option v-if="!groupsForCourse.length" :value="group">{{ group || locale.t('schedulePage.groupPlaceholder', 'Группа') }}</option>
             <option v-for="g in groupsForCourse" :key="g" :value="g">{{ g }}</option>
           </select>
-          <button v-if="isTeacher" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
-            {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
+          <!-- Студенту (как и преподавателю) даём посмотреть расписание преподавателя:
+               «у кого сегодня физика» — обычный вопрос, а не привилегия сотрудника. -->
+          <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
+            {{ isTeacher ? locale.t('schedulePage.backToChoice', '← к выбору')
+                         : locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
           </button>
         </template>
 

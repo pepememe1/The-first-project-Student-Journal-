@@ -235,7 +235,28 @@ export const useVectorStore = defineStore('vector', () => {
   }
   function ask(q, displayText) { send(q, displayText) }
 
+  // 🔒 СБРОС ПРИ ВЫХОДЕ ИЗ АККАУНТА. Живой отзыв 3.6: преподаватель, войдя после
+  // студента на той же машине, увидел в переписке ЧУЖОЙ вопрос про оценки. Причина не
+  // в сервере — ответы Вектора нигде не сохраняются; переписка лежит в памяти этого
+  // store, а SPA при выходе НЕ перезагружается (клиентский роутинг), поэтому состояние
+  // просто переживало смену пользователя. «После перезагрузки пропало» — тот же признак.
+  // Ровно эта дыра однажды уже была у мессенджера, и лечится она так же — явным reset()
+  // из auth.logout(). Чистим ВСЁ, что несёт следы человека: саму переписку, поле ввода,
+  // настроение/интент последнего ответа и флаг «уже поздоровались».
+  // ⚠️ `collapsed` НЕ трогаем: это настройка устройства («я не хочу видеть шторку»),
+  // а не данные пользователя, и сбрасывать её при каждом выходе было бы навязчиво.
+  function reset() {
+    messages.value = [{ role: 'vector', text: locale.t(GREETING_KEY, GREETING_FALLBACK) }]
+    input.value = ''
+    state.value = 'greeting'
+    lastMood.value = 'neutral'
+    lastIntent.value = 'help'
+    typingReveal.value = { index: -1, text: '', done: true }
+    tick.value = 0
+    greeted = false
+  }
+
   return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
            sprite, anim, label, cmds, send, ask, greetSettle, greetOnce,
-           typingReveal, skipTyping }
+           typingReveal, skipTyping, reset }
 })

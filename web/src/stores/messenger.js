@@ -113,7 +113,13 @@ export const useMessengerStore = defineStore('messenger', () => {
     for (const c of chats.value) {
       if (!c.mention_loud || !c.mention_message_id) continue
       if (_pinged.has(c.mention_message_id)) continue
+      //Отметку считаем показанной ВСЕГДА, даже когда звук приглушён: иначе, сняв
+      //«не беспокоить», человек получил бы очередь накопившихся сигналов разом.
       _pinged.add(c.mention_message_id)
+      //🔕 «Не беспокоить» глушит именно ЗВУК. Само письмо и значок остаются: статус
+      //отключает то, что дёргает, а не факт события — тот же принцип, что у категорий
+      //уведомлений на сервере (rustore_push.notify_login).
+      if (myStatus.value.kind === 'dnd') continue
       playMentionPing()
     }
   }
@@ -391,6 +397,7 @@ export const useMessengerStore = defineStore('messenger', () => {
   // сообщение с mine=true «как будто написал ты»). Пара к clearCache() в auth.logout().
   function reset() {
     stopPolling()
+    stopIdleWatch()          //иначе авто-«отошёл» продолжил бы жить от прошлого аккаунта
     clearActive()
     chats.value = []
     channels.value = []
@@ -511,7 +518,60 @@ export const useMessengerStore = defineStore('messenger', () => {
   async function loadMyStatus() {
     try { const { data } = await messengerApi.getStatus(); myStatus.value = data } catch { /* noop */ }
   }
-  async function setMyStatus(kind, customText = '') {
+  // ── Авто-«отошёл» по бездействию (как в Discord) ─────────────────────────────────
+  // Человек оставил вкладку открытой и ушёл — собеседник не должен думать, что ему
+  // просто не отвечают. Ставим «отошёл» САМИ и снимаем при первом же действии.
+  //
+  // ⚠️ Возвращаем ровно тот статус, что был ДО отлучки, а не «обычный»: иначе выбранное
+  // человеком «не беспокоить» тихо слетало бы после каждой отлучки, и он получал бы
+  // звуки, от которых как раз отписался. И по той же причине авто-режим НЕ трогает
+  // статусы, выставленные вручную сейчас, — только запоминает их на время отсутствия.
+  const AWAY_AFTER_MS = 10 * 60 * 1000     //как в Discord — десять минут тишины
+  let _idleTimer = null
+  let _statusBeforeAway = null             //не null → «отошёл» поставили мы, а не человек
+
+  async function _goAway() {
+    if (_statusBeforeAway !== null || myStatus.value.kind === 'away') return
+    _statusBeforeAway = { ...myStatus.value }
+    await setMyStatus('away', myStatus.value.custom_text || '', true)
+  }
+
+  async function _comeBack() {
+    if (_statusBeforeAway === null) return
+    const prev = _statusBeforeAway
+    _statusBeforeAway = null
+    await setMyStatus(prev.kind, prev.custom_text || '', true)
+  }
+
+  function _resetIdle() {
+    if (_idleTimer) clearTimeout(_idleTimer)
+    _idleTimer = setTimeout(_goAway, AWAY_AFTER_MS)
+    _comeBack()
+  }
+
+  const _IDLE_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart']
+  function startIdleWatch() {
+    if (_idleTimer) return                 //уже следим — второй раз не подписываемся
+    for (const e of _IDLE_EVENTS) window.addEventListener(e, _resetIdle, { passive: true })
+    //Сворачивание вкладки — тоже отсутствие, и узнаём мы о нём сразу, не дожидаясь таймера.
+    document.addEventListener('visibilitychange', _onVisibility)
+    _resetIdle()
+  }
+  function stopIdleWatch() {
+    for (const e of _IDLE_EVENTS) window.removeEventListener(e, _resetIdle)
+    document.removeEventListener('visibilitychange', _onVisibility)
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null }
+    _statusBeforeAway = null
+  }
+  function _onVisibility() {
+    if (document.visibilityState === 'hidden') _goAway()
+    else _resetIdle()
+  }
+
+  //auto=true — статус меняем МЫ (авто-отошёл), а не человек: такой вызов не должен
+  //затирать память о прежнем статусе, иначе возвращаться будет некуда.
+  async function setMyStatus(kind, customText = '', auto = false) {
+    if (!auto) _statusBeforeAway = null
     try {
       const { data } = await messengerApi.setStatus(kind, customText)
       myStatus.value = { kind: data.kind, custom_text: data.custom_text }
@@ -727,7 +787,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
     kickMember, setMemberRole, toggleIgnore,
     openAnnouncementsChannel, ensureReportsChannel, createReport,
-    myStatus, loadMyStatus, setMyStatus,
+    myStatus, loadMyStatus, setMyStatus, startIdleWatch, stopIdleWatch,
     togglePinChat, toggleArchiveChat, openSaved,
     draftFor, saveDraft, clearDraft,
     templates, loadTemplates, addTemplate, removeTemplate,

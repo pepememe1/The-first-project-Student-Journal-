@@ -80,7 +80,12 @@ onBeforeUnmount(() => clearInterval(tipTimer))
       <Mascot :sprite="sprite" class="aspect-[3/4] w-14 shrink-0 lg:hidden" />
       <div class="min-w-0">
         <h2 class="truncate font-title text-xl font-extrabold text-text sm:text-2xl">{{ data?.name || '—' }}</h2>
-        <p class="mt-0.5 truncate text-sm text-text3">{{ locale.t('studentDashboard.groupLabel', { group: data?.group || '—' }) }}</p>
+        <!-- Курс рядом с группой. Показываем, ТОЛЬКО когда сервер его знает (год
+             поступления группы задан): «1 курс» наугад хуже, чем его отсутствие. -->
+        <p class="mt-0.5 truncate text-sm text-text3">
+          {{ locale.t('studentDashboard.groupLabel', { group: data?.group || '—' }) }}<span
+            v-if="data?.course"> · {{ locale.t('adminGroups.courseN', { n: data.course }) }}</span>
+        </p>
       </div>
     </div>
     <div class="h-px bg-border" />

@@ -67,6 +67,10 @@ onMounted(async () => {
   window.addEventListener('offline', updateOnline)
   profile.load()
   await messenger.loadMyStatus()
+  //Авто-«отошёл» по бездействию (как в Discord). Запускаем ЗДЕСЬ, а не на странице
+  //мессенджера: панель видна на всех страницах, а отлучиться можно и из журнала —
+  //привяжи слежение к одной вкладке, и статус завис бы на «в сети» у всех остальных.
+  messenger.startIdleWatch()
   // Поле открываем с текущим текстом, а не пустым: пустое читается как «текста нет» и
   // человек стёр бы свой статус, просто нажав «Сохранить».
   statusDraft.value = messenger.myStatus.custom_text || ''
