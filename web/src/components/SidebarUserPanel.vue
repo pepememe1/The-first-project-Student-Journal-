@@ -22,6 +22,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
 import Avatar from '@/components/ui/Avatar.vue'
+import SidebarUserOverlay from '@/components/SidebarUserOverlay.vue'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
@@ -34,27 +35,13 @@ const fullName = computed(() => (auth.user?.name || '').trim() || roleLabel.valu
 const login = computed(() => (auth.user?.login || '').trim())
 
 // Статус — тот же общий словарь (config/status.js), что у мессенджера: второй копии нет.
-const statusOpen = ref(false)
+// Сам ВЫБОР статуса живёт в раскрывающейся карточке (SidebarUserOverlay) — здесь нужна
+// только точка нужного цвета рядом с аватаром.
+const cardOpen = ref(false)
 const myStatus = computed(() =>
   STATUS_KINDS.find(k => k.kind === messenger.myStatus.kind) || STATUS_KINDS[0])
 const statusText = computed(() =>
   myStatusLabel(messenger.myStatus.kind, messenger.myStatus.custom_text))
-
-async function pickStatus(kind) {
-  statusOpen.value = false
-  // Вид статуса меняем, УЖЕ ЗАДАННЫЙ ТЕКСТ сохраняем: «не беспокоить» не должно молча
-  // стирать пояснение «принимаю до 15:00».
-  await messenger.setMyStatus(kind, messenger.myStatus.custom_text || '')
-}
-
-// Свой текст статуса задаёт только преподаватель — то же правило, что в мессенджере
-// (MyStatusPicker.vue): у студента такого поля нет ни там, ни здесь.
-const canSetStatusText = computed(() => auth.role === 'teacher')
-const statusDraft = ref('')
-async function saveStatusText() {
-  statusOpen.value = false
-  await messenger.setMyStatus(messenger.myStatus.kind, statusDraft.value)
-}
 
 // Связь показываем, ТОЛЬКО когда её нет (то же решение, что было в шапке): «онлайн»
 // рядом с выбираемым статусом читалось как один составной статус, и «Не беспокоить»
@@ -71,53 +58,35 @@ onMounted(async () => {
   //мессенджера: панель видна на всех страницах, а отлучиться можно и из журнала —
   //привяжи слежение к одной вкладке, и статус завис бы на «в сети» у всех остальных.
   messenger.startIdleWatch()
-  // Поле открываем с текущим текстом, а не пустым: пустое читается как «текста нет» и
-  // человек стёр бы свой статус, просто нажав «Сохранить».
-  statusDraft.value = messenger.myStatus.custom_text || ''
 })
 </script>
 
 <template>
   <div class="relative shrink-0 border-t border-border px-2 py-2">
-    <!-- Меню статуса раскрывается ВВЕРХ: панель прижата к нижнему краю окна. -->
-    <div v-if="statusOpen"
-         class="absolute bottom-full left-2 right-2 z-40 mb-1 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
-      <button v-for="k in STATUS_KINDS" :key="k.kind" type="button" @click="pickStatus(k.kind)"
-              class="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-text hover:bg-bg2"
-              :class="{ 'bg-accent-glow': messenger.myStatus.kind === k.kind }">
-        <span class="size-2.5 shrink-0 rounded-full" :style="{ background: k.color }" />
-        {{ k.self }}
-      </button>
-      <div v-if="canSetStatusText" class="mt-1 border-t border-border pt-1.5">
-        <input v-model="statusDraft" :placeholder="locale.t('header.statusTextPlaceholder', 'Текст статуса (видят другие)')"
-               maxlength="80" @keydown.enter="saveStatusText"
-               class="w-full rounded-md border border-border2 bg-card2 px-2 py-1 text-xs text-text outline-none focus:border-accent" />
-        <button type="button" @click="saveStatusText"
-                class="mt-1 w-full rounded-md bg-accent px-2 py-1 text-xs font-semibold text-white hover:bg-accent2">
-          {{ locale.t('header.saveStatusText', 'Сохранить текст') }}
-        </button>
-      </div>
-    </div>
-    <!-- Клик мимо меню закрывает его (глобальной директивы click-outside в проекте нет). -->
-    <div v-if="statusOpen" class="fixed inset-0 z-30" @click="statusOpen = false" />
+    <!-- Карточка себя раскрывается ВВЕРХ: панель прижата к нижнему краю окна. -->
+    <SidebarUserOverlay v-if="cardOpen" @close="cardOpen = false" />
+    <!-- Клик мимо карточки закрывает её (глобальной директивы click-outside в проекте нет). -->
+    <div v-if="cardOpen" class="fixed inset-0 z-30" @click="cardOpen = false" />
 
     <div class="relative z-10 flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-bg">
-      <RouterLink :to="`/${auth.role}/profile`" class="shrink-0"
-                  :title="locale.t('nav.profile', 'Профиль')">
-        <Avatar :src="profile.avatar" :name="fullName" :size="36" />
-      </RouterLink>
-
-      <button type="button" @click="statusOpen = !statusOpen"
-              class="min-w-0 flex-1 text-left"
-              :aria-label="locale.t('header.myStatusAria', 'Мой статус')"
+      <!-- ⚠️ В самой панели — ТОЛЬКО самое частое: аватар, имя, логин и точка статуса.
+           Роль и статус словами сюда не помещались (склеивались в «Студент · Не
+           беспокоить» и обрезались) — они переехали в карточку по клику. -->
+      <button type="button" @click="cardOpen = !cardOpen"
+              class="flex min-w-0 flex-1 items-center gap-2 text-left"
+              :aria-label="locale.t('userOverlay.open', 'Профиль и статус')"
               :title="locale.t('header.myStatus', { status: statusText })">
-        <p class="truncate text-[13px] font-semibold leading-tight text-text">{{ fullName }}</p>
-        <p v-if="login" class="truncate text-[11px] leading-tight text-text3">@{{ login }}</p>
-        <p class="mt-0.5 flex items-center gap-1.5 text-[11px] leading-tight text-text2">
-          <span class="size-2 shrink-0 rounded-full" :style="{ background: myStatus.color }" />
-          <span class="truncate">{{ roleLabel }} · {{ statusText }}</span>
-          <ChevronDown class="size-3 shrink-0" />
-        </p>
+        <span class="relative shrink-0">
+          <Avatar :src="profile.avatar" :name="fullName" :size="36" />
+          <span class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card"
+                :style="{ background: myStatus.color }" />
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate text-[13px] font-semibold leading-tight text-text">{{ fullName }}</span>
+          <span v-if="login" class="block truncate text-[11px] leading-tight text-text3">@{{ login }}</span>
+        </span>
+        <ChevronDown class="size-3.5 shrink-0 text-text3 transition-transform"
+                     :class="cardOpen ? 'rotate-180' : ''" />
       </button>
 
       <button type="button" @click="theme.toggleMode()"

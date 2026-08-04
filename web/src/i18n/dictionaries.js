@@ -1562,6 +1562,10 @@ export const MESSAGES = {
     'monitorPage.onlineHint': 'Активность за последние ~90 секунд.',
     'monitorPage.onlineNow': 'Сейчас онлайн',
 
+    //── Карточка себя в углу сайдбара (3.6) ─────────────────────────────────────
+    'userOverlay.open': 'Профиль и статус',
+    'userOverlay.editProfile': 'Редактировать профиль',
+
     //── Риск отчисления (3.6, dropout_risk.py) ──────────────────────────────────────
     //Уровень переводим ПО КОДУ, а не берём готовую русскую подпись с сервера: иначе в
     //английском интерфейсе плашка осталась бы русской.
@@ -3144,6 +3148,9 @@ export const MESSAGES = {
     'monitorPage.onlineHint': 'Activity within the last ~90 seconds.',
     'monitorPage.onlineNow': 'Currently online',
 
+    'userOverlay.open': 'Profile and status',
+    'userOverlay.editProfile': 'Edit profile',
+
     'risk.level.low': 'Moderate',
     'risk.level.medium': 'Elevated',
     'risk.level.high': 'High',
@@ -4718,6 +4725,9 @@ export const MESSAGES = {
     'monitorPage.nobodyOnline': '当前无人在线',
     'monitorPage.onlineHint': '最近约90秒内的活动。',
     'monitorPage.onlineNow': '当前在线',
+
+    'userOverlay.open': '个人资料与状态',
+    'userOverlay.editProfile': '编辑个人资料',
 
     'risk.level.low': '中等',
     'risk.level.medium': '较高',
