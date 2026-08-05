@@ -256,6 +256,29 @@ def test_report_excludes_subject_not_in_current_plan(client):
     assert "История" not in subjects
 
 
+def test_report_shows_plan_subject_with_no_grades_yet(client):
+    """Живой баг: «в отчёте видны только предметы, по которым есть оценки». Предмет
+    НАЗНАЧЕН в группе (есть в действующем плане — assign_teacher/SubjectHours), но
+    ни одного занятия/оценки по нему ещё нет — раньше просто не появлялся в отчёте,
+    хотя куратору нужен именно сигнал «здесь пока пусто», а не тишина."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)   # план: {"Математика"}
+    conv_id = _ensure_channel(client, teach)
+    _seed_lesson_and_grade(client, admin, teach, "ИС-21", "Математика", "5")
+    #«Физика» назначена ДРУГОМУ преподавателю (в плане), но занятий по ней вообще нет.
+    make_teacher(client, admin, login="phys", subjects=["Физика"])
+    assign_teacher(client, admin, "teach:phys", "ИС-21", "Физика")
+
+    client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    rid = next(m["report"]["id"] for m in msgs if m["kind"] == "report")
+
+    r = client.get(f"/web/messenger/reports/{rid}", headers=ph)
+    assert r.status_code == 200, r.text
+    by_subject = {s["subject"]: s for s in r.json()["subjects"]}
+    assert set(by_subject) == {"Математика", "Физика"}
+    assert by_subject["Физика"] == {"subject": "Физика", "avg": 0, "percent": 0}
+
+
 def test_report_snapshot_excludes_lessons_after_cutoff(client):
     """«Вечная» граница: занятие, добавленное ПОСЛЕ создания отчёта, в него не попадает,
     даже если дата занятия попадает в прошлое (curator_report фильтрует по факту создания,

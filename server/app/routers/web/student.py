@@ -53,6 +53,15 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     subj_lessons = OrderedDict()
     for l in lessons:
         subj_lessons.setdefault(l.subject, []).append(l)
+    #⚠️ Живой баг («на Главной 2 предмета, в Журнале 4, в Статистике весь список») —
+    #список предметов Главной раньше был ЦЕЛИКОМ производным от `lessons` (какие
+    #предметы у СТУДЕНТА уже реально есть занятия), а статистика (`per_subject_
+    #with_plan`) досыпает предметы ДЕЙСТВУЮЩЕГО ПЛАНА без единого занятия — три экрана
+    #по одному и тому же студенту отвечали на «сколько у меня предметов» ПО-РАЗНОМУ.
+    #Досыпаем и здесь, тем же источником (`group_plan_subjects`) — предмет без единой
+    #пары получает cnt=0, а не пропадает из списка.
+    for subj in sorted(W.group_plan_subjects(db, user.group_name, cfg) - set(subj_lessons)):
+        subj_lessons[subj] = []
     subjects = []
     grades_total = 0
     lec_total = lec_present = 0
@@ -110,6 +119,13 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
     buckets = OrderedDict()
     for l in lessons:
         buckets.setdefault(l.subject, []).append(l)
+    #⚠️ Тот же живой баг, что и на Главной (см. student_overview): предмет ДЕЙСТВУЮЩЕГО
+    #плана без единого занятия должен быть ВИДЕН («по нему пока пусто»), а не пропадать
+    #из журнала молча — иначе три экрана снова расходятся в ответе на «сколько у меня
+    #предметов». В архиве план мог с тех пор замениться — не трогаем.
+    if not is_archive:
+        for subj in sorted(W.group_plan_subjects(db, user.group_name, cfg) - set(buckets)):
+            buckets[subj] = []
 
     subjects = []
     for subj, ls in buckets.items():

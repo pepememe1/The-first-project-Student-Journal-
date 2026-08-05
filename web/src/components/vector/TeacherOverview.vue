@@ -14,8 +14,8 @@
 // пороги ≥4 / 3–4 / <3, что и везде в продукте), а не «каждому предмету свой»: у
 // преподавателя предметов мало, а вопрос у него один — «где просело». Число стоит
 // рядом всегда, цвет ничего не сообщает в одиночку.
-import { ref, computed, onMounted } from 'vue'
-import { RotateCw, PieChart } from '@lucide/vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { RotateCw, PieChart, ChevronDown } from '@lucide/vue'
 import { teacherApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import TeacherSubjectsOverlay from '@/components/vector/TeacherSubjectsOverlay.vue'
@@ -45,6 +45,23 @@ function statusOf(avg) {
 }
 function width(avg) {
   return `${Math.max(2, Math.min(100, ((Number(avg) || 0) / MAX_SCORE) * 100))}%`
+}
+
+// Курируемые группы свёрнуты ПО УМОЛЧАНИЮ (живой отзыв 3.6.1): куратор ведёт группу
+// не сам, все её предметы сразу — это МНОГО текста на панели, который не нужен
+// каждый раз при открытии вкладки. Строка-сводка «N/M предметов заполнены» — сколько
+// предметов уже получили хоть одну оценку, а какие ещё пустые (то же наблюдение,
+// что и в самом отчёте куратора, § заполненность предмета) — и по клику раскрывается
+// список, тот же, что и у «своих» групп.
+const expandedCurator = reactive(new Set())
+function toggleCurator(group) {
+  if (expandedCurator.has(group)) expandedCurator.delete(group)
+  else expandedCurator.add(group)
+}
+function filledOf(g) {
+  const total = (g.subjects || []).length
+  const filled = (g.subjects || []).filter((s) => s.graded_students > 0).length
+  return { filled, total }
 }
 
 async function load() {
@@ -141,25 +158,35 @@ const hasData = computed(() => groups.value.length > 0 || curatorGroups.value.le
         </template>
 
         <!-- Курируемые группы — СО ВСЕМИ предметами (не только своими): куратор смотрит
-             группу целиком, это отдельная от преподавания роль (§role). -->
+             группу целиком, это отдельная от преподавания роль (§role). Свёрнуты по
+             умолчанию — раскрываются по клику на строку. -->
         <template v-if="curatorGroups.length">
           <p class="text-[11px] font-semibold uppercase tracking-wide text-text3">
             {{ locale.t('teacherOverview.curatedGroups', 'Курируемые группы') }}
           </p>
           <div v-for="g in curatorGroups" :key="'curator-' + g.group">
-            <div class="flex items-baseline justify-between gap-2">
-              <span class="min-w-0 truncate font-title text-sm font-bold text-text">{{ g.group }}</span>
-              <span class="shrink-0 font-title text-sm font-extrabold" :class="STATUS[statusOf(g.average)].text">
-                {{ g.average ? Number(g.average).toFixed(2) : '—' }}
+            <button type="button" class="flex w-full items-center gap-2 text-left"
+                    @click="toggleCurator(g.group)">
+              <span class="min-w-0 flex-1">
+                <span class="flex items-baseline justify-between gap-2">
+                  <span class="min-w-0 truncate font-title text-sm font-bold text-text">{{ g.group }}</span>
+                  <span class="shrink-0 font-title text-sm font-extrabold" :class="STATUS[statusOf(g.average)].text">
+                    {{ g.average ? Number(g.average).toFixed(2) : '—' }}
+                  </span>
+                </span>
+                <!-- Сводка вместо развёрнутого списка: сколько предметов ХОТЬ ЧТО-ТО
+                     получили от преподавателя, а не просто числятся в плане. -->
+                <span class="block text-[11px] text-text3">
+                  {{ locale.t('teacherOverview.subjectsFilled', { filled: filledOf(g).filled, total: filledOf(g).total }) }}
+                </span>
               </span>
-            </div>
-            <p class="mt-0.5 text-[11px] text-text3">
-              {{ locale.t('teacherOverview.studentsCount', { n: g.students }) }}
-            </p>
+              <ChevronDown class="size-4 shrink-0 text-text3 transition-transform"
+                           :class="expandedCurator.has(g.group) ? 'rotate-180' : ''" />
+            </button>
             <p v-if="g.at_risk" class="mt-1.5 rounded-md border border-red/30 bg-red/10 px-2 py-1 text-[11px] font-semibold text-red">
               🎓 {{ locale.t('teacherOverview.atRisk', { n: g.at_risk }) }}
             </p>
-            <ul class="mt-2 flex flex-col gap-2.5">
+            <ul v-if="expandedCurator.has(g.group)" class="mt-2 flex flex-col gap-2.5">
               <li v-for="s in g.subjects" :key="s.subject">
                 <div class="flex items-baseline justify-between gap-2">
                   <span class="min-w-0 truncate text-xs text-text2" :title="s.subject">{{ s.subject }}</span>

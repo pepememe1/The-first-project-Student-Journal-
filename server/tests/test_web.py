@@ -67,6 +67,31 @@ def test_student_journal_grouped_by_subject(client):
     assert {l["grade"] for l in subj["lessons"]} == {"5", "3"}
 
 
+def test_overview_and_journal_show_plan_subject_with_no_lessons_yet(client):
+    """Живой баг: «на Главной 2 предмета, в Журнале 4, в Статистике весь список» —
+    три экрана по-разному отвечали на «сколько у меня предметов». Предмет
+    ДЕЙСТВУЮЩЕГО плана без единого занятия обязан быть виден ВЕЗДЕ (не пропадать,
+    пока преподаватель не откроет журнал), а не только в статистике."""
+    admin = make_admin(client)
+    _seed(client, admin)   # план: {"Математика"} + 2 занятия
+    #Второй предмет ЕСТЬ в плане группы, но занятий по нему нет вовсе.
+    r = client.post("/sync/push", json={"changes": {
+        "groups": [{"id": "g:ИС-21", "name": "ИС-21", "subjects": ["Математика", "Физика"]}],
+    }}, headers=admin)
+    assert r.status_code == 200, r.text
+    h = _login(client, "stud1", "studpass1")
+
+    ov = client.get("/web/student/overview", headers=h).json()
+    assert {s["subject"] for s in ov["subjects"]} == {"Математика", "Физика"}
+    phys = next(s for s in ov["subjects"] if s["subject"] == "Физика")
+    assert phys["grades"] == 0
+
+    jr = client.get("/web/student/journal", headers=h).json()
+    assert {s["subject"] for s in jr["subjects"]} == {"Математика", "Физика"}
+    phys_j = next(s for s in jr["subjects"] if s["subject"] == "Физика")
+    assert phys_j["lessons"] == [] and phys_j["average"] == 0
+
+
 def test_student_cannot_access_teacher_view(client):
     admin = make_admin(client)
     _seed(client, admin)

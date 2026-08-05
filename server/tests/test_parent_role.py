@@ -106,6 +106,33 @@ def test_student_approval_opens_journal(client):
     assert r.json()["student"]["group"] == "ИС-21"
 
 
+def test_parent_journal_matches_student_subject_filter(client):
+    """Живой баг: /web/parent/journal собирал предметы прямо из Lesson, БЕЗ фильтра по
+    действующему плану группы (в отличие от student_journal, который эту дыру уже
+    закрывал) — родитель видел отменённые дисциплины со старыми оценками, хотя
+    докстринг эндпоинта прямо обещает «формат один в один» со студенческим."""
+    admin, sid, pid, link_id = _setup(client)
+    sh = _headers(client, "ivanova", "studpass1")
+    ph = _headers(client, "parent1", "parentpass1")
+    _approve(client, sh, link_id)
+
+    #Действующий план группы — только «Математика» (Group.subjects).
+    client.post("/sync/push", json={"changes": {
+        "groups": [{"id": "grp:ИС-21", "name": "ИС-21", "subjects": ["Математика"]}]}},
+        headers=admin)
+    #«История» — занятие и оценка РЕАЛЬНО есть, но предмета нет в плане группы.
+    client.post("/sync/push", json={"changes": {"lessons": [
+        {"id": "LH", "group_name": "ИС-21", "subject": "История", "type": "Практика",
+         "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
+    client.post("/sync/push", json={"changes": {"grades": [
+        {"id": "Иванова|Мария|LH", "student_f": "Иванова", "student_n": "Мария",
+         "lesson_id": "LH", "grade": "2"}]}}, headers=admin)
+
+    subjects = {s["subject"] for s in client.get("/web/parent/journal", headers=ph).json()["subjects"]}
+    assert "Математика" in subjects
+    assert "История" not in subjects
+
+
 def test_student_can_revoke_consent_later(client):
     """Согласие на обработку своих данных отзывается в любой момент — кнопка у студента."""
     _admin, _sid, _pid, link_id = _setup(client)

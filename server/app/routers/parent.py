@@ -127,7 +127,15 @@ def parent_journal(student_id: str = Query(""), year: str = Query(""), semester:
     cfg = W.load_config(db)
     from .web import _resolve_term
     ty, ts = _resolve_term(cfg, year, semester)
-    lessons = W.group_lessons(db, child.group_name, year=ty, semester=ts)
+    is_archive = bool((year or "").strip() and semester)
+    #⚠️ Живой баг (найден у студента, здесь была ТА ЖЕ дыра, только эта функция её ещё
+    #не получала вовсе): без current_subject_lessons предмет, УБРАННЫЙ из плана группы,
+    #продолжал висеть в журнале родителя со старыми занятиями — тот же скоуп, что и у
+    #student_journal (см. её докстринг), иначе «формат один в один» из докстрина этой
+    #функции был бы неправдой.
+    lessons = W.current_subject_lessons(
+        db, child.group_name,
+        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive)
     records = W.student_records(db, child.surname, child.name, child.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
 
@@ -135,6 +143,11 @@ def parent_journal(student_id: str = Query(""), year: str = Query(""), semester:
     buckets = OrderedDict()
     for l in lessons:
         buckets.setdefault(l.subject, []).append(l)
+    #Тот же живой баг, что и на Главной/Журнале студента: предмет ДЕЙСТВУЮЩЕГО плана
+    #без единого занятия должен быть виден («по нему пока пусто»), не пропадать молча.
+    if not is_archive:
+        for subj in sorted(W.group_plan_subjects(db, child.group_name, cfg) - set(buckets)):
+            buckets[subj] = []
 
     subjects = []
     for subj, ls in buckets.items():

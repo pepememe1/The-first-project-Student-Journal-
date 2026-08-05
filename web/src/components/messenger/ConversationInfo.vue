@@ -13,6 +13,7 @@ import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
+import SharedGroupsChannels from '@/components/messenger/SharedGroupsChannels.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
@@ -68,6 +69,11 @@ const isGroupOrChannel = computed(() => ['group', 'channel'].includes(kind.value
 const isSaved = computed(() => kind.value === 'saved')
 const people = computed(() => activeInfo.value?.participants || [])
 const ownerId = computed(() => activeInfo.value?.owner_id || '')
+// ЛС с реальным собеседником — карточка профиля ТЕПЕРЬ полноценная (3.6.1), с правой
+// колонкой «Общие группы/каналы» по аналогии с PeerProfileModal — модалке нужно больше
+// места. Остальные случаи (список участников группы/канала, «Избранное», модерация)
+// остаются в прежней узкой ширине.
+const wide = computed(() => !isGroupOrChannel.value && !isSaved.value && !isModeration.value && !!activePeer.value)
 
 const KIND_RU = computed(() => ({
   group: locale.t('messenger.groupLabel', 'Группа'),
@@ -151,7 +157,8 @@ async function clearHistory() {
 <template>
   <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
-    <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card shadow-card">
+    <div class="flex max-h-[85vh] w-full flex-col rounded-xl border border-border2 bg-card shadow-card"
+         :class="wide ? 'max-w-3xl' : 'max-w-md'">
       <!-- Шапка -->
       <div class="flex items-center gap-2 border-b border-border p-4">
         <component :is="kind === 'channel' ? Radio : (isModeration ? ShieldCheck : Users)"
@@ -175,7 +182,30 @@ async function clearHistory() {
         </button>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto p-4">
+      <!-- ЛС с реальным собеседником — flex-строка: карточка профиля СЛЕВА (скроллится
+           отдельно), «Общие группы/каналы» СПРАВА (§5.4, 3.6.1 — по аналогии с
+           PeerProfileModal, заказчик прямо просил). Остальные случаи (переименование,
+           «Избранное», модерация, список участников группы/канала) — как раньше, в
+           обычной колонке с отступом p-4. -->
+      <div v-if="wide" class="flex min-h-0 flex-1">
+        <div class="min-w-0 flex-1 overflow-y-auto p-4">
+          <!-- §5.4 (живой отзыв 3.6.1): в ЛС карточка собеседника ЭТО ЖЕ полноценная
+               Discord-style PeerProfileCard (баннер/аватар/«о себе»/заметка), а не её
+               урезанная копия за вторым кликом — та версия оставалась только для
+               УЧАСТНИКОВ ГРУППЫ/КАНАЛА ниже (там «очистить историю»/«удалить
+               переписку» этого конкретного человека не имеют смысла, а здесь беседа и
+               есть личный чат с ним же). -->
+          <PeerProfileCard :peer-data="activePeer" @messaged="emit('close')" />
+          <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
+          <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
+            <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
+            {{ locale.t('conversationInfo.notHereShort', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
+          </div>
+        </div>
+        <SharedGroupsChannels :user-id="activePeer.id" class="hidden sm:block" @navigate="emit('close')" />
+      </div>
+
+      <div v-else class="min-h-0 flex-1 overflow-y-auto p-4">
         <!-- §D6: форма переименования -->
         <div v-if="editing" class="mb-4 space-y-2 rounded-lg border border-border2 bg-card2 p-3">
           <input v-model="titleDraft" :placeholder="locale.t('conversationInfo.namePlaceholder', 'Название')" maxlength="120"
@@ -192,7 +222,6 @@ async function clearHistory() {
         </div>
         <p v-if="activeInfo?.about" class="mb-4 text-sm text-text2">{{ activeInfo.about }}</p>
 
-        <!-- Личный чат: карточка собеседника с его плашкой и «О себе» -->
         <!-- В «Избранном» карточки «собеседника» нет: это ты сам. -->
         <p v-if="isSaved" class="text-sm text-text2">
           {{ locale.t('conversationInfo.savedHint1', 'Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда') }}
@@ -206,20 +235,6 @@ async function clearHistory() {
           </div>
           {{ locale.t('conversationInfo.modText', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.') }}
         </div>
-        <template v-else-if="!isGroupOrChannel && activePeer">
-          <!-- §5.4 (живой отзыв 3.6.1): в ЛС карточка собеседника ЭТО ЖЕ полноценная
-               Discord-style PeerProfileCard (баннер/аватар/«о себе»/заметка), а не её
-               урезанная копия за вторым кликом — та версия оставалась только для
-               УЧАСТНИКОВ ГРУППЫ/КАНАЛА ниже (там «очистить историю»/«удалить
-               переписку» этого конкретного человека не имеют смысла, а здесь беседа и
-               есть личный чат с ним же). -->
-          <PeerProfileCard :peer-data="activePeer" @messaged="emit('close')" />
-          <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
-          <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
-            <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
-            {{ locale.t('conversationInfo.notHereShort', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
-          </div>
-        </template>
 
         <!-- Группа/канал: участники, владелец сверху и с короной -->
         <template v-else-if="isGroupOrChannel">
