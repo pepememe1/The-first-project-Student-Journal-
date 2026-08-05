@@ -56,9 +56,15 @@ function categoryLabel(key) {
   return categories.value.find((c) => c.key === key)?.label || key
 }
 
-// ── Учебный период + перевод на курс (rollover) ─────────────────────────────────
+// ── Учебный период (только чтение) ────────────────────────────────────────────
+// ⚠️ Живой баг (3.6.1): ручной «⏭ Перевод на курс» ЗДЕСЬ и породил всю пачку
+// расхождений «курс группы по расписанию vs по плану» — им один раз воспользовались
+// раньше времени, термин в конфиге разошёлся с реальной датой, и это не было видно
+// нигде в интерфейсе. Термин ТЕПЕРЬ считается ИСКЛЮЧИТЕЛЬНО по дате сервера
+// (server/app/db.py::default_term, граница — 1 сентября), кнопка ручного перевода
+// убрана из интерфейса совсем — здесь остаётся только пояснительная надпись, какой
+// период сейчас действует, без возможности его сдвинуть отсюда.
 const currentTerm = ref(null)
-const rolling = ref(false)
 // Сезон/период — общая помощь для всех мест, где семестр показывается человеку
 // (бейдж периода, окно часов, сводка импорта ВСГУТУ) — раньше форма собиралась
 // инлайн-тернарником в каждом месте по отдельности.
@@ -68,24 +74,6 @@ function seasonLabel(semester) {
 function termLabel(t) { return t ? locale.t('adminGroups.termLabel', { year: t.year, semester: seasonLabel(t.semester) }) : '' }
 async function loadTerm() {
   try { currentTerm.value = (await termsApi.list()).data.current } catch { /* */ }
-}
-async function rollover() {
-  const next = currentTerm.value?.semester === 1
-    ? locale.t('adminGroups.nextSpring', 'весенний семестр')
-    : locale.t('adminGroups.nextFallNextYear', 'осенний семестр следующего года')
-  const ok = await confirm({
-    title: locale.t('adminGroups.rolloverConfirmTitle', { next }),
-    message: locale.t('adminGroups.rolloverConfirmMessage', 'Текущий семестр станет архивом (только чтение), новый — активным. Группы и студенты сохранятся, оценки нового семестра — с чистого листа.'),
-    okText: locale.t('adminGroups.rolloverConfirmOk', 'Перевести'),
-  })
-  if (!ok) return
-  rolling.value = true
-  try {
-    const r = (await adminApi.rolloverTerm()).data
-    currentTerm.value = r.current
-    toast.success(locale.t('adminGroups.rolloverDone', { term: termLabel(r.current) }))
-  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.rolloverFailed', 'Не удалось перевести')) }
-  finally { rolling.value = false }
 }
 
 async function reload() {
@@ -384,9 +372,6 @@ async function importParsed() {
         <span class="text-text3">{{ locale.t('adminGroups.currentTermLabel', 'Учебный период:') }}</span>
         <Badge variant="green">{{ termLabel(currentTerm) }}</Badge>
       </div>
-      <AppButton variant="ghost" size="sm" :disabled="rolling" @click="rollover">
-        {{ rolling ? locale.t('adminGroups.rollingBtn', 'Перевод…') : locale.t('adminGroups.rolloverBtn', '⏭ Перевод на курс') }}
-      </AppButton>
       <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
         {{ importing ? locale.t('adminGroups.updatingBtn', 'Обновление…') : locale.t('adminGroups.updateGroupsBtn', 'Обновить группы') }}
       </AppButton>
