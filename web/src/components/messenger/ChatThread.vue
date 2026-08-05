@@ -25,6 +25,7 @@ import MessageActionsOverlay from './MessageActionsOverlay.vue'
 import ReportDialog from './ReportDialog.vue'
 import ForwardPicker from './ForwardPicker.vue'
 import ConversationInfo from './ConversationInfo.vue'
+import PeerProfileModal from './PeerProfileModal.vue'
 import MascotCooldown from './MascotCooldown.vue'
 import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
@@ -191,12 +192,29 @@ function quoted(id) {
 // §D1: рендер тела сообщения (Markdown-lite → безопасный HTML для v-html).
 // §D8: подсветка @Фамилия/@!Фамилия — визуальная, ПОСЛЕ Markdown (безопасно: результат
 // markdownLite уже экранирован, «@Слово» — обычный текст ни в одном из вставленных тегов).
+// Отметка → user_id, ТЕМ ЖЕ способом, что сервер (_parse_mentions в routers/messenger.py):
+// по ПЕРВОМУ слову ФИО, регистронезависимо. Строим карту из participants ЭТОЙ беседы —
+// тех же, что уже приезжают в conversation_info для автодополнения (mentionCandidates).
+const mentionUidBySurname = computed(() => {
+  const map = new Map()
+  for (const p of (activeInfo.value?.participants || [])) {
+    const first = (p.full_name || '').trim().split(/\s+/)[0]
+    if (first) map.set(first.toLowerCase(), p.user_id)
+  }
+  return map
+})
+
 function renderBody(msg) {
   const html = renderMarkdownLite(msg.body, isChannel.value)
   //Подсвечиваем ВСЕ формы отметки, включая «/@» и «/@!» — иначе тихий и громкий пинги
   //в ленте выглядели обычным текстом со слэшем. Набор форм — как у сервера (_MENTION_RE).
-  return html.replace(/\/?(?:@!?|!@)[A-Za-zА-Яа-яЁё]+/g,
-                      (hit) => `<span class="mention">${hit}</span>`)
+  // Клик по плашке открывает профиль отмеченного (см. onBodyClick) — уже отметку
+  // сопоставили с user_id прямо здесь, чтобы не таскать это состояние отдельно.
+  return html.replace(/(\/?(?:@!?|!@))([A-Za-zА-Яа-яЁё]+)/g, (hit, _prefix, name) => {
+    const uid = mentionUidBySurname.value.get(name.toLowerCase())
+    return uid ? `<span class="mention" data-mention-uid="${uid}">${hit}</span>`
+               : `<span class="mention">${hit}</span>`
+  })
 }
 
 // Фаза 1 ссылок/видео (docs/MESSENGER-ATTACHMENTS-PLAN.md): клик по обычной ссылке в теле
@@ -204,6 +222,12 @@ function renderBody(msg) {
 // перед уходом с сайта, как договорились (видео из белого списка сюда не попадают —
 // они рендерятся ОТДЕЛЬНОЙ карточкой ниже, см. videoEmbeds()).
 async function onBodyClick(e) {
+  // Отметка — раньше просто подсветка, теперь ведёт на профиль отмеченного (как клик по
+  // участнику в ConversationInfo). Проверяем ДО ссылок: разметка не пересекается, но
+  // порядок проверки не имеет значения — просто первым делом.
+  const mention = e.target.closest('.mention[data-mention-uid]')
+  if (mention) { mentionProfileId.value = mention.dataset.mentionUid; return }
+
   const a = e.target.closest('a[data-external-link]')
   if (!a) return
   e.preventDefault()
@@ -215,6 +239,7 @@ async function onBodyClick(e) {
   })
   if (ok) window.open(url, '_blank', 'noopener,noreferrer')
 }
+const mentionProfileId = ref('')
 
 // Видео из белого списка (YouTube/VK/Rutube) — отдельная карточка ПОД текстом сообщения
 // (v-html статичен и не даёт повесить Vue-обработчик внутрь), плеер виден сразу.
@@ -1392,6 +1417,8 @@ const peerNameFont = computed(() =>
 
     <!-- «О беседе»: профиль собеседника / участники группы с владельцем -->
     <ConversationInfo v-if="showInfo" @close="showInfo = false" />
+    <!-- Клик по отметке "@Фамилия"/"/@Фамилия"/"/@!Фамилия" в теле сообщения (см. onBodyClick) -->
+    <PeerProfileModal v-if="mentionProfileId" :user-id="mentionProfileId" @close="mentionProfileId = ''" />
 
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
     <!-- §12: оверлей отчёта куратора (круговая + плоские по предметам + дрилл-даун). -->
@@ -1439,4 +1466,5 @@ const peerNameFont = computed(() =>
 .msg-body :deep(ul) { margin: 2px 0 2px 1.1em; list-style: disc; }
 /* §D8: подсветка упоминаний — заметно, но не спорит с цветом текста своих/чужих пузырей. */
 .msg-body :deep(.mention) { font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.msg-body :deep(.mention[data-mention-uid]) { cursor: pointer; }
 </style>

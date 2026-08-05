@@ -231,6 +231,38 @@ def test_group_zet_report_sorts_not_ready_first(client):
     assert students[1]["eligible"] is True and students[1]["missing_zet"] == 0.0
 
 
+def test_group_zet_report_includes_per_subject_breakdown(client):
+    """CuratorView (3.6.1) показывает earned/zet ОДНОГО выбранного предмета (выпадающий
+    список сверху), а не только сумму по всем — эта пара обязана прийти В КАЖДОЙ строке
+    отчёта, чтобы фронт не ходил на сервер повторно при переключении предмета."""
+    admin = make_admin(client)
+    _group(client, admin)
+    make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    make_teacher(client, admin, login="teacher2", subjects=["Физика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
+    assign_teacher(client, admin, "teach:teacher2", "ИС-21", "Физика")
+    _set_zet(client, admin, "ИС-21", "Математика", 2.0)
+    _set_zet(client, admin, "ИС-21", "Физика", 3.0)
+    _student(client, admin, login="ivanova", surname="Иванова", name="Мария")
+    _push_lesson(client, admin, "E1", "ИС-21", "Математика", "Экзамен")
+    _push_grade(client, admin, "E1", "Иванова", "Мария", "4 (Зачтено)")
+    _push_lesson(client, admin, "E2", "ИС-21", "Физика", "Экзамен")
+    _push_grade(client, admin, "E2", "Иванова", "Мария", "2 (Не зачтено)")
+
+    curator = make_teacher(client, admin, login="curator1", subjects=["Математика"])
+    client.put("/web/admin/teachers/curator1", json={"curated_groups": ["ИС-21"]},
+              headers=admin)
+    r = client.get("/web/curator/zet-report?group=ИС-21", headers=curator)
+    assert r.status_code == 200, r.text
+    row = r.json()["students"][0]
+    assert row["earned"] == 2.0 and row["total"] == 5.0   # общая сумма — как раньше
+    by_subject = {x["subject"]: x for x in row["subjects"]}
+    assert by_subject["Математика"] == {"subject": "Математика", "zet": 2.0,
+                                        "earned": 2.0, "passed": True}
+    assert by_subject["Физика"] == {"subject": "Физика", "zet": 3.0,
+                                    "earned": 0.0, "passed": False}
+
+
 def test_promote_accepts_eligible_and_rejects_not_eligible(client):
     admin = make_admin(client)
     _group(client, admin)

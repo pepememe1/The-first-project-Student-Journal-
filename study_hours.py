@@ -124,7 +124,12 @@ def group_zet_report(students, min_zet) -> list:
     "display_name", "summary": <результат zet_summary()>}]. min_zet — порог
     (ZetThreshold.min_zet) или None (порог не задан — тогда все eligible).
     Сортировка: сначала НЕ готовые (eligible=False), внутри — по earned по возрастанию
-    (меньше набравшие — выше, они нуждаются в внимании куратора в первую очередь)."""
+    (меньше набравшие — выше, они нуждаются в внимании куратора в первую очередь).
+
+    `subjects` в каждой строке — сырой per-subject список из zet_summary() (earned/zet
+    по каждому предмету отдельно), а НЕ только агрегат earned/total: куратор выбирает
+    ОДИН предмет в выпадающем списке над таблицей, и фронт сам достаёт из этого списка
+    нужную пару без второго похода на сервер при переключении предмета."""
     out = []
     for s in students:
         summ = s["summary"]
@@ -135,6 +140,7 @@ def group_zet_report(students, min_zet) -> list:
             "eligible": eligible,
             "missing_zet": round((min_zet or 0) - summ["earned"], 1) if not eligible else 0.0,
             "unsatisfied": [x["subject"] for x in summ["subjects"] if not x["passed"]],
+            "subjects": summ["subjects"],
         })
     out.sort(key=lambda x: (x["eligible"], x["earned"]))
     return out

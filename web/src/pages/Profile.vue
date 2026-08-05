@@ -3,7 +3,7 @@
 // заготовки под эффекты/рамку, стиль никнейма), посередине — ЖИВОЙ предпросмотр, который
 // и есть та самая карточка, что видят другие (PeerProfileCard editable — общий компонент
 // с «чужим» профилем в мессенджере, см. его докстринг). Ниже — уведомления, как раньше.
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useProfileStore } from '@/stores/profile'
 import { useLocaleStore } from '@/stores/locale'
 import { PRESETS } from '@/theme/palette'
@@ -12,7 +12,7 @@ import { useAuthStore } from '@/stores/auth'
 import Card from '@/components/ui/Card.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
-import { Camera, Check, Sparkles, SquareDashed } from '@lucide/vue'
+import { Camera, Check, ChevronDown, Sparkles, SquareDashed } from '@lucide/vue'
 
 const auth = useAuthStore()
 const profile = useProfileStore()
@@ -20,7 +20,13 @@ const locale = useLocaleStore()
 const cardRef = ref(null)
 
 async function pickColor(id) { await profile.saveProfile({ color: id }) }
-async function pickFont(id) { await profile.saveProfile({ font: id }) }
+async function pickFont(id) { await profile.saveProfile({ font: id }); fontMenuOpen.value = false }
+
+// Стиль никнейма (3.6.1): свёрнуто — видна только ВЫБРАННАЯ строка, разворачивается по
+// клику в список всех вариантов (как MyStatusPicker.vue) — раньше все 7 вариантов висели
+// развёрнутым списком всегда, и карточка занимала половину левой колонки без необходимости.
+const fontMenuOpen = ref(false)
+const currentFont = computed(() => NAME_FONTS.find((f) => f.id === profile.font) || NAME_FONTS[0])
 </script>
 
 <template>
@@ -50,21 +56,36 @@ async function pickFont(id) { await profile.saveProfile({ font: id }) }
           </div>
         </Card>
 
-        <!-- Стиль никнейма: список шрифтов, КАЖДЫЙ пункт написан ЭТИМ ЖЕ шрифтом текущим
-             именем пользователя — так видно результат ДО выбора, не после сохранения. -->
+        <!-- Стиль никнейма: свёрнуто показываем ТОЛЬКО выбранный вариант, написанный ЭТИМ
+             ЖЕ шрифтом текущим именем — клик по строке разворачивает список остальных
+             (тот же приём, что MyStatusPicker.vue: кнопка + абсолютный список + фоновая
+             подложка, закрывающая список по клику мимо). -->
         <Card :title="locale.t('profile.nameFont', 'Стиль никнейма')" :subtitle="locale.t('profile.nameFontHint', 'Видно всем — в сообщениях и в вашем профиле')">
-          <div class="space-y-1">
-            <button v-for="f in NAME_FONTS" :key="f.id" type="button" @click="pickFont(f.id)"
-                    class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
-                    :class="profile.font === f.id ? 'border-accent bg-accent-glow' : 'border-border2 hover:bg-bg2'">
+          <div class="relative">
+            <button type="button" @click="fontMenuOpen = !fontMenuOpen"
+                    class="flex w-full items-center justify-between gap-2 rounded-lg border border-border2 px-3 py-2 text-left transition-colors hover:bg-bg2">
               <span class="min-w-0 flex-1">
-                <span class="block truncate text-base text-text" :style="{ fontFamily: f.family }">
-                  {{ auth.user?.name || f.label }}
+                <span class="block truncate text-base text-text" :style="{ fontFamily: currentFont.family }">
+                  {{ auth.user?.name || currentFont.label }}
                 </span>
-                <span class="text-[11px] text-text3">{{ f.label }}</span>
+                <span class="text-[11px] text-text3">{{ currentFont.label }}</span>
               </span>
-              <Check v-if="profile.font === f.id" class="size-4 shrink-0 text-accent" />
+              <ChevronDown class="size-4 shrink-0 text-text3 transition-transform" :class="fontMenuOpen ? 'rotate-180' : ''" />
             </button>
+            <div v-if="fontMenuOpen" class="absolute inset-x-0 top-full z-20 mt-1 space-y-1 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
+              <button v-for="f in NAME_FONTS" :key="f.id" type="button" @click="pickFont(f.id)"
+                      class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
+                      :class="profile.font === f.id ? 'border-accent bg-accent-glow' : 'border-border2 hover:bg-bg2'">
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-base text-text" :style="{ fontFamily: f.family }">
+                    {{ auth.user?.name || f.label }}
+                  </span>
+                  <span class="text-[11px] text-text3">{{ f.label }}</span>
+                </span>
+                <Check v-if="profile.font === f.id" class="size-4 shrink-0 text-accent" />
+              </button>
+            </div>
+            <div v-if="fontMenuOpen" class="fixed inset-0 z-10" @click="fontMenuOpen = false" />
           </div>
         </Card>
 

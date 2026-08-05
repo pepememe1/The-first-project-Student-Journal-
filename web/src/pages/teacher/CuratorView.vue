@@ -4,7 +4,7 @@
 // ТОЛЬКО НА ЧТЕНИЕ: группа → предмет → студенты с оценками и средним. Данные — из
 // role-scoped /web/curator/* (сервер проверяет group ∈ curated_groups).
 import { ref, computed, watch, onMounted } from 'vue'
-import { curatorApi, adminApi, termsApi } from '@/api/endpoints'
+import { curatorApi, adminApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import RiskBadge from '@/components/ui/RiskBadge.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -41,20 +41,17 @@ async function loadZetReport() {
   zetLoading.value = true
   selectedForPromote.value = []
   try {
-    zetReport.value = (await curatorApi.zetReport(group.value, termParams())).data
+    zetReport.value = (await curatorApi.zetReport(group.value)).data
     zetThresholdDraft.value = zetReport.value.min_zet ?? ''
   } catch { zetReport.value = null } finally { zetLoading.value = false }
 }
-// ⚠️ Наблюдатель за ЗЕТ-отчётом заводится НИЖЕ, после объявления `term` (см. конец
-// блока «Учебный период»). Здесь его быть не может: `const term` не поднимается, и
-// обращение к нему выше объявления валит ВЕСЬ setup — вкладка «Курирование» открывалась
-// пустой страницей, а не «нет данных».
+watch([group, viewMode], () => { if (viewMode.value === 'zet') loadZetReport() })
 
 async function saveThreshold() {
   const v = zetThresholdDraft.value
   try {
     await adminApi.setZetThreshold({
-      group: group.value, ...termParams(),
+      group: group.value,
       min_zet: (v === '' || v === null) ? null : Number(v),
     })
     toast.success(locale.t('curatorView.thresholdSaved', 'Порог сохранён'))
@@ -81,7 +78,7 @@ async function doPromote() {
   promoting.value = true
   try {
     const r = await adminApi.promoteGroup({
-      group: group.value, ...termParams(), student_ids: selectedForPromote.value,
+      group: group.value, student_ids: selectedForPromote.value,
     })
     toast.success(locale.t('curatorView.promotedToast', { n: r.data.promoted.length }))
     await loadZetReport()
@@ -89,41 +86,9 @@ async function doPromote() {
   finally { promoting.value = false }
 }
 
-// Учебный период (архив прошлых семестров)
-const terms = ref([])
-const term = ref(null)
-const currentTerm = ref(null)
-const isArchive = computed(() => term.value && currentTerm.value &&
-  (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
-function termLabel(t) {
-  if (!t) return ''
-  const sem = t.semester === 1
-    ? locale.t('curatorView.termAutumn', 'осенний')
-    : locale.t('curatorView.termSpring', 'весенний')
-  return locale.t('curatorView.termLabelFormat', { year: t.year, semester: sem })
-}
-function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
-function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
-function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
-
-//Здесь, а не рядом с `loadZetReport`: наблюдателю нужен уже объявленный `term`.
-watch([group, term, viewMode], () => { if (viewMode.value === 'zet') loadZetReport() })
-
 onMounted(async () => {
   try { groups.value = (await curatorApi.groups()).data.groups || [] } catch { groups.value = [] }
   group.value = groups.value[0] || ''
-  try {
-    const t = (await termsApi.list()).data
-    currentTerm.value = t.current
-    const all = (t.terms || []).slice()
-    if (!all.some((x) => x.year === t.current.year && x.semester === t.current.semester)) all.unshift(t.current)
-    terms.value = all
-    term.value = t.current
-  } catch { /* */ }
-  // Загрузку предметов вызываем ЯВНО, когда И группа, И термин уже выставлены. Раньше
-  // это делал только watch([group, term]) — но group и term задаются в разные моменты
-  // (между ними await termsApi), и предметы грузились в гонке с ещё не готовым термином,
-  // из-за чего вкладка показывала «нет предметов» даже при наличии занятий.
   await loadSubjects()
   //Риск грузим сразу: счётчик на вкладке должен быть правдой с первого показа страницы.
   loadRisk()
@@ -133,11 +98,11 @@ async function loadSubjects() {
   subjects.value = []; subject.value = ''; data.value = null
   if (!group.value) return
   try {
-    subjects.value = (await curatorApi.subjects(group.value, termParams())).data.subjects || []
+    subjects.value = (await curatorApi.subjects(group.value)).data.subjects || []
     subject.value = subjects.value[0] || ''
   } catch { subjects.value = [] }
 }
-watch([group, term], loadSubjects, { immediate: false })
+watch(group, loadSubjects)
 
 async function loadRisk() {
   riskReport.value = null
@@ -162,7 +127,7 @@ watch(group, loadRisk)
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
   loading.value = true
-  try { data.value = (await curatorApi.groupSubject(group.value, subject.value, termParams())).data }
+  try { data.value = (await curatorApi.groupSubject(group.value, subject.value)).data }
   catch { data.value = null } finally { loading.value = false }
 }
 watch(subject, load)
@@ -183,7 +148,7 @@ async function loadSubgroupInfo() {
   subgroupLoading.value = true
   const forKey = `${group.value}|${subject.value}`
   try {
-    const r = (await curatorApi.subgroups(group.value, subject.value, termParams())).data
+    const r = (await curatorApi.subgroups(group.value, subject.value)).data
     if (`${group.value}|${subject.value}` !== forKey) return
     subgroupInfo.value = r
   } catch { subgroupInfo.value = null } finally { subgroupLoading.value = false }
@@ -194,7 +159,7 @@ async function toggleSplit(on) {
   if (!group.value || !subject.value) return
   splitToggling.value = true
   try {
-    await curatorApi.setSubjectSplit(group.value, subject.value, on, termParams())
+    await curatorApi.setSubjectSplit(group.value, subject.value, on)
     await loadSubgroupInfo()
     if (!on) toast.success(locale.t('curatorView.splitDisabled', 'Раздельное обучение выключено'))
   } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.splitToggleFailed', 'Не удалось изменить')) }
@@ -209,12 +174,20 @@ function openSubgroups() {
 async function saveSubgroupDraft() {
   subgroupSaving.value = true
   try {
-    await curatorApi.saveSubgroups(group.value, subject.value, subgroupDraft.value, termParams())
+    await curatorApi.saveSubgroups(group.value, subject.value, subgroupDraft.value)
     toast.success(locale.t('curatorView.subgroupsSaved', 'Подгруппы сохранены'))
     showSubgroups.value = false
     await loadSubgroupInfo()
   } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.subgroupsSaveFailed', 'Не удалось сохранить')) }
   finally { subgroupSaving.value = false }
+}
+
+// Ту же таблицу дают ЗЕТ-отчёт: earned/zet ПО ВЫБРАННОМУ предмету (общий выпадающий
+// список сверху, тот же, что у вкладки «Журнал»), а не сумма по всем сразу — она
+// осталась отдельной колонкой «Всего ЗЕТ». Предмет без заданного ЗЕТ (или ещё не
+// выбран) в `subjects` этого студента просто отсутствует — тогда «—».
+function subjectZetOf(s) {
+  return (s.subjects || []).find((x) => x.subject === subject.value) || null
 }
 
 function gradeClass(v) {
@@ -253,7 +226,7 @@ async function exportReport(fmt) {
     // 'all' — когда выбраны все курируемые (короче URL и понятнее в аудите).
     const scope = pickedGroups.value.length === groups.value.length
       ? 'all' : pickedGroups.value.join(',')
-    const { data: blob } = await curatorApi.report(scope, fmt, termParams())
+    const { data: blob } = await curatorApi.report(scope, fmt)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -283,11 +256,6 @@ async function exportReport(fmt) {
                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52">
           <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
         </select>
-        <select v-if="terms.length" :value="termKey(term)" @change="selectTerm($event.target.value)"
-                class="h-10 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent"
-                :class="isArchive ? 'border-orange text-orange' : ''">
-          <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
-        </select>
         <button class="flex h-10 items-center gap-1.5 rounded-sm border border-accent bg-accent/10 px-3 text-sm font-medium text-accent hover:bg-accent/20 sm:ml-auto"
                 @click="openExport">
           📊 {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
@@ -297,8 +265,8 @@ async function exportReport(fmt) {
       <!-- Раздельное обучение (§ролей, 3.6.1): куратор включает здесь, второй преподаватель
            занимается в редакторе часов группы (админка), подгруппы — кнопкой ниже. -->
       <div v-if="subject && !subgroupLoading" class="flex flex-wrap items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2">
-        <label class="flex cursor-pointer items-center gap-2 text-sm text-text" :class="isArchive ? 'opacity-60' : ''">
-          <input type="checkbox" :checked="!!subgroupInfo?.split" :disabled="splitToggling || isArchive"
+        <label class="flex cursor-pointer items-center gap-2 text-sm text-text">
+          <input type="checkbox" :checked="!!subgroupInfo?.split" :disabled="splitToggling"
                  @change="toggleSplit($event.target.checked)" />
           {{ locale.t('curatorView.splitCheckbox', 'Раздельное обучение') }}
         </label>
@@ -482,9 +450,13 @@ async function exportReport(fmt) {
               <tr class="border-b-2 border-accent bg-bg2 text-text2">
                 <th class="w-8 px-3 py-2"></th>
                 <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colStudent', 'Студент') }}</th>
-                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colEarned', 'Набрано') }}</th>
+                <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">
+                  {{ locale.t('curatorView.colEarned', 'Набрано') }}
+                  <div v-if="subject" class="truncate text-[11px] font-normal normal-case text-text3">{{ subject }}</div>
+                </th>
                 <th class="px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colMissing', 'Не хватает') }}</th>
                 <th class="px-3 py-2 text-left text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colUnsatisfied', 'Несданные предметы') }}</th>
+                <th class="border-l-2 border-accent/20 px-3 py-2 text-right text-tiny font-semibold uppercase tracking-wide">{{ locale.t('curatorView.colTotalZet', 'Всего ЗЕТ') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -498,9 +470,13 @@ async function exportReport(fmt) {
                   <span :class="s.eligible ? 'text-accent' : 'text-red'">{{ s.eligible ? '✅' : '❌' }}</span>
                   {{ s.display_name }}
                 </td>
-                <td class="px-3 py-2 text-right text-text2">{{ s.earned }}/{{ s.total }}</td>
+                <td class="px-3 py-2 text-right text-text2">
+                  <template v-if="subjectZetOf(s)">{{ subjectZetOf(s).earned }}/{{ subjectZetOf(s).zet }}</template>
+                  <span v-else class="text-text3">—</span>
+                </td>
                 <td class="px-3 py-2 text-right" :class="s.eligible ? 'text-text3' : 'text-red'">{{ s.eligible ? '—' : s.missing_zet }}</td>
                 <td class="px-3 py-2 text-xs text-text3">{{ s.unsatisfied.join(', ') || '—' }}</td>
+                <td class="border-l-2 border-accent/20 px-3 py-2 text-right text-text3">{{ s.earned }}/{{ s.total }}</td>
               </tr>
             </tbody>
           </table>

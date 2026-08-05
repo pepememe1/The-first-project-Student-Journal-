@@ -78,12 +78,67 @@ async function load() {
 }
 watch([group, subject], load)
 
+// ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
+// owned_subgroups: [1] или [2] — препод ведёт только свою (кнопок нет, всё неявно под
+// неё); [1,2] — ведёт ОБЕ (маленький класс либо единственный назначенный) — тогда
+// показываем 1ПГ/2ПГ/Совместно, и переключение фильтрует И ростер, И колонки занятий —
+// иначе таблица выбранной подгруппы всё равно показывала бы чужих студентов сплошными
+// прочерками (живой отзыв: «должны показываться студенты ЭТИХ подгрупп»).
+const splitOwned = computed(() => data.value?.split?.owned_subgroups || [])
+const hasSubgroupButtons = computed(() => splitOwned.value.length === 2)
+// Подгруппа нового занятия/текущего вида: если кнопок нет, но предмет разделён —
+// единственная своя; если кнопок нет и предмет не разделён — 0 (обычное занятие,
+// сервер её всё равно проигнорирует, но не подставлять произвольное число чище).
+const activeSubgroup = ref(0)
+watch(splitOwned, (owned) => {
+  activeSubgroup.value = owned.length === 1 ? owned[0] : 0
+}, { immediate: true })
+
+function subgroupLabel(n) {
+  return n === 1 ? locale.t('teacherJournal.subgroup1', '1ПГ')
+       : n === 2 ? locale.t('teacherJournal.subgroup2', '2ПГ') : ''
+}
+async function pickSubgroup(n) {
+  if (n === 0) {
+    const ok = await confirm({
+      title: locale.t('teacherJournal.combinedConfirmTitle', 'Совместное занятие'),
+      message: locale.t('teacherJournal.combinedConfirmMessage',
+        'Занятие будет создано СРАЗУ для обеих подгрупп (общая лекция/задание). Продолжить?'),
+      okText: locale.t('teacherJournal.combinedConfirmOk', 'Да, совместное'),
+    })
+    if (!ok) return
+  }
+  activeSubgroup.value = n
+}
+// Ячейка НЕ применима к студенту, если занятие — чужой подгруппы (студент её не посещал).
+// Актуально только для «Совместно» (activeSubgroup=0, видно всех сразу) — при выбранной
+// конкретной подгруппе и ростер, и колонки уже сужены, чужих строк/столбцов там нет.
+function cellApplies(s, col) {
+  return !col.l.subgroup || !s.subgroup || col.l.subgroup === s.subgroup
+}
+// Ростер: при выбранной конкретной подгруппе — только её студенты; «Совместно» (0)
+// или предмет не разделён — все, как раньше.
+const visibleStudents = computed(() => {
+  const all = data.value?.students || []
+  if (!hasSubgroupButtons.value || activeSubgroup.value === 0) return all
+  return all.filter((s) => s.subgroup === activeSubgroup.value)
+})
+// Занятия: та же логика, что у ростера — конкретная подгруппа сужает список до своих
+// занятий + «Совместно» (subgroup=0 видно всем); «Совместно» выбрано или предмет не
+// разделён — вообще всё, без сужения.
+const visibleLessons = computed(() => {
+  const all = data.value?.lessons || []
+  const onlySubgroup = hasSubgroupButtons.value && activeSubgroup.value !== 0 ? activeSubgroup.value : 0
+  if (!onlySubgroup) return all
+  return all.filter((l) => !l.subgroup || l.subgroup === onlySubgroup)
+})
+
 // ── Колонки: занятие + его пересдачи (как col_defs в десктопе) ──────────────────
 function retakeKey(l, ri) { return attemptKey(l.id, ri) }   //единый формат ключа (контракт)
 function retakeDate(l, ri) { return ri === 1 ? l.retake_date : (l.extra || {})[`retake_date_${ri}`] || '' }
 const colDefs = computed(() => {
   const out = []
-  for (const l of data.value?.lessons || []) {
+  for (const l of visibleLessons.value) {
     out.push({ l, ri: 0, key: l.id })
     if (l.type === 'Экзамен') {
       for (let ri = 1; ri <= 5; ri++) {
@@ -153,7 +208,7 @@ function avgClass(a) {
   return 'text-text3'
 }
 const groupAverage = computed(() => {
-  const vals = (data.value?.students || []).map((s) => Number(s.average) || 0).filter((v) => v > 0)
+  const vals = visibleStudents.value.map((s) => Number(s.average) || 0).filter((v) => v > 0)
   return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—'
 })
 
@@ -286,41 +341,6 @@ const LESSON_TYPES = ['Практика', 'Лекция', 'ДЗ', 'Экзаме�
 // У ДЗ «тема» — это текст самого задания, он же уходит студенту в уведомление.
 const topicLabel = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicHomework', 'Домашнее задание') : locale.t('teacherJournal.topicFull', 'Тема (полностью)')))
 const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicPlaceholderHomework', 'создать базу данных') : locale.t('teacherJournal.topicPlaceholderDefault', 'Тема занятия')))
-
-// ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
-// owned_subgroups: [1] или [2] — препод ведёт только свою (кнопок нет, всё неявно под
-// неё); [1,2] — ведёт ОБЕ (маленький класс либо единственный назначенный) — тогда
-// показываем 1ПГ/2ПГ/Совместно, и НОВОЕ занятие создаётся под ВЫБРАННОЙ кнопкой.
-const splitOwned = computed(() => data.value?.split?.owned_subgroups || [])
-const hasSubgroupButtons = computed(() => splitOwned.value.length === 2)
-// Подгруппа нового занятия: если кнопок нет, но предмет разделён — единственная своя;
-// если кнопок нет и предмет не разделён — 0 (обычное занятие, сервер её всё равно
-// проигнорирует, но не подставлять произвольное число чище).
-const activeSubgroup = ref(0)
-watch(splitOwned, (owned) => {
-  activeSubgroup.value = owned.length === 1 ? owned[0] : 0
-}, { immediate: true })
-
-function subgroupLabel(n) {
-  return n === 1 ? locale.t('teacherJournal.subgroup1', '1ПГ')
-       : n === 2 ? locale.t('teacherJournal.subgroup2', '2ПГ') : ''
-}
-async function pickSubgroup(n) {
-  if (n === 0) {
-    const ok = await confirm({
-      title: locale.t('teacherJournal.combinedConfirmTitle', 'Совместное занятие'),
-      message: locale.t('teacherJournal.combinedConfirmMessage',
-        'Занятие будет создано СРАЗУ для обеих подгрупп (общая лекция/задание). Продолжить?'),
-      okText: locale.t('teacherJournal.combinedConfirmOk', 'Да, совместное'),
-    })
-    if (!ok) return
-  }
-  activeSubgroup.value = n
-}
-// Ячейка НЕ применима к студенту, если занятие — чужой подгруппы (студент её не посещал).
-function cellApplies(s, col) {
-  return !col.l.subgroup || !s.subgroup || col.l.subgroup === s.subgroup
-}
 
 // Следующий номер — МАКСИМУМ+1 внутри типа, как считают сервер и десктоп.
 // Не количество строк: лекция лежит в базе двумя строками (по академическому часу),
@@ -472,7 +492,7 @@ async function downloadVedomost(fmt) {
       <MicButton @text="onVoiceText" @error="(m) => toast.error(m)" />
       <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">{{ locale.t('teacherJournal.saving', 'Сохранение…') }}</span>
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
-        {{ locale.t('teacherJournal.countsLine', { students: data.students?.length || 0, lessons: data.lessons?.length || 0 }) }}
+        {{ locale.t('teacherJournal.countsLine', { students: visibleStudents.length, lessons: visibleLessons.length }) }}
         <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
         <span v-if="data.hours?.total" class="text-accent">
           · {{ locale.t('teacherJournal.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
@@ -509,7 +529,9 @@ async function downloadVedomost(fmt) {
                 :message="locale.t('teacherJournal.noWorkloadMessage', 'За вами не закреплены группы или предметы.')" />
     <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
     <EmptyState v-else-if="!data?.students?.length" :title="locale.t('teacherJournal.noStudentsTitle', 'Нет студентов')" :message="locale.t('teacherJournal.noStudentsMessage', { group })" />
-    <EmptyState v-else-if="!data?.lessons?.length" :title="locale.t('teacherJournal.emptyJournalTitle', 'Журнал пуст')"
+    <EmptyState v-else-if="!visibleStudents.length" :title="locale.t('teacherJournal.emptySubgroupTitle', 'Подгруппа пуста')"
+                :message="locale.t('teacherJournal.emptySubgroupMessage', 'Куратор ещё не распределил сюда студентов.')" />
+    <EmptyState v-else-if="!colDefs.length" :title="locale.t('teacherJournal.emptyJournalTitle', 'Журнал пуст')"
                 :message="locale.t('teacherJournal.emptyJournalMessage', 'Добавьте первое занятие кнопкой «+ Занятие» — колонки появятся здесь.')" />
 
     <!-- Таблица компактная и выровнена влево: обёртка не растягивает table (w-max). -->
@@ -549,7 +571,7 @@ async function downloadVedomost(fmt) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(s, i) in data.students" :key="i"
+          <tr v-for="(s, i) in visibleStudents" :key="i"
               class="border-b border-border last:border-0 hover:bg-accent-glow/40" :class="i % 2 ? 'bg-bg2/50' : ''">
             <td class="sticky left-0 z-10 max-w-[7.5rem] truncate px-2 py-2 text-left font-medium text-text sm:max-w-none sm:whitespace-nowrap sm:px-4"
                 :class="i % 2 ? 'bg-bg2' : 'bg-card'" :title="`${s.surname} ${s.name}`">

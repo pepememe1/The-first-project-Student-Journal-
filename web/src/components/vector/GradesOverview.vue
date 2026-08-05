@@ -73,9 +73,12 @@ async function load() {
     // формат /web/student/stats, поэтому дальше код общий (см. parent.py::parent_stats).
     const { data } = auth.role === 'parent' ? await parentApi.stats() : await studentApi.stats()
     average.value = Number(data.average) || 0
-    //Предметы без единой оценки в сводку не берём: полоса нулевой длины читается как
-    //«двойка по предмету», хотя оценок там просто ещё нет.
-    perSubject.value = (data.per_subject || []).filter((p) => Number(p.average) > 0)
+    //ВСЕ предметы плана, а не только с оценками (data.per_subject уже досыпан сервером —
+    //webdata.per_subject_with_plan, та же логика, что в Журнале/Главной/отчёте куратора).
+    //Раньше фильтровали по average>0 — предмет без единой оценки просто не появлялся в
+    //сводке. «Без оценок» рисуем отдельным состоянием (см. hasGrades ниже), а не нулевой
+    //полосой — иначе «нет оценок» и «двойка» выглядели бы одинаково.
+    perSubject.value = data.per_subject || []
     risk.value = data.risk || null
   } catch {
     failed.value = true
@@ -95,6 +98,8 @@ const ringStyle = computed(() => ({
 const hasData = computed(() => average.value > 0 || perSubject.value.length > 0)
 const totalGrades = computed(() =>
   perSubject.value.reduce((n, s) => n + (Number(s.grades) || 0), 0))
+
+function hasGrades(s) { return Number(s.grades) > 0 }
 
 function barStyle(s, i) {
   return {
@@ -164,15 +169,18 @@ function barStyle(s, i) {
           <li v-for="(s, i) in perSubject" :key="s.subject">
             <div class="flex items-baseline justify-between gap-2">
               <span class="min-w-0 truncate text-xs font-medium text-text" :title="s.subject">{{ s.subject }}</span>
-              <span class="shrink-0 font-title text-sm font-extrabold" :class="STATUS[statusOf(s.average)].text">
+              <span v-if="hasGrades(s)" class="shrink-0 font-title text-sm font-extrabold" :class="STATUS[statusOf(s.average)].text">
                 {{ Number(s.average).toFixed(2) }}
               </span>
+              <span v-else class="shrink-0 font-title text-sm font-extrabold text-text3">—</span>
             </div>
+            <!-- Без оценок — пустая дорожка, а НЕ нулевая полоса (та читалась бы как «двойка»). -->
             <div class="mt-1 h-2 w-full overflow-hidden rounded-full bg-bg2">
-              <div class="h-full rounded-full transition-all" :style="barStyle(s, i)" />
+              <div v-if="hasGrades(s)" class="h-full rounded-full transition-all" :style="barStyle(s, i)" />
             </div>
             <p class="mt-0.5 text-[11px] text-text3">
-              {{ locale.t('gradesOverview.gradesCounted', { n: s.grades ?? 0 }) }}
+              {{ hasGrades(s) ? locale.t('gradesOverview.gradesCounted', { n: s.grades ?? 0 })
+                              : locale.t('gradesOverview.noGradesYet', 'Оценок пока нет') }}
             </p>
           </li>
         </ul>

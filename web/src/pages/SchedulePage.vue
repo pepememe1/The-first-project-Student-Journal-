@@ -150,6 +150,12 @@ async function enterCategory(fromUser = false) {
   //осознанно пошёл смотреть чужую категорию, и там его группы нет.
   if (isStudent.value && !fromUser) {
     await load()
+    //§f (3.6.1, по аналогии с преподавателем): группа НЕ резолвилась (нет своей группы/
+    //данные разошлись) — тот же двухкнопочный выбор «Расписание группы / Расписание
+    //преподавателя», что у непойманного по ФИО преподавателя, вместо тихого пустого
+    //списка. Резолвится (обычный случай) — mode остаётся 'group', экран не показывается,
+    //ни одного лишнего клика не появляется.
+    if (!group.value) mode.value = ''
   } else {
     loading.value = false // ждём выбора группы из списка
   }
@@ -322,6 +328,12 @@ const dayColumns = computed(() => {
 // Преподаватель ещё не выбрал режим и авто-матч не сработал → экран с двумя кнопками
 // (только для категории по умолчанию — вне колледжа своего ФИО матчить не с чем).
 const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value && mode.value === '')
+// Студент (§f, 3.6.1): та же пара кнопок — но только КОГДА автоподстановка своей группы
+// не сработала (см. enterCategory) — обычно экран вообще не появляется, группа известна
+// сразу. В отличие от teacherChoice, не привязан к категории: авто-детект своей группы
+// (3.6) работает в любой, значит и откат на выбор уместен в любой же.
+const studentChoice = computed(() => isStudent.value && mode.value === '')
+const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
 </script>
 
 <template>
@@ -330,7 +342,7 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
          преподавателя/группы). §3.5.5, живой отзыв: до выбора режима категории путали —
          выглядело так, будто они выбирают что-то ещё до основного выбора; пока препод не
          решил, что смотреть, эти кнопки нечего показывать. -->
-    <div v-if="categories.length > 1 && !teacherChoice" class="flex flex-wrap gap-2">
+    <div v-if="categories.length > 1 && !modeChoice" class="flex flex-wrap gap-2">
       <button v-for="c in categories" :key="c.key"
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="category === c.key
@@ -341,12 +353,16 @@ const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value 
       </button>
     </div>
 
-    <!-- Преподаватель без авто-совпадения ФИО: две НЕвыбранные кнопки (пункт 2). -->
-    <div v-if="teacherChoice" class="flex min-h-[50vh] flex-col items-center justify-center gap-4">
+    <!-- Преподаватель без авто-совпадения ФИО ИЛИ студент без резолвнутой группы (§f,
+         3.6.1) — две НЕвыбранные кнопки. У студента появляется практически никогда:
+         обычный случай (своя группа известна) резолвится в enterCategory() ДО первого
+         показа этого экрана, см. studentChoice. -->
+    <div v-if="modeChoice" class="flex min-h-[50vh] flex-col items-center justify-center gap-4">
       <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading', 'Загрузка…') }}</p>
       <template v-else>
         <p class="text-sm text-text2">
           {{ building ? locale.t('schedulePage.buildingTeachers', 'Индекс преподавателей ещё готовится на сервере (~минута).') :
+             studentChoice ? locale.t('schedulePage.studentNotMatched', 'Не удалось определить вашу группу — выберите, что показать:') :
              locale.t('schedulePage.notMatched', 'Ваше ФИО не найдено в спарсенном расписании — выберите, что показать:') }}
         </p>
         <div class="flex flex-wrap justify-center gap-3">
