@@ -544,17 +544,26 @@ def admin_create_group(payload: dict = Body(...),
     return {"ok": True, "name": name, "category": row.category or "college"}
 
 
-def _unassign_teachers_for_dropped_subjects(db, group: str, old_subjects, new_subjects, now: str):
-    """Предмет ушёл из плана группы (Group.subjects ЗАМЕНИЛИ) — снимаем назначение
-    преподавателя на НЕГО за ТЕКУЩИЙ термин (живой баг 3.6.1: «предмет убрали у группы, а
-    журнал у препода остался» — SubjectHours.teacher_id пережил сам предмет, потому что
-    группа плана сверяется и по Group.subjects, И по SubjectHours, см. group_plan_subjects).
+def _archive_dropped_subjects(db, group: str, old_subjects, new_subjects, now: str):
+    """Предмет ушёл из плана группы (Group.subjects ЗАМЕНИЛИ — ручная правка или реимпорт
+    учебного плана) — строка `SubjectHours` за ТЕКУЩИЙ термин гасится (`deleted=True`),
+    а не остаётся висеть рядом со свежим планом.
 
-    Часы/ЗЕТ и саму строку SubjectHours НЕ трогаем — это отдельная от назначения
-    сущность (та же граница, что уже проведена в admin_import_esstu: «назначение
-    препода отдельно от содержимого учебного плана»), снимаем только teacher_id, и
-    только у предметов, которых в НОВОМ списке действительно больше нет. Архивные
-    (прошлый термин) строки не трогаем — история не переписывается."""
+    Живой баг 3.6.1, тремя разными симптомами одного корня: (1) «предмет убрали у
+    группы, а журнал у препода остался» — `teacher_assignments` находил старую строку
+    по `teacher_id`; (2) `group_plan_subjects` (единый источник «что сейчас изучает
+    группа» для студента/куратора/родителя/Вектора) продолжал засчитывать предмет в
+    план — она сверяется и по `Group.subjects`, И по живым строкам `SubjectHours`,
+    поэтому одной замены списка недостаточно; (3) `zet_summary_for_student` считал
+    ЗЕТ убранного предмета в знаменатель — она перечисляет именно живые `SubjectHours`.
+    Гашение строки закрывает все три одним действием.
+
+    Часы/ЗЕТ ЗНАЧЕНИЯ не стираем (`hours_total`/`zet` остаются в строке) — это и есть
+    «архив»: история видна тем, кто явно смотрит прошлое (админ), просто не
+    подмешивается в ТЕКУЩИЙ план. Повторное добавление того же предмета обратно в
+    Group.subjects находит ЭТУ ЖЕ строку по составному id (`subject_hours_id`) и
+    снимает с неё `deleted` — второй записи не создаётся. Архивные (прошлый термин)
+    строки не трогаем — история не переписывается."""
     dropped = set(old_subjects or []) - set(new_subjects or [])
     if not dropped:
         return
@@ -562,9 +571,10 @@ def _unassign_teachers_for_dropped_subjects(db, group: str, old_subjects, new_su
     rows = (db.query(SubjectHours)
             .filter(SubjectHours.group_name == group, SubjectHours.subject.in_(dropped),
                     SubjectHours.year == ty, SubjectHours.semester == ts,
-                    SubjectHours.teacher_id != "", SubjectHours.deleted == False).all())  # noqa: E712
+                    SubjectHours.deleted == False).all())  # noqa: E712
     for r in rows:
         r.teacher_id = ""
+        r.deleted = True
         r.updated_at = now
 
 
@@ -578,7 +588,7 @@ def admin_update_group(name: str, payload: dict = Body(...),
     now = _now_iso()
     if "subjects" in payload:
         new_subjects = payload.get("subjects") or []
-        _unassign_teachers_for_dropped_subjects(db, name, row.subjects, new_subjects, now)
+        _archive_dropped_subjects(db, name, row.subjects, new_subjects, now)
         row.subjects = new_subjects
     if "category" in payload:
         row.category = _norm_category(payload.get("category"))
@@ -774,6 +784,7 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
             #вручную в карточке группы; повторный «Из расписания» пересинхронит с порталом.
             new = sorted(subs)
             if new != list(row.subjects or []) or row.deleted:
+                _archive_dropped_subjects(db, name, row.subjects, new, now)
                 row.subjects = new
                 row.deleted = False
                 row.updated_at = now
@@ -908,9 +919,9 @@ def admin_import_esstu(payload: dict = Body(...),
     #схлопываются — Group.subjects хранит имена, не индексы дисциплин плана.
     all_names = sorted({r["subject"] for r in current_rows} | {r["subject"] for r in unmapped_rows})
     #Предметы, которых в СВЕЖЕМ плане больше нет (напр. группу «доучили» до другого курса
-    #или починили ранее неверно посчитанный курс, см. CLAUDE.md 3.6.1) — снимаем с них
-    #назначение препода за ТЕКУЩИЙ термин; часы/ЗЕТ самого импорта это не касается.
-    _unassign_teachers_for_dropped_subjects(db, group, grp.subjects, all_names, now)
+    #или починили ранее неверно посчитанный курс, см. CLAUDE.md 3.6.1) — их строка часов
+    #уходит в архив (deleted=True) за ТЕКУЩИЙ термин; сами часы/ЗЕТ не стираем.
+    _archive_dropped_subjects(db, group, grp.subjects, all_names, now)
     grp.subjects = all_names
     grp.specialty_code = specialty_code
     grp.enrollment_year = enrollment_year

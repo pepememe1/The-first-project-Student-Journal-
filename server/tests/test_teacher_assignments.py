@@ -215,6 +215,39 @@ def test_archived_term_assignment_survives_subject_leaving_todays_plan(client):
     assert archived.status_code == 200, archived.text
 
 
+def test_dropped_subject_hours_row_is_archived_not_left_dangling(client):
+    """Живой баг 3.6.1: убранный из плана предмет продолжал считаться «в плане» через
+    СВОЮ ЖЕ строку SubjectHours (group_plan_subjects сверяется и по ней, не только по
+    Group.subjects) — его ЗЕТ утекал в знаменатель зачёта, а часы висели в редакторе
+    рядом со свежим планом. Строка теперь гасится (deleted=True), а не остаётся жить."""
+    admin = make_admin(client)
+    client.post("/web/admin/groups", json={"name": "G6", "subjects": ["Физика"]}, headers=admin)
+    r = client.post("/web/admin/group-hours",
+                    json={"group": "G6", "hours": {"Физика": 36}, "zet": {"Физика": 1.0}},
+                    headers=admin)
+    assert r.status_code == 200, r.text
+    before = next(s for s in client.get("/web/admin/group-hours?group=G6", headers=admin)
+                 .json()["subjects"] if s["subject"] == "Физика")
+    assert before["hours_total"] == 36
+
+    #убираем предмет из плана — его строка часов гасится, а не остаётся висеть
+    r = client.put("/web/admin/groups/G6", json={"subjects": []}, headers=admin)
+    assert r.status_code == 200, r.text
+    after = client.get("/web/admin/group-hours?group=G6", headers=admin).json()
+    assert not any(s["subject"] == "Физика" for s in after["subjects"]), after
+
+    #возвращаем предмет в план и пересохраняем часы — находится ТА ЖЕ строка (по
+    #составному id), а не плодится дубль с обнулённой историей.
+    r = client.put("/web/admin/groups/G6", json={"subjects": ["Физика"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    r = client.post("/web/admin/group-hours",
+                    json={"group": "G6", "hours": {"Физика": 36}}, headers=admin)
+    assert r.status_code == 200, r.text
+    restored = next(s for s in client.get("/web/admin/group-hours?group=G6", headers=admin)
+                    .json()["subjects"] if s["subject"] == "Физика")
+    assert restored["hours_total"] == 36
+
+
 def test_fallback_prefers_real_lessons_over_subject_directory(client):
     """Мост не должен показывать ВЕСЬ колледж.
 

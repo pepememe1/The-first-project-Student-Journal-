@@ -30,6 +30,7 @@ import AdminTeachers from '@/pages/admin/AdminTeachers.vue'
 import AdminStudents from '@/pages/admin/AdminStudents.vue'
 import AdminRegistrations from '@/pages/admin/AdminRegistrations.vue'
 import AdminGroups from '@/pages/admin/AdminGroups.vue'
+import AdminSubjectArchive from '@/pages/admin/AdminSubjectArchive.vue'
 import AdminSubjects from '@/pages/admin/AdminSubjects.vue'
 import AdminSchedule from '@/pages/admin/AdminSchedule.vue'
 import AdminScheduleIssues from '@/pages/admin/AdminScheduleIssues.vue'
@@ -104,6 +105,8 @@ const routes = [
       page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
       page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов', 'nav.registrations', 'router.registrationsSubtitle'),
       page('groups', AdminGroups, 'Группы', undefined, 'nav.groups'),
+      page('subject-archive', AdminSubjectArchive, 'Архив предметов',
+           'Что изучалось раньше и что убрал последний реимпорт плана', 'nav.subjectArchive', 'router.subjectArchiveSubtitle'),
       page('subjects', AdminSubjects, 'Предметы', undefined, 'nav.subjects'),
       page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ', 'nav.schedule', 'router.adminScheduleSubtitle'),
       page('schedule-issues', AdminScheduleIssues, 'Накладки расписания',

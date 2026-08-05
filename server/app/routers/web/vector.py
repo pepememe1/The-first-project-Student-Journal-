@@ -835,7 +835,9 @@ def _admin_risk_facts(db: Session, cfg: dict, intent: str) -> dict:
         if not group:
             continue
         if group not in lessons_by_group:
-            lessons_by_group[group] = W.group_lessons(db, group)
+            #Только ТЕКУЩИЙ термин — иначе повторяющийся предмет (напр. «Физическая
+            #культура») тянул бы долги/средний из прошлых курсов этой же группы.
+            lessons_by_group[group] = W.current_term_lessons(db, group, W.group_lessons(db, group), cfg)
         lessons = lessons_by_group[group]
         records = W.student_records(db, stud.surname, stud.name, group)
         if intent == "debtors":
@@ -900,7 +902,12 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
     # ── СТУДЕНТ: только свои данные (privacy-by-design) ──────────────────────────────
     if role == "student":
         group = user.group_name
-        lessons = W.group_lessons(db, group)
+        #Занятия по предметам, убранным из плана группы, не должны попадать ни в долги,
+        #ни в средний, ни в «мои оценки» (current_subject_lessons) — и занятия за ПРОШЛЫЕ
+        #курсы по повторяющимся предметам вроде «Физической культуры» тоже не должны
+        #(current_term_lessons) — та же двойная фильтрация, что в student_overview.
+        lessons = W.current_term_lessons(db, group, W.current_subject_lessons(
+            db, group, W.group_lessons(db, group)), cfg)
         records = W.student_records(db, user.surname, user.name, group)
         scale_map = W.lesson_scale_map(db, lessons)
 
@@ -1043,14 +1050,17 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             own = []
             for g in groups:
                 allowed = subjects_by_group.get(g, set())
-                own += [l for l in W.group_lessons(db, g) if l.subject in allowed]
+                own += W.current_term_lessons(
+                    db, g, [l for l in W.group_lessons(db, g) if l.subject in allowed], cfg)
             return _homework_answer(own, {}, subject)
         if intent in ("absences", "debtors") and surname:
             # пропуски/долги конкретного студента (по фамилии) в группах преподавателя
             for g in groups:
                 for s in W.students_in_group(db, g):
                     if s.surname == surname:
-                        gl = [l for l in W.group_lessons(db, g) if l.subject in subjects_by_group.get(g, set())]
+                        gl = W.current_term_lessons(db, g, [
+                            l for l in W.group_lessons(db, g)
+                            if l.subject in subjects_by_group.get(g, set())], cfg)
                         rec = W.student_records(db, s.surname, s.name, g)
                         if intent == "absences":
                             a = W.absences(gl, rec)
@@ -1071,7 +1081,9 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         # и Вектор честно не мог назвать фамилии.
         per, risky = [], []
         for g in groups:
-            gl = [l for l in W.group_lessons(db, g) if l.subject in subjects_by_group.get(g, set())]
+            gl = W.current_term_lessons(db, g, [
+                l for l in W.group_lessons(db, g)
+                if l.subject in subjects_by_group.get(g, set())], cfg)
             vals = []
             for s in W.students_in_group(db, g):
                 rec = W.student_records(db, s.surname, s.name, g)

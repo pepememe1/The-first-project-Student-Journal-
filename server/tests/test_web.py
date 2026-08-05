@@ -92,6 +92,41 @@ def test_overview_and_journal_show_plan_subject_with_no_lessons_yet(client):
     assert phys_j["lessons"] == [] and phys_j["average"] == 0
 
 
+def test_overview_does_not_blend_a_recurring_subject_across_past_courses(client):
+    """Живой баг 3.6.1: «Физра» (и любой другой предмет, повторяющийся каждый курс)
+    числится в плане группы КАЖДЫЙ семестр — group_lessons(db, group) без year/semester
+    возвращает историю группы ЦЕЛИКОМ, а фильтр по имени предмета (current_subject_
+    lessons) её не сужает. Без term-фильтра «средний балл сейчас» тянул бы оценки за
+    ВСЕ прошлые курсы той же группы. Проверяем ровно этот сценарий: двойка за физру
+    два года назад не должна портить сегодняшнюю пятёрку."""
+    admin = make_admin(client)
+    student = {"id": "stud:phys1", "role": "student", "login": "phys1",
+               "password_hash": hash_password("physpass1"),
+               "surname": "Орлов", "name": "Олег", "group_name": "ИС-99"}
+    old_lesson = {"id": "PhysOld", "group_name": "ИС-99", "subject": "Физическая культура",
+                  "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2022",
+                  "year": "2022/2023", "semester": 1}
+    new_lesson = {"id": "PhysNew", "group_name": "ИС-99", "subject": "Физическая культура",
+                  "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2025",
+                  "year": "2025/2026", "semester": 2}
+    r = client.post("/sync/push", json={"changes": {
+        "groups": [{"id": "g:ИС-99", "name": "ИС-99", "subjects": ["Физическая культура"]}],
+        "users": [student], "lessons": [old_lesson, new_lesson],
+        "grades": [{"id": "Орлов|Олег|PhysOld", "student_f": "Орлов", "student_n": "Олег",
+                    "lesson_id": "PhysOld", "grade": "2"},
+                   {"id": "Орлов|Олег|PhysNew", "student_f": "Орлов", "student_n": "Олег",
+                    "lesson_id": "PhysNew", "grade": "5"}],
+    }}, headers=admin)
+    assert r.status_code == 200, r.text
+    h = _login(client, "phys1", "physpass1")
+
+    ov = client.get("/web/student/overview", headers=h).json()
+    #Сегодняшний термин видит ровно текущую пятёрку, а не (2+5)/2=3.5 из обоих курсов.
+    assert ov["average"] == 5.0, ov
+    phys = next(s for s in ov["subjects"] if s["subject"] == "Физическая культура")
+    assert phys["grades"] == 1, phys
+
+
 def test_student_cannot_access_teacher_view(client):
     admin = make_admin(client)
     _seed(client, admin)

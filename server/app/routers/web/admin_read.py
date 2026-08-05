@@ -121,6 +121,67 @@ def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: 
     return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
 
 
+@router.get("/admin/group-subject-archive")
+def admin_group_subject_archive(group: str = Query(...),
+                                _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Архив предметов группы по семестрам (живой запрос 3.6.1: «текущие должны
+    перезаписаться [реимпортом плана], а старые улететь в архив, где видны в
+    админке»). Один снимок на каждый (year, semester), где у группы есть хоть какой-то
+    след — активная ИЛИ погашенная строка `SubjectHours`, либо занятия.
+
+    ⚠️ ТЕКУЩИЙ термин показывает ОБА состояния разом: действующий план (`active=true`)
+    и то, что последний реимпорт/правка плана только что вытеснили (`active=false`,
+    строка гашена — см. `write._archive_dropped_subjects`) — это и есть «архив» в
+    буквальном смысле запроса, а не только старые годы. Прошлые термины отдают то, что
+    реально велось тогда (все их строки исторически активны — гашение затрагивает
+    только ТЕКУЩИЙ термин, история не переписывается)."""
+    grp = db.get(Group, f"grp:{group}")
+    if grp is None or grp.deleted:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    cfg = W.load_config(db)
+    cur_y, cur_s = W.current_term(cfg)
+
+    all_rows = db.query(SubjectHours).filter(SubjectHours.group_name == group).all()
+    lesson_terms = (db.query(Lesson.year, Lesson.semester)
+                    .filter(Lesson.group_name == group, Lesson.deleted == False,  # noqa: E712
+                            Lesson.year != "").distinct().all())
+    term_keys = {(r.year, int(r.semester or 0)) for r in all_rows if r.year}
+    term_keys |= {(y, int(s or 0)) for y, s in lesson_terms if y}
+    term_keys.add((cur_y, cur_s))
+
+    tids = {r.teacher_id for r in all_rows if r.teacher_id}
+    tnames = {u.id: W.display_name(u) for u in db.query(User).filter(User.id.in_(tids)).all()} if tids else {}
+
+    terms_out = []
+    for y, s in sorted(term_keys, key=lambda t: (t[0], t[1]), reverse=True):
+        is_current = (y, s) == (cur_y, cur_s)
+        rows_here = [r for r in all_rows if r.year == y and int(r.semester or 0) == s]
+        seen = {r.subject for r in rows_here}
+        subs = [{"subject": r.subject, "hours_total": r.hours_total or 0, "zet": r.zet,
+                "teacher_name": tnames.get(r.teacher_id, ""), "active": not r.deleted}
+               for r in rows_here]
+        if is_current:
+            #Предметы плана без своей строки часов — план без цифр всё равно план.
+            for subj in (grp.subjects or []):
+                if subj not in seen:
+                    subs.append({"subject": subj, "hours_total": 0, "zet": None,
+                                "teacher_name": "", "active": True})
+                    seen.add(subj)
+        elif not rows_here:
+            #Прошлый термин совсем без строк часов — предметы только из занятий.
+            for (subj,) in (db.query(Lesson.subject).filter(
+                    Lesson.group_name == group, Lesson.year == y, Lesson.semester == s,
+                    Lesson.deleted == False, Lesson.subject != "").distinct().all()):  # noqa: E712
+                if subj not in seen:
+                    subs.append({"subject": subj, "hours_total": 0, "zet": None,
+                                "teacher_name": "", "active": True})
+                    seen.add(subj)
+        subs.sort(key=lambda x: (not x["active"], x["subject"]))
+        terms_out.append({"year": y, "semester": s, "is_current": is_current, "subjects": subs})
+
+    return {"group": group, "current": {"year": cur_y, "semester": cur_s}, "terms": terms_out}
+
+
 @router.post("/admin/group-hours")
 def admin_set_group_hours(payload: dict = Body(...),
                           _admin: User = Depends(require_admin), db: Session = Depends(get_db)):

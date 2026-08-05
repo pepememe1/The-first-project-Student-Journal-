@@ -240,6 +240,24 @@ def current_subject_lessons(db, group: str, lessons, is_archive: bool = False):
     return [l for l in lessons if l.subject in plan]
 
 
+def current_term_lessons(db, group: str, lessons, cfg=None):
+    """Занятия ТОЛЬКО текущего термина — безопасно для среднего/долгов/пропусков/риска.
+
+    ⚠️ Зачем ОТДЕЛЬНО от `current_subject_lessons` (тот фильтрует по ИМЕНИ предмета).
+    `group_lessons(db, group)` без year/semester возвращает историю группы ЦЕЛИКОМ —
+    предмет, который есть в плане КАЖДЫЙ семестр (например, «Физическая культура»),
+    проходит фильтр по имени всегда, и без термина в «средний балл сейчас» и «текущие
+    долги» подмешивались бы оценки за ВСЕ прошлые курсы группы — живой баг 3.6.1: «оценки
+    по физре не должны быть циклом» при переходе на новый курс.
+
+    Занятия БЕЗ штампа термина (легаси — заведены до появления `year`/`semester` у
+    `Lesson`) ОСТАЮТСЯ как есть: отличить их «текущий» от «прошлый» нечем, а прятать по
+    ним реальные долги хуже, чем один раз посчитать их текущими (тот же компромисс уже
+    принят в `student_stats` для показателей по умолчанию)."""
+    ty, ts = current_term(cfg if cfg is not None else load_config(db))
+    return [l for l in lessons if not l.year or (l.year, int(l.semester or 0)) == (ty, ts)]
+
+
 def list_terms(db) -> list:
     """Список учебных периodов, по которым есть занятия: [{year, semester}], новые сверху.
     Для селектора термина в журнале/статистике и для архива прошлых семестров."""
@@ -462,7 +480,10 @@ def dropout_risk_for_student(db, surname: str, name: str, group: str,
     if cfg is None:
         cfg = load_config(db)
     if lessons is None:
-        lessons = group_lessons(db, group)
+        #Без явного списка — берём ТЕКУЩИЙ термин (не всю историю группы), иначе риск
+        #считался бы по оценкам за прошлые курсы для предметов вроде «Физической
+        #культуры», которые есть в плане каждый семестр.
+        lessons = current_term_lessons(db, group, group_lessons(db, group), cfg)
     if records is None:
         records = student_records(db, surname, name, group)
     scale_map = lesson_scale_map(db, lessons)
@@ -491,7 +512,9 @@ def group_risk_report(db, group: str, cfg=None, subjects=None) -> list:
     Занятия группы читаются ОДИН раз на всю группу, а не на каждого студента."""
     if cfg is None:
         cfg = load_config(db)
-    lessons = group_lessons(db, group)
+    #ТЕКУЩИЙ термин — та же причина, что в dropout_risk_for_student: повторяющийся
+    #предмет (напр. «Физическая культура») иначе тянул бы риск из прошлых курсов группы.
+    lessons = current_term_lessons(db, group, group_lessons(db, group), cfg)
     if subjects is not None:
         lessons = [l for l in lessons if l.subject in subjects]
     out = []

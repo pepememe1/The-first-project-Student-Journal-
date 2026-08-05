@@ -9,7 +9,8 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database } from '@lucide/vue'
+  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database,
+  Archive } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -58,6 +59,7 @@ export const NAV = {
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/admin/parents' },
     { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
+    { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
     // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.

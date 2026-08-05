@@ -90,7 +90,10 @@ def teacher_students(group: str = Query(...),
     subjects = {s for g, s in W.teacher_assignments(db, user.id, ty, ts) if g == group}
     if not subjects:
         raise HTTPException(status_code=403, detail="Эта группа вам не назначена")
-    lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+    #Только ТЕКУЩИЙ термин — иначе повторяющийся предмет (напр. «Физическая культура»)
+    #тянул бы средний/риск из прошлых курсов той же группы.
+    lessons = W.current_term_lessons(
+        db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
     tscale = W.teacher_scale(user)
     out = []
     for s in W.students_in_group(db, group):
@@ -171,7 +174,10 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
     groups = []
     for group in sorted(by_group):
         subjects = by_group[group]
-        lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+        #Только ТЕКУЩИЙ термин — иначе повторяющийся предмет (напр. «Физическая культура»)
+        #тянул бы средний/риск из прошлых курсов той же группы в «сейчас».
+        lessons = W.current_term_lessons(
+            db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
         studs = W.students_in_group(db, group)
         recs = {s.id: W.student_records(db, s.surname, s.name, group) for s in studs}
 

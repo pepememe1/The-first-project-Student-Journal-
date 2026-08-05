@@ -116,6 +116,7 @@ function toggleSubject(s) {
   if (i >= 0) form.value.subjects.splice(i, 1)
   else form.value.subjects.push(s)
 }
+function clearSubjects() { form.value.subjects = [] }
 async function save() {
   const f = form.value
   if (!f.name.trim()) { formError.value = locale.t('adminGroups.enterName', 'Введите название группы'); return }
@@ -613,7 +614,12 @@ async function importParsed() {
             </select>
           </label>
           <div>
-            <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.subjectsLabel', 'Предметы группы') }}</span>
+            <div class="mb-1 flex items-center justify-between">
+              <span class="block text-tiny uppercase text-text3">{{ locale.t('adminGroups.subjectsLabel', 'Предметы группы') }}</span>
+              <button v-if="form.subjects.length" type="button" class="text-tiny text-text3 hover:text-red hover:underline" @click="clearSubjects">
+                {{ locale.t('adminGroups.clearSubjects', 'убрать все') }}
+              </button>
+            </div>
             <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
               <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
                 <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />

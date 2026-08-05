@@ -15,10 +15,12 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     """Витрина студента: средний балл, свежие оценки, счётчик задолженностей."""
     _require("student", user)
     cfg = W.load_config(db)
-    #Только предметы ДЕЙСТВУЮЩЕГО плана: занятия отменённых дисциплин остаются в базе
-    #(история), но «Мои предметы» и средний балл обязаны отражать текущий семестр.
-    lessons = W.current_subject_lessons(db, user.group_name,
-                                        W.group_lessons(db, user.group_name))
+    #Только предметы ДЕЙСТВУЮЩЕГО плана И только ТЕКУЩИЙ термин: занятия отменённых
+    #дисциплин и занятия за прошлые курсы остаются в базе (история), но «Мои предметы» и
+    #средний балл обязаны отражать текущий семестр — без term-фильтра предмет вроде
+    #«Физическая культура» (есть в плане каждый семестр) тянул бы оценки за все курсы.
+    lessons = W.current_term_lessons(db, user.group_name, W.current_subject_lessons(
+        db, user.group_name, W.group_lessons(db, user.group_name)), cfg)
     by_id = {l.id: l for l in lessons}
     records = W.student_records(db, user.surname, user.name, user.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
@@ -162,11 +164,15 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
         db, user.group_name,
         W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive)
     records = W.student_records(db, user.surname, user.name, user.group_name)
-    #Долги и пропуски в ДЕФОЛТНОМ виде считаем по ВСЕМ занятиям группы (как overview): иначе
-    #легаси-занятия без штампа термина (десктоп до штампа) выпадают из фильтра текущего
-    #термина, и реальные долги/пропуски «исчезают». В архиве — строго по выбранному термину.
-    dl = lessons if is_archive else W.current_subject_lessons(
-        db, user.group_name, W.group_lessons(db, user.group_name), is_archive)
+    #Долги и пропуски в ДЕФОЛТНОМ виде считаем по занятиям БЕЗ штампа термина ТОЖЕ (как
+    #overview): иначе легаси-занятия без year/semester (десктоп до штампа) выпадают из
+    #фильтра текущего термина, и реальные долги/пропуски «исчезают». Занятия с ЧУЖИМ, но
+    #ЗАДАННЫМ термином (прошлый курс) — исключаем (current_term_lessons), иначе предмет
+    #вроде «Физической культуры» тянул бы долги/пропуски за все прошлые курсы группы.
+    #В архиве — строго по выбранному термину, ничего лишнего не подмешиваем.
+    dl = lessons if is_archive else W.current_term_lessons(
+        db, user.group_name, W.current_subject_lessons(
+            db, user.group_name, W.group_lessons(db, user.group_name), is_archive), cfg)
     scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
     #Предметы ПЛАНА, по которым занятий ещё нет вовсе, тоже показываем — иначе список
     #«мои предметы» в статистике короче, чем в журнале, и это выглядит как потеря данных.
@@ -188,10 +194,11 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     скоуп): долги, ближайшие пересдачи, пропуски, средний. Все числа — из БД."""
     _require("student", user)
     cfg = W.load_config(db)
-    #Карточки и риск отчисления считаем по ДЕЙСТВУЮЩЕМУ плану: долг по отменённому
-    #предмету не должен пугать студента (и тем более тянуть его в зону риска).
-    lessons = W.current_subject_lessons(db, user.group_name,
-                                        W.group_lessons(db, user.group_name))
+    #Карточки и риск отчисления считаем по ДЕЙСТВУЮЩЕМУ плану И текущему термину: долг
+    #по отменённому предмету не должен пугать студента, а предмет вроде «Физической
+    #культуры» (в плане каждый семестр) не должен тянуть оценки за прошлые курсы.
+    lessons = W.current_term_lessons(db, user.group_name, W.current_subject_lessons(
+        db, user.group_name, W.group_lessons(db, user.group_name)), cfg)
     records = W.student_records(db, user.surname, user.name, user.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
     avg = W.average(lessons, records, cfg, scale=scale_map)
@@ -280,7 +287,11 @@ def teacher_insights(group: str = Query(...),
     _require("teacher", user)
     cfg = W.load_config(db)
     subjects = set(user.subjects or [])
-    lessons = [l for l in W.group_lessons(db, group) if l.subject in subjects]
+    #Только ТЕКУЩИЙ термин: без него предмет, который препод вёл этой же группе в прошлом
+    #курсе (напр. повторяющаяся «Физическая культура»), тянул бы средний/должников/риск
+    #из истории, а не из того, что происходит сейчас.
+    lessons = W.current_term_lessons(
+        db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
     studs = W.students_in_group(db, group)
     cards = []
     tscale = W.teacher_scale(user)

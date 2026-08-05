@@ -188,6 +188,9 @@ export const adminApi = {
     api.post('/web/admin/groups/import-schedule-category-all', { category }),
   // Учебные часы группы: план на семестр по каждому предмету + уже пройденное.
   groupHours: (group) => api.get('/web/admin/group-hours', { params: { group } }),
+  // Архив предметов группы по семестрам — текущий термин показывает и активный план, и
+  // то, что только что вытеснил реимпорт (active:false), прошлые — что велось тогда.
+  groupSubjectArchive: (group) => api.get('/web/admin/group-subject-archive', { params: { group } }),
   // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);
   // zet — docs/PLAN-ZET.md: {предмет: float | null}. Та же строка subject_hours, что и часы
   // (см. server/app/routers/web.py::admin_set_group_hours).
