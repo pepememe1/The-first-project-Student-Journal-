@@ -35,12 +35,12 @@ const data = ref(null)
 const loading = ref(false)
 const saving = ref(false)
 
-// ── Учебный период (семестр): текущий по умолчанию, прошлые — архив (read-only) ──
-const terms = ref([])
-const term = ref(null)
+// ── Учебный период: преподаватель работает ИСКЛЮЧИТЕЛЬНО с ТЕКУЩИМ термином ──────
+// Ручного переключателя семестра здесь больше нет (убран по живому отзыву — путал
+// «какой семестр сейчас редактируется» с архивным просмотром, а термин и так
+// считается сервером исключительно по дате, см. CLAUDE.md). currentTerm остаётся
+// только ради подписи в аттестации.
 const currentTerm = ref(null)
-const isArchive = computed(() => term.value && currentTerm.value &&
-  (term.value.year !== currentTerm.value.year || term.value.semester !== currentTerm.value.semester))
 function termLabel(t) {
   if (!t) return ''
   const sem = t.semester === 1
@@ -48,19 +48,8 @@ function termLabel(t) {
     : locale.t('teacherJournal.termSpring', 'весенний')
   return locale.t('teacherJournal.termLabelFormat', { year: t.year, semester: sem })
 }
-function termKey(t) { return t ? `${t.year}|${t.semester}` : '' }
-function termParams() { return term.value ? { year: term.value.year, semester: term.value.semester } : {} }
-function selectTerm(k) { term.value = terms.value.find((t) => termKey(t) === k) || currentTerm.value }
-
-async function loadTerms() {
-  try {
-    const t = (await termsApi.list()).data
-    currentTerm.value = t.current
-    const all = (t.terms || []).slice()
-    if (!all.some((x) => x.year === t.current.year && x.semester === t.current.semester)) all.unshift(t.current)
-    terms.value = all
-    term.value = t.current
-  } catch { /* */ }
+async function loadTerm() {
+  try { currentTerm.value = (await termsApi.list()).data.current } catch { /* */ }
 }
 
 onMounted(async () => {
@@ -77,7 +66,7 @@ onMounted(async () => {
     group.value = (qGroup && groups.value.includes(qGroup)) ? qGroup : (groups.value[0] || '')
     subject.value = (qSubject && subjects.value.includes(qSubject)) ? qSubject : (subjects.value[0] || '')
   } catch { /* */ }
-  await loadTerms()
+  await loadTerm()
   document.addEventListener('click', closeCtx)
 })
 onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
@@ -85,9 +74,9 @@ onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
   loading.value = true
-  try { data.value = (await teacherApi.journal(group.value, subject.value, termParams())).data } catch { data.value = null } finally { loading.value = false }
+  try { data.value = (await teacherApi.journal(group.value, subject.value)).data } catch { data.value = null } finally { loading.value = false }
 }
-watch([group, subject, term], load)
+watch([group, subject], load)
 
 // ── Колонки: занятие + его пересдачи (как col_defs в десктопе) ──────────────────
 function retakeKey(l, ri) { return attemptKey(l.id, ri) }   //единый формат ключа (контракт)
@@ -276,7 +265,6 @@ async function setExamGrade(s, col, value) {
   }
 }
 function onCell(s, col, value) {
-  if (isArchive.value) return   // прошлый семестр — только чтение
   if (col.l.type === 'Экзамен' || col.ri > 0) setExamGrade(s, col, value)
   else setGrade(s, col.key, value)
 }
@@ -378,7 +366,7 @@ function saveBlob(blob, name) {
 async function downloadJournal(fmt) {
   exporting.value = true
   try {
-    const { data: blob } = await teacherApi.journalExport(group.value, subject.value, { fmt, ...termParams() })
+    const { data: blob } = await teacherApi.journalExport(group.value, subject.value, { fmt })
     saveBlob(blob, `Журнал_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
   } catch (e) {
     let detail = ''
@@ -397,7 +385,7 @@ const ATT_GRADES = ['', '5', '4', '3', '2', 'Зачтено', 'Не зачтен
 
 async function openAtt() {
   try {
-    const tg = (await teacherApi.termGrades(group.value, subject.value, termParams())).data.grades || {}
+    const tg = (await teacherApi.termGrades(group.value, subject.value)).data.grades || {}
     attRows.value = (data.value?.students || []).map((s) => ({
       surname: s.surname, name: s.name, grade: tg[`${s.surname}|${s.name}`]?.grade || '',
     }))
@@ -420,7 +408,7 @@ async function saveAtt() {
 }
 async function downloadVedomost(fmt) {
   try {
-    const { data: blob } = await teacherApi.vedomost(group.value, subject.value, { fmt, form: attForm.value, ...termParams() })
+    const { data: blob } = await teacherApi.vedomost(group.value, subject.value, { fmt, form: attForm.value })
     saveBlob(blob, `Ведомость_${group.value}_${subject.value}.${fmt === 'docx' ? 'docx' : 'xlsx'}`)
   } catch { toast.error(locale.t('teacherJournal.exportVedomostFailed', 'Не удалось выгрузить ведомость')) }
 }
@@ -435,11 +423,6 @@ async function downloadVedomost(fmt) {
       <select v-model="subject" :title="subject"
               class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52 sm:max-w-md">
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
-      </select>
-      <select v-if="terms.length" :value="termKey(term)" @change="selectTerm($event.target.value)"
-              class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto"
-              :class="isArchive ? 'border-orange text-orange' : ''">
-        <option v-for="t in terms" :key="termKey(t)" :value="termKey(t)">{{ termLabel(t) }}</option>
       </select>
       <!-- Голосом можно ставить оценки и отмечать пропуски. Кнопка здесь, а не у
            «Вектора»: команде нужны группа и предмет, а они выбраны именно на этой
@@ -459,12 +442,8 @@ async function downloadVedomost(fmt) {
         <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
           {{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : `📘 ${locale.t('teacherJournal.journalButton', 'Журнал')}` }}
         </AppButton>
-        <AppButton v-if="!isArchive" variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
+        <AppButton variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
       </div>
-    </div>
-
-    <div v-if="isArchive" class="rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
-      🔒 {{ locale.t('teacherJournal.archiveBanner', { term: termLabel(currentTerm) }) }}
     </div>
 
     <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
@@ -500,7 +479,7 @@ async function downloadVedomost(fmt) {
                 <div v-if="col.l.topic" class="mt-0.5 line-clamp-2 text-[11px] font-normal normal-case leading-snug text-text2" :title="col.l.topic">
                   {{ col.l.topic }}
                 </div>
-                <div v-if="!isArchive" class="mt-1 flex items-center justify-center gap-3 text-text3">
+                <div class="mt-1 flex items-center justify-center gap-3 text-text3">
                   <button class="hover:text-accent" :title="locale.t('teacherJournal.edit', 'Изменить')" @click.stop="openEditLesson(col.l)">✎</button>
                   <button class="hover:text-red" :title="locale.t('common.delete')" @click.stop="delLesson(col.l)">✕</button>
                 </div>
@@ -521,7 +500,7 @@ async function downloadVedomost(fmt) {
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
               <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key], col.l)"
-                      :title="s.grades[col.key] || ''" :disabled="isArchive"
+                      :title="s.grades[col.key] || ''"
                       class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
                       @change="onCell(s, col, $event.target.value)">
                 <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
@@ -595,7 +574,7 @@ async function downloadVedomost(fmt) {
     <div v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
       <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 {{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
-        <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(term) }}</p>
+        <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(currentTerm) }}</p>
         <label class="mb-3 block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.controlFormLabel', 'Форма контроля') }}</span>
           <select v-model="attForm" class="h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
             <option v-for="f in ATT_FORMS" :key="f" :value="f">{{ f }}</option>

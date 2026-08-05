@@ -200,3 +200,24 @@ def test_curator_group_with_slash_in_name(client):
                            "year": "2026/2027", "semester": 1}, headers=th)
     assert v.status_code == 200, v.text
     assert v.json()["group"] == "К75/1"
+
+
+def test_curator_group_subject_shows_hours_plan(client):
+    """Живой баг 3.6.1: у преподавателя в ЕГО журнале часы «пройдено X из Y» есть, а у
+    куратора на ТОМ ЖЕ предмете/группе — не было вовсе (эндпоинт их просто не отдавал)."""
+    admin = make_admin(client)
+    r = client.post("/web/admin/groups", json={"name": "G5", "subjects": ["Физ"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    r = client.post("/web/admin/group-hours",
+                    json={"group": "G5", "hours": {"Физ": 72}}, headers=admin)
+    assert r.status_code == 200, r.text
+    r = client.post("/web/admin/teachers", json={
+        "full_name": "Кур Атор", "login": "t4", "password": "pass1234",
+        "subjects": [], "curated_groups": ["G5"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    th = _login(client, "t4", "pass1234")
+
+    v = client.get("/web/curator/group-subject",
+                   params={"group": "G5", "subject": "Физ"}, headers=th)
+    assert v.status_code == 200, v.text
+    assert v.json()["hours"] == {"done": 0, "total": 72}, v.json()

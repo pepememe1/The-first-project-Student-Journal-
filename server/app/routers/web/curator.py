@@ -148,6 +148,10 @@ def curator_group_subject(group: str = Query(...), subject: str = Query(...),
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
                      "topic": l.topic, "date": l.date} for l in lessons],
         "students": rows,
+        #«Пройдено X из Y часов» — куратор смотрит ЧУЖОЙ журнал и раньше не видел плана
+        #вовсе (живой баг: у препода в его собственном журнале часы есть, у куратора на
+        #том же предмете/группе — нет). Тот же расчёт, что и в teacher_journal.
+        "hours": W.hours_progress(db, group, subject, lessons, ty, ts),
     }
 
 

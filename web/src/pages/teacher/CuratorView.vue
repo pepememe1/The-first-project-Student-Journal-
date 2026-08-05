@@ -308,7 +308,13 @@ async function exportReport(fmt) {
       </div>
 
       <template v-if="viewMode === 'journal'">
-        <p class="text-xs text-text3">👁 {{ locale.t('curatorView.readOnlyHint', 'Только просмотр (куратор) — оценки ставит преподаватель.') }}</p>
+        <p class="text-xs text-text3">
+          👁 {{ locale.t('curatorView.readOnlyHint', 'Только просмотр (куратор) — оценки ставит преподаватель.') }}
+          <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
+          <span v-if="data?.hours?.total" class="text-accent">
+            · {{ locale.t('curatorView.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
+          </span>
+        </p>
         <EmptyState v-if="!subjects.length" :title="locale.t('curatorView.noSubjectsTitle', 'Нет предметов')"
                     :message="locale.t('curatorView.noSubjectsMessage', { group })" />
         <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>

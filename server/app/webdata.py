@@ -575,7 +575,7 @@ def teacher_assignments(db, teacher_id: str, year: str, semester,
                     SubjectHours.deleted == False).all())  # noqa: E712
     pairs = sorted({(r.group_name, r.subject) for r in rows if r.group_name and r.subject})
     if pairs or not allow_fallback:
-        return pairs
+        return _drop_subjects_outside_current_plan(db, pairs, year, semester)
     #⚠️ НОЛЬ назначений — это НЕ «админ назначил пусто», и разница стоила боевого простоя.
     #30.07.2026 нагрузка обнулилась сразу у ВСЕХ преподавателей (проверено на живых
     #аккаунтах Saha/ddxd/Dixm/Artur/Golubev): в базе 13 строк SubjectHours, teacher_id
@@ -586,7 +586,32 @@ def teacher_assignments(db, teacher_id: str, year: str, semester,
     #точного скоупа цел — появилось хоть одно назначение, и работают ТОЛЬКО они (return
     #выше), поэтому «препод видит чужие группы» не возвращается. Это мост на время ввода
     #данных, а не режим: снимается удалением этой ветки, когда назначения расставлены.
-    return _assignments_fallback(db, teacher_id)
+    return _drop_subjects_outside_current_plan(db, _assignments_fallback(db, teacher_id), year, semester)
+
+
+def _drop_subjects_outside_current_plan(db, pairs: list, year: str, semester) -> list:
+    """Пара (группа, предмет) может пережить сам предмет: `Group.subjects` при импорте
+    учебного плана/расписания ЗАМЕНЯЮТ (не объединяют, см. admin_import_esstu), а
+    старая строка `SubjectHours.teacher_id` или старое занятие — остаются. Препод
+    продолжал бы видеть в выборе предмет, которого у группы больше нет (живой баг:
+    «предмет убрали у группы, а журнал у препода остался»).
+
+    Фильтруем ТОЛЬКО для ТЕКУЩЕГО термина — архивный просмотр прошлого семестра НЕ
+    обязан зависеть от сегодняшнего плана: тогда велись другие предметы, и прятать их
+    задним числом было бы переписыванием истории (тот же принцип, что уже применён в
+    `current_subject_lessons`). Группа без плана вовсе (пусто) не фильтруется — иначе
+    у групп, куда план ещё не завозили, пропали бы вообще все назначения."""
+    if not pairs or (year, int(semester or 0)) != current_term(load_config(db)):
+        return pairs
+    cache = {}
+    out = []
+    for g, s in pairs:
+        if g not in cache:
+            cache[g] = group_plan_subjects(db, g)
+        plan = cache[g]
+        if not plan or s in plan:
+            out.append((g, s))
+    return out
 
 
 def _assignments_fallback(db, teacher_id: str) -> list:

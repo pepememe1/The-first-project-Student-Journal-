@@ -544,6 +544,30 @@ def admin_create_group(payload: dict = Body(...),
     return {"ok": True, "name": name, "category": row.category or "college"}
 
 
+def _unassign_teachers_for_dropped_subjects(db, group: str, old_subjects, new_subjects, now: str):
+    """Предмет ушёл из плана группы (Group.subjects ЗАМЕНИЛИ) — снимаем назначение
+    преподавателя на НЕГО за ТЕКУЩИЙ термин (живой баг 3.6.1: «предмет убрали у группы, а
+    журнал у препода остался» — SubjectHours.teacher_id пережил сам предмет, потому что
+    группа плана сверяется и по Group.subjects, И по SubjectHours, см. group_plan_subjects).
+
+    Часы/ЗЕТ и саму строку SubjectHours НЕ трогаем — это отдельная от назначения
+    сущность (та же граница, что уже проведена в admin_import_esstu: «назначение
+    препода отдельно от содержимого учебного плана»), снимаем только teacher_id, и
+    только у предметов, которых в НОВОМ списке действительно больше нет. Архивные
+    (прошлый термин) строки не трогаем — история не переписывается."""
+    dropped = set(old_subjects or []) - set(new_subjects or [])
+    if not dropped:
+        return
+    ty, ts = W.current_term(W.load_config(db))
+    rows = (db.query(SubjectHours)
+            .filter(SubjectHours.group_name == group, SubjectHours.subject.in_(dropped),
+                    SubjectHours.year == ty, SubjectHours.semester == ts,
+                    SubjectHours.teacher_id != "", SubjectHours.deleted == False).all())  # noqa: E712
+    for r in rows:
+        r.teacher_id = ""
+        r.updated_at = now
+
+
 @router.put("/admin/groups/{name:path}")
 def admin_update_group(name: str, payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -551,11 +575,14 @@ def admin_update_group(name: str, payload: dict = Body(...),
     row = db.get(Group, f"grp:{name}")
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Группа не найдена")
+    now = _now_iso()
     if "subjects" in payload:
-        row.subjects = payload.get("subjects") or []
+        new_subjects = payload.get("subjects") or []
+        _unassign_teachers_for_dropped_subjects(db, name, row.subjects, new_subjects, now)
+        row.subjects = new_subjects
     if "category" in payload:
         row.category = _norm_category(payload.get("category"))
-    row.updated_at = _now_iso()
+    row.updated_at = now
     db.commit()
     return {"ok": True, "name": name}
 
@@ -880,6 +907,10 @@ def admin_import_esstu(payload: dict = Body(...),
     #момент импорта. Дубли имён (одно название в разных циклах, напр. «История»)
     #схлопываются — Group.subjects хранит имена, не индексы дисциплин плана.
     all_names = sorted({r["subject"] for r in current_rows} | {r["subject"] for r in unmapped_rows})
+    #Предметы, которых в СВЕЖЕМ плане больше нет (напр. группу «доучили» до другого курса
+    #или починили ранее неверно посчитанный курс, см. CLAUDE.md 3.6.1) — снимаем с них
+    #назначение препода за ТЕКУЩИЙ термин; часы/ЗЕТ самого импорта это не касается.
+    _unassign_teachers_for_dropped_subjects(db, group, grp.subjects, all_names, now)
     grp.subjects = all_names
     grp.specialty_code = specialty_code
     grp.enrollment_year = enrollment_year

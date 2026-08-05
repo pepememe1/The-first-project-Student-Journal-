@@ -167,6 +167,54 @@ def test_only_admin_can_assign_teacher(client):
     assert r.status_code == 403
 
 
+def test_removed_from_plan_subject_disappears_from_current_assignments(client):
+    """Живой баг 3.6.1: предмет убрали из плана группы (реимпорт учебного плана заменяет
+    Group.subjects, см. admin_import_esstu), а преподаватель продолжал видеть журнал по
+    нему — SubjectHours.teacher_id пережил сам предмет. teacher_assignments теперь
+    сверяет ТЕКУЩИЙ термин с group_plan_subjects и такие пары отбрасывает."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, subjects=["Компьютерные сети"])
+    client.post("/web/admin/groups", json={"name": "К74/1", "subjects": ["Компьютерные сети"]},
+                headers=admin)
+    assign_teacher(client, admin, "teach:teacher1", "К74/1", "Компьютерные сети")
+    assert client.get("/web/teacher/overview", headers=th).json()["groups"] == ["К74/1"]
+
+    #план заменён (как при реимпорте) — строка SubjectHours.teacher_id не трогалась
+    r = client.put("/web/admin/groups/К74/1", json={"subjects": ["Физика"]}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    data = client.get("/web/teacher/overview", headers=th).json()
+    assert data["groups"] == [], f"устаревшее назначение не должно висеть: {data}"
+    forbidden = client.get("/web/teacher/journal",
+                           params={"group": "К74/1", "subject": "Компьютерные сети"}, headers=th)
+    assert forbidden.status_code == 403
+
+
+def test_archived_term_assignment_survives_subject_leaving_todays_plan(client):
+    """Тот же сценарий, но АРХИВНЫЙ (уже закрытый) термин — фильтр по сегодняшнему плану
+    на явный просмотр прошлого семестра не распространяется: тогда предмет реально
+    велся, и прятать его задним числом было бы переписыванием истории."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, subjects=["Компьютерные сети"])
+    client.post("/web/admin/groups", json={"name": "К74/1", "subjects": ["Компьютерные сети"]},
+                headers=admin)
+    assign_teacher(client, admin, "teach:teacher1", "К74/1", "Компьютерные сети")
+    old = client.get("/web/terms", headers=th).json()["current"]
+
+    rr = client.post("/web/admin/term/rollover", json={}, headers=admin)
+    assert rr.status_code == 200, rr.text
+
+    #план ТЕКУЩЕГО (нового) термина меняется — предмета в нём больше нет
+    r = client.put("/web/admin/groups/К74/1", json={"subjects": ["Физика"]}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    #явный запрос за СТАРЫЙ (архивный) термин по-прежнему видит назначение
+    archived = client.get("/web/teacher/journal",
+                          params={"group": "К74/1", "subject": "Компьютерные сети",
+                                  "year": old["year"], "semester": old["semester"]}, headers=th)
+    assert archived.status_code == 200, archived.text
+
+
 def test_fallback_prefers_real_lessons_over_subject_directory(client):
     """Мост не должен показывать ВЕСЬ колледж.
 
