@@ -21,6 +21,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
+import { nameFontFamily } from '@/config/nameFonts'
 import Avatar from '@/components/ui/Avatar.vue'
 import SidebarUserOverlay from '@/components/SidebarUserOverlay.vue'
 
@@ -82,7 +83,8 @@ onMounted(async () => {
                 :style="{ background: myStatus.color }" />
         </span>
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[13px] font-semibold leading-tight text-text">{{ fullName }}</span>
+          <span class="block truncate text-[13px] font-semibold leading-tight text-text"
+                :style="{ fontFamily: nameFontFamily(profile.font) }">{{ fullName }}</span>
           <span v-if="login" class="block truncate text-[11px] leading-tight text-text3">@{{ login }}</span>
         </span>
         <ChevronDown class="size-3.5 shrink-0 text-text3 transition-transform"

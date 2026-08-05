@@ -111,12 +111,22 @@ def _find_web_dist() -> str:
 WEB_DIST = _find_web_dist()
 
 
+#index.html НАМЕРЕННО без длинного кэша (в отличие от /assets/* ниже — те кэшируются
+#агрессивно, потому что их имя меняется вместе с содержимым, content-hash). Сам
+#index.html никогда не меняет имя — без Cache-Control браузер вправе héuristически
+#счесть его свежим и не перепроверить у сервера даже после `F5`, и человек молча
+#продолжает работать на СТАРОМ JS-бандле после деплоя, пока не сделает жёсткий
+#reload вручную. `no-cache` — не «не кэшировать», а «кэшировать, но ВСЕГДА
+#перепроверять по ETag» (дешёвый 304, а не полная перекачка).
+_INDEX_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/", tags=["service"], include_in_schema=False)
 def root():
     #Есть собранный сайт → отдаём его (адрес сервера = адрес сайта). Нет — короткая
     #«визитка» API, чтобы при заходе в браузере было видно «сервер жив».
     if WEB_DIST:
-        return FileResponse(os.path.join(WEB_DIST, "index.html"))
+        return FileResponse(os.path.join(WEB_DIST, "index.html"), headers=_INDEX_HEADERS)
     return JSONResponse({"service": "GradeBookAI API", "status": "ok", "docs": "/docs"})
 
 
@@ -210,7 +220,7 @@ if WEB_DIST:
         #иначе неизвестный путь → отдаём index.html (клиентский роутинг Vue).
         if (target == WEB_DIST or target.startswith(WEB_DIST + os.sep)) and os.path.isfile(target):
             return FileResponse(target)
-        return FileResponse(os.path.join(WEB_DIST, "index.html"))
+        return FileResponse(os.path.join(WEB_DIST, "index.html"), headers=_INDEX_HEADERS)
 
 else:
     #⚠️ САЙТ НЕ СОБРАН. Раньше этот случай не обрабатывался вовсе, и программа,

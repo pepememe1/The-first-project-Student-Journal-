@@ -23,6 +23,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
+import { nameFontFamily } from '@/config/nameFonts'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['close'])
@@ -81,7 +82,8 @@ async function saveStatusText() {
               :style="{ background: myStatus.color }" />
       </RouterLink>
 
-      <p class="mt-2 truncate font-title text-base font-extrabold text-text">{{ fullName }}</p>
+      <p class="mt-2 truncate font-title text-base font-extrabold text-text"
+         :style="{ fontFamily: nameFontFamily(profile.font) }">{{ fullName }}</p>
       <p class="truncate text-xs text-text3">
         <span v-if="login">@{{ login }} · </span>{{ roleLabel }}
       </p>
