@@ -628,6 +628,76 @@ def teacher_group_names(db, teacher_id: str, year: str, semester) -> list:
     return sorted({g for g, _s in teacher_assignments(db, teacher_id, year, semester)})
 
 
+def _teacher_subject_rows(db, teacher, ty: str, ts, cfg,
+                          only_subject: str = "", only_group: str = ""):
+    """Общая выборка для диаграмм вкладки «ИИ Помощник» у преподавателя (3.6.1): по
+    каждой его паре (группа, предмет) — строка `{"average": …}` на каждого студента
+    группы, средний ИМЕННО по этому предмету (а не общий средний студента по всем
+    дисциплинам, как у куратора — иначе чужой предмет того же студента красил бы
+    категорию, к которой этот преподаватель отношения не имеет). Отдаёт список
+    `(group, subject, rows)` — вызывающий сам решает, как их сгруппировать/агрегировать.
+    Шкала — СВОЯ шкала преподавателя (`teacher_scale`), как и в /teacher/stats и
+    /teacher/summary: все эти занятия его собственные, лукап по каждому занятию отдельно
+    (как у куратора, где занятия могут быть НЕСКОЛЬКИХ преподавателей) тут не нужен.
+    `only_subject`/`only_group` — сузить одной парой (для drill-down по конкретному
+    предмету/группе), пустая строка — без фильтра."""
+    scale = teacher_scale(teacher)
+    out = []
+    for group, subject in teacher_assignments(db, teacher.id, ty, ts):
+        if only_subject and subject != only_subject:
+            continue
+        if only_group and group != only_group:
+            continue
+        lessons = group_lessons(db, group, subject=subject, year=ty, semester=ts)
+        if not lessons:
+            continue
+        rows = []
+        for s in students_in_group(db, group):
+            recs = student_records(db, s.surname, s.name, group)
+            rows.append({"average": average(lessons, recs, cfg, scale=scale)})
+        out.append((group, subject, rows))
+    return out
+
+
+def _avg_of(rows) -> float:
+    vals = [r["average"] for r in rows if r["average"]]
+    return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+
+def teacher_subjects_overview(db, teacher, ty: str, ts) -> dict:
+    """Сводка для верхнего уровня диаграмм: ОБЩАЯ категоризация (по всем парам
+    группа-предмет сразу) + по КАЖДОМУ предмету (агрегат по всем группам, где он
+    ведётся). Категории/пороги — curator_report.categorize, ТЕ ЖЕ, что красят
+    дашборды преподавателя/куратора (единый набор порогов на весь продукт)."""
+    from . import curator_report as CR
+    cfg = load_config(db)
+    triples = _teacher_subject_rows(db, teacher, ty, ts, cfg)
+    all_rows = []
+    by_subject: dict[str, list] = {}
+    for _group, subject, rows in triples:
+        all_rows.extend(rows)
+        by_subject.setdefault(subject, []).extend(rows)
+    subjects = [{"subject": subj, "students": len(rows), "avg": _avg_of(rows),
+                "categories": CR.categorize(rows)}
+               for subj, rows in sorted(by_subject.items())]
+    return {"overall": {"students": len(all_rows), "avg": _avg_of(all_rows),
+                        "categories": CR.categorize(all_rows)},
+            "subjects": subjects}
+
+
+def teacher_subject_groups(db, teacher, ty: str, ts, subject: str) -> dict:
+    """Второй уровень (drill-down по предмету): та же категоризация, но ОДНА строка
+    на каждую группу, где преподаватель ведёт этот предмет — для сравнения групп
+    между собой."""
+    from . import curator_report as CR
+    cfg = load_config(db)
+    triples = _teacher_subject_rows(db, teacher, ty, ts, cfg, only_subject=subject)
+    groups = [{"group": group, "students": len(rows), "avg": _avg_of(rows),
+              "categories": CR.categorize(rows)}
+             for group, _subject, rows in triples]
+    return {"subject": subject, "groups": groups}
+
+
 def display_name(user) -> str:
     return user.full_name or f"{user.surname} {user.name}".strip()
 

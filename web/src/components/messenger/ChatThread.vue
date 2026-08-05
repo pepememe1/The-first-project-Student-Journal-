@@ -796,6 +796,13 @@ function senderName(msg) {
 const headerTint = computed(() =>
   (!isGroupOrChannel.value && !isModeration.value && activePeer.value?.profile_color)
     ? profilePlate(activePeer.value.profile_color) : '')
+
+// Стиль никнейма собеседника — ТОЖЕ «сверху в мессенджере» (заголовок открытого чата),
+// не только у сообщений/списка чатов/карточки. Только для личного чата с реальным
+// человеком — у «Избранного»/«Модерации»/групп-каналов peerName не имя человека.
+const peerNameFont = computed(() =>
+  (!isGroupOrChannel.value && !isSaved.value && !isModeration.value)
+    ? nameFontFamily(activePeer.value?.name_font || '') : '')
 </script>
 
 <template>
@@ -820,7 +827,8 @@ const headerTint = computed(() =>
                 :class="headerTint ? 'hover:bg-white/10' : 'hover:bg-bg2'"
                 :title="locale.t('chatThread.openProfile', 'Открыть профиль')">
           <div class="truncate font-title text-base font-bold"
-               :class="headerTint ? 'text-white' : 'text-text'">{{ peerName }}</div>
+               :class="headerTint ? 'text-white' : 'text-text'"
+               :style="peerNameFont ? { fontFamily: peerNameFont } : {}">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
         <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->

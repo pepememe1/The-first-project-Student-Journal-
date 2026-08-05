@@ -99,8 +99,13 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
        Раньше вкладка на всю высоту несла ТОЛЬКО чат — правая половина пустовала, хотя
        это самая просторная страница продукта.
        Высота задана ОДНА на обе колонки (h-full у детей), чтобы кольцо и полосы не
-       уезжали за нижний край рядом с более высокой карточкой чата. -->
-  <div class="grid h-[calc(100dvh-var(--gb-page-offset))] gap-3"
+       уезжали за нижний край рядом с более высокой карточкой чата.
+       ⚠️ У ЭТОЙ страницы (в отличие от мессенджера) РЕАЛЬНО есть подзаголовок
+       (meta.subtitle='Вектор', см. router/index.js) — поэтому, в отличие от
+       MessengerPage.vue, здесь ещё и вычитаем --gb-subtitle-offset (3.6.1, см.
+       style.css: единая --gb-page-offset больше не включает подзаголовок сама по себе,
+       иначе высота была бы неверной у страниц БЕЗ него). -->
+  <div class="grid h-[calc(100dvh-var(--gb-page-offset)-var(--gb-subtitle-offset))] gap-3"
        :class="sidePanel ? 'lg:grid-cols-[1fr_320px]' : ''">
   <!-- Одна карточка на всю высоту: шапка · (маскот ФОНОМ + чат поверх) · ввод -->
   <div class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card">

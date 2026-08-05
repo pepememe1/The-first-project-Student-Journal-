@@ -663,6 +663,30 @@ def user_profile(user_id: str, _user: User = Depends(get_current_user),
     return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id))}
 
 
+@router.get("/users/{user_id}/shared")
+def user_shared(user_id: str, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """«Общие группы»/«Общие каналы» на карточке чужого профиля (Discord-style).
+
+    Пересечение бесед, где участвуем ОБА — безопасно по построению: раскрываем только
+    те группы/каналы, в которых вызывающий и так уже состоит, ничего нового о чужом
+    членстве не утекает. `saved`/личные ЛС/модерация в пересечение не входят намеренно —
+    «общее» здесь означает ровно то, что показывает Discord (сервера), а не любую беседу."""
+    mine = {r[0] for r in db.query(ConversationParticipant.conversation_id)
+            .filter(ConversationParticipant.user_id == user.id).all()}
+    theirs = {r[0] for r in db.query(ConversationParticipant.conversation_id)
+              .filter(ConversationParticipant.user_id == user_id).all()}
+    shared_ids = mine & theirs
+    if not shared_ids:
+        return {"groups": [], "channels": []}
+    convs = (db.query(Conversation)
+             .filter(Conversation.id.in_(shared_ids), Conversation.kind.in_(("group", "channel")))
+             .order_by(Conversation.title).all())
+    groups = [{"id": c.id, "title": c.title} for c in convs if c.kind == "group"]
+    channels = [{"id": c.id, "title": c.title} for c in convs if c.kind == "channel"]
+    return {"groups": groups, "channels": channels}
+
+
 @router.get("/users/{user_id}/note")
 def get_user_note(user_id: str, user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)):

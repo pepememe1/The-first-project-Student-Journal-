@@ -15,9 +15,10 @@
 // преподавателя предметов мало, а вопрос у него один — «где просело». Число стоит
 // рядом всегда, цвет ничего не сообщает в одиночку.
 import { ref, computed, onMounted } from 'vue'
-import { RotateCw } from '@lucide/vue'
+import { RotateCw, PieChart } from '@lucide/vue'
 import { teacherApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
+import TeacherSubjectsOverlay from '@/components/vector/TeacherSubjectsOverlay.vue'
 
 const locale = useLocaleStore()
 const MAX_SCORE = 5
@@ -25,6 +26,7 @@ const MAX_SCORE = 5
 const loading = ref(true)
 const failed = ref(false)
 const groups = ref([])
+const showCharts = ref(false)
 
 const STATUS = {
   accent: { text: 'text-accent', bg: 'bg-accent' },
@@ -63,12 +65,20 @@ const hasData = computed(() => groups.value.length > 0)
       <h3 class="font-title text-sm font-bold text-text">
         {{ locale.t('teacherOverview.title', 'Мои группы') }}
       </h3>
-      <button type="button" @click="load" :disabled="loading"
-              class="grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent disabled:opacity-50"
-              :title="locale.t('common.refresh', 'Обновить')"
-              :aria-label="locale.t('common.refresh', 'Обновить')">
-        <RotateCw class="size-3.5" />
-      </button>
+      <div class="flex shrink-0 items-center gap-1">
+        <button type="button" @click="showCharts = true"
+                class="grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent"
+                :title="locale.t('teacherOverview.chartsTitle', 'Статистика по предметам')"
+                :aria-label="locale.t('teacherOverview.chartsTitle', 'Статистика по предметам')">
+          <PieChart class="size-3.5" />
+        </button>
+        <button type="button" @click="load" :disabled="loading"
+                class="grid size-7 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent disabled:opacity-50"
+                :title="locale.t('common.refresh', 'Обновить')"
+                :aria-label="locale.t('common.refresh', 'Обновить')">
+          <RotateCw class="size-3.5" />
+        </button>
+      </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto p-4">
@@ -120,5 +130,7 @@ const hasData = computed(() => groups.value.length > 0)
         </div>
       </div>
     </div>
+
+    <TeacherSubjectsOverlay v-if="showCharts" @close="showCharts = false" />
   </section>
 </template>

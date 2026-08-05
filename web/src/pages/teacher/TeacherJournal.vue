@@ -10,6 +10,7 @@
 //  • дата нового занятия — автоматически сегодняшняя.
 // Всё пишется в те же таблицы, что синк десктопа → изменения доезжают до ПК pull'ом.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute } from 'vue-router'
 import { teacherApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -24,6 +25,7 @@ import { useLocaleStore } from '@/stores/locale'
 const toast = useToast()
 const { confirm, prompt } = useConfirm()
 const locale = useLocaleStore()
+const route = useRoute()
 
 const groups = ref([])
 const subjects = ref([])
@@ -66,8 +68,14 @@ onMounted(async () => {
     const o = (await teacherApi.overview()).data
     groups.value = o.groups || []
     subjects.value = o.subjects || []
-    group.value = groups.value[0] || ''
-    subject.value = subjects.value[0] || ''
+    // Deep-link из статистики (§ИИ Помощник → диаграммы → «Открыть журнал»): группа/
+    // предмет пришли в query. Подставляем, ТОЛЬКО если они реально есть в списках
+    // этого преподавателя — иначе чужой/опечатанный параметр молча выбрал бы то,
+    // что сервер потом всё равно откажется отдавать.
+    const qGroup = String(route.query.group || '')
+    const qSubject = String(route.query.subject || '')
+    group.value = (qGroup && groups.value.includes(qGroup)) ? qGroup : (groups.value[0] || '')
+    subject.value = (qSubject && subjects.value.includes(qSubject)) ? qSubject : (subjects.value[0] || '')
   } catch { /* */ }
   await loadTerms()
   document.addEventListener('click', closeCtx)

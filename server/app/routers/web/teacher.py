@@ -125,6 +125,29 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
             "students": len(studs), "group_average": group_avg, "lessons": len(lessons)}
 
 
+@router.get("/teacher/subjects-overview")
+def teacher_subjects_overview(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Диаграммы вкладки «ИИ Помощник» (3.6.1): общая категоризация студентов
+    (отличники/хорошисты/успевающие/неуспевающие) по ВСЕЙ нагрузке преподавателя +
+    та же категоризация ПО КАЖДОМУ ПРЕДМЕТУ (агрегат по всем его группам). Второй
+    уровень (по группам внутри предмета) — GET /teacher/subjects-overview/groups."""
+    _require("teacher", user)
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    return W.teacher_subjects_overview(db, user, ty, ts)
+
+
+@router.get("/teacher/subjects-overview/groups")
+def teacher_subjects_overview_groups(subject: str = Query(...),
+                                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Drill-down по предмету: категоризация ОТДЕЛЬНО по каждой группе, где
+    преподаватель ведёт этот предмет (§/teacher/subjects-overview)."""
+    _require("teacher", user)
+    cfg = W.load_config(db)
+    ty, ts = W.current_term(cfg)
+    return W.teacher_subject_groups(db, user, ty, ts, subject)
+
+
 @router.get("/teacher/summary")
 def teacher_summary(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Сводка преподавателя для вкладки «ИИ Помощник» (3.6): его группы, в каждой —

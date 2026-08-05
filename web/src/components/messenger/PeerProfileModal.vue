@@ -1,20 +1,50 @@
 <script setup>
 // PeerProfileModal — открывается кликом по аватарке/имени человека где угодно в
 // мессенджере (участник группы/канала, собеседник ЛС), как в Discord. Сама карточка —
-// PeerProfileCard (общий компонент, см. его докстринг); здесь только оболочка модалки +
-// правая колонка «Общие каналы»/«Общие группы» — ЗАГОТОВКА (заголовки без данных, как
-// «Эффекты профиля» на своей карточке, см. Profile.vue): реальный запрос пересечения
-// бесед — отдельная по объёму задача, не часть этого захода.
+// PeerProfileCard (общий компонент, см. его докстринг); здесь — оболочка модалки + правая
+// колонка «Общие каналы»/«Общие группы»: пересечение бесед с человеком (GET .../shared),
+// клик по строке открывает ту беседу и закрывает модалку — тот же переход, что у кнопки
+// «Сообщение» в самой карточке.
+import { ref, onMounted, watch, computed } from 'vue'
 import { X, Radio, Users } from '@lucide/vue'
+import { useRouter } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
+import { useAuthStore } from '@/stores/auth'
+import { useMessengerStore } from '@/stores/messenger'
+import { messengerApi } from '@/api/endpoints'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 
-defineProps({
+const props = defineProps({
   userId: { type: String, default: '' },
   peerData: { type: Object, default: null },
 })
 const emit = defineEmits(['close'])
 const locale = useLocaleStore()
+const auth = useAuthStore()
+const messenger = useMessengerStore()
+const router = useRouter()
+
+const targetId = computed(() => props.userId || props.peerData?.id || '')
+const groups = ref([])
+const channels = ref([])
+async function loadShared() {
+  groups.value = []
+  channels.value = []
+  if (!targetId.value) return
+  try {
+    const { data } = await messengerApi.shared(targetId.value)
+    groups.value = data.groups || []
+    channels.value = data.channels || []
+  } catch { /* нет доступа/сервера — тихо, список останется пустым */ }
+}
+onMounted(loadShared)
+watch(targetId, loadShared)
+
+async function openConversation(conv) {
+  await messenger.selectChat({ conversation_id: conv.id, title: conv.title })
+  router.push(`/${auth.role}/messages`)
+  emit('close')
+}
 </script>
 
 <template>
@@ -24,16 +54,32 @@ const locale = useLocaleStore()
       <div class="min-h-0 flex-1 overflow-y-auto">
         <PeerProfileCard :user-id="userId" :peer-data="peerData" @messaged="emit('close')" />
       </div>
-      <!-- Резерв места под будущее — не запрашиваем и не считаем ничего, только каркас. -->
-      <div class="hidden w-56 shrink-0 border-l border-border2 bg-card p-4 sm:block">
-        <p class="mb-3 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
+      <div class="hidden w-56 shrink-0 overflow-y-auto border-l border-border2 bg-card p-4 sm:block">
+        <p class="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
           <Users class="size-3.5" />{{ locale.t('peerProfile.sharedGroups', 'Общие группы') }}
         </p>
-        <p class="mb-4 text-xs text-text3">{{ locale.t('peerProfile.soon', 'Скоро') }}</p>
-        <p class="mb-3 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
+        <ul v-if="groups.length" class="mb-4 space-y-0.5">
+          <li v-for="g in groups" :key="g.id">
+            <button type="button" @click="openConversation(g)"
+                    class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
+              {{ g.title }}
+            </button>
+          </li>
+        </ul>
+        <p v-else class="mb-4 text-xs text-text3">{{ locale.t('peerProfile.noneYet', 'Пока нет') }}</p>
+
+        <p class="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
           <Radio class="size-3.5" />{{ locale.t('peerProfile.sharedChannels', 'Общие каналы') }}
         </p>
-        <p class="text-xs text-text3">{{ locale.t('peerProfile.soon', 'Скоро') }}</p>
+        <ul v-if="channels.length" class="space-y-0.5">
+          <li v-for="c in channels" :key="c.id">
+            <button type="button" @click="openConversation(c)"
+                    class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
+              {{ c.title }}
+            </button>
+          </li>
+        </ul>
+        <p v-else class="text-xs text-text3">{{ locale.t('peerProfile.noneYet', 'Пока нет') }}</p>
       </div>
     </div>
     <button type="button" @click="emit('close')" :aria-label="locale.t('common.close')"

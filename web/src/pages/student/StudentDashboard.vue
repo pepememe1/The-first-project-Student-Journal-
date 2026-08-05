@@ -105,7 +105,10 @@ onBeforeUnmount(() => clearInterval(tipTimer))
     <!-- Маскот слева крупным планом; справа — инсайты, статы и предметы ОДНОЙ колонкой,
          поэтому плашки рисков/долгов встают вровень со статами. -->
     <div class="grid gap-6 lg:grid-cols-[minmax(190px,240px)_1fr] xl:grid-cols-[minmax(300px,380px)_1fr]">
-      <div class="hidden items-center justify-center lg:flex">
+      <!-- items-start, НЕ items-center: правая колонка высокая (заявки родителей +
+           инсайты + статы + предметы), и центрирование по всей её высоте утаскивало
+           тигра вниз, вровень со статами, а не сразу под «Умным советом» (живой баг). -->
+      <div class="hidden items-start justify-center lg:flex">
         <!-- Тигр во всю ширину колонки; пропорции спрайта 3:4 (460×613) — без пустот. -->
         <Mascot :sprite="sprite" class="aspect-[3/4] w-full max-w-[190px] lg:max-w-[320px] xl:max-w-[380px]" />
       </div>

@@ -1592,3 +1592,32 @@ def test_note_requires_auth(client):
     _, (a_id, a), (b_id, b), _ = _setup(client)
     assert client.get(f"/web/messenger/users/{b_id}/note").status_code == 401
     assert client.post(f"/web/messenger/users/{b_id}/note", json={"text": "x"}).status_code == 401
+
+
+# ── «Общие группы»/«Общие каналы» на карточке профиля ─────────────────────────────────
+def test_shared_groups_and_channels_are_the_intersection(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    #Группа с a+b (общая), канал с a+b (общий), и группа с a+c (НЕ общая с b).
+    g_shared = client.post("/web/messenger/chats/group",
+                           json={"title": "Общая группа", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    ch_shared = client.post("/web/messenger/chats/channel",
+                            json={"title": "Общий канал", "writer_ids": [b_id]}, headers=a).json()["conversation_id"]
+    client.post("/web/messenger/chats/group", json={"title": "Только a+c", "member_ids": [c_id]}, headers=a)
+
+    r = client.get(f"/web/messenger/users/{b_id}/shared", headers=a)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert [x["id"] for x in data["groups"]] == [g_shared]
+    assert [x["id"] for x in data["channels"]] == [ch_shared]
+
+
+def test_shared_empty_when_no_mutual_conversations(client):
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    r = client.get(f"/web/messenger/users/{c_id}/shared", headers=a)
+    assert r.status_code == 200
+    assert r.json() == {"groups": [], "channels": []}
+
+
+def test_shared_requires_auth(client):
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    assert client.get(f"/web/messenger/users/{b_id}/shared").status_code == 401

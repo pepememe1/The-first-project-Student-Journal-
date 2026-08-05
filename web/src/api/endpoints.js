@@ -85,6 +85,10 @@ export const teacherApi = {
   // Сводка «мои группы × мои предметы» ОДНИМ запросом (для панели на вкладке «ИИ
   // Помощник»): перебор stats() по каждой паре означал бы десяток запросов на открытие.
   summary: () => api.get('/web/teacher/summary'),
+  // Диаграммы вкладки «ИИ Помощник» (3.6.1): общая категоризация + по предметам, и
+  // drill-down по группам внутри одного предмета.
+  subjectsOverview: () => api.get('/web/teacher/subjects-overview'),
+  subjectsOverviewGroups: (subject) => api.get('/web/teacher/subjects-overview/groups', { params: { subject } }),
   stats: (group, subject, params = {}) => api.get('/web/teacher/stats', { params: { group, subject, ...params } }),
   insights: (group) => api.get('/web/teacher/insights', { params: { group } }),
   // Запись оценки (Phase B). Пустой grade = снять оценку. Сервер ставит метку LWW.
@@ -350,6 +354,7 @@ export const messengerApi = {
   // Личная заметка о человеке (Discord-style «Notes») — видна только автору.
   note: (id) => api.get(`/web/messenger/users/${encodeURIComponent(id)}/note`),
   saveNote: (id, text) => api.post(`/web/messenger/users/${encodeURIComponent(id)}/note`, { text }),
+  shared: (id) => api.get(`/web/messenger/users/${encodeURIComponent(id)}/shared`),
   // Чаты.
   chats: () => api.get('/web/messenger/chats'),
   openDirect: (userId) => api.post(`/web/messenger/chats/direct/${encodeURIComponent(userId)}`),

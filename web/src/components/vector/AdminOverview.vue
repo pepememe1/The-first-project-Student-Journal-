@@ -25,15 +25,21 @@ const loading = ref(true)
 const failed = ref(false)
 const metrics = ref(null)
 const counts = ref(null)
+// «Онлайн сейчас» — тот же источник, что и вкладка «Сервер» → «Мониторинг»
+// (events.online(), окно ONLINE_WINDOW_SEC): второго расчёта «кто в сети» не заводим.
+const online = ref(null)
 
 async function load() {
   loading.value = true
   failed.value = false
-  //Две независимые сводки: сбой одной не должен прятать другую (состояние машины
+  //Три независимые сводки: сбой одной не должен прятать другие (состояние машины
   //полезно и без счётчиков, и наоборот).
-  const [m, c] = await Promise.allSettled([adminApi.serverMetrics(), adminApi.overview()])
+  const [m, c, si] = await Promise.allSettled([
+    adminApi.serverMetrics(), adminApi.overview(), adminApi.serverInfo(),
+  ])
   metrics.value = m.status === 'fulfilled' ? m.value.data : null
   counts.value = c.status === 'fulfilled' ? c.value.data : null
+  online.value = si.status === 'fulfilled' ? si.value.data.online_count : null
   failed.value = !metrics.value && !counts.value
   loading.value = false
 }
@@ -93,6 +99,15 @@ function loadStatus(pct) {
       </p>
 
       <div v-else class="flex flex-col gap-4">
+        <!-- Онлайн сейчас — тот же признак «база живая», но мгновенный, без похода
+             в раздел «Сервер». -->
+        <div v-if="online != null" class="flex items-center gap-2 rounded-lg border border-accent/25 bg-accent-glow p-3">
+          <span class="size-2.5 shrink-0 rounded-full bg-accent" />
+          <span class="text-sm text-text">
+            {{ locale.t('adminOverview.onlineNow', { n: online }) }}
+          </span>
+        </div>
+
         <!-- Когда запущено приложение. Первое, на что смотрят после деплоя. -->
         <div v-if="metrics" class="rounded-lg border border-border bg-bg2/50 p-3">
           <p class="text-[11px] uppercase tracking-wide text-text3">
@@ -165,6 +180,18 @@ function loadStatus(pct) {
               {{ locale.t('adminOverview.grades', 'Оценок') }}
             </p>
             <p class="mt-1 font-title text-xl font-extrabold leading-none text-text">{{ counts.grades ?? '—' }}</p>
+          </div>
+          <div class="rounded-lg border border-border bg-bg2/50 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-text3">
+              {{ locale.t('adminOverview.subjects', 'Предметов') }}
+            </p>
+            <p class="mt-1 font-title text-xl font-extrabold leading-none text-text">{{ counts.subjects ?? '—' }}</p>
+          </div>
+          <div class="rounded-lg border border-border bg-bg2/50 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-text3">
+              {{ locale.t('adminOverview.lessons', 'Занятий') }}
+            </p>
+            <p class="mt-1 font-title text-xl font-extrabold leading-none text-text">{{ counts.lessons ?? '—' }}</p>
           </div>
         </div>
 
