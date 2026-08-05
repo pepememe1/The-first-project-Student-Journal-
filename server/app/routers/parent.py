@@ -133,9 +133,10 @@ def parent_journal(student_id: str = Query(""), year: str = Query(""), semester:
     #продолжал висеть в журнале родителя со старыми занятиями — тот же скоуп, что и у
     #student_journal (см. её докстринг), иначе «формат один в один» из докстрина этой
     #функции был бы неправдой.
-    lessons = W.current_subject_lessons(
+    #Плюс раздельное обучение (§ролей, 3.6.1): чужая подгруппа ребёнка родителю не видна.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, child.group_name,
-        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive)
+        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive), child.id)
     records = W.student_records(db, child.surname, child.name, child.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
 
@@ -203,17 +204,18 @@ def parent_stats(student_id: str = Query(""), year: str = Query(""), semester: i
     is_archive = bool((year or "").strip() and semester)
     #Скоуп ТОТ ЖЕ, что у студента: только предметы действующего плана (отменённые
     #дисциплины остаются в базе, но в текущую сводку не идут) — см. student_stats.
-    lessons = W.current_subject_lessons(
+    #Плюс раздельное обучение (§ролей, 3.6.1): чужая подгруппа ребёнка не в счёт.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, child.group_name,
-        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive)
+        W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive), child.id)
     records = W.student_records(db, child.surname, child.name, child.group_name)
     #Долги/пропуски — как у студента: занятия без штампа термина остаются (иначе реальные
     #долги «исчезают»), а занятия с ЧУЖИМ заданным термином (прошлый курс) — отсекаются
     #(current_term_lessons), иначе повторяющийся предмет тянул бы долги за все курсы.
     #В архиве — строго по выбранному термину.
-    dl = lessons if is_archive else W.current_term_lessons(
-        db, child.group_name, W.current_subject_lessons(
-            db, child.group_name, W.group_lessons(db, child.group_name), is_archive), cfg)
+    dl = lessons if is_archive else W.filter_lessons_by_student_subgroup(
+        db, W.current_term_lessons(db, child.group_name, W.current_subject_lessons(
+            db, child.group_name, W.group_lessons(db, child.group_name), is_archive), cfg), child.id)
     scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
     risk = W.dropout_risk_for_student(db, child.surname, child.name, child.group_name,
                                       cfg=cfg, lessons=dl)

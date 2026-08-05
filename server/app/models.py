@@ -95,6 +95,12 @@ class Lesson(Base):
     year = Column(String, index=True, default="")
     semester = Column(Integer, index=True, default=0)
     extra = Column(JSON, default=dict)                 #retake_date_2..5 и пр.
+    #Раздельное обучение (§ролей, 3.6.1): 0 — обычное занятие (предмет не разделён, ИЛИ
+    #«Совместно» — занятие сразу для обеих подгрупп), 1/2 — только для этой подгруппы.
+    #Нумерация («Практика №N») считается ОТДЕЛЬНО в пределах каждого значения — иначе
+    #у двух преподавателей одной группы независимые «Практика №1» слились бы в одну
+    #серию и сбивали счёт друг другу (см. webdata.next_lesson_number).
+    subgroup = Column(Integer, default=0)
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 
@@ -346,6 +352,15 @@ class SubjectHours(Base):
     #та же (группа+предмет+год+семестр), отдельная колонка в существующей таблице проще,
     #чем новая сущность.
     zet = Column(Float, nullable=True)
+    #Раздельное обучение (§ролей, 3.6.1) — куратор ставит галочку в «Курировании», ПОСЛЕ
+    #этого админ вправе занять teacher_id_2 (см. ниже). Флаг живёт на самой строке часов,
+    #а не отдельной таблицей: гранулярность та же (группа+предмет+год+семестр).
+    split = Column(Boolean, default=False)
+    #Второй преподаватель — подгруппа 2. Пусто при split=True значит «подгруппа 2 тоже за
+    #teacher_id» (случай «маленький класс, один препод ведёт обе подгруппы по очереди» —
+    #сознательное решение не заводить для этого отдельный переключатель, см. CLAUDE.md).
+    #Бессмысленно, если split=False — writer обязан это проверять (см. admin_read.py).
+    teacher_id_2 = Column(String, index=True, default="")
     updated_at = Column(String, default="", index=True)
     deleted = Column(Boolean, default=False)
 
@@ -354,6 +369,31 @@ def subject_hours_id(group: str, subject: str, year: str, semester) -> str:
     """Детерминированный ключ (как sovr:/grp:/subj:) — автоинкремент столкнулся бы между
     ПК. Повторное сохранение часов ЗАМЕНЯЕТ строку, а не плодит дубли."""
     return f"hrs:{group}|{subject}|{year}|{int(semester or 0)}"
+
+
+class StudentSubgroup(Base):
+    """Подгруппа (1 или 2) студента ПО ОДНОМУ раздельному предмету на семестр (§ролей,
+    3.6.1) — куратор расставляет галочками, ПОСЛЕ того как админ занял teacher_id_2 у
+    SubjectHours этого предмета. Один студент может быть в 1-й подгруппе по английскому
+    и во 2-й по физре одновременно — поэтому ключ включает предмет, а не только группу.
+
+    ВХОДИТ в SYNC_MODELS: журнал на десктопе нативный (офлайн), и роспись по подгруппам
+    должна быть видна там же, где преподаватель ведёт занятия, без похода в сеть."""
+    __tablename__ = "student_subgroups"
+    id = Column(String, primary_key=True)      #sg:{группа}|{предмет}|{год}|{семестр}|{student_id}
+    group_name = Column(String, index=True, default="")
+    subject = Column(String, index=True, default="")
+    year = Column(String, index=True, default="")
+    semester = Column(Integer, index=True, default=0)
+    student_id = Column(String, index=True, default="")
+    subgroup = Column(Integer, default=1)      #1 или 2
+    updated_at = Column(String, default="", index=True)
+    deleted = Column(Boolean, default=False)
+
+
+def student_subgroup_id(group: str, subject: str, year: str, semester, student_id: str) -> str:
+    """Детерминированный ключ — повторная простановка подгруппы ЗАМЕНЯЕТ запись."""
+    return f"sg:{group}|{subject}|{year}|{int(semester or 0)}|{student_id}"
 
 
 class ZetThreshold(Base):
@@ -824,5 +864,6 @@ SYNC_MODELS = {
     "term_grades": TermGrade,
     "schedule_overrides": ScheduleOverride,   #правки расписания — общие веб↔десктоп
     "subject_hours": SubjectHours,            #плановые часы — нужны нативному журналу ПК
+    "student_subgroups": StudentSubgroup,     #раздельное обучение — нужны нативному журналу ПК
     "config": ConfigKV,
 }

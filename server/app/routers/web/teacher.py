@@ -33,7 +33,12 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
                     year: str = Query(""), semester: int = Query(0),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Журнал группы по одному предмету преподавателя: студенты × занятия × оценки.
-    По умолчанию — текущий семестр; year+semester открывают архив."""
+    По умолчанию — текущий семестр; year+semester открывают архив.
+
+    Раздельное обучение (§ролей, 3.6.1): если предмет отмечен `split`, и занятия, и
+    ростер сужаются до подгрупп, которые РЕАЛЬНО ведёт этот преподаватель — «Совместно»
+    (subgroup=0) видно всем, своя подгруппа — только её студентам/занятиям, чужая —
+    не видна вовсе."""
     _require("teacher", user)
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, year, semester)
@@ -41,6 +46,22 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
     tscale = W.teacher_scale(user)
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
+
+    sh_row = W.subject_hours_row(db, group, subject, ty, ts)
+    split_info = None
+    sub_map = {}
+    if sh_row and sh_row.split:
+        owned = W.teacher_owned_subgroups(sh_row, user.id)
+        lessons = [l for l in lessons if not l.subgroup or l.subgroup in owned]
+        sub_map = W.group_student_subgroups(db, group, subject, ty, ts)
+        if owned == {1, 2}:
+            #ведёт ОБЕ подгруппы — видит всех, кого куратор УЖЕ расставил (не «лимб»
+            #ещё не распределённых — им это занятие всё равно не адресовано).
+            studs = [s for s in studs if s.id in sub_map]
+        else:
+            only = next(iter(owned)) if owned else 0
+            studs = [s for s in studs if sub_map.get(s.id) == only]
+        split_info = {"owned_subgroups": sorted(owned)}
     #Ключи пересдач экзаменов (как в десктопе: <id>_retake, дальше — _retake_N по extra).
     retake_keys = []
     for l in lessons:
@@ -55,7 +76,11 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         grades.update({k: recs.get(k, "") for k in retake_keys})
         rows.append({"surname": s.surname, "name": s.name, "grades": grades,
-                     "average": W.average(lessons, recs, cfg, scale=tscale)})
+                     "average": W.average(lessons, recs, cfg, scale=tscale),
+                     #Своя подгруппа (§ролей, 3.6.1) — None у обычного предмета/студента,
+                     #которого куратор ещё не расставил. Клиент по ней гасит ячейки чужой
+                     #подгруппы (пары этого столбца этот студент не мог посещать).
+                     "subgroup": sub_map.get(s.id) if split_info else None})
     return {
         "group": group, "subject": subject, "term": {"year": ty, "semester": ts},
         #Шкала ЭТОГО преподавателя (§ролей, 3.3.1) — клиент строит из неё варианты
@@ -63,11 +88,16 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
         "scale": tscale, "scale_values": list(W.grading.scale_values(tscale)),
         "lessons": [{"id": l.id, "type": l.type, "number": l.number,
                      "topic": l.topic, "date": l.date, "hour": l.hour,
-                     "retake_date": l.retake_date, "extra": l.extra or {}}
+                     "retake_date": l.retake_date, "extra": l.extra or {},
+                     "subgroup": l.subgroup or 0}
                     for l in lessons],
         "students": rows,
         #«Пройдено X из Y часов» — считается из тех же занятий, отдельный запрос не нужен.
         "hours": W.hours_progress(db, group, subject, lessons, ty, ts),
+        #Раздельное обучение (§ролей, 3.6.1) — None у обычного предмета (клиент не рисует
+        #кнопки подгрупп вовсе); owned_subgroups — какие подгруппы реально ведёт ЭТОТ
+        #преподаватель ({1}, {2} или [1,2] — «Совместно» доступно только последнему).
+        "split": split_info,
     }
 
 

@@ -164,17 +164,21 @@ async function saveHours() {
   try {
     const hours = {}
     const teachers = {}
+    const teachers2 = {}
     const zet = {}
     hoursRows.value.forEach((r) => {
       hours[r.subject] = Number(r.hours_total) || 0
       teachers[r.subject] = r.teacher_id || ''
+      //Второй преподаватель (раздельное обучение, §ролей 3.6.1) — шлём, ТОЛЬКО если
+      //куратор уже поставил галочку на предмете (иначе сервер отклонит: 400).
+      if (r.split) teachers2[r.subject] = r.teacher_id_2 || ''
       //ЗЕТ: пусто/не число — снять (null), НЕ подставлять zet_hint автоматически
       //(docs/PLAN-ZET.md §10 — подсказка, а не источник правды).
       const zv = r.zet
       zet[r.subject] = (zv === '' || zv === null || zv === undefined || Number.isNaN(Number(zv)))
         ? null : Number(zv)
     })
-    await adminApi.saveGroupHours(hoursGroup.value, hours, teachers, zet)
+    await adminApi.saveGroupHours(hoursGroup.value, hours, teachers, teachers2, zet)
     toast.success(locale.t('adminGroups.hoursSaved', 'Часы сохранены'))
     showHours.value = false
   } catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.hoursSaveFailed', 'Не удалось сохранить')) }
@@ -480,6 +484,19 @@ async function importParsed() {
             <p v-if="!teachersFor(r.subject).length" class="mt-1 text-[11px] text-text3">
               {{ locale.t('adminGroups.noTeachersForSubject', { subject: r.subject }) }}
             </p>
+            <!-- Раздельное обучение (§ролей, 3.6.1) — флаг ставит куратор во вкладке
+                 «Курирование», здесь только читаем его и, если он стоит, даём занять
+                 ВТОРОГО преподавателя (подгруппа 2). Пусто — обе подгруппы у teacher_id. -->
+            <template v-if="r.split">
+              <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent">
+                <span>👥</span><span>{{ locale.t('adminGroups.splitBadge', 'раздельное обучение') }}</span>
+              </div>
+              <select v-model="r.teacher_id_2"
+                      class="mt-1 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
+                <option value="">{{ locale.t('adminGroups.subgroup2NotAssigned', '— подгруппа 2: тот же преподаватель —') }}</option>
+                <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
+              </select>
+            </template>
           </div>
         </div>
 

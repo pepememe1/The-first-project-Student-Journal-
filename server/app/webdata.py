@@ -13,6 +13,8 @@ import os
 import re
 import sys
 
+from sqlalchemy import or_
+
 #grading.py лежит в корне репозитория рядом с server/. Разворачивание идёт из того
 #же репо (см. server/DEPLOY.md: git clone <repo> && cd server), поэтому корень
 #доступен. Добавляем его в sys.path и переиспользуем единый расчёт.
@@ -24,7 +26,7 @@ import study_hours  # noqa: E402  — общее с десктопом прав�
 import dropout_risk  # noqa: E402  — общие с десктопом правила риска отчисления
 
 from .models import (User, Lesson, Grade, ConfigKV, SubjectHours, Group,  # noqa: E402
-                     subject_hours_id)
+                     subject_hours_id, StudentSubgroup, student_subgroup_id)
 
 
 def load_config(db) -> dict:
@@ -292,6 +294,84 @@ def hours_progress(db, group: str, subject: str, lessons, year: str, semester) -
     а не рисует «24 из 0». Придумывать план за администратора нельзя."""
     return {"done": hours_done(lessons),
             "total": hours_plan(db, group, subject, year, semester)}
+
+
+# ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
+def subject_hours_row(db, group: str, subject: str, year: str, semester):
+    """Строка часов (или None) — общий лукап, чтобы не собирать subject_hours_id в
+    каждом месте, где нужны split/teacher_id_2."""
+    row = db.get(SubjectHours, subject_hours_id(group, subject, year, semester))
+    return row if (row and not row.deleted) else None
+
+
+def teacher_owned_subgroups(row, teacher_id: str) -> set:
+    """Какие подгруппы ведёт преподаватель по строке часов раздельного предмета:
+    {1}, {2}, {1,2} или пусто (не назначен вовсе). Пустой teacher_id_2 при split=True —
+    единственный назначенный преподаватель ведёт ОБЕ подгруппы по очереди (маленький
+    класс, см. CLAUDE.md) — тогда {1,2}, а не только {1}."""
+    if row is None or not row.split or not teacher_id:
+        return set()
+    t1, t2 = row.teacher_id or "", row.teacher_id_2 or ""
+    out = set()
+    if teacher_id == t1:
+        out.add(1)
+        if not t2:
+            out.add(2)
+    if teacher_id == t2:
+        out.add(2)
+    return out
+
+
+def student_subgroup(db, group: str, subject: str, year: str, semester, student_id: str):
+    """Подгруппа (1/2) студента по ЭТОМУ предмету и термину — None, если куратор ещё не
+    расставил (студент не входит ни в чью подгруппу, пока не назначен явно)."""
+    row = db.get(StudentSubgroup, student_subgroup_id(group, subject, year, semester, student_id))
+    return row.subgroup if (row and not row.deleted) else None
+
+
+def group_student_subgroups(db, group: str, subject: str, year: str, semester) -> dict:
+    """{student_id: 1|2} — вся роспись по подгруппам этого предмета/термина, одним запросом
+    (для редактора куратора и для фильтрации ростера в журнале препода)."""
+    rows = (db.query(StudentSubgroup)
+            .filter(StudentSubgroup.group_name == group, StudentSubgroup.subject == subject,
+                    StudentSubgroup.year == (year or ""), StudentSubgroup.semester == int(semester or 0),
+                    StudentSubgroup.deleted == False).all())  # noqa: E712
+    return {r.student_id: r.subgroup for r in rows}
+
+
+def next_lesson_number(db, group: str, subject: str, ltype: str, subgroup: int = 0) -> int:
+    """Следующий номер занятия этого типа — МАКСИМУМ+1, а не количество строк (лекция
+    лежит в базе двумя строками по академическим часам, см. study_hours.HOURS_PER_LESSON).
+    При раздельном обучении (§ролей, 3.6.1) считается ОТДЕЛЬНО в пределах ТОЙ ЖЕ
+    подгруппы — иначе у двух преподавателей одной группы независимые «Практика №1»
+    слились бы в одну общую последовательность и сбивали счёт друг другу (живой
+    запрос: «чтобы разные преподы могли не сбиться со счёта»)."""
+    rows = db.query(Lesson.number).filter(
+        Lesson.group_name == group, Lesson.subject == subject, Lesson.type == ltype,
+        Lesson.subgroup == int(subgroup or 0), Lesson.deleted == False).all()  # noqa: E712
+    return (max((r[0] or 0) for r in rows) + 1) if rows else 1
+
+
+def filter_lessons_by_student_subgroup(db, lessons, student_id: str) -> list:
+    """Оставляет занятия, которые видны СТУДЕНТУ: subgroup=0 (обычное занятие, либо
+    «Совместно» на раздельном предмете) — всегда, иначе — только его собственная
+    подгруппа по ИМЕННО ЭТОМУ предмету и термину (один студент может быть в разных
+    подгруппах по разным предметам).
+
+    Не split-предметы subgroup=0 у ВСЕХ занятий — фильтр их не трогает, поведение как
+    раньше. Дёшево для типичного случая: ранний `continue` без похода в БД."""
+    cache = {}
+    out = []
+    for l in lessons:
+        if not l.subgroup:
+            out.append(l)
+            continue
+        key = (l.group_name, l.subject, l.year, l.semester)
+        if key not in cache:
+            cache[key] = student_subgroup(db, l.group_name, l.subject, l.year, l.semester, student_id)
+        if cache[key] == l.subgroup:
+            out.append(l)
+    return out
 
 
 def teacher_scale(user) -> str:
@@ -591,8 +671,12 @@ def teacher_assignments(db, teacher_id: str, year: str, semester,
     поведения, ошибка в другую сторону (спрятать своё) тут безопаснее."""
     if not teacher_id:
         return []
+    #teacher_id_2 — второй преподаватель раздельного обучения (§ролей, 3.6.1, подгруппа
+    #2). Без него препод, назначенный ТОЛЬКО во второй слот, не проходил бы вообще
+    #никуда: журнал/сводка/офлайн-синк отвечали бы «эта группа вам не назначена».
     rows = (db.query(SubjectHours)
-            .filter(SubjectHours.teacher_id == teacher_id,
+            .filter(or_(SubjectHours.teacher_id == teacher_id,
+                       SubjectHours.teacher_id_2 == teacher_id),
                     SubjectHours.year == (year or ""),
                     SubjectHours.semester == int(semester or 0),
                     SubjectHours.deleted == False).all())  # noqa: E712

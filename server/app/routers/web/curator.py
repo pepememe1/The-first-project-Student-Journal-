@@ -301,3 +301,112 @@ def curator_report(groups: str = Query("all"), fmt: str = Query("xlsx"),
     audit.log(db, actor=user.login, role="teacher", action="curator.report",
               target=", ".join(chosen), detail=f"{fmt}, семестр {ty}/{ts}")
     return _file_response(blob, name, fmt)
+
+
+# ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
+# Поток: куратор ставит галочку «раздельное обучение» на предмете (здесь) → админ в
+# редакторе часов группы получает право занять ВТОРОГО преподавателя (admin_read.py) →
+# куратор расставляет студентов по подгруппам (subgroups ниже). Порядок именно такой —
+# без назначенных преподавателей расставлять студентов по подгруппам было бы не за кого.
+@router.post("/curator/subject-split")
+def curator_set_subject_split(payload: dict = Body(...),
+                              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Включить/выключить раздельное обучение по предмету группы: {group, subject,
+    split: bool, year?, semester?}. Куратор ИЛИ админ (тот же порог, что у ЗЕТ-порога —
+    решение по своей группе куратор принимает сам, гонять его к админу за каждой
+    галочкой не нужно). Строку SubjectHours заводит, если её ещё не было (план мог
+    быть пуст по этому предмету — часы админ выставит позже, отдельно)."""
+    group = (payload.get("group") or "").strip()
+    subject = (payload.get("subject") or "").strip()
+    if not group or not subject:
+        raise HTTPException(status_code=400, detail="Нужны group и subject")
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    hid = subject_hours_id(group, subject, ty, ts)
+    row = db.get(SubjectHours, hid)
+    if row is None:
+        row = SubjectHours(id=hid, group_name=group, subject=subject, year=ty, semester=ts)
+        db.add(row)
+    split = bool(payload.get("split"))
+    row.split = split
+    #Выключили раздельное обучение — второй преподаватель и роспись по подгруппам теряют
+    #смысл: снимаем teacher_id_2 (иначе он молча продолжал бы «владеть» подгруппой 2 у
+    #уже НЕ раздельного предмета). Роспись StudentSubgroup не трогаем — включат обратно,
+    #она понадобится снова, а сама по себе на не-раздельный предмет не влияет никак
+    #(Lesson.subgroup у него и так всегда 0 — фильтры её не читают).
+    if not split:
+        row.teacher_id_2 = ""
+    row.deleted = False
+    row.updated_at = _now_iso()
+    db.commit()
+    return {"ok": True, "group": group, "subject": subject, "split": split,
+            "term": {"year": ty, "semester": ts}}
+
+
+@router.get("/curator/subgroups")
+def curator_get_subgroups(group: str = Query(...), subject: str = Query(...),
+                          year: str = Query(""), semester: int = Query(0),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Роспись студентов группы по подгруппам ЭТОГО раздельного предмета — для редактора
+    куратора. Отдаёт ВСЕХ студентов группы (не только уже распределённых), чтобы было
+    видно, кого ещё не отметили."""
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, year, semester)
+    row = W.subject_hours_row(db, group, subject, ty, ts)
+    assigned = W.group_student_subgroups(db, group, subject, ty, ts)
+    students = [{"student_id": s.id, "surname": s.surname, "name": s.name,
+                "full_name": W.display_name(s), "subgroup": assigned.get(s.id)}
+               for s in W.students_in_group(db, group)]
+    return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
+            "split": bool(row and row.split),
+            "teacher_name": W.display_name(db.get(User, row.teacher_id)) if (row and row.teacher_id and db.get(User, row.teacher_id)) else "",
+            "teacher_name_2": W.display_name(db.get(User, row.teacher_id_2)) if (row and row.teacher_id_2 and db.get(User, row.teacher_id_2)) else "",
+            "students": students}
+
+
+@router.post("/curator/subgroups")
+def curator_set_subgroups(payload: dict = Body(...),
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сохранить роспись по подгруппам: {group, subject, assignments: {student_id: 1|2|null},
+    year?, semester?}. null снимает распределение студента (снова «не назначен»)."""
+    group = (payload.get("group") or "").strip()
+    subject = (payload.get("subject") or "").strip()
+    assignments = payload.get("assignments")
+    if not group or not subject or not isinstance(assignments, dict):
+        raise HTTPException(status_code=400, detail="Нужны group, subject и assignments")
+    _admin_or_curator_check(user, group)
+    cfg = W.load_config(db)
+    ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
+    row = W.subject_hours_row(db, group, subject, ty, ts)
+    if not row or not row.split:
+        raise HTTPException(status_code=400, detail="Предмет не отмечен как раздельный")
+    roster = {s.id for s in W.students_in_group(db, group)}
+    now = _now_iso()
+    for sid, sg in assignments.items():
+        if sid not in roster:
+            continue   #чужой/устаревший id — молча пропускаем, а не 400 на весь запрос
+        hid = student_subgroup_id(group, subject, ty, ts, sid)
+        srow = db.get(StudentSubgroup, hid)
+        if sg is None or sg == "":
+            if srow is not None:
+                srow.deleted = True
+                srow.updated_at = now
+            continue
+        try:
+            sg = int(sg)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Подгруппа для {sid} должна быть 1 или 2")
+        if sg not in (1, 2):
+            raise HTTPException(status_code=400, detail="Подгруппа должна быть 1 или 2")
+        if srow is None:
+            srow = StudentSubgroup(id=hid, group_name=group, subject=subject, year=ty,
+                                   semester=ts, student_id=sid)
+            db.add(srow)
+        srow.subgroup = sg
+        srow.deleted = False
+        srow.updated_at = now
+    db.commit()
+    return {"ok": True, "group": group, "subject": subject,
+            "assigned": W.group_student_subgroups(db, group, subject, ty, ts)}

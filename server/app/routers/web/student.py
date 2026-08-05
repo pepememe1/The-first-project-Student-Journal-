@@ -19,8 +19,10 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     #дисциплин и занятия за прошлые курсы остаются в базе (история), но «Мои предметы» и
     #средний балл обязаны отражать текущий семестр — без term-фильтра предмет вроде
     #«Физическая культура» (есть в плане каждый семестр) тянул бы оценки за все курсы.
-    lessons = W.current_term_lessons(db, user.group_name, W.current_subject_lessons(
-        db, user.group_name, W.group_lessons(db, user.group_name)), cfg)
+    #Плюс раздельное обучение (§ролей, 3.6.1): занятие чужой подгруппы студенту не видно.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
+        db, user.group_name, W.current_subject_lessons(
+            db, user.group_name, W.group_lessons(db, user.group_name)), cfg), user.id)
     by_id = {l.id: l for l in lessons}
     records = W.student_records(db, user.surname, user.name, user.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
@@ -111,9 +113,11 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
     #Тот же скоуп, что у статистики: журнал текущего семестра показывает предметы
     #ДЕЙСТВУЮЩЕГО плана, архив — то, что реально велось тогда. Иначе список предметов в
     #журнале и в статистике расходится, и непонятно, какому из них верить.
-    lessons = W.current_subject_lessons(
+    #Раздельное обучение (§ролей, 3.6.1): своя подгруппа — всегда, архив не исключение
+    #(тогда занятие тоже принадлежало конкретной подгруппе, это факт истории).
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, user.group_name,
-        W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive)
+        W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive), user.id)
     records = W.student_records(db, user.surname, user.name, user.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
 
@@ -160,9 +164,11 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     #занятия и оценки остаются в базе (это история), но диаграмма «мои предметы» обязана
     #показывать то, что человек изучает СЕЙЧАС. В архиве фильтр не применяется — см.
     #webdata.current_subject_lessons.
-    lessons = W.current_subject_lessons(
+    #+ раздельное обучение (§ролей, 3.6.1): чужая подгруппа студенту не видна ни здесь,
+    #ни в архиве (тогда занятие тоже принадлежало конкретной подгруппе).
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, user.group_name,
-        W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive)
+        W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive), user.id)
     records = W.student_records(db, user.surname, user.name, user.group_name)
     #Долги и пропуски в ДЕФОЛТНОМ виде считаем по занятиям БЕЗ штампа термина ТОЖЕ (как
     #overview): иначе легаси-занятия без year/semester (десктоп до штампа) выпадают из
@@ -170,9 +176,9 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     #ЗАДАННЫМ термином (прошлый курс) — исключаем (current_term_lessons), иначе предмет
     #вроде «Физической культуры» тянул бы долги/пропуски за все прошлые курсы группы.
     #В архиве — строго по выбранному термину, ничего лишнего не подмешиваем.
-    dl = lessons if is_archive else W.current_term_lessons(
-        db, user.group_name, W.current_subject_lessons(
-            db, user.group_name, W.group_lessons(db, user.group_name), is_archive), cfg)
+    dl = lessons if is_archive else W.filter_lessons_by_student_subgroup(
+        db, W.current_term_lessons(db, user.group_name, W.current_subject_lessons(
+            db, user.group_name, W.group_lessons(db, user.group_name), is_archive), cfg), user.id)
     scale_map = W.lesson_scale_map(db, lessons if is_archive else lessons + dl)
     #Предметы ПЛАНА, по которым занятий ещё нет вовсе, тоже показываем — иначе список
     #«мои предметы» в статистике короче, чем в журнале, и это выглядит как потеря данных.
@@ -197,8 +203,10 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     #Карточки и риск отчисления считаем по ДЕЙСТВУЮЩЕМУ плану И текущему термину: долг
     #по отменённому предмету не должен пугать студента, а предмет вроде «Физической
     #культуры» (в плане каждый семестр) не должен тянуть оценки за прошлые курсы.
-    lessons = W.current_term_lessons(db, user.group_name, W.current_subject_lessons(
-        db, user.group_name, W.group_lessons(db, user.group_name)), cfg)
+    #Плюс раздельное обучение (§ролей, 3.6.1): чужая подгруппа не в счёт.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
+        db, user.group_name, W.current_subject_lessons(
+            db, user.group_name, W.group_lessons(db, user.group_name)), cfg), user.id)
     records = W.student_records(db, user.surname, user.name, user.group_name)
     scale_map = W.lesson_scale_map(db, lessons)
     avg = W.average(lessons, records, cfg, scale=scale_map)

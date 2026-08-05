@@ -105,19 +105,27 @@ def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: 
         SubjectHours.group_name == group, SubjectHours.year == ty,
         SubjectHours.semester == ts, SubjectHours.deleted == False).all()}  # noqa: E712
     tids = {r.teacher_id for r in hrows.values() if r.teacher_id}
+    tids |= {r.teacher_id_2 for r in hrows.values() if r.teacher_id_2}
     tnames = {u.id: W.display_name(u) for u in db.query(User).filter(User.id.in_(tids)).all()} if tids else {}
     out = []
     for subj in list(grp.subjects or []):
-        tid = (hrows.get(subj).teacher_id if subj in hrows else "") or ""
+        row = hrows.get(subj)
+        tid = (row.teacher_id if row else "") or ""
+        tid2 = (row.teacher_id_2 if row else "") or ""
         hrs = W.hours_plan(db, group, subj, ty, ts)
-        zet = hrows.get(subj).zet if subj in hrows else None
+        zet = row.zet if row else None
         out.append({"subject": subj, "hours_total": hrs,
                     "hours_done": W.hours_done(by_subject.get(subj, [])),
                     "teacher_id": tid, "teacher_name": tnames.get(tid, ""),
                     #ЗЕТ (docs/PLAN-ZET.md): zet — уже подтверждённое администратором
                     #значение (None — не задано, тогда интерфейс строку не показывает);
                     #zet_hint — ТОЛЬКО подсказка по формуле, никогда не подставляется сама.
-                    "zet": zet, "zet_hint": W.study_hours.zet_hint(hrs)})
+                    "zet": zet, "zet_hint": W.study_hours.zet_hint(hrs),
+                    #Раздельное обучение (§ролей, 3.6.1): флаг ставит куратор во вкладке
+                    #«Курирование» — здесь только читаем и, если он стоит, даём занять
+                    #второго преподавателя (см. admin_set_group_hours::teachers2).
+                    "split": bool(row and row.split),
+                    "teacher_id_2": tid2, "teacher_name_2": tnames.get(tid2, "")})
     return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
 
 
@@ -187,29 +195,35 @@ def admin_set_group_hours(payload: dict = Body(...),
                           _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Сохранить часы + назначение препода + ЗЕТ по предметам группы:
     {group, year, semester, hours: {предмет: N}, teachers: {предмет: teacher_id | ""},
-    zet: {предмет: float | null}}.
+    teachers2: {предмет: teacher_id | ""}, zet: {предмет: float | null}}.
 
     Пишем ПАЧКОЙ (кнопка «Сохранить» в админке правит сразу несколько предметов) — иначе
     полтора десятка запросов на одно нажатие и половинчатое состояние при обрыве связи.
     `teachers` — §ролей препод↔предмет↔группа: единственный источник правды «кто ведёт
-    какую группу по какому предмету», см. webdata.teacher_assignments. `zet` —
-    docs/PLAN-ZET.md: null (или ключ отсутствует) — не трогать/не задано, число —
+    какую группу по какому предмету», см. webdata.teacher_assignments. `teachers2` —
+    ВТОРОЙ преподаватель (подгруппа 2) раздельного обучения (3.6.1); принимается ТОЛЬКО
+    если куратор уже поставил галочку «раздельное обучение» на этом предмете
+    (SubjectHours.split — см. curator.py::curator_set_subject_split), иначе 400: часы
+    редактор не место заводить раздельное обучение, только назначать в него людей.
+    `zet` — docs/PLAN-ZET.md: null (или ключ отсутствует) — не трогать/не задано, число —
     подтверждённое администратором значение (подсказка zet_hint сюда НЕ подставляется
     автоматически, только человеком)."""
     group = (payload.get("group") or "").strip()
     hours = payload.get("hours") or {}
     teachers = payload.get("teachers") or {}
+    teachers2 = payload.get("teachers2") or {}
     zets = payload.get("zet") or {}
     if not group or not isinstance(hours, dict) or not isinstance(teachers, dict) \
-            or not isinstance(zets, dict):
+            or not isinstance(teachers2, dict) or not isinstance(zets, dict):
         raise HTTPException(status_code=400, detail="Нужны group и hours")
     cfg = W.load_config(db)
     ty, ts = _resolve_term(cfg, payload.get("year") or "", int(payload.get("semester") or 0))
     #Пустая строка teacher_id / null ЗЕТ = «снять назначение»/«снять ЗЕТ» — ЗНАЧИМОЕ
-    #намерение, поэтому обходим объединение ключей hours∪teachers∪zet, а не только те,
-    #где задано число часов.
+    #намерение, поэтому обходим объединение ключей hours∪teachers∪teachers2∪zet, а не
+    #только те, где задано число часов.
     subjects_touched = ({(s or "").strip() for s in hours}
                         | {(s or "").strip() for s in teachers}
+                        | {(s or "").strip() for s in teachers2}
                         | {(s or "").strip() for s in zets})
     subjects_touched.discard("")
     saved = 0
@@ -237,6 +251,22 @@ def admin_set_group_hours(payload: dict = Body(...),
                         status_code=400,
                         detail=f"У преподавателя «{W.display_name(t)}» нет предмета «{subject}»")
             row.teacher_id = tid
+        if subject in teachers2:
+            if not row.split:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Предмет «{subject}» не отмечен куратором как раздельный")
+            tid2 = (teachers2[subject] or "").strip()
+            if tid2:
+                t2 = db.query(User).filter(User.id == tid2, User.role == "teacher",
+                                           User.deleted == False).first()  # noqa: E712
+                if t2 is None:
+                    raise HTTPException(status_code=404, detail="Преподаватель не найден")
+                if subject not in (t2.subjects or []):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"У преподавателя «{W.display_name(t2)}» нет предмета «{subject}»")
+            row.teacher_id_2 = tid2
         if subject in zets:
             zv = zets[subject]
             if zv is None or zv == "":

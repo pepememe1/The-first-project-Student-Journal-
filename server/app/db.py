@@ -158,6 +158,8 @@ def init_db():
     _ensure_conversation_system_columns()
     _ensure_subject_hours_teacher_column()
     _ensure_subject_hours_zet_column()
+    _ensure_subject_hours_split_columns()
+    _ensure_lesson_subgroup_column()
     _ensure_group_specialty_columns()
     _ensure_group_category_column()
     _migrate_slash_in_ids()
@@ -229,6 +231,37 @@ def _ensure_subject_hours_zet_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE subject_hours ADD COLUMN zet FLOAT"))
+
+
+def _ensure_subject_hours_split_columns():
+    """Идемпотентная мини-миграция: subject_hours.split/teacher_id_2 (раздельное
+    обучение, §ролей 3.6.1). Тот же паттерн, что уже трижды применён для subject_hours."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("subject_hours")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу с обеими колонками
+    with engine.begin() as conn:
+        if "split" not in columns:
+            conn.execute(text("ALTER TABLE subject_hours ADD COLUMN split BOOLEAN DEFAULT 0"))
+        if "teacher_id_2" not in columns:
+            conn.execute(text("ALTER TABLE subject_hours ADD COLUMN teacher_id_2 VARCHAR DEFAULT ''"))
+
+
+def _ensure_lesson_subgroup_column():
+    """Идемпотентная мини-миграция: lessons.subgroup (раздельное обучение, §ролей
+    3.6.1) — 0 занятие общее/не разделённого предмета, 1/2 — своя подгруппа."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("lessons")}
+    except Exception:
+        return
+    if "subgroup" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE lessons ADD COLUMN subgroup INTEGER DEFAULT 0"))
 
 
 def _ensure_group_specialty_columns():

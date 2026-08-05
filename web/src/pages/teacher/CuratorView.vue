@@ -7,6 +7,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { curatorApi, adminApi, termsApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import RiskBadge from '@/components/ui/RiskBadge.vue'
+import AppButton from '@/components/ui/AppButton.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
@@ -166,6 +167,56 @@ async function load() {
 }
 watch(subject, load)
 
+// ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
+// Куратор ставит галочку на предмете → админ получает право занять второго
+// преподавателя (редактор часов) → куратор расставляет студентов по подгруппам.
+const subgroupInfo = ref(null)   // {split, teacher_name, teacher_name_2, students:[...]}
+const subgroupLoading = ref(false)
+const splitToggling = ref(false)
+const showSubgroups = ref(false)
+const subgroupDraft = ref({})    // {student_id: 1|2|null} — черновик редактора
+const subgroupSaving = ref(false)
+
+async function loadSubgroupInfo() {
+  subgroupInfo.value = null
+  if (!group.value || !subject.value) return
+  subgroupLoading.value = true
+  const forKey = `${group.value}|${subject.value}`
+  try {
+    const r = (await curatorApi.subgroups(group.value, subject.value, termParams())).data
+    if (`${group.value}|${subject.value}` !== forKey) return
+    subgroupInfo.value = r
+  } catch { subgroupInfo.value = null } finally { subgroupLoading.value = false }
+}
+watch(subject, loadSubgroupInfo)
+
+async function toggleSplit(on) {
+  if (!group.value || !subject.value) return
+  splitToggling.value = true
+  try {
+    await curatorApi.setSubjectSplit(group.value, subject.value, on, termParams())
+    await loadSubgroupInfo()
+    if (!on) toast.success(locale.t('curatorView.splitDisabled', 'Раздельное обучение выключено'))
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.splitToggleFailed', 'Не удалось изменить')) }
+  finally { splitToggling.value = false }
+}
+
+function openSubgroups() {
+  subgroupDraft.value = {}
+  for (const s of (subgroupInfo.value?.students || [])) subgroupDraft.value[s.student_id] = s.subgroup || null
+  showSubgroups.value = true
+}
+async function saveSubgroupDraft() {
+  subgroupSaving.value = true
+  try {
+    await curatorApi.saveSubgroups(group.value, subject.value, subgroupDraft.value, termParams())
+    toast.success(locale.t('curatorView.subgroupsSaved', 'Подгруппы сохранены'))
+    showSubgroups.value = false
+    await loadSubgroupInfo()
+  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.subgroupsSaveFailed', 'Не удалось сохранить')) }
+  finally { subgroupSaving.value = false }
+}
+
 function gradeClass(v) {
   v = (v || '').trim().split(' ')[0]
   if (v === '5' || v === '✓') return 'text-accent font-bold'
@@ -241,6 +292,27 @@ async function exportReport(fmt) {
                 @click="openExport">
           📊 {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
         </button>
+      </div>
+
+      <!-- Раздельное обучение (§ролей, 3.6.1): куратор включает здесь, второй преподаватель
+           занимается в редакторе часов группы (админка), подгруппы — кнопкой ниже. -->
+      <div v-if="subject && !subgroupLoading" class="flex flex-wrap items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2">
+        <label class="flex cursor-pointer items-center gap-2 text-sm text-text" :class="isArchive ? 'opacity-60' : ''">
+          <input type="checkbox" :checked="!!subgroupInfo?.split" :disabled="splitToggling || isArchive"
+                 @change="toggleSplit($event.target.checked)" />
+          {{ locale.t('curatorView.splitCheckbox', 'Раздельное обучение') }}
+        </label>
+        <template v-if="subgroupInfo?.split">
+          <span class="text-xs text-text3">
+            {{ locale.t('curatorView.splitTeachers', {
+              t1: subgroupInfo.teacher_name || locale.t('curatorView.splitNoTeacher', '—'),
+              t2: subgroupInfo.teacher_name_2 || locale.t('curatorView.splitSameTeacher', 'та же/не назначен'),
+            }) }}
+          </span>
+          <button type="button" class="ml-auto text-sm font-medium text-accent hover:underline" @click="openSubgroups">
+            👥 {{ locale.t('curatorView.subgroupsButton', 'Подгруппы') }}
+          </button>
+        </template>
       </div>
 
       <!-- Журнал (read-only) / ЗЕТ·Перевод (docs/PLAN-ZET.md §7.4) -->
@@ -434,6 +506,41 @@ async function exportReport(fmt) {
           </table>
         </div>
       </template>
+
+      <!-- Подгруппы (§ролей, 3.6.1): куратор отмечает, кто в 1-й, кто во 2-й. -->
+      <div v-if="showSubgroups" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+           @click.self="showSubgroups = false">
+        <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-border bg-card p-5 shadow-card">
+          <h3 class="mb-1 font-title text-lg font-bold text-text">👥 {{ locale.t('curatorView.subgroupsModalTitle', 'Подгруппы') }}</h3>
+          <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }}</p>
+          <div class="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+            <div v-for="s in (subgroupInfo?.students || [])" :key="s.student_id"
+                 class="flex items-center gap-2 rounded-sm px-1 py-1.5 hover:bg-bg2">
+              <span class="flex-1 truncate text-sm text-text">{{ s.full_name }}</span>
+              <div class="flex overflow-hidden rounded-sm border border-border2">
+                <button type="button" class="px-2.5 py-1 text-xs font-medium"
+                        :class="subgroupDraft[s.student_id] === 1 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
+                        @click="subgroupDraft[s.student_id] = 1">1{{ locale.t('curatorView.subgroupShort', 'ПГ') }}</button>
+                <button type="button" class="border-l border-border2 px-2.5 py-1 text-xs font-medium"
+                        :class="subgroupDraft[s.student_id] === 2 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
+                        @click="subgroupDraft[s.student_id] = 2">2{{ locale.t('curatorView.subgroupShort', 'ПГ') }}</button>
+                <button type="button" class="border-l border-border2 px-2 py-1 text-xs text-text3 hover:bg-bg2"
+                        :title="locale.t('curatorView.subgroupClear', 'Не назначен')"
+                        @click="subgroupDraft[s.student_id] = null">✕</button>
+              </div>
+            </div>
+            <p v-if="!subgroupInfo?.students?.length" class="py-6 text-center text-sm text-text3">
+              {{ locale.t('curatorView.noStudentsTitle', 'Нет студентов') }}
+            </p>
+          </div>
+          <div class="mt-4 flex justify-end gap-2">
+            <AppButton variant="ghost" size="sm" @click="showSubgroups = false">{{ locale.t('common.cancel') }}</AppButton>
+            <AppButton variant="green" size="sm" :disabled="subgroupSaving" @click="saveSubgroupDraft">
+              {{ subgroupSaving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : locale.t('common.save') }}
+            </AppButton>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>

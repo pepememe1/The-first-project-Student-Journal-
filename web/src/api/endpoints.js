@@ -137,6 +137,17 @@ export const curatorApi = {
   // Риск отчисления по ВСЕЙ группе (3.6, dropout_risk.py). Сервер отдаёт только тех, у
   // кого риск реально есть, и уже отсортированными по убыванию — к кому идти первым.
   risk: (group) => api.get('/web/curator/risk', { params: { group } }),
+  // Раздельное обучение (§ролей, 3.6.1): куратор ставит галочку на предмете — ПОСЛЕ
+  // этого админ может занять второго преподавателя в редакторе часов группы.
+  setSubjectSplit: (group, subject, split, params = {}) =>
+    api.post('/web/curator/subject-split', { group, subject, split, ...params }),
+  // Роспись студентов по подгруппам (1/2) этого предмета — вся группа, с уже
+  // назначенными и ещё нет.
+  subgroups: (group, subject, params = {}) =>
+    api.get('/web/curator/subgroups', { params: { group, subject, ...params } }),
+  // assignments — {student_id: 1|2|null}, null снимает распределение.
+  saveSubgroups: (group, subject, assignments, params = {}) =>
+    api.post('/web/curator/subgroups', { group, subject, assignments, ...params }),
 }
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
@@ -192,10 +203,12 @@ export const adminApi = {
   // то, что только что вытеснил реимпорт (active:false), прошлые — что велось тогда.
   groupSubjectArchive: (group) => api.get('/web/admin/group-subject-archive', { params: { group } }),
   // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);
+  // teachers2 — второй преподаватель раздельного обучения (§ролей, 3.6.1; принимается,
+  // только если куратор уже поставил split на предмете, см. curatorApi.setSubjectSplit);
   // zet — docs/PLAN-ZET.md: {предмет: float | null}. Та же строка subject_hours, что и часы
-  // (см. server/app/routers/web.py::admin_set_group_hours).
-  saveGroupHours: (group, hours, teachers = {}, zet = {}) =>
-    api.post('/web/admin/group-hours', { group, hours, teachers, zet }),
+  // (см. server/app/routers/web/admin_read.py::admin_set_group_hours).
+  saveGroupHours: (group, hours, teachers = {}, teachers2 = {}, zet = {}) =>
+    api.post('/web/admin/group-hours', { group, hours, teachers, teachers2, zet }),
   // Импорт специальности/учебного плана ВСГУТУ (parsers/esstu_parser.py на сервере):
   // список специальностей сайта колледжа + сам импорт часов/ЗЕТ текущего семестра в группу.
   esstuSpecialties: (group = '') => api.get('/web/admin/esstu/specialties', { params: { group } }),

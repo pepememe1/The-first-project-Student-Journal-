@@ -92,10 +92,12 @@ def test_admin_sees_plan_and_progress_together(client):
     assert r.status_code == 200, r.text
     row = next(s for s in r.json()["subjects"] if s["subject"] == "Математика")
     #§ролей: строка теперь несёт и назначение препода (teacher_id/teacher_name), и ЗЕТ
-    #(docs/PLAN-ZET.md: zet=None — не задано, zet_hint — подсказка по формуле часов/36).
+    #(docs/PLAN-ZET.md: zet=None — не задано, zet_hint — подсказка по формуле часов/36),
+    #и раздельное обучение (3.6.1: split/teacher_id_2/teacher_name_2 — по умолчанию нет).
     assert row == {"subject": "Математика", "hours_total": 72, "hours_done": 2,
                    "teacher_id": "teach:teacher1", "teacher_name": "Преподаватель",
-                   "zet": None, "zet_hint": 2.0}, row
+                   "zet": None, "zet_hint": 2.0,
+                   "split": False, "teacher_id_2": "", "teacher_name_2": ""}, row
 
 
 def test_saving_hours_twice_replaces_not_duplicates(client):

@@ -108,7 +108,13 @@ def teacher_set_grade(payload: dict = Body(...),
 def teacher_create_lesson(payload: dict = Body(...),
                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Создать занятие (пару). Номер, если не передан, — следующий по типу в этом
-    журнале (как авто-нумерация в десктопе)."""
+    журнале (как авто-нумерация в десктопе).
+
+    `subgroup` (§ролей, 3.6.1) — 0 (по умолчанию, «Совместно»/предмет не разделён), 1
+    или 2. На РАЗДЕЛЁННОМ предмете преподаватель может создавать занятие только для
+    подгруппы, которую реально ведёт (0/«Совместно» — только если ведёт ОБЕ, см.
+    webdata.teacher_owned_subgroups); на НЕразделённом subgroup всегда 0, что бы ни
+    прислал клиент — там подгрупп попросту нет."""
     _require("teacher", user)
     group = (payload.get("group") or "").strip()
     subject = (payload.get("subject") or "").strip()
@@ -119,12 +125,26 @@ def teacher_create_lesson(payload: dict = Body(...),
     #термином и проверяем назначение.
     ty, ts = W.current_term(W.load_config(db))
     _teacher_check_assignment(db, user, group, subject, ty, ts)
+
+    sh_row = W.subject_hours_row(db, group, subject, ty, ts)
+    subgroup = 0
+    if sh_row and sh_row.split:
+        try:
+            subgroup = int(payload.get("subgroup") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="subgroup должен быть 0, 1 или 2")
+        if subgroup not in (0, 1, 2):
+            raise HTTPException(status_code=400, detail="subgroup должен быть 0, 1 или 2")
+        owned = W.teacher_owned_subgroups(sh_row, user.id)
+        if subgroup == 0 and owned != {1, 2}:
+            raise HTTPException(status_code=403,
+                                detail="«Совместно» доступно только тому, кто ведёт ОБЕ подгруппы")
+        if subgroup in (1, 2) and subgroup not in owned:
+            raise HTTPException(status_code=403, detail=f"Подгруппа {subgroup} вам не назначена")
+
     number = payload.get("number")
     if not number:
-        rows = db.query(Lesson.number).filter(
-            Lesson.group_name == group, Lesson.subject == subject,
-            Lesson.type == ltype, Lesson.deleted == False).all()  # noqa: E712
-        number = (max((r[0] or 0) for r in rows) + 1) if rows else 1
+        number = W.next_lesson_number(db, group, subject, ltype, subgroup)
     import uuid as _uuid
     lid = str(_uuid.uuid4())
     topic = (payload.get("topic") or "").strip()
@@ -133,13 +153,13 @@ def teacher_create_lesson(payload: dict = Body(...),
                   date=(payload.get("date") or "").strip(),
                   retake_date=(payload.get("retake_date") or "").strip(),
                   hour=int(payload.get("hour") or 0), extra={},
-                  year=ty, semester=ts,
+                  year=ty, semester=ts, subgroup=subgroup,
                   updated_at=_now_iso(), deleted=False))
     db.commit()
     if ltype == "ДЗ":
         _notify_homework(db, group, subject, lid, topic, int(number),
                          author_login=user.login)
-    return {"ok": True, "id": lid, "number": int(number)}
+    return {"ok": True, "id": lid, "number": int(number), "subgroup": subgroup}
 
 
 @router.post("/events")

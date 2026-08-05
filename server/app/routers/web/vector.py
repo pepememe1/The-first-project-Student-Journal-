@@ -905,9 +905,11 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
         #Занятия по предметам, убранным из плана группы, не должны попадать ни в долги,
         #ни в средний, ни в «мои оценки» (current_subject_lessons) — и занятия за ПРОШЛЫЕ
         #курсы по повторяющимся предметам вроде «Физической культуры» тоже не должны
-        #(current_term_lessons) — та же двойная фильтрация, что в student_overview.
-        lessons = W.current_term_lessons(db, group, W.current_subject_lessons(
-            db, group, W.group_lessons(db, group)), cfg)
+        #(current_term_lessons) — та же тройная фильтрация, что в student_overview, плюс
+        #раздельное обучение (§ролей, 3.6.1): чужая подгруппа студенту не видна.
+        lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
+            db, group, W.current_subject_lessons(
+                db, group, W.group_lessons(db, group)), cfg), user.id)
         records = W.student_records(db, user.surname, user.name, group)
         scale_map = W.lesson_scale_map(db, lessons)
 

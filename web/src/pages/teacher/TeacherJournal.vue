@@ -287,11 +287,51 @@ const LESSON_TYPES = ['Практика', 'Лекция', 'ДЗ', 'Экзаме�
 const topicLabel = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicHomework', 'Домашнее задание') : locale.t('teacherJournal.topicFull', 'Тема (полностью)')))
 const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? locale.t('teacherJournal.topicPlaceholderHomework', 'создать базу данных') : locale.t('teacherJournal.topicPlaceholderDefault', 'Тема занятия')))
 
+// ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
+// owned_subgroups: [1] или [2] — препод ведёт только свою (кнопок нет, всё неявно под
+// неё); [1,2] — ведёт ОБЕ (маленький класс либо единственный назначенный) — тогда
+// показываем 1ПГ/2ПГ/Совместно, и НОВОЕ занятие создаётся под ВЫБРАННОЙ кнопкой.
+const splitOwned = computed(() => data.value?.split?.owned_subgroups || [])
+const hasSubgroupButtons = computed(() => splitOwned.value.length === 2)
+// Подгруппа нового занятия: если кнопок нет, но предмет разделён — единственная своя;
+// если кнопок нет и предмет не разделён — 0 (обычное занятие, сервер её всё равно
+// проигнорирует, но не подставлять произвольное число чище).
+const activeSubgroup = ref(0)
+watch(splitOwned, (owned) => {
+  activeSubgroup.value = owned.length === 1 ? owned[0] : 0
+}, { immediate: true })
+
+function subgroupLabel(n) {
+  return n === 1 ? locale.t('teacherJournal.subgroup1', '1ПГ')
+       : n === 2 ? locale.t('teacherJournal.subgroup2', '2ПГ') : ''
+}
+async function pickSubgroup(n) {
+  if (n === 0) {
+    const ok = await confirm({
+      title: locale.t('teacherJournal.combinedConfirmTitle', 'Совместное занятие'),
+      message: locale.t('teacherJournal.combinedConfirmMessage',
+        'Занятие будет создано СРАЗУ для обеих подгрупп (общая лекция/задание). Продолжить?'),
+      okText: locale.t('teacherJournal.combinedConfirmOk', 'Да, совместное'),
+    })
+    if (!ok) return
+  }
+  activeSubgroup.value = n
+}
+// Ячейка НЕ применима к студенту, если занятие — чужой подгруппы (студент её не посещал).
+function cellApplies(s, col) {
+  return !col.l.subgroup || !s.subgroup || col.l.subgroup === s.subgroup
+}
+
 // Следующий номер — МАКСИМУМ+1 внутри типа, как считают сервер и десктоп.
 // Не количество строк: лекция лежит в базе двумя строками (по академическому часу),
 // и счётчик выдавал бы каждой следующей лекции номер вдвое больше настоящего.
+// При раздельном обучении — ОТДЕЛЬНО в пределах ТЕКУЩЕЙ подгруппы (activeSubgroup),
+// иначе у двух преподавателей одной группы независимые «Практика №1» сливались бы в
+// одну серию и сбивали счёт друг другу (тот же принцип, что и на сервере).
 function nextNumber(t) {
-  const nums = (data.value?.lessons || []).filter((l) => l.type === t).map((l) => l.number || 0)
+  const nums = (data.value?.lessons || [])
+    .filter((l) => l.type === t && (l.subgroup || 0) === activeSubgroup.value)
+    .map((l) => l.number || 0)
   return nums.length ? Math.max(...nums) + 1 : 1
 }
 const showLesson = ref(false)
@@ -327,7 +367,9 @@ async function saveLesson() {
         topic: f.topic, date: f.date, number: f.number, hour: f.hour, retake_date: f.retake_date,
       })
     } else {
-      await teacherApi.createLesson({ group: group.value, subject: subject.value, ...lessonForm.value })
+      await teacherApi.createLesson({
+        group: group.value, subject: subject.value, subgroup: activeSubgroup.value, ...lessonForm.value,
+      })
     }
     showLesson.value = false
     await load()
@@ -446,6 +488,23 @@ async function downloadVedomost(fmt) {
       </div>
     </div>
 
+    <!-- Раздельное обучение (§ролей, 3.6.1): показываются, только если ЭТОТ преподаватель
+         ведёт ОБЕ подгруппы — выбор определяет, для кого создастся следующее занятие. -->
+    <div v-if="hasSubgroupButtons" class="flex items-center gap-1.5">
+      <span class="text-xs text-text3">{{ locale.t('teacherJournal.subgroupPickerLabel', 'Занятие для:') }}</span>
+      <div class="flex overflow-hidden rounded-sm border border-border2">
+        <button type="button" class="px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="activeSubgroup === 1 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
+                @click="pickSubgroup(1)">{{ locale.t('teacherJournal.subgroup1', '1ПГ') }}</button>
+        <button type="button" class="border-l border-border2 px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="activeSubgroup === 2 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
+                @click="pickSubgroup(2)">{{ locale.t('teacherJournal.subgroup2', '2ПГ') }}</button>
+        <button type="button" class="border-l border-border2 px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="activeSubgroup === 0 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
+                @click="pickSubgroup(0)">{{ locale.t('teacherJournal.subgroupCombined', 'Совместно') }}</button>
+      </div>
+    </div>
+
     <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
                 :message="locale.t('teacherJournal.noWorkloadMessage', 'За вами не закреплены группы или предметы.')" />
     <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
@@ -474,6 +533,7 @@ async function downloadVedomost(fmt) {
               <template v-else>
                 <div class="text-xs font-bold text-text">
                   {{ col.l.type }} №{{ col.l.number }}<span v-if="col.l.type === 'Лекция' && col.l.hour" class="font-normal text-text3"> ({{ col.l.hour }}ч)</span>
+                  <span v-if="col.l.subgroup" class="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-bold normal-case text-accent">{{ subgroupLabel(col.l.subgroup) }}</span>
                 </div>
                 <div class="text-[11px] font-normal normal-case text-text3">{{ col.l.date || '—' }}</div>
                 <div v-if="col.l.topic" class="mt-0.5 line-clamp-2 text-[11px] font-normal normal-case leading-snug text-text2" :title="col.l.topic">
@@ -498,7 +558,8 @@ async function downloadVedomost(fmt) {
               <span class="hidden sm:inline">{{ s.surname }} {{ s.name }}</span>
             </td>
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
-              <span v-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
+              <span v-if="!cellApplies(s, col)" class="text-text3" :title="locale.t('teacherJournal.otherSubgroupHint', 'Другая подгруппа')">·</span>
+              <span v-else-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
               <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key], col.l)"
                       :title="s.grades[col.key] || ''"
                       class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
