@@ -698,6 +698,49 @@ def teacher_subject_groups(db, teacher, ty: str, ts, subject: str) -> dict:
     return {"subject": subject, "groups": groups}
 
 
+def curator_summary_groups(db, user, ty: str, ts) -> list:
+    """Курируемые группы для вкладки «ИИ Помощник» (3.6.1) — та же форма ответа, что
+    у `/teacher/summary`'s `groups[]` (group/students/average/at_risk/subjects[]), чтобы
+    TeacherOverview.vue рисовал их ОДНИМ и тем же шаблоном, просто вторым разделом.
+
+    ⚠️ Отличие от teacher_summary принципиальное: там предметы группы — те, что
+    НАЗНАЧЕНЫ преподавателю (teacher_assignments), здесь — ВЕСЬ ДЕЙСТВУЮЩИЙ учебный
+    план группы (group_plan_subjects), включая предметы ДРУГИХ преподавателей — куратор
+    должен видеть картину группы целиком, а не только свою нагрузку. Живой отзыв:
+    «курируемые группы со всеми предметами» вообще не показывались — панель знала
+    только про explicit-назначенные преподавателю пары."""
+    cfg = load_config(db)
+    out = []
+    for group in sorted(set(user.curated_groups or [])):
+        subjects = sorted(group_plan_subjects(db, group, cfg))
+        if not subjects:
+            continue
+        lessons = current_subject_lessons(db, group, group_lessons(db, group, year=ty, semester=ts), False)
+        studs = students_in_group(db, group)
+        recs = {s.id: student_records(db, s.surname, s.name, group) for s in studs}
+        #Куратор видит ЧУЖИЕ предметы — своей единой шкалы у него нет, лукап по каждому
+        #занятию (как у отчёта/Вектора), а не teacher_scale одного человека.
+        scale_map = lesson_scale_map(db, lessons)
+        subj_rows = []
+        for subject in subjects:
+            sl = [l for l in lessons if l.subject == subject]
+            vals = [v for v in (average(sl, recs[s.id], cfg, scale=scale_map) for s in studs) if v > 0]
+            subj_rows.append({"subject": subject,
+                              "average": round(sum(vals) / len(vals), 2) if vals else 0.0,
+                              "graded_students": len(vals), "lessons": len(sl)})
+        all_vals = [v for v in (average(lessons, recs[s.id], cfg, scale=scale_map) for s in studs) if v > 0]
+        at_risk = 0
+        for s in studs:
+            r = dropout_risk_for_student(db, s.surname, s.name, group,
+                                         cfg=cfg, lessons=lessons, records=recs[s.id])
+            if r["visible"] and r["level"] in ("medium", "high", "critical"):
+                at_risk += 1
+        out.append({"group": group, "students": len(studs),
+                    "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
+                    "at_risk": at_risk, "subjects": subj_rows})
+    return out
+
+
 def display_name(user) -> str:
     return user.full_name or f"{user.surname} {user.name}".strip()
 

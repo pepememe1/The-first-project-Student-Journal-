@@ -226,6 +226,36 @@ def test_report_subject_drilldown_shows_grades_and_absences(client):
     assert row["missed_count"] == 1 and row["missed_hours"] == 1
 
 
+def test_report_excludes_subject_not_in_current_plan(client):
+    """Живой баг (3.6.1): «отчёты показывают старые предметы, а не актуальные» —
+    предмет с историческими занятиями/оценками, но БЕЗ назначения преподавателя в
+    группе за ТЕКУЩИЙ термин (значит не в её действующем плане), не должен попадать
+    в отчёт куратора. Раньше список предметов собирался прямо из Lesson, без сверки
+    с планом — та же логика уже почищена в статистике студента/Векторе
+    (webdata.current_subject_lessons), но не в curator_report.collect_group."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)   # план: {"Математика"}
+    conv_id = _ensure_channel(client, teach)
+    _seed_lesson_and_grade(client, admin, teach, "ИС-21", "Математика", "5")
+    #«История» — занятие и оценка РЕАЛЬНО есть (обычный push), но преподаватель на
+    #этот предмет в группе НЕ назначен — его нет в действующем плане.
+    client.post("/sync/push", json={"changes": {"lessons": [
+        {"id": "LH", "group_name": "ИС-21", "subject": "История", "type": "Практика",
+         "number": 1, "topic": "т", "date": "01.09.2025"}]}}, headers=admin)
+    client.post("/sync/push", json={"changes": {"grades": [
+        {"id": "Иванова|Мария|LH", "student_f": "Иванова", "student_n": "Мария",
+         "lesson_id": "LH", "grade": "2"}]}}, headers=admin)
+
+    client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    rid = next(m["report"]["id"] for m in msgs if m["kind"] == "report")
+
+    r = client.get(f"/web/messenger/reports/{rid}", headers=ph)
+    assert r.status_code == 200, r.text
+    subjects = [s["subject"] for s in r.json()["subjects"]]
+    assert "Математика" in subjects
+    assert "История" not in subjects
+
+
 def test_report_snapshot_excludes_lessons_after_cutoff(client):
     """«Вечная» граница: занятие, добавленное ПОСЛЕ создания отчёта, в него не попадает,
     даже если дата занятия попадает в прошлое (curator_report фильтрует по факту создания,

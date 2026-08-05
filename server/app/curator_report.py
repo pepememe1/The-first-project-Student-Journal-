@@ -39,6 +39,16 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict,
     весь термин целиком (экспорт xlsx/docx куратора этим путём и продолжает ходить)."""
     students = W.students_in_group(db, group)
     lessons = W.group_lessons(db, group, year=year, semester=semester)
+    #⚠️ Живой баг («отчёты показывают старые предметы, а не актуальные»): список
+    #предметов раньше собирался ПРЯМО ИЗ ЗАНЯТИЙ, а удаление предмета из плана группы
+    #не удаляет старые Lesson-строки (это история) — отчёт продолжал показывать
+    #отменённые дисциплины со старыми оценками, а свежедобавленный предмет без единого
+    #занятия не показывался вовсе. Тот же фильтр, что уже чинил это в статистике
+    #студента и у Вектора (webdata.current_subject_lessons) — АРХИВ (явно выбранный
+    #прошлый термин) не фильтруем: тогда велись другие предметы, прятать их — переписывать
+    #прошлое задним числом.
+    is_archive = (year, semester) != W.current_term(cfg)
+    lessons = W.current_subject_lessons(db, group, lessons, is_archive)
     cutoff = parse_ddmmyyyy(cutoff_date) if cutoff_date else None
     if cutoff:
         # Занятие без даты/с нераспознанной датой — оставляем (лучше лишнее, чем

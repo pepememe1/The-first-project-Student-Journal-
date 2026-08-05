@@ -9,19 +9,13 @@ import { storeToRefs } from 'pinia'
 import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
-import { profilePlate } from '@/theme/palette'
-import { nameFontFamily } from '@/config/nameFonts'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
+import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
-
-// Цвет плашки профиля выбирает сам человек (id пресета) — см. palette.profilePlate.
-function plate(u) {
-  return profilePlate(u?.profile_color)
-}
 
 const emit = defineEmits(['close'])
 const m = useMessengerStore()
@@ -107,15 +101,6 @@ function meta(p) {
   return p.user_role === 'admin' ? sharedRoleLabel('admin') : ''
 }
 
-// Та же подпись, но для activePeer (личный чат) — там роль лежит в поле `role`, а не
-// `user_role` (см. _safe_user на сервере vs. participants[] в conversation_info). Раньше
-// админ падал в "иначе" инлайн-тернарника и подписывался «Студент».
-function peerMeta(p) {
-  if (p?.role === 'teacher') return (p.subjects || []).join(', ') || sharedRoleLabel('teacher')
-  if (p?.role === 'admin') return sharedRoleLabel('admin')
-  if (p?.role === 'parent') return sharedRoleLabel('parent')
-  return p?.group_name ? locale.t('conversationInfo.groupOf', { group: p.group_name }) : sharedRoleLabel('student')
-}
 
 const title = computed(() => {
   if (isSaved.value) return locale.t('messenger.saved', 'Избранное')
@@ -222,29 +207,13 @@ async function clearHistory() {
           {{ locale.t('conversationInfo.modText', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.') }}
         </div>
         <template v-else-if="!isGroupOrChannel && activePeer">
-          <button type="button" @click="profileFor = activePeer"
-                  class="flex w-full items-center gap-3 rounded-xl p-4 text-left transition-opacity hover:opacity-90"
-                  :style="{ background: plate(activePeer) }">
-            <Avatar :src="activePeer.avatar" :name="activePeer.full_name"
-                    :online="!!activePeer.online" :size="56" />
-            <div class="min-w-0">
-              <div class="truncate text-base font-bold text-white" :style="{ fontFamily: nameFontFamily(activePeer.name_font) }">{{ activePeer.full_name }}</div>
-              <div class="truncate text-xs text-white/80">{{ peerMeta(activePeer) }}</div>
-              <!-- Статус, который человек выбрал сам, ВАЖНЕЕ presence: «не беспокоить»
-                   при этом остаётся «в сети», и показать только «в сети» — значит
-                   потерять ровно то, что он просил передать. Кружок в цвет статуса. -->
-              <div class="mt-0.5 flex items-center gap-1.5 text-xs text-white/70">
-                <template v-if="statusLabel(activePeer)">
-                  <span class="size-2.5 shrink-0 rounded-full ring-1 ring-white/50"
-                        :style="{ background: statusColor(activePeer) }" />
-                  <span class="truncate">{{ statusLabel(activePeer) }}</span>
-                  <span class="shrink-0 text-white/50">· {{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}</span>
-                </template>
-                <template v-else>{{ activePeer.online ? locale.t('profilePanel.online', 'в сети') : locale.t('profilePanel.offline', 'не в сети') }}</template>
-              </div>
-            </div>
-          </button>
-          <p v-if="activePeer.bio" class="mt-3 whitespace-pre-wrap text-sm text-text2">{{ activePeer.bio }}</p>
+          <!-- §5.4 (живой отзыв 3.6.1): в ЛС карточка собеседника ЭТО ЖЕ полноценная
+               Discord-style PeerProfileCard (баннер/аватар/«о себе»/заметка), а не её
+               урезанная копия за вторым кликом — та версия оставалась только для
+               УЧАСТНИКОВ ГРУППЫ/КАНАЛА ниже (там «очистить историю»/«удалить
+               переписку» этого конкретного человека не имеют смысла, а здесь беседа и
+               есть личный чат с ним же). -->
+          <PeerProfileCard :peer-data="activePeer" @messaged="emit('close')" />
           <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
           <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
             <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>

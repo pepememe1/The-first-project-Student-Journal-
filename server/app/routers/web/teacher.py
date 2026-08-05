@@ -199,5 +199,11 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
                        "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
                        "at_risk": at_risk, "subjects": subj_rows})
 
+    #Куратор (§role — teacher с непустым curated_groups) видит ЕЩЁ и курируемые группы,
+    #но СО ВСЕМИ их предметами (не только своими) — живой отзыв: «курируемые группы со
+    #всеми предметами» не показывались вовсе, панель знала только про explicit-назначения.
+    #Та же форма ответа, что у groups[] выше, — TeacherOverview.vue рисует вторым разделом.
+    curator_groups = W.curator_summary_groups(db, user, ty, ts) if user.curated_groups else []
+
     return {"term": {"year": ty, "semester": ts}, "groups": groups,
-            "subjects": sorted({s for _g, s in pairs})}
+            "subjects": sorted({s for _g, s in pairs}), "curator_groups": curator_groups}

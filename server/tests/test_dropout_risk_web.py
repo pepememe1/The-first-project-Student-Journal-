@@ -142,6 +142,29 @@ def test_teacher_summary_returns_groups_and_subjects(client):
     assert grp["subjects"][0]["graded_students"] == 1
 
 
+def test_teacher_summary_includes_curated_groups_with_all_subjects(client):
+    """Живой баг (3.6.1): преподаватель-куратор не видел курируемые группы во вкладке
+    «ИИ Помощник» вовсе — панель знала только про explicit teacher_assignments.
+    `curator_groups` — ОТДЕЛЬНОЕ поле, со ВСЕМИ предметами группы (не только своими:
+    физику здесь ведёт ДРУГОЙ преподаватель, куратор её не ведёт вовсе)."""
+    admin = make_admin(client)
+    _group(client, admin, "К-2", subjects=("Физика",))
+    teacher = make_teacher(client, admin, subjects=["Математика"])   #ничего в К-2 не ведёт
+    r = client.put("/web/admin/teachers/teacher1", json={"curated_groups": ["К-2"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    make_teacher(client, admin, login="phys", subjects=["Физика"])
+    assign_teacher(client, admin, "teach:phys", "К-2", "Физика")
+    _student(client, admin, "petrov", "Петров", "Иван", group="К-2")
+    _lesson(client, admin, "PH1", "Физика", "Практика", group="К-2")
+    _grade(client, admin, "PH1", "5", "Петров", "Иван")
+
+    body = client.get("/web/teacher/summary", headers=teacher).json()
+    assert body["groups"] == []   #сам в К-2 ничего не преподаёт
+    cg = next(g for g in body["curator_groups"] if g["group"] == "К-2")
+    assert [s["subject"] for s in cg["subjects"]] == ["Физика"]
+    assert cg["subjects"][0]["average"] == 5.0
+
+
 # ── КУРАТОР ─────────────────────────────────────────────────────────────────────────
 def test_curator_sees_whole_group_risk_sorted(client):
     admin = make_admin(client)
