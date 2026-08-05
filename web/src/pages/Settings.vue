@@ -485,7 +485,7 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
         <p class="text-sm text-text3">
           {{ loc.t('settings.logoutExplain', 'После выхода понадобится снова ввести логин и пароль — сохранённая сессия будет удалена с этого устройства.') }}
         </p>
-        <AppButton variant="ghost" class="text-red" @click="onLogout">
+        <AppButton variant="red" @click="onLogout">
           <LogOut class="mr-2 inline size-4" />{{ loc.t('nav.logout', 'Выйти') }}
         </AppButton>
       </div>

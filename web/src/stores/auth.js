@@ -14,6 +14,7 @@ import { registerToken, unregisterToken } from '@/services/push'
 import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
+import { useProfileStore } from '@/stores/profile'
 
 const LS_USER = 'gb.user'
 
@@ -97,6 +98,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearCache()   // стираем оффлайн-кэш — чтобы данные не показались другому юзеру
     useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     useVectorStore().reset()      // и диалог с Вектором: он тоже жил в памяти store
+    useProfileStore().reset()     // и профиль (аватар/«о себе»/цвет/шрифт) — та же причина
     user.value = null
   }
 
@@ -107,6 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearCache()
     useMessengerStore().reset()
     useVectorStore().reset()
+    useProfileStore().reset()
     user.value = null
   }
 
