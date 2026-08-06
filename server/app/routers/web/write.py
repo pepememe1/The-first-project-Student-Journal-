@@ -661,13 +661,19 @@ def admin_import_schedule_category(payload: dict = Body(...),
     #Предметы — уникальные названия ИЗ УЖЕ РАЗОБРАННОГО расписания этой группы (те же
     #данные, что рисует вкладка «Расписание»). Сайт может быть недоступен именно сейчас —
     #тогда просто пусто, как и раньше; это не повод отказывать в создании группы.
+    #⚠️ Живой баг родителя: `sched` — сырой dict (GroupSchedule.to_dict), а не сам
+    #объект, поэтому метод .subjects() (уже нормализует «- N п/г») тут не сработал бы
+    #сам собой — снимаем суффикс явно тем же W.strip_subgroup_tag, что и остальной
+    #сервер (webdata.group_plan_subjects), иначе именно этот путь импорта (единичная
+    #группа вне колледжа) продолжал бы заводить «-1 п/г»/«-2 п/г» как отдельные предметы.
     subjects = []
     try:
         sched = schedule_web.get_group(group_name, category)
         if sched:
-            subjects = sorted({ls.get("subject") for days in (sched.get("weeks") or {}).values()
+            subjects = sorted({W.strip_subgroup_tag(ls.get("subject"))
+                               for days in (sched.get("weeks") or {}).values()
                                for lessons in days.values() for ls in lessons
-                               if ls.get("subject")})
+                               if ls.get("subject") and W.strip_subgroup_tag(ls.get("subject"))})
     except Exception:
         subjects = []
 

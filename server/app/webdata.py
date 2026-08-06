@@ -24,6 +24,7 @@ if _ROOT not in sys.path:
 import grading  # noqa: E402
 import study_hours  # noqa: E402  — общее с десктопом правило учебных часов
 import dropout_risk  # noqa: E402  — общие с десктопом правила риска отчисления
+from schedule.model import strip_subgroup_tag  # noqa: E402 — нормализация «…п/г»-меток ниже
 
 from .models import (User, Lesson, Grade, ConfigKV, SubjectHours, Group,  # noqa: E402
                      subject_hours_id, StudentSubgroup, student_subgroup_id)
@@ -136,7 +137,8 @@ def group_subject_list(db, group: str) -> list:
     plan = group_plan_subjects(db, group)
     if plan:
         return sorted(plan)
-    return sorted({l.subject for l in group_lessons(db, group) if l.subject})
+    return sorted({strip_subgroup_tag(l.subject) for l in group_lessons(db, group)
+                   if l.subject and strip_subgroup_tag(l.subject)})
 
 
 def per_subject_with_plan(db, group: str, lessons, records, cfg, scale=None,
@@ -204,15 +206,29 @@ def group_plan_subjects(db, group: str, cfg=None) -> set:
 
     Пусто значит «плана нет», а НЕ «предметов нет»: у групп, заведённых до импорта
     учебного плана, ни один из источников не заполняли. Отличать эти два случая
-    обязательно — см. `current_subject_lessons`."""
+    обязательно — см. `current_subject_lessons`.
+
+    ⚠️ Живой баг родителя: строки вида «…- 1 п/г»/«…- 2 п/г» — метка подгруппы у
+    лабораторных, которую портал пишет ПРЯМО в название предмета (см. schedule/
+    model.py). Импорт из расписания (`admin_bind_subjects`/`admin_import_schedule_
+    category`) до фикса парсера клал их в `Group.subjects` как отдельные «предметы» —
+    ни одного занятия/оценки под ними нет и не будет. Нормализуем (снимаем суффикс)
+    ЗДЕСЬ, а не только на входе парсера: у уже поражённых групп (импорт был ДО фикса)
+    `Group.subjects` остаётся как есть на диске, повторный импорт админом никто не
+    гарантирует, а нормализация лечит всех сразу, включая прошлые импорты, без
+    миграции данных. ⚠️ Именно НОРМАЛИЗАЦИЯ, а не отбрасывание — у части предметов
+    (языки/лабораторные классы) на портале нет НИ ОДНОЙ немеченой строки вовсе, и
+    отбрасывание убрало бы такой предмет из плана целиком (см. strip_subgroup_tag)."""
     row = db.query(Group).filter(Group.name == group,
                                  Group.deleted == False).first()  # noqa: E712
-    subs = {s for s in (row.subjects if row else None) or [] if s}
+    subs = {strip_subgroup_tag(s) for s in (row.subjects if row else None) or []
+            if s and strip_subgroup_tag(s)}
     ty, ts = current_term(cfg if cfg is not None else load_config(db))
-    subs |= {r.subject for r in db.query(SubjectHours).filter(
+    subs |= {strip_subgroup_tag(r.subject) for r in db.query(SubjectHours).filter(
         SubjectHours.group_name == group, SubjectHours.year == (ty or ""),
         SubjectHours.semester == int(ts or 0),
-        SubjectHours.deleted == False).all() if r.subject}  # noqa: E712
+        SubjectHours.deleted == False).all()  # noqa: E712
+             if r.subject and strip_subgroup_tag(r.subject)}
     return subs
 
 

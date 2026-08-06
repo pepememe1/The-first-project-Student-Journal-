@@ -133,6 +133,58 @@ def test_parent_journal_matches_student_subject_filter(client):
     assert "История" not in subjects
 
 
+def test_parent_journal_excludes_subgroup_tagged_junk_subjects(client):
+    """Живой баг родителя (реальные данные К74/1): лабораторные, разбитые на
+    подгруппы, портал ВСГУТУ пишет ПРЯМО в название предмета («Информатика- 1
+    п/г») — старый импорт из расписания (до фикса schedule/model.py) заносил их
+    в Group.subjects как отдельные «предметы». Ни одного занятия/оценки под ними
+    нет и не будет — journal родителя (и студента, тот же group_plan_subjects)
+    не должен их показывать, а обычная «Информатика» без метки — обязана остаться."""
+    admin, sid, pid, link_id = _setup(client)
+    sh = _headers(client, "ivanova", "studpass1")
+    ph = _headers(client, "parent1", "parentpass1")
+    _approve(client, sh, link_id)
+
+    client.post("/sync/push", json={"changes": {
+        "groups": [{"id": "grp:ИС-21", "name": "ИС-21", "subjects": [
+            "Информатика",
+            "Информатика- 1 п/г",
+            "Информатика- 2 п/г",
+        ]}]}}, headers=admin)
+
+    subjects = {s["subject"] for s in client.get("/web/parent/journal", headers=ph).json()["subjects"]}
+    assert "Информатика" in subjects
+    assert not any("п/г" in s for s in subjects), subjects
+
+    #Тот же источник (group_plan_subjects) кормит и собственный журнал студента —
+    #фильтр не должен быть особенностью только родительского пути.
+    subjects_own = {s["subject"] for s in client.get("/web/student/journal", headers=sh).json()["subjects"]}
+    assert "Информатика" in subjects_own
+    assert not any("п/г" in s for s in subjects_own), subjects_own
+
+
+def test_parent_journal_keeps_subject_with_only_subgroup_tagged_rows(client):
+    """Живой баг на К74/1: «Иностр. язык в проф. коммуникации» на портале ведётся
+    ТОЛЬКО парами по подгруппам — Group.subjects содержит ОБЕ «- N п/г»-строки и НИ
+    ОДНОЙ немеченой. Простое отбрасывание меток убрало бы предмет из журнала
+    родителя целиком («не всех предметов хватает») — снятие суффикса обязано
+    оставить канонический предмет одной строкой."""
+    admin, sid, pid, link_id = _setup(client)
+    sh = _headers(client, "ivanova", "studpass1")
+    ph = _headers(client, "parent1", "parentpass1")
+    _approve(client, sh, link_id)
+
+    client.post("/sync/push", json={"changes": {
+        "groups": [{"id": "grp:ИС-21", "name": "ИС-21", "subjects": [
+            "Иностр. язык в проф. коммуникации- 1 п/г",
+            "Иностр. язык в проф. коммуникации- 2 п/г",
+        ]}]}}, headers=admin)
+
+    subjects = {s["subject"] for s in client.get("/web/parent/journal", headers=ph).json()["subjects"]}
+    assert "Иностр. язык в проф. коммуникации" in subjects, subjects
+    assert not any("п/г" in s for s in subjects), subjects
+
+
 def test_student_can_revoke_consent_later(client):
     """Согласие на обработку своих данных отзывается в любой момент — кнопка у студента."""
     _admin, _sid, _pid, link_id = _setup(client)

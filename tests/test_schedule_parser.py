@@ -10,7 +10,7 @@ from datetime import date
 
 from schedule import parse_group_page, parse_cell, current_week_parity, week_label
 from schedule.parser import list_college_groups
-from schedule.model import WEEKDAYS
+from schedule.model import WEEKDAYS, is_subgroup_tagged
 
 _FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "group_K15_1.htm")
 
@@ -88,6 +88,42 @@ def test_group_subjects_collected():
     assert "Физика" in subs
     assert "Математика" in subs
     assert all(s.strip() for s in subs)
+
+
+def test_group_subjects_exclude_subgroup_tagged_rows():
+    """§правка (живой баг родителя): фикстура реально содержит «Информатика- 1 п/г»/
+    «Информатика- 2 п/г» (лабораторные, разбитые на подгруппы) — это не отдельные
+    предметы, каталог не должен ими засоряться (метка снимается — strip_subgroup_tag).
+    Сама «Информатика» без метки — из лекционных занятий той же фикстуры — остаётся
+    в списке как обычно, и ни одна «- N п/г»-строка отдельным пунктом не всплывает."""
+    gs = parse_group_page(_load_fixture(), name="К15/1")
+    subs = gs.subjects()
+    assert not any("п/г" in s for s in subs), subs
+    assert "Информатика" in subs
+    #А в самом расписании (не в каталоге предметов) пара с меткой подгруппы видна как
+    #есть — нормализация только для агрегата subjects(), не для просмотра пар по дням.
+    tagged = [ls for _, _, ls in gs.all_lessons() if "п/г" in (ls.subject or "")]
+    assert tagged, "фикстура должна содержать хотя бы одну помеченную пару"
+
+
+def test_group_subjects_keeps_subject_with_no_untagged_variant():
+    """Живой баг на К74/1: «Иностр. язык в проф. коммуникации» на портале ведётся
+    ТОЛЬКО парами по подгруппам — немеченой строки для него нет вовсе. Простое
+    отбрасывание «- N п/г»-строк (первая версия фикса) убрало бы предмет из
+    каталога целиком — ровно жалоба «не всех предметов хватает». Нормализация
+    (снятие суффикса) обязана оставить канонический предмет в списке."""
+    from schedule.model import GroupSchedule, Lesson
+
+    gs = GroupSchedule(name="К74/1")
+    gs.weeks[1] = {"Пнд": [
+        Lesson(pair_no=1, kind="пр", subject="Иностр. язык в проф. коммуникации- 1 п/г",
+               teacher="ИВАНОВА И.И.", room="101", raw="raw1"),
+        Lesson(pair_no=2, kind="пр", subject="Иностр. язык в проф. коммуникации- 2 п/г",
+               teacher="ПЕТРОВА П.П.", room="102", raw="raw2"),
+    ]}
+    subs = gs.subjects()
+    assert "Иностр. язык в проф. коммуникации" in subs, subs
+    assert not any("п/г" in s for s in subs), subs
 
 
 def test_list_college_groups_filters_K():
