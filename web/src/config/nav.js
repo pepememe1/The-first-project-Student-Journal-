@@ -51,6 +51,17 @@ export const NAV = {
     { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/parent/profile' },
     { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/parent/settings' },
   ],
+  // §живой отзыв: пункты «понапиханы что-куда» — было ОДНО «Система» на всё, что не
+  // «Управление», хотя туда смешались три РАЗНЫХ вещи: инфраструктура/безопасность
+  // (Сервер/Мониторинг/Данные/Запросы/Сессии), общение (ИИ Помощник/Сообщения/
+  // Модерация — те же функции, что у student/teacher есть в СВОЁМ основном разделе, не
+  // в «системном»), и личное (Настройки — та же страница темы/озвучки/безопасности,
+  // что у остальных ролей в «Личном», а не системный конфиг). У student/teacher/parent
+  // уже был «Личное» (Профиль+Настройки) — у admin не было вовсе, «Профиль» даже не
+  // значился в этом списке (хотя маршрут /admin/profile существует, см. router/index.js
+  // и запись 3.6 в CLAUDE.md про мини-карточку сайдбара). Четыре секции вместо двух —
+  // не искусственное дробление, а тот же принцип «Личное» + по одной на КАЖДУЮ реально
+  // разную область, а не всё не-«Управление» одной кучей.
   admin: [
     { section: 'Управление', i18n: 'nav.sectionManage' },
     { key: 'dash', label: 'Дашборд', i18n: 'nav.dashboard', icon: LayoutDashboard, to: '/admin' },
@@ -59,23 +70,26 @@ export const NAV = {
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/admin/parents' },
     { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
-    { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
+    { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
     // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.
     { key: 'issues', label: 'Накладки расписания', icon: AlertTriangle,
       to: '/admin/schedule-issues', badge: 'scheduleIssues' },
-    { section: 'Система', i18n: 'nav.sectionSystem' },
-    { key: 'api', label: 'Настройки ИИ', i18n: 'nav.aiSettings', icon: Settings, to: '/admin/api' },
-    { key: 'server', label: 'Сервер', i18n: 'nav.server', icon: Server, to: '/admin/server' },
-    { key: 'data', label: 'Данные и копии', i18n: 'nav.data', icon: Database, to: '/admin/data' },
-    { key: 'requests', label: 'Запросы на подключение', i18n: 'nav.requests', icon: MonitorSmartphone, to: '/admin/requests' },
-    { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: ShieldCheck, to: '/admin/access' },
-    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/admin/settings' },
-    { key: 'mon', label: 'Мониторинг', i18n: 'nav.monitor', icon: Activity, to: '/admin/monitor' },
+    { section: 'Общение', i18n: 'nav.sectionCommunication' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/admin/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/admin/messages', badge: 'messagesUnread' },
     { key: 'moderation', label: 'Модерация чатов', i18n: 'nav.moderation', icon: ShieldAlert, to: '/admin/moderation' },
+    { section: 'Система', i18n: 'nav.sectionSystem' },
+    { key: 'api', label: 'Настройки ИИ', i18n: 'nav.aiSettings', icon: Settings, to: '/admin/api' },
+    { key: 'server', label: 'Сервер', i18n: 'nav.server', icon: Server, to: '/admin/server' },
+    { key: 'mon', label: 'Мониторинг', i18n: 'nav.monitor', icon: Activity, to: '/admin/monitor' },
+    { key: 'data', label: 'Данные и копии', i18n: 'nav.data', icon: Database, to: '/admin/data' },
+    { key: 'requests', label: 'Запросы на подключение', i18n: 'nav.requests', icon: MonitorSmartphone, to: '/admin/requests' },
+    { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: ShieldCheck, to: '/admin/access' },
+    { section: 'Личное', i18n: 'nav.sectionPersonal' },
+    { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/admin/profile' },
+    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/admin/settings' },
   ],
 }
 

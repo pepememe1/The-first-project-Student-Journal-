@@ -123,18 +123,25 @@ async function enterCategory(fromUser = false) {
   data.value = null
   week.value = 1
   stopPoll()
-  //Живой баг 3.5.5: суб-режим «расписание преподавателей» раньше сбрасывался на
-  //«группа» при ЛЮБОМ переключении на неколледжевую категорию — «Расписание
-  //преподавателей» выглядело так, будто для Бакалавриата/Заочного его вообще нет.
-  //Осознанный выбор режима «преподаватель» (mode==='teacher') теперь переживает
-  //смену категории — сервер прекрасно строит teacher-расписание по любой категории
-  //(schedule_web.full_state(category)), просто раньше сюда никогда не доходило.
+  //Живой баг 3.5.5, вернулся в новом виде: суб-режим «расписание преподавателей»
+  //раньше сбрасывался на «группа» при ЛЮБОМ переключении категории — сперва чинили
+  //только для роли «преподаватель» (isTeacher-гейт), и тот же баг остался для
+  //студента: он тоже умеет открыть «Расписание преподавателя» (см. chooseTeacherMode
+  //ниже), но при смене категории вылетал в группу как ни в чём не бывало. Проверка
+  //теперь на ЗНАЧЕНИЕ mode, а не на роль — как уже сделано в AdminSchedule.vue,
+  //где ТА ЖЕ логика (`if (mode.value === 'teacher') {...}`) ни от какой роли не
+  //зависит и сразу работала верно.
+  //Если мы уже были в 'teacher' — держим это же значение (не сбрасываем в '' до
+  //ответа сервера): loadTeacher('') подтвердит 'me' при авто-совпадении ФИО
+  //(только у реальных преподавателей) или оставит 'teacher' как есть, вместо
+  //падения в общий экран выбора.
   //Авто-матч «мои пары» (mode==='me') НЕ переносим специально: это чистый побочный
   //эффект удачного совпадения ФИО на конкретной категории, а не осознанный выбор —
   //переносить его в категорию, где он не пробовался, значило бы врать про «моё».
   const wasTeacherMode = mode.value === 'teacher'
-  if (isTeacher.value && (wasTeacherMode || (isDefaultCategory.value && mode.value === ''))) {
-    mode.value = ''
+  if (wasTeacherMode || (isTeacher.value && isDefaultCategory.value && mode.value === '')) {
+    mode.value = wasTeacherMode ? 'teacher' : ''
+    teacherName.value = ''
     await loadTeacher('')
     return
   }
@@ -342,14 +349,24 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
          преподавателя/группы). §3.5.5, живой отзыв: до выбора режима категории путали —
          выглядело так, будто они выбирают что-то ещё до основного выбора; пока препод не
          решил, что смотреть, эти кнопки нечего показывать. -->
-    <div v-if="categories.length > 1 && !modeChoice" class="flex flex-wrap gap-2">
-      <button v-for="c in categories" :key="c.key"
-              class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
-              :class="category === c.key
-                ? 'border-accent bg-accent text-white'
-                : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
-              @click="onCategoryChange(c.key)">
-        {{ c.label }}
+    <!-- «← к выбору» — явная кнопка сброса режима (расписание группы/преподавателя),
+         тот же приём, что уже есть в AdminSchedule.vue: живёт в ЭТОЙ строке, а не
+         спрятана в тексте фильтров, поэтому видна независимо от того, сколько
+         категорий портала вообще есть. -->
+    <div v-if="!modeChoice" class="flex flex-wrap items-center justify-between gap-2">
+      <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+        <button v-for="c in categories" :key="c.key"
+                class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="category === c.key
+                  ? 'border-accent bg-accent text-white'
+                  : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
+                @click="onCategoryChange(c.key)">
+          {{ c.label }}
+        </button>
+      </div>
+      <button type="button" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline"
+              @click="mode = ''">
+        {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
       </button>
     </div>
 
