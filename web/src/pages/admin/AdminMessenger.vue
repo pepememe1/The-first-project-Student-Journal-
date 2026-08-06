@@ -92,11 +92,22 @@ async function toggleMute(user, after) {
   catch { /* noop */ }
 }
 
-async function openConversation(convId, mode = 'report') {
-  viewer.value = { open: true, conv: convId, mode, messages: [], loading: true }
+// §правка: тикет закрыт (не 'open'/'in_review') — переписку по нему больше не открыть.
+// Кнопка дизейблится этим же признаком, но решает СЕРВЕР (report_id передаётся ниже) —
+// дизейбл кнопки сам по себе обходится прямым запросом к API, поэтому это не защита,
+// а просто честная подсказка «сюда уже нельзя».
+function isReportOpen(r) { return r.status === 'open' || r.status === 'in_review' }
+
+async function openConversation(convId, mode = 'report', reportId = 0) {
+  viewer.value = { open: true, conv: convId, mode, messages: [], loading: true, error: '' }
   replyDraft.value = ''
-  try { viewer.value.messages = (await messengerModApi.conversationMessages(convId)).data.messages || [] }
-  catch { viewer.value.messages = [] }
+  try { viewer.value.messages = (await messengerModApi.conversationMessages(convId, reportId)).data.messages || [] }
+  catch (e) {
+    viewer.value.messages = []
+    viewer.value.error = e?.response?.status === 403
+      ? locale.t('adminMessenger.reportClosedError', 'Тикет закрыт — переписка больше не открывается.')
+      : locale.t('adminMessenger.loadFailed', 'Не удалось загрузить переписку.')
+  }
   finally { viewer.value.loading = false }
 }
 
@@ -116,6 +127,12 @@ async function sendReply() {
 const supportUserId = computed(() => (viewer.value.conv || '').replace(/^mod:/, ''))
 function isModReply(mm) {
   return viewer.value.mode === 'inbox' && mm.sender_id && mm.sender_id !== supportUserId.value
+}
+
+// §правка: полная цепочка правок «изначальное->после правки->после правки» — сервер
+// присылает её ТОЛЬКО сюда (mod_conversation_messages), обычным читателям недоступно.
+function editChainText(mm) {
+  return mm.edit_versions?.length ? mm.edit_versions.map((v) => v.body).join(' → ') : mm.body
 }
 
 function fmt(iso) {
@@ -150,6 +167,9 @@ function fmt(iso) {
           <option value="in_review">{{ locale.t('adminMessenger.statusInReview', 'В работе') }}</option>
           <option value="resolved">{{ locale.t('adminMessenger.statusResolved', 'Решённые') }}</option>
           <option value="dismissed">{{ locale.t('adminMessenger.statusDismissed', 'Отклонённые') }}</option>
+          <!-- §правка: авто-закрытые по таймауту 10 ч (see me.py::_expire_stale_reports) —
+               отдельно от «Отклонённые», чтобы было видно, что их никто не разобрал. -->
+          <option value="expired">{{ locale.t('adminMessenger.statusExpired', 'Истёкшие') }}</option>
           <option value="">{{ locale.t('adminMessenger.statusAll', 'Все') }}</option>
         </select>
         <button type="button" @click="load" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.refresh') }}</button>
@@ -187,8 +207,9 @@ function fmt(iso) {
             </div>
           </div>
           <div class="mt-3 flex flex-wrap gap-2">
-            <button type="button" @click="openConversation(r.conversation_id, 'report')"
-                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('adminMessenger.openConversation', 'Открыть переписку') }}</button>
+            <button type="button" @click="openConversation(r.conversation_id, 'report', r.id)"
+                    :disabled="!isReportOpen(r)" :title="isReportOpen(r) ? '' : locale.t('adminMessenger.reportClosedError', 'Тикет закрыт — переписка больше не открывается.')"
+                    class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent">{{ locale.t('adminMessenger.openConversation', 'Открыть переписку') }}</button>
             <button v-if="r.status === 'open'" type="button" @click="resolve(r, 'in_review')"
                     class="rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('adminMessenger.markInReview', 'В работу') }}</button>
             <button type="button" @click="resolve(r, 'resolved')"
@@ -248,13 +269,18 @@ function fmt(iso) {
         </div>
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
           <p v-if="viewer.loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+          <p v-else-if="viewer.error" class="text-sm text-red">{{ viewer.error }}</p>
           <!-- Режим тикета: плоский список для чтения -->
-          <template v-if="viewer.mode !== 'inbox'">
+          <template v-else-if="viewer.mode !== 'inbox'">
             <div v-for="mm in viewer.messages" :key="mm.id" class="group flex items-start gap-2 text-sm">
               <span class="shrink-0 text-text3">[{{ fmt(mm.created_at) }}]</span>
               <span class="min-w-0 flex-1 break-words text-text">
                 <span v-if="mm.sender_name" class="font-semibold text-text2">{{ mm.sender_name }}:</span>
-                {{ mm.deleted ? locale.t('adminMessenger.deletedInline', '(удалено)') : mm.body }}
+                <!-- §правка: модерация видит текст удалённого и ВСЮ цепочку правок,
+                     см. mod_conversation_messages/editChainText. -->
+                <span v-if="mm.deleted" class="font-semibold text-red">({{ locale.t('adminMessenger.deletedTag', 'удал.') }})</span>
+                <span v-else-if="mm.edit_versions?.length" class="font-semibold text-orange">({{ locale.t('adminMessenger.editedTag', 'ред.') }})</span>
+                {{ editChainText(mm) }}
               </span>
               <!-- Удалить нарушающее сообщение у всех (модерация). -->
               <button v-if="!mm.deleted" type="button" @click="deleteMessage(mm)"
@@ -275,15 +301,21 @@ function fmt(iso) {
               </button>
               <div class="max-w-[80%] rounded-2xl px-3 py-1.5 text-sm"
                    :class="isModReply(mm) ? 'bg-accent text-white' : 'bg-card2 text-text'">
-                <span v-if="mm.deleted" class="italic opacity-70">{{ locale.t('adminMessenger.messageDeletedItalic', 'Сообщение удалено') }}</span>
-                <span v-else class="whitespace-pre-wrap break-words">{{ mm.body }}</span>
+                <span v-if="mm.deleted" class="italic opacity-70">
+                  <span class="not-italic font-semibold">({{ locale.t('adminMessenger.deletedTag', 'удал.') }})</span>
+                  {{ mm.body }}
+                </span>
+                <span v-else class="whitespace-pre-wrap break-words">
+                  <span v-if="mm.edit_versions?.length" class="font-semibold" :class="isModReply(mm) ? 'text-white' : 'text-orange'">({{ locale.t('adminMessenger.editedTag', 'ред.') }})</span>
+                  {{ editChainText(mm) }}
+                </span>
                 <div class="mt-0.5 text-[10px]" :class="isModReply(mm) ? 'text-white/70' : 'text-text3'">
                   {{ isModReply(mm) ? locale.t('adminMessenger.moderationPrefix', 'Модерация · ') : '' }}{{ fmt(mm.created_at) }}
                 </div>
               </div>
             </div>
           </template>
-          <p v-if="!viewer.loading && !viewer.messages.length" class="text-sm text-text3">{{ locale.t('adminMessenger.emptyDot', 'Пусто.') }}</p>
+          <p v-if="!viewer.loading && !viewer.error && !viewer.messages.length" class="text-sm text-text3">{{ locale.t('adminMessenger.emptyDot', 'Пусто.') }}</p>
         </div>
         <!-- Композер ответа модерации (только вкладка «Обращения») -->
         <form v-if="viewer.mode === 'inbox'" class="flex items-end gap-2 border-t border-border p-3"

@@ -12,7 +12,7 @@ me.py — Личные настройки текущего пользовате�
 клиента, и обновлённый prefs уехал другим устройствам этого же пользователя на pull.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -351,6 +351,43 @@ def _fire_due_reminders(db: Session, user: User) -> int:
         return 0
 
 
+#§правка: жалоба (тикет модерации), которую 10 часов никто не тронул (статус так и
+#остался 'open' — даже не «в работу»), закрывается САМА. Свободный доступ к чужой
+#переписке БЕЗ активного расследования — риск сам по себе (см. mod_conversation_
+#messages ниже: доступ закрывается сразу, как только жалоба перестаёт быть
+#открытой) — бессрочно висящая жалоба продлевала бы этот риск бессрочно же.
+_REPORT_EXPIRY_HOURS = 10
+
+
+def _expire_stale_reports(db: Session) -> int:
+    """Тот же приём, что и напоминания ниже — планировщик ради одной проверки не
+    заводим, один индексный запрос (`status`+`created_at` уже проиндексированы в
+    MessageReport) почти бесплатен, и делать её логично там, где ЛЮБОЙ активный
+    пользователь (не только автор жалобы) и так пришёл за уведомлениями — иначе
+    просрочка обнаружилась бы только если админ откроет модерацию сам.
+    Полностью в try/except: сбой не должен ронять чтение уведомлений."""
+    try:
+        from ..models import MessageReport
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=_REPORT_EXPIRY_HOURS)).isoformat()
+        stale = (db.query(MessageReport)
+                 .filter(MessageReport.status == "open",
+                         MessageReport.created_at <= cutoff).all())
+        if not stale:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        for r in stale:
+            r.status = "expired"
+            r.handled_at = now
+            reporter = db.query(User).filter(User.id == r.reporter_id).first()
+            if reporter and reporter.login:
+                rustore_push.notify_report_expired(db, reporter.login, r.id)
+        db.commit()
+        return len(stale)
+    except Exception as e:      # noqa: BLE001
+        print(f"[reports] не удалось обработать просроченные жалобы: {e}")
+        return 0
+
+
 @router.get("/events")
 def list_events(filter_: str = Query("unread", alias="filter"),
                 limit: int = Query(50, ge=1, le=100),
@@ -368,6 +405,7 @@ def list_events(filter_: str = Query("unread", alias="filter"),
     #индексу (login + remind_at), и делать её логично ровно там, где человек всё равно
     #пришёл за уведомлениями.
     _fire_due_reminders(db, user)
+    _expire_stale_reports(db)
     q = db.query(NotifyEvent).filter(NotifyEvent.login == (user.login or ""))
     if filter_ != "all":
         q = q.filter(NotifyEvent.read_at == "")

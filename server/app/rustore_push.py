@@ -419,6 +419,23 @@ def notify_reminder(db, login: str, text: str, conversation_id: str = "") -> int
     )
 
 
+def notify_report_expired(db, login: str, report_id: int) -> int:
+    """§правка: жалоба (тикет модерации) провисела 10 часов без движения статуса и
+    закрылась сама (см. me.py::_expire_stale_reports) — отправитель должен честно узнать,
+    что её никто не разобрал, а не думать, что жалоба «на рассмотрении» бессрочно."""
+    event_id = _create_event(
+        db, login, "report_expired", "Жалоба истекла",
+        "Модерация не успела рассмотреть вашу жалобу за 10 часов, и она закрылась "
+        "автоматически. Подайте её заново, если проблема ещё актуальна.",
+        payload={"report_id": report_id})
+    return notify_login(
+        db, login,
+        title="Жалоба истекла",
+        body="Модерация не успела рассмотреть жалобу вовремя — подайте её заново.",
+        data={"type": "report_expired", "event_id": event_id},
+    )
+
+
 def notify_event(db, login: str, title: str, body: str,
                  author_login: str = "", batch_id: str = "") -> int:
     """Мероприятие/событие (олимпиада, конкурс, выступление и т.п.) — заводит

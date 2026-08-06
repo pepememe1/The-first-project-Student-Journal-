@@ -3115,18 +3115,52 @@ def mod_conversations(q: str = Query(""), kind: str = Query(""),
 
 
 @mod_router.get("/conversations/{conv_id}/messages")
-def mod_conversation_messages(conv_id: str, request: Request = None,
+def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: Request = None,
                               admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Прочитать ЛЮБУЮ беседу (модерация). Каждый вызов пишется в аудит (152-ФЗ)."""
+    """Прочитать ЛЮБУЮ беседу (модерация). Каждый вызов пишется в аудит (152-ФЗ).
+
+    §правка: `report_id` — необязательный, передаёт фронт ТОЛЬКО во вкладке «Жалобы»
+    (просмотр из тикета, см. AdminMessenger.vue::openConversation); вкладка «Обращения»
+    его не знает и продолжает работать как раньше. Если тикет уже закрыт (resolved/
+    dismissed/expired) — доступ к переписке ПО ЭТОМУ ТИКЕТУ закрывается: свободный
+    просмотр чужой переписки без активного расследования — риск сам по себе (живой
+    отзыв). Проверка СЕРВЕРНАЯ, а не только дизейбл кнопки во фронте — иначе прямой
+    запрос к этому же URL с браузерным дебагом обходил бы «закрытую» кнопку."""
     _conversation(db, conv_id)
+    if report_id:
+        rep = db.query(MessageReport).filter(MessageReport.id == report_id).first()
+        if rep is None or rep.conversation_id != conv_id:
+            raise HTTPException(status_code=404, detail="Тикет не найден")
+        if rep.status not in ("open", "in_review"):
+            raise HTTPException(status_code=403, detail="Тикет закрыт — переписка больше не открывается")
     rows = (db.query(Message).filter(Message.conversation_id == conv_id)
             .order_by(Message.id.asc()).all())
     #ФИО автора — иначе в переписке с 2+ участниками (жалоба, групповой чат) не видно,
     #кто что написал (тот же _names_for, что уже используют обычные списки сообщений).
     names = _names_for(db, [m.sender_id for m in rows])
+    #§правка: модерация должна видеть ПОЛНУЮ картину — текст удалённых сообщений и всю
+    #цепочку правок. Обычный _msg_out() их НАМЕРЕННО прячет (для всех остальных
+    #читателей это правильно), здесь — противоположный, осознанный контракт: доступ и
+    #так журналируется аудитом ниже, а подотчётность важнее приватности при активной
+    #проверке жалобы (см. комментарий у edit_message: «модерация должна видеть оригинал»).
+    ids = [m.id for m in rows]
+    edits_by_msg: dict[int, list] = {}
+    if ids:
+        for e in (db.query(MessageEdit).filter(MessageEdit.message_id.in_(ids))
+                  .order_by(MessageEdit.id.asc()).all()):
+            edits_by_msg.setdefault(e.message_id, []).append({"body": e.body_before, "at": e.edited_at})
+    out = []
+    for m in rows:
+        d = _msg_out(m, sender_name=names.get(m.sender_id, ""))
+        if m.deleted_at:
+            d["body"] = m.body or ""
+        versions = edits_by_msg.get(m.id)
+        if versions:
+            d["edit_versions"] = versions + [{"body": m.body or "", "at": m.edited_at or m.created_at}]
+        out.append(d)
     audit.log(db, request, actor=admin.login, role=admin.role,
               action="msg.moderation.view", target=conv_id)
-    return {"messages": [_msg_out(m, sender_name=names.get(m.sender_id, "")) for m in rows]}
+    return {"messages": out}
 
 
 @mod_router.post("/conversations/{conv_id}/reply")

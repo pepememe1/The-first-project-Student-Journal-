@@ -324,6 +324,122 @@ def test_moderation_view_writes_audit(client):
         db.close()
 
 
+# ── §правка: закрытый тикет закрывает и просмотр переписки, полная история правок ─────
+def test_mod_conversation_messages_blocked_after_report_closed(client):
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "грубость"}, headers=a).json()["id"]
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": mid, "reason_code": "harassment"}, headers=b).json()["report_id"]
+    #Открыт — читается ЧЕРЕЗ report_id.
+    r = client.get(f"/web/admin/messenger/conversations/{conv}/messages",
+                   params={"report_id": rid}, headers=admin)
+    assert r.status_code == 200, r.text
+    client.post(f"/web/admin/messenger/reports/{rid}/resolve",
+               json={"status": "resolved"}, headers=admin)
+    #Закрыт — та же ссылка теперь 403, а не тихо отдаёт данные.
+    r2 = client.get(f"/web/admin/messenger/conversations/{conv}/messages",
+                    params={"report_id": rid}, headers=admin)
+    assert r2.status_code == 403, r2.text
+    #Обходной путь: та же беседа БЕЗ report_id (как открывает вкладка «Обращения») —
+    #сознательно НЕ блокируется тикетом другой вкладки, это разные потоки доступа.
+    r3 = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin)
+    assert r3.status_code == 200, r3.text
+
+
+def test_mod_conversation_messages_report_id_must_match_conversation(client):
+    """report_id для ЧУЖОЙ беседы не подделать — 404, не молчаливая утечка."""
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv_ab = _conv(client, a, b_id)
+    conv_ac = _conv(client, a, c_id)
+    mid = client.post(f"/web/messenger/chats/{conv_ab}/messages", json={"body": "x"}, headers=a).json()["id"]
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": mid, "reason_code": "spam"}, headers=b).json()["report_id"]
+    r = client.get(f"/web/admin/messenger/conversations/{conv_ac}/messages",
+                   params={"report_id": rid}, headers=admin)
+    assert r.status_code == 404, r.text
+
+
+def test_mod_conversation_messages_shows_deleted_body_and_edit_chain(client):
+    """Модерация видит ТЕКСТ удалённого и ВСЮ цепочку правок — обычные читатели нет."""
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    edited = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "опечтка"}, headers=a).json()["id"]
+    client.patch(f"/web/messenger/messages/{edited}", json={"body": "опечатка"}, headers=a)
+    client.patch(f"/web/messenger/messages/{edited}", json={"body": "опечатка исправлена"}, headers=a)
+    deleted = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "секрет"}, headers=a).json()["id"]
+    client.delete(f"/web/messenger/messages/{deleted}", params={"scope": "all"}, headers=a)
+
+    msgs = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()["messages"]
+    by_id = {m["id"]: m for m in msgs}
+    assert by_id[edited]["edit_versions"] == [
+        {"body": "опечтка", "at": by_id[edited]["edit_versions"][0]["at"]},
+        {"body": "опечатка", "at": by_id[edited]["edit_versions"][1]["at"]},
+        {"body": "опечатка исправлена", "at": by_id[edited]["edit_versions"][2]["at"]},
+    ]
+    assert by_id[deleted]["deleted"] is True and by_id[deleted]["body"] == "секрет"
+    #Обычный участник по-прежнему НЕ видит текст удалённого (инвариант не ослаблен).
+    own = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert [m for m in own if m["id"] == deleted][0]["body"] == ""
+
+
+def test_expire_stale_reports_closes_after_10h_and_notifies(client):
+    admin, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "x"}, headers=a).json()["id"]
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": mid, "reason_code": "spam"}, headers=b).json()["report_id"]
+    from datetime import datetime, timedelta, timezone
+    from app.db import SessionLocal
+    from app.models import MessageReport
+    db = SessionLocal()
+    try:
+        rep = db.query(MessageReport).filter(MessageReport.id == rid).first()
+        rep.created_at = (datetime.now(timezone.utc) - timedelta(hours=11)).isoformat()
+        db.commit()
+    finally:
+        db.close()
+    #Любой пришедший за уведомлениями (не обязательно сам заявитель) триггерит проверку.
+    client.get("/me/events?filter=all&limit=5", headers=a)
+    left = client.get("/web/admin/messenger/reports?status=open", headers=admin).json()["reports"]
+    assert all(t["id"] != rid for t in left)
+    expired = client.get("/web/admin/messenger/reports?status=expired", headers=admin).json()["reports"]
+    assert any(t["id"] == rid for t in expired)
+    #Заявитель (Боб) получил системное уведомление — не тот, на кого жаловались.
+    items = client.get("/me/events?filter=all&limit=100", headers=b).json()["items"]
+    assert any(i["kind"] == "report_expired" for i in items)
+
+
+def test_expire_stale_reports_leaves_fresh_and_in_review_alone(client):
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv1 = _conv(client, a, b_id)
+    mid1 = client.post(f"/web/messenger/chats/{conv1}/messages", json={"body": "x"}, headers=a).json()["id"]
+    fresh_rid = client.post("/web/messenger/reports",
+                            json={"message_id": mid1, "reason_code": "spam"}, headers=b).json()["report_id"]
+
+    conv2 = _conv(client, a, c_id)
+    mid2 = client.post(f"/web/messenger/chats/{conv2}/messages", json={"body": "y"}, headers=a).json()["id"]
+    old_in_review_rid = client.post("/web/messenger/reports",
+                                    json={"message_id": mid2, "reason_code": "spam"}, headers=c).json()["report_id"]
+    client.post(f"/web/admin/messenger/reports/{old_in_review_rid}/resolve",
+               json={"status": "in_review"}, headers=admin)
+    from datetime import datetime, timedelta, timezone
+    from app.db import SessionLocal
+    from app.models import MessageReport
+    db = SessionLocal()
+    try:
+        rep = db.query(MessageReport).filter(MessageReport.id == old_in_review_rid).first()
+        rep.created_at = (datetime.now(timezone.utc) - timedelta(hours=11)).isoformat()
+        db.commit()
+    finally:
+        db.close()
+    client.get("/me/events?filter=all&limit=5", headers=a)
+    open_now = {t["id"]: t["status"] for t in
+               client.get("/web/admin/messenger/reports?status=", headers=admin).json()["reports"]}
+    assert open_now[fresh_rid] == "open"                # свежий — не тронут
+    assert open_now[old_in_review_rid] == "in_review"    # «в работе» — не авто-закрывается
+
+
 # ── Фазы 5–6: группы и каналы ────────────────────────────────────────────────────────
 def test_create_group_send_and_names(client):
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)

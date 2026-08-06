@@ -516,8 +516,11 @@ export const messengerModApi = {
     api.post(`/web/admin/messenger/reports/${id}/resolve`, { status, resolution_note: note }),
   conversations: (q = '', kind = '') =>
     api.get('/web/admin/messenger/conversations', { params: { q, kind } }),
-  conversationMessages: (id) =>
-    api.get(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/messages`),
+  // reportId — только из вкладки «Жалобы»: сервер проверяет, что ЭТОТ тикет ещё
+  // открыт, и отвечает 403, когда его закрыли (см. mod_conversation_messages).
+  conversationMessages: (id, reportId = 0) =>
+    api.get(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/messages`,
+            { params: reportId ? { report_id: reportId } : {} }),
   reply: (id, body) =>
     api.post(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/reply`, { body }),
   // Глобальный мьют/размьют пользователя модерацией (не может писать никому).

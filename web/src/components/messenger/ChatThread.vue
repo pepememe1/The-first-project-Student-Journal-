@@ -828,6 +828,36 @@ const headerTint = computed(() =>
 const peerNameFont = computed(() =>
   (!isGroupOrChannel.value && !isSaved.value && !isModeration.value)
     ? nameFontFamily(activePeer.value?.name_font || '') : '')
+
+// §правка: на телефоне четыре иконки (поиск/сводка/перевод/уведомления) съедали всю
+// ширину шапки, и полное имя/название беседы обрезалось раньше, чем должно. На sm+
+// они остаются прямо в строке как раньше; на телефоне — прячутся за одной кнопкой
+// со стрелкой (тот же приём «кнопка + абсолютный список + подложка», что уже есть в
+// MyStatusPicker.vue), открывается по тапу, закрывается тапом мимо или повторным тапом.
+const mobileActionsOpen = ref(false)
+watch(activeId, () => { mobileActionsOpen.value = false })
+
+// §правка: Telegram-style «здесь ничего нет» + случайная гифка-приветствие — ТОЛЬКО
+// для личных чатов без единого сообщения (не групп/каналов/«Избранного»/модерации —
+// там либо бессмысленно, либо неуместно). Запрос к Klipy — фиксированное "hello"
+// (англоязычная база, у "привет" выдача заметно скуднее), случайный элемент с ПЕРВОЙ
+// страницы — заводить отдельный эндпоинт ради одной картинки не нужно, переиспользуем
+// уже существующий gifSearch (тот же, что у GifPicker.vue).
+const isNewDirectConversation = computed(() => kind.value === 'direct' && !messages.value.length)
+const greetingGif = ref(null)
+const greetingGifLoading = ref(false)
+async function loadGreetingGif() {
+  greetingGifLoading.value = true
+  try {
+    const { data } = await messengerApi.gifSearch('hello')
+    const items = data.items || []
+    greetingGif.value = items.length ? items[Math.floor(Math.random() * items.length)] : null
+  } catch { greetingGif.value = null } finally { greetingGifLoading.value = false }
+}
+watch(isNewDirectConversation, (on) => { if (on) loadGreetingGif(); else greetingGif.value = null }, { immediate: true })
+// Клик по гифке = отправка ЕЁ ЖЕ, без промежуточного пикера (тот же sendGif, что и у
+// GifPicker.vue) — «нажимаем и отправляется именно она».
+async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greetingGif.value) }
 </script>
 
 <template>
@@ -856,43 +886,80 @@ const peerNameFont = computed(() =>
                :style="peerNameFont ? { fontFamily: peerNameFont } : {}">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
-        <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->
-        <button type="button" @click="toggleSearchPanel"
-                :aria-label="locale.t('chatThread.searchInChat', 'Поиск по чату')" :title="locale.t('chatThread.searchInChat', 'Поиск по чату')"
-                class="grid size-8 shrink-0 place-items-center rounded-md"
-                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                  : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-          <Search class="size-5" />
-        </button>
-        <!-- §D18: сводка переписки — ТОЛЬКО по кнопке. Автоматический пересказ при каждом
-             открытии чата означал бы запрос к модели на каждый вход. -->
-        <button type="button" @click="openSummary"
-                :aria-label="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')" :title="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')"
-                class="grid size-8 shrink-0 place-items-center rounded-md"
-                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                  : 'text-text3 hover:bg-bg2 hover:text-text'">
-          <ScrollText class="size-5" />
-        </button>
-        <!-- 🌐 — настройки перевода переписки. Ярче обычного, когда автоперевод включён:
-             человек должен видеть, что его сообщения уходят переведёнными, а не гадать. -->
-        <button type="button" @click="showTranslate = true"
-                :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
-                :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
-                class="grid size-8 shrink-0 place-items-center rounded-md"
-                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                  : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-          <Languages class="size-5" />
-        </button>
-        <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
-        <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
-                :aria-label="muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
-                :title="muted ? locale.t('chatThread.notifyOff', 'Уведомления выключены') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
-                class="grid size-8 shrink-0 place-items-center rounded-md"
-                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                  : (muted ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-          <BellOff v-if="muted" class="size-5" />
-          <Bell v-else class="size-5" />
-        </button>
+        <!-- Поиск/сводка/перевод/уведомления — на sm+ прямо в строке, как раньше. На
+             телефоне съедали всю ширину и обрезали название беседы — спрятаны за
+             кнопкой-стрелкой ниже (см. mobileActionsOpen). -->
+        <div class="hidden items-center gap-1 sm:flex">
+          <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->
+          <button type="button" @click="toggleSearchPanel"
+                  :aria-label="locale.t('chatThread.searchInChat', 'Поиск по чату')" :title="locale.t('chatThread.searchInChat', 'Поиск по чату')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+            <Search class="size-5" />
+          </button>
+          <!-- §D18: сводка переписки — ТОЛЬКО по кнопке. Автоматический пересказ при каждом
+               открытии чата означал бы запрос к модели на каждый вход. -->
+          <button type="button" @click="openSummary"
+                  :aria-label="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')" :title="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : 'text-text3 hover:bg-bg2 hover:text-text'">
+            <ScrollText class="size-5" />
+          </button>
+          <!-- 🌐 — настройки перевода переписки. Ярче обычного, когда автоперевод включён:
+               человек должен видеть, что его сообщения уходят переведёнными, а не гадать. -->
+          <button type="button" @click="showTranslate = true"
+                  :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
+                  :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+            <Languages class="size-5" />
+          </button>
+          <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
+          <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
+                  :aria-label="muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
+                  :title="muted ? locale.t('chatThread.notifyOff', 'Уведомления выключены') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : (muted ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+            <BellOff v-if="muted" class="size-5" />
+            <Bell v-else class="size-5" />
+          </button>
+        </div>
+
+        <!-- Телефон: та же четвёрка — за одной кнопкой-стрелкой (тот же приём, что
+             MyStatusPicker.vue). -->
+        <div class="relative shrink-0 sm:hidden">
+          <button type="button" @click="mobileActionsOpen = !mobileActionsOpen"
+                  :aria-label="locale.t('chatThread.moreActions', 'Ещё действия')" :title="locale.t('chatThread.moreActions', 'Ещё действия')"
+                  class="grid size-8 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white' : 'text-text3 hover:bg-bg2 hover:text-text'">
+            <ChevronDown class="size-5 transition-transform" :class="mobileActionsOpen ? 'rotate-180' : ''" />
+          </button>
+          <div v-if="mobileActionsOpen" class="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
+            <button type="button" @click="toggleSearchPanel(); mobileActionsOpen = false"
+                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
+              <Search class="size-4 shrink-0 text-text3" /> {{ locale.t('chatThread.searchInChat', 'Поиск по чату') }}
+            </button>
+            <button type="button" @click="openSummary(); mobileActionsOpen = false"
+                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
+              <ScrollText class="size-4 shrink-0 text-text3" /> {{ locale.t('chatThread.summaryAction', 'Краткая сводка переписки') }}
+            </button>
+            <button type="button" @click="showTranslate = true; mobileActionsOpen = false"
+                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
+              <Languages class="size-4 shrink-0" :class="tr.enabled ? 'text-accent' : 'text-text3'" /> {{ locale.t('translate.title', 'Перевод') }}
+            </button>
+            <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted); mobileActionsOpen = false"
+                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
+              <BellOff v-if="muted" class="size-4 shrink-0 text-accent" />
+              <Bell v-else class="size-4 shrink-0 text-text3" />
+              {{ muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления') }}
+            </button>
+          </div>
+          <div v-if="mobileActionsOpen" class="fixed inset-0 z-10" @click="mobileActionsOpen = false" />
+        </div>
         <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
         <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
                 :aria-label="locale.t('nav.moderation', 'Модерация')" :title="locale.t('chatThread.writeToModeration', 'Написать модерации')"
@@ -962,6 +1029,19 @@ const peerNameFont = computed(() =>
            этой области (а не всей секции чата, где съезжала бы на композер). -->
       <div class="relative min-h-0 flex-1">
       <div ref="scroller" class="h-full overflow-y-auto px-3 py-4" @scroll="onScrollerScroll">
+        <!-- Личный чат без единого сообщения (§правка, «как в Телеграме») — компактно,
+             без баннеров на пол-экрана. -->
+        <div v-if="isNewDirectConversation" class="flex flex-col items-center justify-center gap-2 py-8 text-center">
+          <p class="text-sm font-medium text-text2">{{ locale.t('chatThread.emptyConversation', 'Здесь пока ничего нет') }}</p>
+          <p class="text-xs text-text3">{{ locale.t('chatThread.emptyConversationHint', 'Отправьте сообщение или нажмите на гифку ниже') }}</p>
+          <button v-if="greetingGif" type="button" @click="sendGreetingGif"
+                  class="mt-1 overflow-hidden rounded-lg border border-border2 transition-transform hover:scale-105"
+                  :title="locale.t('chatThread.sendGreetingGif', 'Отправить приветствие')">
+            <img :src="greetingGif.thumb_url || greetingGif.url" alt=""
+                 class="block h-28 w-auto max-w-[180px] object-cover" />
+          </button>
+          <p v-else-if="greetingGifLoading" class="mt-1 text-xs text-text3">{{ locale.t('common.loading') }}</p>
+        </div>
         <template v-for="msg in messages" :key="msg.id">
           <!-- Разделитель по датам — над «Новые сообщения», если оба совпали на одном msg. -->
           <div v-if="dateBreaks.has(msg.id)" class="my-3 flex justify-center">
