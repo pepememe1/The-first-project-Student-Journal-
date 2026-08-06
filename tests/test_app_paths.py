@@ -8,6 +8,7 @@ test_app_paths.py — is_frozen()/app_dir() под PyInstaller И Nuitka.
 а __compiled__ — есть в globals(), и sys.executable указывает на временный
 bootstrap-интерпретатор в %TEMP%, а не на настоящий .exe.
 """
+import os
 import sys
 
 import app_paths
@@ -63,3 +64,49 @@ def test_app_dir_override_wins_over_frozen_detection(monkeypatch, tmp_path):
     monkeypatch.setenv("GRADEBOOK_APP_DIR", override)
     monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
     assert app_paths.app_dir() == override
+
+
+# ── «Загрузки» — живой баг (скриншот от Влада: data.key/vsgutu_grades.db/          ──
+# ── local_app.key легли прямо в Downloads, программа при этом не запускалась) ────
+def test_is_risky_run_location_detects_downloads(monkeypatch, tmp_path):
+    home = tmp_path / "profile"
+    downloads = home / "Downloads"
+    downloads.mkdir(parents=True)
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    assert app_paths._is_risky_run_location(str(downloads)) is True
+
+
+def test_is_risky_run_location_ignores_ordinary_folder(monkeypatch, tmp_path):
+    home = tmp_path / "profile"
+    (home / "Downloads").mkdir(parents=True)
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    assert app_paths._is_risky_run_location(str(tmp_path / "GradeBookAI-install")) is False
+
+
+def test_data_dir_redirects_away_from_downloads(monkeypatch, tmp_path):
+    """Живой баг: .exe скачан и запущен прямо из «Загрузки» — data_dir() обязана
+    увести базу/ключи/логи в постоянное место, а НЕ рассыпать их вперемешку с
+    другими скачанными файлами. app_dir() при этом (проверено ниже отдельно) не
+    меняется — апдейтеру и поиску ресурсов всё ещё нужен РЕАЛЬНЫЙ путь к .exe."""
+    monkeypatch.delenv("GRADEBOOK_APP_DIR", raising=False)
+    downloads = tmp_path / "profile" / "Downloads"
+    downloads.mkdir(parents=True)
+    local_appdata = tmp_path / "LocalAppData"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    monkeypatch.setattr(os.path, "expanduser",
+                        lambda p: str(tmp_path / "profile") if p == "~" else p)
+    monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
+    monkeypatch.setenv("NUITKA_ONEFILE_DIRECTORY", str(downloads))
+    assert app_paths.app_dir() == str(downloads), "app_dir() не должен меняться"
+    assert app_paths.data_dir() == str(local_appdata / "GradeBookAI")
+
+
+def test_data_dir_stays_portable_outside_downloads(monkeypatch, tmp_path):
+    """Обычная («не установил, а скопировал») папка — портативность как была: данные
+    рядом с .exe, редирект не срабатывает."""
+    monkeypatch.delenv("GRADEBOOK_APP_DIR", raising=False)
+    install_dir = tmp_path / "GradeBookAI-test1"
+    install_dir.mkdir()
+    monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
+    monkeypatch.setenv("NUITKA_ONEFILE_DIRECTORY", str(install_dir))
+    assert app_paths.data_dir() == str(install_dir)

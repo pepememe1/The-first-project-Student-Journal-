@@ -41,6 +41,34 @@ def _get(url, data=None, headers=None):
         return e.code, b""
 
 
+def test_ensure_server_path_falls_back_to_sys_executable_dir(monkeypatch, tmp_path):
+    """Живой баг («программа не запускается» под собранным .exe): под Nuitka onefile
+    __file__-путь (кандидат №1, от расположения local_api.py в репозитории) не
+    находит server/app там, где Nuitka РЕАЛЬНО его распаковывает — это отдельный кэш
+    (--onefile-tempdir-spec), доступный через dirname(sys.executable). Эмулируем это:
+    кандидат №1 «не находится» (репозиторий отсутствует), а рядом с sys.executable
+    лежит настоящий server/ — ensure_server_path обязана дойти до него."""
+    real_isdir = os.path.isdir
+    repo_candidate = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(local_api.__file__))), "server")
+    fake_exe_dir = tmp_path / "onefile_cache"
+    (fake_exe_dir / "server").mkdir(parents=True)
+
+    def fake_isdir(path):
+        if os.path.abspath(path) == os.path.abspath(repo_candidate):
+            return False                                        # кандидат 1 «не найден»
+        return real_isdir(path)
+
+    monkeypatch.setattr(os.path, "isdir", fake_isdir)
+    monkeypatch.setattr("sys.executable", str(fake_exe_dir / "python.exe"))
+    expected = str(fake_exe_dir / "server")
+    monkeypatch.setattr("sys.path", [p for p in __import__("sys").path if p != expected])
+
+    local_api.ensure_server_path()
+    import sys as _sys
+    assert expected in _sys.path
+
+
 def test_listens_only_on_loopback(api):
     """Самая важная проверка файла: сервер обязан слушать ТОЛЬКО себя.
 

@@ -215,15 +215,33 @@ def wipe_local_db(login: str = "", encrypted=None) -> bool:
 def ensure_server_path() -> None:
     """Положить `server/` в sys.path, чтобы был импортируем пакет `app`.
 
-    Каталог ищем ДВУМЯ путями, и это не перестраховка: `app_paths.app_dir()`
-    отталкивается от точки запуска, а она разная — у .exe это папка рядом с ним, а под
-    pytest вообще каталог самого pytest, и тогда `server/` не находится вовсе. Поэтому
-    сначала пробуем путь ОТ ЭТОГО ФАЙЛА (ui/ → корень репозитория), который от точки
-    запуска не зависит."""
+    Каталог ищем НЕСКОЛЬКИМИ путями, и это не перестраховка — у каждого своя причина:
+    1. Путь ОТ ЭТОГО ФАЙЛА (ui/ → корень репозитория) — от точки запуска не зависит,
+       нужен для запуска из исходников и под pytest (там `app_paths.app_dir()`
+       отталкивается от каталога САМОГО pytest, и `server/` там не находится вовсе).
+    2. `dirname(sys.executable)` — 🔥 ЖИВОЙ БАГ («программа не запускается» — WebView2
+       считал локальный сервер недоступным, откатывался на Qt, которого в релизной
+       сборке нет вовсе, — окно не открывалось СОВСЕМ, без единого сообщения).
+       Под Nuitka onefile `__file__` СКОМПИЛИРОВАННОГО модуля (кандидат 1) не
+       резолвится туда, где ФАКТИЧЕСКИ лежат сырые бандл-файлы (`--include-raw-dir=
+       server/app=server/app`) — они распаковываются в ОТДЕЛЬНЫЙ кэш
+       (`--onefile-tempdir-spec`), а не рядом с настоящим .exe. `sys.executable` под
+       Nuitka onefile указывает на bootstrap-python ВНУТРИ этого же кэша (проверено
+       отдельной пробной сборкой с тем же `--onefile-tempdir-spec`, что и релиз, +
+       прямым осмотром кэша на диске: `server/app` там реально лежит) — то есть это
+       ТОЧНО противоположность тому, что нужно `app_paths.app_dir()` (та отвечает
+       «где лежит настоящий .exe», см. её докстрин), но ровно то, что нужно здесь.
+    3. `app_paths.app_dir()` — последний резерв (PyInstaller/dev, где `sys.executable`
+       уже указывает на настоящий .exe и бандл-файлы физически рядом с ним)."""
     import sys
     candidates = []
     here = os.path.dirname(os.path.abspath(__file__))          # …/ui
     candidates.append(os.path.join(os.path.dirname(here), "server"))
+    try:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
+                                       "server"))
+    except Exception:
+        pass
     try:
         import app_paths
         candidates.append(os.path.join(app_paths.app_dir(), "server"))
