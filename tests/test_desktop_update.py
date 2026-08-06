@@ -162,6 +162,115 @@ def test_cleanup_old_removes_previous_exe(updater_env):
     assert not old.exists()
 
 
+# ── Интерактивный апдейтер: диалог да/нет, перезапуск ─────────────────────────────
+class _FakeUser32:
+    """Подмена ctypes.windll.user32 — реальный MessageBoxW НИКОГДА не должен всплывать
+    в тестах (завис бы, ожидая клика человека)."""
+    def __init__(self, answer=6):
+        self.answer = answer
+        self.calls = []
+
+    def MessageBoxW(self, hwnd, message, title, flags):
+        self.calls.append((message, title, flags))
+        return self.answer
+
+
+def test_ask_yes_no_true_on_idyes(updater_env, monkeypatch):
+    updater, _tmp, _exe = updater_env
+    fake = _FakeUser32(answer=6)                                # IDYES
+    monkeypatch.setattr(updater.ctypes, "windll",
+                        type("W", (), {"user32": fake})(), raising=False)
+    assert updater.ask_yes_no("Заголовок", "Текст") is True
+    assert fake.calls and fake.calls[0][1] == "Заголовок"
+
+
+def test_ask_yes_no_false_on_idno(updater_env, monkeypatch):
+    updater, _tmp, _exe = updater_env
+    fake = _FakeUser32(answer=7)                                # IDNO
+    monkeypatch.setattr(updater.ctypes, "windll",
+                        type("W", (), {"user32": fake})(), raising=False)
+    assert updater.ask_yes_no("Заголовок", "Текст") is False
+
+
+def test_show_info_never_raises_if_dialog_fails(updater_env, monkeypatch):
+    """Показ информационного окна — best-effort: сбой не должен ронять программу."""
+    updater, _tmp, _exe = updater_env
+
+    class Boom:
+        def MessageBoxW(self, *a, **kw):
+            raise OSError("нет доступа к рабочему столу")
+    monkeypatch.setattr(updater.ctypes, "windll",
+                        type("W", (), {"user32": Boom()})(), raising=False)
+    updater.show_info("Заголовок", "Текст")                    # не должно бросить
+
+
+def test_relaunch_noop_when_not_frozen(updater_env, monkeypatch):
+    """В dev-запуске (не собранный .exe) перезапускать нечего."""
+    updater, _tmp, _exe = updater_env
+    called = []
+    monkeypatch.setattr(updater.app_paths, "is_frozen", lambda: False)
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: called.append(a))
+    updater.relaunch()
+    assert not called
+
+
+def test_relaunch_spawns_new_process_when_frozen(updater_env, monkeypatch):
+    updater, tmp_path, exe = updater_env
+    calls = []
+    monkeypatch.setattr(updater.app_paths, "is_frozen", lambda: True)
+    monkeypatch.setattr("subprocess.Popen", lambda args, **kw: calls.append(args))
+    updater.relaunch()
+    assert calls == [[str(exe)]]
+
+
+def test_check_and_prompt_no_update_never_asks(updater_env, monkeypatch):
+    """Нет обновления — диалог вообще не должен показываться."""
+    updater, _tmp, _exe = updater_env
+    monkeypatch.setattr(updater, "fetch_manifest", lambda url, timeout=6: _manifest(version="3.5.5"))
+    monkeypatch.setattr(updater, "ask_yes_no",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("не должен спрашивать")))
+    assert updater.check_and_prompt("https://x", "3.5.5") is False
+
+
+def test_check_and_prompt_decline_closes_without_downloading(updater_env, monkeypatch):
+    """Отказ («нет») — программа должна закрыться, но НИЧЕГО не скачивать."""
+    updater, _tmp, _exe = updater_env
+    monkeypatch.setattr(updater, "fetch_manifest", lambda url, timeout=6: _manifest())
+    monkeypatch.setattr(updater, "ask_yes_no", lambda *a, **kw: False)
+    monkeypatch.setattr(updater, "check_and_fetch",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("не должен качать")))
+    assert updater.check_and_prompt("https://x", "3.5.5") is True
+
+
+def test_check_and_prompt_accept_downloads_applies_and_relaunches(updater_env, monkeypatch):
+    """Согласие («да») — скачать, установить, перезапустить одним циклом."""
+    updater, _tmp, _exe = updater_env
+    relaunched = []
+    monkeypatch.setattr(updater, "fetch_manifest", lambda url, timeout=6: _manifest())
+    monkeypatch.setattr(updater, "ask_yes_no", lambda *a, **kw: True)
+    monkeypatch.setattr(updater, "check_and_fetch",
+                        lambda *a, **kw: {"version": "3.5.6", "path": "x", "sha256": "f" * 64})
+    monkeypatch.setattr(updater, "apply_pending", lambda *a, **kw: True)
+    monkeypatch.setattr(updater, "relaunch", lambda: relaunched.append(1))
+    assert updater.check_and_prompt("https://x", "3.5.5") is True
+    assert relaunched == [1]
+
+
+def test_check_and_prompt_accept_but_download_fails_falls_back_to_normal_startup(updater_env, monkeypatch):
+    """Согласились, но скачать/поставить не вышло — сообщаем и продолжаем как обычно
+    (НЕ закрываем программу: сеть подвела — не повод не пустить человека в журнал)."""
+    updater, _tmp, _exe = updater_env
+    shown = []
+    relaunched = []
+    monkeypatch.setattr(updater, "fetch_manifest", lambda url, timeout=6: _manifest())
+    monkeypatch.setattr(updater, "ask_yes_no", lambda *a, **kw: True)
+    monkeypatch.setattr(updater, "check_and_fetch", lambda *a, **kw: {})
+    monkeypatch.setattr(updater, "show_info", lambda *a, **kw: shown.append(a))
+    monkeypatch.setattr(updater, "relaunch", lambda: relaunched.append(1))
+    assert updater.check_and_prompt("https://x", "3.5.5") is False
+    assert shown and not relaunched
+
+
 def test_fetch_manifest_survives_offline(updater_env, monkeypatch):
     """Нет сети — это штатное состояние, а не ошибка: возвращаем пустой манифест."""
     updater, _tmp, _exe = updater_env

@@ -22,11 +22,12 @@ updater.py — КЛИЕНТСКАЯ часть автообновления де
 журнал; подмена файла под работающей программой — это как минимум неожиданный
 перезапуск. Скачиваем в фоне, ставим на старте.
 """
+import ctypes
 import os
+import sys
 import json
 import shutil
 import tempfile
-import threading
 import urllib.request
 import urllib.error
 
@@ -79,13 +80,18 @@ def _get(url: str, timeout: int = _TIMEOUT) -> bytes:
         return r.read()
 
 
-def fetch_manifest(base_url: str) -> dict:
-    """Манифест обновлений или {} (нет сети/нет обновлений — это НЕ ошибка)."""
+def fetch_manifest(base_url: str, timeout: int = _TIMEOUT) -> dict:
+    """Манифест обновлений или {} (нет сети/нет обновлений — это НЕ ошибка).
+
+    ⚠️ `timeout` короче полного `_TIMEOUT` вызывается из ИНТЕРАКТИВНОЙ проверки при
+    старте (`check_and_prompt`, ниже) — манифест это несколько байт JSON, а без него
+    окно программы вообще не открывается, поэтому 30 секунд ожидания при плохой сети
+    выглядели бы зависанием на старте."""
     base = (base_url or "").rstrip("/")
     if not base:
         return {}
     try:
-        return json.loads(_get(f"{base}/desktop/updates").decode("utf-8"))
+        return json.loads(_get(f"{base}/desktop/updates", timeout=timeout).decode("utf-8"))
     except Exception as e:                                   # noqa: BLE001
         _LOG.info(f"[update] манифест недоступен: {e}")
         return {}
@@ -283,11 +289,85 @@ def apply_pending(current_version: str) -> bool:
     return True
 
 
-def start_background_check(base_url: str, current_version: str) -> None:
-    """Фоновая проверка обновлений — daemon-поток, чтобы не задерживать запуск и выход."""
-    def _run():
-        try:
-            check_and_fetch(base_url, current_version)
-        except Exception as e:                               # noqa: BLE001
-            _LOG.info(f"[update] фоновая проверка не удалась: {e}")
-    threading.Thread(target=_run, name="updater", daemon=True).start()
+#── Интерактивная проверка при старте (диалог да/нет) ────────────────────────────────
+#⚠️ Раньше проверка была ТИХОЙ фоновой (start_background_check — качала про запас,
+#подмена ставилась молча на СЛЕДУЮЩЕМ запуске). Человек видел, что программа вдруг
+#закрывается, без единого объяснения (--windows-console-mode=disable — консоли нет,
+#печать в неё никто не увидит) — это и читалось как «автообновление не работает»
+#наравне с самим багом is_frozen()/Nuitka (см. CLAUDE.md). Теперь: проверяем СИНХРОННО
+#до открытия окна, спрашиваем явным диалогом, качаем только после согласия и сразу же
+#перезапускаемся — без «запустите программу ещё раз».
+
+def ask_yes_no(title: str, message: str) -> bool:
+    """Нативный Windows-диалог да/нет. Работает БЕЗ готового окна/WebView2/Qt — на
+    этом этапе запуска их ещё нет, а тянуть Qt ради одного диалога означало бы то же
+    самое ~150 МБ, от которых отказались переходом на WebView2 (см. §11 CLAUDE.md).
+
+    На не-Windows (только dev-запуск тестов на другой ОС, релиз — Windows-only, DPAPI/
+    WebView2/SQLCipher) — молча отвечает «нет», чтобы автотесты не поймали реальный
+    диалог; тесты самой функции подменяют ctypes.windll, а не полагаются на эту ветку."""
+    if sys.platform != "win32":
+        _LOG.info(f"[update] {title}: {message} (не Windows — диалог недоступен)")
+        return False
+    MB_YESNO, MB_ICONQUESTION, MB_TOPMOST = 0x4, 0x20, 0x40000
+    IDYES = 6
+    res = ctypes.windll.user32.MessageBoxW(0, message, title,
+                                           MB_YESNO | MB_ICONQUESTION | MB_TOPMOST)
+    return res == IDYES
+
+
+def show_info(title: str, message: str) -> None:
+    """Информационное окно (например, «не удалось скачать»). Best-effort — сбой показа
+    не должен ронять программу, сообщение в любом случае уходит и в лог."""
+    _LOG.info(f"[update] {title}: {message}")
+    if sys.platform != "win32":
+        return
+    try:
+        MB_ICONINFORMATION, MB_TOPMOST = 0x40, 0x40000
+        ctypes.windll.user32.MessageBoxW(0, message, title, MB_ICONINFORMATION | MB_TOPMOST)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
+def relaunch() -> None:
+    """Запускает СВЕЖУЮ копию программы (только что обновлённый .exe) отдельным
+    процессом. Не завершает текущий процесс сама — это решает вызывающий код (main.py),
+    симметрично остальным функциям модуля.
+
+    Только для собранной версии: в dev (`python main.py`) `_exe_path()` не указывает
+    ни на что реально исполняемое, перезапускать нечего."""
+    if not app_paths.is_frozen():
+        return
+    try:
+        import subprocess
+        subprocess.Popen([_exe_path()], cwd=app_paths.app_dir(),
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+    except Exception as e:                                     # noqa: BLE001
+        _LOG.warning(f"[update] не удалось перезапустить программу: {e}")
+
+
+def check_and_prompt(base_url: str, current_version: str) -> bool:
+    """Весь интерактивный цикл автообновления ОДНИМ вызовом: манифест → диалог →
+    закачка → установка → перезапуск. Вынесено сюда (а не в main.py), чтобы
+    тестировать без реального диалога/сети/подмены файлов — ровно так же, как
+    остальные функции модуля.
+
+    Возвращает True, если программа должна завершиться ПРЯМО СЕЙЧАС: либо человек
+    согласился и уже запущена новая версия отдельным процессом, либо отказался — по
+    прямому решению тогда программа просто закрывается, а не остаётся работать на
+    старой версии молча."""
+    man = fetch_manifest(base_url, timeout=6)
+    if not DU.has_update(man, current_version):
+        return False
+    latest = DU.normalize(man.get("version") or "") or "новая версия"
+    if not ask_yes_no("Обновление GradeBookAI",
+                      f"Доступна версия {latest}.\n\nУстановить сейчас? Программа "
+                      "скачает обновление и перезапустится."):
+        return True
+    info = check_and_fetch(base_url, current_version)
+    if not info or not apply_pending(current_version):
+        show_info("Обновление GradeBookAI",
+                  "Не удалось установить обновление. Программа откроется как обычно.")
+        return False
+    relaunch()
+    return True
