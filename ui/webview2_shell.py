@@ -32,6 +32,7 @@ WebView2 — движок Microsoft, и по умолчанию он разго�
 """
 import os
 
+import app_paths
 import log
 
 _LOG = log.get("webview2")
@@ -130,10 +131,12 @@ def open_window(url: str, title: str = "GradeBookAI", on_closed=None) -> bool:
         import webview
         webview.create_window(title, url, width=1440, height=900,
                               min_size=(1024, 640), text_select=True)
+        #debug=True открывает DevTools (F12) — ТОЛЬКО при запуске из исходников, см.
+        #тот же приём и его причину в webview2_app.py::run().
         webview.start(gui="edgechromium",
                       private_mode=True,                 #эфемерный профиль (152-ФЗ)
                       storage_path=profile_dir(),
-                      debug=False)
+                      debug=not app_paths.is_frozen())
         if on_closed is not None:
             on_closed()
         return True

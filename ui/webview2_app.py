@@ -125,10 +125,15 @@ def run() -> bool:
         window.events.shown += lambda: _apply_window_icon(window)
     _LOG.info(f"[webview2] окно открыто: {url}")
     try:
+        #⚠️ debug=True открывает DevTools (F12) — НАМЕРЕННО только при запуске ИЗ
+        #ИСХОДНИКОВ (живой вопрос: «где смотреть причину, если страница не грузится» —
+        #JS-ошибки уходят в консоль браузера внутри окна, а не в gradebook.log; в
+        #собранном .exe эта консоль недостижима в принципе). В РЕЛИЗЕ — по-прежнему
+        #False: обычному человеку в колледже DevTools не нужны и не должны быть видны.
         webview.start(gui="edgechromium",
                       private_mode=True,             #эфемерный профиль (152-ФЗ)
                       storage_path=shell.profile_dir(),
-                      debug=False)
+                      debug=not _is_compiled())
     finally:
         #Сначала дописать несохранённое, потом гасить сервер: выход не имеет права
         #потерять правки, сделанные в последнюю минуту (то же правило, что у Qt-оболочки).
