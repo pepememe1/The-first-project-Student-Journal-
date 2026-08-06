@@ -295,3 +295,24 @@ def admin_set_group_hours(payload: dict = Body(...),
 def admin_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = db.query(Subject).filter(Subject.deleted == False).order_by(Subject.name).all()  # noqa: E712
     return {"subjects": [{"name": s.name} for s in rows]}
+
+
+@router.get("/admin/subjects/portal")
+def admin_subjects_portal(category: str = Query(""), _admin: User = Depends(require_admin),
+                          db: Session = Depends(get_db)):
+    """Предметы категории портала (колледж/бакалавриат/заочное 1/заочное 2) — та же
+    сортировка по категориям, что уже есть у «Расписания»/«Групп»/«Студентов» (§5.1
+    CLAUDE.md), только для каталога предметов. Источник — Snapshot.subjects того же
+    снимка, что и массовый импорт групп (`admin_import_schedule_category_all`) —
+    второй краулер не заводим. Он УЖЕ приходит без «- N п/г»-дублей (см.
+    schedule/model.py::strip_subgroup_tag) — здесь их сверять НЕ нужно ещё раз.
+
+    `in_catalog` — уже ли предмет в каталоге (Subject) — чтобы кнопка «Добавить»
+    в интерфейсе показывалась только для того, чего реально не хватает."""
+    if category and category not in schedule_parser.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Неизвестная категория расписания")
+    snap, building = schedule_web.full_state(category)
+    existing = {s.name for s in db.query(Subject).filter(Subject.deleted == False).all()}  # noqa: E712
+    portal_subjects = sorted(snap.subjects) if snap else []
+    return {"category": category or schedule_web.default_category(), "building": building,
+            "subjects": [{"name": s, "in_catalog": s in existing} for s in portal_subjects]}

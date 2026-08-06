@@ -22,9 +22,14 @@ import os
 
 import app_paths
 
-#subjects.json ВСЕГДА рядом с программой (см. app_paths.app_dir): его можно
+#subjects.json ВСЕГДА рядом с программой (см. app_paths.safe_app_dir): его можно
 #свободно править в любом текстовом редакторе. В .exe НЕ упаковывается.
-SUBJECTS_FILE = app_paths.app_file("subjects.json")
+#⚠️ Живой баг: .exe запущен прямо из «Загрузки» → обычный app_file() кладёт
+#subjects.json туда же, вперемешку со скачанными файлами (та же жалоба, что уже
+#чинили для базы/ключа в app_paths.py::data_dir). safe_app_file() — та же папка
+#во ВСЕХ остальных случаях (dev, любая обычная папка), но уводит именно из
+#«Загрузок» — см. её докстрин.
+SUBJECTS_FILE = app_paths.safe_app_file("subjects.json")
 
 #Встроенный список по умолчанию — используется если subjects.json не существует
 _BUILTIN_SUBJECTS = [

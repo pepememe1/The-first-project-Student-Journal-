@@ -9,6 +9,18 @@ import { useThemeStore } from './stores/theme'
 const app = createApp(App)
 app.use(createPinia())
 
+// Живой баг («вкладка иногда не загружается, помогает только F5» — повторился и после
+// фикса :duration в AppShell.vue): БЕЗ глобального обработчика необработанная ошибка
+// внутри setup/render/watcher ЛЮБОГО компонента страницы уходит в тишину — Vue просто
+// оставляет пустой экран, а сайдбар (отдельное от RouterView поддерево) продолжает жить
+// как ни в чём не бывало, ровно как на скриншоте. Раньше диагностировать было нечем: ни
+// один такой сбой нигде не логировался. Теперь — печатаем причину целиком в консоль
+// (минимум видно в devtools при следующем повторении) и не даём ошибке остаться немой.
+app.config.errorHandler = (err, instance, info) => {
+  const name = instance?.type?.__name || instance?.type?.name || 'unknown'
+  console.error(`[app] необработанная ошибка в компоненте "${name}" (${info}):`, err)
+}
+
 // Тему применяем ДО монтирования (и до router), чтобы не мигал светлый кадр.
 const theme = useThemeStore()
 theme.apply()

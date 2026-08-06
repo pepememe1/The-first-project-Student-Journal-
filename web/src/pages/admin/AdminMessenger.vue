@@ -9,6 +9,7 @@ import { messengerModApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { roleLabel } from '@/config/roles'
+import { profilePlate } from '@/theme/palette'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -192,14 +193,16 @@ function fmt(iso) {
           <!-- Кто и на кого — с аватаром, ФИО и группой/предметами. -->
           <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div class="flex items-center gap-2 rounded-md border border-border bg-bg2 p-2">
-              <Avatar :src="r.reported?.avatar" :name="r.reported?.full_name || r.reported_name" :size="36" />
+              <Avatar :src="r.reported?.avatar" :name="r.reported?.full_name || r.reported_name"
+                      :role="r.reported?.role" :color="profilePlate(r.reported?.profile_color)" :size="36" />
               <div class="min-w-0">
                 <div class="truncate text-xs font-semibold text-text">{{ locale.t('adminMessenger.reportedLabel', 'На:') }} {{ r.reported?.full_name || r.reported_name }}</div>
                 <div class="truncate text-[11px] text-text3">{{ userMeta(r.reported) }}</div>
               </div>
             </div>
             <div class="flex items-center gap-2 rounded-md border border-border bg-bg2 p-2">
-              <Avatar :src="r.reporter?.avatar" :name="r.reporter?.full_name || r.reporter_name" :size="36" />
+              <Avatar :src="r.reporter?.avatar" :name="r.reporter?.full_name || r.reporter_name"
+                      :role="r.reporter?.role" :color="profilePlate(r.reporter?.profile_color)" :size="36" />
               <div class="min-w-0">
                 <div class="truncate text-xs font-semibold text-text">{{ locale.t('adminMessenger.reporterLabel', 'От:') }} {{ r.reporter?.full_name || r.reporter_name }}</div>
                 <div class="truncate text-[11px] text-text3">{{ userMeta(r.reporter) }}</div>
@@ -242,7 +245,8 @@ function fmt(iso) {
              class="flex items-center gap-3 rounded-lg border border-border bg-card p-3 shadow-card">
           <button type="button" @click="openConversation(c.conversation_id, 'inbox')"
                   class="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:opacity-80">
-            <Avatar :src="c.people?.[0]?.avatar" :name="c.people?.[0]?.full_name || (c.participants || []).join(', ')" :size="40" />
+            <Avatar :src="c.people?.[0]?.avatar" :name="c.people?.[0]?.full_name || (c.participants || []).join(', ')"
+                    :role="c.people?.[0]?.role" :color="profilePlate(c.people?.[0]?.profile_color)" :size="40" />
             <div class="min-w-0 flex-1">
               <div class="truncate text-sm font-semibold text-text">{{ c.people?.[0]?.full_name || (c.participants || []).join(', ') || locale.t('adminMessenger.unknownUser', 'Пользователь') }}</div>
               <div class="truncate text-xs text-text3">{{ userMeta(c.people?.[0]) || locale.t('adminMessenger.supportRequestFallback', 'Обращение в поддержку') }}</div>

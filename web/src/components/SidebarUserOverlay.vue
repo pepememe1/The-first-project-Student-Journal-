@@ -73,7 +73,7 @@ async function saveStatusText() {
       <RouterLink :to="`/${auth.role}/profile`" @click="emit('close')"
                   class="group relative -mt-8 block w-fit rounded-full ring-4 ring-card"
                   :title="locale.t('userOverlay.editProfile', 'Редактировать профиль')">
-        <Avatar :src="profile.avatar" :name="fullName" :size="64" />
+        <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="plate" :size="64" />
         <span class="absolute inset-0 grid place-items-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
           <Pencil class="size-5 text-white" />
         </span>

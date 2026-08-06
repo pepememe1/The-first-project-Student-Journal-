@@ -132,7 +132,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
          карточки модерации), т.к. личка с админом это другой контекст переписки. -->
     <div v-else-if="isAdminPeer" class="flex flex-col p-6">
       <div class="mb-3 flex flex-col items-center text-center">
-        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="72" />
+        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :role="activePeer.role" :color="plate" :online="!!activePeer.online" :size="72" />
         <h2 class="mt-3 font-title text-lg font-bold text-text">{{ activePeer.full_name }}</h2>
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-text3">
           <Landmark class="size-3.5" />{{ locale.t('role.admin', 'Администратор') }}
@@ -153,7 +153,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
       <button type="button" @click="profileFor = activePeer"
               class="flex flex-col items-center p-6 text-center transition-opacity hover:opacity-90"
               :style="{ background: plate }">
-        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :online="!!activePeer.online" :size="96" />
+        <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :role="activePeer.role" :color="plate" :online="!!activePeer.online" :size="96" />
         <h2 class="mt-3 font-title text-lg font-bold text-white" :style="{ fontFamily: nameFontFamily(activePeer.name_font) }">{{ activePeer.full_name }}</h2>
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-white/80">
           <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}

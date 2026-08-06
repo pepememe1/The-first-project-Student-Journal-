@@ -110,3 +110,39 @@ def test_data_dir_stays_portable_outside_downloads(monkeypatch, tmp_path):
     monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
     monkeypatch.setenv("NUITKA_ONEFILE_DIRECTORY", str(install_dir))
     assert app_paths.data_dir() == str(install_dir)
+
+
+# ── safe_app_dir()/safe_app_file() — живой баг: subjects.json качался в «Загрузки» ──
+def test_safe_app_dir_matches_app_dir_in_dev():
+    """Dev-режим (не frozen) — safe_app_dir() обязана совпадать с app_dir() один в
+    один: тестовый override GRADEBOOK_APP_DIR читает именно app_dir(), и ничего не
+    должно перестать работать для существующих потребителей (subjects.py и др.)."""
+    assert app_paths.safe_app_dir() == app_paths.app_dir()
+
+
+def test_safe_app_dir_stays_portable_outside_downloads(monkeypatch, tmp_path):
+    monkeypatch.delenv("GRADEBOOK_APP_DIR", raising=False)
+    install_dir = tmp_path / "GradeBookAI-test1"
+    install_dir.mkdir()
+    monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
+    monkeypatch.setenv("NUITKA_ONEFILE_DIRECTORY", str(install_dir))
+    assert app_paths.safe_app_dir() == str(install_dir)
+    assert app_paths.app_dir() == str(install_dir), "app_dir() не трогаем — нужен апдейтеру"
+
+
+def test_safe_app_dir_redirects_away_from_downloads(monkeypatch, tmp_path):
+    """Живой баг: subjects.json скачивался вместе с .exe прямо в «Загрузки». safe_app_dir()
+    обязана увести его в то же место, что и data_dir() — а app_dir() остаться нетронутой
+    (нужна апдейтеру/поиску бандл-ресурсов, см. её докстрин)."""
+    monkeypatch.delenv("GRADEBOOK_APP_DIR", raising=False)
+    downloads = tmp_path / "profile" / "Downloads"
+    downloads.mkdir(parents=True)
+    local_appdata = tmp_path / "LocalAppData"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    monkeypatch.setattr(os.path, "expanduser",
+                        lambda p: str(tmp_path / "profile") if p == "~" else p)
+    monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
+    monkeypatch.setenv("NUITKA_ONEFILE_DIRECTORY", str(downloads))
+    assert app_paths.safe_app_dir() == str(local_appdata / "GradeBookAI")
+    assert app_paths.app_dir() == str(downloads), "app_dir() не должен меняться"
+    assert app_paths.safe_app_file("subjects.json") == str(local_appdata / "GradeBookAI" / "subjects.json")

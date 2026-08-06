@@ -22,6 +22,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
 import { nameFontFamily } from '@/config/nameFonts'
+import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 import SidebarUserOverlay from '@/components/SidebarUserOverlay.vue'
 
@@ -78,7 +79,7 @@ onMounted(async () => {
               :aria-label="locale.t('userOverlay.open', 'Профиль и статус')"
               :title="locale.t('header.myStatus', { status: statusText })">
         <span class="relative shrink-0">
-          <Avatar :src="profile.avatar" :name="fullName" :size="36" />
+          <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="36" />
           <span class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card"
                 :style="{ background: myStatus.color }" />
         </span>

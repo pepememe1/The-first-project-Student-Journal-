@@ -6,6 +6,7 @@ import { storeToRefs } from 'pinia'
 import { X, Check } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
+import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const props = defineProps({ count: { type: Number, default: 1 } })
@@ -45,7 +46,8 @@ function initials(name) {
                 class="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-bg2">
           <!-- Личный чат — аватар собеседника; группа/канал/избранное — цветной кружок
                с инициалами (тот же приём, что в ChatList.vue). -->
-          <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title" :size="36" />
+          <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title"
+                  :role="c.peer?.role" :color="profilePlate(c.peer?.profile_color)" :size="36" />
           <div v-else class="grid size-9 shrink-0 place-items-center rounded-full text-xs font-bold text-white"
                :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
             {{ initials(c.title) }}

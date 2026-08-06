@@ -136,13 +136,13 @@ defineExpose({ openAvatarEditor: () => { editingAvatar.value = true } })
         <button v-if="editable" type="button" @click="editingAvatar = true"
                 class="relative block size-20 overflow-hidden rounded-full ring-4 ring-card"
                 :title="locale.t('profile.editAvatar', 'Изменить аватарку')">
-          <Avatar :src="shown.avatar" :name="shown.full_name" :size="80" />
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
           <span class="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
             <Camera class="size-6 text-white" />
           </span>
         </button>
         <div v-else class="rounded-full ring-4 ring-card">
-          <Avatar :src="shown.avatar" :name="shown.full_name" :size="80" />
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
         </div>
       </div>
 

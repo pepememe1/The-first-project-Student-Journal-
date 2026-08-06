@@ -222,6 +222,13 @@ export const adminApi = {
   createSubject: (name) => api.post('/web/admin/subjects', { name }),
   renameSubject: (name, newName) => api.put(`/web/admin/subjects/${encodeURIComponent(name)}`, { name: newName }),
   deleteSubject: (name) => api.delete(`/web/admin/subjects/${encodeURIComponent(name)}`),
+  // Каталог предметов, отсортированный по категориям портала (колледж/бакалавриат/
+  // заочное 1/2) — та же сортировка, что уже есть у Расписания/Групп/Студентов.
+  // «- N п/г»-дубли уже сняты на сервере (schedule/model.py::strip_subgroup_tag).
+  subjectsPortal: (category) => api.get('/web/admin/subjects/portal', { params: { category } }),
+  // names — конкретный отбор (галочки), не передан — импортировать ВСЕ предметы категории.
+  importSubjectsPortal: (category, names) =>
+    api.post('/web/admin/subjects/import-portal', { category, names }),
   // CRUD преподавателей (Phase B). id на сервере = teach:login.
   createTeacher: (payload) => api.post('/web/admin/teachers', payload),
   updateTeacher: (login, payload) => api.put(`/web/admin/teachers/${encodeURIComponent(login)}`, payload),

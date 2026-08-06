@@ -16,6 +16,7 @@ import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import SharedGroupsChannels from '@/components/messenger/SharedGroupsChannels.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
+import { profilePlate } from '@/theme/palette'
 import { useLocaleStore } from '@/stores/locale'
 
 const emit = defineEmits(['close'])
@@ -247,7 +248,10 @@ async function clearHistory() {
               <!-- §5.4: клик по аватарке/имени — карточка профиля этого участника. -->
               <button type="button" @click="profileFor = { userId: p.user_id }"
                       class="flex min-w-0 flex-1 items-center gap-2.5 text-left">
-                <Avatar :src="p.avatar" :name="p.full_name" :online="!!p.online" :size="36" />
+                <!-- ⚠️ p.role здесь — роль УЧАСТНИКА БЕСЕДЫ (owner/admin/writer/member/
+                     reader, §ролей), а НЕ роль в системе — та отдельным полем
+                     p.user_role (student/teacher/admin/parent), не перепутать. -->
+                <Avatar :src="p.avatar" :name="p.full_name" :role="p.user_role" :color="profilePlate(p.profile_color)" :online="!!p.online" :size="36" />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-1.5">
                     <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>

@@ -18,6 +18,7 @@ import { Menu } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore } from '@/stores/profile'
 import { useLocaleStore } from '@/stores/locale'
+import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
@@ -52,7 +53,7 @@ const fullName = computed(() => (auth.user?.name || '').trim())
 
     <RouterLink :to="`/${auth.role}/profile`" class="shrink-0"
                 :aria-label="locale.t('nav.profile', 'Профиль')">
-      <Avatar :src="profile.avatar" :name="fullName" :size="30" />
+      <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="30" />
     </RouterLink>
   </header>
 </template>

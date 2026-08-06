@@ -1,8 +1,12 @@
 <script setup>
-// Avatar — круглая аватарка: показывает картинку (prefs.avatar) либо инициалы по ФИО.
-// Единый вид во всех местах (список чатов, карточка, каталог людей, модерация).
+// Avatar — круглая аватарка: показывает картинку (prefs.avatar) либо, если её нет,
+// значок РОЛИ (RoleAvatarIcon, Discord-style — «у каждой роли свой значок») цветом
+// профиля человека; для ролей вне списка (роль неизвестна/не передана — маскот,
+// групповой чат и т.п.) — инициалы по ФИО, как было. Единый вид во всех местах
+// (список чатов, карточка, каталог людей, модерация).
 import { computed } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
+import RoleAvatarIcon from '@/components/ui/RoleAvatarIcon.vue'
 const locale = useLocaleStore()
 
 const props = defineProps({
@@ -14,7 +18,18 @@ const props = defineProps({
   //центру ещё при загрузке, а спрайт маскота — фигура в полный рост: без 'top' в кружок
   //попало бы туловище вместо морды.
   position: { type: String, default: 'center' },
+  //Роль (student/teacher/admin/parent/moderation) — выбирает значок по умолчанию.
+  //Пусто/неизвестная роль — откат на инициалы (прежнее поведение, для маскота/групп/
+  //каналов и т.п.). 'moderation' — не роль аккаунта, а синтетический peer чата с
+  //администрацией (см. RoleAvatarIcon.vue).
+  role: { type: String, default: '' },
+  //Цвет фона значка роли — обычно profilePlate(prefs.profile_color) вызывающей стороны.
+  //На инициалы НЕ влияет (у них свой класс bg-accent, как было всегда).
+  color: { type: String, default: '' },
 })
+
+const ROLE_ICONS = new Set(['admin', 'teacher', 'student', 'parent', 'moderation'])
+const hasRoleIcon = computed(() => ROLE_ICONS.has(props.role))
 
 const initials = computed(() => {
   const p = (props.name || '').trim().split(/\s+/)
@@ -24,9 +39,10 @@ const initials = computed(() => {
 
 <template>
   <div class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
-    <div class="size-full overflow-hidden rounded-full bg-accent">
+    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || src ? '' : 'bg-accent'">
       <img v-if="src" :src="src" alt="" class="size-full object-cover"
            :style="{ objectPosition: position }" />
+      <RoleAvatarIcon v-else-if="hasRoleIcon" :role="role" :color="color || undefined" />
       <span v-else class="grid size-full place-items-center font-bold text-white"
             :style="{ fontSize: Math.round(size * 0.4) + 'px' }">{{ initials }}</span>
     </div>

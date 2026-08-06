@@ -11,6 +11,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '@/api/client'
+import { PRESETS } from '@/theme/palette'
 
 // Лимит «О себе» — тот же, что режет сервер (routers/me.py::_MAX_BIO_CHARS).
 export const BIO_LIMIT = 400
@@ -33,6 +34,14 @@ export const useProfileStore = defineStore('profile', () => {
       bio.value = p.bio || ''
       color.value = p.profile_color || ''
       font.value = p.name_font || ''
+      // Живой запрос: новый аккаунт (или ещё не выбравший цвет) получает СЛУЧАЙНЫЙ цвет
+      // из текущего пула палитры, а не всегда «стандарт ВСГУТУ». Выбирается ОДИН раз и
+      // тут же сохраняется на сервер — дальше это обычный prefs.profile_color, roaming
+      // между устройствами тем же путём, что и ручной выбор в палитре Profile.vue.
+      if (!color.value) {
+        const pick = PRESETS[Math.floor(Math.random() * PRESETS.length)]
+        if (pick) await saveProfile({ color: pick.id })
+      }
     } catch { /* офлайн — оставляем что есть */ }
   }
 

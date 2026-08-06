@@ -816,6 +816,28 @@ function senderName(msg) {
   if (isVector(msg)) return locale.t('chatThread.vectorName', 'Вектор')
   return msg.sender_name || (isSaved.value ? '' : (activePeer.value?.full_name || ''))
 }
+// Роль/цвет отправителя для значка-аватарки по умолчанию (RoleAvatarIcon, см. Avatar.vue) —
+// тот же приём, что avatarBySender выше. ⚠️ p.user_role (роль В СИСТЕМЕ), НЕ p.role (та —
+// роль УЧАСТНИКА БЕСЕДЫ owner/admin/writer/…, см. предупреждение в ConversationInfo.vue).
+const roleBySender = computed(() => {
+  const map = {}
+  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.user_role || ''
+  return map
+})
+const colorBySender = computed(() => {
+  const map = {}
+  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.profile_color || ''
+  return map
+})
+function senderRole(msg) {
+  if (isVector(msg)) return ''
+  return roleBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.role || ''))
+}
+function senderColor(msg) {
+  if (isVector(msg)) return ''
+  const id = colorBySender.value[msg.sender_id] ?? (msg.mine ? '' : (activePeer.value?.profile_color || ''))
+  return profilePlate(id)
+}
 
 // Шапка чата — в цвет плашки, которую собеседник выбрал в своём профиле.
 const headerTint = computed(() =>
@@ -1085,7 +1107,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
             <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
             <div v-if="!msg.mine" class="w-8 shrink-0">
               <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
-                      :name="senderName(msg)" :size="32"
+                      :name="senderName(msg)" :role="senderRole(msg)" :color="senderColor(msg)" :size="32"
                       :position="isVector(msg) ? 'top' : 'center'" />
             </div>
             <!-- div, а не button: внутри есть свои интерактивные элементы (реакции) —
@@ -1337,7 +1359,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
             <button v-for="p in mentionCandidates" :key="p.user_id" type="button"
                     @mousedown.prevent="insertMention(p)"
                     class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg2">
-              <Avatar :src="p.avatar" :name="p.full_name" :size="24" />
+              <Avatar :src="p.avatar" :name="p.full_name" :role="p.user_role" :color="profilePlate(p.profile_color)" :size="24" />
               <span class="min-w-0 flex-1 truncate">{{ p.full_name }}</span>
               <span class="shrink-0 text-[11px] text-text3">{{ meta(p) }}</span>
             </button>

@@ -1021,6 +1021,47 @@ def admin_create_subject(payload: dict = Body(...),
     return {"ok": True, "name": name}
 
 
+@router.post("/admin/subjects/import-portal")
+def admin_import_subjects_portal(payload: dict = Body(...),
+                                 _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Массовое добавление предметов каталога с портала расписания — по аналогии с
+    «Все (N)» у импорта групп категории. `names` — конкретный отбор (галочки в
+    интерфейсе) либо пусто = взять ВСЕ предметы категории. Источник имён —
+    ТОТ ЖЕ снимок (Snapshot.subjects), что и /admin/subjects/portal — там уже нет
+    «- N п/г»-дублей (см. schedule/model.py::strip_subgroup_tag), поэтому дедуп
+    здесь не нужен: если такое имя уже есть в каталоге, просто пропускаем."""
+    category = (payload.get("category") or "").strip()
+    if category and category not in schedule_parser.CATEGORIES:
+        raise HTTPException(status_code=400, detail="Неизвестная категория расписания")
+    snap, building = schedule_web.full_state(category)
+    if snap is None:
+        return {"ok": False, "building": building, "imported": 0, "skipped": 0, "total": 0}
+    portal_subjects = set(snap.subjects)
+    picked = payload.get("names")
+    names = sorted(portal_subjects & set(picked)) if picked else sorted(portal_subjects)
+    now = _now_iso()
+    imported = skipped = 0
+    for name in names:
+        sid = f"subj:{name}"
+        row = db.get(Subject, sid)
+        if row is not None and not row.deleted:
+            skipped += 1
+            continue
+        if row is None:
+            db.add(Subject(id=sid, name=name, updated_at=now))
+        else:
+            row.name = name
+            row.deleted = False
+            row.updated_at = now
+        imported += 1
+    db.commit()
+    if imported:
+        audit.log(db, actor=_admin.login, role="admin", action="subject.import_portal",
+                  target=category or schedule_web.default_category(), detail=f"добавлено: {imported}")
+    return {"ok": True, "building": building, "imported": imported, "skipped": skipped,
+            "total": len(names)}
+
+
 @router.put("/admin/subjects/{name:path}")
 def admin_rename_subject(name: str, payload: dict = Body(...),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):

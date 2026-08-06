@@ -15,6 +15,7 @@ import { X, Check, Users, Star } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
+import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['create', 'close'])
@@ -112,7 +113,7 @@ const nothingPicked = computed(() =>
             <div v-if="parents.length" class="mb-2 overflow-hidden rounded-lg border border-border">
               <button v-for="p in parents" :key="p.id" type="button" @click="toggleUser(p.id)"
                       class="flex w-full items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
-                <Avatar :src="p.avatar" :name="p.full_name" :size="28" />
+                <Avatar :src="p.avatar" :name="p.full_name" role="parent" :color="profilePlate(p.profile_color)" :size="28" />
                 <span class="min-w-0 flex-1 truncate text-text">{{ p.full_name }}<span class="text-text3"> · {{ locale.t('role.parent', 'родитель') }}</span></span>
                 <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                       :class="pickedUsers.includes(p.id) ? 'border-accent bg-accent text-white' : 'border-border2'">

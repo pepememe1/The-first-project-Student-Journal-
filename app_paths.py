@@ -163,6 +163,21 @@ def _dev_data_dir() -> str:
     return os.path.join(base, "GradeBookAI")
 
 
+def _redirect_if_risky(d: str) -> str:
+    """Если папка «рискованная» (см. _is_risky_run_location) — уводит в постоянное
+    системное место (%LOCALAPPDATA%\\GradeBookAI), иначе возвращает как есть. Общий
+    хвост для data_dir() и safe_app_dir() — один и тот же редирект, две разные
+    отправные точки (служебные файлы vs «рядом с программой, но не в Загрузках»)."""
+    if is_frozen() and _is_risky_run_location(d):
+        safe = os.path.join(os.environ.get("LOCALAPPDATA") or d, "GradeBookAI")
+        try:
+            os.makedirs(safe, exist_ok=True)
+            return safe
+        except Exception:
+            pass                #не вышло — остаёмся портативными, как раньше
+    return d
+
+
 def data_dir() -> str:
     """Папка для служебных файлов (база, ключ, журналы, бэкапы).
 
@@ -175,14 +190,7 @@ def data_dir() -> str:
     ⚠️ `app_dir()` этот редирект НЕ трогает и продолжает отвечать «где реальный
     .exe» как есть — это нужно апдейтеру (переименовать именно ЕГО) и поиску
     бандл-ресурсов (там, где они реально лежат), путать с data_dir() нельзя."""
-    d = app_dir() if is_frozen() else _dev_data_dir()
-    if is_frozen() and _is_risky_run_location(d):
-        safe = os.path.join(os.environ.get("LOCALAPPDATA") or d, "GradeBookAI")
-        try:
-            os.makedirs(safe, exist_ok=True)
-            d = safe
-        except Exception:
-            pass                #не вышло — остаёмся портативными, как раньше
+    d = _redirect_if_risky(app_dir() if is_frozen() else _dev_data_dir())
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:
@@ -196,5 +204,26 @@ def data_file(name: str) -> str:
 
 
 def app_file(name: str) -> str:
-    """Полный путь к пользовательскому файлу рядом с программой."""
+    """Полный путь к пользовательскому файлу рядом с программой.
+
+    ⚠️ БЕЗ защиты от «Загрузок» — это НАСТОЯЩЕЕ расположение .exe, ломать нельзя
+    (см. app_dir()). Для файлов, которые человек правит руками, но которым не нужно
+    знать именно реальный путь (subjects.json) — см. safe_app_file() ниже."""
     return os.path.join(app_dir(), name)
+
+
+def safe_app_dir() -> str:
+    """app_dir() с той же защитой от «Загрузок», что у data_dir() (см.
+    _is_risky_run_location) — для файлов, которые ДОЛЖНЫ лежать рядом с программой
+    (subjects.json — правится руками в любом текстовом редакторе, живой баг: качался
+    прямо в «Загрузки»), но не обязаны знать НАСТОЯЩЕЕ расположение .exe.
+
+    В dev-режиме и в любой ОБЫЧНОЙ (не «Загрузки») папке — 100% то же самое, что
+    app_dir(): ничьё существующее поведение (включая тестовый override
+    GRADEBOOK_APP_DIR, который читает app_dir()) не меняется."""
+    return _redirect_if_risky(app_dir())
+
+
+def safe_app_file(name: str) -> str:
+    """Полный путь к файлу в safe_app_dir()."""
+    return os.path.join(safe_app_dir(), name)
