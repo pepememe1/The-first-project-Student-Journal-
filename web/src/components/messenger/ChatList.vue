@@ -229,10 +229,15 @@ onMounted(() => { m.loadChats() })
              class="group relative flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 transition-colors"
              :class="activeId === c.conversation_id ? 'bg-accent-glow' : 'hover:bg-bg2'">
           <button type="button" @click="m.selectChat(c)" class="flex min-w-0 flex-1 items-center gap-3 text-left">
-            <!-- Личный чат — аватар собеседника; группа/канал — цветной кружок с инициалами. -->
+            <!-- Личный чат — аватар собеседника; «Модерация» — та же Avatar, но со
+                 значком role="moderation" (щит), сервер её НЕ отдаёт как обычного
+                 peer'а — kind='moderation' это служебная беседа с администрацией
+                 целиком, а не переписка с чьим-то аккаунтом, см. RoleAvatarIcon.vue;
+                 группа/канал — цветной кружок с инициалами, как раньше. -->
             <Avatar v-if="c.kind === 'direct'" :src="c.peer?.avatar" :name="c.title"
                     :role="c.peer?.role" :color="profilePlate(c.peer?.profile_color)"
                     :online="!!c.peer?.online" :size="40" />
+            <Avatar v-else-if="c.kind === 'moderation'" :name="c.title" role="moderation" :size="40" />
             <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
                  :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
               {{ initials(c.title) }}
