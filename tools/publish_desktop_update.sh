@@ -24,7 +24,10 @@ SSH_KEY="${GB_SSH_KEY:-$HOME/.ssh/gb_vps_ed25519}"
 HOST="${GB_HOST:-root@194.226.120.74}"
 SITE="${GB_SITE:-https://esstu-gradebook.ru}"
 REMOTE_DL="/root/gb-deploy/downloads"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# ⚠️ pwd -W — иначе на Windows/Git Bash ROOT получается в стиле /c/Users/... (MSYS), а
+# ниже он идёт АРГУМЕНТОМ нативному Windows-python (не Cygwin/MSYS-сборке) — тот такой
+# путь открыть не может (см. build_nuitka.sh, тот же приём уже применён там).
+ROOT="$(cd "$(dirname "$0")/.." && pwd -W 2>/dev/null || pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

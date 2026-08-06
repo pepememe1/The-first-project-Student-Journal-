@@ -178,9 +178,25 @@ PYNET=""
 [ -d "$PYNET_RT" ] && PYNET="--include-data-dir=$PYNET_RT=pythonnet/runtime"
 echo "pythonnet runtime: ${PYNET_RT:-не найден}"
 
+# ⚠️ Nuitka сама ищет C-компилятор (MSVC через реестр, либо автозагрузка MinGW64 — но та
+# работает ТОЛЬКО для Python <=3.12, а сборка идёт на 3.13/3.14). На машине без Visual
+# Studio это вылезает уже ПОСЛЕ генерации C-кода: «FATAL: cannot locate suitable C
+# compiler» — минуты компиляции Python-уровня на ветер, ошибка не в начале. `--zig` —
+# третий вариант из этого же сообщения Nuitka: Zig скачивается САМ (--assume-yes-for-
+# downloads уже стоит ниже) и работает компилятором для любого 64-битного Python, без
+# Visual Studio вообще. Добавляем, только если НИ MSVC, НИ MinGW не нашлись на PATH —
+# не переопределяем выбор там, где Visual Studio уже настроена и работает (напр. у
+# Ярослава, «решение... у него на ней собирается», см. комментарий у выбора Python выше).
+CC_FLAG=""
+if ! command -v cl.exe >/dev/null 2>&1 && ! command -v gcc.exe >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
+  echo "[nuitka] Visual Studio/MinGW не найдены на PATH — используем --zig (Nuitka скачает сама)"
+  CC_FLAG="--zig"
+fi
+
 echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
 "$PYEXE" -m nuitka main.py \
   --standalone --onefile \
+  $CC_FLAG \
   --windows-console-mode=disable \
   --windows-icon-from-ico=icon.ico \
   --company-name=Synapse --product-name=GradeBookAI \
