@@ -182,15 +182,36 @@ echo "pythonnet runtime: ${PYNET_RT:-не найден}"
 # работает ТОЛЬКО для Python <=3.12, а сборка идёт на 3.13/3.14). На машине без Visual
 # Studio это вылезает уже ПОСЛЕ генерации C-кода: «FATAL: cannot locate suitable C
 # compiler» — минуты компиляции Python-уровня на ветер, ошибка не в начале. `--zig` —
-# третий вариант из этого же сообщения Nuitka: Zig скачивается САМ (--assume-yes-for-
-# downloads уже стоит ниже) и работает компилятором для любого 64-битного Python, без
-# Visual Studio вообще. Добавляем, только если НИ MSVC, НИ MinGW не нашлись на PATH —
-# не переопределяем выбор там, где Visual Studio уже настроена и работает (напр. у
-# Ярослава, «решение... у него на ней собирается», см. комментарий у выбора Python выше).
+# третий вариант из этого же сообщения Nuitka: работает компилятором для любого
+# 64-битного Python, без Visual Studio вообще. Добавляем, только если НИ MSVC, НИ MinGW
+# не нашлись на PATH — не переопределяем выбор там, где Visual Studio уже настроена и
+# работает (напр. у Ярослава, «решение... у него на ней собирается», см. комментарий у
+# выбора Python выше).
+#
+# 🔥 ЖИВОЙ БАГ (Release-3.6.2): «Zig скачивается САМ» — НЕПРАВДА, несмотря на текст
+# сообщения Nuitka «depends on 'zig' to compile» (звучит как обещание автозагрузки).
+# Нужен pip-пакет `ziglang` В СБОРОЧНОМ Python + его каталог (там лежит zig.exe) НА
+# PATH — без этого второго шага сборка падала уже на этапе C-компиляции, даже когда
+# сам пакет был установлен (проверено: `pip install ziglang` без добавления в PATH
+# всё равно не работает — `import ziglang` доступности исполняемости не даёт). Раньше
+# PATH правился РУКАМИ в интерактивной сессии — фикс молча терялся при следующем
+# запуске скрипта с нуля. Теперь скрипт делает это САМ.
 CC_FLAG=""
 if ! command -v cl.exe >/dev/null 2>&1 && ! command -v gcc.exe >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1; then
-  echo "[nuitka] Visual Studio/MinGW не найдены на PATH — используем --zig (Nuitka скачает сама)"
+  echo "[nuitka] Visual Studio/MinGW не найдены на PATH — используем --zig"
   CC_FLAG="--zig"
+  ZIG_DIR="$("$PYEXE" -c "import ziglang, os; print(os.path.dirname(ziglang.__file__))" 2>/dev/null || true)"
+  if [ -z "$ZIG_DIR" ]; then
+    echo "[nuitka] пакет ziglang не найден в сборочном Python — ставлю"
+    "$PYEXE" -m pip install --quiet ziglang
+    ZIG_DIR="$("$PYEXE" -c "import ziglang, os; print(os.path.dirname(ziglang.__file__))" 2>/dev/null || true)"
+  fi
+  if [ -n "$ZIG_DIR" ]; then
+    export PATH="$ZIG_DIR:$PATH"
+    echo "[nuitka] zig.exe добавлен в PATH: $ZIG_DIR"
+  else
+    echo "[nuitka] ⚠️ не удалось найти/поставить ziglang — сборка, скорее всего, упадёт на этапе C-компиляции"
+  fi
 fi
 
 echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="

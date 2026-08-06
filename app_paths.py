@@ -28,16 +28,41 @@ import sys
 
 
 def is_frozen() -> bool:
-    """True, если запущены как собранный .exe (PyInstaller)."""
-    return bool(getattr(sys, "frozen", False))
+    """True, если запущены как собранный .exe.
+
+    🔥 ЖИВОЙ БАГ (найден при разборе «автообновление не работает», Release-3.6.2):
+    PyInstaller ставит `sys.frozen`, а **Nuitka — НЕТ** (единственный РЕЛИЗНЫЙ путь,
+    §8.1 CLAUDE.md). Старая проверка `getattr(sys, "frozen", False)` под релизным
+    .exe всегда возвращала False — `app_dir()`/`data_dir()` уходили в DEV-ветку, а
+    `__file__` под Nuitka onefile резолвится во ВРЕМЕННУЮ распаковку
+    (`%TEMP%\\onefile_.../app_paths.py`, эмпирически проверено отдельной пробной
+    сборкой), а не туда, где лежит настоящий .exe. Тем же путём шёл и
+    `updater.py::_exe_path()` — в итоге апдейтер либо подменял файл не там, либо не
+    находил, что подменять, и обновление визуально «не работало». Тот же нюанс уже
+    был учтён в `ui/webview2_app.py::_is_compiled()` (`"__compiled__" in globals()`) —
+    здесь применяем ТОТ ЖЕ приём, а не изобретаем второй."""
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
+def _nuitka_onefile_dir() -> str:
+    """Папка настоящего .exe под Nuitka ONEFILE, или "".
+
+    ⚠️ `sys.executable` под Nuitka onefile указывает НЕ на настоящий .exe, а на
+    временный bootstrap-интерпретатор в `%TEMP%\\onefile_<pid>_<ts>_<rnd>\\python.exe`
+    (тоже проверено пробной сборкой) — использовать его для app_dir() означало бы
+    писать базу/ключ/логи во временную папку, которую Nuitka вправе очистить. Nuitka
+    сама кладёт путь к настоящему .exe в переменную окружения `NUITKA_ONEFILE_
+    DIRECTORY` (документированный механизм ИМЕННО для этого случая) — читаем её."""
+    return os.environ.get("NUITKA_ONEFILE_DIRECTORY", "").strip()
 
 
 def app_dir() -> str:
     """Папка, где физически лежит программа.
 
-    Важно: при --onefile PyInstaller распаковывает код во временный sys._MEIPASS,
-    но нам нужна папка, где лежит САМ .exe — это os.path.dirname(sys.executable),
-    иначе пользовательские файлы оказались бы в %TEMP% и пропадали бы.
+    Важно: при --onefile код распаковывается во временную папку, но нам нужна папка,
+    где лежит САМ .exe — иначе пользовательские файлы оказались бы в %TEMP% и
+    пропадали бы (PyInstaller — `os.path.dirname(sys.executable)`, Nuitka —
+    `NUITKA_ONEFILE_DIRECTORY`, см. is_frozen()/_nuitka_onefile_dir() выше).
     """
     #Переопределение папки — для ТЕСТОВ. Без него прогон клиентского набора писал в
     #subjects.json РЕПОЗИТОРИЯ (reset_synced_local_data чистит предметы) и затирал
@@ -46,7 +71,7 @@ def app_dir() -> str:
     if override:
         return override
     if is_frozen():
-        return os.path.dirname(sys.executable)
+        return _nuitka_onefile_dir() or os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 

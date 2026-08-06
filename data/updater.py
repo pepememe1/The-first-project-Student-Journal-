@@ -23,7 +23,6 @@ updater.py — КЛИЕНТСКАЯ часть автообновления де
 перезапуск. Скачиваем в фоне, ставим на старте.
 """
 import os
-import sys
 import json
 import shutil
 import tempfile
@@ -51,9 +50,14 @@ _MAX_EXE_BYTES = 300 * 1024 * 1024   #потолок здравого смысл
 
 
 def _exe_path() -> str:
-    """Путь к САМОМУ .exe программы (не к временной распаковке onefile)."""
-    if app_paths.is_frozen():
-        return os.path.abspath(sys.executable)
+    """Путь к САМОМУ .exe программы (не к временной распаковке onefile).
+
+    ⚠️ `sys.executable` НЕ годится под Nuitka onefile (единственный релизный сборщик,
+    §8.1 CLAUDE.md) — он указывает на временный bootstrap-интерпретатор в %TEMP%, а
+    не на настоящий .exe (см. app_paths.py::_nuitka_onefile_dir, там же разбор живого
+    бага «автообновление не работает»: апдейтер молча подменял файл не там). Берём
+    ИМЯ файла из EXE_NAME и ПАПКУ из app_paths.app_dir() — она уже учитывает разницу
+    PyInstaller/Nuitka сама, второй копии этой логики здесь не нужно."""
     return os.path.join(app_paths.app_dir(), EXE_NAME)
 
 
