@@ -20,7 +20,7 @@ from openpyxl.styles import Font, Alignment
 #⚠️ Держать синхронным с веткой релиза: по этой строке автообновление (desktop_update.py)
 #решает, ставить ли новую сборку, — отстала она, и программа будет считать себя старее,
 #чем есть, либо не увидит обновления вовсе. В 3.5.3 и 3.5.6 она уже отставала.
-APP_VERSION = "Release 3.6.8"
+APP_VERSION = "Release 3.6.9"
 
 import os as _os
 import sys as _sys

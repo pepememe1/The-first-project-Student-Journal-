@@ -26,7 +26,6 @@ export const useProfileStore = defineStore('profile', () => {
 
   async function load(force = false) {
     if (loaded && !force) return
-    loaded = true
     try {
       const { data } = await api.get('/me/prefs')
       const p = data?.prefs || {}
@@ -42,7 +41,12 @@ export const useProfileStore = defineStore('profile', () => {
         const pick = PRESETS[Math.floor(Math.random() * PRESETS.length)]
         if (pick) await saveProfile({ color: pick.id })
       }
-    } catch { /* офлайн — оставляем что есть */ }
+      // ⚠️ loaded — ТОЛЬКО при успехе (тот же класс бага, что у избранных гифок): внутри
+      // десктопа запрос идёт через локальный прокси на бой, и на самый первый заход
+      // сразу после холодного старта токен может быть ещё не готов — раньше один
+      // неудачный запрос НАВСЕГДА (до перезапуска) оставлял профиль пустым/дефолтным.
+      loaded = true
+    } catch { /* офлайн — оставляем что есть, попробуем снова при следующем load() */ }
   }
 
   // dataUrl='' — удалить аватарку. Локально применяем сразу, на сервер — best-effort.

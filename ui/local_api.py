@@ -491,6 +491,15 @@ class LocalAPI:
             self._thread.join(timeout=5)
         self._server = None
         self._thread = None
+        #⚠️ Общий httpx-клиент прокси (см. _get_proxy_client) привязан к event loop'у
+        #ИМЕННО этого запуска uvicorn (свой поток, свой loop). Следующий start() поднимет
+        #НОВЫЙ loop — старый клиент в нём был бы мёртв («event loop is closed»). Сбрасываем
+        #ссылку, а не закрываем явно (async-закрытие из синхронного stop() усложнило бы
+        #код ради процесса, который и так почти всегда завершается вместе с программой) —
+        #следующий проксируемый запрос лениво создаст свежего клиента в новом loop'е.
+        global _proxy_client, _proxy_client_lock
+        _proxy_client = None
+        _proxy_client_lock = None
 
     def url(self, route: str = "/") -> str:
         if not self.port:
@@ -774,6 +783,34 @@ def _local_caller_ok(authorization: str) -> bool:
     return bool(expected) and login == expected
 
 
+#⚠️ (живой отзыв Влада: «программа медленнее сайта») Реальная причина — ЗДЕСЬ, не в
+#WebView2 и не в локальной SQLite. `async with httpx.AsyncClient(...)` СОЗДАВАЛ И ГАСИЛ
+#клиента НА КАЖДЫЙ проксируемый запрос — то есть новое TCP+TLS рукопожатие до VPS на
+#КАЖДЫЙ вызов `/me/prefs`/`/me/events`/мессенджера, без переиспользования соединения.
+#Браузер на сайте держит keep-alive-соединение к тому же origin сам, а прокси эту
+#экономию не делал вовсе — и это ровно те пути, которые расширили в 3.6.7 (§0 «правки
+#по живому отзыву»). Один долгоживущий клиент на весь процесс — тот же приём, что и
+#обычный HTTP keep-alive браузера: соединение держится, повторные запросы быстрее на
+#десятки-сотни мс каждый (зависит от RTT до VPS), и это КОПИТСЯ на каждой странице,
+#где проксируемых вызовов несколько подряд (мессенджер+уведомления+профиль).
+_proxy_client = None
+_proxy_client_lock = None
+
+
+async def _get_proxy_client():
+    global _proxy_client, _proxy_client_lock
+    import asyncio
+    import httpx
+    if _proxy_client_lock is None:
+        _proxy_client_lock = asyncio.Lock()
+    if _proxy_client is not None:
+        return _proxy_client
+    async with _proxy_client_lock:
+        if _proxy_client is None:
+            _proxy_client = httpx.AsyncClient(timeout=25)
+        return _proxy_client
+
+
 def install_remote_proxy(app) -> None:
     """Переслать онлайн-подсистемы на боевой сервер. Ошибку НЕ прячем: пустой чат без
     объяснения читается как «сообщения пропали»."""
@@ -800,17 +837,16 @@ def install_remote_proxy(app) -> None:
             #аккаунта — а локальная сессия жива, и журнал с расписанием работают.
             return Response(content=body.encode(), status_code=503,
                             media_type="application/json")
-        import httpx
         headers = {k: v for k, v in request.headers.items()
                    if k.lower() not in ("host", "authorization", "content-length",
                                         "accept-encoding")}
         headers["Authorization"] = f"Bearer {token}"
         headers["X-Client"] = "web"
         try:
-            async with httpx.AsyncClient(timeout=25) as cli:
-                r = await cli.request(request.method, f"{base}{path}",
-                                      params=dict(request.query_params),
-                                      content=await request.body(), headers=headers)
+            cli = await _get_proxy_client()
+            r = await cli.request(request.method, f"{base}{path}",
+                                  params=dict(request.query_params),
+                                  content=await request.body(), headers=headers)
             #Заголовки ответа фильтруем: hop-by-hop и кодирование относятся к ТОМУ
             #соединению, а не к нашему — иначе браузер получит битое тело.
             skip = ("content-encoding", "transfer-encoding", "content-length",
