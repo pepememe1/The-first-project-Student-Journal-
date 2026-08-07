@@ -36,7 +36,7 @@ async function loadCategories() {
 // колледж/бакалавриат/заочное → курс → группа, как просили). Разведано с портала
 // (столбец таблицы индекса), число курсов НЕ фиксировано на 4.
 const courseFilter = ref('')
-const byCourse = ref({})   // {курс: [имена с портала]} — для ТЕКУЩЕЙ categoryFilter
+const byCourse = ref({})   // {курс: [имена с портала]} — для ТЕКУЩЕЙ categoryFilter (кнопки)
 async function loadByCourse() {
   courseFilter.value = ''
   if (!categoryFilter.value) { byCourse.value = {}; return }
@@ -44,6 +44,25 @@ async function loadByCourse() {
   catch { byCourse.value = {} }
 }
 const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((a, b) => a - b))
+
+// ⚠️ (живой отзыв Влада) Курс раньше сужал только выпадающий список ГРУПП в фильтре —
+// саму таблицу студентов не трогал вовсе (кнопка «нажимается, но не сортирует»), и
+// столбца с курсом не было, чтобы вообще понять, где студент. Здесь — ОБЩАЯ карта
+// {группа → курс} по ВСЕМ категориям сразу (не только по выбранной), нужна и для
+// столбца (виден без выбора категории), и для реального фильтра строк ниже.
+const groupCourse = ref({})
+async function loadGroupCourseMap() {
+  const map = {}
+  for (const c of categories.value) {
+    try {
+      const by = (await scheduleApi.groups(c.key)).data.by_course || {}
+      for (const [course, names] of Object.entries(by)) {
+        for (const g of names) map[g] = Number(course)
+      }
+    } catch { /* эта категория недоступна — остальные всё равно посчитаем */ }
+  }
+  groupCourse.value = map
+}
 
 // Список групп в фильтре сужается под выбранную категорию, затем под курс — иначе
 // можно было бы выбрать «колледж» и группу заочки одновременно и увидеть пусто без
@@ -84,6 +103,7 @@ async function reload() {
 onMounted(async () => {
   await reload()
   await loadCategories()
+  loadGroupCourseMap()   // фоном — таблица показывает «—», пока карта не готова, не блокируем список
   // Список групп для выбора: синкнутые (БД) + спарсенные из расписания, без дублей —
   // как _all_group_choices в десктопе.
   try {
@@ -102,6 +122,7 @@ const rows = computed(() => {
     if (s && !`${r.surname} ${r.name} ${r.group} ${r.login}`.toLowerCase().includes(s)) return false
     if (groupFilter.value && r.group !== groupFilter.value) return false
     if (categoryFilter.value && (groupCategory.value[r.group] || 'college') !== categoryFilter.value) return false
+    if (courseFilter.value && groupCourse.value[r.group] !== Number(courseFilter.value)) return false
     return true
   })
 })
@@ -201,6 +222,7 @@ async function del(r) {
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colFullName', 'ФИО') }}</th>
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colGroup', 'Группа') }}</th>
+            <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colCourse', 'Курс') }}</th>
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colLogin', 'Логин') }}</th>
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colPhone', 'Телефон') }}</th>
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colLastLogin', 'Посл. вход') }}</th>
@@ -209,11 +231,12 @@ async function del(r) {
           </tr>
         </thead>
         <tbody>
-          <tr v-if="loading"><td colspan="7" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
-          <tr v-else-if="!rows.length"><td colspan="7" class="px-4 py-6 text-center text-text3">{{ locale.t('adminStudents.noStudents', 'Студентов нет') }}</td></tr>
+          <tr v-if="loading"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
+          <tr v-else-if="!rows.length"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('adminStudents.noStudents', 'Студентов нет') }}</td></tr>
           <tr v-for="(r, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ r.surname }} {{ r.name }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ groupCourse[r.group] ?? '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.login || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? locale.t('adminStudents.deviceTitle', { device: r.device }) : ''">{{ fmtDT(r.last_login) }}</td>

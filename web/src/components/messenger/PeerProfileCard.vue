@@ -12,6 +12,12 @@
 // Заметка (§5.4 «заметка… видна только нам», Discord «Notes») — ОДИНАКОВО работает в ОБОИХ
 // режимах: это всегда «моя личная запись про этого человека», и про самого себя тоже
 // (памятка себе на своей же карточке — так в ТЗ, отдельно не выпиливаем).
+// ⚠️ (живой отзыв Влада) «О себе» и заметка раньше сохранялись КАЖДАЯ ПО-СВОЕМУ — «о
+// себе» отдельной кнопкой прямо тут, заметка ПО BLUR без единой кнопки вовсе (и терялась
+// при уходе со вкладки, если blur не успевал). Обе САМИ по себе больше НЕ сохраняют —
+// черновик копится здесь, а сохраняет ОБЩАЯ кнопка в Profile.vue через `commit()`
+// (defineExpose ниже), одним действием со сменой цвета/шрифта. Компонент editable=false
+// (чужой профиль) этого не касается — там ни «о себе», ни заметка не редактируются.
 import { ref, computed, onMounted, watch } from 'vue'
 import { Camera, Send } from '@lucide/vue'
 import { useRouter } from 'vue-router'
@@ -30,6 +36,11 @@ const props = defineProps({
   editable: { type: Boolean, default: false },
   userId: { type: String, default: '' },
   peerData: { type: Object, default: null },
+  // Черновики цвета/шрифта живут В Profile.vue (там же, где сами пикеры) — картинка
+  // предпросмотра обязана их видеть ДО сохранения, иначе смена цвета «не работала бы
+  // на глаз», пока не нажата общая кнопка. null — использовать сохранённое значение стора.
+  colorOverride: { type: String, default: null },
+  fontOverride: { type: String, default: null },
 })
 const emit = defineEmits(['messaged'])
 
@@ -58,7 +69,8 @@ const shown = computed(() => {
     return {
       id: auth.user?.id || '', full_name: auth.user?.name || '', role: auth.role,
       group_name: auth.user?.group_name || '', avatar: profile.avatar, bio: profile.bio,
-      profile_color: profile.color, name_font: profile.font, login: auth.user?.login || '',
+      profile_color: props.colorOverride ?? profile.color,
+      name_font: props.fontOverride ?? profile.font, login: auth.user?.login || '',
       subjects: auth.user?.subjects || [],
     }
   }
@@ -89,7 +101,6 @@ const draftBio = ref('')
 const bioDirty = computed(() => props.editable && draftBio.value !== profile.bio)
 onMounted(() => { draftBio.value = profile.bio })
 watch(() => profile.bio, (v) => { if (!bioDirty.value) draftBio.value = v })
-async function saveBio() { await profile.saveProfile({ bio: draftBio.value }) }
 
 // ── Заметка (в ОБОИХ режимах — всегда про shown.value.id) ───────────────────────────
 const note = ref('')
@@ -113,6 +124,27 @@ async function saveNote() {
     noteSaved.value = data.text || ''
   } catch { /* офлайн-мессенджер не бывает, но не роняем интерфейс */ }
 }
+// ⚠️ В editable-режиме заметка НЕ сохраняется сама по blur — это раньше и было
+// причиной «написал, при перезаходе пропало» (уход со страницы кликом по сайдбару не
+// гарантированно успевает довести blur→запрос до конца, а второй клик — уже не на этом
+// компоненте). Теперь она копится черновиком и уходит ТОЛЬКО через commit() ниже, одним
+// действием с «о себе»/цветом/шрифтом. В НЕ-editable режиме (чужой профиль в модалке —
+// там нет общей кнопки сохранения) поведение прежнее: реальный blur сохраняет сразу.
+function onNoteBlur() { if (!props.editable && noteDirty.value) saveNote() }
+
+// ── Общее сохранение (вызывается ИЗВНЕ, из Profile.vue) ─────────────────────────────
+const isDirty = computed(() => bioDirty.value || (props.editable && noteDirty.value))
+async function commit() {
+  const tasks = []
+  if (bioDirty.value) tasks.push(profile.saveProfile({ bio: draftBio.value }))
+  if (props.editable && noteDirty.value) tasks.push(saveNote())
+  await Promise.all(tasks)
+}
+function discard() {
+  draftBio.value = profile.bio
+  note.value = noteSaved.value
+}
+defineExpose({ openAvatarEditor: () => { editingAvatar.value = true }, isDirty, commit, discard })
 
 // ── Кнопка «Сообщение» ────────────────────────────────────────────────────────────────
 async function sendMessage() {
@@ -124,8 +156,8 @@ async function sendMessage() {
 
 // Левая колонка Profile.vue дублирует вход в тот же редактор аватарки (как в Discord —
 // превью-аватар и «Изменить аватарку» слева ведут в ОДИН диалог), поэтому открывать его
-// нужно и СНАРУЖИ, не только кликом по самой карточке.
-defineExpose({ openAvatarEditor: () => { editingAvatar.value = true } })
+// нужно и СНАРУЖИ, не только кликом по самой карточке. Экспортирован ВЫШЕ, вместе с
+// isDirty/commit/discard — второй defineExpose Vue тихо проигнорировал бы.
 </script>
 
 <template>
@@ -172,10 +204,8 @@ defineExpose({ openAvatarEditor: () => { editingAvatar.value = true } })
             <span class="text-xs" :class="(BIO_LIMIT - draftBio.length) <= 20 ? 'text-red' : 'text-text3'">
               {{ locale.t('profile.charsLeft', { n: BIO_LIMIT - draftBio.length }) }}
             </span>
-            <button type="button" @click="saveBio" :disabled="!bioDirty || profile.saving"
-                    class="ml-auto rounded-md bg-accent px-3 py-1 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-              {{ profile.saving ? locale.t('profile.saving', 'Сохранение…') : locale.t('common.save') }}
-            </button>
+            <!-- Своей кнопки «Сохранить» тут больше нет — сохраняет общая кнопка в
+                 Profile.vue (см. commit() выше), одним действием со всем профилем. -->
           </div>
         </template>
         <p v-else class="whitespace-pre-wrap text-sm text-text2">
@@ -189,7 +219,7 @@ defineExpose({ openAvatarEditor: () => { editingAvatar.value = true } })
           {{ locale.t('peerProfile.note', 'Заметка') }}
           <span class="normal-case text-text3">— {{ locale.t('peerProfile.noteHint', 'видна только вам') }}</span>
         </p>
-        <textarea v-model="note" @blur="noteDirty && saveNote()" rows="2" maxlength="300"
+        <textarea v-model="note" @blur="onNoteBlur" rows="2" maxlength="300"
                   :placeholder="locale.t('peerProfile.notePlaceholder', 'Личная заметка (не видна собеседнику)')"
                   class="w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
       </div>

@@ -332,9 +332,16 @@ const dayColumns = computed(() => {
   if (!categoryDated.value) return DAYS.value
   return Object.keys(weeks.value[String(week.value)] || {}).map((d) => [d, d])
 })
-// Преподаватель ещё не выбрал режим и авто-матч не сработал → экран с двумя кнопками
-// (только для категории по умолчанию — вне колледжа своего ФИО матчить не с чем).
-const teacherChoice = computed(() => isDefaultCategory.value && isTeacher.value && mode.value === '')
+// Преподаватель ещё не выбрал режим и авто-матч не сработал → экран с двумя кнопками.
+// ⚠️ (живой отзыв Влада) Раньше здесь ЕЩЁ И проверялась isDefaultCategory — верно
+// для АВТО-матча при входе (тот проверяет её отдельно, прямо в enterCategory(), этот
+// computed там не участвует), но неверно для РУЧНОГО сброса кнопкой «← к выбору»:
+// снаружи колледжа mode становился '', а экран выбора всё равно не показывался
+// (teacherChoice оставался false из-за категории) — кнопка молча откатывала на
+// список групп и переставала на вид что-либо делать при повторных нажатиях. Экран
+// выбора не завязан на авто-матч ФИО — это ручное переключение вида, оно уместно в
+// любой категории, как и у studentChoice ниже (у него такого гейта не было изначально).
+const teacherChoice = computed(() => isTeacher.value && mode.value === '')
 // Студент (§f, 3.6.1): та же пара кнопок — но только КОГДА автоподстановка своей группы
 // не сработала (см. enterCategory) — обычно экран вообще не появляется, группа известна
 // сразу. В отличие от teacherChoice, не привязан к категории: авто-детект своей группы
@@ -429,8 +436,13 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
               <RotateCw class="size-3.5" /> {{ locale.t('schedulePage.checkAgain', 'Проверить снова') }}
             </AppButton>
           </template>
+          <!-- ⚠️ (живой отзыв Влада) Раньше здесь и у соседней кнопки (ниже) был общий
+               подписанный «к выбору»/«смотреть по группе» текст, который на деле МЕНЯЛ
+               СМЫСЛ в зависимости от роли и текущего режима — с двух разных мест разными
+               словами читалось одно и то же действие. Название теперь ВСЕГДА по
+               НАЗНАЧЕНИЮ (куда ведёт клик), а не по роли/состоянию. -->
           <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseGroupMode">
-            {{ locale.t('schedulePage.viewByGroup', 'смотреть по группе') }}
+            {{ locale.t('schedulePage.groupSchedule', 'Расписание группы') }}
           </button>
         </template>
 
@@ -445,10 +457,13 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
             <option v-for="g in groupsForCourse" :key="g" :value="g">{{ g }}</option>
           </select>
           <!-- Студенту (как и преподавателю) даём посмотреть расписание преподавателя:
-               «у кого сегодня физика» — обычный вопрос, а не привилегия сотрудника. -->
+               «у кого сегодня физика» — обычный вопрос, а не привилегия сотрудника.
+               ⚠️ Раньше у преподавателя здесь стояло «← к выбору» — то же самое слово,
+               что и у ВЕРХНЕЙ кнопки сброса режима (см. выше), хотя ведут они в разные
+               места: та сбрасывает выбор целиком, эта просто переключает вид. Название —
+               по назначению, для всех ролей одинаково. -->
           <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
-            {{ isTeacher ? locale.t('schedulePage.backToChoice', '← к выбору')
-                         : locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
+            {{ locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
           </button>
         </template>
 

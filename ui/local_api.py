@@ -643,7 +643,21 @@ def instance() -> LocalAPI:
 #машину, а внутри программы страница говорит с ЛОКАЛЬНЫМ сервером — и без пересылки
 #показывала диск, память и базу компьютера администратора вместо VPS. Со стороны это
 #выглядит как правдоподобная ложь: цифры настоящие, но не про тот компьютер.
-_PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server")
+#⚠️ (живой отзыв Влада) ЭТОТ ЖЕ БАГ БЫЛ ЕЩЁ В ЧЕТЫРЁХ МЕСТАХ, найдено сверкой:
+#`/me/prefs` (тема, аватар, «о себе», цвет плашки, стиль никнейма, настройки
+#уведомлений) и `/me/events` (сама вкладка «Уведомления») — НЕ синхронизируемые поля
+#(`User.prefs`/`NotifyEvent` не в SYNC_MODELS), и вдобавок `PUSH_SCOPE` для
+#teacher/student вообще не включает "users" — значит правки профиля/темы, сделанные
+#ВНУТРИ десктопа без этой пересылки, не просто не долетали до сайта, а физически не
+#МОГЛИ долететь и терялись при следующей синхронизации (сервер = истина, §4
+#инвариант 5). `/web/staff/parents`/`/web/staff/parent-links`/`/web/admin/parents` —
+#привязки родителей, тоже не синкаются (ParentLink не в SYNC_MODELS), поэтому список
+#привязанных родителей в локальной копии всегда пуст. Разбор ПО ТОЙ ЖЕ логике, что
+#выше: если данные не входят в offline-first синк — единственный источник правды для
+#них ВСЕГДА бой, и без пересылки внутри десктопа их просто неоткуда взять.
+_PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
+                   "/me/prefs", "/me/events",
+                   "/web/staff/parents", "/web/staff/parent-links", "/web/admin/parents")
 
 
 #Что именно недоступно — зависит и от пути, и от ПРИЧИНЫ. Два прежних текста врали в
@@ -653,7 +667,9 @@ _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server")
 #Подставляется в винительном падеже («показать состояние», «показать сообщения») —
 #так одна формулировка годится и для среднего рода, и для множественного числа.
 _WHAT = {"/web/admin/server": "состояние", "/web/messenger": "сообщения",
-         "/messenger": "сообщения"}
+         "/messenger": "сообщения", "/me/prefs": "профиль", "/me/events": "уведомления",
+         "/web/staff/parents": "родителей", "/web/staff/parent-links": "родителей",
+         "/web/admin/parents": "родителей"}
 
 
 def _offline_reason(path: str, why: str = "offline") -> str:
@@ -980,7 +996,15 @@ def _try_local_login(login: str, password: str):
             access, refresh = issue_local_session(user.login, user.role or "student")
             if not access:
                 return None
-            name = (f"{user.surname or ''} {user.name or ''}".strip() or user.login)
+            #⚠️ (живой отзыв Влада) Раньше здесь ФИО собиралось ТОЛЬКО из surname+name —
+            #это поля СТУДЕНЧЕСКОЙ конвенции (см. докстринг User.name в models.py: «ключ
+            #ОЦЕНОК»), а у преподавателя основное поле — full_name (models.py: «ФИО, у
+            #преподавателя — КЛЮЧ»). У препода с пустыми surname/name (обычный случай)
+            #строка схлопывалась в пустоту и откатывалась на login — карточка профиля
+            #показывала логин ДВАЖДЫ вместо ФИО+логина. Тот же порядок проверки, что и на
+            #бою (`routers/auth.py`: `user.full_name or f"{surname} {name}".strip()`).
+            name = (user.full_name or f"{user.surname or ''} {user.name or ''}".strip()
+                    or user.login)
             return {"access_token": access, "refresh_token": refresh,
                     "role": user.role or "student", "name": name}
         finally:

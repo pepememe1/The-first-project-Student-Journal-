@@ -96,7 +96,18 @@ class SyncManager:
         Нужно встроенному веб-view мессенджера: JWT живёт жёстко 5 ч, и просроченный
         токен SPA просто отвергает — внутри десктопа показывалась ВЕБ-ФОРМА ВХОДА, хотя
         человек в программу уже вошёл. current_auth() отдаёт токен как есть и для этого
-        не годится. Сеть недоступна — вернём что есть (решает вызывающий)."""
+        не годится. Сеть недоступна — вернём что есть (решает вызывающий).
+
+        ⚠️ (живой отзыв Влада) `allow_jitter=False` ОБЯЗАТЕЛЕН здесь. Эта функция висит
+        синхронно ВНУТРИ HTTP-запроса живого человека (прокси мессенджера/`/me/prefs`,
+        см. `ui/local_api.py::install_remote_proxy`) — если токена ещё нет (холодный
+        старт программы), `_ensure_auth` без этого флага могла ждать до
+        `GRADEBOOK_LOGIN_JITTER_SEC` (по умолчанию 0-8 с СЛУЧАЙНО) ПЕРЕД входом по
+        паролю: та задержка задумана для ФОНОВОГО цикла `_loop()` (размазать вход сотен
+        ПК по 9:00), а не для интерактивного запроса, где человек прямо сейчас смотрит
+        на пустой список чатов и ждёт. Фоновый `_loop()` свой джиттер не теряет — у него
+        отдельный вызов `_ensure_auth(url)` с джиттером по умолчанию, флаг `_jitter_done`
+        на процесс общий, но срабатывает только там, где джиттер реально запрашивали."""
         url = get_api_url()
         if not url:
             return "", ""
@@ -105,7 +116,7 @@ class SyncManager:
             _, token = self.current_auth()
             if token and not is_token_expired(token):
                 return url, token
-            if self._ensure_auth(url) and self._client and self._client.token:
+            if self._ensure_auth(url, allow_jitter=False) and self._client and self._client.token:
                 return url, self._client.token
         except Exception as e:
             _log.warning("обновление токена для веб-view не удалось: %s", e)

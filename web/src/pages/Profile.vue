@@ -3,13 +3,24 @@
 // заготовки под эффекты/рамку, стиль никнейма), посередине — ЖИВОЙ предпросмотр, который
 // и есть та самая карточка, что видят другие (PeerProfileCard editable — общий компонент
 // с «чужим» профилем в мессенджере, см. его докстринг). Ниже — уведомления, как раньше.
-import { ref, computed } from 'vue'
+//
+// ⚠️ (живой отзыв Влада) Раньше цвет/шрифт сохранялись МГНОВЕННО по клику, «о себе» —
+// своей кнопкой, заметка — по blur без кнопки вовсе (и терялась при быстром уходе со
+// вкладки). Три разных механизма сохранения на одной странице — путано и хрупко. Теперь
+// ВСЁ — черновик до явного нажатия «Сохранить» здесь (цвет/шрифт — локально в этом
+// файле, «о себе»/заметка — внутри PeerProfileCard через commit()/discard(), см. её
+// докстринг). Уход со страницы с несохранённым черновиком — предупреждение с выбором
+// «Сохранить»/«Отменить» (onBeforeRouteLeave ниже), а не молчаливая потеря правок.
+import { ref, computed, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
 import { useLocaleStore } from '@/stores/locale'
+import { useConfirm } from '@/composables/useConfirm'
 import { PRESETS } from '@/theme/palette'
 import { NAME_FONTS } from '@/config/nameFonts'
 import { useAuthStore } from '@/stores/auth'
 import Card from '@/components/ui/Card.vue'
+import AppButton from '@/components/ui/AppButton.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import { Camera, Check, ChevronDown, Sparkles, SquareDashed } from '@lucide/vue'
@@ -17,16 +28,64 @@ import { Camera, Check, ChevronDown, Sparkles, SquareDashed } from '@lucide/vue'
 const auth = useAuthStore()
 const profile = useProfileStore()
 const locale = useLocaleStore()
+const { confirm } = useConfirm()
 const cardRef = ref(null)
 
-async function pickColor(id) { await profile.saveProfile({ color: id }) }
-async function pickFont(id) { await profile.saveProfile({ font: id }); fontMenuOpen.value = false }
+// ── Черновик цвета/шрифта — синхронизируется с сохранённым значением, ПОКА человек
+// его не тронул (см. lastSynced*: приход prefs с сервера ПОСЛЕ монтирования страницы
+// не должен затирать уже начатую правку, но обязан подхватиться, если правки ещё нет). ──
+const draftColor = ref(profile.color)
+const draftFont = ref(profile.font)
+let lastSyncedColor = profile.color
+let lastSyncedFont = profile.font
+watch(() => profile.color, (v) => { if (draftColor.value === lastSyncedColor) draftColor.value = v; lastSyncedColor = v })
+watch(() => profile.font, (v) => { if (draftFont.value === lastSyncedFont) draftFont.value = v; lastSyncedFont = v })
+
+function pickColor(id) { draftColor.value = id }
+function pickFont(id) { draftFont.value = id; fontMenuOpen.value = false }
+
+const colorFontDirty = computed(() => draftColor.value !== profile.color || draftFont.value !== profile.font)
+const dirty = computed(() => colorFontDirty.value || !!cardRef.value?.isDirty)
+const saving = ref(false)
+
+async function saveAll() {
+  saving.value = true
+  try {
+    const tasks = []
+    if (colorFontDirty.value) tasks.push(profile.saveProfile({ color: draftColor.value, font: draftFont.value }))
+    if (cardRef.value?.isDirty) tasks.push(cardRef.value.commit())
+    await Promise.all(tasks)
+  } finally { saving.value = false }
+}
+function discardAll() {
+  draftColor.value = profile.color
+  draftFont.value = profile.font
+  cardRef.value?.discard()
+}
+
+// Уход со страницы (клик по сайдбару/другому пункту меню) с несохранённым черновиком —
+// та же плашка выбора «Сохранить»/«Отменить», что и везде в приложении (useConfirm), а
+// не молчаливая потеря правок. Закрытие мимо кнопок (Esc/клик по фону) = «Отменить»,
+// как и у любого другого confirm() в проекте — переход не блокируем в любом случае:
+// плашка отвечает КАК уйти, а не блокирует уход целиком.
+onBeforeRouteLeave(async () => {
+  if (!dirty.value) return true
+  const save = await confirm({
+    title: locale.t('profile.unsavedTitle', 'Есть несохранённые изменения'),
+    message: locale.t('profile.unsavedMessage', 'Сохранить их перед уходом со страницы?'),
+    okText: locale.t('profile.saveAndLeave', 'Сохранить'),
+    cancelText: locale.t('profile.discardAndLeave', 'Отменить'),
+  })
+  if (save) await saveAll()
+  else discardAll()
+  return true
+})
 
 // Стиль никнейма (3.6.1): свёрнуто — видна только ВЫБРАННАЯ строка, разворачивается по
 // клику в список всех вариантов (как MyStatusPicker.vue) — раньше все 7 вариантов висели
 // развёрнутым списком всегда, и карточка занимала половину левой колонки без необходимости.
 const fontMenuOpen = ref(false)
-const currentFont = computed(() => NAME_FONTS.find((f) => f.id === profile.font) || NAME_FONTS[0])
+const currentFont = computed(() => NAME_FONTS.find((f) => f.id === draftFont.value) || NAME_FONTS[0])
 </script>
 
 <template>
@@ -49,9 +108,9 @@ const currentFont = computed(() => NAME_FONTS.find((f) => f.id === profile.font)
             <button v-for="p in PRESETS" :key="p.id" type="button" @click="pickColor(p.id)"
                     :title="locale.t(`theme.preset.${p.id}`, p.name)" :aria-label="locale.t(`theme.preset.${p.id}`, p.name)"
                     class="grid size-8 place-items-center rounded-full ring-offset-2 ring-offset-[var(--gb-card)] transition-transform hover:scale-110"
-                    :class="profile.color === p.id ? 'ring-2 ring-accent' : ''"
+                    :class="draftColor === p.id ? 'ring-2 ring-accent' : ''"
                     :style="{ background: p.accent }">
-              <Check v-if="profile.color === p.id" class="size-3.5 text-white" />
+              <Check v-if="draftColor === p.id" class="size-3.5 text-white" />
             </button>
           </div>
         </Card>
@@ -75,14 +134,14 @@ const currentFont = computed(() => NAME_FONTS.find((f) => f.id === profile.font)
             <div v-if="fontMenuOpen" class="absolute inset-x-0 top-full z-20 mt-1 space-y-1 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
               <button v-for="f in NAME_FONTS" :key="f.id" type="button" @click="pickFont(f.id)"
                       class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
-                      :class="profile.font === f.id ? 'border-accent bg-accent-glow' : 'border-border2 hover:bg-bg2'">
+                      :class="draftFont === f.id ? 'border-accent bg-accent-glow' : 'border-border2 hover:bg-bg2'">
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-base text-text" :style="{ fontFamily: f.family }">
                     {{ auth.user?.name || f.label }}
                   </span>
                   <span class="text-[11px] text-text3">{{ f.label }}</span>
                 </span>
-                <Check v-if="profile.font === f.id" class="size-4 shrink-0 text-accent" />
+                <Check v-if="draftFont === f.id" class="size-4 shrink-0 text-accent" />
               </button>
             </div>
             <div v-if="fontMenuOpen" class="fixed inset-0 z-10" @click="fontMenuOpen = false" />
@@ -112,9 +171,25 @@ const currentFont = computed(() => NAME_FONTS.find((f) => f.id === profile.font)
         </Card>
       </div>
 
-      <!-- Центр: живой предпросмотр (= карточка, которую видят другие) -->
+      <!-- Центр: живой предпросмотр (= карточка, которую видят другие). Цвет/шрифт —
+           ЧЕРНОВИК (colorOverride/fontOverride): смена видна здесь сразу, не дожидаясь
+           «Сохранить» — иначе предпросмотр не был бы предпросмотром. -->
       <div class="lg:order-2">
-        <PeerProfileCard ref="cardRef" editable />
+        <PeerProfileCard ref="cardRef" editable :color-override="draftColor" :font-override="draftFont" />
+      </div>
+    </div>
+
+    <!-- Общая панель сохранения — ОДНА на весь профиль (цвет/шрифт/«о себе»/заметка),
+         видна только когда есть что сохранять. -->
+    <div v-if="dirty" class="sticky bottom-3 z-20 flex items-center justify-between gap-3 rounded-xl border border-accent/40 bg-card px-4 py-3 shadow-card">
+      <span class="text-sm text-text2">{{ locale.t('profile.unsavedBar', 'Есть несохранённые изменения') }}</span>
+      <div class="flex gap-2">
+        <AppButton variant="ghost" size="sm" :disabled="saving" @click="discardAll">
+          {{ locale.t('profile.discardAndLeave', 'Отменить') }}
+        </AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="saveAll">
+          {{ saving ? locale.t('profile.saving', 'Сохранение…') : locale.t('common.save') }}
+        </AppButton>
       </div>
     </div>
 
