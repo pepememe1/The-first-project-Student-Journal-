@@ -234,10 +234,17 @@ export const useTtsStore = defineStore('tts', () => {
    * Озвучить текст ответа Вектора по текущему режиму. Прерывает предыдущую озвучку
    * (barge-in). Ничего не делает, если выключено или пусто. Никогда не бросает.
    * opts.onStart/onEnd — синхронизация анимации речи маскота.
+   * opts.forceVoice — ИГНОРИРУЕТ текущий режим (`mode.value`) и всегда идёт синтезом
+   * речи, а не бубнежом/тишиной. Настройку `mode` при этом НЕ трогаем и не сохраняем —
+   * это разовое решение конкретного вызова, а не смена глобального режима Вектора.
+   * Нужно «Зачитать сообщение» в мессенджере (§5.4, живой отзыв Влада): у него бубнёж
+   * вместо понятной речи. Разбор ФИО голосом «бубнёж» бессмысленен — это ведь не
+   * ответ Вектора, там нечего «изображать под голос персонажа», нужна именно речь.
    */
   async function speak(text, opts = {}) {
     const t = (text || '').trim()
-    if (mode.value === 'off' || !t) return
+    const effectiveMode = opts.forceVoice ? 'voice' : mode.value
+    if (effectiveMode === 'off' || !t) return
     stop()                              // barge-in
     const my = reqGen
     // opts.onStart получает длительность озвучки в мс (0/undefined — неизвестна, см.
@@ -245,7 +252,7 @@ export const useTtsStore = defineStore('tts', () => {
     const onStart = (durationMs) => { try { opts.onStart && opts.onStart(durationMs) } catch { /* noop */ } }
     const onEnd = () => { try { opts.onEnd && opts.onEnd() } catch { /* noop */ } }
 
-    if (mode.value === 'mumble') { _speakMumble(t, onStart, onEnd); return }
+    if (effectiveMode === 'mumble') { _speakMumble(t, onStart, onEnd); return }
 
     // Режим voice: серверный синтез (Silero, ТОЛЬКО русский), откат на speechSynthesis.
     const localeCode = useLocaleStore().active
