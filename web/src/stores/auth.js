@@ -11,6 +11,7 @@ import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
 import { registerToken, unregisterToken } from '@/services/push'
+import { clear as clearScheduleWidget } from '@/services/scheduleWidget'
 import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
@@ -99,6 +100,10 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     useVectorStore().reset()      // и диалог с Вектором: он тоже жил в памяти store
     useProfileStore().reset()     // и профиль (аватар/«о себе»/цвет/шрифт) — та же причина
+    // Виджет на рабочем столе Android живёт ВНЕ страницы и переживает выход: без этой
+    // строки он продолжал бы показывать группу предыдущего владельца сессии тому, кто
+    // войдёт следом (на телефоне в колледже это норма, а не редкость).
+    clearScheduleWidget()
     user.value = null
   }
 
@@ -110,6 +115,7 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()
     useVectorStore().reset()
     useProfileStore().reset()
+    clearScheduleWidget()
     user.value = null
   }
 

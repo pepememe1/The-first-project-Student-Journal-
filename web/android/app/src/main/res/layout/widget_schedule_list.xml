@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  СРЕДНИЙ (4×2) и БОЛЬШОЙ (4×4) виджет — одна разметка. Отличие только в том,
+  сколько строк в неё кладёт провайдер (см. ScheduleWidgetProvider.ROWS_MEDIUM /
+  ROWS_LARGE) и показывать ли строку преподавателя.
+
+  Держать два почти одинаковых XML смысла нет: расходятся они ровно на одно число,
+  а разъезжаются потом молча — правку внесли в один, забыли во втором.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_bg"
+    android:padding="12dp">
+
+    <!-- ШАПКА -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <!-- «Сегодня, пятница» / «Завтра, понедельник» — день важнее даты, но
+                 дата нужна: виджет легко перепутать с висящим со вчера снимком. -->
+            <TextView
+                android:id="@+id/w_day"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/gb_widget_text"
+                android:text="Сегодня, пятница" />
+
+            <TextView
+                android:id="@+id/w_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textSize="11sp"
+                android:textColor="@color/gb_widget_text2"
+                android:text="К74/1 · 7 августа" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/w_week"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="7dp"
+            android:paddingRight="7dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:background="@drawable/widget_badge_bg"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="@color/gb_widget_accent"
+            android:text="I неделя" />
+    </LinearLayout>
+
+    <!-- СТРОКИ ПАР. Наполняется в рантайме: removeAllViews + addView. -->
+    <LinearLayout
+        android:id="@+id/w_rows"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:orientation="vertical" />
+
+    <!-- ПУСТОЙ ДЕНЬ / НЕТ ДАННЫХ. Отдельный текст, а не «просто пусто»: пустой
+         прямоугольник читается как поломка виджета, а не как выходной. -->
+    <TextView
+        android:id="@+id/w_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:visibility="gone"
+        android:textSize="12sp"
+        android:textColor="@color/gb_widget_text2"
+        android:text="Пар нет" />
+
+    <!-- ПОДВАЛ: сколько ещё пар + когда снимок обновлялся. Время обновления
+         показываем ВСЕГДА — расписание кэшировано, и человек должен видеть,
+         насколько оно свежее, а не доверять картинке вслепую. -->
+    <TextView
+        android:id="@+id/w_foot"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="9sp"
+        android:textColor="@color/gb_widget_text2"
+        android:text="обновлено 18:40" />
+</LinearLayout>

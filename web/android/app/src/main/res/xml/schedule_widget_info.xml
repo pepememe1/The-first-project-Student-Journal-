@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Описание виджета расписания для системы.
+
+  ОДИН виджет на все размеры, а не три отдельных пункта в списке добавления:
+  `resizeMode` даёт человеку растянуть его от 2×2 до 4×5, а провайдер выбирает
+  раскладку по фактическим габаритам (см. ScheduleWidgetProvider.render). Три
+  отдельных виджета заставляли бы удалять и добавлять заново ради смены размера.
+
+  minWidth/minHeight = 2×2 клетки (по 70dp на клетку минус системные отступы).
+  targetCellWidth/Height и maxResize* — атрибуты Android 12+; на более старых
+  версиях (у нас minSdk 24) они просто игнорируются, поэтому отдельного файла
+  под API 31 не нужно.
+
+  updatePeriodMillis=1800000 (30 минут) — системный минимум. Меньше поставить
+  нельзя, Android всё равно округлит вверх; точный будильник ради подсветки
+  «идёт сейчас» не заводим (потребовал бы SCHEDULE_EXACT_ALARM на Android 12+).
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="400dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_schedule_list"
+    android:previewLayout="@layout/widget_schedule_list"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_schedule_description"
+    tools:targetApi="s" />

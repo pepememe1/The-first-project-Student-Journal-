@@ -62,6 +62,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getBridge().getWebView().addJavascriptInterface(new PushBridge(), "GradeBookPushNative");
+        getBridge().getWebView().addJavascriptInterface(new WidgetBridge(), "GradeBookWidgetNative");
         askNotificationPermission();
         requestTokenFromRuStore();
         //Приложение могли ОТКРЫТЬ нажатием на уведомление («холодный» старт).
@@ -200,6 +201,77 @@ public class MainActivity extends BridgeActivity {
                 return "{}";
             }
             return out.toString();
+        }
+    }
+
+    /**
+     * Объект, видимый из JS как window.GradeBookWidgetNative — мост к виджету
+     * расписания на рабочем столе (см. web/src/services/scheduleWidget.js).
+     *
+     * ━━ ПОЧЕМУ СНИМОК КЛАДЁТ ВЕБ-СЛОЙ, А НЕ ВИДЖЕТ ХОДИТ САМ ━━
+     * У виджета нет и не может быть долгоживущего доступа к серверу: токен в проекте
+     * живёт жёстко 5 часов (§6), после чего нужен повторный вход. Виджет, работающий
+     * первые пять часов после входа, а дальше показывающий ошибку, — хуже, чем виджет,
+     * честно рисующий последний загруженный снимок. Расписание портала недельное и
+     * меняется редко, а «какой сегодня день» и «какая пара идёт» считаются локально,
+     * поэтому кэш остаётся верным неограниченно долго.
+     *
+     * Роль и группу тоже определяет веб-слой: развилка «студент видит свою группу,
+     * преподаватель — свои пары» уже разобрана на сервере по роли токена, и вторая её
+     * копия в нативном коде разъехалась бы с первой.
+     */
+    public class WidgetBridge {
+
+        /**
+         * Положить снимок расписания и перерисовать виджеты.
+         *
+         * JSON НЕ разбираем здесь: любой сбой разбора на UI-потоке — это подвисание
+         * приложения ради виджета, которого может вообще не быть на рабочем столе.
+         * Строка кладётся как есть, а разбирает её провайдер при отрисовке, где
+         * повреждённый кэш безопасно вырождается в «данных нет».
+         */
+        @JavascriptInterface
+        public void save(String json) {
+            if (json == null || json.isEmpty()) {
+                return;
+            }
+            getSharedPreferences(ScheduleWidgetData.PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(ScheduleWidgetData.KEY_SNAPSHOT, json).apply();
+            ScheduleWidgetProvider.refreshAll(MainActivity.this);
+        }
+
+        /**
+         * Забыть расписание — зовётся при выходе из аккаунта.
+         *
+         * Обязательно: на телефоне может войти другой человек (в колледже это норма),
+         * и оставленный на рабочем столе виджет показывал бы группу предыдущего
+         * владельца сессии. Это ровно та же граница, по которой при логауте
+         * сбрасываются сторы мессенджера и Вектора.
+         */
+        @JavascriptInterface
+        public void clear() {
+            getSharedPreferences(ScheduleWidgetData.PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(ScheduleWidgetData.KEY_SNAPSHOT).apply();
+            ScheduleWidgetProvider.refreshAll(MainActivity.this);
+        }
+
+        /**
+         * Есть ли смысл собирать снимок: true, если виджет реально размещён на
+         * рабочем столе. Веб-слой спрашивает это ПЕРЕД сериализацией — расписание
+         * целиком весит десятки килобайт, и гонять их через мост на каждом заходе у
+         * тех, кто виджет не ставил, незачем.
+         */
+        @JavascriptInterface
+        public boolean isPlaced() {
+            try {
+                android.appwidget.AppWidgetManager mgr =
+                        android.appwidget.AppWidgetManager.getInstance(MainActivity.this);
+                int[] ids = mgr.getAppWidgetIds(new android.content.ComponentName(
+                        MainActivity.this, ScheduleWidgetProvider.class));
+                return ids != null && ids.length > 0;
+            } catch (Throwable e) {
+                return false;
+            }
         }
     }
 }

@@ -31,6 +31,25 @@
             </intent-filter>
         </service>
 
+        <!-- Виджет расписания на рабочем столе. exported="false": наш собственный
+             AppWidgetProvider — обновляет его система и мы сами, снаружи дёргать
+             нечего. Приёмник слушает ещё и смену даты/времени, иначе после полуночи
+             виджет до получаса показывал бы вчерашний день (см. onReceive). -->
+        <receiver
+            android:name=".ScheduleWidgetProvider"
+            android:label="@string/widget_schedule_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/schedule_widget_info" />
+        </receiver>
+
         <!-- Идентификатор проекта из консоли RuStore. НЕ секрет (он виден в APK), в
              отличие от сервисного токена — тот живёт только на сервере в .env. -->
         <meta-data

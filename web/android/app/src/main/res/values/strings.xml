@@ -4,4 +4,8 @@
     <string name="title_activity_main">GradeBookAI</string>
     <string name="package_name">ru.esstu.gradebook</string>
     <string name="custom_url_scheme">ru.esstu.gradebook</string>
+
+    <!-- Виджет расписания -->
+    <string name="widget_schedule_label">Расписание</string>
+    <string name="widget_schedule_description">Пары на сегодня: время, предмет, аудитория. Работает без интернета — по последнему загруженному расписанию.</string>
 </resources>

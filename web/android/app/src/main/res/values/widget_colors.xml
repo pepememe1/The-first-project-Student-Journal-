@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Палитра виджета расписания.
+
+  Цвета — порт токенов `--gb-*` из web/src/theme/palette.js (NEUTRALS_LIGHT +
+  DEFAULT_ACCENT), чтобы виджет на рабочем столе выглядел частью продукта, а не
+  чужим прямоугольником. Тёмная тема — в values-night/widget_colors.xml.
+
+  ⚠️ Своей копии палитры здесь заводить БОЛЬШЕ НЕЛЬЗЯ: акцент и нейтрали правятся
+  в palette.js, и если понадобится ещё один цвет — переносим его сюда явно с тем же
+  hex, а не подбираем «похожий на глаз». Пользовательские пресеты акцента (16 штук)
+  виджет НЕ поддерживает намеренно: RemoteViews не умеет читать CSS-переменные
+  веб-слоя, а тянуть выбранный акцент через мост ради одной полоски — лишняя связь
+  между слоями. Виджет всегда фирменный бирюзовый ВСГУТУ.
+-->
+<resources>
+    <!-- Поверхности -->
+    <color name="gb_widget_bg">#FFFFFFFF</color>          <!-- NEUTRALS_LIGHT.card -->
+    <color name="gb_widget_bg_row">#FFF4F6F8</color>      <!-- NEUTRALS_LIGHT.card2 -->
+    <color name="gb_widget_border">#FFE4E9ED</color>      <!-- NEUTRALS_LIGHT.border -->
+
+    <!-- Текст -->
+    <color name="gb_widget_text">#FF0F1B22</color>        <!-- NEUTRALS_LIGHT.text -->
+    <color name="gb_widget_text3">#FF46555F</color>       <!-- NEUTRALS_LIGHT.text3 -->
+    <color name="gb_widget_text2">#FF7A8893</color>       <!-- NEUTRALS_LIGHT.text2 -->
+
+    <!-- Акцент ВСГУТУ -->
+    <color name="gb_widget_accent">#FF147C8B</color>      <!-- DEFAULT_ACCENT.green -->
+    <color name="gb_widget_accent_soft">#26147C8B</color> <!-- green_glow, 15% -->
+    <color name="gb_widget_accent_on">#FFFFFFFF</color>
+
+    <!-- Статусы: та же семантика, что уже красит продукт -->
+    <color name="gb_widget_now">#FF147C8B</color>         <!-- идёт сейчас -->
+    <color name="gb_widget_past">#FF7A8893</color>        <!-- уже прошла -->
+</resources>

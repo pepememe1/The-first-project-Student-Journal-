@@ -10,8 +10,8 @@
 
 [![152-ФЗ](https://img.shields.io/badge/152--ФЗ-ПДн_в_РФ_·_ГОСТ--хеш_·_SQLCipher-2e9e5b)](#соответствие-152-фз-и-требованиям-фстэк)
 [![Стек](https://img.shields.io/badge/стек-Python_·_Vue_3_·_FastAPI-147c8b)](#для-разработчиков)
-[![Версия](https://img.shields.io/badge/версия-Release_3.6.1-008080)](CHANGELOG.md)
-[![Тесты](https://img.shields.io/badge/тесты-634_клиент_·_762_сервер_·_37_веб-2e9e5b)](#тесты)
+[![Версия](https://img.shields.io/badge/версия-Release_3.6.9-008080)](CHANGELOG.md)
+[![Тесты](https://img.shields.io/badge/тесты-665_клиент_·_799_сервер_·_37_веб-2e9e5b)](#тесты)
 
 *Победитель хакатона «Мы — будущее IT Бурятии» (март 2026)*
 
@@ -292,7 +292,10 @@ SQL-запрос к реальной базе        ← здесь и толь�
 
 **Есть ли мобильное приложение?**
 Да, Android. Обновляется «по воздуху» — новые версии интерфейса приходят без переустановки
-из магазина.
+из магазина. На рабочий стол можно вынести **виджет расписания** трёх размеров: от
+маленького «что сейчас» до полного дня с преподавателем и аудиторией. Виджет рисует
+последнее загруженное расписание и **не требует интернета** — какой сегодня день, какая
+неделя и какая пара идёт, телефон считает сам.
 
 **Кто может читать переписку студентов?**
 Только участники беседы. Администратор-модератор может открыть переписку при разборе
@@ -303,7 +306,7 @@ SQL-запрос к реальной базе        ← здесь и толь�
 
 ## Статус проекта
 
-Продукт находится в стадии **Release 3.5** и готовится к первому коммерческому внедрению
+Продукт находится в стадии **Release 3.6** и готовится к первому коммерческому внедрению
 во ВСГУТУ. Работающее демо доступно публично: **[esstu-gradebook.ru](https://esstu-gradebook.ru)**.
 
 Функционально продукт собран: десктоп, сайт и мобильное приложение работают на общей базе,
@@ -352,7 +355,7 @@ SQL-запрос к реальной базе        ← здесь и толь�
 # интерпретаторами это снимает целый класс наших проблем)
 uv sync --extra desktop --extra server --extra dev
 
-# Десктоп (Python 3.10+; сборка релиза — на python.org 3.11, не из Microsoft Store)
+# Десктоп (Python 3.10+; сборка релиза — на python.org 3.13, не из Microsoft Store)
 uv run python main.py                # GUI
 uv run python main.py --run-server   # поднять сервер из того же процесса
 
@@ -370,7 +373,7 @@ cd web && npm run build               # → web/dist
 
 ## Тесты
 
-Держим зелёными: **634 клиентских**, **762 серверных**, **37 веб-тестов**.
+Держим зелёными: **665 клиентских**, **799 серверных**, **37 веб-тестов**.
 Линтер — `ruff` (высокосигнальный минимум, настройки в `pyproject.toml`).
 
 ```bash
@@ -452,7 +455,7 @@ cd web && npm test        # веб-тесты (node --test, без внешни�
 | `app/webdata.py` | Выборки для `/web/*` строго по роли; сбор фактов для риска отчисления |
 | `app/routers/auth.py` | Вход, refresh с абсолютным потолком сессии, регистрация, восстановление |
 | `app/routers/sync.py` | `/sync/pull` и `/sync/push`: скоуп по роли, серверные метки LWW, нормализация ключей оценок |
-| `app/routers/web.py` | Основной API кабинетов: студент, преподаватель, куратор, админ, расписание, Вектор |
+| `app/routers/web/` | Основной API кабинетов, разрезанный по ролям (3.6): `student`, `teacher`, `curator`, `termgrades`, `terms`, `admin_read`, `siteinfo`, `schedule`, `vector`, `write`, `datatransfer` + `_common` |
 | `app/routers/parent.py` | Кабинет родителя + согласие студента (152-ФЗ) |
 | `app/routers/messenger.py` | Мессенджер и модерация (онлайн-only, вне синка) |
 | `app/routers/me.py`, `admin.py`, `connect.py`, `serverinfo.py`, `appupdate.py`, `desktopupdate.py`, `vector.py`, `webauthn_router.py` | Профиль/уведомления, мониторинг, подтверждение устройств, состояние сервера, OTA Android, автообновление десктопа, озвучка, passkeys |
@@ -477,7 +480,8 @@ cd web && npm test        # веб-тесты (node --test, без внешни�
 | `src/utils/` | `grading.js` (контракт с Python), `markdownLite.js`, `videoEmbed.js`, `gifEmbed.js`, `clipboard.js`, `voiceInput.js` |
 | `public/fonts/` | Фирменные шрифты своими файлами (собираются `tools/build_web_fonts.py`) |
 | `tests/` | `node --test`: контракты Python↔JS, i18n-аудит, markdown, видео |
-| `android/` | Capacitor-обёртка (APK для RuStore) + OTA-обновления |
+| `src/services/` | `push.js` (пуши RuStore), `scheduleWidget.js` (снимок расписания для виджета на рабочем столе) |
+| `android/` | Capacitor-обёртка (APK для RuStore), OTA-обновления, **виджет расписания** (`ScheduleWidgetProvider`) |
 | `deploy/` | Скрипты выкладки сайта и OTA |
 
 ### Документация
@@ -515,8 +519,9 @@ cd web && npm test        # веб-тесты (node --test, без внешни�
 
 ```bash
 # .exe: РЕЛИЗ — только Nuitka (компиляция в C, не декомпилируется).
-# Собирать на python.org 3.11, НЕ на Python из Microsoft Store.
-GRADEBOOK_PYEXE="$(py -3.11 -c 'import sys;print(sys.executable)')" bash build_nuitka.sh
+# Собирать на python.org 3.13, НЕ на Python из Microsoft Store. Нет Visual Studio или
+# MinGW — скрипт сам добавит --zig (нужен `pip install ziglang` в сборочный Python).
+GRADEBOOK_PYEXE="$(py -3.13 -c 'import sys;print(sys.executable)')" bash build_nuitka.sh
 python -m PyInstaller GradeBookAI.spec --noconfirm --clean   # дев-сборка, декомпилируется
 
 # Мобильное приложение: правки веба доезжают «по воздуху» (OTA), APK

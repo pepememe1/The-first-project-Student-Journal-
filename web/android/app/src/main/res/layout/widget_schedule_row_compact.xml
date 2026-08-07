@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Строка пары для СРЕДНЕГО (низкого) виджета — всё в одну линию.
+
+  ⚠️ Отдельная разметка появилась не ради красоты. В обычной строке
+  (widget_schedule_row.xml) номер пары стоит НАД временем, из-за чего строка не может
+  быть ниже ~37dp. На ячейке 4×2 (высота около 110-120dp) за вычетом шапки остаётся
+  меньше 70dp — то есть ОДНА строка. Виджет «ближайшие пары», показывающий одну пару,
+  ничем не отличается от маленького и не нужен.
+
+  Здесь время и предмет стоят рядом, строка занимает ~26dp, и в тот же виджет входят
+  две-три пары. Номер пары убран сознательно: рядом стоит время, а по времени человек
+  ориентируется быстрее, чем по номеру.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="@drawable/widget_row_bg"
+    android:paddingLeft="8dp"
+    android:paddingRight="8dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
+
+    <TextView
+        android:id="@+id/row_time"
+        android:layout_width="38dp"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:textColor="@color/gb_widget_text"
+        android:text="10:45" />
+
+    <TextView
+        android:id="@+id/row_subject"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginLeft="8dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="12sp"
+        android:textColor="@color/gb_widget_text"
+        android:text="Базы данных" />
+
+    <TextView
+        android:id="@+id/row_room"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="6dp"
+        android:maxLines="1"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:textColor="@color/gb_widget_text3"
+        android:text="2-215" />
+
+    <!-- Тех же id, что в полной строке, здесь нет намеренно: провайдер обращается к
+         row_pair/row_meta только на большом размере (см. ScheduleWidgetProvider.row). -->
+</LinearLayout>

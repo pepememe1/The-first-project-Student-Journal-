@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  МАЛЫЙ виджет (2×2). Отвечает ровно на один вопрос: «что у меня прямо сейчас или
+  следующим». Списка здесь нет намеренно — на 110dp он превращается в нечитаемую
+  кашу из обрезанных названий, а виджет такого размера смотрят мельком.
+
+  ⚠️ RemoteViews поддерживает НЕ все контейнеры: только FrameLayout / LinearLayout /
+  RelativeLayout / GridLayout (+ TextView, ImageView, ListView…). ConstraintLayout
+  здесь не работает вовсе — не «плохо выглядит», а падает при инфляции.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_bg"
+    android:padding="12dp">
+
+    <!-- Шапка: чья это выборка (группа или ФИО препода) + чётность недели -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/w_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/gb_widget_text2"
+            android:text="К74/1" />
+
+        <TextView
+            android:id="@+id/w_week"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="6dp"
+            android:paddingRight="6dp"
+            android:paddingTop="1dp"
+            android:paddingBottom="1dp"
+            android:background="@drawable/widget_badge_bg"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="@color/gb_widget_accent"
+            android:text="I" />
+    </LinearLayout>
+
+    <!-- Подпись состояния: «Сейчас» / «Дальше» / «Пар нет» -->
+    <TextView
+        android:id="@+id/w_state"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:textAllCaps="true"
+        android:textColor="@color/gb_widget_accent"
+        android:text="Сейчас" />
+
+    <!-- Время — самая крупная строка: её ищут глазами первой -->
+    <TextView
+        android:id="@+id/w_time"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        android:textColor="@color/gb_widget_text"
+        android:text="10:45–12:20" />
+
+    <TextView
+        android:id="@+id/w_subject"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="3dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        android:lineSpacingMultiplier="0.95"
+        android:textSize="12sp"
+        android:textColor="@color/gb_widget_text3"
+        android:text="Основы алгоритмизации" />
+
+    <!-- Хвост: аудитория и сколько ещё осталось за день -->
+    <TextView
+        android:id="@+id/w_foot"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="10sp"
+        android:textColor="@color/gb_widget_text2"
+        android:text="ауд. 3-301 · ещё 2" />
+</LinearLayout>

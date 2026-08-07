@@ -28,6 +28,7 @@ import { scheduleApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
+import * as widget from '@/services/scheduleWidget'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -239,12 +240,45 @@ async function load() {
     //Сессионные категории — своя «текущая» неделя не существует (это не календарная
     //чётность, а порядковый номер сессии) — берём первый реально найденный блок.
     week.value = categoryDated.value ? (wk[0] || 1) : (r.week || 1)
+    //Запрос БЕЗ группы делает только тот, у кого она своя (студент): группу подставил
+    //сервер по токену, значит это и есть «своя». Запоминаем, чтобы и после ручного
+    //ухода на чужую группу и возврата обратно виджет снова обновлялся.
+    if (isStudent.value && !forGroup && r.group) ownGroup.value = r.group
+    if (isStudent.value && r.group && r.group === ownGroup.value) pushWidgetSnapshot('group', r)
   } catch {
     if (my === reqSeq) data.value = null
   } finally {
     //Спиннер снимает ТОЛЬКО последний запрос — и снимает его всегда, независимо от того,
     //что успело поменяться в category/group за время ожидания (см. комментарий у reqSeq).
     if (my === reqSeq) loading.value = false
+  }
+}
+
+// ── Снимок для нативного виджета на рабочем столе Android ───────────────────────
+// Виджет наполняет ТОЛЬКО приложение (у него нет своего доступа к серверу: токен
+// живёт жёстко 5 часов, см. services/scheduleWidget.js). Здесь единственное место,
+// где расписание уже загружено и точно принадлежит текущему аккаунту.
+//
+// ⚠️ Сохраняем СТРОГО СВОЁ расписание: студент и админ могут открыть любую группу,
+// преподаватель — любого коллегу, и без этой проверки виджет показывал бы чужие
+// пары. Признак «своё» разный у ролей: у студента — группа, которую сервер подставил
+// САМ (запрос без group), у преподавателя — авто-совпадение по ФИО (matched_self).
+//
+// Сессионные категории (Заочное 1/2) сюда не попадают намеренно: днями там служат
+// календарные даты без года, восстановить ISO-дату не из чего — см. fromDatedSchedule.
+const ownGroup = ref('')
+
+function pushWidgetSnapshot(kind, resp) {
+  if (!widget.isAvailable() || !widget.isWanted()) return
+  if (categoryDated.value) return
+  try {
+    const snap = kind === 'teacher'
+      ? widget.fromTeacherSchedule(resp, resp?.teacher || auth.user?.name || '')
+      : widget.fromGroupSchedule(resp, resp?.group || '')
+    if (snap) widget.save(snap)
+  } catch (e) {
+    //Виджет — дополнение: его сбой не имеет права ломать саму страницу расписания.
+    console.warn('[widget] снимок не собран:', e)
   }
 }
 
@@ -268,6 +302,9 @@ async function loadTeacher(name) {
       teacherName.value = r.teacher
       if (r.matched_self) mode.value = 'me'
       else if (name) mode.value = 'teacher'
+      //Только СВОИ пары (авто-совпадение по ФИО). Расписание коллеги, открытое из
+      //любопытства, в виджет попадать не должно.
+      if (r.matched_self) pushWidgetSnapshot('teacher', r)
     } else {
       data.value = null
       if (name) mode.value = 'teacher'   // выбрал вручную, но пар нет — остаёмся в режиме

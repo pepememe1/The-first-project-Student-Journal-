@@ -21,8 +21,11 @@ android {
         //стирался при загрузке страницы, и токен устройства не доезжал до сервера
         //(в боевой базе не было ни одного). Здесь же — иконка и заставка из общего
         //icon.png и снятие service worker'а, из-за которого не приживались OTA-обновления.
-        versionCode 6
-        versionName "1.0.5"
+        //7 — ВИДЖЕТ РАСПИСАНИЯ на рабочем столе. Перезалив APK здесь обязателен: виджет
+        //это НАТИВНАЯ часть (AppWidgetProvider + разметка + приёмник в манифесте), и
+        //«по воздуху» через Capgo он не доедет — OTA подменяет только веб-бандл.
+        versionCode 7
+        versionName "1.0.6"
         //project_id из консоли RuStore подставляется в манифест. Держим в
         //gradle.properties (файл вне git), чтобы не зашивать идентификатор в исходники.
         manifestPlaceholders = [
@@ -74,6 +77,11 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    //⚠️ org.json в JVM-юнит-тестах Android — ЗАГЛУШКА: все методы кидают
+    //"not mocked", то есть контрактный тест виджета (WeekParityContractTest) без
+    //настоящей реализации падал бы не по делу. Подкладываем настоящую библиотеку
+    //ТОЛЬКО в тесты — в APK она не попадает, там работает системная.
+    testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

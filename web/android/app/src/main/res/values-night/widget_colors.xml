@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Тёмная тема виджета — порт NEUTRALS_DARK из web/src/theme/palette.js.
+
+  Тема берётся СИСТЕМНАЯ (values-night), а не выбранная в приложении: виджет живёт
+  на рабочем столе рядом с чужими виджетами, и там он обязан подчиняться телефону.
+  Читать тему аккаунта через мост можно было бы, но тогда виджет светился бы белым
+  на тёмном рабочем столе у человека, который просто не менял тему в приложении.
+-->
+<resources>
+    <color name="gb_widget_bg">#FF171B1E</color>          <!-- NEUTRALS_DARK.card -->
+    <color name="gb_widget_bg_row">#FF1E2327</color>      <!-- NEUTRALS_DARK.card2 -->
+    <color name="gb_widget_border">#FF272D32</color>      <!-- NEUTRALS_DARK.border -->
+
+    <color name="gb_widget_text">#FFECEEF0</color>        <!-- NEUTRALS_DARK.text -->
+    <color name="gb_widget_text3">#FFAEB8BF</color>       <!-- NEUTRALS_DARK.text3 -->
+    <color name="gb_widget_text2">#FF7E8A92</color>       <!-- NEUTRALS_DARK.text2 -->
+
+    <!-- В тёмном режиме фирменная бирюза слишком глухая на графите — берём
+         производный `blue` (#2BA6B8) из той же DEFAULT_ACCENT, а не осветляем
+         на глаз: этот hex уже есть в палитре продукта. -->
+    <color name="gb_widget_accent">#FF2BA6B8</color>
+    <color name="gb_widget_accent_soft">#332BA6B8</color>
+    <color name="gb_widget_accent_on">#FF0E1113</color>
+
+    <color name="gb_widget_now">#FF2BA6B8</color>
+    <color name="gb_widget_past">#FF7E8A92</color>
+</resources>

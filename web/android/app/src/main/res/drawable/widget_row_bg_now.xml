@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Строка пары, которая ИДЁТ ПРЯМО СЕЙЧАС.
+
+  Отличается не только цветом, но и левой полосой: виджет читают мельком и часто
+  под солнцем, а цветовая заливка сама по себе плохо различима при дальтонизме.
+  Тот же принцип, что у сводок в SPA — цвет всегда дублируется формой или числом.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/gb_widget_accent_soft" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <item android:width="3dp" android:gravity="left|start">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/gb_widget_accent" />
+            <corners android:radius="2dp" />
+        </shape>
+    </item>
+</layer-list>
