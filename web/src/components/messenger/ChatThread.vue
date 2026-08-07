@@ -8,13 +8,14 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
-  Languages, Star,
+  Languages, Star, SmilePlus,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useTranslateStore } from '@/stores/translate'
 import { useGifStore } from '@/stores/gif'
+import { useTtsStore } from '@/stores/tts'
 import { renderMarkdownLite } from '@/utils/markdownLite'
 import { extractVideos } from '@/utils/videoEmbed'
 import { extractGifLinks } from '@/utils/gifEmbed'
@@ -46,6 +47,7 @@ const showTranslate = ref(false)
 const showGifPicker = ref(false)
 const auth = useAuthStore()
 const gif = useGifStore()
+const tts = useTtsStore()
 const { confirm } = useConfirm()
 const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
 //Свой id клиент знает только из conversation_info: в JWT лежат логин и роль.
@@ -566,6 +568,34 @@ async function onPick(action) {
   else if (action === 'delete') requestDelete([msg])
   else if (action === 'report') reportMsg.value = msg
   else if (action === 'remind') remindMsg.value = msg
+  else if (action === 'speak') speakMessage(msg)
+  else if (action === 'reactions-info') showMessageInfo(msg)
+}
+
+// ── «Зачитать сообщение» (Discord-style) — той же говорилкой, что у Вектора (§5.3) ──────
+function speakMessage(msg) {
+  const name = speakerName(msg)
+  const phrase = name
+    ? locale.t('chatThread.speakPhrase', { name, text: msg.body || '' })
+    : (msg.body || '')
+  tts.unlock()   // «разбудить» AudioContext из жеста клика — иначе первая фраза не прозвучит
+  tts.speak(phrase)
+}
+
+// ── «Реакции» — своё сообщение: кто поставил реакцию + кто просмотрел (когда), в одной
+// панели (аналог Telegram «Message Info»). Реакции — GET .../reactions (уже был на
+// сервере, просто не вызывался ни с одной страницы); просмотры — тот же readBy(), что и
+// у попапа «Кто прочитал» под сообщением, только со временем (last_read_at участника —
+// отдельной метки «прочитал ИМЕННО ЭТО сообщение тогда-то» у нас нет, см. докстринг
+// эндпоинта на сервере).
+const msgInfoPopup = ref({ open: false, reactions: [], viewed: [] })
+async function showMessageInfo(msg) {
+  msgInfoPopup.value = { open: true, reactions: [], viewed: [] }
+  const [reactRes, viewedRes] = await Promise.all([
+    messengerApi.reactionUsers(msg.id).then((r) => r.data.reactions || []).catch(() => []),
+    m.readBy(msg.id),
+  ])
+  msgInfoPopup.value = { open: true, reactions: reactRes, viewed: viewedRes }
 }
 
 // §D19: напоминание о сообщении. Дату из текста разбирает сервер (детерминированно),
@@ -815,6 +845,13 @@ function senderAvatar(msg) {
 function senderName(msg) {
   if (isVector(msg)) return locale.t('chatThread.vectorName', 'Вектор')
   return msg.sender_name || (isSaved.value ? '' : (activePeer.value?.full_name || ''))
+}
+// «Зачитать сообщение» — senderName(msg) выше НАМЕРЕННО не считает своё (гейтится
+// v-if="!msg.mine" в шаблоне), а для озвучки имя нужно и на своих сообщениях тоже.
+function speakerName(msg) {
+  if (isVector(msg)) return locale.t('chatThread.vectorName', 'Вектор')
+  if (msg.mine) return auth.user?.name || auth.user?.login || ''
+  return senderName(msg)
 }
 // Роль/цвет отправителя для значка-аватарки по умолчанию (RoleAvatarIcon, см. Avatar.vue) —
 // тот же приём, что avatarBySender выше. ⚠️ p.user_role (роль В СИСТЕМЕ), НЕ p.role (та —
@@ -1467,6 +1504,37 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
           <li v-for="(n, i) in readByPopup.names" :key="i">{{ n }}</li>
         </ul>
         <button type="button" @click="readByPopup.open = false"
+                class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.close') }}</button>
+      </div>
+    </div>
+
+    <!-- «Реакции» (Message Info): кто поставил реакцию + кто просмотрел, с временем. -->
+    <div v-if="msgInfoPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+         style="background: var(--gb-overlay)" @click.self="msgInfoPopup.open = false">
+      <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-4 shadow-card">
+        <div class="mb-2 flex items-center gap-2">
+          <SmilePlus class="size-4 text-accent" />
+          <h3 class="font-title text-sm font-bold text-text">{{ locale.t('msgAction.reactionsInfo', 'Реакции') }}</h3>
+        </div>
+        <div v-if="msgInfoPopup.reactions.length" class="mb-3 space-y-1.5">
+          <div v-for="r in msgInfoPopup.reactions" :key="r.emoji" class="flex items-start gap-2 text-sm">
+            <span class="text-base leading-5">{{ r.emoji }}</span>
+            <span class="text-text2">{{ r.users.join(', ') }}</span>
+          </div>
+        </div>
+        <p v-else class="mb-3 text-sm text-text3">{{ locale.t('chatThread.noReactionsYet', 'Пока никто не отреагировал.') }}</p>
+        <div class="mb-1.5 flex items-center gap-2 border-t border-border pt-2.5">
+          <Eye class="size-3.5 text-text3" />
+          <span class="text-tiny font-semibold uppercase tracking-wide text-text3">{{ locale.t('chatThread.readByTitle', 'Прочитали') }}</span>
+        </div>
+        <p v-if="!msgInfoPopup.viewed.length" class="text-sm text-text3">{{ locale.t('chatThread.noOneReadYet', 'Пока никто не прочитал.') }}</p>
+        <ul v-else class="space-y-1 text-sm text-text">
+          <li v-for="u in msgInfoPopup.viewed" :key="u.id" class="flex items-center justify-between gap-2">
+            <span class="truncate">{{ u.full_name }}</span>
+            <span class="shrink-0 text-tiny text-text3">{{ fmtTime(u.last_read_at) }}</span>
+          </li>
+        </ul>
+        <button type="button" @click="msgInfoPopup.open = false"
                 class="mt-3 w-full rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.close') }}</button>
       </div>
     </div>

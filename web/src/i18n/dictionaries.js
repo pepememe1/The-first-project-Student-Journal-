@@ -367,6 +367,10 @@ export const MESSAGES = {
     'msgAction.remind': 'Напомнить',
     'msgAction.select': 'Выделить',
     'msgAction.report': 'Пожаловаться',
+    'msgAction.speak': 'Зачитать сообщение',
+    'msgAction.reactionsInfo': 'Реакции',
+    'chatThread.speakPhrase': 'Юзер {name} сказал: {text}',
+    'chatThread.noReactionsYet': 'Пока никто не отреагировал.',
 
     'reminder.needDate': 'Укажите дату и время',
     'reminder.willRemind': 'Напомним {when}',
@@ -2040,6 +2044,10 @@ export const MESSAGES = {
     'msgAction.remind': 'Remind me',
     'msgAction.select': 'Select',
     'msgAction.report': 'Report',
+    'msgAction.speak': 'Read message aloud',
+    'msgAction.reactionsInfo': 'Reactions',
+    'chatThread.speakPhrase': 'User {name} said: {text}',
+    'chatThread.noReactionsYet': 'No reactions yet.',
 
     'reminder.needDate': 'Set a date and time',
     'reminder.willRemind': 'We’ll remind you {when}',
@@ -3704,6 +3712,10 @@ export const MESSAGES = {
     'msgAction.remind': '提醒我',
     'msgAction.select': '选择',
     'msgAction.report': '举报',
+    'msgAction.speak': '朗读消息',
+    'msgAction.reactionsInfo': '反应',
+    'chatThread.speakPhrase': '用户 {name} 说：{text}',
+    'chatThread.noReactionsYet': '还没有人做出反应。',
 
     'reminder.needDate': '请设置日期和时间',
     'reminder.willRemind': '将于{when}提醒您',

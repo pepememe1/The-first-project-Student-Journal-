@@ -1561,6 +1561,9 @@ def test_read_by_reflects_participant_read_state(client):
     client.post(f"/web/messenger/chats/{conv}/read", headers=a)
     after = client.get(f"/web/messenger/messages/{m['id']}/read_by", headers=b).json()
     assert len(after["users"]) == 1 and after["users"][0]["id"] == a_id
+    #Панель «Реакции» (контекстное меню) показывает время — переиспользует last_read_at,
+    #отдельной таблицы «просмотрено именно это сообщение тогда-то» нет и не будет.
+    assert after["users"][0]["last_read_at"]
 
 
 # ── Шаблоны быстрых ответов преподавателя ────────────────────────────────────────────

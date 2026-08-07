@@ -4,7 +4,7 @@
 // (своё/чужое, закреплено ли, удалено ли) — см. MESSENGER-PLAN.md §6.8. Эмитит выбранное
 // действие наверх (ChatThread выполняет), сам ничего не делает с данными.
 import { computed } from 'vue'
-import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages } from '@lucide/vue'
+import { Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages, Volume2, SmilePlus } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -39,6 +39,14 @@ const items = computed(() => {
     ? { key: 'unpin', label: locale.t('messenger.unpin', 'Открепить'), icon: PinOff }
     : { key: 'pin', label: locale.t('messenger.pin', 'Закрепить'), icon: Pin })
   if (!d) list.push({ key: 'copy', label: locale.t('msgAction.copy', 'Копировать текст'), icon: Copy })
+  // Зачитать вслух — той же говорилкой, что у Вектора (§5.3). Только там, где есть что
+  // читать: у GIF/пустого текста после slash-команд озвучивать нечего.
+  if (!d && m.value.body) list.push({ key: 'speak', label: locale.t('msgAction.speak', 'Зачитать сообщение'), icon: Volume2 })
+  // «Реакции» (по аналогии с Message Info в Telegram) — только СВОИ сообщения: кто
+  // поставил реакцию и кто просмотрел, с временем. У чужого сообщения этот список не
+  // наш секрет — и технически, и по смыслу («кто прочитал» тут же снизу под своим же
+  // сообщением, как обычно).
+  if (!d && m.value.mine) list.push({ key: 'reactions-info', label: locale.t('msgAction.reactionsInfo', 'Реакции'), icon: SmilePlus })
   //Перевод — только ЧУЖИХ сообщений (своё и так на языке, на котором написано);
   //тот же переключатель, что у ссылки «перевести» под самим сообщением.
   if (!d && !m.value.mine && m.value.body) {

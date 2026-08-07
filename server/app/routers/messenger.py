@@ -1299,9 +1299,17 @@ def message_read_by(mid: int, user: User = Depends(get_current_user), db: Sessio
     ids = [r.user_id for r in rows]
     if not ids:
         return {"users": []}
+    #⚠️ (живой отзыв Влада, панель «Реакции» в контекстном меню) Точки «когда именно
+    #прочитали ИМЕННО ЭТО сообщение» у нас нет и заводить её не будем (см. докстринг
+    #выше — сознательно без новой таблицы «строка на каждое прочтение каждым»). Честная
+    #замена — last_read_at участника: раз он ≥ момента отправки, значит человек дошёл
+    #этим чтением как минимум досюда, и last_read_at — самая точная метка, какая у нас
+    #есть. Как в Telegram — не «увидел именно эту секунду», а «где он сейчас в ленте».
+    read_at_by_id = {r.user_id: (r.last_read_at or "") for r in rows}
     onl = _online_logins()
     users = db.query(User).filter(User.id.in_(ids)).all()
-    return {"users": [_safe_user(u, onl) for u in users]}
+    return {"users": [dict(_safe_user(u, onl), last_read_at=read_at_by_id.get(u.id, ""))
+                      for u in users]}
 
 
 # ── Перевод ──────────────────────────────────────────────────────────────────────────
