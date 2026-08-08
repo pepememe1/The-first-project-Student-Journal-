@@ -30,10 +30,16 @@ def is_web_client(request: Request) -> bool:
     Веб-клиент помечает себя заголовком `X-Client: web` (см. фронтенд api/client.js).
     Спуфинг этого заголовка максимум даёт доступ уровня СТУДЕНТА (для персонала барьер
     остаётся, см. device_barrier_applies), а студенческий веб-доступ и так открыт —
-    поэтому подмена ничего сверх политики не открывает."""
+    поэтому подмена ничего сверх политики не открывает.
+
+    ⚠️ `android` — ТА ЖЕ САМАЯ веб-редакция, просто в обёртке Capacitor (§11): тот же
+    Vue, те же role-scoped `/web/*`, синк ей не нужен. Значение появилось отдельно
+    только затем, чтобы у телефона был свой (недельный) потолок сессии — см.
+    config.session_ttl_min. Если бы мы забыли учесть его ЗДЕСЬ, приложение внезапно
+    попало бы под барьер устройства и перестало пускать преподавателей с телефона."""
     if request is None:
         return False
-    return (request.headers.get("x-client", "") or "").strip().lower() == "web"
+    return (request.headers.get("x-client", "") or "").strip().lower() in ("web", "android")
 
 
 def device_barrier_applies(request: Request, role: str) -> bool:

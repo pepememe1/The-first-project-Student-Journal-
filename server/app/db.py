@@ -162,6 +162,7 @@ def init_db():
     _ensure_lesson_subgroup_column()
     _ensure_group_specialty_columns()
     _ensure_group_category_column()
+    _ensure_auth_session_client_column()
     _migrate_slash_in_ids()
 
 
@@ -200,6 +201,33 @@ def _ensure_conversation_system_columns():
         for name, coltype in wanted:
             if name not in columns:
                 conn.execute(text(f"ALTER TABLE conversations ADD COLUMN {name} {coltype}"))
+
+
+def _ensure_auth_session_client_column():
+    """Идемпотентная мини-миграция: auth_sessions.client — каким клиентом выдана сессия
+    ('android' | 'web' | '' для десктопа).
+
+    Зачем колонка, а не заголовок запроса. Абсолютный потолок сессии (§6) считается на
+    КАЖДОМ `/auth/refresh` от `issued_at`. Если брать «мобильный ли клиент» из заголовка
+    прямо там, то любой браузер, приславший `X-Client: android`, продлил бы обычную
+    веб-сессию с пяти часов до недели — то есть заголовок стал бы способом обойти
+    потолок. Записанный ОДИН раз при входе, он этого не позволяет: подделать можно
+    только собственную новую сессию, а не растянуть уже выданную.
+
+    Тот же паттерн, что и у остальных мини-миграций: create_all не досоздаёт СТОЛБЕЦ в
+    уже существующей таблице на боевой БД (в свежей тестовой создаёт сразу целиком —
+    поэтому ветка «колонки не было» в обычных тестах не срабатывает, см. урок про
+    conversation_participants)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("auth_sessions")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу со столбцом
+    if "client" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE auth_sessions ADD COLUMN client VARCHAR DEFAULT ''"))
 
 
 def _ensure_subject_hours_teacher_column():

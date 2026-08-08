@@ -16,7 +16,23 @@
 import axios from 'axios'
 import { getAccess, getRefresh, setTokens, clearTokens, getDeviceId } from './tokens'
 import { isCacheable, writeCache, readCache, servingStale } from './offlineCache'
-import { getApiBase } from './server'
+import { getApiBase, isNativeApp } from './server'
+
+/**
+ * Чем мы представляемся серверу: 'android' в приложении, 'web' в браузере.
+ *
+ * Отличие нужно ровно для ОДНОГО: у мобильного приложения свой, недельный потолок
+ * сессии вместо пятичасового (см. server/app/config.py::session_ttl_min). Телефон
+ * личный и заперт блокировкой экрана, а общий компьютер в аудитории — нет, и там
+ * пятичасовой потолок и есть основная защита.
+ *
+ * Прав заголовок не даёт: сервер записывает его ОДИН РАЗ при входе в auth_sessions
+ * и дальше уже не перечитывает — подделав его в браузере, можно получить только
+ * собственную новую сессию, но не растянуть чужую или уже выданную.
+ */
+function clientKind() {
+  return isNativeApp() ? 'android' : 'web'
+}
 
 export const api = axios.create({
   baseURL: getApiBase(),
@@ -36,7 +52,7 @@ api.interceptors.request.use((config) => {
   const token = getAccess()
   if (token) config.headers.Authorization = `Bearer ${token}`
   config.headers['X-Device-Id'] = getDeviceId()
-  config.headers['X-Client'] = 'web'
+  config.headers['X-Client'] = clientKind()
   return config
 })
 
@@ -50,7 +66,7 @@ async function doRefresh() {
   const { data } = await axios.post(
     getApiBase() + '/auth/refresh',
     { refresh_token: refresh },
-    { headers: { 'X-Device-Id': getDeviceId(), 'X-Client': 'web' } },
+    { headers: { 'X-Device-Id': getDeviceId(), 'X-Client': clientKind() } },
   )
   setTokens({ access: data.access_token, refresh: data.refresh_token || refresh })
   return data.access_token

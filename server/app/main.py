@@ -21,6 +21,7 @@ from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
 from .routers import desktopupdate
+from .routers import publicschedule
 from .routers import serverinfo
 from . import events, throttle
 
@@ -146,6 +147,10 @@ app.include_router(web.router)
 app.include_router(parent.router)          # кабинет родителя + согласие студента (/web/parent/*)
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
 app.include_router(messenger.mod_router)   # модерация мессенджера (/web/admin/messenger/*)
+#Расписание БЕЗ входа (/public/schedule/*) — для виджета на рабочем столе Android:
+#токена у него быть не может (JWT живёт 5 часов), а данные и так публичны у портала.
+#Никаких данных журнала здесь нет и быть не должно — см. предупреждение в самом файле.
+app.include_router(publicschedule.router)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
 app.include_router(desktopupdate.router)   # автообновление десктопа (манифест; файлы — /downloads)
 #Раздел «Сервер» — ТОЛЬКО ПРОСМОТР. Управление (SSH, команды, перенос) живёт в

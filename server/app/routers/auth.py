@@ -16,7 +16,7 @@ from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
                         decode_token)
-from ..config import JWT_TTL_MIN
+from ..config import JWT_TTL_MIN, session_ttl_min
 from .. import throttle, events, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -28,8 +28,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def client_kind(request: Request) -> str:
+    """Каким клиентом пришёл запрос: 'android' | 'web' | '' (десктоп).
+
+    Заголовок ставит сам клиент (`api/client.js`), подделать его тривиально — поэтому
+    он НЕ даёт никаких прав, а только выбирает длину сессии при ВЫДАЧЕ токена. Дальше
+    выбор фиксируется в auth_sessions.client и уже не зависит от заголовков."""
+    if request is None:
+        return ""
+    v = (request.headers.get("x-client", "") or "").strip().lower()
+    return v if v in ("android", "web") else ""
+
+
 def _record_session(db: Session, jti: str, login: str, role: str, kind: str,
-                    exp: int, request: Request, pair_jti: str = ""):
+                    exp: int, request: Request, pair_jti: str = "", client: str = ""):
     """Сохраняет выданный токен в AuthSession (для отзыва/refresh/видимости сессий)."""
     dev = ip = ""
     try:
@@ -40,18 +52,25 @@ def _record_session(db: Session, jti: str, login: str, role: str, kind: str,
         pass
     db.add(AuthSession(jti=jti, login=login, role=role, kind=kind, device_id=dev,
                        ip=ip, issued_at=_now(), expires_at=int(exp), revoked=False,
-                       pair_jti=pair_jti))
+                       pair_jti=pair_jti, client=client))
 
 
 def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
     """Выдаёт пару (access + refresh), записывает обе сессии и коммитит.
 
     access — короткий (для запросов), refresh — длинный (тихое обновление). Связаны
-    через pair_jti, чтобы logout/отзыв гасил оба разом."""
-    access, a_jti, a_exp = create_token_full(user.login, user.role, "access")
-    refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh")
-    _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti)
-    _record_session(db, r_jti, user.login, user.role, "refresh", r_exp, request, a_jti)
+    через pair_jti, чтобы logout/отзыв гасил оба разом.
+
+    ⚠️ Длину сессии задаёт КЛИЕНТ (мобильное приложение — неделя, сайт и десктоп —
+    прежние 5 часов, см. config.session_ttl_min и комментарий там же о том, почему это
+    не одинаково для всех устройств). Записываем её в саму сессию, чтобы потолок на
+    /auth/refresh считался от того же значения, а не от заголовка очередного запроса."""
+    client = client_kind(request)
+    ttl = session_ttl_min(client)
+    access, a_jti, a_exp = create_token_full(user.login, user.role, "access", ttl_min=ttl)
+    refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh", ttl_min=ttl)
+    _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti, client)
+    _record_session(db, r_jti, user.login, user.role, "refresh", r_exp, request, a_jti, client)
     db.commit()
     name = user.full_name or f"{user.surname} {user.name}".strip()
     return TokenOut(access_token=access, refresh_token=refresh, role=user.role, name=name)
@@ -178,7 +197,12 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         session_age_min = (datetime.now(timezone.utc) - issued).total_seconds() / 60
     except (TypeError, ValueError):
         session_age_min = 0      #метка повреждена/отсутствует — не блокируем по этой причине
-    if session_age_min > JWT_TTL_MIN:
+    #Потолок берём ПО КЛИЕНТУ, записанному в самой сессии при входе (см. models.AuthSession
+    #и config.session_ttl_min): у мобильного приложения он недельный, у сайта и десктопа —
+    #прежние 5 часов. Читать «мобильный ли клиент» из ЗАГОЛОВКА прямо здесь нельзя: тогда
+    #браузер, приславший X-Client: android, растянул бы уже выданную веб-сессию до недели,
+    #то есть заголовок стал бы способом обойти потолок.
+    if session_age_min > session_ttl_min(sess.client or ""):
         sess.revoked = True
         db.commit()
         raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
@@ -198,8 +222,14 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         old = db.query(AuthSession).filter(AuthSession.jti == sess.pair_jti).first()
         if old is not None:
             old.revoked = True
-    access, a_jti, a_exp = create_token_full(u.login, u.role, "access")
-    _record_session(db, a_jti, u.login, u.role, "access", a_exp, request, jti)
+    #Длину нового access берём из САМОЙ СЕССИИ, а не из заголовка этого запроса, и не
+    #из глобального дефолта: иначе у мобильной сессии access жил бы 5 часов при недельном
+    #потолке и приложение всё равно ходило бы за refresh каждые пять часов — то есть
+    #ровно то, от чего мы уходим. Клиент наследуется, а не перечитывается.
+    access, a_jti, a_exp = create_token_full(u.login, u.role, "access",
+                                             ttl_min=session_ttl_min(sess.client or ""))
+    _record_session(db, a_jti, u.login, u.role, "access", a_exp, request, jti,
+                    sess.client or "")
     sess.pair_jti = a_jti
     db.commit()
     name = u.full_name or f"{u.surname} {u.name}".strip()

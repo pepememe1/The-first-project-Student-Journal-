@@ -221,6 +221,13 @@ class AuthSession(Base):
     login = Column(String, index=True, default="")
     role = Column(String, default="")
     kind = Column(String, default="access")            #access | refresh
+    #Каким клиентом выдана сессия: 'android' | 'web' | '' (десктоп). Определяет
+    #АБСОЛЮТНЫЙ ПОТОЛОК сессии: телефон личный и под блокировкой экрана, поэтому у него
+    #неделя, а у сайта и десктопа — прежние 5 часов (общий ПК колледжа за спиной у
+    #человека остаётся открытым). Хранится ИМЕННО ЗДЕСЬ, а не читается из заголовка при
+    #каждом refresh: иначе браузер, приславший X-Client: android, растянул бы уже
+    #выданную веб-сессию до недели — заголовок стал бы способом обойти потолок.
+    client = Column(String, default="")
     device_id = Column(String, default="")             #X-Device-Id, с которого выдан
     ip = Column(String, default="")
     issued_at = Column(String, default="")             #ISO UTC

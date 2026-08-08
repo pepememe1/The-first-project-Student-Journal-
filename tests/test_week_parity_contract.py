@@ -79,6 +79,35 @@ def test_contract_has_two_full_consecutive_weeks():
     assert max(len(r) for r in runs) >= 14, "нет сплошного отрезка в 14 дней"
 
 
+def test_parity_is_stable_inside_week_and_flips_between():
+    """🔥 ИНВАРИАНТ, который поймал реальный баг продукта (починен в 3.6.9).
+
+    До правки формула брала день недели ТЕКУЩЕЙ даты вместо 1 января, и чётность
+    менялась внутри одной календарной недели по два-три раза (2026-02-02 Пн → I,
+    Вт-Пт → II, Сб → I, Вс → II). Контракт из 30 дат был при этом ЗЕЛЁНЫМ: он сверял
+    Python с Java, а обе стороны были одинаково неправы.
+
+    ⚠️ Учебная неделя здесь начинается с ВОСКРЕСЕНЬЯ — наследие JS-идиомы, где
+    `getDay()` считает от воскресенья. Проверяем Вс..Сб, а не Пн..Вс.
+    """
+    start = datetime.date(2026, 2, 8)          # воскресенье
+    first = _parity(start)
+    for i in range(1, 7):                      # Пн..Сб той же недели
+        d = start + datetime.timedelta(days=i)
+        assert _parity(d) == first, f"{d}: чётность изменилась ВНУТРИ недели"
+    nxt = start + datetime.timedelta(days=7)
+    assert _parity(nxt) != first, "чётность обязана смениться на следующей неделе"
+
+
+def test_parity_alternates_over_ten_weeks():
+    """Десять недель подряд обязаны идти строго через одну. Ловит и «застрявшую»
+    чётность (всегда I), и слишком частое переключение."""
+    start = datetime.date(2026, 2, 8)          # воскресенье
+    seq = [_parity(start + datetime.timedelta(days=7 * w)) for w in range(10)]
+    for a, b in zip(seq, seq[1:]):
+        assert a != b, f"чётность не чередуется: {seq}"
+
+
 @pytest.mark.parametrize("day_shift", [1, -1])
 def test_shifted_formula_would_fail(day_shift):
     """Страховка от бессмысленного теста: если бы формула была сдвинута на день,

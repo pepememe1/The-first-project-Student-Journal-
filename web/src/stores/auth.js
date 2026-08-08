@@ -11,7 +11,8 @@ import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
 import { registerToken, unregisterToken } from '@/services/push'
-import { clear as clearScheduleWidget } from '@/services/scheduleWidget'
+import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedule }
+  from '@/services/scheduleWidget'
 import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
@@ -54,6 +55,12 @@ export const useAuthStore = defineStore('auth', () => {
       import('@/stores/locale')
         .then(({ useLocaleStore }) => useLocaleStore().loadFromAccount())
         .catch(() => { /* язык — не условие входа */ })
+      // Виджет расписания на рабочем столе Android наполняем ИМЕННО ЗДЕСЬ, а не на
+      // странице «Расписание»: туда человек может не заходить неделями, а виджет всё
+      // это время показывал бы данные с прошлого захода. Вход — единственный момент,
+      // который случается гарантированно и однозначно определяет, ЧЬЁ расписание брать.
+      // Ошибку глотаем: виджет — дополнение, из-за него вход падать не должен.
+      refreshWidgetSchedule(data.role).catch(() => {})
       return user.value
     } catch (e) {
       const status = e.response?.status

@@ -70,15 +70,23 @@ final class ScheduleWidgetData {
     /**
      * 1 (I неделя) / 2 (II неделя).
      *
-     * Формула сохранена ДОСЛОВНО, включая её странности: `jsGetDay` — это день недели
-     * в нумерации JavaScript (0 = воскресенье), потому что исходный расчёт когда-то
-     * пришёл со страницы портала. Переписывать «покрасивее» нельзя — сместится
-     * граница недели, и всё расписание уедет на неделю у всех сразу.
+     * Порт `schedule_web.current_week_parity` / `schedule/store.py` — третья копия
+     * одной арифметики, и другого пути нет: виджет считает неделю сам, спросить ему
+     * не у кого. Согласованность держит `docs/contracts/week-parity-cases.json`.
+     *
+     * 🔥 Здесь берётся день недели 1 ЯНВАРЯ, а НЕ текущей даты. Ровно на этом месте
+     * жил баг (починен в 3.6.9): с днём недели текущей даты числитель растёт на два
+     * в сутки, и чётность менялась ВНУТРИ календарной недели по два-три раза.
+     * `jsGetDay` — нумерация JavaScript (0 = воскресенье): формула пришла из
+     * JS-идиомы «номер недели года», и менять её вид без нужды не стоит.
      */
     static int weekParity(Calendar cal) {
+        Calendar jan1 = (Calendar) cal.clone();
+        jan1.set(Calendar.MONTH, Calendar.JANUARY);
+        jan1.set(Calendar.DAY_OF_MONTH, 1);
         int daysFromJan1 = cal.get(Calendar.DAY_OF_YEAR) - 1;
-        int jsGetDay = cal.get(Calendar.DAY_OF_WEEK) - 1;      // Calendar: 1=Вс → 0=Вс
-        int result = (int) Math.ceil((jsGetDay + 1 + daysFromJan1) / 7.0);
+        int jan1JsGetDay = jan1.get(Calendar.DAY_OF_WEEK) - 1;   // Calendar: 1=Вс → 0=Вс
+        int result = (int) Math.ceil((daysFromJan1 + jan1JsGetDay + 1) / 7.0);
         return result % 2 == 0 ? 2 : 1;
     }
 

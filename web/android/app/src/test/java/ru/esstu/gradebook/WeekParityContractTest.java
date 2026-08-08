@@ -85,42 +85,31 @@ public class WeekParityContractTest {
     }
 
     /**
-     * Внутри одной недели чётность постоянна, между соседними — меняется.
+     * Внутри одной УЧЕБНОЙ недели чётность постоянна, между соседними — меняется.
      *
-     * 🔥 ОТКЛЮЧЁН, ПОТОМУ ЧТО ПАДАЕТ НА РЕАЛЬНОМ ПРОДУКТЕ — и это НЕ дефект теста.
+     * 🔥 Именно этот тест поймал баг, который жил в продукте: до 3.6.9 формула брала
+     * день недели текущей даты вместо 1 января, и чётность менялась внутри одной
+     * календарной недели по два-три раза (2026-02-02 Пн → I, Вт-Пт → II, Сб → I).
+     * Контракт из 30 дат этого НЕ ловил — он сверял Python с Java, а обе стороны были
+     * одинаково неправы. Инвариант ловит то, чего не ловят конкретные значения.
      *
-     * `current_week_parity` (сервер, десктоп и, как следствие, этот виджет) меняет
-     * чётность ВНУТРИ одной календарной недели по два-три раза:
-     *
-     *     2026-02-02 Пн → I,  02-03..02-06 Вт-Пт → II,  02-07 Сб → I,  02-08 Вс → II
-     *
-     * Причина найдена: формула `ceil((jsGetDay + 1 + dayOfYear) / 7)` — это классическая
-     * JS-идиома «номер недели года», в которой первое слагаемое обязано быть днём недели
-     * 1 ЯНВАРЯ, а не текущей даты. С днём недели текущей даты числитель растёт на 2 в
-     * сутки вместо 1, и «неделя» сменяется каждые ~3.5 дня.
-     *
-     * Виджет тут ни при чём: он СОГЛАСОВАН с продуктом (см. javaMatchesContract) и
-     * показывает ровно ту же чётность, что сайт. Чинить надо ОДИН источник —
-     * `server/app/schedule_web.py::current_week_parity` и зеркало в `schedule/store.py`,
-     * после чего перегенерировать контракт и снять @Ignore. Правка меняет то, какую
-     * неделю видит КАЖДЫЙ студент, поэтому делается отдельно и осознанно, а не попутно
-     * со сборкой APK.
+     * ⚠️ Учебная неделя в этой формуле начинается с ВОСКРЕСЕНЬЯ (наследие JS-идиомы,
+     * где `getDay()` считает от воскресенья), поэтому проверяем Вс..Сб, а не Пн..Вс.
      */
-    @org.junit.Ignore("known-defect: current_week_parity меняет чётность внутри недели")
     @Test
     public void parityIsStableInsideWeekAndFlipsBetween() {
-        Calendar monday = calendarOf("2026-02-02");        //понедельник
-        int first = ScheduleWidgetData.weekParity(monday);
-        for (int i = 1; i < 6; i++) {                       //Втр..Сбт той же недели
-            Calendar c = (Calendar) monday.clone();
+        Calendar sunday = calendarOf("2026-02-08");         //воскресенье — начало недели
+        int first = ScheduleWidgetData.weekParity(sunday);
+        for (int i = 1; i < 7; i++) {                       //Пн..Сб той же недели
+            Calendar c = (Calendar) sunday.clone();
             c.add(Calendar.DAY_OF_YEAR, i);
             assertEquals("чётность не должна меняться внутри недели",
                     first, ScheduleWidgetData.weekParity(c));
         }
-        Calendar nextMonday = (Calendar) monday.clone();
-        nextMonday.add(Calendar.DAY_OF_YEAR, 7);
+        Calendar nextSunday = (Calendar) sunday.clone();
+        nextSunday.add(Calendar.DAY_OF_YEAR, 7);
         assertTrue("чётность обязана смениться на следующей неделе",
-                first != ScheduleWidgetData.weekParity(nextMonday));
+                first != ScheduleWidgetData.weekParity(nextSunday));
     }
 
     /** Разбор «10:45-12:20» — от него зависит подсветка идущей пары. */

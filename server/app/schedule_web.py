@@ -53,11 +53,19 @@ def categories() -> list:
 
 
 def current_week_parity(d: date | None = None) -> int:
-    """1 (I неделя) / 2 (II неделя) — тот же расчёт, что в schedule/store.py."""
+    """1 (I неделя) / 2 (II неделя) — тот же расчёт, что в schedule/store.py.
+
+    🔥 ИСПРАВЛЕНО (3.6.9): раньше первым слагаемым шёл день недели САМОЙ ДАТЫ, из-за
+    чего чётность менялась внутри одной календарной недели по два-три раза. Полный
+    разбор и причина — в докстринге `schedule/store.py::current_week_parity`, там же
+    оговорка про сверку с порталом. Здесь копия формулы, а не второй расчёт: держит
+    контракт `docs/contracts/week-parity-cases.json` (Python ↔ Java-виджет Android).
+    """
     d = d or date.today()
-    days = (d - date(d.year, 1, 1)).days
-    js_getday = (d.weekday() + 1) % 7
-    result = math.ceil((js_getday + 1 + days) / 7)
+    one_jan = date(d.year, 1, 1)
+    days = (d - one_jan).days
+    jan1_js_getday = (one_jan.weekday() + 1) % 7
+    result = math.ceil((days + jan1_js_getday + 1) / 7)
     return 2 if result % 2 == 0 else 1
 
 
