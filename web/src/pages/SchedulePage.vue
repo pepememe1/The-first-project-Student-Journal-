@@ -23,7 +23,7 @@
 // календарные даты («Пнд, 06 апреля»), а не Пн-Сб, и число «недель» (сессионных
 // блоков) не всегда 2 — см. dayColumns/weekButtons ниже.
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { RotateCw, GraduationCap, User, Users, Download } from '@lucide/vue'
+import { RotateCw, User, Users, Download } from '@lucide/vue'
 import { scheduleApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'

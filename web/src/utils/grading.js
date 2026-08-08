@@ -89,7 +89,3 @@ export function toFivePoint(raw, scale = DEFAULT_SCALE) {
 export function isFailedScaled(raw, scale = DEFAULT_SCALE) {
   return (SCALES[scale] || SCALES[DEFAULT_SCALE]).isFailed(raw)
 }
-
-export function scaleLabel(scale = DEFAULT_SCALE) {
-  return (SCALES[scale] || SCALES[DEFAULT_SCALE]).label
-}

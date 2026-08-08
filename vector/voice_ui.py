@@ -360,26 +360,6 @@ def teacher_roster_and_lessons(group: str, subject: str):
     return roster, lessons
 
 
-def _write_grade(surname: str, name: str, lesson_id: str, value: str) -> bool:
-    """Запись значения (оценка/Н/Б/О/✓) тем же путём, что ручная простановка в журнале."""
-    try:
-        from core import DBManager
-        conn = DBManager.get_conn()
-        cur = conn.cursor()
-        DBManager.upsert_grade(cur, (surname, name, lesson_id, value))
-        conn.commit(); conn.close()
-        try:
-            from sync_runner import trigger
-            trigger()
-        except Exception:
-            pass
-        _refresh_teacher_journal()   #перечитать открытый журнал, чтобы оценка появилась сразу
-        return True
-    except Exception as e:
-        log.get("voice_ui").warning(f"[voice] запись не удалась: {e}")
-        return False
-
-
 def _refresh_teacher_journal():
     """Перезагружает открытый журнал преподавателя, чтобы голосовая правка отобразилась
     в таблице немедленно (write идёт мимо in-memory GradeBook, поэтому таблицу надо
@@ -447,79 +427,6 @@ def _create_lesson(group: str, subject: str, ltype: str, topic: str) -> bool:
     except Exception as e:
         log.get("voice_ui").warning(f"[voice] создание занятия не удалось: {e}")
         return False
-
-
-# Диалог подтверждения записи (обязателен для преподавателя)
-class ConfirmWriteDialog(QDialog):
-    """Показывает распознанную фразу и разобранное действие; при однофамильцах — выбор
-    студента. Пишем ТОЛЬКО после явного «Подтвердить»."""
-
-    def __init__(self, cmd: voice_command.ParsedCommand, parent=None):
-        super().__init__(parent)
-        self.cmd = cmd
-        self.chosen_student = cmd.student
-        self.setWindowTitle("Подтверждение записи")
-        self.setMinimumWidth(420)
-        try:
-            from styles import C
-        except Exception:
-            C = {"text": "#111", "text3": "#666", "green": "#147C8B", "card": "#fff"}
-        lay = QVBoxLayout(self); lay.setContentsMargins(18, 16, 18, 16); lay.setSpacing(10)
-
-        heard = QLabel(f"🎙 Распознано: «{cmd.heard}»")
-        heard.setWordWrap(True)
-        heard.setStyleSheet(f"color:{C['text3']};font-size:12px;")
-        lay.addWidget(heard)
-
-        #Выбор студента при однофамильцах.
-        self._combo = None
-        if cmd.candidates and cmd.student is None:
-            lay.addWidget(QLabel("Несколько студентов с такой фамилией — выберите:"))
-            self._combo = QComboBox()
-            for (f, n) in cmd.candidates:
-                self._combo.addItem(f"{f} {n}", (f, n))
-            lay.addWidget(self._combo)
-
-        line = QFrame(); line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet(f"color:{C.get('border', '#ccc')};")
-        lay.addWidget(line)
-
-        self._summary = QLabel(self._summary_text())
-        self._summary.setWordWrap(True)
-        self._summary.setStyleSheet(f"color:{C['text']};font-size:14px;font-weight:bold;")
-        lay.addWidget(self._summary)
-        if self._combo is not None:
-            self._combo.currentIndexChanged.connect(
-                lambda *_: self._summary.setText(self._summary_text()))
-
-        btns = QHBoxLayout(); btns.addStretch(1)
-        cancel = QPushButton("Отмена"); cancel.clicked.connect(self.reject)
-        ok = QPushButton("Подтвердить и записать")
-        ok.setStyleSheet(
-            f"QPushButton{{background:{C['green']};color:#fff;border:none;"
-            f"border-radius:8px;padding:8px 14px;font-weight:bold;}}")
-        ok.clicked.connect(self._accept)
-        btns.addWidget(cancel); btns.addWidget(ok)
-        lay.addLayout(btns)
-
-    def _current_student(self):
-        if self._combo is not None:
-            return self._combo.currentData()
-        return self.chosen_student
-
-    def _summary_text(self) -> str:
-        who = self._current_student()
-        who_s = f"{who[0]} {who[1]}" if who else "…"
-        act = {"grade": "оценку", "present": "присутствие (✓)",
-               "absent_n": "пропуск (Н)", "absent_b": "пропуск по болезни (Б)",
-               "absent_o": "пропуск по уважительной (О)"}.get(self.cmd.action, self.cmd.action)
-        return f"{who_s}: {act} «{self.cmd.value}»\nЗа: {self.cmd.lesson_label}"
-
-    def _accept(self):
-        self.chosen_student = self._current_student()
-        if not self.chosen_student:
-            return
-        self.accept()
 
 
 # Диалог подтверждения ПАКЕТА правок (несколько студентов / вся группа / первые N)

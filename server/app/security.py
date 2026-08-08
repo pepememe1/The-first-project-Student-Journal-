@@ -132,12 +132,6 @@ def create_token_full(subject: str, role: str, typ: str = "access",
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG), jti, exp
 
 
-def create_token(subject: str, role: str) -> str:
-    """Совместимость: короткий access-токен (с jti). Возвращает только строку токена."""
-    token, _jti, _exp = create_token_full(subject, role, "access")
-    return token
-
-
 def decode_token(token: str) -> dict:
     """Возвращает payload или None, если токен невалиден/просрочен."""
     try:

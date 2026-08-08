@@ -184,7 +184,7 @@ function pct(avg) { return Math.max(2, Math.min(100, ((Number(avg) || 0) / 5) * 
           <p v-if="groupsLoading" class="py-10 text-center text-sm text-text3">{{ locale.t('common.loading', 'Загрузка…') }}</p>
           <template v-else-if="groupsData?.groups?.length">
             <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <button v-for="(g, i) in groupsData.groups" :key="g.group" type="button" @click="openJournal(g.group)"
+              <button v-for="g in groupsData.groups" :key="g.group" type="button" @click="openJournal(g.group)"
                       class="flex flex-col items-center gap-2 rounded-lg border border-border2 bg-card2 p-3 text-center transition-colors hover:border-accent"
                       :title="locale.t('teacherOverview.openJournal', 'Открыть журнал')">
                 <div class="relative size-20 shrink-0 rounded-full" :style="donutStyle(g.categories)">

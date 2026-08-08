@@ -19,7 +19,7 @@ import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['create', 'close'])
-const props = defineProps({
+defineProps({
   error: { type: String, default: '' },
   busy: { type: Boolean, default: false },
 })

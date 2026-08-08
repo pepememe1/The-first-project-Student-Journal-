@@ -62,11 +62,6 @@ _SECRET_FIELDS = {"password_hash"}
 FORMAT_VERSION = 1
 
 
-def dataset_labels() -> dict:
-    """Имя набора → подпись для интерфейса (чтобы подписи не дублировались на клиенте)."""
-    return {name: label for name, _f, _m, label in DATASETS}
-
-
 def _row_to_dict(row, model) -> dict:
     """Строка ORM → словарь, без секретов и без служебных полей SQLAlchemy."""
     out = {}

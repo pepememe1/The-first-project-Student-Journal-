@@ -423,11 +423,6 @@ def set_on_state(cb):
     _manager.set_on_state(cb)
 
 
-def sync_status() -> dict:
-    """Состояние синка {online, fails, error} — для индикатора/диагностики."""
-    return _manager.status()
-
-
 def trigger():
     """Немедленно разбудить синкер (после изменения данных)."""
     _manager.trigger()

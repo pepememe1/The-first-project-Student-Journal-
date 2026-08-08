@@ -200,8 +200,3 @@ def transcribe(samples, sample_rate: int = 16000, language: str = "ru",
     except Exception as e:
         return {"ok": False, "text": "", "error": f"Ошибка распознавания: {e}",
                 "avg_logprob": 0.0}
-
-
-def warm_up(size: str = "large-v3", device: str = "auto", compute: str = "") -> bool:
-    """Прогрев: заранее грузит модель (чтобы первая команда не ждала загрузку). True — ок."""
-    return load_model(size=size, device=device, compute=compute) is not None

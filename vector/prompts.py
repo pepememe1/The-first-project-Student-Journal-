@@ -52,17 +52,6 @@ def build_voicing_prompt(facts_text: str, role: str = "student",
     ]
 
 
-def build_insight_prompt(facts_text: str) -> list:
-    """Промпт для проактивной карточки-инсайта (одно тёплое предложение)."""
-    system = VECTOR_PERSONA + "\nСформулируй одну короткую заметку-наблюдение."
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content":
-            f"ДАННЫЕ:\n{facts_text}\n\nСделай из этого одно дружелюбное "
-            f"предложение-подсказку. Только факты из данных."},
-    ]
-
-
 def build_free_chat_prompt(question: str, role: str = "student") -> list:
     """
     Промпт для вопроса ВНЕ пула команд (свободный чат). Блока ДАННЫЕ нет, поэтому
