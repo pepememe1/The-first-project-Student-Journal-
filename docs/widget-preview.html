@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GradeBookAI — виджет расписания, предпросмотр 4×2 / 4×4</title>
+<style>
+/* ─────────────────────────────────────────────────────────────────────────────
+   Предпросмотр виджета расписания GradeBookAI (Android, home screen).
+
+   Что здесь проверяется: НЕ пиксели, а ДВИЖЕНИЕ. По наброску — список пар, у
+   текущей пары строка выезжает ВЛЕВО и показана чётко, остальные приглушены, но
+   читаемы. Когда время пары проходит, список плавно едет так, чтобы текущая
+   встала в фокусную позицию.
+
+   Стрелки ↑/↓ (и клавиши, и кнопки) переключают «текущую пару» вручную — именно
+   для проверки плавности, в бою это делает время.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+/* Длительность и кривая перехода — ОДНО место на всю страницу: кнопка «медленно ×3»
+   меняет только их, и список, строка и акцентная полоса замедляются синхронно.
+   Заданы здесь, а не в скрипте, чтобы первый кадр уже был с корректным переходом. */
+:root { --dur: .55s; --ease: cubic-bezier(.22,.61,.36,1); }
+
+body {
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #11161a;
+  color: #e8eef0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Шапка страницы и пульт управления ───────────────────────────────────── */
+.page-head {
+  padding: 26px 32px 18px;
+  border-bottom: 1px solid #232a30;
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(17,22,26,.94);
+  backdrop-filter: blur(8px);
+}
+.page-head h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: -.2px; }
+.page-head p  { margin: 0; font-size: 13px; color: #8b9aa3; }
+
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.btn {
+  font: inherit; font-size: 14px; font-weight: 600;
+  color: #e8eef0; background: #1e262c; border: 1px solid #2e3941;
+  border-radius: 10px; padding: 9px 14px; cursor: pointer;
+  transition: background .18s, border-color .18s, transform .08s;
+}
+.btn:hover { background: #263039; border-color: #3b4954; }
+.btn:active { transform: translateY(1px); }
+.btn.arrow { font-size: 17px; line-height: 1; padding: 9px 15px; }
+.btn.on { background: #0e6d7b; border-color: #178fa1; }
+.now-label { font-size: 13px; color: #8b9aa3; margin-left: 6px; }
+.now-label b { color: #35b6cc; font-weight: 600; }
+kbd {
+  font: inherit; font-size: 11px; background: #232c33; border: 1px solid #35424b;
+  border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; color: #a9b8c1;
+}
+
+/* ── Панели тем ──────────────────────────────────────────────────────────── */
+.panel { padding: 34px 32px 42px; }
+.panel-head { margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.4px; }
+.panel-sub  { margin: 0 0 26px; font-size: 14px; }
+.stage { display: flex; align-items: flex-start; gap: 34px; flex-wrap: wrap; }
+.stage-item { display: flex; flex-direction: column; gap: 10px; }
+.stage-cap { font-size: 13px; }
+
+/* Светлая тема — цвета сняты с присланных скриншотов предпросмотра */
+.panel.light {
+  --bg:        #dde5ea;
+  --card:      #ffffff;
+  --card-bd:   transparent;
+  --text:      #16232b;
+  --text2:     #4a5b64;
+  --text3:     #8496a0;
+  --row:       #eef2f4;
+  --row-past:  #f2f5f6;
+  --row-live:  #e0eff1;
+  --accent:    #0e7f8f;
+  --accent-2:  #0b6b79;
+  --badge-bg:  #cfe8ec;
+  --badge-fg:  #0b5f6b;
+  --shadow:    0 2px 10px rgba(16,32,40,.07);
+  background: var(--bg); color: var(--text);
+}
+/* Тёмная тема — системная (values-night), НЕ акцент аккаунта: виджет живёт на
+   чужом рабочем столе и обязан подчиняться телефону. */
+.panel.dark {
+  --bg:        #0a0a0b;
+  --card:      #141719;
+  --card-bd:   #23282c;
+  --text:      #e9eff1;
+  --text2:     #aebac1;
+  --text3:     #76858e;
+  --row:       #1c2023;
+  --row-past:  #171a1d;
+  --row-live:  #123238;
+  --accent:    #2aa9bd;
+  --accent-2:  #35b6cc;
+  --badge-bg:  #133b43;
+  --badge-fg:  #63cadc;
+  --shadow:    none;
+  background: var(--bg); color: var(--text);
+}
+.panel .panel-head { color: var(--text); }
+.panel .panel-sub, .panel .stage-cap { color: var(--text3); }
+
+/* ── Карточка виджета ────────────────────────────────────────────────────── */
+.widget {
+  background: var(--card);
+  border: 1px solid var(--card-bd);
+  border-radius: 26px;
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  display: flex; flex-direction: column;
+  overflow: hidden;                 /* список едет ВНУТРИ карточки */
+}
+.w2x2 { width: 300px; height: 300px; }
+.w4x2 { width: 660px; height: 300px; }
+.w4x4 { width: 660px; height: 660px; }
+
+.w-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.w-title { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+.w-sub   { font-size: 15px; color: var(--text3); margin-top: 2px; }
+.badge {
+  flex: none; font-size: 13px; font-weight: 600;
+  color: var(--badge-fg); background: var(--badge-bg);
+  border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+}
+
+/* ── Окно списка + сам список ────────────────────────────────────────────── */
+/* Ключ анимации: список смещается по Y так, чтобы активная строка встала в
+   фокусный слот. Двигаем ТОЛЬКО transform/opacity — то, что браузер (и вообще
+   любой компоновщик) умеет двигать дёшево и без рывков. */
+.viewport { position: relative; flex: 1; margin-top: 14px; overflow: hidden; }
+.rows {
+  --active: 0;                      /* перебивается скриптом; нужен для первого кадра */
+  position: absolute; left: 0; right: 0; top: 0;
+  display: flex; flex-direction: column; gap: var(--gap);
+  transform: translateY(calc((var(--focus) - var(--active)) * (var(--row-h) + var(--gap))));
+  transition: transform var(--dur) var(--ease);
+  will-change: transform;
+}
+
+.row {
+  position: relative;
+  height: var(--row-h);
+  margin-left: var(--inset);        /* активная строка выедет левее этого отступа */
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 16px 0 14px;
+  border-radius: 14px;
+  background: var(--row);
+  opacity: .55;                     /* «слегка тускло, но читаемо» */
+  transform: translateX(0);
+  transition:
+    transform var(--dur) var(--ease),
+    opacity   calc(var(--dur) * .7) ease,
+    background-color calc(var(--dur) * .7) ease;
+  will-change: transform, opacity;
+}
+.row.past    { opacity: .40; background: var(--row-past); }
+.row.active  {
+  opacity: 1;
+  background: var(--row-live);
+  transform: translateX(calc(-1 * var(--inset)));   /* ВЫЕЗД ВЛЕВО, как на наброске */
+}
+
+/* Акцентная полоса слева — растёт только у активной строки */
+.row::before {
+  content: ""; position: absolute; left: 0; top: 50%;
+  width: 4px; height: 0; transform: translateY(-50%);
+  border-radius: 0 3px 3px 0; background: var(--accent);
+  transition: height var(--dur) var(--ease);
+}
+.row.active::before { height: 68%; }
+
+.r-when { flex: none; width: var(--when-w); }
+.r-num  { font-size: 13px; color: var(--text3); line-height: 1.25; transition: color .3s; }
+.r-time { font-size: 20px; font-weight: 700; letter-spacing: -.3px; line-height: 1.15; }
+.row.active .r-num  { color: var(--accent-2); font-weight: 700; text-transform: lowercase; }
+.row.active .r-time { color: var(--text); }
+
+.r-main { flex: 1; min-width: 0; }
+.r-subj {
+  font-size: 19px; font-weight: 600; letter-spacing: -.2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.r-meta { font-size: 14px; color: var(--text3); margin-top: 1px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-room { flex: none; font-size: 17px; font-weight: 600; color: var(--text2); }
+.row.active .r-room { color: var(--text); }
+
+/* Размеры под конкретный виджет */
+.w4x2 { --row-h: 74px; --gap: 10px; --inset: 16px; --when-w: 62px; --focus: 0; }
+.w4x2 .r-subj { font-size: 20px; }
+.w4x2 .r-meta { display: none; }         /* в низком виджете метаданные не помещаются */
+.w4x4 { --row-h: 92px; --gap: 12px; --inset: 18px; --when-w: 78px; --focus: 1; }
+
+/* Мягкое затухание у краёв окна — строка не «обрубается» на границе карточки */
+.viewport::before, .viewport::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 26px;
+  pointer-events: none; z-index: 2;
+}
+.viewport::before { top: 0;    background: linear-gradient(to bottom, var(--card), transparent); }
+.viewport::after  { bottom: 0; background: linear-gradient(to top,    var(--card), transparent); }
+
+.w-foot { font-size: 13px; color: var(--text3); padding-top: 12px; }
+
+/* ── Виджет 2×2 («что сейчас») — не переделывался, но живёт тем же состоянием ─ */
+.w2x2 .n-group { font-size: 17px; font-weight: 600; }
+.w2x2 .n-dot {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--badge-bg); color: var(--badge-fg);
+  font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.w2x2 .n-now  { font-size: 15px; font-weight: 700; color: var(--accent-2);
+                letter-spacing: .06em; margin-top: 18px; }
+.w2x2 .n-time { font-size: 34px; font-weight: 700; letter-spacing: -1px; margin-top: 2px; }
+.w2x2 .n-subj { font-size: 18px; margin-top: 4px; color: var(--text2);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w2x2 .n-tail { margin-top: auto; font-size: 14px; color: var(--text3); }
+/* Смена содержимого 2×2 — короткое затухание, иначе цифры «прыгают» скачком */
+.w2x2 .fade { transition: opacity .22s ease; }
+.w2x2.swapping .fade { opacity: 0; }
+
+/* ── Пояснение внизу ─────────────────────────────────────────────────────── */
+.notes { padding: 28px 32px 60px; border-top: 1px solid #232a30; font-size: 14px; line-height: 1.65; color: #a9b8c1; }
+.notes h2 { font-size: 16px; color: #e8eef0; margin: 0 0 10px; }
+.notes ul { margin: 0 0 18px; padding-left: 20px; }
+.notes li { margin-bottom: 6px; }
+.notes b { color: #e8eef0; }
+.warn { border-left: 3px solid #c2683a; padding-left: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rows, .row, .row::before { transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>GradeBookAI — виджет расписания: 4×2 и 4×4</h1>
+  <p>Предпросмотр переработанной раскладки и анимации. Активная пара выезжает влево и показана чётко, остальные приглушены, но читаемы.</p>
+  <div class="controls">
+    <button class="btn arrow" id="up"   title="Предыдущая пара">↑</button>
+    <button class="btn arrow" id="down" title="Следующая пара">↓</button>
+    <button class="btn" id="auto">▶ Автопрокрутка</button>
+    <button class="btn" id="slow">Медленно ×3</button>
+    <span class="now-label">Идёт: <b id="nowText">—</b> &nbsp;·&nbsp; стрелки <kbd>↑</kbd> <kbd>↓</kbd> на клавиатуре тоже работают</span>
+  </div>
+</div>
+
+<!-- Панели тем: разметка одна, отличаются только переменными цвета -->
+<section class="panel light" id="panelLight"></section>
+<section class="panel dark"  id="panelDark"></section>
+
+<div class="notes">
+  <h2>Что здесь показано</h2>
+  <ul>
+    <li><b>Выезд влево.</b> Активная строка сдвигается на величину своего левого отступа и «протыкает» общий край списка — ровно то, что на наброске отмечено стрелкой. Соседи стоят на месте.</li>
+    <li><b>Список едет, а не перерисовывается.</b> Когда пара заканчивается, весь список смещается по Y так, чтобы новая текущая встала в фокусный слот: в 4×2 это верхняя строка, в 4×4 — вторая (сверху остаётся одна прошедшая, чтобы был виден контекст «сейчас вторая из пяти»).</li>
+    <li><b>Приглушение, а не скрытие.</b> Будущие пары — 55% непрозрачности, прошедшие — 40%. Обе читаются; прошедшие ещё и на более тусклом фоне.</li>
+    <li><b>Двигаются только <code>transform</code> и <code>opacity</code></b> — свойства, которые не вызывают перерасчёт вёрстки, поэтому переход идёт плавно даже на слабом телефоне.</li>
+  </ul>
+
+  <h2>Проверить плавность</h2>
+  <ul>
+    <li><b>↑ / ↓</b> — шаг по парам вручную (в бою это делает время). Клавиши-стрелки тоже.</li>
+    <li><b>Автопрокрутка</b> — циклический проход по всему дню, чтобы посмотреть переход подряд несколько раз.</li>
+    <li><b>Медленно ×3</b> — растягивает переход втрое: видно, что строка выезжает и список едет одновременно, без рывка и без «двух движений подряд».</li>
+  </ul>
+
+  <h2 class="warn">Важно про настоящий виджет Android</h2>
+  <p class="warn">
+    Эта страница — макет движения, а не то, что само заработает на телефоне.
+    Home-screen виджет рисуется через <b>RemoteViews</b>, а он не умеет покадровую анимацию:
+    система отдаёт виджету готовую раскладку и перерисовывает её целиком. Плавный переход
+    в таком виде достижим либо через <code>AnimationDrawable</code>/<code>setInt</code>-трюки
+    (грубо и ненадёжно на разных лаунчерах), либо не достижим вовсе.
+    Плюс <code>updatePeriodMillis</code> в системе не бывает чаще 30 минут — момент «пара
+    кончилась» виджет и так узнаёт с задержкой.
+    <b>Поэтому решение по анимации нужно принимать до реализации:</b> либо мы соглашаемся,
+    что на телефоне смена будет мгновенной (макет остаётся эталоном раскладки), либо виджет
+    переносится на <code>ListView</code>+<code>RemoteViewsService</code> с частичными
+    обновлениями, что дороже и всё равно не даст такой плавности, как здесь.
+  </p>
+</div>
+
+<script>
+/* ── Данные дня (демо, как на присланных скриншотах) ───────────────────────── */
+const PAIRS = [
+  { n: '1 пара', time: '09:00', till: '10:35', subj: 'Основы алгоритмизации',        meta: 'лек · Иванов И.И.',   room: '3-301' },
+  { n: '2 пара', time: '10:45', till: '12:20', subj: 'Базы данных',                  meta: 'пр · Петрова А.С.',   room: '2-215' },
+  { n: '3 пара', time: '13:00', till: '14:35', subj: 'Веб-разработка',               meta: 'лаб · Сидоров К.М.',  room: '1-104' },
+  { n: '4 пара', time: '14:45', till: '16:20', subj: 'Иностр. язык в проф. ком…',    meta: 'пр · Прудова Л.Ю.',   room: '4-402' },
+  { n: '5 пара', time: '16:30', till: '18:05', subj: 'Физическая культура',          meta: 'пр · Гончаров Д.В.',  room: 'с/зал' },
+];
+const GROUP = 'К74/1', DAY = 'Сегодня, пятница', DATE = '7 августа', WEEK = 'I неделя';
+
+let active = 1;                 // индекс текущей пары (по скриншотам идёт вторая)
+let gen = 0;                    // поколение перерисовки (см. render → 2×2)
+
+/* ── Разметка ─────────────────────────────────────────────────────────────── */
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function rowsHtml() {
+  return PAIRS.map((p, i) => `
+    <div class="row" data-i="${i}">
+      <div class="r-when">
+        <div class="r-num">${esc(p.n)}</div>
+        <div class="r-time">${esc(p.time)}</div>
+      </div>
+      <div class="r-main">
+        <div class="r-subj">${esc(p.subj)}</div>
+        <div class="r-meta">${esc(p.meta)}</div>
+      </div>
+      <div class="r-room">${esc(p.room)}</div>
+    </div>`).join('');
+}
+
+function panelHtml(caption) {
+  return `
+  <h2 class="panel-head">${caption}</h2>
+  <p class="panel-sub">GradeBookAI · виджет расписания · предпросмотр разметки (xxhdpi)</p>
+  <div class="stage">
+
+    <div class="stage-item">
+      <div class="widget w2x2">
+        <div class="w-head">
+          <div class="n-group">${GROUP}</div>
+          <div class="n-dot">I</div>
+        </div>
+        <div class="n-now">СЕЙЧАС</div>
+        <div class="n-time fade" data-bind="range"></div>
+        <div class="n-subj fade" data-bind="subj"></div>
+        <div class="n-tail fade" data-bind="tail"></div>
+      </div>
+      <div class="stage-cap">2×2 — «что сейчас» (не менялся)</div>
+    </div>
+
+    <div class="stage-item">
+      <div class="widget w4x2">
+        <div class="w-head">
+          <div><div class="w-title">${DAY}</div></div>
+          <div class="badge">${WEEK}</div>
+        </div>
+        <div class="viewport"><div class="rows">${rowsHtml()}</div></div>
+      </div>
+      <div class="stage-cap">4×2 — ближайшие пары</div>
+    </div>
+
+    <div class="stage-item">
+      <div class="widget w4x4">
+        <div class="w-head">
+          <div>
+            <div class="w-title">${DAY}</div>
+            <div class="w-sub">${GROUP} · ${DATE}</div>
+          </div>
+          <div class="badge">${WEEK}</div>
+        </div>
+        <div class="viewport"><div class="rows">${rowsHtml()}</div></div>
+        <div class="w-foot">обновлено 18:40</div>
+      </div>
+      <div class="stage-cap">4×4 — весь день</div>
+    </div>
+
+  </div>`;
+}
+
+document.getElementById('panelLight').innerHTML = panelHtml('Светлая тема');
+document.getElementById('panelDark').innerHTML  = panelHtml('Тёмная тема');
+
+/* ── Перерисовка состояния ────────────────────────────────────────────────── */
+/* Меняем ТОЛЬКО классы и переменную --active: браузер сам доводит движение
+   переходами, поэтому шаги можно жать подряд — анимация не «копится». */
+function render() {
+  const p = PAIRS[active];
+
+  document.querySelectorAll('.rows').forEach(list => {
+    list.style.setProperty('--active', active);
+    list.querySelectorAll('.row').forEach(row => {
+      const i = +row.dataset.i;
+      row.classList.toggle('active', i === active);
+      row.classList.toggle('past',   i <  active);
+      // «идёт» вместо номера пары — только у активной строки
+      row.querySelector('.r-num').textContent = (i === active) ? 'идёт' : PAIRS[i].n;
+    });
+  });
+
+  // 2×2 меняет содержимое через короткое затухание. Метка поколения обязательна:
+  // при быстром щёлканье стрелками отложенный колбэк от ПРЕДЫДУЩЕГО шага иначе
+  // допишет уже устаревшую пару поверх актуальной.
+  const myGen = ++gen;
+  document.querySelectorAll('.w2x2').forEach(w => {
+    w.classList.add('swapping');
+    setTimeout(() => {
+      if (myGen !== gen) return;
+      w.querySelector('[data-bind="range"]').textContent = `${p.time}–${p.till}`;
+      w.querySelector('[data-bind="subj"]').textContent  = p.subj;
+      const left = PAIRS.length - active - 1;
+      w.querySelector('[data-bind="tail"]').textContent =
+        `ауд. ${p.room}` + (left > 0 ? ` · ещё ${left}` : ' · последняя');
+      w.classList.remove('swapping');
+    }, 220);
+  });
+
+  document.getElementById('nowText').textContent = `${p.n}, ${p.subj}`;
+}
+
+/* ── Управление ───────────────────────────────────────────────────────────── */
+function step(d) {
+  active = (active + d + PAIRS.length) % PAIRS.length;   // по кругу — удобно смотреть подряд
+  render();
+}
+document.getElementById('up').onclick   = () => step(-1);
+document.getElementById('down').onclick = () => step(+1);
+
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowUp')   { e.preventDefault(); step(-1); }
+  if (e.key === 'ArrowDown') { e.preventDefault(); step(+1); }
+});
+
+let timer = null, slow = false;
+const autoBtn = document.getElementById('auto');
+const slowBtn = document.getElementById('slow');
+
+// Пауза между шагами всегда длиннее самого перехода — иначе в медленном режиме
+// следующий шаг стартует поверх незакончившегося, и «плавность» проверить нечем.
+const tick = () => (slow ? 2600 : 1700);
+
+function restartTimer() {
+  if (!timer) return;
+  clearInterval(timer);
+  timer = setInterval(() => step(+1), tick());
+}
+
+autoBtn.onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; autoBtn.textContent = '▶ Автопрокрутка'; autoBtn.classList.remove('on'); return; }
+  timer = setInterval(() => step(+1), tick());
+  autoBtn.textContent = '⏸ Стоп';
+  autoBtn.classList.add('on');
+};
+
+slowBtn.onclick = () => {
+  slow = !slow;
+  document.documentElement.style.setProperty('--dur', slow ? '1.65s' : '.55s');
+  slowBtn.classList.toggle('on', slow);
+  restartTimer();
+};
+
+render();
+</script>
+</body>
+</html>
