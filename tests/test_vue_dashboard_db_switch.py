@@ -91,3 +91,38 @@ def test_try_vue_dashboard_skips_switch_without_saved_login(monkeypatch):
     dash = main_window.MainAppWindow._try_vue_dashboard("admin")
     assert dash is not None
     assert calls == [], "без сохранённого логина switch_user_db не вызывается вовсе"
+
+
+def test_bootstrap_binds_db_before_issuing_session(monkeypatch):
+    """Страница-передатчик сама привязывает базу к тому, ЧЬЮ сессию выдаёт.
+
+    Почему это отдельный тест, хотя выше уже проверен `main_window`. Точечная починка
+    ОДНОГО вызывающего (3.5.4) оставила мину следующему: `/desktop/bootstrap` — то самое
+    место, где сессия уходит в оболочку, и единственное, которое знает, чья она, — само
+    привязку не обеспечивало. Основная оболочка (WebView2, `webview2_app._start_url` →
+    `bootstrap_url`) переключения не делает вовсе и держалась на том, что сервер угадал
+    привязку при старте. Теперь гарантия выполняется по построению, и порядок важен:
+    переключить базу ОБЯЗАНЫ до выпуска токена, иначе сессия окажется валидной для одной
+    копии, а сервер будет читать другую.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import local_api
+
+    order = []
+    monkeypatch.setattr(local_api, "_session_login", lambda: "ivanov")
+    monkeypatch.setattr(local_api, "switch_user_db",
+                        lambda login: order.append(("switch", login)) or True)
+    monkeypatch.setattr(local_api, "issue_local_session",
+                        lambda login, role: order.append(("issue", login)) or ("acc", "ref"))
+    import app_settings
+    monkeypatch.setattr(app_settings, "get_saved_session",
+                        lambda: {"login": "ivanov", "role": "teacher"})
+
+    app = FastAPI()
+    local_api.install_desktop_bootstrap(app)
+    resp = TestClient(app).get("/desktop/bootstrap", params={"route": "/teacher"})
+
+    assert resp.status_code == 200
+    assert order == [("switch", "ivanov"), ("issue", "ivanov")], (
+        f"база обязана быть привязана ДО выпуска сессии, получено: {order}")
