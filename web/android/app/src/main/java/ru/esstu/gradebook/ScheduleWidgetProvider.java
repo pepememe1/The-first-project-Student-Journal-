@@ -13,7 +13,6 @@ import android.widget.RemoteViews;
 import org.json.JSONObject;
 
 import java.util.Calendar;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -49,25 +48,19 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
     /** Ниже этой высоты шапка сжимается в одну строку, а подвал прячется (см. buildList). */
     private static final int SHORT_MAX_DP = 160;
 
-    // Высоты элементов в dp — те же числа, что в widget_schedule_list.xml и
-    // widget_schedule_row.xml. Из них считается, сколько строк реально влезет.
+    // ⚠️ Констант высот строк здесь БОЛЬШЕ НЕТ, и это осознанно.
     //
-    // ⚠️ Раньше здесь стояли константы «3 строки на средний, 7 на большой», и это
-    // был реальный дефект, пойманный предпросмотром разметки: на 4×2 (высота ячейки
-    // около 110-120dp) три строки не помещались — третья уезжала под подвал и
-    // обрезалась на середине. Считать по фактической высоте надёжнее: человек тянет
-    // виджет за угол на любой размер, и подобрать константу «на все случаи» нельзя.
-    private static final int PADDING_DP = 24;          //padding 12 сверху + 12 снизу
-    private static final int HEADER_TALL_DP = 34;      //день + подпись под ним
-    private static final int HEADER_SHORT_DP = 18;     //только день
-    private static final int ROWS_MARGIN_DP = 8;
-    private static final int FOOTER_DP = 17;           //текст + marginTop
-    private static final int ROW_TALL_DP = 38;         //номер над временем + «тип · кто»
-    private static final int ROW_SHORT_DP = 26;        //компактная строка в одну линию
-    private static final int ROW_GAP_DP = 5;
-
-    /** Разумный потолок: больше восьми пар в дне у колледжа не бывает. */
-    private static final int ROWS_MAX = 8;
+    // Сначала стояли «3 строки на средний, 7 на большой» — предпросмотр разметки поймал
+    // реальный дефект: на 4×2 три строки не помещались, третья обрезалась на середине
+    // текста. Тогда число строк начали СЧИТАТЬ по фактической высоте ячейки. Но как
+    // только шрифты выросли до читаемых с вытянутой руки, посчитанное честно число
+    // оказалось равно полутора — и любой подсчёт стал бессмысленным: показывать одну
+    // пару в широком виджете незачем.
+    //
+    // Ответ не в арифметике, а в прокрутке: список отдаёт коллекция (ListView +
+    // ScheduleWidgetService), сколько влезло — столько видно, остальное человек
+    // долистывает. Размер ячейки теперь решает только ДВА вопроса: узкий это виджет
+    // (одна пара крупно) и показывать ли уже прошедшие пары.
 
     @Override
     public void onUpdate(Context ctx, AppWidgetManager mgr, int[] ids) {
@@ -98,16 +91,38 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         }
     }
 
+    /**
+     * Все три класса-приёмника, под которыми виджет может быть размещён.
+     *
+     * ⚠️ В списке добавления теперь ТРИ пункта — 2×2, 4×2 и 4×4 (прямая просьба: одного
+     * пункта, который «можно растянуть», человеку недостаточно, он хочет выбрать сразу).
+     * Классы отличаются ТОЛЬКО стартовым размером и картинкой предпросмотра в своём
+     * `appwidget-provider`; вся логика общая и живёт здесь. Растягивание при этом никуда
+     * не делось: раскладку по-прежнему выбирает фактический размер ячейки, поэтому
+     * поставленный «4×4» после сжатия до 2×2 честно станет маленьким.
+     */
+    static final Class<?>[] PROVIDERS = {
+            ScheduleWidgetProvider.class,
+            ScheduleWidgetSizes.Small.class,
+            ScheduleWidgetSizes.Medium.class,
+            ScheduleWidgetSizes.Large.class,
+    };
+
     /** Перерисовать все размещённые виджеты. Зовётся и из моста, когда пришли данные. */
     static void refreshAll(Context ctx) {
         AppWidgetManager mgr = AppWidgetManager.getInstance(ctx);
-        ComponentName cn = new ComponentName(ctx, ScheduleWidgetProvider.class);
-        int[] ids = mgr.getAppWidgetIds(cn);
-        if (ids == null) {
-            return;
-        }
-        for (int id : ids) {
-            render(ctx, mgr, id);
+        for (Class<?> cls : PROVIDERS) {
+            int[] ids = mgr.getAppWidgetIds(new ComponentName(ctx, cls));
+            if (ids == null) {
+                continue;
+            }
+            for (int id : ids) {
+                //Сначала сообщаем КОЛЛЕКЦИИ, что данные сменились (иначе список
+                //перерисуется старым содержимым — RemoteViewsFactory кэшируется
+                //системой), и только потом перерисовываем сам виджет.
+                mgr.notifyAppWidgetViewDataChanged(id, R.id.w_rows);
+                render(ctx, mgr, id);
+            }
         }
     }
 
@@ -123,10 +138,13 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         if (wDp > 0 && wDp < NARROW_MAX_DP) {
             rv = buildSmall(ctx, snap, now);
         } else {
-            //Средний (низкий) размер отдаёт место строкам: подпись под днём и подвал
-            //уходят, шапка сжимается в одну строку. На большом всё возвращается.
-            boolean detailed = !(hDp > 0 && hDp < SHORT_MAX_DP);
-            rv = buildList(ctx, snap, now, rowsThatFit(hDp, detailed), detailed);
+            //Низкий виджет отвечает на вопрос «что дальше» — прошедшие пары в нём не
+            //показываем, места мало. Большой отвечает на «как выглядит мой день»: там
+            //прошедшие нужны как опора («сейчас третья из пяти») и рисуются приглушённо.
+            //Число строк БОЛЬШЕ НЕ СЧИТАЕМ: список прокручивается, сколько влезло —
+            //столько видно, остальное человек долистает.
+            boolean tall = !(hDp > 0 && hDp < SHORT_MAX_DP);
+            rv = buildList(ctx, snap, now, id, tall);
         }
 
         //Тап по виджету открывает приложение. Отдельного deep-link на страницу
@@ -212,6 +230,23 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
             left = day.pairs.size() - 1;
         }
 
+        //ПЕРЕРЫВ. Если пара уже закончилась, а следующая скоро — вместо безликого
+        //«Дальше» показываем, СКОЛЬКО ЖДАТЬ: «через 15 мин». Именно это человек и хочет
+        //знать, глянув на телефон между парами, — время начала он потом ещё считает в
+        //уме, а минуты до начала не требуют никакого счёта.
+        //
+        //Порог в полтора часа не случайный: за ним «через 200 минут» уже не помогает,
+        //а мешает — там полезнее обычное время начала. Ноль минут не пишем никогда
+        //(«через 0 мин» читается как ошибка): с этого момента и до звонка говорим
+        //«вот-вот».
+        if (day.offset == 0 && !"Сейчас".equals(state)
+                && chosen.startMin >= 0 && chosen.startMin > nowMin) {
+            int wait = chosen.startMin - nowMin;
+            if (wait <= 90) {
+                state = wait < 1 ? "Вот-вот" : ("Через " + wait + " " + minuteWord(wait));
+            }
+        }
+
         rv.setTextViewText(R.id.w_state, state);
         rv.setTextViewText(R.id.w_time, chosen.time.isEmpty()
                 ? (chosen.no + " пара") : chosen.time.replace('-', '–'));
@@ -234,38 +269,48 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         return rv;
     }
 
-    // СРЕДНИЙ И БОЛЬШОЙ ───────────────────────────────────────────────────────────
-    /**
-     * Сколько строк пар реально помещается в виджет высотой hDp.
-     *
-     * Считаем, а не подбираем константу: виджет растягивается произвольно, и «три
-     * строки» верны ровно для одного размера. Строка, не влезшая целиком, обрезается
-     * системой на середине текста — выглядит как поломка, поэтому лучше показать на
-     * одну меньше и честно дописать в подвал «ещё N пар».
-     *
-     * hDp == 0 (лаунчер не сообщил габариты — бывает на первом размещении) — берём
-     * скромные две строки: недобор места виден сразу, а обрезка — не всегда.
-     */
-    static int rowsThatFit(int hDp, boolean detailed) {
-        if (hDp <= 0) {
-            return 2;
+    /** «минуту» / «минуты» / «минут» — иначе «через 21 минут» выглядит как опечатка. */
+    private static String minuteWord(int n) {
+        int n100 = n % 100, n10 = n % 10;
+        if (n100 >= 11 && n100 <= 14) {
+            return "минут";
         }
-        int header = detailed ? HEADER_TALL_DP : HEADER_SHORT_DP;
-        int footer = detailed ? FOOTER_DP : 0;
-        int avail = hDp - PADDING_DP - header - ROWS_MARGIN_DP - footer;
-        int rowH = (detailed ? ROW_TALL_DP : ROW_SHORT_DP) + ROW_GAP_DP;
-        int fit = avail / rowH;
-        return Math.max(1, Math.min(ROWS_MAX, fit));
+        if (n10 == 1) {
+            return "минуту";
+        }
+        if (n10 >= 2 && n10 <= 4) {
+            return "минуты";
+        }
+        return "минут";
     }
 
+    // СРЕДНИЙ И БОЛЬШОЙ ───────────────────────────────────────────────────────────
+    /**
+     * Шапка + ПРОКРУЧИВАЕМЫЙ список пар.
+     *
+     * ⚠️ Раньше здесь считалось, СКОЛЬКО строк влезет (`rowsThatFit`), и лишние просто
+     * не показывались. С крупными читаемыми шрифтами это перестало работать: в низкую
+     * ячейку влезает полторы пары, и «показать меньше» — не ответ. Теперь строки отдаёт
+     * коллекция (ListView + ScheduleWidgetService), и то, что не поместилось,
+     * ПРОКРУЧИВАЕТСЯ. Подсчёт строк удалён вместе с константами высот — он врал бы.
+     *
+     * ⚠️ `setRemoteAdapter` обязателен ДО `updateAppWidget`, а `notifyAppWidgetViewDataChanged`
+     * — при каждом обновлении данных (см. refreshAll): фабрика кэшируется системой, и без
+     * уведомления список остался бы вчерашним, хотя шапка обновилась бы. Это классическая
+     * ловушка коллекционных виджетов: «шапка новая, список старый».
+     */
     private static RemoteViews buildList(Context ctx, JSONObject snap, Calendar now,
-                                         int maxRows, boolean detailed) {
+                                         int widgetId, boolean tall) {
         RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget_schedule_list);
-        rv.removeAllViews(R.id.w_rows);
-        //На низком виджете подпись под днём и подвал съедали ровно ту высоту, которой
-        //не хватало второй строке пары. Дата и «обновлено» там менее ценны, чем сама
-        //пара, поэтому прячем их, а не ужимаем шрифт до нечитаемого.
-        if (!detailed) {
+
+        //🔥 НА НИЗКОМ ВИДЖЕТЕ ПОДПИСЬ ПОД ДНЁМ И ПОДВАЛ ПРЯЧЕМ — иначе не остаётся места
+        //НИ ОДНОЙ строке пары. Поймано предпросмотром разметки: с крупными шрифтами
+        //строка занимает ~52dp, а на ячейке 4×2 (высота ~130dp) шапка с подписью и
+        //подвал съедали ~75dp, и список оказывался пустым. Пустой виджет неотличим от
+        //сломанного, поэтому дата и «обновлено» уступают место самой паре: они здесь
+        //менее ценны, а ужимать шрифт до нечитаемого — значит вернуть ровно ту проблему,
+        //ради которой шрифты и увеличивали.
+        if (!tall) {
             rv.setViewVisibility(R.id.w_title, android.view.View.GONE);
             rv.setViewVisibility(R.id.w_foot, android.view.View.GONE);
         }
@@ -277,7 +322,7 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
             rv.setViewVisibility(R.id.w_rows, android.view.View.GONE);
             rv.setViewVisibility(R.id.w_empty, android.view.View.VISIBLE);
             rv.setTextViewText(R.id.w_empty, "Откройте приложение —\nрасписание загрузится само");
-            rv.setTextViewText(R.id.w_foot, "");
+            rv.setViewVisibility(R.id.w_foot, android.view.View.GONE);
             return rv;
         }
 
@@ -299,144 +344,42 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         String sub = ScheduleWidgetData.dateHuman(shown);
         rv.setTextViewText(R.id.w_title, title.isEmpty() ? sub : (title + " · " + sub));
         rv.setTextViewText(R.id.w_week, weekLabel(snap, shown, true));
+        rv.setTextViewText(R.id.w_foot, updatedLabel(snap));
 
         if (day == null || day.pairs.isEmpty()) {
             rv.setViewVisibility(R.id.w_rows, android.view.View.GONE);
             rv.setViewVisibility(R.id.w_empty, android.view.View.VISIBLE);
             rv.setTextViewText(R.id.w_empty, "Пар нет");
-            rv.setTextViewText(R.id.w_foot, updatedLabel(snap));
             return rv;
         }
 
         rv.setViewVisibility(R.id.w_empty, android.view.View.GONE);
         rv.setViewVisibility(R.id.w_rows, android.view.View.VISIBLE);
 
-        int nowMin = ScheduleWidgetData.minutesOfDay(now);
-        List<ScheduleWidgetData.Pair> all = day.pairs;
+        //Каждому виджету — СВОЙ Intent-адаптер. Данные у них разные (низкий прячет
+        //прошедшие пары), а система различает адаптеры по Intent'у целиком, поэтому в
+        //него обязан входить и widgetId, и признак showPast. Без widgetId два виджета
+        //разных размеров получили бы один и тот же список.
+        Intent svc = new Intent(ctx, ScheduleWidgetService.class);
+        svc.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId);
+        //Высокий виджет показывает и прошедшие пары (приглушённо) — они дают опору
+        //«сейчас третья из пяти»; низкий отвечает на «что дальше», и тратить на них
+        //свои полторы видимые строки нельзя. Тот же флаг решает оба вопроса.
+        svc.putExtra(ScheduleWidgetService.EXTRA_SHOW_PAST, tall);
+        svc.setData(android.net.Uri.parse(svc.toUri(Intent.URI_INTENT_SCHEME)));
+        rv.setRemoteAdapter(R.id.w_rows, svc);
+        rv.setEmptyView(R.id.w_rows, R.id.w_empty);
 
-        //РАЗНЫЕ размеры отвечают на РАЗНЫЕ вопросы, и отбор строк из этого и следует.
-        //  • низкий (4×2) — «что дальше»: две-три строки, и тратить их на уже
-        //    закончившуюся пару нельзя;
-        //  • большой — «как выглядит мой день»: там прошедшие пары нужны, они дают
-        //    опору («сейчас третья из пяти»), а без них виджет ещё и полупустой к
-        //    вечеру. Прошедшие рисуем приглушённо — понятно, что они позади.
-        //Ничего из этого не относится к ЗАВТРАШНЕМУ дню: там прошедших нет вовсе.
-        int firstIdx = 0;
-        if (day.offset == 0 && !detailed) {
-            for (int i = 0; i < all.size(); i++) {
-                ScheduleWidgetData.Pair p = all.get(i);
-                if (p.endMin < 0 || nowMin < p.endMin) {
-                    firstIdx = i;
-                    break;
-                }
-                firstIdx = i + 1;
-            }
+        //Шаблон клика для строк списка: у элементов коллекции своего PendingIntent быть
+        //не может, система склеивает этот шаблон с fill-in из getViewAt.
+        Intent open = new Intent(ctx, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags |= PendingIntent.FLAG_IMMUTABLE;
         }
-        //Если места меньше, чем пар, на большом виджете сдвигаем окно к текущей паре:
-        //показать первые четыре пары дня в шесть вечера — то же самое, что показать
-        //вчерашний день.
-        if (detailed && day.offset == 0 && all.size() > maxRows) {
-            int current = 0;
-            for (int i = 0; i < all.size(); i++) {
-                ScheduleWidgetData.Pair p = all.get(i);
-                if (p.endMin < 0 || nowMin < p.endMin) {
-                    current = i;
-                    break;
-                }
-                current = i + 1;
-            }
-            firstIdx = Math.max(0, Math.min(current, all.size() - maxRows));
-        }
-
-        int shownCount = 0;
-        for (int i = firstIdx; i < all.size() && shownCount < maxRows; i++, shownCount++) {
-            ScheduleWidgetData.Pair p = all.get(i);
-            boolean isNow = day.offset == 0 && p.startMin >= 0 && p.endMin >= 0
-                    && nowMin >= p.startMin && nowMin < p.endMin;
-            boolean isPast = day.offset == 0 && p.endMin >= 0 && nowMin >= p.endMin;
-            rv.addView(R.id.w_rows, row(ctx, p, isNow, isPast, detailed, shownCount > 0));
-        }
-
-        int rest = all.size() - firstIdx - shownCount;
-        StringBuilder foot = new StringBuilder();
-        if (rest > 0) {
-            foot.append("ещё ").append(rest).append(pairWord(rest));
-            foot.append(" · ");
-        }
-        foot.append(updatedLabel(snap));
-        rv.setTextViewText(R.id.w_foot, foot.toString());
-        return rv;
-    }
-
-    private static RemoteViews row(Context ctx, ScheduleWidgetData.Pair p, boolean isNow,
-                                   boolean isPast, boolean detailed, boolean withTopGap) {
-        //Две разметки строки, а не одна с прячущимися частями: у полной строки номер
-        //пары стоит НАД временем, и высоту ниже ~37dp она не берёт при любом скрытии.
-        //На низком виджете это давало ровно одну строку — см. rowsThatFit.
-        int layout = detailed ? R.layout.widget_schedule_row
-                              : R.layout.widget_schedule_row_compact;
-        RemoteViews rv = new RemoteViews(ctx.getPackageName(), layout);
-        rv.setInt(R.id.row_root, "setBackgroundResource",
-                isNow ? R.drawable.widget_row_bg_now : R.drawable.widget_row_bg);
-
-        //Показываем только начало пары: конец занимает столько же места, а нужен реже.
-        String start = p.time;
-        int dash = indexOfDash(start);
-        if (dash > 0) {
-            start = start.substring(0, dash).trim();
-        }
-        rv.setTextViewText(R.id.row_time, start);
-        rv.setTextViewText(R.id.row_subject, p.subject.isEmpty() ? "—" : p.subject);
-
-        if (detailed) {
-            rv.setTextViewText(R.id.row_pair, isNow ? "идёт" : (p.no + " пара"));
-            if (isNow) {
-                rv.setTextColor(R.id.row_pair, ctx.getResources().getColor(R.color.gb_widget_accent));
-            }
-            StringBuilder meta = new StringBuilder();
-            if (!p.kind.isEmpty()) {
-                meta.append(p.kind);
-            }
-            if (!p.who.isEmpty()) {
-                if (meta.length() > 0) {
-                    meta.append(" · ");
-                }
-                meta.append(p.who);
-            }
-            if (meta.length() == 0) {
-                rv.setViewVisibility(R.id.row_meta, android.view.View.GONE);
-            } else {
-                rv.setTextViewText(R.id.row_meta, meta.toString());
-            }
-        } else if (isNow) {
-            //В компактной строке подписи «идёт» нет — её роль играет цвет времени
-            //плюс левая полоса подложки (та видна и при дальтонизме).
-            rv.setTextColor(R.id.row_time, ctx.getResources().getColor(R.color.gb_widget_accent));
-        }
-
-        if (p.room.isEmpty()) {
-            rv.setViewVisibility(R.id.row_room, android.view.View.GONE);
-        } else {
-            rv.setTextViewText(R.id.row_room, p.room);
-        }
-
-        //Прошедшая пара — приглушённая, но НЕ скрытая: она держит контекст («сейчас
-        //третья из пяти»). Гасим цветом, а не прозрачностью: setAlpha у RemoteViews
-        //работает не на всех лаунчерах, а цвет — везде одинаково.
-        if (isPast && !isNow) {
-            int muted = ctx.getResources().getColor(R.color.gb_widget_past);
-            rv.setTextColor(R.id.row_time, muted);
-            rv.setTextColor(R.id.row_subject, muted);
-            rv.setTextColor(R.id.row_room, muted);
-        }
-
-        //Отступ между строками — через padding самой строки: RemoteViews не умеет
-        //задавать layout_margin у добавленной вьюхи.
-        if (withTopGap) {
-            int side = dp(ctx, 8);
-            int base = detailed ? 5 : 4;
-            rv.setViewPadding(R.id.row_root, side, dp(ctx, base + ROW_GAP_DP), side, dp(ctx, base));
-        }
+        rv.setPendingIntentTemplate(R.id.w_rows,
+                PendingIntent.getActivity(ctx, 1, open, flags));
         return rv;
     }
 
@@ -451,23 +394,6 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         return -1;
     }
 
-    private static int dp(Context ctx, int value) {
-        return Math.round(value * ctx.getResources().getDisplayMetrics().density);
-    }
-
-    private static String pairWord(int n) {
-        int n100 = n % 100, n10 = n % 10;
-        if (n100 >= 11 && n100 <= 14) {
-            return " пар";
-        }
-        if (n10 == 1) {
-            return " пара";
-        }
-        if (n10 >= 2 && n10 <= 4) {
-            return " пары";
-        }
-        return " пар";
-    }
 
     /**
      * «I неделя» / «II».

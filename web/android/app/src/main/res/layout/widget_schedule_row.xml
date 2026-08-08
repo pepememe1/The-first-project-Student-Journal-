@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Одна строка пары. Используется и в среднем, и в большом виджете — строки
-  добавляются в контейнер через RemoteViews.addView().
+  Строка пары для СПИСКА (ListView) на среднем и большом виджете.
 
-  ⚠️ Почему не ListView/RemoteViewsService: адаптерный список в виджете требует
-  отдельного сервиса, живёт своим процессом обновления и заметно медленнее
-  просыпается. Пар в дне максимум 6-8 — статическая сборка строк проще, быстрее и
-  не имеет «мигания пустым списком» при обновлении.
+  ⚠️ Шрифты крупные СОЗНАТЕЛЬНО. Прошлая версия ужимала кегли, чтобы влезло больше
+  строк, — и виджет становился нечитаемым на вытянутой руке, то есть терял смысл:
+  расписание смотрят мельком, а не вчитываются. Теперь наоборот — шрифт крупный, а
+  строки, которые не поместились, ПРОКРУЧИВАЮТСЯ (ListView), а не исчезают.
+
+  ⚠️ Стрелка слева — ImageView с фиксированным местом (visibility=INVISIBLE, а НЕ
+  GONE, у неактивных строк): при GONE соседние строки разъезжались бы по горизонтали
+  на ширину стрелки, и список «дёргался» бы при каждой смене пары.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/row_root"
@@ -15,39 +18,45 @@
     android:orientation="horizontal"
     android:gravity="center_vertical"
     android:background="@drawable/widget_row_bg"
-    android:paddingLeft="8dp"
-    android:paddingRight="8dp"
-    android:paddingTop="5dp"
-    android:paddingBottom="5dp">
+    android:paddingLeft="6dp"
+    android:paddingRight="10dp"
+    android:paddingTop="7dp"
+    android:paddingBottom="7dp">
 
-    <!-- Левая колонка: номер пары над временем. Ширина фиксирована, иначе строки
-         «прыгают» друг относительно друга и колонка предметов теряет ровный край. -->
+    <!-- Стрелка «идёт сейчас». Своя ширина, чтобы строки не прыгали. -->
+    <ImageView
+        android:id="@+id/row_arrow"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_marginRight="4dp"
+        android:src="@drawable/widget_arrow_now"
+        android:contentDescription="@string/widget_now_desc" />
+
     <LinearLayout
         android:layout_width="52dp"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
         <TextView
-            android:id="@+id/row_pair"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="9sp"
-            android:textStyle="bold"
-            android:textColor="@color/gb_widget_text2"
-            android:text="2 пара" />
-
-        <TextView
             android:id="@+id/row_time"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxLines="1"
-            android:textSize="11sp"
+            android:textSize="16sp"
             android:textStyle="bold"
             android:textColor="@color/gb_widget_text"
             android:text="10:45" />
+
+        <TextView
+            android:id="@+id/row_pair"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:textSize="11sp"
+            android:textColor="@color/gb_widget_text2"
+            android:text="2 пара" />
     </LinearLayout>
 
-    <!-- Центр: предмет и мелкая строка «тип · преподаватель/группа» -->
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
@@ -61,10 +70,9 @@
             android:layout_height="wrap_content"
             android:maxLines="2"
             android:ellipsize="end"
-            android:lineSpacingMultiplier="0.95"
-            android:textSize="12sp"
+            android:textSize="16sp"
             android:textColor="@color/gb_widget_text"
-            android:text="Основы алгоритмизации" />
+            android:text="Базы данных" />
 
         <TextView
             android:id="@+id/row_meta"
@@ -72,20 +80,19 @@
             android:layout_height="wrap_content"
             android:maxLines="1"
             android:ellipsize="end"
-            android:textSize="10sp"
+            android:textSize="12sp"
             android:textColor="@color/gb_widget_text2"
-            android:text="лек · Иванов И.И." />
+            android:text="пр · Петрова А.С." />
     </LinearLayout>
 
-    <!-- Аудитория -->
     <TextView
         android:id="@+id/row_room"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginLeft="6dp"
+        android:layout_marginLeft="8dp"
         android:maxLines="1"
-        android:textSize="11sp"
+        android:textSize="14sp"
         android:textStyle="bold"
         android:textColor="@color/gb_widget_text3"
-        android:text="3-301" />
+        android:text="2-215" />
 </LinearLayout>

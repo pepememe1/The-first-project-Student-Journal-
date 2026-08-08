@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  4×2 — ближайшие пары списком. Прошедшие не показываем: виджет этого размера отвечает
+  на вопрос «что дальше», и тратить его строки на уже закончившуюся пару незачем.
+  Список ПРОКРУЧИВАЕТСЯ — то, что не влезло, никуда не девается.
+
+  Подробности про три пункта в списке добавления и про updatePeriodMillis — в
+  schedule_widget_2x2.xml, дублировать здесь не стали.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:minWidth="180dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="400dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_schedule_list"
+    android:previewLayout="@layout/widget_schedule_list"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_schedule_description_4x2"
+    tools:targetApi="s" />

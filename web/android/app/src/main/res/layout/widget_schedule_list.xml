@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  СРЕДНИЙ (4×2) и БОЛЬШОЙ (4×4) виджет — одна разметка. Отличие только в том,
-  сколько строк в неё кладёт провайдер (см. ScheduleWidgetProvider.ROWS_MEDIUM /
-  ROWS_LARGE) и показывать ли строку преподавателя.
+  Средний и большой виджет: шапка + ПРОКРУЧИВАЕМЫЙ список пар.
 
-  Держать два почти одинаковых XML смысла нет: расходятся они ровно на одно число,
-  а разъезжаются потом молча — правку внесли в один, забыли во втором.
+  ⚠️ Список — настоящий ListView, а не стопка добавленных вручную строк, как было
+  раньше. Причина: шрифты стали крупными (расписание смотрят мельком, а не вчитываются),
+  и на низкой ячейке в экран влезает полторы пары. Единственный способ показать весь
+  день крупным шрифтом — прокрутка, а прокрутка в виджете бывает только через коллекцию
+  (ListView + RemoteViewsService, см. ScheduleWidgetService).
+
+  ⚠️ RemoteViews поддерживает НЕ ВСЕ контейнеры: ConstraintLayout там не «плохо
+  выглядит», а падает при инфляции. Разрешены FrameLayout/LinearLayout/RelativeLayout/
+  GridLayout и коллекции (ListView/GridView/StackView/AdapterViewFlipper).
+
+  ⚠️ `w_empty` обязан быть УКАЗАН через setEmptyView: без него пустой список выглядит
+  как «виджет сломался», а не как «пар нет».
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
@@ -15,7 +23,7 @@
     android:background="@drawable/widget_bg"
     android:padding="12dp">
 
-    <!-- ШАПКА -->
+    <!-- Шапка: день + чётность недели -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -28,15 +36,13 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <!-- «Сегодня, пятница» / «Завтра, понедельник» — день важнее даты, но
-                 дата нужна: виджет легко перепутать с висящим со вчера снимком. -->
             <TextView
                 android:id="@+id/w_day"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:maxLines="1"
                 android:ellipsize="end"
-                android:textSize="14sp"
+                android:textSize="17sp"
                 android:textStyle="bold"
                 android:textColor="@color/gb_widget_text"
                 android:text="Сегодня, пятница" />
@@ -47,51 +53,50 @@
                 android:layout_height="wrap_content"
                 android:maxLines="1"
                 android:ellipsize="end"
-                android:textSize="11sp"
+                android:textSize="12sp"
                 android:textColor="@color/gb_widget_text2"
-                android:text="К74/1 · 7 августа" />
+                android:text="К74/1" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/w_week"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingLeft="7dp"
-            android:paddingRight="7dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp"
+            android:layout_marginLeft="8dp"
             android:background="@drawable/widget_badge_bg"
-            android:textSize="10sp"
+            android:paddingLeft="9dp"
+            android:paddingRight="9dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:maxLines="1"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:textColor="@color/gb_widget_accent"
             android:text="I неделя" />
     </LinearLayout>
 
-    <!-- СТРОКИ ПАР. Наполняется в рантайме: removeAllViews + addView. -->
-    <LinearLayout
+    <!-- Прокручиваемый список пар -->
+    <ListView
         android:id="@+id/w_rows"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="8dp"
-        android:orientation="vertical" />
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:scrollbars="none"
+        android:clipToPadding="false" />
 
-    <!-- ПУСТОЙ ДЕНЬ / НЕТ ДАННЫХ. Отдельный текст, а не «просто пусто»: пустой
-         прямоугольник читается как поломка виджета, а не как выходной. -->
     <TextView
         android:id="@+id/w_empty"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center"
-        android:visibility="gone"
-        android:textSize="12sp"
+        android:textSize="14sp"
         android:textColor="@color/gb_widget_text2"
-        android:text="Пар нет" />
+        android:text="@string/widget_no_pairs" />
 
-    <!-- ПОДВАЛ: сколько ещё пар + когда снимок обновлялся. Время обновления
-         показываем ВСЕГДА — расписание кэшировано, и человек должен видеть,
-         насколько оно свежее, а не доверять картинке вслепую. -->
     <TextView
         android:id="@+id/w_foot"
         android:layout_width="match_parent"
@@ -99,7 +104,7 @@
         android:layout_marginTop="6dp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:textSize="9sp"
+        android:textSize="11sp"
         android:textColor="@color/gb_widget_text2"
         android:text="обновлено 18:40" />
 </LinearLayout>

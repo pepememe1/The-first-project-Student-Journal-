@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  2×2 — «что сейчас/дальше» одной парой крупно.
+
+  ⚠️ Три отдельных пункта в списке добавления (2×2, 4×2, 4×4), а не один растягиваемый:
+  человек выбирает размер ГЛАЗАМИ, в списке, и одного пункта с одной картинкой для
+  этого мало — чтобы получить большой виджет, пришлось бы сначала поставить средний, а
+  потом догадаться потянуть за угол. Растягивание при этом сохранено: раскладку решает
+  фактический размер ячейки, а не то, какой пункт выбрали.
+
+  targetCellWidth/Height и maxResize* — атрибуты Android 12+; на более старых версиях
+  (minSdk 24) они игнорируются, поэтому отдельного файла под API 31 не нужно.
+
+  updatePeriodMillis=1800000 (30 минут) — системный минимум, меньше Android округлит
+  вверх. Точный будильник ради подсветки «идёт сейчас» не заводим: на Android 12+ он
+  требует SCHEDULE_EXACT_ALARM, а это несоразмерное право ради подсветки строки.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="400dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_schedule_small"
+    android:previewLayout="@layout/widget_schedule_small"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_schedule_description_2x2"
+    tools:targetApi="s" />

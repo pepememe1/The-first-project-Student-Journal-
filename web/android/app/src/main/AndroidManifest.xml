@@ -50,6 +50,67 @@
                 android:resource="@xml/schedule_widget_info" />
         </receiver>
 
+        <!-- Три отдельных пункта в списке добавления: 2x2, 4x2 и 4x4. Отличаются только
+             стартовым размером и картинкой предпросмотра, вся логика в общем предке
+             (см. ScheduleWidgetSizes). Растягивать по-прежнему можно: раскладку решает
+             фактический размер ячейки, а не выбранный пункт.
+             Приёмник выше (.ScheduleWidgetProvider) оставлен ради уже размещённых
+             виджетов прошлой версии: удалить его значило бы, что после обновления
+             приложения виджет с рабочего стола молча исчезнет. -->
+        <receiver
+            android:name=".ScheduleWidgetSizes$Small"
+            android:label="@string/widget_schedule_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/schedule_widget_2x2" />
+        </receiver>
+
+        <receiver
+            android:name=".ScheduleWidgetSizes$Medium"
+            android:label="@string/widget_schedule_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/schedule_widget_4x2" />
+        </receiver>
+
+        <receiver
+            android:name=".ScheduleWidgetSizes$Large"
+            android:label="@string/widget_schedule_label"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/schedule_widget_4x4" />
+        </receiver>
+
+        <!-- Поставщик строк для прокручиваемого списка пар.
+             ⚠️ BIND_REMOTEVIEWS обязателен: без этого разрешения система откажется
+             привязываться к сервису, и список останется навсегда пустым — причём молча,
+             в логе будет только SecurityException от системного процесса. -->
+        <service
+            android:name=".ScheduleWidgetService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
+
         <!-- Идентификатор проекта из консоли RuStore. НЕ секрет (он виден в APK), в
              отличие от сервисного токена — тот живёт только на сервере в .env. -->
         <meta-data
