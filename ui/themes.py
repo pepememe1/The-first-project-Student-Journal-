@@ -284,11 +284,6 @@ def effective_mode(spec, now=None) -> str:
     return "dark" if spec.get("mode") == "dark" else "light"
 
 
-def is_dark(spec) -> bool:
-    """True, если spec даёт тёмный режим прямо сейчас (с учётом расписания)."""
-    return effective_mode(spec) == "dark"
-
-
 #Сериализация темы в строку (хранится в config / в prefs пользователя).
 def spec_to_json(spec: dict) -> str:
     return json.dumps(normalize_spec(spec), ensure_ascii=False)

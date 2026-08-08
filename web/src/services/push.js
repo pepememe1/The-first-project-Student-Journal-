@@ -131,10 +131,6 @@ export function rememberPendingEvent(eventId) {
   if (eventId) localStorage.setItem(PENDING_KEY, String(eventId))
 }
 
-export function hasPendingEvent() {
-  return !!localStorage.getItem(PENDING_KEY)
-}
-
 /**
  * Куда открыть экран по событию.
  *

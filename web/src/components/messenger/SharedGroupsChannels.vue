@@ -7,7 +7,7 @@
 // докстринг про 3.6.1). Пересечение бесед — GET .../shared (см. её докстринг на
 // сервере): безопасно по построению, раскрывает только то, в чём вызывающий и так
 // уже состоит.
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { Radio, Users } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'

@@ -6,7 +6,7 @@ import { ref, computed } from 'vue'
 import { X } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 
-const props = defineProps({ message: { type: Object, required: true } })
+defineProps({ message: { type: Object, required: true } })
 const emit = defineEmits(['submit', 'close'])
 const locale = useLocaleStore()
 

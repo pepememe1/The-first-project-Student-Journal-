@@ -12,7 +12,7 @@
 // категориальной палитры скилла (blue/orange/aqua/yellow), провалидированные ИМЕННО В
 // ЭТОМ порядке (включая переход последний→первый — сектора донута образуют круг) для
 // обоих режимов темы — см. references/palette.md той же skill.
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { X, ChevronLeft } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useThemeStore } from '@/stores/theme'

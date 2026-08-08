@@ -48,11 +48,6 @@ export async function sttStatus() {
   }
 }
 
-/** Совместимость с прежним вызовом: просто «доступен ли голосовой ввод». */
-export async function sttAvailable() {
-  return (await sttStatus()).available
-}
-
 /**
  * Список микрофонов для выбора в настройках: [{ deviceId, label }].
  *

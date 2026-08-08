@@ -621,7 +621,7 @@ async function openSummary() {
         ? locale.t('chatThread.summaryTooShort', 'В переписке пока слишком мало сообщений, чтобы было что пересказывать.')
         : locale.t('chatThread.summaryUnavailable', 'ИИ-модель сейчас недоступна — сводку сделать не удалось. Настройки модели у администратора.'),
     }
-  } catch (e) {
+  } catch {
     summary.value = { open: true, text: '', loading: false, note: locale.t('chatThread.summaryFailed', 'Не удалось получить сводку.') }
   }
 }

@@ -41,19 +41,6 @@ def list_input_devices() -> List[Tuple[int, str]]:
         return []
 
 
-def default_input_device() -> Optional[int]:
-    """Индекс микрофона по умолчанию (или None)."""
-    if not is_available():
-        return None
-    try:
-        import sounddevice as sd
-        dev = sd.default.device
-        idx = dev[0] if isinstance(dev, (list, tuple)) else dev
-        return int(idx) if idx is not None and idx >= 0 else None
-    except Exception:
-        return None
-
-
 class Recorder:
     """Запись с микрофона по схеме start()/stop(). stop() возвращает numpy float32 (моно,
     16 кГц). Поток аудио складываем в буфер; всё потокобезопасно (callback идёт из потока

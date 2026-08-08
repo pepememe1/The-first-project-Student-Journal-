@@ -24,12 +24,6 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
 
 
-def smtp_configured() -> bool:
-    return bool(os.environ.get("GRADEBOOK_SMTP_HOST")
-                and os.environ.get("GRADEBOOK_SMTP_USER")
-                and os.environ.get("GRADEBOOK_SMTP_PASS"))
-
-
 def send_email(to: str, subject: str, body: str, html: str = "") -> bool:
     """Отправляет письмо. True — ушло, False — не настроено/ошибка (не роняем поток)."""
     host = os.environ.get("GRADEBOOK_SMTP_HOST", "").strip()

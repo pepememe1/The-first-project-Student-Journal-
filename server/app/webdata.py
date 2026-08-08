@@ -910,14 +910,3 @@ def patronymic_of(user) -> str:
         return p
     n = (getattr(user, "name", "") or "").strip()
     return n.split(" ", 1)[1].strip() if " " in n else ""
-
-
-def split_fio(full_name: str) -> tuple:
-    """Разбор «Фамилия Имя Отчество» → (surname, first_name, patronymic).
-    Отчество — всё, что после 2-го слова (на случай двойных отчеств/фамилий редко,
-    но хвост целиком относим к отчеству, как и раньше делал name= parts[1:])."""
-    parts = (full_name or "").split()
-    surname = parts[0] if parts else ""
-    first = parts[1] if len(parts) > 1 else ""
-    patr = " ".join(parts[2:]) if len(parts) > 2 else ""
-    return surname, first, patr

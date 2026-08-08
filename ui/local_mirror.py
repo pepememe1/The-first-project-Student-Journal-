@@ -144,13 +144,3 @@ def _default_client():
         return SyncClient(base, token=token)
     except Exception:
         return None
-
-
-def mirror_in_background():
-    """Запустить зеркалирование фоном (после входа/после обычного синка).
-
-    Молча: сбой не авария — просто копия чуть устареет, а интерфейс продолжит работать
-    на том, что уже скачано."""
-    import threading
-
-    threading.Thread(target=mirror_once, name="gb-local-mirror", daemon=True).start()

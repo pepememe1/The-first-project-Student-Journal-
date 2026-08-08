@@ -5,7 +5,7 @@
 // JPEG (data:URL) в prefs. Всё в браузере, без сети и сторонних библиотек.
 import { ref, onBeforeUnmount } from 'vue'
 
-const props = defineProps({ current: { type: String, default: '' } })
+defineProps({ current: { type: String, default: '' } })
 const emit = defineEmits(['save', 'close'])
 
 const VP = 256                       // размер вьюпорта/экспорта в пикселях (актуальный размер canvas)

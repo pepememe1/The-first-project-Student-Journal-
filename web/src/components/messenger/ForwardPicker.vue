@@ -9,7 +9,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
-const props = defineProps({ count: { type: Number, default: 1 } })
+defineProps({ count: { type: Number, default: 1 } })
 const emit = defineEmits(['submit', 'close'])
 
 const m = useMessengerStore()

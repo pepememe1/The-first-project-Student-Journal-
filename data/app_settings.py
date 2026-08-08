@@ -388,14 +388,3 @@ def set_device_connected(value: bool = True) -> bool:
         return local_set(_DEVICE_CONNECTED_KEY, bool(value))
     except Exception:
         return False
-
-
-def dev_tunnel_enabled() -> bool:
-    """Историческая «ручка»: показывать ли serveo как dev/demo-инструмент.
-
-    Сейчас serveo вынесен в обычный выбор типа сервера в админке (с явным
-    предупреждением про 152-ФЗ), поэтому отдельный флаг больше не прячет UI. Функция
-    оставлена для совместимости и для dev-сценариев, где он ещё может опрашиваться.
-    Включается переменной окружения GRADEBOOK_ENABLE_TUNNEL=1."""
-    val = os.environ.get("GRADEBOOK_ENABLE_TUNNEL", "").strip().lower()
-    return val in ("1", "true", "yes", "on")

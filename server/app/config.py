@@ -164,7 +164,3 @@ def push_enabled() -> bool:
 #развёртывание (не выбор ИИ-провайдера, поэтому НЕ в /web/admin/ai-config, тот же
 #принцип, что у RuStore выше). Пусто — пикер выключен, чат работает как раньше.
 KLIPY_API_KEY = os.environ.get("GRADEBOOK_KLIPY_API_KEY", "").strip()
-
-
-def klipy_enabled() -> bool:
-    return bool(KLIPY_API_KEY)
