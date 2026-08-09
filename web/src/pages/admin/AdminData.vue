@@ -181,7 +181,7 @@ async function doImport() {
       <template v-else>
         <div class="mb-3 flex items-center gap-2 text-sm text-text2">
           <Database class="size-4 text-accent" />
-          <span class="truncate">{{ chosen?.name }}</span>
+          <span class="min-w-0 truncate">{{ chosen?.name }}</span>
           <span v-if="preview.created_at" class="shrink-0 text-xs text-text3">
             {{ locale.t('adminData.snapshotDate', { date: preview.created_at.slice(0, 10) }) }}
           </span>

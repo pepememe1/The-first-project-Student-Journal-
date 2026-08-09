@@ -197,7 +197,7 @@ function pct(avg) { return Math.max(2, Math.min(100, ((Number(avg) || 0) / 5) * 
                 <ul class="w-full space-y-0.5 text-left">
                   <li v-for="c in legendOf(g.categories)" :key="c.key" class="flex items-center gap-1 text-[10px]">
                     <span class="size-1.5 shrink-0 rounded-full" :style="{ background: c.color }" />
-                    <span class="flex-1 truncate text-text3">{{ c.label }}</span>
+                    <span class="min-w-0 flex-1 truncate text-text3">{{ c.label }}</span>
                     <span class="text-text3">{{ c.pct }}%</span>
                   </li>
                 </ul>

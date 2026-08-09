@@ -1534,7 +1534,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
         <p v-if="!msgInfoPopup.viewed.length" class="text-sm text-text3">{{ locale.t('chatThread.noOneReadYet', 'Пока никто не прочитал.') }}</p>
         <ul v-else class="space-y-1 text-sm text-text">
           <li v-for="u in msgInfoPopup.viewed" :key="u.id" class="flex items-center justify-between gap-2">
-            <span class="truncate">{{ u.full_name }}</span>
+            <span class="min-w-0 truncate">{{ u.full_name }}</span>
             <span class="shrink-0 text-tiny text-text3">{{ fmtTime(u.last_read_at) }}</span>
           </li>
         </ul>

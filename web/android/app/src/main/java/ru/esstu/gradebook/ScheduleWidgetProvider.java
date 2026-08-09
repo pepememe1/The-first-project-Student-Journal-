@@ -212,9 +212,16 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
             if (chosen == null) {
                 //Все пары дня уже закончились — честнее сказать это, чем показать
                 //первую пару дня так, будто она ещё впереди.
+                //
+                //⚠️ В КРУПНУЮ строку идёт КОРОТКОЕ слово. Здесь стояло «Пар больше
+                //нет» — четырнадцать знаков при 17sp жирным это около 126dp, а внутри
+                //ячейки 2×2 остаётся примерно 86dp: строка обрезалась в «Пар больш…».
+                //Пояснение перенесено в блок предмета — он при пустом дне всё равно
+                //пустовал (12sp, три строки, места с запасом), и виджет заодно
+                //перестал выглядеть наполовину незаполненным.
                 rv.setTextViewText(R.id.w_state, "На сегодня всё");
-                rv.setTextViewText(R.id.w_time, "Пар больше нет");
-                rv.setTextViewText(R.id.w_subject, "");
+                rv.setTextViewText(R.id.w_time, "Пар нет");
+                rv.setTextViewText(R.id.w_subject, "Занятий сегодня больше нет");
                 rv.setTextViewText(R.id.w_foot, updatedLabel(snap));
                 return rv;
             }

@@ -387,3 +387,49 @@ def test_zet_threshold_clear_with_null(client):
                json={"group": "ИС-21", "min_zet": None}, headers=admin)
     r = client.get("/web/admin/zet-thresholds?group=ИС-21", headers=admin)
     assert r.json()["min_zet"] is None
+
+
+# ── Порог доезжает до программы синком (3.7) ──────────────────────────────────────
+def test_zet_threshold_travels_by_sync_so_desktop_knows_the_bar(client):
+    """Порог перевода обязан приезжать в программу через `/sync/pull`.
+
+    Пока `ZetThreshold` не было в SYNC_MODELS, внутри десктопа получалось хуже, чем
+    «неизвестно»: `/web/student/zet` честно отдавал `min_zet=None`, страница молча не
+    рисовала строку порога, и студент видел свой баланс БЕЗ единого ограничения рядом.
+    Читается это ровно как «перевод возможен при любом балансе» — то есть отсутствие
+    данных выглядело утверждением, а не пробелом.
+
+    Проверяем не «ключ есть в словаре», а СКВОЗНОЙ путь: админ задал порог на сервере —
+    строка приехала в дельту синка со своим значением.
+    """
+    admin = make_admin(client)
+    _group(client, admin, "ИС-21")
+    r = client.post("/web/admin/zet-thresholds",
+                    json={"group": "ИС-21", "year": "2025/2026", "semester": 2,
+                          "min_zet": 27.5},
+                    headers=admin)
+    assert r.status_code == 200, r.text
+
+    pull = client.get("/sync/pull", headers={**admin, "X-Client": "desktop"})
+    assert pull.status_code == 200, pull.text
+    rows = (pull.json().get("changes") or {}).get("zet_thresholds")
+    assert rows, "порог не попал в дельту — внутри программы он останется неизвестным"
+    assert any(abs((x.get("min_zet") or 0) - 27.5) < 1e-6 for x in rows), rows
+
+
+def test_zet_threshold_editor_is_proxied_not_written_locally():
+    """Редактор порогов обязан уходить на бой, а не в локальное зеркало.
+
+    Пара к тесту выше и намеренно с ДРУГИМ ответом: читать порог можно синком, а вот
+    ЗАПИСЬ внутри программы уходит в `local_app.db` — копию, из которой обратного пути
+    на боевой сервер нет. Сохранённый там порог не потерялся бы «когда-нибудь», а
+    исчез бы сразу и молча, и админ узнал бы об этом от куратора через семестр.
+    """
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent.parent
+    for p in (root, root / "ui"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    import local_api
+    assert "/web/admin/zet-thresholds" in local_api._PROXY_PREFIXES

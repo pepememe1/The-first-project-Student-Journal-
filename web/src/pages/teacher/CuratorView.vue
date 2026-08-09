@@ -492,7 +492,7 @@ async function exportReport(fmt) {
           <div class="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             <div v-for="s in (subgroupInfo?.students || [])" :key="s.student_id"
                  class="flex items-center gap-2 rounded-sm px-1 py-1.5 hover:bg-bg2">
-              <span class="flex-1 truncate text-sm text-text">{{ s.full_name }}</span>
+              <span class="min-w-0 flex-1 truncate text-sm text-text">{{ s.full_name }}</span>
               <div class="flex overflow-hidden rounded-sm border border-border2">
                 <button type="button" class="px-2.5 py-1 text-xs font-medium"
                         :class="subgroupDraft[s.student_id] === 1 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"

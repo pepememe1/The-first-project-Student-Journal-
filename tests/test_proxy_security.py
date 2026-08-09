@@ -151,6 +151,12 @@ _ONLINE_ONLY_SUBSYSTEMS = {
     "/web/staff/parents": "ParentLink не в SYNC_MODELS",
     "/web/staff/parent-links": "ParentLink не в SYNC_MODELS",
     "/web/admin/parents": "ParentLink не в SYNC_MODELS",
+    "/web/admin/registrations": "RegistrationRequest не в SYNC_MODELS, а одобрение заявки "
+                                "СОЗДАЁТ пользователя и шлёт письмо — выполнить это против "
+                                "локального зеркала значит завести фантомный аккаунт",
+    "/web/admin/zet-thresholds": "РЕДАКТОР порогов: сами пороги синкаются (ZetThreshold в "
+                                 "SYNC_MODELS), но у Phase B-записи нет обратного пути из "
+                                 "local_app.db на бой — сохранённый порог потерялся бы молча",
 }
 
 

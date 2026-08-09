@@ -337,3 +337,67 @@ def test_patch_is_much_smaller_than_full_file(tmp_path):
 
     size = MP.build_patch(str(old), str(new), str(patch))
     assert 0 < size < os.path.getsize(new) * 0.2
+
+
+# ── Защищённый канал (находка аудита 08.08.2026) ──────────────────────────────────
+# Автообновление — единственное место продукта, где чужой байт становится
+# исполняемым кодом. Тройная сверка SHA-256 от подмены не спасает: хеш едет ТЕМ ЖЕ
+# каналом, что и файл. Значит проверять надо канал, а не только содержимое.
+@pytest.mark.parametrize("url,allowed", [
+    ("https://esstu-gradebook.ru", True),      # боевой адрес
+    ("https://192.168.1.50:8443", True),       # свой сервер, но с TLS
+    ("http://127.0.0.1:8000", True),           # петля: встать в середину негде
+    ("http://localhost:8000", True),
+    ("", True),                                # адреса нет вовсе — качать неоткуда
+    ("http://194.226.120.74:8000", False),     # боевой IP открытым текстом
+    ("http://192.168.1.50:8000", False),       # ровно то, что создаёт «ПК как сервер ЛВС»
+    ("http://gradebook.local:8000", False),
+])
+def test_transport_guard_allows_only_secure_channels(updater_env, url, allowed):
+    updater, _tmp, _exe = updater_env
+    assert updater._transport_ok(url) is allowed
+
+
+def test_manifest_over_plain_http_never_touches_network(updater_env, monkeypatch):
+    """По небезопасному адресу запрос не делается ВООБЩЕ.
+
+    Важно именно «не делается», а не «результат отбрасывается»: сам факт запроса уже
+    сообщает тому, кто сидит в середине, что здесь есть клиент, готовый принять .exe.
+    """
+    updater, _tmp, _exe = updater_env
+    def boom(*a, **kw):                       # pragma: no cover — не должно вызваться
+        raise AssertionError("updater полез в сеть по незащищённому каналу")
+    monkeypatch.setattr(updater, "_get", boom)
+    assert updater.fetch_manifest("http://192.168.1.50:8000") == {}
+
+
+def test_prompt_over_plain_http_does_not_offer_update(updater_env, monkeypatch):
+    """Диалог «установить обновление?» по http не показывается, и программа живёт дальше.
+
+    Возврат False здесь принципиален: True означает «закройся прямо сейчас», и человек
+    остался бы без журнала из-за того, что администратор поднял сервер без TLS.
+    """
+    updater, _tmp, _exe = updater_env
+    monkeypatch.setattr(updater, "_get", lambda *a, **kw: json.dumps(
+        {"version": "9.9.9", "file": "GradeBookAI.exe", "sha256": "0" * 64}
+    ).encode("utf-8"))
+    asked = []
+    monkeypatch.setattr(updater, "ask_yes_no", lambda *a: asked.append(a) or True)
+    assert updater.check_and_prompt("http://192.168.1.50:8000", "3.6.9") is False
+    assert not asked, "по незащищённому каналу обновление даже не предлагается"
+
+
+def test_prompt_over_https_still_offers_update(updater_env, monkeypatch):
+    """Обратная сторона: заслонка не должна отключить автообновление на боевом https.
+
+    Без этой проверки «починка» могла бы просто выключить обновления всем и остаться
+    незамеченной — тесты были бы зелёными, а продукт перестал бы обновляться.
+    """
+    updater, _tmp, _exe = updater_env
+    monkeypatch.setattr(updater, "_get", lambda *a, **kw: json.dumps(
+        {"version": "9.9.9", "file": "GradeBookAI.exe", "sha256": "0" * 64}
+    ).encode("utf-8"))
+    asked = []
+    monkeypatch.setattr(updater, "ask_yes_no", lambda *a: asked.append(a) or False)
+    assert updater.check_and_prompt("https://esstu-gradebook.ru", "3.6.9") is True
+    assert asked, "по https обновление обязано предлагаться как раньше"

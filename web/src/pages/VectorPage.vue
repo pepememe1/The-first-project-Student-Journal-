@@ -113,7 +113,7 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
     <div class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
       <span class="size-2 shrink-0 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />
       <span class="font-title text-base font-bold text-text">{{ vectorName() }}</span>
-      <span v-if="label" class="truncate text-xs text-text3">· {{ label }}</span>
+      <span v-if="label" class="min-w-0 truncate text-xs text-text3">· {{ label }}</span>
     </div>
 
     <!-- Маскот ФОНОМ (крупный, по центру) + чат полупрозрачным слоем поверх -->

@@ -665,7 +665,7 @@ async function downloadVedomost(fmt) {
         </label>
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
           <div v-for="(r, i) in attRows" :key="i" class="flex items-center gap-2">
-            <span class="flex-1 truncate text-sm text-text">{{ r.surname }} {{ r.name }}</span>
+            <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.surname }} {{ r.name }}</span>
             <select v-model="r.grade" class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
               <option v-for="g in ATT_GRADES" :key="g" :value="g">{{ g || '—' }}</option>
             </select>

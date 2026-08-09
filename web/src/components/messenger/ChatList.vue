@@ -251,7 +251,7 @@ onMounted(() => { m.loadChats() })
                 <span class="shrink-0 text-[11px] text-text3">{{ fmtTime(c.last_at) }}</span>
               </div>
               <div class="flex items-center justify-between gap-2">
-                <span class="truncate text-xs text-text3">
+                <span class="min-w-0 truncate text-xs text-text3">
                   {{ preview(c) }}
                 </span>
                 <!-- Меня отметили в непрочитанном — вместо ЧИСЛА сообщений показываем «@».

@@ -127,7 +127,13 @@ onBeforeUnmount(() => clearInterval(tipTimer))
 
         <!-- ЗЕТ (docs/PLAN-ZET.md) — только если хотя бы один предмет его имеет. -->
         <div v-if="zet?.subjects?.length" class="rounded-lg border border-border bg-card p-4 shadow-card">
-          <ZetProgress :earned="zet.earned" :total="zet.total" :subjects="zet.subjects" show-details />
+          <!-- min-zet передаётся ОБЯЗАТЕЛЬНО: без него полоса всегда красится «хорошо»
+               (см. ZetProgress: «без порога — всегда accent»), и студент видит свой
+               баланс без единого ограничения рядом. Сервер отдавал это поле с самого
+               появления ЗЕТ и прямо обещал в докстринге «для „до перевода: X ЗЕТ“ в
+               дашборде», но страница его не читала — обещание не выполнялось ни разу. -->
+          <ZetProgress :earned="zet.earned" :total="zet.total" :min-zet="zet.min_zet"
+                       :subjects="zet.subjects" show-details />
         </div>
 
         <div>

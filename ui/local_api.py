@@ -672,9 +672,19 @@ def instance() -> LocalAPI:
 #привязанных родителей в локальной копии всегда пуст. Разбор ПО ТОЙ ЖЕ логике, что
 #выше: если данные не входят в offline-first синк — единственный источник правды для
 #них ВСЕГДА бой, и без пересылки внутри десктопа их просто неоткуда взять.
+#`/web/admin/registrations` — заявки на регистрацию. `RegistrationRequest` не в
+#SYNC_MODELS, и это правильно: одобрение не читает строку, а СОЗДАЁТ пользователя и шлёт
+#ему письмо с доступом. Без пересылки заявка ушла бы в `local_app.db` — зеркальную копию,
+#из которой обратного пути на бой нет, — и родился бы фантомный студент, которого нет ни
+#на сайте, ни у него самого. До этой правки админ внутри программы видел ПУСТОЙ список и
+#делал вывод «никто не регистрировался», хотя на сайте заявки лежали.
+#`/web/admin/zet-thresholds` — РЕДАКТОР порогов перевода. Сами пороги теперь синкаются
+#(ZetThreshold в SYNC_MODELS), но ЗАПИСЬ обязана идти на бой по той же причине: у Phase
+#B-правок нет обратного моста из локального зеркала, и сохранённый порог потерялся бы.
 _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
                    "/me/prefs", "/me/events",
-                   "/web/staff/parents", "/web/staff/parent-links", "/web/admin/parents")
+                   "/web/staff/parents", "/web/staff/parent-links", "/web/admin/parents",
+                   "/web/admin/registrations", "/web/admin/zet-thresholds")
 
 
 #Что именно недоступно — зависит и от пути, и от ПРИЧИНЫ. Два прежних текста врали в
@@ -686,7 +696,9 @@ _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
 _WHAT = {"/web/admin/server": "состояние", "/web/messenger": "сообщения",
          "/messenger": "сообщения", "/me/prefs": "профиль", "/me/events": "уведомления",
          "/web/staff/parents": "родителей", "/web/staff/parent-links": "родителей",
-         "/web/admin/parents": "родителей"}
+         "/web/admin/parents": "родителей",
+         "/web/admin/registrations": "заявки на регистрацию",
+         "/web/admin/zet-thresholds": "пороги перевода"}
 
 
 def _offline_reason(path: str, why: str = "offline") -> str:
