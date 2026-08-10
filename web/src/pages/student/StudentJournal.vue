@@ -6,6 +6,7 @@ import { studentApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SubjectLessons from '@/components/journal/SubjectLessons.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -22,19 +23,9 @@ async function load() {
 }
 onMounted(load)
 
-// Оценка-«плашка» как в журнале десктопа (_load_journal): у числовых оценок —
-// пастельный фон (5→зелёный, 4→синий, 3→жёлтый, 2→красный) поверх тёмного текста;
-// «Н» — красным, «✓» — акцентом; пусто — приглушённый прочерк.
-const GRADE_BG = { 5: '#DBF0E4', 4: '#DCEFF2', 3: '#FBEFD6', 2: '#FAE0DE' }
-function gradeChip(g) {
-  const v = (g || '').trim()
-  const head = v.split(' ')[0]
-  if (GRADE_BG[head]) return { background: GRADE_BG[head], color: '#0F1B22' }
-  if (v === 'Н') return { color: 'var(--gb-red)' }
-  if (v === '✓') return { color: 'var(--gb-accent)' }
-  return { color: 'var(--gb-text2)' }
-}
-const isNumericGrade = (g) => !!GRADE_BG[(g || '').trim().split(' ')[0]]
+// Сами занятия рисует общий SubjectLessons — он же стоит в журнале родителя, чтобы две
+// страницы, обязанные показывать одно и то же, не разъезжались (раньше вёрстка была
+// скопирована в оба файла и уже начала расходиться, см. докстринг компонента).
 </script>
 
 <template>
@@ -52,30 +43,7 @@ const isNumericGrade = (g) => !!GRADE_BG[(g || '').trim().split(' ')[0]]
           </Badge>
           <Badge variant="green">{{ locale.t('studentJournal.averageBadge', { avg: s.average || '—' }) }}</Badge>
         </template>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border2 text-left text-tiny uppercase tracking-wide text-text2">
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colType', 'Тип') }}</th>
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colTopic', 'Тема') }}</th>
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('studentJournal.colDate', 'Дата') }}</th>
-                <th class="py-2 text-right font-semibold">{{ locale.t('studentJournal.colGrade', 'Оценка') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="l in s.lessons" :key="l.id" class="border-b border-border last:border-0">
-                <td class="py-2.5 pr-3 text-text3 whitespace-nowrap">{{ l.type }} №{{ l.number }}</td>
-                <td class="py-2.5 pr-3 text-text">{{ l.topic || '—' }}</td>
-                <td class="py-2.5 pr-3 text-text3 whitespace-nowrap">{{ l.date || '—' }}</td>
-                <td class="py-2.5 text-right">
-                  <span class="inline-block min-w-[2.2rem] rounded-md text-center font-title text-base font-bold"
-                        :class="isNumericGrade(l.grade) ? 'px-2 py-0.5' : ''"
-                        :style="gradeChip(l.grade)">{{ l.grade || '—' }}</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <SubjectLessons :lessons="s.lessons" />
       </Card>
 
       <p v-if="data.methodology" class="px-1 text-xs text-text3">{{ data.methodology }}</p>

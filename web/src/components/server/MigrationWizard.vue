@@ -78,7 +78,7 @@ const named = (id) => props.servers.find((s) => s.id === id)?.name || id
 
 <template>
   <div class="flex flex-col gap-4">
-    <div class="grid gap-3 sm:grid-cols-2">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <label class="block">
         <span class="mb-1 block text-sm font-medium text-text2">{{ locale.t('migrationWizard.fromLabel', 'Откуда (работает сейчас)') }}</span>
         <select v-model="source"

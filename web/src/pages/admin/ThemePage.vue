@@ -57,7 +57,7 @@ function swatchStyle(id) {
       </div>
     </Card>
 
-    <div class="grid gap-6 lg:grid-cols-2">
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Card :title="locale.t('themePage.customColor', 'Свой цвет')" :subtitle="locale.t('themePage.customColorHint', 'Кастомный акцент палитры')">
         <div class="flex items-center gap-4">
           <input

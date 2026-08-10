@@ -42,7 +42,7 @@ function barColor(v) {
     <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
 
     <template v-else-if="data">
-      <div class="grid gap-4 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard :label="locale.t('studentStats.average', 'Средний балл')" :value="data.average ?? '—'" :icon="TrendingUp" accent />
         <StatCard :label="locale.t('studentStats.absencesHours', 'Пропусков (часов)')" :value="data.absences?.всего ?? 0" />
         <StatCard :label="locale.t('studentStats.debts', 'Задолженности')" :value="data.debts?.length ?? 0" />
@@ -50,16 +50,18 @@ function barColor(v) {
 
       <Card :title="locale.t('studentStats.subjectPerfTitle', 'Успеваемость по предметам')">
         <EmptyState v-if="!perSubject.length" :title="locale.t('studentStats.noData', 'Нет данных')" />
-        <div v-else class="grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
+        <!-- grid-cols-1 на телефоне: без явной колонки неявная дорожка `auto` тянется под
+             самое длинное название предмета и уводит карточку за край экрана -->
+        <div v-else class="grid grid-cols-1 gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
           <div class="flex flex-col items-center justify-center">
             <Gauge :value="Number(data.average) || 0" :size="132" />
             <p class="mt-1 text-xs text-text3">{{ locale.t('studentStats.averageCaption', 'средний балл') }}</p>
           </div>
-          <ul class="space-y-3">
-            <li v-for="p in perSubject" :key="p.subject">
-              <div class="mb-1 flex items-center justify-between text-sm">
-                <span class="text-text">{{ p.subject }}</span>
-                <span class="font-title font-bold" :style="{ color: barColor(p.average) }">{{ p.average || '—' }}</span>
+          <ul class="flex min-w-0 flex-col gap-3">
+            <li v-for="p in perSubject" :key="p.subject" class="min-w-0">
+              <div class="mb-1 flex items-center justify-between gap-2 text-sm">
+                <span class="min-w-0 break-words text-text">{{ p.subject }}</span>
+                <span class="shrink-0 font-title font-bold" :style="{ color: barColor(p.average) }">{{ p.average || '—' }}</span>
               </div>
               <div class="h-2 overflow-hidden rounded-full bg-bg2">
                 <div class="h-full rounded-full transition-all"
@@ -70,7 +72,7 @@ function barColor(v) {
         </div>
       </Card>
 
-      <div class="grid gap-6 lg:grid-cols-2">
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card :title="locale.t('studentStats.absencesTitle', 'Пропуски')">
           <div class="grid grid-cols-3 gap-3 text-center">
             <div class="rounded-md bg-card2 p-3">

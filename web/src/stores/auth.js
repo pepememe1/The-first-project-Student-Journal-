@@ -11,8 +11,8 @@ import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
 import { registerToken, unregisterToken } from '@/services/push'
-import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedule }
-  from '@/services/scheduleWidget'
+import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedule,
+  saveEndpoint as saveWidgetEndpoint } from '@/services/scheduleWidget'
 import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
@@ -60,6 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
       // это время показывал бы данные с прошлого захода. Вход — единственный момент,
       // который случается гарантированно и однозначно определяет, ЧЬЁ расписание брать.
       // Ошибку глотаем: виджет — дополнение, из-за него вход падать не должен.
+      // Адрес сервера — ОБЯЗАТЕЛЬНО рядом со снимком: без него нативная часть не знает,
+      // куда ходить, и виджет живёт ровно тем, что положили при входе. Человек может не
+      // открывать приложение неделями, а расписание за это время правят — и виджет
+      // уверенно показывает не то. Зашить адрес в нативный код нельзя: сервер задаётся
+      // в рантайме (свой сервер колледжа), и зашитый указывал бы не туда.
+      saveWidgetEndpoint()
       refreshWidgetSchedule(data.role).catch(() => {})
       return user.value
     } catch (e) {
@@ -84,6 +90,11 @@ export const useAuthStore = defineStore('auth', () => {
       setTokens({ access: data.access_token, refresh: data.refresh_token })
       user.value = { login: data.login || '', role: data.role, name: data.name || data.login || '' }
       localStorage.setItem(LS_USER, JSON.stringify(user.value))
+      // ⚠️ То же, что и в парольном входе, — и раньше этого здесь НЕ БЫЛО: у того, кто
+      // заходит по биометрии, виджет не наполнялся вовсе и молча оставался пустым.
+      // Вход есть вход, каким бы способом он ни произошёл.
+      saveWidgetEndpoint()
+      refreshWidgetSchedule(data.role).catch(() => {})
       return user.value
     } catch (e) {
       // Отмена пользователем (NotAllowedError/AbortError) — не ошибка, пробрасываем молча.

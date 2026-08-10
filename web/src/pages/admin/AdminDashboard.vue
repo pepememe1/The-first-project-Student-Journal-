@@ -25,14 +25,14 @@ const tiles = computed(() => [
 
 <template>
   <div class="space-y-6">
-    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard :label="locale.t('adminDashboard.teachersLabel', 'Преподавателей')" :value="data?.teachers ?? '—'" :icon="GraduationCap" accent />
       <StatCard :label="locale.t('adminDashboard.studentsLabel', 'Студентов')" :value="data?.students ?? '—'" :icon="Users" />
       <StatCard :label="locale.t('adminDashboard.groupsLabel', 'Групп')" :value="data?.groups ?? '—'" :icon="Boxes" />
       <StatCard :label="locale.t('adminDashboard.subjectsLabel', 'Предметов')" :value="data?.subjects ?? '—'" :icon="Library" />
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <button v-for="t in tiles" :key="t.to" type="button"
               class="flex items-start gap-4 rounded-lg border border-border bg-card p-5 text-left shadow-card transition-colors hover:border-accent"
               @click="router.push(t.to)">

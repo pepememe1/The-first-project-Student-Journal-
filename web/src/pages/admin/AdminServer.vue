@@ -225,7 +225,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
 
       <!-- Форма сервера -->
       <div v-if="form" class="mb-4 rounded-lg border border-border bg-card2 p-3">
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label class="block">
             <span class="mb-1 block text-xs text-text3">{{ locale.t('adminServer.nameLabel', 'Название') }}</span>
             <input v-model="form.name" :placeholder="locale.t('adminServer.defaultServerName', 'Боевой сервер')"
@@ -331,7 +331,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
               </span>
             </div>
 
-            <div class="grid gap-5 md:grid-cols-2">
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
               <UsageBar v-if="remote.disk?.total" :label="locale.t('adminServer.diskLabel', 'Диск')"
                         :used="remote.disk.used" :total="remote.disk.total" />
               <UsageBar v-if="remote.memory?.total" :label="locale.t('adminServer.ramLabel', 'Оперативная память')"
@@ -430,7 +430,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
 
       <Card v-if="metrics" :title="locale.t('adminServer.machineCardTitle', 'Машина, на которой работает сервер')"
             :subtitle="`${metrics.host} · ${metrics.system} · Python ${metrics.python}`" pad>
-        <div class="grid gap-5 md:grid-cols-2">
+        <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
           <UsageBar v-if="metrics.disk?.total" :label="locale.t('adminServer.diskLabel', 'Диск')"
                     :used="metrics.disk.used" :total="metrics.disk.total" />
           <UsageBar v-if="metrics.memory?.total" :label="locale.t('adminServer.ramLabel', 'Оперативная память')"
@@ -450,7 +450,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
         </div>
       </Card>
 
-      <div class="grid gap-4 md:grid-cols-2">
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card :title="locale.t('adminServer.dbCardTitle', 'База данных · защита ПДн (152-ФЗ)')" pad>
           <dl class="flex flex-col gap-2.5 text-sm">
             <div class="flex items-center justify-between gap-3">

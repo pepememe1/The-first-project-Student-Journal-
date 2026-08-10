@@ -41,7 +41,7 @@ onUnmounted(() => timer && clearInterval(timer))
 </script>
 
 <template>
-  <div class="grid gap-6 lg:grid-cols-5">
+  <div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
     <Card class="lg:col-span-2" :title="locale.t('monitorPage.onlineNow', 'Сейчас онлайн')" :subtitle="locale.t('monitorPage.connectedCount', { n: online.length })">
       <EmptyState v-if="!online.length" :title="locale.t('monitorPage.nobodyOnline', 'Никого онлайн')" :message="locale.t('monitorPage.onlineHint', 'Активность за последние ~90 секунд.')" />
       <ul v-else class="divide-y divide-border">

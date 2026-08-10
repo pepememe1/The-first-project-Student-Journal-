@@ -541,7 +541,7 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
            h-full на карточке — чтобы дни в одном ряду были РАВНОЙ высоты: без него
            карточка тянется по своему содержимому, и ряд «лесенкой» выглядит как сбой
            вёрстки, хотя данные верные. -->
-      <div v-else class="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+      <div v-else class="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
         <div v-for="[key, full] in dayColumns" :key="key" class="flex h-full flex-col rounded-lg border border-border bg-card p-3 shadow-card">
           <p class="mb-2 font-title text-base font-bold text-text">{{ full }}</p>
           <p v-if="!dayLessons(key).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>

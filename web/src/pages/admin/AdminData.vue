@@ -141,7 +141,7 @@ async function doImport() {
         </div>
       </div>
 
-      <div class="grid gap-1 sm:grid-cols-2">
+      <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
         <label v-for="d in datasets" :key="d.name"
                class="flex cursor-pointer items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm hover:bg-bg2">
           <input type="checkbox" :value="d.name" v-model="pickedExport" class="accent-accent" />
@@ -187,7 +187,7 @@ async function doImport() {
           </span>
         </div>
 
-        <div class="grid gap-1 sm:grid-cols-2">
+        <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
           <label v-for="d in preview.datasets" :key="d.name"
                  class="flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm"
                  :class="d.error || !d.count ? 'opacity-50' : 'cursor-pointer hover:bg-bg2'">

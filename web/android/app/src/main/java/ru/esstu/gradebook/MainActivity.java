@@ -261,6 +261,24 @@ public class MainActivity extends BridgeActivity {
          * целиком весит десятки килобайт, и гонять их через мост на каждом заходе у
          * тех, кто виджет не ставил, незачем.
          */
+        /**
+         * Запомнить адрес сервера, чтобы виджет мог обновляться САМ.
+         *
+         * Без этого он живёт ровно тем снимком, который приложение положило при входе, —
+         * а человек может не открывать приложение неделями, пока расписание правят.
+         * Зашить адрес в нативный код нельзя: сервер задаётся в рантайме (экран
+         * подключения, свой сервер колледжа), и «зашитый» указывал бы не туда.
+         *
+         * Токена здесь нет и не будет — ходим в публичный `/public/schedule*`
+         * (см. ScheduleWidgetRefresh, там же заслонка «только https»).
+         */
+        @JavascriptInterface
+        public void setEndpoint(String base) {
+            getSharedPreferences(ScheduleWidgetData.PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(ScheduleWidgetRefresh.KEY_ENDPOINT,
+                            base == null ? "" : base.trim()).apply();
+        }
+
         @JavascriptInterface
         public boolean isPlaced() {
             try {

@@ -81,14 +81,50 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
     public void onReceive(Context ctx, Intent intent) {
         super.onReceive(ctx, intent);
         String action = intent != null ? intent.getAction() : null;
-        if (Intent.ACTION_DATE_CHANGED.equals(action)
+        boolean dayChanged = Intent.ACTION_DATE_CHANGED.equals(action)
                 || Intent.ACTION_TIME_CHANGED.equals(action)
-                || Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
+                || Intent.ACTION_TIMEZONE_CHANGED.equals(action);
+        if (dayChanged) {
             //Наступили новые сутки — «сегодня» стало другим днём недели, а на границе
             //года меняется ещё и чётность. Без этого виджет до получаса показывал бы
             //вчерашний день, что хуже пустого: цифры настоящие, но не про тот день.
             refreshAll(ctx);
         }
+        if (dayChanged || AppWidgetManager.ACTION_APPWIDGET_UPDATE.equals(action)) {
+            maybeFetchFresh(ctx);
+        }
+    }
+
+    /**
+     * Сходить за свежим расписанием, если пора (см. ScheduleWidgetRefresh).
+     *
+     * ⚠️ `goAsync()` обязателен. Сеть на главном потоке запрещена системой
+     * (NetworkOnMainThreadException), а просто запущенный поток не спасает: как только
+     * onReceive возвращает управление, процесс становится кандидатом на убийство, и
+     * запрос обрывается на середине — незаметно и невоспроизводимо. `goAsync` продлевает
+     * жизнь приёмнику ровно до `finish()`; наши таймауты (6 с соединение, 8 с чтение)
+     * заведомо укладываются в отпущенное системой окно.
+     *
+     * Рисуем из кэша мы в любом случае РАНЬШЕ (super.onReceive выше), поэтому сеть здесь
+     * никогда не задерживает появление виджета на экране.
+     */
+    private void maybeFetchFresh(Context ctx) {
+        final PendingResult pending = goAsync();
+        final Context app = ctx.getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (ScheduleWidgetRefresh.refreshNow(app)) {
+                        refreshAll(app);      //снимок реально сменился — перерисовать
+                    }
+                } catch (Throwable ignored) {
+                    //Виджет — дополнение: любая его беда не имеет права уронить процесс.
+                } finally {
+                    pending.finish();
+                }
+            }
+        }, "gb-widget-refresh").start();
     }
 
     /**

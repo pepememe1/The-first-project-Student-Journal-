@@ -508,7 +508,7 @@ function isHover(day, slot) {
         </div>
         <p v-if="teacherLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
         <div v-else-if="!teacherData" class="text-sm text-text3">{{ locale.t('schedulePage.unavailableTitle', 'Расписание недоступно') }}</div>
-        <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <div v-for="day in DAYS" :key="day" class="rounded-lg border border-border bg-card p-3 shadow-card">
             <p class="mb-2 font-title text-base font-bold text-text">{{ dayLabel(day) }}</p>
             <p v-if="!readOnlyDayLessons(day).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>
@@ -610,7 +610,7 @@ function isHover(day, slot) {
 
         <!-- Вне колледжа — тот же просмотр, что у препода/студента, без редактирования
              (ScheduleOverride там не накладывается, см. _group_schedule на сервере). -->
-        <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <div v-for="day in DAYS" :key="day" class="rounded-lg border border-border bg-card p-3 shadow-card">
             <p class="mb-2 font-title text-base font-bold text-text">{{ dayLabel(day) }}</p>
             <p v-if="!readOnlyDayLessons(day).length" class="py-4 text-center text-xs text-text2">{{ locale.t('schedulePage.noLessons', 'Занятий нет') }}</p>

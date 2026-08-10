@@ -12,6 +12,7 @@ import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ZetProgress from '@/components/ui/ZetProgress.vue'
+import SubjectLessons from '@/components/journal/SubjectLessons.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -24,14 +25,9 @@ const loading = ref(true)
 const denied = ref(false)
 const zet = ref(null)   // docs/PLAN-ZET.md §7.6 — та же строка, что у студента, без порога
 
-const gradeClass = (g) => {
-  const v = (g || '').trim().split(' ')[0]
-  if (v === '5') return 'text-green font-bold'
-  if (v === '4') return 'text-accent font-semibold'
-  if (v === '3') return 'text-orange'
-  if (v === '2' || v === 'Н') return 'text-red font-semibold'
-  return 'text-text3'
-}
+// Оценки рисует общий SubjectLessons — тот же, что в журнале студента: докстринг
+// /web/parent/journal обещает «формат один в один», и собственная копия вёрстки здесь
+// уже начала расходиться со студенческой (см. докстринг компонента).
 
 const child = computed(() => children.value.find((c) => c.id === studentId.value) || null)
 
@@ -101,28 +97,7 @@ watch(studentId, loadJournal)
           </Badge>
           <Badge variant="green">{{ locale.t('parentJournal.averageBadge', { avg: s.average || '—' }) }}</Badge>
         </template>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-border2 text-left text-tiny uppercase tracking-wide text-text2">
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colType', 'Тип') }}</th>
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colTopic', 'Тема') }}</th>
-                <th class="py-2 pr-3 font-semibold">{{ locale.t('parentJournal.colDate', 'Дата') }}</th>
-                <th class="py-2 text-right font-semibold">{{ locale.t('parentJournal.colGrade', 'Оценка') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="l in s.lessons" :key="l.id" class="border-b border-border last:border-0">
-                <td class="py-2 pr-3 text-text2">{{ l.type }} {{ l.number }}</td>
-                <td class="py-2 pr-3 text-text">{{ l.topic || '—' }}</td>
-                <td class="py-2 pr-3 text-text3">{{ l.date || '—' }}</td>
-                <td class="py-2 text-right" :class="gradeClass(l.latest || l.grade)">
-                  {{ l.latest || l.grade || '—' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <SubjectLessons :lessons="s.lessons" />
       </Card>
       <p v-if="data.methodology" class="px-1 text-xs text-text3">{{ data.methodology }}</p>
     </template>

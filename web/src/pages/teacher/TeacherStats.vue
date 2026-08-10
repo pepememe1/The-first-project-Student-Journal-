@@ -64,9 +64,11 @@ const sprite = computed(() => dashboardEmote({ average: Number(data.value?.group
     </div>
     <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherStats.noWorkload', 'Нет нагрузки')" />
     <template v-else>
-      <div class="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+      <!-- grid-cols-1 до lg: неявная дорожка `auto` растянулась бы под самое длинное
+           название предмета и утащила бы за край экрана всю страницу -->
+      <div class="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div class="space-y-4">
-          <div class="grid gap-4 sm:grid-cols-3">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard :label="locale.t('teacherStats.groupAverage', 'Средний по группе')" :value="data?.group_average || '—'" :icon="TrendingUp" accent />
             <StatCard :label="locale.t('teacherStats.students', 'Студентов')" :value="data?.students ?? '—'" :icon="Users" />
             <StatCard :label="locale.t('teacherStats.lessons', 'Занятий')" :value="data?.lessons ?? '—'" :icon="BookOpen" />
