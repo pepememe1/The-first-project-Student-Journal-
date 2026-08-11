@@ -354,6 +354,14 @@ export const vectorApi = {
   ttsStatus: () => api.get('/web/vector/tts/status'),
   tts: (text, voice = 'male') =>
     api.post('/web/vector/tts', { text, voice }, { responseType: 'arraybuffer' }),
+  // Распознавание речи (STT). Чем распознавать — решает СЕРВЕР (`engine`: whisper |
+  // browser), а не клиент: иначе десктоп и сайт разъехались бы в поведении, а
+  // переключатель админа «включить для всех» стал бы невозможен.
+  // ⚠️ Раньше эти два вызова шли мимо контракта, прямо из utils/voiceInput.js. Из-за
+  // этого их не видела ни карта связей репозитория, ни человек, читающий этот файл, —
+  // хотя докстринг файла обещает, что здесь собран ВЕСЬ контракт с сервером.
+  sttStatus: () => api.get('/web/vector/stt/status'),
+  stt: (form) => api.post('/web/vector/stt', form),
 }
 
 // МЕССЕНДЖЕР (см. docs/MESSENGER-PLAN.md) ─────────────────────────────────────────

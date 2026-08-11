@@ -2,7 +2,10 @@
 utils.py — Вспомогательные функции и утилиты
 """
 
-from styles import DEFAULT_GROUPS, DEFAULT_SUBJECTS
+#⚠️ Раньше здесь стояло `from styles import ...` — слой ДАННЫХ импортировал слой
+#ИНТЕРФЕЙСА ради двух списков-констант, которые к оформлению отношения не имеют.
+#Направление зависимости было перевёрнуто; теперь они живут в data/defaults.py.
+from defaults import DEFAULT_GROUPS, DEFAULT_SUBJECTS
 import log
 from data_store import get_store
 

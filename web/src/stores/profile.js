@@ -10,7 +10,12 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api } from '@/api/client'
+// ⚠️ Ходим через endpoints.js, а НЕ через голый `api.post('/me/prefs')`.
+// Тот файл в своём же докстринге обещает держать ВЕСЬ контракт с сервером, и это
+// обещание должно быть правдой: иначе смена адреса правится в пяти местах вместо
+// одного, а карта связей репозитория просто не видит такой вызов — для неё эта
+// страница с сервером не разговаривает вовсе.
+import { meApi } from '@/api/endpoints'
 import { PRESETS } from '@/theme/palette'
 
 // Лимит «О себе» — тот же, что режет сервер (routers/me.py::_MAX_BIO_CHARS).
@@ -27,7 +32,7 @@ export const useProfileStore = defineStore('profile', () => {
   async function load(force = false) {
     if (loaded && !force) return
     try {
-      const { data } = await api.get('/me/prefs')
+      const { data } = await meApi.getPrefs()
       const p = data?.prefs || {}
       avatar.value = p.avatar || ''
       bio.value = p.bio || ''
@@ -53,7 +58,7 @@ export const useProfileStore = defineStore('profile', () => {
   async function save(dataUrl) {
     avatar.value = dataUrl || ''
     saving.value = true
-    try { await api.post('/me/prefs', { avatar: avatar.value }) }
+    try { await meApi.setPrefs({ avatar: avatar.value }) }
     catch { /* офлайн — уедет позже с синком */ }
     finally { saving.value = false }
   }
@@ -67,7 +72,7 @@ export const useProfileStore = defineStore('profile', () => {
     if (newColor != null) { color.value = newColor; payload.profile_color = color.value }
     if (newFont != null) { font.value = newFont; payload.name_font = font.value }
     saving.value = true
-    try { await api.post('/me/prefs', payload) }
+    try { await meApi.setPrefs(payload) }
     catch { /* офлайн — уедет позже с синком */ }
     finally { saving.value = false }
   }

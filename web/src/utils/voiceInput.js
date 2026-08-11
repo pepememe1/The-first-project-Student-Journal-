@@ -11,7 +11,12 @@
  * без распознавателя микрофон записал бы и молча ничего не дал, а неработающая кнопка
  * хуже отсутствующей.
  */
-import { api } from '@/api/client'
+// ⚠️ Ходим через endpoints.js, а НЕ через голый `api.post('/web/vector/stt')`.
+// Тот файл в своём же докстринге обещает держать ВЕСЬ контракт с сервером, и это
+// обещание должно быть правдой: иначе смена адреса правится в пяти местах вместо
+// одного, а карта связей репозитория просто не видит такой вызов — для неё эта
+// страница с сервером не разговаривает вовсе.
+import { vectorApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 
 /** Поддерживает ли браузер запись вообще (в старых и в http-контексте — нет). */
@@ -34,7 +39,7 @@ export function browserRecognitionSupported() {
  */
 export async function sttStatus() {
   try {
-    const { data } = await api.get('/web/vector/stt/status')
+    const { data } = await vectorApi.sttStatus()
     const engine = data?.engine || ''
     //Сервер отдал 'browser', но браузер этого не умеет (Firefox/Safari) — честно
     //сообщаем, а не оставляем кнопку, которая ничего не сделает.
@@ -165,7 +170,7 @@ export async function startRecording(deviceId = '') {
       const form = new FormData()
       form.append('file', blob, 'audio.webm')
       try {
-        const { data } = await api.post('/web/vector/stt', form)
+        const { data } = await vectorApi.stt(form)
         return (data?.text || '').trim()
       } catch (e) {
         const status = e.response?.status

@@ -10,7 +10,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { buildPalette, normalizeSpec, effectiveMode } from '@/theme/palette'
-import { api } from '@/api/client'
+// ⚠️ Ходим через endpoints.js, а НЕ через голый `api.post('/me/prefs')`.
+// Тот файл в своём же докстринге обещает держать ВЕСЬ контракт с сервером, и это
+// обещание должно быть правдой: иначе смена адреса правится в пяти местах вместо
+// одного, а карта связей репозитория просто не видит такой вызов — для неё эта
+// страница с сервером не разговаривает вовсе.
+import { meApi } from '@/api/endpoints'
 
 const LS_KEY = 'gb.theme'
 
@@ -101,7 +106,7 @@ export const useThemeStore = defineStore('theme', () => {
       // ВАЖНО: тему шлём ОБЪЕКТОМ, как десктоп (`push_my_prefs({"theme": spec})`), а не
       // JSON-строкой — иначе поле prefs.theme несовместимо между вебом и десктопом и тема
       // не «роумится» между устройствами. prefs — JSON-колонка, объект хранится нативно.
-      await api.post('/me/prefs', { theme: spec.value })
+      await meApi.setPrefs({ theme: spec.value })
     } catch {
       // офлайн/не залогинен — не страшно, локальная тема уже применена
     }
@@ -110,7 +115,7 @@ export const useThemeStore = defineStore('theme', () => {
   /** Подтягивает тему пользователя с сервера при входе (если там сохранена). */
   async function loadFromPrefs() {
     try {
-      const { data } = await api.get('/me/prefs')
+      const { data } = await meApi.getPrefs()
       let t = data?.prefs?.theme
       // Старые записи веба хранились строкой — разбираем; десктоп пишет объект напрямую.
       if (typeof t === 'string') { try { t = JSON.parse(t) } catch { t = null } }
