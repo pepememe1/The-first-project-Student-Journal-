@@ -23,7 +23,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
-import { nameFontFamily } from '@/config/nameFonts'
+import { nameDecor } from '@/config/nameEffects'
 import Avatar from '@/components/ui/Avatar.vue'
 
 const emit = defineEmits(['close'])
@@ -36,6 +36,11 @@ const locale = useLocaleStore()
 const roleLabel = computed(() => roleLabelOf(auth.role))
 const fullName = computed(() => (auth.user?.name || '').trim() || roleLabel.value)
 const login = computed(() => (auth.user?.login || '').trim())
+// Своё имя рисуется тем же стилем, что видят другие: шрифт, эффект и цвет разом.
+const myNameDecor = computed(() => nameDecor({
+  name_font: profile.font, name_effect: profile.effect,
+  name_color: profile.nameColor, profile_color: profile.color,
+}))
 // Плашка цвета профиля — тот же резолвер, что в мессенджере: своей копии сопоставления
 // «id пресета → цвет» не заводим (иначе в чате и в профиле человек будет разного цвета).
 const plate = computed(() => profilePlate(profile.color))
@@ -83,7 +88,7 @@ async function saveStatusText() {
       </RouterLink>
 
       <p class="mt-2 truncate font-title text-base font-extrabold text-text"
-         :style="{ fontFamily: nameFontFamily(profile.font) }">{{ fullName }}</p>
+         v-bind="myNameDecor">{{ fullName }}</p>
       <p class="truncate text-xs text-text3">
         <span v-if="login">@{{ login }} · </span>{{ roleLabel }}
       </p>

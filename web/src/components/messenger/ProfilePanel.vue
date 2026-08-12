@@ -6,7 +6,7 @@ import { storeToRefs } from 'pinia'
 import { GraduationCap, UserRound, ShieldCheck, Users, PanelLeftClose, PanelLeftOpen, Landmark } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { profilePlate } from '@/theme/palette'
-import { nameFontFamily } from '@/config/nameFonts'
+import { nameDecor } from '@/config/nameEffects'
 import Avatar from '@/components/ui/Avatar.vue'
 import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
 import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } from '@/config/status'
@@ -154,7 +154,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
               class="flex flex-col items-center p-6 text-center transition-opacity hover:opacity-90"
               :style="{ background: plate }">
         <Avatar :src="activePeer.avatar" :name="activePeer.full_name" :role="activePeer.role" :color="plate" :online="!!activePeer.online" :size="96" />
-        <h2 class="mt-3 font-title text-lg font-bold text-white" :style="{ fontFamily: nameFontFamily(activePeer.name_font) }">{{ activePeer.full_name }}</h2>
+        <h2 class="mt-3 font-title text-lg font-bold text-white" v-bind="nameDecor(activePeer)">{{ activePeer.full_name }}</h2>
         <span class="mt-1 inline-flex items-center gap-1 text-xs text-white/80">
           <component :is="isTeacher ? GraduationCap : UserRound" class="size-3.5" />{{ roleLabel }}
         </span>

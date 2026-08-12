@@ -26,7 +26,7 @@ import { useProfileStore, BIO_LIMIT } from '@/stores/profile'
 import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
 import { profilePlate } from '@/theme/palette'
-import { nameFontFamily } from '@/config/nameFonts'
+import { nameDecor } from '@/config/nameEffects'
 import { roleLabel } from '@/config/roles'
 import { messengerApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -41,6 +41,8 @@ const props = defineProps({
   // на глаз», пока не нажата общая кнопка. null — использовать сохранённое значение стора.
   colorOverride: { type: String, default: null },
   fontOverride: { type: String, default: null },
+  effectOverride: { type: String, default: null },
+  nameColorOverride: { type: String, default: null },
 })
 const emit = defineEmits(['messaged'])
 
@@ -62,25 +64,43 @@ async function loadPeer() {
 onMounted(loadPeer)
 watch(() => props.userId, loadPeer)
 
+// ⚠️ Свой id берём из стора профиля (он приходит в /me/prefs), а НЕ из auth.user —
+// «визитка» после входа состоит из логина, роли и ФИО, id в ней нет и не было. Пока
+// карточка читала `auth.user?.id`, свой id был пустой строкой ВСЕГДА, и всё, что
+// адресует человека путём, тихо выключалось: заметка про себя не загружалась и не
+// сохранялась (запрос не уходил вовсе — см. ранний выход по `!id` ниже), а кнопка
+// «Написать» показывалась на собственном профиле, потому что isSelf не мог стать true.
+const myUserId = computed(() => profile.userId)
+// Стор грузится один раз за вкладку и обычно уже наполнен нижней панелью сайдбара; зовём
+// на всякий случай и здесь — вызов идемпотентный (второго запроса не будет), а во
+// встроенном режиме окна программы сайдбара нет вовсе и наполнить его больше некому.
+// Не только для editable: без своего id и на ЧУЖОЙ карточке нельзя понять, что открыт
+// собственный профиль, — тогда там появляется кнопка «Написать» самому себе.
+onMounted(() => profile.load())
+
 // «Кого показываем» — три источника по приоритету: свой профиль (реактивно к сторам,
 // живой предпросмотр без сохранения) → готовые данные от вызывающего → подгруженные сами.
 const shown = computed(() => {
   if (props.editable) {
     return {
-      id: auth.user?.id || '', full_name: auth.user?.name || '', role: auth.role,
+      id: myUserId.value, full_name: auth.user?.name || '', role: auth.role,
       group_name: auth.user?.group_name || '', avatar: profile.avatar, bio: profile.bio,
       profile_color: props.colorOverride ?? profile.color,
-      name_font: props.fontOverride ?? profile.font, login: auth.user?.login || '',
+      name_font: props.fontOverride ?? profile.font,
+      name_effect: props.effectOverride ?? profile.effect,
+      name_color: props.nameColorOverride ?? profile.nameColor,
+      login: auth.user?.login || '',
       subjects: auth.user?.subjects || [],
     }
   }
   return props.peerData || fetched.value || {}
 })
-const myUserId = computed(() => auth.user?.id || '')
 const isSelf = computed(() => !!shown.value.id && shown.value.id === myUserId.value)
 
 const plate = computed(() => profilePlate(shown.value.profile_color))
-const fontFamily = computed(() => nameFontFamily(shown.value.name_font))
+// Имя рисуем ЕДИНОЙ nameDecor (шрифт + эффект + цвет), а не одним лишь семейством
+// шрифта: иначе выбранный эффект был бы виден в диалоге выбора и нигде больше.
+const nameDecoration = computed(() => nameDecor(shown.value))
 const metaLine = computed(() => {
   const u = shown.value
   const parts = [roleLabel(u.role)]
@@ -108,11 +128,16 @@ const noteSaved = ref('')
 const noteDirty = computed(() => note.value !== noteSaved.value)
 async function loadNote() {
   if (!shown.value.id) return
+  // ⚠️ Свой id теперь приезжает вместе с prefs, то есть ПОСЛЕ монтирования карточки —
+  // значит загрузка заметки может застать человека уже печатающим. Набранный текст в
+  // этом случае не трогаем: перезаписать его серверным ответом означало бы стереть
+  // правку у того, кто просто начал печатать быстрее, чем ответила сеть.
+  const hadDraft = noteDirty.value
   try {
     const { data } = await messengerApi.note(shown.value.id)
-    note.value = data.text || ''
-    noteSaved.value = note.value
-  } catch { note.value = ''; noteSaved.value = '' }
+    noteSaved.value = data.text || ''
+    if (!hadDraft) note.value = noteSaved.value
+  } catch { if (!hadDraft) { note.value = ''; noteSaved.value = '' } }
 }
 onMounted(loadNote)
 watch(() => shown.value.id, loadNote)
@@ -180,7 +205,7 @@ async function sendMessage() {
 
       <div class="mt-3 flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <p class="truncate font-title text-xl font-extrabold text-text" :style="{ fontFamily }">
+          <p class="truncate font-title text-xl font-extrabold text-text" v-bind="nameDecoration">
             {{ shown.full_name || '…' }}
           </p>
           <p class="truncate text-sm text-text3">

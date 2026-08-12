@@ -21,7 +21,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
 import { STATUS_KINDS, myStatusLabel } from '@/config/status'
 import { roleLabel as roleLabelOf } from '@/config/roles'
-import { nameFontFamily } from '@/config/nameFonts'
+import { nameDecor } from '@/config/nameEffects'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 import SidebarUserOverlay from '@/components/SidebarUserOverlay.vue'
@@ -35,6 +35,11 @@ const locale = useLocaleStore()
 const roleLabel = computed(() => roleLabelOf(auth.role))
 const fullName = computed(() => (auth.user?.name || '').trim() || roleLabel.value)
 const login = computed(() => (auth.user?.login || '').trim())
+// Своё имя рисуется тем же стилем, что видят другие: шрифт, эффект и цвет разом.
+const myNameDecor = computed(() => nameDecor({
+  name_font: profile.font, name_effect: profile.effect,
+  name_color: profile.nameColor, profile_color: profile.color,
+}))
 
 // Статус — тот же общий словарь (config/status.js), что у мессенджера: второй копии нет.
 // Сам ВЫБОР статуса живёт в раскрывающейся карточке (SidebarUserOverlay) — здесь нужна
@@ -85,7 +90,7 @@ onMounted(async () => {
         </span>
         <span class="min-w-0 flex-1">
           <span class="block truncate text-[13px] font-semibold leading-tight text-text"
-                :style="{ fontFamily: nameFontFamily(profile.font) }">{{ fullName }}</span>
+                v-bind="myNameDecor">{{ fullName }}</span>
           <span v-if="login" class="block truncate text-[11px] leading-tight text-text3">@{{ login }}</span>
         </span>
         <ChevronDown class="size-3.5 shrink-0 text-text3 transition-transform"

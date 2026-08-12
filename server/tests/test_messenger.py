@@ -793,6 +793,25 @@ def test_name_font_visible_in_conversation_info(client):
     assert owner["name_font"] == "ptmono"
 
 
+def test_name_effect_and_color_travel_with_the_profile(client):
+    """Эффект и цвет имени (3.7) обязаны доезжать до ОБОИХ мест, где клиент рисует чужое
+    имя: карточка профиля и список участников беседы. Раньше здесь ездил один шрифт, и
+    забытое поле выглядело бы не как ошибка, а как «человек ничего не настраивал»."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    client.post("/me/prefs",
+                json={"name_font": "russo", "name_effect": "rainbow", "name_color": "violet"},
+                headers=a)
+
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert (card["name_font"], card["name_effect"], card["name_color"]) == ("russo", "rainbow", "violet")
+
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Г", "member_ids": [b_id, c_id]}, headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
+    owner = next(p for p in info["participants"] if p["user_id"] == a_id)
+    assert (owner["name_effect"], owner["name_color"]) == ("rainbow", "violet")
+
+
 def test_mute_conversation_endpoint_and_push_suppression(client, monkeypatch):
     """Мьют беседы у себя: флаг отражается в списке чатов и глушит пуш по этой беседе."""
     import app.rustore_push as rp
@@ -1673,6 +1692,27 @@ def test_note_self_note_supported(client):
     r = client.post(f"/web/messenger/users/{a_id}/note", json={"text": "не забыть про журнал"}, headers=a)
     assert r.status_code == 200, r.text
     assert client.get(f"/web/messenger/users/{a_id}/note", headers=a).json()["text"] == "не забыть про журнал"
+
+
+def test_self_note_works_with_the_id_a_client_can_actually_obtain(client):
+    """Заметка про себя достижима ТЕМ id, который клиент реально может узнать.
+
+    Тест выше (`test_note_self_note_supported`) годами был зелёным, а функция при этом
+    не работала: он берёт id из внутренностей теста, а живому клиенту брать его было
+    неоткуда — после входа сервер отдаёт только логин, роль и ФИО. Страница профиля
+    подставляла в путь пустую строку, запрос не уходил вовсе, и кнопка «Сохранить»
+    молча ничего не делала. Поэтому здесь id добывается ровно так же, как в браузере —
+    из /me/prefs, — и только потом проверяется сама заметка."""
+    _, (a_id, a), _, _ = _setup(client)
+
+    me = client.get("/me/prefs", headers=a)
+    assert me.status_code == 200, me.text
+    my_id = me.json().get("user_id")
+    assert my_id == a_id, "клиент обязан узнавать СВОЙ id, иначе путь /users/{id}/… пуст"
+
+    r = client.post(f"/web/messenger/users/{my_id}/note", json={"text": "памятка себе"}, headers=a)
+    assert r.status_code == 200, r.text
+    assert client.get(f"/web/messenger/users/{my_id}/note", headers=a).json()["text"] == "памятка себе"
 
 
 def test_note_overwrite_upserts(client):

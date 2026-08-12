@@ -43,7 +43,22 @@ _UI_LOCALES = ("ru", "en", "zh")
 #приходит поле от авторизованного клиента при сохранении, чужой id означал бы CSS
 #font-family на несуществующий шрифт — фолбэк браузера отработал бы тихо, но проверка
 #на входе дешевле, чем гадать потом, откуда в БД мусор.
-NAME_FONTS = ("", "unbounded", "comfortaa", "caveat", "marckscript", "ptserif", "ptmono")
+NAME_FONTS = (
+    "", "unbounded", "comfortaa", "oswald", "ptserif", "ptmono", "yeseva",
+    "caveat", "marckscript", "pacifico", "lobster",
+    "russo", "tektur", "ruslan", "pixel",
+    "glitch", "moonrocks", "bubbles", "wetpaint",
+)
+
+#ЭФФЕКТ имени (3.7, просьба Влада) — тот же принцип, что у NAME_FONTS: публичное поле,
+#из которого клиент склеивает имя CSS-класса (.gb-nfx-<id> в web/src/style.css), поэтому
+#произвольную строку сюда не пускаем. Список-близнец — web/src/config/nameEffects.js.
+NAME_EFFECTS = ("", "solid", "gradient", "rainbow", "shine", "neon", "outline", "highlight")
+
+#ЦВЕТ имени — НЕ отдельная палитра, а те же id пресетов, что и `profile_color`
+#(web/src/theme/palette.js::PRESETS, ui/themes.py). '' = «как цвет профиля»; проверяем
+#только длину, как у profile_color, — держать здесь копию списка из 16 названий значило
+#бы завести второй источник правды, который однажды разъедется с первым.
 
 
 def _sanitize_public_profile(prefs: dict) -> None:
@@ -63,12 +78,22 @@ def _sanitize_public_profile(prefs: dict) -> None:
 
 def _sanitize_name_font(prefs: dict) -> None:
     """Стиль никнейма — та же логика, что и у цвета плашки (_sanitize_public_profile):
-    ПУБЛИЧНОЕ поле (другие видят его в мессенджере и в карточке профиля, см.
-    messenger._safe_user), поэтому проверяем на сервере, а не только в UI."""
-    if "name_font" not in prefs:
-        return
-    val = prefs.get("name_font")
-    prefs["name_font"] = val if val in NAME_FONTS else ""
+    ПУБЛИЧНЫЕ поля (другие видят их в мессенджере и в карточке профиля, см.
+    messenger._safe_user), поэтому проверяем на сервере, а не только в UI.
+
+    Три поля разом, потому что они и настраиваются одним диалогом, и портятся одинаково:
+    шрифт и эффект — строго из списка (клиент превращает их в font-family и в имя
+    CSS-класса), цвет — id пресета палитры, для него, как и для profile_color, режем
+    только длину (список цветов живёт у клиента, второй копии здесь не заводим)."""
+    if "name_font" in prefs:
+        val = prefs.get("name_font")
+        prefs["name_font"] = val if val in NAME_FONTS else ""
+    if "name_effect" in prefs:
+        val = prefs.get("name_effect")
+        prefs["name_effect"] = val if val in NAME_EFFECTS else ""
+    if "name_color" in prefs:
+        col = prefs.get("name_color")
+        prefs["name_color"] = (col if isinstance(col, str) else "").strip()[:_MAX_COLOR_ID]
 
 
 def _sanitize_notify(prefs: dict) -> None:
@@ -162,8 +187,18 @@ def _now() -> str:
 
 @router.get("/prefs")
 def get_prefs(user: User = Depends(get_current_user)):
-    """Текущие личные настройки вошедшего пользователя."""
-    return {"prefs": user.prefs or {}}
+    """Текущие личные настройки вошедшего пользователя.
+
+    ⚠️ Отдаём ЕЩЁ И собственный id, хотя это не настройка. Причина: клиент своего id не
+    знает вовсе — в JWT и в «визитке» после входа лежат только логин, роль и ФИО. Пока
+    это было незаметно, потому что почти везде id и не нужен: сервер сам понимает, кто
+    спрашивает, по токену. Но эндпоинты, устроенные как «действие ПРО человека», берут
+    цель ПУТЁМ (`/web/messenger/users/{id}/note`), и для действия про самого себя
+    подставить туда было нечего — личная заметка на своей же карточке профиля молча не
+    сохранялась (запрос вообще не уходил). Здесь это дешевле всего: страница профиля и
+    так дёргает prefs при открытии, а значит правка чинит и уже выданные сессии — не
+    требуя от всего колледжа перезайти, как потребовала бы добавка id в ответ входа."""
+    return {"prefs": user.prefs or {}, "user_id": user.id}
 
 
 @router.post("/prefs")
@@ -179,7 +214,7 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     merged = dict(user.prefs or {})
     merged.update(incoming)
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь
-    _sanitize_name_font(merged)          #стиль никнейма — тоже виден другим, только из списка
+    _sanitize_name_font(merged)          #шрифт/эффект/цвет имени — видны другим, только из списка
     _sanitize_notify(merged)             #категории уведомлений читает сервер — приводим к «да/нет»
     _sanitize_translate(merged)          #коды языков уходят в промпт — только известные
     _sanitize_locale(merged)             #язык интерфейса — только тот, для которого есть словарь

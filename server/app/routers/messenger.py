@@ -244,6 +244,10 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
         #шрифтом. Пусто — уже проверено на входе (me.py::_sanitize_name_font), но берём
         #через or "" ещё раз: строки в БД могли остаться от ДО того, как поле завели.
         "name_font": prefs.get("name_font", "") or "",
+        #Эффект и цвет имени (3.7) — та же публичная тройка, что и шрифт: без них у
+        #собеседника имя рисовалось бы выбранным шрифтом, но без выбранного вида.
+        "name_effect": prefs.get("name_effect", "") or "",
+        "name_color": prefs.get("name_color", "") or "",
         "muted": bool(muted),
         "status_kind": st.get("kind", "") or "",
         "status_text": st.get("custom_text", "") or "",
@@ -2308,6 +2312,8 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "bio": prefs.get("bio", "") or "",
             "profile_color": prefs.get("profile_color", "") or "",
             "name_font": prefs.get("name_font", "") or "",   #§5.4 «стиль никнейма»
+            "name_effect": prefs.get("name_effect", "") or "",   #3.7 — эффект и цвет имени
+            "name_color": prefs.get("name_color", "") or "",
             "user_role": (u.role if u else ""),   #student | teacher | admin (роль в системе)
             "group_name": (u.group_name or "") if u else "",
             "subjects": (u.subjects or []) if (u is not None and u.role == "teacher") else [],

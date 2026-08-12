@@ -94,6 +94,101 @@
 }
 
 /*
+  ДОБАВЛЕНЫ В 3.7 (просьба Влада «добавить ещё шрифтов для ников»). Все двенадцать
+  проверены на кириллицу тем же способом, что и семь выше (сборщик печатает число
+  кириллических глифов и краснеет при недоборе) — латинских декоративных шрифтов, которые
+  красиво выглядят на «Gg» и рассыпаются на «Иванов», в подборку не попало ни одного.
+  Файл шрифта браузер качает, ТОЛЬКО когда этим шрифтом реально что-то нарисовано:
+  выбранный человеком стиль стоит один, поэтому обычная страница по-прежнему тянет
+  максимум один файл. Все разом качаются лишь при открытии диалога выбора стиля — там
+  каждый образец написан своим шрифтом, иначе выбирать было бы не из чего.
+*/
+@font-face {
+  font-family: 'GB Nick Russo';
+  src: url('/fonts/nickname/RussoOne.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Oswald';
+  src: url('/fonts/nickname/Oswald.woff2') format('woff2-variations');
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Tektur';
+  src: url('/fonts/nickname/Tektur.woff2') format('woff2-variations');
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Pacifico';
+  src: url('/fonts/nickname/Pacifico.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Lobster';
+  src: url('/fonts/nickname/Lobster.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Yeseva';
+  src: url('/fonts/nickname/YesevaOne.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Ruslan';
+  src: url('/fonts/nickname/RuslanDisplay.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Pixel';
+  src: url('/fonts/nickname/PressStart2P.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Glitch';
+  src: url('/fonts/nickname/RubikGlitch.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Moonrocks';
+  src: url('/fonts/nickname/RubikMoonrocks.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick Bubbles';
+  src: url('/fonts/nickname/RubikBubbles.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'GB Nick WetPaint';
+  src: url('/fonts/nickname/RubikWetPaint.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
   style.css — дизайн-система GradeBookAI для веба (порт desktop `ui/styles.py`).
 
   Цвета живут в runtime-переменных --gb-* (их выставляет theme-store из buildPalette),
@@ -132,13 +227,60 @@
   1.625rem, одинаково на любой ширине (сама строка не адаптивная).
   Меняются отступы оболочки — правим ЗДЕСЬ, а не в каждой полноэкранной странице.
 */
+/*
+  ⚠️ БЕЗОПАСНЫЕ ЗОНЫ ТЕЛЕФОНА (3.7, живой отзыв Ярослава с APK: «захожу в сообщения —
+  окно по высоте не влазит, появляется скролл»).
+
+  В приложении RuStore страница рисуется во ВЕСЬ экран, под системными панелями, и две
+  вставки занимают реальные пиксели: `HeaderBar.vue` берёт себе `48px +
+  env(safe-area-inset-top)` (шторка уведомлений), `main` в `AppShell.vue` —
+  `padding-bottom: env(safe-area-inset-bottom)` (полоса жестов). Формула высоты про них
+  не знала и считала только «наши» пиксели, поэтому полноэкранная страница выходила
+  РОВНО на сумму вставок выше доступного места — а `main` с `overflow-y-auto` честно
+  отвечал прокруткой: шапка чата уезжала вверх, поле ввода вниз.
+  На сайте и в десктопе обе вставки нулевые, поэтому баг видно ТОЛЬКО в APK — и
+  поймать его сборкой или тестами было нельзя.
+
+  С `lg` мобильной полосы нет вовсе (её роль играет сайдбар), поэтому верхнюю вставку
+  там не вычитаем: её никто не занимает.
+*/
 :root {
-  --gb-page-offset: 4.575rem;
+  --gb-safe-top: env(safe-area-inset-top, 0px);
+  --gb-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --gb-page-offset: calc(4.575rem + var(--gb-safe-top) + var(--gb-safe-bottom));
   --gb-subtitle-offset: 1.625rem;
+  /*
+    ХРОМ БЕЗ ОТСТУПОВ СОДЕРЖИМОГО — для страниц, которые на телефоне разворачиваются
+    во всю ширину (`gb-fullbleed` ниже) и сами съедают `p-3` контейнера контента.
+    Отдельная переменная, а не «page-offset минус что-то на месте»: вычитание руками в
+    странице — это ровно тот «свой набор чисел», который уже устаревал молча.
+  */
+  --gb-chrome-offset: calc(3rem + var(--gb-safe-top) + var(--gb-safe-bottom));
 }
 @media (min-width: 1024px) {
   :root {
-    --gb-page-offset: 1.975rem;
+    --gb-page-offset: calc(1.975rem + var(--gb-safe-bottom));
+    --gb-chrome-offset: var(--gb-safe-bottom);
+  }
+}
+
+/*
+  ВО ВСЮ ШИРИНУ ЭКРАНА НА ТЕЛЕФОНЕ (3.7, тот же отзыв: «окно по ширине имеет отступы,
+  лучше убрать их, чтобы повысить полезное пространство»).
+
+  Контейнер содержимого держит `p-3` — на телефоне это 24 px из ~360, то есть почти
+  один столбец текста, потраченный на пустую рамку вокруг переписки. Отрицательными
+  полями съедаем ровно этот отступ (и ничего сверх — нижняя безопасная зона остаётся
+  на месте, иначе поле ввода уехало бы под полосу жестов). С `sm` всё возвращается:
+  на планшете и в окне браузера рамка карточки как раз читается как рамка.
+*/
+@media (max-width: 639.98px) {
+  .gb-fullbleed {
+    margin: -0.75rem;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    height: calc(100dvh - var(--gb-chrome-offset));
   }
 }
 
@@ -257,4 +399,109 @@
     outline: 2px solid var(--gb-accent);
     outline-offset: 2px;
   }
+}
+
+/*
+  ЭФФЕКТЫ ОТОБРАЖАЕМОГО ИМЕНИ (3.7, просьба Влада «эффекты для ника, ргб и тд»).
+
+  Живут ЗДЕСЬ, обычными классами, а не Tailwind-утилитами: имя эффекта приходит из
+  настроек человека (`prefs.name_effect`), то есть класс склеивается ДИНАМИЧЕСКИ, а
+  Tailwind JIT видит только литералы в исходниках и такой класс просто не соберёт (эти
+  грабли в проекте уже ловили на `bg-${x}` в ZetProgress). Соответствие id → класс —
+  `web/src/config/nameEffects.js`, список-близнец на сервере — `routers/me.py::NAME_EFFECTS`.
+
+  Цвет НЕ зашит: каждое место рисования подставляет пару переменных (`--gb-nc1` —
+  выбранный цвет, `--gb-nc2` — его светлый напарник для градиента), поэтому один и тот же
+  класс даёт разный цвет разным людям. Радуга цвет игнорирует НАМЕРЕННО — она и есть
+  «все цвета сразу», как в Discord.
+
+  ⚠️ Эффект применяется к КАЖДОМУ имени в ленте сообщений и в списке чатов, то есть к
+  сотням узлов сразу. Поэтому здесь только дешёвые для отрисовки вещи: градиент по
+  тексту, тень и рамка текста. Анимируется ТОЛЬКО background-position (композитинг без
+  перерасчёта раскладки) и только у двух эффектов из восьми.
+*/
+.gb-nfx {
+  /* Запасные значения на случай, если место рисования переменные не передало. */
+  --gb-nc1: var(--gb-accent);
+  --gb-nc2: var(--gb-accent2);
+}
+
+/* Просто цвет — самый частый «эффект», он же основа для остальных. */
+.gb-nfx-solid { color: var(--gb-nc1); }
+
+/* Градиент по буквам: заливка текста картинкой + прозрачный собственный цвет.
+   -webkit-background-clip нужен и в свежих браузерах — стандартного имени
+   background-clip:text до сих пор нет в части движков (в т.ч. в WebView2). */
+.gb-nfx-gradient {
+  background-image: linear-gradient(95deg, var(--gb-nc1), var(--gb-nc2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Радуга (то самое «ргб»): широкая лента цветов, которая едет по тексту.
+   background-size 300% — чтобы на коротком имени было видно перелив, а не один цвет. */
+.gb-nfx-rainbow {
+  background-image: linear-gradient(95deg, #ff5252, #ff9f40, #ffd93d, #4ade80, #38bdf8, #a78bfa, #ff5252);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gb-nfx-slide 7s linear infinite;
+}
+
+/* Блик — тот же приём, но «лента» это сам цвет с осветлённой полосой посередине.
+   Осветляем именно цвет человека, а не подмешиваем белый: на светлой теме белая
+   полоса была бы невидима, и эффект выглядел бы сломанным. */
+.gb-nfx-shine {
+  background-image: linear-gradient(100deg,
+    var(--gb-nc1) 35%,
+    color-mix(in srgb, var(--gb-nc1) 45%, white) 50%,
+    var(--gb-nc1) 65%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gb-nfx-slide 4.5s linear infinite;
+}
+
+@keyframes gb-nfx-slide {
+  from { background-position: 0 0; }
+  to   { background-position: -300% 0; }
+}
+
+/* Неон: свечение вокруг букв. Два слоя тени — плотный и размытый; оба цветные, а не
+   белые, поэтому эффект читается и на светлой теме. */
+.gb-nfx-neon {
+  color: var(--gb-nc1);
+  text-shadow:
+    0 0 4px color-mix(in srgb, var(--gb-nc1) 55%, transparent),
+    0 0 14px color-mix(in srgb, var(--gb-nc1) 35%, transparent);
+}
+
+/* Контур: буквы пустые, видна только обводка. -webkit-text-stroke — единственный
+   работающий способ обвести текст без дублирующего слоя разметки. */
+.gb-nfx-outline {
+  color: transparent;
+  -webkit-text-stroke: 1px var(--gb-nc1);
+  paint-order: stroke fill;
+}
+
+/* Выделение: имя на цветной плашке. Единственный эффект, который меняет фон, поэтому
+   ему нужны свои отступы и скругление; inline-block — чтобы плашка не рвалась по
+   строкам и не наезжала на соседние элементы строки. */
+.gb-nfx-highlight {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 0.4em;
+  border-radius: 0.4em;
+  background: var(--gb-nc1);
+  color: #fff;
+}
+
+/* Человек попросил систему не анимировать — анимации выключаются, но сам эффект
+   (цвет/градиент) остаётся: это не украшение, а часть того, как выглядит его имя. */
+@media (prefers-reduced-motion: reduce) {
+  .gb-nfx-rainbow,
+  .gb-nfx-shine { animation: none; }
 }

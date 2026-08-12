@@ -34,7 +34,7 @@ import TranslateDialog from './TranslateDialog.vue'
 import GifPicker from './GifPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
-import { nameFontFamily } from '@/config/nameFonts'
+import { nameDecor } from '@/config/nameEffects'
 import { statusLabel } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
@@ -816,16 +816,19 @@ const runStarts = computed(() => {
 // §5.4: стиль никнейма отправителя — та же карта, что и аватарки (состав беседы или
 // собеседник ЛС). Применяем ТОЛЬКО здесь и в PeerProfileCard/Profile.vue — заказчик
 // прямо просил не разносить это по остальным вкладкам (журнал/расписание и т.п.).
-const fontBySender = computed(() => {
+// Держим участника ЦЕЛИКОМ, а не одно поле шрифта: стиль имени — это тройка
+// «шрифт + эффект + цвет», и nameDecor берёт её сама (цвет умеет наследоваться от
+// цвета профиля, поэтому обрезать объект до пары полей нельзя).
+const styleBySender = computed(() => {
   const map = {}
-  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p.name_font || ''
-  if (activePeer.value?.id) map[activePeer.value.id] = activePeer.value.name_font || ''
+  for (const p of activeInfo.value?.participants || []) map[p.user_id] = p
+  if (activePeer.value?.id) map[activePeer.value.id] = activePeer.value
   return map
 })
-function senderFont(msg) {
+function senderDecor(msg) {
   // Как и senderName(msg) чуть ниже — вызывается ТОЛЬКО для чужих сообщений (шаблон
   // гейтит `v-if="!msg.mine"`), поэтому свой стиль здесь разбирать не нужно.
-  return nameFontFamily(fontBySender.value[msg.sender_id] ?? (activePeer.value?.name_font || ''))
+  return nameDecor(styleBySender.value[msg.sender_id] || activePeer.value || {})
 }
 
 // Аватарки отправителей: в группе/канале — из состава беседы, в личном чате — собеседника.
@@ -838,7 +841,7 @@ const avatarBySender = computed(() => {
 // пользователей, поэтому подпись и аватар подставлялись от СОБЕСЕДНИКА — в «Избранном»
 // это ты сам, и ответ ИИ выглядел как твоё же сообщение с твоей аватаркой.
 const VECTOR_SENDER = 'system'
-const VECTOR_AVATAR = '/mascot/neutral-idle.png'   //арт Арины, кадрируем по голове
+const VECTOR_AVATAR = '/mascot/neutral-idle.webp'   //арт Арины, кадрируем по голове
 function isVector(msg) { return msg.sender_id === VECTOR_SENDER }
 //Отвечаем на реплику Вектора → это продолжение разговора с ним, а не обычная цитата.
 const replyingToVector = computed(() => isSaved.value && !!replyTo.value && isVector(replyTo.value))
@@ -888,9 +891,9 @@ const headerTint = computed(() =>
 // Стиль никнейма собеседника — ТОЖЕ «сверху в мессенджере» (заголовок открытого чата),
 // не только у сообщений/списка чатов/карточки. Только для личного чата с реальным
 // человеком — у «Избранного»/«Модерации»/групп-каналов peerName не имя человека.
-const peerNameFont = computed(() =>
+const peerNameDecor = computed(() =>
   (!isGroupOrChannel.value && !isSaved.value && !isModeration.value)
-    ? nameFontFamily(activePeer.value?.name_font || '') : '')
+    ? nameDecor(activePeer.value || {}) : {})
 
 // §правка: на телефоне четыре иконки (поиск/сводка/перевод/уведомления) съедали всю
 // ширину шапки, и полное имя/название беседы обрезалось раньше, чем должно. На sm+
@@ -946,7 +949,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                 :title="locale.t('chatThread.openProfile', 'Открыть профиль')">
           <div class="truncate font-title text-base font-bold"
                :class="headerTint ? 'text-white' : 'text-text'"
-               :style="peerNameFont ? { fontFamily: peerNameFont } : {}">{{ peerName }}</div>
+               v-bind="peerNameDecor">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
         <!-- Поиск/сводка/перевод/уведомления — на sm+ прямо в строке, как раньше. На
@@ -1165,7 +1168,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
               <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
-                   class="mb-0.5 text-[11px] font-semibold text-accent" :style="{ fontFamily: senderFont(msg) }">
+                   class="mb-0.5 text-[11px] font-semibold text-accent" v-bind="senderDecor(msg)">
                 {{ senderName(msg) }}
               </div>
               <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
