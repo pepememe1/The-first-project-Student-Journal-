@@ -12,10 +12,14 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { teacherApi, termsApi } from '@/api/endpoints'
+import {
+  enqueueGrade, enqueueLessonCreate, enqueueLessonDelete, enqueueLessonUpdate,
+  enqueueTermGrade, isTempId, pendingGrade, pendingLessons,
+} from '@/api/outbox'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
-import { scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1)
+import { practiceAverage, scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
@@ -75,6 +79,27 @@ async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
   loading.value = true
   try { data.value = (await teacherApi.journal(group.value, subject.value)).data } catch { data.value = null } finally { loading.value = false }
+  mergePendingLessons()
+}
+
+/**
+ * Дописать в журнал занятия, созданные БЕЗ СЕТИ и ещё не уехавшие.
+ *
+ * Без этого созданная офлайн домашка не появлялась бы в таблице вовсе: журнал строится
+ * из ответа сервера, а сервер о ней пока не знает. Преподаватель нажал «создать», ничего
+ * не увидел и решил бы, что не сработало, — то есть офлайн-создание существовало бы
+ * только на бумаге. Ставить по такой колонке оценки можно сразу: очередь перепривяжет
+ * их к настоящему id, как только занятие уедет.
+ */
+function mergePendingLessons() {
+  if (!data.value) return
+  const local = pendingLessons(group.value, subject.value)
+  if (!local.length) return
+  const known = new Set((data.value.lessons || []).map((l) => l.id))
+  const extra = local.filter((l) => !known.has(l.id)).map((l) => ({
+    number: 0, topic: '', date: '', hour: '', ...l, pending: true,
+  }))
+  if (extra.length) data.value = { ...data.value, lessons: [...(data.value.lessons || []), ...extra] }
 }
 watch([group, subject], load)
 
@@ -208,7 +233,7 @@ function avgClass(a) {
   return 'text-text3'
 }
 const groupAverage = computed(() => {
-  const vals = visibleStudents.value.map((s) => Number(s.average) || 0).filter((v) => v > 0)
+  const vals = visibleStudents.value.map((s) => Number(averageOf(s)) || 0).filter((v) => v > 0)
   return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—'
 })
 
@@ -271,6 +296,38 @@ async function writeVoiceItems(items) {
   }
 }
 
+/** Стоит ли в этой клетке значение, которое ещё НЕ доехало до сервера. */
+function isPending(s, col) {
+  return pendingGrade(col.key, s.surname, s.name) !== undefined
+}
+
+/**
+ * Средний балл студента с учётом оценок, которые ещё ждут отправки.
+ *
+ * Живой отзыв: «оценки ставит препод и нифига не видит, что как». Средний считает
+ * сервер, и без сети он остаётся тем же, каким был до ввода, — преподаватель выставляет
+ * восемь оценок, а колонка не шевелится. Пересчитываем на месте.
+ *
+ * ⚠️ Считаем ТЕМ ЖЕ `practiceAverage`, что и сервер: это построчный порт `grading.py`,
+ * закреплённый общим контрактом (docs/contracts/grade-cases.json). Своей формулы здесь
+ * нет и быть не может — у продукта нетривиальные пересдачи, шкалы преподавателей и
+ * подгруппы, и вторая реализация разошлась бы с первой на первом же нестандартном
+ * журнале. Пока сеть есть, показываем ровно то, что прислал сервер: он видит и то,
+ * чего нет на экране (архив, другие подгруппы).
+ */
+function averageOf(s) {
+  const overrides = {}
+  for (const l of data.value?.lessons || []) {
+    const p = pendingGrade(l.id, s.surname, s.name)
+    if (p !== undefined) overrides[l.id] = p
+  }
+  if (!Object.keys(overrides).length) return s.average
+  const items = (data.value?.lessons || []).map((l) => [l.id, l.type])
+  const records = { ...s.grades, ...overrides }
+  return practiceAverage(items, records, data.value?.methodology_cfg || null,
+                         data.value?.scale || '5')
+}
+
 // ── Запись оценки (селект → сервер → перезагрузка: средний считает сервер) ──────
 async function setGrade(s, key, value) {
   const prev = s.grades[key] || ''
@@ -281,6 +338,18 @@ async function setGrade(s, key, value) {
     await teacherApi.setGrade(s.surname, s.name, key, value)
     await load()
   } catch (e) {
+    // ⚠️ Различаем «сервер отказал» и «сервер не ответил» — это противоположные случаи.
+    // Отказ (есть response) означает, что запись неверна: предмет не ваш, занятие
+    // удалено — оценку надо вернуть как была, иначе экран покажет то, чего в базе нет.
+    // Отсутствие ответа означает лишь, что нет сети. Откатывать здесь нельзя: работа
+    // преподавателя пропала бы ровно в тот момент, когда он физически не может её
+    // повторить. Такую оценку кладём в очередь — она уедет сама (см. api/outbox.js).
+    if (!e?.response) {
+      enqueueGrade({ surname: s.surname, name: s.name, lesson_id: key, grade: value })
+      toast.info(locale.t('teacherJournal.queuedOffline',
+        'Нет сети — оценка сохранена и уйдёт, когда появится связь'))
+      return
+    }
     s.grades[key] = prev
     toast.error(locale.t('teacherJournal.saveFailedPrefix', 'Не удалось сохранить: ') + (e?.response?.data?.detail || e.message))
   } finally { saving.value = false }
@@ -393,8 +462,29 @@ async function saveLesson() {
     }
     showLesson.value = false
     await load()
-  } catch (e) { lessonError.value = e?.response?.data?.detail || locale.t('teacherJournal.saveLessonFailed', 'Не удалось сохранить занятие') }
-  finally { savingLesson.value = false }
+  } catch (e) {
+    // Нет ответа — нет сети. Занятие (в том числе домашку) кладём в очередь: она
+    // выдаст ему временный id, журнал сразу покажет колонку, и по ней уже можно
+    // ставить оценки — очередь перепривяжет их к настоящему id после отправки.
+    if (!e?.response) {
+      const f = lessonForm.value
+      if (editingLesson.value) {
+        enqueueLessonUpdate(editingLesson.value, {
+          topic: f.topic, date: f.date, number: f.number, hour: f.hour, retake_date: f.retake_date,
+        })
+      } else {
+        enqueueLessonCreate({
+          group: group.value, subject: subject.value, subgroup: activeSubgroup.value, ...f,
+        })
+      }
+      showLesson.value = false
+      toast.info(locale.t('teacherJournal.queuedOffline',
+        'Нет сети — сохранено и уйдёт, когда появится связь'))
+      await load()
+      return
+    }
+    lessonError.value = e?.response?.data?.detail || locale.t('teacherJournal.saveLessonFailed', 'Не удалось сохранить занятие')
+  } finally { savingLesson.value = false }
 }
 async function delLesson(l) {
   const ok = await confirm({
@@ -403,8 +493,21 @@ async function delLesson(l) {
     okText: locale.t('common.delete'), danger: true,
   })
   if (!ok) return
+  // Занятие, которое само ещё не уехало на сервер, удаляется прямо из очереди —
+  // создавать его на сервере, чтобы тут же удалить, незачем (а создание ДЗ ещё и
+  // рассылает письма студентам).
+  if (isTempId(l.id)) { enqueueLessonDelete(l.id); await load(); return }
   try { await teacherApi.deleteLesson(l.id); await load() }
-  catch (e) { toast.error(e?.response?.data?.detail || locale.t('teacherJournal.deleteLessonFailed', 'Не удалось удалить')) }
+  catch (e) {
+    if (!e?.response) {
+      enqueueLessonDelete(l.id)
+      toast.info(locale.t('teacherJournal.queuedOffline',
+        'Нет сети — сохранено и уйдёт, когда появится связь'))
+      await load()
+      return
+    }
+    toast.error(e?.response?.data?.detail || locale.t('teacherJournal.deleteLessonFailed', 'Не удалось удалить'))
+  }
 }
 
 // ── Экспорт журнала/ведомости с выбором формата (Excel / Word) ──────────────────
@@ -458,10 +561,29 @@ async function saveAtt() {
   attSaving.value = true
   try {
     for (const r of attRows.value) {
-      await teacherApi.setTermGrade({
+      const row = {
         group: group.value, subject: subject.value,
         surname: r.surname, name: r.name, grade: r.grade, form: attForm.value,
-      })
+      }
+      try {
+        await teacherApi.setTermGrade(row)
+      } catch (e) {
+        // Связи нет — дальше по списку идти незачем, она не появится к следующему
+        // студенту. Кладём В ОЧЕРЕДЬ ВСЮ ведомость, включая ещё не пройденных: иначе
+        // половина группы уехала бы, а половина потерялась, и разобраться, где
+        // остановились, было бы нельзя.
+        if (!e?.response) {
+          attRows.value.slice(attRows.value.indexOf(r)).forEach((rest) => enqueueTermGrade({
+            group: group.value, subject: subject.value,
+            surname: rest.surname, name: rest.name, grade: rest.grade, form: attForm.value,
+          }))
+          showAtt.value = false
+          toast.info(locale.t('teacherJournal.queuedOffline',
+            'Нет сети — сохранено и уйдёт, когда появится связь'))
+          return
+        }
+        throw e
+      }
     }
     showAtt.value = false
     toast.success(locale.t('teacherJournal.finalGradesSaved', 'Итоговые оценки сохранены'))
@@ -582,15 +704,22 @@ async function downloadVedomost(fmt) {
             <td v-for="col in colDefs" :key="col.key" class="border-l border-border px-1.5 py-1.5 text-center">
               <span v-if="!cellApplies(s, col)" class="text-text3" :title="locale.t('teacherJournal.otherSubgroupHint', 'Другая подгруппа')">·</span>
               <span v-else-if="col.ri > 0 && !needsRetake(s, col)" class="text-text3">—</span>
-              <select v-else :value="rawValue(s.grades[col.key])" :class="gradeClass(s.grades[col.key], col.l)"
-                      :title="s.grades[col.key] || ''"
-                      class="h-9 w-14 cursor-pointer rounded-sm border border-border2 bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
+              <!-- Пунктирная жёлтая рамка = оценка ещё НЕ на сервере (нет сети). Без
+                   пометки офлайн-клетка выглядит точно так же, как сохранённая, и
+                   преподаватель закрыл бы журнал в уверенности, что всё уехало. -->
+              <select v-else :value="rawValue(s.grades[col.key])"
+                      :class="[gradeClass(s.grades[col.key], col.l),
+                               isPending(s, col) ? 'border-dashed border-yellow' : 'border-border2']"
+                      :title="isPending(s, col)
+                        ? locale.t('teacherJournal.cellPending', 'Ещё не отправлено на сервер')
+                        : (s.grades[col.key] || '')"
+                      class="h-9 w-14 cursor-pointer rounded-sm border bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
                       @change="onCell(s, col, $event.target.value)">
                 <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
               </select>
             </td>
-            <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(s.average)">
-              {{ s.average || '—' }}
+            <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(averageOf(s))">
+              {{ averageOf(s) || '—' }}
             </td>
           </tr>
           <tr class="border-t-2 border-accent/40 bg-bg2/70">

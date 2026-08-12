@@ -1,76 +1,1116 @@
 {
   "_comment": "Контракт fail-логики оценок. Единый источник для парных тестов Python (grading.is_failed) и JS (web/src/utils/grades.js::isFailed). Меняешь правило — меняй здесь, оба теста должны сойтись. Правило: непусто И (начинается с 2 или Н) ЛИБО содержит «Не зачтено».",
   "is_failed": [
-    { "grade": "",              "expected": false },
-    { "grade": "   ",           "expected": false },
-    { "grade": "2",             "expected": true  },
-    { "grade": "3",             "expected": false },
-    { "grade": "4",             "expected": false },
-    { "grade": "5",             "expected": false },
-    { "grade": "Н",             "expected": true  },
-    { "grade": "Б",             "expected": false },
-    { "grade": "О",             "expected": false },
-    { "grade": "✓",             "expected": false },
-    { "grade": " Н ",           "expected": true  },
-    { "grade": "Зачтено",       "expected": false },
-    { "grade": "Не зачтено",    "expected": true  },
-    { "grade": "3 (Зачтено)",   "expected": false },
-    { "grade": "3 (Не зачтено)","expected": true  },
-    { "grade": "5 (Зачтено)",   "expected": false },
-    { "grade": "2 (Не зачтено)","expected": true  },
-    { "grade": "4 (Зачтено)",   "expected": false }
+    {
+      "grade": "",
+      "expected": false
+    },
+    {
+      "grade": "   ",
+      "expected": false
+    },
+    {
+      "grade": "2",
+      "expected": true
+    },
+    {
+      "grade": "3",
+      "expected": false
+    },
+    {
+      "grade": "4",
+      "expected": false
+    },
+    {
+      "grade": "5",
+      "expected": false
+    },
+    {
+      "grade": "Н",
+      "expected": true
+    },
+    {
+      "grade": "Б",
+      "expected": false
+    },
+    {
+      "grade": "О",
+      "expected": false
+    },
+    {
+      "grade": "✓",
+      "expected": false
+    },
+    {
+      "grade": " Н ",
+      "expected": true
+    },
+    {
+      "grade": "Зачтено",
+      "expected": false
+    },
+    {
+      "grade": "Не зачтено",
+      "expected": true
+    },
+    {
+      "grade": "3 (Зачтено)",
+      "expected": false
+    },
+    {
+      "grade": "3 (Не зачтено)",
+      "expected": true
+    },
+    {
+      "grade": "5 (Зачтено)",
+      "expected": false
+    },
+    {
+      "grade": "2 (Не зачтено)",
+      "expected": true
+    },
+    {
+      "grade": "4 (Зачтено)",
+      "expected": false
+    }
   ],
   "_comment_retake": "needs_retake(records, lesson_id, ri): нужна ли пересдача №ri. true, если за эту попытку уже есть оценка ЛИБО предыдущая попытка завалена (is_failed). Ключи попыток: ri=0 → id, ri=1 → id_retake, ri>=2 → id_retake_N.",
   "needs_retake": [
-    { "records": {},                        "lesson_id": "L", "ri": 1, "expected": false },
-    { "records": {"L": "5"},                "lesson_id": "L", "ri": 1, "expected": false },
-    { "records": {"L": "3"},                "lesson_id": "L", "ri": 1, "expected": false },
-    { "records": {"L": "2"},                "lesson_id": "L", "ri": 1, "expected": true  },
-    { "records": {"L": "Не зачтено"},       "lesson_id": "L", "ri": 1, "expected": true  },
-    { "records": {"L": "2", "L_retake": "4"}, "lesson_id": "L", "ri": 1, "expected": true },
-    { "records": {"L": "2", "L_retake": "4"}, "lesson_id": "L", "ri": 2, "expected": false },
-    { "records": {"L": "2", "L_retake": "2"}, "lesson_id": "L", "ri": 2, "expected": true },
-    { "records": {"L": "2", "L_retake": "2", "L_retake_2": "5"}, "lesson_id": "L", "ri": 2, "expected": true }
+    {
+      "records": {},
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": false
+    },
+    {
+      "records": {
+        "L": "5"
+      },
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": false
+    },
+    {
+      "records": {
+        "L": "3"
+      },
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": false
+    },
+    {
+      "records": {
+        "L": "2"
+      },
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": true
+    },
+    {
+      "records": {
+        "L": "Не зачтено"
+      },
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": true
+    },
+    {
+      "records": {
+        "L": "2",
+        "L_retake": "4"
+      },
+      "lesson_id": "L",
+      "ri": 1,
+      "expected": true
+    },
+    {
+      "records": {
+        "L": "2",
+        "L_retake": "4"
+      },
+      "lesson_id": "L",
+      "ri": 2,
+      "expected": false
+    },
+    {
+      "records": {
+        "L": "2",
+        "L_retake": "2"
+      },
+      "lesson_id": "L",
+      "ri": 2,
+      "expected": true
+    },
+    {
+      "records": {
+        "L": "2",
+        "L_retake": "2",
+        "L_retake_2": "5"
+      },
+      "lesson_id": "L",
+      "ri": 2,
+      "expected": true
+    }
   ],
   "_comment_scales": "Кастомные шкалы оценок (§ролей, 3.3.1). Единый источник для Python (grading.to_five_point/is_failed_scaled) и JS (web/src/utils/grading.js). scale ∈ 5|100|letter|pass_fail.",
   "to_five_point": [
-    { "raw": "5",           "scale": "5",         "expected": 5.0  },
-    { "raw": "2",           "scale": "5",         "expected": 2.0  },
-    { "raw": "",            "scale": "5",         "expected": null },
-    { "raw": "Н",           "scale": "5",         "expected": null },
-    { "raw": "100",         "scale": "100",       "expected": 5.0  },
-    { "raw": "90",          "scale": "100",       "expected": 5.0  },
-    { "raw": "89",          "scale": "100",       "expected": 4.0  },
-    { "raw": "75",          "scale": "100",       "expected": 4.0  },
-    { "raw": "74",          "scale": "100",       "expected": 3.0  },
-    { "raw": "60",          "scale": "100",       "expected": 3.0  },
-    { "raw": "59",          "scale": "100",       "expected": 2.0  },
-    { "raw": "0",           "scale": "100",       "expected": 2.0  },
-    { "raw": "101",         "scale": "100",       "expected": null },
-    { "raw": "abc",         "scale": "100",       "expected": null },
-    { "raw": "",            "scale": "100",       "expected": null },
-    { "raw": "A",           "scale": "letter",    "expected": 5.0  },
-    { "raw": "B",           "scale": "letter",    "expected": 4.0  },
-    { "raw": "C",           "scale": "letter",    "expected": 3.0  },
-    { "raw": "D",           "scale": "letter",    "expected": 2.0  },
-    { "raw": "F",           "scale": "letter",    "expected": 2.0  },
-    { "raw": "a",           "scale": "letter",    "expected": 5.0  },
-    { "raw": "E",           "scale": "letter",    "expected": null },
-    { "raw": "",            "scale": "letter",    "expected": null },
-    { "raw": "Зачтено",     "scale": "pass_fail", "expected": null },
-    { "raw": "Не зачтено",  "scale": "pass_fail", "expected": null },
-    { "raw": "5",           "scale": "unknown",   "expected": 5.0  }
+    {
+      "raw": "5",
+      "scale": "5",
+      "expected": 5.0
+    },
+    {
+      "raw": "2",
+      "scale": "5",
+      "expected": 2.0
+    },
+    {
+      "raw": "",
+      "scale": "5",
+      "expected": null
+    },
+    {
+      "raw": "Н",
+      "scale": "5",
+      "expected": null
+    },
+    {
+      "raw": "100",
+      "scale": "100",
+      "expected": 5.0
+    },
+    {
+      "raw": "90",
+      "scale": "100",
+      "expected": 5.0
+    },
+    {
+      "raw": "89",
+      "scale": "100",
+      "expected": 4.0
+    },
+    {
+      "raw": "75",
+      "scale": "100",
+      "expected": 4.0
+    },
+    {
+      "raw": "74",
+      "scale": "100",
+      "expected": 3.0
+    },
+    {
+      "raw": "60",
+      "scale": "100",
+      "expected": 3.0
+    },
+    {
+      "raw": "59",
+      "scale": "100",
+      "expected": 2.0
+    },
+    {
+      "raw": "0",
+      "scale": "100",
+      "expected": 2.0
+    },
+    {
+      "raw": "101",
+      "scale": "100",
+      "expected": null
+    },
+    {
+      "raw": "abc",
+      "scale": "100",
+      "expected": null
+    },
+    {
+      "raw": "",
+      "scale": "100",
+      "expected": null
+    },
+    {
+      "raw": "A",
+      "scale": "letter",
+      "expected": 5.0
+    },
+    {
+      "raw": "B",
+      "scale": "letter",
+      "expected": 4.0
+    },
+    {
+      "raw": "C",
+      "scale": "letter",
+      "expected": 3.0
+    },
+    {
+      "raw": "D",
+      "scale": "letter",
+      "expected": 2.0
+    },
+    {
+      "raw": "F",
+      "scale": "letter",
+      "expected": 2.0
+    },
+    {
+      "raw": "a",
+      "scale": "letter",
+      "expected": 5.0
+    },
+    {
+      "raw": "E",
+      "scale": "letter",
+      "expected": null
+    },
+    {
+      "raw": "",
+      "scale": "letter",
+      "expected": null
+    },
+    {
+      "raw": "Зачтено",
+      "scale": "pass_fail",
+      "expected": null
+    },
+    {
+      "raw": "Не зачтено",
+      "scale": "pass_fail",
+      "expected": null
+    },
+    {
+      "raw": "5",
+      "scale": "unknown",
+      "expected": 5.0
+    }
   ],
   "is_failed_scaled": [
-    { "raw": "2",           "scale": "5",         "expected": true  },
-    { "raw": "3",           "scale": "5",         "expected": false },
-    { "raw": "59",          "scale": "100",       "expected": true  },
-    { "raw": "60",          "scale": "100",       "expected": false },
-    { "raw": "D",           "scale": "letter",    "expected": true  },
-    { "raw": "F",           "scale": "letter",    "expected": true  },
-    { "raw": "C",           "scale": "letter",    "expected": false },
-    { "raw": "Зачтено",     "scale": "pass_fail", "expected": false },
-    { "raw": "Не зачтено",  "scale": "pass_fail", "expected": true  },
-    { "raw": "",            "scale": "pass_fail", "expected": false }
+    {
+      "raw": "2",
+      "scale": "5",
+      "expected": true
+    },
+    {
+      "raw": "3",
+      "scale": "5",
+      "expected": false
+    },
+    {
+      "raw": "59",
+      "scale": "100",
+      "expected": true
+    },
+    {
+      "raw": "60",
+      "scale": "100",
+      "expected": false
+    },
+    {
+      "raw": "D",
+      "scale": "letter",
+      "expected": true
+    },
+    {
+      "raw": "F",
+      "scale": "letter",
+      "expected": true
+    },
+    {
+      "raw": "C",
+      "scale": "letter",
+      "expected": false
+    },
+    {
+      "raw": "Зачтено",
+      "scale": "pass_fail",
+      "expected": false
+    },
+    {
+      "raw": "Не зачтено",
+      "scale": "pass_fail",
+      "expected": true
+    },
+    {
+      "raw": "",
+      "scale": "pass_fail",
+      "expected": false
+    }
+  ],
+  "_comment_practice_average": "practice_average(items, records, cfg, scale): офлайн-порт для расчёта среднего балла НА ТЕЛЕФОНЕ без сети (десктоп/сервер уже считают этим же grading.practice_average). items — пары [lesson_id, lesson_type]; records — {lesson_id|ключ_попытки: оценка}; cfg — null или {avg_absence_weight, avg_count_absence, avg_include_exam}; scale — строка ('5'/'100'/'letter'/'pass_fail') либо словарь {lesson_id: scale}. Случаи сгенерированы прогоном настоящей grading.py (не написаны руками) — ожидаемые значения гарантированно совпадают с эталоном.",
+  "practice_average": [
+    {
+      "_case": "empty_items",
+      "items": [],
+      "records": {},
+      "cfg": null,
+      "scale": "5",
+      "expected": 0.0
+    },
+    {
+      "_case": "practices_only",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ],
+        [
+          "L3",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "3",
+        "L3": "4"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "practice_no_record",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 5.0
+    },
+    {
+      "_case": "absence_counted_default",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "Н"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 3.5
+    },
+    {
+      "_case": "absence_not_counted",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "Н"
+      },
+      "cfg": {
+        "avg_count_absence": false
+      },
+      "scale": "5",
+      "expected": 5.0
+    },
+    {
+      "_case": "absence_custom_weight",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "Н"
+      },
+      "cfg": {
+        "avg_absence_weight": 3.0
+      },
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "exam_excluded_default",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "5"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "exam_excluded_explicit",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "5"
+      },
+      "cfg": {
+        "avg_include_exam": false
+      },
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "exam_included_no_retake",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "5"
+      },
+      "cfg": {
+        "avg_include_exam": true
+      },
+      "scale": "5",
+      "expected": 4.5
+    },
+    {
+      "_case": "exam_included_with_retake",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "2",
+        "L2_retake": "4"
+      },
+      "cfg": {
+        "avg_include_exam": true
+      },
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "exam_included_two_retakes",
+      "items": [
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L2": "2",
+        "L2_retake": "2",
+        "L2_retake_2": "5"
+      },
+      "cfg": {
+        "avg_include_exam": true
+      },
+      "scale": "5",
+      "expected": 5.0
+    },
+    {
+      "_case": "exam_included_no_grade",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L1": "4"
+      },
+      "cfg": {
+        "avg_include_exam": true
+      },
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "exam_included_failed_no_retake",
+      "items": [
+        [
+          "L2",
+          "Экзамен"
+        ]
+      ],
+      "records": {
+        "L2": "2"
+      },
+      "cfg": {
+        "avg_include_exam": true
+      },
+      "scale": "5",
+      "expected": 2.0
+    },
+    {
+      "_case": "scale_100",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "95",
+        "L2": "62"
+      },
+      "cfg": null,
+      "scale": "100",
+      "expected": 4.0
+    },
+    {
+      "_case": "scale_letter",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "A",
+        "L2": "D"
+      },
+      "cfg": null,
+      "scale": "letter",
+      "expected": 3.5
+    },
+    {
+      "_case": "scale_pass_fail_ignored",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "Зачтено",
+        "L2": "Не зачтено"
+      },
+      "cfg": null,
+      "scale": "pass_fail",
+      "expected": 0.0
+    },
+    {
+      "_case": "scale_pass_fail_with_absence",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "Зачтено",
+        "L2": "Н"
+      },
+      "cfg": null,
+      "scale": "pass_fail",
+      "expected": 2.0
+    },
+    {
+      "_case": "scale_dict_mixed",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ],
+        [
+          "L3",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "90",
+        "L3": "A"
+      },
+      "cfg": null,
+      "scale": {
+        "L1": "5",
+        "L2": "100",
+        "L3": "letter"
+      },
+      "expected": 5.0
+    },
+    {
+      "_case": "scale_dict_missing_key_defaults_to_5",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "4"
+      },
+      "cfg": null,
+      "scale": {
+        "L1": "100"
+      },
+      "expected": 3.0
+    },
+    {
+      "_case": "homework_counts_as_practice",
+      "items": [
+        [
+          "L1",
+          "ДЗ"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "3"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 4.0
+    },
+    {
+      "_case": "homework_absence",
+      "items": [
+        [
+          "L1",
+          "ДЗ"
+        ]
+      ],
+      "records": {
+        "L1": "Н"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 2.0
+    },
+    {
+      "_case": "other_lesson_type_ignored",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Лекция"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "5"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 5.0
+    },
+    {
+      "_case": "full_mixed_scenario",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "ДЗ"
+        ],
+        [
+          "L3",
+          "Практика"
+        ],
+        [
+          "L4",
+          "Экзамен"
+        ],
+        [
+          "L5",
+          "Лекция"
+        ]
+      ],
+      "records": {
+        "L1": "5",
+        "L2": "Н",
+        "L3": "90",
+        "L4": "2",
+        "L4_retake": "4"
+      },
+      "cfg": {
+        "avg_include_exam": true,
+        "avg_absence_weight": 1.5
+      },
+      "scale": {
+        "L1": "5",
+        "L2": "5",
+        "L3": "100"
+      },
+      "expected": 3.88
+    },
+    {
+      "_case": "tie_29_over_8_rounds_to_even_down",
+      "items": [
+        [
+          "l0",
+          "Практика"
+        ],
+        [
+          "l1",
+          "Практика"
+        ],
+        [
+          "l2",
+          "Практика"
+        ],
+        [
+          "l3",
+          "Практика"
+        ],
+        [
+          "l4",
+          "Практика"
+        ],
+        [
+          "l5",
+          "Практика"
+        ],
+        [
+          "l6",
+          "Практика"
+        ],
+        [
+          "l7",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "l0": "4",
+        "l1": "4",
+        "l2": "4",
+        "l3": "4",
+        "l4": "4",
+        "l5": "3",
+        "l6": "3",
+        "l7": "3"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 3.62
+    },
+    {
+      "_case": "tie_27_over_8_rounds_to_even_up",
+      "items": [
+        [
+          "l0",
+          "Практика"
+        ],
+        [
+          "l1",
+          "Практика"
+        ],
+        [
+          "l2",
+          "Практика"
+        ],
+        [
+          "l3",
+          "Практика"
+        ],
+        [
+          "l4",
+          "Практика"
+        ],
+        [
+          "l5",
+          "Практика"
+        ],
+        [
+          "l6",
+          "Практика"
+        ],
+        [
+          "l7",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "l0": "4",
+        "l1": "4",
+        "l2": "4",
+        "l3": "4",
+        "l4": "3",
+        "l5": "3",
+        "l6": "3",
+        "l7": "2"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 3.38
+    },
+    {
+      "_case": "tie_5_over_8",
+      "items": [
+        [
+          "l0",
+          "Практика"
+        ],
+        [
+          "l1",
+          "Практика"
+        ],
+        [
+          "l2",
+          "Практика"
+        ],
+        [
+          "l3",
+          "Практика"
+        ],
+        [
+          "l4",
+          "Практика"
+        ],
+        [
+          "l5",
+          "Практика"
+        ],
+        [
+          "l6",
+          "Практика"
+        ],
+        [
+          "l7",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "l0": "1",
+        "l1": "1",
+        "l2": "1",
+        "l3": "1",
+        "l4": "1",
+        "l5": "0",
+        "l6": "0",
+        "l7": "0"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 0.0
+    },
+    {
+      "_case": "tie_35_over_16",
+      "items": [
+        [
+          "l0",
+          "Практика"
+        ],
+        [
+          "l1",
+          "Практика"
+        ],
+        [
+          "l2",
+          "Практика"
+        ],
+        [
+          "l3",
+          "Практика"
+        ],
+        [
+          "l4",
+          "Практика"
+        ],
+        [
+          "l5",
+          "Практика"
+        ],
+        [
+          "l6",
+          "Практика"
+        ],
+        [
+          "l7",
+          "Практика"
+        ],
+        [
+          "l8",
+          "Практика"
+        ],
+        [
+          "l9",
+          "Практика"
+        ],
+        [
+          "l10",
+          "Практика"
+        ],
+        [
+          "l11",
+          "Практика"
+        ],
+        [
+          "l12",
+          "Практика"
+        ],
+        [
+          "l13",
+          "Практика"
+        ],
+        [
+          "l14",
+          "Практика"
+        ],
+        [
+          "l15",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "l0": "4",
+        "l1": "4",
+        "l2": "4",
+        "l3": "3",
+        "l4": "3",
+        "l5": "3",
+        "l6": "3",
+        "l7": "3",
+        "l8": "3",
+        "l9": "3",
+        "l10": "3",
+        "l11": "3",
+        "l12": "3",
+        "l13": "3",
+        "l14": "3",
+        "l15": "3"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 3.19
+    },
+    {
+      "_case": "no_tie_near_half",
+      "items": [
+        [
+          "l0",
+          "Практика"
+        ],
+        [
+          "l1",
+          "Практика"
+        ],
+        [
+          "l2",
+          "Практика"
+        ],
+        [
+          "l3",
+          "Практика"
+        ],
+        [
+          "l4",
+          "Практика"
+        ],
+        [
+          "l5",
+          "Практика"
+        ],
+        [
+          "l6",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "l0": "3",
+        "l1": "3",
+        "l2": "3",
+        "l3": "4",
+        "l4": "4",
+        "l5": "4",
+        "l6": "4"
+      },
+      "cfg": null,
+      "scale": "5",
+      "expected": 3.57
+    }
   ]
 }

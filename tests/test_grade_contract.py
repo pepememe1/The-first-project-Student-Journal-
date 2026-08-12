@@ -18,6 +18,7 @@ _CASES = _CONTRACT["is_failed"]
 _RETAKE = _CONTRACT["needs_retake"]
 _TO_FIVE = _CONTRACT["to_five_point"]
 _FAILED_SCALED = _CONTRACT["is_failed_scaled"]
+_PRACTICE_AVG = _CONTRACT["practice_average"]
 
 
 def test_is_failed_matches_contract():
@@ -56,3 +57,14 @@ def test_is_failed_scaled_matches_contract():
         assert got is case["expected"], (
             f"is_failed_scaled({case['raw']!r}, {case['scale']!r}) = {got}, "
             f"ожидалось {case['expected']}")
+
+
+def test_practice_average_matches_contract():
+    #Офлайн-порт для среднего балла на телефоне (web/src/utils/grading.js::practiceAverage)
+    #проверяется тем же golden-файлом — случаи сгенерированы прогоном ЭТОЙ функции, поэтому
+    #тест здесь лишь пиннит контракт к самому источнику правды (страховка от опечатки в JSON).
+    for case in _PRACTICE_AVG:
+        items = [tuple(x) for x in case["items"]]
+        got = grading.practice_average(items, case["records"], case["cfg"], case["scale"])
+        assert got == case["expected"], (
+            f"practice_average({case['_case']}) = {got}, ожидалось {case['expected']}")
