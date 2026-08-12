@@ -29,6 +29,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 import * as widget from '@/services/scheduleWidget'
+import DataFreshness from '@/components/ui/DataFreshness.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -389,6 +390,12 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
 
 <template>
   <div class="space-y-4">
+    <!-- Расписание особенно опасно показывать без пометки: без сети оно выглядит точно
+         так же, как свежее, а пары за это время могли переставить. Подпись отвечает на
+         вопрос «на какой момент это верно». Ищем последний сохранённый ответ ЛЮБОГО
+         запроса расписания: параметры (группа, категория) у него разные, а человеку
+         нужна просто дата снимка. -->
+    <DataFreshness url="/web/schedule" />
     <!-- Категории портала (как на сайте) — видны, КОГДА уже выбран режим (расписание
          преподавателя/группы). §3.5.5, живой отзыв: до выбора режима категории путали —
          выглядело так, будто они выбирают что-то ещё до основного выбора; пока препод не

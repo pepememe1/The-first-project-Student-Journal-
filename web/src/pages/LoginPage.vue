@@ -182,7 +182,14 @@ const showRecover = ref(false)
        Теперь режем только по горизонтали (соты), а по вертикали содержимое прокручивается;
        `items-start` на узком экране — чтобы форма начиналась сверху, а не «висела» по
        центру, уводя часть себя за верхний край. -->
-  <div class="relative flex min-h-full items-start justify-center overflow-x-hidden p-4 sm:items-center"
+  <!-- ⚠️ ЦЕНТРИРУЕМ ВЕЗДЕ, но БЕЗ overflow-hidden. Три состояния этой строки стоит
+       помнить, чтобы не ходить по кругу третий раз: сперва было центрирование вместе с
+       `overflow-hidden` — на невысоком экране низ формы становился физически
+       недостижим; потом `items-start` на телефоне — форма влезла, но прилипла к верху
+       и под ней осталось полэкрана пустоты (живой скриншот). Правильно — обычное
+       центрирование в ПРОКРУЧИВАЕМОМ контейнере: помещается — стоит по центру, не
+       помещается — прокручивается. -->
+  <div class="relative flex min-h-full items-center justify-center overflow-x-hidden overflow-y-auto p-4"
        style="padding-top: calc(1rem + env(safe-area-inset-top)); padding-bottom: calc(1rem + env(safe-area-inset-bottom))">
     <HexBackground />
 
@@ -221,8 +228,11 @@ const showRecover = ref(false)
                сильнее класса `sm:hidden` — на экране оказывались ОБА знака сразу
                (поймано скриншотом с телефона). Скрываем обёртки, у них своих
                инлайновых стилей нет. -->
-          <div class="sm:hidden"><BrandLogo :size="56" oncard /></div>
-          <div class="hidden sm:block"><BrandLogo :size="76" oncard /></div>
+          <!-- Знак ужимали ради того, чтобы форма влезла на телефон. Влезла она за счёт
+               других правок, а мелкий знак остался и стал выглядеть случайным (живой
+               отзыв). Возвращаем крупный: место, как показал скриншот, есть. -->
+          <div class="sm:hidden"><BrandLogo :size="84" oncard /></div>
+          <div class="hidden sm:block"><BrandLogo :size="96" oncard /></div>
           <h1 class="mt-2 font-title text-xl font-extrabold text-text sm:mt-3 sm:text-2xl">GradeBookAI</h1>
           <p class="mt-1 hidden text-sm text-text3 sm:block">{{ loc.t('app.subtitle') }}</p>
           <p class="mt-1 text-xs font-semibold text-accent sm:text-sm">{{ loc.t('app.college') }}</p>

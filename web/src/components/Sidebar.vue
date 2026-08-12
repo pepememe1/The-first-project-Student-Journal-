@@ -18,6 +18,7 @@ import { NAV } from '@/config/nav'
 import { curatorApi, adminApi } from '@/api/endpoints'
 import BrandLogo from '@/components/BrandLogo.vue'
 import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
+import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
@@ -103,6 +104,13 @@ function isActive(to) {
         </RouterLink>
       </template>
     </nav>
+
+    <!-- Режим связи — НАД карточкой себя: это состояние всего приложения, а не свойство
+         аккаунта. В приложении виден всегда, на сайте появляется только при потере сети
+         (см. сам компонент о том, почему постоянное «Онлайн» в браузере — шум). -->
+    <div class="shrink-0 px-3 pb-1">
+      <ConnectionBadge />
+    </div>
 
     <!-- 3. Карточка себя — прижата к нижнему краю (Discord). Занимает ровно тот угол,
          который в прежней раскладке пустовал. -->

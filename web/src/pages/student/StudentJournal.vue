@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
+import DataFreshness from '@/components/ui/DataFreshness.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -30,6 +31,10 @@ onMounted(load)
 
 <template>
   <div class="space-y-5">
+    <!-- Без сети журнал показывает сохранённую копию и выглядит как свежий. Подпись
+         говорит, на какой момент эти оценки, — иначе человек примет вчерашнее за
+         сегодняшнее и не станет перепроверять. -->
+    <DataFreshness url="/web/student/journal" />
     <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
     <EmptyState v-else-if="!data?.subjects?.length" :title="locale.t('studentJournal.noLessonsTitle', 'Занятий пока нет')"
                 :message="locale.t('studentJournal.noLessonsMessage', 'Когда появятся предметы и оценки, они отобразятся здесь.')" />
