@@ -8,6 +8,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { vectorApi, parentApi } from '@/api/endpoints'
+import { answerOffline } from '@/utils/vectorOffline'
 import { chatEmote } from '@/config/mascot'
 import { QUICK_COMMANDS } from '@/config/vectorCommands'
 import { useAuthStore } from './auth'
@@ -179,14 +180,27 @@ export const useVectorStore = defineStore('vector', () => {
       msgIndex = messages.value.length
       messages.value.push({ role: 'vector', text: answer })
     } catch (e) {
-      const offline = e.response?.status === 404
-      messages.value.push({
-        role: 'vector',
-        text: offline
-          ? locale.t('vectorPage.offline', 'Серверный «Вектор» ещё подключается.')
-          : locale.t('vectorPage.failed', 'Не удалось получить ответ. Попробуйте снова.'),
-      })
-      lastMood.value = 'neutral'
+      // ⚠️ Ответа нет ВООБЩЕ — значит связи нет, и это не ошибка, а рабочий режим:
+      // отвечает офлайн-помощник по сохранённым данным (см. utils/vectorOffline.js).
+      // Различать обязательно: ответ с кодом (даже 500) означает, что сервер на связи,
+      // и подменять его локальным разбором нельзя — там ответ полнее и он авторитетнее.
+      if (!e.response) {
+        const local = answerOffline(t)
+        lastIntent.value = local.intent
+        lastMood.value = local.mood
+        answer = `${locale.t('vectorPage.offlineMode', 'Работаю без интернета, по сохранённым данным.')}\n\n${local.text}`
+        msgIndex = messages.value.length
+        messages.value.push({ role: 'vector', text: answer, offline: true })
+      } else {
+        const notReady = e.response?.status === 404
+        messages.value.push({
+          role: 'vector',
+          text: notReady
+            ? locale.t('vectorPage.offline', 'Серверный «Вектор» ещё подключается.')
+            : locale.t('vectorPage.failed', 'Не удалось получить ответ. Попробуйте снова.'),
+        })
+        lastMood.value = 'neutral'
+      }
     } finally {
       tick.value++
       // Переход к анимации речи. На ПРИВЕТСТВИЕ (hello) Вектор сначала МАШЕТ (greeting),
