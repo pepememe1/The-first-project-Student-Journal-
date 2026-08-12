@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Что разрешено вынести из приложения наружу: НИЧЕГО.
+
+  На Android 12 и новее allowBackup="false" гасит только облачную копию, а перенос
+  на новый телефон (device transfer) идёт отдельным механизмом и по умолчанию
+  забирает всё. Нам нельзя ни то, ни другое: в приватном хранилище лежат токен
+  сессии и локальная копия оценок студента, то есть персональные данные.
+
+  Потери для человека нет: и вход, и данные восстанавливаются одним входом в аккаунт,
+  а расписание и оценки всё равно приедут с сервера свежими.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
