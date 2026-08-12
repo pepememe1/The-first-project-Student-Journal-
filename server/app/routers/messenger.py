@@ -239,6 +239,10 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
         #«О себе» и цвет плашки (id пресета палитры — клиент сопоставит его с цветом).
         "bio": prefs.get("bio", "") or "",
         "profile_color": prefs.get("profile_color", "") or "",
+        #Баннер карточки — гифка с CDN Klipy вместо однотонной плашки цвета. Пусто —
+        #рисуем плашку по profile_color, как и раньше (баннер НЕ заменяет цвет: цвет
+        #по-прежнему красит имя и подложку аватарки, гифка ложится только на полосу).
+        "profile_banner": prefs.get("profile_banner", "") or "",
         #Стиль никнейма (§5.4) — тоже публичный, тем же путём, что цвет плашки: id из
         #фиксированного списка (routers/me.py::NAME_FONTS), клиент сам сопоставит его со
         #шрифтом. Пусто — уже проверено на входе (me.py::_sanitize_name_font), но берём
@@ -2311,6 +2315,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "avatar": prefs.get("avatar", "") or "",
             "bio": prefs.get("bio", "") or "",
             "profile_color": prefs.get("profile_color", "") or "",
+            "profile_banner": prefs.get("profile_banner", "") or "",   #гифка-баннер карточки
             "name_font": prefs.get("name_font", "") or "",   #§5.4 «стиль никнейма»
             "name_effect": prefs.get("name_effect", "") or "",   #3.7 — эффект и цвет имени
             "name_color": prefs.get("name_color", "") or "",

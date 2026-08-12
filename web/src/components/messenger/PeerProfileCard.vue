@@ -19,7 +19,7 @@
 // (defineExpose ниже), одним действием со сменой цвета/шрифта. Компонент editable=false
 // (чужой профиль) этого не касается — там ни «о себе», ни заметка не редактируются.
 import { ref, computed, onMounted, watch } from 'vue'
-import { Camera, Send } from '@lucide/vue'
+import { Camera, Send, Pencil, ImageIcon, Film, Trash2 } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore, BIO_LIMIT } from '@/stores/profile'
@@ -31,6 +31,8 @@ import { roleLabel } from '@/config/roles'
 import { messengerApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
 import AvatarCropper from '@/components/AvatarCropper.vue'
+import GifPicker from '@/components/messenger/GifPicker.vue'
+import { useToast } from '@/composables/useToast'
 
 const props = defineProps({
   editable: { type: Boolean, default: false },
@@ -51,6 +53,7 @@ const profile = useProfileStore()
 const messenger = useMessengerStore()
 const locale = useLocaleStore()
 const router = useRouter()
+const toast = useToast()
 
 // ── Данные карточки ──────────────────────────────────────────────────────────────────
 const fetched = ref(null)
@@ -85,6 +88,7 @@ const shown = computed(() => {
     return {
       id: myUserId.value, full_name: auth.user?.name || '', role: auth.role,
       group_name: auth.user?.group_name || '', avatar: profile.avatar, bio: profile.bio,
+      profile_banner: profile.banner,
       profile_color: props.colorOverride ?? profile.color,
       name_font: props.fontOverride ?? profile.font,
       name_effect: props.effectOverride ?? profile.effect,
@@ -109,11 +113,57 @@ const metaLine = computed(() => {
   return parts.filter(Boolean).join(' · ')
 })
 
-// ── Аватарка (только editable) ───────────────────────────────────────────────────────
+// ── Баннер карточки ──────────────────────────────────────────────────────────────────
+// Гифка с Klipy вместо однотонной плашки. Цвет профиля она НЕ отменяет: он по-прежнему
+// красит подложку значка роли и участвует в оформлении имени — гифка ложится только на
+// верхнюю полосу. Поэтому «убрать баннер» возвращает цвет, а не оставляет пустоту.
+const bannerUrl = computed(() => shown.value.profile_banner || '')
+
+// ── Аватарка и баннер: выбор источника (только editable) ─────────────────────────────
 const editingAvatar = ref(false)
+const avatarMenuOpen = ref(false)
+// '' | 'avatar' | 'banner' — один и тот же пикер Klipy на два места назначения.
+const gifPickerFor = ref('')
+
+// Сохраняем СРАЗУ, а не черновиком под общую кнопку внизу страницы (как цвет и шрифт).
+// Причина: и картинку, и гифку выбирают в отдельном окне, которое закрывается по выбору,
+// — «выбрал и закрылось» человек читает как «применено». Копить это в черновике значит
+// однажды потерять выбор, уйдя со страницы мимо кнопки.
+async function applyAvatar(src) {
+  const r = await profile.save(src)
+  if (!r.ok) reportSaveFailure(r)
+}
+async function applyBanner(url) {
+  const before = profile.banner
+  const r = await profile.saveProfile({ banner: url })
+  if (!r.ok) {
+    profile.banner = before      // на экране не должно висеть то, чего нет на сервере
+    reportSaveFailure(r)
+  }
+}
+function reportSaveFailure(r) {
+  toast.error(r.offline
+    ? locale.t('profile.mediaOffline', 'Нет связи с сервером — изменение не сохранено.')
+    : (r.detail || locale.t('profile.mediaFailed', 'Не удалось сохранить изображение.')))
+}
+
 async function onSaveAvatar(dataUrl) {
   editingAvatar.value = false
-  await profile.save(dataUrl)
+  await applyAvatar(dataUrl)
+}
+function onGifPicked(item) {
+  const target = gifPickerFor.value
+  gifPickerFor.value = ''
+  if (!item) return
+  // ⚠️ Берём `url` (это gif, см. gif_service._simplify), а НЕ лёгкое превью `thumb_url`,
+  // хотя аватарка рисуется размером 32–80 px и превью хватило бы по пикселям. Причина:
+  // превью — webp, и АНИМИРОВАН ли он, проверить не удалось (ключ Klipy живёт только на
+  // сервере, а доступа к нему в момент правки не было). Неподвижная «гифка-аватарка» —
+  // это молчаливый отказ фичи, а лишние килобайты — всего лишь лишние килобайты.
+  // Подтвердится, что превью анимировано, — здесь меняется одно слово.
+  const src = item.url || item.thumb_url || ''
+  if (target === 'avatar') applyAvatar(src)
+  else if (target === 'banner') applyBanner(src)
 }
 
 // ── «О себе» (только editable — у чужого профиля это чистый текст) ──────────────────
@@ -169,7 +219,16 @@ function discard() {
   draftBio.value = profile.bio
   note.value = noteSaved.value
 }
-defineExpose({ openAvatarEditor: () => { editingAvatar.value = true }, isDirty, commit, discard })
+// Левая колонка Profile.vue ведёт в те же самые действия — теперь их два вида (картинка
+// и гифка), поэтому наружу отдаём открытие МЕНЮ, а не сразу обрезалки: иначе кнопка
+// «Изменить аватарку» молча означала бы «только картинку», и гифку нашли бы лишь те, кто
+// догадался нажать на саму аватарку.
+defineExpose({
+  openAvatarEditor: () => { avatarMenuOpen.value = true },
+  openBannerPicker: () => { gifPickerFor.value = 'banner' },
+  removeBanner: () => applyBanner(''),
+  isDirty, commit, discard,
+})
 
 // ── Кнопка «Сообщение» ────────────────────────────────────────────────────────────────
 async function sendMessage() {
@@ -187,10 +246,30 @@ async function sendMessage() {
 
 <template>
   <div class="overflow-hidden rounded-xl border border-border2 bg-card">
-    <div class="h-20" :style="{ background: plate }" />
+    <!-- Баннер: гифка, если выбрана, иначе однотонная плашка цвета профиля. -->
+    <div class="relative h-20 overflow-hidden" :style="bannerUrl ? undefined : { background: plate }">
+      <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover" />
+      <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
+           существует вовсе, и подсказка «здесь можно поменять» иначе не появилась бы
+           никогда. При наведении просто становится заметнее. -->
+      <button v-if="editable" type="button" @click="gifPickerFor = 'banner'"
+              class="absolute right-2 top-2 grid size-8 place-items-center rounded-full bg-black/45
+                     text-white opacity-80 transition hover:bg-black/70 hover:opacity-100"
+              :title="locale.t('profile.editBanner', 'Сменить баннер')"
+              :aria-label="locale.t('profile.editBanner', 'Сменить баннер')">
+        <Pencil class="size-4" />
+      </button>
+      <button v-if="editable && bannerUrl" type="button" @click="applyBanner('')"
+              class="absolute right-11 top-2 grid size-8 place-items-center rounded-full bg-black/45
+                     text-white opacity-80 transition hover:bg-black/70 hover:opacity-100"
+              :title="locale.t('profile.removeBanner', 'Убрать баннер')"
+              :aria-label="locale.t('profile.removeBanner', 'Убрать баннер')">
+        <Trash2 class="size-4" />
+      </button>
+    </div>
     <div class="-mt-10 px-5 pb-5">
       <div class="group relative inline-block">
-        <button v-if="editable" type="button" @click="editingAvatar = true"
+        <button v-if="editable" type="button" @click="avatarMenuOpen = !avatarMenuOpen"
                 class="relative block size-20 overflow-hidden rounded-full ring-4 ring-card"
                 :title="locale.t('profile.editAvatar', 'Изменить аватарку')">
           <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
@@ -201,6 +280,29 @@ async function sendMessage() {
         <div v-else class="rounded-full ring-4 ring-card">
           <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
         </div>
+
+        <!-- Выбор источника аватарки. Тот же приём, что у MyStatusPicker: список плюс
+             прозрачная подложка на весь экран, закрывающая его кликом мимо, — иначе на
+             телефоне меню нечем закрыть, не выбрав пункт. -->
+        <template v-if="editable && avatarMenuOpen">
+          <div class="fixed inset-0 z-30" @click="avatarMenuOpen = false" />
+          <div class="absolute left-0 top-[calc(100%+0.375rem)] z-40 w-52 overflow-hidden rounded-lg
+                      border border-border2 bg-card py-1 shadow-card">
+            <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"
+                    @click="avatarMenuOpen = false; editingAvatar = true">
+              <ImageIcon class="size-4 shrink-0 text-text3" />{{ locale.t('profile.avatarImage', 'Изображение') }}
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"
+                    @click="avatarMenuOpen = false; gifPickerFor = 'avatar'">
+              <Film class="size-4 shrink-0 text-text3" />{{ locale.t('profile.avatarGif', 'GIF') }}
+            </button>
+            <button v-if="shown.avatar" type="button"
+                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-bg2"
+                    @click="avatarMenuOpen = false; applyAvatar('')">
+              <Trash2 class="size-4 shrink-0" />{{ locale.t('profile.avatarRemove', 'Убрать аватарку') }}
+            </button>
+          </div>
+        </template>
       </div>
 
       <div class="mt-3 flex items-start justify-between gap-3">
@@ -251,5 +353,12 @@ async function sendMessage() {
     </div>
 
     <AvatarCropper v-if="editingAvatar" :current="profile.avatar" @save="onSaveAvatar" @close="editingAvatar = false" />
+    <!-- Тот же пикер Klipy, что у поля ввода в чате; здесь по центру экрана — у карточки
+         профиля нет поля ввода внизу справа, к которому он приклеен в мессенджере. -->
+    <GifPicker v-if="gifPickerFor" anchor="center"
+               :title="gifPickerFor === 'banner'
+                 ? locale.t('profile.pickBannerGif', 'Гифка на баннер профиля')
+                 : locale.t('profile.pickAvatarGif', 'Гифка на аватарку')"
+               @pick="onGifPicked" @close="gifPickerFor = ''" />
   </div>
 </template>

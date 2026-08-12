@@ -25,7 +25,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import NameStyleDialog from '@/components/NameStyleDialog.vue'
-import { Camera, Check, Sparkles, SquareDashed } from '@lucide/vue'
+import { Camera, Check, Film, Sparkles, SquareDashed } from '@lucide/vue'
 
 const auth = useAuthStore()
 const profile = useProfileStore()
@@ -139,6 +139,25 @@ const styleSummary = computed(() => {
             </span>
             <span class="text-sm font-medium text-text">{{ locale.t('profile.editAvatar', 'Изменить аватарку') }}</span>
           </button>
+        </Card>
+
+        <!-- Баннер вынесен и сюда, не только на карандаш поверх карточки: карандаш
+             находят не все, а строка в редакторе слева стоит там же, где остальные
+             настройки внешнего вида. -->
+        <Card :title="locale.t('profile.bannerSection', 'Баннер')" :subtitle="locale.t('profile.bannerHint', 'Гифка вместо цветной полосы вверху карточки')" :pad="true">
+          <div class="flex flex-col gap-2">
+            <button type="button" @click="cardRef?.openBannerPicker()"
+                    class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
+              <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-accent">
+                <Film class="size-4" />
+              </span>
+              <span class="text-sm font-medium text-text">{{ locale.t('profile.pickBannerGif', 'Гифка на баннер профиля') }}</span>
+            </button>
+            <button v-if="profile.banner" type="button" @click="cardRef?.removeBanner()"
+                    class="self-start text-xs text-text3 hover:text-red">
+              {{ locale.t('profile.removeBanner', 'Убрать баннер') }}
+            </button>
+          </div>
         </Card>
 
         <Card :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">

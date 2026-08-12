@@ -11,6 +11,9 @@ from ._common import *      # noqa: F401,F403 — общий router, модел�
 
 # СЕРВЕР И САЙТ (инфо-панель, только чтение) ──────────────────────────────────────
 import time as _time                                                    # noqa: E402
+#Общая строка версии продукта (корень в sys.path через webdata — тем же приёмом, что
+#`vector_nlu` в _common.py). Литерала здесь больше нет: он дважды отставал от релиза.
+import desktop_update                                                   # noqa: E402
 _SERVER_START_TS = _time.time()   #≈ старт процесса (web.py грузится при старте)
 
 
@@ -42,7 +45,11 @@ def admin_server_info(request: Request = None,
     gost_hash = security._openssl_gost_name()
     return {
         "address": domain or (str(request.base_url).rstrip("/") if request else ""),
-        "version": "Release 3.6.1",   #⚠️ строка, не связана ни с чем автоматически — правь руками при каждом релизе (была "Release 3.0", отставала на 6 версий, не проверялась годами)
+        #Версия берётся из ОБЩЕЙ константы (корневой desktop_update.py), а не из литерала.
+        #Прежний литерал сопровождался комментарием «правь руками при каждом релизе» — и
+        #дважды отставал: сначала на шесть версий («Release 3.0»), потом снова («3.6.1»
+        #при 3.7). Просьба к человеку помнить о синхронизации — не механизм.
+        "version": desktop_update.APP_VERSION,
         "status": "работает",
         "uptime_sec": int(_time.time() - _SERVER_START_TS),
         "db_kind": "PostgreSQL" if not is_sqlite else "SQLite",

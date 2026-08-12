@@ -23,7 +23,12 @@ import { PRESETS } from '@/theme/palette'
 export const BIO_LIMIT = 400
 
 export const useProfileStore = defineStore('profile', () => {
-  const avatar = ref('')          // data:URL или ''
+  // Аватарка — ЛИБО своя обрезанная картинка (data:URL), ЛИБО гифка с CDN Klipy
+  // (ссылка). Одно поле на оба вида намеренно: всё, что рисует аватарку, подставляет
+  // это значение в `<img src>` и о разнице знать не обязано (сервер проверяет источник,
+  // см. me.py::_sanitize_profile_media).
+  const avatar = ref('')
+  const banner = ref('')          // гифка-баннер карточки ('' — обычная плашка цвета)
   const bio = ref('')             // «О себе» — видно другим в карточке профиля
   const color = ref('')           // id пресета палитры для плашки профиля ('' — стандарт)
   const font = ref('')            // §5.4: id стиля никнейма (@/config/nameFonts) — тоже видно другим
@@ -50,6 +55,7 @@ export const useProfileStore = defineStore('profile', () => {
       // — иначе цифра жила бы только внутри собранного APK и менялась бы перевыпуском.
       setGraceMin(data?.offline_grace_min)
       avatar.value = p.avatar || ''
+      banner.value = p.profile_banner || ''
       bio.value = p.bio || ''
       color.value = p.profile_color || ''
       font.value = p.name_font || ''
@@ -71,30 +77,53 @@ export const useProfileStore = defineStore('profile', () => {
     } catch { /* офлайн — оставляем что есть, попробуем снова при следующем load() */ }
   }
 
-  // dataUrl='' — удалить аватарку. Локально применяем сразу, на сервер — best-effort.
-  async function save(dataUrl) {
-    avatar.value = dataUrl || ''
+  // src='' — убрать аватарку; иначе data:URL своей картинки либо ссылка на гифку Klipy.
+  // Локально применяем сразу (человек должен увидеть результат мгновенно), но результат
+  // сохранения ВОЗВРАЩАЕМ.
+  //
+  // ⚠️ Раньше здесь стояло глухое `catch {}` с пометкой «офлайн — уедет позже с синком».
+  // Это больше не так: с 3.6.7 `/me/prefs` входит в `_PROXY_PREFIXES`, то есть и внутри
+  // программы запрос уходит ПРЯМО на бой, и без связи он просто не доходит — никуда
+  // потом не «уезжает». Плюс сервер вправе ответить отказом (413 на слишком большие
+  // настройки — ровно на этом молча терялась аватарка-фотография). Проглоченная ошибка
+  // означала «на экране новая аватарка, в базе старая», и человек узнавал об этом
+  // только при следующем входе.
+  async function save(src) {
+    const prev = avatar.value
+    avatar.value = src || ''
     saving.value = true
-    try { await meApi.setPrefs({ avatar: avatar.value }) }
-    catch { /* офлайн — уедет позже с синком */ }
-    finally { saving.value = false }
+    try {
+      await meApi.setPrefs({ avatar: avatar.value })
+      return { ok: true }
+    } catch (e) {
+      avatar.value = prev      // не показываем как сохранённое то, что не сохранилось
+      return { ok: false, offline: !e?.response, detail: e?.response?.data?.detail || '' }
+    } finally { saving.value = false }
   }
 
   // Публичная часть профиля: «О себе» + цвет плашки + стиль никнейма. Обрезаем и здесь
   // (сервер режет тоже) — только те поля, что реально переданы, чтобы клик по одной
   // палитре не перезаписывал ещё не сохранённый черновик «О себе» в соседней карточке.
   async function saveProfile({ bio: newBio, color: newColor, font: newFont,
-                               effect: newEffect, nameColor: newNameColor } = {}) {
+                               effect: newEffect, nameColor: newNameColor,
+                               banner: newBanner } = {}) {
     const payload = {}
     if (newBio != null) { bio.value = String(newBio).slice(0, BIO_LIMIT); payload.bio = bio.value }
     if (newColor != null) { color.value = newColor; payload.profile_color = color.value }
+    if (newBanner != null) { banner.value = newBanner; payload.profile_banner = banner.value }
     if (newFont != null) { font.value = newFont; payload.name_font = font.value }
     if (newEffect != null) { effect.value = newEffect; payload.name_effect = effect.value }
     if (newNameColor != null) { nameColor.value = newNameColor; payload.name_color = nameColor.value }
     saving.value = true
-    try { await meApi.setPrefs(payload) }
-    catch { /* офлайн — уедет позже с синком */ }
-    finally { saving.value = false }
+    try {
+      await meApi.setPrefs(payload)
+      return { ok: true }
+    } catch (e) {
+      // Возвращаем результат, но НЕ откатываем поля: сюда приходят и палитра, и выбор
+      // шрифта, где мгновенный откат под пальцем читался бы как «кнопка не нажалась».
+      // Вызывающий сам решает, стоит ли ругаться (баннер — стоит, палитра — нет).
+      return { ok: false, offline: !e?.response, detail: e?.response?.data?.detail || '' }
+    } finally { saving.value = false }
   }
 
   // Вызывается из auth.logout()/clearSession() — без этого профиль ПРЕДЫДУЩЕГО
@@ -104,6 +133,7 @@ export const useProfileStore = defineStore('profile', () => {
   // показывал чужие данные как свои (тот же класс бага, что уже был у Вектора).
   function reset() {
     avatar.value = ''
+    banner.value = ''
     bio.value = ''
     color.value = ''
     font.value = ''
@@ -113,5 +143,6 @@ export const useProfileStore = defineStore('profile', () => {
     loaded = false
   }
 
-  return { avatar, bio, color, font, effect, nameColor, userId, saving, load, save, saveProfile, reset }
+  return { avatar, banner, bio, color, font, effect, nameColor, userId, saving,
+           load, save, saveProfile, reset }
 })

@@ -51,17 +51,32 @@ const courseKeys = computed(() => Object.keys(byCourse.value).map(Number).sort((
 // {группа → курс} по ВСЕМ категориям сразу (не только по выбранной), нужна и для
 // столбца (виден без выбора категории), и для реального фильтра строк ниже.
 const groupCourse = ref({})
-async function loadGroupCourseMap() {
-  const map = {}
+// {имя группы: category} ПО ПОРТАЛУ — заполняет пробелы там, где группы ещё нет в БД
+// (спарсили из расписания, но не завели). Без этого такая группа считалась бы
+// колледжем по умолчанию, и заочная группа попадала бы не в своё направление.
+const portalCategory = ref({})
+async function loadPortalMaps() {
+  const courses = {}
+  const cats = {}
   for (const c of categories.value) {
     try {
       const by = (await scheduleApi.groups(c.key)).data.by_course || {}
       for (const [course, names] of Object.entries(by)) {
-        for (const g of names) map[g] = Number(course)
+        for (const g of names) { courses[g] = Number(course); cats[g] = c.key }
       }
     } catch { /* эта категория недоступна — остальные всё равно посчитаем */ }
   }
-  groupCourse.value = map
+  groupCourse.value = courses
+  portalCategory.value = cats
+}
+
+// Направление группы. Порядок источников важен: БД ГЛАВНЕЕ портала — категорию там
+// мог поправить админ вручную, и портал не должен её переопределять.
+function categoryOf(name) {
+  return groupCategory.value[name] || portalCategory.value[name] || 'college'
+}
+function categoryLabel(key) {
+  return categories.value.find((c) => c.key === key)?.label || key
 }
 
 // Список групп в фильтре сужается под выбранную категорию, затем под курс — иначе
@@ -70,7 +85,7 @@ async function loadGroupCourseMap() {
 const groupFilterChoices = computed(() => {
   let list = groupChoices.value
   if (categoryFilter.value) {
-    list = list.filter((g) => (groupCategory.value[g] || 'college') === categoryFilter.value)
+    list = list.filter((g) => categoryOf(g) === categoryFilter.value)
   }
   if (courseFilter.value) {
     const names = new Set(byCourse.value[courseFilter.value] || [])
@@ -103,7 +118,7 @@ async function reload() {
 onMounted(async () => {
   await reload()
   await loadCategories()
-  loadGroupCourseMap()   // фоном — таблица показывает «—», пока карта не готова, не блокируем список
+  loadPortalMaps()   // фоном — таблица показывает «—», пока карта не готова, не блокируем список
   // Список групп для выбора: синкнутые (БД) + спарсенные из расписания, без дублей —
   // как _all_group_choices в десктопе.
   try {
@@ -121,7 +136,7 @@ const rows = computed(() => {
   return all.value.filter((r) => {
     if (s && !`${r.surname} ${r.name} ${r.group} ${r.login}`.toLowerCase().includes(s)) return false
     if (groupFilter.value && r.group !== groupFilter.value) return false
-    if (categoryFilter.value && (groupCategory.value[r.group] || 'college') !== categoryFilter.value) return false
+    if (categoryFilter.value && categoryOf(r.group) !== categoryFilter.value) return false
     if (courseFilter.value && groupCourse.value[r.group] !== Number(courseFilter.value)) return false
     return true
   })
@@ -133,6 +148,38 @@ const editing = ref(null) // null = создание; иначе исходны�
 const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', password: '' })
 const saving = ref(false)
 const formError = ref('')
+
+// Группы в карточке студента подчиняются ТОЙ ЖЕ вкладке направления, что и таблица
+// (живой запрос). Выбран «Колледж» — в списке только колледж; выбраны «Все категории»
+// — все, но РАЗЛОЖЕННЫЕ по направлению, а не свалкой: иначе в списке из полутора сотен
+// имён невозможно понять, к какому направлению относится «К74/1», и админ заводит
+// студента в одноимённую группу чужого направления.
+//
+// ⚠️ Объявлено ПОСЛЕ `form`: computed ленив и порядок ему безразличен, но правило
+// «не читать ref, объявленный ниже» в этом проекте уже стоило пустой страницы, и
+// нарушать его даже там, где это безопасно, — плохая привычка.
+const formGroupChoices = computed(() => {
+  const order = categories.value.map((c) => c.key)
+  const rank = (g) => {
+    const i = order.indexOf(categoryOf(g))
+    return i < 0 ? order.length : i          // незнакомое направление — в конец, не теряем
+  }
+  const cur = (form.value.group || '').trim()
+  let list = groupChoices.value
+  if (categoryFilter.value) {
+    list = list.filter((g) => categoryOf(g) === categoryFilter.value)
+    // Уже выбранную группу показываем ВСЕГДА, даже если она из другого направления:
+    // иначе при правке студента список её не предлагает, и стёртое поле нечем вернуть.
+    if (cur && !list.includes(cur)) list = [cur, ...list]
+    return [...list].sort((a, b) => a.localeCompare(b, 'ru'))
+  }
+  return [...list].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, 'ru'))
+})
+// Подпись направления рядом с группой нужна ТОЛЬКО в режиме «все категории»: внутри
+// выбранного направления она одинакова у всех строк и превращается в шум.
+function formGroupLabel(g) {
+  return categoryFilter.value ? '' : categoryLabel(categoryOf(g))
+}
 
 function openCreate() {
   editing.value = null
@@ -269,7 +316,15 @@ async function del(r) {
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colGroup', 'Группа') }}</span>
             <input v-model="form.group" list="admin-group-list" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-            <datalist id="admin-group-list"><option v-for="g in groupChoices" :key="g" :value="g" /></datalist>
+            <!-- label у option в datalist показывается второй строкой рядом со значением
+                 (Chromium: и браузер, и WebView2 на десктопе, и WebView в APK) — так
+                 направление видно, а само значение остаётся чистым именем группы. -->
+            <datalist id="admin-group-list">
+              <option v-for="g in formGroupChoices" :key="g" :value="g" :label="formGroupLabel(g) || undefined" />
+            </datalist>
+            <span class="mt-1 block text-tiny text-text3">{{ categoryFilter
+              ? locale.t('adminStudents.groupsOfCategoryHint', { category: categoryLabel(categoryFilter) })
+              : locale.t('adminStudents.groupsAllCategoriesHint', 'Показаны группы всех направлений — направление подписано рядом.') }}</span>
           </label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminStudents.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminStudents.passwordLabel', 'Пароль') }}</span>
             <div class="relative">

@@ -146,3 +146,42 @@ def test_safe_app_dir_redirects_away_from_downloads(monkeypatch, tmp_path):
     assert app_paths.safe_app_dir() == str(local_appdata / "GradeBookAI")
     assert app_paths.app_dir() == str(downloads), "app_dir() не должен меняться"
     assert app_paths.safe_app_file("subjects.json") == str(local_appdata / "GradeBookAI" / "subjects.json")
+
+
+# ── Строка версии продукта ───────────────────────────────────────────────────────────
+def test_version_string_has_exactly_one_source():
+    """Версия обязана жить в ОДНОМ месте и совпадать везде, где её показывают.
+
+    До 3.7 она была литералом в трёх файлах, и два отставали ОДНОВРЕМЕННО: заголовок
+    окна показывал 3.6.9 на ветке 3.7, а инфо-панель сайта — 3.6.1, то есть отстала на
+    шесть релизов. Над вторым литералом при этом стоял комментарий «правь руками при
+    каждом релизе» — просьба помнить не сработала ни разу за год.
+
+    Тест держит именно СВЯЗЬ, а не конкретное значение: сверять его с номером ветки
+    было бы вторым местом, которое надо не забыть поправить."""
+    import desktop_update
+    from core import APP_VERSION
+
+    assert APP_VERSION is desktop_update.APP_VERSION, (
+        "core.APP_VERSION обязан быть ре-экспортом, а не собственным литералом")
+    assert desktop_update.parse_version(APP_VERSION), (
+        f"версия {APP_VERSION!r} не разбирается собственным parse_version — "
+        "автообновление не сможет сравнить её со сборкой на сервере")
+
+
+def test_site_info_reports_the_same_version_as_the_desktop():
+    """Инфо-панель сайта («Сервер» у админа) обязана называть ту же версию, что и
+    заголовок окна программы. Именно здесь литерал отстал на шесть релизов, и заметить
+    это было нечем: тест той панели проверял только, что поле непустое."""
+    import pathlib
+    import re
+
+    import desktop_update
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "server" / "app" / "routers" / "web" / "siteinfo.py"
+    text = src.read_text(encoding="utf-8")
+    line = next((ln for ln in text.splitlines() if '"version":' in ln), "")
+    assert line, "в siteinfo.py пропало поле version"
+    assert not re.search(r'"version":\s*"', line), (
+        f"версия снова захардкожена литералом: {line.strip()!r} — "
+        f"должна браться из desktop_update.APP_VERSION ({desktop_update.APP_VERSION})")

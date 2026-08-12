@@ -573,8 +573,8 @@ class AdminDashboard(QWidget):
         lay.addWidget(title_lbl(f"{s.get('surname', '')} {s.get('name', '')}", 18))
         sn = field_input(); sn.setText(s.get("surname", ""))
         nm = field_input(); nm.setText(s.get("name", ""))
-        grp = combo(self._all_group_choices()); grp.setEditable(True)
-        grp.setCurrentText(s.get("group", ""))
+        grp = combo([]); grp.setEditable(True)
+        self._fill_student_group_combo(grp, s.get("group", ""))
         lg = field_input(); lg.setText(s.get("login", ""))
         pw = field_input("Новый пароль", password=True)
         for lb, w in [("Фамилия", sn), ("Имя", nm), ("Группа", grp), ("Логин", lg), ("Новый пароль", pw)]:
@@ -630,8 +630,9 @@ class AdminDashboard(QWidget):
         sn = field_input("Иванов"); nm = field_input("Иван")
         #Группа — выпадающий список спарсенных групп колледжа (+ уже заведённых);
         #редактируемый, чтобы при необходимости завести свою. По умолчанию не выбрана.
-        grp = combo(self._all_group_choices()); grp.setEditable(True)
-        grp.setCurrentText(""); grp.lineEdit().setPlaceholderText("Выберите или введите группу")
+        grp = combo([]); grp.setEditable(True)
+        self._fill_student_group_combo(grp, "")
+        grp.lineEdit().setPlaceholderText("Выберите или введите группу")
         pw = field_input("Пароль", password=True)
         lg = field_input("ivanov")
         for lb, w in [("Фамилия", sn), ("Имя", nm), ("Группа", grp), ("Логин", lg), ("Пароль", pw)]:
@@ -708,6 +709,56 @@ class AdminDashboard(QWidget):
             if name and name not in seen:
                 seen.add(name); out.append(name)
         return out
+
+    def _fill_student_group_combo(self, cb, current=""):
+        """Наполняет выпадающий список групп в карточке студента ПО ТОМУ ЖЕ направлению,
+        что выбрано вкладкой «Студенты» (зеркало веб-версии, AdminStudents.vue).
+
+        Зачем. Раньше список был один и тот же всегда — все группы разом. Админ,
+        отфильтровавший экран на «Заочное», при добавлении студента получал вперемешку
+        колледж, бакалавриат и заочку; одноимённые группы разных направлений в такой
+        свалке различить нечем, и студент уезжает не туда.
+
+        Выбрано направление — только его группы. «Все категории» — все, но РАЗДЕЛЁННЫЕ
+        неактивными заголовками направлений: в Qt это единственный способ показать
+        группировку, не испортив само значение (список редактируемый, `currentText()`
+        уходит в имя группы — префикс в тексте пункта стал бы частью имени)."""
+        key = getattr(self, "_students_category_filter", "")
+        gh = get_store()
+        cat_by_group = {g.get("name", ""): (g.get("category") or "college")
+                        for g in (gh.get_groups() if gh else [])}
+        #Спарсенные из расписания — это снимок КОЛЛЕДЖА (см. _parsed_group_names),
+        #поэтому умолчание «college» для них не догадка, а факт.
+        names = self._all_group_choices()
+        cur = (current or "").strip()
+
+        cb.clear()
+        if key:
+            picked = [n for n in names if cat_by_group.get(n, "college") == key]
+            #Уже выбранную группу показываем всегда, даже если она из другого
+            #направления: иначе при правке студента её нечем вернуть в поле.
+            if cur and cur not in picked:
+                picked.insert(0, cur)
+            cb.addItems(sorted(picked, key=str.lower))
+        else:
+            def _add_block(label, block):
+                if not block:
+                    return
+                cb.addItem(f"— {label} —")
+                item = cb.model().item(cb.count() - 1)
+                if item is not None:
+                    item.setEnabled(False)      #заголовок, а не выбираемая «группа»
+                cb.addItems(sorted(block, key=str.lower))
+
+            shown = set()
+            for ckey, meta in _sched.CATEGORIES.items():
+                block = [n for n in names if cat_by_group.get(n, "college") == ckey]
+                shown.update(block)
+                _add_block(meta["label"], block)
+            #Направление, которого нет в реестре (правили БД руками, реестр сузили),
+            #не должно выкидывать группу из списка ВОВСЕ: показываем отдельным блоком.
+            _add_block("Прочие", [n for n in names if n not in shown])
+        cb.setCurrentText(cur)
 
     def _ensure_group_exists(self, name):
         """Заводит группу в БД, если её ещё нет (предметы пустые). Вызывается при

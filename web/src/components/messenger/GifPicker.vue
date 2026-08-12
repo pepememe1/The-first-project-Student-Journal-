@@ -14,6 +14,19 @@ import { X, Search, Star, Flame, ChevronLeft } from '@lucide/vue'
 import { useGifStore } from '@/stores/gif'
 import { useLocaleStore } from '@/stores/locale'
 
+// Оба пропса читает только шаблон (там они доступны по имени), поэтому результат
+// defineProps никуда не присваиваем — иначе линтер справедливо ругается на мёртвую
+// переменную.
+defineProps({
+  // Где показать окно. 'composer' — как было: приклеено к правому нижнему углу, над
+  // кнопкой GIF в поле ввода. 'center' — по центру экрана: пикер зовут ещё и со
+  // страницы «Профиль» (гифка на аватарку и на баннер), а там никакого поля ввода
+  // внизу справа нет, и окно висело бы в пустом углу.
+  anchor: { type: String, default: 'composer' },
+  // Подпись в шапке. У выбора аватарки и баннера вопрос «что именно выбираем» не
+  // праздный: диалог один и тот же, а результат ложится в разные места.
+  title: { type: String, default: '' },
+})
 const emit = defineEmits(['pick', 'close'])
 const gif = useGifStore()
 const locale = useLocaleStore()
@@ -123,9 +136,14 @@ function send(item) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50" @click="emit('close')">
-    <div class="absolute bottom-16 right-2 flex h-96 w-80 max-w-[calc(100vw-1rem)] flex-col
-                overflow-hidden rounded-xl border border-border2 bg-card shadow-card" @click.stop>
+  <div class="fixed inset-0 z-50" :class="anchor === 'center' ? 'grid place-items-center bg-black/40 p-4' : ''"
+       @click="emit('close')">
+    <div class="flex h-96 w-80 max-w-[calc(100vw-1rem)] flex-col
+                overflow-hidden rounded-xl border border-border2 bg-card shadow-card"
+         :class="anchor === 'center' ? 'max-h-[calc(100vh-2rem)]' : 'absolute bottom-16 right-2'" @click.stop>
+      <p v-if="title" class="border-b border-border px-3 pt-2.5 pb-2 text-[11px] uppercase tracking-wide text-text3">
+        {{ title }}
+      </p>
       <div class="flex items-center gap-1 border-b border-border p-2">
         <button v-if="view === 'results'" type="button" @click="goHome" :aria-label="locale.t('gif.toCategories', 'К категориям')"
                 class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2">

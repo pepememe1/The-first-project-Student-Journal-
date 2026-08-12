@@ -1780,3 +1780,39 @@ def test_shared_empty_when_no_mutual_conversations(client):
 def test_shared_requires_auth(client):
     _, (a_id, a), (b_id, b), _ = _setup(client)
     assert client.get(f"/web/messenger/users/{b_id}/shared").status_code == 401
+
+
+# ── Гифка-баннер профиля (3.7) ───────────────────────────────────────────────────────
+def test_profile_banner_travels_to_other_people(client):
+    """Баннер обязан доезжать до ОБОИХ мест, где клиент рисует чужую карточку: до
+    отдельного профиля и до списка участников беседы. Поля добавляют по одному месту за
+    раз, и «в личке видно, а в группе нет» уже случалось со стилем никнейма."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    url = "https://static.klipy.com/gif/xyz/md.gif"
+    client.post("/me/prefs", json={"profile_banner": url}, headers=a)
+
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert card["profile_banner"] == url
+
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Г", "member_ids": [b_id, c_id]}, headers=a).json()["conversation_id"]
+    info = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
+    owner = next(p for p in info["participants"] if p["user_id"] == a_id)
+    assert owner["profile_banner"] == url
+
+
+def test_profile_banner_defaults_to_empty_string(client):
+    #Пусто — клиент рисует обычную плашку цвета профиля, как и до появления баннеров.
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert card["profile_banner"] == ""
+
+
+def test_gif_avatar_is_visible_to_others_like_a_picture_one(client):
+    #Аватарка-гифка — то же поле `avatar`, что и своя картинка (см. me.py). Тест держит
+    #это свойство: разведи их на два поля — и половина мест перестанет её показывать.
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    url = "https://static.klipy.com/gif/ava/xs.webp"
+    client.post("/me/prefs", json={"avatar": url}, headers=a)
+    card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
+    assert card["avatar"] == url
