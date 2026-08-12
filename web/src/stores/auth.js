@@ -10,6 +10,8 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
+import { resetOfflineSession } from '@/api/offlineSession'
+import { flushOutbox, reloadOutbox } from '@/api/outbox'
 import { registerToken, unregisterToken } from '@/services/push'
 import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedule,
   saveEndpoint as saveWidgetEndpoint } from '@/services/scheduleWidget'
@@ -67,6 +69,11 @@ export const useAuthStore = defineStore('auth', () => {
       // в рантайме (свой сервер колледжа), и зашитый указывал бы не туда.
       saveWidgetEndpoint()
       refreshWidgetSchedule(data.role).catch(() => {})
+      // Очередь оценок принадлежит логину и пережила выход из аккаунта. Перечитываем
+      // её под нового вошедшего и сразу пробуем отправить: сеть только что была —
+      // вход по ней и произошёл, лучшего момента не будет.
+      reloadOutbox()
+      flushOutbox().catch(() => {})
       return user.value
     } catch (e) {
       const status = e.response?.status
@@ -95,6 +102,11 @@ export const useAuthStore = defineStore('auth', () => {
       // Вход есть вход, каким бы способом он ни произошёл.
       saveWidgetEndpoint()
       refreshWidgetSchedule(data.role).catch(() => {})
+      // Очередь оценок принадлежит логину и пережила выход из аккаунта. Перечитываем
+      // её под нового вошедшего и сразу пробуем отправить: сеть только что была —
+      // вход по ней и произошёл, лучшего момента не будет.
+      reloadOutbox()
+      flushOutbox().catch(() => {})
       return user.value
     } catch (e) {
       // Отмена пользователем (NotAllowedError/AbortError) — не ошибка, пробрасываем молча.
@@ -122,6 +134,13 @@ export const useAuthStore = defineStore('auth', () => {
     // строки он продолжал бы показывать группу предыдущего владельца сессии тому, кто
     // войдёт следом (на телефоне в колледже это норма, а не редкость).
     clearScheduleWidget()
+    // Отсчёт суточного окна офлайна начинаем с нуля: оно принадлежит сессии, а не
+    // устройству. Иначе следующий вошедший унаследовал бы чужой почти истёкший счётчик
+    // и получил бы «войдите заново» через десять минут после входа.
+    // ⚠️ Очередь неотправленных оценок (outbox) при этом НЕ трогаем — она привязана к
+    // логину автора и обязана пережить выход: иначе преподаватель, вышедший из
+    // аккаунта до появления сети, потеряет всё, что выставил.
+    resetOfflineSession()
     user.value = null
   }
 
@@ -134,6 +153,13 @@ export const useAuthStore = defineStore('auth', () => {
     useVectorStore().reset()
     useProfileStore().reset()
     clearScheduleWidget()
+    // Отсчёт суточного окна офлайна начинаем с нуля: оно принадлежит сессии, а не
+    // устройству. Иначе следующий вошедший унаследовал бы чужой почти истёкший счётчик
+    // и получил бы «войдите заново» через десять минут после входа.
+    // ⚠️ Очередь неотправленных оценок (outbox) при этом НЕ трогаем — она привязана к
+    // логину автора и обязана пережить выход: иначе преподаватель, вышедший из
+    // аккаунта до появления сети, потеряет всё, что выставил.
+    resetOfflineSession()
     user.value = null
   }
 

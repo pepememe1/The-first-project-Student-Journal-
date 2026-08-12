@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from .. import rustore_push
+from ..config import OFFLINE_GRACE_MIN
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import NotifyEvent, PushToken, User
@@ -197,8 +198,15 @@ def get_prefs(user: User = Depends(get_current_user)):
     подставить туда было нечего — личная заметка на своей же карточке профиля молча не
     сохранялась (запрос вообще не уходил). Здесь это дешевле всего: страница профиля и
     так дёргает prefs при открытии, а значит правка чинит и уже выданные сессии — не
-    требуя от всего колледжа перезайти, как потребовала бы добавка id в ответ входа."""
-    return {"prefs": user.prefs or {}, "user_id": user.id}
+    требуя от всего колледжа перезайти, как потребовала бы добавка id в ответ входа.
+
+    Здесь же приезжает `offline_grace_min` — сколько минут приложение вправе работать,
+    ни разу не дозвонившись до сервера. Это не личная настройка, а ПОЛИТИКА, и её
+    место на сервере: иначе цифра жила бы только в собранном APK, и поменять её без
+    перевыпуска приложения было бы нельзя. Клиент проверяет окно сам (сервера в этот
+    момент по определению нет), но правило получает отсюда."""
+    return {"prefs": user.prefs or {}, "user_id": user.id,
+            "offline_grace_min": OFFLINE_GRACE_MIN}
 
 
 @router.post("/prefs")

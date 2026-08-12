@@ -16,6 +16,7 @@ import { ref } from 'vue'
 // одного, а карта связей репозитория просто не видит такой вызов — для неё эта
 // страница с сервером не разговаривает вовсе.
 import { meApi } from '@/api/endpoints'
+import { setGraceMin } from '@/api/offlineSession'
 import { PRESETS } from '@/theme/palette'
 
 // Лимит «О себе» — тот же, что режет сервер (routers/me.py::_MAX_BIO_CHARS).
@@ -44,6 +45,10 @@ export const useProfileStore = defineStore('profile', () => {
       const { data } = await meApi.getPrefs()
       const p = data?.prefs || {}
       userId.value = data?.user_id || ''
+      // Не настройка человека, а ПОЛИТИКА сервера: сколько приложение вправе работать
+      // без связи. Приезжает здесь, потому что этот запрос и так делается при открытии,
+      // — иначе цифра жила бы только внутри собранного APK и менялась бы перевыпуском.
+      setGraceMin(data?.offline_grace_min)
       avatar.value = p.avatar || ''
       bio.value = p.bio || ''
       color.value = p.profile_color || ''

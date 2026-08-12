@@ -16,6 +16,7 @@
 import axios from 'axios'
 import { getAccess, getRefresh, setTokens, clearTokens, getDeviceId } from './tokens'
 import { isCacheable, writeCache, readCache, servingStale } from './offlineCache'
+import { noteOffline, noteOnline } from './offlineSession'
 import { getApiBase, isNativeApp } from './server'
 
 /**
@@ -78,6 +79,9 @@ function isGet(config) { return (config?.method || 'get').toLowerCase() === 'get
 api.interceptors.response.use(
   (resp) => {
     const config = resp.config || {}
+    // Сервер ответил — значит связь есть, и отсчёт суточного окна офлайна
+    // начинается заново (см. offlineSession.js).
+    noteOnline()
     if (isGet(config) && isCacheable(config.url)) {
       writeCache(config, resp.data)
       servingStale.value = false     // пришли свежие данные — мы онлайн
@@ -86,8 +90,12 @@ api.interceptors.response.use(
   },
   async (error) => {
     const { response, config } = error
-    // Нет ответа (сеть недоступна/таймаут): для кэшируемых GET отдаём СОХРАНЁННОЕ —
-    // экран показывает данные, а не пустоту. Обновятся, как только вернётся сеть.
+    // Ответа нет вовсе (сеть недоступна/таймаут) — это офлайн. Ответ с любым кодом,
+    // даже 500, наоборот означает, что сервер на связи: различать обязательно, иначе
+    // одна серверная ошибка запускала бы отсчёт окна офлайна на исправной сети.
+    if (!response) noteOffline()
+    // Для кэшируемых GET отдаём СОХРАНЁННОЕ — экран показывает данные, а не пустоту.
+    // Обновятся, как только вернётся сеть.
     if (!response && config && isGet(config) && isCacheable(config.url)) {
       const hit = readCache(config)
       if (hit) {

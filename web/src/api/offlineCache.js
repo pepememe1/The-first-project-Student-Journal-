@@ -23,6 +23,13 @@ const CACHEABLE = ['/web/', '/me/prefs']
 // (напр. шапка) могут показать «показаны сохранённые данные».
 export const servingStale = ref(false)
 
+/**
+ * Счётчик записей в кэш. Нужен ровно для подписи «обновлено в 12:40» на экранах:
+ * сама отметка времени лежит в localStorage, а Vue за ним не следит. Каждая удачная
+ * запись двигает счётчик, и вычисляемые подписи пересчитываются.
+ */
+export const cacheVersion = ref(0)
+
 function currentLogin() {
   try {
     return JSON.parse(localStorage.getItem('gb.user') || 'null')?.login || '_'
@@ -50,7 +57,18 @@ export function writeCache(config, data) {
   try {
     localStorage.setItem(`${PREFIX}${currentLogin()}|${reqKey(config)}`,
       JSON.stringify({ t: Date.now(), data }))
+    cacheVersion.value += 1
   } catch { /* переполнена квота — не критично */ }
+}
+
+/**
+ * Когда данные этого запроса последний раз приходили С СЕРВЕРА (мс) или 0.
+ *
+ * Именно «с сервера», а не «когда показали»: подпись под оценками должна отвечать на
+ * вопрос «насколько это свежее», иначе она успокаивает вместо того, чтобы предупреждать.
+ */
+export function cachedAt(config) {
+  return readCache(config)?.t || 0
 }
 
 export function readCache(config) {
@@ -60,6 +78,27 @@ export function readCache(config) {
   } catch {
     return null
   }
+}
+
+/**
+ * Самая свежая сохранённая копия ЛЮБОГО запроса, начинающегося с этого пути.
+ *
+ * Нужно там, где точные параметры запроса заранее неизвестны: расписание, например,
+ * запрашивается то с группой, то без неё, то с категорией портала — а офлайн-Вектору
+ * нужно просто «последнее известное расписание». Подбирать ключ по кусочкам значило бы
+ * повторить сборку параметров ещё раз и однажды с ней разойтись.
+ */
+export function findCached(pathPrefix) {
+  const head = `${PREFIX}${currentLogin()}|${pathPrefix}`
+  let best = null
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (!k.startsWith(head)) continue
+      const hit = JSON.parse(localStorage.getItem(k) || 'null')
+      if (hit && (!best || hit.t > best.t)) best = hit
+    }
+  } catch { /* битая запись — ведём себя как при её отсутствии */ }
+  return best        // { t, data } | null
 }
 
 /** Полная очистка кэша (вызывается при выходе из аккаунта). */
