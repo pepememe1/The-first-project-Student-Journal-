@@ -128,15 +128,28 @@ async function loadBundle() {
   } catch { otaLog.value = [] }
 }
 
+// ⚠️ Живой отзыв Ярослава (11.08.2026): «вроде реализовано автообновление, но оно не
+// работает — написано, что доступна какая-то версия, а как её скачать непонятно».
+// Так и было: проверка ТОЛЬКО печатала номер версии, а `download()`/`set()` не звал
+// никто во всём web/src — кнопки установки физически не существовало. Держим найденное
+// обновление здесь, чтобы кнопка появлялась ровно тогда, когда есть что ставить.
+const pending = ref(null)         // { version, url, checksum } | null
+
 async function checkUpdate() {
   bundleBusy.value = true
   bundleMsg.value = ''
+  pending.value = null
   try {
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
     const latest = await CapacitorUpdater.getLatest()
     if (!latest?.version || latest.version === bundle.value?.version) {
       bundleMsg.value = loc.t('settings.bundleUpToDate', 'У вас последняя версия.')
+    } else if (!latest.url) {
+      // Версия новее есть, а ссылки нет — качать нечего. Молчать здесь нельзя: человек
+      // увидел бы «доступна версия» и снова искал бы несуществующую кнопку.
+      bundleMsg.value = loc.t('settings.bundleNoUrl', { version: latest.version })
     } else {
+      pending.value = { version: latest.version, url: latest.url, checksum: latest.checksum || '' }
       bundleMsg.value = loc.t('settings.bundleAvailable', { version: latest.version })
     }
   } catch (e) {
@@ -144,6 +157,54 @@ async function checkUpdate() {
   } finally {
     bundleBusy.value = false
   }
+}
+
+async function installUpdate() {
+  if (!pending.value) return
+  bundleBusy.value = true
+  bundleMsg.value = loc.t('settings.bundleDownloading', 'Скачиваем обновление…')
+  try {
+    const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
+    const info = await CapacitorUpdater.download({
+      url: pending.value.url,
+      version: pending.value.version,
+      ...(pending.value.checksum ? { checksum: pending.value.checksum } : {}),
+    })
+    if (!info?.id) throw new Error('bundle id')
+    bundleMsg.value = loc.t('settings.bundleApplying', 'Применяем — приложение перезапустится…')
+    // ⚠️ После set() плагин сам перезагружает веб-часть, и код ПОСЛЕ этого вызова уже не
+    // отработает (так прямо написано в его документации) — поэтому ни сообщений, ни
+    // снятия флага занятости здесь быть не должно.
+    await CapacitorUpdater.set({ id: info.id })
+  } catch (e) {
+    bundleMsg.value = loc.t('settings.bundleInstallFailed', { error: e?.message || e })
+    bundleBusy.value = false
+  }
+}
+
+// ── Нативная часть (сам APK) ─────────────────────────────────────────────────────
+// OTA везёт ТОЛЬКО интерфейс. Виджет расписания, мост пушей и права — внутри apk, и
+// меняются лишь переустановкой; человеку это не видно, поэтому проверяем отдельно и
+// говорим прямо, что нужно скачать файл.
+const apk = ref(null)             // { version, url } | null — есть сборка новее нашей
+async function loadApkInfo() {
+  if (!bundle.value) return       // не приложение — нечего и сравнивать
+  try {
+    const { App } = await import('@capacitor/app')
+    const info = await App.getInfo()
+    const mine = parseInt(info?.build || '0', 10) || 0
+    const { appApi } = await import('@/api/endpoints')
+    const { data } = await appApi.apkInfo()
+    const theirs = parseInt(data?.nativeVersion || 0, 10) || 0
+    if (theirs > mine && data?.url) apk.value = { version: data.versionName || String(theirs), url: data.url }
+  } catch { apk.value = null }
+}
+async function openApk() {
+  if (!apk.value) return
+  try {
+    const { Browser } = await import('@capacitor/browser')
+    await Browser.open({ url: apk.value.url })
+  } catch { window.open(apk.value.url, '_blank') }
 }
 
 // ── Шкала оценивания (§ролей, 3.3.1) — только препод: в ЧЁМ он вводит/видит оценки.
@@ -199,7 +260,8 @@ onMounted(async () => {
   voice.refresh(false)
   loadNotify()
   loadPushInfo()
-  loadBundle()
+  await loadBundle()
+  loadApkInfo()          //строго ПОСЛЕ loadBundle: вне приложения проверять нечего
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
   if (canBiometric.value) await loadPasskeys()
   if (auth.role === 'teacher') await loadGradingScale()
@@ -304,11 +366,29 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
           :subtitle="loc.t('settings.appVersionHint', 'Интерфейс обновляется сам, без переустановки из магазина')">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-text2">{{ loc.t('settings.installed', 'Установлена:') }} <span class="font-semibold text-text">{{ bundle.version }}</span></p>
-        <AppButton variant="ghost" :disabled="bundleBusy" @click="checkUpdate">
-          <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? loc.t('settings.checking', 'Проверяем…') : loc.t('settings.checkUpdate', 'Проверить обновление') }}
-        </AppButton>
+        <div class="flex flex-wrap gap-2">
+          <AppButton variant="ghost" :disabled="bundleBusy" @click="checkUpdate">
+            <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? loc.t('settings.checking', 'Проверяем…') : loc.t('settings.checkUpdate', 'Проверить обновление') }}
+          </AppButton>
+          <!-- Кнопка появляется, ТОЛЬКО когда есть что ставить: пустая кнопка
+               «Установить», которая ничего не делает, — это то же самое «непонятно, как
+               скачать», с которого начался этот разбор. -->
+          <AppButton v-if="pending" variant="green" :disabled="bundleBusy" @click="installUpdate">
+            {{ loc.t('settings.bundleInstall', 'Скачать и установить') }}
+          </AppButton>
+        </div>
       </div>
       <p v-if="bundleMsg" class="mt-3 text-sm text-text3">{{ bundleMsg }}</p>
+
+      <!-- Новая НАТИВНАЯ сборка: её OTA не привезёт никогда, нужен файл из магазина или
+           с сайта. Говорим об этом прямо, а не молчим — иначе человек ждёт обновления,
+           которого по этому каналу не бывает. -->
+      <div v-if="apk" class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/40 bg-accent-glow px-3 py-2.5">
+        <p class="text-sm text-text2">{{ loc.t('settings.apkAvailable', { version: apk.version }) }}</p>
+        <AppButton variant="green" size="sm" @click="openApk">
+          {{ loc.t('settings.apkDownload', 'Скачать APK') }}
+        </AppButton>
+      </div>
 
       <!-- Ход последних обновлений. Нужен, пока не выяснена причина, по которой бандл
            скачивается и не приживается: она остаётся на устройстве и в логи сервера не
