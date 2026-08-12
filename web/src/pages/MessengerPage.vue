@@ -29,9 +29,13 @@ onBeforeUnmount(() => { m.stopPolling() })
 <template>
   <!-- Высота — от ОДНОЙ переменной оболочки (--gb-page-offset в style.css), а не от
        собственного набора чисел: свой набор устарел молча после перекомпоновки 3.5.6, и
-       снизу осталась мёртвая полоса в полторы сотни пикселей. -->
+       снизу осталась мёртвая полоса в полторы сотни пикселей.
+       ⚠️ `gb-fullbleed` (3.7) действует ТОЛЬКО ниже sm и делает две вещи разом: убирает
+       боковую рамку контейнера и пересчитывает высоту под свой, уже без отступов, хром
+       (см. комментарий у класса в style.css). Классы Tailwind ниже он перебивает не
+       «по случайности» — правило вне @layer всегда сильнее утилит внутри слоя. -->
   <div class="flex overflow-hidden rounded-lg border border-border bg-card shadow-card"
-       :class="embed ? 'h-full' : 'h-[calc(100dvh-var(--gb-page-offset))]'">
+       :class="embed ? 'h-full' : 'gb-fullbleed h-[calc(100dvh-var(--gb-page-offset))]'">
     <ChatList />
     <ProfilePanel />
     <ChatThread />

@@ -4,13 +4,13 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Download, Fingerprint } from '@lucide/vue'
+import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
-import { desktopApi } from '@/api/endpoints'
+import { desktopApi, appApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
-import { isDesktopApp } from '@/utils/platform'
+import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
@@ -35,6 +35,11 @@ const needApproval = ref(false)
 const isDesktop = ref(false)
 const insideApp = isDesktopApp()
 const desktop = ref({ available: false })
+// Мобильное приложение предлагаем скачать только в браузере на Android (см.
+// isAndroidBrowser) и только если сервер реально отдаёт файл: блок «скачать», за
+// которым нет файла, хуже отсутствующего блока.
+const isAndroid = isAndroidBrowser()
+const apk = ref({ url: '', version: '' })
 // Кнопку «Войти по биометрии» показываем только если на устройстве есть встроенный
 // биометрический аутентификатор (Face ID/отпечаток) и браузер поддерживает passkeys.
 const canBiometric = ref(false)
@@ -43,6 +48,14 @@ onMounted(async () => {
   setTimeout(() => { greetingDone.value = true }, 1600)
   isDesktop.value = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? true
   try { desktop.value = (await desktopApi.info()).data } catch { desktop.value = { available: false } }
+  //Спрашиваем сервер об .apk только там, где кнопка вообще может появиться —
+  //лишний запрос с каждого захода на сайт с ПК не нужен никому.
+  if (isAndroid) {
+    try {
+      const { data } = await appApi.apkInfo()
+      if (data?.url) apk.value = { url: data.url, version: data.versionName || '' }
+    } catch { apk.value = { url: '', version: '' } }
+  }
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
 })
 
@@ -161,7 +174,15 @@ const showRecover = ref(false)
 </script>
 
 <template>
-  <div class="relative flex min-h-full items-center justify-center overflow-hidden p-4"
+  <!-- ⚠️ ПРОКРУТКА НА ТЕЛЕФОНЕ (3.7, живой отзыв: «не вся страница влазит на экран»).
+       Здесь стоял `overflow-hidden` вместе с вертикальным центрированием — на широком
+       экране это правильно (фон-соты не должен давать полосу прокрутки), но на телефоне
+       содержимое ВЫШЕ экрана, и `overflow-hidden` не просто прячет лишнее, а лишает
+       возможности до него добраться: прокрутить нельзя, низа карточки не существует.
+       Теперь режем только по горизонтали (соты), а по вертикали содержимое прокручивается;
+       `items-start` на узком экране — чтобы форма начиналась сверху, а не «висела» по
+       центру, уводя часть себя за верхний край. -->
+  <div class="relative flex min-h-full items-start justify-center overflow-x-hidden p-4 sm:items-center"
        style="padding-top: calc(1rem + env(safe-area-inset-top)); padding-bottom: calc(1rem + env(safe-area-inset-bottom))">
     <HexBackground />
 
@@ -185,23 +206,29 @@ const showRecover = ref(false)
       </div>
 
       <!-- Карточка входа (центр экрана) -->
-      <div class="mx-auto w-full max-w-sm justify-self-center rounded-2xl border border-border bg-card p-7 shadow-card">
+      <div class="mx-auto w-full max-w-sm justify-self-center rounded-2xl border border-border bg-card p-4 shadow-card sm:p-7">
         <!-- Глобус выбора языка. Стоит НА ЭКРАНЕ ВХОДА, до аккаунта: человек, который не
              читает по-русски, должен переключить язык раньше, чем начнёт разбираться
              в форме. Выбор переживает вход (см. stores/locale.js). -->
         <div class="mb-1 flex justify-end">
           <LanguagePicker />
         </div>
-        <div class="mb-5 flex flex-col items-center text-center">
+        <div class="mb-3 flex flex-col items-center text-center sm:mb-5">
           <!-- Знак над названием журнала: цвет из темы (кольца — акцентным цветом,
                видны на белой карточке; ядро двухцветное). -->
-          <BrandLogo :size="76" oncard />
-          <h1 class="mt-3 font-title text-2xl font-extrabold text-text">GradeBookAI</h1>
-          <p class="mt-1 text-sm text-text3">{{ loc.t('app.subtitle') }}</p>
-          <p class="mt-1 text-sm font-semibold text-accent">{{ loc.t('app.college') }}</p>
+          <!-- ⚠️ Прятать классом ПРЯМО НА КОМПОНЕНТЕ нельзя: у BrandLogo корневой
+               <svg> несёт инлайновый style="display:block", а инлайновый стиль
+               сильнее класса `sm:hidden` — на экране оказывались ОБА знака сразу
+               (поймано скриншотом с телефона). Скрываем обёртки, у них своих
+               инлайновых стилей нет. -->
+          <div class="sm:hidden"><BrandLogo :size="56" oncard /></div>
+          <div class="hidden sm:block"><BrandLogo :size="76" oncard /></div>
+          <h1 class="mt-2 font-title text-xl font-extrabold text-text sm:mt-3 sm:text-2xl">GradeBookAI</h1>
+          <p class="mt-1 hidden text-sm text-text3 sm:block">{{ loc.t('app.subtitle') }}</p>
+          <p class="mt-1 text-xs font-semibold text-accent sm:text-sm">{{ loc.t('app.college') }}</p>
         </div>
 
-        <form class="space-y-4" @submit.prevent="submit">
+        <form class="space-y-3 sm:space-y-4" @submit.prevent="submit">
           <div>
             <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.login') }}</label>
             <input v-model="login" id="login" name="username" autocomplete="username"
@@ -238,10 +265,10 @@ const showRecover = ref(false)
             <Fingerprint class="size-4" />
             {{ isDesktop ? loc.t('login.passkey') : loc.t('login.biometry') }}
           </button>
-          <p class="mt-1.5 text-center text-tiny text-text3">Функция настраивается в настройках профиля</p>
+          <p class="mt-1.5 hidden text-center text-tiny text-text3 sm:block">Функция настраивается в настройках профиля</p>
         </div>
 
-        <div class="mt-4 border-t border-border pt-3 text-center">
+        <div class="mt-3 border-t border-border pt-2.5 text-center sm:mt-4 sm:pt-3">
           <p class="text-xs text-text3">{{ loc.t('login.forStudents') }}</p>
           <div class="mt-1.5 flex flex-wrap items-center justify-center gap-2">
             <button type="button" class="rounded-sm border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow"
@@ -249,7 +276,7 @@ const showRecover = ref(false)
             <button type="button" class="rounded-sm border border-border2 px-3 py-1.5 text-xs font-medium text-text3 transition-colors hover:border-accent hover:text-accent"
                     @click="showRecover = true">{{ loc.t('login.recover') }}</button>
           </div>
-          <p class="mt-2 text-tiny text-text3">Преподаватели и админ входят по данным от администратора.</p>
+          <p class="mt-2 hidden text-tiny text-text3 sm:block">Преподаватели и админ входят по данным от администратора.</p>
         </div>
 
         <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную. -->
@@ -261,6 +288,24 @@ const showRecover = ref(false)
 
         <DeviceApproval v-if="needApproval" @approved="onApproved" />
       </div>
+
+      <!-- СКАЧАТЬ ПРИЛОЖЕНИЕ — отдельная ячейка сетки, а НЕ часть правой колонки.
+           ⚠️ Сначала блок стоял именно там, рядом со «скачать .exe» — и на телефоне его
+           не было видно вовсе: та колонка `hidden … lg:flex`, то есть существует только
+           с lg. А единственная платформа, где кнопка вообще уместна, — Android-телефон,
+           то есть ровно та ширина, на которой колонки нет. Здесь блок живёт в общем
+           потоке и стоит ПОД карточкой входа; на широком экране его не бывает по
+           самому условию (isAndroid), поэтому раскладку ПК он не задевает.
+           Вид — ОДНА строка-кнопка без карточки и описания: экран входа на телефоне
+           обязан помещаться целиком, а рассказ о возможностях приложения человек и так
+           увидит сразу после установки. Версию оставляем: по ней видно, что файл свежий. -->
+      <a v-if="isAndroid && apk.url" :href="apk.url" download
+         class="mx-auto flex w-full max-w-sm lg:hidden items-center justify-center gap-2 rounded-2xl border border-border bg-card px-4 py-3 text-sm font-semibold text-text shadow-card transition-colors hover:border-accent">
+        <Smartphone class="size-4 text-accent" />
+        {{ loc.t('login.mobileDownload', 'Скачать приложение') }}
+        <span v-if="apk.version" class="text-xs font-medium text-text3">· {{ apk.version }}</span>
+        <Download class="size-4 text-text3" />
+      </a>
 
       <!-- Правая колонка: карточка «фичи» + (только для ПК) скачать десктоп -->
       <div class="hidden w-72 flex-col gap-4 justify-self-start lg:flex">
@@ -301,6 +346,7 @@ const showRecover = ref(false)
             Установщик готовится к выпуску
           </div>
         </div>
+
       </div>
     </div>
 
@@ -308,7 +354,7 @@ const showRecover = ref(false)
     <RecoverDialog v-if="showRecover" @close="showRecover = false" />
 
     <!-- Футер — заполняет низ, даёт «завершённость» экрану. -->
-    <p class="absolute bottom-3 left-1/2 z-10 w-full max-w-[94vw] -translate-x-1/2 px-4 text-center text-tiny leading-relaxed text-text3">
+    <p class="absolute bottom-3 left-1/2 z-10 hidden w-full max-w-[94vw] -translate-x-1/2 px-4 text-center text-tiny leading-relaxed text-text3 sm:block">
       © 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse
     </p>
   </div>
