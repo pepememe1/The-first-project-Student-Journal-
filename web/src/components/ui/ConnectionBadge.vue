@@ -36,10 +36,10 @@ const sinceText = computed(() => {
   const f = since.value
   if (f.kind === 'never') return ''
   if (f.kind === 'now') return locale.t('freshness.now', 'только что')
-  if (f.kind === 'minutes') return locale.t('freshness.minutes', '{n} мин назад', { n: f.n })
-  if (f.kind === 'today') return locale.t('freshness.today', 'в {time}', { time: f.time })
-  if (f.kind === 'yesterday') return locale.t('freshness.yesterday', 'вчера в {time}', { time: f.time })
-  return locale.t('freshness.date', '{date} в {time}', { date: f.date, time: f.time })
+  if (f.kind === 'minutes') return locale.t('freshness.minutes', { n: f.n })
+  if (f.kind === 'today') return locale.t('freshness.today', { time: f.time })
+  if (f.kind === 'yesterday') return locale.t('freshness.yesterday', { time: f.time })
+  return locale.t('freshness.date', { date: f.date, time: f.time })
 })
 </script>
 
@@ -63,6 +63,6 @@ const sinceText = computed(() => {
       v-if="pendingCount"
       class="px-1.5 py-0.5 rounded-full bg-yellow/15 text-yellow shrink-0"
       :title="locale.t('offline.pendingHint', 'Оценки уйдут на сервер, как только появится сеть')"
-    >{{ locale.t('offline.pending', 'не отправлено: {n}', { n: pendingCount }) }}</span>
+    >{{ locale.t('offline.pending', { n: pendingCount }) }}</span>
   </div>
 </template>

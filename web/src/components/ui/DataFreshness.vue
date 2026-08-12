@@ -48,12 +48,12 @@ const visible = computed(() => at.value > 0 && (!online.value || info.value.kind
 
 const text = computed(() => {
   const f = info.value
-  const when = f.kind === 'now' ? locale.t('freshness.now', 'только что')
-    : f.kind === 'minutes' ? locale.t('freshness.minutes', '{n} мин назад', { n: f.n })
-      : f.kind === 'today' ? locale.t('freshness.today', 'в {time}', { time: f.time })
-        : f.kind === 'yesterday' ? locale.t('freshness.yesterday', 'вчера в {time}', { time: f.time })
-          : locale.t('freshness.date', '{date} в {time}', { date: f.date, time: f.time })
-  return locale.t('offline.updated', 'Обновлено {when}', { when })
+  const when = f.kind === 'now' ? locale.t('freshness.now')
+    : f.kind === 'minutes' ? locale.t('freshness.minutes', { n: f.n })
+      : f.kind === 'today' ? locale.t('freshness.today', { time: f.time })
+        : f.kind === 'yesterday' ? locale.t('freshness.yesterday', { time: f.time })
+          : locale.t('freshness.date', { date: f.date, time: f.time })
+  return locale.t('offline.updated', { when })
 })
 </script>
 

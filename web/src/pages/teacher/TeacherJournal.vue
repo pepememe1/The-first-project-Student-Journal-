@@ -78,29 +78,41 @@ onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 async function load() {
   if (!group.value || !subject.value) { data.value = null; return }
   loading.value = true
-  try { data.value = (await teacherApi.journal(group.value, subject.value)).data } catch { data.value = null } finally { loading.value = false }
-  mergePendingLessons()
+  try {
+    data.value = (await teacherApi.journal(group.value, subject.value)).data
+  } catch {
+    // ⚠️ НЕ обнуляем то, что уже показано. Прежде здесь стояло `data.value = null`, и
+    // один неудачный запрос стирал журнал целиком — а без сети он неудачен постоянно.
+    // Пустой экран вместо последних известных данных это ровно то, чего офлайн-режим
+    // должен не допускать. Нет ни ответа, ни прежних данных — тогда честно пусто.
+    if (!data.value) data.value = null
+  } finally { loading.value = false }
 }
 
 /**
- * Дописать в журнал занятия, созданные БЕЗ СЕТИ и ещё не уехавшие.
+ * Занятия журнала: пришедшие с сервера ПЛЮС созданные без сети и ещё не уехавшие.
  *
- * Без этого созданная офлайн домашка не появлялась бы в таблице вовсе: журнал строится
- * из ответа сервера, а сервер о ней пока не знает. Преподаватель нажал «создать», ничего
- * не увидел и решил бы, что не сработало, — то есть офлайн-создание существовало бы
- * только на бумаге. Ставить по такой колонке оценки можно сразу: очередь перепривяжет
- * их к настоящему id, как только занятие уедет.
+ * 🔥 Это ВЫЧИСЛЯЕМОЕ значение, а не дописывание в `data.value`, и разница
+ * принципиальная. Первая версия дописывала локальные занятия внутрь загруженного
+ * ответа прямо в `load()` — то есть результат зависел от порядка выполнения, и любое
+ * следующее присваивание `data.value` его затирало. На телефоне это выглядело так:
+ * создаёшь занятие без сети — и СТАРЫЕ занятия пропадают, остаётся одно новое (живой
+ * отзыв). Вычисляемый союз потерять нельзя в принципе: он пересобирается из двух
+ * источников на каждое обращение.
+ *
+ * Без локальных занятий в списке созданная офлайн домашка не появлялась бы в таблице
+ * вовсе (сервер о ней пока не знает), и преподаватель решил бы, что кнопка не сработала.
+ * Ставить по такой колонке оценки можно сразу: очередь перепривяжет их к настоящему id,
+ * как только занятие уедет.
  */
-function mergePendingLessons() {
-  if (!data.value) return
+const allLessons = computed(() => {
+  const fromServer = data.value?.lessons || []
+  const known = new Set(fromServer.map((l) => l.id))
   const local = pendingLessons(group.value, subject.value)
-  if (!local.length) return
-  const known = new Set((data.value.lessons || []).map((l) => l.id))
-  const extra = local.filter((l) => !known.has(l.id)).map((l) => ({
-    number: 0, topic: '', date: '', hour: '', ...l, pending: true,
-  }))
-  if (extra.length) data.value = { ...data.value, lessons: [...(data.value.lessons || []), ...extra] }
-}
+    .filter((l) => !known.has(l.id))
+    .map((l) => ({ number: 0, topic: '', date: '', hour: '', extra: {}, ...l, pending: true }))
+  return local.length ? [...fromServer, ...local] : fromServer
+})
 watch([group, subject], load)
 
 // ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
@@ -152,7 +164,7 @@ const visibleStudents = computed(() => {
 // занятий + «Совместно» (subgroup=0 видно всем); «Совместно» выбрано или предмет не
 // разделён — вообще всё, без сужения.
 const visibleLessons = computed(() => {
-  const all = data.value?.lessons || []
+  const all = allLessons.value        //с сервера + созданные без сети, см. allLessons
   const onlySubgroup = hasSubgroupButtons.value && activeSubgroup.value !== 0 ? activeSubgroup.value : 0
   if (!onlySubgroup) return all
   return all.filter((l) => !l.subgroup || l.subgroup === onlySubgroup)
@@ -317,12 +329,12 @@ function isPending(s, col) {
  */
 function averageOf(s) {
   const overrides = {}
-  for (const l of data.value?.lessons || []) {
+  for (const l of allLessons.value) {
     const p = pendingGrade(l.id, s.surname, s.name)
     if (p !== undefined) overrides[l.id] = p
   }
   if (!Object.keys(overrides).length) return s.average
-  const items = (data.value?.lessons || []).map((l) => [l.id, l.type])
+  const items = allLessons.value.map((l) => [l.id, l.type])
   const records = { ...s.grades, ...overrides }
   return practiceAverage(items, records, data.value?.methodology_cfg || null,
                          data.value?.scale || '5')
@@ -418,7 +430,7 @@ const topicPlaceholder = computed(() => (lessonForm.value.type === 'ДЗ' ? loca
 // иначе у двух преподавателей одной группы независимые «Практика №1» сливались бы в
 // одну серию и сбивали счёт друг другу (тот же принцип, что и на сервере).
 function nextNumber(t) {
-  const nums = (data.value?.lessons || [])
+  const nums = allLessons.value
     .filter((l) => l.type === t && (l.subgroup || 0) === activeSubgroup.value)
     .map((l) => l.number || 0)
   return nums.length ? Math.max(...nums) + 1 : 1
@@ -620,13 +632,18 @@ async function downloadVedomost(fmt) {
           · {{ locale.t('teacherJournal.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
         </span>
       </span>
-      <div v-if="group && subject" class="flex w-full gap-2 sm:ml-auto sm:w-auto">
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 {{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
-        <AppButton variant="ghost" size="sm" class="flex-1 sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
+      <!-- ⚠️ НА ТЕЛЕФОНЕ 2x2, а не одна строка. Четыре кнопки в ряд делят ~312 px (360
+           минус поля и три промежутка) — по 78 px на «🎓 Аттестация», и последняя не
+           влезала (живой отзыв). Уменьшать текст бессмысленно: он и так короткий, а
+           подписи нужны — иконки без слов на редких действиях не читаются. С `sm`
+           места хватает, и кнопки возвращаются в одну строку, как были. -->
+      <div v-if="group && subject" class="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto">
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 {{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
           {{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : `📘 ${locale.t('teacherJournal.journalButton', 'Журнал')}` }}
         </AppButton>
-        <AppButton variant="green" size="sm" class="flex-1 sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
+        <AppButton variant="green" size="sm" class="sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
       </div>
     </div>
 
