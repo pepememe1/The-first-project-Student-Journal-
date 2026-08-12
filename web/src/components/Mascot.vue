@@ -28,7 +28,7 @@ const props = defineProps({
 const src = computed(() =>
   props.anim
     ? `/mascot/anim/${props.anim}.webp?v=${ART_VERSION}`
-    : `/mascot/${props.sprite}.png?v=${ART_VERSION}`)
+    : `/mascot/${props.sprite}.webp?v=${ART_VERSION}`)
 onMounted(() => { preloadMascots(); preloadAnims() })
 </script>
 

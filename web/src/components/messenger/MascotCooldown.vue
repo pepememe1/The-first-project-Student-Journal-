@@ -83,7 +83,7 @@ const label = computed(() => {
 
 <template>
   <div class="flex items-end gap-2.5 border-b border-border bg-card2/60 px-3 py-2.5">
-    <img src="/mascot/warn-warn.png" alt="Vector" class="size-11 shrink-0 select-none object-contain" draggable="false" />
+    <img src="/mascot/warn-warn.webp" alt="Vector" class="size-11 shrink-0 select-none object-contain" draggable="false" />
     <div class="min-w-0 flex-1 rounded-xl rounded-bl-sm border border-border2 bg-card px-3 py-2 text-sm text-text">
       {{ label }}
       <span class="ml-1.5 font-title font-bold text-accent">{{ locale.t('messenger.secondsShort', { n: cooldown.remaining }) }}</span>

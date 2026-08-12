@@ -46,12 +46,12 @@ const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
 // ⚠️ Та же версия арта, что в Mascot.vue, и по той же причине: файлы в `public/` не
 // получают хеш в имени, поэтому без метки предзагрузка бережно кладёт в кэш СТАРЫЕ файлы.
 // Держать значение синхронным с ART_VERSION в Mascot.vue.
-export const ART_VERSION = 2
+export const ART_VERSION = 3
 let _preloaded = false
 export function preloadMascots() {
   if (_preloaded || typeof Image === 'undefined') return
   _preloaded = true
-  for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.png?v=${ART_VERSION}` }
+  for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.webp?v=${ART_VERSION}` }
 }
 
 // Анимированные состояния чата (WebP с альфой). Состояния store совпадают с именами
