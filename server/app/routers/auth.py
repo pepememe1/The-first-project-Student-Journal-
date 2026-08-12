@@ -16,7 +16,7 @@ from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
                         decode_token)
-from ..config import JWT_TTL_MIN, session_ttl_min
+from ..config import JWT_TTL_MIN, issue_ttl_min, session_ttl_min
 from .. import throttle, events, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -61,12 +61,13 @@ def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
     access — короткий (для запросов), refresh — длинный (тихое обновление). Связаны
     через pair_jti, чтобы logout/отзыв гасил оба разом.
 
-    ⚠️ Длину сессии задаёт КЛИЕНТ (мобильное приложение — неделя, сайт и десктоп —
-    прежние 5 часов, см. config.session_ttl_min и комментарий там же о том, почему это
-    не одинаково для всех устройств). Записываем её в саму сессию, чтобы потолок на
-    /auth/refresh считался от того же значения, а не от заголовка очередного запроса."""
+    ⚠️ Длину сессии задаёт КЛИЕНТ (мобильное приложение — до ближайшего понедельника,
+    сайт и десктоп — прежние 5 часов, см. config.issue_ttl_min и комментарий там же о
+    том, почему это не одинаково для всех устройств). Записываем её в саму сессию,
+    чтобы потолок на /auth/refresh считался от того же значения, а не от заголовка
+    очередного запроса."""
     client = client_kind(request)
-    ttl = session_ttl_min(client)
+    ttl = issue_ttl_min(client)
     access, a_jti, a_exp = create_token_full(user.login, user.role, "access", ttl_min=ttl)
     refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh", ttl_min=ttl)
     _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti, client)
@@ -206,6 +207,18 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         sess.revoked = True
         db.commit()
         raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
+    #ВТОРАЯ, независимая граница — КОНКРЕТНЫЙ срок, назначенный этой сессии при входе
+    #(auth_sessions.expires_at). Проверка выше сравнивает возраст с потолком ПОЛИТИКИ и
+    #поэтому не видит рубежа, который зависит от даты входа: мобильная сессия кончается
+    #в ближайший понедельник, и в воскресенье её возраст (шесть дней) честно меньше
+    #недельного потолка — то есть одной верхней проверки мало, понедельник наступил бы,
+    #а сессия жила дальше. Ноль/пусто = запись старого формата, такие судим только по
+    #возрасту (не выкидывать людей из-за нашей же миграции).
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if sess.expires_at and now_ts >= int(sess.expires_at):
+        sess.revoked = True
+        db.commit()
+        raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
     login_str = payload.get("sub", "")
     u = db.query(User).filter(
         User.login == login_str, User.deleted == False  # noqa: E712
@@ -226,8 +239,14 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     #из глобального дефолта: иначе у мобильной сессии access жил бы 5 часов при недельном
     #потолке и приложение всё равно ходило бы за refresh каждые пять часов — то есть
     #ровно то, от чего мы уходим. Клиент наследуется, а не перечитывается.
-    access, a_jti, a_exp = create_token_full(u.login, u.role, "access",
-                                             ttl_min=session_ttl_min(sess.client or ""))
+    #⚠️ И ОБРЕЗАЕМ его сроком самой сессии. Без обрезки выданный в воскресенье access жил
+    #бы неделю — то есть пережил бы понедельничный рубеж: проверки выше срабатывают
+    #только когда клиент придёт ЗА ОБНОВЛЕНИЕМ, а с ещё действующим access он не придёт
+    #вовсе. Рубеж, который держится лишь при добровольном визите клиента, — не рубеж.
+    ttl = session_ttl_min(sess.client or "")
+    if sess.expires_at:
+        ttl = max(1, min(ttl, int((int(sess.expires_at) - now_ts) // 60)))
+    access, a_jti, a_exp = create_token_full(u.login, u.role, "access", ttl_min=ttl)
     _record_session(db, a_jti, u.login, u.role, "access", a_exp, request, jti,
                     sess.client or "")
     sess.pair_jti = a_jti
