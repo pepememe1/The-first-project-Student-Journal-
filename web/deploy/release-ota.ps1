@@ -50,16 +50,37 @@ $zip = Join-Path $otaDir "$Version.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 
 Write-Host "== Packing bundle $Version.zip ==" -ForegroundColor Cyan
-Compress-Archive -Path (Join-Path $web "dist\*") -DestinationPath $zip
+# ---- DO NOT USE Compress-Archive HERE. THIS WAS THE BUG. -----------------------------
+# Compress-Archive on Windows PowerShell 5.1 stores entry names with BACKSLASHES
+# ("assets\index-abc.js"). The ZIP spec (APPNOTE 4.4.17) requires forward slashes, and
+# Java/Android read the name literally: instead of a folder "assets" the phone gets ONE
+# file whose NAME contains a backslash. index.html then asks for /assets/index-abc.js,
+# which no longer exists -> the bundle fails to finish installing. On the device this
+# showed up as "finish_download_fail", i.e. it looked like a broken download.
+# Cost of that one cmdlet: OTA updates never applied on any phone for a month, while the
+# server logs showed every bundle served with HTTP 200.
+# ZipFile::CreateFromDirectory was tried next and does THE SAME on .NET Framework here
+# (the guard below caught it immediately). PowerShell has no built-in packer that writes
+# spec-compliant names, so packing is done by tools/pack_ota_bundle.py - see its docstring.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+& python -X utf8 (Join-Path $root "tools\pack_ota_bundle.py") (Join-Path $web "dist") $zip
+if ($LASTEXITCODE -ne 0) { throw "packing the bundle failed" }
 $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 
-# Sanity check: Capgo needs index.html at the ARCHIVE ROOT. A nested folder yields a
-# bundle that installs and then shows a blank screen, which rolls back silently.
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+# Sanity checks. Both failures below are silent on the phone and expensive to diagnose
+# afterwards, so the release stops here rather than shipping a bundle that cannot install:
+#   1. Capgo needs index.html at the ARCHIVE ROOT. A nested folder yields a bundle that
+#      installs and then shows a blank screen, which rolls back silently.
+#   2. No backslashes in entry names (see the note above) - the guard exists because the
+#      packer was wrong for a month and nothing anywhere complained.
 $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try {
     $hasIndex = $archive.Entries | Where-Object { $_.FullName -eq 'index.html' }
     if (-not $hasIndex) { throw "index.html is not at the archive root - Capgo would reject this bundle" }
+    $bad = @($archive.Entries | Where-Object { $_.FullName -like '*\*' })
+    if ($bad.Count -gt 0) {
+        throw "$($bad.Count) entries use backslashes (e.g. '$($bad[0].FullName)') - Android would create files instead of folders"
+    }
 } finally { $archive.Dispose() }
 
 $manifestPath = Join-Path $otaDir "latest.json"
