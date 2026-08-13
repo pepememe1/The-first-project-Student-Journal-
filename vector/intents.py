@@ -14,13 +14,12 @@ intents.py — Whitelisted-интенты: распознавание намер
 """
 import sqlite3
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
 
 #ВАЖНО: Вектор обязан читать ТУ ЖЕ базу, что и приложение. После переноса базы
 #в локальную папку пользователя (core.LOCAL_DB) относительный путь сломался бы —
 #поэтому берём путь из core.
 try:
-    from core import LOCAL_DB as DEFAULT_DB
+    from data.core import LOCAL_DB as DEFAULT_DB
 except Exception:
     DEFAULT_DB = "vsgutu_grades.db"
 
@@ -36,20 +35,20 @@ def _grading():
 class VectorScope:
     role: str = "student"                 #student / teacher / admin
     group: str = ""
-    subject: Optional[str] = None         #None = все предметы группы
+    subject: str | None = None         #None = все предметы группы
     student_f: str = ""                   #для роли student — своя фамилия
     student_n: str = ""                   #для роли student — своё имя
     db_path: str = DEFAULT_DB
-    teacher_groups: List[str] = field(default_factory=list)  #для роли teacher — его группы
+    teacher_groups: list[str] = field(default_factory=list)  #для роли teacher — его группы
 
 
 @dataclass
 class Facts:
     intent: str
     facts_text: str                       #нейтральное текстовое представление
-    names: List[str] = field(default_factory=list)   #реальные имена в тексте
-    data: Dict = field(default_factory=dict)          #структурно (для карточек)
-    mood_value: Optional[float] = None    #средний балл для настроения, если есть
+    names: list[str] = field(default_factory=list)   #реальные имена в тексте
+    data: dict = field(default_factory=dict)          #структурно (для карточек)
+    mood_value: float | None = None    #средний балл для настроения, если есть
 
 
 #Низкоуровневые помощники
@@ -57,7 +56,7 @@ def _conn(scope: VectorScope) -> sqlite3.Connection:
     return sqlite3.connect(scope.db_path)
 
 
-def _lessons(conn, group: str, subject: Optional[str]) -> List[tuple]:
+def _lessons(conn, group: str, subject: str | None) -> list[tuple]:
     #Хвостовой subject — для _scale_for (какой препод/шкала ведёт КАЖДОЕ занятие, §ролей
     #3.3.1). Существующие потребители его не видят (unpack через *_), поэтому добавление
     #столбца в конец — обратно совместимо.
@@ -80,17 +79,17 @@ def _lessons(conn, group: str, subject: Optional[str]) -> List[tuple]:
     return cur.fetchall()
 
 
-def _scale_for(scope: "VectorScope", lessons: List[tuple]):
+def _scale_for(scope: "VectorScope", lessons: list[tuple]):
     """Шкала(ы) преподавателя(ей), ведущих LESSONS (§ролей, 3.3.1) — для _practice_average/
     _is_debt/_grade_breakdown. scope.subject задан (журнал одного предмета) → одна строка
     (дешевле). Не задан (общий средний по всем предметам группы) → словарь {lesson_id:
     шкала}, т.к. разные предметы могут вести разные преподы. Разрешение — ЧЕРЕЗ ТО ЖЕ
     назначение препод↔предмет↔группа, что и на сервере (webdata.lesson_scale_map)."""
-    import avatar_service
+    from data import avatar_service
     if scope.subject:
         return avatar_service.get_subject_grading_scale(scope.group, scope.subject)
-    cache: Dict[str, str] = {}
-    out: Dict[str, str] = {}
+    cache: dict[str, str] = {}
+    out: dict[str, str] = {}
     for lid, _ltype, _num, _topic, _date, subj in lessons:
         if subj not in cache:
             cache[subj] = avatar_service.get_subject_grading_scale(scope.group, subj)
@@ -98,27 +97,27 @@ def _scale_for(scope: "VectorScope", lessons: List[tuple]):
     return out
 
 
-def _records(conn, f: str, n: str) -> Dict[str, str]:
+def _records(conn, f: str, n: str) -> dict[str, str]:
     cur = conn.cursor()
     cur.execute("SELECT lesson_id, grade FROM grades "
                 "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0", (f, n))
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def _students(conn, group: str) -> List[Tuple[str, str]]:
+def _students(conn, group: str) -> list[tuple[str, str]]:
     cur = conn.cursor()
     cur.execute("SELECT f, n FROM students WHERE group_name=? ORDER BY f", (group,))
     return cur.fetchall()
 
 
-def _practice_average(lessons: List[tuple], records: Dict[str, str],
-                      cfg: Optional[dict] = None, scale=None) -> float:
+def _practice_average(lessons: list[tuple], records: dict[str, str],
+                      cfg: dict | None = None, scale=None) -> float:
     """Средний балл — через единый модуль grading (та же формула, что в core).
     scale — из _scale_for: строка (один предмет) или {lesson_id: шкала} (несколько)."""
     import grading
     if cfg is None:
         try:
-            from data_store import get_store
+            from data.data_store import get_store
             cfg = get_store()._config()
         except Exception:
             cfg = {}
@@ -128,7 +127,7 @@ def _practice_average(lessons: List[tuple], records: Dict[str, str],
         [(lid, ltype) for lid, ltype, *_ in lessons], records, cfg, scale=scale)
 
 
-def _latest_exam_value(lid: str, records: Dict[str, str]) -> str:
+def _latest_exam_value(lid: str, records: dict[str, str]) -> str:
     """Берёт последнюю попытку по экзамену: base, _retake, _retake_2 ..."""
     val = records.get(lid, "")
     i = 1
@@ -142,7 +141,7 @@ def _latest_exam_value(lid: str, records: Dict[str, str]) -> str:
     return val
 
 
-def _is_debt(lessons: List[tuple], records: Dict[str, str], scale=None) -> List[str]:
+def _is_debt(lessons: list[tuple], records: dict[str, str], scale=None) -> list[str]:
     """Возвращает список причин задолженности (пусто — долгов нет).
     scale — из _scale_for (§ролей, 3.3.1): строка или {lesson_id: шкала}."""
     grading = _grading()
@@ -165,7 +164,7 @@ def _is_debt(lessons: List[tuple], records: Dict[str, str], scale=None) -> List[
     return reasons
 
 
-def _count_absences(lessons: List[tuple], records: Dict[str, str]) -> Dict[str, int]:
+def _count_absences(lessons: list[tuple], records: dict[str, str]) -> dict[str, int]:
     """Считает пропуски. Каждая строка лекции = 1 час.
 
     ⚠️ ДЗ здесь НЕ учитывается, хотя в средний балл идёт наравне с практикой: «Н» на
@@ -182,7 +181,7 @@ def _count_absences(lessons: List[tuple], records: Dict[str, str]) -> Dict[str, 
 
 
 #Хендлеры интентов  (каждый возвращает Facts)
-def _resolve_student(scope: VectorScope, asked_name: str) -> Optional[Tuple[str, str]]:
+def _resolve_student(scope: VectorScope, asked_name: str) -> tuple[str, str] | None:
     """
     Кого спрашивают. Студент всегда видит только себя (privacy). Преподаватель/админ
     — указанного по фамилии; если не указали, вернёт None (значит запрос групповой).
@@ -371,7 +370,7 @@ def intent_help(scope: VectorScope, asked_name: str = "") -> Facts:
 
 
 def _store():
-    from data_store import get_store
+    from data.data_store import get_store
     return get_store()
 
 
@@ -503,8 +502,8 @@ def intent_unknown(scope: VectorScope, asked_name: str = "") -> Facts:
 #и «у кого долги» дают ОДИН И ТОТ ЖЕ ответ без всякой LLM.
 #Если суммарный вес совпадений ниже порога — интент «unknown», и engine
 #передаёт вопрос живой ИИ-модели (если она подключена).
-def classify(question: str, known_surnames: List[str],
-             known_subjects: List[str] = ()) -> Tuple[str, str, str, object]:
+def classify(question: str, known_surnames: list[str],
+             known_subjects: list[str] = ()) -> tuple[str, str, str, object]:
     """Возвращает (intent, asked_surname, subject, day). Чисто локально, без сети.
 
     Делегирует ЕДИНОМУ классификатору vector_nlu (тот же, что на сервере) — раньше здесь
@@ -549,7 +548,7 @@ def intent_grade_count(scope: VectorScope, asked_name: str = "") -> Facts:
     return Facts("grade_count", txt, data={"total": total, **counts})
 
 
-def _subject_hours_zet(conn, group: str, year: str, semester) -> Dict[str, float]:
+def _subject_hours_zet(conn, group: str, year: str, semester) -> dict[str, float]:
     """{предмет: ЗЕТ} для группы за термин — прямой SELECT (docs/PLAN-ZET.md). Порог
     перевода (ZetThreshold) сюда НЕ приезжает синком (серверная политика, не офлайн-
     данные) — поэтому десктопный Вектор отвечает балансом, без «хватит ли для перевода»."""
@@ -569,7 +568,7 @@ def intent_zet(scope: VectorScope, asked_name: str = "") -> Facts:
     перевода) даёт сервер/веб, см. webdata.zet_summary_for_student — здесь то же самое
     правило (study_hours.subject_zet_earned/zet_summary), только без ZetThreshold."""
     from collections import namedtuple
-    import terms
+    from data import terms
     conn = _conn(scope)
     year, sem = terms.current_term()
     zets = _subject_hours_zet(conn, scope.group, year, sem)
@@ -607,7 +606,7 @@ def intent_zet(scope: VectorScope, asked_name: str = "") -> Facts:
 def avatar_service_module():
     """Ленивый доступ к avatar_service (шкала оценивания преподавателя, §ролей 3.3.1) —
     тот же приём, что и _grading(): модуль десктопный, импортируем по требованию."""
-    import avatar_service
+    from data import avatar_service
     return avatar_service
 
 

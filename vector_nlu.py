@@ -15,7 +15,6 @@ vector_nlu.py — ЕДИНЫЙ разбор запроса к «Вектору»
 """
 import re
 import unicodedata
-from typing import Dict, List, Tuple
 
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 _WS_RE = re.compile(r"\s+")
@@ -29,14 +28,14 @@ def normalize(text: str) -> str:
     return _WS_RE.sub(" ", t).strip()
 
 
-def tokens(text: str) -> List[str]:
+def tokens(text: str) -> list[str]:
     return normalize(text).split()
 
 
 # ── Лексикон: основа слова → вес. Матч по ОСНОВЕ (префиксу) ловит склонения:
 # «долг/долги/долгами», «оценк/оценка/оценок/оценками». Вес 2 — сильный маркер,
 # 1 — поддерживающий. Богатый набор формулировок = «понимает живую речь».
-INTENT_STEMS: Dict[str, List[Tuple[str, int]]] = {
+INTENT_STEMS: dict[str, list[tuple[str, int]]] = {
     # ── КАК УСТРОЕНО (процедурные вопросы). Факты из кода (grading), не выдумка. Стоит
     # ВЫШЕ grades/average, чтобы «как считается средний» не утекало в average.
     "howto": [
@@ -299,7 +298,7 @@ WHEN_TODAY = ("сегодня", "сейчас", "сегодняшн")
 WHEN_TOMORROW = ("завтра", "завтрашн")
 
 
-def _score_intents(qpad: str) -> Tuple[str, int]:
+def _score_intents(qpad: str) -> tuple[str, int]:
     best, best_score = "unknown", 0
     for intent, stems in INTENT_STEMS.items():
         score = sum(w for stem, w in stems if stem in qpad)
@@ -308,7 +307,7 @@ def _score_intents(qpad: str) -> Tuple[str, int]:
     return best, best_score
 
 
-def classify_by_stems(question: str) -> Tuple[str, int]:
+def classify_by_stems(question: str) -> tuple[str, int]:
     """Возвращает (intent, score). score < MIN_SCORE => интент не распознан.
     Оставлено для обратной совместимости десктопа (vector/faq.py реэкспортирует)."""
     q = " " + normalize(question) + " "
@@ -316,7 +315,7 @@ def classify_by_stems(question: str) -> Tuple[str, int]:
     return (best, score) if score >= MIN_SCORE else ("unknown", score)
 
 
-def match_subject(question: str, subjects: List[str]) -> str:
+def match_subject(question: str, subjects: list[str]) -> str:
     """Находит УПОМЯНУТЫЙ предмет из реального списка (subjects) — по значимым словам.
 
     Студент говорит коротко («по информатике», «когда математика»), а предмет в базе
@@ -356,7 +355,7 @@ def match_subject(question: str, subjects: List[str]) -> str:
     return ""
 
 
-def match_surname(question: str, surnames: List[str]) -> str:
+def match_surname(question: str, surnames: list[str]) -> str:
     """Находит упомянутую фамилию из известного ростера (для «оценки Иванова»,
     «пропуски у Петровой»). Учитывает склонения по основе. Возвращает канон. фамилию."""
     q = normalize(question)
@@ -385,7 +384,7 @@ def detect_day(question: str):
     return ""
 
 
-def classify(question: str, surnames: List[str] = (), subjects: List[str] = ()) -> Dict:
+def classify(question: str, surnames: list[str] = (), subjects: list[str] = ()) -> dict:
     """ЕДИНЫЙ разбор запроса → словарь:
         {intent, score, surname, subject, day}
 

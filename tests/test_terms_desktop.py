@@ -3,9 +3,9 @@ test_terms_desktop.py — Учебные семестры на десктопе 
 у занятий, фильтр журнала по семестру, «усыновление» легаси-занятий в текущий термин,
 синхронизация year/semester и список периодов.
 """
-import terms
-from core import GradeBook, DBManager
-import sync_engine
+from data import terms
+from data.core import GradeBook, DBManager
+from sync import sync_engine
 
 G, S = "ИС-21", "Математика"
 

@@ -12,8 +12,8 @@ test_lww_compare.py — сравнение меток времени в LWW (`_t
 """
 from datetime import datetime, timedelta, timezone
 
-import sync_engine
-from sync_engine import _should_apply, _ts_key
+from sync import sync_engine
+from sync.sync_engine import _should_apply, _ts_key
 
 OLD = "2026-08-12T14:30:00.000000+00:00"
 NEW = "2026-08-12T14:30:01.000000+00:00"

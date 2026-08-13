@@ -54,7 +54,7 @@ _migrated = False
 
 def _ds():
     """Ленивая ссылка на data_store (см. пояснение в шапке)."""
-    import data_store
+    from data import data_store
     return data_store
 
 
@@ -72,7 +72,7 @@ def _migrate_once():
         ds = _ds()
         #journal
         if os.path.exists(_LEGACY_AUDIT):
-            with open(_LEGACY_AUDIT, "r", encoding="utf-8") as f:
+            with open(_LEGACY_AUDIT, encoding="utf-8") as f:
                 lines = [ln.rstrip("\n") for ln in f if ln.strip()]
             ok = True
             if lines:
@@ -83,7 +83,7 @@ def _migrate_once():
         #throttle
         if os.path.exists(_LEGACY_THROTTLE):
             import json
-            with open(_LEGACY_THROTTLE, "r", encoding="utf-8") as f:
+            with open(_LEGACY_THROTTLE, encoding="utf-8") as f:
                 data = json.load(f)
             ok = True
             if isinstance(data, dict) and data:

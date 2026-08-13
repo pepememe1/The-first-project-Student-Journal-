@@ -15,10 +15,11 @@ sync_engine.py — Слой-переходник offline-first синхрони�
     серверных данных зациклилось бы («синк → запись → синк»). Поэтому приём с сервера
     идёт мимо data_store, напрямую в таблицы, с меткой сервера (stamp=False по смыслу).
     Плата — слой знает схему SQLite; при смене схемы править и здесь, и в data_store.
-  • Оркестрация — функции sync_once/reconcile + модульный флаг _session_full_pull_done.
-    Класса SyncEngine здесь НЕТ (раньше докстринг обещал его — это было неправдой).
-    Флаг безопасен: синк крутится в ОДНОМ фоновом потоке (sync_runner), параллельных
-    циклов нет. Появятся — заворачивать состояние в класс.
+  • Оркестрация — функции sync_once/reconcile поверх `SyncSession` (флаги самолечения,
+    счётчик циклов, замок цикла). Раньше это были четыре модульных глобала, и рядом
+    стояло обещание «синк крутится в ОДНОМ фоновом потоке, параллельных циклов нет» —
+    неправда с тех пор, как `sync_runner.flush_now()` начал звать цикл из потока
+    закрытия программы. Теперь состояние принадлежит сеансу и защищено его замком.
 
 Сетевой обмен — через sync_client. Любая сетевая ошибка не критична: синк
 откладывается, прога работает офлайн.
@@ -42,6 +43,7 @@ Push тоже ДЕЛЬТА (раньше уезжал полный снимок 
 на случай отхода часов назад и полный снимок раз в FULL_PUSH_EVERY циклов и на старте
 сессии. Push идемпотентен, поэтому «отправить лишний раз» всегда дешевле, чем потерять.
 """
+import threading
 from datetime import datetime, timezone
 
 import log
@@ -162,7 +164,7 @@ def config_from_pull(config_rows: list, users: list, admin_login: str = "admin")
 
 def _collect_lessons() -> list:
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:
@@ -175,6 +177,7 @@ def _collect_lessons() -> list:
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать занятия для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for r in rows:
         out.append({
@@ -189,8 +192,8 @@ def _collect_lessons() -> list:
 
 def _collect_grades() -> list:
     from contextlib import closing
-    import core as _core
-    from core import DBManager
+    from data import core as _core
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:
@@ -203,6 +206,7 @@ def _collect_grades() -> list:
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать оценки для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for f, n, lid, grade, uat, dev, deleted, sid in rows:
         out.append({
@@ -225,7 +229,7 @@ def _collect_users() -> list:
     """Пользователи (студенты/преподаватели) из таблицы users в СЕРВЕРНОЙ форме (со
     надгробиями) — прямой push, без переводчика. Расшифровку blob'а делает data_store.
     Админ добавляется отдельно (его хеш — в config)."""
-    from data_store import users_for_sync
+    from data.data_store import users_for_sync
     return users_for_sync()
 
 
@@ -233,7 +237,7 @@ def _collect_groups() -> list:
     """Группы из таблицы в формате API (со надгробиями) — прямой upsert, без переводчика."""
     import json as _json
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:   #закроется и при исключении
@@ -245,6 +249,7 @@ def _collect_groups() -> list:
         #НЕ глушим молча: при залоченной/битой БД пустой список уехал бы как «нет групп»,
         #и локальные группы просто перестали бы синхронизироваться — без следа в логах.
         _log.error("не удалось прочитать группы для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for gid, name, subj, uat, deleted, specialty_code, enrollment_year, category in rows:
         try:
@@ -261,7 +266,7 @@ def _collect_groups() -> list:
 
 def _collect_term_grades() -> list:
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:
@@ -275,6 +280,7 @@ def _collect_term_grades() -> list:
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать итоговые оценки для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for r in rows:
         out.append({
@@ -303,33 +309,59 @@ def collect_local(since: str = "") -> dict:
     since != "" — собираем ДЕЛЬТУ: только строки с updated_at >= since. Предметы и конфиг
     отдаём всегда: их локальные «метки» синтезируются на лету (`_now()`), реальной истории
     изменений у них нет, а объём — десятки строк, фильтровать нечего."""
-    from data_store import get_store
+    from data.data_store import get_store
     from subjects import load_subjects
     st = get_store()
     cfg = st._config()
+
+    def _safe(name: str, fn):
+        """Позвать коллектор так, чтобы его сбой не уронил цикл — но и не солгал.
+
+        🔥 Единая обёртка вместо семи одинаковых try/except внутри коллекторов. Так было
+        не всегда, и цена разнобоя оказалась конкретной: шесть коллекторов ставили
+        `collect_failed` сами, а седьмой (`_collect_users`) его не ставил ВООБЩЕ — при
+        залоченной базе он отдавал пустой список, push проходил «успешно», и водяной знак
+        уносил за собой неотправленные правки пользователей. Дефект нашёлся адверсариальным
+        ревью, а не тестом: каждый коллектор по отдельности выглядел правильным.
+        Теперь забыть флаг у НОВОГО коллектора нельзя — он ставится здесь, в одном месте.
+
+        Пустой список при сбое — осознанно: одна нечитаемая таблица не должна лишать
+        человека синхронизации целиком. Но флаг гарантирует, что метку дельты после этого
+        не сдвинут, и тот же диапазон соберётся заново следующим циклом (push идемпотентен).
+        """
+        try:
+            return fn()
+        except Exception as e:                      # noqa: BLE001
+            _session.collect_failed = True
+            _log.error("таблица «%s» не прочиталась (%s) — метку дельты не двигаю, "
+                       "эти правки уедут следующим циклом", name, e)
+            return []
+
     #Пользователи — прямо из таблицы users (серверная форма, со надгробиями). Админ —
     #синтетически из config (его хеш там и живёт).
-    users = _collect_users()
+    users = _safe("users", _collect_users)
     admin = admin_user_from_config(cfg, st.get_admin_login())
     if admin:
         users.append(admin)
     return {
         "users": _filter_since(users, since),
-        "subjects": subjects_to_rows(load_subjects()),
+        "subjects": subjects_to_rows(_safe("subjects", load_subjects)),
         "config": config_to_rows(cfg),
-        "groups": _filter_since(_collect_groups(), since),
-        "lessons": _filter_since(_collect_lessons(), since),
-        "grades": _filter_since(_collect_grades(), since),
-        "term_grades": _filter_since(_collect_term_grades(), since),
-        "schedule_overrides": _filter_since(_collect_schedule_overrides(), since),
-        "subject_hours": _filter_since(_collect_subject_hours(), since),
+        "groups": _filter_since(_safe("groups", _collect_groups), since),
+        "lessons": _filter_since(_safe("lessons", _collect_lessons), since),
+        "grades": _filter_since(_safe("grades", _collect_grades), since),
+        "term_grades": _filter_since(_safe("term_grades", _collect_term_grades), since),
+        "schedule_overrides": _filter_since(
+            _safe("schedule_overrides", _collect_schedule_overrides), since),
+        "subject_hours": _filter_since(
+            _safe("subject_hours", _collect_subject_hours), since),
     }
 
 
 def apply_remote(changes: dict):
     """Применяет пришедшие с сервера изменения в локальное хранилище (LWW-слияние).
     Пишем с stamp=False — сохраняем серверные метки, чтобы синк не зациклился."""
-    from data_store import get_store, _kv_set
+    from data.data_store import get_store, _kv_set
     from subjects import load_subjects, save_subjects
     st = get_store()
     users = changes.get("users", []) or []
@@ -372,7 +404,7 @@ def apply_remote(changes: dict):
 
 def _merge_lessons(remote: list):
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
     with closing(DBManager.get_conn()) as conn:
@@ -408,8 +440,8 @@ def _merge_users(remote: list):
     в таблицу users. payload шифруем в blob (Fernet+DPAPI) — хеши паролей и ПДн на диске
     защищены (152-ФЗ). role=admin пропускаем: его хеш применяется в config (не тут)."""
     import json as _json
-    from core import DBManager
-    from security import encrypt_value
+    from data.core import DBManager
+    from data.security import encrypt_value
     from contextlib import closing
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
@@ -453,7 +485,7 @@ def _ensure_sovr_table(cur):
 def _collect_schedule_overrides() -> list:
     """Правки расписания из локальной таблицы (со надгробиями) — прямой upsert в синк."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:
@@ -465,6 +497,7 @@ def _collect_schedule_overrides() -> list:
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать правки расписания для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for r in rows:
         out.append({"id": r[0], "group_name": r[1], "week": r[2], "day": r[3], "pair_no": r[4],
@@ -480,7 +513,7 @@ def _merge_schedule_overrides(remote: list):
     """Слияние правок расписания с сервера — прямой LWW-upsert (как группы). Пишем прямо
     в таблицу, синк не будим (серверные данные, а не UI-правка)."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
     with closing(DBManager.get_conn()) as conn:
@@ -527,7 +560,7 @@ def _collect_subject_hours() -> list:
     Десктоп их обычно только ЧИТАЕТ (задаёт админ на сайте), но отдаём в push всё равно:
     иначе локально заведённая строка навсегда осталась бы на одной машине."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     rows = []
     try:
         with closing(DBManager.get_conn()) as conn:
@@ -539,6 +572,7 @@ def _collect_subject_hours() -> list:
             rows = cur.fetchall()
     except Exception as e:
         _log.error("не удалось прочитать учебные часы для синка: %s", e)
+        _session.collect_failed = True
     out = []
     for r in rows:
         out.append({"id": r[0], "group_name": r[1], "subject": r[2], "year": r[3],
@@ -553,7 +587,7 @@ def _collect_subject_hours() -> list:
 def _merge_subject_hours(remote: list):
     """Слияние учебных часов с сервера — прямой LWW-upsert (как правки расписания)."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     with closing(DBManager.get_conn()) as conn:
         cur = conn.cursor()
         _ensure_hours_table(cur)
@@ -583,7 +617,7 @@ def _merge_groups(remote: list):
     себя (это применение серверных данных, а не UI-правка)."""
     import json as _json
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
     with closing(DBManager.get_conn()) as conn:
@@ -624,7 +658,7 @@ def _merge_grades(remote: list):
     разойтись в формате — и оценка либо молча затиралась, либо бесконечно порождала
     конфликт. Ровно то, от чего _ts_key и заводился."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
     with closing(DBManager.get_conn()) as conn:
@@ -707,7 +741,7 @@ def _merge_term_grades(remote: list):
     (как занятия). Диалог конфликтов тут не нужен: это одна итоговая оценка за
     семестр, а не «два разных балла за занятие» — побеждает более поздняя правка."""
     from contextlib import closing
-    from core import DBManager
+    from data.core import DBManager
     #closing гарантирует закрытие даже при исключении: раньше при ошибке
     #посреди слияния соединение утекало, и пул рано или поздно исчерпывался.
     with closing(DBManager.get_conn()) as conn:
@@ -732,17 +766,6 @@ def _merge_term_grades(remote: list):
         conn.commit()
 
 
-#Флаг «первый синк этой сессии». На старте процесса делаем ОДИН полный pull
-#(since=""), даже если метка уже есть: так лечится возможный дрейф — редкая потеря
-#пограничной записи из-за гонки «коммит против взятия метки». Дальше в течение
-#сессии тянем только дельту. Поток синка один, поэтому простого флага достаточно.
-_session_full_pull_done = False
-
-#То же для PUSH: первый push сессии — полный. За время, пока прога была закрыта, часы
-#могли сдвинуться, а правки — прийти мимо синка (восстановление из бэкапа, ручной импорт).
-#Полный снимок на старте это лечит.
-_session_full_push_done = False
-
 #Страховка от «дырки» в дельта-push: локальные часы могут отойти назад (синхронизация
 #времени, переезд через часовой пояс, виртуалка после сна). Тогда правка получила бы
 #метку РАНЬШЕ watermark и не попала бы в дельту. Поэтому метку сдвигаем назад на лаг —
@@ -753,21 +776,94 @@ PUSH_SAFETY_LAG_S = 120
 #какая-то правка мимо всех расчётов выпала из дельты, она уедет максимум через N циклов,
 #а не потеряется навсегда. Дешевле, чем гарантировать безошибочность меток.
 FULL_PUSH_EVERY = 20
-_push_cycles = 0
+
+
+class SyncSession:
+    """Состояние ОДНОГО сеанса синхронизации: флаги самолечения, счётчик циклов, замок.
+
+    Раньше всё это лежало модульными глобалами. Их было ровно четыре, и цена казалась
+    небольшой — но она копилась в двух местах сразу:
+      • тесты правили внутренности модуля напрямую (`sync_engine._push_cycles = 0`), и
+        забытый сброс протекал в СОСЕДНИЙ тест, где выглядел как случайный «полный push»;
+      • второй сеанс (два сервера, тест рядом с рабочим циклом) молча делил бы флаги с
+        первым — то есть один гасил бы самолечение другого.
+    Здесь состояние принадлежит экземпляру, а модульные функции ниже остались как были:
+    ни один существующий вызывающий не тронут.
+    """
+
+    def __init__(self) -> None:
+        #Первый синк сеанса делаем ПОЛНЫМ (since=""), даже если метка уже есть: так
+        #лечится возможный дрейф — редкая потеря пограничной записи из-за гонки
+        #«коммит против взятия метки». Дальше в течение сеанса тянем только дельту.
+        self.full_pull_done = False
+        #То же для PUSH. Пока программа была закрыта, часы могли сдвинуться, а правки —
+        #прийти мимо синка (восстановление из бэкапа, ручной импорт).
+        self.full_push_done = False
+        self.push_cycles = 0
+        #Что сервер ОТКЛОНИЛ в последнем push ({} — всё принято).
+        self.last_rejected: dict[str, int] = {}
+        #🔥 Хоть один коллектор не смог прочитать свою таблицу в этом цикле.
+        #Зачем отдельный флаг. Коллекторы при сбое чтения возвращают ПУСТОЙ список (это
+        #осознанно: одна залоченная таблица не должна ронять весь цикл и оставлять
+        #человека без синхронизации вообще). Но пустой список неотличим от «изменений
+        #нет» — push проходит успешно, и водяной знак уезжает вперёд, унося за собой
+        #правки, которых сервер так и не увидел. Сервер их не удалит (удаление у нас
+        #только по надгробиям), но расхождение будет жить до ближайшего полного снимка,
+        #то есть до 20 циклов. Поэтому: читать не смогли — метку НЕ двигаем.
+        self.collect_failed = False
+        #Один цикл за раз.
+        #🔥 Замка раньше не было, а докстринг модуля утверждал «синк крутится в ОДНОМ
+        #потоке, параллельных циклов нет» — это перестало быть правдой:
+        #`sync_runner.flush_now()` (до-отправка перед закрытием программы) зовёт цикл из
+        #ДРУГОГО потока, пока фоновый `_loop` может быть в середине своего. Два
+        #следствия, оба реальные:
+        #  • `requests.Session` внутри SyncClient НЕ потокобезопасна — общий пул
+        #    соединений портится при одновременном использовании;
+        #  • водяной знак push двигали бы оба потока вперемешку, и правка, собранная
+        #    одним, но не отправленная им, могла оказаться «за» меткой, выставленной
+        #    другим, — то есть не уехать НИКОГДА (дельта её больше не увидит).
+        #Замок НЕ реентерабельный намеренно: цикл не зовёт сам себя, а RLock скрыл бы
+        #случайную рекурсию вместо того, чтобы показать её сразу.
+        self.lock = threading.Lock()
+
+    def reset(self) -> None:
+        """Вернуть сеанс в исходное состояние (следующий цикл будет полным).
+
+        Существует ради тестов: раньше каждый из них правил внутренности модуля руками,
+        и забытое поле протекало в соседний тест."""
+        self.full_pull_done = False
+        self.full_push_done = False
+        self.push_cycles = 0
+        self.last_rejected = {}
+
+
+#Сеанс по умолчанию — один на процесс (десктоп синхронизируется с одним сервером).
+_session = SyncSession()
+
+
+def last_rejected() -> dict:
+    """Записи, отвергнутые сервером в последнем push ({} — всё принято).
+
+    Нужен, чтобы расхождение «локально есть, на сервере нет» было ВИДНО, а не жило
+    молча: см. разбор в `_sync_once_locked`."""
+    return dict(_session.last_rejected)
+
+
+def reset_session_state() -> None:
+    """Сбросить состояние сеанса по умолчанию (для тестов и после смены сервера)."""
+    _session.reset()
 
 
 def force_full_push():
     """Следующий push будет ПОЛНЫМ снимком (не дельтой)."""
-    global _session_full_push_done
-    _session_full_push_done = False
+    _session.full_push_done = False
 
 
 def force_full_pull():
-    """Сбрасывает флаг «полный pull сессии уже сделан», чтобы СЛЕДУЮЩИЙ sync_once
+    """Сбрасывает флаг «полный pull сеанса уже сделан», чтобы СЛЕДУЮЩИЙ sync_once
     тянул всё с сервера (since=""), а не дельту. Нужно после reset_synced_local_data:
     кэш стёрт, и его надо наполнить заново полным снимком сервера."""
-    global _session_full_pull_done
-    _session_full_pull_done = False
+    _session.full_pull_done = False
 
 
 def reconcile(client) -> bool:
@@ -784,48 +880,116 @@ def reconcile(client) -> bool:
     ДО отправки — безвозвратная потеря. Push идемпотентен: сервер применит только реально
     изменённое, а после полного pull эти же правки вернутся в кэш уже с серверной меткой.
     """
-    from data_store import reset_synced_local_data
-    #Спасаем офлайн-правки: пуш перед очисткой. Ошибку глушим — если сервер вдруг отпал
-    #между проверкой доступности и этим вызовом, дальше упадёт pull и вызывающий уйдёт в
-    #офлайн-ветку, а несохранённый кэш останется на месте (reset ещё не выполнен).
-    try:
-        client.push(collect_local())
-    except Exception as e:
-        _log.warning("пуш офлайн-правок перед сбросом кэша не удался: %s", e)
-        raise   #не стираем кэш, если правки не удалось отправить — данные важнее «чистоты»
-    reset_synced_local_data()
-    force_full_pull()
-    force_full_push()   #кэш стёрт — «уже отправленному» верить нельзя, шлём полный снимок
-    return sync_once(client)
+    from data.data_store import reset_synced_local_data
+    #Всё под ОДНИМ замком: между «спасли правки» и «стёрли кэш» не должен влезть фоновый
+    #цикл — он собрал бы дельту из данных, которые вот-вот исчезнут, и сдвинул бы за ними
+    #водяной знак. Внутри зовём `_sync_once_locked`, а не `sync_once`: замок не
+    #реентерабельный, и повторный захват был бы взаимной блокировкой.
+    with _session.lock:
+        #Спасаем офлайн-правки: пуш перед очисткой. Упал — кэш НЕ трогаем: он ещё цел,
+        #вызывающий уйдёт в офлайн-ветку, данные важнее «чистоты».
+        try:
+            client.push(collect_local())
+        except Exception as e:
+            _log.warning("пуш офлайн-правок перед сбросом кэша не удался: %s", e)
+            raise
+        reset_synced_local_data()
+        force_full_pull()
+        force_full_push()   #кэш стёрт — «уже отправленному» верить нельзя, шлём полный снимок
+        return _sync_once_locked(client)
 
 
-def sync_once(client) -> bool:
+def sync_once(client, wait: float | None = None) -> bool:
     """Один цикл синхронизации: отправить локальные изменения, забрать серверные.
-    Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код."""
-    global _session_full_pull_done, _session_full_push_done, _push_cycles
+    Возвращает True при успехе. Бросаемые сетевые ошибки ловит вызывающий код.
+
+    ⚠️ Цикл ЦЕЛИКОМ под замком сеанса (см. `SyncSession.lock`): два одновременных цикла
+    портили бы и HTTP-сессию клиента, и водяной знак дельты.
+
+    `wait` — сколько секунд ждать замок (None — сколько угодно, для фонового цикла).
+    Закрытие программы передаёт конечное значение: висеть на чужом push до 45 c при
+    выходе нельзя, а правки всё равно уедут — тем самым циклом, который сейчас идёт."""
+    if not _session.lock.acquire(timeout=wait if wait is not None else -1):
+        #Замок занят — цикл уже идёт в другом потоке, и наши правки он соберёт сам
+        #(дельта берётся по водяному знаку, а не по «чьи это правки»). Для выхода из
+        #программы это правильный ответ: ждать чужой push до 45 c нельзя.
+        _log.info("цикл синхронизации уже идёт — пропускаю параллельный запуск")
+        return False
+    try:
+        return _sync_once_locked(client)
+    finally:
+        _session.lock.release()
+
+
+def _sync_once_locked(client) -> bool:
     from datetime import timedelta
 
-    from data_store import (get_push_watermark, get_sync_watermark,
+    from data.data_store import (get_push_watermark, get_sync_watermark,
                             set_push_watermark, set_sync_watermark)
 
     #1. Отправляем ДЕЛЬТУ локальных правок (роль ограничивает на сервере). Раньше уезжал
     #полный снимок базы каждый цикл: сервер применял только изменившееся, но трафик рос
     #вместе с базой. Полный снимок оставляем для первого цикла сессии и раз в
     #FULL_PUSH_EVERY циклов — как самоизлечение.
-    full_push = (not _session_full_push_done) or (_push_cycles % FULL_PUSH_EVERY == 0)
     #Метку берём ДО сбора: правка, сделанная во время push, попадёт в СЛЕДУЮЩУЮ дельту,
     #а не провалится между сбором и сохранением метки.
     mark = (datetime.now(timezone.utc) - timedelta(seconds=PUSH_SAFETY_LAG_S)).isoformat()
-    client.push(collect_local("" if full_push else get_push_watermark()))
+
+    #🔥 ЧАСЫ УШЛИ НАЗАД — дельте верить нельзя, шлём полный снимок.
+    #PUSH_SAFETY_LAG_S закрывает регрессию только на ДВЕ МИНУТЫ, а реальные бывают куда
+    #крупнее: ноутбук проснулся с отставшими часами, сработала синхронизация времени,
+    #человек переставил дату руками. Правка, сделанная в «откатившийся» час, получает
+    #метку РАНЬШЕ водяного знака и в дельту не попадает — то есть не уезжает до
+    #ближайшего полного снимка (до FULL_PUSH_EVERY циклов), а выглядит это как обычная
+    #успешная синхронизация. Приём подсмотрен у ElectricSQL, где граница дельты — позиция
+    #в журнале, а не время: часов в протоколе нет вовсе. Полный курсор у нас впереди
+    #(docs/SYNC-RESEARCH-2026.md, шаг 5), но САМ КЛАСС отказа закрывается здесь и сейчас:
+    #граница уехала назад — не хитрим, отправляем всё.
+    prev_mark = get_push_watermark()
+    clock_back = bool(prev_mark) and _ts_key(mark) < _ts_key(prev_mark)
+    if clock_back:
+        _log.warning("часы ушли назад (граница дельты %s раньше прошлой %s) — "
+                     "отправляю полный снимок, чтобы правки этого промежутка не потерялись",
+                     mark, prev_mark)
+
+    full_push = ((not _session.full_push_done)
+                 or (_session.push_cycles % FULL_PUSH_EVERY == 0)
+                 or clock_back)
+    _session.collect_failed = False          #флаг относится к ЭТОМУ циклу, не к прошлому
+    res = client.push(collect_local("" if full_push else prev_mark)) or {}
     #Метку двигаем только после УСПЕШНОГО push: упало — правки останутся в дельте.
-    set_push_watermark(mark)
-    _session_full_push_done = True
-    _push_cycles += 1
+    #И только если СОБРАТЬ данные тоже удалось: пустой список из-за залоченной таблицы
+    #выглядит как «изменений нет», и сдвиг метки унёс бы за собой неотправленные правки
+    #(см. `SyncSession.collect_failed`). Оставляем метку на месте — следующий цикл
+    #соберёт тот же диапазон заново, push идемпотентен.
+    if _session.collect_failed:
+        _log.warning("часть локальных таблиц не прочиталась — метку дельты НЕ двигаю, "
+                     "правки уедут следующим циклом")
+    else:
+        set_push_watermark(mark)
+    _session.full_push_done = True
+    _session.push_cycles += 1
+
+    #🔥 ОТВЕРГНУТЫЕ СЕРВЕРОМ ЗАПИСИ. Сервер построчно проверяет права преподавателя и
+    #возвращает `rejected: {таблица: сколько}` — но этот ответ НЕ ЧИТАЛСЯ НИКЕМ, и
+    #расхождение выглядело как полный успех. Цена молчания здесь максимальная: push
+    #«удался», водяной знак уехал вперёд, и отвергнутая оценка больше в дельту не
+    #попадает — в журнале преподавателя она есть, на сервере её нет, и так навсегда
+    #(полный снимок раз в FULL_PUSH_EVERY циклов отправит её снова и получит тот же
+    #отказ). Причина отказа штатная и живая: админ снял назначение преподавателя на
+    #предмет, пока тот работал офлайн.
+    #Молча не проглатываем и не роняем цикл: остальные правки уехали законно, а человеку
+    #нужен след — в логе и в `sync_runner.status()`, откуда его берёт индикатор.
+    _session.last_rejected = dict(res.get("rejected") or {})
+    if _session.last_rejected:
+        _log.warning("сервер отклонил часть правок (нет прав на эти предмет/группу): %s. "
+                     "Они останутся только на этом ПК, пока админ не вернёт назначение.",
+                     _session.last_rejected)
 
     #2. Тянем ДЕЛЬТУ: только изменения позже метки last_sync — это снимает главный
     #тормоз (раньше каждый цикл качал всю базу). Первый pull сессии — полный
     #(since=""), для самоизлечения; последующие — по сохранённой метке.
-    since = "" if not _session_full_pull_done else get_sync_watermark()
+    since = "" if not _session.full_pull_done else get_sync_watermark()
     data = client.pull(since=since)
     apply_remote(data.get("changes", {}))
 
@@ -841,5 +1005,5 @@ def sync_once(client) -> bool:
         #единственная плата. Но молчать нельзя: это дефект контракта сервера.
         _log.warning("pull без server_time — метка дельты не сдвинута, следующий цикл "
                      "заберёт те же изменения повторно")
-    _session_full_pull_done = True
+    _session.full_pull_done = True
     return True

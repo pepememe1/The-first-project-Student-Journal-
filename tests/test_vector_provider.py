@@ -5,7 +5,7 @@ test_vector_provider.py — Выбор LLM-провайдера Вектора �
 (сервер вырезает его из pull). Тогда фабрика должна выбрать озвучку ЧЕРЕЗ СЕРВЕР
 (ServerProvider), а не падать в оффлайн, — если есть адрес сервера и токен сессии.
 """
-import sync_runner
+from sync import sync_runner
 from vector.llm import get_provider
 
 

@@ -11,7 +11,6 @@ privacy.py — Обезличивание перед облачной LLM (GigaC
 чтобы код был один.
 """
 import re
-from typing import Dict
 
 
 class Anonymizer:
@@ -22,8 +21,8 @@ class Anonymizer:
     """
 
     def __init__(self):
-        self._fwd: Dict[str, str] = {}     #имя -> плейсхолдер
-        self._rev: Dict[str, str] = {}     #плейсхолдер -> имя
+        self._fwd: dict[str, str] = {}     #имя -> плейсхолдер
+        self._rev: dict[str, str] = {}     #плейсхолдер -> имя
         self._n = 0
 
     def placeholder_for(self, real_name: str) -> str:
@@ -61,5 +60,5 @@ class Anonymizer:
         return out
 
     @property
-    def mapping(self) -> Dict[str, str]:
+    def mapping(self) -> dict[str, str]:
         return dict(self._rev)

@@ -35,10 +35,10 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 import requests  # noqa: E402
-from core import DBManager, GradeBook, LOCAL_DB  # noqa: E402
-import sync_engine  # noqa: E402
-import data_store  # noqa: E402
-from sync_client import SyncClient  # noqa: E402
+from data.core import DBManager, GradeBook, LOCAL_DB  # noqa: E402
+from sync import sync_engine  # noqa: E402
+from data import data_store  # noqa: E402
+from sync.sync_client import SyncClient  # noqa: E402
 
 G, S = "ИС-21", "Математика"
 _ok = True
@@ -65,7 +65,7 @@ def _wipe_device():
             pass
     DBManager.init()
     data_store._STORE = None if hasattr(data_store, "_STORE") else None
-    sync_engine._session_full_pull_done = False
+    sync_engine.reset_session_state()
 
 
 def main():

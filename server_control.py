@@ -83,7 +83,7 @@ def _write_pid(path: str, pid: int):
 
 def _read_pid(path: str) -> int:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return int((f.read() or "0").strip() or 0)
     except Exception:
         return 0
@@ -183,7 +183,7 @@ def read_env() -> dict:
     out = {}
     try:
         if os.path.exists(ENV_PATH):
-            with open(ENV_PATH, "r", encoding="utf-8") as f:
+            with open(ENV_PATH, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith("#") or "=" not in line:
@@ -342,7 +342,7 @@ def _runtime_env(port: int) -> dict:
     env["GRADEBOOK_DB_URL"] = _db_url_for_runtime()
     env["GRADEBOOK_PORT"] = str(port)          #run.py читает GRADEBOOK_PORT
     try:
-        import app_settings
+        from data import app_settings
         host_dev = app_settings.get_device_id()
         if host_dev:
             env["GRADEBOOK_HOST_DEVICE_ID"] = host_dev
@@ -615,7 +615,7 @@ def _confirm_tunnel(timeout: float = 12.0) -> str:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with open(TUNNEL_LOG, "r", encoding="utf-8", errors="replace") as f:
+            with open(TUNNEL_LOG, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     m = pat.search(line)
                     if m:

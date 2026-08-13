@@ -13,8 +13,8 @@ import threading
 import time
 
 import log
-import student_link
-from app_settings import get_api_url
+from data import student_link
+from data.app_settings import get_api_url
 
 _log = log.get("sync")
 
@@ -43,6 +43,10 @@ class SyncManager:
         self._fail_count = 0
         self._online = None
         self._last_error = ""
+        #Причина последнего неудачного входа ('' — вход в порядке). Держим отдельно от
+        #_last_error: сетевой сбой лечится сам, а отказ входа требует действия человека
+        #(войти заново, попросить админа снять блокировку) — и различать их обязан UI.
+        self._auth_error = ""
 
     def trigger(self):
         """Разбудить синкер прямо сейчас (например, после сохранения данных),
@@ -60,9 +64,20 @@ class SyncManager:
         self._on_state = cb
 
     def status(self) -> dict:
-        """Текущее состояние синка для UI/диагностики."""
+        """Текущее состояние синка для UI/диагностики.
+
+        `auth_error` и `rejected` вынесены отдельно от `error` НАМЕРЕННО: это три разных
+        по смыслу состояния, и лечатся они по-разному.
+          error     — сеть/сервер недоступны. Пройдёт само, делать ничего не надо.
+          auth_error— вход не проходит (пароль, отозванная сессия, 429). Синка не будет,
+                      пока человек не войдёт заново; само НЕ пройдёт.
+          rejected  — сервер отверг часть правок (нет прав на предмет/группу). Они
+                      остались только на этом ПК; нужен админ, чтобы вернуть назначение.
+        Свести их в одну строку значило бы показать «нет связи» там, где связь есть."""
+        from sync.sync_engine import last_rejected
         return {"online": self._online, "fails": self._fail_count,
-                "error": self._last_error}
+                "error": self._last_error, "auth_error": self._auth_error,
+                "rejected": last_rejected()}
 
     def _set_online(self, online: bool, error: str = ""):
         """Обновить онлайн-состояние; колбэк дёргаем только при РЕАЛЬНОЙ смене."""
@@ -85,7 +100,7 @@ class SyncManager:
         if self._client and getattr(self._client, "token", ""):
             token = self._client.token
         elif self._login:
-            import app_settings
+            from data import app_settings
             token = app_settings.get_saved_token(self._login)
         return url, (token or "")
 
@@ -100,7 +115,7 @@ class SyncManager:
 
         ⚠️ (живой отзыв Влада) `allow_jitter=False` ОБЯЗАТЕЛЕН здесь. Эта функция висит
         синхронно ВНУТРИ HTTP-запроса живого человека (прокси мессенджера/`/me/prefs`,
-        см. `ui/local_api.py::install_remote_proxy`) — если токена ещё нет (холодный
+        см. `desktop/local_api.py::install_remote_proxy`) — если токена ещё нет (холодный
         старт программы), `_ensure_auth` без этого флага могла ждать до
         `GRADEBOOK_LOGIN_JITTER_SEC` (по умолчанию 0-8 с СЛУЧАЙНО) ПЕРЕД входом по
         паролю: та задержка задумана для ФОНОВОГО цикла `_loop()` (размазать вход сотен
@@ -112,7 +127,7 @@ class SyncManager:
         if not url:
             return "", ""
         try:
-            from sync_client import is_token_expired
+            from sync.sync_client import is_token_expired
             _, token = self.current_auth()
             if token and not is_token_expired(token):
                 return url, token
@@ -180,8 +195,16 @@ class SyncManager:
 
         Просрочку access проверяем локально (is_token_expired, exp — абсолютная метка):
         офлайн-время учитывается, «заморозить» токен нельзя."""
-        from sync_client import SyncClient, is_token_expired
-        import app_settings
+        from sync.sync_client import SyncClient, is_token_expired
+        from data import app_settings
+        #🔥 КЛИЕНТ ОБЯЗАН СООТВЕТСТВОВАТЬ АДРЕСУ. Проверка смены адреса стояла только в
+        #`_loop`, а `flush_now`/`fresh_auth` зовут `_ensure_auth` НАПРЯМУЮ из другого
+        #потока — между сменой адреса и следующим витком цикла они видели старого клиента
+        #с ещё живым токеном, получали True и отправляли данные НА ПРЕЖНИЙ СЕРВЕР.
+        #Адрес меняется штатно: поддомен туннеля, переезд с ЛВС на боевой домен.
+        if self._client is not None and self._client.base_url != SyncClient.normalize(url):
+            self._client = None
+            self._saved_token_tried = True   #сохранённый токен выдан ДРУГИМ сервером
         if self._client is None:
             self._client = SyncClient(url)
         #Подтянем сохранённый refresh-токен (для тихого обновления) — один раз.
@@ -201,7 +224,8 @@ class SyncManager:
                 return True
 
         #3) тихое обновление refresh-токеном — без пароля
-        if self._client.refresh_token and self._try_refresh():
+        tried_refresh = bool(self._client.refresh_token)
+        if tried_refresh and self._try_refresh():
             return True
 
         #4) вход по паролю. ВАЖНО: если пароля нет (восстановленная сессия без
@@ -210,6 +234,23 @@ class SyncManager:
         #анти-брутфорс (429) и блокировал бы даже правильный вход. Тихо ждём, пока
         #пользователь войдёт заново с паролем (data_store передаст его в start()).
         if not (self._password or "").strip():
+            #🔥 НО «пароля нет» — это ДВА разных состояния, и раньше они были склеены.
+            #Здесь стоял голый `return False`, а вызывающий не считал это сбоем, потому
+            #что «сети мы не касались». Для случая «токена нет вовсе» это верно. А вот
+            #если refresh-токен БЫЛ и его отвергли — шагом выше мы уже сходили в сеть и
+            #получили отказ. Это самый частый десктопный случай (запуск по сохранённой
+            #сессии, токен отозван админом или истёк), и он давал ровно тот симптом,
+            #ради которого счётчик и заводился: POST /auth/refresh каждые 30 c
+            #бесконечно, без бэкоффа, при индикаторе «онлайн». Данные при этом не
+            #терялись (метку не двигаем), но система врала человеку и долбила сервер.
+            if tried_refresh:
+                self._auth_error = ("сессия отозвана или истекла — нужен вход заново "
+                                    "(тихое обновление токена отвергнуто сервером)")
+            else:
+                #Токена не было вовсе — сети не касались, это чистое ожидание входа.
+                #Гасим причину ЯВНО: оставшись от прошлого цикла, она заставила бы
+                #вызывающего вечно считать сбоем то, чего сейчас не произошло.
+                self._auth_error = ""
             return False
         #Перед входом — jitter (размазать герд входов в 9:00). ⚠️ ТОЛЬКО в фоновом потоке:
         #flush_now() зовётся из _on_quit в ГЛАВНОМ потоке, и сон до 8 c там задерживал бы
@@ -221,14 +262,22 @@ class SyncManager:
             self._client.login(self._login, self._password)
             self._save_tokens()
             return True
-        except Exception:
+        except Exception as e:
+            #🔥 ПРИЧИНУ ЗАПОМИНАЕМ. Раньше здесь стоял голый `return False`, и отказ входа
+            #(неверный пароль, отозванная сессия, 429 анти-брутфорса) не оставлял НИ
+            #СЛЕДА: `_loop` видел только False, не считал это сбоем — а значит не включал
+            #бэкофф и не переключал индикатор. Программа молча ходила на `/auth/login`
+            #каждые 30 c бесконечно, накручивая тот самый анти-брутфорс, и выглядела при
+            #этом «онлайн». Диагностировать было нечем.
+            self._auth_error = str(e)
             if self._role == "admin":
                 try:
                     self._client.bootstrap_admin(self._login, self._password)
                     self._save_tokens()
+                    self._auth_error = ""
                     return True
-                except Exception:
-                    return False
+                except Exception as e2:
+                    self._auth_error = f"{e} / bootstrap: {e2}"
             return False
 
     def _try_refresh(self) -> bool:
@@ -240,18 +289,22 @@ class SyncManager:
             self._client.refresh()
             self._save_tokens()
             return True
-        except Exception:
+        except Exception as e:
+            #Не молчим: отказ refresh — законный шаг вниз по цепочке (уйдём на пароль),
+            #но у него две РАЗНЫЕ причины, и различать их можно только по следу — сеть
+            #отпала (само пройдёт) или сессию отозвали/она истекла (нужен вход заново).
+            _log.debug("тихое обновление токена не удалось, пробуем вход по паролю: %s", e)
             return False
 
     def _save_tokens(self):
         """Сохраняет access и refresh в зашифрованное локальное хранилище (DPAPI/Fernet)."""
-        import app_settings
+        from data import app_settings
         app_settings.set_saved_token(self._login, self._client.token)
         if self._client.refresh_token:
             app_settings.set_saved_refresh_token(self._login, self._client.refresh_token)
 
     def _loop(self):
-        import sync_engine
+        from sync import sync_engine
         while self._running:
             #Адрес сервера читаем КАЖДЫЙ цикл, а не один раз при старте: на хост-ПК он
             #появляется уже после входа (админ поднимает сервер), а у serveo поддомен
@@ -267,29 +320,54 @@ class SyncManager:
                 self._saved_token_tried = True
             self._url = url
             try:
-                if self._ensure_auth(url):
-                    sync_engine.sync_once(self._client)
-                    self._flush_pending_prefs()   #до-отправляем тему, если зависла
-                    #Доклеиваем оценкам неизменяемый id студента. Именно ЗДЕСЬ, после
-                    #pull: справочник студентов уже свежий, есть с чем сопоставлять.
-                    #Идемпотентно и дёшево (берутся только строки с пустым id), поэтому
-                    #флаг «уже сделано» не нужен — он соврал бы на свежей установке,
-                    #где справочник ещё не приехал и клеить было не с чем.
-                    student_link.backfill_quietly()
-                    #Зеркало для ОБЩЕГО Vue-интерфейса: тем же успешным циклом обновляем
-                    #локальную копию серверной базы (ui/local_mirror.py). Именно здесь, а
-                    #не отдельным таймером: раз сеть только что была доступна и токен свеж,
-                    #второй раз это выяснять незачем. Сбой внутри проглатывается там же и
-                    #цикл не роняет; модуль опционален (server-пакета может не быть рядом).
-                    self._mirror_for_vue()
-                    #Успех: сбрасываем бэкофф и помечаем «онлайн».
-                    self._fail_count = 0
-                    self._set_online(True)
-                    if self._on_synced:
-                        try:
-                            self._on_synced()   #сигнал «данные обновились» в UI
-                        except Exception:
-                            pass
+                if not self._ensure_auth(url):
+                    #🔥 ОТКАЗ ВХОДА — ЭТО СБОЙ, а не «ничего не произошло». Раньше ветка
+                    #была пустой: счётчик не рос, значит не включался бэкофф и мы били в
+                    #`/auth/login` каждые 30 c бесконечно (прямая дорога в 429), а
+                    #индикатор продолжал показывать прежнее состояние — человек видел
+                    #«онлайн» при том, что не синхронизировалось НИЧЕГО.
+                    #Пустой пароль (восстановленная сессия) — штатное ожидание, а не сбой:
+                    #сети мы в этом случае не касались, ждать нечего и шуметь незачем.
+                    #⚠️ НО только если не касались ДЕЙСТВИТЕЛЬНО. Прежняя формулировка
+                    #была неверна: при живом refresh-токене `_ensure_auth` уже сходил в
+                    #сеть и получил отказ, а мы считали это «ничего не произошло». Теперь
+                    #такой случай приходит с заполненным `_auth_error` — и считается сбоем
+                    #наравне с отказом по паролю: растёт счётчик, включается бэкофф,
+                    #индикатор перестаёт врать «онлайн».
+                    if (self._password or "").strip() or self._auth_error:
+                        self._fail_count += 1
+                        self._set_online(False, self._auth_error or "вход не выполнен")
+                        if self._fail_count == 1:
+                            _log.warning("вход на сервер не удался — синхронизации не "
+                                         "будет, пока он не пройдёт: %s",
+                                         self._auth_error or "причина неизвестна")
+                    self._sleep_cycle()
+                    continue
+                self._auth_error = ""
+                sync_engine.sync_once(self._client)
+                self._flush_pending_prefs()   #до-отправляем тему, если зависла
+                #Доклеиваем оценкам неизменяемый id студента. Именно ЗДЕСЬ, после
+                #pull: справочник студентов уже свежий, есть с чем сопоставлять.
+                #Идемпотентно и дёшево (берутся только строки с пустым id), поэтому
+                #флаг «уже сделано» не нужен — он соврал бы на свежей установке,
+                #где справочник ещё не приехал и клеить было не с чем.
+                student_link.backfill_quietly()
+                #Зеркало для ОБЩЕГО Vue-интерфейса: тем же успешным циклом обновляем
+                #локальную копию серверной базы (desktop/local_mirror.py). Именно здесь, а
+                #не отдельным таймером: раз сеть только что была доступна и токен свеж,
+                #второй раз это выяснять незачем. Сбой внутри проглатывается там же и
+                #цикл не роняет; модуль опционален (server-пакета может не быть рядом).
+                self._mirror_for_vue()
+                #Успех: сбрасываем бэкофф и помечаем «онлайн».
+                self._fail_count = 0
+                self._set_online(True)
+                if self._on_synced:
+                    try:
+                        self._on_synced()   #сигнал «данные обновились» в UI
+                    except Exception as e:
+                        #Колбэк — чужой код (обновление экрана). Его падение не имеет
+                        #права ронять синк, но и исчезать бесследно не должно.
+                        _log.debug("колбэк обновления UI упал: %s", e)
             except Exception as e:
                 #Сеть/токен/сервер недоступны — не критично, повторим позже с БЭКОФФОМ.
                 self._client = None   # сбросим, чтобы перелогиниться
@@ -326,7 +404,7 @@ class SyncManager:
         prefs в отложенные (app_settings.set_pending_prefs) и до-отправим при следующей
         удачной синхронизации (_flush_pending_prefs). Иначе выбранная тема осталась бы
         только локально и не уехала бы в БД (не «роумилась» на другие ПК)."""
-        import app_settings
+        from data import app_settings
         url = get_api_url()
         token = ""
         if self._client and getattr(self._client, "token", ""):
@@ -340,7 +418,7 @@ class SyncManager:
 
         def _send():
             try:
-                from sync_client import SyncClient
+                from sync.sync_client import SyncClient
                 SyncClient(url, token).set_my_prefs(prefs)
                 app_settings.clear_pending_prefs()
             except Exception as e:
@@ -354,12 +432,12 @@ class SyncManager:
         пользуясь уже живым токеном текущего цикла. Зовётся после удачного sync_once."""
         if not self._login or self._client is None:
             return
-        import app_settings
+        from data import app_settings
         prefs = app_settings.get_pending_prefs(self._login)
         if not prefs:
             return
         try:
-            from sync_client import SyncClient
+            from sync.sync_client import SyncClient
             SyncClient(self._url, self._client.token).set_my_prefs(prefs)
             app_settings.clear_pending_prefs()
         except Exception as e:
@@ -367,13 +445,13 @@ class SyncManager:
 
     def _mirror_for_vue(self):
         """Обновить локальную копию серверной базы — ту, на которой работает общий
-        Vue-интерфейс (см. ui/local_mirror.py, «один интерфейс» §11 CLAUDE.md).
+        Vue-интерфейс (см. desktop/local_mirror.py, «один интерфейс» §11 CLAUDE.md).
 
         Полностью изолировано: любая ошибка тут не должна ронять обычный синк, ради
         которого цикл и существует. Модуль опционален — в окружении без серверного
         пакета рядом (`server/`) его просто нет, и это штатная ситуация, а не сбой."""
         try:
-            import local_mirror
+            from desktop import local_mirror
             local_mirror.mirror_once(client=self._client)
         except Exception as e:
             _log.debug(f"[mirror] пропущено: {e}")
@@ -395,8 +473,12 @@ class SyncManager:
                 #в локальной БД (offline-first) и уедут при следующем запуске.
                 if not self._client.health():
                     return
-                import sync_engine
-                sync_engine.sync_once(self._client)
+                from sync import sync_engine
+                #wait=8: если фоновый цикл прямо сейчас в середине push (read-таймаут 45 c),
+                #ждать его при закрытии программы нельзя — окно «зависло бы» на глазах.
+                #Пропуск безопасен: тот цикл собирает дельту по водяному знаку, а не «свои»
+                #правки, поэтому наши изменения уедут вместе с его пушем.
+                sync_engine.sync_once(self._client, wait=8)
                 self._flush_pending_prefs()
         except Exception as e:
             _log.warning("flush перед выходом не удался: %s", e)

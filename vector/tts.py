@@ -75,7 +75,7 @@ _MODE_LABELS = {"voice": "Голос включён", "mumble": "Бубнеж", 
 def get_mode() -> str:
     """Текущий режим озвучки. Мигрирует со старого 'tts_enabled' (вкл/выкл)."""
     try:
-        from data_store import local_get
+        from data.data_store import local_get
         m = str(local_get("tts_mode", ""))
         if m in _MODES:
             return m
@@ -87,7 +87,7 @@ def get_mode() -> str:
 def set_mode(mode: str) -> None:
     m = mode if mode in _MODES else "voice"
     try:
-        from data_store import local_set
+        from data.data_store import local_set
         local_set("tts_mode", m)
     except Exception as e:
         _LOG.warning(f"[tts] не сохранил режим озвучки: {e}")
@@ -118,7 +118,7 @@ def set_enabled(on: bool) -> None:
 def get_voice() -> str:
     """Выбранный голос ('male' по умолчанию)."""
     try:
-        from data_store import local_get
+        from data.data_store import local_get
         return "female" if str(local_get("tts_voice", "male")) == "female" else "male"
     except Exception:
         return "male"
@@ -127,7 +127,7 @@ def get_voice() -> str:
 def set_voice(voice: str) -> None:
     v = "female" if voice == "female" else "male"
     try:
-        from data_store import local_set
+        from data.data_store import local_set
         local_set("tts_voice", v)
     except Exception as e:
         _LOG.warning(f"[tts] не сохранил выбор голоса: {e}")
@@ -171,14 +171,14 @@ def _wav_to_samples(data: bytes):
 def _server_wav(text: str, voice: str):
     """WAV-байты с сервера или None (нет сети/токена/движка)."""
     try:
-        from sync_runner import current_auth
+        from sync.sync_runner import current_auth
         url, token = current_auth()
     except Exception:
         url, token = ("", "")
     if not (url and token):
         return None
     try:
-        from sync_client import SyncClient
+        from sync.sync_client import SyncClient
         return SyncClient(url, token).tts(text, voice=voice)
     except Exception as e:
         _LOG.info(f"[tts] серверный синтез недоступен ({e}) — падаю на локальный")

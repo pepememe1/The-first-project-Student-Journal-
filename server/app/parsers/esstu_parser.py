@@ -507,7 +507,7 @@ def _detect_hours_column(rows: list[list], index_col: int = 0) -> int | None:
     разными планами, перебор обязателен каждый раз заново. index_col — от
     _detect_index_column, а НЕ обязательно 0 (см. её докстринг)."""
     groups = []
-    for i, row in enumerate(rows):
+    for row in rows:
         if not row or index_col >= len(row) or not row[index_col]:
             continue
         idx = str(row[index_col]).strip()
@@ -703,7 +703,7 @@ def _parse_pdf_plan(content: bytes) -> list[dict]:
             #Многостраничная таблица «Учебный план» не всегда повторяет колонку
             #часов на следующих страницах в распознаваемом виде — но ширина
             #строк (число ячеек) у продолжения та же самая, это и используем.
-            for pi, table in page_tables:
+            for _page_no, table in page_tables:
                 width = max((len(r) for r in table if r), default=0)
                 if width == anchor_width:
                     out.extend(_pdf_table_to_rows(table, anchor_col, sem_base, sem_period,

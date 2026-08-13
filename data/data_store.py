@@ -16,10 +16,9 @@ data_store.py — Локальное хранилище данных GradeBookAI
 """
 import json
 import log
-from typing import Optional
 
-from core import DBManager
-from security import hash_password, verify_password, encrypt_value, decrypt_value
+from data.core import DBManager
+from data.security import hash_password, verify_password, encrypt_value, decrypt_value
 
 #Логин администратора не секрет (секрет — пароль). Дефолтного ПАРОЛЯ больше нет:
 #раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
@@ -93,7 +92,7 @@ def _kv_set(key: str, value, wake: bool = True) -> bool:
     #опять писал бы метку: получился бы бесконечный цикл «синк → метка → синк».
     if wake:
         try:
-            from sync_runner import trigger as _sync_trigger
+            from sync.sync_runner import trigger as _sync_trigger
             _sync_trigger()
         except Exception:
             pass
@@ -411,7 +410,15 @@ def _users_table_read() -> list:
                     "COALESCE(blob,'') FROM users")
         rows = cur.fetchall()
     except Exception:
-        rows = []
+        #🔥 РАНЬШЕ ЗДЕСЬ БЫЛО `rows = []`, И ЭТО ТЕРЯЛО ПРАВКИ МОЛЧА. Пустой список
+        #неотличим от «пользователей нет»: push уходил успешным, водяной знак дельты
+        #уезжал вперёд, и заведённый офлайн студент, переименованный преподаватель или
+        #надгробие удалённого больше в дельту не попадали — до ближайшего полного снимка,
+        #то есть до 20 циклов. Защита от этого в синке есть (`SyncSession.collect_failed`),
+        #но она рассчитана на ИСКЛЮЧЕНИЕ, а мы его гасили. Пробрасываем: решение «сдвигать
+        #ли метку» принимает синк, у него есть контекст, а у нас его нет.
+        conn.close()
+        raise
     conn.close()
     out = []
     for uid, role, uat, deleted, blob in rows:
@@ -534,7 +541,7 @@ class LocalStore:
         #Разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу.
         if wake:
             try:
-                from sync_runner import trigger as _sync_trigger
+                from sync.sync_runner import trigger as _sync_trigger
                 _sync_trigger()
             except Exception:
                 pass
@@ -549,7 +556,7 @@ class LocalStore:
         if not teacher_id:
             return []
         if not year or semester is None:
-            import terms
+            from data import terms
             year, semester = terms.current_term()
         conn = DBManager.get_conn(); cur = conn.cursor()
         try:
@@ -572,7 +579,7 @@ class LocalStore:
         if not group or not subject:
             return ""
         if not year or semester is None:
-            import terms
+            from data import terms
             year, semester = terms.current_term()
         conn = DBManager.get_conn(); cur = conn.cursor()
         try:
@@ -595,7 +602,7 @@ class LocalStore:
         if not group:
             return {}
         if not year or semester is None:
-            import terms
+            from data import terms
             year, semester = terms.current_term()
         conn = DBManager.get_conn(); cur = conn.cursor()
         try:
@@ -625,7 +632,7 @@ class LocalStore:
         _groups_write_raw(groups)
         if wake:   #разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу
             try:
-                from sync_runner import trigger as _sync_trigger
+                from sync.sync_runner import trigger as _sync_trigger
                 _sync_trigger()
             except Exception:
                 pass
@@ -675,7 +682,7 @@ class LocalStore:
         return verify_password(pw, h)
 
     #Аутентификация (логин + пароль)
-    def authenticate(self, login: str, password: str) -> Optional[dict]:
+    def authenticate(self, login: str, password: str) -> dict | None:
         """
         Единая точка входа. Возвращает:
           {"role": "admin"}
@@ -687,7 +694,7 @@ class LocalStore:
         Здесь же — журнал аудита и анти-брутфорс: фиксируем каждый вход и блокируем
         логин после серии неверных попыток (152-ФЗ / приказ ФСТЭК №21).
         """
-        from audit import (is_locked, register_failure, register_success,
+        from data.audit import (is_locked, register_failure, register_success,
                             log_event)
 
         login = (login or "").strip()
@@ -710,13 +717,13 @@ class LocalStore:
             #Запускается фоновая синхронизация с сервером (если задан адрес API).
             #Офлайн / без сервера — внутри просто ничего не делает.
             try:
-                from sync_runner import start as _sync_start
+                from sync.sync_runner import start as _sync_start
                 _sync_start(login, password, result.get("role", ""))
             except Exception as e:
                 log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
         return result
 
-    def authenticate_trusted(self, login: str, password: str) -> Optional[dict]:
+    def authenticate_trusted(self, login: str, password: str) -> dict | None:
         """Собрать сессию для пользователя, ПАРОЛЬ КОТОРОГО УЖЕ ПРОВЕРЕН СЕРВЕРОМ.
 
         Зачем: на десктопе (Windows, без OpenSSL GOST-провайдера) локальная проверка
@@ -738,17 +745,17 @@ class LocalStore:
             res = {"role": "parent", "parent": payload}
         else:
             res = {"role": "student", "stud": payload}
-        from audit import register_success, log_event
+        from data.audit import register_success, log_event
         register_success(login)
         log_event("login_success", login, role)
         try:
-            from sync_runner import start as _sync_start
+            from sync.sync_runner import start as _sync_start
             _sync_start(login, password, role)
         except Exception as e:
             log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
         return res
 
-    def _authenticate_inner(self, login: str, password: str) -> Optional[dict]:
+    def _authenticate_inner(self, login: str, password: str) -> dict | None:
         """Сама проверка логина/пароля без аудита и блокировок."""
         if login == self.get_admin_login() and self.check_admin_password(password):
             return {"role": "admin"}
@@ -832,7 +839,7 @@ class LocalStore:
 
 
 #Singleton
-_store: Optional[LocalStore] = None
+_store: LocalStore | None = None
 
 
 def rekey_student_grades(old_f: str, old_n: str, new_f: str, new_n: str) -> int:
@@ -927,7 +934,7 @@ def reset_synced_local_data():
     except Exception as e:
         log.get("data_store").warning(f"[reset] предметы не очищены: {e}")
     try:
-        from core import DBManager
+        from data.core import DBManager
         DBManager.clear_synced_tables()
     except Exception as e:
         log.get("data_store").warning(f"[reset] таблицы занятий/оценок не очищены: {e}")

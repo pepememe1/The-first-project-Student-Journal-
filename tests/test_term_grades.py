@@ -2,8 +2,8 @@
 test_term_grades.py — Итоговые оценки за семестр (промежуточная аттестация) на десктопе:
 локальная запись/чтение, round-trip через синк (collect/apply), надгробия, экспорт.
 """
-from core import DBManager
-import sync_engine
+from data.core import DBManager
+from sync import sync_engine
 
 SUBJ = "Математика"
 YEAR, SEM = "2025/2026", 1
@@ -68,7 +68,7 @@ def test_stale_remote_does_not_override_local(fresh_db):
 
 def test_vedomost_xlsx_bytes():
     """Экспорт ведомости в xlsx отдаёт непустой файл."""
-    import exports
+    from data import exports
     rows = [{"surname": "Иванов", "name": "Иван", "patronymic": "Петрович", "grade": "5"}]
     data = exports.build_vedomost_xlsx("ИС-21", SUBJ, {"year": YEAR, "semester": SEM},
                                        "экзамен", rows, teacher="Тестов Т.Т.")

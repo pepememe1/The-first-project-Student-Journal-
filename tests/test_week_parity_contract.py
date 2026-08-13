@@ -20,6 +20,7 @@
 import datetime
 import json
 import pathlib
+from itertools import pairwise
 
 import pytest
 
@@ -69,7 +70,7 @@ def test_contract_has_two_full_consecutive_weeks():
     dates = sorted(datetime.date.fromisoformat(c["date"]) for c in _cases())
     runs = []
     streak = [dates[0]]
-    for prev, cur in zip(dates, dates[1:]):
+    for prev, cur in pairwise(dates):
         if (cur - prev).days == 1:
             streak.append(cur)
         else:
@@ -104,7 +105,7 @@ def test_parity_alternates_over_ten_weeks():
     чётность (всегда I), и слишком частое переключение."""
     start = datetime.date(2026, 2, 8)          # воскресенье
     seq = [_parity(start + datetime.timedelta(days=7 * w)) for w in range(10)]
-    for a, b in zip(seq, seq[1:]):
+    for a, b in pairwise(seq):
         assert a != b, f"чётность не чередуется: {seq}"
 
 

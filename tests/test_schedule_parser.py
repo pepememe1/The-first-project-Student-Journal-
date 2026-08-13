@@ -16,7 +16,7 @@ _FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "group_K15_1.htm"
 
 
 def _load_fixture() -> str:
-    with open(_FIXTURE, "r", encoding="utf-8") as f:
+    with open(_FIXTURE, encoding="utf-8") as f:
         return f.read()
 
 

@@ -44,7 +44,7 @@ def current_term() -> tuple:
     """Текущий учебный термин (год, семестр) из синкнутого config, иначе — по дате.
     Так итоговая оценка, выставленная на ПК, попадёт в тот же семестр, что и на сайте."""
     try:
-        from data_store import get_store
+        from data.data_store import get_store
         cfg = get_store()._config() or {}
     except Exception:
         cfg = {}

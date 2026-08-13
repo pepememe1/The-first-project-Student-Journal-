@@ -1,5 +1,5 @@
 """
-test_local_mirror.py — зеркало боевой базы в локальную (ui/local_mirror.py).
+test_local_mirror.py — зеркало боевой базы в локальную (desktop/local_mirror.py).
 
 Зеркало — то, что делает общий Vue-интерфейс совместимым с offline-first: без него
 интерфейс на десктопе открылся бы пустым. Закрепляем свойства, потеря которых тихо
@@ -17,7 +17,7 @@ def local_db():
     tmp = os.path.join(tempfile.mkdtemp(), "mirror_test.db").replace("\\", "/")
     os.environ["GRADEBOOK_DB_URL"] = f"sqlite:///{tmp}"
     #Путь к серверному пакету добавляет local_api — используем его же логику.
-    import local_api
+    from desktop import local_api
     local_api.LocalAPI()._load_app()
     from app.db import init_db
     init_db()
@@ -26,7 +26,7 @@ def local_db():
 
 @pytest.fixture()
 def db(local_db):
-    import local_mirror
+    from desktop import local_mirror
     session = local_mirror._local_session()
     yield session
     session.close()
@@ -47,7 +47,7 @@ class _FakeClient:
 
 def test_copies_rows_verbatim(db):
     """Записи ложатся в локальную базу как есть."""
-    import local_mirror
+    from desktop import local_mirror
     changes = {"groups": [{"id": "grp:К74/1", "name": "К74/1", "subjects": ["Математика"],
                            "updated_at": "2026-07-01T10:00:00+00:00", "deleted": False}]}
     assert local_mirror.apply_changes(db, changes) == 1
@@ -63,7 +63,7 @@ def test_preserves_remote_updated_at(db):
     updated_at — часы механизма LWW. Переставив их локальным временем, мы бы навсегда
     рассинхронизировали копию с оригиналом: следующая дельта считала бы наши строки
     новее серверных и перестала бы их обновлять."""
-    import local_mirror
+    from desktop import local_mirror
     stamp = "2026-06-15T08:30:00+00:00"
     local_mirror.apply_changes(db, {"subjects": [
         {"id": "subj:Физика", "name": "Физика", "updated_at": stamp, "deleted": False}]})
@@ -74,7 +74,7 @@ def test_preserves_remote_updated_at(db):
 
 def test_updates_existing_row(db):
     """Повторный приезд той же записи обновляет её, а не плодит вторую."""
-    import local_mirror
+    from desktop import local_mirror
     for name in ("Информатика", "Информатика и ИКТ"):
         local_mirror.apply_changes(db, {"subjects": [
             {"id": "subj:И", "name": name,
@@ -86,12 +86,12 @@ def test_updates_existing_row(db):
 
 def test_unknown_model_is_skipped(db):
     """Сервер может уметь больше, чем знает эта сборка десктопа — падать нельзя."""
-    import local_mirror
+    from desktop import local_mirror
     assert local_mirror.apply_changes(db, {"чего_то_новое": [{"id": "x"}]}) == 0
 
 
 def test_rows_without_key_are_skipped(db):
-    import local_mirror
+    from desktop import local_mirror
     assert local_mirror.apply_changes(db, {"subjects": [{"name": "без id"}]}) == 0
 
 
@@ -100,7 +100,7 @@ def test_watermark_moves_only_after_success(db, monkeypatch):
 
     Сдвинутая заранее метка потеряла бы данные безвозвратно: следующий заход решил бы,
     что этот кусок уже скачан. Повторная же загрузка безвредна — запись идемпотентна."""
-    import local_mirror
+    from desktop import local_mirror
     client = _FakeClient({"server_time": "2026-07-10T00:00:00+00:00",
                           "changes": {"subjects": [
                               {"id": "subj:Х", "name": "Химия",
@@ -117,7 +117,7 @@ def test_watermark_moves_only_after_success(db, monkeypatch):
 
 def test_failure_does_not_move_watermark(db):
     """Сорвалась загрузка — метка осталась прежней, кусок скачается снова."""
-    import local_mirror
+    from desktop import local_mirror
 
     class _Broken:
         def pull(self, since=""):
@@ -132,6 +132,6 @@ def test_failure_does_not_move_watermark(db):
 
 def test_no_session_is_not_a_crash():
     """Пользователь ещё не вошёл — честный отказ, а не исключение наружу."""
-    import local_mirror
+    from desktop import local_mirror
     res = local_mirror.mirror_once(client=None)
     assert res["ok"] is False

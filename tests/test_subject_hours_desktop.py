@@ -11,8 +11,8 @@ subject_hours входит в SYNC_MODELS и приезжает обычным p
 import pytest
 
 import study_hours
-import sync_engine as se
-from core import GradeBook
+from sync import sync_engine as se
+from data.core import GradeBook
 
 
 @pytest.fixture(autouse=True)
@@ -80,18 +80,17 @@ def test_older_remote_row_does_not_override_newer_local():
     assert book.hours_progress()[1] == 72
 
 
-def test_student_journal_shows_hours_badge():
-    """НАТИВНЫЙ журнал студента показывает «Пройдено X из Y ч» — как карточка на сайте.
+def test_plan_arriving_by_sync_becomes_visible_to_offline_journal():
+    """План, ПРИЕХАВШИЙ СИНКОМ, сразу виден офлайн-журналу — источник подписи «Пройдено X из Y ч».
 
-    Часы уже лежали локально (subject_hours синкуется), но экран студента их не выводил:
-    подпись была только у преподавателя. Проверяем сам источник подписи — то, что
-    StudentDashboard подставляет в карточку предмета и в шапку открытого предмета.
+    Часы синкуются (`subject_hours` в SYNC_MODELS), но пока плана нет, знаменателя нет
+    тоже — интерфейс обязан не рисовать подпись вовсе, а не показывать «0 из 0».
+    Проверяем сам источник цифр (`hours_progress`), а не экран: подпись рисует SPA,
+    и она одна на все платформы (§11 «один интерфейс»).
     """
-    from dashboards import StudentDashboard
-
     book = GradeBook("К74/1", "Математика")
     book.add_lesson("Лекция", topic="л1")        #пара = 2 ч (две строки, один зачёт)
-    assert StudentDashboard._hours_text(book) == "", "плана нет — подписи быть не должно"
+    assert book.hours_progress() == (2, 0), "плана нет — знаменателя быть не должно"
 
     se.apply_remote({"subject_hours": [
         {"id": "hrs:К74/1|Математика||0", "group_name": "К74/1", "subject": "Математика",
@@ -99,7 +98,7 @@ def test_student_journal_shows_hours_badge():
          "updated_at": "2026-07-28T10:00:00+00:00", "deleted": False}]})
 
     book = GradeBook("К74/1", "Математика")
-    assert StudentDashboard._hours_text(book) == "Пройдено 2 из 67 ч"
+    assert book.hours_progress() == (2, 67)
 
 
 def test_plan_saved_with_term_is_found_by_termless_journal():
@@ -108,7 +107,7 @@ def test_plan_saved_with_term_is_found_by_termless_journal():
     Веб пишет часы ключом с учебным периодом (`hrs:Группа|Предмет|2025/2026|1`), а
     экраны студента открывают журнал без периода и искали `hrs:Группа|Предмет||0` —
     ключи не совпадали, и часы на ПК не появлялись вовсе."""
-    import terms
+    from data import terms
     year, sem = terms.current_term()
 
     book = GradeBook("К74/1", "История")
@@ -125,7 +124,7 @@ def test_plan_saved_with_term_is_found_by_termless_journal():
 
 def test_archive_term_does_not_borrow_current_plan():
     """Журнал ПРОШЛОГО семестра не подставляет план текущего — это была бы чужая цифра."""
-    import terms
+    from data import terms
     year, sem = terms.current_term()
     se.apply_remote({"subject_hours": [
         {"id": f"hrs:К74/1|Химия|{year}|{sem}", "group_name": "К74/1", "subject": "Химия",
@@ -138,9 +137,9 @@ def test_archive_term_does_not_borrow_current_plan():
 
 # ── ЗЕТ (docs/PLAN-ZET.md) — desktop offline (SubjectHours.zet синкуется, порог нет) ──
 def test_get_group_zet_reads_synced_column():
-    """data_store.get_group_zet — только предметы с явно заданным (не NULL) ЗЕТ."""
-    import terms
-    from data_store import get_store
+    """data.data_store.get_group_zet — только предметы с явно заданным (не NULL) ЗЕТ."""
+    from data import terms
+    from data.data_store import get_store
     year, sem = terms.current_term()
     se.apply_remote({"subject_hours": [
         {"id": f"hrs:К74/1|Математика|{year}|{sem}", "group_name": "К74/1",

@@ -1,4 +1,4 @@
-"""
+r"""
 pack_ota_bundle.py — упаковать собранный фронтенд в OTA-бандл для мобильного приложения.
 
     python tools/pack_ota_bundle.py web/dist server/ota_bundles/1.260812.0500.zip

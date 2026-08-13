@@ -7,7 +7,7 @@ avatar_service.py — аватарка пользователя (десктоп)
 офлайн. Приоритет чтения: локальный кэш → синхронизированная запись пользователя → ''.
 """
 import log
-from data_store import get_store, local_get, local_set
+from data.data_store import get_store, local_get, local_set
 
 _LOCAL_PREFIX = "my_avatar"
 
@@ -70,7 +70,7 @@ def save_avatar(data_url: str, role: str, identity: dict = None) -> None:
     data_url = data_url or ""
     local_set(_key(role, identity), data_url)
     try:
-        import sync_runner
+        from sync import sync_runner
         sync_runner.push_my_prefs({"avatar": data_url})
     except Exception as e:
         log.get("avatar_service").warning(f"[avatar] отправка в prefs пропущена: {e}")
@@ -117,7 +117,7 @@ def get_subject_grading_scale(group: str, subject: str, year: str = "", semester
     (webdata.lesson_scale_map) — единый источник, не отдельная копия. Без назначения
     или у назначенного препода нет своей строки в локальных teachers — "5"."""
     import grading
-    from data_store import get_store
+    from data.data_store import get_store
     try:
         store = get_store()
         tid = store.get_subject_teacher_id(group, subject, year, semester)
@@ -139,7 +139,7 @@ def save_grading_scale(scale: str, role: str, identity: dict = None) -> None:
     scale = (scale or "5").strip()
     local_set(f"my_grading_scale:{_ident_token(role, identity)}", scale)
     try:
-        import sync_runner
+        from sync import sync_runner
         sync_runner.push_my_prefs({"grading_scale": scale})
     except Exception as e:
         log.get("avatar_service").warning(f"[grading_scale] отправка в prefs пропущена: {e}")
@@ -161,7 +161,7 @@ def save_profile(role: str, identity: dict = None, bio: str = None, color: str =
     if not payload:
         return
     try:
-        import sync_runner
+        from sync import sync_runner
         sync_runner.push_my_prefs(payload)
     except Exception as e:
         log.get("avatar_service").warning(f"[profile] отправка в prefs пропущена: {e}")

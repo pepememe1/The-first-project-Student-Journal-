@@ -8,10 +8,10 @@ test_stage3_desktop.py — ДЕСКТОП, этап 3: ключи оценок �
 """
 import sqlite3
 
-import student_link
-import sync_engine
-from core import DBManager, term_grade_id
-from data_store import get_store
+from data import student_link
+from sync import sync_engine
+from data.core import DBManager, term_grade_id
+from data.data_store import get_store
 
 
 def _seed_student(surname="Иванова", name="Мария", group="К-101") -> str:

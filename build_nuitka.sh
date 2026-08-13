@@ -3,10 +3,10 @@
 # исходник практически не восстановить). Один .exe, весь клиентский код + арт внутри.
 #
 # Серверный пакет (server/app) ТЕПЕРЬ ВХОДИТ — это ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md,
-# «один UI»): десктоп поднимает его же у себя на 127.0.0.1 (ui/local_api.py), плюс тот
+# «один UI»): десктоп поднимает его же у себя на 127.0.0.1 (desktop/local_api.py), плюс тот
 # же пакет нужен фоновому хостингу «этот ПК как сервер» (--run-server, server_control.py).
 # ⚠️ Бандлится СЫРЫМИ файлами (--include-data-dir), а НЕ компилируется Nuitka-пакетом:
-# ui/local_api.py и server/app/main.py находят друг друга через __file__-относительные
+# desktop/local_api.py и server/app/main.py находят друг друга через __file__-относительные
 # обходы, которые ожидают РОВНО ДВА уровня вложенности «.../server/app/main.py» (та же
 # раскладка, что и в исходниках). `--include-package=app` сплющил бы пакет до плоского
 # app/ без server/ сверху — пути разъехались бы. Раз сервер и так публично слушает
@@ -19,9 +19,9 @@ set -e
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(pwd -W 2>/dev/null || pwd)"
 
-# Плоские импорты (ui/ sync/ data/ кладутся в sys.path через _bootstrap на рантайме) —
+# Плоские импорты (desktop/ sync/ data/ кладутся в sys.path через _bootstrap на рантайме) —
 # Nuitka их сама не видит, поэтому даём папки в путь и включаем модули явно.
-export PYTHONPATH="$ROOT/ui;$ROOT/sync;$ROOT/data"
+export PYTHONPATH="$ROOT/desktop;$ROOT/sync;$ROOT/data"
 
 # ⚠️ Собирать нужно ОБЫЧНЫМ python.org Python, НЕ из Microsoft Store: у Store-сборки
 # песочница ломает пути MinGW, и gcc не находит windows.h. Ошибка при этом вылезает
@@ -54,14 +54,14 @@ case "$("$PYEXE" -c 'import sys; print(sys.executable)')" in
 esac
 
 INC=""
-for d in ui sync data; do
+for d in desktop sync data; do
   for f in "$d"/*.py; do
     b="$(basename "$f" .py)"
     [ "$b" = "__init__" ] && continue
     INC="$INC --include-module=$b"
   done
 done
-for b in grading subjects server_control fonts app_paths _bootstrap main_window; do
+for b in grading subjects server_control app_paths; do
   INC="$INC --include-module=$b"
 done
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
@@ -80,7 +80,7 @@ INC="$INC --include-module=reminder_parse"
 # бы вовсе — ровно тот же отказ, что когда-то давал забытый reminder_parse.
 INC="$INC --include-module=dropout_risk"
 
-# paramiko — ЕДИНСТВЕННЫЙ путь входа по ПАРОЛЮ в разделе «Сервер» (ui/server_admin.py).
+# paramiko — ЕДИНСТВЕННЫЙ путь входа по ПАРОЛЮ в разделе «Сервер» (desktop/server_admin.py).
 # Системный ssh пароль ввести не может: он запускается с BatchMode=yes, а без него
 # процесс без консоли повис бы на приглашении навсегда; `sshpass` на Windows нет.
 # Импорт там ЛЕНИВЫЙ и обёрнут в try/except — то есть при входе по ключу пакет не нужен,
@@ -152,7 +152,12 @@ PKGS="$PKGS --include-package=email"
 #     те же 30 эмоций и 6 анимаций уже лежат в web/dist/mascot и весят 7 МБ,
 #     потому что сжаты для веба;
 #   fonts/ (9 МБ) — грузились через QFontDatabase; SPA их не подключает вовсе.
-# Итого ~86 МБ мёртвого груза. Вернутся, если вернётся Qt-оболочка.
+# Итого ~86 МБ мёртвого груза.
+# ⚠️ Qt-оболочки БОЛЬШЕ НЕТ В ПРОЕКТЕ — не «не включается в сборку», а удалена из
+# исходников (перенесена в WORK/GB-legacy-qt). Раньше она формально существовала как
+# запасной путь, но в .exe не попадала никогда, поэтому у людей не исполнялась ни разу —
+# и молча накапливала поломки. Флаг --nofollow-import-to=PySide6 ниже оставлен
+# СТРАХОВКОЙ: случайный импорт Qt не должен вернуть в сборку Chromium незаметно.
 # ⚠️ Шрифты стоит ОТДЕЛЬНО занести в web/public с @font-face — тогда фирменное
 # начертание будет и в программе, и на сайте, а не только там, где Syne стоит в системе.
 # ━━ ПОЧЕМУ ВЫКИНУТЫ ТЯЖЁЛЫЕ ИИ-ПАКЕТЫ ━━

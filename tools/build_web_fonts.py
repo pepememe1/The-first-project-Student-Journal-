@@ -21,7 +21,6 @@ build_web_fonts.py — собрать фирменные шрифты для в�
 предполагалось: появится версия с кириллицей — цифра сама об этом скажет.
 """
 import os
-import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "fonts")

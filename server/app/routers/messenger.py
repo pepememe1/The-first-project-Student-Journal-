@@ -31,7 +31,7 @@ from ..models import (
     CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
     NotifyEvent, ParentLink, SubjectHours,
-    UserStatus, User, UserNote, Lesson, direct_conversation_id,
+    UserStatus, User, UserNote, direct_conversation_id,
 )
 
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
@@ -1252,7 +1252,7 @@ def reminder_create(mid: int, payload: dict = Body(default={}),
     try:
         parsed = datetime.fromisoformat(when)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Неверный формат времени")
+        raise HTTPException(status_code=400, detail="Неверный формат времени") from None
     if parsed.tzinfo is None:
         #Клиент прислал локальное время без зоны. Считаем его UTC — иначе сравнение с
         #remind_at (тоже UTC) было бы сдвинуто на часовой пояс.

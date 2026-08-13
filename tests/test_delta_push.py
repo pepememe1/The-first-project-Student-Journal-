@@ -9,9 +9,9 @@ test_delta_push.py — push шлёт ДЕЛЬТУ, но не теряет пра
 """
 from datetime import datetime, timedelta, timezone
 
-import data_store
-import sync_engine
-from core import DBManager
+from data import data_store
+from sync import sync_engine
+from data.core import DBManager
 
 
 class FakeClient:
@@ -28,9 +28,7 @@ class FakeClient:
 
 
 def _reset_engine():
-    sync_engine._session_full_pull_done = False
-    sync_engine._session_full_push_done = False
-    sync_engine._push_cycles = 0
+    sync_engine.reset_session_state()
 
 
 def _add_lesson(lid: str, ts: str):

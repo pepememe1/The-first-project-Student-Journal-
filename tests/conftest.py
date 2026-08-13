@@ -24,7 +24,7 @@ os.environ["GRADEBOOK_APP_DIR"] = _DATA
 
 import pytest
 
-from core import DBManager, LOCAL_DB
+from data.core import DBManager, LOCAL_DB
 
 
 @pytest.fixture()
@@ -37,6 +37,6 @@ def fresh_db():
             pass
     DBManager.init()
     #Сбрасываем «первый полный pull сессии», чтобы тесты дельты не влияли друг на друга.
-    import sync_engine
-    sync_engine._session_full_pull_done = False
+    from sync import sync_engine
+    sync_engine.reset_session_state()
     yield

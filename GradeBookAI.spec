@@ -2,7 +2,7 @@
 # GradeBookAI.spec — сборка ДЕСКТОП-КЛИЕНТА в один .exe (onefile, без консоли).
 #
 # Особенности проекта, которые учтены:
-#  • Плоские импорты: код лежит в ui/ sync/ data/, но импортируется плоско
+#  • Плоские импорты: код лежит в desktop/ sync/ data/, но импортируется плоско
 #    (from core import ...) через _bootstrap.py. Даём эти папки в pathex И добавляем
 #    все их .py как hiddenimports (PyInstaller не видит sys.path, который правит
 #    _bootstrap на рантайме).
@@ -10,12 +10,12 @@
 #    в _MEIPASS (emotes по модуль-относительным путям, fonts/get_icon — пропатчены).
 #  • subjects.json НЕ бандлим (в subjects.py есть встроенный дефолт).
 #  • ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md, «один UI»): десктоп поднимает НАСТОЯЩЕЕ серверное
-#    приложение (server/app) у себя же на 127.0.0.1 (ui/local_api.py). Поэтому пакет
+#    приложение (server/app) у себя же на 127.0.0.1 (desktop/local_api.py). Поэтому пакет
 #    server/app и собранный web/dist бандлятся как ДАННЫЕ (сырые файлы, не через pyz) —
-#    ровно та же раскладка путей, что и в исходниках репозитория (ui/local_api.py и
+#    ровно та же раскладка путей, что и в исходниках репозитория (desktop/local_api.py и
 #    server/app/main.py ищут их относительно СВОЕГО расположения, см. ниже). Серверные
 #    Python-зависимости (fastapi/uvicorn/SQLAlchemy/jose/webauthn/httpx) — в hiddenimports:
-#    без них локальный сервер просто не поднимется (ui/local_api.py съест исключение и
+#    без них локальный сервер просто не поднимется (desktop/local_api.py съест исключение и
 #    десктоп тихо останется на нативных экранах — деградация, не крах, но фичи не будет).
 #  • Серверный ФОНОВЫЙ режим --run-server (server_control.py, «этот ПК как сервер для ЛВС
 #    колледжа») входит туда же: он использует ТОТ ЖЕ бандл server/app, просто с другим
@@ -34,11 +34,10 @@ def _flat_mods(d):
 
 
 hidden = []
-for d in ('ui', 'sync', 'data'):
+for d in ('desktop', 'sync', 'data'):
     hidden += _flat_mods(d)
 # корневые модули, которые тоже импортируются плоско/лениво
-hidden += ['grading', 'subjects', 'server_control', 'fonts', 'app_paths', '_bootstrap',
-           'main_window', 'log']
+hidden += ['grading', 'subjects', 'server_control', 'app_paths', 'log']
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
 # потребителем: напоминания в мессенджере (server/app/routers/messenger.py, §5.4).
 # Ни один клиентский .py его не импортирует — статический анализ PyInstaller (идёт от
@@ -50,7 +49,7 @@ hidden += ['reminder_parse']
 # server/app/webdata.py, который для сборщика — данные, а не код: без явного include
 # локальный сервер внутри программы не поднимется.
 hidden += ['dropout_risk']
-# sqlcipher3 — ШИФРОВАНИЕ локальной копии базы (ui/local_api.py). Модуль самодостаточный:
+# sqlcipher3 — ШИФРОВАНИЕ локальной копии базы (desktop/local_api.py). Модуль самодостаточный:
 # один .pyd со статически влинкованным SQLCipher, внешних DLL не тянет, поэтому вшивается
 # в exe как обычная зависимость — ПОЛЬЗОВАТЕЛЮ КАЧАТЬ НИЧЕГО НЕ НАДО. Импортируется
 # ЛЕНИВО внутри server/app/db.py (а тот лежит в datas сырыми файлами), поэтому статический
@@ -66,10 +65,10 @@ hidden += ['gostcrypto', 'gostcrypto.gostpbkdf', 'requests', 'cryptography',
 # reminder_parse выше, но со стандартной библиотекой: без явного include Nuitka-сборка
 # (см. build_nuitka.sh) падала на «No module named 'email.mime'» при первом запуске.
 hidden += collect_submodules('email')
-# QtWebEngine — встроенный веб-view онлайн-вкладок (мессенджер/модерация, ui/messenger_web.py).
-# Импортируется ЛЕНИВО внутри функции, поэтому PyInstaller его статикой не видит — добавляем
-# явно, чтобы хук PySide6 собрал Chromium (QtWebEngineProcess, resources, icudtl, локали).
-hidden += ['PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore']
+# ⚠️ QtWebEngine БОЛЬШЕ НЕ ВКЛЮЧАЕТСЯ. Окно рисует системный движок Edge (WebView2), а
+# Qt-оболочка убрана из проекта целиком (см. main.py) — Chromium внутри PySide6 стоил бы
+# ~150 МБ ради кода, которого больше нет. Списки исключений ниже оставлены как страховка:
+# случайный импорт Qt не должен снова раздуть сборку незаметно.
 # python-docx (Word-экспорт журнала/ведомости) — импортируется лениво (data/exports.py).
 # Пакет ставится как python-docx, а импортируется как `docx`; ему нужны его шаблоны
 # (docx/templates/*.docx), поэтому тянем и submodules, и data-файлы.
@@ -92,7 +91,7 @@ for folder in ('emotions', 'emotes', 'vector_assets', 'fonts'):
 for f in ('icon.ico', 'icon.png'):
     if os.path.isfile(os.path.join(ROOT, f)):
         datas.append((f, '.'))
-# server/app — СЫРЫМИ файлами (не через pyz): ui/local_api.py и server/app/main.py сами
+# server/app — СЫРЫМИ файлами (не через pyz): desktop/local_api.py и server/app/main.py сами
 # находят его через __file__-относительные пути ОТНОСИТЕЛЬНО РАСПАКОВАННОГО _MEIPASS
 # (та же раскладка, что в исходниках репозитория — server/ рядом с корнем). Нет папки на
 # машине сборки (свежий чекаут без server/) — просто пропускаем, фича молча не войдёт.
@@ -108,7 +107,7 @@ if os.path.isfile(os.path.join(ROOT, _web_dist, 'index.html')):
 
 a = Analysis(
     ['main.py'],
-    pathex=[ROOT, os.path.join(ROOT, 'ui'), os.path.join(ROOT, 'sync'),
+    pathex=[ROOT, os.path.join(ROOT, 'desktop'), os.path.join(ROOT, 'sync'),
             os.path.join(ROOT, 'data')],
     binaries=[],
     datas=datas,
@@ -121,26 +120,19 @@ a = Analysis(
     optimize=0,
 )
 
-# ── Обрезка QtWebEngine под лимит размера exe ─────────────────────────────────────────
-# Chromium тянет ~200 МБ сырыми. Убираем то, что конечному пользователю не нужно:
-#  • *.debug.pak / *.debug.bin — отладочные ресурсы (~82 МБ);
-#  • qtwebengine_devtools_resources — DevTools (F12), в проде не нужны (~10 МБ);
-#  • локали WebEngine, кроме ru/en (~38 МБ из 53 языков).
-# Сам Qt6WebEngineCore.dll (193 МБ) обязателен — его не трогаем (сжимается в onefile).
-def _keep_webengine(dest):
-    d = (dest or '').lower().replace('\\', '/')
-    if '.debug.' in d:
-        return False
-    if 'devtools_resources' in d:
-        return False
-    if 'qtwebengine_locales/' in d:
-        name = d.rsplit('/', 1)[-1]
-        return name.startswith(('ru', 'en'))
-    return True
-
-
-a.datas = [t for t in a.datas if _keep_webengine(t[0])]
-a.binaries = [t for t in a.binaries if _keep_webengine(t[0])]
+# ── Страховка: Qt не должен просочиться в сборку ──────────────────────────────────────
+# Здесь раньше стояла обрезка QtWebEngine (Chromium тянул ~200 МБ, и из него вырезались
+# отладочные ресурсы, DevTools и лишние локали). Теперь Qt в проекте нет вовсе — окно
+# рисует системный движок Edge, — поэтому обрезать нечего. Но молчаливое возвращение Qt
+# «одним импортом» уже удваивало размер .exe (49 → 135 МБ, §8.1), а замечают это только
+# при выкладке. Поэтому не фильтруем, а РОНЯЕМ сборку: пусть отказ будет громким.
+_qt = [t[0] for t in (a.binaries + a.datas)
+       if 'pyside6' in (t[0] or '').lower() or 'qt6' in (t[0] or '').lower()]
+if _qt:
+    raise SystemExit(
+        'В сборку попал Qt — значит где-то вернулся импорт PySide6. Это ~150 МБ и '
+        'откат к убранной оболочке. Найдите импорт, а не выключайте эту проверку.\n'
+        'Первые совпадения: ' + ', '.join(_qt[:5]))
 
 pyz = PYZ(a.pure)
 

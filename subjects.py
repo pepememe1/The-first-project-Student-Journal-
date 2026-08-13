@@ -123,7 +123,7 @@ def load_subjects() -> list:
     if not os.path.exists(SUBJECTS_FILE):
         save_subjects(sorted(_BUILTIN_SUBJECTS))
     try:
-        with open(SUBJECTS_FILE, "r", encoding="utf-8") as f:
+        with open(SUBJECTS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
             return sorted([str(s).strip() for s in data if str(s).strip()])

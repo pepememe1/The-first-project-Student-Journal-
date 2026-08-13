@@ -71,14 +71,14 @@ def test_full_year_mapping():
 
 def test_desktop_matches_reference_formula():
     """Реальная десктопная default_term совпадает с эталонной формулой на текущую дату."""
-    import terms
+    from data import terms
     now = datetime.now(timezone.utc)
     assert terms.default_term() == _term(now.year, now.month)
 
 
 def test_server_matches_desktop():
     """Сервер и десктоп дают одинаковый термин — иначе ключи term_grades разъедутся."""
-    import terms
+    from data import terms
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(root, "server", "app", "db.py")
     #server/app/db.py тянет пакетные импорты — грузить целиком тут дорого и хрупко,

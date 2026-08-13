@@ -121,7 +121,9 @@ def inspect_zip(blob: bytes) -> dict:
     try:
         z = zipfile.ZipFile(io.BytesIO(blob))
     except Exception:
-        raise ValueError("Это не ZIP-архив выгрузки.")
+        #from None — администратору нужна одна понятная строка, а не цепочка из
+        #внутренностей zipfile поверх неё.
+        raise ValueError("Это не ZIP-архив выгрузки.") from None
     names = set(z.namelist())
     manifest = {}
     if "manifest.json" in names:

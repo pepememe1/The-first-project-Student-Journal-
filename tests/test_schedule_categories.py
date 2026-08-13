@@ -22,7 +22,7 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
 def _load(name: str) -> str:
-    with open(os.path.join(FIXTURES, name), "r", encoding="utf-8") as f:
+    with open(os.path.join(FIXTURES, name), encoding="utf-8") as f:
         return f.read()
 
 

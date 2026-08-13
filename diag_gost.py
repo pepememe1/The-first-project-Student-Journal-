@@ -20,7 +20,6 @@ import sys
 import time
 import hashlib
 
-import _bootstrap  # noqa: F401  (раскладка путей ui/sync/data — до ленивого import security)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -38,7 +37,7 @@ def main():
     print(f"ГОСТ в hashlib:          {gost_algos or 'НЕТ (OpenSSL без gost-engine)'}")
 
     try:
-        import security
+        from data import security
     except Exception as e:
         print(f"\n[!] Не удалось импортировать security.py: {e}")
         return 1

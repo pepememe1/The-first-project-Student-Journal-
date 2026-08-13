@@ -27,6 +27,44 @@ from urllib.parse import urlparse
 
 import app_paths
 
+_log = log.get("settings")
+#Об одном и том же сбое хранилища сообщаем ОДИН раз за запуск: настройки читаются
+#десятки раз за цикл, и повтор превратил бы лог в шум, в котором ничего не видно.
+_reported: set[str] = set()
+
+
+def _kv_get(key: str, default):
+    """Прочитать локальную настройку. Сбой хранилища — НЕ тишина.
+
+    🔥 Раньше каждая настройка имела свою копию `try/except: return default`, и сбой
+    локального хранилища (залоченная база, битый ключ шифрования, нет прав на файл)
+    читался как «пользователь ничего не настраивал». Самое вредное следствие:
+    `get_api_url()` возвращал пустую строку, программа считала это ШТАТНЫМ офлайн-
+    режимом и молча не синхронизировалась — ни ошибки, ни строки в логе. Значение по
+    умолчанию всё равно возвращаем (уронить журнал из-за настройки нельзя), но след
+    теперь остаётся."""
+    try:
+        from data.data_store import local_get
+        return local_get(key, default)
+    except Exception as e:                          # noqa: BLE001
+        if key not in _reported:
+            _reported.add(key)
+            _log.warning("настройка «%s» не прочиталась (%s) — работаю со значением по "
+                         "умолчанию %r", key, e, default)
+        return default
+
+
+def _kv_set(key: str, value) -> bool:
+    """Записать локальную настройку. False — не сохранилось (и это видно в логе)."""
+    try:
+        from data.data_store import local_set
+        return bool(local_set(key, value))
+    except Exception as e:                          # noqa: BLE001
+        #Тут молчать опаснее, чем при чтении: человек ЧТО-ТО поменял в интерфейсе,
+        #увидел, что оно применилось, и после перезапуска обнаружил прежнее значение.
+        _log.warning("настройка «%s» не сохранилась: %s", key, e)
+        return False
+
 #Боевая сборка: адрес сервера ВСГУТУ, вшитый в .exe. Для боевой работы — https://
 #(ПДн по сети только в шифрованном канале, 152-ФЗ). Его можно переопределить в
 #программе (вкладка «Сервер и сайт» → «Адрес сайта и онлайн-базы»).
@@ -84,10 +122,10 @@ def _migrate_legacy_json():
         p = app_paths.app_file(_LEGACY_API_CONFIG_FILE)
         if not os.path.exists(p):
             return
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             url = ((json.load(f) or {}).get("api_url", "") or "").strip()
         if url:
-            from data_store import local_get, local_set
+            from data.data_store import local_get, local_set
             if not (local_get(_API_URL_KEY) or "").strip():
                 local_set(_API_URL_KEY, url)
         os.remove(p)   #файл-костыль больше не нужен
@@ -100,7 +138,7 @@ def get_api_url() -> str:
     Порядок: настройка в БД → переменная окружения (dev) → зашитый дефолт."""
     _migrate_legacy_json()
     try:
-        from data_store import local_get
+        from data.data_store import local_get
         url = (local_get(_API_URL_KEY) or "").strip()
         if url:
             return url
@@ -117,7 +155,7 @@ def set_api_url(url: str) -> bool:
     """Сохраняет адрес сервера В ПРОГРАММЕ (локальный ключ БД, не синхронизируется)."""
     url = (url or "").strip()
     try:
-        from data_store import local_set
+        from data.data_store import local_set
         ok = local_set(_API_URL_KEY, url)
         #Задали адрес — значит офлайн-режим больше не подразумевается, снимаем флаг,
         #чтобы стартовая проверка снова работала штатно, если адрес потом очистят.
@@ -135,19 +173,11 @@ _OFFLINE_ACK_KEY = "offline_ack"
 
 
 def get_offline_ack() -> bool:
-    try:
-        from data_store import local_get
-        return bool(local_get(_OFFLINE_ACK_KEY, False))
-    except Exception:
-        return False
+    return bool(_kv_get(_OFFLINE_ACK_KEY, False))
 
 
 def set_offline_ack(value: bool) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_OFFLINE_ACK_KEY, bool(value))
-    except Exception:
-        return False
+    return _kv_set(_OFFLINE_ACK_KEY, bool(value))
 
 
 #Признак ПК-хоста (на нём администратор поднимает сервер). Нужен, чтобы стартовое
@@ -159,19 +189,11 @@ _HOST_FLAG_KEY = "is_host"
 
 def is_host() -> bool:
     """True, если этот ПК уже выступал хостом (вход админа / запуск сервера)."""
-    try:
-        from data_store import local_get
-        return bool(local_get(_HOST_FLAG_KEY, False))
-    except Exception:
-        return False
+    return bool(_kv_get(_HOST_FLAG_KEY, False))
 
 
 def mark_host(value: bool = True) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_HOST_FLAG_KEY, bool(value))
-    except Exception:
-        return False
+    return _kv_set(_HOST_FLAG_KEY, bool(value))
 
 
 #Автозапуск сервера на ПК-хосте. Чтобы связь была ПОСТОЯННОЙ: хост поднимает свой
@@ -185,19 +207,11 @@ _HOST_AUTOSTART_KEY = "host_autostart"
 
 def host_autostart_enabled() -> bool:
     """True, если этот ПК-хост должен сам поднимать свой сервер при старте программы."""
-    try:
-        from data_store import local_get
-        return bool(local_get(_HOST_AUTOSTART_KEY, False))
-    except Exception:
-        return False
+    return bool(_kv_get(_HOST_AUTOSTART_KEY, False))
 
 
 def set_host_autostart(value: bool = True) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_HOST_AUTOSTART_KEY, bool(value))
-    except Exception:
-        return False
+    return _kv_set(_HOST_AUTOSTART_KEY, bool(value))
 
 
 #Отложенная отправка личных настроек (темы оформления). Если в момент «Сохранить»
@@ -211,30 +225,18 @@ _PENDING_PREFS_KEY = "pending_prefs"
 
 def get_pending_prefs(login: str):
     """Отложенные prefs именно для ЭТОГО логина (None — нет либо принадлежат другому)."""
-    try:
-        from data_store import local_get
-        rec = local_get(_PENDING_PREFS_KEY, None) or {}
-        if isinstance(rec, dict) and rec.get("login") == (login or ""):
-            return rec.get("prefs") or None
-    except Exception:
-        pass
+    rec = _kv_get(_PENDING_PREFS_KEY, None) or {}
+    if isinstance(rec, dict) and rec.get("login") == (login or ""):
+        return rec.get("prefs") or None
     return None
 
 
 def set_pending_prefs(login: str, prefs: dict) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_PENDING_PREFS_KEY, {"login": login or "", "prefs": prefs or {}})
-    except Exception:
-        return False
+    return _kv_set(_PENDING_PREFS_KEY, {"login": login or "", "prefs": prefs or {}})
 
 
 def clear_pending_prefs() -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_PENDING_PREFS_KEY, {})
-    except Exception:
-        return False
+    return _kv_set(_PENDING_PREFS_KEY, {})
 
 
 #Сохранённый токен доступа (JWT) для переиспользования между ЗАПУСКАМИ программы.
@@ -248,30 +250,18 @@ _TOKEN_KEY = "api_token"
 
 def get_saved_token(login: str) -> str:
     """Сохранённый JWT именно для ЭТОГО логина ('' — нет либо принадлежит другому)."""
-    try:
-        from data_store import local_get
-        rec = local_get(_TOKEN_KEY, None) or {}
-        if isinstance(rec, dict) and rec.get("login") == (login or ""):
-            return rec.get("token", "") or ""
-    except Exception:
-        pass
+    rec = _kv_get(_TOKEN_KEY, None) or {}
+    if isinstance(rec, dict) and rec.get("login") == (login or ""):
+        return rec.get("token", "") or ""
     return ""
 
 
 def set_saved_token(login: str, token: str) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_TOKEN_KEY, {"login": login or "", "token": token or ""})
-    except Exception:
-        return False
+    return _kv_set(_TOKEN_KEY, {"login": login or "", "token": token or ""})
 
 
 def clear_saved_token() -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_TOKEN_KEY, {})
-    except Exception:
-        return False
+    return _kv_set(_TOKEN_KEY, {})
 
 
 #Refresh-токен: долгоживущий, им ТИХО обновляют короткий access, не выкидывая
@@ -283,30 +273,18 @@ _REFRESH_TOKEN_KEY = "api_refresh_token"
 
 def get_saved_refresh_token(login: str) -> str:
     """Сохранённый refresh-токен для ЭТОГО логина ('' — нет либо принадлежит другому)."""
-    try:
-        from data_store import local_get
-        rec = local_get(_REFRESH_TOKEN_KEY, None) or {}
-        if isinstance(rec, dict) and rec.get("login") == (login or ""):
-            return rec.get("token", "") or ""
-    except Exception:
-        pass
+    rec = _kv_get(_REFRESH_TOKEN_KEY, None) or {}
+    if isinstance(rec, dict) and rec.get("login") == (login or ""):
+        return rec.get("token", "") or ""
     return ""
 
 
 def set_saved_refresh_token(login: str, token: str) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_REFRESH_TOKEN_KEY, {"login": login or "", "token": token or ""})
-    except Exception:
-        return False
+    return _kv_set(_REFRESH_TOKEN_KEY, {"login": login or "", "token": token or ""})
 
 
 def clear_saved_refresh_token() -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_REFRESH_TOKEN_KEY, {})
-    except Exception:
-        return False
+    return _kv_set(_REFRESH_TOKEN_KEY, {})
 
 
 #Сохранённая СЕССИЯ для персистентного входа: чтобы после закрытия программы при
@@ -320,7 +298,7 @@ _SESSION_KEY = "session"
 def get_saved_session() -> dict:
     """{'login':..., 'role':...} последнего входа ({} — нет сохранённой сессии)."""
     try:
-        from data_store import local_get
+        from data.data_store import local_get
         rec = local_get(_SESSION_KEY, None) or {}
         return rec if isinstance(rec, dict) and rec.get("login") else {}
     except Exception:
@@ -328,19 +306,11 @@ def get_saved_session() -> dict:
 
 
 def set_saved_session(login: str, role: str) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_SESSION_KEY, {"login": login or "", "role": role or ""})
-    except Exception:
-        return False
+    return _kv_set(_SESSION_KEY, {"login": login or "", "role": role or ""})
 
 
 def clear_saved_session() -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_SESSION_KEY, {})
-    except Exception:
-        return False
+    return _kv_set(_SESSION_KEY, {})
 
 
 #Идентификатор ЭТОГО устройства (ПК) для барьера подтверждения подключения. Сервер
@@ -354,7 +324,7 @@ _DEVICE_ID_KEY = "device_id"
 def get_device_id() -> str:
     """Стабильный идентификатор этого ПК (создаётся при первом обращении)."""
     try:
-        from data_store import local_get, local_set
+        from data.data_store import local_get, local_set
         dev = (local_get(_DEVICE_ID_KEY, "") or "").strip()
         if not dev:
             import uuid
@@ -375,16 +345,8 @@ _DEVICE_CONNECTED_KEY = "device_connected"
 
 
 def is_device_connected() -> bool:
-    try:
-        from data_store import local_get
-        return bool(local_get(_DEVICE_CONNECTED_KEY, False))
-    except Exception:
-        return False
+    return bool(_kv_get(_DEVICE_CONNECTED_KEY, False))
 
 
 def set_device_connected(value: bool = True) -> bool:
-    try:
-        from data_store import local_set
-        return local_set(_DEVICE_CONNECTED_KEY, bool(value))
-    except Exception:
-        return False
+    return _kv_set(_DEVICE_CONNECTED_KEY, bool(value))

@@ -9,8 +9,8 @@ import os
 
 import pytest
 
-import local_api
-import webview2_shell as wv
+from desktop import local_api
+from desktop import webview2_shell as wv
 
 
 def test_privacy_args_disable_microsoft_chatter():

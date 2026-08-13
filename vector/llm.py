@@ -16,7 +16,6 @@ llm.py — Провайдеры озвучки для Вектора.
 Фабрика get_provider(config) выбирает провайдера по настройке, с безопасным
 откатом на офлайн-шаблон при любой ошибке.
 """
-from typing import Optional
 
 from .prompts import build_voicing_prompt
 
@@ -202,7 +201,7 @@ class ServerProvider(LLMProvider):
     @staticmethod
     def _auth():
         try:
-            from sync_runner import current_auth
+            from sync.sync_runner import current_auth
             return current_auth()          #(url, token)
         except Exception:
             return ("", "")
@@ -216,12 +215,12 @@ class ServerProvider(LLMProvider):
         url, token = self._auth()
         if not (url and token):
             raise RuntimeError("нет адреса сервера или токена для серверной озвучки")
-        from sync_client import SyncClient
+        from sync.sync_client import SyncClient
         return SyncClient(url, token).voice(facts_text, role=role, question=user_question)
 
 
 #  Фабрика
-def get_provider(config: Optional[dict] = None) -> LLMProvider:
+def get_provider(config: dict | None = None) -> LLMProvider:
     """
     config (из настроек, хранится в kv_store['config']):
         {"vector_llm": "offline" | "gigachat" | "local",

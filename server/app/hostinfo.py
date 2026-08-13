@@ -2,7 +2,7 @@
 hostinfo.py — сведения о машине, на которой ЭТОТ сервер работает.
 
 Кто это читает. Раздел «Сервер» в кабинете администратора: на сайте — только просмотр,
-в программе — то же самое плюс управление по SSH (см. `ui/server_admin.py`, оно живёт
+в программе — то же самое плюс управление по SSH (см. `desktop/server_admin.py`, оно живёт
 ТОЛЬКО в локальном сервере и на боевой машине не существует).
 
 ━━ БЕЗ НОВЫХ ЗАВИСИМОСТЕЙ ━━
@@ -24,7 +24,7 @@ import time
 
 def _read(path: str) -> str:
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError:
         return ""

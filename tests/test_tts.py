@@ -34,7 +34,7 @@ def test_prefs_default_male_enabled():
 def test_prefs_roundtrip(monkeypatch):
     """set_voice/get_voice и флаг вкл/выкл ходят через локальные настройки ПК."""
     store = {}
-    import data_store
+    from data import data_store
     monkeypatch.setattr(data_store, "local_set", lambda k, v: store.__setitem__(k, v) or True)
     monkeypatch.setattr(data_store, "local_get", lambda k, d=None: store.get(k, d))
 

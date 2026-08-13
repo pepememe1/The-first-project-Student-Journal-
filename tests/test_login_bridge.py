@@ -22,7 +22,7 @@ import urllib.request
 
 import pytest
 
-import local_api
+from desktop import local_api
 
 
 #Успешный вход ЗАПОМИНАЕТ сессию: запускает синхронизацию и пишет логин в настройки

@@ -140,8 +140,18 @@ def get_data_key() -> bytes:
     if _DATA_KEY_CACHE is not None:
         return _DATA_KEY_CACHE
 
+    _log = log.get("security")
     path = _data_key_path()
+    #🔥 Существовал ли файл ключа. Отличать «ключа не было» (первый запуск, штатно) от
+    #«ключ был, но прочитать не вышло» ОБЯЗАТЕЛЬНО: во втором случае ниже создаётся НОВЫЙ
+    #ключ, и все ранее зашифрованные ПДн превращаются в нечитаемый мусор НАВСЕГДА.
+    #Раньше обе ветки молчали одинаково (`except Exception: pass`), и человек видел лишь
+    #«программа открылась, а данных нет» — без единой строки в логе, по которой это можно
+    #было бы понять. Ключ мы всё равно создаём (отказаться запускаться из-за битого файла
+    #у того, кто ещё ничего не шифровал, — хуже), но след теперь остаётся.
+    had_key_file = False
     if os.path.exists(path):
+        had_key_file = True
         try:
             with open(path, "rb") as f:
                 raw = f.read().strip()
@@ -154,19 +164,22 @@ def get_data_key() -> bytes:
             #тут же перешифровываем под DPAPI, чтобы открытого ключа не осталось.
             try:
                 legacy = base64.urlsafe_b64decode(raw)
-            except Exception:
+            except Exception as e:                  # noqa: BLE001
+                _log.warning("[Security] ключ %s не разбирается как base64 (%s) — "
+                             "проверю запасное расположение", path, e)
                 legacy = b""
             if len(legacy) == 32:
                 _save_data_key(legacy, path)
                 _DATA_KEY_CACHE = legacy
                 return legacy
-        except Exception:
-            pass
+        except Exception as e:                      # noqa: BLE001
+            _log.error("[Security] файл ключа %s не прочитался: %s", path, e)
 
     #Миграция со старого расположения (ключ переехал из Roaming в общую папку).
     #Переносим один раз; старый файл не трогаем — на случай отката.
     old = _legacy_data_key_path()
     if old != path and os.path.exists(old):
+        had_key_file = True
         try:
             with open(old, "rb") as f:
                 raw = f.read().strip()
@@ -174,14 +187,29 @@ def get_data_key() -> bytes:
             if len(key) != 32:
                 try:
                     key = base64.urlsafe_b64decode(raw)
-                except Exception:
+                except Exception as e:              # noqa: BLE001
+                    _log.warning("[Security] прежний ключ %s не разбирается: %s", old, e)
                     key = b""
             if len(key) == 32:
                 _save_data_key(key, path)
                 _DATA_KEY_CACHE = key
                 return key
-        except Exception:
-            pass
+        except Exception as e:                      # noqa: BLE001
+            _log.error("[Security] прежний файл ключа %s не прочитался: %s", old, e)
+
+    if had_key_file:
+        #Самое дорогое сообщение в этом файле. Ключ БЫЛ, но не подошёл — значит либо файл
+        #повреждён, либо DPAPI отказал (типично: профиль перенесли на другую машину или
+        #под другого пользователя Windows — DPAPI привязан к учётной записи). Данные,
+        #зашифрованные прежним ключом, этим запуском уже не расшифруются.
+        _log.error("[Security] файл ключа найден, но НЕ ПОДОШЁЛ — создаю новый. "
+                   "Ранее зашифрованные данные этим ключом больше не прочитаются. "
+                   "Обычная причина: копию программы перенесли на другую машину или под "
+                   "другого пользователя Windows (защита DPAPI привязана к учётной записи). "
+                   "Если данные важны — восстановите их из резервной копии вместе со "
+                   "старым файлом ключа: %s", path)
+    else:
+        _log.info("[Security] файла ключа нет — первый запуск, создаю новый: %s", path)
 
     key = secrets.token_bytes(32)
     _save_data_key(key, path)

@@ -46,7 +46,7 @@ def _ds():
 
     Лениво — чтобы импорт schedule.* не тянул БД на раннем старте и не падал, если
     хранилище ещё не готово (offline-first, «не падающий» модуль)."""
-    import data_store
+    from data import data_store
     return data_store
 
 
@@ -75,7 +75,7 @@ def load_cached(category: str = "college") -> Snapshot | None:
         return None
 
 
-def refresh_all(category: str = "college") -> "Snapshot | None":
+def refresh_all(category: str = "college") -> Snapshot | None:
     """Заново скачать ПОЛНЫЙ снимок расписания категории с портала ВСГУТУ и сохранить в кэш.
 
     Кнопка «Взять с ВСГУТУ (все группы)». Сетевая операция (десятки-сотни GET,

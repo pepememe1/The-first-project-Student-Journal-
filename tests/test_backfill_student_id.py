@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
                                 "tools"))
 
 import backfill_student_id_desktop as bf  # noqa: E402
-from core import DBManager  # noqa: E402
-from data_store import get_store  # noqa: E402
+from data.core import DBManager  # noqa: E402
+from data.data_store import get_store  # noqa: E402
 
 
 def _seed_students(rows):
@@ -117,7 +117,7 @@ def test_unknown_student_reported_with_reason(fresh_db):
 
     text, _written = bf.run(apply=True)
     assert "Нет Такого" in text
-    import student_link
+    from data import student_link
     assert student_link.REASON_NOT_FOUND in text
 
 

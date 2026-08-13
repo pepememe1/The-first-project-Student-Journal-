@@ -6,8 +6,8 @@ test_subjects_visibility.py — Предмет с реальными занят�
 реально существующие занятия. Предмет, заведённый преподавателем вручную (и отсутствующий
 в портале), становился невидим студенту вместе с уже выставленными оценками.
 """
-from core import GradeBook, DBManager
-from utils import get_subjects_for_group
+from data.core import GradeBook, DBManager
+from data.utils import get_subjects_for_group
 
 
 def test_subject_with_lessons_is_visible(fresh_db):

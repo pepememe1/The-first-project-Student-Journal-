@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 backfill_student_id_desktop.py — ЭТАП 2 миграции, сторона ДЕСКТОПА (ручной прогон).
 
@@ -25,10 +24,9 @@ from collections import defaultdict
 from contextlib import closing
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import _bootstrap  # noqa: F401,E402  — кладёт ui/ sync/ data/ в sys.path
 
-import student_link as SL  # noqa: E402
-from core import DBManager, LOCAL_DB  # noqa: E402
+from data import student_link as SL  # noqa: E402
+from data.core import DBManager, LOCAL_DB  # noqa: E402
 
 
 def _report(lines: list, title: str, scanned: list) -> list:

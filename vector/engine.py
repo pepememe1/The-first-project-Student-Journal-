@@ -11,7 +11,6 @@ engine.py — Оркестратор Вектора.
 import sqlite3
 import log
 from dataclasses import dataclass
-from typing import List, Optional
 
 from . import intents
 from .intents import VectorScope, Facts
@@ -26,11 +25,11 @@ class VectorResponse:
     text: str
     mood: str = "neutral"            #happy / neutral / sad
     intent: str = "help"
-    facts: Optional[Facts] = None
+    facts: Facts | None = None
 
 
 class VectorEngine:
-    def __init__(self, scope: VectorScope, llm: Optional[LLMProvider] = None):
+    def __init__(self, scope: VectorScope, llm: LLMProvider | None = None):
         self.scope = scope
         self.llm = llm or OfflineTemplateProvider()
         self._mood = "neutral"
@@ -39,7 +38,7 @@ class VectorEngine:
         self._base_subject = scope.subject
 
     #известные фамилии (для классификатора и анонимайзера)
-    def _known_surnames(self) -> List[str]:
+    def _known_surnames(self) -> list[str]:
         try:
             conn = sqlite3.connect(self.scope.db_path)
             cur = conn.cursor()
@@ -51,7 +50,7 @@ class VectorEngine:
         except Exception:
             return []
 
-    def _known_subjects(self) -> List[str]:
+    def _known_subjects(self) -> list[str]:
         """Предметы занятий группы — чтобы vector_nlu распознал «оценки по <предмет>»."""
         try:
             conn = sqlite3.connect(self.scope.db_path)
@@ -86,7 +85,7 @@ class VectorEngine:
         #В чистом офлайне free_chat честно подскажет, что умеет Вектор.
         if intent == "unknown":
             q_for_llm = question
-            anon: Optional[Anonymizer] = None
+            anon: Anonymizer | None = None
             if getattr(self.llm, "name", "offline") in ("gigachat", "local") and surnames:
                 anon = Anonymizer()
                 q_for_llm = anon.anonymize_text(question, surnames)
@@ -134,7 +133,7 @@ class VectorEngine:
 
         #озвучка. Для облачных провайдеров — сначала обезличиваем.
         facts_for_llm = facts.facts_text
-        anon: Optional[Anonymizer] = None
+        anon: Anonymizer | None = None
         if getattr(self.llm, "name", "offline") in ("gigachat", "local", "server") and facts.names:
             anon = Anonymizer()
             facts_for_llm = anon.anonymize_text(facts.facts_text, facts.names)
@@ -159,7 +158,7 @@ class VectorEngine:
                               intent=intent, facts=facts)
 
     #проактивные карточки (для teacher/admin дашборда)
-    def insights(self) -> List[InsightCard]:
+    def insights(self) -> list[InsightCard]:
         return compute_insights(self.scope)
 
     def greeting(self) -> str:

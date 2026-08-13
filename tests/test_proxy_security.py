@@ -14,7 +14,7 @@ test_proxy_security.py — прокси онлайн-подсистем не д�
 """
 import pytest
 
-import local_api
+from desktop import local_api
 
 
 @pytest.fixture(autouse=True)
@@ -33,28 +33,28 @@ def _ok(auth: str) -> bool:
 
 
 def test_no_token_is_rejected(monkeypatch):
-    monkeypatch.setattr("sync_runner.current_login", lambda: "ivanov")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "ivanov")
     assert _ok("") is False
     assert _ok("Bearer ") is False
 
 
 def test_garbage_token_is_rejected(monkeypatch):
     """Подпись обязана проверяться: без неё «токен» подделывается текстовым редактором."""
-    monkeypatch.setattr("sync_runner.current_login", lambda: "ivanov")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "ivanov")
     assert _ok("Bearer garbage.token.here") is False
 
 
 def test_token_of_another_user_is_rejected(monkeypatch):
     """Токен ПРОШЛОГО пользователя не должен открывать переписку нового — на общем
     компьютере колледжа это самый вероятный сценарий злоупотребления."""
-    monkeypatch.setattr("sync_runner.current_login", lambda: "ivanov")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "ivanov")
     other, _ = local_api.issue_local_session("petrov", "student")
     assert other, "тесту нужен настоящий подписанный токен"
     assert _ok(f"Bearer {other}") is False
 
 
 def test_own_token_is_accepted(monkeypatch):
-    monkeypatch.setattr("sync_runner.current_login", lambda: "ivanov")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "ivanov")
     own, _ = local_api.issue_local_session("ivanov", "student")
     assert _ok(f"Bearer {own}") is True
 
@@ -67,14 +67,14 @@ def _no_saved_session(monkeypatch):
         def get_saved_session(self):
             return {}
 
-    monkeypatch.setitem(sys.modules, "app_settings", _Empty())
+    monkeypatch.setattr("data.app_settings", _Empty())
 
 
 def test_without_any_session_nothing_passes(monkeypatch):
     """Вход не выполнялся ВООБЩЕ — прокси закрыт целиком, даже с формально верным
     токеном: подставлять боевые права некому."""
     own, _ = local_api.issue_local_session("ivanov", "student")
-    monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
     _no_saved_session(monkeypatch)
     assert _ok(f"Bearer {own}") is False
 
@@ -92,8 +92,8 @@ def test_saved_session_passes_on_cold_start(monkeypatch):
             return {"login": "ivanov", "role": "student"}
 
     own, _ = local_api.issue_local_session("ivanov", "student")
-    monkeypatch.setattr("sync_runner.current_login", lambda: "")
-    monkeypatch.setitem(sys.modules, "app_settings", _Saved())
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("data.app_settings", _Saved())
     assert _ok(f"Bearer {own}") is True
     #Строгость не упала: чужой логин не проходит и по сохранённой сессии.
     other, _ = local_api.issue_local_session("petrov", "student")

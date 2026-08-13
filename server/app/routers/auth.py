@@ -16,7 +16,7 @@ from ..models import User, AuthSession
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import (hash_password, verify_password, create_token_full,
                         decode_token)
-from ..config import JWT_TTL_MIN, issue_ttl_min, session_ttl_min
+from ..config import issue_ttl_min, session_ttl_min
 from .. import throttle, events, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])

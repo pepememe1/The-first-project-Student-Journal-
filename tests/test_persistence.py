@@ -2,7 +2,7 @@
 test_persistence.py — Персистентность по действию: выставленная оценка попадает на
 диск СРАЗУ и переживает перезагрузку журнала (раньше жила только в памяти до «Сохранить»).
 """
-from core import DBManager, GradeBook, Student
+from data.core import DBManager, GradeBook, Student
 
 G, S = "ИС-21", "Математика"
 

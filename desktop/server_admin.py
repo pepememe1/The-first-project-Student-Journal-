@@ -3,7 +3,7 @@ server_admin.py — управление боевым сервером ИЗ ПР
 
 ━━ ГЛАВНОЕ ПРО ГРАНИЦУ ━━
 Этот модуль подключается ТОЛЬКО к локальному серверу программы (127.0.0.1, см.
-`ui/local_api.py`). На боевой машине его нет физически — там работает
+`desktop/local_api.py`). На боевой машине его нет физически — там работает
 `server/app/routers/serverinfo.py`, который умеет исключительно СМОТРЕТЬ.
 
 Разделение проходит по наличию кода, а не по проверке роли, и это не перестраховка:
@@ -72,7 +72,7 @@ _SSH_OPTS = ["-o", "BatchMode=yes",
 # ── Хранилище списка серверов ────────────────────────────────────────────────────────
 def _load() -> list:
     try:
-        import data_store
+        from data import data_store
         raw = data_store.local_get(_KEY, "[]")
         items = json.loads(raw) if isinstance(raw, str) else (raw or [])
         return items if isinstance(items, list) else []
@@ -83,7 +83,7 @@ def _load() -> list:
 
 def _save(items: list) -> bool:
     try:
-        import data_store
+        from data import data_store
         return bool(data_store.local_set(_KEY, json.dumps(items, ensure_ascii=False)))
     except Exception as e:      # noqa: BLE001
         _LOG.warning(f"[server-admin] список серверов не сохранён: {e}")
@@ -134,7 +134,7 @@ def suggested_host() -> str:
     Берём тот же адрес, на который программа и так синхронизируется: это ровно та
     машина, состояние которой человек хочет увидеть."""
     try:
-        import app_settings
+        from data import app_settings
         from urllib.parse import urlparse
         return (urlparse(app_settings.get_api_url() or "").hostname or "").strip()
     except Exception:      # noqa: BLE001
@@ -151,7 +151,7 @@ def _protect(plain: str) -> str:
     if not plain:
         return ""
     import base64
-    import security
+    from data import security
     return base64.b64encode(security.os_protect(plain.encode("utf-8"))).decode("ascii")
 
 
@@ -162,7 +162,7 @@ def _password(server: dict) -> str:
         return ""
     try:
         import base64
-        import security
+        from data import security
         return security.os_unprotect(base64.b64decode(blob)).decode("utf-8", "replace")
     except Exception:      # noqa: BLE001
         _LOG.warning("[server-admin] сохранённый пароль не расшифровался")
@@ -565,7 +565,7 @@ def install_key(server: dict) -> dict:
     for path in candidates:
         if os.path.isfile(path):
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                with open(path, encoding="utf-8", errors="replace") as f:
                     pub = f.read().strip()
                 break
             except OSError:
@@ -680,7 +680,7 @@ def migrate_step(step_id: str, source: dict, target: dict) -> dict:
         #боевая машина умела заходить на другую. Такой ключ потом никто не уберёт.
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), f"gb-migrate-{uuid.uuid4().hex[:8]}.tar.gz")
-        pull = _scp(source, f"/root/gb-backups/", tmp, pull=True, latest="premigrate-*.tar.gz")
+        pull = _scp(source, "/root/gb-backups/", tmp, pull=True, latest="premigrate-*.tar.gz")
         if not pull["ok"]:
             return {"ok": False, "log": pull["log"],
                     "hint": "Не удалось забрать архив со старого сервера."}

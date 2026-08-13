@@ -154,7 +154,7 @@ def _local_db_key() -> str:
         import binascii
         import os as _os
         import app_paths
-        import security
+        from data import security
         path = app_paths.data_file("local_app.key")
         if _os.path.exists(path):
             with open(path, "rb") as f:
@@ -431,8 +431,8 @@ class LocalAPI:
                 #в локальном сервере программы. На бою этого кода нет вовсе — там
                 #работает `routers/serverinfo.py`, который умеет только смотреть.
                 #Граница проходит по наличию кода, а не по проверке роли: роль можно
-                #обойти, отсутствующий код — нельзя (см. шапку ui/server_admin.py).
-                import server_admin
+                #обойти, отсутствующий код — нельзя (см. шапку desktop/server_admin.py).
+                from desktop import server_admin
                 server_admin.install(app, _local_caller_ok)
             except Exception as e:
                 _LOG.warning(f"[local-api] надстройки локального сервера не встали: {e}")
@@ -523,14 +523,14 @@ def _session_login() -> str:
     Доверять сохранённой сессии здесь не новость: `webview2_app._start_url` брал логин
     ровно оттуда с самого начала — расходились только эти два места."""
     try:
-        from sync_runner import current_login
+        from sync.sync_runner import current_login
         live = current_login()
         if live:
             return live
     except Exception:      # noqa: BLE001
         pass
     try:
-        import app_settings
+        from data import app_settings
         return ((app_settings.get_saved_session() or {}).get("login") or "").strip()
     except Exception:      # noqa: BLE001
         return ""
@@ -732,7 +732,7 @@ def _remote_auth():
     провайдера вместо того, чтобы просто войти заново."""
     base = ""
     try:
-        from sync_runner import fresh_auth
+        from sync.sync_runner import fresh_auth
         base, token = fresh_auth()
         base = (base or "").rstrip("/")
         if token:
@@ -741,7 +741,7 @@ def _remote_auth():
         pass
 
     try:
-        import app_settings
+        from data import app_settings
         base = base or (app_settings.get_api_url() or "").rstrip("/")
         if not base:
             return "", "", "no-url"
@@ -749,14 +749,14 @@ def _remote_auth():
         if not login:
             return base, "", "no-session"
         token = app_settings.get_saved_token(login) or ""
-        from sync_client import is_token_expired
+        from sync.sync_client import is_token_expired
         if token and not is_token_expired(token):
             return base, token, ""
 
         refresh = app_settings.get_saved_refresh_token(login) or ""
         if not refresh:
             return base, "", "expired"
-        from sync_client import SyncClient
+        from sync.sync_client import SyncClient
         data = SyncClient(base, token, refresh).refresh() or {}
         fresh = (data.get("access_token") or "").strip()
         if not fresh:
@@ -909,7 +909,7 @@ def install_desktop_bootstrap(app) -> None:
         login = _session_login()
         role = ""
         try:
-            import app_settings
+            from data import app_settings
             role = (app_settings.get_saved_session() or {}).get("role", "") or ""
         except Exception:
             pass
@@ -925,14 +925,11 @@ def install_desktop_bootstrap(app) -> None:
             #гарантия перенесена сюда — теперь она выполняется по построению, для всех.
             switch_user_db(login)
             access, refresh = issue_local_session(login, role or "student")
-        theme = ""
-        try:
-            import themes
-            spec = themes.active_spec()
-            if spec:
-                theme = _json.dumps(spec)
-        except Exception:
-            pass
+        #Тему В ОКНО НЕ ПЕРЕДАЁМ. Раньше здесь читался `themes.active_spec()` — состояние
+        #НАТИВНОЙ Qt-оболочки, которую заполнял только Qt-путь. В окне на движке Edge
+        #`apply_spec()` не зовётся никогда, то есть спек всегда пуст и ветка была тихим
+        #no-op, зато держала живой код на Qt-модуле. Хозяин темы один — сама SPA
+        #(`AppShell.vue`, chromeless), она берёт её из своих настроек.
         user = _json.dumps({"login": login, "role": role, "name": login})
         #⚠️ dumps ДВАЖДЫ для gb.user: внутренний даёт JSON, внешний — строковый литерал JS.
         #С одним dumps браузер сохранял «[object Object]», разбор падал, и SPA показывала
@@ -946,8 +943,6 @@ def install_desktop_bootstrap(app) -> None:
             "localStorage.setItem('gb.api_base','');",
             f"localStorage.setItem('gb.embed',{_json.dumps(embed)});",
         ]
-        if theme:
-            parts.append(f"localStorage.setItem('gb.theme',{_json.dumps(theme)});")
         parts.append(f"location.replace({_json.dumps(route or '/')});")
         return HTMLResponse(
             "<!doctype html><meta charset=utf-8><title>GradeBookAI</title>"
@@ -1082,7 +1077,7 @@ def _try_local_login(login: str, password: str):
 def _try_remote_login(login: str, password: str):
     """Войти на БОЕВОМ сервере. None — не вышло (нет сети или неверные данные)."""
     try:
-        import app_settings
+        from data import app_settings
         base = (app_settings.get_api_url() or "").rstrip("/")
     except Exception:
         base = ""
@@ -1106,12 +1101,12 @@ def _remember_session(login: str, password: str, role: str) -> None:
     Пароль остаётся В ПАМЯТИ процесса (инвариант §7: на диск он не пишется). Он нужен
     синхронизации, чтобы переполучать токен: боевой JWT живёт жёстко 5 часов."""
     try:
-        from sync_runner import start as _sync_start
+        from sync.sync_runner import start as _sync_start
         _sync_start(login, password, role or "student")
     except Exception as e:
         _LOG.warning(f"[login] синхронизация не запустилась: {e}")
     try:
-        import app_settings
+        from data import app_settings
         app_settings.set_saved_session(login, role or "student")
     except Exception:
         pass
@@ -1121,7 +1116,7 @@ def _wait_for_mirror(login: str, seconds: int = 12) -> bool:
     """Дождаться, пока человек появится в локальной копии (после первого входа)."""
     import time
     try:
-        from local_mirror import mirror_once
+        from desktop.local_mirror import mirror_once
         mirror_once()
     except Exception:
         pass

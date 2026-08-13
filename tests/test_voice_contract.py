@@ -16,7 +16,7 @@ import tempfile
 
 import pytest
 
-import local_api
+from desktop import local_api
 
 
 @pytest.fixture(scope="module")

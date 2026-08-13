@@ -205,7 +205,7 @@ def build_xlsx(groups_data: list, term: dict) -> bytes:
 
 def build_docx(groups_data: list, term: dict) -> bytes:
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.section import WD_ORIENT
 
@@ -219,7 +219,7 @@ def build_docx(groups_data: list, term: dict) -> bytes:
         if gi:
             doc.add_page_break()
         term_word = "осенний" if term["semester"] == 1 else "весенний"
-        h = doc.add_heading(f'Успеваемость группы {gd["group"]}', level=1)
+        doc.add_heading(f'Успеваемость группы {gd["group"]}', level=1)
         sub = doc.add_paragraph(f'{term["year"]} · {term_word} семестр · '
                                 f'студентов: {gd["students"]} · '
                                 f'средний по группе: {_fmt(gd["group_avg"])}')

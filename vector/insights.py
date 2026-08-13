@@ -9,7 +9,6 @@ insights.py — Проактивные карточки-инсайты.
 Каждая карточка возвращается структурно — отрисовку (цвет/иконку) делает widget.
 """
 from dataclasses import dataclass
-from typing import List
 
 from . import intents
 from .intents import VectorScope
@@ -35,9 +34,9 @@ def mood_from_average(avg: float) -> str:
     return "sad"
 
 
-def compute_insights(scope: VectorScope) -> List[InsightCard]:
+def compute_insights(scope: VectorScope) -> list[InsightCard]:
     """Набор карточек для роли teacher/admin по текущей группе(+предмету)."""
-    cards: List[InsightCard] = []
+    cards: list[InsightCard] = []
 
     stats = intents.intent_group_stats(scope)
     d = stats.data

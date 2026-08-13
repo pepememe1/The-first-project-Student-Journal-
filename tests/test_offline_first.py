@@ -17,7 +17,7 @@ import urllib.request
 
 import pytest
 
-import local_api
+from desktop import local_api
 
 
 @pytest.fixture(scope="module")
@@ -76,14 +76,14 @@ def _get(url, token):
 def test_no_network_is_really_simulated(monkeypatch):
     """Страховка от самообмана: если тест случайно получит доступ к бою, он проверит не то,
     что заявлено. Поэтому сеть гасим явно и убеждаемся, что её действительно нет."""
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("", ""))
-    from sync_runner import fresh_auth
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("", ""))
+    from sync.sync_runner import fresh_auth
     assert fresh_auth() == ("", ""), "тест обязан работать без боевого сервера"
 
 
 def test_journal_opens_without_network(offline_api, monkeypatch):
     """Оценки и предметы приходят из ЛОКАЛЬНОЙ копии — сеть не нужна вовсе."""
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("", ""))
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("", ""))
     _seed()
     token, _ = local_api.issue_local_session("offstud", "student")
     assert token, "сессия для локального сервера обязана выпускаться и офлайн"
@@ -109,8 +109,8 @@ def test_spa_itself_is_served_offline(offline_api):
 def test_mirror_failure_offline_is_not_fatal(monkeypatch):
     """Нет сети — зеркало просто не обновится. Оно НЕ должно ни падать, ни чистить копию:
     уже скачанные данные и есть offline-first."""
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("", ""))
-    import local_mirror
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("", ""))
+    from desktop import local_mirror
     res = local_mirror.mirror_once()
     assert res["ok"] is False and res["error"], "офлайн-зеркало обязано вернуть причину"
     from app.db import SessionLocal

@@ -8,7 +8,7 @@ import pytest
 
 from schedule import overrides as ov
 from schedule.model import GroupSchedule, Lesson
-import sync_engine as se
+from sync import sync_engine as se
 
 
 @pytest.fixture(autouse=True)

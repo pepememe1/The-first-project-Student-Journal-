@@ -25,7 +25,6 @@ voice_command.py — ДЕТЕРМИНИРОВАННЫЙ разбор голос�
 import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import List, Optional, Tuple
 
 #Словесные оценки → цифра. Много форм (Whisper пишет и «пять», и «пятёрку», и падежи).
 _WORD_GRADE = {
@@ -34,8 +33,7 @@ _WORD_GRADE = {
           "неудовлетворительная", "неудовлетворительный", "неуды", "неудовл"},
     "3": {"три", "тройку", "тройка", "тройки", "троечку", "троек", "трояк", "тройкой",
           "троечка", "трешку", "трёшку", "трешка", "трёшка", "удовлетворительно",
-          "удов", "удовлетворительная", "удовлетворительный", "удовлетвор", "удовлет",
-          "удовлетворительно"},
+          "удов", "удовлетворительная", "удовлетворительный", "удовлетвор", "удовлет"},
     "4": {"четыре", "четверку", "четверка", "четверки", "четвёрочку", "четверочку",
           "четвёрку", "четверок", "четвёркой", "четверкой", "четвёрочка", "четвёра",
           "четвера", "четвёру", "четверу", "хорошо", "хор", "хорошая", "хороший", "хорошист", "хорошистка"},
@@ -99,8 +97,8 @@ class ParsedCommand:
     is_question: bool = False  #True — это вопрос, не команда записи → в Q&A Вектора
     action: str = ""          #grade | present | absent_n | absent_b | absent_o
     value: str = ""           #«5» | «✓» | «Н» | «Б» | «О»
-    student: Optional[Tuple[str, str]] = None   #(фамилия, имя)
-    candidates: List[Tuple[str, str]] = field(default_factory=list)
+    student: tuple[str, str] | None = None   #(фамилия, имя)
+    candidates: list[tuple[str, str]] = field(default_factory=list)
     lesson_id: str = ""
     lesson_label: str = ""
     confidence: float = 0.0   #0..1, нечёткое совпадение фамилии
@@ -152,7 +150,7 @@ def _similar(a: str, b: str) -> float:
     return max(direct, SequenceMatcher(None, pa, pb).ratio())
 
 
-def _grade_values(text: str) -> List[str]:
+def _grade_values(text: str) -> list[str]:
     """Все РАЗНЫЕ оценки, упомянутые в тексте (и цифрами, и словами). Порядок сохраняем."""
     t = _norm(text)
     found = []
@@ -186,7 +184,7 @@ def _has_present(text: str) -> bool:
     return any(k in t for k in _PRESENT)
 
 
-def _match_students(text: str, roster: List[Tuple[str, str]],
+def _match_students(text: str, roster: list[tuple[str, str]],
                     threshold: float = 0.74):
     """Возвращает (student|None, candidates, confidence, multi_flag).
 
@@ -239,8 +237,8 @@ def _second_surname_score(scored) -> float:
     return 0.0
 
 
-def parse(text: str, roster: List[Tuple[str, str]],
-          today_lessons: List[dict]) -> ParsedCommand:
+def parse(text: str, roster: list[tuple[str, str]],
+          today_lessons: list[dict]) -> ParsedCommand:
     """Разбирает команду преподавателя. roster — [(фамилия, имя), ...] ТЕКУЩЕЙ группы;
     today_lessons — занятия текущих группы+предмета за сегодня: [{"id","label"}].
 
@@ -356,7 +354,7 @@ _BURYAT_HINT = (
 )
 
 
-def stt_context(roster: List[Tuple[str, str]]) -> str:
+def stt_context(roster: list[tuple[str, str]]) -> str:
     """Подсказка для Whisper (initial_prompt): реальные ФИО + ключевые слова темы + опоры
     бурятской фонетики. Смещает распознавание к настоящим фамилиям и терминам журнала —
     повышает точность в шуме и на редких (в т.ч. бурятских) именах.
@@ -441,20 +439,20 @@ class LessonPlan:
 class BatchResult:
     kind: str = "error"       #grades | lesson | question | error
     is_question: bool = False
-    items: List[WriteItem] = field(default_factory=list)   #для kind=grades
-    lesson: Optional[LessonPlan] = None                    #для kind=lesson
+    items: list[WriteItem] = field(default_factory=list)   #для kind=grades
+    lesson: LessonPlan | None = None                    #для kind=lesson
     lesson_id: str = ""
     lesson_label: str = ""
     error: str = ""
-    warnings: List[str] = field(default_factory=list)      #мягкие проблемы (кого пропустили)
+    warnings: list[str] = field(default_factory=list)      #мягкие проблемы (кого пропустили)
     heard: str = ""
 
 
-def _norm_words(text: str) -> List[str]:
+def _norm_words(text: str) -> list[str]:
     return [w for w in _norm(text).split() if w]
 
 
-def _grade_at_word(w: str) -> Optional[str]:
+def _grade_at_word(w: str) -> str | None:
     """Оценка 2–5 из одного слова (цифрой или словом), иначе None. Вне шкалы → None."""
     if w in ("2", "3", "4", "5"):
         return w
@@ -462,7 +460,7 @@ def _grade_at_word(w: str) -> Optional[str]:
     return d if d in ("2", "3", "4", "5") else None
 
 
-def _first_n(text: str) -> Optional[int]:
+def _first_n(text: str) -> int | None:
     """Число из «первые N / первым N / N человек по списку / по алфавиту». None — не про N."""
     t = _norm(text)
     if not any(k in t for k in ("перв", "по списку", "по алфавит", "сначала", "первых")):
@@ -478,7 +476,7 @@ def _first_n(text: str) -> Optional[int]:
     return None
 
 
-def _match_firstname_unique(word: str, roster: List[Tuple[str, str]],
+def _match_firstname_unique(word: str, roster: list[tuple[str, str]],
                             threshold: float = 0.80):
     """Уникальное совпадение по ИМЕНИ (для обращения «Бато не пришёл», «Арюне пять»).
     Возвращает студента ТОЛЬКО если ровно один по имени и он заметно лучше остальных —
@@ -495,7 +493,7 @@ def _match_firstname_unique(word: str, roster: List[Tuple[str, str]],
     return (scored[0][1], scored[0][2])
 
 
-def _resolve_word_student(words: List[str], i: int, roster: List[Tuple[str, str]]):
+def _resolve_word_student(words: list[str], i: int, roster: list[tuple[str, str]]):
     """Кого назвали словом words[i] (+ возможно соседнее имя). Возвращает
     (student|None, candidates, matched_len). matched_len — сколько слов «съедено» (1 или 2)."""
     w = words[i]
@@ -543,7 +541,7 @@ def _lesson_from_text(heard: str) -> LessonPlan:
     return LessonPlan(type=ltype, topic=topic, number=number)
 
 
-def _assign_lesson(base: BatchResult, today_lessons: List[dict]) -> bool:
+def _assign_lesson(base: BatchResult, today_lessons: list[dict]) -> bool:
     """Проставляет base.lesson_id/label по занятию за сегодня. False + base.error — если
     занятий нет или их несколько (нужно уточнить)."""
     if not today_lessons:
@@ -558,8 +556,8 @@ def _assign_lesson(base: BatchResult, today_lessons: List[dict]) -> bool:
     return True
 
 
-def parse_batch(text: str, roster: List[Tuple[str, str]],
-                today_lessons: List[dict]) -> BatchResult:
+def parse_batch(text: str, roster: list[tuple[str, str]],
+                today_lessons: list[dict]) -> BatchResult:
     """Разбирает команду преподавателя, В ТОМ ЧИСЛЕ пакетную:
       • вопрос                         → kind=question (в обычный Q&A);
       • «создай сегодня лекцию …»       → kind=lesson;

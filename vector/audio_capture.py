@@ -11,7 +11,6 @@ Recorder(device=...). На вебе/телефоне захват делает �
 """
 import threading
 import log
-from typing import List, Optional, Tuple
 
 SAMPLE_RATE = 16000        #родная частота Whisper — пишем сразу в ней
 _CHANNELS = 1
@@ -26,7 +25,7 @@ def is_available() -> bool:
         return False
 
 
-def list_input_devices() -> List[Tuple[int, str]]:
+def list_input_devices() -> list[tuple[int, str]]:
     """Список микрофонов: [(device_index, name), ...]. Пусто, если пакета нет."""
     if not is_available():
         return []
@@ -46,7 +45,7 @@ class Recorder:
     16 кГц). Поток аудио складываем в буфер; всё потокобезопасно (callback идёт из потока
     PortAudio). Ограничение длительности — предохранитель от бесконечной записи."""
 
-    def __init__(self, device: Optional[int] = None, max_seconds: int = 60):
+    def __init__(self, device: int | None = None, max_seconds: int = 60):
         self.device = device
         self.max_seconds = max_seconds
         self._frames = []

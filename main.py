@@ -1,14 +1,20 @@
 """
-main.py — единая точка входа GradeBookAI (Release 3.0).
-Модульная архитектура: main_window.MainAppWindow.
+main.py — единая точка входа GradeBookAI.
+
+Окно рисует системный движок Edge (WebView2) поверх ЛОКАЛЬНОГО серверного приложения
+на 127.0.0.1 — того же `server/app`, что работает на бою (§11 «один интерфейс»).
+
+⚠️ Здесь БОЛЬШЕ НЕТ `import _bootstrap`. Тот модуль подкладывал `desktop/ sync/ data/` в
+sys.path, чтобы работали плоские импорты (`from core import ...`) — приём рабочий, но
+у него три цены, и все три мы платили: порядок импортов становился значимым (забыл
+строку в новой точке входа — ImportError на ровном месте), сборщики .exe не видят
+sys.path и требовали перечислять модули руками, а один и тот же файл, импортированный
+и как `core`, и как `data.core`, давал ДВА разных объекта модуля со своим состоянием.
+Теперь `data/`, `sync/` и `ui/` — обычные пакеты, импорты явные.
 """
 import sys
 import log
 import os
-
-#Раскладка по папкам ui/ sync/ data/ — выполнить ДО любого клиентского импорта,
-#иначе плоские импорты (from main_window import ...) не найдут перенесённые модули.
-import _bootstrap  # noqa: F401,E402
 
 #Безопасный вывод. В собранном .exe (windowed) sys.stdout может быть None, а в
 #консоли с кодировкой cp1251 эмодзи (✅, ℹ️ и т.п.) в print() роняют программу
@@ -49,55 +55,17 @@ def _run_server_entrypoint():
     uvicorn.run("app.main:app", host="0.0.0.0", port=port)
 
 
-#⚠️ Qt импортируется ЛЕНИВО, внутри запасного пути (`_run_qt_shell`). На основном пути
-#(окно на системном движке Edge) он не нужен вовсе, а импорт на уровне модуля затянул бы
-#PySide6 и Chromium внутри него в сборку — то есть ~150 МБ ради кода, который не
-#выполняется. Сборщик ориентируется на реальные импорты, а не на намерения.
+#⚠️ Qt в программе БОЛЬШЕ НЕТ (см. комментарий у выбора окна ниже). Проверить, что он не
+#вернулся случайным импортом, можно так — должно печатать False:
+#   python -c "import main, sys; print(any(m.startswith('PySide6') for m in sys.modules))"
+#Один такой импорт на уровне модуля затянул бы в сборку Chromium внутри Qt (~150 МБ):
+#сборщик ориентируется на реальные импорты, а не на намерения.
 
 
 def _get_app_dir() -> str:
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
-
-
-def get_icon():
-    """Иконка приложения для Qt-оболочки (QIcon). Импорт Qt внутри — см. выше."""
-    from PySide6.QtGui import QIcon
-    #onefile: иконка распакована рядом со скомпилированным модулем (Nuitka) или в
-    #sys._MEIPASS (PyInstaller); рядом с .exe её нет. Проверяем все базы.
-    bases = [_get_app_dir(), os.path.dirname(os.path.abspath(__file__))]
-    meipass = getattr(sys, "_MEIPASS", "")
-    if meipass:
-        bases.append(meipass)
-    for base_dir in bases:
-        for name in ("icon.ico", "icon.png", "icon.jpg"):
-            path = os.path.join(base_dir, name)
-            if os.path.exists(path):
-                return QIcon(path)
-    return QIcon()
-
-
-def _start_local_api_background():
-    """Поднять локальное серверное приложение (общий Vue-интерфейс, §11 CLAUDE.md) в фоне.
-
-    Почему в фоне: на первом запуске создаётся локальная база, и это занимает секунду-
-    другую — держать на этом окно нельзя. Почему молча: сбой здесь НЕ авария, десктоп
-    просто останется на нативных экранах (vue_shell это учитывает), а пугать
-    пользователя ошибкой про сервер, которого он не просил, незачем.
-
-    ⚠️ Не путать с `--run-server` выше: там ФОНОВЫЙ сервер ХОСТА для всего колледжа
-    (отдельный процесс, слушает сеть, server_control.py). Здесь — личный, только 127.0.0.1."""
-    import threading
-
-    def _boot():
-        try:
-            import local_api
-            local_api.instance().start()
-        except Exception as e:
-            log.get("main").warning(f"[local-api] не удалось поднять локальный сервер: {e}")
-
-    threading.Thread(target=_boot, name="gb-local-api-boot", daemon=True).start()
 
 
 def _apply_pending_update():
@@ -112,8 +80,8 @@ def _apply_pending_update():
     не просьба «запустите ещё раз»: та просьба уходила бы в print(), который в
     windowed-сборке никто не видит (--windows-console-mode=disable)."""
     try:
-        from core import APP_VERSION
-        import updater
+        from data.core import APP_VERSION
+        from data import updater
         if updater.apply_pending(APP_VERSION):
             log.get("main").info("[update] установлено, перезапускаюсь")
             updater.relaunch()
@@ -138,9 +106,9 @@ def _check_update_interactive() -> bool:
     True — процесс должен завершиться прямо сейчас (либо переоткрылись новой версией,
     либо человек отказался и программа закрывается)."""
     try:
-        from core import APP_VERSION
-        import app_settings
-        import updater
+        from data.core import APP_VERSION
+        from data import app_settings
+        from data import updater
         url = app_settings.get_api_url()
         if not url:
             return False
@@ -150,80 +118,32 @@ def _check_update_interactive() -> bool:
         return False
 
 
-def _run_qt_shell():
-    """ЗАПАСНАЯ оболочка на Qt: нативные экраны, как до перехода на системный движок.
+def _require_crypto_or_exit() -> None:
+    """Без пакета `cryptography` не запускаемся — молча работать с ПДн нельзя (152-ФЗ).
 
-    Открывается, только если WebView2 недоступен (нет Runtime) или не запустился. Весь
-    Qt импортируется ЗДЕСЬ, а не на уровне модуля: на основном пути он не нужен, и
-    сборщик не должен тянуть PySide6 с Chromium внутри (~150 МБ) ради кода, который не
-    выполняется."""
-    from PySide6.QtWidgets import QApplication
-    from main_window import MainAppWindow
-
-    #Локальное серверное приложение для ОБЩЕГО Vue-интерфейса (см. ui/local_api.py).
-    #Поднимаем ФОНОМ и не ждём результата: первый запуск инициализирует базу и занимает
-    #секунду-другую, а окно должно появиться сразу. Вкладки на Vue сами дождутся
-    #готовности, а если сервер не поднимется — продолжат работать нативные экраны.
-    #Отдельным ПОТОКОМ, не процессом: никаких вспышек консоли (см. шапку local_api).
-    _start_local_api_background()
-
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    #Проверка криптографии: без пакета cryptography шифрование ПДн недоступно.
-    #Раньше приложение молча откатывалось на слабый самописный шифр — для боевой
-    #эксплуатации (152-ФЗ) это недопустимо, поэтому честно останавливаемся.
+    🔥 Проверка жила ТОЛЬКО в запасной Qt-оболочке, которой нет в релизной сборке
+    (PySide6 в неё не входит, §8.1) — то есть в поставляемом .exe она не выполнялась ни
+    разу. Сам `security._require_crypto()` падает громко при первом же шифровании, так
+    что незашифрованных данных на диске быть не могло; но человек получал трейсбек
+    посреди работы вместо внятного сообщения на старте. Диалог — нативный
+    (`updater.show_info`, обычный MessageBoxW): он не требует ни Qt, ни готового окна.
+    """
     try:
-        from security import CRYPTO_AVAILABLE
+        from data.security import CRYPTO_AVAILABLE
     except Exception:
         CRYPTO_AVAILABLE = False
-    if not CRYPTO_AVAILABLE:
-        from PySide6.QtWidgets import QMessageBox
-        QMessageBox.critical(
-            None, "Не установлен компонент защиты",
-            "Для работы с персональными данными требуется пакет «cryptography».\n\n"
-            "Установите его командой:\n    pip install cryptography\n\n"
-            "Без него запуск невозможен: данные нельзя зашифровать надёжно.")
-        sys.exit(1)
-
-    #Шрифты Syne + DM Sans (фирменный стиль Synapse)
+    if CRYPTO_AVAILABLE:
+        return
+    msg = ("Для работы с персональными данными требуется пакет «cryptography».\n\n"
+           "Установите его командой:\n    pip install cryptography\n\n"
+           "Без него запуск невозможен: данные нельзя зашифровать надёжно.")
+    log.get("main").error(f"[crypto] {msg}")
     try:
-        from fonts import load_fonts
-        load_fonts()
-    except Exception as e:
-        log.get("main").warning(f"[Fonts] {e}")
-
-    icon = get_icon()
-    app.setWindowIcon(icon)
-
-    window = MainAppWindow()
-    window.setWindowIcon(icon)
-    window.show()
-    window.raise_()
-    window.activateWindow()
-
-    #Авто-бэкап локальной базы при выходе.
-    #ВАЖНО: сервер и ssh-туннель — ФОНОВЫЕ процессы, и при закрытии программы мы их
-    #НАМЕРЕННО НЕ гасим: связь должна жить без программы (хост сменил аккаунт/закрыл —
-    #клиенты продолжают синкаться). Останавливаются они только кнопкой «Остановить» в
-    #админке (server_control.stop_processes) или вручную.
-    def _on_quit():
-        #Перед закрытием ДО-ОТПРАВЛЯЕМ накопленные правки на сервер (синхронно), чтобы
-        #данные не «застряли» локально до следующего запуска. Без авторизации flush
-        #выходит сразу (не вешает закрытие). Только потом — локальный бэкап.
-        try:
-            import sync_runner
-            sync_runner.flush()
-        except Exception as _e:
-            log.get("main").warning(f"[exit sync] {_e}")
-        try:
-            from core import DBManager
-            DBManager.backup(reason="on_exit")
-        except Exception as _e:
-            log.get("main").warning(f"[exit] {_e}")
-    app.aboutToQuit.connect(_on_quit)
-
-    sys.exit(app.exec())
+        from data import updater
+        updater.show_info("GradeBookAI — не установлен компонент защиты", msg)
+    except Exception:               # noqa: BLE001 — диалог best-effort
+        pass
+    sys.exit(1)
 
 
 def main():
@@ -236,9 +156,7 @@ def main():
     #━━ АВТООБНОВЛЕНИЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     #Ставим скачанное в ПРОШЛЫЙ раз обновление — здесь и только здесь: файл программы
     #нельзя подменять под работающим окном, а на этой строке ещё ничего не открыто и
-    #база не тронута. Подменили — просим перезапустить (продолжать работу СТАРЫМ кодом,
-    #когда на диске уже лежит новый .exe, значит показывать человеку не ту версию,
-    #которую он видит в «О программе»).
+    #база не тронута.
     _apply_pending_update()
 
     #Проверка новой версии — СИНХРОННО, ДО базы и окна: манифест — доли секунды при
@@ -249,59 +167,47 @@ def main():
     if _check_update_interactive():
         return
 
+    #Шифрование ПДн — условие запуска, а не украшение. Проверяем ДО открытия базы.
+    _require_crypto_or_exit()
+
     #Инициализация локальной базы (SQLite). Обмен с сервером — по сети через API
     #(см. sync_runner). Сообщение о режиме печатает сам DBManager.init().
-    from core import DBManager
+    from data.core import DBManager
     DBManager.init()
 
-    #━━ ВЫБОР ОБОЛОЧКИ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #Интерфейс целиком веб-овый, поэтому окно можно рисовать СИСТЕМНЫМ движком Edge
-    #(WebView2) вместо Chromium внутри Qt — это ~150 МБ разницы в .exe.
+    #━━ ОКНО ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #Интерфейс целиком веб-овый, поэтому окно рисует СИСТЕМНЫЙ движок Edge (WebView2):
+    #Chromium внутри Qt стоил бы ~150 МБ в .exe ради того же самого.
     #
-    #Системный движок — УМОЛЧАНИЕ. Qt остаётся запасным путём: если WebView2 недоступен
-    #(нет Runtime на старой машине) или не запустился, ниже открывается прежняя оболочка.
-    #Откат делается ТОЛЬКО до появления окна — `webview.start()` забирает поток, и после
-    #показа окна второй интерфейс в одном запуске уже невозможен.
-    #Принудительно вернуться на Qt: `GRADEBOOK_UI=qt` (пригодится, если что-то поедет).
-    if (os.environ.get("GRADEBOOK_UI") or "").strip().lower() not in ("qt", "qt5", "qt6",
-                                                                     "native"):
-        try:
-            import webview2_app
-            if webview2_app.run():
-                return                      #окно закрыто — программа отработала
-            #⚠️ «Недоступен» — не обязательно про сам движок: run() возвращает False и
-            #когда WebView2 Runtime реально не найден, И когда локальный сервер не
-            #поднялся (см. webview2_app.py::run — тот уже пишет причину в gradebook.log
-            #через _LOG). Здесь дублируем в лог НАШИМ уровнем (а не только print,
-            #который в windowed-сборке уходит в devnull, см. _safe_stream выше) —
-            #иначе диагностировать «программа не запускается» можно только по
-            #скриншоту от человека, а не по логу.
-            log.get("main").warning("[ui] WebView2 не поднял окно — открываем прежнюю "
-                                    "оболочку (подробности выше по логу, если местный "
-                                    "сервер не стартовал)")
-        except Exception as e:      # noqa: BLE001 — отказ движка не имеет права
-            log.get("main").warning(f"[ui] WebView2 не запустился ({e}) — открываем "
-                                    "прежнюю оболочку")
-
-    #Qt-оболочки в сборке без PySide НЕТ. Это не авария, а следствие решения: интерфейс
-    #рисует системный движок. Но человек должен увидеть причину, а не трейсбек — и
-    #увидеть её ГЛАЗАМИ, а не в консоли, которой в windowed-сборке нет вовсе
-    #(--windows-console-mode=disable): иначе программа просто «не запускается» без
-    #единого объяснения — ровно так и читался живой баг с локальным сервером (см.
-    #ensure_server_path в ui/local_api.py), пока путь к нему не был найден по логам.
+    #⚠️ ЗАПАСНОЙ Qt-ОБОЛОЧКИ БОЛЬШЕ НЕТ. Она и раньше не входила в релизную сборку
+    #(--nofollow-import-to=PySide6), то есть у людей не исполнялась никогда — но
+    #продолжала жить в исходниках отдельным кабинетом на ~20 тыс. строк, который никто
+    #не открывал и в котором поэтому молча копились поломки (например, «Добавить
+    #группу» падала NameError). Нативные экраны заменены тем же Vue-SPA, который
+    #поднимает локальный сервер (§11 «один интерфейс»), поэтому вторая реализация
+    #кабинета не нужна ни офлайн, ни онлайн. Исходники убраны в WORK/GB-legacy-qt.
     try:
-        _run_qt_shell()
-    except ImportError:
-        msg = ("Не удалось открыть окно: на этом компьютере нет системного движка Edge "
-              "(WebView2 Runtime), а запасная оболочка в эту сборку не входит. "
-              "Установите Microsoft Edge WebView2 Runtime и запустите программу снова.")
-        log.get("main").warning(f"[ui] {msg}")
-        try:
-            import updater
-            updater.show_info("GradeBookAI — окно не открылось", msg)
-        except Exception:           # noqa: BLE001 — диалог best-effort, не критичен
-            pass
-        sys.exit(1)
+        from desktop import webview2_app
+        if webview2_app.run():
+            return                      #окно закрыто — программа отработала
+        reason = "движок Edge (WebView2) недоступен или локальный сервер не поднялся"
+    except Exception as e:              # noqa: BLE001 — причину показываем, а не роняем
+        reason = str(e)
+
+    #Окна нет — человек обязан увидеть ПРИЧИНУ глазами, а не пустоту: в windowed-сборке
+    #консоли нет вовсе (--windows-console-mode=disable), и «программа не запускается»
+    #без единого сообщения мы уже проходили (см. ensure_server_path в desktop/local_api.py).
+    msg = ("Не удалось открыть окно программы.\n\n"
+           "Чаще всего не хватает системного движка Microsoft Edge WebView2 Runtime — "
+           "установите его и запустите программу снова.\n\n"
+           f"Причина: {reason}")
+    log.get("main").warning(f"[ui] окно не открылось: {reason}")
+    try:
+        from data import updater
+        updater.show_info("GradeBookAI — окно не открылось", msg)
+    except Exception:                   # noqa: BLE001 — диалог best-effort
+        pass
+    sys.exit(1)
 
 
 if __name__ == "__main__":

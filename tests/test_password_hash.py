@@ -11,7 +11,7 @@ import os
 import hashlib
 import secrets
 
-import security
+from data import security
 
 #ГОСТ-итераций по умолчанию на dev и так мало (2), но зафиксируем для скорости/детерминизма.
 os.environ.setdefault("GRADEBOOK_GOST_ITERS", "2")

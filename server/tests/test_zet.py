@@ -431,5 +431,5 @@ def test_zet_threshold_editor_is_proxied_not_written_locally():
     for p in (root, root / "ui"):
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
-    import local_api
+    from desktop import local_api
     assert "/web/admin/zet-thresholds" in local_api._PROXY_PREFIXES

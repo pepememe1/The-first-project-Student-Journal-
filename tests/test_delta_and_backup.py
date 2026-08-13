@@ -2,9 +2,9 @@
 test_delta_and_backup.py — Дельта-синхронизация (метка last_sync, отсутствие
 self-wake) и авто-бэкап по расписанию.
 """
-import sync_engine
-from core import DBManager
-from data_store import get_sync_watermark, get_store
+from sync import sync_engine
+from data.core import DBManager
+from data.data_store import get_sync_watermark, get_store
 
 
 class _FakeClient:
@@ -45,7 +45,7 @@ def test_watermark_not_pushed_to_server(fresh_db):
 def test_apply_remote_does_not_wake_sync(fresh_db, monkeypatch):
     """Применение серверных данных НЕ будит синк (иначе apply_remote → wake → синк
     → apply_remote = busy-loop). А обычная UI-правка — будит."""
-    import sync_runner
+    from sync import sync_runner
     calls = {"n": 0}
     monkeypatch.setattr(sync_runner, "trigger", lambda: calls.__setitem__("n", calls["n"] + 1))
 

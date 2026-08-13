@@ -3,10 +3,10 @@ test_users_table.py — Пользователи в ТАБЛИЦЕ users (пла
 blob'ом (хеши/ПДн не оголены), прямой синк без переводчика, миграция старых kv-баз, надгробия,
 офлайн-вход после round-trip, админ остаётся в config.
 """
-import sync_engine
-from core import DBManager
-from data_store import get_store, _kv_set, _kv_get
-from security import verify_password
+from sync import sync_engine
+from data.core import DBManager
+from data.data_store import get_store, _kv_set, _kv_get
+from data.security import verify_password
 
 
 def _blob_of(uid):
@@ -126,7 +126,7 @@ def test_admin_stays_in_config_not_users_table(fresh_db):
 
 
 def test_apply_remote_users_does_not_wake_sync(fresh_db, monkeypatch):
-    import sync_runner
+    from sync import sync_runner
     calls = {"n": 0}
     monkeypatch.setattr(sync_runner, "trigger", lambda: calls.__setitem__("n", calls["n"] + 1))
     sync_engine.apply_remote({"users": [{

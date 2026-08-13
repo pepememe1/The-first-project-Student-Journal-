@@ -19,7 +19,6 @@ stt.py — Распознавание речи (Speech-to-Text) на базе Op
 import os
 import log
 import threading
-from typing import Optional
 
 #Новый Xet-бэкенд huggingface_hub на части сетей ЗАВИСАЕТ на скачивании крупного файла
 #модели (model.bin остаётся 0-байтным .incomplete). Отключаем его — тогда идёт обычная
@@ -105,7 +104,7 @@ def _pick_device(prefer: str) -> tuple:
 
 
 def load_model(size: str = "large-v3", device: str = "auto",
-               compute: str = "") -> Optional[object]:
+               compute: str = "") -> object | None:
     """Лениво грузит модель Whisper (кэшируется). Возвращает модель или None при ошибке.
     Смена (size/device/compute) вызывает перезагрузку. Первая загрузка large-v3 скачивает
     ~1.5 ГБ весов в кэш HuggingFace (только один раз)."""

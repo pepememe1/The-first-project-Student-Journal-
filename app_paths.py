@@ -39,7 +39,7 @@ def is_frozen() -> bool:
     сборкой), а не туда, где лежит настоящий .exe. Тем же путём шёл и
     `updater.py::_exe_path()` — в итоге апдейтер либо подменял файл не там, либо не
     находил, что подменять, и обновление визуально «не работало». Тот же нюанс уже
-    был учтён в `ui/webview2_app.py::_is_compiled()` (`"__compiled__" in globals()`) —
+    был учтён в `desktop/webview2_app.py::_is_compiled()` (`"__compiled__" in globals()`) —
     здесь применяем ТОТ ЖЕ приём, а не изобретаем второй."""
     return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
 

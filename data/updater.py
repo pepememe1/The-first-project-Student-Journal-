@@ -31,14 +31,13 @@ import ctypes
 import os
 import sys
 import json
-import shutil
 import tempfile
 import urllib.request
 import urllib.error
 
 import log
 import app_paths
-import app_settings          # is_secure_transport — единственная проверка канала в продукте
+from data import app_settings          # is_secure_transport — единственная проверка канала в продукте
 import desktop_update as DU
 
 #Модуль log отдаёт логгер через get(), прямых info/warn у него нет.
@@ -261,7 +260,7 @@ def check_and_fetch(base_url: str, current_version: str) -> dict:
 
 def read_pending() -> dict:
     try:
-        with open(_pending_path(), "r", encoding="utf-8") as f:
+        with open(_pending_path(), encoding="utf-8") as f:
             return json.load(f) or {}
     except Exception:                                        # noqa: BLE001
         return {}

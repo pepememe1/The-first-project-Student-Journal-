@@ -20,8 +20,8 @@ win_login.py — «Вход по Windows» на десктопе (ОПЦИОНА
 import base64
 
 import log
-import win_hello
-from data_store import local_get, local_set
+from data import win_hello
+from data.data_store import local_get, local_set
 
 _KEY = "win_login"          #{'login': str, 'blob': base64(DPAPI), 'win_user': str}
 
@@ -52,7 +52,7 @@ def enable(login: str, password: str) -> bool:
     if not available() or not login or not password:
         return False
     try:
-        from security import os_protect
+        from data.security import os_protect
         blob = os_protect(password.encode("utf-8"))
         return local_set(_KEY, {
             "login": login,
@@ -84,7 +84,7 @@ def unlock(hwnd: int = 0):
             caption=f"GradeBookAI · {who}", hwnd=hwnd):
         return "", ""
     try:
-        from security import os_unprotect
+        from data.security import os_unprotect
         password = os_unprotect(base64.b64decode(blob)).decode("utf-8")
         return login, password
     except Exception as e:

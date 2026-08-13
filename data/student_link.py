@@ -36,7 +36,7 @@ REASON_TERM_NO_GROUP = "однофамильцы, а у итоговой оце�
 def students_index() -> dict:
     """(фамилия, имя) → список студентов. Надгробия отфильтрованы get_students():
     привязывать живую оценку к удалённому аккаунту бессмысленно."""
-    from data_store import get_store
+    from data.data_store import get_store
     index = defaultdict(list)
     for s in (get_store().get_students() or []):
         index[((s.get("surname") or "").strip(), (s.get("name") or "").strip())].append(s)
@@ -120,7 +120,7 @@ def backfill(apply: bool = True) -> tuple:
     первого прохода работы нет и запрос отрабатывает вхолостую. Именно поэтому его можно
     звать после каждого синка, не заводя флаг «уже сделано» — флаг соврал бы на свежей
     установке, где справочник ещё не приехал и клеить было не с чем."""
-    from core import DBManager
+    from data.core import DBManager
     with closing(DBManager.get_conn()) as conn:
         index = students_index()
         grades, terms = scan(conn, index)
@@ -143,7 +143,7 @@ def backfill_quietly() -> int:
         #Сразу за доклейкой — перевод ключей итоговых (этап 3). Порядок важен: без
         #student_id переводить нечего, поэтому только ПОСЛЕ бэкофилла.
         from contextlib import closing as _closing
-        from core import DBManager as _DB
+        from data.core import DBManager as _DB
         with _closing(_DB.get_conn()) as _c:
             moved = migrate_local_term_keys(_c)
         if moved:
@@ -175,7 +175,7 @@ def migrate_local_term_keys(conn) -> int:
     Конфликт (целевой id уже занят) разрешаем в пользу СУЩЕСТВУЮЩЕЙ строки и просто
     убираем дубликат — данные в них одинаковы, это две записи одной оценки.
     """
-    from core import term_grade_id
+    from data.core import term_grade_id
     cur = conn.cursor()
     cur.execute("SELECT id,subject,COALESCE(year,''),COALESCE(semester,0),"
                 "COALESCE(student_id,'') FROM term_grades WHERE COALESCE(student_id,'')<>''")

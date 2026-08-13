@@ -4,7 +4,7 @@ webview2_app.py — ВСЯ программа одним окном систем
 ━━ ЗАЧЕМ ━━
 Интерфейс уже целиком веб-овый: кабинеты студента, преподавателя и админа — это Vue-SPA,
 которую отдаёт НАСТОЯЩЕЕ серверное приложение, поднятое на этом же компьютере
-(`ui/local_api.py`). Qt в сборке остался ради одного — показать страницу, и стоит это
+(`desktop/local_api.py`). Qt в сборке остался ради одного — показать страницу, и стоит это
 ~180 МБ Chromium внутри .exe. В Windows 10/11 движок Edge уже установлен системой,
 поэтому окно можно рисовать им, а из сборки убрать и Chromium, и сам Qt.
 
@@ -28,7 +28,7 @@ import os
 import sys
 import threading
 
-import local_api
+from desktop import local_api
 import log
 
 _LOG = log.get("webview2app")
@@ -49,7 +49,7 @@ class _DeskAPI:
 
     def app_version(self):
         try:
-            from core import APP_VERSION
+            from data.core import APP_VERSION
             return APP_VERSION
         except Exception:
             return ""
@@ -68,7 +68,7 @@ class _DeskAPI:
 def available() -> bool:
     """Можно ли запуститься на системном движке (обвязка + WebView2 Runtime)."""
     try:
-        from webview2_shell import available as _av
+        from desktop.webview2_shell import available as _av
         return bool(_av())
     except Exception:
         return False
@@ -84,7 +84,7 @@ def run() -> bool:
         return False
 
     import webview
-    import webview2_shell as shell
+    from desktop import webview2_shell as shell
 
     #1. Поднимаем НАСТОЯЩЕЕ серверное приложение на петле. Без него показывать нечего:
     #   и страницы, и данные приходят с одного адреса (поэтому нет ни CORS, ни настройки
@@ -105,7 +105,7 @@ def run() -> bool:
     _prepare_permissions()
 
     try:
-        from core import APP_VERSION
+        from data.core import APP_VERSION
         title = f"GradeBookAI — {APP_VERSION}"
     except Exception:
         title = "GradeBookAI"
@@ -149,13 +149,13 @@ def _start_url(api) -> str:
     """Адрес первой страницы: кабинет, если сессия есть, иначе форма входа."""
     login = ""
     try:
-        from sync_runner import current_login
+        from sync.sync_runner import current_login
         login = current_login()
     except Exception:
         pass
     if not login:
         try:
-            import app_settings
+            from data import app_settings
             saved = app_settings.get_saved_session() or {}
             login = (saved.get("login") or "").strip()
         except Exception:
@@ -165,7 +165,7 @@ def _start_url(api) -> str:
     if login and local_api_user_ready(login):
         role = ""
         try:
-            import app_settings
+            from data import app_settings
             role = (app_settings.get_saved_session() or {}).get("role", "") or ""
         except Exception:
             pass
@@ -256,11 +256,24 @@ def _prepare_permissions() -> None:
 
 
 def _flush_sync() -> None:
-    """Дописать несохранённое перед закрытием (правки последней минуты не теряем)."""
+    """Дописать несохранённое перед закрытием (правки последней минуты не теряем).
+
+    ⚠️ Порядок обязателен: СНАЧАЛА отправить правки, ПОТОМ снять копию — копия обязана
+    содержать то же, что уже уехало на сервер, иначе восстановление из неё вернёт базу
+    к состоянию ДО последних правок и молча их откатит."""
     try:
-        from sync_runner import flush
+        from sync.sync_runner import flush
         t = threading.Thread(target=flush, daemon=True)
         t.start()
         t.join(timeout=8)
     except Exception as e:      # noqa: BLE001
         _LOG.info(f"[webview2] финальная синхронизация не удалась: {e}")
+    #🔥 Раньше авто-бэкап при выходе жил ТОЛЬКО в запасной Qt-оболочке — а её нет в
+    #релизной сборке вовсе (PySide6 не включается, §8.1). То есть у людей, работающих
+    #в поставляемом .exe, копия при закрытии не снималась НИ РАЗУ, хотя сама функция
+    #существовала и выглядела рабочей. Ставим там, где закрывается ЖИВОЕ окно.
+    try:
+        from data.core import DBManager
+        DBManager.backup(reason="on_exit")
+    except Exception as e:      # noqa: BLE001 — бэкап не имеет права мешать закрытию
+        _LOG.info(f"[webview2] копия при выходе не сделана: {e}")

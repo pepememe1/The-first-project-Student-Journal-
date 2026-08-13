@@ -13,7 +13,7 @@ import json
 import pytest
 
 import app_paths
-import audit
+from data import audit
 
 
 @pytest.fixture(autouse=True)

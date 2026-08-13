@@ -8,11 +8,11 @@ lookup_session() и force_full_pull().
 """
 import pytest
 
-import data_store
-import app_settings
-import sync_engine
-from core import DBManager
-from data_store import get_store, reset_synced_local_data, local_get, local_set
+from data import data_store
+from data import app_settings
+from sync import sync_engine
+from data.core import DBManager
+from data.data_store import get_store, reset_synced_local_data, local_get, local_set
 from subjects import load_subjects, save_subjects
 
 
@@ -100,9 +100,9 @@ def test_lookup_session(fresh_db):
 
 
 def test_force_full_pull(fresh_db):
-    sync_engine._session_full_pull_done = True
+    sync_engine._session.full_pull_done = True
     sync_engine.force_full_pull()
-    assert sync_engine._session_full_pull_done is False
+    assert sync_engine._session.full_pull_done is False
 
 
 class _FakeClient:

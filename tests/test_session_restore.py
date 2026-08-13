@@ -10,7 +10,7 @@ test_session_restore.py — программа не должна разлоги�
 Со стороны это выглядело как «программа каждый раз выкидывает из аккаунта и сбрасывает
 тему»: тему отдаёт та же страница-передатчик, что и сессию, поэтому терялись обе.
 """
-import local_api
+from desktop import local_api
 
 
 class _FakeSettings:
@@ -27,13 +27,13 @@ class _FakeSettings:
 def _patch_settings(monkeypatch, login):
     import sys
     fake = _FakeSettings(login)
-    monkeypatch.setitem(sys.modules, "app_settings", fake)
+    monkeypatch.setattr("data.app_settings", fake)
     return fake
 
 
 def test_saved_session_is_used_when_there_is_no_live_one(monkeypatch):
     """Холодный старт: живой сессии ещё нет, но человек уже входил на этой машине."""
-    monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
     _patch_settings(monkeypatch, "ivanova")
     assert local_api._session_login() == "ivanova"
 
@@ -41,13 +41,13 @@ def test_saved_session_is_used_when_there_is_no_live_one(monkeypatch):
 def test_live_session_wins_over_the_saved_one(monkeypatch):
     """Если вошёл ДРУГОЙ человек, работать надо с ним, а не с прошлым владельцем машины —
     иначе он увидел бы чужую копию базы."""
-    monkeypatch.setattr("sync_runner.current_login", lambda: "petrov")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "petrov")
     _patch_settings(monkeypatch, "ivanova")
     assert local_api._session_login() == "petrov"
 
 
 def test_no_session_at_all_is_empty(monkeypatch):
-    monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
     _patch_settings(monkeypatch, "")
     assert local_api._session_login() == ""
 
@@ -57,7 +57,7 @@ def test_cold_start_binds_the_personal_copy_not_the_anonymous_one(monkeypatch):
     пользователя: на анонимной его нет, `user_exists` отвечает «нет», и человек получает
     форму входа вместо кабинета."""
     import os
-    monkeypatch.setattr("sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
     _patch_settings(monkeypatch, "ivanova")
     monkeypatch.delenv("GRADEBOOK_DB_URL", raising=False)
     monkeypatch.setattr(local_api, "ensure_server_path", lambda: None)
@@ -127,9 +127,9 @@ def test_saved_tokens_are_used_when_there_is_no_live_session(monkeypatch):
         def get_saved_refresh_token(self, login):
             return "refresh"
 
-    monkeypatch.setitem(sys.modules, "app_settings", _Settings())
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("https://example.test", ""))
-    monkeypatch.setattr("sync_client.is_token_expired", lambda t, skew_sec=30: False)
+    monkeypatch.setattr("data.app_settings", _Settings())
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("https://example.test", ""))
+    monkeypatch.setattr("sync.sync_client.is_token_expired", lambda t, skew_sec=30: False)
 
     base, token, why = local_api._remote_auth()
     assert base == "https://example.test"
@@ -168,10 +168,10 @@ def test_expired_saved_token_is_refreshed_and_stored(monkeypatch):
         def refresh(self):
             return {"access_token": "новый", "refresh_token": "новый-refresh"}
 
-    monkeypatch.setitem(sys.modules, "app_settings", _Settings())
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("https://example.test", ""))
-    monkeypatch.setattr("sync_client.is_token_expired", lambda t, skew_sec=30: True)
-    monkeypatch.setattr("sync_client.SyncClient", _Client)
+    monkeypatch.setattr("data.app_settings", _Settings())
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("https://example.test", ""))
+    monkeypatch.setattr("sync.sync_client.is_token_expired", lambda t, skew_sec=30: True)
+    monkeypatch.setattr("sync.sync_client.SyncClient", _Client)
 
     base, token, why = local_api._remote_auth()
     assert token == "новый" and why == ""
@@ -203,10 +203,10 @@ def test_rejected_refresh_is_reported_as_expired_not_offline(monkeypatch):
         def refresh(self):
             raise RuntimeError("401 Client Error: Unauthorized for url: /auth/refresh")
 
-    monkeypatch.setitem(sys.modules, "app_settings", _Settings())
-    monkeypatch.setattr("sync_runner.fresh_auth", lambda: ("https://example.test", ""))
-    monkeypatch.setattr("sync_client.is_token_expired", lambda t, skew_sec=30: True)
-    monkeypatch.setattr("sync_client.SyncClient", _Client)
+    monkeypatch.setattr("data.app_settings", _Settings())
+    monkeypatch.setattr("sync.sync_runner.fresh_auth", lambda: ("https://example.test", ""))
+    monkeypatch.setattr("sync.sync_client.is_token_expired", lambda t, skew_sec=30: True)
+    monkeypatch.setattr("sync.sync_client.SyncClient", _Client)
 
     _base, token, why = local_api._remote_auth()
     assert not token and why == "expired"

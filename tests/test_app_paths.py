@@ -26,7 +26,7 @@ def test_is_frozen_true_for_pyinstaller_style(monkeypatch):
 def test_is_frozen_true_for_nuitka_style(monkeypatch):
     """Nuitka не ставит sys.frozen — компилятор инжектит __compiled__ прямо в globals()
     КАЖДОГО скомпилированного модуля (см. уже существующий приём в
-    ui/webview2_app.py::_is_compiled()). Эмулируем это подсовыванием имени в globals
+    desktop/webview2_app.py::_is_compiled()). Эмулируем это подсовыванием имени в globals
     самого app_paths, а не через monkeypatch sys — иначе тест ничего не проверял бы."""
     monkeypatch.setitem(app_paths.__dict__, "__compiled__", True)
     assert app_paths.is_frozen() is True
@@ -160,10 +160,10 @@ def test_version_string_has_exactly_one_source():
     Тест держит именно СВЯЗЬ, а не конкретное значение: сверять его с номером ветки
     было бы вторым местом, которое надо не забыть поправить."""
     import desktop_update
-    from core import APP_VERSION
+    from data.core import APP_VERSION
 
     assert APP_VERSION is desktop_update.APP_VERSION, (
-        "core.APP_VERSION обязан быть ре-экспортом, а не собственным литералом")
+        "data.core.APP_VERSION обязан быть ре-экспортом, а не собственным литералом")
     assert desktop_update.parse_version(APP_VERSION), (
         f"версия {APP_VERSION!r} не разбирается собственным parse_version — "
         "автообновление не сможет сравнить её со сборкой на сервере")

@@ -29,7 +29,7 @@ def _now() -> str:
 #— не на каждое чтение/запись. Флага «уже создано» здесь СОЗНАТЕЛЬНО нет: он врал бы при
 #пересоздании базы (тесты, сброс синхронизируемого кэша) и таблица «пропадала» бы.
 def _conn():
-    from core import DBManager
+    from data.core import DBManager
     return DBManager.get_conn()
 
 
@@ -51,7 +51,9 @@ def list_overrides(group: str = None) -> list:
         log.get("overrides").warning(f"[overrides] чтение правок не удалось: {e}")
     keys = ("id", "group_name", "week", "day", "pair_no", "action", "subject", "time",
             "room", "teacher", "kind")
-    return [dict(zip(keys, r)) for r in rows]
+    #strict=True: список колонок в SELECT выше и `keys` обязаны совпадать по длине.
+    #Молчаливое усечение при расхождении дало бы правку расписания без части полей.
+    return [dict(zip(keys, r, strict=True)) for r in rows]
 
 
 def set_override(group: str, week: int, day: str, pair_no: int, action: str = "set",
@@ -85,7 +87,7 @@ def delete_override(oid: str) -> bool:
 
 def _wake():
     try:
-        from sync_runner import trigger as _t
+        from sync.sync_runner import trigger as _t
         _t()
     except Exception:
         pass

@@ -17,7 +17,7 @@ core.GradeBook.add_lesson), практика — одной. Подсчёт по
 Плановые часы (Y) хранятся в таблице subject_hours и задаются администратором; здесь
 только арифметика пройденного — план приходит из хранилища своей платформы.
 """
-from typing import Iterable, Tuple
+from collections.abc import Iterable
 
 #Типы занятий, идущие в учебные часы.
 HOUR_BEARING_TYPES = ("Лекция", "Практика")
@@ -25,7 +25,7 @@ HOUR_BEARING_TYPES = ("Лекция", "Практика")
 HOURS_PER_LESSON = 2
 
 
-def hours_done_from_pairs(items: Iterable[Tuple[str, int]]) -> int:
+def hours_done_from_pairs(items: Iterable[tuple[str, int]]) -> int:
     """items — итерируемое из пар (тип занятия, номер). Возвращает пройденные часы."""
     seen = set()
     for ltype, number in items:

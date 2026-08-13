@@ -86,7 +86,7 @@ class Lesson:
         return asdict(self)
 
     @staticmethod
-    def from_dict(d: dict) -> "Lesson":
+    def from_dict(d: dict) -> Lesson:
         return Lesson(
             pair_no=int(d.get("pair_no", 0)),
             time=d.get("time", ""),
@@ -146,7 +146,7 @@ class GroupSchedule:
         }
 
     @staticmethod
-    def from_dict(d: dict) -> "GroupSchedule":
+    def from_dict(d: dict) -> GroupSchedule:
         weeks = {}
         for w, days in (d.get("weeks") or {}).items():
             weeks[int(w)] = {
@@ -199,7 +199,7 @@ class Snapshot:
         }
 
     @staticmethod
-    def from_dict(d: dict) -> "Snapshot":
+    def from_dict(d: dict) -> Snapshot:
         groups = {name: GroupSchedule.from_dict(g)
                   for name, g in (d.get("groups") or {}).items()}
         tindex = {}

@@ -3,9 +3,9 @@ test_groups_table.py — Группы в ТАБЛИЦЕ (план техдолг
 переводчика, миграция старых kv-баз, надгробия/LWW. Публичный API data_store сохранён,
 поэтому UI не затронут.
 """
-import sync_engine
-from core import DBManager
-from data_store import get_store, _kv_set, _kv_get
+from sync import sync_engine
+from data.core import DBManager
+from data.data_store import get_store, _kv_set, _kv_get
 
 G = "ИС-21"
 
@@ -96,7 +96,7 @@ def test_category_survives_set_groups_round_trip(fresh_db):
 
 
 def test_apply_remote_groups_does_not_wake_sync(fresh_db, monkeypatch):
-    import sync_runner
+    from sync import sync_runner
     calls = {"n": 0}
     monkeypatch.setattr(sync_runner, "trigger", lambda: calls.__setitem__("n", calls["n"] + 1))
     sync_engine.apply_remote({"groups": [{

@@ -26,7 +26,6 @@ desktop_update.py — АВТООБНОВЛЕНИЕ ДЕСКТОПА: общий 
 """
 import hashlib
 import re
-from typing import Optional
 
 #🔑 ЕДИНСТВЕННЫЙ ИСТОЧНИК СТРОКИ ВЕРСИИ ПРОДУКТА.
 #Раньше она жила в ТРЁХ местах, и два из них отставали одновременно: `data/core.py`
@@ -37,7 +36,7 @@ from typing import Optional
 #и сервером, и занимается ровно сравнением версий. `data/core.py` её РЕ-ЭКСПОРТИРУЕТ,
 #поэтому ни один существующий импорт не сломался (тот же приём, что с `data/defaults.py`).
 #⚠️ Держать синхронной с веткой релиза: по ней автообновление решает, ставить ли сборку.
-APP_VERSION = "Release 3.7.1"
+APP_VERSION = "Release 3.7.2"
 
 # Имя каталога с обновлениями внутри `downloads/` (его сервер и так раздаёт наружу).
 UPDATES_DIR_NAME = "updates"
@@ -103,7 +102,7 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def pick_patch(manifest: dict, current_version: str) -> Optional[dict]:
+def pick_patch(manifest: dict, current_version: str) -> dict | None:
     """Патч ИМЕННО с текущей версии на последнюю, либо None.
 
     Цепочки патчей (3.5.4→3.5.5→3.5.6) сознательно НЕ поддерживаем: каждый лишний шаг —

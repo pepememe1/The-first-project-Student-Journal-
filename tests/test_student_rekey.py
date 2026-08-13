@@ -6,8 +6,8 @@ test_student_rekey.py — ДЕСКТОП: смена ФИО студента н�
 """
 import sqlite3
 
-from core import DBManager
-from data_store import rekey_student_grades
+from data.core import DBManager
+from data.data_store import rekey_student_grades
 
 
 def _seed():

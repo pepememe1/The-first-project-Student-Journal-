@@ -20,7 +20,7 @@ vector/intents._practice_average) и могла разойтись. Теперь
 Все параметры читаются из config (kv_store['config']) с безопасными дефолтами,
 поэтому при отсутствии настроек поведение в точности прежнее.
 """
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 PRACTICE_VALUES = {"2", "3", "4", "5"}
 
@@ -50,7 +50,7 @@ METHODOLOGY_TEXT = (
 )
 
 
-def avg_config(cfg: Optional[dict]) -> dict:
+def avg_config(cfg: dict | None) -> dict:
     """Достаёт параметры методики из config с дефолтами."""
     cfg = cfg or {}
     out = dict(DEFAULTS)
@@ -66,7 +66,7 @@ def avg_config(cfg: Optional[dict]) -> dict:
     return out
 
 
-def methodology_text(cfg: Optional[dict] = None) -> str:
+def methodology_text(cfg: dict | None = None) -> str:
     c = avg_config(cfg)
     return METHODOLOGY_TEXT.format(
         w=c["avg_absence_weight"],
@@ -76,7 +76,7 @@ def methodology_text(cfg: Optional[dict] = None) -> str:
     )
 
 
-def lead_num(val: str) -> Optional[float]:
+def lead_num(val: str) -> float | None:
     """Числовая оценка из строки вида '4 (Зачтено)' → 4.0; иначе None."""
     if not val:
         return None
@@ -104,7 +104,7 @@ def attempt_key(lesson_id: str, ri: int) -> str:
     return lesson_id + ("_retake" if ri == 1 else f"_retake_{ri}")
 
 
-def needs_retake(records: Dict[str, str], lesson_id: str, ri: int) -> bool:
+def needs_retake(records: dict[str, str], lesson_id: str, ri: int) -> bool:
     """Нужна ли студенту пересдача №ri: либо у него уже проставлена оценка за эту
     попытку (показываем существующее), либо ПРЕДЫДУЩАЯ попытка завалена (is_failed).
     Единый источник для десктопа (teacher_dashboard) и веба (grades.js::needsRetake) —
@@ -114,7 +114,7 @@ def needs_retake(records: Dict[str, str], lesson_id: str, ri: int) -> bool:
     return is_failed(records.get(attempt_key(lesson_id, ri - 1), ""))
 
 
-def latest_exam_value(lesson_id: str, records: Dict[str, str]) -> str:
+def latest_exam_value(lesson_id: str, records: dict[str, str]) -> str:
     """
     Последняя попытка по экзамену с учётом пересдач:
     база → <id>_retake → <id>_retake_2 → ... Возвращает «сырую» строку оценки.
@@ -131,9 +131,9 @@ def latest_exam_value(lesson_id: str, records: Dict[str, str]) -> str:
     return val
 
 
-def practice_average(items: Iterable[Tuple[str, str]],
-                     records: Dict[str, str],
-                     cfg: Optional[dict] = None,
+def practice_average(items: Iterable[tuple[str, str]],
+                     records: dict[str, str],
+                     cfg: dict | None = None,
                      scale="5") -> float:
     """
     items — итерируемое из пар (lesson_id, lesson_type).
@@ -172,7 +172,7 @@ def practice_average(items: Iterable[Tuple[str, str]],
     return round(total / count, 2) if count else 0.0
 
 
-def pairs_from_objects(lessons) -> List[Tuple[str, str]]:
+def pairs_from_objects(lessons) -> list[tuple[str, str]]:
     """Адаптер для core.Lesson: [(l.id, l.type), ...]."""
     return [(l.id, l.type) for l in lessons]
 
@@ -197,7 +197,7 @@ def _is_failed_5(raw: str) -> bool:
     return is_failed(raw)
 
 
-def _to_five_100(raw: str) -> Optional[float]:
+def _to_five_100(raw: str) -> float | None:
     """0..100 → 5-балльная: пороги 90/75/60 (стандартная вузовская привязка)."""
     if not raw:
         return None
@@ -225,7 +225,7 @@ def _is_failed_100(raw: str) -> bool:
 _LETTER_TO_FIVE = {"A": 5.0, "B": 4.0, "C": 3.0, "D": 2.0, "F": 2.0}
 
 
-def _to_five_letter(raw: str) -> Optional[float]:
+def _to_five_letter(raw: str) -> float | None:
     if not raw:
         return None
     head = raw.strip().split()[0].upper() if raw.strip() else ""
@@ -239,7 +239,7 @@ def _is_failed_letter(raw: str) -> bool:
     return head in ("D", "F")
 
 
-def _to_five_pass_fail(raw: str) -> Optional[float]:
+def _to_five_pass_fail(raw: str) -> float | None:
     #Зачёт/незачёт в числовой средний не входит вовсе — та же логика, что у экзаменов
     #с выключенным avg_include_exam: это статус, а не балл.
     return None
@@ -286,7 +286,7 @@ def scale_values(scale: str = DEFAULT_SCALE) -> tuple:
     return SCALES.get(scale, SCALES[DEFAULT_SCALE])["values"]
 
 
-def to_five_point(raw_value: str, scale: str = DEFAULT_SCALE) -> Optional[float]:
+def to_five_point(raw_value: str, scale: str = DEFAULT_SCALE) -> float | None:
     """Сырое значение оценки (в ШКАЛЕ ПРЕПОДА) → 5-балльный эквивалент для среднего/
     итоговой. None — значение не распознано этой шкалой (не считается)."""
     fn = SCALES.get(scale, SCALES[DEFAULT_SCALE])["to_five"]

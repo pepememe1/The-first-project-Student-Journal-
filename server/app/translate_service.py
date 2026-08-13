@@ -70,7 +70,7 @@ _CACHE_LIMIT = 500
 
 
 def _key(text: str, src: str, dst: str) -> str:
-    return hashlib.sha256(f"{src}|{dst}|{text}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{src}|{dst}|{text}".encode()).hexdigest()
 
 
 def _remember(key: str, value: str) -> None:

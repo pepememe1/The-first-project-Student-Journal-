@@ -2,8 +2,8 @@
 test_tombstones.py — Удаление занятий/оценок: надгробия, неисчезновение данных,
 распространение удаления через синхронизацию (главное про «данные не путаются»).
 """
-from core import GradeBook, Student
-import sync_engine
+from data.core import GradeBook, Student
+from sync import sync_engine
 
 G, S = "ИС-21", "Математика"
 

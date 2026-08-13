@@ -5,9 +5,9 @@ utils.py — Вспомогательные функции и утилиты
 #⚠️ Раньше здесь стояло `from styles import ...` — слой ДАННЫХ импортировал слой
 #ИНТЕРФЕЙСА ради двух списков-констант, которые к оформлению отношения не имеют.
 #Направление зависимости было перевёрнуто; теперь они живут в data/defaults.py.
-from defaults import DEFAULT_GROUPS, DEFAULT_SUBJECTS
+from data.defaults import DEFAULT_GROUPS, DEFAULT_SUBJECTS
 import log
-from data_store import get_store
+from data.data_store import get_store
 
 
 #ДОСТУП К ДАННЫМ ЧЕРЕЗ ХРАНИЛИЩЕ (data_store: локальный SQLite + синк с сервером)
@@ -56,7 +56,7 @@ def get_subjects_for_group(group_name: str):
         base = list(DEFAULT_SUBJECTS)
     #Юнион с предметами, у которых есть реальные занятия в группе (сохраняем порядок base).
     try:
-        from core import DBManager
+        from data.core import DBManager
         for s in DBManager.group_subjects_with_lessons(group_name):
             if s not in base:
                 base.append(s)

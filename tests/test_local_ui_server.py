@@ -1,5 +1,5 @@
 """
-test_local_ui_server.py — ПРИВАТНЫЙ локальный сервер интерфейса (ui/local_ui_server.py).
+test_local_ui_server.py — ПРИВАТНЫЙ локальный сервер интерфейса (desktop/local_ui_server.py).
 
 Это фундамент перехода десктопа на общий Vue-интерфейс, и у него ровно два обещания
 пользователю: «никаких окон» и «снаружи не достучаться». Оба легко потерять при
@@ -14,7 +14,7 @@ import urllib.request
 
 import pytest
 
-import local_ui_server as L
+from desktop import local_ui_server as L
 
 
 @pytest.fixture()

@@ -154,7 +154,7 @@ app.include_router(publicschedule.router)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
 app.include_router(desktopupdate.router)   # автообновление десктопа (манифест; файлы — /downloads)
 #Раздел «Сервер» — ТОЛЬКО ПРОСМОТР. Управление (SSH, команды, перенос) живёт в
-#ui/server_admin.py и подключается лишь к локальному серверу программы: на боевой
+#desktop/server_admin.py и подключается лишь к локальному серверу программы: на боевой
 #машине этого кода нет вовсе, поэтому дырка в веб-админке не даёт оболочку на VPS.
 app.include_router(serverinfo.router)
 

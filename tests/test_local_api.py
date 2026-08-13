@@ -1,5 +1,5 @@
 """
-test_local_api.py — ЛОКАЛЬНОЕ серверное приложение внутри десктопа (ui/local_api.py).
+test_local_api.py — ЛОКАЛЬНОЕ серверное приложение внутри десктопа (desktop/local_api.py).
 
 Это ядро объединения платформ: десктоп показывает ту же Vue-SPA и ходит в тот же
 `/web/*`, что и сайт, но всё на своём компьютере — отсюда offline-first.
@@ -17,7 +17,7 @@ import urllib.request
 
 import pytest
 
-import local_api
+from desktop import local_api
 
 
 @pytest.fixture(scope="module")

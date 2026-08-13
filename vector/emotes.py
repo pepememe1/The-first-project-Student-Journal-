@@ -17,11 +17,14 @@ emotes.py — Реестр эмоций маскота «Вектор» (арт 
 (idle/thinking/speaking/away), настроению ответа (happy/neutral/sad) и намерению
 (intent) выбирает осмысленную пару (морда, жест). Задействованы ВСЕ 6 выражений и
 ВСЕ 5 жестов, поэтому Вектор проживает весь эмоциональный диапазон от Арины.
+
+⚠️ МОДУЛЬ ЧИСТЫЙ (только stdlib) — и это не случайность, а требование. `pick()` —
+ЭТАЛОН для веб-порта (`web/src/config/mascot.js`), их согласованность держит общий
+`docs/contracts/mascot-cases.json`. Qt нужен ровно одной функции `get()` (загрузка
+спрайта в QPixmap), поэтому он импортируется ВНУТРИ неё: иначе контрактный тест и
+любой не-GUI потребитель тянули бы за собой PySide6 целиком.
 """
 import os
-
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
 
 #Папка с артом (имя как у Арины — рядом с программой/пакетом)
 EMOTES_DIR = "emotes"
@@ -90,7 +93,12 @@ def get(face: str = DEFAULT_FACE, gesture: str = DEFAULT_GESTURE):
     """QPixmap спрайта (морда, жест) или None, если файла нет.
 
     Грузим один раз, кэшируем уже уменьшенную по высоте версию (≤ MAX_CACHE_H),
-    чтобы 30 тяжёлых PNG не висели в памяти в полном разрешении."""
+    чтобы 30 тяжёлых PNG не висели в памяти в полном разрешении.
+
+    Qt импортируется ЗДЕСЬ (см. шапку модуля): рисование — единственное, чему он нужен."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+
     key = (face, gesture)
     if key in _pix_cache:
         return _pix_cache[key]

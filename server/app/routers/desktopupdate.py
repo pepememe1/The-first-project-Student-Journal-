@@ -43,7 +43,7 @@ def load_manifest() -> dict:
         return {}
     try:
         #utf-8-sig — терпимо к BOM (PowerShell пишет его при Out-File), как в appupdate.py.
-        with open(path, "r", encoding="utf-8-sig") as f:
+        with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:                                        # noqa: BLE001

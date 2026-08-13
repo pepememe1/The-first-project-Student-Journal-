@@ -7,9 +7,9 @@ id строки users. Проверяем именно совместимост�
 """
 import sqlite3
 
-import sync_engine
-from core import DBManager, resolve_student_id
-from data_store import get_store, student_id_by_name
+from sync import sync_engine
+from data.core import DBManager, resolve_student_id
+from data.data_store import get_store, student_id_by_name
 
 
 def _grade_rows():
@@ -73,7 +73,7 @@ def test_id_survives_rename(fresh_db):
     conn.commit()
     conn.close()
 
-    from data_store import rekey_student_grades
+    from data.data_store import rekey_student_grades
     rekey_student_grades("Иванова", "Мария", "Петрова", "Мария")
     live = [r for r in _grade_rows() if r["student_f"] == "Петрова"]
     assert live and live[0]["student_id"] == sid, \

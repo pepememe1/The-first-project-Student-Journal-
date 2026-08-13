@@ -6,7 +6,7 @@ id стабилен. Раньше безлогинный студент полу
 id зависел от ФИО — переименование порождало НОВОГО пользователя, а старая строка
 оставалась висеть надгробием вместе со всей историей. Тесты закрывают именно это.
 """
-from data_store import _server_to_student, _student_id, get_store
+from data.data_store import _server_to_student, _student_id, get_store
 
 
 def test_existing_id_is_never_recomputed():

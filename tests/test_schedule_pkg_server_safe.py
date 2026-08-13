@@ -48,4 +48,4 @@ def test_unknown_attribute_raises():
     """Опечатка в имени даёт честный AttributeError, а не тихо тянет store."""
     sched = _fresh_import_schedule()
     with pytest.raises(AttributeError):
-        sched.nonexistent_function_xyz
+        _ = sched.nonexistent_function_xyz   #обращение и ЕСТЬ проверка, результат не нужен

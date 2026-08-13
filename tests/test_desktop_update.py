@@ -97,7 +97,7 @@ def updater_env(tmp_path, monkeypatch):
     (tmp_path / "data").mkdir(exist_ok=True)
     for mod in ("app_paths", "updater"):
         sys.modules.pop(mod, None)
-    import updater
+    from data import updater
     import app_paths
     monkeypatch.setattr(app_paths, "data_dir", lambda: str(tmp_path / "data"))
     monkeypatch.setattr(updater.app_paths, "data_dir", lambda: str(tmp_path / "data"))
@@ -315,7 +315,7 @@ def test_patch_roundtrip_reconstructs_new_build(tmp_path):
 
     #Накладываем тем же кодом, что и клиент.
     sys.modules.pop("updater", None)
-    import updater
+    from data import updater
     out = tmp_path / "out.exe"
     assert updater._apply_patch(str(old), str(patch), str(out)) is True
     assert out.read_bytes() == new.read_bytes()

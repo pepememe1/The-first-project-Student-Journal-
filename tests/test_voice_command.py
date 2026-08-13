@@ -430,7 +430,9 @@ def test_buryat_firstname_address():
     assert c.ok and c.student == ("Самбуев", "Бато") and c.action == "absent_n", (c.error, c.student)
 
 
-def test_buryat_firstname_grade():
+def test_buryat_firstname_grade_single_command():
+    #Имя было у ДВУХ тестов сразу, и объявленный выше (пакетный разбор `bu`) молча
+    #переопределялся этим — то есть не выполнялся ни разу. Имена разведены.
     c = bok("Арюне пятёрку")
     assert c.ok and c.student == ("Гындынова", "Арюна") and c.value == "5", (c.error, c.student)
 

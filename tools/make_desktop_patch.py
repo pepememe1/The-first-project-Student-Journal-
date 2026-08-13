@@ -128,7 +128,7 @@ def _version_from_code() -> str:
     """Версия из data/core.py::APP_VERSION — чтобы не задавать её вторым местом руками."""
     try:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(root, "data", "core.py"), "r", encoding="utf-8") as f:
+        with open(os.path.join(root, "data", "core.py"), encoding="utf-8") as f:
             for line in f:
                 if line.startswith("APP_VERSION"):
                     return DU.normalize(line.split("=", 1)[1])

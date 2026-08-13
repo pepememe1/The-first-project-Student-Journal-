@@ -19,7 +19,13 @@ import os
 import re
 import time
 
+import threading
+
 import requests
+
+import log
+
+_log = log.get("sync")
 
 #Таймауты — КОРТЕЖ (connect, read). connect чуть щедрее (РФ-VPS за Cloudflare/TLS не
 #всегда соединяется за пару секунд), read короче для быстрых вызовов. Единичный блип
@@ -74,17 +80,46 @@ def _prefer_ipv4(url: str) -> str:
 
 
 class SyncClient:
+    @staticmethod
+    def normalize(base_url: str) -> str:
+        """Адрес в том виде, в каком его хранит клиент.
+
+        Отдельным методом, чтобы вызывающие могли СРАВНИТЬ свой адрес с `client.base_url`
+        (сменился сервер — клиента надо пересоздать, см. `sync_runner._ensure_auth`), не
+        повторяя у себя ни обрезку слэша, ни подмену localhost."""
+        return _prefer_ipv4((base_url or "").rstrip("/"))
+
     def __init__(self, base_url: str, token: str = None, refresh_token: str = None):
-        self.base_url = _prefer_ipv4((base_url or "").rstrip("/"))
+        self.base_url = self.normalize(base_url)
+        if not self.base_url:
+            #Пустой адрес раньше давал ОТНОСИТЕЛЬНЫЙ запрос и невнятную ошибку глубоко
+            #внутри requests. Отказ на месте создания понятнее на порядок.
+            raise ValueError("SyncClient: не задан адрес сервера")
         self.token = token
         self.refresh_token = refresh_token or ""
         #verify (проверка TLS) и заголовки общие для всех запросов — держим в сессии.
         self._verify = _verify_setting()
-        self._session = self._build_session()
+        #🔥 СЕССИИ — ПО ПОТОКУ. `requests.Session` НЕ потокобезопасна: у неё общий пул
+        #соединений, и одновременные запросы из разных потоков портят его состояние
+        #(симптом — редкие необъяснимые обрывы, которые не воспроизводятся). А потоков у
+        #нас реально несколько: фоновый цикл синка, прокси мессенджера внутри локального
+        #сервера, отправка темы, закрытие программы. Замок сеанса в sync_engine защищает
+        #только сам цикл, но не эти вызовы. Держим сессию в thread-local: у каждого потока
+        #своя, keep-alive при этом сохраняется (потоки долгоживущие).
+        self._local = threading.local()
         self._warn_if_insecure()
 
+    def _sess(self, retry_post: bool):
+        """Сессия ЭТОГО потока. `retry_post` — можно ли повторять POST (см. _build_session)."""
+        key = "idem" if retry_post else "plain"
+        got = getattr(self._local, key, None)
+        if got is None:
+            got = self._build_session(retry_post)
+            setattr(self._local, key, got)
+        return got
+
     @staticmethod
-    def _build_session():
+    def _build_session(retry_post: bool = False):
         """Сессия с АВТО-РЕТРАЯМИ на транзиентные сетевые сбои. Одиночный блип канала
         до РФ-VPS (обрыв соединения `RemoteDisconnected`, кратковременный отказ TCP,
         502/503/504 от Caddy/Cloudflare, пока бэкенд перезапускается) повторяется на
@@ -97,17 +132,25 @@ class SyncClient:
             retry = Retry(
                 total=3, connect=3, read=2, backoff_factor=0.6,
                 status_forcelist=(502, 503, 504),
-                #Наши POST идемпотентны (push сверяет содержимое, login/refresh безопасны),
-                #поэтому разрешаем ретрай и для них — иначе connect-блип на pull/push не
-                #гасился бы.
-                allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+                #🔥 POST ЗДЕСЬ НЕ ПОВТОРЯЕМ. Раньше повторялся с оговоркой «наши POST
+                #идемпотентны» — это верно ровно для трёх из них (push сверяет содержимое,
+                #login/refresh безопасны), но НЕ для остальных: `create_event`,
+                #`approve_registration`, `create_parent`, `create_parent_link` при
+                #повторе создают ВТОРУЮ запись. Блип сети на такой отправке давал бы
+                #дубль заявки или родителя — молча, потому что оба запроса «успешны».
+                #Идемпотентные вызовы просят повтор явно: `_req(..., retry_post=True)`.
+                allowed_methods=(frozenset(["GET", "PUT", "DELETE", "HEAD", "OPTIONS",
+                                            "POST"]) if retry_post else
+                                 frozenset(["GET", "PUT", "DELETE", "HEAD", "OPTIONS"])),
                 raise_on_status=False,
             )
             adapter = HTTPAdapter(max_retries=retry)
             s.mount("https://", adapter)
             s.mount("http://", adapter)
-        except Exception:
-            pass   #нет urllib3 Retry (крайне маловероятно) — работаем без авто-ретраев
+        except Exception as e:
+            #Без ретраев работать можно, но знать об этом надо: одиночный блип канала
+            #станет «сбоем синка» вместо прозрачного повтора.
+            _log.warning("авто-ретраи HTTP недоступны (%s) — блипы сети пойдут как сбои", e)
         return s
 
     def _warn_if_insecure(self):
@@ -115,14 +158,13 @@ class SyncClient:
         (логины, пароли, оценки) пойдут по сети открытым текстом. Не блокируем —
         в ЛВС на этапе настройки это бывает временно нужно, но админ должен знать."""
         try:
-            import app_settings
+            from data import app_settings
             if self.base_url and not app_settings.is_secure_transport(self.base_url):
-                print("[SyncClient] ВНИМАНИЕ: сервер задан по http:// к удалённому "
-                      "адресу — персональные данные пойдут по сети В ОТКРЫТОМ виде. "
-                      "Для боевой работы используйте https:// (см. server/DEPLOY.md, "
-                      "раздел про Caddy и TLS).")
-        except Exception:
-            pass
+                _log.warning("сервер задан по http:// к удалённому адресу — персональные "
+                             "данные пойдут по сети В ОТКРЫТОМ виде. Для боевой работы "
+                             "нужен https:// (server/DEPLOY.md, раздел про Caddy и TLS)")
+        except Exception as e:
+            _log.debug("проверка безопасности адреса не выполнена: %s", e)
 
     def _headers(self) -> dict:
         #ngrok-skip-browser-warning — чтобы бесплатные туннели (ngrok и пр.) не
@@ -132,7 +174,7 @@ class SyncClient:
         #нему решает, одобрено ли устройство (см. server/app/connect.py). Шлём на КАЖДОМ
         #запросе, в т.ч. при входе — иначе неодобренный ПК не отличить от одобренного.
         try:
-            import app_settings
+            from data import app_settings
             dev = app_settings.get_device_id()
             if dev:
                 h["X-Device-Id"] = dev
@@ -142,12 +184,18 @@ class SyncClient:
             h["Authorization"] = f"Bearer {self.token}"
         return h
 
-    def _req(self, method: str, path: str, timeout=DEFAULT_TIMEOUT, **kwargs):
+    def _req(self, method: str, path: str, timeout=DEFAULT_TIMEOUT,
+             retry_post: bool = False, **kwargs):
         """Единая точка сетевого вызова: общие заголовки, проверка TLS (verify) и
-        авто-ретраи (через self._session) в одном месте — их нельзя случайно забыть."""
-        return self._session.request(method, f"{self.base_url}{path}",
-                                     headers=self._headers(), timeout=timeout,
-                                     verify=self._verify, **kwargs)
+        авто-ретраи в одном месте — их нельзя случайно забыть.
+
+        `retry_post=True` ставят ТОЛЬКО вызовы, безопасные к повтору: `push` (сервер
+        делает upsert по ключу), `login`/`refresh` (повтор выдаёт новый токен, лишних
+        сущностей не создаёт). Всё остальное, что создаёт записи, повторять нельзя —
+        см. комментарий в `_build_session`."""
+        return self._sess(retry_post).request(method, f"{self.base_url}{path}",
+                                              headers=self._headers(), timeout=timeout,
+                                              verify=self._verify, **kwargs)
 
     def health(self) -> bool:
         """True, если сервер отвечает. Не кидает исключений.
@@ -165,11 +213,15 @@ class SyncClient:
 
     def login(self, login: str, password: str) -> dict:
         """Возвращает {access_token, refresh_token, role, name} и запоминает оба токена."""
-        r = self._req("POST", "/auth/login",
+        r = self._req("POST", "/auth/login", retry_post=True,
                       json={"login": login, "password": password})
         r.raise_for_status()
         data = r.json()
-        self.token = data.get("access_token")
+        #Код 200 без токена — дефект контракта сервера. Молча остаться без авторизации
+        #нельзя: дальше все запросы пошли бы анонимными и получали 401 без объяснения.
+        if not data.get("access_token"):
+            raise ValueError("сервер ответил успехом, но не выдал access_token")
+        self.token = data["access_token"]
         self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
 
@@ -181,7 +233,11 @@ class SyncClient:
                             "full_name": full_name})
         r.raise_for_status()
         data = r.json()
-        self.token = data.get("access_token")
+        #Код 200 без токена — дефект контракта сервера. Молча остаться без авторизации
+        #нельзя: дальше все запросы пошли бы анонимными и получали 401 без объяснения.
+        if not data.get("access_token"):
+            raise ValueError("сервер ответил успехом, но не выдал access_token")
+        self.token = data["access_token"]
         self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
 
@@ -192,7 +248,7 @@ class SyncClient:
         rt = (refresh_token or self.refresh_token or "").strip()
         if not rt:
             raise ValueError("нет refresh-токена для обновления")
-        r = self._req("POST", "/auth/refresh", json={"refresh_token": rt})
+        r = self._req("POST", "/auth/refresh", json={"refresh_token": rt}, retry_post=True)
         r.raise_for_status()
         data = r.json()
         self.token = data.get("access_token") or self.token
@@ -202,13 +258,19 @@ class SyncClient:
     def logout(self) -> dict:
         """Безопасный выход: просит сервер ОТОЗВАТЬ текущий токен (чёрный список), чтобы
         украденный до выхода токен нельзя было использовать. Best-effort (ошибку глушим)."""
+        out = {"revoked": 0}
         try:
             r = self._req("POST", "/auth/logout", timeout=5)
             if r.status_code == 200:
-                return r.json()
-        except Exception:
-            pass
-        return {"revoked": 0}
+                out = r.json()
+        except Exception as e:
+            _log.debug("отзыв токена на сервере не прошёл (выход всё равно выполняем): %s", e)
+        #🔥 ГАСИМ ТОКЕНЫ В ЛЮБОМ СЛУЧАЕ. Раньше они оставались в объекте, и если клиент
+        #переиспользовали (смена пользователя на общем ПК колледжа — обычное дело), он
+        #продолжал слать УЖЕ ОТОЗВАННЫЙ токен и получал 401 там, где вход был выполнен.
+        self.token = None
+        self.refresh_token = ""
+        return out
 
     def pull(self, since: str = "") -> dict:
         """Изменения позже метки since. Возвращает {server_time, changes}.
@@ -220,7 +282,8 @@ class SyncClient:
     def push(self, changes: dict) -> dict:
         """Отправляет изменения. changes = {users:[...], grades:[...], ...}.
         Долгий read-таймаут: первый пуш накопленного офлайн бывает объёмным."""
-        r = self._req("POST", "/sync/push", json={"changes": changes}, timeout=SYNC_TIMEOUT)
+        r = self._req("POST", "/sync/push", json={"changes": changes},
+                      timeout=SYNC_TIMEOUT, retry_post=True)
         r.raise_for_status()
         return r.json()
 

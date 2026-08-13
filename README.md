@@ -448,15 +448,15 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 |---|---|
 | `main.py` | Точка входа: применение отложенного обновления → БД → окно. `--run-server` поднимает сервер из того же процесса |
 | `main_window.py` | Роутинг по ролям, восстановление сессии, выбор Vue-кабинета или нативного фолбэка |
-| `_bootstrap.py` | Кладёт `ui/ sync/ data/` в `sys.path` — отсюда «плоские» импорты (`from core import …`). Уходит вместе с переездом в пакет, см. `docs/PLAN-PACKAGING.md` |
+| `_bootstrap.py` | Кладёт `desktop/ sync/ data/` в `sys.path` — отсюда «плоские» импорты (`from core import …`). Уходит вместе с переездом в пакет, см. `docs/PLAN-PACKAGING.md` |
 | `app_paths.py`, `fonts.py` | Единый источник путей и шрифтов; кросс-совместимо с PyInstaller и Nuitka |
 | `subjects.py`, `server_control.py`, `log.py` | Справочник предметов, хостинг сервера из админки, логирование |
-| `ui/webview2_app.py`, `ui/webview2_shell.py` | **Основное окно** — системный движок Edge (WebView2) через pywebview |
-| `ui/local_api.py` | Поднимает **настоящий** `server/app` на 127.0.0.1 в потоке; мост входа, прокси онлайн-разделов |
-| `ui/local_mirror.py`, `ui/local_ui_server.py` | Дельта-зеркало боевой базы в локальную; запасная раздача статики |
+| `desktop/webview2_app.py`, `desktop/webview2_shell.py` | **Основное окно** — системный движок Edge (WebView2) через pywebview |
+| `desktop/local_api.py` | Поднимает **настоящий** `server/app` на 127.0.0.1 в потоке; мост входа, прокси онлайн-разделов |
+| `desktop/local_mirror.py`, `desktop/local_ui_server.py` | Дельта-зеркало боевой базы в локальную; запасная раздача статики |
 | `ui/vue_shell.py`, `ui/vue_dashboard.py` | Оболочка Vue-кабинета (весь кабинет одной страницей) |
 | `ui/messenger_web.py`, `ui/webengine_links.py` | Встраивание мессенджера (онлайн-only) и перехват внешних ссылок в системный браузер |
-| `ui/server_admin.py` | Раздел «Сервер» по SSH — **только локально**, на бою этого кода нет вовсе |
+| `desktop/server_admin.py` | Раздел «Сервер» по SSH — **только локально**, на бою этого кода нет вовсе |
 | `ui/dashboards.py`, `ui/teacher_dashboard.py`, `ui/admin_dashboard.py`, `ui/parent_dashboard.py`, `ui/auth_pages.py` | Запасная Qt-оболочка (в релизный .exe не входит) |
 | `ui/schedule_view.py`, `ui/schedule_editor.py`, `ui/notifications_view.py`, `ui/avatar_dialog.py` | Нативные экраны расписания, уведомлений, профиля |
 | `ui/styles.py`, `ui/themes.py`, `ui/theme_ui.py`, `ui/ui_components.py`, `ui/widgets.py` | Дизайн-система Qt-оболочки |

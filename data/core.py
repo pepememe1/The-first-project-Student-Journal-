@@ -13,7 +13,6 @@ import uuid
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Dict
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
@@ -76,7 +75,7 @@ def resolve_student_id(f: str, n: str, group: str = "") -> str:
     на core. Импорт на уровне модуля замкнул бы кольцо.
     """
     try:
-        from data_store import student_id_by_name
+        from data.data_store import student_id_by_name
         return student_id_by_name(f, n, group)
     except Exception as e:
         log.get("core").warning(f"[student_id] не удалось определить id для {f} {n}: {e}")
@@ -264,7 +263,7 @@ class DBManager:
         #Гасим фоновую синхронизацию: иначе её поток может в этот момент держать
         #соединение (файл не удалить) или тут же подтянуть данные обратно с сервера.
         try:
-            import sync_runner
+            from sync import sync_runner
             sync_runner.stop()
         except Exception:
             pass
@@ -316,7 +315,7 @@ class DBManager:
 
         #Сбрасываем singleton хранилища, чтобы в памяти не осталось ссылок на старое.
         try:
-            import data_store
+            from data import data_store
             data_store.reset_store()
         except Exception:
             pass
@@ -657,7 +656,7 @@ class Student:
     n: str
     f: str
     group: str
-    records: Dict[str, str] = field(default_factory=dict)
+    records: dict[str, str] = field(default_factory=dict)
 
 
 #Журнал
@@ -671,8 +670,8 @@ class GradeBook:
         self.year    = year or ""
         self.semester = int(semester or 0)
         DBManager._init_sqlite_tables()
-        self.lessons: List[Lesson] = []
-        self.spisok_stud: List[Student] = []
+        self.lessons: list[Lesson] = []
+        self.spisok_stud: list[Student] = []
         self.load_from_db()
 
     def add_student(self, st: Student):
@@ -783,7 +782,7 @@ class GradeBook:
         #показались ни в одном. Только когда журнал открыт с термином (self.year задан).
         if self.year:
             try:
-                import terms
+                from data import terms
                 cy, cs = terms.current_term()
                 cur.execute(
                     "UPDATE lessons SET year=?, semester=? "
@@ -823,7 +822,7 @@ class GradeBook:
         #иначе добавленные администратором студенты исчезали бы при каждой
         #перезагрузке журнала.
         try:
-            from data_store import get_store
+            from data.data_store import get_store
             store = get_store()
             if store:
                 known_students = store.get_students()
@@ -873,7 +872,7 @@ class GradeBook:
             return [_key(self.year, self.semester)]
         keys = []
         try:
-            import terms
+            from data import terms
             y, s = terms.current_term()
             keys.append(_key(y, s))
         except Exception:
@@ -919,7 +918,7 @@ class GradeBook:
         import grading
         if cfg is None:
             try:
-                from data_store import get_store
+                from data.data_store import get_store
                 cfg = get_store()._config()
             except Exception:
                 cfg = {}

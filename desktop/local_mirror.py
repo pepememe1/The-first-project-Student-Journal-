@@ -1,7 +1,7 @@
 """
 local_mirror.py — наполнение ЛОКАЛЬНОЙ базы приложения копией боевой.
 
-Зачем. Десктоп поднимает у себя настоящее серверное приложение (`ui/local_api.py`), и
+Зачем. Десктоп поднимает у себя настоящее серверное приложение (`desktop/local_api.py`), и
 на нём же работает общий Vue-интерфейс. Но своя база у этого приложения пустая, поэтому
 без зеркала интерфейс открылся бы, а данных в нём не было. Зеркало — то, что делает
 переход на общий интерфейс совместимым с offline-first: один раз скачали, дальше журнал
@@ -46,7 +46,7 @@ def _local_session():
 
     `prepare_env` обязателен и здесь: без него `app.db` открыл бы базу разработчика, и
     зеркало наполняло бы НЕ ТОТ файл — незаметно, потому что ошибок при этом не будет."""
-    import local_api
+    from desktop import local_api
     local_api.prepare_env()
     from app.db import SessionLocal          # noqa: WPS433 — server-пакет уже в sys.path
     return SessionLocal()
@@ -136,8 +136,8 @@ def mirror_once(client=None) -> dict:
 def _default_client():
     """SyncClient текущей сессии (или None, если пользователь ещё не вошёл/нет сети)."""
     try:
-        from sync_runner import fresh_auth
-        from sync_client import SyncClient
+        from sync.sync_runner import fresh_auth
+        from sync.sync_client import SyncClient
         base, token = fresh_auth()
         if not base or not token:
             return None
