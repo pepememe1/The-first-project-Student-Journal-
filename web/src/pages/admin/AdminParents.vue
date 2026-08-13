@@ -9,7 +9,10 @@
 // студент не подтвердит её у себя, статус «ожидает». Об этом написано прямо на странице —
 // иначе сотрудник решит, что система сломана, и пойдёт заводить вторую связь.
 import { ref, computed, onMounted } from 'vue'
+import { RotateCw, Copy } from '@lucide/vue'
 import { staffParentApi, adminApi } from '@/api/endpoints'
+import { generatePassword } from '@/utils/passwordGen'
+import { copyText } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -59,6 +62,18 @@ function openCreate() {
   form.value = { login: '', surname: '', name: '', password: '' }
   formError.value = ''
   showCreate.value = true
+}
+// Кнопка «⟳». Поле здесь и так открытое (type="text") — раскрывать нечего, админ сразу
+// видит, что диктовать родителю. Повторное нажатие перезаписывает новым паролем.
+function regenerateCreatePassword() {
+  form.value.password = generatePassword()
+}
+// Один обработчик на оба диалога (заведение и правка) — значение приходит аргументом.
+// Провал копирования показываем: в вебвью и по локальному IP буфер бывает недоступен,
+// и молчаливый отказ читается как «кнопка не работает».
+async function copyPassword(value) {
+  if (await copyText(value)) toast.success(locale.t('password.copied', 'Пароль скопирован'))
+  else toast.error(locale.t('password.copyFailed', 'Не удалось скопировать — выделите пароль и скопируйте вручную'))
 }
 async function createParent() {
   const f = form.value
@@ -124,8 +139,23 @@ function openEdit(p) {
   const full = (p.full_name || '').trim()
   const [surname0, ...rest0] = full.split(' ')
   editForm.value = { surname: surname0 || '', name: rest0.join(' '), password: '' }
+  passwordSetAt.value = p.password_set_at || ''
   editError.value = ''
   showEdit.value = true
+}
+function regenerateEditPassword() {
+  editForm.value.password = generatePassword()
+}
+// Дата последней выдачи пароля. Сам пароль показать нельзя (в базе необратимый хеш),
+// но дата отвечает на реальный вопрос админа: свежий он или полугодовой. Пусто —
+// «неизвестно»: выдумывать дату задним числом для старых учёток нельзя.
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
+const passwordSetAt = ref('')
+function fmtIssued(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return isNaN(d) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+    { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 async function saveEdit() {
   const f = editForm.value
@@ -238,8 +268,25 @@ async function deleteEdit() {
               <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.passwordLabel', 'Пароль') }}</span>
-            <input v-model="form.password" type="text"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <div class="flex gap-2">
+              <input v-model="form.password" type="text"
+                     class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                      @click="regenerateCreatePassword">
+                <RotateCw class="size-4" />
+              </button>
+              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+              <button type="button" :disabled="!form.password"
+                      :title="locale.t('password.copy', 'Скопировать пароль')"
+                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                      @click="copyPassword(form.password)">
+                <Copy class="size-4" />
+              </button>
+            </div>
+            <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
@@ -294,8 +341,30 @@ async function deleteEdit() {
               <input v-model="editForm.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.newPassword', 'Новый пароль') }}</span>
-            <input v-model="editForm.password" type="text" :placeholder="locale.t('adminParents.leaveEmptyHint', 'Оставьте пустым, чтобы не менять')"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <p class="mb-1 text-tiny text-text3">
+              <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
+              <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
+              <span v-if="editForm.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
+            </p>
+            <div class="flex gap-2">
+              <input v-model="editForm.password" type="text" :placeholder="locale.t('adminParents.leaveEmptyHint', 'Оставьте пустым, чтобы не менять')"
+                     class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                      @click="regenerateEditPassword">
+                <RotateCw class="size-4" />
+              </button>
+              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+              <button type="button" :disabled="!editForm.password"
+                      :title="locale.t('password.copy', 'Скопировать пароль')"
+                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                      @click="copyPassword(editForm.password)">
+                <Copy class="size-4" />
+              </button>
+            </div>
+            <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.') }}</span></label>
           <p v-if="editError" class="text-sm text-red">{{ editError }}</p>
         </div>
         <div class="mt-5 flex items-center justify-between gap-2">

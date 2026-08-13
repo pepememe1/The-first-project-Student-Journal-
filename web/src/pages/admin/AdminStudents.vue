@@ -4,7 +4,10 @@
 // студента на сервере — stud:login (как в синке десктопа); удаление мягкое (надгробие),
 // поэтому изменения доезжают до десктопа обычным pull.
 import { ref, computed, onMounted } from 'vue'
+import { RotateCw, Copy } from '@lucide/vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
+import { generatePassword } from '@/utils/passwordGen'
+import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -149,6 +152,34 @@ const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', 
 const saving = ref(false)
 const formError = ref('')
 
+// Дата последней выдачи пароля. Показываем ТОЛЬКО дату: сам пароль показать нельзя,
+// в базе лежит необратимый хеш. Пусто — пароль не менялся с тех пор, как появилось
+// это поле; выдумывать дату задним числом нельзя, «—» честнее.
+const passwordSetAt = ref('')
+function fmtIssued(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return isNaN(d) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+    { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// Кнопка «⟳» у поля пароля. Сгенерированный пароль СРАЗУ раскрываем глазком: админу его
+// диктовать человеку, а из точек не продиктуешь — иначе кнопка выглядела бы сломанной.
+// Повторное нажатие просто перезаписывает поле новым паролем.
+function regeneratePassword() {
+  form.value.password = generatePassword()
+  showPass.value = true
+}
+
+// Копируется ТО, ЧТО В ПОЛЕ (новый пароль), — текущего у нас нет и быть не может.
+// Результат обязательно показываем: `copyText` умеет вернуть false (в вебвью без прав к
+// буферу, при заходе по локальному IP без защищённого контекста), и молчаливый провал
+// читается как «кнопка не работает» — этой болезнью уже болел мессенджер.
+async function copyPassword() {
+  if (await copyText(form.value.password)) toast.success(locale.t('password.copied', 'Пароль скопирован'))
+  else toast.error(locale.t('password.copyFailed', 'Не удалось скопировать — выделите пароль и скопируйте вручную'))
+}
+
 // Группы в карточке студента подчиняются ТОЙ ЖЕ вкладке направления, что и таблица
 // (живой запрос). Выбран «Колледж» — в списке только колледж; выбраны «Все категории»
 // — все, но РАЗЛОЖЕННЫЕ по направлению, а не свалкой: иначе в списке из полутора сотен
@@ -194,6 +225,7 @@ function openEdit(r) {
     surname: r.surname, name: r.first_name ?? r.name, patronymic: r.patronymic ?? '',
     login: r.login, group: r.group, password: '',
   }
+  passwordSetAt.value = r.password_set_at || ''
   formError.value = ''
   showForm.value = true
 }
@@ -327,14 +359,39 @@ async function del(r) {
               : locale.t('adminStudents.groupsAllCategoriesHint', 'Показаны группы всех направлений — направление подписано рядом.') }}</span>
           </label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminStudents.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminStudents.passwordLabel', 'Пароль') }}</span>
-            <div class="relative">
-              <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
-                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
-              <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
-                {{ showPass ? '🙈' : '👁' }}
+            <!-- Сам пароль показать нельзя (в базе необратимый хеш), но ДАТА выдачи
+                 отвечает на реальный вопрос админа: свежий пароль или полугодовой. -->
+            <p v-if="editing" class="mb-1 text-tiny text-text3">
+              <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
+              <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
+              <span v-if="form.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
+            </p>
+            <div class="flex gap-2">
+              <div class="relative flex-1">
+                <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
+                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
+                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
+                  {{ showPass ? '🙈' : '👁' }}
+                </button>
+              </div>
+              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                      @click="regeneratePassword">
+                <RotateCw class="size-4" />
+              </button>
+              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+              <button type="button" :disabled="!form.password"
+                      :title="locale.t('password.copy', 'Скопировать пароль')"
+                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                      @click="copyPassword">
+                <Copy class="size-4" />
               </button>
             </div>
-            <span class="mt-1 block text-tiny text-text3">{{ locale.t('adminStudents.passwordHashHint', 'Пароль в базе хранится хешем — показать можно только новый вводимый.') }}</span></label>
+            <span class="mt-1 block text-tiny text-text3">{{ editing
+              ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
+              : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">

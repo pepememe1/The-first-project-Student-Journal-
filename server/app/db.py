@@ -151,6 +151,7 @@ def init_db():
     _ensure_lesson_term_columns()
     _backfill_lesson_term()
     _ensure_user_curated_groups_column()
+    _ensure_user_password_set_at_column()
     _ensure_grade_student_id_columns()
     _ensure_notify_event_columns()
     _ensure_participant_state_columns()
@@ -526,6 +527,22 @@ def _backfill_lesson_term():
                 {"s": s})
     except Exception as e:
         print(f"[db] backfill lesson term пропущен: {e}")
+
+
+def _ensure_user_password_set_at_column():
+    """Идемпотентная мини-миграция: users.password_set_at (когда пароль выдан в
+    последний раз). Существующим строкам НЕ проставляем дату задним числом — пусто
+    честно значит «неизвестно», а выдуманная дата выглядела бы как факт."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("users")}
+    except Exception:
+        return
+    if "password_set_at" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN password_set_at VARCHAR"))
 
 
 def _ensure_user_curated_groups_column():

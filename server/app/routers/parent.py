@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import User, ParentLink, parent_link_id
+from ..models import User, ParentLink, parent_link_id, set_user_password
 from .. import webdata as W
 from .. import audit
 
@@ -383,7 +383,9 @@ def staff_parents(user: User = Depends(get_current_user), db: Session = Depends(
             .filter(User.role == "parent", User.deleted == False)  # noqa: E712
             .order_by(User.surname, User.name).all())
     return {"parents": [{"id": p.id, "login": p.login,
-                         "full_name": (p.full_name or p.name or "").strip()} for p in rows]}
+                         "full_name": (p.full_name or p.name or "").strip(),
+                         #дата выдачи пароля — сам пароль показать нельзя (в базе хеш)
+                         "password_set_at": p.password_set_at or ""} for p in rows]}
 
 
 @router.post("/admin/parents")
@@ -391,7 +393,6 @@ def admin_create_parent(payload: dict = Body(...),
                         admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Завести родителя. Пароль хешируется тем же гибридом, что у всех остальных ролей."""
     import uuid
-    from ..security import hash_password
     login = (payload.get("login") or "").strip()
     surname = (payload.get("surname") or "").strip()
     name = (payload.get("name") or "").strip()
@@ -403,10 +404,12 @@ def admin_create_parent(payload: dict = Body(...),
     if existing is not None:
         raise HTTPException(status_code=409, detail="Пользователь с таким логином уже есть")
     uid = f"par:u:{uuid.uuid4()}"
-    db.add(User(id=uid, role="parent", login=login, password_hash=hash_password(password),
-                surname=surname, name=name,
-                full_name=f"{surname} {name}".strip(),
-                updated_at=_now_iso(), deleted=False))
+    row = User(id=uid, role="parent", login=login,
+               surname=surname, name=name,
+               full_name=f"{surname} {name}".strip(),
+               updated_at=_now_iso(), deleted=False)
+    set_user_password(row, password)     #хеш и дата выдачи — одной функцией
+    db.add(row)
     db.commit()
     audit.log(db, actor=admin.login, role="admin", action="parent.create", target=login)
     return {"ok": True, "id": uid, "login": login}
@@ -429,8 +432,7 @@ def admin_update_parent(parent_id: str, payload: dict = Body(...),
     row.full_name = f"{row.surname or ''} {row.name or ''}".strip()
     password = payload.get("password") or ""
     if password:
-        from ..security import hash_password
-        row.password_hash = hash_password(password)
+        set_user_password(row, password)
     row.updated_at = _now_iso()
     db.commit()
     audit.log(db, actor=admin.login, role="admin", action="parent.update", target=row.login)
