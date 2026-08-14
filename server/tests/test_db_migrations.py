@@ -14,7 +14,8 @@ from sqlalchemy import text, inspect
 
 from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
-                    _ensure_notify_event_columns, _ensure_group_category_column)
+                    _ensure_notify_event_columns, _ensure_group_category_column,
+                    _ensure_user_password_set_at_column)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -128,3 +129,27 @@ def test_ensure_notify_event_columns_is_idempotent(client):
     engine.dispose()
     _ensure_notify_event_columns()
     _ensure_notify_event_columns()
+
+
+def test_ensure_user_password_set_at_column_adds_to_old_schema(client):
+    """Таблица users без password_set_at (схема ДО даты выдачи пароля).
+
+    Именно тот случай из шапки файла: users живёт на проде с самого начала, и
+    create_all новую колонку в неё не добавит. Без ALTER-а список студентов
+    (`/web/admin/students` читает `u.password_set_at`) падал бы «no such column» у
+    администратора сразу после деплоя — то есть на самом видном экране."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE users"))
+        conn.execute(text("""CREATE TABLE users (
+            id VARCHAR PRIMARY KEY, role VARCHAR NOT NULL, login VARCHAR,
+            password_hash VARCHAR, full_name VARCHAR, surname VARCHAR, name VARCHAR,
+            patronymic VARCHAR, group_name VARCHAR, subjects TEXT DEFAULT '[]',
+            group_assignments TEXT DEFAULT '{}', curated_groups TEXT DEFAULT '[]',
+            prefs TEXT DEFAULT '{}', updated_at VARCHAR DEFAULT '',
+            deleted BOOLEAN DEFAULT 0
+        )"""))
+    engine.dispose()
+    _ensure_user_password_set_at_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert "password_set_at" in cols
+    _ensure_user_password_set_at_column()  # идемпотентность — второй вызов не падает

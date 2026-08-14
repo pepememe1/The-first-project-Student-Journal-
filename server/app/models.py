@@ -20,6 +20,11 @@ class User(Base):
     role = Column(String, nullable=False)              #admin | teacher | student
     login = Column(String, index=True, default="")
     password_hash = Column(String, default="")
+    #Когда пароль выдавали в последний раз (ISO-строка, как updated_at). Нужна админу,
+    #чтобы понимать, свежий пароль у человека или выдан полгода назад: САМ пароль
+    #показать нельзя — в базе только необратимый хеш. Пусто = пароль не менялся с тех
+    #пор, как у учётной записи появилось это поле (задним числом дату не выдумываем).
+    password_set_at = Column(String, default="")
     full_name = Column(String, default="")             #ФИО (у преподавателя — ключ)
     surname = Column(String, default="")
     #ВАЖНО: name хранит «Имя Отчество» (полную форму) и служит КЛЮЧОМ оценок
@@ -174,6 +179,22 @@ def parent_link_id(parent_id: str, student_id: str) -> str:
     """Детерминированный ключ: повторная привязка тех же двоих ЗАМЕНЯЕТ запись, а не
     плодит вторую (иначе отозванная связь соседствовала бы с новой активной)."""
     return f"plink:{parent_id}|{student_id}"
+
+
+def set_user_password(row: "User", plain: str) -> None:
+    """ЕДИНСТВЕННОЕ место, где меняется пароль: хеш и дата выдачи ставятся вместе.
+
+    Раздельно их ставить нельзя — не «некрасиво», а по опыту: правило, расписанное по
+    семи местам вместо одного, здесь уже приводило к тому, что в одном из семи его
+    забыли (см. историю с `collect_failed` в шапке CLAUDE.md). Мест, где пароль
+    меняется, ровно семь: регистрация, восстановление по почте, заведение и правка
+    студента/преподавателя/родителя, одобрение заявки. Новое восьмое место обязано
+    звать эту функцию, а не присваивать `password_hash` руками.
+    """
+    from datetime import datetime, timezone
+    from .security import hash_password
+    row.password_hash = hash_password(plain)
+    row.password_set_at = datetime.now(timezone.utc).isoformat()
 
 
 class ConfigKV(Base):

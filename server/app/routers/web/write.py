@@ -431,8 +431,7 @@ def admin_create_student(payload: dict = Body(...),
     row.subjects = []
     row.group_assignments = {}
     if password:
-        from ...security import hash_password
-        row.password_hash = hash_password(password)
+        set_user_password(row, password)
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
@@ -508,8 +507,7 @@ def admin_update_student(login: str, payload: dict = Body(...),
         row.group_name = group
     password = payload.get("password") or ""
     if password:
-        from ...security import hash_password
-        row.password_hash = hash_password(password)
+        set_user_password(row, password)
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "login": login}
@@ -1184,8 +1182,7 @@ def admin_create_teacher(payload: dict = Body(...),
     row.group_assignments = {}
     password = payload.get("password") or ""
     if password:
-        from ...security import hash_password
-        row.password_hash = hash_password(password)
+        set_user_password(row, password)
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
@@ -1214,8 +1211,7 @@ def admin_update_teacher(login: str, payload: dict = Body(...),
                       target=login, detail=", ".join(row.curated_groups) or "(снято)")
     password = payload.get("password") or ""
     if password:
-        from ...security import hash_password
-        row.password_hash = hash_password(password)
+        set_user_password(row, password)
     row.updated_at = _now_iso()
     db.commit()
     return {"ok": True, "login": login}
@@ -1270,14 +1266,13 @@ def admin_approve_registration(payload: dict = Body(...),
     surname = parts[0] if parts else ""
     name = " ".join(parts[1:]) if len(parts) > 1 else ""
     patronymic = " ".join(parts[2:]) if len(parts) > 2 else ""
-    from ...security import hash_password
     sid = f"stud:{email}"
     row = db.get(User, sid) or User(id=sid)
     if db.get(User, sid) is None:
         db.add(row)
     row.role = "student"
     row.login = email
-    row.password_hash = hash_password(pw)
+    set_user_password(row, pw)
     row.full_name = req.full_name
     row.surname = surname
     row.name = name

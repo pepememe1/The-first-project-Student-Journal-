@@ -14,7 +14,7 @@
 #   4. обновляет downloads/GradeBookAI.exe — кнопку «Скачать» на сайте;
 #   5. проверяет, что сервер отдаёт новый манифест.
 #
-# ⚠️ Версия берётся из data/core.py::APP_VERSION. Забыли поднять её перед сборкой —
+# ⚠️ Версия берётся из desktop_update.py::APP_VERSION. Забыли поднять её перед сборкой —
 # скрипт остановится: выложить сборку под уже существующим номером хуже, чем не
 # выложить, — часть парка осталась бы на старом коде, считая себя обновлённой.
 set -euo pipefail
@@ -33,12 +33,16 @@ trap 'rm -rf "$WORK"' EXIT
 
 [ -f "$NEW_EXE" ] || { echo "нет файла сборки: $NEW_EXE"; exit 2; }
 
+# ⚠️ Читаем ИМЕННО desktop_update.py, а не data/core.py: с 3.7 литерал живёт здесь, а
+# core.py его только ре-экспортирует (`from desktop_update import APP_VERSION`), и
+# регулярка по core.py не находила ничего — выкладка падала «не удалось прочитать
+# APP_VERSION» на ровном месте. Тот же файл читает и сервер (routers/web/siteinfo.py).
 VERSION="$(python -c "
 import re,io
-s=io.open('$ROOT/data/core.py',encoding='utf-8').read()
+s=io.open('$ROOT/desktop_update.py',encoding='utf-8').read()
 m=re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"',s)
 print(re.search(r'(\d+(?:\.\d+)*)',m.group(1)).group(1) if m else '')")"
-[ -n "$VERSION" ] || { echo "не удалось прочитать APP_VERSION из data/core.py"; exit 2; }
+[ -n "$VERSION" ] || { echo "не удалось прочитать APP_VERSION из desktop_update.py"; exit 2; }
 echo "== выкладываем версию $VERSION =="
 
 # 1. Предыдущий манифест и .exe — база для дельты. Нет их (первая выкладка) — не беда,

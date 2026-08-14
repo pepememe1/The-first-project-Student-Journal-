@@ -36,7 +36,10 @@ def admin_teachers(_admin: User = Depends(require_admin), db: Session = Depends(
     info = _contact_info(db, [u.login for u in rows])
     return {"teachers": [dict(
         {"id": u.id, "login": u.login, "name": W.display_name(u),
-         "subjects": list(u.subjects or []), "curated_groups": list(u.curated_groups or [])},
+         "subjects": list(u.subjects or []), "curated_groups": list(u.curated_groups or []),
+         #Когда пароль выдан в последний раз. Сам пароль показать нельзя (в базе хеш),
+         #а дата отвечает на реальный вопрос админа: «свежий он или полугодовой».
+         "password_set_at": u.password_set_at or ""},
         **info.get(u.login, {})) for u in rows]}
 
 
@@ -67,7 +70,9 @@ def admin_students(group: str = Query(""),
          "group": u.group_name,
          #null — год поступления группы не задан администратором (сортировка по курсу
          #такие строки покажет отдельно, а не выдумает им первый курс).
-         "course": course_by_group.get(u.group_name)},
+         "course": course_by_group.get(u.group_name),
+         #см. пояснение у преподавателей выше
+         "password_set_at": u.password_set_at or ""},
         **info.get(u.login, {})) for u in rows]}
 
 

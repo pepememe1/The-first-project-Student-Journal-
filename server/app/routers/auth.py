@@ -13,10 +13,9 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import (ensure_device_allowed, get_current_user, is_web_client,
                     device_barrier_applies)
-from ..models import User, AuthSession
+from ..models import User, AuthSession, set_user_password
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
-from ..security import (hash_password, verify_password, create_token_full,
-                        decode_token)
+from ..security import verify_password, create_token_full, decode_token
 from ..config import issue_ttl_min, session_ttl_min
 from .. import throttle, events, audit
 
@@ -98,9 +97,9 @@ def bootstrap_admin(body: BootstrapIn, request: Request, db: Session = Depends(g
     #через /sync, он обновит ЭТУ же строку, а не создаст дубликат.
     u = User(
         id=f"admin:{login}", role="admin", login=login,
-        password_hash=hash_password(body.password), full_name=body.full_name,
-        updated_at=_now(),
+        full_name=body.full_name, updated_at=_now(),
     )
+    set_user_password(u, body.password)   #хеш и дата выдачи — одной функцией
     db.add(u)
     db.commit()
     return _issue_token_pair(db, u, request)
@@ -567,7 +566,11 @@ def recover_confirm(body: dict = Body(...), request: Request = None,
             raise HTTPException(status_code=503,
                                 detail="Сервер сейчас занят. Повторите через несколько секунд.",
                                 headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)})
-        u.password_hash = hash_password(password)
+        #⚠️ ЧЕРЕЗ `set_user_password`, а не `hash_password` руками. Её докстринг прямо
+        #говорит: мест, где меняется пароль, семь, и новое восьмое обязано звать её —
+        #иначе `password_set_at` не обновится, и админ увидит «пароль выдан полгода
+        #назад» у человека, который сменил его пять минут как.
+        set_user_password(u, password)
     u.updated_at = _now()
     row.used_at = now.isoformat()
     #Отзываем ВСЕ сессии: смена пароля — это в том числе реакция на «кажется, меня
