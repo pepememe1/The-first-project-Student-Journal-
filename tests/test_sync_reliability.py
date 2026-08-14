@@ -218,6 +218,87 @@ def test_normal_clock_still_sends_a_delta(monkeypatch):
         f"часы исправны, а уехал полный снимок (звали collect_local с {seen[-1]!r})")
 
 
+# ── 3.2 Порционный push: большой снимок уезжает пачками ────────────────────────────
+def _snapshot(**tables) -> dict:
+    """Снимок вида {'таблица': [{'id': 'таблица-0'}, ...]} — id уникальны на весь снимок."""
+    return {name: [{"id": f"{name}-{i}"} for i in range(n)] for name, n in tables.items()}
+
+
+def test_small_snapshot_still_goes_in_a_single_request():
+    """ОБРАТНЫЙ тест и он здесь главный: обычный цикл (десятки строк) обязан остаться
+    ОДНИМ запросом.
+
+    Без него «порционный push» зелёный и при реализации «всегда слать по одной строке» —
+    то есть мы бы починили редкий отказ, сломав горячий путь, которым синк живёт каждые
+    30 секунд у каждого преподавателя."""
+    sent = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            sent.append(changes)
+            return {}
+
+    sync_engine._push_all(_Rec(), _snapshot(lessons=10, grades=20))
+    assert len(sent) == 1, f"мелкий снимок уехал {len(sent)} запросами вместо одного"
+
+
+def test_large_snapshot_is_split_and_nothing_is_lost():
+    """Крупный снимок режется на пачки, и КАЖДАЯ строка уезжает РОВНО ОДИН раз.
+
+    Проверяем не «сколько было запросов», а сохранность данных: нарезка, теряющая или
+    дублирующая строки, — это ровно та тихая потеря, ради которой весь этот модуль и
+    переписывался."""
+    sent = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            sent.append(changes)
+            return {}
+
+    snap = _snapshot(lessons=700, grades=900, users=3)
+    sync_engine._push_all(_Rec(), snap)
+
+    assert len(sent) > 1, "снимок на 1603 строки обязан был разбиться"
+    got: list = []
+    for part in sent:
+        for rows in part.values():
+            got.extend(r["id"] for r in rows)
+    expected = [r["id"] for rows in snap.values() for r in rows]
+    assert sorted(got) == sorted(expected), "нарезка потеряла или исказила строки"
+    assert len(got) == len(set(got)), "строка уехала дважды — нарезка дублирует"
+
+
+def test_lessons_are_pushed_before_the_grades_that_reference_them():
+    """Порядок таблиц переживает нарезку: занятие уезжает раньше оценок по нему.
+
+    Внешних ключей на сервере нет, но обратный порядок оставлял бы базу в состоянии
+    «оценки без занятий» на те секунды, пока идут остальные пачки, — а на этом состоянии
+    может отработать пуш-хук или отчёт."""
+    order = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            order.extend(changes.keys())
+            return {}
+
+    sync_engine._push_all(_Rec(), _snapshot(lessons=600, grades=600))
+    assert order.index("lessons") < order.index("grades")
+
+
+def test_rejections_from_every_batch_are_summed():
+    """`rejected` из РАЗНЫХ пачек складывается, а не затирается последней.
+
+    Иначе отказ, случившийся в первой пачке, исчез бы из отчёта — то самое молчание про
+    отвергнутые правки, которое мы уже чинили один раз."""
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            return {"rejected": {"grades": 1}}
+
+    res = sync_engine._push_all(_Rec(), _snapshot(grades=1200))
+    assert res["rejected"]["grades"] >= 2, (
+        f"отказы из разных пачек не сложились: {res['rejected']}")
+
+
 # ── 4. Инвариант формата метки времени ─────────────────────────────────────────────
 def test_timestamp_format_is_offset_not_z():
     """Метки времени ОБЯЗАНЫ иметь смещение «+00:00», а не суффикс «Z».
@@ -242,3 +323,76 @@ def test_parsed_comparison_survives_mixed_formats():
     b = sync_engine._ts_key("2026-08-13T12:00:00+00:00")
     c = sync_engine._ts_key("2026-08-13T12:00:00.000000+00:00")
     assert a == b == c
+
+
+# ── 5. Сверка «сервер = истина» ОБЯЗАНА иметь вызывающего ──────────────────────────
+def test_reconcile_has_a_caller_in_the_product():
+    """Инвариант §4.5 живёт только пока `reconcile` кто-то ЗОВЁТ.
+
+    🔥 Он и не жил. Единственный вызывающий (`main_window._restore_client_bg`) исчез
+    вместе с `main_window.py` при удалении Qt-оболочки: функция осталась, тесты на неё
+    остались зелёными, а выполняться перестала совсем. Последствие тихое и накопительное —
+    удалённые на сервере студенты и группы оставались на ПК преподавателя навсегда,
+    потому что удаление приходит надгробием, а надгробие видит только тот, кто был на
+    связи в тот момент.
+
+    Тест намеренно проверяет ФАКТ вызова из рабочего кода, а не поведение самой
+    `reconcile` (её поведение покрыто отдельно и было покрыто всё это время — именно
+    поэтому дефект и не заметили).
+    """
+    import inspect
+    from sync import sync_runner
+    src = inspect.getsource(sync_runner)
+    assert "sync_engine.reconcile(" in src, (
+        "в sync_runner нет вызова reconcile — сверка «сервер = истина» снова осиротела")
+    #И он должен стоять на пути ЦИКЛА, а не в мёртвой ветке: цикл обязан его звать.
+    assert "_reconcile_once()" in inspect.getsource(sync_runner.SyncManager._loop)
+
+
+def test_reconcile_runs_once_per_session_and_host_is_exempt(monkeypatch):
+    """Сверка идёт РОВНО один раз за сессию входа, и хост от неё освобождён.
+
+    Оба свойства обязательны и по разным причинам: повтор каждые 30 c означал бы полный
+    снимок базы в каждом цикле (самый дорогой обмен из всех), а сверка на ХОСТЕ стёрла бы
+    единственную авторитетную копию данных ради того, чтобы налить её же обратно.
+    """
+    from sync import sync_runner
+
+    calls = []
+    monkeypatch.setattr(sync_engine, "reconcile", lambda c: calls.append(c))
+
+    r = sync_runner.SyncManager()
+    r._client = object()
+    r._need_reconcile = True
+
+    monkeypatch.setattr("data.app_settings.is_host", lambda: False)
+    assert r._reconcile_once() is True
+    assert r._reconcile_once() is False, "сверка пошла по второму кругу в той же сессии"
+    assert len(calls) == 1
+
+    #Хост: сверки нет вовсе, флаг гасится.
+    r2 = sync_runner.SyncManager()
+    r2._client = object()
+    r2._need_reconcile = True
+    monkeypatch.setattr("data.app_settings.is_host", lambda: True)
+    assert r2._reconcile_once() is False
+    assert len(calls) == 1, "на хосте сверка не имеет права выполняться"
+
+
+def test_failed_reconcile_is_retried_next_cycle(monkeypatch):
+    """Сверка упала — флаг НЕ снимаем: иначе один блип сети отменял бы её до следующего
+    входа, а именно ради накопившихся расхождений она и нужна."""
+    from sync import sync_runner
+
+    def _boom(_c):
+        raise RuntimeError("сеть отвалилась на пуше")
+
+    monkeypatch.setattr(sync_engine, "reconcile", _boom)
+    monkeypatch.setattr("data.app_settings.is_host", lambda: False)
+
+    r = sync_runner.SyncManager()
+    r._client = object()
+    r._need_reconcile = True
+    with pytest.raises(RuntimeError):
+        r._reconcile_once()
+    assert r._need_reconcile is True, "провал сверки должен оставлять её в очереди"

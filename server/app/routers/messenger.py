@@ -27,6 +27,7 @@ from ..db import get_db, SessionLocal
 from ..deps import get_current_user, require_admin
 from ..security import decode_token
 from ..models import (
+    AuthSession,
     Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
     CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
@@ -89,6 +90,37 @@ class _WSManager:
             return
         try:
             asyncio.run_coroutine_threadsafe(self.send_users(list(uids), data), loop)
+        except Exception:
+            pass
+
+    async def close_user(self, uid: str, code: int = 4001):
+        """Разорвать ВСЕ живые сокеты пользователя."""
+        for ws in list(self._by_user.get(uid, ())):
+            try:
+                await ws.close(code=code)
+            except Exception:
+                #Сокет мог умереть сам (клиент закрыл вкладку) — это штатный исход
+                #гонки, а не сбой. Важно, что из реестра он всё равно уйдёт ниже.
+                pass
+        self._by_user.pop(uid, None)
+
+    def kick_user(self, uid: str):
+        """🔒 Отзыв сессии обязан РВАТЬ уже открытый сокет, а не только закрывать вход.
+
+        Проверка отзыва стоит на ПОДКЛЮЧЕНИИ, и этого мало: сокет живёт часами. После
+        «Выйти» или блокировки админом украденный токен продолжал получать карту
+        активности бесед (в каких чатах идёт переписка) и слать «печатает…» — ровно до
+        того момента, когда клиент сам отвалится. Тексты не утекали (их отдаёт HTTP, а
+        он отзыв проверяет), но чёрный список jti заводился именно ради того, чтобы
+        доступ закрывался МГНОВЕННО, а не «когда-нибудь».
+
+        Зовётся из СИНХРОННЫХ обработчиков (logout, отзыв сессий админом) — отсюда тот
+        же приём с планированием корутины в цикл, что у `emit_users`."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.close_user(uid), loop)
         except Exception:
             pass
 
@@ -2432,7 +2464,17 @@ def _post_system_channel_message(db: Session, conv_id: str, body: str) -> None:
         if ids:
             for u in db.query(User).filter(User.id.in_(ids)).all():
                 if u.login and u.login not in online:
-                    rustore_push.notify_login(db, u.login, SYSTEM_SENDER_NAME, body[:120],
+                    #🔒 ТЕКСТ СООБЩЕНИЯ В ПУШ НЕ КЛАДЁМ. Здесь стояло `body[:120]` — и это
+                    #было ЕДИНСТВЕННОЕ место во всём мессенджере, нарушавшее собственное
+                    #правило продукта «содержимое не уходит третьей стороне» (см. шапку
+                    #rustore_push.py и `_notify_recipients`, где давно уходит нейтральное
+                    #«Новое сообщение»). Через системные каналы ходят объявления куратора и
+                    #ответы Вектора на вопросы студента — то есть первые 120 символов
+                    #учебных данных уезжали в инфраструктуру RuStore и оседали в её логах
+                    #и в шторке уведомлений на заблокированном экране.
+                    #Ради чего терпеть: ни ради чего. Человек всё равно открывает чат.
+                    rustore_push.notify_login(db, u.login, SYSTEM_SENDER_NAME,
+                                              "Новое сообщение",
                                               {"type": "message", "conversation_id": conv_id})
     except Exception:
         pass
@@ -3282,8 +3324,23 @@ async def messenger_ws(ws: WebSocket, token: str = Query("")):
         return
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.login == payload.get("sub"),
-                                     User.deleted == False).first()  # noqa: E712
+        #🔒 ОТЗЫВ СЕССИИ. Раньше здесь проверялись только подпись и наличие пользователя —
+        #в отличие от HTTP-пути (`deps.get_current_user`), который смотрит чёрный список
+        #jti. Из-за этого «Выйти» и блокировка админом НЕ разрывали живой сокет: украденный
+        #токен ещё до пяти часов получал сигналы `{"changed", conversation_id}` — то есть
+        #видел, в каких беседах идёт переписка, — и мог слать «печатает…». Тексты не
+        #утекали (их отдаёт HTTP, а он отзыв проверяет), но это ровно та дверь, ради
+        #закрытия которой чёрный список jti и заводился.
+        #Токены БЕЗ jti (старого формата) пускаем, как и на HTTP: иначе выданные до
+        #введения списка сессии оборвались бы у всех разом.
+        jti = payload.get("jti")
+        revoked = False
+        if jti:
+            sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
+            revoked = sess is None or bool(sess.revoked)
+        user = None if revoked else db.query(User).filter(
+            User.login == payload.get("sub"),
+            User.deleted == False).first()  # noqa: E712
     finally:
         db.close()
     if user is None:

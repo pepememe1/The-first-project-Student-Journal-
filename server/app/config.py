@@ -200,6 +200,18 @@ WEBAUTHN_ORIGIN = (os.environ.get("GRADEBOOK_WEBAUTHN_ORIGIN", "").strip() or _d
 WEBAUTHN_RP_ID = (os.environ.get("GRADEBOOK_WEBAUTHN_RP_ID", "").strip() or _host_of(WEBAUTHN_ORIGIN))
 WEBAUTHN_RP_NAME = os.environ.get("GRADEBOOK_WEBAUTHN_RP_NAME", "GradeBookAI — ВСГУТУ")
 
+#Адрес сайта для ССЫЛОК В ПИСЬМАХ. Берём тот же источник, что и WebAuthn: он уже обязан
+#совпадать с реальным origin (иначе passkey не работают), значит второго места, которое
+#можно забыть обновить при смене домена, мы не заводим.
+#⚠️ В письме адрес обязан быть АБСОЛЮТНЫМ и https: относительная ссылка в почтовом
+#клиенте не откроется вовсе, а http отдал бы одноразовый токен сброса в открытый канал.
+SITE_URL = (os.environ.get("GRADEBOOK_SITE_URL", "").strip() or WEBAUTHN_ORIGIN).rstrip("/")
+
+#Сколько живёт ссылка восстановления пароля. Полчаса — компромисс: человек успевает
+#дойти до почты, а украденное или забытое в общем почтовом ящике письмо перестаёт быть
+#ключом от аккаунта уже к концу пары.
+PASSWORD_RESET_TTL_MIN = int(os.environ.get("GRADEBOOK_PASSWORD_RESET_TTL_MIN", "30"))
+
 
 #RuStore Push. Секреты — ТОЛЬКО из окружения (.env вне git): сервисный токен даёт право
 #рассылать уведомления всем пользователям приложения, утечка = чужая рассылка от нашего

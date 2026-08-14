@@ -1,6 +1,26 @@
 {
 	servers {
 		protocols h1 h2
+		timeouts {
+			# ⚠️ Таймаутов здесь не было ВООБЩЕ — то есть соединение, открытое и брошенное
+			# на полуслове, держалось столько, сколько захочет тот, кто его открыл. Это
+			# классический slowloris: несколько тысяч таких соединений съедают лимит
+			# дескрипторов и рабочие потоки, не потратив у атакующего почти ничего.
+			#
+			# read_header — главный рубеж: заголовки живой браузер шлёт мгновенно, и 15 с
+			# хватает даже с плохой мобильной связи у вуза. Именно на этой фазе висит
+			# slowloris (шлёт по байту в минуту и не заканчивает заголовки никогда).
+			read_header 15s
+			# read_body щедрее: сюда попадает импорт данных админом (zip-архив выгрузки) и
+			# отправка звука на распознавание. Ограничение всё равно есть — соединение не
+			# может держаться вечно.
+			read_body 5m
+			# idle — сколько держим keep-alive без запросов.
+			idle 5m
+			# ⚠️ write НЕ ставим намеренно: через этот же сервер качается .exe на 49 МБ, и
+			# любой разумный write-таймаут оборвал бы закачку на медленном канале. Защита
+			# от медленного ЧТЕНИЯ ответа — это лимит соединений, а не таймаут записи.
+		}
 	}
 }
 
@@ -10,6 +30,11 @@ esstu-gradebook.ru {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
+		# Permissions-Policy: явный отказ от того, чем продукт не пользуется. Без него
+		# браузер разрешает эти способности встроенному содержимому по умолчанию.
+		# ⚠️ microphone НЕ запрещаем: на нём голосовой ввод Вектора (MicButton.vue +
+		# voiceInput.js) и распознавание речи — запрет убил бы работающую функцию.
+		Permissions-Policy "camera=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), midi=(), serial=(), bluetooth=(), interest-cohort=(), microphone=(self)"
 		# frame-src — Фаза 1 видео-эмбедов мессенджера (docs/MESSENGER-ATTACHMENTS-PLAN.md):
 		# без него default-src 'self' блокирует ЛЮБОЙ <iframe>, и белый список видеохостингов
 		# (YouTube/VK/Rutube, см. web/src/utils/videoEmbed.js) не открылся бы вовсе.
@@ -24,6 +49,36 @@ esstu-gradebook.ru {
 		Content-Security-Policy "default-src 'self'; img-src 'self' data: https://static.klipy.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
 		-Server
 	}
+
+	# ━━ ЛИМИТ РАЗМЕРА ТЕЛА ЗАПРОСА ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	# Его не было вовсе: любой желающий мог слать в /auth/login тело на гигабайт, и мы
+	# честно принимали его в память одноядерной машины. Это самый дешёвый способ положить
+	# сервер — трафик атакующего оплачивает провайдер, память нашу тратим мы.
+	#
+	# Крупная загрузка в продукте РОВНО одна — импорт выгрузки данных админом (zip со
+	# справочниками, см. data_transfer.py). Ей даём отдельный, широкий лимит.
+	@bigupload path /web/admin/data/import
+	request_body @bigupload {
+		max_size 200MB
+	}
+	# Всему остальному 4 МБ хватает с запасом: самое объёмное — аватар в /me/prefs
+	# (лимит настроек 64 КБ) и звук на распознавание в /web/vector/stt.
+	request_body {
+		max_size 4MB
+	}
+
+	# Журнал доступа — нужен fail2ban, чтобы отсекать сканеры ДО бэкенда, и нам, чтобы
+	# вообще видеть, что происходит. Пишем в файл с ротацией: без неё лог на диске,
+	# забитом на три четверти, однажды доест остаток.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+	}
+
 	# Реальный IP клиента из ПРОВЕРЕННОГО TCP-пира (клиент подделать не может — Caddy
 	# перезаписывает). Сервер (throttle.client_ip) доверяет ему для анти-брутфорса; без
 	# него первый элемент X-Forwarded-For спуфится и защита от перебора пароля обходится.

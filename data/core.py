@@ -30,6 +30,39 @@ import socket as _socket
 import app_paths
 
 
+#Об одном и том же сбое сообщаем ОДИН раз за запуск. Часть мест ниже зовётся на КАЖДОЕ
+#соединение с базой, на каждое открытие журнала и на каждый пересчёт среднего — писать
+#по строке на вызов значит превратить лог в шум, в котором не найти ни одной настоящей
+#записи, и его перестанут читать. Тот же приём и та же причина, что в data/app_settings.py.
+_reported: set[str] = set()
+
+
+def _report_once(tag: str, message: str, *args, level: str = "warning") -> None:
+    """Записать сбой в лог один раз за запуск (ключ повтора — tag)."""
+    if tag in _reported:
+        return
+    _reported.add(tag)
+    getattr(log.get("core"), level)(message, *args)
+
+
+def _alter_ignored(table: str, column: str, exc: Exception) -> None:
+    """Не прошёл идемпотентный `ALTER TABLE ... ADD COLUMN` при миграции схемы.
+
+    «duplicate column name» — ШТАТНЫЙ исход: миграция зовётся на каждом старте, и на
+    уже мигрированной базе она обязана падать именно так. Такой случай не логируем
+    совсем — иначе каждый запуск давал бы полтора десятка строк-пустышек.
+
+    ЛЮБАЯ другая причина (залоченная база, нет прав на файл) оставляет таблицу БЕЗ
+    колонки, и дальше запросы к ней падают «непонятно почему», уже далеко от места
+    настоящей ошибки. Класс дефекта «колонка без ALTER» у нас уже случался, поэтому
+    поведение не меняем (падать на старте из-за миграции нельзя), но след оставляем."""
+    if "duplicate column name" in str(exc).lower():
+        return
+    _report_once(f"alter:{table}.{column}",
+                 "[DBManager] миграция схемы: колонка «%s» не добавлена в «%s» (%s) — "
+                 "запросы к этой колонке будут падать", column, table, exc, level="error")
+
+
 #Где лежит локальная база.
 #ВАЖНО: SQLite ВСЕГДА на локальном диске машины — никогда на сетевой шаре
 #(иначе блокировки и порча файла при работе нескольких ПК). Где именно лежит
@@ -46,7 +79,14 @@ def _is_network_path(path: str) -> bool:
             import ctypes
             drive = _os.path.splitdrive(p)[0] + "\\"
             return ctypes.windll.kernel32.GetDriveTypeW(drive) == 4  # DRIVE_REMOTE
-        except Exception:
+        except Exception as e:
+            #Тип диска не определился — считаем путь локальным (как и раньше), иначе
+            #программа не запустилась бы из-за неудавшейся проверки. Но молчать нельзя:
+            #предупреждение о базе на сетевой шаре, ради которого функция и написана,
+            #в этом случае не сработает НИКОГДА, и блокировки/порчу файла будут искать
+            #где угодно, только не здесь.
+            _report_once("drive_type", "[DBManager] тип диска для «%s» не определён (%s) — "
+                         "проверка «база на сетевом пути» пропущена", p, e)
             return False
     return False
 
@@ -123,8 +163,13 @@ class DBManager:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA synchronous=NORMAL")
-        except Exception:
-            pass
+        except Exception as e:
+            #Соединение отдаём в любом случае — без этих PRAGMA база работает, просто
+            #становится уязвимой ровно к тому, ради чего они и стоят: блокировкам и
+            #порче файла при параллельном доступе. Раз в запуск: зовётся на КАЖДОЕ
+            #соединение, и построчный лог утопил бы всё остальное.
+            _report_once("pragma", "[DBManager] PRAGMA (WAL/busy_timeout) не применились: %s "
+                         "— возможны блокировки базы", e)
         return conn
 
     #Авто-бэкапы локальной базы
@@ -158,8 +203,13 @@ class DBManager:
                 c = sqlite3.connect(LOCAL_DB)
                 c.execute("PRAGMA wal_checkpoint(FULL)")
                 c.close()
-            except Exception:
-                pass
+            except Exception as e:
+                #Копию всё равно делаем (неполная лучше, чем никакой), но WAL не сброшен —
+                #значит самые свежие правки могли остаться в -wal и в копию не попасть.
+                #Без этой строки «после восстановления пропали последние оценки» нечем
+                #объяснить: сам файл копии выглядит совершенно нормальным.
+                log.get("core").warning("[DBManager] WAL не сброшен перед копией (%s) — копия "
+                                        "может не содержать последних правок", e)
             _shutil.copy2(LOCAL_DB, dst)
             cls._prune_backups()
             return dst
@@ -196,6 +246,7 @@ class DBManager:
 
     @classmethod
     def _prune_backups(cls):
+        failed = 0
         try:
             files = sorted(
                 (f for f in _os.listdir(BACKUP_DIR) if f.endswith(".db")),
@@ -205,9 +256,17 @@ class DBManager:
                 try:
                     _os.remove(_os.path.join(BACKUP_DIR, old))
                 except Exception:
-                    pass
-        except Exception:
-            pass
+                    #Копий в папке до полусотни, и файл может быть занят антивирусом или
+                    #проводником. Пишем ОДНУ строку с количеством после цикла, а не по
+                    #строке на файл — иначе одна занятая папка даёт полсотни записей.
+                    failed += 1
+        except Exception as e:
+            log.get("core").warning("[DBManager] уборка старых копий не выполнена: %s — папка "
+                                    "бэкапов будет расти", e)
+            return
+        if failed:
+            log.get("core").warning("[DBManager] не удалось удалить старых копий: %d — папка "
+                                    "бэкапов будет расти", failed)
 
     @classmethod
     def list_backups(cls) -> list:
@@ -220,8 +279,12 @@ class DBManager:
                 p = _os.path.join(BACKUP_DIR, f)
                 st = _os.stat(p)
                 out.append((f, p, st.st_size, st.st_mtime))
-        except Exception:
-            pass
+        except Exception as e:
+            #Пустой список неотличим от «копий ещё нет»: раздел «Резервные копии» покажет
+            #пусто при живых файлах на диске, а backup_if_due решит, что копий нет вовсе.
+            #Второе безвредно (сделает лишнюю копию), первое — прямой повод к неверному
+            #выводу «нас не бэкапят».
+            log.get("core").warning("[DBManager] список резервных копий не прочитан: %s", e)
         out.sort(key=lambda x: x[3], reverse=True)
         return out
 
@@ -265,8 +328,13 @@ class DBManager:
         try:
             from sync import sync_runner
             sync_runner.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            #Синк не остановлен — а это ровно та причина, по которой сброс может «не
+            #сработать»: живой поток держит соединение (файл не удалить) или сразу после
+            #очистки тянет данные обратно с сервера. В `errors` не кладём намеренно: этот
+            #список показывается человеку как итог операции, и его состав — поведение,
+            #которое мы здесь не меняем. Лога достаточно, чтобы объяснить «данные вернулись».
+            log.get("core").warning("[wipe] фоновая синхронизация не остановлена: %s", e)
 
         #Сбрасываем WAL в основной файл и отпускаем соединение — чтобы -wal/-shm не
         #держали данные и файлы освободились для удаления.
@@ -274,8 +342,11 @@ class DBManager:
             c = sqlite3.connect(LOCAL_DB)
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             c.close()
-        except Exception:
-            pass
+        except Exception as e:
+            #Продолжаем (файлы -wal/-shm всё равно удаляются ниже поимённо), но знать
+            #надо: незакрытый WAL — самая частая причина, по которой файл базы занят и
+            #сброс уходит в запасной путь «очистка через SQL».
+            log.get("core").warning("[wipe] WAL не сброшен перед удалением базы: %s", e)
 
         file_ok = True
         for suffix in ("-wal", "-shm", "-journal", ""):
@@ -317,8 +388,12 @@ class DBManager:
         try:
             from data import data_store
             data_store.reset_store()
-        except Exception:
-            pass
+        except Exception as e:
+            #Singleton остался жить со ссылками на стёртые данные: до перезапуска
+            #программа может показывать студентов и группы, которых на диске уже нет.
+            #Выглядит как «сброс не сработал», хотя база пуста.
+            log.get("core").warning("[wipe] singleton хранилища не сброшен: %s — "
+                                    "до перезапуска возможны данные из памяти", e)
 
         return {"removed": removed, "errors": errors}
 
@@ -414,8 +489,8 @@ class DBManager:
                              ("year", "TEXT DEFAULT ''"), ("semester", "INTEGER DEFAULT 0")]:
             try:
                 cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} {default}")
-            except Exception:
-                pass
+            except Exception as e:
+                _alter_ignored("lessons", col, e)
         #Плановые учебные часы предмета на семестр. Задаёт админ (на сайте/в админке ПК),
         #сюда приезжают синком — журнал показывает «пройдено X из Y ч». Ключ
         #детерминированный (hrs:группа|предмет|год|семестр), как у остальных синкуемых
@@ -431,13 +506,13 @@ class DBManager:
         #колонку не досоздаёт, нужен ALTER (тот же паттерн, что уже применяем к lessons).
         try:
             cur.execute("ALTER TABLE subject_hours ADD COLUMN teacher_id TEXT DEFAULT ''")
-        except Exception:
-            pass
+        except Exception as e:
+            _alter_ignored("subject_hours", "teacher_id", e)
         #zet — ЗЕТ предмета (docs/PLAN-ZET.md), NULL = администратор не задавал.
         try:
             cur.execute("ALTER TABLE subject_hours ADD COLUMN zet REAL")
-        except Exception:
-            pass
+        except Exception as e:
+            _alter_ignored("subject_hours", "zet", e)
         cur.execute("""CREATE TABLE IF NOT EXISTS students
             (f TEXT, n TEXT, group_name TEXT, PRIMARY KEY(f, n, group_name))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS grades
@@ -448,13 +523,13 @@ class DBManager:
         for col in ("updated_at", "device"):
             try:
                 cur.execute(f"ALTER TABLE grades ADD COLUMN {col} TEXT DEFAULT ''")
-            except Exception:
-                pass
+            except Exception as e:
+                _alter_ignored("grades", col, e)
         #deleted у оценок — то же надгробие (удалённая оценка не должна воскресать).
         try:
             cur.execute("ALTER TABLE grades ADD COLUMN deleted INTEGER DEFAULT 0")
-        except Exception:
-            pass
+        except Exception as e:
+            _alter_ignored("grades", "deleted", e)
         cur.execute("""CREATE TABLE IF NOT EXISTS sync_conflicts
             (id INTEGER PRIMARY KEY AUTOINCREMENT,
              student_f TEXT, student_n TEXT, lesson_id TEXT,
@@ -477,8 +552,8 @@ class DBManager:
         for _tbl in ("grades", "term_grades", "sync_conflicts"):
             try:
                 cur.execute(f"ALTER TABLE {_tbl} ADD COLUMN student_id TEXT DEFAULT ''")
-            except Exception:
-                pass
+            except Exception as e:
+                _alter_ignored(_tbl, "student_id", e)
         #Правки расписания админом (overlay поверх портала) — синкуемая сущность.
         #Схему создаём ЗДЕСЬ, при инициализации БД, а не на каждое чтение/запись в
         #schedule/overrides.py: DDL на каждый вызов — лишний парсинг запроса, а флаг
@@ -503,8 +578,8 @@ class DBManager:
                             ("category", "TEXT")):
             try:
                 cur.execute(f"ALTER TABLE groups ADD COLUMN {_col} {_decl}")
-            except Exception:
-                pass
+            except Exception as e:
+                _alter_ignored("groups", _col, e)
         #Пользователи (студенты/преподаватели) — в таблице для прямого синка (LWW/надгробия/
         #дельта, как lessons), НО payload лежит ЗАШИФРОВАННЫМ blob'ом (Fernet+DPAPI): хеши
         #паролей и ПДн НЕ оголяются на диске (152-ФЗ; та же защита, что была у kv_store).
@@ -602,7 +677,11 @@ class DBManager:
                         "WHERE COALESCE(deleted,0)=0 AND COALESCE(year,'')<>''")
             terms = sorted({(y, int(s or 0)) for y, s in cur.fetchall() if y},
                            key=lambda t: (t[0], t[1]), reverse=True)
-        except Exception:
+        except Exception as e:
+            #Пустой список = селектор семестра пуст, и человек читает это как «занятий не
+            #было ни в одном периоде». Пустоту оставляем (журнал важнее селектора), но
+            #отличить сбой чтения от честного отсутствия периодов теперь можно по логу.
+            log.get("core").warning("[DBManager] список учебных периодов не прочитан: %s", e)
             terms = []
         conn.close()
         return terms
@@ -617,7 +696,12 @@ class DBManager:
             cur.execute("SELECT DISTINCT subject FROM lessons WHERE group_name=? "
                         "AND COALESCE(deleted,0)=0 AND COALESCE(subject,'')<>''", (group,))
             subs = [r[0] for r in cur.fetchall()]
-        except Exception:
+        except Exception as e:
+            #Функция существует ровно затем, чтобы студент увидел предмет с оценками,
+            #которого нет в портальном расписании. Пустой список молча возвращает тот
+            #самый баг, который она закрывает: «оценки пропали». Поведение сохраняем.
+            log.get("core").warning("[DBManager] предметы с занятиями группы «%s» не "
+                                    "прочитаны: %s", group, e)
             subs = []
         conn.close()
         return subs
@@ -746,8 +830,8 @@ class GradeBook:
         cur  = conn.cursor()
         try:
             cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} TEXT DEFAULT ''")
-        except Exception:
-            pass
+        except Exception as e:
+            _alter_ignored("lessons", col, e)
         cur.execute(f"UPDATE lessons SET {col}=? WHERE id=?", (retake_date, lesson_id))
         conn.commit()
         conn.close()
@@ -875,8 +959,13 @@ class GradeBook:
             from data import terms
             y, s = terms.current_term()
             keys.append(_key(y, s))
-        except Exception:
-            pass          #нет модуля/конфига — обойдёмся бестерминным ключом ниже
+        except Exception as e:
+            #Обойдёмся бестерминным ключом ниже — но это ровно тот сценарий, из-за
+            #которого часы «не появлялись на ПК»: админ сохраняет их С периодом, а мы
+            #ищем `hrs:Группа|Предмет||0`, и ключи не совпадают никогда. Раз в запуск:
+            #зовётся на каждое открытие журнала.
+            _report_once("hours_term", "[GradeBook] текущий учебный период не определён (%s) — "
+                         "план часов ищу по бестерминному ключу, он может не найтись", e)
         keys.append(_key("", 0))
         return keys
 

@@ -88,6 +88,14 @@ def revoke_session(body: RevokeIn,
             revoked += 1
     db.commit()
     if revoked:
+        #🔒 Экстренная блокировка обязана РВАТЬ живые сокеты, а не только закрывать вход:
+        #иначе уволенный сотрудник ещё часами видит, в каких беседах идёт переписка.
+        #Логины собираем из самих отозванных строк — по `jti` login заранее неизвестен.
+        from .auth import _kick_sockets
+        for login in {(s.login or "") for s in targets if s.login}:
+            u = db.query(User).filter(User.login == login).first()
+            if u is not None:
+                _kick_sockets(u.id)
         events.record("warn", "token_revoked",
                       f"админ отозвал сессии ({revoked})",
                       body.login or body.jti, "")

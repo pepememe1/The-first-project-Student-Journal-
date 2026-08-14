@@ -21,6 +21,10 @@ export const authApi = {
   // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
   register: (payload) => api.post('/auth/register', payload),
   recover: (email) => api.post('/auth/recover', { email }),
+  // Смена пароля по одноразовой ссылке из письма — ЕДИНСТВЕННОЕ место, где
+  // пароль реально меняется (сам /auth/recover его больше не трогает).
+  recoverConfirm: (token, password) =>
+    api.post('/auth/recover/confirm', { token, password }),
   // Passkeys (вход по Face ID / отпечатку). begin выдаёт опции с challenge, complete
   // проверяет ответ устройства. register — под токеном (включить), login — публичный.
   webauthnRegisterBegin: () => api.post('/auth/webauthn/register/begin'),

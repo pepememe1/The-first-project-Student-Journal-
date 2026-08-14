@@ -4,6 +4,7 @@ auth.py — Авторизация: создание первого админи
 Offline-first: пользователей заводит админ в десктоп-проге, они синхронизируются
 на сервер уже хешами паролей. Логин через API/сайт работает с теми же паролями.
 """
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -144,8 +145,33 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     if web and u is not None and device_barrier_applies(request, u.role):
         ensure_device_allowed(request, db)
 
-    if not u or not verify_password(body.password, u.password_hash):
-        throttle.register_failure(ip, login_str)
+    #Сверка пароля — под слотом: гибридный хеш стоит 200k+200k итераций, и на одноядерном
+    #VPS полсотни одновременных входов положили бы сайт всем (см. throttle.hash_slot).
+    #Слот не получен — это НЕ неудачный вход: счётчики не трогаем, человек ни при чём.
+    with throttle.hash_slot() as got_slot:
+        if not got_slot:
+            events.record("warn", "login_busy",
+                          "вход отложен: сервер занят проверкой паролей", login_str, ip)
+            raise HTTPException(
+                status_code=503,
+                detail="Сервер сейчас занят. Повторите через несколько секунд.",
+                headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)},
+            )
+        password_ok = u is not None and verify_password(body.password, u.password_hash)
+
+    if u is None:
+        #Логина не существует: хешировать нечего, и без задержки ответ прилетел бы
+        #МГНОВЕННО — в отличие от существующего логина, где считается 200k итераций.
+        #Эта разница во времени сама по себе отвечает «есть такой аккаунт или нет», то
+        #есть даёт собрать список живых логинов, не подобрав ни одного пароля. Плюс
+        #перебор выдуманных логинов шёл бы даром и на полной скорости.
+        time.sleep(throttle.UNKNOWN_LOGIN_DELAY_S)
+
+    if not password_ok:
+        #login_exists различает опечатку живого человека и перебор: счётчик ПО ВСЕМУ
+        #адресу двигают только попытки против НЕсуществующих логинов. Иначе группа
+        #студентов за одним VPN/NAT запирала бы вход сама себе (см. throttle.IP_MAX_FAILS).
+        throttle.register_failure(ip, login_str, login_exists=u is not None)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
         audit.log(db, request, actor=login_str, action="login.fail", level="warn")
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
@@ -279,16 +305,36 @@ def logout(request: Request, authorization: str = Header(None),
                     pair.revoked = True
                     revoked += 1
         db.commit()
+        #🔒 И РВЁМ ЖИВОЙ СОКЕТ. Без этого «Выйти» закрывало только новые подключения, а
+        #уже открытое продолжало получать сигналы о переписке часами. Подробности —
+        #в `messenger.ws_manager.kick_user`. Импорт ленивый: `messenger` тянет за собой
+        #пол-приложения, и статический импорт отсюда завязал бы вход на мессенджер.
+        _kick_sockets(user.id)
         events.record("info", "logout", "выход (токен отозван)", user.login,
                       throttle.client_ip(request))
         audit.log(db, request, actor=user.login, role=user.role, action="logout")
     return {"revoked": revoked}
 
 
+def _kick_sockets(user_id: str):
+    """Разорвать живые WebSocket-соединения пользователя. Никогда не бросает: отзыв
+    сессии обязан состояться, даже если мессенджер по какой-то причине недоступен."""
+    try:
+        from .messenger import ws_manager
+        ws_manager.kick_user(user_id or "")
+    except Exception as e:      # noqa: BLE001
+        events.record("warn", "ws_kick_failed",
+                      f"сокет не разорван после отзыва сессии: {e}", "", "")
+
+
 # ── Самостоятельная регистрация студентов и восстановление пароля ────────────────
+import secrets                                                        # noqa: E402
+import threading                                                      # noqa: E402
 import uuid as _uuid                                                   # noqa: E402
+from datetime import timedelta                                        # noqa: E402
 from fastapi import Body                                              # noqa: E402
-from ..models import RegistrationRequest, Group                       # noqa: E402
+from ..models import RegistrationRequest, Group, PasswordReset        # noqa: E402
+from ..config import SITE_URL, PASSWORD_RESET_TTL_MIN                 # noqa: E402
 from .. import reg_utils, mailer, gost                                # noqa: E402
 
 
@@ -348,10 +394,16 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
 
 @router.post("/recover")
 def recover(body: dict = Body(...), request: Request = None, db: Session = Depends(get_db)):
-    """Восстановление пароля студента по e-mail (= логин). Если аккаунт есть — генерируем
-    НОВЫЙ пароль, сохраняем ХЕШ (старый пароль перестаёт работать), отзываем активные
-    сессии и высылаем новый пароль на почту. Ответ ВСЕГДА одинаковый и НЕ содержит sent
-    (не раскрываем существование почты — анти-энумерация). Лимит по IP — анти-спам сбросов."""
+    """Запрос восстановления пароля студента по e-mail (= логин).
+
+    ⚠️ ПАРОЛЬ ЗДЕСЬ НЕ МЕНЯЕТСЯ — только заводится одноразовая ссылка и уходит письмо.
+    Сама смена — в `/auth/recover/confirm`, по переходу по этой ссылке. (Прежний
+    докстринг обещал «генерируем НОВЫЙ пароль и высылаем его» — так и было до 3.7.3, и
+    это была дыра: знающий чужую почту выкидывал человека из журнала повторяемо.)
+
+    Ответ ВСЕГДА одинаковый — и по телу, и по ВРЕМЕНИ (см. `_uniform_delay` ниже):
+    существование почты не раскрывается ни тем, ни другим."""
+    started = time.monotonic()
     ip = throttle.client_ip(request) if request is not None else ""
     left = throttle.seconds_until_reg_unlocked(ip)
     if left:
@@ -359,27 +411,172 @@ def recover(body: dict = Body(...), request: Request = None, db: Session = Depen
                             detail=f"Слишком много запросов. Подождите {left // 60 + 1} мин.")
     throttle.register_reg_failure(ip)   #каждый запрос на сброс приближает временный лимит
     email = (body.get("email") or "").strip().lower()
+    #🔒 ОСТУДА ПО САМОЙ ПОЧТЕ. Лимит по IP тут не защищает: атакующий меняет адрес (с VPN
+    #это автоматически), а страдает живой человек за общим адресом. Ключ — жертва: один
+    #аккаунт сбрасывается не чаще раза в час, сколько бы адресов ни сменили. Без этого
+    #эндпоинт был повторяемым DoS: каждый запрос менял пароль и отзывал ВСЕ сессии, то
+    #есть выбивал студента из журнала, а знать надо было только его почту.
+    #⚠️ Ответ и здесь ОДИНАКОВЫЙ (тихо выходим), иначе 429 подтверждал бы существование
+    #почты — ровно то, что остальной эндпоинт старательно скрывает.
+    if email and throttle.seconds_until_recover_allowed(email):
+        _uniform_delay(started)
+        return {"ok": True}
     u = db.query(User).filter(User.login == email, User.role == "student",
                               User.deleted == False).first()  # noqa: E712
     sent = False
     if u:
-        pw = reg_utils.gen_password()
-        u.password_hash = hash_password(pw)     #храним только хеш; старый недействителен
-        u.updated_at = _now()
-        db.query(AuthSession).filter(AuthSession.login == email).update({"revoked": True})
+        throttle.register_recover(email)
+        #🔒 ПАРОЛЬ ЗДЕСЬ БОЛЬШЕ НЕ МЕНЯЕТСЯ. Раньше менялся — и это была настоящая дыра:
+        #кто угодно, зная почту студента, обнулял ему доступ и отзывал ВСЕ сессии, то есть
+        #выкидывал человека из журнала посреди пары. Повторяемо и без единого следа для
+        #самого студента. Теперь запрос лишь ЗАВОДИТ одноразовую ссылку; всё, что можно
+        #сделать, не владея почтой, — прислать человеку письмо.
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        db.add(PasswordReset(
+            token=token, login=email, created_at=now.isoformat(),
+            expires_at=(now + timedelta(minutes=PASSWORD_RESET_TTL_MIN)).isoformat(),
+            used_at="", ip=ip))
+        #Прежние невостребованные ссылки гасим: иначе каждый повторный запрос добавлял бы
+        #ещё один действующий ключ, и их накапливалось бы столько, сколько писем ушло.
+        (db.query(PasswordReset)
+           .filter(PasswordReset.login == email, PasswordReset.used_at == "",
+                   PasswordReset.token != token)
+           .update({"used_at": now.isoformat()}))
         db.commit()
-        sent = mailer.send_email(
-            email, "GradeBookAI — новый пароль",
-            f"Здравствуйте!\n\nВаш новый пароль для входа в электронный журнал: {pw}\n"
-            f"Логин: {email}\n\nВойдите на https://esstu-gradebook.ru и при желании смените пароль.",
-            html=mailer._brand_html("Новый пароль", [
-                "Вы запросили восстановление доступа. Ваш новый пароль:",
-                f"<b style='font-size:18px'>{pw}</b>",
-                f"Логин: <b>{email}</b>",
-                "Войдите на <a href='https://esstu-gradebook.ru'>esstu-gradebook.ru</a>."]))
+        sent = _send_reset_link(email, token)
     _ = sent  # ответ намеренно НЕ зависит от sent — не раскрываем существование аккаунта
     #В ЖУРНАЛ (внутренний, админ-only) писать факт можно: анти-энумерация касается только
     #ответа клиенту. Пишем, был ли сброс реально выполнен — для разбора инцидентов.
     audit.log(db, request, actor=email, action="password.recover",
-              detail="сброшен" if u else "аккаунт не найден")
+              detail="ссылка выслана" if u else "аккаунт не найден")
+    _uniform_delay(started)
     return {"ok": True}
+
+
+#🔒 ОБЩИЙ БЮДЖЕТ ВРЕМЕНИ ОТВЕТА. Тянуть каждый выход к одной и той же длительности —
+#единственный способ убрать оракул: считать «где какой sleep поставить» по веткам мы уже
+#пробовали, и первая же новая ветка (остуда по почте) этот расчёт сломала — существующая
+#почта отвечала за миллисекунды, несуществующая за 350 мс, разница в 70 раз.
+_RECOVER_BUDGET_S = 0.40
+
+
+def _uniform_delay(started: float):
+    """Дотянуть ответ до общего бюджета, каким бы путём мы сюда ни пришли."""
+    left = _RECOVER_BUDGET_S - (time.monotonic() - started)
+    if left > 0:
+        time.sleep(left)
+
+
+def _send_reset_link(email: str, token: str) -> bool:
+    """Отправить письмо со ссылкой — В ФОНОВОМ ПОТОКЕ.
+
+    ⚠️ Почему не синхронно, как раньше. SMTP — это сотни миллисекунд, а то и секунды
+    (`mailer.SMTP_SSL(..., timeout=25)`), и они возникают ТОЛЬКО когда аккаунт существует.
+    Никакой общий бюджет времени такой разброс не покроет: ждать 25 секунд на КАЖДОМ
+    запросе нельзя, а не ждать — значит вернуть тот самый оракул с другой стороны. Поэтому
+    письмо уходит после ответа, а сам ответ не зависит от почты вовсе.
+
+    ⚠️ И ТОЛЬКО ПО HTTPS. Ссылка несёт одноразовый ключ от аккаунта; отдать её в открытый
+    канал — это подарить доступ любому, кто в середине. Та же заслонка и та же причина,
+    что у автообновления десктопа (`data/updater._transport_ok`) и у виджета расписания.
+    Сегодня на бою адрес резолвится верно, но он ВЫЧИСЛЯЕТСЯ из `ALLOWED_ORIGINS` — и
+    достаточно поставить туда первым http-адрес, чтобы письма молча начали рассылать
+    токены по открытому каналу.
+    """
+    if not SITE_URL.startswith("https://") and "localhost" not in SITE_URL:
+        events.record("error", "reset_link_insecure",
+                      f"ссылка восстановления НЕ отправлена: небезопасный адрес {SITE_URL}",
+                      email, "")
+        return False
+    link = f"{SITE_URL}/reset-password?token={token}"
+    text = (f"Здравствуйте!\n\nВы запросили восстановление доступа к электронному журналу.\n"
+            f"Чтобы задать новый пароль, перейдите по ссылке (действует "
+            f"{PASSWORD_RESET_TTL_MIN} мин.):\n\n{link}\n\n"
+            f"Логин: {email}\n\nЕсли вы этого не запрашивали — просто не переходите по "
+            f"ссылке. Пароль останется прежним, ничего делать не нужно.")
+    html = mailer._brand_html("Восстановление доступа", [
+        "Вы запросили восстановление доступа к электронному журналу.",
+        f"<a href='{link}'>Задать новый пароль</a> "
+        f"(ссылка действует {PASSWORD_RESET_TTL_MIN} мин.)",
+        f"Логин: <b>{email}</b>",
+        "Если вы этого не запрашивали — просто не переходите по ссылке. "
+        "Пароль останется прежним."])
+
+    def _worker():
+        try:
+            mailer.send_email(email, "GradeBookAI — восстановление доступа", text, html=html)
+        except Exception as e:      # noqa: BLE001
+            #Ответ клиенту уже ушёл, поднимать некуда — но след обязателен: «письмо не
+            #пришло» иначе неотличимо от «человек не туда посмотрел».
+            events.record("warn", "reset_mail_failed",
+                          f"письмо восстановления не отправлено: {e}", email, "")
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return True
+
+
+@router.post("/recover/confirm")
+def recover_confirm(body: dict = Body(...), request: Request = None,
+                    db: Session = Depends(get_db)):
+    """Завершение восстановления: смена пароля ПО ССЫЛКЕ из письма.
+
+    Только здесь пароль реально меняется — значит право сменить его имеет ровно тот, кто
+    владеет почтовым ящиком. Ссылка одноразовая и короткоживущая (см. модель PasswordReset).
+
+    ⚠️ Ответ тут, в отличие от `/recover`, ОБЯЗАН быть внятным. Анти-энумерация здесь не
+    применима и была бы вредной: токен не угадывается перебором (32 случайных байта), а
+    человек, у которого ссылка просто протухла, должен понять, что делать, а не смотреть
+    на «ок» при не сменившемся пароле."""
+    token = (body.get("token") or "").strip()
+    password = body.get("password") or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Ссылка неполная.")
+    #Требование то же, что при создании администратора, — восемь символов. Строже здесь
+    #быть нельзя: человек и так пришёл сюда потому, что не может войти, и отказ по правилу,
+    #которого нет больше нигде в продукте, отправил бы его по кругу.
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Пароль не короче 8 символов")
+
+    row = db.query(PasswordReset).filter(PasswordReset.token == token).first()
+    now = datetime.now(timezone.utc)
+    #Три причины отказа сводим в ОДИН текст намеренно: «такой ссылки нет» и «ссылка уже
+    #использована» вместе рассказали бы, что чужой токен когда-то существовал.
+    if row is None or row.used_at or not row.expires_at or row.expires_at < now.isoformat():
+        audit.log(db, request, actor=(row.login if row else ""),
+                  action="password.reset.reject", level="warn",
+                  detail="ссылка недействительна или истекла")
+        raise HTTPException(
+            status_code=400,
+            detail="Ссылка недействительна или истекла. Запросите восстановление заново.")
+
+    u = db.query(User).filter(User.login == row.login, User.role == "student",
+                              User.deleted == False).first()  # noqa: E712
+    if u is None:
+        #Аккаунт удалили между запросом и переходом. Ссылку гасим — она больше ни к чему
+        #не ведёт, и оставлять её действующей на случай «а вдруг восстановят» нельзя.
+        row.used_at = now.isoformat()
+        db.commit()
+        raise HTTPException(status_code=400, detail="Аккаунт недоступен.")
+
+    with throttle.hash_slot() as got_slot:
+        #Тот же лимит одновременных хешей, что и на входе: смена пароля считает такой же
+        #дорогой гибридный хеш, и без слота этот эндпоинт стал бы обходной дорогой к тому
+        #же усилению нагрузки, от которого закрыт /auth/login.
+        if not got_slot:
+            raise HTTPException(status_code=503,
+                                detail="Сервер сейчас занят. Повторите через несколько секунд.",
+                                headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)})
+        u.password_hash = hash_password(password)
+    u.updated_at = _now()
+    row.used_at = now.isoformat()
+    #Отзываем ВСЕ сессии: смена пароля — это в том числе реакция на «кажется, меня
+    #взломали», и старый токен обязан перестать работать вместе со старым паролем.
+    db.query(AuthSession).filter(AuthSession.login == row.login).update({"revoked": True})
+    db.commit()
+    #Смена пароля — типичная реакция на «кажется, меня взломали»: живой сокет чужой
+    #вкладки обязан оборваться вместе с токеном, а не дожить до конца срока.
+    _kick_sockets(u.id)
+    audit.log(db, request, actor=row.login, action="password.reset.ok",
+              detail="пароль изменён по ссылке из письма")
+    return {"ok": True, "login": row.login}

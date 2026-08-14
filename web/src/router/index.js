@@ -13,6 +13,7 @@ import { HOME_BY_ROLE } from '@/config/nav'
 import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ConnectServer from '@/pages/ConnectServer.vue'
+import ResetPassword from '@/pages/ResetPassword.vue'
 import VectorPage from '@/pages/VectorPage.vue'
 import MessengerPage from '@/pages/MessengerPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
@@ -52,6 +53,8 @@ const page = (path, component, title, subtitle, i18nTitle, i18nSubtitle) =>
 const routes = [
   { path: '/connect', component: ConnectServer, meta: { public: true } },
   { path: '/login', component: LoginPage, meta: { public: true } },
+  // Публичная намеренно: человек приходит сюда именно потому, что войти не может.
+  { path: '/reset-password', component: ResetPassword, meta: { public: true } },
   {
     path: '/',
     redirect: () => {

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from .. import retention as _retention
 from .. import rustore_push
 from ..config import OFFLINE_GRACE_MIN
 from ..db import get_db
@@ -499,6 +500,10 @@ def list_events(filter_: str = Query("unread", alias="filter"),
     #пришёл за уведомлениями.
     _fire_due_reminders(db, user)
     _expire_stale_reports(db)
+    #Политика хранения (152-ФЗ) — тем же приёмом и по той же причине: не чаще раза в
+    #сутки на процесс, проверка метки в памяти без единого запроса к базе. Подробности,
+    #сроки и главное — ПОЧЕМУ окно уборки надгробий такое длинное — в app/retention.py.
+    _retention.maybe_run(db)
     q = db.query(NotifyEvent).filter(NotifyEvent.login == (user.login or ""))
     if filter_ != "all":
         q = q.filter(NotifyEvent.read_at == "")

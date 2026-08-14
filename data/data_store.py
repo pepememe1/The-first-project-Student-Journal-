@@ -17,6 +17,34 @@ data_store.py — Локальное хранилище данных GradeBookAI
 import json
 import log
 
+
+#Сколько раз подряд не удалось разбудить синк. Считаем, чтобы сказать об этом ОДИН раз:
+#функция зовётся на каждое сохранение данных, и построчный лог утопил бы всё остальное.
+_wake_failures = 0
+
+
+def _wake_sync() -> None:
+    """Разбудить фоновую синхронизацию, чтобы правка уехала сразу, а не через интервал.
+
+    Три копии этого кода жили в трёх местах, и все три глотали ошибку молча. Сбой тут
+    НЕ страшен сам по себе — цикл синка всё равно проснётся по своему интервалу, — но
+    молчание означало, что «правка сохранена, а наверх не поехала» выглядело бы
+    совершенно нормально. Пишем в лог ОДИН раз: повторять на каждое сохранение нельзя.
+
+    ⚠️ Первый сбой — штатная ситуация на пути запуска: данные пишутся ДО того, как
+    пользователь вошёл и синк стартовал. Поэтому уровень debug, а не warning.
+    """
+    global _wake_failures
+    try:
+        from sync.sync_runner import trigger as _sync_trigger
+        _sync_trigger()
+        _wake_failures = 0
+    except Exception as e:      # noqa: BLE001
+        _wake_failures += 1
+        if _wake_failures == 1:
+            log.get("data_store").debug(
+                "[sync] не удалось разбудить синк (%s) — правка уедет очередным циклом", e)
+
 from data.core import DBManager
 from data.security import hash_password, verify_password, encrypt_value, decrypt_value
 
@@ -91,11 +119,7 @@ def _kv_set(key: str, value, wake: bool = True) -> bool:
     #по себе НЕ являются данными для отправки — иначе их запись будила бы синк, а тот
     #опять писал бы метку: получился бы бесконечный цикл «синк → метка → синк».
     if wake:
-        try:
-            from sync.sync_runner import trigger as _sync_trigger
-            _sync_trigger()
-        except Exception:
-            pass
+        _wake_sync()
     return True
 
 
@@ -540,11 +564,7 @@ class LocalStore:
     def _after_users_write(wake: bool) -> bool:
         #Разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу.
         if wake:
-            try:
-                from sync.sync_runner import trigger as _sync_trigger
-                _sync_trigger()
-            except Exception:
-                pass
+            _wake_sync()
         return True
 
     #Назначения препод↔предмет↔группа (§ролей, 3.3.1) — читает синкнутую subject_hours
@@ -611,7 +631,14 @@ class LocalStore:
                 "AND semester=? AND COALESCE(deleted,0)=0 AND zet IS NOT NULL",
                 (group, year, int(semester or 0)))
             return {row[0]: row[1] for row in cur.fetchall()}
-        except Exception:
+        except Exception as e:      # noqa: BLE001
+            #Пустой словарь читается интерфейсом как «ЗЕТ по предметам не заданы» — то
+            #есть сбой чтения неотличим от незаполненного администратором плана, и
+            #баланс ЗЕТ студента молча считается от нуля. Значение по умолчанию
+            #оставляем (уронить журнал из-за одной таблицы нельзя), но след обязателен.
+            log.get("data_store").error(
+                "[zet] часы/ЗЕТ группы «%s» не прочитались (%s) — баланс будет "
+                "посчитан без них", group, e)
             return {}
         finally:
             conn.close()
@@ -631,11 +658,7 @@ class LocalStore:
                                             lambda r: r.get("name", ""))
         _groups_write_raw(groups)
         if wake:   #разбудить синк (как делал _kv_set при wake=True) — UI-правка уедет сразу
-            try:
-                from sync.sync_runner import trigger as _sync_trigger
-                _sync_trigger()
-            except Exception:
-                pass
+            _wake_sync()
         return True
 
     #Конфиг приложения
