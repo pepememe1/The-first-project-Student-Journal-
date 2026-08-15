@@ -330,6 +330,16 @@ const canReport = computed(() => reportGroups.value.length > 0)
 const myPermissions = computed(() => new Set(activeInfo.value?.my_permissions || []))
 const canMute = computed(() => myPermissions.value.has('cmd_mute'))
 const canClear = computed(() => myPermissions.value.has('cmd_clear'))
+// Право начать активность ЗЕРКАЛИТ серверный `activities._require_can_run`, а не
+// придумывает своё: беседа общая + (право роли «activities» ИЛИ системная роль
+// преподавателя/админа). Второе слагаемое обязательно — преподаватель ведёт занятие, а не
+// администрирует чат, и просить владельца беседы выдать ему роль ради пары странно.
+// ⚠️ Это подсказка, а не защита: настоящую проверку делает сервер и вернёт 403 с причиной.
+// Здесь она нужна, чтобы команда не выглядела рабочей у того, кому нельзя.
+const canRunActivity = computed(() =>
+  isGroupOrChannel.value
+  && (myPermissions.value.has('activities')
+      || auth.user?.role === 'teacher' || auth.user?.role === 'admin'))
 // §ролей: игнор — по клику раскрывается ЛОКАЛЬНО (revealedIds), снова прячется повторным
 // кликом; сервер тут не участвует, это личное удобство, а не приватность (как в Discord).
 const myIgnoredIds = computed(() => new Set(activeInfo.value?.my_ignored_user_ids || []))
@@ -373,6 +383,20 @@ const SLASH_COMMANDS = computed(() => [
     hint: locale.t('chatThread.cmd.mentionLoudHint', 'Громко отметить — звук у собеседника и письмо во вкладку «Уведомления»'),
     ok: !isSaved.value,
     why: locale.t('chatThread.cmd.noOneToMention', 'В личных заметках отмечать некого'),
+  },
+  //🔥 `/активность` ЗДЕСЬ НЕ БЫЛО, и это делало всю подсистему невидимой. Сервер команду
+  //разбирает (_ACTIVITY_CMD_RE), стор ответ обрабатывает (open_activity_launcher), оверлей
+  //подключён в AppShell — но НАЧАТЬ активность было нечем: единственная дверь к ним это
+  //набранная команда, а список по «/» о ней не говорил. Со стороны — «активностей нет
+  //вообще». Тот же класс, что «обещание без вызывающего», только вызывающий здесь человек,
+  //и узнать о команде ему было неоткуда.
+  {
+    cmd: '/активность',
+    hint: locale.t('chatThread.cmd.activityHint', 'Начать совместную активность: доска, викторина, соревнование, опрос, срез понимания, тайм-бокс'),
+    ok: canRunActivity.value,
+    why: isGroupOrChannel.value
+      ? locale.t('chatThread.cmd.activityWhy', 'Активности ведёт преподаватель или участник с правом «Активности»')
+      : locale.t('chatThread.cmd.activityWhereWhy', 'Активности бывают только в группах и каналах'),
   },
   {
     cmd: '/mute',
