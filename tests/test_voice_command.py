@@ -5,7 +5,7 @@ test_voice_command.py — Детерминированный разбор гол
 все конфликтные ситуации, где обязан быть переспрос, а не молчаливое неверное действие.
 """
 import pytest
-from vector.voice_command import parse, stt_context
+from voice_command import parse, stt_context
 
 ROSTER = [("Иванов", "Иван"), ("Петров", "Пётр"), ("Гордеев", "Ярослав"),
           ("Иванов", "Олег"), ("Смирнова", "Анна")]
@@ -167,7 +167,7 @@ def test_command_is_not_question():
 
 
 # ═══ ПАКЕТНЫЕ КОМАНДЫ (parse_batch) ═══════════════════════════════════════════════
-from vector.voice_command import parse_batch
+from voice_command import parse_batch
 
 # Ростер без однофамильцев — по алфавиту: Абрамов, Гордеев, Петров, Смирнова, Яковлев
 BR = [("Гордеев", "Ярослав"), ("Петров", "Пётр"), ("Смирнова", "Анна"),

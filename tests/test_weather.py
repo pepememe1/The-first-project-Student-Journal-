@@ -105,22 +105,3 @@ def test_answer_returns_to_studies(monkeypatch):
     _fake(monkeypatch, {"temp": 20, "feels": 20, "wind": 0, "code": 0})
     text = weather.answer().lower()
     assert any(w in text for w in ("оценк", "расписан", "долг", "учёб", "учеб"))
-
-
-def test_desktop_intent_handler_wired(monkeypatch):
-    """Десктопный обработчик зарегистрирован и отдаёт тот же текст (паритет платформ)."""
-    from vector import intents
-    _fake(monkeypatch, {"temp": 3, "feels": 3, "wind": 0, "code": 3})
-    assert "weather" in intents._HANDLERS
-    facts = intents._HANDLERS["weather"](None)
-    assert facts.intent == "weather"
-    assert "+3°" in facts.facts_text
-
-
-def test_desktop_does_not_send_weather_to_llm():
-    """Погода НЕ уходит в LLM: модель, «озвучивая данные», меняет числа. Набор обязан
-    совпадать с серверным _NO_VOICE_INTENTS."""
-    import inspect
-    from vector import engine
-    src = inspect.getsource(engine)
-    assert '"schedule", "weather"' in src or "'schedule', 'weather'" in src

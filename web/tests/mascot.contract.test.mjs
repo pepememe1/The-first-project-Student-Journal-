@@ -1,7 +1,12 @@
 // mascot.contract.test.mjs — JS-сторона контракта выбора эмоции маскота.
 //
-// Прогоняет web/src/config/mascot.js::pickEmote по ТОМУ ЖЕ golden-файлу, что и Python
-// (tests/test_mascot_contract.py). Расхождение приоритетов веток уронит один из тестов.
+// Прогоняет web/src/config/mascot.js::pickEmote по golden-файлу docs/contracts/
+// mascot-cases.json.
+//
+// ⚠️ Раньше тот же файл читала Python-сторона (tests/test_mascot_contract.py) — она
+// удалена вместе с пакетом `vector/` 15.08.2026. Это НЕ ослабление: питоновская копия
+// в продукте не исполнялась, а живой код — здесь. Контракт стал спецификацией, а не
+// сверкой двух реализаций, и этот тест теперь единственный, кто её держит.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

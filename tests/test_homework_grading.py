@@ -5,11 +5,13 @@ test_homework_grading.py — ДЗ как оцениваемый тип заня�
 «2»/«Н», но НЕ считается пропуском занятия. Последнее — не мелочь: «Н» на домашней работе
 значит «не сдал», а не «не был», и учёт его в посещаемости наказывал бы студента дважды.
 
-Тесты держат оба конца: единую формулу (grading) и её потребителей — Вектор на десктопе
-(vector.intents) и серверные выборки (server/tests/test_homework.py).
+⚠️ Здесь остался ОДИН конец — единая формула (`grading.py`). Прежде тесты держали ещё и
+десктопного Вектора (`vector.intents._is_debt`/`_count_absences`), но пакет `vector/`
+удалён: у него не осталось ни одного вызывающего в продукте (нативных экранов нет с
+удаления Qt, окно показывает ту же SPA). Правило «несданное ДЗ — долг, но НЕ пропуск»
+проверяется теперь на живом пути — `server/tests/test_homework.py`.
 """
 import grading
-from vector import intents
 
 
 def test_homework_counts_into_average_like_practice():
@@ -36,19 +38,3 @@ def test_is_practice_covers_only_graded_types():
     assert grading.is_practice("ДЗ") and grading.is_practice("Практика")
     assert not grading.is_practice("Лекция")
     assert not grading.is_practice("Экзамен")   #у экзамена своя ветка (avg_include_exam)
-
-
-def test_homework_is_a_debt_but_not_an_absence():
-    """Несданное ДЗ — долг. Но в пропуски оно не попадает: это не прогул занятия."""
-    lessons = [("h", "ДЗ", 1)]
-    debts = intents._is_debt(lessons, {"h": "Н"})
-    assert debts and "ДЗ №1 не сдано" in debts[0], debts
-
-    absences = intents._count_absences(lessons, {"h": "Н"})
-    assert absences["всего"] == 0, f"ДЗ не должно считаться пропуском: {absences}"
-
-
-def test_practice_debt_wording_unchanged():
-    """Формулировка по практике не должна была поменяться из-за появления ДЗ."""
-    debts = intents._is_debt([("p", "Практика", 2)], {"p": "2"})
-    assert debts == ["практика №2 не сдана (2)"], debts

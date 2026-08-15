@@ -11,11 +11,10 @@
 #    больше НЕТ. Перечисление их .py в hiddenimports оставлено осознанно: значительная
 #    часть модулей достижима только через server/app, а он едет ДАННЫМИ (см. ниже) —
 #    статический анализ PyInstaller их не увидит.
-#  • Арт маскота (emotions/), шрифты (fonts/), иконка — кладём в бандл.
-#    ⚠️ Ни то, ни другое СЕЙЧАС не читается кодом: единственным потребителем был
-#    Qt-интерфейс, а его в проекте больше нет (перенесён в WORK/GB-legacy-qt). Маскот и
-#    шрифты приезжают человеку из web/dist. Релизный build_nuitka.sh их уже не кладёт —
-#    здесь оставлены как есть, потому что дев-сборкой размер не меряют.
+#  • Арт маскота и шрифты В БАНДЛ БОЛЬШЕ НЕ КЛАДУТСЯ. Их не читает НИ ОДНА строка кода:
+#    последним потребителем был `vector/emotes.py`, а пакет `vector/` удалён 15.08.2026
+#    (у него не осталось вызывающих в продукте). Маскот и шрифты приезжают человеку из
+#    web/dist — там они ещё и сжаты для веба. Иконка остаётся: её берёт сам EXE.
 #  • subjects.json НЕ бандлим (в subjects.py есть встроенный дефолт).
 #  • ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md, «один UI»): десктоп поднимает НАСТОЯЩЕЕ серверное
 #    приложение (server/app) у себя же на 127.0.0.1 (desktop/local_api.py). Поэтому пакет
@@ -26,9 +25,10 @@
 #    ⚠️ Без них программа НЕ ОТКРОЕТСЯ ВОВСЕ: окно рисуется поверх этого самого локального
 #    сервера, а запасного нативного экрана, на который раньше был откат, больше не
 #    существует. Прежняя формулировка «деградация, не крах» устарела вместе с Qt.
-#  • Серверный ФОНОВЫЙ режим --run-server (server_control.py, «этот ПК как сервер для ЛВС
-#    колледжа») входит туда же: он использует ТОТ ЖЕ бандл server/app, просто с другим
-#    биндом (0.0.0.0) и по кнопке в админке, а не автоматически.
+#  • ⚠️ Режима --run-server («этот ПК как сервер для ЛВС колледжа») БОЛЬШЕ НЕТ: и он, и
+#    `server_control.py` удалены 15.08.2026. Кнопки запуска не существовало с удаления Qt,
+#    а модель отменена решением заказчика — сервер колледжа это отдельная Linux-машина
+#    ВСГУТУ, к которой подключаются по SSH (раздел «Сервер», §16 CLAUDE.md).
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
@@ -52,7 +52,7 @@ for d in ('desktop', 'sync', 'data'):
     hidden += _flat_mods(d)
 # корневые модули, которые импортируются лениво либо только из server/app (то есть из
 # «данных» — статический анализ до них не доходит)
-hidden += ['grading', 'subjects', 'server_control', 'app_paths', 'log']
+hidden += ['grading', 'subjects', 'app_paths', 'log']
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
 # потребителем: напоминания в мессенджере (server/app/routers/messenger.py, §5.4).
 # Ни один клиентский .py его не импортирует — статический анализ PyInstaller (идёт от
@@ -70,9 +70,8 @@ hidden += ['dropout_risk']
 # ЛЕНИВО внутри server/app/db.py (а тот лежит в datas сырыми файлами), поэтому статический
 # анализ его не найдёт — нужен явный hiddenimport, иначе копия молча останется открытой.
 hidden += ['sqlcipher3', 'sqlcipher3.dbapi2']
-# пакеты
-for pkg in ('vector', 'schedule'):
-    hidden += collect_submodules(pkg)
+# пакеты (`vector` здесь был до 15.08.2026 — удалён вместе с самим пакетом)
+hidden += collect_submodules('schedule')
 # зависимости, которые импортируются лениво/динамически
 hidden += ['gostcrypto', 'gostcrypto.gostpbkdf', 'requests', 'cryptography',
            'openpyxl', 'win32crypt']
@@ -88,7 +87,7 @@ hidden += collect_submodules('email')
 # Пакет ставится как python-docx, а импортируется как `docx`; ему нужны его шаблоны
 # (docx/templates/*.docx), поэтому тянем и submodules, и data-файлы.
 hidden += collect_submodules('docx')
-# Серверный стек (общий Vue-интерфейс + фоновый хостинг --run-server, см. шапку файла).
+# Серверный стек (общий Vue-интерфейс, см. шапку файла).
 # server/app сам НЕ здесь — он бандлится как ДАННЫЕ (см. datas ниже) и импортируется
 # обычным файловым импортом (ensure_server_path добавляет распакованный server/ в
 # sys.path), поэтому его подмодули статике PyInstaller не нужны. А вот это —
@@ -100,9 +99,6 @@ for pkg in ('fastapi', 'starlette', 'uvicorn', 'sqlalchemy', 'jose', 'multipart'
 
 datas = []
 datas += collect_data_files('docx')   # шаблон default.docx и пр. — иначе Document() падает
-for folder in ('emotions', 'emotes', 'vector_assets', 'fonts'):
-    if os.path.isdir(os.path.join(ROOT, folder)):
-        datas.append((folder, folder))
 for f in ('icon.ico', 'icon.png'):
     if os.path.isfile(os.path.join(ROOT, f)):
         datas.append((f, '.'))

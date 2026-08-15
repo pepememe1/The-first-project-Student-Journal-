@@ -4,14 +4,13 @@
 #
 # Серверный пакет (server/app) ТЕПЕРЬ ВХОДИТ — это ОБЩИЙ Vue-интерфейс (§11 CLAUDE.md,
 # «один UI»): десктоп поднимает его же у себя на 127.0.0.1 (desktop/local_api.py), плюс тот
-# же пакет нужен фоновому хостингу «этот ПК как сервер» (--run-server, server_control.py).
 # ⚠️ Бандлится СЫРЫМИ файлами (--include-data-dir), а НЕ компилируется Nuitka-пакетом:
 # desktop/local_api.py и server/app/main.py находят друг друга через __file__-относительные
 # обходы, которые ожидают РОВНО ДВА уровня вложенности «.../server/app/main.py» (та же
 # раскладка, что и в исходниках). `--include-package=app` сплющил бы пакет до плоского
 # app/ без server/ сверху — пути разъехались бы. Раз сервер и так публично слушает
 # интернет на VPS (любой желающий видит его трафик/API), защищать его исходники здесь
-# отдельным слоем смысла нет — Nuitka защищает КЛИЕНТСКИЙ код (ui/sync/data/vector/…),
+# отдельным слоем смысла нет — Nuitka защищает КЛИЕНТСКИЙ код (desktop/sync/data/…),
 # как и раньше; server/app просто едет как данные, тем не менее сборка работает целиком.
 set -e
 # Корень берём от САМОГО скрипта: путь к репозиторию у каждого разработчика свой, а
@@ -74,7 +73,7 @@ for d in desktop sync data; do
     INC="$INC --include-module=$d.$b"
   done
 done
-for b in grading subjects server_control app_paths log; do
+for b in grading subjects app_paths log; do
   INC="$INC --include-module=$b"
 done
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
@@ -84,7 +83,7 @@ done
 # ниже), значит и оттуда не подхватится. Без явного include local_api тихо не поднимался
 # бы: `from app.main import app` роняется на `messenger.py`'s `import reminder_parse`.
 # Проверено ПОЛНЫМ перебором всех корневых .py репозитория — остальные общие модули
-# (grading/study_hours/vector_nlu/weather) уже импортируются откуда-то из ui/vector/data
+# (grading/study_hours/vector_nlu/weather) уже импортируются откуда-то из desktop/data
 # и потому попадают в сборку сами.
 INC="$INC --include-module=reminder_parse"
 # dropout_risk — та же история (3.6): общий корневой модуль правил риска отчисления,
@@ -180,7 +179,7 @@ PKGS="$PKGS --include-package=email"
 #   PIL 11 МБ + hf_xet 9 МБ + tokenizers 7 МБ (замерено по распакованному payload).
 # Все они нужны ЛОКАЛЬНОМУ Whisper, а он в .exe и не бандлился никогда: сама модель
 # весит ~3 ГБ и качается отдельно. Импорты у них ленивые и обёрнуты в try/except
-# (vector/stt.py, server/app/stt_service.py), поэтому без них программа работает, а
+# (server/app/stt_service.py), поэтому без них программа работает, а
 # распознавание честно отвечает «движок не установлен» — правильный ответ для машины
 # без GPU. Настоящий дом Whisper — сервер ВСГУТУ с видеокартой.
 # ━━ pywebview + pythonnet ━━
@@ -269,7 +268,6 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --onefile-tempdir-spec="{CACHE_DIR}/GradeBookAI/{VERSION}" \
   --include-data-files=icon.ico=icon.ico \
   --include-data-files=icon.png=icon.png \
-  --include-package=vector \
   --include-package=schedule \
   --disable-plugin=pywebview \
   --include-package=webview \

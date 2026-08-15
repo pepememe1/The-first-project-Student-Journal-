@@ -22,7 +22,8 @@ def admin_server_info(request: Request = None,
                       _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Статус сервера/сайта для веб-вкладки «Сервер»: адрес, версия, тип БД, шифрование
     ПДн (152-ФЗ), ГОСТ-бэкенд, кто онлайн, учебный период, аптайм. Только чтение —
-    хостингом управляют на ХОСТЕ (десктоп server_control), из браузера это не трогаем."""
+    хостингом управляют на самой машине сервера (раздел «Сервер», §16 — по SSH), из
+    браузера это не трогаем."""
     import os
     from ...config import DATABASE_URL, ALLOWED_ORIGINS
     from ... import gost, security, events as _events
