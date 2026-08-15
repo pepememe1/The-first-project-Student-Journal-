@@ -10,8 +10,8 @@
 
 [![152-ФЗ](https://img.shields.io/badge/152--ФЗ-ПДн_в_РФ_·_ГОСТ--хеш_·_SQLCipher-2e9e5b)](#соответствие-152-фз-и-требованиям-фстэк)
 [![Стек](https://img.shields.io/badge/стек-Python_·_Vue_3_·_FastAPI-147c8b)](#для-разработчиков)
-[![Версия](https://img.shields.io/badge/версия-Release_3.7-008080)](CHANGELOG.md)
-[![Тесты](https://img.shields.io/badge/тесты-680_клиент_·_809_сервер_·_44_веб_·_19_Android-2e9e5b)](#тесты)
+[![Версия](https://img.shields.io/badge/версия-Release_3.7.3-008080)](CHANGELOG.md)
+[![Тесты](https://img.shields.io/badge/тесты-628_клиент_·_933_сервер_·_95_веб_·_19_Android-2e9e5b)](#тесты)
 
 *Победитель хакатона «Мы — будущее IT Бурятии» (март 2026)*
 
@@ -393,7 +393,7 @@ cd web && npm run build               # → web/dist
 
 ## Тесты
 
-Держим зелёными: **680 клиентских**, **809 серверных**, **44 веб-теста**, **19 Android**.
+Держим зелёными: **628 клиентских**, **933 серверных**, **95 веб-тестов**, **19 Android**.
 Линтеры — `ruff` для Python и ESLint 9 для веба, типы — `mypy` по списку уже
 типизированных модулей (настройки в `pyproject.toml`).
 
@@ -421,7 +421,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 ## Карта репозитория
 
 Монорепо состоит из четырёх частей: **общие корневые модули** (правила, одинаковые для
-всех платформ), **десктоп** (корень + `ui/ data/ sync/ schedule/ vector/`), **сервер**
+всех платформ), **десктоп** (корень + `desktop/ data/ sync/ schedule/`), **сервер**
 (`server/`) и **веб** (`web/`, он же мобильное приложение).
 
 ### Общие корневые модули — правила, которые обязаны совпадать везде
@@ -444,22 +444,20 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 
 ### Десктоп
 
+> **Интерфейса на Qt в проекте нет.** Окно рисует системный движок Edge (WebView2) поверх
+> локального серверного приложения, то есть десктоп показывает ТУ ЖЕ Vue-SPA, что сайт и
+> мобильное приложение. Нативные экраны, дизайн-система Qt и модуль `_bootstrap.py`
+> удалены; папка `ui/` переименована в `desktop/` — интерфейса в ней не осталось.
+
 | Путь | Что внутри |
 |---|---|
 | `main.py` | Точка входа: применение отложенного обновления → БД → окно. `--run-server` поднимает сервер из того же процесса |
-| `main_window.py` | Роутинг по ролям, восстановление сессии, выбор Vue-кабинета или нативного фолбэка |
-| `_bootstrap.py` | Кладёт `desktop/ sync/ data/` в `sys.path` — отсюда «плоские» импорты (`from core import …`). Уходит вместе с переездом в пакет, см. `docs/PLAN-PACKAGING.md` |
-| `app_paths.py`, `fonts.py` | Единый источник путей и шрифтов; кросс-совместимо с PyInstaller и Nuitka |
-| `subjects.py`, `server_control.py`, `log.py` | Справочник предметов, хостинг сервера из админки, логирование |
-| `desktop/webview2_app.py`, `desktop/webview2_shell.py` | **Основное окно** — системный движок Edge (WebView2) через pywebview |
-| `desktop/local_api.py` | Поднимает **настоящий** `server/app` на 127.0.0.1 в потоке; мост входа, прокси онлайн-разделов |
-| `desktop/local_mirror.py`, `desktop/local_ui_server.py` | Дельта-зеркало боевой базы в локальную; запасная раздача статики |
-| `ui/vue_shell.py`, `ui/vue_dashboard.py` | Оболочка Vue-кабинета (весь кабинет одной страницей) |
-| `ui/messenger_web.py`, `ui/webengine_links.py` | Встраивание мессенджера (онлайн-only) и перехват внешних ссылок в системный браузер |
+| `app_paths.py` | Единый источник путей (портативность .exe); кросс-совместимо с PyInstaller и Nuitka |
+| `subjects.py`, `log.py` | Справочник предметов, логирование |
+| `desktop/webview2_app.py`, `desktop/webview2_shell.py` | **Единственное окно программы** — системный движок Edge (WebView2) через pywebview |
+| `desktop/local_api.py` | Поднимает **настоящий** `server/app` на 127.0.0.1 в потоке; мост входа, передача сессии, прокси онлайн-разделов |
+| `desktop/local_mirror.py` | Дельта-зеркало боевой базы в локальную копию приложения |
 | `desktop/server_admin.py` | Раздел «Сервер» по SSH — **только локально**, на бою этого кода нет вовсе |
-| `ui/dashboards.py`, `ui/teacher_dashboard.py`, `ui/admin_dashboard.py`, `ui/parent_dashboard.py`, `ui/auth_pages.py` | Запасная Qt-оболочка (в релизный .exe не входит) |
-| `ui/schedule_view.py`, `ui/schedule_editor.py`, `ui/notifications_view.py`, `ui/avatar_dialog.py` | Нативные экраны расписания, уведомлений, профиля |
-| `ui/styles.py`, `ui/themes.py`, `ui/theme_ui.py`, `ui/ui_components.py`, `ui/widgets.py` | Дизайн-система Qt-оболочки |
 | `data/core.py` | `DBManager`: SQLite (WAL), `GradeBook`, бэкапы, экспорт, конфликты синка. **Единственная дверь к базе** |
 | `data/security.py` | Хеш пароля (PBKDF2-SHA512 + Стрибог), Fernet, DPAPI |
 | `data/app_settings.py`, `data/data_store.py` | Настройки приложения и key-value хранилище |
@@ -471,8 +469,8 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `sync/sync_runner.py` | Фоновый поток синхронизации; сброс изменений при выходе |
 | `schedule/parser.py` | Парсер `portal.esstu.ru` на stdlib (без BeautifulSoup — чистые лицензии), пять категорий, два формата страницы |
 | `schedule/store.py`, `schedule/model.py`, `schedule/reminders.py`, `schedule/specialty.py` | Зашифрованный кэш по категориям, модель, напоминания |
-| `vector/` | Нативный офлайн-Вектор Qt-оболочки: `intents`, `engine`, `widget`, `llm`, `emotes`, `speech`, `stt`, `tts`, `voice_ui` |
-| `emotions/`, `emotes/`, `vector_assets/`, `fonts/` | Арт маскота (30 эмоций + анимации), шрифты |
+| `vector/` | Эталон анти-галлюцинационного конвейера Вектора (`intents`, `engine`, `llm`, `emotes`, `privacy`). Писался для нативной оболочки; сейчас у людей работает серверная реализация того же конвейера (`server/app/routers/web/vector.py`), а этот пакет держит питоновскую сторону контракта с веб-портом |
+| `emotions/`, `emotes/`, `vector_assets/`, `fonts/` | Исходники арта маскота (30 эмоций + анимации) и шрифтов. Человеку они приезжают из `web/public` — эти папки в релизный .exe не входят |
 | `tools/` | `build_mascot_anim.py` (ролики → WebP), `build_android_icons.py`, `build_web_fonts.py`, `make_desktop_patch.py`, `publish_desktop_update.sh`, `graph_rebuild.py` и `graph_api_bridge.py` (карта связей репозитория) |
 | `tests/` | Клиентские тесты (`pytest` из корня) |
 | `GradeBookAI.spec`, `build_nuitka.sh` | Сборка .exe: дев (PyInstaller) и **релиз** (Nuitka) |

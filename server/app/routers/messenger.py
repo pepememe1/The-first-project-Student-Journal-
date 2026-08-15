@@ -532,6 +532,12 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
         "reply_count": 0,  #Треды: заполняется в списке сообщений (_attach_reply_counts)
         #§12: kind="report" — метаданные кнопки «Отчёт №N» (заполняется _attach_report_meta).
         "report": None,
+        #kind="activity"/"board" — карточка активности и сохранённая доска
+        #(PLAN-ACTIVITIES §10). Тот же приём, что у отчёта: в теле сообщения лежит только
+        #id, а объект подмешивается при выдаче — статус активности меняется ПОСЛЕ отправки
+        #(идёт → завершена), и переотправлять ради этого сообщение незачем.
+        "activity": None,
+        "board": None,
     }
 
 
@@ -586,6 +592,54 @@ def _attach_report_meta(db: Session, msgs: list) -> None:
                            #Дата границы — на кнопке: два отчёта подряд иначе неразличимы.
                            "cutoff_date": r.cutoff_date or "",
                            "archived": bool(r.archived)}
+
+
+def _attach_activity_meta(db: Session, msgs: list) -> None:
+    """kind="activity" — карточка-кнопка активности; kind="board" — сохранённая доска.
+
+    Как и у отчёта, в теле сообщения лежит ТОЛЬКО id: статус активности меняется после
+    отправки (идёт → завершена), а переотправлять сообщение ради этого незачем — клиент
+    гасит кнопку по `status`."""
+    from ..models import Activity, BoardArtifact
+    act_ids = [m["body"] for m in msgs if m["kind"] == "activity" and m["body"]]
+    board_ids = [m["body"] for m in msgs if m["kind"] == "board" and m["body"]]
+    acts = ({a.id: a for a in db.query(Activity).filter(Activity.id.in_(act_ids)).all()}
+            if act_ids else {})
+    boards = ({b.id: b for b in db.query(BoardArtifact)
+               .filter(BoardArtifact.id.in_(board_ids)).all()} if board_ids else {})
+    #⚠️ Сверяем беседу: объект догружаем ТОЛЬКО там, где он и живёт. Без этой проверки
+    #пересланная (или вручную созданная с чужим id) карточка отдавала бы заголовок и
+    #статус активности людям, которые к её беседе отношения не имеют. Пересылку таких
+    #сообщений мы запретили отдельно, но одного запрета мало: правило «чужое не
+    #показываем» должно держаться и там, где строка уже как-то оказалась в ленте.
+    for m in msgs:
+        if m["kind"] == "activity":
+            a = acts.get(m["body"])
+            if a is not None and a.conversation_id == m.get("conversation_id"):
+                m["activity"] = {"id": a.id, "kind": a.kind, "title": a.title or "",
+                                 "status": a.status, "started_at": a.started_at or "",
+                                 "finished_at": a.finished_at or ""}
+        elif m["kind"] == "board":
+            b = boards.get(m["body"])
+            if b is not None and b.conversation_id == m.get("conversation_id"):
+                m["board"] = {"id": b.id, "title": b.title or "", "sheet": b.sheet or "blank",
+                              "strokes_count": len(b.strokes or [])}
+
+
+def _attach_rich_meta(db: Session, msgs: list) -> None:
+    """ЕДИНАЯ точка догрузки всего, что у сообщения лежит в теле одним лишь id.
+
+    ⚠️ Заведена намеренно вместо перечисления вызовов по местам. Раньше
+    `_attach_report_meta` звался из ПЯТИ мест, и добавление второго такого вида
+    (активности) означало не забыть дописать рядом ещё пять строк. Забыть одну — значит
+    отдать клиенту сырой `act:9f3…` вместо кнопки, причём именно в том месте, куда
+    заглядывают реже всего (превью последнего сообщения в списке чатов). Тот же приём и
+    та же причина, что у обёртки `_safe()` в сборе дельты синка: правило живёт в ОДНОМ
+    месте, и новый вид сообщения нельзя забыть подключить."""
+    if not msgs:
+        return
+    _attach_report_meta(db, msgs)
+    _attach_activity_meta(db, msgs)
 
 
 #§D3: белый список эмодзи-реакций (как в плане). Ничего сверх — предсказуемо и безопасно.
@@ -967,7 +1021,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         out.append(item)
     #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
     #сырой id из тела сообщения.
-    _attach_report_meta(db, [x["last_message"] for x in out if x["last_message"]])
+    _attach_rich_meta(db, [x["last_message"] for x in out if x["last_message"]])
     #Сортировка: сначала закреплённые, потом по времени последней активности (новые выше).
     out.sort(key=lambda x: (not x["pinned"], _neg_key(x["last_at"])))
     return {"chats": out}
@@ -1079,7 +1133,7 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
     _attach_reactions(db, out, user.id)      #§D3: реакции пачкой
     _attach_reply_counts(db, out)            #Треды: бейдж «N ответов»
-    _attach_report_meta(db, out)             #§12: номер/архивность кнопки «Отчёт №N»
+    _attach_rich_meta(db, out)               #кнопки: отчёт куратора, активность, доска
     return {"messages": out}
 
 
@@ -1098,6 +1152,7 @@ def message_thread(conv_id: str, message_id: int,
     names = _names_for(db, [m.sender_id for m in rows])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
     _attach_reactions(db, out, user.id)
+    _attach_rich_meta(db, out)               #иначе в ветке ответов вместо кнопки сырой id
     return {"messages": out}
 
 
@@ -1126,6 +1181,7 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
     names = _names_for(db, [m.sender_id for m in matched])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
+    _attach_rich_meta(db, out)
     return {"messages": out}
 
 
@@ -1184,7 +1240,9 @@ def ai_search_messages(conv_id: str, q: str = Query(""), limit: int = Query(30),
     limit = max(1, min(int(limit or 30), 100))
     matched = [m for _s, m in scored[:limit]]
     names = _names_for(db, [m.sender_id for m in matched])
-    return {"messages": [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched],
+    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
+    _attach_rich_meta(db, out)
+    return {"messages": out,
             "expanded": extra}
 
 
@@ -1446,7 +1504,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
                .filter(Message.conversation_id == conv_id, Message.client_nonce == nonce).first())
         if dup is not None:
             out = _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
-            _attach_report_meta(db, [out])
+            _attach_rich_meta(db, [out])
             return out
 
     mentions = []
@@ -1460,11 +1518,16 @@ def send_message(conv_id: str, payload: dict = Body(...),
         rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
         if rep_msg is not None:
             out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
-            _attach_report_meta(db, [out])   #иначе клиент получит сырой id вместо кнопки
+            _attach_rich_meta(db, [out])     #иначе клиент получит сырой id вместо кнопки
             return out
 
         #/mute, /clear — тоже команды, не сообщения: разбираем ДО сохранения текста (как
         #/отчет выше), иначе литеральная строка команды осела бы в ленте мусором.
+        #`/активность` — команда «открой выбор категории», сообщения не создаёт вовсе.
+        act_cmd = _handle_activity_command(db, conv_id, body, user)
+        if act_cmd is not None:
+            return act_cmd
+
         mute_msg = _handle_mute_command(db, conv_id, body, user, part)
         if mute_msg is not None:
             return _msg_out(mute_msg, user.id, "")
@@ -1712,7 +1775,11 @@ _WRITER_ROLES = ("owner", "admin", "writer")
 # ── Роли и права внутри беседы (кастомные роли групп/каналов) ─────────────────────────
 # Фиксированный небольшой набор прав — ровно то, что просили (кик, выдача ролей, две
 # модераторские команды), без раздувания в гранулярную матрицу.
-_ALL_PERMISSIONS = ("kick", "manage_roles", "cmd_mute", "cmd_clear")
+#`activities` — запуск активностей в беседе (docs/PLAN-ACTIVITIES.md §3). Системная роль
+#teacher/admin даёт его и БЕЗ роли беседы (проверка — в routers/activities._require_can_run):
+#преподаватель ведёт занятие, а не администрирует чат, и просить владельца чата выдать
+#ему роль ради этого странно. Здесь право нужно, чтобы владелец мог выдать его старосте.
+_ALL_PERMISSIONS = ("kick", "manage_roles", "cmd_mute", "cmd_clear", "activities")
 #Дефолт для БИЛДОВЫХ ролей, когда участнику не назначена кастомная ConversationRole —
 #эквивалент того, что раньше жёстко проверял _MANAGER_ROLES (owner/admin), чтобы уже
 #существующие беседы без единой кастомной роли продолжали работать ровно как раньше.
@@ -1926,7 +1993,9 @@ def pinned_messages(conv_id: str, user: User = Depends(get_current_user),
     if hidden:
         q = q.filter(~Message.id.in_(hidden))
     rows = q.order_by(Message.id.desc()).all()
-    return {"pinned": [_msg_out(m, user.id) for m in rows]}
+    out = [_msg_out(m, user.id) for m in rows]
+    _attach_rich_meta(db, out)               #закреплённая карточка активности — не сырой id
+    return {"pinned": out}
 
 
 @router.post("/messages/forward")
@@ -1953,6 +2022,13 @@ def forward_messages(payload: dict = Body(...),
             #куратор/администрация; родитель или студент, получивший кнопку, переслать её
             #уже не может (иначе успеваемость группы разошлась бы по чужим чатам).
             if (src.kind or "") == "report" and user.role not in ("teacher", "admin"):
+                continue
+            #🔒 Карточки активности и доски НЕ пересылаются вовсе. Они привязаны к своей
+            #беседе: открыть их снаружи нельзя (403 в `_require_activity_participant`), то
+            #есть в чужой ленте повисла бы кнопка, которая ни у кого не работает, — а
+            #вместе с ней уехали бы заголовок и статус (заголовок пишет преподаватель, там
+            #бывает тема контрольной). Возражение Полковника, 15.08.2026.
+            if (src.kind or "") in ("activity", "board"):
                 continue
             sender = db.query(User).filter(User.id == src.sender_id).first()
             #Источник пересылки — исходный автор оригинала (а не тот, кто раньше переслал).
@@ -2823,6 +2899,32 @@ def _handle_report_command(db: Session, conv_id: str, body: str, user: User,
     return _create_report(db, group_name, user, [conv_id], nonce)
 
 
+#`/активность` — запуск активности (PLAN-ACTIVITIES §10). Команда РУССКАЯ и не переводится:
+#её разбирает сервер, от языка интерфейса она не зависит — ровно как `/отчет`. Букву «ё» в
+#«актив­ность» не пишут, но краткую форму `/акт` принимаем: команду набирают на паре, второпях.
+_ACTIVITY_CMD_RE = re.compile(r"^/(?:активность|акт|activity)\s*$", re.IGNORECASE)
+
+
+def _handle_activity_command(db: Session, conv_id: str, body: str, user: User):
+    """`/активность` — НЕ сообщение, а «открой у меня выбор категории».
+
+    Сама активность заводится потом, отдельным `POST /activities/start`: категорию и её
+    параметры человек выбирает в оверлее, и придумывать текстовый синтаксис для «доска в
+    клетку» или «викторина такая-то» значило бы заставить его помнить то, что проще выбрать.
+
+    Право проверяем ЗДЕСЬ, а не только при старте: иначе студент, набравший команду,
+    получил бы открывшийся оверлей и отказ уже после выбора категории — то есть узнал бы,
+    что ему нельзя, самым обидным способом.
+
+    Возвращает не Message, а команду клиенту: сообщение НЕ создаётся вовсе, поэтому
+    литерал `/активность` в ленте не оседает (та же причина, что у `/отчет` и `/mute`)."""
+    if not _ACTIVITY_CMD_RE.match(body.strip()):
+        return None
+    from .activities import _require_can_run
+    _require_can_run(db, conv_id, user)      #403 с внятной причиной, если нельзя
+    return {"command": "open_activity_launcher", "conversation_id": conv_id}
+
+
 _MUTE_CMD_RE = re.compile(r'^/mute\s+"?@?([^"\s]+)"?\s*$', re.IGNORECASE)
 _CLEAR_CMD_RE = re.compile(r'^/clear\s+"?(\d+)"?\s*$', re.IGNORECASE)
 _CLEAR_MAX_N = 100
@@ -3099,6 +3201,12 @@ def _report_out(db: Session, r: MessageReport) -> dict:
     mset = _muted_set(db, [r.reporter_id, r.reported_user_id])
     return {
         "id": r.id, "message_id": r.message_id, "conversation_id": r.conversation_id,
+        #⚠️ На ЧТО жалоба. Обязано уезжать клиенту: у тикета на отзыв среза понимания
+        #(target_kind="activity_feedback") `message_id` — это id строки activity_feedback,
+        #а НЕ сообщения. Без этого поля админка предложила бы на таком тикете «удалить
+        #сообщение», и удалён был бы ПОСТОРОННИЙ текст с совпавшим номером — молча и
+        #необратимо для читателей. Держит `test_feedback_report_is_marked_as_not_a_message`.
+        "target_kind": getattr(r, "target_kind", "") or "message",
         "message_snapshot": r.message_snapshot, "reason_code": r.reason_code,
         "description": r.description, "created_at": r.created_at, "status": r.status,
         "reporter_name": (reporter.full_name if reporter else r.reporter_id),
@@ -3219,6 +3327,7 @@ def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: 
         if versions:
             d["edit_versions"] = versions + [{"body": m.body or "", "at": m.edited_at or m.created_at}]
         out.append(d)
+    _attach_rich_meta(db, out)               #админ читает ту же ленту, что и участники
     audit.log(db, request, actor=admin.login, role=admin.role,
               action="msg.moderation.view", target=conv_id)
     return {"messages": out}

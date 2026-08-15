@@ -95,16 +95,6 @@ def set_mode(mode: str) -> None:
         stop()
 
 
-def cycle_mode() -> str:
-    """Переключить по кругу: Голос → Бубнеж → Выкл → Голос. Возвращает новый режим."""
-    set_mode(_MODES[(_MODES.index(get_mode()) + 1) % len(_MODES)])
-    return get_mode()
-
-
-def mode_label() -> str:
-    return _MODE_LABELS.get(get_mode(), _MODE_LABELS["voice"])
-
-
 def is_enabled() -> bool:
     """Совместимость: озвучка не выключена (режим ≠ 'off')."""
     return get_mode() != "off"

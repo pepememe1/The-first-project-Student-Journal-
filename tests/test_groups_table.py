@@ -3,6 +3,8 @@ test_groups_table.py — Группы в ТАБЛИЦЕ (план техдолг
 переводчика, миграция старых kv-баз, надгробия/LWW. Публичный API data_store сохранён,
 поэтому UI не затронут.
 """
+import pytest
+
 from sync import sync_engine
 from data.core import DBManager
 from data.data_store import get_store, _kv_set, _kv_get
@@ -105,3 +107,60 @@ def test_apply_remote_groups_does_not_wake_sync(fresh_db, monkeypatch):
     assert calls["n"] == 0, "применение серверных групп не должно будить синк"
     get_store().set_groups([{"name": "ИС-22", "subjects": []}])
     assert calls["n"] >= 1, "UI-правка групп должна будить синк"
+
+
+def test_unreadable_groups_table_is_not_reported_as_empty(fresh_db, monkeypatch):
+    """🔥 РЕАЛЬНЫЙ ДЕФЕКТ, найденный при уборке. Сбой SELECT'а по таблице групп гасился
+    в `rows = []`, и «базу не прочитать» становилось неотличимо от «групп нет».
+
+    Цена не теоретическая: `set_groups(stamp=True)` строит НАДГРОБИЯ сравнением нового
+    списка с тем, что сейчас в базе. Прочитали «пусто» — сравнивать не с чем, надгробий
+    нет, и удаление группы не уедет на сервер НИКОГДА (удаление ходит только надгробием).
+    Ровно эту мину уже обезвредили в `_users_table_read`, но тогда починили одну таблицу
+    из двух.
+
+    Проверяем поведение, а не текст: чтение обязано ПАДАТЬ, а не возвращать [].
+    """
+    import sqlite3
+
+    from data import data_store as ds
+
+    st = ds.get_store()
+    st.set_groups([{"name": "К74/1", "subjects": ["Математика"]}])
+    assert [g["name"] for g in st.get_groups()] == ["К74/1"]
+
+    class _BrokenCursor:
+        def execute(self, *a, **kw):
+            raise sqlite3.OperationalError("database is locked")
+
+    class _BrokenConn:
+        def cursor(self):
+            return _BrokenCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(ds.DBManager, "get_conn", classmethod(lambda cls: _BrokenConn()))
+    with pytest.raises(sqlite3.OperationalError):
+        ds._groups_read_raw()
+
+
+def test_broken_subjects_json_does_not_hide_the_whole_group(fresh_db):
+    """Обратная сторона той же правки: одна битая строка НЕ имеет права ронять список.
+
+    Без этого теста «пробрасывать исключения» легко довести до абсурда — и тогда
+    единственная испорченная запись закрывала бы экран групп целиком. Группа обязана
+    остаться видимой, просто без предметов."""
+    from data import data_store as ds
+
+    st = ds.get_store()
+    st.set_groups([{"name": "К74/1", "subjects": ["Математика"]}])
+
+    conn = ds.DBManager.get_conn()
+    conn.execute("UPDATE groups SET subjects=? WHERE name=?", ("{не json", "К74/1"))
+    conn.commit()
+    conn.close()
+
+    rows = {g["name"]: g for g in st.get_groups()}
+    assert "К74/1" in rows, "битый JSON у одной группы скрыл её целиком"
+    assert rows["К74/1"]["subjects"] == []

@@ -886,6 +886,12 @@ class MessageReport(Base):
     __tablename__ = "message_reports"
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(Integer, index=True, default=0)
+    #На ЧТО жалоба. Появилось с активностями (PLAN-ACTIVITIES §8.3): преподаватель может
+    #пожаловаться админу на отзыв среза понимания, и это НЕ сообщение — `message_id` там
+    #хранит id строки activity_feedback. Умолчание "message" оставляет все прежние тикеты
+    #ровно тем, чем они были. ⚠️ Колонка в СУЩЕСТВУЮЩУЮ таблицу — нужен идемпотентный
+    #ALTER в db.py (`create_all` досоздаёт только целые таблицы), см. §10 CLAUDE.md.
+    target_kind = Column(String, default="message")    #message | activity_feedback
     conversation_id = Column(String, default="")
     message_snapshot = Column(String, default="")      #текст на момент жалобы
     reporter_id = Column(String, index=True, default="")
@@ -924,6 +930,135 @@ class UserNote(Base):
     about_user_id = Column(String, index=True, default="")
     text = Column(String, default="")
     updated_at = Column(String, default="")
+
+
+class Activity(Base):
+    """Активность в беседе — совместное действие участников (docs/PLAN-ACTIVITIES.md).
+
+    Живёт в БЕСЕДЕ, а не в учебной группе: у `Conversation` связи с `Group` нет вовсе,
+    чат-группа это просто список людей. НЕ в SYNC_MODELS — как весь мессенджер: офлайн-
+    десктопу активности не нужны, внутрь программы они приезжают прокси-префиксом
+    `/web/messenger` (desktop/local_api.py).
+
+    ⚠️ `id` — uuid, а НЕ составной ключ с именем беседы/группы. Имя группы в пути URL уже
+    стоило поломки всех отчётов на группах со слэшем («К74/1» → `%2F` → Starlette
+    раскодирует ДО роутинга, и путь распадается на лишний сегмент). В путь идёт только uuid.
+    """
+    __tablename__ = "activities"
+    id = Column(String, primary_key=True)              #act:{uuid4().hex}
+    conversation_id = Column(String, index=True, default="")
+    kind = Column(String, default="")                  #board|quiz|contest|poll|pulse|timer
+    host_id = Column(String, index=True, default="")   #кто запустил
+    title = Column(String, default="")                 #что показывать в карточке ленты
+    params = Column(JSON, default=dict)                #параметры категории
+    status = Column(String, index=True, default="running")   #running | finished
+    started_at = Column(String, default="")            #ISO, ставит СЕРВЕР
+    finished_at = Column(String, default="")
+    message_id = Column(Integer, default=0)            #карточка-кнопка в ленте
+
+
+class QuizSet(Base):
+    """Викторина — набор вопросов в библиотеке преподавателя. НЕ в SYNC_MODELS."""
+    __tablename__ = "quiz_sets"
+    id = Column(String, primary_key=True)              #quiz:{uuid4().hex}
+    author_id = Column(String, index=True, default="")
+    title = Column(String, default="")
+    description = Column(String, default="")
+    tags = Column(JSON, default=list)                  #нормализованные (регистр/пробелы)
+    #private — только автору; college — всем преподавателям колледжа; stock — стартовые
+    #(ознакомительные, чтобы первый открывший не увидел пустой экран).
+    visibility = Column(String, index=True, default="private")
+    #Цепочка копий: оригинал → копия 1 → копия 2. Чужую викторину нельзя править — её
+    #копируют себе, и parent_id хранит, откуда она взялась.
+    parent_id = Column(String, index=True, default="")
+    created_at = Column(String, default="")
+    updated_at = Column(String, default="")
+    deleted = Column(Boolean, default=False, index=True)   #мягкое удаление
+
+
+class QuizQuestion(Base):
+    """Вопрос викторины. `type`: single|multi|order|match (см. PLAN-ACTIVITIES §8.4)."""
+    __tablename__ = "quiz_questions"
+    id = Column(String, primary_key=True)              #qq:{uuid4().hex}
+    quiz_id = Column(String, index=True, default="")
+    order_no = Column(Integer, default=0)
+    type = Column(String, default="single")
+    text = Column(String, default="")
+    points = Column(Integer, default=1)
+
+
+class QuizOption(Base):
+    """Вариант ответа.
+
+    🔒 `is_correct` / `correct_position` / `match_key` — КЛЮЧ. Он не покидает сервер для
+    студента: эндпоинт выдачи вопросов имеет два режима (см. routers/activities.py
+    `_question_out`), и режим студента эти поля не кладёт вовсе. Проверять ответы на
+    клиенте нельзя ни при каких условиях — для локальной проверки нужен ключ, а любой
+    студент прочитает его в инструментах разработчика до начала."""
+    __tablename__ = "quiz_options"
+    id = Column(String, primary_key=True)              #qo:{uuid4().hex}
+    question_id = Column(String, index=True, default="")
+    order_no = Column(Integer, default=0)
+    text = Column(String, default="")
+    is_correct = Column(Boolean, default=False)        #single|multi
+    match_key = Column(String, default="")             #match: с чем сопоставляется
+    correct_position = Column(Integer, default=0)      #order: верное место (1..N)
+
+
+class ActivityResult(Base):
+    """Итог участника по активности.
+
+    Уникальность по паре (activity_id, user_id) держит КОД (upsert в
+    `activity_grading.save_result`), а не составной первичный ключ: строка нужна с
+    автоинкрементным id для единообразия с остальными таблицами мессенджера. Смысл тот
+    же — повторная отправка ЗАМЕНЯЕТ результат, а не создаёт второй: дрогнувшая сеть не
+    должна сдваивать результат теста."""
+    __tablename__ = "activity_results"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    activity_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    score = Column(Float, default=0.0)
+    correct_count = Column(Integer, default=0)
+    total_count = Column(Integer, default=0)
+    answers = Column(JSON, default=dict)               #что именно ответил — для разбора
+    finished_at = Column(String, default="")
+    duration_ms = Column(Integer, default=0)
+
+
+class ActivityFeedback(Base):
+    """Срез понимания (1–10) + «что именно непонятно».
+
+    🔑 `user_id` ХРАНИТСЯ, но преподавателю не отдаётся НИКОГДА (`_feedback_out` не кладёт
+    его ни в одно поле). Хранить обязательно: у отзыва есть кнопка жалобы, и жалоба уходит
+    АДМИНУ — без автора она никуда не ведёт. Скрывает автора интерфейс преподавателя, а не
+    база, поэтому студенту пишем «преподаватель не увидит, кто это написал», а не
+    «анонимно»: первое правда, второе нет, и первая же разобранная жалоба это вскроет."""
+    __tablename__ = "activity_feedback"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    activity_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    score_1_10 = Column(Integer, default=0)
+    reason_code = Column(String, default="")
+    custom_text = Column(String, default="")
+    created_at = Column(String, default="")
+
+
+class BoardArtifact(Base):
+    """Сохранённая доска — ШТРИХАМИ, а не картинкой.
+
+    Файлового хранилища в проекте нет вообще (картинки живут data:-строками в JSON), и
+    PNG доски — это сотни килобайт base64 в теле сообщения: раздутая таблица и лишний
+    трафик при каждой загрузке ленты. Плюс продолжить рисование можно ТОЛЬКО штрихами —
+    поверх растра рисуют заново."""
+    __tablename__ = "board_artifacts"
+    id = Column(String, primary_key=True)              #board:{uuid4().hex}
+    conversation_id = Column(String, index=True, default="")
+    activity_id = Column(String, index=True, default="")
+    author_id = Column(String, default="")
+    sheet = Column(String, default="blank")            #blank | grid | lined
+    strokes = Column(JSON, default=list)
+    title = Column(String, default="")
+    created_at = Column(String, default="")
 
 
 def direct_conversation_id(uid_a: str, uid_b: str) -> str:

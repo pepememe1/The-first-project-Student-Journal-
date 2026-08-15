@@ -1,5 +1,6 @@
 <script setup>
-// AdminDashboard — «Панель администратора» (порт ui/admin_dashboard.py "dash"):
+// AdminDashboard — «Панель администратора». Изначально порт нативного
+// ui/admin_dashboard.py "dash" (тот удалён вместе с Qt — это единственная панель):
 // стат-карточки (Преподавателей/Студентов/Групп/Предметов) + плитки-навигация.
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'

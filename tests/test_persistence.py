@@ -8,7 +8,13 @@ G, S = "ИС-21", "Математика"
 
 
 def _persist_grade(student_f, student_n, key, val):
-    """То же, что делает teacher_dashboard._persist_grade на каждое действие."""
+    """Запись оценки «как в продукте»: сразу на диск, отдельной транзакцией.
+
+    ⚠️ Раньше здесь стояло «то же, что делает teacher_dashboard._persist_grade» — того
+    модуля нет с удаления Qt, и ссылка вводила в заблуждение: сегодня оценку пишет
+    серверный `POST /web/teacher/grade` (внутри программы — на локальном сервере), а
+    сюда она приезжает синком. Проверяется НЕ чужой вызывающий, а само свойство
+    хранилища: `upsert_grade` + `commit` обязаны переживать пересоздание журнала."""
     conn = DBManager.get_conn()
     cur = conn.cursor()
     DBManager.upsert_grade(cur, (student_f, student_n, key, val))

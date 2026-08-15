@@ -58,10 +58,3 @@ def current_term() -> tuple:
     return default_term()
 
 
-def semester_label(semester) -> str:
-    """Человекочитаемое название семестра для заголовков ведомости."""
-    try:
-        s = int(semester)
-    except (TypeError, ValueError):
-        return str(semester)
-    return "осенний" if s == 1 else ("весенний" if s == 2 else str(s))

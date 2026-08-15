@@ -75,19 +75,6 @@ def load_cached(category: str = "college") -> Snapshot | None:
         return None
 
 
-def refresh_all(category: str = "college") -> Snapshot | None:
-    """Заново скачать ПОЛНЫЙ снимок расписания категории с портала ВСГУТУ и сохранить в кэш.
-
-    Кнопка «Взять с ВСГУТУ (все группы)». Сетевая операция (десятки-сотни GET,
-    зависит от категории) — ВЫЗЫВАТЬ ТОЛЬКО ИЗ ФОНОВОГО ПОТОКА, иначе интерфейс
-    замрёт. Правки (overrides) это не трогает — обновляется лишь портальная
-    основа, поверх которой они лежат (overrides — только для колледжа)."""
-    from schedule import parser
-    snap = parser.build_snapshot(category=category)
-    save(snap, category=category)
-    return snap
-
-
 def refresh_group(app_group: str, category: str = "college") -> bool:
     """Обновить с портала ОДНУ группу категории и вписать её в кэш (остальные не трогаем).
 

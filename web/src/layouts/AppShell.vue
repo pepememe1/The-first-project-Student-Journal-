@@ -9,8 +9,11 @@ import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
 import HeaderBar from '@/components/HeaderBar.vue'
 import VectorDock from '@/components/VectorDock.vue'
+import ActivityShell from '@/components/activity/ActivityShell.vue'
+import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
+import { useActivityStore } from '@/stores/activity'
 import { useTtsStore } from '@/stores/tts'
 import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
@@ -18,23 +21,28 @@ import { useLocaleStore } from '@/stores/locale'
 const locale = useLocaleStore()
 const theme = useThemeStore()
 const vector = useVectorStore()
+const activity = useActivityStore()
 const tts = useTtsStore()
 const messenger = useMessengerStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
-// Embed-режим: тот же SPA, встроенный в ДЕСКТОП (QWebEngineView, см. ui/messenger_web.py
-// и ui/vue_shell.py). Прячем собственную навигацию/шапку/док — их роль на десктопе
-// играет нативная оболочка, иначе получилась бы «навигация внутри навигации». Десктоп
-// ставит флаг gb.embed ДО загрузки страницы (плюс поддерживаем ?embed=1 в URL). Значение
-// фиксируется на загрузке.
-// ⚠️ ТРИ режима, а не два. Когда десктоп показывает ВЕСЬ кабинет одним веб-видом
-// (ui/vue_dashboard.py::VueDashboard), своя навигация SPA нужна (иначе человек застрянет
-// на одной странице), а вот шапка — нет: её роль играет заголовок окна программы, и две
-// шапки подряд выглядят как ошибка.
-//   '1'   — встроена одна страница (старый ui/messenger_web.py): прячем и шапку, и меню;
-//   'nav' — встроен весь кабинет (ui/vue_dashboard.py): прячем ТОЛЬКО шапку, меню оставляем;
-//   иначе — обычный сайт/телефон, всё своё.
+// Embed-режим: SPA, встроенная в чужую оболочку, — тогда прячем свою шапку и/или меню,
+// чтобы не вышло «навигации внутри навигации». Флаг приходит из localStorage `gb.embed`
+// (его ставит страница-передатчик десктопа) либо из `?embed=` в адресе; фиксируется один
+// раз на загрузке.
+//   '1'   — встроена ОДНА страница: прячем и шапку, и меню;
+//   'nav' — встроен весь кабинет: прячем ТОЛЬКО шапку (её роль играет заголовок окна);
+//   иначе — обычный сайт/телефон/окно программы, всё своё.
+//
+// 🔴 ЧЕСТНО: СЕГОДНЯ НИ ОДИН ИЗ ДВУХ РЕЖИМОВ НЕ ВКЛЮЧАЕТСЯ. Единственное место, которое
+// вообще выставляет флаг, — `desktop/webview2_app.py`, и оно передаёт '0', то есть
+// «обычный режим». Прежний комментарий описывал ситуацию, когда десктоп встраивал SPA
+// нативной оболочкой (`ui/messenger_web.py`, `ui/vue_dashboard.py`, `ui/vue_shell.py`) —
+// все три модуля удалены вместе с Qt, окно программы теперь показывает ту же SPA целиком
+// и своей шапки не рисует. Ветки оставлены рабочими намеренно: `?embed=1` — дешёвый
+// способ встроить кабинет в чужую страницу, и ломать его уборкой незачем. Но читать это
+// как «так работает десктоп» больше нельзя.
 const embedMode = (() => {
   try {
     const q = new URLSearchParams(window.location.search)
@@ -76,13 +84,13 @@ let _unreadTimer = null
 onMounted(() => {
   // ⚠️ (живой отзыв Влада) Тема веб≠десктоп на ОДНОМ аккаунте — оказалось, что здесь
   // роуминг был выключен для ВСЕХ embed-режимов разом, хотя причина («оболочка окна уже
-  // покрашена, роуминг перекрасил бы её в другую») касалась ТОЛЬКО старого embed='1'
-  // (`ui/messenger_web.py` — узкая одностраничная встройка, у которой раньше была
-  // отдельно раскрашенная нативная рамка). У embed='nav' (`VueDashboard` — ВЕСЬ кабинет,
-  // §11 «один интерфейс») никакой отдельной нативной раскраски нет — это та же самая
-  // SPA целиком, значит и тема обязана роуминг, как на сайте. Дополнительно теперь
-  // нужен пробитый прокси `/me/prefs` (см. `ui/local_api.py::_PROXY_PREFIXES`) — без
-  // него запрос уходил бы в пустую локальную зеркальную копию, а не на бой.
+  // покрашена, роуминг перекрасил бы её в другую») касалась ТОЛЬКО режима '1' — узкой
+  // одностраничной встройки, у которой была отдельно раскрашенная нативная рамка.
+  // Нативных рамок больше нет вовсе (Qt удалён), так что тема роумится всегда — как на
+  // сайте. Условие оставлено на случай, если SPA снова встроят одной страницей в чужую
+  // раскрашенную оболочку. Ещё нужен пробитый прокси `/me/prefs`
+  // (см. `desktop/local_api.py::_PROXY_PREFIXES`) — без него запрос уходил бы в
+  // локальную зеркальную копию, а не на бой.
   if (embedMode !== '1') theme.loadFromPrefs()
   messenger.loadChats()
   _unreadTimer = setInterval(() => messenger.loadChats(), 20000)
@@ -182,6 +190,17 @@ onBeforeUnmount(() => {
          (writing-mode). Вкладка от этого была вдвое шире и заметно ложилась на правую
          колонку страницы — на расписании накрывала субботу. Осталась одна иконка с
          подсказкой: назначение читается по ней, а место она занимает вдвое меньше. -->
+    <!-- Активности (docs/PLAN-ACTIVITIES.md §10). ⚠️ РЯДОМ с <RouterView>, а НЕ внутри
+         него: свёрнутое окно обязано пережить переход в другой раздел, а вмешиваться в
+         <transition> этого файла нельзя — именно там `mode="out-in"` однажды намертво
+         вешал переходы между страницами (3.6.6). Оверлей выбора категории живёт здесь же
+         по той же причине: команду `/активность` набирают в мессенджере, но открыть его
+         должен слой, переживающий навигацию. -->
+    <ActivityShell v-if="!embed" />
+    <ActivityLauncher v-if="!embed && activity.launcherFor"
+                      :conversation-id="activity.launcherFor"
+                      @close="activity.closeLauncher()" />
+
     <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
             :aria-label="locale.t('vectorDock.showPanel', 'Показать панель Вектора')"
             :title="locale.t('vectorDock.showPanelShort', 'Показать Вектора')"

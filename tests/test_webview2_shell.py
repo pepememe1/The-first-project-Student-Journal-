@@ -45,15 +45,26 @@ def test_profile_dir_is_ours_not_the_users_browser():
 def test_ephemeral_profile_is_requested():
     """Кэш и куки не должны оставаться на диске (152-ФЗ, «инкогнито»). Нам это ничего не
     стоит: сессия подставляется заново каждый запуск, а офлайн-данные живут не в кэше
-    браузера, а в зашифрованной локальной базе — требование и offline-first не спорят."""
+    браузера, а в зашифрованной локальной базе — требование и offline-first не спорят.
+
+    ⚠️ Тест смотрит на `webview2_app.run` — ФУНКЦИЮ, КОТОРАЯ РЕАЛЬНО ОТКРЫВАЕТ ОКНО.
+    Раньше он читал исходник `webview2_shell.open_window` — черновика, который не звал
+    никто: проверка была зелёной при любом поведении настоящего окна. Функция удалена,
+    тест переставлен на живой путь."""
     import inspect
-    src = inspect.getsource(wv.open_window)
-    assert "private_mode=True" in src
+    from desktop import webview2_app
+    src = inspect.getsource(webview2_app.run)
+    assert "private_mode=True" in src, "окно обязано открываться с эфемерным профилем"
+    assert "storage_path=" in src, "папка данных движка должна задаваться явно"
 
 
 def test_shell_reports_unavailable_instead_of_guessing():
-    """На машине без обновлений Windows системного движка может не быть. Тогда честный
-    False и прежняя оболочка — а не пустое окно у человека посреди занятия."""
+    """На машине без обновлений Windows системного движка может не быть.
+
+    ⚠️ Раньше здесь было написано «тогда честный False и ПРЕЖНЯЯ ОБОЛОЧКА». Прежней
+    (Qt) оболочки в проекте больше нет: False означает, что программа НЕ ОТКРОЕТСЯ, и
+    человек увидит диалог с причиной. Именно поэтому важно, чтобы ответ был честным
+    булевым, а не догадкой, — пустое окно посреди занятия хуже внятного отказа."""
     assert isinstance(wv.available(), bool)
     assert isinstance(wv.runtime_installed(), bool)
 
@@ -89,3 +100,50 @@ def test_bootstrap_route_is_matched_before_spa_fallback():
     import inspect
     src = inspect.getsource(local_api.install_desktop_bootstrap)
     assert "routes.insert(0" in src
+
+
+# ── Признак «мы внутри программы» доезжает ОБОИМИ путями запуска ────────────────────
+def test_both_startup_paths_carry_the_desktop_marker(monkeypatch):
+    """🔥 РЕГРЕССИЯ УДАЛЕНИЯ QT, найденная уборкой. SPA отключает service worker только
+    когда знает, что открыта внутри программы. Признак выводился из `gb.embed`='1'/'nav'
+    (режимы, в которых нативная оболочка ВСТРАИВАЛА страницу) — оболочки нет, окно
+    передаёт '0', и признак перестал срабатывать совсем.
+
+    Чем это плохо: SW кэширует оболочку SPA и `/assets/*`, а его кэш переживает
+    обновление программы — ровно та болезнь, из-за которой OTA-бандлы месяц не доезжали
+    до телефонов. Плюс локальный сервер каждый запуск слушает НОВЫЙ эфемерный порт, а
+    порт входит в origin: регистрации копились бы по одной на запуск.
+
+    ⚠️ Путей запуска ДВА, и проверять надо ОБА. Первая версия починки ставила ключ только
+    в странице-передатчике сессии — а она открывается, лишь когда человек уже входил на
+    этой машине. На ПЕРВОМ запуске окно идёт прямо на /login мимо неё, и это ровно тот
+    запуск, в который service worker и устанавливается."""
+    from desktop import local_api, webview2_app
+
+    api = local_api.instance()
+    assert api.start(), "локальный сервер не поднялся"
+
+    #Путь 1 — сессии нет (первый запуск): метка обязана быть В АДРЕСЕ.
+    monkeypatch.setattr("sync.sync_runner.current_login", lambda: "")
+    monkeypatch.setattr("data.app_settings.get_saved_session", lambda: {})
+    url = webview2_app._start_url(api)
+    assert "desktop=1" in url, (
+        "первый запуск идёт мимо страницы-передатчика — без метки в адресе SPA "
+        "сочтёт себя обычным сайтом и поставит service worker")
+
+    #Путь 2 — сессия есть: метку ставит страница-передатчик, в localStorage.
+    import inspect
+    src = inspect.getsource(local_api.install_desktop_bootstrap)
+    assert "gb.desktop" in src, "страница-передатчик перестала ставить признак десктопа"
+
+
+def test_web_client_reads_the_desktop_marker_from_both_sources():
+    """Сторож на ДРУГОЙ стороне: питоновский код может честно отдавать метку, а клиент —
+    её не читать, и тогда починка снова окажется наполовину сделанной (ровно так и жил
+    признак всё это время). Проверяем ИСХОДНИК настоящего файла, а не его копию."""
+    import pathlib
+    src = pathlib.Path("web/src/main.js").read_text(encoding="utf-8")
+    head = src[:src.index("const _inDesktop")] + src[src.index("const _inDesktop"):
+                                                     src.index("const _inDesktop") + 900]
+    assert "'desktop'" in head or '"desktop"' in head, "клиент не читает ?desktop= из адреса"
+    assert "gb.desktop" in head, "клиент не читает признак десктопа из localStorage"

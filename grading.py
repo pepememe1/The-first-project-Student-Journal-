@@ -20,7 +20,8 @@ vector/intents._practice_average) и могла разойтись. Теперь
 Все параметры читаются из config (kv_store['config']) с безопасными дефолтами,
 поэтому при отсутствии настроек поведение в точности прежнее.
 """
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import TypedDict
 
 PRACTICE_VALUES = {"2", "3", "4", "5"}
 
@@ -87,9 +88,11 @@ def lead_num(val: str) -> float | None:
 def is_failed(grade: str) -> bool:
     """Считается ли оценка ЗАВАЛЕННОЙ (нужна пересдача).
 
-    ЕДИНЫЙ источник правды для трёх мест, где это раньше дублировалось инлайном:
-    десктоп (teacher_dashboard), сервер (webdata.debts) и веб (web/src/utils/grades.js —
-    точный порт). Правило: непусто И (начинается с «2» или «Н») ЛИБО содержит «Не зачтено».
+    ЕДИНЫЙ источник правды для мест, где это раньше дублировалось инлайном: сервер
+    (`webdata.debts`, он же обслуживает журнал ВНУТРИ программы) и веб/мобилка
+    (`web/src/utils/grades.js` — точный порт). Третьим был нативный десктопный журнал,
+    но нативных экранов нет с удаления Qt — десктоп показывает ту же SPA.
+    Правило: непусто И (начинается с «2» или «Н») ЛИБО содержит «Не зачтено».
     Пороговые случаи закреплены контрактом docs/contracts/grade-cases.json (парные тесты
     Python и JS) — молчаливое расхождение реализаций больше невозможно."""
     v = (grade or "").strip()
@@ -107,8 +110,9 @@ def attempt_key(lesson_id: str, ri: int) -> str:
 def needs_retake(records: dict[str, str], lesson_id: str, ri: int) -> bool:
     """Нужна ли студенту пересдача №ri: либо у него уже проставлена оценка за эту
     попытку (показываем существующее), либо ПРЕДЫДУЩАЯ попытка завалена (is_failed).
-    Единый источник для десктопа (teacher_dashboard) и веба (grades.js::needsRetake) —
-    закреплён контрактом docs/contracts/grade-cases.json (парные тесты Python/JS)."""
+    Единый источник для сервера (он же питает журнал внутри программы) и веба
+    (`grades.js::needsRetake`) — закреплён контрактом docs/contracts/grade-cases.json
+    (парные тесты Python/JS)."""
     if records.get(attempt_key(lesson_id, ri)):
         return True
     return is_failed(records.get(attempt_key(lesson_id, ri - 1), ""))
@@ -250,10 +254,26 @@ def _is_failed_pass_fail(raw: str) -> bool:
     return v.startswith("не") or v.startswith("незач")
 
 
-#Реестр шкал: values — допустимые сырые значения (для UI-селектов ввода), to_five/
+class Scale(TypedDict):
+    """Одна шкала оценивания преподавателя.
+
+    Тип описан ЯВНО, а не выведен: без него mypy видел значения словаря как `object` и
+    честно ругался на `SCALES[...]["to_five"](x)` — «object not callable» (три из трёх
+    ошибок проверки типов во всём allowlist приходились на это место). Заглушить их
+    через `Any` было бы дешевле, но тогда подмена функции конвертации на функцию с
+    другой сигнатурой прошла бы молча — а это ровно та ошибка, из-за которой средний
+    балл разъезжается между платформами.
+    """
+    label: str
+    values: tuple[str, ...]
+    to_five: Callable[[str], float | None]
+    is_failed: Callable[[str], bool]
+
+
+#Реестр шкал: values — допустимые сырые значения (для селектора ввода оценки), to_five/
 #is_failed — функции конвертации. Ключ — то же значение, что хранится в User.prefs
 #["grading_scale"].
-SCALES = {
+SCALES: dict[str, Scale] = {
     "5": {
         "label": "5-балльная",
         "values": ("2", "3", "4", "5"),

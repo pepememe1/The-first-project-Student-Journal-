@@ -149,22 +149,3 @@ def save_subjects(subjects: list) -> bool:
         return False
 
 
-def delete_subject(name: str) -> bool:
-    """Удаляет предмет из subjects.json."""
-    subjects = load_subjects()
-    if name not in subjects:
-        return False
-    subjects = [s for s in subjects if s != name]
-    return save_subjects(subjects)
-
-
-def add_subject(name: str) -> bool:
-    """
-    Добавляет новый предмет в subjects.json.
-    Возвращает False если предмет уже существует.
-    """
-    subjects = load_subjects()
-    if name in subjects:
-        return False
-    subjects.append(name)
-    return save_subjects(subjects)

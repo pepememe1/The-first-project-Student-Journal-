@@ -25,10 +25,18 @@ def _group(client, owner_headers, member_ids, title="Группа"):
 
 
 def test_default_permissions_owner_admin_vs_member(client):
+    """Владелец получает ВЕСЬ набор прав, обычный участник — ни одного.
+
+    ⚠️ Проверяем СВОЙСТВО («владельцу дано всё, что вообще бывает»), а не слепок
+    множества. Прежняя версия сверялась с литеральным `{"kick", "manage_roles",
+    "cmd_mute", "cmd_clear"}` и краснела от каждого честного добавления права —
+    подталкивая «просто дописать пятое в ожидание», то есть ровно к тому, от чего сторож
+    и защищал. Тот же урок, что со сторожем прокси-префиксов (§7 CLAUDE.md)."""
+    from app.routers.messenger import _ALL_PERMISSIONS
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, a, [b_id, c_id])
     info_owner = client.get(f"/web/messenger/chats/{conv}", headers=a).json()
-    assert set(info_owner["my_permissions"]) == {"kick", "manage_roles", "cmd_mute", "cmd_clear"}
+    assert set(info_owner["my_permissions"]) == set(_ALL_PERMISSIONS)
     info_member = client.get(f"/web/messenger/chats/{conv}", headers=b).json()
     assert info_member["my_permissions"] == []
 
@@ -71,7 +79,9 @@ def test_owner_permissions_cannot_be_taken_away(client):
     assert client.post(f"/web/messenger/chats/{conv}/members/{a_id}/role",
                        json={"role": "member"}, headers=a).status_code == 400
     info = client.get(f"/web/messenger/chats/{conv}", headers=a).json()
-    assert set(info["my_permissions"]) == {"kick", "manage_roles", "cmd_mute", "cmd_clear"}
+    #Свойство, а не слепок: см. пояснение в test_default_permissions_owner_admin_vs_member.
+    from app.routers.messenger import _ALL_PERMISSIONS
+    assert set(info["my_permissions"]) == set(_ALL_PERMISSIONS)
 
 
 def test_mute_command_toggles_and_blocks_sending(client):
@@ -162,7 +172,10 @@ def test_roles_list_includes_templates(client):
     assert data["roles"] == []
     names = {t["name"] for t in data["templates"]}
     assert {"Студент", "Староста", "Преподаватель"} <= names
-    assert set(data["all_permissions"]) == {"kick", "manage_roles", "cmd_mute", "cmd_clear"}
+    #Реестр прав отдаётся клиенту целиком — сверяем со ФАКТИЧЕСКИМ реестром, иначе
+    #каждое новое право краснит проверку и подталкивает «просто дописать в ожидание».
+    from app.routers.messenger import _ALL_PERMISSIONS
+    assert set(data["all_permissions"]) == set(_ALL_PERMISSIONS)
 
 
 def test_conversation_info_includes_my_user_id(client):

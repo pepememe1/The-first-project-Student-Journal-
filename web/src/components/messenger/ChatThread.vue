@@ -8,7 +8,7 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
-  Languages, Star, SmilePlus,
+  Languages, Star, SmilePlus, ClipboardList,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -30,6 +30,9 @@ import PeerProfileModal from './PeerProfileModal.vue'
 import MascotCooldown from './MascotCooldown.vue'
 import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
+import ActivityCard from '@/components/activity/ActivityCard.vue'
+import BoardCard from '@/components/activity/BoardCard.vue'
+import ActivityJournal from '@/components/activity/ActivityJournal.vue'
 import TranslateDialog from './TranslateDialog.vue'
 import GifPicker from './GifPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -70,6 +73,9 @@ const canPost = computed(() => {
 })
 // §D1: заголовки # / ## разрешены только в каналах (в личных чатах/группах — просто текст).
 const isChannel = computed(() => kind.value === 'channel')
+//Активности бывают только в общих беседах (PLAN-ACTIVITIES §1): в личном чате один
+//собеседник, в «Избранном» один человек, в чате модерации служебный поток.
+const isGroupLike = computed(() => kind.value === 'group' || kind.value === 'channel')
 
 const draft = ref('')
 const scroller = ref(null)
@@ -79,6 +85,7 @@ const composer = ref(null)
 const overlay = ref({ open: false, message: null, x: 0, y: 0 })
 const reportMsg = ref(null)                 // сообщение, на которое жалуемся
 const openReportOverlay = ref(null)         // §12: id открытого отчёта куратора (или null)
+const journalOpen = ref(false)              // журнал активностей беседы (PLAN-ACTIVITIES §9)
 const forwardState = ref({ open: false, ids: [] })
 const deleteTargets = ref(null)             // [message,…] для выбора «у себя/у всех» (все свои)
 const copied = ref(false)
@@ -983,6 +990,17 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                     : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
             <Languages class="size-5" />
           </button>
+          <!-- Журнал активностей беседы (PLAN-ACTIVITIES §9). Только в группах и каналах:
+               в личном чате и «Избранном» активностей не бывает, и пустая кнопка там
+               читалась бы как поломка. -->
+          <button v-if="isGroupLike" type="button" @click="journalOpen = true"
+                  :aria-label="locale.t('activity.journal.title', 'Журнал активностей')"
+                  :title="locale.t('activity.journal.title', 'Журнал активностей')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : 'text-text3 hover:bg-bg2 hover:text-text'">
+            <ClipboardList class="size-5" />
+          </button>
           <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
           <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
                   :aria-label="muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
@@ -1141,6 +1159,13 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
               <span v-if="msg.report.archived" class="rounded-full bg-bg2 px-1.5 py-0.5 text-[10px] font-medium text-text3">{{ locale.t('curatorReport.archived', 'Архив') }}</span>
             </button>
           </div>
+
+          <!-- Активность и сохранённая доска (PLAN-ACTIVITIES §10). Тот же приём, что у
+               отчёта выше: в теле сообщения только id, объект подмешал сервер. -->
+          <ActivityCard v-else-if="msg.kind === 'activity' && msg.activity"
+                        :id="`gb-msg-${msg.id}`" :activity="msg.activity" :created-at="msg.created_at" />
+          <BoardCard v-else-if="msg.kind === 'board' && msg.board"
+                     :id="`gb-msg-${msg.id}`" :board="msg.board" />
 
           <div v-else :id="`gb-msg-${msg.id}`"
                class="flex items-end gap-2"
@@ -1602,6 +1627,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
     <TranslateDialog v-if="showTranslate" @close="showTranslate = false" />
     <GifPicker v-if="showGifPicker" @pick="m.sendGif($event)" @close="showGifPicker = false" />
     <CuratorReportOverlay v-if="openReportOverlay" :report-id="openReportOverlay" @close="openReportOverlay = null" />
+    <ActivityJournal v-if="journalOpen && activeId" :conversation-id="activeId" @close="journalOpen = false" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"
                    @submit="onForwardSubmit" @close="forwardState = { open: false, ids: [] }" />
 

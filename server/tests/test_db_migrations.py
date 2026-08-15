@@ -15,7 +15,8 @@ from sqlalchemy import text, inspect
 from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
                     _ensure_notify_event_columns, _ensure_group_category_column,
-                    _ensure_user_password_set_at_column)
+                    _ensure_user_password_set_at_column,
+                    _ensure_message_report_target_column)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -153,3 +154,33 @@ def test_ensure_user_password_set_at_column_adds_to_old_schema(client):
     cols = {c["name"] for c in inspect(engine).get_columns("users")}
     assert "password_set_at" in cols
     _ensure_user_password_set_at_column()  # идемпотентность — второй вызов не падает
+
+
+def test_ensure_message_report_target_column_adds_to_old_schema(client):
+    """Таблица message_reports без target_kind (схема ДО активностей).
+
+    Колонка появилась вместе с жалобой на отзыв среза понимания: у такого тикета
+    `message_id` — это id строки отзыва, а НЕ сообщения. Без ALTER-а очередь модерации
+    падала бы «no such column» у администратора на первом же открытии вкладки «Жалобы».
+    """
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE message_reports"))
+        conn.execute(text("""CREATE TABLE message_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER DEFAULT 0,
+            conversation_id VARCHAR, message_snapshot VARCHAR, reporter_id VARCHAR,
+            reported_user_id VARCHAR, reason_code VARCHAR, description VARCHAR,
+            created_at VARCHAR, status VARCHAR DEFAULT 'open', handled_by VARCHAR,
+            handled_at VARCHAR, resolution_note VARCHAR
+        )"""))
+        #Тикет, накопленный ДО миграции: он обязан остаться в очереди модерации.
+        conn.execute(text("INSERT INTO message_reports (message_id, status) VALUES (7, 'open')"))
+    engine.dispose()
+    _ensure_message_report_target_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("message_reports")}
+    assert "target_kind" in cols
+    with engine.begin() as conn:
+        got = conn.execute(text("SELECT target_kind FROM message_reports")).scalar()
+    #⚠️ Не NULL: фильтр `target_kind == "message"` иначе перестал бы находить старые
+    #тикеты, и вся прежняя очередь молча исчезла бы из вкладки «Жалобы».
+    assert got == "message"
+    _ensure_message_report_target_column()  # идемпотентность — второй вызов не падает

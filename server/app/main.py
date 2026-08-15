@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import init_db
 from .config import ALLOWED_ORIGINS, assert_production_secrets
 from .routers import auth, sync, me, admin, web, vector, messenger, parent
+from .routers import activities as activities_router
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import appupdate
@@ -146,6 +147,11 @@ app.include_router(webauthn_router.router)
 app.include_router(web.router)
 app.include_router(parent.router)          # кабинет родителя + согласие студента (/web/parent/*)
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
+# Активности в беседах (/web/messenger/activities/*). ⚠️ ПОСЛЕ messenger.router: у того
+# есть `/chats/{conv_id}`-подобные маршруты, но ни одного, который перехватил бы наш
+# префикс, — а вот наоборот порядок важен для будущих правок. Отдельный роутер, а не
+# часть messenger.py: тот уже 3300 строк (см. docs/PLAN-ACTIVITIES.md §4).
+app.include_router(activities_router.router)
 app.include_router(messenger.mod_router)   # модерация мессенджера (/web/admin/messenger/*)
 #Расписание БЕЗ входа (/public/schedule/*) — для виджета на рабочем столе Android:
 #токена у него быть не может (JWT живёт 5 часов), а данные и так публичны у портала.

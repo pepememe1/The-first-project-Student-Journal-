@@ -396,3 +396,96 @@ def test_failed_reconcile_is_retried_next_cycle(monkeypatch):
     with pytest.raises(RuntimeError):
         r._reconcile_once()
     assert r._need_reconcile is True, "провал сверки должен оставлять её в очереди"
+
+
+# ── 9. Конфликт оценки перестал быть беззвучным ───────────────────────────────────
+def _seed_local_grade(grade: str, at: str, lid: str = "les-1"):
+    """Локальная оценка, с которой потом разойдётся серверная."""
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO grades "
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,student_id) "
+                "VALUES (?,?,?,?,?,?,0,?)",
+                ("Иванов", "Иван", lid, grade, at, "dev-local", "stud:ivanov"))
+    conn.commit()
+    conn.close()
+
+
+def _remote_grade(grade: str, at: str, lid: str = "les-1"):
+    return [{"id": f"stud:ivanov|{lid}", "student_f": "Иванов", "student_n": "Иван",
+             "lesson_id": lid, "grade": grade, "updated_at": at,
+             "device": "dev-other", "deleted": False, "student_id": "stud:ivanov"}]
+
+
+def test_grade_conflict_is_counted_not_only_written():
+    """🔥 РЕАЛЬНЫЙ ДЕФЕКТ. Расхождение по оценке честно писалось в `sync_conflicts` — и на
+    этом всё: экран разбора жил в Qt-оболочке и удалён вместе с ней, `list_conflicts`
+    с тех пор не зовёт никто. То есть у преподавателя в журнале одна оценка, на сервере
+    другая, и узнать об этом было НЕОТКУДА.
+
+    Проверяем не «строка появилась в таблице» (это работало и раньше), а что расхождение
+    ВИДНО снаружи: счётчик в статусе синка. Именно его отсутствие делало потерю тихой."""
+    from data.core import DBManager
+
+    assert DBManager.count_unresolved_conflicts() == 0
+
+    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
+
+    assert DBManager.count_unresolved_conflicts() == 1, "конфликт не виден снаружи"
+
+
+def test_conflict_counter_reaches_the_sync_status():
+    """Счётчик обязан доезжать до `status()` — того единственного места, куда смотрит
+    индикатор. Тест на САМ ФАКТ проводки: сама по себе `count_unresolved_conflicts`
+    может быть исправна, а в статусе её не будет, и наружу опять ничего не попадёт
+    (ровно так и жил конфликт всё это время)."""
+    from sync import sync_runner
+
+    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
+
+    st = sync_runner.SyncManager().status()
+    assert "conflicts" in st, "в статусе синка нет поля conflicts"
+    assert st["conflicts"] == 1
+
+
+def test_agreeing_grade_is_not_a_conflict():
+    """Обратная проверка. Без неё «починка» вида «считать конфликтом любое слияние»
+    выглядела бы правильной: счётчик бы рос, индикатор горел, и преподаватель перестал
+    бы его читать — то же, от чего защищает порог у риска отчисления."""
+    from data.core import DBManager
+
+    _seed_local_grade("4", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("4", "2026-08-15T11:00:00+00:00"))
+    assert DBManager.count_unresolved_conflicts() == 0, "совпавшие значения — не конфликт"
+
+    #Локальная правка НОВЕЕ серверной: тоже не конфликт, наша уедет на сервер сама.
+    _seed_local_grade("5", "2026-08-15T12:00:00+00:00", lid="les-2")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00", lid="les-2"))
+    assert DBManager.count_unresolved_conflicts() == 0, "своя более свежая правка — не конфликт"
+
+
+def test_resolving_a_conflict_keeps_the_immutable_student_id():
+    """🔥 ВТОРОЙ ДЕФЕКТ В ТОМ ЖЕ МЕСТЕ. `resolve_conflict` перезаписывала строку оценки,
+    НЕ перенося `student_id` (§4.10) — то есть разбор конфликта отвязывал историю от
+    студента ровно там, где преподаватель уверен, что всё исправил. Дефект был не виден,
+    потому что функцию никто не звал."""
+    from data.core import DBManager
+
+    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
+    conflicts = DBManager.list_conflicts()
+    assert conflicts, "конфликт должен был появиться"
+
+    assert DBManager.resolve_conflict(conflicts[0]["id"], "4") is True
+
+    conn = DBManager.get_conn()
+    row = conn.execute("SELECT grade, COALESCE(student_id,'') FROM grades "
+                       "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                       ("Иванов", "Иван", "les-1")).fetchone()
+    conn.close()
+    assert row[0] == "4", "выбранное значение не записалось"
+    assert row[1] == "stud:ivanov", "разбор конфликта потерял неизменяемый id студента"
+    assert DBManager.count_unresolved_conflicts() == 0, "конфликт должен закрыться"

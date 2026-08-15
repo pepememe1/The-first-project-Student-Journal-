@@ -172,14 +172,6 @@ def set_api_url(url: str) -> bool:
 _OFFLINE_ACK_KEY = "offline_ack"
 
 
-def get_offline_ack() -> bool:
-    return bool(_kv_get(_OFFLINE_ACK_KEY, False))
-
-
-def set_offline_ack(value: bool) -> bool:
-    return _kv_set(_OFFLINE_ACK_KEY, bool(value))
-
-
 #Признак ПК-хоста (на нём администратор поднимает сервер). Нужен, чтобы стартовое
 #окно «введите адрес сервера» НЕ доставало администратора: иначе вышел бы замкнутый
 #круг — адрес появляется только ПОСЛЕ запуска сервера, а ввести его просили бы ДО
@@ -190,10 +182,6 @@ _HOST_FLAG_KEY = "is_host"
 def is_host() -> bool:
     """True, если этот ПК уже выступал хостом (вход админа / запуск сервера)."""
     return bool(_kv_get(_HOST_FLAG_KEY, False))
-
-
-def mark_host(value: bool = True) -> bool:
-    return _kv_set(_HOST_FLAG_KEY, bool(value))
 
 
 #Автозапуск сервера на ПК-хосте. Чтобы связь была ПОСТОЯННОЙ: хост поднимает свой
@@ -208,10 +196,6 @@ _HOST_AUTOSTART_KEY = "host_autostart"
 def host_autostart_enabled() -> bool:
     """True, если этот ПК-хост должен сам поднимать свой сервер при старте программы."""
     return bool(_kv_get(_HOST_AUTOSTART_KEY, False))
-
-
-def set_host_autostart(value: bool = True) -> bool:
-    return _kv_set(_HOST_AUTOSTART_KEY, bool(value))
 
 
 #Отложенная отправка личных настроек (темы оформления). Если в момент «Сохранить»
@@ -260,10 +244,6 @@ def set_saved_token(login: str, token: str) -> bool:
     return _kv_set(_TOKEN_KEY, {"login": login or "", "token": token or ""})
 
 
-def clear_saved_token() -> bool:
-    return _kv_set(_TOKEN_KEY, {})
-
-
 #Refresh-токен: долгоживущий, им ТИХО обновляют короткий access, не выкидывая
 #пользователя на логин (например, если access протух за время офлайна). Даёт доступ к
 #API так же, как access, поэтому хранится ТОЧНО ТАК ЖЕ — зашифрованным (DPAPI/Fernet)
@@ -281,10 +261,6 @@ def get_saved_refresh_token(login: str) -> str:
 
 def set_saved_refresh_token(login: str, token: str) -> bool:
     return _kv_set(_REFRESH_TOKEN_KEY, {"login": login or "", "token": token or ""})
-
-
-def clear_saved_refresh_token() -> bool:
-    return _kv_set(_REFRESH_TOKEN_KEY, {})
 
 
 #Сохранённая СЕССИЯ для персистентного входа: чтобы после закрытия программы при
@@ -344,9 +320,3 @@ def get_device_id() -> str:
 _DEVICE_CONNECTED_KEY = "device_connected"
 
 
-def is_device_connected() -> bool:
-    return bool(_kv_get(_DEVICE_CONNECTED_KEY, False))
-
-
-def set_device_connected(value: bool = True) -> bool:
-    return _kv_set(_DEVICE_CONNECTED_KEY, bool(value))

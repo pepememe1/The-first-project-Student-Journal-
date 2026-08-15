@@ -19,9 +19,16 @@ set -e
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(pwd -W 2>/dev/null || pwd)"
 
-# Плоские импорты (desktop/ sync/ data/ кладутся в sys.path через _bootstrap на рантайме) —
-# Nuitka их сама не видит, поэтому даём папки в путь и включаем модули явно.
-export PYTHONPATH="$ROOT/desktop;$ROOT/sync;$ROOT/data"
+# 🔥 Здесь СТОЯЛО: PYTHONPATH="$ROOT/desktop;$ROOT/sync;$ROOT/data" с пояснением «плоские
+# импорты через _bootstrap на рантайме». И то, и другое устарело: `_bootstrap.py` удалён,
+# плоских импортов в репозитории не осталось ни одного (проверено grep'ом по всем формам
+# `from core import` / `import data_store` и т.п.), а desktop/ sync/ data/ — обычные пакеты.
+# Оставлять подпапки в пути было не просто лишним, а ВРЕДНЫМ: ровно из-за такой раскладки
+# один файл, импортированный и как `core`, и как `data.core`, даёт ДВА объекта модуля со
+# своим состоянием — для DBManager это две независимые «единственные» точки доступа к базе.
+# Тот же мусор убран из pytest.ini; здесь он прожил дольше просто потому, что сборку гоняют
+# реже тестов.
+export PYTHONPATH="$ROOT"
 
 # ⚠️ Собирать нужно ОБЫЧНЫМ python.org Python, НЕ из Microsoft Store: у Store-сборки
 # песочница ломает пути MinGW, и gcc не находит windows.h. Ошибка при этом вылезает
@@ -53,15 +60,21 @@ case "$("$PYEXE" -c 'import sys; print(sys.executable)')" in
     exit 1 ;;
 esac
 
+# Модули включаем ПОЛНЫМ ИМЕНЕМ ПАКЕТА (`data.core`, а не `core`). Раньше здесь стояло
+# короткое имя — наследие плоских импортов: Nuitka послушно компилировала лишний модуль
+# `core`, которого в продукте не существует, а настоящий `data.core` попадал в сборку
+# только потому, что до него дотягивался анализ от main.py. Явное включение нужно не
+# «на всякий случай»: часть этих модулей достижима ТОЛЬКО через server/app, а он едет
+# сырыми данными (см. ниже) — статический анализ туда не заходит вовсе.
 INC=""
 for d in desktop sync data; do
   for f in "$d"/*.py; do
     b="$(basename "$f" .py)"
     [ "$b" = "__init__" ] && continue
-    INC="$INC --include-module=$b"
+    INC="$INC --include-module=$d.$b"
   done
 done
-for b in grading subjects server_control app_paths; do
+for b in grading subjects server_control app_paths log; do
   INC="$INC --include-module=$b"
 done
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ
@@ -219,6 +232,29 @@ if ! command -v cl.exe >/dev/null 2>&1 && ! command -v gcc.exe >/dev/null 2>&1 &
   fi
 fi
 
+# 🔥 Версия .exe БОЛЬШЕ НЕ ЗАХАРДКОЖЕНА. Здесь стояло `--file-version=3.5.0.0
+# --product-version=3.5.0.0` — при том, что APP_VERSION давно ушла на 3.7.x. Это не
+# косметика в свойствах файла: та же строка подставляется в --onefile-tempdir-spec
+# ({VERSION}), то есть КАЖДЫЙ выпуск распаковывался в одну и ту же папку кэша
+# %LOCALAPPDATA%\GradeBookAI\3.5.0.0. Именно она сбила с толку разбор автообновления в
+# 3.6.2 («обновление применилось к копии в кэше, а не к настоящему .exe»).
+# Берём из ЕДИНСТВЕННОГО места (desktop_update.py::APP_VERSION) и приводим к формату
+# Windows «a.b.c.d»: «Release 3.7.3» → 3.7.3.0.
+FILEVER="$("$PYEXE" -c "
+import re, pathlib
+src = pathlib.Path('desktop_update.py').read_text(encoding='utf-8')
+m = re.search(r'APP_VERSION\s*=\s*[\'\"]([^\'\"]+)', src)
+nums = re.findall(r'\d+', m.group(1) if m else '')
+nums = (nums + ['0', '0', '0', '0'])[:4]
+print('.'.join(nums))
+")"
+if ! printf '%s' "$FILEVER" | grep -qE '^[0-9]+(\.[0-9]+){3}$'; then
+  echo "ОШИБКА: не удалось прочитать APP_VERSION из desktop_update.py (получено: '$FILEVER')." >&2
+  echo "Сборка остановлена: .exe с чужим номером версии распакуется в чужую папку кэша." >&2
+  exit 1
+fi
+echo "[nuitka] версия сборки: $FILEVER"
+
 echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
 "$PYEXE" -m nuitka main.py \
   --standalone --onefile \
@@ -226,7 +262,7 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --windows-console-mode=disable \
   --windows-icon-from-ico=icon.ico \
   --company-name=Synapse --product-name=GradeBookAI \
-  --file-version=3.5.0.0 --product-version=3.5.0.0 \
+  --file-version="$FILEVER" --product-version="$FILEVER" \
   --output-filename=GradeBookAI.exe \
   --output-dir=nuitka_out \
   --assume-yes-for-downloads \

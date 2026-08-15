@@ -1,113 +1,26 @@
 """
-avatar_service.py — аватарка пользователя (десктоп).
+avatar_service.py — разрешение ШКАЛЫ ОЦЕНИВАНИЯ по назначению препод↔предмет↔группа.
 
-Хранение как у темы (theme_service): картинка (обрезанная 256×256 JPEG в виде data:URL)
-лежит в prefs.avatar — роумится между устройствами через /me/prefs + синк и СОВМЕСТИМА с
-вебом (там та же prefs.avatar). Плюс локальный кэш этого аккаунта на ПК — мгновенно и
-офлайн. Приоритет чтения: локальный кэш → синхронизированная запись пользователя → ''.
+🔥 ИМЯ МОДУЛЯ УСТАРЕЛО, И ЭТО НЕ ПРИДИРКА. Он назывался «аватарка пользователя
+(десктоп)» и держал профиль: аватар, «О себе», цвет плашки, шкалу оценивания — плюс
+локальный кэш этого всего на общем ПК колледжа. Ни одной из тех функций больше нет:
+профиль целиком живёт в вебе (`/me/prefs` + `web/src/stores/profile.js`), а
+их единственными вызывающими были нативные Qt-экраны, удалённые вместе с оболочкой.
+Вырезаны `get_avatar`, `save_avatar`, `get_bio`, `get_profile_color`,
+`get_grading_scale`, `save_grading_scale`, `save_profile` и вся обвязка локального кэша
+(`_ident_token`/`_key`/`_synced_pref`/`_synced_avatar`, константа `BIO_LIMIT`).
+Шапка при этом ссылалась на `theme_service` — модуль, которого в репозитории нет вовсе.
+
+⚠️ Переименовать файл — ОТДЕЛЬНАЯ правка, не эта: имя `avatar_service` зашито в
+`vector/intents.py` (два места) и в сборочные скрипты, и менять его заодно с уборкой
+значило бы смешать два разных изменения в одном заходе.
+
+⚠️ И честно про достижимость того, что осталось: единственный вызывающий
+`get_subject_grading_scale` — `vector/intents.py`, то есть НАТИВНЫЙ офлайн-Вектор
+десктопа. У самого пакета `vector/` вызывающих в продукте сегодня нет (окно программы
+показывает ту же SPA, а её Вектор обслуживает `server/app/routers/web/vector.py`).
+Функция рабочая и покрыта тестами, но считать её «тем, что крутится у людей», нельзя.
 """
-import log
-from data.data_store import get_store, local_get, local_set
-
-_LOCAL_PREFIX = "my_avatar"
-
-
-def _ident_token(role: str, identity: dict) -> str:
-    """Стабильный токен аккаунта (тот же принцип, что в theme_service — не путать акки на
-    общем ПК колледжа)."""
-    identity = identity or {}
-    if role == "teacher":
-        return "teacher:" + (identity.get("name", "") or "?")
-    if role == "student":
-        return "student:{}|{}|{}".format(identity.get("f", ""), identity.get("n", ""),
-                                         identity.get("g", ""))
-    if role == "admin":
-        return "admin"
-    return "default"
-
-
-def _key(role: str, identity: dict) -> str:
-    return f"{_LOCAL_PREFIX}:{_ident_token(role, identity)}"
-
-
-def _synced_pref(role: str, identity: dict, field: str) -> str:
-    """Поле prefs из синхронизированной записи пользователя (роуминг с другого ПК)."""
-    identity = identity or {}
-    try:
-        store = get_store()
-        if role == "teacher":
-            rec = store.get_teachers().get(identity.get("name", ""), {})
-            return (rec.get("prefs") or {}).get(field, "") or ""
-        if role == "student":
-            f, n, g = identity.get("f", ""), identity.get("n", ""), identity.get("g", "")
-            for s in store.get_students():
-                if (s.get("surname", "") == f and s.get("name", "") == n
-                        and s.get("group", "") == g):
-                    return (s.get("prefs") or {}).get(field, "") or ""
-    except Exception:
-        pass
-    return ""
-
-
-def _synced_avatar(role: str, identity: dict) -> str:
-    """avatar из синхронизированной записи пользователя (для роуминга с другого ПК)."""
-    return _synced_pref(role, identity, "avatar")
-
-
-def get_avatar(role: str, identity: dict = None) -> str:
-    """Текущая аватарка аккаунта (data:URL) или ''. Локальный кэш → синк-запись → пусто."""
-    identity = identity or {}
-    cached = local_get(_key(role, identity), None)
-    if isinstance(cached, str) and cached:
-        return cached
-    return _synced_avatar(role, identity)
-
-
-def save_avatar(data_url: str, role: str, identity: dict = None) -> None:
-    """Сохранить аватарку: локальный кэш (мгновенно) + prefs на сервер (роуминг). ''
-    (пустая строка) — удалить. Как save_user_theme, self-scope через /me/prefs."""
-    identity = identity or {}
-    data_url = data_url or ""
-    local_set(_key(role, identity), data_url)
-    try:
-        from sync import sync_runner
-        sync_runner.push_my_prefs({"avatar": data_url})
-    except Exception as e:
-        log.get("avatar_service").warning(f"[avatar] отправка в prefs пропущена: {e}")
-
-
-# ── Публичная часть профиля: «О себе» и цвет плашки ──────────────────────────────────
-# Те же поля, что на вебе (prefs.bio / prefs.profile_color), — профиль общий для платформ.
-BIO_LIMIT = 400          #совпадает с лимитом сервера (routers/me.py) и веба
-
-
-def get_bio(role: str, identity: dict = None) -> str:
-    """«О себе» аккаунта. Локальный кэш → синхронизированная запись → пусто."""
-    identity = identity or {}
-    cached = local_get(f"my_bio:{_ident_token(role, identity)}", None)
-    if isinstance(cached, str) and cached:
-        return cached
-    return _synced_pref(role, identity, "bio")
-
-
-def get_profile_color(role: str, identity: dict = None) -> str:
-    """id пресета палитры для плашки профиля ('' — стандартный акцент)."""
-    identity = identity or {}
-    cached = local_get(f"my_profile_color:{_ident_token(role, identity)}", None)
-    if isinstance(cached, str) and cached:
-        return cached
-    return _synced_pref(role, identity, "profile_color")
-
-
-def get_grading_scale(role: str, identity: dict = None) -> str:
-    """Шкала оценивания преподавателя (§ролей, 3.3.1) — в чём он вводит/видит оценки
-    за практику/ДЗ. Тот же роуминг-паттерн, что и bio/цвет: локальный кэш → синк-запись
-    → дефолт "5" (сегодняшнее поведение, если препод ничего не выбрал)."""
-    identity = identity or {}
-    cached = local_get(f"my_grading_scale:{_ident_token(role, identity)}", None)
-    if isinstance(cached, str) and cached:
-        return cached
-    return _synced_pref(role, identity, "grading_scale") or "5"
 
 
 def get_subject_grading_scale(group: str, subject: str, year: str = "", semester=None) -> str:
@@ -127,41 +40,12 @@ def get_subject_grading_scale(group: str, subject: str, year: str = "", semester
             if rec.get("id") == tid:
                 sc = (rec.get("prefs") or {}).get("grading_scale") or grading.DEFAULT_SCALE
                 return sc if sc in grading.SCALES else grading.DEFAULT_SCALE
-    except Exception:
-        pass
+    except Exception as e:
+        #Шкала — оформление ввода, а не сама оценка: уронить из-за неё журнал нельзя.
+        #Но и молчать нельзя — раньше здесь стоял голый `pass`, и «у всех вдруг стала
+        #пятибалльная» выглядело как решение продукта, а не как сбой чтения базы.
+        import log
+        log.get("avatar_service").warning(
+            f"[scale] не удалось определить шкалу для {group!r}/{subject!r}: {e} — "
+            f"беру умолчание")
     return grading.DEFAULT_SCALE
-
-
-def save_grading_scale(scale: str, role: str, identity: dict = None) -> None:
-    """Сохранить шкалу: локальный кэш + prefs на сервер (роуминг, тот же формат, что на
-    вебе — POST /me/prefs). Как save_profile, self-scope."""
-    identity = identity or {}
-    scale = (scale or "5").strip()
-    local_set(f"my_grading_scale:{_ident_token(role, identity)}", scale)
-    try:
-        from sync import sync_runner
-        sync_runner.push_my_prefs({"grading_scale": scale})
-    except Exception as e:
-        log.get("avatar_service").warning(f"[grading_scale] отправка в prefs пропущена: {e}")
-
-
-def save_profile(role: str, identity: dict = None, bio: str = None, color: str = None) -> None:
-    """Сохранить публичный профиль: локальный кэш + prefs на сервер (роуминг, тот же
-    формат, что на вебе). Передавайте только те поля, которые меняете."""
-    identity = identity or {}
-    payload = {}
-    if bio is not None:
-        bio = (bio or "").strip()[:BIO_LIMIT]
-        local_set(f"my_bio:{_ident_token(role, identity)}", bio)
-        payload["bio"] = bio
-    if color is not None:
-        color = (color or "").strip()[:32]
-        local_set(f"my_profile_color:{_ident_token(role, identity)}", color)
-        payload["profile_color"] = color
-    if not payload:
-        return
-    try:
-        from sync import sync_runner
-        sync_runner.push_my_prefs(payload)
-    except Exception as e:
-        log.get("avatar_service").warning(f"[profile] отправка в prefs пропущена: {e}")

@@ -19,6 +19,7 @@ import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
+import { useActivityStore } from '@/stores/activity'
 
 const LS_USER = 'gb.user'
 
@@ -130,6 +131,10 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     useVectorStore().reset()      // и диалог с Вектором: он тоже жил в памяти store
     useProfileStore().reset()     // и профиль (аватар/«о себе»/цвет/шрифт) — та же причина
+    // Активность живёт ВНЕ страницы (плавающее окно поверх RouterView) и переживает смену
+    // пользователя в той же вкладке: без сброса следующий вошедший увидел бы чужую
+    // викторину поверх своего кабинета.
+    useActivityStore().reset()
     // Виджет на рабочем столе Android живёт ВНЕ страницы и переживает выход: без этой
     // строки он продолжал бы показывать группу предыдущего владельца сессии тому, кто
     // войдёт следом (на телефоне в колледже это норма, а не редкость).
@@ -152,6 +157,7 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()
     useVectorStore().reset()
     useProfileStore().reset()
+    useActivityStore().reset()
     clearScheduleWidget()
     // Отсчёт суточного окна офлайна начинаем с нуля: оно принадлежит сессии, а не
     // устройству. Иначе следующий вошедший унаследовал бы чужой почти истёкший счётчик

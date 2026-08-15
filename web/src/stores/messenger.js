@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { messengerApi } from '@/api/endpoints'
+import { useActivityStore } from '@/stores/activity'
 import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
 import { playMentionPing } from '@/utils/pingSound'
@@ -253,6 +254,15 @@ export const useMessengerStore = defineStore('messenger', () => {
     sending.value = true
     try {
       const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
+      // `/активность` — команда, а не сообщение: сервер вообще не создаёт строку в ленте
+      // и отвечает указанием открыть выбор категории. Проверяем ДО _appendUnique: иначе
+      // объект-команда лёг бы в ленту пузырём без текста.
+      if (data?.command === 'open_activity_launcher') {
+        useActivityStore().openLauncher(data.conversation_id || activeId.value)
+        replyTo.value = null
+        setNotice('')
+        return true
+      }
       _appendUnique(data)
       replyTo.value = null
       setNotice('')
@@ -340,6 +350,14 @@ export const useMessengerStore = defineStore('messenger', () => {
         if (ev.type === 'changed') {
           if (ev.conversation_id === activeId.value) pollOnce()
           else loadChats()
+        } else if (ev.type && ev.type.startsWith('activity.')) {
+          // Активности (docs/PLAN-ACTIVITIES.md §7) — своего канала у них нет, кадры
+          // идут этим же сокетом. Разбор — в сторе активности: тут только маршрутизация.
+          const act = useActivityStore()
+          if (ev.type === 'activity.started') act.onStarted(ev, activeId.value)
+          else if (ev.type === 'activity.state') act.applyFrame(ev)
+          else if (ev.type === 'activity.finished') act.onFinished(ev)
+          if (ev.conversation_id === activeId.value) pollOnce()   // карточка в ленте
         } else if (ev.type === 'typing' && ev.conversation_id === activeId.value) {
           peerTyping.value = true
           clearTimeout(typingTimer)

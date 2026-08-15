@@ -415,6 +415,38 @@ class DBManager:
             conn.close()
 
     #Конфликты синхронизации (детект вместо тихой перезаписи)
+    #
+    #⚠️ ЧЕСТНО О СОСТОЯНИИ: ЭКРАНА РАЗБОРА КОНФЛИКТОВ СЕЙЧАС НЕТ. Он жил в Qt-оболочке
+    #(`conflict_dialog.py`) и удалён вместе с ней, а нового в SPA не появилось — то есть
+    #`list_conflicts`/`resolve_conflict` ниже НЕ ЗОВЁТ никто. Оставлены осознанно (это
+    #готовое API для будущего экрана, и detect-часть в sync_engine продолжает работать),
+    #но пока конфликт виден только двумя способами: WARNING в `gradebook.log` и число в
+    #`sync_runner.status()['conflicts']`. Не считать §4.4 закрытым инвариантом: он
+    #выполняется наполовину — локальное значение действительно не затирается, а вот
+    #«преподаватель решит вручную» сегодня неправда.
+    @classmethod
+    def count_unresolved_conflicts(cls) -> int:
+        """Сколько расхождений по оценкам ждут решения (0 — всё чисто).
+
+        Отдельный COUNT, а не `len(list_conflicts())`: значение читает индикатор синка на
+        каждом обновлении статуса, и тянуть ради счётчика все строки с ПДн незачем.
+        Сбой чтения — это 0 плюс запись в лог: уронить индикатор из-за залоченной базы
+        нельзя, но и молчать о сбое тоже."""
+        try:
+            conn = cls.get_conn(); cur = conn.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS sync_conflicts ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        "student_f TEXT, student_n TEXT, lesson_id TEXT,"
+                        "local_grade TEXT, remote_grade TEXT, remote_device TEXT,"
+                        "remote_at TEXT, detected_at TEXT, resolved INTEGER DEFAULT 0)")
+            cur.execute("SELECT COUNT(*) FROM sync_conflicts WHERE resolved=0")
+            n = int((cur.fetchone() or [0])[0])
+            conn.close()
+            return n
+        except Exception as e:
+            log.get("core").warning(f"[DBManager] счётчик конфликтов: {e}")
+            return 0
+
     @classmethod
     def list_conflicts(cls, unresolved_only: bool = True) -> list:
         """Список конфликтов оценок: [dict(...), ...]."""
@@ -446,6 +478,14 @@ class DBManager:
         Применяет выбранное преподавателем значение и закрывает конфликт.
         chosen_grade записывается как победитель в SQLite; updated_at обновляется,
         поэтому решение само уедет на сервер при следующей синхронизации (API).
+
+        ⚠️ ВЫЗЫВАЮЩЕГО У ФУНКЦИИ СЕЙЧАС НЕТ (см. комментарий над list_conflicts).
+        🔥 И прежняя версия молча ТЕРЯЛА `student_id`: она перезаписывала строку оценки,
+        не перенося неизменяемую привязку к студенту (§4.10, этап 2 миграции). Разбор
+        конфликта — единственное место, где преподаватель трогает уже уехавшую оценку;
+        обнулить ей id значило бы отвязать историю от человека ровно там, где он
+        уверен, что всё исправил. Забирать id надо из САМОЙ строки оценки, а не из
+        конфликта: конфликт мог быть заведён старым клиентом, который о колонке не знал.
         """
         try:
             conn = cls.get_conn(); cur = conn.cursor()
@@ -455,10 +495,15 @@ class DBManager:
             if not row:
                 conn.close(); return False
             f, n, lid = row
+            cur.execute("SELECT COALESCE(student_id,'') FROM grades "
+                        "WHERE student_f=? AND student_n=? AND lesson_id=?", (f, n, lid))
+            sid_row = cur.fetchone()
+            sid = (sid_row[0] if sid_row else "") or ""
             now = datetime.now(timezone.utc).isoformat()
             cur.execute("INSERT OR REPLACE INTO grades "
-                        "(student_f,student_n,lesson_id,grade,updated_at,device,deleted) "
-                        "VALUES (?,?,?,?,?,?,0)", (f, n, lid, chosen_grade, now, DEVICE_ID))
+                        "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,"
+                        "student_id) VALUES (?,?,?,?,?,?,0,?)",
+                        (f, n, lid, chosen_grade, now, DEVICE_ID, sid))
             cur.execute("UPDATE sync_conflicts SET resolved=1 WHERE id=?", (conflict_id,))
             conn.commit(); conn.close()
             return True
@@ -1002,8 +1047,10 @@ class GradeBook:
         ВРЕМЕННО (визуально) отключить учёт пропусков «Н=2» тумблером в интерфейсе, не
         меняя общий config. scale — шкала преподавателя (§ролей, 3.3.1), ведущего эти
         занятия; без него — "5" (сегодняшнее поведение). Разрешение «чья шкала» — забота
-        вызывающего (teacher_dashboard знает СВОЕГО текущего препода через avatar_service),
-        этот модуль ролей не знает и решать не должен."""
+        вызывающего: шкалу знает тот, кто знает преподавателя (на сервере — `webdata.
+        lesson_scale_map` по назначению препод↔предмет↔группа), а этот модуль ролей не
+        видит и решать за них не должен. Прежняя ссылка на `teacher_dashboard` устарела —
+        нативных экранов нет с удаления Qt."""
         import grading
         if cfg is None:
             try:

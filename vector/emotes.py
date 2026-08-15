@@ -1,7 +1,8 @@
 """
 emotes.py — Реестр эмоций маскота «Вектор» (арт Арины).
 
-Арт лежит в папке `emotes/` рядом с программой. Каждый файл — это комбинация
+Арт лежит в `web/public/mascot` (для показа) и в `emotions/эмоции` (исходники
+Арины). Каждый файл — это комбинация
 ВЫРАЖЕНИЯ МОРДЫ и ЖЕСТА/ПОЗЫ, имя вида «<морда>+<жест>.png»:
 
     морды (FACES):     груст · деф · думает · предупреж · рад · удив
@@ -9,27 +10,27 @@ emotes.py — Реестр эмоций маскота «Вектор» (арт 
 
 Итого матрица 6×5 = 30 спрайтов в полный рост (прозрачный фон ~1536×2048).
 
-Зачем отдельный модуль: картинки тяжёлые (по ~1.2 МБ PNG), поэтому грузим их
-ЛЕНИВО и кэшируем уже уменьшенную версию (по высоте ≤ MAX_CACHE_H) — память не
-раздувается, а на экране всё равно показываем максимум ~420 px.
-
-`pick(state, mood, intent)` — главная функция: по состоянию машины маскота
+`pick(state, mood, intent)` — единственная живая функция: по состоянию машины маскота
 (idle/thinking/speaking/away), настроению ответа (happy/neutral/sad) и намерению
 (intent) выбирает осмысленную пару (морда, жест). Задействованы ВСЕ 6 выражений и
 ВСЕ 5 жестов, поэтому Вектор проживает весь эмоциональный диапазон от Арины.
 
 ⚠️ МОДУЛЬ ЧИСТЫЙ (только stdlib) — и это не случайность, а требование. `pick()` —
 ЭТАЛОН для веб-порта (`web/src/config/mascot.js`), их согласованность держит общий
-`docs/contracts/mascot-cases.json`. Qt нужен ровно одной функции `get()` (загрузка
-спрайта в QPixmap), поэтому он импортируется ВНУТРИ неё: иначе контрактный тест и
-любой не-GUI потребитель тянули бы за собой PySide6 целиком.
+`docs/contracts/mascot-cases.json`. Всё, что рисует маскота человеку, живёт в вебе;
+здесь остаётся ПРАВИЛО ВЫБОРА эмоции, и держать его питоновским имеет смысл ровно
+затем, чтобы контракт сверял две независимые реализации, а не одну с самой собой.
+
+🔥 ЗДЕСЬ БЫЛА ЗАГРУЗКА СПРАЙТОВ В QPixmap (`get()`, `has_art()`, `_find_dir()`, кэш
+`_pix_cache`, константы `EMOTES_DIR`/`MAX_CACHE_H`) — удалена. Причина не в наведении
+порядка: функция начиналась с `from PySide6.QtGui import QPixmap`, а PySide6 в проекте
+НЕТ (убран из зависимостей вместе с Qt-оболочкой) и в сборку он не включается. То есть
+код не «редко вызывался», а физически не мог отработать — упал бы ImportError на первой
+же строке. Вызывающих у него не было ни одного: спрайты человеку отдаёт SPA из
+`web/public/mascot`, а не Python. Шапка при этом продолжала объяснять, как бережно там
+сделан ленивый импорт Qt, — ровно тот случай, когда докстринг уверенно описывает
+несуществующее поведение.
 """
-import os
-
-#Папка с артом (имя как у Арины — рядом с программой/пакетом)
-EMOTES_DIR = "emotes"
-MAX_CACHE_H = 760           #до какой высоты ужимаем спрайт при загрузке (px)
-
 #словарь морд и жестов (ключи = части имени файла)
 FACES = ("груст", "деф", "думает", "предупреж", "рад", "удив")
 GESTURES = ("деф", "думает", "подбадрив", "поздрав", "предупреж")
@@ -43,80 +44,13 @@ _WARN_INTENTS = {"debtors", "absences", "at_risk"}        #строго пред
 _INFO_INTENTS = {"help", "about_vsgutu", "about_college",  #спокойно рассказывает
                  "groups", "teachers", "roster", "group_stats"}
 
-_dir_cache = None           #найденная папка emotes (или "")
-_pix_cache = {}             #(face, gesture) -> QPixmap (уже уменьшенный)
-
-
-def _find_dir() -> str:
-    """Ищем папку с артом эмоций рядом с программой и рядом с пакетом vector.
-
-    ВАЖНО про порядок: сначала ищем НОВУЮ раскладку `emotions/эмоции/` (актуальный арт
-    Арины — все 30 пар «морда+жест»), и только потом историческую `emotes/`. Раньше
-    приоритет был обратный, поэтому в кабинете студента показывался старый/образцовый
-    набор из `emotes/`, а не подобранная по совету эмоция из `emotions/эмоции/`."""
-    global _dir_cache
-    if _dir_cache is not None:
-        return _dir_cache
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.dirname(here)                            #корень проекта
-    emotions_subdir = os.path.join("emotions", "эмоции")    #новая раскладка (приоритет)
-    candidates = [
-        os.path.join(os.getcwd(), emotions_subdir),
-        os.path.join(root, emotions_subdir),
-        os.path.join(here, emotions_subdir),
-        #исторический fallback — старая папка `emotes/` рядом с программой/пакетом
-        os.path.join(os.getcwd(), EMOTES_DIR),
-        os.path.join(root, EMOTES_DIR),
-        os.path.join(here, EMOTES_DIR),
-    ]
-    #если доступен app_paths (портативный .exe) — путь рядом с программой ставим первым
-    try:
-        import app_paths
-        candidates.insert(0, os.path.join(app_paths.app_dir(), emotions_subdir))
-    except Exception:
-        pass
-    _dir_cache = next((c for c in candidates if os.path.isdir(c)), "")
-    return _dir_cache
-
 
 def filename(face: str, gesture: str) -> str:
-    """Имя файла спрайта для пары (морда, жест)."""
+    """Имя файла спрайта для пары (морда, жест).
+
+    Здесь ОСТАЁТСЯ, хотя картинки грузит веб: имя файла — часть договора с артом Арины
+    («<морда>+<жест>.png»), и тест раскладки сверяет по нему наличие всех 30 пар."""
     return f"{face}+{gesture}.png"
-
-
-def has_art() -> bool:
-    """Есть ли вообще папка с артом (иначе маскот живёт на эмодзи-заглушке)."""
-    return bool(_find_dir())
-
-
-def get(face: str = DEFAULT_FACE, gesture: str = DEFAULT_GESTURE):
-    """QPixmap спрайта (морда, жест) или None, если файла нет.
-
-    Грузим один раз, кэшируем уже уменьшенную по высоте версию (≤ MAX_CACHE_H),
-    чтобы 30 тяжёлых PNG не висели в памяти в полном разрешении.
-
-    Qt импортируется ЗДЕСЬ (см. шапку модуля): рисование — единственное, чему он нужен."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QPixmap
-
-    key = (face, gesture)
-    if key in _pix_cache:
-        return _pix_cache[key]
-    base = _find_dir()
-    if not base:
-        return None
-    path = os.path.join(base, filename(face, gesture))
-    if not os.path.isfile(path):
-        _pix_cache[key] = None
-        return None
-    pm = QPixmap(path)
-    if pm.isNull():
-        _pix_cache[key] = None
-        return None
-    if pm.height() > MAX_CACHE_H:
-        pm = pm.scaledToHeight(MAX_CACHE_H, Qt.SmoothTransformation)
-    _pix_cache[key] = pm
-    return pm
 
 
 def pick(state: str, mood: str = "neutral", intent: str = "help"):

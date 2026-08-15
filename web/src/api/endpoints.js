@@ -529,6 +529,62 @@ export const messengerApi = {
 }
 
 // МОДЕРАЦИЯ МЕССЕНДЖЕРА (только админ) ─────────────────────────────────────────────
+// Активности в беседах (docs/PLAN-ACTIVITIES.md). Префикс `/web/messenger/...` выбран не
+// случайно: он уже в `_PROXY_PREFIXES` десктопа, поэтому внутри программы всё работает
+// без единой правки локального сервера.
+export const activitiesApi = {
+  start: (conversationId, kind, params = {}, title = '') =>
+    api.post('/web/messenger/activities/start',
+      { conversation_id: conversationId, kind, params, title }),
+  current: (conversationId) =>
+    api.get('/web/messenger/activities/current', { params: { conversation_id: conversationId } }),
+  get: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}`),
+  finish: (id, save = false) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/finish`, { save }),
+  journal: (conversationId) =>
+    api.get('/web/messenger/activities/journal', { params: { conversation_id: conversationId } }),
+  // Тайм-бокс: сервер один раз присылает время окончания, отсчёт ведёт клиент.
+  timer: (id, action, seconds = 0) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/timer`, { action, seconds }),
+  // Опрос.
+  vote: (id, choice) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/vote`, { choice }),
+  pollResults: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/poll-results`),
+  // Срез понимания.
+  sendFeedback: (id, score, reasonCode = '', text = '') =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/feedback`,
+      { score, reason_code: reasonCode, text }),
+  feedbackSummary: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/feedback`),
+  reportFeedback: (feedbackId, reasonCode, description = '') =>
+    api.post(`/web/messenger/activities/feedback/${feedbackId}/report`,
+      { reason_code: reasonCode, description }),
+  // Викторина и соревнование.
+  questions: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/questions`),
+  submit: (id, answers, durationMs = 0) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/submit`,
+      { answers, duration_ms: durationMs }),
+  answer: (id, answer) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/answer`, { answer }),
+  next: (id) => api.post(`/web/messenger/activities/${encodeURIComponent(id)}/next`),
+  results: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/results`),
+  // Библиотека викторин.
+  quizzes: (params = {}) => api.get('/web/messenger/activities/quizzes', { params }),
+  quiz: (id) => api.get(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}`),
+  similar: (id) => api.get(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}/similar`),
+  createQuiz: (body) => api.post('/web/messenger/activities/quizzes', body),
+  updateQuiz: (id, body) => api.put(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}`, body),
+  copyQuiz: (id) => api.post(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}/copy`),
+  deleteQuiz: (id) => api.delete(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}`),
+  // Доска.
+  strokes: (id, strokes, clear = false) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/strokes`, { strokes, clear }),
+  pen: (id, body) => api.post(`/web/messenger/activities/${encodeURIComponent(id)}/pen`, body),
+  snapshot: (id) => api.post(`/web/messenger/activities/${encodeURIComponent(id)}/snapshot`),
+  boards: (conversationId) =>
+    api.get('/web/messenger/activities/boards', { params: { conversation_id: conversationId } }),
+  board: (id) => api.get(`/web/messenger/activities/boards/${encodeURIComponent(id)}`),
+}
+
 export const messengerModApi = {
   reports: (status = 'open') => api.get('/web/admin/messenger/reports', { params: { status } }),
   resolve: (id, status, note = '') =>
@@ -563,7 +619,7 @@ export const desktopApi = {
 }
 
 // УПРАВЛЕНИЕ СЕРВЕРОМ ПО SSH — ТОЛЬКО В ПРОГРАММЕ ────────────────────────────────
-// Эти маршруты подключает ЛОКАЛЬНЫЙ сервер программы (ui/server_admin.py). На боевом
+// Эти маршруты подключает ЛОКАЛЬНЫЙ сервер программы (desktop/server_admin.py). На боевом
 // сервере их нет вовсе: там работает только просмотр (adminApi.serverMetrics и рядом).
 // Граница проходит по наличию кода, а не по проверке роли — роль можно обойти,
 // отсутствующий код нельзя.
@@ -601,7 +657,7 @@ export const deskServerApi = {
   service: (id, name, action, confirm = false) =>
     api.post(`/desk/servers/${encodeURIComponent(id)}/service`, { name, action, confirm }),
   // confirm=true нужен для опасных команд: сервер отвечает 409 «confirm-required»,
-  // пока человек не подтвердил осознанно (см. is_dangerous в ui/server_admin.py).
+  // пока человек не подтвердил осознанно (см. is_dangerous в desktop/server_admin.py).
   exec: (id, command, { confirm = false, long = false } = {}) =>
     api.post(`/desk/servers/${encodeURIComponent(id)}/exec`, { command, confirm, long }),
   migrationPlan: (source, target) =>

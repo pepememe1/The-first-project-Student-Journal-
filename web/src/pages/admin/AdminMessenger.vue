@@ -185,6 +185,14 @@ function fmt(iso) {
         <div v-for="r in reports" :key="r.id" class="rounded-lg border border-border bg-card p-4 shadow-card">
           <div class="mb-2 flex flex-wrap items-center gap-2">
             <span class="rounded-full bg-red/15 px-2.5 py-0.5 text-xs font-semibold text-red">{{ REASON_LABELS[r.reason_code] || r.reason_code }}</span>
+            <!-- ⚠️ Жалоба на отзыв среза понимания — НЕ на сообщение: у такого тикета
+                 `message_id` это id строки отзыва. Без явной пометки админ читал бы его
+                 как обычную жалобу и искал бы в переписке текст, которого там нет
+                 (PLAN-ACTIVITIES §8.3). -->
+            <span v-if="r.target_kind === 'activity_feedback'"
+                  class="rounded-full bg-blue/15 px-2.5 py-0.5 text-xs font-semibold text-blue">
+              {{ locale.t('adminMessenger.fromActivity', 'Отзыв на активности') }}
+            </span>
             <span class="text-xs text-text3">{{ fmt(r.created_at) }}</span>
             <span class="ml-auto text-xs text-text3">#{{ r.id }} · {{ r.status }}</span>
           </div>

@@ -156,6 +156,7 @@ def init_db():
     _ensure_notify_event_columns()
     _ensure_participant_state_columns()
     _ensure_message_addon_columns()
+    _ensure_message_report_target_column()
     _ensure_conversation_system_columns()
     _ensure_subject_hours_teacher_column()
     _ensure_subject_hours_zet_column()
@@ -543,6 +544,31 @@ def _ensure_user_password_set_at_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN password_set_at VARCHAR"))
+
+
+def _ensure_message_report_target_column():
+    """Идемпотентная мини-миграция: message_reports.target_kind — на ЧТО жалоба
+    (message | activity_feedback, см. PLAN-ACTIVITIES §8.3).
+
+    Таблица жалоб на проде существует давно, а `create_all` досоздаёт только целые
+    таблицы, но НЕ колонки в существующие — этот же промах уже чуть не улетел на прод с
+    `conversation_participants` (§10 CLAUDE.md). Умолчание проставляем и НОВОЙ колонке, и
+    УЖЕ накопленным строкам: без второго UPDATE старые тикеты приехали бы с NULL, и
+    фильтр `target_kind == "message"` перестал бы их находить — то есть вся прежняя
+    очередь модерации молча исчезла бы из вкладки «Жалобы»."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("message_reports")}
+    except Exception:
+        return
+    if "target_kind" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE message_reports ADD COLUMN target_kind VARCHAR "
+                          "DEFAULT 'message'"))
+        conn.execute(text("UPDATE message_reports SET target_kind = 'message' "
+                          "WHERE target_kind IS NULL"))
 
 
 def _ensure_user_curated_groups_column():

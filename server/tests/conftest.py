@@ -33,7 +33,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
-from app import throttle, events, connect, msg_limit
+from app import throttle, events, connect, msg_limit, activity_state
 
 
 @pytest.fixture()
@@ -46,6 +46,10 @@ def client():
     events.reset()
     connect.reset()
     msg_limit.reset()          #анти-флуд мессенджера — иначе счётчик копится между тестами
+    #Ход активностей живёт в ПАМЯТИ процесса (см. app/activity_state.py) и пересоздание
+    #таблиц его не трогает: активность из прошлого теста ловилась бы в следующем как
+    #«уже идёт» (409). Та же грабля, что была с `throttle.reset()` и словарём остуды.
+    activity_state.reset()
     with TestClient(app) as c:
         c.headers.update({"X-Device-Id": HOST_DEVICE_ID})
         yield c
