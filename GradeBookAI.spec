@@ -39,7 +39,12 @@ def _flat_mods(d):
     p = os.path.join(ROOT, d)
     if not os.path.isdir(p):
         return []
-    return [f[:-3] for f in os.listdir(p) if f.endswith('.py') and not f.startswith('__')]
+    # ⚠️ ПОЛНОЕ имя пакета ('data.core'), а не базовое ('core'). Базовое — наследие
+    # плоских импортов: PyInstaller послушно тянул модуль `core`, которого в продукте
+    # не существует ни в одном импорте, а настоящий `data.core` явного включения не
+    # получал вовсе. Ровно это же поправлено в build_nuitka.sh.
+    return [f"{d}.{f[:-3]}" for f in os.listdir(p)
+            if f.endswith('.py') and not f.startswith('__')]
 
 
 hidden = []
@@ -117,8 +122,11 @@ if os.path.isfile(os.path.join(ROOT, _web_dist, 'index.html')):
 
 a = Analysis(
     ['main.py'],
-    pathex=[ROOT, os.path.join(ROOT, 'desktop'), os.path.join(ROOT, 'sync'),
-            os.path.join(ROOT, 'data')],
+    # ⚠️ ТОЛЬКО корень. Подпапки здесь лежали ради плоских импортов (`from core import …`)
+    # и вернулись бы миной: один файл, найденный и как `core`, и как `data.core`, даёт ДВА
+    # объекта модуля со своим состоянием — для DBManager это две «единственные» точки
+    # доступа к базе. Плоских импортов в репозитории не осталось, `_bootstrap.py` удалён.
+    pathex=[ROOT],
     binaries=[],
     datas=datas,
     hiddenimports=hidden,
