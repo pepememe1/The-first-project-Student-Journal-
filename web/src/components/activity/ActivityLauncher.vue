@@ -8,6 +8,7 @@ import { ref, computed } from 'vue'
 import { X, Presentation, ListChecks, Trophy, BarChart3, Gauge, Timer, ChevronLeft } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { useAuthStore } from '@/stores/auth'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
 import QuizEditor from './quiz/QuizEditor.vue'
@@ -16,6 +17,9 @@ const props = defineProps({ conversationId: { type: String, required: true } })
 const emit = defineEmits(['close'])
 const locale = useLocaleStore()
 const act = useActivityStore()
+//Видимость ссылки на журнал. Настоящая проверка прав — на сервере (эндпоинт
+//откажет студенту сам); здесь только то, показывать ли ссылку.
+const canSeeJournal = computed(() => ['teacher', 'admin'].includes(useAuthStore().user?.role))
 
 const KINDS = [
   { id: 'board', icon: Presentation },
@@ -244,6 +248,15 @@ async function confirm() {
           <p v-if="act.error" class="text-sm text-red">{{ act.error }}</p>
         </div>
       </div>
+
+      <!-- Журнал активностей беседы. Мелкой ссылкой под категориями, а не кнопкой в
+           шапке чата: место в шапке одно, и оно отдано частому действию — запуску.
+           Виден только тому, кто вправе запускать: студенту таблица чужих результатов
+           не полагается (свои строки он видит в самом журнале). -->
+      <button v-if="!chosen && canSeeJournal" type="button" @click="act.openJournal(conversationId)"
+              class="mx-4 mb-3 self-start text-xs text-text3 underline-offset-2 hover:text-accent hover:underline">
+        {{ locale.t('activity.journal.title', 'Журнал активностей') }}
+      </button>
 
       <div v-if="chosen" class="flex items-center justify-between gap-2 border-t border-border2 px-4 py-3">
         <span class="min-w-0 truncate text-xs text-text3">

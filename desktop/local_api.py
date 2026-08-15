@@ -442,6 +442,10 @@ class LocalAPI:
                 #обойти, отсутствующий код — нельзя (см. шапку desktop/server_admin.py).
                 from desktop import server_admin
                 server_admin.install(app, _local_caller_ok)
+                #Состояние синка наружу, в интерфейс. Без него `sync_runner.status()`
+                #оставался обещанием без вызывающего: конфликты и отвергнутые правки
+                #уходили ТОЛЬКО в gradebook.log, который никто не открывает.
+                install_sync_status(app)
             except Exception as e:
                 _LOG.warning(f"[local-api] надстройки локального сервера не встали: {e}")
 
@@ -810,6 +814,46 @@ async def _get_proxy_client():
         if _proxy_client is None:
             _proxy_client = httpx.AsyncClient(timeout=25)
         return _proxy_client
+
+
+def install_sync_status(app) -> None:
+    """`GET /desk/sync/status` — состояние синхронизации для интерфейса программы.
+
+    🔥 ЗАЧЕМ ЭТО ВООБЩЕ ПОЯВИЛОСЬ. `sync_runner.status()` собирал четыре разных беды
+    (нет сети, не проходит вход, сервер отверг правки, неразрешённые конфликты оценок),
+    но НЕ ИМЕЛ НИ ОДНОГО ВЫЗЫВАЮЩЕГО в продукте: единственным читателем был тест, а
+    индикатор, на который ссылались комментарии, жил в Qt-оболочке и удалён вместе с ней.
+    То есть починка «конфликт теперь звучит» была обещанием без вызывающего — ровно тот
+    класс дефекта, который в этом проекте ловят чаще всего. Здесь у обещания появляется
+    потребитель; держит это `tests/test_local_api.py::test_sync_status_has_a_real_caller`.
+
+    Маршрут живёт ТОЛЬКО в локальном сервере программы (как раздел «Сервер», §16): на бою
+    такого кода нет вовсе, и сайт получит на него честный 404 — по нему клиент и понимает,
+    что синхронизации здесь не существует, и больше не спрашивает.
+
+    Доступ — тот же `_local_caller_ok`, что у прокси: состояние синка говорит, сколько у
+    человека неотправленных и конфликтных правок, и это не то, что стоит отдавать любому
+    процессу на машине.
+    """
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    @app.get("/desk/sync/status")
+    def _desk_sync_status(request: Request):
+        if not _local_caller_ok(request.headers.get("authorization", "")):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        try:
+            from sync import sync_runner
+            st = sync_runner.status()
+        except Exception as e:                   # noqa: BLE001
+            #Синк мог не запуститься вовсе (вход по сохранённой сессии без пароля).
+            #Это не авария: честно говорим «состояние неизвестно», а не выдумываем ноль —
+            #ноль конфликтов на экране значил бы «всё сошлось», чего мы не знаем.
+            _LOG.info(f"[local-api] состояние синка недоступно: {e}")
+            return JSONResponse({"available": False}, status_code=200)
+        return JSONResponse({"available": True, **st}, status_code=200)
+
+    app.router.routes.insert(0, app.router.routes.pop())
 
 
 def install_remote_proxy(app) -> None:

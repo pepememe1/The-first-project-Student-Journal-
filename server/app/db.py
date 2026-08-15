@@ -165,7 +165,26 @@ def init_db():
     _ensure_group_specialty_columns()
     _ensure_group_category_column()
     _ensure_auth_session_client_column()
+    _ensure_quiz_time_limit_column()
     _migrate_slash_in_ids()
+
+
+def _ensure_quiz_time_limit_column():
+    """Идемпотентная мини-миграция: quiz_sets.time_limit_s (ограничение времени на тест).
+
+    ⚠️ `create_all` досоздаёт только ОТСУТСТВУЮЩИЕ таблицы, но НЕ добавляет колонки в
+    существующие — в свежей тестовой базе таблица создаётся целиком, и ветка «колонки не
+    было» там не срабатывает никогда. Это правило спасало прод уже четырежды."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("quiz_sets")}
+    except Exception:
+        return
+    if "time_limit_s" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE quiz_sets ADD COLUMN time_limit_s INTEGER DEFAULT 0"))
 
 
 def _ensure_message_addon_columns():

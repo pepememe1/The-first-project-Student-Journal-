@@ -197,8 +197,18 @@ def _question_out(q: QuizQuestion, options: list, with_key: bool, shuffle_seed: 
             cell["match_key"] = o.match_key or ""
             cell["correct_position"] = int(o.correct_position or 0)
         out_opts.append(cell)
-    return {"id": q.id, "order_no": int(q.order_no or 0), "type": q.type or "single",
-            "text": q.text or "", "points": int(q.points or 1), "options": out_opts}
+    out = {"id": q.id, "order_no": int(q.order_no or 0), "type": q.type or "single",
+           "text": q.text or "", "points": int(q.points or 1), "options": out_opts}
+    #Сопоставление: без списка правых половин студенту нечего выбирать — раньше он
+    #ВПИСЫВАЛ пару руками, то есть попадал в ответ только дословным совпадением.
+    #🔒 Сам список ключ НЕ раскрывает: он перемешан и не привязан к вариантам, поэтому
+    #«какая половина к какой» по нему не восстановить — это ровно те же слова, что и так
+    #написаны на экране, только в другом порядке.
+    if (q.type or "single") == "match" and not with_key:
+        pool = sorted({(o.match_key or "").strip() for o in options if (o.match_key or "").strip()},
+                      key=lambda s: _stable_hash(f"{shuffle_seed}|pool|{s}"))
+        out["match_pool"] = pool
+    return out
 
 
 def _stable_hash(s: str) -> str:
@@ -211,7 +221,7 @@ def _stable_hash(s: str) -> str:
 
 def _quiz_out(q: QuizSet, questions_count: int = 0) -> dict:
     return {"id": q.id, "author_id": q.author_id, "title": q.title or "",
-            "description": q.description or "", "tags": list(q.tags or []),
+            "description": q.description or "", "tags": list(q.tags or []), "time_limit_s": int(q.time_limit_s or 0),
             "visibility": q.visibility or "private", "parent_id": q.parent_id or "",
             "created_at": q.created_at or "", "updated_at": q.updated_at or "",
             "questions_count": questions_count}
@@ -266,6 +276,17 @@ def _running_in(db: Session, conv_id: str) -> Activity | None:
     return a
 
 
+#Категории, которые оставляют отметку в ленте беседы. Таймер и срез понимания её НЕ
+#оставляют: они живут минуты, всплывают у всех сами и в историю возвращаться незачем —
+#отметка о каждом запуске засоряла бы переписку. Опрос ведёт себя иначе и разбирается
+#отдельно: он и есть сообщение в чате с кнопками (как в Telegram), а не ссылка на оверлей.
+_LEAVES_TRACE_IN_FEED = ("quiz", "contest", "board", "poll")
+#Опрос оставляет след ОСОБЫМ видом сообщения: он и ЕСТЬ сообщение с кнопками, как в
+#Telegram, — голосуют прямо в ленте, не открывая ничего. Остальные категории оставляют
+#карточку-ссылку на оверлей.
+_KIND_OF_FEED_MESSAGE = {"poll": "poll"}
+
+
 def _initial_payload(kind: str, params: dict) -> dict:
     """Начальное живое состояние по категории."""
     if kind == "timer":
@@ -275,7 +296,7 @@ def _initial_payload(kind: str, params: dict) -> dict:
         #votes — {user_id: индекс варианта}. Голос НЕ анонимен для сервера осознанно:
         #иначе ни накрутку не поймать, ни ошибочное нажатие не исправить. В интерфейсе
         #формулировка честная — «результаты видит только преподаватель».
-        return {"votes": {}}
+        return {"votes": {}, "public_votes": bool(params.get("public_votes"))}
     if kind == "pulse":
         return {"open": True, "answered": []}
     if kind == "board":
@@ -305,7 +326,16 @@ def _validate_start(db: Session, kind: str, params: dict, user: User) -> dict:
             raise HTTPException(status_code=400, detail="Нужен текст вопроса")
         if len(options) < 2:
             raise HTTPException(status_code=400, detail="Нужно хотя бы два варианта")
-        return {"question": question, "options": options[:MAX_OPTIONS]}
+        out = {"question": question, "options": options[:MAX_OPTIONS]}
+        #Срок окончания — как в Telegram. 0 = без срока (прежнее поведение).
+        secs = int(p.get("duration_s") or 0)
+        if secs:
+            out["duration_s"] = max(30, min(secs, 7 * 24 * 60 * 60))
+        #Видно ли, КТО как проголосовал. По умолчанию нет: голос не анонимен для сервера
+        #(иначе не поймать накрутку), но показывать его классу — отдельное решение,
+        #и принимать его должен автор опроса осознанно.
+        out["public_votes"] = bool(p.get("public_votes"))
+        return out
     if kind == "pulse":
         secs = int(p.get("duration_s") or PULSE_DEFAULT_S)
         return {"duration_s": max(10, min(secs, 30 * 60))}
@@ -368,6 +398,8 @@ def start_activity(payload: dict = Body(...), request: Request = None,
     db.refresh(a)
 
     live = _initial_payload(kind, params)
+    if kind == "poll" and params.get("duration_s"):
+        live["ends_at"] = _plus_seconds(now, int(params["duration_s"]))
     if kind == "timer":
         #Время окончания считает СЕРВЕР и присылает один раз; тик отсчитывает клиент.
         #Тикать по сокету каждую секунду всем участникам — самая дорогая реализация самой
@@ -384,16 +416,23 @@ def start_activity(payload: dict = Body(...), request: Request = None,
             live["sheet"] = src.sheet or live["sheet"]
     activity_state.start(a.id, kind, live)
 
-    #Карточка-кнопка в ленте. Тот же механизм, что у отчёта куратора: тело сообщения —
-    #просто id, а объект сервер подмешивает при выдаче (`_attach_activity_meta`), потому
-    #что статус активности меняется ПОСЛЕ отправки, а переотправлять сообщение незачем.
-    msg = Message(conversation_id=conv_id, sender_id=user.id, body=a.id,
-                  created_at=now, kind="activity", body_format="plain")
-    db.add(msg)
-    db.commit()
-    db.refresh(msg)
-    a.message_id = msg.id
-    db.commit()
+    #Отметка в ленте. Тело сообщения — просто id, а объект сервер подмешивает при выдаче
+    #(`_attach_activity_meta`), потому что статус активности меняется ПОСЛЕ отправки, а
+    #переотправлять сообщение незачем.
+    #
+    #⚠️ СЛЕД В ЛЕНТЕ ОСТАВЛЯЮТ НЕ ВСЕ КАТЕГОРИИ. Таймер и срез понимания — это оверлеи
+    #на несколько минут: они всплывают у всех сами, заходить в них из истории незачем, а
+    #отметка о каждом запуске превращала бы ленту в мусор (на паре их бывает несколько).
+    #Остаются те, к которым РЕАЛЬНО возвращаются: викторина, соревнование, доска.
+    if kind in _LEAVES_TRACE_IN_FEED:
+        msg = Message(conversation_id=conv_id, sender_id=user.id, body=a.id,
+                      created_at=now, kind=_KIND_OF_FEED_MESSAGE.get(kind, "activity"),
+                      body_format="plain")
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        a.message_id = msg.id
+        db.commit()
 
     audit.log(db, request, actor=user.login, role=user.role, action="activity.start",
               target=a.id, detail=f"{kind} в {conv_id}")
@@ -428,8 +467,12 @@ def finish_activity(activity_id: str, payload: dict = Body(default={}),
     a.finished_at = _now()
     db.commit()
     activity_state.drop(a.id)
+    #`finished_at` в событии обязателен: по нему клиент гасит таймер на карточке в ленте.
+    #Без него ему пришлось бы взять СВОИ часы — а метку времени в этом продукте всегда
+    #ставит сервер (§4.3), иначе у двух человек в одном чате активность «шла» разное время.
     _emit(db, a.conversation_id, {"type": "activity.finished", "activity_id": a.id,
-                                  "conversation_id": a.conversation_id, "summary": summary})
+                                  "conversation_id": a.conversation_id,
+                                  "finished_at": a.finished_at, "summary": summary})
     from .messenger import _broadcast
     _broadcast(db, a.conversation_id)
     out = _activity_out(a, user.id)
@@ -461,6 +504,18 @@ def _finalize(db: Session, a: Activity, payload: dict, save: bool) -> dict:
         for idx in votes.values():
             if isinstance(idx, int) and 0 <= idx < len(counts):
                 counts[idx] += 1
+        #🔥 СОХРАНЯЕМ ИТОГ В params. Живое состояние после завершения гасится, а опрос —
+        #это СООБЩЕНИЕ, которое остаётся в ленте навсегда: без снимка оно показывало бы
+        #«проголосовало: 0» и пустые полосы, то есть завершённый опрос выглядел бы так,
+        #будто в нём никто не участвовал. Отдельной таблицы ради двух чисел не заводим.
+        params = dict(a.params or {})
+        params["final_counts"] = counts
+        params["final_total"] = len(votes)
+        params["final_votes"] = {k: int(v) for k, v in votes.items() if isinstance(v, int)}
+        a.params = params
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(a, "params")
+        db.commit()
         return {"votes_total": len(votes), "counts": counts}
     if a.kind == "pulse":
         rows = db.query(ActivityFeedback).filter(ActivityFeedback.activity_id == a.id).all()
@@ -542,8 +597,24 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         cur = str(payload.get("question_index", -1))
         payload["answered"] = user.id in (answers.get(cur) or {})
         payload["answered_count"] = len(answers.get(cur) or {})
-        if is_host:
-            payload["board"] = _contest_board(db, scores)
+        #Табло видят ВСЕ, как в Kahoot: соревнование ради него и затевается, а места
+        #в конце всё равно объявляются вслух. Скрывать промежуточные баллы значило бы
+        #убрать из игры единственное, что заставляет тянуться к следующему вопросу.
+        payload["board"] = _contest_board(db, scores)
+    elif a.kind == "quiz" and is_host:
+        #Ведущему вместо самого задания нужен ХОД: кто уже закончил, а кто ещё идёт.
+        done = (db.query(ActivityResult)
+                .filter(ActivityResult.activity_id == a.id).all())
+        names = {}
+        ids = [r.user_id for r in done]
+        if ids:
+            names = {u.id: (u.full_name or u.name or u.login or u.id)
+                     for u in db.query(User).filter(User.id.in_(ids)).all()}
+        payload["progress"] = [{"user_id": r.user_id, "name": names.get(r.user_id, r.user_id),
+                                "correct_count": int(r.correct_count or 0),
+                                "total_count": int(r.total_count or 0),
+                                "score": float(r.score or 0)} for r in done]
+        payload["participants"] = len(_participants_of(db, a.conversation_id))
     elif a.kind == "pulse":
         answered = payload.pop("answered", []) or []
         payload["answered_count"] = len(answered)
@@ -633,7 +704,14 @@ def vote(activity_id: str, payload: dict = Body(...),
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
            "payload": {"voted_count": len(votes)}})
-    return {"ok": True, "my_choice": choice, "voted_count": len(votes)}
+    #Автору опроса (и всем, если он включил открытые голоса) сразу возвращаем
+    #распределение: иначе после своего клика он видел бы только «проголосовало N»,
+    #а ради распределения ему пришлось бы перезаходить в беседу.
+    out = {"ok": True, "my_choice": choice, "voted_count": len(votes)}
+    opts = list((a.params or {}).get("options") or [])
+    if bool((a.params or {}).get("public_votes")) or user.id == a.host_id:
+        out["tally"] = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(opts))]
+    return out
 
 
 @router.get("/{activity_id}/poll-results")
@@ -944,7 +1022,8 @@ def create_quiz(payload: dict = Body(...), user: User = Depends(get_current_user
     now = _now()
     quiz = QuizSet(id=f"quiz:{uuid4().hex}", author_id=user.id, title=title,
                    description=str(payload.get("description") or "").strip()[:MAX_TEXT],
-                   tags=_clean_tags(payload.get("tags")), visibility=vis,
+                   tags=_clean_tags(payload.get("tags")),
+            time_limit_s=max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60)), visibility=vis,
                    created_at=now, updated_at=now)
     db.add(quiz)
     db.commit()
@@ -970,6 +1049,11 @@ def update_quiz(quiz_id: str, payload: dict = Body(...),
         quiz.description = str(payload.get("description") or "").strip()[:MAX_TEXT]
     if "tags" in payload:
         quiz.tags = _clean_tags(payload.get("tags"))
+    if "time_limit_s" in payload:
+        #Ограничение на весь тест. 0 — без ограничения (так было всегда). Потолок шесть
+        #часов — тот же, что у тайм-бокса: пары длиннее не бывает, а опечатка в поле
+        #иначе завела бы счётчик на годы.
+        quiz.time_limit_s = max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60))
     if "visibility" in payload:
         vis = str(payload.get("visibility") or "private")
         if vis in VISIBILITY and not (vis == "stock" and user.role != "admin"):
@@ -1057,9 +1141,13 @@ def activity_questions(activity_id: str, user: User = Depends(get_current_user),
         return {"questions": [_question_out(q, opts.get(q.id, []), False, user.id)],
                 "index": idx, "total": len(questions),
                 "limit_ms": int((a.params or {}).get("limit_ms") or 30000)}
+    quiz = db.query(QuizSet).filter(QuizSet.id == quiz_id).first()
     return {"questions": [_question_out(x, opts.get(x.id, []), False, user.id)
                           for x in questions],
-            "index": 0, "total": len(questions)}
+            "index": 0, "total": len(questions),
+            #Счётчик идёт от ОТКРЫТИЯ теста, а не от старта активности: человек мог зайти
+            #в беседу через десять минут после запуска, и общий отсчёт съел бы его время.
+            "time_limit_s": int((quiz.time_limit_s or 0) if quiz else 0)}
 
 
 def _upsert_result(db: Session, activity_id: str, user_id: str, score: float,
@@ -1082,6 +1170,41 @@ def _upsert_result(db: Session, activity_id: str, user_id: str, score: float,
     row.duration_ms = int(duration_ms or 0)
     db.commit()
     return row
+
+
+def _quiz_questions(db: Session, a):
+    """Вопросы викторины активности в порядке показа."""
+    quiz_id = (a.params or {}).get("quiz_id") or ""
+    return (db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id)
+            .order_by(QuizQuestion.order_no.asc()).all())
+
+
+def _review(questions, opts, answers: dict, per_question: list) -> dict:
+    """Разбор для экрана итогов: что спрашивали, что человек выбрал, что было верно.
+
+    🔒 Отдавать ключ здесь БЕЗОПАСНО ровно потому, что пересдать нельзя: результат
+    считается ОДИН раз, повторная отправка возвращает сохранённый (см. докстринг
+    `submit_quiz` про оракул). Убери ту идемпотентность — и этот разбор мгновенно
+    станет способом узнать ответы и отправить заново.
+    """
+    ok_by_q = {r.get("question_id"): r for r in (per_question or [])}
+    out = []
+    for q in questions:
+        chosen = answers.get(q.id)
+        chosen_ids = ([chosen] if isinstance(chosen, str)
+                      else list(chosen) if isinstance(chosen, list)
+                      else list(chosen.values()) if isinstance(chosen, dict) else [])
+        out.append({
+            "id": q.id, "text": q.text, "type": q.type,
+            "points": float(q.points or 1),
+            "correct": bool((ok_by_q.get(q.id) or {}).get("correct")),
+            "earned": float((ok_by_q.get(q.id) or {}).get("points") or 0),
+            "options": [{"id": o.id, "text": o.text,
+                         "is_correct": bool(o.is_correct),
+                         "chosen": o.id in chosen_ids}
+                        for o in (opts.get(q.id) or [])],
+        })
+    return {"review": out, "max_score": round(sum(float(q.points or 1) for q in questions), 2)}
 
 
 @router.post("/{activity_id}/submit")
@@ -1116,7 +1239,11 @@ def submit_quiz(activity_id: str, payload: dict = Body(...),
         return {"score": float(done.score or 0), "correct_count": int(done.correct_count or 0),
                 "total_count": int(done.total_count or 0),
                 "per_question": (done.answers or {}).get("_per_question", []),
-                "already_submitted": True}
+                "already_submitted": True,
+                **_review(_quiz_questions(db, a), _options_by_question(
+                    db, [x.id for x in _quiz_questions(db, a)]),
+                    {k: v for k, v in (done.answers or {}).items() if k != "_per_question"},
+                    (done.answers or {}).get("_per_question", []))}
     quiz_id = (a.params or {}).get("quiz_id") or ""
     questions = (db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id)
                  .order_by(QuizQuestion.order_no.asc()).all())
@@ -1140,6 +1267,7 @@ def submit_quiz(activity_id: str, payload: dict = Body(...),
               {"type": "activity.state", "activity_id": a.id,
                "conversation_id": a.conversation_id, "seq": snap["seq"],
                "payload": {"submitted_count": done}})
+    graded.update(_review(questions, opts, answers, graded["per_question"]))
     return graded
 
 

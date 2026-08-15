@@ -23,6 +23,7 @@ const TYPES = ['single', 'multi', 'order', 'match']
 const title = ref('')
 const description = ref('')
 const tagsText = ref('')
+const timeLimitMin = ref(0)   //минуты: секунды человек не считает
 const visibility = ref('private')
 const questions = ref([])
 const canEdit = ref(true)
@@ -36,6 +37,7 @@ onMounted(async () => {
     title.value = data.title
     description.value = data.description
     tagsText.value = (data.tags || []).join(', ')
+    timeLimitMin.value = Math.round((data.time_limit_s || 0) / 60)
     visibility.value = data.visibility
     canEdit.value = !!data.can_edit
     questions.value = (data.questions || []).map((q) => ({
@@ -72,6 +74,7 @@ async function save() {
   const body = {
     title: title.value.trim(), description: description.value.trim(),
     tags: tagsText.value.split(',').map((t) => t.trim()).filter(Boolean),
+    time_limit_s: Math.max(0, Math.round(Number(timeLimitMin.value) || 0) * 60),
     visibility: visibility.value,
     questions: questions.value.map((q) => ({
       type: q.type, text: q.text.trim(), points: q.points,
@@ -131,6 +134,15 @@ async function copySelf() {
           <input v-model="tagsText" type="text" :disabled="!canEdit"
                  :placeholder="locale.t('quiz.tags', 'Теги через запятую: математика, дроби')"
                  class="w-full rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text" />
+          <!-- Ограничение времени на весь тест. В МИНУТАХ: секунды преподаватель не
+               считает, а поле в секундах провоцирует опечатку на порядок. Ноль —
+               без ограничения, и так было всегда: пустое поле ничего не меняет. -->
+          <label class="flex items-center gap-2 text-sm text-text2">
+            <span class="shrink-0">{{ locale.t('quiz.timeLimit', 'Ограничение времени, мин') }}</span>
+            <input v-model.number="timeLimitMin" type="number" min="0" max="360" :disabled="!canEdit"
+                   class="w-24 rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text" />
+            <span class="text-tiny text-text3">{{ locale.t('quiz.timeLimitHint', '0 — без ограничения') }}</span>
+          </label>
           <select v-model="visibility" :disabled="!canEdit"
                   class="w-full rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text">
             <option value="private">{{ locale.t('quiz.visibility.private', 'Только я') }}</option>

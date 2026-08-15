@@ -19,6 +19,7 @@ import { curatorApi, adminApi } from '@/api/endpoints'
 import BrandLogo from '@/components/BrandLogo.vue'
 import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
+import SyncIssuesBadge from '@/components/ui/SyncIssuesBadge.vue'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
@@ -110,6 +111,13 @@ function isActive(to) {
          (см. сам компонент о том, почему постоянное «Онлайн» в браузере — шум). -->
     <div class="shrink-0 px-3 pb-1">
       <ConnectionBadge />
+    </div>
+
+    <!-- Рядом, но ОТДЕЛЬНО от значка связи: тот про «есть ли сеть», этот про «дошли ли
+         правки». Состояния не совпадают — связь бывает прекрасной, а оценка всё равно
+         остаётся только на этом ПК. Появляется, лишь когда есть о чём сказать. -->
+    <div class="shrink-0 px-3 pb-1">
+      <SyncIssuesBadge />
     </div>
 
     <!-- 3. Карточка себя — прижата к нижнему краю (Discord). Занимает ровно тот угол,

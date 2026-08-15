@@ -190,7 +190,7 @@ def test_removed_from_plan_subject_disappears_from_current_assignments(client):
     assert forbidden.status_code == 403
 
 
-def test_archived_term_assignment_survives_subject_leaving_todays_plan(client):
+def test_archived_term_assignment_survives_subject_leaving_todays_plan(client, monkeypatch):
     """Тот же сценарий, но АРХИВНЫЙ (уже закрытый) термин — фильтр по сегодняшнему плану
     на явный просмотр прошлого семестра не распространяется: тогда предмет реально
     велся, и прятать его задним числом было бы переписыванием истории."""
@@ -201,8 +201,13 @@ def test_archived_term_assignment_survives_subject_leaving_todays_plan(client):
     assign_teacher(client, admin, "teach:teacher1", "К74/1", "Компьютерные сети")
     old = client.get("/web/terms", headers=th).json()["current"]
 
-    rr = client.post("/web/admin/term/rollover", json={}, headers=admin)
-    assert rr.status_code == 200, rr.text
+    #Следующий период НАСТУПИЛ (в жизни это делает календарь 1 сентября). Раньше здесь
+    #стоял ручной перевод термина вперёд — он теперь запрещён: именно такой сдвиг дважды
+    #уводил боевой сервер на год вперёд, и у группы оказывались предметы двух курсов сразу.
+    y, s = old["year"], int(old["semester"])
+    nxt = (y, 2) if s == 1 else (f"{int(y.split('/')[0]) + 1}/{int(y.split('/')[1]) + 1}", 1)
+    from app import db as _db
+    monkeypatch.setattr(_db, "default_term", lambda: nxt)
 
     #план ТЕКУЩЕГО (нового) термина меняется — предмета в нём больше нет
     r = client.put("/web/admin/groups/К74/1", json={"subjects": ["Физика"]}, headers=admin)

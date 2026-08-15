@@ -32,7 +32,6 @@ import ReminderDialog from './ReminderDialog.vue'
 import CuratorReportOverlay from './CuratorReportOverlay.vue'
 import ActivityCard from '@/components/activity/ActivityCard.vue'
 import BoardCard from '@/components/activity/BoardCard.vue'
-import ActivityJournal from '@/components/activity/ActivityJournal.vue'
 import TranslateDialog from './TranslateDialog.vue'
 import GifPicker from './GifPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -41,6 +40,9 @@ import { nameDecor } from '@/config/nameEffects'
 import { statusLabel } from '@/config/status'
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { useLocaleStore } from '@/stores/locale'
+import { useActivityStore } from '@/stores/activity'
+import TimerStrip from '@/components/activity/timer/TimerStrip.vue'
+import PollMessage from '@/components/activity/poll/PollMessage.vue'
 
 const locale = useLocaleStore()
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
@@ -85,7 +87,7 @@ const composer = ref(null)
 const overlay = ref({ open: false, message: null, x: 0, y: 0 })
 const reportMsg = ref(null)                 // сообщение, на которое жалуемся
 const openReportOverlay = ref(null)         // §12: id открытого отчёта куратора (или null)
-const journalOpen = ref(false)              // журнал активностей беседы (PLAN-ACTIVITIES §9)
+const activity = useActivityStore()         // кнопка активностей в шапке + значок «новая»
 const forwardState = ref({ open: false, ids: [] })
 const deleteTargets = ref(null)             // [message,…] для выбора «у себя/у всех» (все свои)
 const copied = ref(false)
@@ -848,7 +850,12 @@ const avatarBySender = computed(() => {
 // пользователей, поэтому подпись и аватар подставлялись от СОБЕСЕДНИКА — в «Избранном»
 // это ты сам, и ответ ИИ выглядел как твоё же сообщение с твоей аватаркой.
 const VECTOR_SENDER = 'system'
-const VECTOR_AVATAR = '/mascot/neutral-idle.webp'   //арт Арины, кадрируем по голове
+//Отдельный файл, а НЕ спрайт настроения. Раньше сюда подставлялся `neutral-idle` —
+//спрайт из набора эмоций: он рисован в полный рост, и в кружке 32 px от Вектора
+//оставалась неразличимая фигурка. Этот файл нарисован именно как аватарка (голова
+//крупно), с прозрачным фоном — иначе белый угол светил бы бельмом на тёмной теме.
+//Набор эмоций не трогаем: он живёт своей жизнью и используется дашбордом.
+const VECTOR_AVATAR = '/mascot/vector-avatar.webp'
 function isVector(msg) { return msg.sender_id === VECTOR_SENDER }
 //Отвечаем на реплику Вектора → это продолжение разговора с ним, а не обычная цитата.
 const replyingToVector = computed(() => isSaved.value && !!replyTo.value && isVector(replyTo.value))
@@ -959,6 +966,10 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                v-bind="peerNameDecor">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
+        <!-- Идущий тайм-бокс — ПОД названием беседы, всегда на виду. В окне активности он
+             был бесполезен: на таймер поглядывают, продолжая работать, а полноэкранное
+             окно закрывает как раз то, над чем работают. Кнопки — только у ведущего. -->
+        <TimerStrip class="shrink-0" />
         <!-- Поиск/сводка/перевод/уведомления — на sm+ прямо в строке, как раньше. На
              телефоне съедали всю ширину и обрезали название беседы — спрятаны за
              кнопкой-стрелкой ниже (см. mobileActionsOpen). -->
@@ -993,13 +1004,20 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
           <!-- Журнал активностей беседы (PLAN-ACTIVITIES §9). Только в группах и каналах:
                в личном чате и «Избранном» активностей не бывает, и пустая кнопка там
                читалась бы как поломка. -->
-          <button v-if="isGroupLike" type="button" @click="journalOpen = true"
-                  :aria-label="locale.t('activity.journal.title', 'Журнал активностей')"
-                  :title="locale.t('activity.journal.title', 'Журнал активностей')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
+          <!-- Кнопка ведёт в САМИ АКТИВНОСТИ, а не в журнал: журнал — редкий взгляд
+               назад, а запуск и вход — ежедневное действие, и держать его за командой
+               `/активность` значило прятать главное. Журнал открывается изнутри окна
+               активностей. Восклицательный знак — в беседе началась активность, которую
+               ещё не открывали. -->
+          <button v-if="isGroupLike" type="button" @click="activity.openLauncher(activeId)"
+                  :aria-label="locale.t('activity.open', 'Активности')"
+                  :title="locale.t('activity.open', 'Активности')"
+                  class="relative grid size-8 shrink-0 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                     : 'text-text3 hover:bg-bg2 hover:text-text'">
             <ClipboardList class="size-5" />
+            <span v-if="activity.unseen"
+                  class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
           </button>
           <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
           <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
@@ -1162,6 +1180,11 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
 
           <!-- Активность и сохранённая доска (PLAN-ACTIVITIES §10). Тот же приём, что у
                отчёта выше: в теле сообщения только id, объект подмешал сервер. -->
+          <!-- Опрос голосуется ПРЯМО в ленте (как в Telegram), а не открывает оверлей. -->
+          <div v-else-if="msg.kind === 'poll' && msg.activity" :id="`gb-msg-${msg.id}`"
+               class="flex" :class="msg.mine ? 'justify-end' : 'justify-start'">
+            <PollMessage :activity="msg.activity" />
+          </div>
           <ActivityCard v-else-if="msg.kind === 'activity' && msg.activity"
                         :id="`gb-msg-${msg.id}`" :activity="msg.activity" :created-at="msg.created_at" />
           <BoardCard v-else-if="msg.kind === 'board' && msg.board"
@@ -1627,7 +1650,6 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
     <TranslateDialog v-if="showTranslate" @close="showTranslate = false" />
     <GifPicker v-if="showGifPicker" @pick="m.sendGif($event)" @close="showGifPicker = false" />
     <CuratorReportOverlay v-if="openReportOverlay" :report-id="openReportOverlay" @close="openReportOverlay = null" />
-    <ActivityJournal v-if="journalOpen && activeId" :conversation-id="activeId" @close="journalOpen = false" />
     <ForwardPicker v-if="forwardState.open" :count="forwardState.ids.length"
                    @submit="onForwardSubmit" @close="forwardState = { open: false, ids: [] }" />
 

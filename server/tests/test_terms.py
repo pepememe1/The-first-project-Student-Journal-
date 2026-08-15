@@ -19,6 +19,27 @@ def _mk_lesson(client, th, group="G1", subject="Мат", ltype="Практика
     return r.json()["id"]
 
 
+def _advance_calendar(monkeypatch, year: str, semester) -> tuple:
+    """Сдвинуть КАЛЕНДАРЬ на следующий учебный период — так, как это делает 1 сентября.
+
+    🔥 Раньше архив в тестах делали переводом термина вперёд (`/admin/term/rollover`).
+    Так больше нельзя, и это не каприз: ровно тот ручной сдвиг дважды уводил боевой
+    сервер на год вперёд календаря, и у группы оказывались предметы двух курсов сразу.
+    Теперь эндпоинт отвечает 400 на попытку уйти в будущее.
+
+    Подменяем сам источник времени (`app.db.default_term`) — тогда прошедший период
+    становится архивом ровно по той причине, по которой он им становится в жизни, и
+    тест перестаёт зависеть от механизма, который мы намеренно ограничили."""
+    if int(semester) == 1:
+        nxt = (year, 2)
+    else:
+        a, b = year.split("/")
+        nxt = (f"{int(a) + 1}/{int(b) + 1}", 1)
+    from app import db as _db
+    monkeypatch.setattr(_db, "default_term", lambda: nxt)
+    return nxt
+
+
 def test_new_lesson_gets_current_term_and_terms_endpoint(client):
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
@@ -30,7 +51,9 @@ def test_new_lesson_gets_current_term_and_terms_endpoint(client):
     assert {"year": terms["current"]["year"], "semester": terms["current"]["semester"]} in terms["terms"]
 
 
-def test_rollover_archives_old_term_and_blocks_writes(client):
+def test_passing_term_archives_it_and_blocks_writes(client, monkeypatch):
+    """Наступил следующий период — прошлый стал архивом: в журнале по умолчанию его нет,
+    по явному термину виден, писать в него нельзя (409)."""
     admin = make_admin(client)
     th = make_teacher(client, admin, subjects=["Мат"])
     assign_teacher(client, admin, "teach:teacher1", "G1", "Мат")
@@ -42,10 +65,9 @@ def test_rollover_archives_old_term_and_blocks_writes(client):
     jr = client.get("/web/teacher/journal", params={"group": "G1", "subject": "Мат"}, headers=th).json()
     assert any(l["id"] == lid for l in jr["lessons"])
 
-    #перевод на курс
-    rr = client.post("/web/admin/term/rollover", json={}, headers=admin)
-    assert rr.status_code == 200, rr.text
-    new = rr.json()["current"]
+    #наступил следующий учебный период (в жизни это делает календарь 1 сентября)
+    ny, ns = _advance_calendar(monkeypatch, old_y, old_s)
+    new = {"year": ny, "semester": ns}
     assert (new["year"], new["semester"]) != (old_y, old_s)
     #Назначения — за термин (как и часы): после перевода на курс их нет автоматически,
     #новый семестр админ размечает заново (то же поведение, что уже было у часов).
@@ -83,3 +105,65 @@ def test_desktop_pushed_lesson_gets_stamped_term(client):
     cur = client.get("/web/terms", headers=admin).json()["current"]
     #занятие видно в текущем термине (значит период проставлен)
     assert {"year": cur["year"], "semester": cur["semester"]} in client.get("/web/terms", headers=admin).json()["terms"]
+
+
+# ── Заслонки против сдвига термина в будущее ──────────────────────────────────────────
+# Оба теста написаны потому, что этот баг случался ДВАЖДЫ (3.6.1 и 15.08.2026) и оба
+# раза чинился руками в боевой базе: ручной оверрайд уводил продукт на год вперёд
+# календаря, от термина считался КУРС студента, импорт учебного плана записывал предметы
+# следующего курса — и у группы оказывались предметы двух курсов сразу.
+
+def test_rollover_refuses_to_move_the_term_into_the_future(client):
+    """Вперёд период переключается сам 1 сентября. Ручной сдвиг — 400, и термин на месте."""
+    admin = make_admin(client)
+    before = client.get("/web/terms", headers=admin).json()["current"]
+
+    r = client.post("/web/admin/term/rollover", json={}, headers=admin)
+    assert r.status_code == 400, r.text
+    assert "не наступил" in r.json()["detail"], r.json()
+
+    after = client.get("/web/terms", headers=admin).json()["current"]
+    assert after == before, "отказ обязан быть полным: термин не должен сдвинуться"
+
+
+def test_rollover_still_works_backwards(client):
+    """Обратный тест. Без него «починка» вида «запретить rollover совсем» прошла бы
+    незамеченной, а открыть закрытый семестр — законный сценарий."""
+    admin = make_admin(client)
+    cur = client.get("/web/terms", headers=admin).json()["current"]
+    y, s = cur["year"], int(cur["semester"])
+    prev = (y, 1) if s == 2 else (f"{int(y.split('/')[0]) - 1}/{int(y.split('/')[1]) - 1}", 2)
+
+    r = client.post("/web/admin/term/rollover",
+                    json={"year": prev[0], "semester": prev[1]}, headers=admin)
+    assert r.status_code == 200, r.text
+    now = client.get("/web/terms", headers=admin).json()["current"]
+    assert (now["year"], int(now["semester"])) == prev
+
+
+def test_current_term_ignores_a_future_override_left_in_the_database(client, monkeypatch):
+    """Вторая заслонка: оверрайд из будущего мог УЖЕ лежать в базе с прошлых раз (именно
+    так и было на бою). Читатель обязан его игнорировать, а не верить вслепую."""
+    from app import webdata as W
+    from app.db import SessionLocal, default_term
+    from app.models import ConfigKV
+    make_admin(client)
+    real = default_term()
+    future_year = f"{int(real[0].split('/')[0]) + 1}/{int(real[0].split('/')[1]) + 1}"
+
+    db = SessionLocal()
+    row = db.get(ConfigKV, "config") or ConfigKV(key="config", value={}, updated_at="")
+    row.value = {**(row.value or {}), "current_year": future_year, "current_semester": 1}
+    db.add(row)
+    db.commit()
+
+    assert W.current_term(W.load_config(db)) == real, "оверрайд из будущего обязан игнорироваться"
+
+    #Обратная половина: оверрайд в ПРОШЛОЕ по-прежнему уважается — иначе тест был бы
+    #зелёным и при реализации «игнорировать любой оверрайд», то есть проверял бы не то.
+    past_year = f"{int(real[0].split('/')[0]) - 1}/{int(real[0].split('/')[1]) - 1}"
+    row.value = {**row.value, "current_year": past_year, "current_semester": 1}
+    db.add(row)
+    db.commit()
+    assert W.current_term(W.load_config(db)) == (past_year, 1), "оверрайд назад — законный сценарий"
+    db.close()

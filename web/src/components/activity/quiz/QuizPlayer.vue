@@ -7,8 +7,9 @@
 //
 // 🔒 Проверку ответов делает СЕРВЕР. Здесь её нет и быть не может: для локальной проверки
 // нужен ключ, а любой студент прочитает его в инструментах разработчика до начала.
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import QuizResult from './QuizResult.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
@@ -24,6 +25,36 @@ const result = ref(null)
 const board = ref([])
 const busy = ref(false)
 const startedAt = ref(Date.now())
+const showBoard = ref(false)
+const timeLimit = ref(0)          //секунды на весь тест, 0 — без ограничения
+const nowMs = ref(Date.now())
+let quizTick = null
+
+// Счётчик идёт от ОТКРЫТИЯ теста, а не от запуска активности: человек мог зайти в беседу
+// через десять минут после старта, и общий отсчёт съел бы его время ни за что.
+const leftS = computed(() => {
+  if (!timeLimit.value) return null
+  return Math.max(0, timeLimit.value - Math.round((nowMs.value - startedAt.value) / 1000))
+})
+const leftLabel = computed(() => {
+  const s = leftS.value
+  if (s === null) return ''
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+})
+
+// Палитра плиток — как в Kahoot: четыре крупных цветных поля, узнаваемых с проектора
+// через весь кабинет. Цвета ЛИТЕРАЛЬНЫЕ, а не токены темы: плитка обязана выглядеть
+// одинаково в светлой и тёмной теме (это «поле ответа», а не элемент оформления), и
+// различаться между собой человек должен по цвету, а не по подписи.
+const TILE = [
+  { bg: '#e21b3c', ring: '#ff5c74' },   // 1 — красный
+  { bg: '#1368ce', ring: '#4b95ee' },   // 2 — синий
+  { bg: '#d89e00', ring: '#f5c53d' },   // 3 — жёлтый
+  { bg: '#26890c', ring: '#4fbb2e' },   // 4 — зелёный
+]
+//Вариантов может быть больше четырёх — палитру повторяем по кругу, а не оставляем
+//бесцветные плитки: серая плитка среди цветных читается как недоступная.
+const tileOf = (i) => TILE[i % TILE.length]
 
 const isContest = computed(() => act.kind === 'contest')
 const current = computed(() => questions.value[isContest.value ? 0 : index.value] || null)
@@ -34,11 +65,23 @@ async function load() {
     const { data } = await activitiesApi.questions(act.activity.id)
     questions.value = data.questions || []
     total.value = Number(data.total || 0)
+    timeLimit.value = Number(data.time_limit_s || 0)
     if (!isContest.value) index.value = 0
   } catch { questions.value = [] }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  quizTick = setInterval(() => {
+    nowMs.value = Date.now()
+    //Время вышло — отправляем то, что успел человек. Молча оставить его на экране с
+    //нулём значило бы потерять уже данные ответы.
+    if (leftS.value === 0 && !result.value && !isContest.value && !act.isHost && !busy.value) {
+      submitAll()
+    }
+  }, 1000)
+})
+onBeforeUnmount(() => { if (quizTick) clearInterval(quizTick) })
 // В соревновании вопрос показывает ХОСТ — перечитываем по кадру со сменой номера.
 watch(() => act.state.question_index, () => { if (isContest.value) load() })
 
@@ -124,11 +167,15 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
 
     <!-- Свой результат после отправки -->
     <template v-else-if="result">
-      <div class="py-8 text-center">
-        <div class="text-5xl font-bold text-accent">{{ result.score }}</div>
-        <p class="mt-2 text-sm text-text2">
-          {{ locale.t('quiz.correctOf', { n: result.correct_count, total: result.total_count }) }}
-        </p>
+      <QuizResult :result="result" />
+      <!-- Кнопка выхода обязана быть ЗДЕСЬ. Без неё экран результата был тупиком: выйти
+           можно было только крестиком в шапке, а свернуть — значило вернуться в тест.
+           Результат к этому моменту уже у преподавателя (его отправил `submitAll`),
+           поэтому кнопка просто закрывает окно и ничего не теряет. -->
+      <div class="flex justify-center pb-2">
+        <AppButton size="sm" @click="act.hide()">
+          {{ locale.t('quiz.finish', 'Завершить') }}
+        </AppButton>
       </div>
     </template>
 
@@ -141,13 +188,22 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
       <template v-else>
         <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}</p>
         <h3 class="text-lg font-semibold text-text">{{ current.text }}</h3>
-        <div class="flex flex-col gap-2">
-          <button v-for="o in current.options" :key="o.id" type="button"
+        <!-- Плитки 2×2: с проектора вариант узнают по ЦВЕТУ и НОМЕРУ, а не по чтению
+             мелкого текста. На телефоне — в одну колонку, иначе четыре плитки по 160 px
+             не помещаются и текст рвётся. -->
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button v-for="(o, i) in current.options" :key="o.id" type="button"
                   :disabled="answeredHere || busy"
                   @click="current.type === 'single' ? answerContest(o.id) : pick(current, o.id)"
-                  class="min-w-0 rounded-xl border px-3 py-2.5 text-left text-sm disabled:opacity-60"
-                  :class="chosen(current, o.id) ? 'border-accent bg-accent-glow' : 'border-border2 bg-bg2 hover:border-accent'">
-            <span class="block truncate text-text">{{ o.text }}</span>
+                  class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-transform disabled:opacity-70"
+                  :style="{ backgroundColor: tileOf(i).bg,
+                            outline: chosen(current, o.id) ? `3px solid ${tileOf(i).ring}` : 'none',
+                            outlineOffset: '2px' }"
+                  :class="answeredHere || busy ? '' : 'hover:scale-[1.02]'">
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
+              {{ i + 1 }}
+            </span>
+            <span class="min-w-0 flex-1 break-words text-lg font-bold leading-tight text-white">{{ o.text }}</span>
           </button>
         </div>
         <AppButton v-if="current.type === 'multi' && !answeredHere" :disabled="busy"
@@ -158,14 +214,57 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
           {{ locale.t('quiz.answered', 'Ответ принят') }} · {{ locale.t('quiz.myScore', { n: act.state.my_score || 0 }) }}
         </p>
       </template>
-      <div v-if="act.isHost" class="flex flex-wrap items-center gap-2 border-t border-border2 pt-3">
-        <AppButton size="sm" :disabled="busy" @click="nextQuestion">
+      <!-- Табло между вопросами — то, ради чего в соревнование и играют. Видят все:
+           места всё равно объявляются вслух, а скрытые баллы убирают из игры единственное,
+           что заставляет тянуться к следующему вопросу. -->
+      <div v-if="showBoard && (act.state.board || []).length" class="flex flex-col gap-1.5 border-t border-border2 pt-3">
+        <div v-for="r in act.state.board.slice(0, 10)" :key="r.user_id"
+             class="flex min-w-0 items-center gap-2 rounded-lg px-3 py-1.5"
+             :class="r.place <= 3 ? 'bg-accent/10' : 'bg-bg2'">
+          <span class="w-7 shrink-0 text-center text-sm font-bold"
+                :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
+            {{ r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place }}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
+          <span class="shrink-0 text-sm font-semibold tabular-nums text-accent">{{ r.score }}</span>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 border-t border-border2 pt-3">
+        <AppButton v-if="act.isHost" size="sm" :disabled="busy" @click="nextQuestion">
           {{ locale.t('quiz.next', 'Следующий вопрос') }}
         </AppButton>
         <span class="text-xs text-text3">
           {{ locale.t('quiz.answeredCount', { n: act.state.answered_count || 0 }) }}
         </span>
+        <AppButton variant="ghost" size="sm" class="ml-auto" @click="showBoard = !showBoard">
+          {{ locale.t('quiz.leaderboard', 'Лидерборд') }}
+        </AppButton>
       </div>
+    </template>
+
+    <!-- Ведущему показываем ХОД, а не задание: он тест не проходит, ему нужно видеть,
+         кто закончил, а кого ещё ждать. Раньше здесь открывался первый вопрос — то есть
+         преподаватель смотрел на то, чем не пользуется, а нужное было недоступно. -->
+    <template v-else-if="act.isHost">
+      <div class="flex flex-wrap items-baseline gap-3">
+        <span class="text-3xl font-bold text-accent">{{ (act.state.progress || []).length }}</span>
+        <span class="text-sm text-text3">
+          {{ locale.t('quiz.doneOf', { n: (act.state.progress || []).length,
+                                       total: act.state.participants || 0 }) }}
+        </span>
+      </div>
+      <div v-if="(act.state.progress || []).length" class="flex flex-col gap-1.5">
+        <div v-for="r in act.state.progress" :key="r.user_id"
+             class="flex min-w-0 items-center gap-2 rounded-lg border border-border2 bg-bg2 px-3 py-2">
+          <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
+          <span class="shrink-0 text-xs text-text3">{{ r.correct_count }}/{{ r.total_count }}</span>
+          <span class="shrink-0 text-sm font-semibold text-accent">{{ r.score }}</span>
+        </div>
+      </div>
+      <p v-else class="py-8 text-center text-sm text-text3">
+        {{ locale.t('quiz.nobodyFinished', 'Пока никто не закончил') }}
+      </p>
     </template>
 
     <!-- Асинхронная викторина: все вопросы, свой темп, одна отправка -->
@@ -174,29 +273,57 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
         {{ locale.t('quiz.empty', 'Викторин пока нет') }}
       </div>
       <template v-else>
-        <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: index + 1, total: questions.length }) }}</p>
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: index + 1, total: questions.length }) }}</p>
+          <span v-if="leftLabel" class="rounded-full bg-bg2 px-2 py-0.5 text-xs font-bold tabular-nums"
+                :class="leftS <= 60 ? 'text-red' : 'text-text2'">{{ leftLabel }}</span>
+        </div>
         <h3 class="text-lg font-semibold text-text">{{ current.text }}</h3>
 
+        <!-- Сопоставление: слева вопрос, справа ВЫБОР из готовых половин.
+             Раньше здесь было поле ввода — попасть в ответ можно было только дословным
+             совпадением, то есть задание проверяло грамотность, а не знание.
+             🔒 Список половин перемешан сервером и не привязан к строкам, поэтому сам по
+             себе ключа не даёт: это те же слова, что и так на экране, в другом порядке. -->
         <div v-if="current.type === 'match'" class="flex flex-col gap-2">
-          <div v-for="o in current.options" :key="o.id" class="flex min-w-0 items-center gap-2">
-            <span class="min-w-0 flex-1 truncate text-sm text-text">{{ o.text }}</span>
-            <input type="text" :value="(answers[current.id] || {})[o.id] || ''"
-                   @input="setMatch(current, o.id, $event.target.value)"
-                   :placeholder="locale.t('quiz.matchPlaceholder', 'Пара')"
-                   class="w-32 shrink-0 rounded-lg border border-border2 bg-bg2 px-2 py-1.5 text-sm text-text" />
+          <div v-for="o in current.options" :key="o.id"
+               class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border2 bg-bg2 px-3 py-2">
+            <span class="min-w-0 flex-1 break-words text-sm text-text">{{ o.text }}</span>
+            <span class="shrink-0 text-text3">—</span>
+            <select :value="(answers[current.id] || {})[o.id] || ''"
+                    @change="setMatch(current, o.id, $event.target.value)"
+                    class="min-w-[9rem] shrink-0 rounded-lg border border-border2 bg-card px-2 py-1.5 text-sm text-text">
+              <option value="">{{ locale.t('quiz.matchPlaceholder', 'Выберите пару') }}</option>
+              <option v-for="k in (current.match_pool || [])" :key="k" :value="k">{{ k }}</option>
+            </select>
           </div>
         </div>
-        <div v-else class="flex flex-col gap-2">
+
+        <!-- Порядок — список (там важна последовательность, а не цвет).
+             Выбор одного/нескольких — те же плитки, что в соревновании. -->
+        <div v-else-if="current.type === 'order'" class="flex flex-col gap-2">
           <button v-for="o in current.options" :key="o.id" type="button"
-                  @click="current.type === 'order' ? placeOrder(current, o.id) : pick(current, o.id)"
+                  @click="placeOrder(current, o.id)"
                   class="flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-sm"
-                  :class="(current.type === 'order' ? orderPos(current, o.id) : chosen(current, o.id))
-                    ? 'border-accent bg-accent-glow' : 'border-border2 bg-bg2 hover:border-accent'">
-            <span v-if="current.type === 'order' && orderPos(current, o.id)"
+                  :class="orderPos(current, o.id) ? 'border-accent bg-accent-glow' : 'border-border2 bg-bg2 hover:border-accent'">
+            <span v-if="orderPos(current, o.id)"
                   class="size-5 shrink-0 rounded-full bg-accent text-center text-xs font-bold leading-5 text-white">
               {{ orderPos(current, o.id) }}
             </span>
             <span class="min-w-0 flex-1 truncate text-text">{{ o.text }}</span>
+          </button>
+        </div>
+        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button v-for="(o, i) in current.options" :key="o.id" type="button"
+                  @click="pick(current, o.id)"
+                  class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-transform hover:scale-[1.02]"
+                  :style="{ backgroundColor: tileOf(i).bg,
+                            outline: chosen(current, o.id) ? `3px solid ${tileOf(i).ring}` : 'none',
+                            outlineOffset: '2px' }">
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
+              {{ i + 1 }}
+            </span>
+            <span class="min-w-0 flex-1 break-words text-lg font-bold leading-tight text-white">{{ o.text }}</span>
           </button>
         </div>
 

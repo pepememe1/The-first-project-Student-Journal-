@@ -971,6 +971,10 @@ class QuizSet(Base):
     #Цепочка копий: оригинал → копия 1 → копия 2. Чужую викторину нельзя править — её
     #копируют себе, и parent_id хранит, откуда она взялась.
     parent_id = Column(String, index=True, default="")
+    #Ограничение времени на ВЕСЬ тест, секунды. 0 — без ограничения (так было всегда).
+    #Счётчик у студента идёт от ОТКРЫТИЯ теста, а не от запуска активности: человек мог
+    #зайти в беседу через десять минут после старта, и общий отсчёт съел бы его время.
+    time_limit_s = Column(Integer, default=0)
     created_at = Column(String, default="")
     updated_at = Column(String, default="")
     deleted = Column(Boolean, default=False, index=True)   #мягкое удаление

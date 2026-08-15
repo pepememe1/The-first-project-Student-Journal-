@@ -184,3 +184,32 @@ def test_ensure_message_report_target_column_adds_to_old_schema(client):
     #тикеты, и вся прежняя очередь молча исчезла бы из вкладки «Жалобы».
     assert got == "message"
     _ensure_message_report_target_column()  # идемпотентность — второй вызов не падает
+
+
+def test_quiz_time_limit_column_is_added_to_an_old_schema():
+    """quiz_sets.time_limit_s на СТАРОЙ схеме.
+
+    ⚠️ `create_all` досоздаёт только отсутствующие ТАБЛИЦЫ — колонку в существующую он не
+    добавляет никогда, а в свежей тестовой базе таблица создаётся сразу целиком, и ветка
+    «колонки не было» там не срабатывает. Поэтому эмулируем старую схему явным DROP+CREATE.
+    Это правило спасало прод уже четырежды."""
+    from sqlalchemy import text, inspect
+    from app.db import engine, _ensure_quiz_time_limit_column
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS quiz_sets"))
+        conn.execute(text(
+            "CREATE TABLE quiz_sets (id VARCHAR PRIMARY KEY, author_id VARCHAR, "
+            "title VARCHAR, description VARCHAR, tags JSON, visibility VARCHAR, "
+            "parent_id VARCHAR, created_at VARCHAR, updated_at VARCHAR, deleted BOOLEAN)"))
+    #Пул прогрет предыдущими тестами — без dispose PRAGMA увидит снимок ДО DDL с другой
+    #пуловой коннекции (та же грабля, что уже описана у соседних миграций).
+    engine.dispose()
+    assert "time_limit_s" not in {c["name"] for c in inspect(engine).get_columns("quiz_sets")}
+
+    _ensure_quiz_time_limit_column()
+    engine.dispose()
+    assert "time_limit_s" in {c["name"] for c in inspect(engine).get_columns("quiz_sets")}
+
+    #Повторный вызов не должен падать: миграция обязана быть идемпотентной.
+    _ensure_quiz_time_limit_column()

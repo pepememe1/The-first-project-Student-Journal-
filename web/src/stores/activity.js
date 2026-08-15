@@ -16,6 +16,8 @@ import { acceptsFrame, mergeFrame } from '@/utils/frameOrder'
 export const useActivityStore = defineStore('activity', () => {
   const activity = ref(null)        // {id, kind, host_id, is_host, status, params, ...}
   const state = ref({})             // payload последнего принятого кадра
+  const unseen = ref(false)         // в беседе началась активность, её ещё не открывали
+  const journalFor = ref('')        // открыт журнал активностей этой беседы
   const seq = ref(-1)               // номер последнего принятого кадра
   const mode = ref('hidden')        // hidden | full | mini
   const launcherFor = ref('')       // id беседы, для которой открыт выбор категории
@@ -46,6 +48,10 @@ export const useActivityStore = defineStore('activity', () => {
   /** Событие «в беседе запустили активность» — для тех, кто её ещё не видит. */
   async function onStarted(ev, conversationId) {
     if (!ev || ev.conversation_id !== conversationId) return
+    // Отметка «появилась новая» — для значка у кнопки активностей в шапке чата. Гасим её
+    // не по факту получения события, а по факту ОТКРЫТИЯ: иначе значок исчезал бы сам, и
+    // человек, отошедший от экрана на минуту, не узнал бы, что активность вообще была.
+    unseen.value = true
     await load(conversationId)
     if (mode.value === 'hidden') mode.value = 'mini'
   }
@@ -111,7 +117,9 @@ export const useActivityStore = defineStore('activity', () => {
     } finally { loading.value = false }
   }
 
-  function openLauncher(conversationId) { launcherFor.value = conversationId }
+  function openLauncher(conversationId) { unseen.value = false; launcherFor.value = conversationId }
+  function openJournal(conversationId) { journalFor.value = conversationId }
+  function closeJournal() { journalFor.value = '' }
   function closeLauncher() { launcherFor.value = '' }
   function minimize() { mode.value = 'mini' }
   function expand() { mode.value = 'full' }
@@ -136,6 +144,7 @@ export const useActivityStore = defineStore('activity', () => {
     activity, state, seq, mode, launcherFor, loading, error,
     isRunning, isHost, kind,
     applyFrame, onStarted, onFinished, load, start, finish, open,
-    openLauncher, closeLauncher, minimize, expand, hide, reset,
+    openLauncher, closeLauncher, minimize, expand, hide, reset, unseen,
+    journalFor, openJournal, closeJournal,
   }
 })

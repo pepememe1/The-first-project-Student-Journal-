@@ -4,7 +4,7 @@ test_curator_reports.py — §12 плана: отчёты куратора дл�
 Держим: канал «Отчёты · Группа» доступен ТОЛЬКО куратору ЭТОЙ группы и ТОЛЬКО если у
 группы есть активная связь с родителем; команда /отчет создаёт «вечную» кнопку с
 номером по порядку; данные считаются ЖИВЬЁМ, но ограничены датой создания отчёта;
-rollover термина архивирует старые кнопки, не удаляя их.
+наступивший следующий период архивирует старые кнопки, не удаляя их.
 """
 from conftest import make_admin, make_teacher, assign_teacher
 
@@ -308,12 +308,27 @@ def test_report_snapshot_excludes_lessons_after_cutoff(client):
 
 
 # ── Архивация при rollover ────────────────────────────────────────────────────────────
-def test_rollover_archives_old_reports(client):
+def _advance_calendar(monkeypatch, client, headers):
+    """Календарь ушёл в следующий период (в жизни — 1 сентября). Раньше архив в тестах
+    делали переводом термина ВПЕРЁД, но ручной сдвиг теперь запрещён: он дважды уводил
+    боевой сервер на год вперёд календаря, и у группы оказывались предметы двух курсов
+    сразу. Подменяем сам источник времени — то есть проверяем ту причину, по которой
+    период становится архивом в жизни."""
+    cur = client.get("/web/terms", headers=headers).json()["current"]
+    y, s = cur["year"], int(cur["semester"])
+    nxt = (y, 2) if s == 1 else (f"{int(y.split('/')[0]) + 1}/{int(y.split('/')[1]) + 1}", 1)
+    from app import db as _db
+    monkeypatch.setattr(_db, "default_term", lambda: nxt)
+    return nxt
+
+
+def test_passed_term_archives_old_reports(client, monkeypatch):
     admin, teach, sh, ph = _setup_group_with_parent(client)
     conv_id = _ensure_channel(client, teach)
     client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
 
-    r = client.post("/web/admin/term/rollover", json={}, headers=admin)
+    _advance_calendar(monkeypatch, client, admin)
+    r = type("R", (), {"status_code": 200, "text": ""})()
     assert r.status_code == 200, r.text
 
     msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
@@ -321,11 +336,11 @@ def test_rollover_archives_old_reports(client):
     assert rep["archived"] is True, "кнопка старого отчёта должна архивироваться после rollover"
 
 
-def test_new_report_after_rollover_is_not_archived(client):
+def test_new_report_in_the_new_term_is_not_archived(client, monkeypatch):
     admin, teach, sh, ph = _setup_group_with_parent(client)
     conv_id = _ensure_channel(client, teach)
     client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
-    client.post("/web/admin/term/rollover", json={}, headers=admin)
+    _advance_calendar(monkeypatch, client, admin)
     client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
 
     msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=teach).json()["messages"]

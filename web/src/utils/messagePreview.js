@@ -78,6 +78,23 @@ export function messagePreview(msg, opts = {}) {
   //GIF (Klipy) — тело сообщения это прямая ссылка на CDN, показывать её человеку в
   //списке чатов нечего (та же логика, что у отчёта выше).
   else if (msg.kind === 'gif') text = t('messagePreview.gif', 'GIF')
+  //Активность и сохранённая доска — тот же случай: в теле лежит только id («act:6de1…»),
+  //и он уезжал в список чатов как есть. Название категории берём из ТОГО ЖЕ словаря
+  //`activity.kind.*`, которым подписаны карточки в ленте, — второй копии названий не
+  //заводим, иначе они разъедутся при добавлении новой категории.
+  else if (msg.kind === 'activity') {
+    const kind = msg.activity?.kind
+    const cat = kind ? t(`activity.kind.${kind}`, '') : ''
+    const title = (msg.activity?.title || '').trim()
+    //«Активность: Викторина» и, если у неё есть своё имя, «… · тест по циклам».
+    text = cat ? t('messagePreview.activity', { kind: cat }) : t('messagePreview.activityPlain', 'Активность')
+    if (title) text += ` · ${title}`
+  }
+  else if (msg.kind === 'board') {
+    const title = (msg.board?.title || '').trim()
+    text = t('messagePreview.board', '🖉 Доска')
+    if (title) text += ` · ${title}`
+  }
   else text = stripMarkup(msg.body)
   if (!text) return ''
   if (msg.kind === 'system') return text          //служебные — без подписи автора

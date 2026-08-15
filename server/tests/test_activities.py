@@ -538,7 +538,7 @@ def test_feed_card_carries_the_activity_object(client):
     меняется ПОСЛЕ отправки."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    a = _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка").json()["id"]
+    a = _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка").json()["id"]
     msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     assert card["activity"]["id"] == a
@@ -554,7 +554,7 @@ def test_chat_list_preview_also_resolves_the_card(client):
     сырой `act:9f3…` жил бы дольше всего незамеченным."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка")
+    _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка")
     chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
     row = [x for x in chats if x["conversation_id"] == conv][0]
     assert row["last_message"]["activity"]["title"] == "Пятиминутка"
@@ -601,7 +601,7 @@ def test_activity_card_cannot_be_forwarded_to_another_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv1 = _group(client, t, [b_id], title="Первая")
     conv2 = _group(client, t, [c_id], title="Вторая")
-    _start(client, t, conv1, "timer", {"duration_s": 60}, "Контрольная по дробям")
+    _start(client, t, conv1, "board", {"sheet": "grid"}, "Контрольная по дробям")
     msgs = client.get(f"/web/messenger/chats/{conv1}/messages", headers=t).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     client.post("/web/messenger/messages/forward",
@@ -619,7 +619,7 @@ def test_card_object_is_not_attached_outside_its_own_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv1 = _group(client, t, [b_id], title="Первая")
     conv2 = _group(client, t, [c_id], title="Вторая")
-    aid = _start(client, t, conv1, "timer", {"duration_s": 60}, "Тема контрольной").json()["id"]
+    aid = _start(client, t, conv1, "board", {"sheet": "grid"}, "Тема контрольной").json()["id"]
     db = SessionLocal()
     db.add(Message(conversation_id=conv2, sender_id=t_id, body=aid,
                    created_at="2026-08-15T00:00:00+00:00", kind="activity", body_format="plain"))
@@ -637,7 +637,7 @@ def test_pinned_and_search_resolve_the_card_too(client):
     отовсюду: закреплённые, поиск, ветка ответов и модерация отдавали сырой `act:…`."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка")
+    _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка")
     msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     client.post(f"/web/messenger/messages/{card['id']}/pin", json={}, headers=t)
@@ -648,3 +648,143 @@ def test_pinned_and_search_resolve_the_card_too(client):
     mod = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()
     got2 = [m for m in mod["messages"] if m["kind"] == "activity"]
     assert got2 and got2[0]["activity"]["title"] == "Пятиминутка"
+
+
+def test_short_lived_activities_leave_no_trace_in_the_feed(client):
+    """Таймер и срез понимания НЕ оставляют карточку в ленте.
+
+    Они живут минуты и всплывают у всех сами — заходить в них из истории незачем, а на
+    паре их запускают по нескольку раз, и отметка о каждом превращала переписку в мусор.
+    Обратная половина обязательна: викторина/соревнование/доска карточку оставляют, иначе
+    «починка» вида «не создавать сообщение никогда» прошла бы незамеченной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+
+    for kind, params in (("timer", {"duration_s": 60}), ("pulse", {"duration_s": 60})):
+        a = _start(client, t, conv, kind, params).json()["id"]
+        msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+        assert not [m for m in msgs if m["kind"] == "activity"], f"{kind} оставил след в ленте"
+        client.post(f"{A}/{a}/finish", json={}, headers=t)
+
+    a = _start(client, t, conv, "board", {"sheet": "grid"}).json()["id"]
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    cards = [m for m in msgs if m["kind"] == "activity"]
+    assert len(cards) == 1 and cards[0]["activity"]["id"] == a, "доска обязана оставить карточку"
+
+
+def test_review_shows_the_key_only_after_submitting(client):
+    """Разбор с правильными ответами приходит ВМЕСТЕ с результатом отправки — и это
+    безопасно ровно потому, что пересдать нельзя (см. `submit_quiz` про оракул).
+
+    Проверяем обе половины: до отправки вопросы приходят БЕЗ ключа, после — с ключом и
+    с максимальным баллом. Без первой половины тест был бы зелёным и в том случае, если
+    ключ утекает студенту до начала прохождения."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    qs = client.get(f"{A}/{a}/questions", headers=b).json()["questions"]
+    raw = str(qs)
+    assert "is_correct" not in raw, "ключ не должен приходить ДО отправки"
+
+    r = client.post(f"{A}/{a}/submit", json={"answers": {}, "duration_ms": 1000}, headers=b)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("max_score"), "максимальный балл нужен экрану итогов"
+    assert body.get("review"), "разбор обязан прийти после отправки"
+    assert any(o["is_correct"] for q in body["review"] for o in q["options"]), \
+        "в разборе должен быть отмечен верный вариант"
+
+
+def test_poll_is_a_chat_message_not_a_link_to_an_overlay(client):
+    """Опрос — сообщение В ЛЕНТЕ с кнопками (как в Telegram), а не карточка-ссылка.
+
+    Обратная половина: доска по-прежнему оставляет `kind="activity"`. Без неё «починка»
+    вида «называть всё опросом» осталась бы незамеченной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Когда пересдача?", "options": ["Вторник", "Четверг"]}).json()["id"]
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    polls = [m for m in msgs if m["kind"] == "poll"]
+    assert len(polls) == 1, msgs
+    cell = polls[0]["activity"]
+    assert cell["id"] == a
+    assert cell["options"] == ["Вторник", "Четверг"], cell
+    assert cell["my_choice"] is None
+    #🔒 Распределение не создателю не отдаём.
+    assert "tally" not in cell, "чужие голоса студенту показывать нельзя"
+
+    host_msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    host_cell = [m for m in host_msgs if m["kind"] == "poll"][0]["activity"]
+    assert "tally" in host_cell, "автору опроса распределение нужно"
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    _start(client, t, conv, "board", {"sheet": "grid"})
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert [m for m in msgs if m["kind"] == "activity"], "доска обязана остаться карточкой"
+
+
+def test_match_pool_is_given_without_revealing_the_mapping(client):
+    """Сопоставление: студент получает СПИСОК правых половин (иначе выбирать не из чего),
+    но не узнаёт, какая к какой — `match_key` у вариантов по-прежнему нет."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[{
+        "type": "match", "text": "Сопоставьте", "points": 2,
+        "options": [{"text": "HTTP", "match_key": "протокол"},
+                    {"text": "HTML", "match_key": "разметка"}],
+    }])
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+
+    assert sorted(q["match_pool"]) == ["протокол", "разметка"], q
+    assert all("match_key" not in o for o in q["options"]), "ключ соответствия утёк"
+
+
+def test_quiz_time_limit_survives_save_and_reaches_the_player(client):
+    """Ограничение времени задаётся в конструкторе и доезжает до прохождения.
+    Ноль — «без ограничения», и это тоже проверяем: пустое поле не должно превращаться
+    в мгновенно истёкший таймер."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+
+    r = client.put(f"{A}/quizzes/{quiz}", json={"time_limit_s": 600}, headers=t)
+    assert r.status_code == 200, r.text
+    assert client.get(f"{A}/quizzes/{quiz}", headers=t).json()["time_limit_s"] == 600
+
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+    assert client.get(f"{A}/{a}/questions", headers=b).json()["time_limit_s"] == 600
+
+    client.put(f"{A}/quizzes/{quiz}", json={"time_limit_s": 0}, headers=t)
+    assert client.get(f"{A}/quizzes/{quiz}", headers=t).json()["time_limit_s"] == 0
+
+
+def test_finished_poll_keeps_its_results_in_the_feed(client):
+    """Завершённый опрос обязан ПОМНИТЬ голоса.
+
+    🔥 Живое состояние после завершения гасится, а опрос — это сообщение, которое
+    остаётся в ленте навсегда. Без снимка он показывал бы «проголосовало: 0» и пустые
+    полосы, то есть выглядел бы так, будто в нём никто не участвовал. Найдено
+    самопроверкой перед выкладкой, а не тестом, — поэтому тест и появился."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Когда пересдача?", "options": ["Вторник", "Четверг"]}).json()["id"]
+
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=b).status_code == 200
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=c).status_code == 200
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    cell = [m for m in msgs if m["kind"] == "poll"][0]["activity"]
+    assert cell["voted_count"] == 2, cell
+    assert cell["tally"] == [0, 2], cell
+
+    #И у проголосовавшего его выбор не должен потеряться вместе с живым состоянием.
+    mine = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    my_cell = [m for m in mine if m["kind"] == "poll"][0]["activity"]
+    assert my_cell["my_choice"] == 1, my_cell
