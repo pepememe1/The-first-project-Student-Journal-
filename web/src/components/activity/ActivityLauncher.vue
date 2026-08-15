@@ -4,7 +4,7 @@
 // Подтверждение — ЕДИНАЯ модалка на все категории («Вы выбрали X, подтвердить?»), а не
 // своя у каждой: шесть почти одинаковых диалогов разъезжаются формулировками уже на
 // третьем, и человек перестаёт их читать.
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { X, Presentation, ListChecks, Trophy, BarChart3, Gauge, Timer, ChevronLeft } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
@@ -62,9 +62,15 @@ async function choose(kind) {
   if (kind === 'quiz' || kind === 'contest') await loadQuizzes()
 }
 
+watch(() => chosen.value, (k) => { if (k === 'quiz' || k === 'contest') loadQuizzes() })
+
 async function loadQuizzes() {
   try {
-    const { data } = await activitiesApi.quizzes({ scope: quizScope.value, q: quizSearch.value })
+    //Библиотека РАЗДЕЛЬНАЯ: у соревнования свои наборы, у викторины свои. Общий список
+    //заставлял гадать, что откуда запускается, и позволял выбрать для соревнования набор
+    //с заданиями, которые оно не принимает (порядок, сопоставление).
+    const { data } = await activitiesApi.quizzes({ scope: quizScope.value, q: quizSearch.value,
+                                                  kind: chosen.value === 'contest' ? 'contest' : 'quiz' })
     quizzes.value = data.quizzes || []
   } catch { quizzes.value = [] }
 }
@@ -275,5 +281,6 @@ async function confirm() {
   </div>
 
   <QuizEditor v-if="editorFor !== null" :quiz-id="editorFor"
+              :kind="chosen === 'contest' ? 'contest' : 'quiz'"
               @close="editorFor = null" @saved="loadQuizzes" />
 </template>

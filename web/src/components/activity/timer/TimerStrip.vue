@@ -51,12 +51,16 @@ async function finish() {
 </script>
 
 <template>
+  <!-- ОТДЕЛЬНОЕ окошко под полоской с названием, а не строка внутри неё: в шапке оно
+       конкурировало с названием беседы за ширину и на телефоне обрезало и то и другое.
+       Здесь у таймера своя строка на всю ширину, и он читается с расстояния. -->
   <div v-if="visible"
-       class="flex items-center gap-2 rounded-lg bg-bg2 px-2 py-1"
+       class="flex items-center gap-3 border-b border-border2 bg-card px-4 py-2"
        :class="urgent ? 'text-red' : 'text-text2'">
-    <Timer class="size-3.5 shrink-0" />
-    <span class="text-sm font-bold tabular-nums">{{ label }}</span>
-    <span v-if="paused" class="text-tiny">{{ locale.t('timer.paused', 'пауза') }}</span>
+    <Timer class="size-4 shrink-0" />
+    <span class="text-lg font-bold tabular-nums">{{ label }}</span>
+    <span v-if="paused" class="text-xs">{{ locale.t('timer.paused', 'пауза') }}</span>
+    <span class="flex-1" />
 
     <!-- Кнопки — ТОЛЬКО у ведущего. Студенту здесь нечего нажимать: остановить чужой
          таймер он не вправе, а неактивные кнопки читались бы как поломка. -->

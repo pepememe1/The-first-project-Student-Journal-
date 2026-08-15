@@ -57,7 +57,17 @@ export const useActivityStore = defineStore('activity', () => {
     if (frame.activity_id && frame.activity_id !== activity.value.id) return false
     if (!acceptsFrame(seq.value, frame.seq)) return false
     seq.value = Number(frame.seq)
+    const add = frame.payload?.strokes_added
+    const cleared = frame.payload?.cleared
     state.value = mergeFrame(state.value, frame.payload)
+    //🔥 Доска: кадр приносит ТОЛЬКО добавленное, а полную доску держал у себя открытый
+    //холст. Кто открывал доску позже, получал `state.strokes` с момента последнего
+    //load() — то есть чужие штрихи ему не приезжали вовсе («не видно доску у других»).
+    //Копим в сторе: тогда и поздно открывший, и свёрнутое окно видят одно и то же.
+    if (kind.value === 'board') {
+      const base = cleared ? [] : (state.value.strokes || [])
+      state.value = { ...state.value, strokes: Array.isArray(add) ? [...base, ...add] : base }
+    }
     return true
   }
 
@@ -140,6 +150,21 @@ export const useActivityStore = defineStore('activity', () => {
   }
 
   function openLauncher(conversationId) { unseen.value = false; launcherFor.value = conversationId }
+  /** Подхватить активность, которая уже идёт в этой беседе (вход в чат, перезагрузка).
+   *  Режим выбираем тот же, что при запуске: таймер и опрос экрана не занимают. */
+  async function adoptCurrent(conversationId) {
+    try {
+      const { data } = await activitiesApi.current(conversationId)
+      //Активности нет — гасим свою, но НЕ трогаем открытую на весь экран: человек мог
+      //как раз в ней работать, а ответ прийти позже переключения беседы.
+      if (!data?.activity) { if (mode.value !== 'full') reset(); return }
+      _adopt(data.activity)
+      if (mode.value === 'hidden' || !activity.value) {
+        mode.value = MODE_ON_START[kind.value] === 'hidden' ? 'hidden' : 'mini'
+      }
+    } catch { /* активности нет — обычное дело */ }
+  }
+
   function openJournal(conversationId) { journalFor.value = conversationId }
   function closeJournal() { journalFor.value = '' }
   function closeLauncher() { launcherFor.value = '' }
@@ -167,6 +192,6 @@ export const useActivityStore = defineStore('activity', () => {
     isRunning, isHost, kind,
     applyFrame, onStarted, onFinished, load, start, finish, open,
     openLauncher, closeLauncher, minimize, expand, hide, reset, unseen,
-    journalFor, openJournal, closeJournal,
+    journalFor, openJournal, closeJournal, adoptCurrent,
   }
 })

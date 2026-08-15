@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import activity_grading, activity_state, audit
@@ -153,6 +154,18 @@ def _emit(db: Session, conv_id: str, data: dict) -> None:
         pass
 
 
+def _emit_to(user_ids: list, data: dict) -> None:
+    """Кадр КОНКРЕТНЫМ людям (например, распределение голосов — только автору опроса).
+
+    Отдельно от `_emit`: тот рассылает всем участникам беседы, а есть данные, которые
+    в общей рассылке прочитали бы все. Так же не роняет запрос: сокет — ускоритель."""
+    try:
+        from .messenger import ws_manager
+        ws_manager.emit_users(user_ids, data)
+    except Exception:
+        pass
+
+
 def _emit_state(db: Session, a: Activity, snapshot: dict | None) -> None:
     if not snapshot:
         return
@@ -221,7 +234,7 @@ def _stable_hash(s: str) -> str:
 
 def _quiz_out(q: QuizSet, questions_count: int = 0) -> dict:
     return {"id": q.id, "author_id": q.author_id, "title": q.title or "",
-            "description": q.description or "", "tags": list(q.tags or []), "time_limit_s": int(q.time_limit_s or 0),
+            "description": q.description or "", "tags": list(q.tags or []), "time_limit_s": int(q.time_limit_s or 0), "kind": q.kind or "quiz",
             "visibility": q.visibility or "private", "parent_id": q.parent_id or "",
             "created_at": q.created_at or "", "updated_at": q.updated_at or "",
             "questions_count": questions_count}
@@ -578,7 +591,7 @@ def get_board(board_id: str, user: User = Depends(get_current_user),
             "strokes": list(b.strokes or []), "created_at": b.created_at or ""}
 
 
-def _host_progress(db: Session, a: Activity, payload: dict) -> None:
+def _host_progress(db: Session, a: Activity, payload: dict, answers: dict | None = None) -> None:
     """Шкала прогресса по КАЖДОМУ участнику — для ведущего.
 
     ⚠️ Отдельной функцией и вызовом ПОСЛЕ цепочки `elif`, а не веткой внутри неё: ветка
@@ -590,7 +603,16 @@ def _host_progress(db: Session, a: Activity, payload: dict) -> None:
     """
     done = db.query(ActivityResult).filter(ActivityResult.activity_id == a.id).all()
     by_user = {r.user_id: r for r in done}
-    walk = payload.get("walk") or {}
+    walk = dict(payload.get("walk") or {})
+    #В соревновании прогресс известен серверу и без сообщений клиента: ответы лежат по
+    #вопросам. Считаем оттуда, иначе шкала у ведущего стояла бы на нуле всю игру.
+    if a.kind == "contest":
+        #⚠️ Ответы приходят ПАРАМЕТРОМ: ветка соревнования выше по коду выбрасывает их из
+        #состояния (`payload.pop("answers")`), чтобы не отдать чужие ответы клиенту, и
+        #`payload.get("answers")` здесь уже пуст — шкала стояла бы на нуле всю игру.
+        for slot in (answers or {}).values():
+            for uid in (slot or {}):
+                walk[uid] = int(walk.get(uid) or 0) + 1
     roster = [uid for uid in _participants_of(db, a.conversation_id) if uid != a.host_id]
     names = {}
     if roster:
@@ -635,7 +657,8 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         #вопрос «дошло ли вообще». Само распределение — только создателю, и не здесь.
         payload["participants"] = len(_participants_of(db, a.conversation_id))
     elif a.kind == "contest":
-        answers = payload.pop("answers", {}) or {}
+        contest_answers = payload.pop("answers", {}) or {}
+        answers = contest_answers
         scores = payload.pop("scores", {}) or {}
         payload["my_score"] = float(scores.get(user.id, 0) or 0)
         cur = str(payload.get("question_index", -1))
@@ -650,7 +673,7 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         payload["answered_count"] = len(answered)
         payload["mine_done"] = user.id in answered
     if a.kind in ("quiz", "contest") and is_host:
-        _host_progress(db, a, payload)
+        _host_progress(db, a, payload, locals().get("contest_answers"))
     payload.pop("walk", None)
     return {"seq": snap["seq"], "payload": payload}
 
@@ -732,18 +755,29 @@ def vote(activity_id: str, payload: dict = Body(...),
     #`submit` викторины, который план прямо разрешает).
     _upsert_result(db, a.id, user.id, score=0.0, correct=0, total=0,
                    answers={"choice": choice})
+    #Распределение считаем ЗДЕСЬ: оно нужно и рассылке ниже, и ответу на сам запрос.
+    tally = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(options))]
+    public = bool((a.params or {}).get("public_votes"))
     #Наружу уходит СЧЁТЧИК, не карта голосов: распределение видит только создатель.
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"voted_count": len(votes)}})
+           "payload": {"voted_count": len(votes),
+                       #Открытые голоса — распределение всем сразу; иначе оно уходит
+                       #ОТДЕЛЬНЫМ кадром только автору (ниже): в общей рассылке ему
+                       #места нет, там его прочитали бы все.
+                       **({"tally": tally} if public else {})}})
+    if not public and a.host_id:
+        _emit_to([a.host_id],
+                 {"type": "activity.state", "activity_id": a.id,
+                  "conversation_id": a.conversation_id, "seq": snap["seq"],
+                  "payload": {"voted_count": len(votes), "tally": tally}})
     #Автору опроса (и всем, если он включил открытые голоса) сразу возвращаем
     #распределение: иначе после своего клика он видел бы только «проголосовало N»,
     #а ради распределения ему пришлось бы перезаходить в беседу.
     out = {"ok": True, "my_choice": choice, "voted_count": len(votes)}
-    opts = list((a.params or {}).get("options") or [])
-    if bool((a.params or {}).get("public_votes")) or user.id == a.host_id:
-        out["tally"] = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(opts))]
+    if public or user.id == a.host_id:
+        out["tally"] = tally
     return out
 
 
@@ -901,11 +935,20 @@ def _clean_tags(tags) -> list:
 
 @router.get("/quizzes")
 def list_quizzes(q: str = Query(default=""), tag: str = Query(default=""),
-                 scope: str = Query(default="mine"),
+                 scope: str = Query(default="mine"), kind: str = Query(default=""),
                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Библиотека: `scope` = mine | college | stock."""
+    """Библиотека: `scope` = mine | college | stock, `kind` = quiz | contest.
+
+    ⚠️ Библиотеки РАЗДЕЛЬНЫЕ. У категорий разные допустимые типы заданий (в соревновании
+    только выбор — там нужен бесспорный балл) и разный смысл, а общий список заставлял
+    преподавателя гадать, что откуда запускается. Без `kind` отдаём всё — так ведут себя
+    старые сборки клиента, и ломать их незачем."""
     _require_teacher(user)
     query = db.query(QuizSet).filter(QuizSet.deleted == False)          # noqa: E712
+    if kind in ("quiz", "contest"):
+        #Наборы, заведённые до появления поля, считаем обычными викторинами.
+        query = query.filter(QuizSet.kind == kind) if kind == "contest" else query.filter(
+            or_(QuizSet.kind == "quiz", QuizSet.kind.is_(None), QuizSet.kind == ""))
     if scope == "mine":
         query = query.filter(QuizSet.author_id == user.id)
     elif scope == "stock":
@@ -1056,7 +1099,8 @@ def create_quiz(payload: dict = Body(...), user: User = Depends(get_current_user
     quiz = QuizSet(id=f"quiz:{uuid4().hex}", author_id=user.id, title=title,
                    description=str(payload.get("description") or "").strip()[:MAX_TEXT],
                    tags=_clean_tags(payload.get("tags")),
-            time_limit_s=max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60)), visibility=vis,
+            time_limit_s=max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60)),
+            kind=("contest" if str(payload.get("kind") or "") == "contest" else "quiz"), visibility=vis,
                    created_at=now, updated_at=now)
     db.add(quiz)
     db.commit()
@@ -1428,10 +1472,16 @@ def _persist_contest_results(db: Session, a: Activity, payload: dict) -> None:
     scores = payload.get("scores") or {}
     answers = payload.get("answers") or {}
     total = len({k for k in answers})
-    for uid, sc in scores.items():
+    #🔥 Участники берутся из ОТВЕТОВ, а не только из баллов. Раньше цикл шёл по `scores`,
+    #а туда человек попадает, лишь когда что-то заработал: ответивший на всё неправильно
+    #не получал строки результата ВООБЩЕ и пропадал из таблицы — со стороны это выглядело
+    #как «соревнование не считает результаты». Ноль баллов — тоже результат, и его надо
+    #показать: именно он говорит преподавателю, с кем разбирать тему.
+    participants = set(scores) | {uid for slot in answers.values() for uid in (slot or {})}
+    for uid in participants:
         correct = sum(1 for slot in answers.values()
                       if (slot.get(uid) or {}).get("correct"))
-        _upsert_result(db, a.id, uid, float(sc or 0), correct, total, {})
+        _upsert_result(db, a.id, uid, float(scores.get(uid) or 0), correct, total, {})
 
 
 @router.get("/{activity_id}/results")

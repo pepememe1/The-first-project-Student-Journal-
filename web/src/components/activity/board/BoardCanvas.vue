@@ -286,11 +286,13 @@ function onKey(e) {
 
 // Кадр состояния приносит ТОЛЬКО добавленное (не всю доску): полная доска в каждом
 // кадре — это мегабайты по сокету на длинной паре.
-watch(() => act.state.strokes_added, (added) => {
-  if (act.state.cleared) { objects.value = [] }
-  if (Array.isArray(added) && added.length) objects.value = [...objects.value, ...added]
+// Полную доску держит СТОР (он накапливает кадры) — здесь только перерисовка. Раньше
+// холст копил штрихи сам, и тот, кто открыл доску позже, не видел чужого: у него в
+// `state.strokes` лежал снимок на момент последнего load().
+watch(() => act.state.strokes, (all) => {
+  if (Array.isArray(all)) objects.value = [...all]
   redraw()
-})
+}, { deep: false })
 
 onMounted(async () => {
   objects.value = [...(act.state.strokes || [])]

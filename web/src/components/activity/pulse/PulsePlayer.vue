@@ -51,6 +51,10 @@ const summary = ref(null)
 const reporting = ref(0)
 
 const done = computed(() => sent.value || !!act.state.mine_done)
+//Комментарии показываем отдельным блоком: строка без текста — это просто оценка,
+//она уже посчитана выше, и повторять её ещё раз пустой карточкой незачем.
+const withText = computed(() => (summary.value?.items || [])
+  .filter((f) => (f.text || '').trim() || f.reason_code))
 const answered = computed(() => Number(act.state.answered_count || 0))
 const participants = computed(() => Number(act.state.participants || 0))
 
@@ -147,33 +151,49 @@ async function report(id) {
       </p>
     </template>
 
-    <!-- Взгляд преподавателя: сводка БЕЗ авторов -->
+    <!-- Взгляд преподавателя: сводка БЕЗ авторов.
+         Порядок продиктован тем, как её читают: сверху отдельные оценки (по ним видно
+         разброс), посередине общий средний (по нему принимают решение — идти дальше или
+         возвращаться), внизу комментарии (по ним понятно, ЧТО именно объяснять). -->
     <template v-else>
-      <div class="flex flex-wrap items-baseline gap-3">
-        <span class="text-3xl font-bold text-accent">{{ summary?.average ?? 0 }}</span>
-        <span class="text-sm text-text3">
-          {{ locale.t('pulse.answeredOf', { n: answered, total: participants }) }}
-        </span>
-        <!-- Доля отвечает на вопрос «можно ли уже делать выводы»: средний балл по трём
-             ответам из тридцати не значит ничего, и это должно быть видно сразу. -->
-        <span v-if="participants" class="rounded-full bg-bg2 px-2 py-0.5 text-xs font-semibold text-text2">
-          {{ Math.round((answered / participants) * 100) }}%
-        </span>
-      </div>
-      <!-- Гистограмма 1–10: полными классами, не шаблонной интерполяцией (Tailwind JIT
-           не видит склеенное имя класса при сборке). -->
-      <div v-if="summary" class="flex items-end gap-1" style="height: 72px">
-        <div v-for="(n, i) in summary.histogram" :key="i"
-             class="flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
-          <div class="w-full rounded-t bg-accent"
-               :style="{ height: (summary.answers ? (n * 100 / summary.answers) : 0) + '%' }" />
-          <span class="text-[10px] text-text3">{{ i + 1 }}</span>
+      <!-- Оценки по одному. Цифра того же цвета, что сектор на спидометре, — человек
+           уже видел эту шкалу и читает цвет без легенды. -->
+      <div v-if="summary?.items?.length" class="flex flex-col gap-1">
+        <div v-for="f in summary.items" :key="f.id"
+             class="flex min-w-0 items-center gap-3 rounded-lg px-2 py-1">
+          <span class="w-8 shrink-0 text-center text-xl font-bold tabular-nums"
+                :style="{ color: segColor(f.score) }">{{ f.score }}</span>
+          <span class="min-w-0 flex-1 truncate text-sm text-text2">
+            {{ locale.t('pulse.someone', 'участник') }}
+          </span>
         </div>
       </div>
-      <div v-if="summary?.items?.length" class="flex flex-col gap-1.5">
-        <div v-for="f in summary.items" :key="f.id"
+
+      <!-- Общий средний по всем участникам — та же шкала, что видел студент. -->
+      <div class="flex flex-col items-center gap-1 border-y border-border2 py-4">
+        <div class="relative h-3 w-full max-w-sm overflow-hidden rounded-full bg-bg2">
+          <span class="absolute inset-y-0 left-0 rounded-full transition-all"
+                :style="{ width: ((summary?.average || 0) / 10 * 100) + '%',
+                          backgroundColor: segColor(Math.round(summary?.average || 0) || 1) }" />
+        </div>
+        <div class="flex items-baseline gap-2">
+          <span class="text-2xl font-bold tabular-nums"
+                :style="{ color: segColor(Math.round(summary?.average || 0) || 1) }">
+            {{ summary?.average ?? 0 }}
+          </span>
+          <span class="text-xs text-text3">
+            {{ locale.t('pulse.answeredOf', { n: answered, total: participants }) }}
+            <template v-if="participants"> · {{ Math.round((answered / participants) * 100) }}%</template>
+          </span>
+        </div>
+      </div>
+
+      <!-- Комментарии — последними: их читают, когда уже решили, что делать. -->
+      <div v-if="withText.length" class="flex flex-col gap-1.5">
+        <div v-for="f in withText" :key="f.id"
              class="flex min-w-0 items-start gap-2 rounded-lg border border-border2 bg-bg2 px-3 py-2">
-          <span class="shrink-0 rounded bg-card px-1.5 py-0.5 text-xs font-semibold text-accent">{{ f.score }}</span>
+          <span class="shrink-0 text-sm font-bold tabular-nums"
+                :style="{ color: segColor(f.score) }">{{ f.score }}</span>
           <span class="min-w-0 flex-1 break-words text-sm text-text">
             {{ f.text || locale.t(`pulse.reason.${f.reason_code}`, f.reason_code) }}
           </span>
@@ -185,7 +205,7 @@ async function report(id) {
           </button>
         </div>
       </div>
-      <p v-else class="py-6 text-center text-sm text-text3">
+      <p v-else-if="!summary?.items?.length" class="py-6 text-center text-sm text-text3">
         {{ locale.t('pulse.waiting', 'Пока никто не ответил') }}
       </p>
     </template>

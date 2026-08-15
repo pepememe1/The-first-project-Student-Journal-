@@ -14,7 +14,8 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
 
-const props = defineProps({ quizId: { type: String, default: '' } })
+const props = defineProps({ quizId: { type: String, default: '' },
+                            kind: { type: String, default: 'quiz' } })
 const emit = defineEmits(['close', 'saved'])
 const locale = useLocaleStore()
 
@@ -75,6 +76,9 @@ async function save() {
     title: title.value.trim(), description: description.value.trim(),
     tags: tagsText.value.split(',').map((t) => t.trim()).filter(Boolean),
     time_limit_s: Math.max(0, Math.round(Number(timeLimitMin.value) || 0) * 60),
+    //Категория набора задаётся при СОЗДАНИИ и потом не меняется: перенос
+    //набора между библиотеками означал бы задания, которых там быть не может.
+    kind: props.kind,
     visibility: visibility.value,
     questions: questions.value.map((q) => ({
       type: q.type, text: q.text.trim(), points: q.points,

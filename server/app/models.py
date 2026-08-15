@@ -975,6 +975,10 @@ class QuizSet(Base):
     #Счётчик у студента идёт от ОТКРЫТИЯ теста, а не от запуска активности: человек мог
     #зайти в беседу через десять минут после старта, и общий отсчёт съел бы его время.
     time_limit_s = Column(Integer, default=0)
+    #Для какой категории набор: 'quiz' (обычная викторина) или 'contest' (соревнование).
+    #Библиотеки РАЗДЕЛЬНЫЕ — у категорий разные допустимые типы заданий и разный смысл,
+    #и общий список заставлял преподавателя гадать, что откуда запускается.
+    kind = Column(String, index=True, default="quiz")
     created_at = Column(String, default="")
     updated_at = Column(String, default="")
     deleted = Column(Boolean, default=False, index=True)   #мягкое удаление

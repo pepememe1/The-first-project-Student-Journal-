@@ -148,6 +148,10 @@ export const useMessengerStore = defineStore('messenger', () => {
     // из списка/после перезагрузки она рендерится как обычный личный чат с ролью-заглушкой
     // «Студент» (см. ProfilePanel). Тип приходит из convInfo (kind='moderation').
     if (activeInfo.value?.kind === 'moderation') isModeration.value = true
+    //🔥 Подхватываем ИДУЩУЮ активность беседы. Без этого таймер, запущенный до ухода на
+    //другую вкладку, исчезал вместе со стором: полоски нет, завершить нечем, а сервер
+    //не даёт запустить второй — «одна активность на беседу». Выглядело как тупик.
+    try { await useActivityStore().adoptCurrent(convId) } catch { /* нет активности — обычное дело */ }
     await markReadActive()
     await loadChats()                    // обновить счётчик непрочитанного в списке
   }

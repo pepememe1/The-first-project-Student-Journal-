@@ -166,7 +166,26 @@ def init_db():
     _ensure_group_category_column()
     _ensure_auth_session_client_column()
     _ensure_quiz_time_limit_column()
+    _ensure_quiz_kind_column()
     _migrate_slash_in_ids()
+
+
+def _ensure_quiz_kind_column():
+    """Идемпотентная мини-миграция: quiz_sets.kind (для какой категории набор).
+
+    ⚠️ Существующие наборы получают 'quiz' — они и создавались как обычные викторины.
+    `create_all` колонку в существующую таблицу не добавляет никогда."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("quiz_sets")}
+    except Exception:
+        return
+    if "kind" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE quiz_sets ADD COLUMN kind VARCHAR DEFAULT 'quiz'"))
+        conn.execute(text("UPDATE quiz_sets SET kind = 'quiz' WHERE kind IS NULL"))
 
 
 def _ensure_quiz_time_limit_column():

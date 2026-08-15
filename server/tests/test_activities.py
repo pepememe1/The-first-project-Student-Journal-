@@ -846,3 +846,33 @@ def test_contest_host_also_gets_the_roster_not_the_question(client):
     st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
     assert "progress" in st and {r["user_id"] for r in st["progress"]} == {b_id, c_id}, st
     assert st.get("total_questions") == 1, st
+
+
+def test_contest_counts_everyone_who_answered_even_with_zero(client):
+    """Ответил на всё неправильно — это ТОЖЕ результат, и он обязан быть в таблице.
+
+    🔥 Раньше итоги собирались по `scores`, а туда человек попадает только когда что-то
+    заработал: ответивший мимо не получал строки ВООБЩЕ и пропадал из результатов — со
+    стороны выглядело как «соревнование не считает». Именно нулевая строка и говорит
+    преподавателю, с кем разбирать тему."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[{
+        "type": "single", "text": "2+2?", "points": 1,
+        "options": [{"text": "4", "is_correct": True}, {"text": "5"}],
+    }])
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+
+    qs = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    wrong = [o["id"] for o in qs["options"] if o["text"] == "5"][0]
+    assert client.post(f"{A}/{a}/answer", json={"value": wrong}, headers=b).status_code == 200
+
+    #Шкала у ведущего обязана видеть, что человек ответил, а не стоять на нуле.
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [1], st["progress"]
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    res = client.get(f"{A}/{a}/results", headers=t).json()["results"]
+    assert b_id in {r["user_id"] for r in res}, res
+    assert [r["score"] for r in res if r["user_id"] == b_id] == [0.0], res

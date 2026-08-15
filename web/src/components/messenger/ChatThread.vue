@@ -966,10 +966,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                v-bind="peerNameDecor">{{ peerName }}</div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
-        <!-- Идущий тайм-бокс — ПОД названием беседы, всегда на виду. В окне активности он
-             был бесполезен: на таймер поглядывают, продолжая работать, а полноэкранное
-             окно закрывает как раз то, над чем работают. Кнопки — только у ведущего. -->
-        <TimerStrip class="shrink-0" />
+
         <!-- Поиск/сводка/перевод/уведомления — на sm+ прямо в строке, как раньше. На
              телефоне съедали всю ширину и обрезали название беседы — спрятаны за
              кнопкой-стрелкой ниже (см. mobileActionsOpen). -->
@@ -1122,6 +1119,11 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
           <div class="truncate text-xs text-text2">{{ topPinned.body }}</div>
         </div>
       </button>
+
+      <!-- Идущий тайм-бокс — СВОЕЙ строкой сразу под шапкой: на него поглядывают,
+           продолжая работать, а полноэкранное окно закрывает как раз то, над чем
+           работают. Кнопки паузы и завершения — только у ведущего. -->
+      <TimerStrip />
 
       <!-- Лента -->
       <!-- Отступы задаём НА САМОМ сообщении (mt-*), а не через space-y на контейнере:
