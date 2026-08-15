@@ -26,6 +26,8 @@ const board = ref([])
 const busy = ref(false)
 const startedAt = ref(Date.now())
 const showBoard = ref(false)
+const segments = computed(() => Number(act.state.total_questions || total.value || 0) || 1)
+const finishedCount = computed(() => (act.state.progress || []).filter((r) => r.done).length)
 const timeLimit = ref(0)          //секунды на весь тест, 0 — без ограничения
 const nowMs = ref(Date.now())
 let quizTick = null
@@ -112,6 +114,15 @@ function setMatch(q, optId, key) {
   answers.value = { ...answers.value, [q.id]: { ...(answers.value[q.id] || {}), [optId]: key } }
 }
 
+// Отправляем ТОЛЬКО число пройденных заданий — ни одного ответа. Это не возврат к
+// «запрос на каждый вопрос»: тяжёлой была проверка с записью в базу, а здесь сервер
+// кладёт число в память процесса и пересылает ведущему.
+function goForward() {
+  index.value += 1
+  if (act.isHost) return
+  activitiesApi.progress(act.activity.id, index.value).catch(() => {})
+}
+
 async function submitAll() {
   busy.value = true
   try {
@@ -177,6 +188,41 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
           {{ locale.t('quiz.finish', 'Завершить') }}
         </AppButton>
       </div>
+    </template>
+
+    <!-- ВЕДУЩИЙ — всегда мониторинг, а не задание: он тест не решает. Ветка стоит ВЫШЕ
+         соревнования намеренно: раньше `isContest` перехватывал её, и преподаватель,
+         запустивший соревнование, смотрел на первый вопрос. -->
+    <template v-else-if="act.isHost">
+      <div class="flex flex-wrap items-baseline gap-3">
+        <span class="text-3xl font-bold text-accent">{{ finishedCount }}</span>
+        <span class="text-sm text-text3">
+          {{ locale.t('quiz.doneOf', { n: finishedCount, total: (act.state.progress || []).length }) }}
+        </span>
+        <AppButton v-if="isContest" size="sm" class="ml-auto" :disabled="busy" @click="nextQuestion">
+          {{ locale.t('quiz.next', 'Следующий вопрос') }}
+        </AppButton>
+      </div>
+
+      <!-- Шкала на каждого: делится на столько частей, сколько заданий, и заполняется
+           по мере прохождения. Одно число «закончил / не закончил» не отвечало на
+           главный вопрос преподавателя — ждать ещё или уже собирать. -->
+      <div v-if="(act.state.progress || []).length" class="flex flex-col gap-2">
+        <div v-for="r in act.state.progress" :key="r.user_id" class="flex min-w-0 items-center gap-2">
+          <span class="w-36 shrink-0 truncate text-sm text-text">{{ r.name }}</span>
+          <span class="flex min-w-0 flex-1 gap-0.5">
+            <span v-for="i in segments" :key="i"
+                  class="h-2.5 flex-1 rounded-[2px] transition-colors"
+                  :class="i <= r.walked ? (r.done ? 'bg-accent' : 'bg-accent/55') : 'bg-bg2'" />
+          </span>
+          <span class="w-16 shrink-0 text-right text-xs tabular-nums text-text3">
+            {{ r.done ? `${r.correct_count}/${r.total_count}` : `${r.walked}/${segments}` }}
+          </span>
+        </div>
+      </div>
+      <p v-else class="py-8 text-center text-sm text-text3">
+        {{ locale.t('quiz.nobodyFinished', 'Пока никто не начал') }}
+      </p>
     </template>
 
     <!-- Соревнование: вопрос по команде хоста -->
@@ -246,27 +292,6 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
     <!-- Ведущему показываем ХОД, а не задание: он тест не проходит, ему нужно видеть,
          кто закончил, а кого ещё ждать. Раньше здесь открывался первый вопрос — то есть
          преподаватель смотрел на то, чем не пользуется, а нужное было недоступно. -->
-    <template v-else-if="act.isHost">
-      <div class="flex flex-wrap items-baseline gap-3">
-        <span class="text-3xl font-bold text-accent">{{ (act.state.progress || []).length }}</span>
-        <span class="text-sm text-text3">
-          {{ locale.t('quiz.doneOf', { n: (act.state.progress || []).length,
-                                       total: act.state.participants || 0 }) }}
-        </span>
-      </div>
-      <div v-if="(act.state.progress || []).length" class="flex flex-col gap-1.5">
-        <div v-for="r in act.state.progress" :key="r.user_id"
-             class="flex min-w-0 items-center gap-2 rounded-lg border border-border2 bg-bg2 px-3 py-2">
-          <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
-          <span class="shrink-0 text-xs text-text3">{{ r.correct_count }}/{{ r.total_count }}</span>
-          <span class="shrink-0 text-sm font-semibold text-accent">{{ r.score }}</span>
-        </div>
-      </div>
-      <p v-else class="py-8 text-center text-sm text-text3">
-        {{ locale.t('quiz.nobodyFinished', 'Пока никто не закончил') }}
-      </p>
-    </template>
-
     <!-- Асинхронная викторина: все вопросы, свой темп, одна отправка -->
     <template v-else>
       <div v-if="!current" class="py-10 text-center text-sm text-text3">
@@ -331,7 +356,7 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
           <AppButton variant="ghost" size="sm" :disabled="index === 0" @click="index -= 1">
             {{ locale.t('quiz.prev', 'Назад') }}
           </AppButton>
-          <AppButton v-if="index < questions.length - 1" size="sm" @click="index += 1">
+          <AppButton v-if="index < questions.length - 1" size="sm" @click="goForward">
             {{ locale.t('quiz.forward', 'Дальше') }}
           </AppButton>
           <AppButton v-else size="sm" :disabled="busy" @click="submitAll">

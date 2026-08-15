@@ -13,6 +13,22 @@ import { defineStore } from 'pinia'
 import { activitiesApi } from '@/api/endpoints'
 import { acceptsFrame, mergeFrame } from '@/utils/frameOrder'
 
+
+// 🔑 КАК ОТКРЫВАЕТСЯ АКТИВНОСТЬ ПОСЛЕ ЗАПУСКА — по категориям, а не одинаково.
+// Раньше `start()` всегда ставил 'full', и это давало сразу три жалобы:
+//   • опрос открывался отдельной страницей, хотя он ЕСТЬ сообщение в чате с кнопками;
+//   • таймер закрывал собой весь экран, и полоски в шапке никто не видел;
+//   • полноэкранное окно перекрывало переписку там, где смотреть было не на что.
+// Правило простое: на весь экран открывается только то, ВНУТРИ чего работают.
+const MODE_ON_START = {
+  poll: 'hidden',     //голосуют в ленте
+  timer: 'hidden',    //живёт полоской под названием беседы
+  pulse: 'full',      //плашка обязана всплыть у всех, иначе её не заметят
+  board: 'full',
+  quiz: 'full',
+  contest: 'full',
+}
+
 export const useActivityStore = defineStore('activity', () => {
   const activity = ref(null)        // {id, kind, host_id, is_host, status, params, ...}
   const state = ref({})             // payload последнего принятого кадра
@@ -53,6 +69,12 @@ export const useActivityStore = defineStore('activity', () => {
     // человек, отошедший от экрана на минуту, не узнал бы, что активность вообще была.
     unseen.value = true
     await load(conversationId)
+    //Срез понимания обязан ВСПЛЫТЬ: он живёт минуту, и свёрнутое окошко в углу человек
+    //просто не заметит — ради этого его и запускают посреди пары.
+    if (kind.value === 'pulse') { mode.value = 'full'; return }
+    //Опрос и таймер экрана не занимают: первый голосуется в ленте, второй виден
+    //полоской в шапке. Открывать их поверх переписки не за чем.
+    if (kind.value === 'poll' || kind.value === 'timer') { mode.value = 'hidden'; return }
     if (mode.value === 'hidden') mode.value = 'mini'
   }
 
@@ -85,7 +107,7 @@ export const useActivityStore = defineStore('activity', () => {
     try {
       const { data } = await activitiesApi.start(conversationId, kindName, params, title)
       _adopt(data)
-      mode.value = 'full'
+      mode.value = MODE_ON_START[data?.kind] || 'full'
       launcherFor.value = ''
       return true
     } catch (e) {

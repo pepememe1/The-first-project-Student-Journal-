@@ -788,3 +788,61 @@ def test_finished_poll_keeps_its_results_in_the_feed(client):
     mine = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
     my_cell = [m for m in mine if m["kind"] == "poll"][0]["activity"]
     assert my_cell["my_choice"] == 1, my_cell
+
+
+def test_host_sees_the_whole_roster_with_a_progress_scale(client):
+    """Ведущий видит ШКАЛУ по каждому участнику — и в викторине, и в соревновании.
+
+    Раньше он получал только тех, кто уже закончил, и «пусто» было неотличимо от «все
+    закончили мгновенно». Плюс шкале нужно число заданий: без `total_questions` делить
+    полосу не на что."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[
+        {"type": "single", "text": "1?", "points": 1,
+         "options": [{"text": "a", "is_correct": True}, {"text": "b"}]},
+        {"type": "single", "text": "2?", "points": 1,
+         "options": [{"text": "a", "is_correct": True}, {"text": "b"}]},
+    ])
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert st["total_questions"] == 2, st
+    #Оба участника беседы в списке, ещё до того как кто-то начал.
+    assert {r["user_id"] for r in st["progress"]} == {b_id, c_id}, st["progress"]
+    assert all(r["walked"] == 0 and not r["done"] for r in st["progress"])
+
+    #Студент дошёл до второго задания — шкала у ведущего сдвинулась.
+    assert client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b).status_code == 200
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [1], st["progress"]
+
+    #🔒 Чужой прогресс студенту не отдаём: у него в состоянии нет ни `walk`, ни `progress`.
+    st_b = client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]
+    assert "walk" not in st_b and "progress" not in st_b, st_b
+
+
+def test_progress_never_goes_backwards(client):
+    """Человек вернулся к предыдущему вопросу — пройденного это не отменяет.
+    Прыгающая назад шкала у ведущего читается как сбой."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    client.post(f"{A}/{a}/progress", json={"answered": 3}, headers=b)
+    client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b)
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [3], st["progress"]
+
+
+def test_contest_host_also_gets_the_roster_not_the_question(client):
+    """Соревнование: ведущему тоже нужен ход, а не задание — он его не решает."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert "progress" in st and {r["user_id"] for r in st["progress"]} == {b_id, c_id}, st
+    assert st.get("total_questions") == 1, st

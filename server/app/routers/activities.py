@@ -398,6 +398,13 @@ def start_activity(payload: dict = Body(...), request: Request = None,
     db.refresh(a)
 
     live = _initial_payload(kind, params)
+    if kind in ("quiz", "contest"):
+        #⚠️ Скобки обязательны: `Column == x or ""` Python считает как `(Column == x) or ""`,
+        #а `__bool__` у сравнения SQLAlchemy отдаёт False — в фильтр уезжала пустая строка
+        #и падало «Textual SQL expression '' should be explicitly declared as text()».
+        _qid = params.get("quiz_id") or ""
+        live["total_questions"] = (db.query(QuizQuestion)
+                                   .filter(QuizQuestion.quiz_id == _qid).count())
     if kind == "poll" and params.get("duration_s"):
         live["ends_at"] = _plus_seconds(now, int(params["duration_s"]))
     if kind == "timer":
@@ -571,6 +578,43 @@ def get_board(board_id: str, user: User = Depends(get_current_user),
             "strokes": list(b.strokes or []), "created_at": b.created_at or ""}
 
 
+def _host_progress(db: Session, a: Activity, payload: dict) -> None:
+    """Шкала прогресса по КАЖДОМУ участнику — для ведущего.
+
+    ⚠️ Отдельной функцией и вызовом ПОСЛЕ цепочки `elif`, а не веткой внутри неё: ветка
+    соревнования стоит выше и перехватывала бы её, и преподаватель, запустивший
+    соревнование, снова видел бы задание вместо хода. Ровно на это и была жалоба.
+
+    В список идёт ВЕСЬ ростер беседы, а не только закончившие: иначе «пусто» неотличимо
+    от «все закончили мгновенно», и преподаватель не понимает, ждать ему или собирать.
+    """
+    done = db.query(ActivityResult).filter(ActivityResult.activity_id == a.id).all()
+    by_user = {r.user_id: r for r in done}
+    walk = payload.get("walk") or {}
+    roster = [uid for uid in _participants_of(db, a.conversation_id) if uid != a.host_id]
+    names = {}
+    if roster:
+        names = {u.id: (u.full_name or u.name or u.login or u.id)
+                 for u in db.query(User).filter(User.id.in_(roster)).all()}
+    total_q = int(payload.get("total_questions") or 0)
+    rows = []
+    for uid in roster:
+        r = by_user.get(uid)
+        rows.append({
+            "user_id": uid, "name": names.get(uid, uid),
+            #Сколько заданий человек прошёл. Закончил — засчитываем все.
+            "walked": int(r.total_count or 0) if r is not None else int(walk.get(uid) or 0),
+            "done": r is not None,
+            "correct_count": int(r.correct_count or 0) if r is not None else 0,
+            "total_count": int(r.total_count or 0) if r is not None else total_q,
+            "score": float(r.score or 0) if r is not None else 0.0,
+        })
+    rows.sort(key=lambda x: (-x["walked"], x["name"]))
+    payload["progress"] = rows
+    payload["participants"] = len(roster)
+    payload["total_questions"] = total_q
+
+
 def _state_for(db: Session, a: Activity, user: User) -> dict | None:
     """Живое состояние ДЛЯ ЭТОГО зрителя.
 
@@ -601,24 +645,13 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         #в конце всё равно объявляются вслух. Скрывать промежуточные баллы значило бы
         #убрать из игры единственное, что заставляет тянуться к следующему вопросу.
         payload["board"] = _contest_board(db, scores)
-    elif a.kind == "quiz" and is_host:
-        #Ведущему вместо самого задания нужен ХОД: кто уже закончил, а кто ещё идёт.
-        done = (db.query(ActivityResult)
-                .filter(ActivityResult.activity_id == a.id).all())
-        names = {}
-        ids = [r.user_id for r in done]
-        if ids:
-            names = {u.id: (u.full_name or u.name or u.login or u.id)
-                     for u in db.query(User).filter(User.id.in_(ids)).all()}
-        payload["progress"] = [{"user_id": r.user_id, "name": names.get(r.user_id, r.user_id),
-                                "correct_count": int(r.correct_count or 0),
-                                "total_count": int(r.total_count or 0),
-                                "score": float(r.score or 0)} for r in done]
-        payload["participants"] = len(_participants_of(db, a.conversation_id))
     elif a.kind == "pulse":
         answered = payload.pop("answered", []) or []
         payload["answered_count"] = len(answered)
         payload["mine_done"] = user.id in answered
+    if a.kind in ("quiz", "contest") and is_host:
+        _host_progress(db, a, payload)
+    payload.pop("walk", None)
     return {"seq": snap["seq"], "payload": payload}
 
 
@@ -1205,6 +1238,36 @@ def _review(questions, opts, answers: dict, per_question: list) -> dict:
                         for o in (opts.get(q.id) or [])],
         })
     return {"review": out, "max_score": round(sum(float(q.points or 1) for q in questions), 2)}
+
+
+@router.post("/{activity_id}/progress")
+def report_progress(activity_id: str, payload: dict = Body(...),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сколько заданий человек уже прошёл — для шкалы у ведущего.
+
+    ⚠️ Это НЕ отход от «одного запроса на участника». Тяжёлым был не запрос, а ПРОВЕРКА:
+    grading, запись результата, коммит. Здесь только число в памяти процесса и рассылка
+    ведущему — ни одной записи в базу. Без этого шкала прогресса невозможна в принципе:
+    асинхронная викторина отправляет ответы одним запросом В КОНЦЕ, и до него сервер не
+    знает о человеке ничего, кроме того, что он открыл вопросы.
+    """
+    a = _require_running(_require_activity_participant(db, activity_id, user))
+    if a.kind not in ("quiz", "contest"):
+        raise HTTPException(status_code=400, detail="У этой активности нет заданий")
+    snap = activity_state.get(a.id)
+    if snap is None:
+        raise HTTPException(status_code=400, detail="Активность уже завершена")
+    done = max(0, int(payload.get("answered") or 0))
+    walk = dict(snap["payload"].get("walk") or {})
+    #Назад не двигаем: человек мог вернуться к предыдущему вопросу, но пройденного это
+    #не отменяет, а прыгающая назад шкала у ведущего читается как сбой.
+    walk[user.id] = max(done, int(walk.get(user.id) or 0))
+    snap = activity_state.patch(a.id, {"walk": walk})
+    _emit(db, a.conversation_id,
+          {"type": "activity.state", "activity_id": a.id,
+           "conversation_id": a.conversation_id, "seq": snap["seq"],
+           "payload": {"walk_bump": user.id}})
+    return {"ok": True}
 
 
 @router.post("/{activity_id}/submit")

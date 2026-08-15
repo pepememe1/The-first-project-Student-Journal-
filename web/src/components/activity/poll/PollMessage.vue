@@ -9,7 +9,7 @@
 // 🔒 Распределение голосов приходит с сервера ТОЛЬКО создателю либо когда автор явно
 // включил открытые голоса. Здесь его не вычисляют — если сервер не прислал `tally`,
 // показывать нечего, и это не «спрятано в интерфейсе», а не отдано вовсе.
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { BarChart3, Check, Clock } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
@@ -23,6 +23,15 @@ const votedCount = ref(Number(props.activity.voted_count || 0))
 const tally = ref(props.activity.tally || null)
 
 const options = computed(() => props.activity.options || [])
+
+// Счётчик и распределение приходят снаружи (WS-кадр патчит карточку в сторе) — держим
+// локальные значения в согласии с ними, иначе чужой голос был бы виден только после
+// перезахода в беседу.
+watch(() => props.activity.voted_count, (v) => {
+  if (v !== undefined && v !== null) votedCount.value = Number(v)
+})
+watch(() => props.activity.tally, (v) => { if (v) tally.value = v })
+watch(() => props.activity.my_choice, (v) => { if (v !== undefined && mine.value === null) mine.value = v })
 const closed = computed(() => props.activity.status !== 'running' || expired.value)
 
 // Срок окончания — как в Telegram. Считает клиент от присланного сервером времени:

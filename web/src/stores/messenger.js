@@ -336,6 +336,19 @@ export const useMessengerStore = defineStore('messenger', () => {
     chats.value.forEach((c) => patch(c.last_message))
   }
 
+  /** Обновить счётчик голосов у опроса прямо в ленте (см. про pollOnce выше). */
+  function _patchPollCard(activityId, votedCount, tally) {
+    if (!activityId) return
+    const patch = (m) => {
+      if (m && m.kind === 'poll' && m.activity && m.activity.id === activityId) {
+        m.activity = { ...m.activity, voted_count: votedCount,
+                       ...(tally ? { tally } : {}) }
+      }
+    }
+    messages.value.forEach(patch)
+    chats.value.forEach((c) => patch(c.last_message))
+  }
+
   // Опрос новых сообщений активной беседы + обновление списка чатов.
   async function pollOnce() {
     if (activeId.value) {
@@ -373,7 +386,14 @@ export const useMessengerStore = defineStore('messenger', () => {
           // идут этим же сокетом. Разбор — в сторе активности: тут только маршрутизация.
           const act = useActivityStore()
           if (ev.type === 'activity.started') act.onStarted(ev, activeId.value)
-          else if (ev.type === 'activity.state') act.applyFrame(ev)
+          else if (ev.type === 'activity.state') {
+            act.applyFrame(ev)
+            // Опрос живёт СООБЩЕНИЕМ в ленте, а не окном: его счётчик обязан расти у
+            // всех сразу. Обычный опрос ленты сюда не дотянется — карточка старая, а
+            // `pollOnce` тянет только то, что новее последнего id.
+            const vc = ev.payload?.voted_count
+            if (vc !== undefined) _patchPollCard(ev.activity_id, vc, ev.payload?.tally)
+          }
           else if (ev.type === 'activity.finished') {
             act.onFinished(ev)
             // 🔥 Карточку в ленте надо ПОЧИНИТЬ ЗДЕСЬ, а не ждать опроса. `pollOnce`
