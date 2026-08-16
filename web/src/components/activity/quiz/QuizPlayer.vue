@@ -43,6 +43,24 @@ const started = computed(() => Number(act.state.question_index ?? -1) >= 0)
 const limitSec = computed(() => Math.round(Number(act.state.limit_ms || 30000) / 1000))
 const segments = computed(() => Number(act.state.total_questions || total.value || 0) || 1)
 const finishedCount = computed(() => (act.state.progress || []).filter((r) => r.done).length)
+const isLastQuestion = computed(() =>
+  Number(act.state.question_index ?? -1) >= Number(act.state.total_questions || total.value || 0) - 1)
+
+// В СОРЕВНОВАНИИ «закончили N» не значит ничего: результат появляется только в самом
+// конце, и счётчик всю игру показывал бы ноль (ровно это и было на экране). Показываем
+// то, что меняется прямо сейчас, — сколько ответило на ТЕКУЩИЙ вопрос.
+const hostDoneCount = computed(() => (isContest.value
+  ? Number(act.state.answered_count || 0)
+  : finishedCount.value))
+const hostDoneLabel = computed(() => (isContest.value
+  ? locale.t('quiz.answeredOf', { n: hostDoneCount.value, total: (act.state.progress || []).length })
+  : locale.t('quiz.doneOf', { n: hostDoneCount.value, total: (act.state.progress || []).length })))
+
+/** Завершить соревнование вручную (последний вопрос). */
+async function finishContest() {
+  busy.value = true
+  try { await act.finish(false) } finally { busy.value = false }
+}
 const timeLimit = ref(0)          //секунды на весь тест, 0 — без ограничения
 const nowMs = ref(Date.now())
 let quizTick = null
@@ -223,23 +241,73 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
       </div>
     </template>
 
-    <!-- ВЕДУЩИЙ — всегда мониторинг, а не задание: он тест не решает. Ветка стоит ВЫШЕ
-         соревнования намеренно: раньше `isContest` перехватывал её, и преподаватель,
-         запустивший соревнование, смотрел на первый вопрос. -->
+    <!-- ВЕДУЩИЙ. Мониторинг ВМЕСТО задания (он его не решает), но для соревнования это
+         ещё и ПУЛЬТ: отсчёт вопроса, «Старт», переход к следующему, завершение и табло.
+         Раньше здесь был только список — и преподаватель оставался без кнопки старта,
+         без таймера и без лидерборда, потому что вся эта разметка жила в ветке
+         участника, куда ведущий не попадает никогда. Ровно это и выглядело как
+         «ничего не работает». -->
     <template v-else-if="act.isHost">
-      <div class="flex flex-wrap items-baseline gap-3">
-        <span class="text-3xl font-bold text-accent">{{ finishedCount }}</span>
-        <span class="text-sm text-text3">
-          {{ locale.t('quiz.doneOf', { n: finishedCount, total: (act.state.progress || []).length }) }}
-        </span>
-        <AppButton v-if="isContest" size="sm" class="ml-auto" :disabled="busy" @click="nextQuestion">
-          {{ locale.t('quiz.next', 'Следующий вопрос') }}
+      <!-- Соревнование ещё не начато -->
+      <div v-if="isContest && !started" class="flex flex-col items-center gap-3 py-6 text-center">
+        <p class="text-sm text-text2">{{ locale.t('quiz.perQuestion', { n: limitSec }) }}</p>
+        <AppButton :disabled="busy" @click="nextQuestion">
+          {{ locale.t('quiz.start', 'Старт') }}
         </AppButton>
       </div>
 
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-3xl font-bold text-accent">{{ hostDoneCount }}</span>
+        <span class="text-sm text-text3">{{ hostDoneLabel }}</span>
+
+        <!-- Отсчёт вопроса — и у ведущего тоже: по нему он решает, ждать или двигать
+             дальше вручную. -->
+        <span v-if="isContest && started && qLeft !== null"
+              class="rounded-full bg-bg2 px-2.5 py-0.5 text-sm font-bold tabular-nums"
+              :class="qLeft <= 5 ? 'text-red' : 'text-text2'">{{ qLeft }}</span>
+
+        <span class="flex-1" />
+
+        <template v-if="isContest && started">
+          <!-- На ПОСЛЕДНЕМ вопросе кнопка становится «Завершить»: следующего нет, и
+               прежняя «Следующий вопрос» отвечала ошибкой «вопросы закончились». -->
+          <AppButton v-if="isLastQuestion" size="sm" :disabled="busy" @click="finishContest">
+            {{ locale.t('quiz.finishContest', 'Завершить') }}
+          </AppButton>
+          <AppButton v-else size="sm" :disabled="busy" @click="nextQuestion">
+            {{ locale.t('quiz.next', 'Следующий вопрос') }}
+          </AppButton>
+          <AppButton variant="ghost" size="sm" @click="showBoard = !showBoard">
+            {{ locale.t('quiz.leaderboard', 'Лидерборд') }}
+          </AppButton>
+        </template>
+      </div>
+
+      <!-- Текущий вопрос — ведущему для чтения вслух, без плиток для ответа. -->
+      <div v-if="isContest && started && current"
+           class="rounded-xl border border-border2 bg-bg2 px-3 py-2">
+        <p class="text-xs text-text3">
+          {{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}
+        </p>
+        <p class="text-sm font-semibold text-text">{{ current.text }}</p>
+      </div>
+
+      <!-- Табло по кнопке -->
+      <div v-if="showBoard && (act.state.board || []).length" class="flex flex-col gap-1.5">
+        <div v-for="r in act.state.board.slice(0, 10)" :key="r.user_id"
+             class="flex min-w-0 items-center gap-2 rounded-lg px-3 py-1.5"
+             :class="r.place <= 3 ? 'bg-accent/10' : 'bg-bg2'">
+          <span class="w-7 shrink-0 text-center text-sm font-bold"
+                :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
+            {{ r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place }}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
+          <span class="shrink-0 text-sm font-semibold tabular-nums text-accent">{{ r.score }}</span>
+        </div>
+      </div>
+
       <!-- Шкала на каждого: делится на столько частей, сколько заданий, и заполняется
-           по мере прохождения. Одно число «закончил / не закончил» не отвечало на
-           главный вопрос преподавателя — ждать ещё или уже собирать. -->
+           по мере прохождения. -->
       <div v-if="(act.state.progress || []).length" class="flex flex-col gap-2">
         <div v-for="r in act.state.progress" :key="r.user_id" class="flex min-w-0 items-center gap-2">
           <span class="w-36 shrink-0 truncate text-sm text-text">{{ r.name }}</span>
@@ -258,21 +326,12 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
       </p>
     </template>
 
-    <!-- Соревнование: вопрос по команде хоста -->
+    <!-- УЧАСТНИК соревнования: ожидание до старта, затем вопрос с плитками. -->
     <template v-else-if="isContest">
-      <!-- До старта: у ведущего кнопка «Старт» с честным предупреждением о времени,
-           у остальных — ожидание. Раньше здесь стояло «Нажмите Следующий вопрос», и
-           преподаватель не знал, сколько секунд получит группа на задание. -->
       <div v-if="!started" class="flex flex-col items-center gap-3 py-10 text-center">
-        <p class="text-sm text-text2">
-          {{ locale.t('quiz.perQuestion', { n: limitSec }) }}
-        </p>
-        <AppButton v-if="act.isHost" :disabled="busy" @click="nextQuestion">
-          {{ locale.t('quiz.start', 'Старт') }}
-        </AppButton>
-        <p v-else class="text-sm text-text3">{{ locale.t('quiz.waitHost', 'Ждём преподавателя…') }}</p>
+        <p class="text-sm text-text2">{{ locale.t('quiz.perQuestion', { n: limitSec }) }}</p>
+        <p class="text-sm text-text3">{{ locale.t('quiz.waitHost', 'Ждём преподавателя…') }}</p>
       </div>
-
       <template v-else-if="current">
         <div class="flex items-center justify-between gap-2">
           <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}</p>

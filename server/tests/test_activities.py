@@ -879,7 +879,7 @@ def test_contest_counts_everyone_who_answered_even_with_zero(client):
 
     qs = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
     wrong = [o["id"] for o in qs["options"] if o["text"] == "5"][0]
-    assert client.post(f"{A}/{a}/answer", json={"value": wrong}, headers=b).status_code == 200
+    assert client.post(f"{A}/{a}/answer", json={"answer": wrong}, headers=b).status_code == 200
 
     #Шкала у ведущего обязана видеть, что человек ответил, а не стоять на нуле.
     st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
@@ -966,8 +966,8 @@ def test_contest_leaderboard_is_open_to_everyone_after_it_ends(client):
     a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
     client.post(f"{A}/{a}/next", json={}, headers=t)
     q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
-    client.post(f"{A}/{a}/answer", json={"value": q["options"][0]["id"]}, headers=b)
-    client.post(f"{A}/{a}/answer", json={"value": q["options"][1]["id"]}, headers=c)
+    client.post(f"{A}/{a}/answer", json={"answer": q["options"][0]["id"]}, headers=b)
+    client.post(f"{A}/{a}/answer", json={"answer": q["options"][1]["id"]}, headers=c)
 
     #До завершения участник видит только себя.
     mine = client.get(f"{A}/{a}/results", headers=b).json()["results"]
@@ -978,3 +978,29 @@ def test_contest_leaderboard_is_open_to_everyone_after_it_ends(client):
     assert {b_id, c_id} <= {r["user_id"] for r in board}, board
     #«Выполнено» считает ОТВЕТИВШИХ, даже если ответ неверный.
     assert all(r["answered_count"] == 1 for r in board), board
+
+
+def test_correct_contest_answer_actually_scores(client):
+    """⚠️ Обратный тест к остальным: ВЕРНЫЙ ответ обязан давать баллы.
+
+    Нужен потому, что соседние тесты слали поле `value`, которого сервер не читает
+    (он ждёт `answer`): ответ молча считался неотвеченным и оценивался как неверный, а
+    проверки на ноль баллов при этом оставались зелёными. То есть весь путь начисления
+    баллов не был покрыт ни разу — тесты подтверждали не то, что проверяли."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    right = [o["id"] for o in q["options"] if o["text"] == "4"][0]
+    r = client.post(f"{A}/{a}/answer", json={"answer": right}, headers=b)
+    assert r.status_code == 200, r.text
+    assert r.json()["correct"] is True, r.json()
+    assert r.json()["gain"] > 0, r.json()
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    board = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    mine = [x for x in board if x["user_id"] == b_id][0]
+    assert mine["score"] > 0 and mine["correct_count"] == 1, mine
