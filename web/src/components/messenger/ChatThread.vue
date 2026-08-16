@@ -1182,15 +1182,26 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
 
           <!-- Активность и сохранённая доска (PLAN-ACTIVITIES §10). Тот же приём, что у
                отчёта выше: в теле сообщения только id, объект подмешал сервер. -->
-          <!-- Опрос голосуется ПРЯМО в ленте (как в Telegram), а не открывает оверлей. -->
+          <!-- Опрос голосуется ПРЯМО в ленте (как в Telegram), а не открывает оверлей.
+               ⚠️ `gb-feed-indent` — та же левая граница, что у входящих сообщений. У них
+               колонка аватарки (32 px + зазор) держится ВСЕГДА, даже когда сам аватар не
+               рисуется: иначе пачка сообщений одного человека разъезжалась бы по уровням.
+               Карточки поначалу вставили мимо этой строки, они прижимались к самому краю,
+               и на телефоне лента выглядела как две разные левые границы — сообщения
+               «уехали к центру» относительно карточек (живой отзыв со скриншотом). -->
           <div v-else-if="msg.kind === 'poll' && msg.activity" :id="`gb-msg-${msg.id}`"
-               class="flex" :class="msg.mine ? 'justify-end' : 'justify-start'">
+               class="flex" :class="msg.mine ? 'justify-end' : 'justify-start gb-feed-indent'">
             <PollMessage :activity="msg.activity" />
           </div>
-          <ActivityCard v-else-if="msg.kind === 'activity' && msg.activity"
-                        :id="`gb-msg-${msg.id}`" :activity="msg.activity" :created-at="msg.created_at" />
-          <BoardCard v-else-if="msg.kind === 'board' && msg.board"
-                     :id="`gb-msg-${msg.id}`" :board="msg.board" />
+          <div v-else-if="msg.kind === 'activity' && msg.activity" :id="`gb-msg-${msg.id}`">
+            <!-- Разделитель активности НЕ сдвигаем: он и должен идти во всю ширину по
+                 центру — это событие беседы, а не чья-то реплика. -->
+            <ActivityCard :activity="msg.activity" :created-at="msg.created_at" />
+          </div>
+          <div v-else-if="msg.kind === 'board' && msg.board" :id="`gb-msg-${msg.id}`"
+               class="flex" :class="msg.mine ? 'justify-end' : 'justify-start gb-feed-indent'">
+            <BoardCard :board="msg.board" />
+          </div>
 
           <div v-else :id="`gb-msg-${msg.id}`"
                class="flex items-end gap-2"

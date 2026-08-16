@@ -93,7 +93,13 @@ const tileOf = (i) => TILE[i % TILE.length]
 
 const isContest = computed(() => act.kind === 'contest')
 const current = computed(() => questions.value[isContest.value ? 0 : index.value] || null)
-const answeredHere = computed(() => !!act.state.answered)
+//🔥 Локальный признак «я уже ответил» ОБЯЗАТЕЛЕН. Серверное поле `answered` считается в
+//проекции состояния, то есть приходит только при загрузке активности; кадр после ответа
+//несёт лишь `answered_count` и номер вопроса. Значит после «Подтвердить» флаг оставался
+//ложным: кнопка не пропадала, плитки продолжали переключаться, и человек не понимал,
+//засчитан ответ или нет. Сбрасывается на новом вопросе.
+const confirmedHere = ref(false)
+const answeredHere = computed(() => confirmedHere.value || !!act.state.answered)
 
 async function load() {
   try {
@@ -121,6 +127,7 @@ onBeforeUnmount(() => { if (quizTick) clearInterval(quizTick) })
 watch(() => act.state.question_index, () => {
   if (!isContest.value) return
   draft.value = null            //новый вопрос — выбор с чистого листа
+  confirmedHere.value = false
   load()
 })
 
@@ -178,7 +185,12 @@ async function confirmAnswer() {
 
 async function answerContest(value) {
   busy.value = true
-  try { await activitiesApi.answer(act.activity.id, value) } catch { /* noop */ }
+  try {
+    await activitiesApi.answer(act.activity.id, value)
+    //Закрываем вопрос СРАЗУ по успеху: сменить ответ уже нельзя (баллы зависят от
+    //скорости), и оставлять кнопку с активными плитками — обещать возможность, которой нет.
+    confirmedHere.value = true
+  } catch { /* не прошло — оставляем возможность нажать ещё раз */ }
   finally { busy.value = false }
 }
 
@@ -350,13 +362,14 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button v-for="(o, i) in current.options" :key="o.id" type="button"
                   :disabled="answeredHere || busy"
-                  @click="draft = o.id"
+                  @click="!answeredHere && (draft = o.id)"
                   class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-all disabled:cursor-default"
                   :style="{ backgroundColor: tileOf(i).bg,
                             outline: draft === o.id ? `3px solid ${tileOf(i).ring}` : 'none',
                             outlineOffset: '2px' }"
-                  :class="draft !== null && draft !== o.id ? 'scale-[0.97] opacity-45'
-                          : draft === o.id ? 'scale-[1.03]' : ''">
+                  :class="[draft !== null && draft !== o.id ? 'scale-[0.97] opacity-45' : '',
+                           draft === o.id ? 'scale-[1.03]' : '',
+                           answeredHere ? 'cursor-default' : '']">
             <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
               {{ i + 1 }}
             </span>

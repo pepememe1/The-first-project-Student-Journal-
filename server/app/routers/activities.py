@@ -1649,7 +1649,12 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"answered_count": len(slot), "question_index": idx}})
+           #🔥 Табло — В КАДРЕ. Оно считается в проекции состояния, то есть попадает
+           #клиенту только при открытии активности: кнопка «Лидерборд» во время игры
+           #показывала пустой список у всех, кто не перезаходил. В соревновании баллы
+           #публичны по построению (пьедестал объявляют вслух), поэтому шлём всем.
+           "payload": {"answered_count": len(slot), "question_index": idx,
+                       "board": _contest_board(db, scores)}})
     _emit_host_progress(db, a)
     return {"ok": True, "correct": ok, "gain": gain, "my_score": scores[user.id]}
 

@@ -1004,3 +1004,38 @@ def test_correct_contest_answer_actually_scores(client):
     board = client.get(f"{A}/{a}/results", headers=b).json()["results"]
     mine = [x for x in board if x["user_id"] == b_id][0]
     assert mine["score"] > 0 and mine["correct_count"] == 1, mine
+
+
+def test_leaderboard_updates_live_for_everyone_during_the_contest(client):
+    """Табло обязано жить ВО ВРЕМЯ игры, а не только при открытии.
+
+    🔥 Тот же класс, что был у шкалы прогресса: `board` считается в проекции состояния и
+    попадает клиенту один раз — кнопка «Лидерборд» посреди соревнования показывала пустой
+    список всем, кто не перезаходил в активность. Проверяем, что кадр после ответа несёт
+    свежее табло."""
+    sent = []
+    from app.routers import activities as act_mod
+    orig = act_mod._emit
+
+    def _spy(db, conv_id, data):
+        sent.append(data)
+        return orig(db, conv_id, data)
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    right = [o["id"] for o in q["options"] if o["text"] == "4"][0]
+
+    act_mod._emit = _spy
+    try:
+        client.post(f"{A}/{a}/answer", json={"answer": right}, headers=b)
+    finally:
+        act_mod._emit = orig
+
+    frames = [d for d in sent if "board" in (d.get("payload") or {})]
+    assert frames, f"кадр с табло не ушёл: {sent}"
+    board = frames[-1]["payload"]["board"]
+    assert any(r["user_id"] == b_id and r["score"] > 0 for r in board), board
