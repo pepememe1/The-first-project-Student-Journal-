@@ -26,6 +26,8 @@ const description = ref('')
 const tagsText = ref('')
 const timeLimitMin = ref(0)   //минуты: секунды человек не считает
 const setKind = ref('quiz')   //в какой библиотеке лежит набор
+//Набор соревнования: тип задания фиксирован — только выбор одного ответа.
+const isContest = computed(() => (props.quizId ? setKind.value : props.kind) === 'contest')
 const visibility = ref('private')
 const questions = ref([])
 const canEdit = ref(true)
@@ -54,7 +56,7 @@ onMounted(async () => {
 })
 
 function addQuestion() {
-  questions.value.push({ type: 'single', text: '', points: 1,
+  questions.value.push({ type: isContest.value ? 'single' : 'single', text: '', points: 1,
                          options: [{ text: '', is_correct: false }, { text: '', is_correct: false }] })
 }
 function removeQuestion(i) { questions.value.splice(i, 1) }
@@ -169,7 +171,15 @@ async function copySelf() {
           <div v-for="(q, qi) in questions" :key="qi"
                class="flex flex-col gap-2 rounded-xl border border-border2 bg-bg2 p-3">
             <div class="flex flex-wrap items-center gap-2">
-              <select v-model="q.type" :disabled="!canEdit"
+              <!-- В СОРЕВНОВАНИИ выбора типа нет: там нужен бесспорный балл и скорость,
+                   а «порядок» и «сопоставление» частично верным ответом их ломают. Показывать
+                   выпадающий список, из которого нельзя выбрать ничего, кроме одного пункта,
+                   значит предлагать выбор, которого не существует. -->
+              <span v-if="isContest"
+                    class="shrink-0 rounded-lg bg-card px-2 py-1.5 text-xs text-text3">
+                {{ locale.t('quiz.type.single', 'выберите один ответ') }}
+              </span>
+              <select v-else v-model="q.type" :disabled="!canEdit"
                       class="shrink-0 rounded-lg border border-border2 bg-card px-2 py-1.5 text-xs text-text">
                 <option v-for="t in TYPES" :key="t" :value="t">{{ locale.t(`quiz.type.${t}`, t) }}</option>
               </select>

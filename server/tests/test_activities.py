@@ -889,3 +889,92 @@ def test_contest_counts_everyone_who_answered_even_with_zero(client):
     res = client.get(f"{A}/{a}/results", headers=t).json()["results"]
     assert b_id in {r["user_id"] for r in res}, res
     assert [r["score"] for r in res if r["user_id"] == b_id] == [0.0], res
+
+
+def test_host_progress_actually_reaches_the_host_over_the_socket(client, monkeypatch):
+    """🔥 СТОРОЖ НА ЖИВУЮ ШКАЛУ, а не на её расчёт.
+
+    Расчёт был исправен и покрыт тестом — а мониторинг у преподавателя всё равно выглядел
+    мёртвым: `progress` попадает клиенту только в проекции состояния, то есть ОДИН раз
+    при открытии, а кадры по сокету несут лишь изменившиеся поля и подмешиваются поверх.
+    Значит после открытия список застывал в моменте, когда никто ещё не начинал.
+    Проверяем именно ДОСТАВКУ: что при отчёте о прогрессе ведущему уходит кадр со шкалой.
+    """
+    sent = []
+
+    def _spy(user_ids, data):
+        sent.append((list(user_ids), data))
+
+    from app.routers import activities as act_mod
+    monkeypatch.setattr(act_mod, "_emit_to", _spy)
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    sent.clear()
+    assert client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b).status_code == 200
+
+    to_host = [d for ids, d in sent if t_id in ids]
+    assert to_host, f"ведущему не ушёл ни один кадр: {sent}"
+    payload = to_host[-1]["payload"]
+    assert "progress" in payload, payload
+    assert [r["walked"] for r in payload["progress"] if r["user_id"] == b_id] == [1], payload
+
+    #🔒 И это ИМЕННО адресный кадр: чужой прогресс студентам не полагается.
+    assert all(t_id in ids for ids, _ in sent), sent
+
+
+def test_contest_advances_by_time_and_finishes_itself_after_the_last_question(client):
+    """Ход ведёт ВРЕМЯ, а ведущий может его обогнать.
+
+    🔥 Чинит тупик: на последнем вопросе «следующий» отвечал ошибкой «вопросы
+    закончились», выбрать ответ было уже нельзя, а итоги появлялись, только если ведущий
+    вручную нажимал «завершить». Двигает СЕРВЕР: у тридцати человек тридцать своих часов,
+    и переход по клиентскому таймеру случился бы тридцать раз в разные моменты."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    qs = [{"type": "single", "text": f"{i}?", "points": 1,
+           "options": [{"text": "да", "is_correct": True}, {"text": "нет"}]} for i in (1, 2)]
+    quiz = _quiz(client, t, questions=qs)
+    #Минимум, который принимает сервер, — 5 секунд (ниже вопрос не успеть прочитать).
+    #Ждать в тесте настоящие тридцать нельзя, поэтому берём именно минимум.
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz, "limit_ms": 5000}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    assert client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]["question_index"] == 0
+
+    import time
+    time.sleep(5.3)
+    #Любое обращение к API подметает истёкшее — как и у таймера.
+    client.get(f"{A}/running", params={"conversation_id": conv}, headers=b)
+    st = client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]
+    assert st["question_index"] == 1, f"время вышло — вопрос обязан смениться сам: {st}"
+
+    time.sleep(5.3)
+    client.get(f"{A}/running", params={"conversation_id": conv}, headers=b)
+    fresh = client.get(f"{A}/{a}", headers=b).json()
+    assert fresh["status"] == "finished", "после последнего вопроса активность завершается сама"
+
+
+def test_contest_leaderboard_is_open_to_everyone_after_it_ends(client):
+    """Пьедестал — смысл категории, его видят ВСЕ. Но только после завершения: до него
+    чужие баллы никому не полагаются. В обычной викторине таблица так и остаётся личной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    client.post(f"{A}/{a}/answer", json={"value": q["options"][0]["id"]}, headers=b)
+    client.post(f"{A}/{a}/answer", json={"value": q["options"][1]["id"]}, headers=c)
+
+    #До завершения участник видит только себя.
+    mine = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    assert {r["user_id"] for r in mine} <= {b_id}, mine
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    board = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    assert {b_id, c_id} <= {r["user_id"] for r in board}, board
+    #«Выполнено» считает ОТВЕТИВШИХ, даже если ответ неверный.
+    assert all(r["answered_count"] == 1 for r in board), board

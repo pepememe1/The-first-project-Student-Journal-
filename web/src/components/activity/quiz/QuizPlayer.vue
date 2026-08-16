@@ -10,6 +10,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import QuizResult from './QuizResult.vue'
+import ContestPodium from './ContestPodium.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
@@ -26,6 +27,20 @@ const board = ref([])
 const busy = ref(false)
 const startedAt = ref(Date.now())
 const showBoard = ref(false)
+// Выбранный, но ЕЩЁ НЕ подтверждённый вариант соревнования. Раньше клик сразу уходил на
+// сервер: промах пальцем по соседней плитке стоил вопроса, а подтвердить или передумать
+// было нечем — и человек даже не понимал, засчитан ли ответ.
+const draft = ref(null)
+
+// Отсчёт до конца ВОПРОСА. Считаем от абсолютного времени окончания, присланного
+// сервером: у каждого свои часы, и локальный лимит разошёлся бы между устройствами.
+const qEndsAt = computed(() => Date.parse(act.state.question_ends_at || ''))
+const qLeft = computed(() => {
+  if (!Number.isFinite(qEndsAt.value)) return null
+  return Math.max(0, Math.round((qEndsAt.value - nowMs.value) / 1000))
+})
+const started = computed(() => Number(act.state.question_index ?? -1) >= 0)
+const limitSec = computed(() => Math.round(Number(act.state.limit_ms || 30000) / 1000))
 const segments = computed(() => Number(act.state.total_questions || total.value || 0) || 1)
 const finishedCount = computed(() => (act.state.progress || []).filter((r) => r.done).length)
 const timeLimit = ref(0)          //секунды на весь тест, 0 — без ограничения
@@ -85,7 +100,11 @@ onMounted(() => {
 })
 onBeforeUnmount(() => { if (quizTick) clearInterval(quizTick) })
 // В соревновании вопрос показывает ХОСТ — перечитываем по кадру со сменой номера.
-watch(() => act.state.question_index, () => { if (isContest.value) load() })
+watch(() => act.state.question_index, () => {
+  if (!isContest.value) return
+  draft.value = null            //новый вопрос — выбор с чистого листа
+  load()
+})
 
 function pick(q, optId) {
   if (q.type === 'single') answers.value = { ...answers.value, [q.id]: optId }
@@ -132,6 +151,13 @@ async function submitAll() {
   } catch { /* noop */ } finally { busy.value = false }
 }
 
+/** Подтвердить выбранный вариант. После подтверждения сменить его нельзя (баллы зависят
+ *  от скорости, и «сначала наугад, потом исправлю» обесценило бы соревнование). */
+async function confirmAnswer() {
+  if (draft.value === null || answeredHere.value || busy.value) return
+  await answerContest(draft.value)
+}
+
 async function answerContest(value) {
   busy.value = true
   try { await activitiesApi.answer(act.activity.id, value) } catch { /* noop */ }
@@ -156,7 +182,14 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
 <template>
   <div class="flex flex-col gap-4 py-4">
     <!-- Итоговая таблица -->
-    <template v-if="act.activity?.status === 'finished'">
+    <!-- Соревнование заканчивается ПЬЕДЕСТАЛОМ: места объявляют вслух, и в этот момент
+         на экране должны быть трое, а не список из тридцати строк. Полная таблица —
+         по кнопке внутри. -->
+    <template v-if="act.activity?.status === 'finished' && isContest">
+      <ContestPodium :results="board" />
+    </template>
+
+    <template v-else-if="act.activity?.status === 'finished'">
       <h3 class="text-lg font-semibold text-text">{{ locale.t('quiz.results', 'Результаты') }}</h3>
       <div class="flex flex-col gap-1.5">
         <div v-for="r in board" :key="r.user_id"
@@ -227,44 +260,59 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
 
     <!-- Соревнование: вопрос по команде хоста -->
     <template v-else-if="isContest">
-      <div v-if="!current" class="py-10 text-center text-sm text-text3">
-        {{ act.isHost ? locale.t('quiz.pressNext', 'Нажмите «Следующий вопрос»')
-                      : locale.t('quiz.waitHost', 'Ждём преподавателя…') }}
+      <!-- До старта: у ведущего кнопка «Старт» с честным предупреждением о времени,
+           у остальных — ожидание. Раньше здесь стояло «Нажмите Следующий вопрос», и
+           преподаватель не знал, сколько секунд получит группа на задание. -->
+      <div v-if="!started" class="flex flex-col items-center gap-3 py-10 text-center">
+        <p class="text-sm text-text2">
+          {{ locale.t('quiz.perQuestion', { n: limitSec }) }}
+        </p>
+        <AppButton v-if="act.isHost" :disabled="busy" @click="nextQuestion">
+          {{ locale.t('quiz.start', 'Старт') }}
+        </AppButton>
+        <p v-else class="text-sm text-text3">{{ locale.t('quiz.waitHost', 'Ждём преподавателя…') }}</p>
       </div>
-      <template v-else>
-        <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}</p>
+
+      <template v-else-if="current">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}</p>
+          <!-- Отсчёт вопроса виден ВСЕМ: он объясняет, почему вопрос вот-вот сменится. -->
+          <span v-if="qLeft !== null"
+                class="rounded-full bg-bg2 px-2.5 py-0.5 text-sm font-bold tabular-nums"
+                :class="qLeft <= 5 ? 'text-red' : 'text-text2'">{{ qLeft }}</span>
+        </div>
         <h3 class="text-lg font-semibold text-text">{{ current.text }}</h3>
-        <!-- Тип задания подписан: «выберите один» и «выберите несколько» выглядят
-             одинаково, и человек, отметивший один вариант, не знает, ждут ли от него ещё. -->
         <span class="self-start rounded-full bg-bg2 px-2 py-0.5 text-tiny text-text3">
           {{ locale.t(`quiz.type.${current.type}`, current.type) }}
         </span>
-        <!-- Плитки 2×2: с проектора вариант узнают по ЦВЕТУ и НОМЕРУ, а не по чтению
-             мелкого текста. На телефоне — в одну колонку, иначе четыре плитки по 160 px
-             не помещаются и текст рвётся. -->
+
+        <!-- Плитки: выбранная ЧУТЬ БОЛЬШЕ, остальные тусклее — до подтверждения видно,
+             что именно выбрано, и промах пальцем можно исправить. -->
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button v-for="(o, i) in current.options" :key="o.id" type="button"
                   :disabled="answeredHere || busy"
-                  @click="current.type === 'single' ? answerContest(o.id) : pick(current, o.id)"
-                  class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-transform disabled:opacity-70"
+                  @click="draft = o.id"
+                  class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-all disabled:cursor-default"
                   :style="{ backgroundColor: tileOf(i).bg,
-                            outline: chosen(current, o.id) ? `3px solid ${tileOf(i).ring}` : 'none',
+                            outline: draft === o.id ? `3px solid ${tileOf(i).ring}` : 'none',
                             outlineOffset: '2px' }"
-                  :class="answeredHere || busy ? '' : 'hover:scale-[1.02]'">
+                  :class="draft !== null && draft !== o.id ? 'scale-[0.97] opacity-45'
+                          : draft === o.id ? 'scale-[1.03]' : ''">
             <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
               {{ i + 1 }}
             </span>
             <span class="min-w-0 flex-1 break-words text-lg font-bold leading-tight text-white">{{ o.text }}</span>
           </button>
         </div>
-        <AppButton v-if="current.type === 'multi' && !answeredHere" :disabled="busy"
-                   @click="answerContest(answers[current.id] || [])">
-          {{ locale.t('quiz.answer', 'Ответить') }}
+
+        <AppButton v-if="draft !== null && !answeredHere" :disabled="busy" @click="confirmAnswer">
+          {{ locale.t('quiz.confirm', 'Подтвердить') }}
         </AppButton>
         <p v-if="answeredHere" class="text-sm text-text2">
           {{ locale.t('quiz.answered', 'Ответ принят') }} · {{ locale.t('quiz.myScore', { n: act.state.my_score || 0 }) }}
         </p>
       </template>
+
       <!-- Табло между вопросами — то, ради чего в соревнование и играют. Видят все:
            места всё равно объявляются вслух, а скрытые баллы убирают из игры единственное,
            что заставляет тянуться к следующему вопросу. -->
