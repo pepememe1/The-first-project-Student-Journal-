@@ -40,6 +40,26 @@ const qLeft = computed(() => {
   return Math.max(0, Math.round((qEndsAt.value - nowMs.value) / 1000))
 })
 const started = computed(() => Number(act.state.question_index ?? -1) >= 0)
+
+// 🔥 ТОЛЧОК СЕРВЕРУ, когда время вопроса вышло. Сервер подметает истёкшее при обращении
+// к API, своего таймера у него нет и заводить фоновый планировщик на одноядерном VPS
+// незачем. У тайм-бокса такой толчок уже был, а у соревнования его не было вовсе —
+// поэтому отсчёт доходил до нуля и всё замирало: ни следующего вопроса, ни завершения.
+//
+// ⚠️ Толкает ВЕДУЩИЙ сразу, участники — на две секунды позже. Иначе тридцать человек
+// ударили бы по серверу одновременно в одну и ту же секунду; а задержка нужна на случай,
+// когда вкладка ведущего закрыта и толкнуть больше некому.
+let nudgedFor = null
+watch(qLeft, (left) => {
+  if (!isContest.value || left === null || left > 0) return
+  const key = `${act.activity?.id}|${act.state.question_index}`
+  if (nudgedFor === key) return
+  nudgedFor = key
+  const delay = act.isHost ? 0 : 2000
+  setTimeout(() => {
+    if (act.activity && act.isRunning) act.refreshRunning(act.activity.conversation_id)
+  }, delay)
+})
 const limitSec = computed(() => Math.round(Number(act.state.limit_ms || 30000) / 1000))
 const segments = computed(() => Number(act.state.total_questions || total.value || 0) || 1)
 const finishedCount = computed(() => (act.state.progress || []).filter((r) => r.done).length)
