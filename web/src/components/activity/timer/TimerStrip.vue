@@ -21,12 +21,18 @@ let tick = null
 onMounted(() => { tick = setInterval(() => { now.value = Date.now() }, 1000) })
 onBeforeUnmount(() => { if (tick) clearInterval(tick) })
 
-const visible = computed(() => act.kind === 'timer' && act.isRunning && !!act.activity)
-const paused = computed(() => !!act.state.paused)
+// Таймер ищем среди ВСЕХ идущих активностей, а не среди открытой: рядом с ним может
+// идти доска или викторина, и полоска обязана быть видна независимо от того, что человек
+// открыл на экране. Раньше она держалась на `act.activity` и пропадала при любом другом
+// открытии — со стороны это выглядело как «таймер исчез и завершить его нечем».
+const mine = computed(() => (act.running || []).find((x) => x.kind === 'timer') || null)
+const visible = computed(() => !!mine.value)
+const live = computed(() => mine.value?.state?.payload || {})
+const paused = computed(() => !!live.value.paused)
 
 const left = computed(() => {
-  if (paused.value) return Math.max(0, Number(act.state.left_s || 0))
-  const ends = Date.parse(act.state.ends_at || '')
+  if (paused.value) return Math.max(0, Number(live.value.left_s || 0))
+  const ends = Date.parse(live.value.ends_at || '')
   if (!Number.isFinite(ends)) return 0
   return Math.max(0, Math.round((ends - now.value) / 1000))
 })
@@ -43,10 +49,13 @@ const label = computed(() => {
 const urgent = computed(() => left.value > 0 && left.value <= 60)
 
 async function control(action) {
-  try { await activitiesApi.timer(act.activity.id, action) } catch { /* noop */ }
+  try { await activitiesApi.timer(mine.value.id, action) } catch { /* noop */ }
+  await act.refreshRunning(mine.value?.conversation_id)
 }
 async function finish() {
-  await act.finish(false)
+  //Завершаем ИМЕННО таймер, а не то, что открыто на экране: это разные активности.
+  try { await activitiesApi.finish(mine.value.id, false) } catch { /* noop */ }
+  await act.refreshRunning(mine.value?.conversation_id)
 }
 </script>
 
@@ -64,7 +73,7 @@ async function finish() {
 
     <!-- Кнопки — ТОЛЬКО у ведущего. Студенту здесь нечего нажимать: остановить чужой
          таймер он не вправе, а неактивные кнопки читались бы как поломка. -->
-    <template v-if="act.isHost">
+    <template v-if="mine?.is_host">
       <button type="button" @click="control(paused ? 'resume' : 'pause')"
               class="ml-1 grid size-6 shrink-0 place-items-center rounded text-text3 hover:bg-card hover:text-accent"
               :title="paused ? locale.t('timer.resume', 'Продолжить') : locale.t('timer.pause', 'Остановить')">

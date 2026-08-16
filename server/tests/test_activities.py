@@ -81,16 +81,29 @@ def test_no_activities_in_direct_chat(client):
     assert "групп" in r.json()["detail"].lower()
 
 
-def test_second_activity_in_same_conversation_is_refused(client):
-    """Вторая параллельная — гонка за экран студента и два источника правды «что идёт»."""
+def test_second_activity_of_the_SAME_kind_is_refused_but_others_are_allowed(client):
+    """Правило сменилось по живому отзыву: беседа держит НЕСКОЛЬКО активностей, но не
+    двух одинаковых.
+
+    Раньше активность была одна на беседу любого вида, и запустить таймер рядом с доской
+    было нельзя — а это ровно то, что делают на паре. Два таймера или два среза
+    по-прежнему бессмысленны: два отсчёта на экране и два одинаковых опроса понимания.
+    Опрос — исключение: он живёт сообщением в ленте и никому не мешает."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    assert _start(client, t, conv, "timer", {"duration_s": 60}, "Первая").status_code == 200
-    r = _start(client, t, conv, "poll",
-               {"question": "Понятно?", "options": ["Да", "Нет"]})
-    assert r.status_code == 409
-    assert "Первая" in r.json()["detail"]      #называем ТЕКУЩУЮ, иначе отказ непонятен
 
+    assert _start(client, t, conv, "timer", {"duration_s": 60}, "Первая").status_code == 200
+    #Тот же вид — отказ.
+    dup = _start(client, t, conv, "timer", {"duration_s": 60}, "Вторая")
+    assert dup.status_code == 409, dup.text
+    #Другой вид — можно: таймер рядом с доской это нормальная работа.
+    assert _start(client, t, conv, "board", {"sheet": "grid"}).status_code == 200
+    #Опросов можно несколько.
+    assert _start(client, t, conv, "poll", {"question": "А?", "options": ["1", "2"]}).status_code == 200
+    assert _start(client, t, conv, "poll", {"question": "Б?", "options": ["1", "2"]}).status_code == 200
+
+    running = client.get(f"{A}/running", params={"conversation_id": conv}, headers=b).json()["activities"]
+    assert sorted(x["kind"] for x in running) == ["board", "poll", "poll", "timer"], running
 
 def test_finishing_frees_the_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)

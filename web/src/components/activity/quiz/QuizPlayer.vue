@@ -234,6 +234,11 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
       <template v-else>
         <p class="text-xs text-text3">{{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}</p>
         <h3 class="text-lg font-semibold text-text">{{ current.text }}</h3>
+        <!-- Тип задания подписан: «выберите один» и «выберите несколько» выглядят
+             одинаково, и человек, отметивший один вариант, не знает, ждут ли от него ещё. -->
+        <span class="self-start rounded-full bg-bg2 px-2 py-0.5 text-tiny text-text3">
+          {{ locale.t(`quiz.type.${current.type}`, current.type) }}
+        </span>
         <!-- Плитки 2×2: с проектора вариант узнают по ЦВЕТУ и НОМЕРУ, а не по чтению
              мелкого текста. На телефоне — в одну колонку, иначе четыре плитки по 160 px
              не помещаются и текст рвётся. -->
@@ -304,6 +309,11 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
                 :class="leftS <= 60 ? 'text-red' : 'text-text2'">{{ leftLabel }}</span>
         </div>
         <h3 class="text-lg font-semibold text-text">{{ current.text }}</h3>
+        <!-- Тип задания подписан: «выберите один» и «выберите несколько» выглядят
+             одинаково, и человек, отметивший один вариант, не знает, ждут ли от него ещё. -->
+        <span class="self-start rounded-full bg-bg2 px-2 py-0.5 text-tiny text-text3">
+          {{ locale.t(`quiz.type.${current.type}`, current.type) }}
+        </span>
 
         <!-- Сопоставление: слева вопрос, справа ВЫБОР из готовых половин.
              Раньше здесь было поле ввода — попасть в ответ можно было только дословным

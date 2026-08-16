@@ -34,6 +34,9 @@ export const useActivityStore = defineStore('activity', () => {
   const state = ref({})             // payload последнего принятого кадра
   const unseen = ref(false)         // в беседе началась активность, её ещё не открывали
   const journalFor = ref('')        // открыт журнал активностей этой беседы
+  //ВСЕ идущие активности беседы. Их теперь может быть несколько разных категорий
+  //(таймер рядом с доской — обычная работа), а `activity` — та, что открыта на экране.
+  const running = ref([])
   const seq = ref(-1)               // номер последнего принятого кадра
   const mode = ref('hidden')        // hidden | full | mini
   const launcherFor = ref('')       // id беседы, для которой открыт выбор категории
@@ -78,6 +81,7 @@ export const useActivityStore = defineStore('activity', () => {
     // не по факту получения события, а по факту ОТКРЫТИЯ: иначе значок исчезал бы сам, и
     // человек, отошедший от экрана на минуту, не узнал бы, что активность вообще была.
     unseen.value = true
+    await refreshRunning(conversationId)
     await load(conversationId)
     //Срез понимания обязан ВСПЛЫТЬ: он живёт минуту, и свёрнутое окошко в углу человек
     //просто не заметит — ради этого его и запускают посреди пары.
@@ -89,9 +93,17 @@ export const useActivityStore = defineStore('activity', () => {
   }
 
   function onFinished(ev) {
+    //Из списка идущих убираем всегда: полоска таймера обязана исчезнуть у всех сразу,
+    //даже если человек в этот момент смотрел другую активность.
+    running.value = running.value.filter((x) => x.id !== ev?.activity_id)
     if (!activity.value || ev?.activity_id !== activity.value.id) return
     activity.value = { ...activity.value, status: 'finished' }
     if (ev.summary) state.value = { ...state.value, summary: ev.summary }
+    //🔥 Свёрнутое окно закрываем САМИ: ведущий завершил — значит смотреть больше не на
+    //что, а окошко висело у всех до тех пор, пока каждый не закроет его руками.
+    //Полный экран не трогаем: там человек читает свой результат, и выдёргивать его
+    //с экрана итогов нельзя (кнопка «Завершить» там своя).
+    if (mode.value === 'mini') hide()
   }
 
   async function load(conversationId) {
@@ -152,7 +164,17 @@ export const useActivityStore = defineStore('activity', () => {
   function openLauncher(conversationId) { unseen.value = false; launcherFor.value = conversationId }
   /** Подхватить активность, которая уже идёт в этой беседе (вход в чат, перезагрузка).
    *  Режим выбираем тот же, что при запуске: таймер и опрос экрана не занимают. */
+  /** Обновить список идущих активностей беседы (полоска таймера, значок «новая»). */
+  async function refreshRunning(conversationId) {
+    if (!conversationId) { running.value = []; return }
+    try {
+      const { data } = await activitiesApi.running(conversationId)
+      running.value = data.activities || []
+    } catch { running.value = [] }
+  }
+
   async function adoptCurrent(conversationId) {
+    await refreshRunning(conversationId)
     try {
       const { data } = await activitiesApi.current(conversationId)
       //Активности нет — гасим свою, но НЕ трогаем открытую на весь экран: человек мог
@@ -192,6 +214,6 @@ export const useActivityStore = defineStore('activity', () => {
     isRunning, isHost, kind,
     applyFrame, onStarted, onFinished, load, start, finish, open,
     openLauncher, closeLauncher, minimize, expand, hide, reset, unseen,
-    journalFor, openJournal, closeJournal, adoptCurrent,
+    journalFor, openJournal, closeJournal, adoptCurrent, running, refreshRunning,
   }
 })

@@ -536,6 +536,9 @@ export const activitiesApi = {
   start: (conversationId, kind, params = {}, title = '') =>
     api.post('/web/messenger/activities/start',
       { conversation_id: conversationId, kind, params, title }),
+  //Все идущие активности беседы: их может быть несколько разных категорий.
+  running: (conversationId) =>
+    api.get('/web/messenger/activities/running', { params: { conversation_id: conversationId } }),
   current: (conversationId) =>
     api.get('/web/messenger/activities/current', { params: { conversation_id: conversationId } }),
   get: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}`),

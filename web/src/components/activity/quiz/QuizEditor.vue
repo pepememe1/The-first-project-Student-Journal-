@@ -25,6 +25,7 @@ const title = ref('')
 const description = ref('')
 const tagsText = ref('')
 const timeLimitMin = ref(0)   //минуты: секунды человек не считает
+const setKind = ref('quiz')   //в какой библиотеке лежит набор
 const visibility = ref('private')
 const questions = ref([])
 const canEdit = ref(true)
@@ -39,6 +40,7 @@ onMounted(async () => {
     description.value = data.description
     tagsText.value = (data.tags || []).join(', ')
     timeLimitMin.value = Math.round((data.time_limit_s || 0) / 60)
+    setKind.value = data.kind || 'quiz'
     visibility.value = data.visibility
     canEdit.value = !!data.can_edit
     questions.value = (data.questions || []).map((q) => ({
@@ -78,7 +80,7 @@ async function save() {
     time_limit_s: Math.max(0, Math.round(Number(timeLimitMin.value) || 0) * 60),
     //Категория набора задаётся при СОЗДАНИИ и потом не меняется: перенос
     //набора между библиотеками означал бы задания, которых там быть не может.
-    kind: props.kind,
+    kind: props.quizId ? setKind.value : props.kind,
     visibility: visibility.value,
     questions: questions.value.map((q) => ({
       type: q.type, text: q.text.trim(), points: q.points,
@@ -146,6 +148,17 @@ async function copySelf() {
             <input v-model.number="timeLimitMin" type="number" min="0" max="360" :disabled="!canEdit"
                    class="w-24 rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text" />
             <span class="text-tiny text-text3">{{ locale.t('quiz.timeLimitHint', '0 — без ограничения') }}</span>
+          </label>
+          <!-- В какой библиотеке лежит набор. Нужен именно ПЕРЕНОС, а не только выбор
+               при создании: наборы, заведённые до разделения библиотек, все помечены
+               обычными викторинами, и без переноса они не появились бы в соревновании. -->
+          <label v-if="props.quizId" class="flex items-center gap-2 text-sm text-text2">
+            <span class="shrink-0">{{ locale.t('quiz.libraryOf', 'Библиотека') }}</span>
+            <select v-model="setKind" :disabled="!canEdit"
+                    class="rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text">
+              <option value="quiz">{{ locale.t('activity.kind.quiz', 'Викторина') }}</option>
+              <option value="contest">{{ locale.t('activity.kind.contest', 'Соревнование') }}</option>
+            </select>
           </label>
           <select v-model="visibility" :disabled="!canEdit"
                   class="w-full rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text">

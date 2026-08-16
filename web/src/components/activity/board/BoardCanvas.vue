@@ -294,6 +294,16 @@ watch(() => act.state.strokes, (all) => {
   redraw()
 }, { deep: false })
 
+// 🔥 Пересчёт размера при ПОЯВЛЕНИИ. Полный экран рисуется через v-show (иначе
+// сворачивание сбрасывало бы состояние), поэтому холст монтируется СКРЫТЫМ: у скрытого
+// элемента clientWidth/clientHeight равны нулю, canvas получает размер 0×0 и остаётся
+// пустым. На телефоне это и выглядело как «доски не видно, а в свёрнутом окне видно».
+watch(() => act.mode, async (m) => {
+  if (m !== 'full') return
+  await nextTick()
+  resize()
+})
+
 onMounted(async () => {
   objects.value = [...(act.state.strokes || [])]
   await nextTick()

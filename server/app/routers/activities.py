@@ -269,6 +269,35 @@ def _sweep_stale(db: Session) -> None:
         db.commit()
 
 
+#Категории, которых в беседе может идти НЕСКОЛЬКО сразу. Опрос — сообщение в ленте, он
+#никому не мешает и живёт своей жизнью; остальные занимают экран или ведут ход, и две
+#одинаковых означали бы два источника правды «что сейчас идёт».
+_MULTI_ALLOWED = ("poll",)
+
+
+def _running_same_kind(db: Session, conv_id: str, kind: str) -> Activity | None:
+    """Идущая активность ТОЙ ЖЕ категории (или None).
+
+    ⚠️ Правило сменилось по живому отзыву: раньше беседа держала ОДНУ активность любого
+    вида, и запустить таймер рядом с викториной было нельзя — а это ровно то, что делают
+    на паре. Теперь ограничение точечное: два таймера или два среза одновременно
+    по-прежнему бессмысленны (два отсчёта на экране, два одинаковых опроса понимания),
+    а таймер рядом с доской — нормальная работа."""
+    if kind in _MULTI_ALLOWED:
+        return None
+    for a in (db.query(Activity)
+              .filter(Activity.conversation_id == conv_id, Activity.status == "running",
+                      Activity.kind == kind)
+              .order_by(Activity.started_at.desc()).all()):
+        if activity_state.get(a.id) is not None:
+            return a
+        #След рестарта: строка «running» без состояния в памяти — закрываем на месте.
+        a.status = "finished"
+        a.finished_at = _now()
+        db.commit()
+    return None
+
+
 def _running_in(db: Session, conv_id: str) -> Activity | None:
     """Активность, идущая в беседе ПРЯМО СЕЙЧАС (или None).
 
@@ -340,8 +369,11 @@ def _validate_start(db: Session, kind: str, params: dict, user: User) -> dict:
         if len(options) < 2:
             raise HTTPException(status_code=400, detail="Нужно хотя бы два варианта")
         out = {"question": question, "options": options[:MAX_OPTIONS]}
-        #Срок окончания — как в Telegram. 0 = без срока (прежнее поведение).
-        secs = int(p.get("duration_s") or 0)
+        #Срок окончания — как в Telegram. По умолчанию СУТКИ: бессрочный опрос висел в
+        #ленте вечно, и никто не знал, когда смотреть результат. Явный 0 по-прежнему
+        #значит «без срока» — но это осознанный выбор автора, а не молчаливое умолчание.
+        raw = p.get("duration_s")
+        secs = int(raw) if raw is not None else 24 * 60 * 60
         if secs:
             out["duration_s"] = max(30, min(secs, 7 * 24 * 60 * 60))
         #Видно ли, КТО как проголосовал. По умолчанию нет: голос не анонимен для сервера
@@ -395,11 +427,11 @@ def start_activity(payload: dict = Body(...), request: Request = None,
     kind = str(payload.get("kind") or "").strip()
     _require_can_run(db, conv_id, user)
     _sweep_stale(db)
-    running = _running_in(db, conv_id)
+    running = _running_same_kind(db, conv_id, kind)
     if running is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"В этой беседе уже идёт активность «{running.title or running.kind}». "
+            detail=f"В беседе уже идёт «{running.title or running.kind}» этой же категории. "
                    f"Сначала завершите её.")
     params = _validate_start(db, kind, payload.get("params") or {}, user)
     now = _now()
@@ -553,6 +585,30 @@ def _finalize(db: Session, a: Activity, payload: dict, save: bool) -> dict:
 
 
 # ── Чтение состояния ─────────────────────────────────────────────────────────────────
+@router.get("/running")
+def running_activities(conversation_id: str = Query(...),
+                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """ВСЕ активности, идущие в беседе. Их теперь может быть несколько разных категорий:
+    таймер рядом с доской — нормальная работа на паре, и клиенту нужен весь список, чтобы
+    показать полоску таймера независимо от того, какая активность открыта на экране."""
+    _require_participant(db, conversation_id, user)
+    _sweep_stale(db)
+    out = []
+    for a in (db.query(Activity)
+              .filter(Activity.conversation_id == conversation_id, Activity.status == "running")
+              .order_by(Activity.started_at.asc()).all()):
+        if activity_state.get(a.id) is None:
+            #След рестарта — закрываем, живой её показывать нельзя (она не отвечает).
+            a.status = "finished"
+            a.finished_at = _now()
+            db.commit()
+            continue
+        cell = _activity_out(a, user.id)
+        cell["state"] = _state_for(db, a, user)
+        out.append(cell)
+    return {"activities": out}
+
+
 @router.get("/current")
 def current_activity(conversation_id: str = Query(...),
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -672,6 +728,10 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         answered = payload.pop("answered", []) or []
         payload["answered_count"] = len(answered)
         payload["mine_done"] = user.id in answered
+        #Сколько ВСЕГО человек в беседе. Без этого у преподавателя стояло «ответили 1 из
+        #0» — доля не считалась, и понять, можно ли делать выводы, было нельзя.
+        payload["participants"] = len([uid for uid in _participants_of(db, a.conversation_id)
+                                       if uid != a.host_id])
     if a.kind in ("quiz", "contest") and is_host:
         _host_progress(db, a, payload, locals().get("contest_answers"))
     payload.pop("walk", None)
@@ -1126,6 +1186,22 @@ def update_quiz(quiz_id: str, payload: dict = Body(...),
         quiz.description = str(payload.get("description") or "").strip()[:MAX_TEXT]
     if "tags" in payload:
         quiz.tags = _clean_tags(payload.get("tags"))
+    if "kind" in payload:
+        #Перенос набора между библиотеками. Нужен потому, что наборы, созданные ДО
+        #разделения, все помечены как обычные викторины: без переноса преподаватель
+        #увидел бы в соревновании пустой список и не понял, куда делись его тесты.
+        #⚠️ В соревнование переносим только если ВСЕ задания ему подходят (там нужен
+        #бесспорный балл) — иначе набор попал бы в библиотеку, из которой не запускается.
+        want = "contest" if str(payload.get("kind") or "") == "contest" else "quiz"
+        if want == "contest":
+            bad = [q for q in db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz.id).all()
+                   if (q.type or "single") not in CONTEST_TYPES]
+            if bad:
+                raise HTTPException(
+                    status_code=400,
+                    detail="В соревновании бывают только задания с выбором ответа. "
+                           "Уберите задания на порядок и сопоставление.")
+        quiz.kind = want
     if "time_limit_s" in payload:
         #Ограничение на весь тест. 0 — без ограничения (так было всегда). Потолок шесть
         #часов — тот же, что у тайм-бокса: пары длиннее не бывает, а опечатка в поле
