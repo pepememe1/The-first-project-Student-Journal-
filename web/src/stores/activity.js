@@ -37,6 +37,10 @@ export const useActivityStore = defineStore('activity', () => {
   //ВСЕ идущие активности беседы. Их теперь может быть несколько разных категорий
   //(таймер рядом с доской — обычная работа), а `activity` — та, что открыта на экране.
   const running = ref([])
+  //Истёкший тайм-бокс, по которому ещё не нажали «ОК». Живёт в сторе, а не в компоненте
+  //мессенджера: окно с сигналом обязано всплыть в ЛЮБОЙ вкладке — таймер ставят и идут
+  //работать в журнал или расписание.
+  const expiredTimer = ref(null)
   const seq = ref(-1)               // номер последнего принятого кадра
   const mode = ref('hidden')        // hidden | full | mini
   const launcherFor = ref('')       // id беседы, для которой открыт выбор категории
@@ -92,7 +96,21 @@ export const useActivityStore = defineStore('activity', () => {
     if (mode.value === 'hidden') mode.value = 'mini'
   }
 
+  /** Убрать окно истёкшего таймера (кнопка «ОК»). */
+  function clearExpiredTimer() { expiredTimer.value = null }
+
   function onFinished(ev) {
+    //Таймер, у которого ВЫШЛО время (а не тот, что завершили руками), поднимает окно с
+    //сигналом. Признак ставит сервер: только он знает, дошёл отсчёт до нуля или человек
+    //нажал «завершить» — у клиента часы свои, и доверять им тут нельзя.
+    if (ev?.summary?.expired) {
+      const was = (running.value || []).find((x) => x.id === ev.activity_id)
+      expiredTimer.value = {
+        id: ev.activity_id,
+        duration_s: Number(ev.summary.duration_s || 0),
+        title: was?.title || '',
+      }
+    }
     //Из списка идущих убираем всегда: полоска таймера обязана исчезнуть у всех сразу,
     //даже если человек в этот момент смотрел другую активность.
     running.value = running.value.filter((x) => x.id !== ev?.activity_id)
@@ -215,5 +233,6 @@ export const useActivityStore = defineStore('activity', () => {
     applyFrame, onStarted, onFinished, load, start, finish, open,
     openLauncher, closeLauncher, minimize, expand, hide, reset, unseen,
     journalFor, openJournal, closeJournal, adoptCurrent, running, refreshRunning,
+    expiredTimer, clearExpiredTimer,
   }
 })

@@ -17,8 +17,23 @@ const locale = useLocaleStore()
 const act = useActivityStore()
 
 const now = ref(Date.now())
+//Один толчок серверу на таймер: без флага цикл долбил бы /running каждую секунду.
+let expiredAsked = false
 let tick = null
-onMounted(() => { tick = setInterval(() => { now.value = Date.now() }, 1000) })
+onMounted(() => {
+  tick = setInterval(() => {
+    now.value = Date.now()
+    //Отсчёт дошёл до нуля — просим сервер закрыть таймер. Он подметает истёкшие при
+    //любом обращении, но САМ по себе ничего не делает: без этого толчка таймер висел бы
+    //с нулём на экране, держал место (второй не запустить) и не звонил бы.
+    //Один раз на таймер: `expiredAsked` не даёт долбить сервер каждую секунду.
+    if (visible.value && !paused.value && left.value === 0 && !expiredAsked) {
+      expiredAsked = true
+      act.refreshRunning(mine.value?.conversation_id)
+    }
+    if (left.value > 0) expiredAsked = false
+  }, 1000)
+})
 onBeforeUnmount(() => { if (tick) clearInterval(tick) })
 
 // Таймер ищем среди ВСЕХ идущих активностей, а не среди открытой: рядом с ним может

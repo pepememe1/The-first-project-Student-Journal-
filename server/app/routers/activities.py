@@ -267,6 +267,40 @@ def _sweep_stale(db: Session) -> None:
             a.status = "finished"
             a.finished_at = _now()
         db.commit()
+    _sweep_expired_timers(db)
+
+
+def _sweep_expired_timers(db: Session) -> None:
+    """Тайм-бокс, у которого вышло время, ЗАВЕРШАЕТСЯ САМ.
+
+    🔥 Прямое требование: «если время таймера закончилось, он висеть не должен — именно
+    ОТМЕНЯЕТСЯ, а не становится невидимым». Раньше отсчёт доходил до нуля, а активность
+    оставалась `running` — она держала место (второй таймер запустить нельзя) и тихо
+    висела в фоне. Завершаем ЗДЕСЬ, на сервере: клиент мог закрыть вкладку сразу после
+    старта, и надеяться, что кто-то нажмёт «завершить», нельзя.
+
+    Пауза не считается истечением: у остановленного таймера времени окончания нет, он
+    ждёт человека."""
+    for a in db.query(Activity).filter(Activity.kind == "timer",
+                                       Activity.status == "running").all():
+        snap = activity_state.get(a.id)
+        if snap is None:
+            continue
+        live = snap.get("payload") or {}
+        if live.get("paused"):
+            continue
+        ends = live.get("ends_at") or ""
+        if not ends or _seconds_left(ends) > 0:
+            continue
+        a.status = "finished"
+        a.finished_at = _now()
+        db.commit()
+        activity_state.drop(a.id)
+        #Кадр всем: по нему клиент гасит полоску и показывает окно с сигналом.
+        _emit(db, a.conversation_id,
+              {"type": "activity.finished", "activity_id": a.id,
+               "conversation_id": a.conversation_id, "finished_at": a.finished_at,
+               "summary": {"expired": True, "duration_s": int(live.get("duration_s") or 0)}})
 
 
 #Категории, которых в беседе может идти НЕСКОЛЬКО сразу. Опрос — сообщение в ленте, он
