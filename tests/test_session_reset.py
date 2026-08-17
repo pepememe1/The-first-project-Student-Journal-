@@ -2,7 +2,7 @@
 test_session_reset.py — Сброс синхронизируемого кэша и персистентный вход (без GUI).
 
 Проверяем, что reset_synced_local_data() стирает данные, синхронизируемые с сервером
-(students/teachers/groups/предметы/занятия/оценки + метку дельты), но СОХРАНЯЕТ
+(students/teachers/groups/занятия/оценки + метку дельты), но СОХРАНЯЕТ
 локальные настройки ПК (адрес сервера, device_id, токен, сохранённую сессию). Плюс
 lookup_session() и force_full_pull().
 """
@@ -13,19 +13,11 @@ from data import app_settings
 from sync import sync_engine
 from data.core import DBManager
 from data.data_store import get_store, reset_synced_local_data, local_get, local_set
-from subjects import load_subjects, save_subjects
+#ℹ️ `subjects.py` удалён 17.08.2026 (решение Ярослава: зависим чисто от портала
+#ВСГУТУ). Локального файла предметов больше нет — охранять от прогона нечего, а в
+#программу список приезжает синком в зеркальную копию `local_app.db`.
 
 
-@pytest.fixture(autouse=True)
-def _preserve_subjects():
-    """Тесты пишут предметы через save_subjects, а файл предметов в dev лежит рядом с
-    программой (не в temp как БД). Снимаем и восстанавливаем его, чтобы прогон тестов
-    не затирал рабочий subjects.json в репозитории."""
-    saved = load_subjects()
-    try:
-        yield
-    finally:
-        save_subjects(saved)
 
 
 def _seed_synced_data():
@@ -36,7 +28,6 @@ def _seed_synced_data():
                                      "subjects": ["Математика"]}})
     st.set_students([{"surname": "Петров", "name": "Пётр", "group": "ИС-21",
                       "login": "petrov", "password_hash": "h"}])
-    save_subjects(["Математика", "Физика"])
     conn = DBManager.get_conn(); cur = conn.cursor()
     cur.execute("INSERT OR REPLACE INTO lessons (id,group_name,subject,updated_at,deleted) "
                 "VALUES ('L1','ИС-21','Математика','2026-01-01T00:00:00+00:00',0)")
@@ -65,7 +56,6 @@ def test_reset_clears_synced_keeps_local(fresh_db):
     assert st.get_students() == []
     assert st.get_teachers() == {}
     assert st.get_groups() == []
-    assert load_subjects() == []
     assert data_store.get_sync_watermark() == ""
     conn = DBManager.get_conn(); cur = conn.cursor()
     assert cur.execute("SELECT COUNT(*) FROM lessons").fetchone()[0] == 0

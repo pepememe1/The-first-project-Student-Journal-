@@ -73,7 +73,7 @@ for d in desktop sync data; do
     INC="$INC --include-module=$d.$b"
   done
 done
-for b in grading subjects app_paths log; do
+for b in grading app_paths log; do
   INC="$INC --include-module=$b"
 done
 # reminder_parse — общий корневой модуль (как grading/vector_nlu), но с ЕДИНСТВЕННЫМ

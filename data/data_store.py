@@ -979,11 +979,10 @@ def reset_synced_local_data():
     #И метку push — кэш стёрт, «уже отправленного» больше нет; следующий push обязан
     #быть полным, иначе уцелевшие после реконсиляции локальные правки не уехали бы.
     set_push_watermark("")
-    try:
-        from subjects import save_subjects
-        save_subjects([])
-    except Exception as e:
-        log.get("data_store").warning(f"[reset] предметы не очищены: {e}")
+    #Предметы отдельной очистки больше не требуют: локального `subjects.json` нет с
+    #17.08.2026 (удалён вместе с `subjects.py` — список берётся с портала ВСГУТУ, а в
+    #программу приезжает обычным pull в зеркальную копию `local_app.db`). Саму таблицу
+    #`subjects` в зеркале чистит `clear_synced_tables()` ниже, как и остальные.
     try:
         from data.core import DBManager
         DBManager.clear_synced_tables()

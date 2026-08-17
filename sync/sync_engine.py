@@ -102,15 +102,16 @@ def _should_apply(inc_ts: str, cur_ts: str, inc_deleted: bool) -> bool:
 #Группы — так же (таблица groups): _collect_groups() / _merge_groups().
 
 
-#Предметы (list имён)  <->  subjects
-def subjects_to_rows(names: list) -> list:
-    return [{"id": f"subj:{n}", "name": n, "updated_at": _now(), "deleted": False}
-            for n in names if n]
-
-
-def rows_to_subjects(rows: list) -> list:
-    return sorted({r.get("name", "") for r in rows
-                   if not r.get("deleted") and r.get("name")})
+#🔥 ПЕРЕВОДЧИК ПРЕДМЕТОВ УДАЛЁН вместе с `subjects.py` (17.08.2026, решение Ярослава:
+#«зависим чисто от портала ВСГУТУ»). Здесь были `subjects_to_rows`/`rows_to_subjects` —
+#мост между локальным `subjects.json` и таблицей `subjects`.
+#Почему ушёл целиком, а не «починили направление»: список предметов десктоп брал ПЕРВЫМ
+#делом с портала (`schedule.store.subjects_all`), а `subjects.json` со встроенными 68
+#названиями был лишь откатом — то есть вторым, устаревающим источником правды. Он же и
+#воскрешал на сервере предметы, удалённые администратором на сайте: отправить надгробие
+#`subjects_to_rows` не умела в принципе, она штамповала `deleted: False` каждому имени.
+#Предметы для интерфейса программы приезжают обычным pull в `local_app.db` (зеркало, на
+#котором работает SPA) — этот путь не тронут.
 
 
 #Конфиг + админ
@@ -314,7 +315,6 @@ def collect_local(since: str = "") -> dict:
     `tests/test_sync_does_not_clobber_server_config.py`.
     Приём с сервера (`apply_remote`) НЕ ТРОНУТ: методика оценок и настройки по-прежнему
     приезжают на ПК и нужны офлайн-расчёту."""
-    from subjects import load_subjects
 
     def _safe(name: str, fn):
         """Позвать коллектор так, чтобы его сбой не уронил цикл — но и не солгал.
@@ -346,7 +346,15 @@ def collect_local(since: str = "") -> dict:
     users = _safe("users", _collect_users)
     return {
         "users": _filter_since(users, since),
-        "subjects": subjects_to_rows(_safe("subjects", load_subjects)),
+        #🔥 `subjects` НЕ УЕЗЖАЮТ (17.08.2026) — по той же причине и с тем же механизмом,
+        #что `config` выше. `subjects_to_rows` физически не умеет отправить надгробие: она
+        #штампует `deleted: False` каждому имени из локального списка. А push применяет
+        #правку по содержимому, значит удалённый на сайте предмет ОЖИВАЛ на сервере на
+        #ближайшем цикле — и так бесконечно, потому что из `subjects.json` имя не уходит
+        #никогда (приём делает ОБЪЕДИНЕНИЕ множеств, см. `apply_remote`). Свежая установка
+        #вдобавок досылала на бой ВСТРОЕННЫЙ список по умолчанию.
+        #Десктоп предметы не авторствует: локально `save_subjects` зовут только очистка
+        #кэша и наполнение дефолтом, каталог ведут на сайте.
         "groups": _filter_since(_safe("groups", _collect_groups), since),
         "lessons": _filter_since(_safe("lessons", _collect_lessons), since),
         "grades": _filter_since(_safe("grades", _collect_grades), since),
@@ -362,7 +370,6 @@ def apply_remote(changes: dict):
     """Применяет пришедшие с сервера изменения в локальное хранилище (LWW-слияние).
     Пишем с stamp=False — сохраняем серверные метки, чтобы синк не зациклился."""
     from data.data_store import get_store, _kv_set
-    from subjects import load_subjects, save_subjects
     st = get_store()
     users = changes.get("users", []) or []
 
@@ -375,10 +382,11 @@ def apply_remote(changes: dict):
     if changes.get("groups"):
         _merge_groups(changes["groups"])
 
-    #Предметы (объединение множеств)
-    if "subjects" in changes:
-        cur = set(load_subjects())
-        save_subjects(sorted(cur | set(rows_to_subjects(changes["subjects"]))))
+    #Предметы в локальный файл БОЛЬШЕ НЕ ПИШЕМ (`subjects.json` и `subjects.py` удалены).
+    #Их читал только этот же модуль, а интерфейсу программы предметы приезжают обычным
+    #pull в `local_app.db` — зеркальную копию, на которой работает SPA (`local_mirror`
+    #применяет ВСЕ таблицы SYNC_MODELS, включая `subjects`). То есть путь до экрана не
+    #тронут: убран второй, параллельный склад того же списка.
 
     #Конфиг (ключи) + хеш админа
     if "config" in changes or users:
