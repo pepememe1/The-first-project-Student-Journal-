@@ -121,6 +121,20 @@ def test_own_page_and_desktop_calls_still_work(api):
         "запрос со СВОЕГО origin (сама SPA) обязан пройти"
 
 
+def test_the_proxy_checks_the_origin_itself(api):
+    """У прокси СВОЯ проверка origin, независимая от общей заслонки.
+
+    Заслонка ставится в общем `try/except` с четырьмя другими надстройками: исключение в
+    любой из них оставило бы сервер работающим БЕЗ неё — при уже установленном прокси, то
+    есть с открытым отказом и одной строкой WARNING в логе. Прокси подставляет к запросу
+    БОЕВОЙ токен, поэтому здесь проверяем дважды и не полагаемся на порядок установки."""
+    import inspect
+    src = inspect.getsource(local_api.install_remote_proxy)
+    assert "_is_loopback_origin" in src, (
+        "прокси перестал проверять origin сам — теперь всё держится на том, что общая "
+        "заслонка успела встать")
+
+
 def test_a_lookalike_host_is_not_mistaken_for_the_loopback(api):
     """Похожий на петлю чужой домен — всё равно чужой.
 

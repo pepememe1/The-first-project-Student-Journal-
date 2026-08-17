@@ -1013,6 +1013,18 @@ def install_remote_proxy(app) -> None:
         path = request.url.path
         if not path.startswith(_PROXY_PREFIXES):
             return await call_next(request)
+        #🔒 ВТОРАЯ, независимая проверка origin — ровно здесь, а не только в общей заслонке
+        #(`install_origin_guard`). Причина названа адверсариальным ревью: заслонка ставится
+        #в общем `try/except` с четырьмя другими надстройками, и исключение в ЛЮБОЙ из них
+        #оставило бы сервер работающим БЕЗ неё — при уже установленном прокси. Отказ
+        #получался бы открытым, и единственным следом была бы строка WARNING в логе.
+        #Прокси — самое дорогое место в программе (он подставляет БОЕВОЙ токен), поэтому
+        #здесь дешевле проверить дважды, чем один раз положиться на порядок установки.
+        origin = (request.headers.get("origin") or "").strip()
+        if origin and not _is_loopback_origin(origin):
+            _LOG.warning(f"[proxy] отклонён запрос со стороннего origin: {origin}")
+            return Response(content='{"detail":"forbidden"}'.encode(),
+                            status_code=403, media_type="application/json")
         #🔒 СНАЧАЛА проверяем, КТО спрашивает, и только потом подставляем боевой токен.
         #Без этой проверки прокси был дырой: он подменял Authorization токеном вошедшего,
         #не глядя на присланный, — значит переписку мог прочитать (и писать от лица
