@@ -536,6 +536,9 @@ export const activitiesApi = {
   start: (conversationId, kind, params = {}, title = '') =>
     api.post('/web/messenger/activities/start',
       { conversation_id: conversationId, kind, params, title }),
+  //Все идущие активности беседы: их может быть несколько разных категорий.
+  running: (conversationId) =>
+    api.get('/web/messenger/activities/running', { params: { conversation_id: conversationId } }),
   current: (conversationId) =>
     api.get('/web/messenger/activities/current', { params: { conversation_id: conversationId } }),
   get: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}`),
@@ -566,6 +569,9 @@ export const activitiesApi = {
   answer: (id, answer) =>
     api.post(`/web/messenger/activities/${encodeURIComponent(id)}/answer`, { answer }),
   next: (id) => api.post(`/web/messenger/activities/${encodeURIComponent(id)}/next`),
+  //Шкала прогресса у ведущего: только число пройденных заданий, без ответов.
+  progress: (id, answered) =>
+    api.post(`/web/messenger/activities/${encodeURIComponent(id)}/progress`, { answered }),
   results: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/results`),
   // Библиотека викторин.
   quizzes: (params = {}) => api.get('/web/messenger/activities/quizzes', { params }),

@@ -87,16 +87,63 @@ def student_records(db, surname: str, name: str, group: str | None = None,
 
 def current_term(cfg: dict) -> tuple:
     """Текущий учебный термин (год, семестр) из config, иначе — дефолт по дате.
-    Год «YYYY/YYYY+1», семестр 1 (осень) | 2 (весна)."""
+    Год «YYYY/YYYY+1», семестр 1 (осень) | 2 (весна).
+
+    🔥 ОВЕРРАЙД ИЗ БУДУЩЕГО ИГНОРИРУЕТСЯ, и это не перестраховка. Дважды — в 3.6.1 и
+    снова 15.08.2026 — в `ConfigKV` оставался ручной ключ от кнопки «Перевод на курс»
+    (`{'current_year': '2026/2027', 'current_semester': 1}` при живом августе 2026).
+    Последствие каждый раз одно: от термина считается КУРС студента, импорт учебного
+    плана записывает предметы следующего курса, и у группы оказываются предметы двух
+    курсов сразу — у куратора одни, в админке другие. Оба раза чинилось руками в базе.
+
+    Оверрайд НАЗАД (посмотреть закрытый семестр) — законный сценарий и работает как
+    прежде. Оверрайд ВПЕРЁД означает, что продукт штампует новые данные периодом,
+    который ещё не наступил, — законного применения у этого нет, а цена измерена.
+    """
     from . import db as _db
+    base = _db.default_term()
     y = (cfg.get("current_year") or "").strip()
     s = cfg.get("current_semester")
     if y and s:
         try:
-            return y, int(s)
+            override = (y, int(s))
         except (TypeError, ValueError):
-            pass
+            return base
+        if _term_key(override) > _term_key(base):
+            #Раз в запуск: строка на каждый запрос превратила бы лог в шум, а молчать
+            #нельзя — прошлые два раза оверрайд нашли только прямым разбором боевой базы.
+            global _future_term_warned
+            if not _future_term_warned:
+                _future_term_warned = True
+                import logging
+                logging.getLogger("gradebook.webdata").warning(
+                    "[термин] ручной оверрайд %s указывает в БУДУЩЕЕ относительно "
+                    "календарного %s — игнорирую. Ключи current_year/current_semester в "
+                    "таблице config стоит убрать: они уже дважды приводили к предметам "
+                    "двух курсов сразу.", override, base)
+            return base
+        return override
+    return base
+
+
+_future_term_warned = False
+
+
+def default_term_by_date() -> tuple:
+    """Термин ПО КАЛЕНДАРЮ, без оглядки на ручной оверрайд. Нужен тем, кто проверяет сам
+    оверрайд (`routers/web/terms.py`), — через `current_term` они получили бы уже
+    отфильтрованное значение и сравнивали бы его само с собой."""
+    from . import db as _db
     return _db.default_term()
+
+
+def _term_key(term: tuple) -> tuple:
+    """Сравнимый ключ термина: («2025/2026», 2) → (2025, 2). Мусор → (0, 0), то есть
+    заведомо «старее» любого настоящего — неразборчивый оверрайд не должен побеждать."""
+    try:
+        return int(str(term[0]).split("/")[0]), int(term[1])
+    except (TypeError, ValueError, IndexError):
+        return 0, 0
 
 
 def group_lessons(db, group: str, subject: str | None = None,

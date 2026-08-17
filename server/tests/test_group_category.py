@@ -206,7 +206,8 @@ def test_import_schedule_category_all_creates_groups_with_subjects(client, monke
                     json={"category": "bakalavriat"}, headers=admin)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"ok": True, "building": False, "imported": 2, "skipped": 0, "total": 2}
+    assert body == {"ok": True, "building": False, "imported": 2, "updated": 0,
+                    "skipped": 0, "total": 2}
 
     groups = {g["name"]: g for g in client.get("/web/admin/groups", headers=admin).json()["groups"]}
     assert groups["Б165"]["category"] == "bakalavriat"
@@ -214,9 +215,14 @@ def test_import_schedule_category_all_creates_groups_with_subjects(client, monke
     assert groups["Б175"]["subjects"] == ["Химия"]
 
 
-def test_import_schedule_category_all_skips_already_imported(client, monkeypatch):
-    """Повторный запуск (или группа, заведённая по одной раньше) — не дублирует и
-    не 409-ит, просто считает её «уже была»."""
+def test_import_schedule_category_all_updates_already_imported(client, monkeypatch):
+    """Уже заведённая группа не дублируется и не 409-ит — её предметы ОБНОВЛЯЮТСЯ по
+    расписанию и считаются в `updated` (раньше такая группа молча пропускалась, и
+    «Все» никогда не догоняла портал; парсинг обязан быть одинаковым у всех кнопок).
+
+    Второй прогон подряд — уже no-op: список совпал, `updated` снова 0. Без этой
+    половины теста «обновляем всегда» было бы неотличимо от «обновляем, когда надо»,
+    а каждый холостой прогон двигал бы `updated_at` и гнал бы группу в синк заново."""
     admin = make_admin(client)
     snap = _two_group_snapshot(monkeypatch)
     from app import schedule_web
@@ -229,7 +235,17 @@ def test_import_schedule_category_all_skips_already_imported(client, monkeypatch
                     json={"category": "bakalavriat"}, headers=admin)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["imported"] == 1 and body["skipped"] == 1 and body["total"] == 2
+    assert body["imported"] == 1 and body["updated"] == 1 and body["total"] == 2
+    assert body["skipped"] == 0, "нетронутых групп больше не бывает"
+
+    groups = [g for g in client.get("/web/admin/groups", headers=admin).json()["groups"]
+              if g["name"] == "Б165"]
+    assert len(groups) == 1, f"группа не должна задвоиться: {groups}"
+    assert groups[0]["subjects"] == ["Физика"]
+
+    again = client.post("/web/admin/groups/import-schedule-category-all",
+                        json={"category": "bakalavriat"}, headers=admin).json()
+    assert again["imported"] == 0 and again["updated"] == 0, "повтор без изменений — no-op"
 
 
 def test_import_schedule_category_all_backfills_subjects_of_empty_existing_group(client, monkeypatch):
@@ -251,9 +267,19 @@ def test_import_schedule_category_all_backfills_subjects_of_empty_existing_group
     assert groups["Б165"]["subjects"] == ["Физика"]
 
 
-def test_import_schedule_category_all_does_not_overwrite_existing_subjects(client, monkeypatch):
-    """А вот НЕПУСТОЙ список (в т.ч. правленный вручную админом) — не re-sync, «Все»
-    не должна тихо подменять то, что уже задано."""
+def test_import_schedule_category_all_replaces_subjects_and_archives_the_dropped_one(client,
+                                                                                    monkeypatch):
+    """НЕПУСТОЙ список тоже ЗАМЕНЯЕТСЯ данными расписания — ровно как в одиночном
+    импорте, и это главное в правке: раньше «Все» такую группу не трогала никогда.
+
+    Выпавший предмет обязан уйти в АРХИВ, а не остаться висеть: его строка часов
+    гасится (`deleted`), и вместе с ней открепляются ОБА преподавателя — иначе
+    предмет, вернувшийся в план через полгода, оживал бы с назначениями, которых
+    никто не делал, а его ЗЕТ до тех пор утекал бы в знаменатель зачёта.
+
+    Проверяем и через API (активный редактор часов предмета больше не показывает),
+    и прямо в строке БД: сам факт исчезновения из выдачи даёт и простое удаление
+    строки, а нам нужно именно гашение с обнулёнными слотами преподавателей."""
     admin = make_admin(client)
     snap = _two_group_snapshot(monkeypatch)
     from app import schedule_web
@@ -262,12 +288,46 @@ def test_import_schedule_category_all_does_not_overwrite_existing_subjects(clien
     client.post("/web/admin/groups",
                json={"name": "Б165", "category": "bakalavriat", "subjects": ["Своё"]},
                headers=admin)
+    #Раздельное обучение — чтобы занять ОБА слота преподавателя: teacher_id_2 раньше
+    #переживал уход предмета из плана, и его открепление проверять надо отдельно.
+    r = client.post("/web/curator/subject-split",
+                    json={"group": "Б165", "subject": "Своё", "split": True}, headers=admin)
+    assert r.status_code == 200, r.text
+    make_teacher(client, admin, login="t1", password="pass1234", subjects=["Своё"])
+    make_teacher(client, admin, login="t2", password="pass1234", subjects=["Своё"])
+    r = client.post("/web/admin/group-hours",
+                    json={"group": "Б165", "hours": {"Своё": 36},
+                          "teachers": {"Своё": "teach:t1"}, "teachers2": {"Своё": "teach:t2"}},
+                    headers=admin)
+    assert r.status_code == 200, r.text
+    before = next(s for s in client.get("/web/admin/group-hours?group=Б165", headers=admin)
+                  .json()["subjects"] if s["subject"] == "Своё")
+    assert before["teacher_id"] == "teach:t1", before
 
-    client.post("/web/admin/groups/import-schedule-category-all",
-               json={"category": "bakalavriat"}, headers=admin)
+    body = client.post("/web/admin/groups/import-schedule-category-all",
+                       json={"category": "bakalavriat"}, headers=admin).json()
+    assert body["updated"] == 1, body
 
     groups = {g["name"]: g for g in client.get("/web/admin/groups", headers=admin).json()["groups"]}
-    assert groups["Б165"]["subjects"] == ["Своё"]
+    assert groups["Б165"]["subjects"] == ["Физика"], "предметы обязаны прийти из расписания"
+
+    after = client.get("/web/admin/group-hours?group=Б165", headers=admin).json()["subjects"]
+    assert not any(s["subject"] == "Своё" for s in after), after
+
+    from app.db import SessionLocal
+    from app.models import SubjectHours
+    db = SessionLocal()
+    try:
+        row = (db.query(SubjectHours)
+               .filter(SubjectHours.group_name == "Б165", SubjectHours.subject == "Своё")
+               .first())
+        assert row is not None, "строка часов гасится, а не удаляется — история не стирается"
+        assert row.deleted is True, "выпавший предмет обязан уйти в архив"
+        assert row.teacher_id == "" and row.teacher_id_2 == "", \
+            f"оба преподавателя обязаны открепиться: {row.teacher_id!r}/{row.teacher_id_2!r}"
+        assert row.hours_total == 36, "часы остаются в архивной строке — это архив, не удаление"
+    finally:
+        db.close()
 
 
 def test_import_schedule_category_all_reports_building(client, monkeypatch):

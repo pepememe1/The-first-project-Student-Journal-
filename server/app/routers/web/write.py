@@ -581,17 +581,37 @@ def _archive_dropped_subjects(db, group: str, old_subjects, new_subjects, now: s
     подмешивается в ТЕКУЩИЙ план. Повторное добавление того же предмета обратно в
     Group.subjects находит ЭТУ ЖЕ строку по составному id (`subject_hours_id`) и
     снимает с неё `deleted` — второй записи не создаётся. Архивные (прошлый термин)
-    строки не трогаем — история не переписывается."""
-    dropped = set(old_subjects or []) - set(new_subjects or [])
+    строки не трогаем — история не переписывается.
+
+    ⚠️ ЗОВЁТСЯ ИЗ ВСЕХ путей, заменяющих `Group.subjects`, и список этот закреплён
+    тестом (`test_every_subject_writer_archives`): раньше её звали три пути из пяти, и
+    импорт категории расписания — что одиночный, что массовый — менял предметы, оставляя
+    старые часы и назначенных преподавателей висеть. Прямое требование: «если меняются
+    предметы, ВСЕ прикреплённые преподы по предмету у этой группы открепляются».
+
+    Сравнение идёт по НОРМАЛИЗОВАННЫМ именам (`strip_subgroup_tag`): один источник
+    пишет «Информатика», другой — «Информатика- 1 п/г», и без нормализации выпавшим
+    считался бы предмет, который на самом деле остался, а настоящий выпавший — нет."""
+    def _norm(names):
+        return {W.strip_subgroup_tag(s) for s in (names or []) if s and W.strip_subgroup_tag(s)}
+
+    dropped = _norm(old_subjects) - _norm(new_subjects)
     if not dropped:
         return
     ty, ts = W.current_term(W.load_config(db))
     rows = (db.query(SubjectHours)
-            .filter(SubjectHours.group_name == group, SubjectHours.subject.in_(dropped),
+            .filter(SubjectHours.group_name == group,
                     SubjectHours.year == ty, SubjectHours.semester == ts,
                     SubjectHours.deleted == False).all())  # noqa: E712
     for r in rows:
+        #Фильтр по имени — в Python, а не в SQL: в базе имя может лежать с меткой
+        #подгруппы, и `IN (...)` по сырым строкам такую строку не нашёл бы.
+        if W.strip_subgroup_tag(r.subject or "") not in dropped:
+            continue
+        #Открепляем ОБОИХ. `teacher_id_2` раньше оставался, и предмет, вернувшийся в
+        #план через полгода, оживал со вторым преподавателем, которого никто не назначал.
         r.teacher_id = ""
+        r.teacher_id_2 = ""
         r.deleted = True
         r.updated_at = now
 
@@ -683,6 +703,10 @@ def admin_import_schedule_category(payload: dict = Body(...),
     if existing is None:
         db.add(row)
     row.name = group_name
+    #Меняем список предметов — значит выпавшие обязаны уйти в архив вместе со своими
+    #преподавателями. Раньше этот путь их не трогал вовсе: предметы подменялись, а часы
+    #и назначения оставались висеть от прошлого набора (см. докстринг функции).
+    _archive_dropped_subjects(db, group_name, row.subjects, subjects, _now_iso())
     row.subjects = subjects
     row.category = category
     row.updated_at = _now_iso()
@@ -723,37 +747,42 @@ def admin_import_schedule_category_all(payload: dict = Body(...),
 
     now = _now_iso()
     imported = 0
-    skipped = 0
+    updated = 0
     for name, gsched in snap.groups.items():
         gid = f"grp:{name}"
         existing = db.get(Group, gid)
+        subs = gsched.subjects()
         if existing is not None and not existing.deleted:
-            skipped += 1
-            #Бэкфилл: группа могла быть заведена ДО того, как одиночный/массовый импорт
-            #стали подставлять предметы (или портал не ответил в момент её импорта) —
-            #раз уж расписание всё равно только что разобрано, доливаем предметы
-            #в пустую запись бесплатно. ТОЛЬКО пустую — уже заполненные (в т.ч. вручную
-            #админом) не трогаем, это не re-sync существующих данных.
-            if not existing.subjects:
-                subs = gsched.subjects()
-                if subs:
-                    existing.subjects = subs
-                    existing.updated_at = now
+            #🔥 РАНЬШЕ ЗДЕСЬ БЫЛ `continue` с бэкфиллом ТОЛЬКО пустого списка, и это была
+            #та самая разница между «импортировать по одной» и «импортировать все»:
+            #одиночный импорт список ЗАМЕНЯЛ, массовый — уже заполненную группу не трогал
+            #никогда. Группа, импортированная однажды, устаревала навсегда, и админ,
+            #нажавший «Все», честно считал, что обновил всё.
+            #Прямое требование: парсинг обязан быть ОДИНАКОВЫМ у всех кнопок.
+            if subs and list(existing.subjects or []) != list(subs):
+                _archive_dropped_subjects(db, name, existing.subjects, subs, now)
+                existing.subjects = subs
+                existing.updated_at = now
+                updated += 1
             continue
         row = existing or Group(id=gid)
         if existing is None:
             db.add(row)
         row.name = name
-        row.subjects = gsched.subjects()
+        row.subjects = subs
         row.category = category
         row.updated_at = now
         row.deleted = False
         imported += 1
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="group.import_schedule_category_all",
-              target=category, detail=f"imported={imported} skipped={skipped}")
-    return {"ok": True, "building": building, "imported": imported, "skipped": skipped,
-           "total": len(snap.groups)}
+              target=category, detail=f"imported={imported} updated={updated}")
+    #`skipped` оставлен в ответе для старых клиентов: раньше он значил «группа уже была и
+    #мы её не тронули». Теперь нетронутых нет — есть обновлённые, поэтому отдаём 0, а
+    #настоящее число несём в новом поле. Убрать ключ совсем значило бы сломать разбор
+    #ответа у сборки, которая ещё не обновилась.
+    return {"ok": True, "building": building, "imported": imported, "updated": updated,
+            "skipped": 0, "total": len(snap.groups)}
 
 
 @router.post("/admin/groups/bind-subjects")

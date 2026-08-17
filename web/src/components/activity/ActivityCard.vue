@@ -45,21 +45,28 @@ const elapsed = computed(() => {
 </script>
 
 <template>
-  <div class="my-1 flex justify-start">
+  <!-- Активность стоит ПО ЦЕНТРУ ленты разделителем, как метка даты, а не пузырём
+       сообщения слева. Причина не косметическая: активность — не чья-то реплика, а
+       событие всей беседы, и пузырь от лица преподавателя читался как его сообщение,
+       которое можно процитировать, переслать или удалить. Разделитель этого не обещает.
+       Кликабелен целиком, пока активность идёт. -->
+  <div class="my-3 flex items-center gap-3">
+    <span class="h-px min-w-4 flex-1 bg-border2" />
     <button type="button" :disabled="!running" @click="act.open(activity.id)"
-            class="flex min-w-0 items-center gap-2 rounded-2xl border border-border2 bg-card px-4 py-2 text-left text-sm shadow-sm transition-colors"
-            :class="running ? 'font-semibold text-accent hover:bg-bg2' : 'cursor-default text-text3'">
+            class="flex max-w-[80%] min-w-0 items-center gap-2 rounded-full border px-4 py-1.5 text-center text-sm transition-colors"
+            :class="running
+              ? 'border-accent/40 bg-accent/10 font-semibold text-accent hover:bg-accent/20'
+              : 'cursor-default border-border2 bg-bg2 text-text3'">
       <component :is="icon" class="size-4 shrink-0" />
-      <span class="flex min-w-0 flex-col leading-tight">
-        <span class="truncate">
-          {{ activity.title || kindLabel }}
-          <span v-if="activity.title" class="font-medium text-text2">· {{ kindLabel }}</span>
-        </span>
-        <span class="text-[11px] font-medium text-text3">
-          {{ running ? locale.t('activity.card.running', 'идёт') : locale.t('activity.card.finished', 'завершена') }}
-          · {{ elapsed }}
-        </span>
+      <span class="min-w-0 truncate">
+        {{ activity.title || kindLabel }}
+        <span v-if="activity.title" class="font-medium opacity-70">· {{ kindLabel }}</span>
+      </span>
+      <span class="shrink-0 text-[11px] font-medium opacity-70">
+        {{ running ? locale.t('activity.card.running', 'идёт') : locale.t('activity.card.finished', 'завершена') }}
+        · {{ elapsed }}
       </span>
     </button>
+    <span class="h-px min-w-4 flex-1 bg-border2" />
   </div>
 </template>

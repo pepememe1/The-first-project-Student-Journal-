@@ -21,12 +21,22 @@ def terms(user: User = Depends(get_current_user), db: Session = Depends(get_db))
 @router.post("/admin/term/rollover")
 def admin_term_rollover(payload: dict = Body(default={}), request: Request = None,
                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Перевод на следующий учебный период (перевод на курс).
+    """Перевод учебного периода вручную.
 
-    Продвигает ТЕКУЩИЙ термин: семестр 1→2 (тот же год) или 2→1 (год +1). Прошлые
-    занятия остаются в своём периоде и становятся read-only (архив, см. _ensure_current_term).
-    Ростер/группы НЕ трогаем — новый семестр наполняется занятиями заново. Можно задать
-    явные year+semester в теле. Текущий термин хранится в config (синкается на десктоп)."""
+    Прошлые занятия остаются в своём периоде и становятся read-only (архив, см.
+    `_ensure_current_term`). Ростер/группы НЕ трогаем. Термин хранится в config.
+
+    🔥 ВПЕРЁД ДВИГАТЬ НЕЛЬЗЯ, и это главное в этой функции. Дважды — в 3.6.1 и снова
+    15.08.2026 — оставленный ею ключ уводил продукт на год вперёд календаря, а от термина
+    считается КУРС студента: импорт учебного плана записывал предметы СЛЕДУЮЩЕГО курса, и
+    у группы оказывались предметы двух курсов сразу (у куратора одни, в админке другие).
+    Оба раза чинилось руками в боевой базе.
+
+    Двигать вперёд не нужно вовсе: 1 сентября календарь переключается сам
+    (`db.default_term`). Поэтому попытка уйти в будущее — 400 с объяснением, а не тихая
+    запись. Назад (открыть закрытый семестр) по-прежнему можно — это законный сценарий.
+    Вторая заслонка стоит в `webdata.current_term`: она игнорирует будущий оверрайд, если
+    он уже лежит в базе с прошлых раз."""
     cfg = W.load_config(db)
     cy, cs = W.current_term(cfg)
     ny = (payload.get("year") or "").strip()
@@ -42,6 +52,14 @@ def admin_term_rollover(payload: dict = Body(default={}), request: Request = Non
         except Exception:
             new_year = cy
         new_sem = 1
+    #Заслонка: уйти в термин, который календарь ещё не прошёл, нельзя (см. докстринг).
+    if W._term_key((new_year, new_sem)) > W._term_key(W.default_term_by_date()):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Период {new_year}·{new_sem} ещё не наступил по календарю "
+                    f"(сейчас {'·'.join(map(str, W.default_term_by_date()))}). Вперёд "
+                    f"учебный период переключается сам 1 сентября — ручной сдвиг уже "
+                    f"дважды приводил к предметам двух курсов сразу."))
     row = db.get(ConfigKV, "config")
     cur = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
     cur["current_year"] = new_year

@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import activity_grading, activity_state, audit
@@ -153,6 +154,47 @@ def _emit(db: Session, conv_id: str, data: dict) -> None:
         pass
 
 
+def _emit_to(user_ids: list, data: dict) -> None:
+    """Кадр КОНКРЕТНЫМ людям (например, распределение голосов — только автору опроса).
+
+    Отдельно от `_emit`: тот рассылает всем участникам беседы, а есть данные, которые
+    в общей рассылке прочитали бы все. Так же не роняет запрос: сокет — ускоритель."""
+    try:
+        from .messenger import ws_manager
+        ws_manager.emit_users(user_ids, data)
+    except Exception:
+        pass
+
+
+def _emit_host_progress(db: Session, a: Activity) -> None:
+    """Свежая шкала прохождения — ТОЛЬКО ведущему.
+
+    🔥 Без этого мониторинг выглядел мёртвым, и это была настоящая поломка, а не мелочь.
+    `progress` считается в проекции состояния (`_state_for`), то есть попадает клиенту
+    ОДИН раз — при открытии активности. Кадры по сокету несут только изменившиеся поля
+    (`walk_bump`, `submitted_count`, `answered_count`), а клиент их просто подмешивает —
+    значит `progress` после открытия не обновлялся НИКОГДА: преподаватель смотрел на
+    список, застывший в момент, когда ещё никто не начинал.
+
+    Кадр адресный: чужой прогресс студентам не полагается. И со СВОИМ `seq` — клиент
+    отбрасывает кадры с номером не больше текущего, поэтому повторить номер предыдущей
+    рассылки нельзя, иначе шкала молча не приехала бы.
+    """
+    if a.kind not in ("quiz", "contest") or not a.host_id:
+        return
+    snap = activity_state.bump(a.id)
+    if snap is None:
+        return
+    payload = dict(snap.get("payload") or {})
+    answers = payload.get("answers") or {}
+    _host_progress(db, a, payload, answers)
+    _emit_to([a.host_id],
+             {"type": "activity.state", "activity_id": a.id,
+              "conversation_id": a.conversation_id, "seq": snap["seq"],
+              "payload": {k: payload[k] for k in ("progress", "participants",
+                                                  "total_questions") if k in payload}})
+
+
 def _emit_state(db: Session, a: Activity, snapshot: dict | None) -> None:
     if not snapshot:
         return
@@ -197,8 +239,18 @@ def _question_out(q: QuizQuestion, options: list, with_key: bool, shuffle_seed: 
             cell["match_key"] = o.match_key or ""
             cell["correct_position"] = int(o.correct_position or 0)
         out_opts.append(cell)
-    return {"id": q.id, "order_no": int(q.order_no or 0), "type": q.type or "single",
-            "text": q.text or "", "points": int(q.points or 1), "options": out_opts}
+    out = {"id": q.id, "order_no": int(q.order_no or 0), "type": q.type or "single",
+           "text": q.text or "", "points": int(q.points or 1), "options": out_opts}
+    #Сопоставление: без списка правых половин студенту нечего выбирать — раньше он
+    #ВПИСЫВАЛ пару руками, то есть попадал в ответ только дословным совпадением.
+    #🔒 Сам список ключ НЕ раскрывает: он перемешан и не привязан к вариантам, поэтому
+    #«какая половина к какой» по нему не восстановить — это ровно те же слова, что и так
+    #написаны на экране, только в другом порядке.
+    if (q.type or "single") == "match" and not with_key:
+        pool = sorted({(o.match_key or "").strip() for o in options if (o.match_key or "").strip()},
+                      key=lambda s: _stable_hash(f"{shuffle_seed}|pool|{s}"))
+        out["match_pool"] = pool
+    return out
 
 
 def _stable_hash(s: str) -> str:
@@ -211,7 +263,7 @@ def _stable_hash(s: str) -> str:
 
 def _quiz_out(q: QuizSet, questions_count: int = 0) -> dict:
     return {"id": q.id, "author_id": q.author_id, "title": q.title or "",
-            "description": q.description or "", "tags": list(q.tags or []),
+            "description": q.description or "", "tags": list(q.tags or []), "time_limit_s": int(q.time_limit_s or 0), "kind": q.kind or "quiz",
             "visibility": q.visibility or "private", "parent_id": q.parent_id or "",
             "created_at": q.created_at or "", "updated_at": q.updated_at or "",
             "questions_count": questions_count}
@@ -244,6 +296,146 @@ def _sweep_stale(db: Session) -> None:
             a.status = "finished"
             a.finished_at = _now()
         db.commit()
+    _sweep_expired_timers(db)
+    _advance_expired_contests(db)
+
+
+def _advance_expired_contests(db: Session) -> None:
+    """Соревнование: время вопроса вышло — переходим к следующему САМИ, а после
+    последнего завершаем активность.
+
+    🔥 Прямое требование и одновременно починка тупика: на последнем вопросе «следующий»
+    отвечал ошибкой «вопросы закончились», выбрать ответ было уже нельзя, а итоги
+    появлялись, только если ведущий вручную нажимал «завершить». Теперь ход ведёт время,
+    как в любой викторине-игре, а ведущий может обогнать его кнопкой.
+
+    Двигает СЕРВЕР, а не клиент: у каждого свои часы, и переход по клиентскому таймеру
+    у тридцати человек случился бы тридцать раз в разные моменты."""
+    for a in db.query(Activity).filter(Activity.kind == "contest",
+                                       Activity.status == "running").all():
+        snap = activity_state.get(a.id)
+        if snap is None:
+            continue
+        live = snap.get("payload") or {}
+        idx = int(live.get("question_index", -1))
+        ends = live.get("question_ends_at") or ""
+        if idx < 0 or not ends or _seconds_left(ends) > 0:
+            continue                       #ещё не стартовали или время не вышло
+        quiz_id = (a.params or {}).get("quiz_id") or ""
+        total = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id).count()
+        if idx + 1 < total:
+            _contest_show(db, a, idx + 1, total)
+        else:
+            _finish_activity_row(db, a, save=False, expired=True)
+
+
+def _contest_show(db: Session, a: Activity, idx: int, total: int) -> None:
+    """Показать вопрос №idx ВСЕМ. Одна реализация на кнопку ведущего и на автопереход по
+    времени — иначе ход соревнования зависел бы от того, кто его сдвинул."""
+    import time
+    limit_ms = int((a.params or {}).get("limit_ms") or 30000)
+    snap = activity_state.patch(a.id, {
+        "question_index": idx,
+        "question_started_ms": int(time.monotonic() * 1000),
+        "question_ends_at": _plus_seconds(_now(), limit_ms / 1000.0),
+    })
+    if snap is None:
+        return
+    _emit(db, a.conversation_id,
+          {"type": "activity.state", "activity_id": a.id,
+           "conversation_id": a.conversation_id, "seq": snap["seq"],
+           "payload": {"question_index": idx, "total": total, "limit_ms": limit_ms,
+                       "question_ends_at": snap["payload"]["question_ends_at"],
+                       "answered_count": 0}})
+    _emit_host_progress(db, a)
+
+
+def _finish_activity_row(db: Session, a: Activity, save: bool = False,
+                         expired: bool = False) -> dict:
+    """Завершить активность и разослать итог. Общая для кнопки ведущего и для завершения
+    ПО ВРЕМЕНИ: иначе у автозавершения не было бы ни итогов, ни события, и участники
+    остались бы на экране вопроса навсегда.
+
+    Итог считаем ДО снятия состояния из памяти: после `drop` считать уже нечего."""
+    summary = _finalize(db, a, (activity_state.get(a.id) or {}).get("payload") or {}, save)
+    if expired:
+        summary = {**summary, "expired": True}
+    a.status = "finished"
+    a.finished_at = _now()
+    db.commit()
+    activity_state.drop(a.id)
+    _emit(db, a.conversation_id,
+          {"type": "activity.finished", "activity_id": a.id,
+           "conversation_id": a.conversation_id,
+           "finished_at": a.finished_at, "summary": summary})
+    try:
+        from .messenger import _broadcast
+        _broadcast(db, a.conversation_id)
+    except Exception:
+        pass
+    return summary
+
+
+def _sweep_expired_timers(db: Session) -> None:
+    """Тайм-бокс, у которого вышло время, ЗАВЕРШАЕТСЯ САМ.
+
+    🔥 Прямое требование: «если время таймера закончилось, он висеть не должен — именно
+    ОТМЕНЯЕТСЯ, а не становится невидимым». Раньше отсчёт доходил до нуля, а активность
+    оставалась `running` — она держала место (второй таймер запустить нельзя) и тихо
+    висела в фоне. Завершаем ЗДЕСЬ, на сервере: клиент мог закрыть вкладку сразу после
+    старта, и надеяться, что кто-то нажмёт «завершить», нельзя.
+
+    Пауза не считается истечением: у остановленного таймера времени окончания нет, он
+    ждёт человека."""
+    for a in db.query(Activity).filter(Activity.kind == "timer",
+                                       Activity.status == "running").all():
+        snap = activity_state.get(a.id)
+        if snap is None:
+            continue
+        live = snap.get("payload") or {}
+        if live.get("paused"):
+            continue
+        ends = live.get("ends_at") or ""
+        if not ends or _seconds_left(ends) > 0:
+            continue
+        a.status = "finished"
+        a.finished_at = _now()
+        db.commit()
+        activity_state.drop(a.id)
+        #Кадр всем: по нему клиент гасит полоску и показывает окно с сигналом.
+        _emit(db, a.conversation_id,
+              {"type": "activity.finished", "activity_id": a.id,
+               "conversation_id": a.conversation_id, "finished_at": a.finished_at,
+               "summary": {"expired": True, "duration_s": int(live.get("duration_s") or 0)}})
+
+
+#Категории, которых в беседе может идти НЕСКОЛЬКО сразу. Опрос — сообщение в ленте, он
+#никому не мешает и живёт своей жизнью; остальные занимают экран или ведут ход, и две
+#одинаковых означали бы два источника правды «что сейчас идёт».
+_MULTI_ALLOWED = ("poll",)
+
+
+def _running_same_kind(db: Session, conv_id: str, kind: str) -> Activity | None:
+    """Идущая активность ТОЙ ЖЕ категории (или None).
+
+    ⚠️ Правило сменилось по живому отзыву: раньше беседа держала ОДНУ активность любого
+    вида, и запустить таймер рядом с викториной было нельзя — а это ровно то, что делают
+    на паре. Теперь ограничение точечное: два таймера или два среза одновременно
+    по-прежнему бессмысленны (два отсчёта на экране, два одинаковых опроса понимания),
+    а таймер рядом с доской — нормальная работа."""
+    if kind in _MULTI_ALLOWED:
+        return None
+    for a in (db.query(Activity)
+              .filter(Activity.conversation_id == conv_id, Activity.status == "running",
+                      Activity.kind == kind)
+              .order_by(Activity.started_at.desc()).all()):
+        if activity_state.get(a.id) is not None:
+            return a
+        #След рестарта: строка «running» без состояния в памяти — закрываем на месте.
+        a.status = "finished"
+        a.finished_at = _now()
+        db.commit()
+    return None
 
 
 def _running_in(db: Session, conv_id: str) -> Activity | None:
@@ -266,6 +458,17 @@ def _running_in(db: Session, conv_id: str) -> Activity | None:
     return a
 
 
+#Категории, которые оставляют отметку в ленте беседы. Таймер и срез понимания её НЕ
+#оставляют: они живут минуты, всплывают у всех сами и в историю возвращаться незачем —
+#отметка о каждом запуске засоряла бы переписку. Опрос ведёт себя иначе и разбирается
+#отдельно: он и есть сообщение в чате с кнопками (как в Telegram), а не ссылка на оверлей.
+_LEAVES_TRACE_IN_FEED = ("quiz", "contest", "board", "poll")
+#Опрос оставляет след ОСОБЫМ видом сообщения: он и ЕСТЬ сообщение с кнопками, как в
+#Telegram, — голосуют прямо в ленте, не открывая ничего. Остальные категории оставляют
+#карточку-ссылку на оверлей.
+_KIND_OF_FEED_MESSAGE = {"poll": "poll"}
+
+
 def _initial_payload(kind: str, params: dict) -> dict:
     """Начальное живое состояние по категории."""
     if kind == "timer":
@@ -275,7 +478,7 @@ def _initial_payload(kind: str, params: dict) -> dict:
         #votes — {user_id: индекс варианта}. Голос НЕ анонимен для сервера осознанно:
         #иначе ни накрутку не поймать, ни ошибочное нажатие не исправить. В интерфейсе
         #формулировка честная — «результаты видит только преподаватель».
-        return {"votes": {}}
+        return {"votes": {}, "public_votes": bool(params.get("public_votes"))}
     if kind == "pulse":
         return {"open": True, "answered": []}
     if kind == "board":
@@ -305,7 +508,19 @@ def _validate_start(db: Session, kind: str, params: dict, user: User) -> dict:
             raise HTTPException(status_code=400, detail="Нужен текст вопроса")
         if len(options) < 2:
             raise HTTPException(status_code=400, detail="Нужно хотя бы два варианта")
-        return {"question": question, "options": options[:MAX_OPTIONS]}
+        out = {"question": question, "options": options[:MAX_OPTIONS]}
+        #Срок окончания — как в Telegram. По умолчанию СУТКИ: бессрочный опрос висел в
+        #ленте вечно, и никто не знал, когда смотреть результат. Явный 0 по-прежнему
+        #значит «без срока» — но это осознанный выбор автора, а не молчаливое умолчание.
+        raw = p.get("duration_s")
+        secs = int(raw) if raw is not None else 24 * 60 * 60
+        if secs:
+            out["duration_s"] = max(30, min(secs, 7 * 24 * 60 * 60))
+        #Видно ли, КТО как проголосовал. По умолчанию нет: голос не анонимен для сервера
+        #(иначе не поймать накрутку), но показывать его классу — отдельное решение,
+        #и принимать его должен автор опроса осознанно.
+        out["public_votes"] = bool(p.get("public_votes"))
+        return out
     if kind == "pulse":
         secs = int(p.get("duration_s") or PULSE_DEFAULT_S)
         return {"duration_s": max(10, min(secs, 30 * 60))}
@@ -352,11 +567,11 @@ def start_activity(payload: dict = Body(...), request: Request = None,
     kind = str(payload.get("kind") or "").strip()
     _require_can_run(db, conv_id, user)
     _sweep_stale(db)
-    running = _running_in(db, conv_id)
+    running = _running_same_kind(db, conv_id, kind)
     if running is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"В этой беседе уже идёт активность «{running.title or running.kind}». "
+            detail=f"В беседе уже идёт «{running.title or running.kind}» этой же категории. "
                    f"Сначала завершите её.")
     params = _validate_start(db, kind, payload.get("params") or {}, user)
     now = _now()
@@ -368,6 +583,15 @@ def start_activity(payload: dict = Body(...), request: Request = None,
     db.refresh(a)
 
     live = _initial_payload(kind, params)
+    if kind in ("quiz", "contest"):
+        #⚠️ Скобки обязательны: `Column == x or ""` Python считает как `(Column == x) or ""`,
+        #а `__bool__` у сравнения SQLAlchemy отдаёт False — в фильтр уезжала пустая строка
+        #и падало «Textual SQL expression '' should be explicitly declared as text()».
+        _qid = params.get("quiz_id") or ""
+        live["total_questions"] = (db.query(QuizQuestion)
+                                   .filter(QuizQuestion.quiz_id == _qid).count())
+    if kind == "poll" and params.get("duration_s"):
+        live["ends_at"] = _plus_seconds(now, int(params["duration_s"]))
     if kind == "timer":
         #Время окончания считает СЕРВЕР и присылает один раз; тик отсчитывает клиент.
         #Тикать по сокету каждую секунду всем участникам — самая дорогая реализация самой
@@ -384,16 +608,23 @@ def start_activity(payload: dict = Body(...), request: Request = None,
             live["sheet"] = src.sheet or live["sheet"]
     activity_state.start(a.id, kind, live)
 
-    #Карточка-кнопка в ленте. Тот же механизм, что у отчёта куратора: тело сообщения —
-    #просто id, а объект сервер подмешивает при выдаче (`_attach_activity_meta`), потому
-    #что статус активности меняется ПОСЛЕ отправки, а переотправлять сообщение незачем.
-    msg = Message(conversation_id=conv_id, sender_id=user.id, body=a.id,
-                  created_at=now, kind="activity", body_format="plain")
-    db.add(msg)
-    db.commit()
-    db.refresh(msg)
-    a.message_id = msg.id
-    db.commit()
+    #Отметка в ленте. Тело сообщения — просто id, а объект сервер подмешивает при выдаче
+    #(`_attach_activity_meta`), потому что статус активности меняется ПОСЛЕ отправки, а
+    #переотправлять сообщение незачем.
+    #
+    #⚠️ СЛЕД В ЛЕНТЕ ОСТАВЛЯЮТ НЕ ВСЕ КАТЕГОРИИ. Таймер и срез понимания — это оверлеи
+    #на несколько минут: они всплывают у всех сами, заходить в них из истории незачем, а
+    #отметка о каждом запуске превращала бы ленту в мусор (на паре их бывает несколько).
+    #Остаются те, к которым РЕАЛЬНО возвращаются: викторина, соревнование, доска.
+    if kind in _LEAVES_TRACE_IN_FEED:
+        msg = Message(conversation_id=conv_id, sender_id=user.id, body=a.id,
+                      created_at=now, kind=_KIND_OF_FEED_MESSAGE.get(kind, "activity"),
+                      body_format="plain")
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        a.message_id = msg.id
+        db.commit()
 
     audit.log(db, request, actor=user.login, role=user.role, action="activity.start",
               target=a.id, detail=f"{kind} в {conv_id}")
@@ -422,16 +653,10 @@ def finish_activity(activity_id: str, payload: dict = Body(default={}),
     a = _require_host(db, activity_id, user)
     if a.status == "finished":
         return _activity_out(a, user.id)          #повтор — не ошибка (двойное нажатие)
-    snapshot = activity_state.get(a.id) or {"payload": {}}
-    summary = _finalize(db, a, snapshot.get("payload") or {}, bool(payload.get("save")))
-    a.status = "finished"
-    a.finished_at = _now()
-    db.commit()
-    activity_state.drop(a.id)
-    _emit(db, a.conversation_id, {"type": "activity.finished", "activity_id": a.id,
-                                  "conversation_id": a.conversation_id, "summary": summary})
-    from .messenger import _broadcast
-    _broadcast(db, a.conversation_id)
+    #`finished_at` в событии обязателен: по нему клиент гасит таймер на карточке в ленте.
+    #Метку времени в этом продукте всегда ставит сервер (§4.3), иначе у двух человек в
+    #одном чате активность «шла» разное время.
+    summary = _finish_activity_row(db, a, save=bool(payload.get("save")))
     out = _activity_out(a, user.id)
     out["summary"] = summary
     return out
@@ -461,6 +686,18 @@ def _finalize(db: Session, a: Activity, payload: dict, save: bool) -> dict:
         for idx in votes.values():
             if isinstance(idx, int) and 0 <= idx < len(counts):
                 counts[idx] += 1
+        #🔥 СОХРАНЯЕМ ИТОГ В params. Живое состояние после завершения гасится, а опрос —
+        #это СООБЩЕНИЕ, которое остаётся в ленте навсегда: без снимка оно показывало бы
+        #«проголосовало: 0» и пустые полосы, то есть завершённый опрос выглядел бы так,
+        #будто в нём никто не участвовал. Отдельной таблицы ради двух чисел не заводим.
+        params = dict(a.params or {})
+        params["final_counts"] = counts
+        params["final_total"] = len(votes)
+        params["final_votes"] = {k: int(v) for k, v in votes.items() if isinstance(v, int)}
+        a.params = params
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(a, "params")
+        db.commit()
         return {"votes_total": len(votes), "counts": counts}
     if a.kind == "pulse":
         rows = db.query(ActivityFeedback).filter(ActivityFeedback.activity_id == a.id).all()
@@ -478,6 +715,30 @@ def _finalize(db: Session, a: Activity, payload: dict, save: bool) -> dict:
 
 
 # ── Чтение состояния ─────────────────────────────────────────────────────────────────
+@router.get("/running")
+def running_activities(conversation_id: str = Query(...),
+                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """ВСЕ активности, идущие в беседе. Их теперь может быть несколько разных категорий:
+    таймер рядом с доской — нормальная работа на паре, и клиенту нужен весь список, чтобы
+    показать полоску таймера независимо от того, какая активность открыта на экране."""
+    _require_participant(db, conversation_id, user)
+    _sweep_stale(db)
+    out = []
+    for a in (db.query(Activity)
+              .filter(Activity.conversation_id == conversation_id, Activity.status == "running")
+              .order_by(Activity.started_at.asc()).all()):
+        if activity_state.get(a.id) is None:
+            #След рестарта — закрываем, живой её показывать нельзя (она не отвечает).
+            a.status = "finished"
+            a.finished_at = _now()
+            db.commit()
+            continue
+        cell = _activity_out(a, user.id)
+        cell["state"] = _state_for(db, a, user)
+        out.append(cell)
+    return {"activities": out}
+
+
 @router.get("/current")
 def current_activity(conversation_id: str = Query(...),
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -516,6 +777,52 @@ def get_board(board_id: str, user: User = Depends(get_current_user),
             "strokes": list(b.strokes or []), "created_at": b.created_at or ""}
 
 
+def _host_progress(db: Session, a: Activity, payload: dict, answers: dict | None = None) -> None:
+    """Шкала прогресса по КАЖДОМУ участнику — для ведущего.
+
+    ⚠️ Отдельной функцией и вызовом ПОСЛЕ цепочки `elif`, а не веткой внутри неё: ветка
+    соревнования стоит выше и перехватывала бы её, и преподаватель, запустивший
+    соревнование, снова видел бы задание вместо хода. Ровно на это и была жалоба.
+
+    В список идёт ВЕСЬ ростер беседы, а не только закончившие: иначе «пусто» неотличимо
+    от «все закончили мгновенно», и преподаватель не понимает, ждать ему или собирать.
+    """
+    done = db.query(ActivityResult).filter(ActivityResult.activity_id == a.id).all()
+    by_user = {r.user_id: r for r in done}
+    walk = dict(payload.get("walk") or {})
+    #В соревновании прогресс известен серверу и без сообщений клиента: ответы лежат по
+    #вопросам. Считаем оттуда, иначе шкала у ведущего стояла бы на нуле всю игру.
+    if a.kind == "contest":
+        #⚠️ Ответы приходят ПАРАМЕТРОМ: ветка соревнования выше по коду выбрасывает их из
+        #состояния (`payload.pop("answers")`), чтобы не отдать чужие ответы клиенту, и
+        #`payload.get("answers")` здесь уже пуст — шкала стояла бы на нуле всю игру.
+        for slot in (answers or {}).values():
+            for uid in (slot or {}):
+                walk[uid] = int(walk.get(uid) or 0) + 1
+    roster = [uid for uid in _participants_of(db, a.conversation_id) if uid != a.host_id]
+    names = {}
+    if roster:
+        names = {u.id: (u.full_name or u.name or u.login or u.id)
+                 for u in db.query(User).filter(User.id.in_(roster)).all()}
+    total_q = int(payload.get("total_questions") or 0)
+    rows = []
+    for uid in roster:
+        r = by_user.get(uid)
+        rows.append({
+            "user_id": uid, "name": names.get(uid, uid),
+            #Сколько заданий человек прошёл. Закончил — засчитываем все.
+            "walked": int(r.total_count or 0) if r is not None else int(walk.get(uid) or 0),
+            "done": r is not None,
+            "correct_count": int(r.correct_count or 0) if r is not None else 0,
+            "total_count": int(r.total_count or 0) if r is not None else total_q,
+            "score": float(r.score or 0) if r is not None else 0.0,
+        })
+    rows.sort(key=lambda x: (-x["walked"], x["name"]))
+    payload["progress"] = rows
+    payload["participants"] = len(roster)
+    payload["total_questions"] = total_q
+
+
 def _state_for(db: Session, a: Activity, user: User) -> dict | None:
     """Живое состояние ДЛЯ ЭТОГО зрителя.
 
@@ -536,18 +843,28 @@ def _state_for(db: Session, a: Activity, user: User) -> dict | None:
         #вопрос «дошло ли вообще». Само распределение — только создателю, и не здесь.
         payload["participants"] = len(_participants_of(db, a.conversation_id))
     elif a.kind == "contest":
-        answers = payload.pop("answers", {}) or {}
+        contest_answers = payload.pop("answers", {}) or {}
+        answers = contest_answers
         scores = payload.pop("scores", {}) or {}
         payload["my_score"] = float(scores.get(user.id, 0) or 0)
         cur = str(payload.get("question_index", -1))
         payload["answered"] = user.id in (answers.get(cur) or {})
         payload["answered_count"] = len(answers.get(cur) or {})
-        if is_host:
-            payload["board"] = _contest_board(db, scores)
+        #Табло видят ВСЕ, как в Kahoot: соревнование ради него и затевается, а места
+        #в конце всё равно объявляются вслух. Скрывать промежуточные баллы значило бы
+        #убрать из игры единственное, что заставляет тянуться к следующему вопросу.
+        payload["board"] = _contest_board(db, scores)
     elif a.kind == "pulse":
         answered = payload.pop("answered", []) or []
         payload["answered_count"] = len(answered)
         payload["mine_done"] = user.id in answered
+        #Сколько ВСЕГО человек в беседе. Без этого у преподавателя стояло «ответили 1 из
+        #0» — доля не считалась, и понять, можно ли делать выводы, было нельзя.
+        payload["participants"] = len([uid for uid in _participants_of(db, a.conversation_id)
+                                       if uid != a.host_id])
+    if a.kind in ("quiz", "contest") and is_host:
+        _host_progress(db, a, payload, locals().get("contest_answers"))
+    payload.pop("walk", None)
     return {"seq": snap["seq"], "payload": payload}
 
 
@@ -628,12 +945,30 @@ def vote(activity_id: str, payload: dict = Body(...),
     #`submit` викторины, который план прямо разрешает).
     _upsert_result(db, a.id, user.id, score=0.0, correct=0, total=0,
                    answers={"choice": choice})
+    #Распределение считаем ЗДЕСЬ: оно нужно и рассылке ниже, и ответу на сам запрос.
+    tally = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(options))]
+    public = bool((a.params or {}).get("public_votes"))
     #Наружу уходит СЧЁТЧИК, не карта голосов: распределение видит только создатель.
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"voted_count": len(votes)}})
-    return {"ok": True, "my_choice": choice, "voted_count": len(votes)}
+           "payload": {"voted_count": len(votes),
+                       #Открытые голоса — распределение всем сразу; иначе оно уходит
+                       #ОТДЕЛЬНЫМ кадром только автору (ниже): в общей рассылке ему
+                       #места нет, там его прочитали бы все.
+                       **({"tally": tally} if public else {})}})
+    if not public and a.host_id:
+        _emit_to([a.host_id],
+                 {"type": "activity.state", "activity_id": a.id,
+                  "conversation_id": a.conversation_id, "seq": snap["seq"],
+                  "payload": {"voted_count": len(votes), "tally": tally}})
+    #Автору опроса (и всем, если он включил открытые голоса) сразу возвращаем
+    #распределение: иначе после своего клика он видел бы только «проголосовало N»,
+    #а ради распределения ему пришлось бы перезаходить в беседу.
+    out = {"ok": True, "my_choice": choice, "voted_count": len(votes)}
+    if public or user.id == a.host_id:
+        out["tally"] = tally
+    return out
 
 
 @router.get("/{activity_id}/poll-results")
@@ -790,11 +1125,20 @@ def _clean_tags(tags) -> list:
 
 @router.get("/quizzes")
 def list_quizzes(q: str = Query(default=""), tag: str = Query(default=""),
-                 scope: str = Query(default="mine"),
+                 scope: str = Query(default="mine"), kind: str = Query(default=""),
                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Библиотека: `scope` = mine | college | stock."""
+    """Библиотека: `scope` = mine | college | stock, `kind` = quiz | contest.
+
+    ⚠️ Библиотеки РАЗДЕЛЬНЫЕ. У категорий разные допустимые типы заданий (в соревновании
+    только выбор — там нужен бесспорный балл) и разный смысл, а общий список заставлял
+    преподавателя гадать, что откуда запускается. Без `kind` отдаём всё — так ведут себя
+    старые сборки клиента, и ломать их незачем."""
     _require_teacher(user)
     query = db.query(QuizSet).filter(QuizSet.deleted == False)          # noqa: E712
+    if kind in ("quiz", "contest"):
+        #Наборы, заведённые до появления поля, считаем обычными викторинами.
+        query = query.filter(QuizSet.kind == kind) if kind == "contest" else query.filter(
+            or_(QuizSet.kind == "quiz", QuizSet.kind.is_(None), QuizSet.kind == ""))
     if scope == "mine":
         query = query.filter(QuizSet.author_id == user.id)
     elif scope == "stock":
@@ -944,7 +1288,9 @@ def create_quiz(payload: dict = Body(...), user: User = Depends(get_current_user
     now = _now()
     quiz = QuizSet(id=f"quiz:{uuid4().hex}", author_id=user.id, title=title,
                    description=str(payload.get("description") or "").strip()[:MAX_TEXT],
-                   tags=_clean_tags(payload.get("tags")), visibility=vis,
+                   tags=_clean_tags(payload.get("tags")),
+            time_limit_s=max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60)),
+            kind=("contest" if str(payload.get("kind") or "") == "contest" else "quiz"), visibility=vis,
                    created_at=now, updated_at=now)
     db.add(quiz)
     db.commit()
@@ -970,6 +1316,27 @@ def update_quiz(quiz_id: str, payload: dict = Body(...),
         quiz.description = str(payload.get("description") or "").strip()[:MAX_TEXT]
     if "tags" in payload:
         quiz.tags = _clean_tags(payload.get("tags"))
+    if "kind" in payload:
+        #Перенос набора между библиотеками. Нужен потому, что наборы, созданные ДО
+        #разделения, все помечены как обычные викторины: без переноса преподаватель
+        #увидел бы в соревновании пустой список и не понял, куда делись его тесты.
+        #⚠️ В соревнование переносим только если ВСЕ задания ему подходят (там нужен
+        #бесспорный балл) — иначе набор попал бы в библиотеку, из которой не запускается.
+        want = "contest" if str(payload.get("kind") or "") == "contest" else "quiz"
+        if want == "contest":
+            bad = [q for q in db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz.id).all()
+                   if (q.type or "single") not in CONTEST_TYPES]
+            if bad:
+                raise HTTPException(
+                    status_code=400,
+                    detail="В соревновании бывают только задания с выбором ответа. "
+                           "Уберите задания на порядок и сопоставление.")
+        quiz.kind = want
+    if "time_limit_s" in payload:
+        #Ограничение на весь тест. 0 — без ограничения (так было всегда). Потолок шесть
+        #часов — тот же, что у тайм-бокса: пары длиннее не бывает, а опечатка в поле
+        #иначе завела бы счётчик на годы.
+        quiz.time_limit_s = max(0, min(int(payload.get("time_limit_s") or 0), 6 * 60 * 60))
     if "visibility" in payload:
         vis = str(payload.get("visibility") or "private")
         if vis in VISIBILITY and not (vis == "stock" and user.role != "admin"):
@@ -1057,9 +1424,13 @@ def activity_questions(activity_id: str, user: User = Depends(get_current_user),
         return {"questions": [_question_out(q, opts.get(q.id, []), False, user.id)],
                 "index": idx, "total": len(questions),
                 "limit_ms": int((a.params or {}).get("limit_ms") or 30000)}
+    quiz = db.query(QuizSet).filter(QuizSet.id == quiz_id).first()
     return {"questions": [_question_out(x, opts.get(x.id, []), False, user.id)
                           for x in questions],
-            "index": 0, "total": len(questions)}
+            "index": 0, "total": len(questions),
+            #Счётчик идёт от ОТКРЫТИЯ теста, а не от старта активности: человек мог зайти
+            #в беседу через десять минут после запуска, и общий отсчёт съел бы его время.
+            "time_limit_s": int((quiz.time_limit_s or 0) if quiz else 0)}
 
 
 def _upsert_result(db: Session, activity_id: str, user_id: str, score: float,
@@ -1082,6 +1453,72 @@ def _upsert_result(db: Session, activity_id: str, user_id: str, score: float,
     row.duration_ms = int(duration_ms or 0)
     db.commit()
     return row
+
+
+def _quiz_questions(db: Session, a):
+    """Вопросы викторины активности в порядке показа."""
+    quiz_id = (a.params or {}).get("quiz_id") or ""
+    return (db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id)
+            .order_by(QuizQuestion.order_no.asc()).all())
+
+
+def _review(questions, opts, answers: dict, per_question: list) -> dict:
+    """Разбор для экрана итогов: что спрашивали, что человек выбрал, что было верно.
+
+    🔒 Отдавать ключ здесь БЕЗОПАСНО ровно потому, что пересдать нельзя: результат
+    считается ОДИН раз, повторная отправка возвращает сохранённый (см. докстринг
+    `submit_quiz` про оракул). Убери ту идемпотентность — и этот разбор мгновенно
+    станет способом узнать ответы и отправить заново.
+    """
+    ok_by_q = {r.get("question_id"): r for r in (per_question or [])}
+    out = []
+    for q in questions:
+        chosen = answers.get(q.id)
+        chosen_ids = ([chosen] if isinstance(chosen, str)
+                      else list(chosen) if isinstance(chosen, list)
+                      else list(chosen.values()) if isinstance(chosen, dict) else [])
+        out.append({
+            "id": q.id, "text": q.text, "type": q.type,
+            "points": float(q.points or 1),
+            "correct": bool((ok_by_q.get(q.id) or {}).get("correct")),
+            "earned": float((ok_by_q.get(q.id) or {}).get("points") or 0),
+            "options": [{"id": o.id, "text": o.text,
+                         "is_correct": bool(o.is_correct),
+                         "chosen": o.id in chosen_ids}
+                        for o in (opts.get(q.id) or [])],
+        })
+    return {"review": out, "max_score": round(sum(float(q.points or 1) for q in questions), 2)}
+
+
+@router.post("/{activity_id}/progress")
+def report_progress(activity_id: str, payload: dict = Body(...),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Сколько заданий человек уже прошёл — для шкалы у ведущего.
+
+    ⚠️ Это НЕ отход от «одного запроса на участника». Тяжёлым был не запрос, а ПРОВЕРКА:
+    grading, запись результата, коммит. Здесь только число в памяти процесса и рассылка
+    ведущему — ни одной записи в базу. Без этого шкала прогресса невозможна в принципе:
+    асинхронная викторина отправляет ответы одним запросом В КОНЦЕ, и до него сервер не
+    знает о человеке ничего, кроме того, что он открыл вопросы.
+    """
+    a = _require_running(_require_activity_participant(db, activity_id, user))
+    if a.kind not in ("quiz", "contest"):
+        raise HTTPException(status_code=400, detail="У этой активности нет заданий")
+    snap = activity_state.get(a.id)
+    if snap is None:
+        raise HTTPException(status_code=400, detail="Активность уже завершена")
+    done = max(0, int(payload.get("answered") or 0))
+    walk = dict(snap["payload"].get("walk") or {})
+    #Назад не двигаем: человек мог вернуться к предыдущему вопросу, но пройденного это
+    #не отменяет, а прыгающая назад шкала у ведущего читается как сбой.
+    walk[user.id] = max(done, int(walk.get(user.id) or 0))
+    snap = activity_state.patch(a.id, {"walk": walk})
+    _emit(db, a.conversation_id,
+          {"type": "activity.state", "activity_id": a.id,
+           "conversation_id": a.conversation_id, "seq": snap["seq"],
+           "payload": {"walk_bump": user.id}})
+    _emit_host_progress(db, a)
+    return {"ok": True}
 
 
 @router.post("/{activity_id}/submit")
@@ -1116,7 +1553,11 @@ def submit_quiz(activity_id: str, payload: dict = Body(...),
         return {"score": float(done.score or 0), "correct_count": int(done.correct_count or 0),
                 "total_count": int(done.total_count or 0),
                 "per_question": (done.answers or {}).get("_per_question", []),
-                "already_submitted": True}
+                "already_submitted": True,
+                **_review(_quiz_questions(db, a), _options_by_question(
+                    db, [x.id for x in _quiz_questions(db, a)]),
+                    {k: v for k, v in (done.answers or {}).items() if k != "_per_question"},
+                    (done.answers or {}).get("_per_question", []))}
     quiz_id = (a.params or {}).get("quiz_id") or ""
     questions = (db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id)
                  .order_by(QuizQuestion.order_no.asc()).all())
@@ -1140,6 +1581,8 @@ def submit_quiz(activity_id: str, payload: dict = Body(...),
               {"type": "activity.state", "activity_id": a.id,
                "conversation_id": a.conversation_id, "seq": snap["seq"],
                "payload": {"submitted_count": done}})
+        _emit_host_progress(db, a)
+    graded.update(_review(questions, opts, answers, graded["per_question"]))
     return graded
 
 
@@ -1159,14 +1602,9 @@ def contest_next(activity_id: str, user: User = Depends(get_current_user),
     idx = int(snap["payload"].get("question_index", -1)) + 1
     if idx >= total:
         raise HTTPException(status_code=400, detail="Вопросы закончились — завершите соревнование")
-    import time
-    snap = activity_state.patch(a.id, {"question_index": idx,
-                                       "question_started_ms": int(time.monotonic() * 1000)})
-    _emit(db, a.conversation_id,
-          {"type": "activity.state", "activity_id": a.id,
-           "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"question_index": idx, "total": total,
-                       "limit_ms": int((a.params or {}).get("limit_ms") or 30000)}})
+    #Ручной сдвиг ведущего идёт ТЕМ ЖЕ путём, что и автопереход по времени: отсчёт
+    #начинается заново, счётчик ответивших обнуляется.
+    _contest_show(db, a, idx, total)
     return {"ok": True, "index": idx, "total": total}
 
 
@@ -1211,7 +1649,13 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"answered_count": len(slot), "question_index": idx}})
+           #🔥 Табло — В КАДРЕ. Оно считается в проекции состояния, то есть попадает
+           #клиенту только при открытии активности: кнопка «Лидерборд» во время игры
+           #показывала пустой список у всех, кто не перезаходил. В соревновании баллы
+           #публичны по построению (пьедестал объявляют вслух), поэтому шлём всем.
+           "payload": {"answered_count": len(slot), "question_index": idx,
+                       "board": _contest_board(db, scores)}})
+    _emit_host_progress(db, a)
     return {"ok": True, "correct": ok, "gain": gain, "my_score": scores[user.id]}
 
 
@@ -1237,10 +1681,21 @@ def _persist_contest_results(db: Session, a: Activity, payload: dict) -> None:
     scores = payload.get("scores") or {}
     answers = payload.get("answers") or {}
     total = len({k for k in answers})
-    for uid, sc in scores.items():
+    #🔥 Участники берутся из ОТВЕТОВ, а не только из баллов. Раньше цикл шёл по `scores`,
+    #а туда человек попадает, лишь когда что-то заработал: ответивший на всё неправильно
+    #не получал строки результата ВООБЩЕ и пропадал из таблицы — со стороны это выглядело
+    #как «соревнование не считает результаты». Ноль баллов — тоже результат, и его надо
+    #показать: именно он говорит преподавателю, с кем разбирать тему.
+    participants = set(scores) | {uid for slot in answers.values() for uid in (slot or {})}
+    for uid in participants:
         correct = sum(1 for slot in answers.values()
                       if (slot.get(uid) or {}).get("correct"))
-        _upsert_result(db, a.id, uid, float(sc or 0), correct, total, {})
+        #«Выполнено» = человек ОТВЕТИЛ, пусть и неверно. Не выбрал вариант вовсе —
+        #задание не выполнено и в счётчик не идёт (прямое требование): иначе молчание
+        #выглядело бы как участие.
+        answered = sum(1 for slot in answers.values() if uid in (slot or {}))
+        _upsert_result(db, a.id, uid, float(scores.get(uid) or 0), correct, total,
+                       {"answered_count": answered})
 
 
 @router.get("/{activity_id}/results")
@@ -1250,7 +1705,10 @@ def activity_results(activity_id: str, user: User = Depends(get_current_user),
     a = _require_activity_participant(db, activity_id, user)
     is_host = a.host_id == user.id or user.role == "admin"
     query = db.query(ActivityResult).filter(ActivityResult.activity_id == activity_id)
-    if not is_host:
+    #🏆 В СОРЕВНОВАНИИ таблицу видят ВСЕ, и только после завершения: пьедестал и есть
+    #смысл категории, а места всё равно объявляются вслух. В обычной викторине чужие
+    #результаты по-прежнему не показываем — там это личный результат, а не игра.
+    if not is_host and not (a.kind == "contest" and a.status == "finished"):
         query = query.filter(ActivityResult.user_id == user.id)
     rows = query.all()
     names = {}
@@ -1260,6 +1718,11 @@ def activity_results(activity_id: str, user: User = Depends(get_current_user),
     items = [{"user_id": r.user_id, "name": names.get(r.user_id, r.user_id),
               "score": float(r.score or 0), "correct_count": int(r.correct_count or 0),
               "total_count": int(r.total_count or 0),
+              #«Выполнено» — сколько заданий человек РЕШАЛ (неверный ответ тоже
+              #выполнен). У викторины отдельного счётчика нет: там отправляют всё разом,
+              #поэтому выполнено ровно столько, сколько заданий в наборе.
+              "answered_count": int((r.answers or {}).get("answered_count",
+                                                          r.total_count or 0) or 0),
               "finished_at": r.finished_at or "",
               "duration_ms": int(r.duration_ms or 0)} for r in rows]
     items.sort(key=lambda r: (-r["score"], r["duration_ms"] or 10 ** 12))

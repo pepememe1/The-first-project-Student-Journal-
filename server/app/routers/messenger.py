@@ -591,17 +591,69 @@ def _attach_report_meta(db: Session, msgs: list) -> None:
             m["report"] = {"id": r.id, "seq": r.seq, "group": r.group_name,
                            #Дата границы — на кнопке: два отчёта подряд иначе неразличимы.
                            "cutoff_date": r.cutoff_date or "",
-                           "archived": bool(r.archived)}
+                           "archived": _report_archived(r, db)}
 
 
-def _attach_activity_meta(db: Session, msgs: list) -> None:
+def _report_archived(rep, db) -> bool:
+    """Архивна ли кнопка отчёта куратора.
+
+    🔥 Считаем по КАЛЕНДАРЮ, а не только по сохранённому флагу. Флаг ставил ровно один
+    код — перевод термина вперёд (`/admin/term/rollover`), а его сдвиг в будущее теперь
+    запрещён: он дважды уводил боевой сервер на год вперёд, и у группы оказывались
+    предметы двух курсов сразу. Если оставить только флаг, отчёты перестали бы
+    архивироваться вовсе и «Отчёт №3» за прошлый семестр выглядел бы действующим.
+
+    Сохранённый флаг уважаем (его могли поставить раньше) — он лишь дополняется
+    честным сравнением периода отчёта с текущим."""
+    if bool(getattr(rep, "archived", False)):
+        return True
+    #⚠️ `webdata` в этом модуле импортируется ВНУТРИ функций, а не на уровне файла —
+    #модульного `W` тут нет, и обращение к нему дало бы NameError уже в рантайме, при
+    #полностью зелёной компиляции (эта грабля в проекте уже стоила отдельного разбора).
+    from .. import webdata as W
+    try:
+        cy, cs = W.current_term(W.load_config(db))
+        return (int(str(rep.year).split("/")[0]), int(rep.semester)) <                (int(str(cy).split("/")[0]), int(cs))
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return False
+
+
+def _poll_cell(a, viewer_id: str) -> dict:
+    """Опрос ДЛЯ ЛЕНТЫ: голосуют прямо в сообщении, как в Telegram.
+
+    🔒 Распределение голосов кладём ТОЛЬКО создателю либо когда автор явно включил
+    открытые голоса. Прочим — свой выбор и общее число проголосовавших: число ничего не
+    раскрывает и снимает вопрос «дошло ли», а чужой голос без согласия автора опроса
+    показывать нельзя."""
+    from ..routers import activities as _act
+    snap = _act.activity_state.get(a.id)
+    live = (snap or {}).get("payload") or {}
+    params = a.params or {}
+    #Идёт — берём живые голоса; завершён — снимок, сохранённый при завершении. Без
+    #снимка завершённый опрос показывал бы «проголосовало: 0», хотя голосовали все.
+    votes = live.get("votes") if snap is not None else (params.get("final_votes") or {})
+    votes = votes or {}
+    opts = list(params.get("options") or [])
+    public = bool(params.get("public_votes"))
+    mine = votes.get(viewer_id)
+    cell = {"question": params.get("question") or "", "options": opts,
+            "my_choice": mine if mine is not None else None,
+            "voted_count": len(votes), "ends_at": live.get("ends_at") or "",
+            "public_votes": public}
+    if public or viewer_id == a.host_id:
+        cell["tally"] = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(opts))]
+    return cell
+
+
+def _attach_activity_meta(db: Session, msgs: list, viewer_id: str = "") -> None:
     """kind="activity" — карточка-кнопка активности; kind="board" — сохранённая доска.
 
     Как и у отчёта, в теле сообщения лежит ТОЛЬКО id: статус активности меняется после
     отправки (идёт → завершена), а переотправлять сообщение ради этого незачем — клиент
     гасит кнопку по `status`."""
     from ..models import Activity, BoardArtifact
-    act_ids = [m["body"] for m in msgs if m["kind"] == "activity" and m["body"]]
+    #Опрос — тоже активность, просто рисуется в ленте кнопками, а не ссылкой.
+    act_ids = [m["body"] for m in msgs if m["kind"] in ("activity", "poll") and m["body"]]
     board_ids = [m["body"] for m in msgs if m["kind"] == "board" and m["body"]]
     acts = ({a.id: a for a in db.query(Activity).filter(Activity.id.in_(act_ids)).all()}
             if act_ids else {})
@@ -613,12 +665,14 @@ def _attach_activity_meta(db: Session, msgs: list) -> None:
     #сообщений мы запретили отдельно, но одного запрета мало: правило «чужое не
     #показываем» должно держаться и там, где строка уже как-то оказалась в ленте.
     for m in msgs:
-        if m["kind"] == "activity":
+        if m["kind"] in ("activity", "poll"):
             a = acts.get(m["body"])
             if a is not None and a.conversation_id == m.get("conversation_id"):
                 m["activity"] = {"id": a.id, "kind": a.kind, "title": a.title or "",
                                  "status": a.status, "started_at": a.started_at or "",
                                  "finished_at": a.finished_at or ""}
+                if a.kind == "poll":
+                    m["activity"].update(_poll_cell(a, viewer_id))
         elif m["kind"] == "board":
             b = boards.get(m["body"])
             if b is not None and b.conversation_id == m.get("conversation_id"):
@@ -626,7 +680,7 @@ def _attach_activity_meta(db: Session, msgs: list) -> None:
                               "strokes_count": len(b.strokes or [])}
 
 
-def _attach_rich_meta(db: Session, msgs: list) -> None:
+def _attach_rich_meta(db: Session, msgs: list, viewer_id: str = "") -> None:
     """ЕДИНАЯ точка догрузки всего, что у сообщения лежит в теле одним лишь id.
 
     ⚠️ Заведена намеренно вместо перечисления вызовов по местам. Раньше
@@ -639,7 +693,7 @@ def _attach_rich_meta(db: Session, msgs: list) -> None:
     if not msgs:
         return
     _attach_report_meta(db, msgs)
-    _attach_activity_meta(db, msgs)
+    _attach_activity_meta(db, msgs, viewer_id)
 
 
 #§D3: белый список эмодзи-реакций (как в плане). Ничего сверх — предсказуемо и безопасно.
@@ -1021,7 +1075,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         out.append(item)
     #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
     #сырой id из тела сообщения.
-    _attach_rich_meta(db, [x["last_message"] for x in out if x["last_message"]])
+    _attach_rich_meta(db, [x["last_message"] for x in out if x["last_message"]], user.id)
     #Сортировка: сначала закреплённые, потом по времени последней активности (новые выше).
     out.sort(key=lambda x: (not x["pinned"], _neg_key(x["last_at"])))
     return {"chats": out}
@@ -1133,7 +1187,7 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
     _attach_reactions(db, out, user.id)      #§D3: реакции пачкой
     _attach_reply_counts(db, out)            #Треды: бейдж «N ответов»
-    _attach_rich_meta(db, out)               #кнопки: отчёт куратора, активность, доска
+    _attach_rich_meta(db, out, user.id)               #кнопки: отчёт куратора, активность, доска
     return {"messages": out}
 
 
@@ -1152,7 +1206,7 @@ def message_thread(conv_id: str, message_id: int,
     names = _names_for(db, [m.sender_id for m in rows])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
     _attach_reactions(db, out, user.id)
-    _attach_rich_meta(db, out)               #иначе в ветке ответов вместо кнопки сырой id
+    _attach_rich_meta(db, out, user.id)               #иначе в ветке ответов вместо кнопки сырой id
     return {"messages": out}
 
 
@@ -1181,7 +1235,7 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
     names = _names_for(db, [m.sender_id for m in matched])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
-    _attach_rich_meta(db, out)
+    _attach_rich_meta(db, out, user.id)
     return {"messages": out}
 
 
@@ -1241,7 +1295,7 @@ def ai_search_messages(conv_id: str, q: str = Query(""), limit: int = Query(30),
     matched = [m for _s, m in scored[:limit]]
     names = _names_for(db, [m.sender_id for m in matched])
     out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
-    _attach_rich_meta(db, out)
+    _attach_rich_meta(db, out, user.id)
     return {"messages": out,
             "expanded": extra}
 
@@ -1504,7 +1558,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
                .filter(Message.conversation_id == conv_id, Message.client_nonce == nonce).first())
         if dup is not None:
             out = _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
-            _attach_rich_meta(db, [out])
+            _attach_rich_meta(db, [out], user.id)
             return out
 
     mentions = []
@@ -1518,7 +1572,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
         rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
         if rep_msg is not None:
             out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
-            _attach_rich_meta(db, [out])     #иначе клиент получит сырой id вместо кнопки
+            _attach_rich_meta(db, [out], user.id)     #иначе клиент получит сырой id вместо кнопки
             return out
 
         #/mute, /clear — тоже команды, не сообщения: разбираем ДО сохранения текста (как
@@ -1994,7 +2048,7 @@ def pinned_messages(conv_id: str, user: User = Depends(get_current_user),
         q = q.filter(~Message.id.in_(hidden))
     rows = q.order_by(Message.id.desc()).all()
     out = [_msg_out(m, user.id) for m in rows]
-    _attach_rich_meta(db, out)               #закреплённая карточка активности — не сырой id
+    _attach_rich_meta(db, out, user.id)               #закреплённая карточка активности — не сырой id
     return {"pinned": out}
 
 
@@ -3127,7 +3181,7 @@ def report_overview(report_id: str, user: User = Depends(get_current_user),
                for s in data["subjects"]]
     return {"id": rep.id, "seq": rep.seq, "group": rep.group_name,
             "year": rep.year, "semester": rep.semester, "cutoff_date": rep.cutoff_date,
-            "archived": rep.archived, "students": data["students"],
+            "archived": _report_archived(rep, db), "students": data["students"],
             "group_avg": data["group_avg"], "categories": categories, "subjects": subjects}
 
 
@@ -3327,7 +3381,7 @@ def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: 
         if versions:
             d["edit_versions"] = versions + [{"body": m.body or "", "at": m.edited_at or m.created_at}]
         out.append(d)
-    _attach_rich_meta(db, out)               #админ читает ту же ленту, что и участники
+    _attach_rich_meta(db, out, admin.id)               #админ читает ту же ленту, что и участники
     audit.log(db, request, actor=admin.login, role=admin.role,
               action="msg.moderation.view", target=conv_id)
     return {"messages": out}

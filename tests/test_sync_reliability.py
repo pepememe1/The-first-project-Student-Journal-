@@ -437,10 +437,16 @@ def test_grade_conflict_is_counted_not_only_written():
 
 
 def test_conflict_counter_reaches_the_sync_status():
-    """Счётчик обязан доезжать до `status()` — того единственного места, куда смотрит
-    индикатор. Тест на САМ ФАКТ проводки: сама по себе `count_unresolved_conflicts`
-    может быть исправна, а в статусе её не будет, и наружу опять ничего не попадёт
-    (ровно так и жил конфликт всё это время)."""
+    """Счётчик обязан доезжать до `status()`. Тест на САМ ФАКТ проводки: сама по себе
+    `count_unresolved_conflicts` может быть исправна, а в статусе её не будет, и наружу
+    опять ничего не попадёт (ровно так конфликт и жил всё это время).
+
+    ⚠️ Прежний докстринг называл `status()` «единственным местом, куда смотрит индикатор»
+    — это было НЕПРАВДОЙ на момент написания: индикатор жил в Qt-оболочке и удалён вместе
+    с ней, а `status()` не звал никто, кроме этого самого теста. То есть тест был зелёным,
+    проверяя проводку до тупика. Настоящего потребителя добавили отдельно (см.
+    `test_sync_status_has_a_real_consumer` ниже); формулировку исправляем, чтобы
+    следующий читатель не сделал по ней тот же ложный вывод."""
     from sync import sync_runner
 
     _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
@@ -449,6 +455,65 @@ def test_conflict_counter_reaches_the_sync_status():
     st = sync_runner.SyncManager().status()
     assert "conflicts" in st, "в статусе синка нет поля conflicts"
     assert st["conflicts"] == 1
+
+
+def test_sync_status_has_a_real_consumer():
+    """СТРУКТУРНЫЙ сторож: у `status()` обязан быть вызывающий В ПРОДУКТЕ, а не в тестах.
+
+    Зачем такой странный тест. Обычная проверка «status() возвращает conflicts» была
+    зелёной ровно в тот период, когда значение не читал НИКТО: индикатор удалили вместе с
+    Qt, и починка «конфликт теперь звучит» превратилась в обещание без вызывающего. Это
+    самый частый класс дефекта в этом проекте (`:min-zet`, `saveEndpoint`, эндпоинт
+    профиля без единого вызова), и ловится он только так — проверкой, что у обещания есть
+    потребитель. Заглушить его, дописав вызов в тест, нельзя: тесты из поиска исключены.
+
+    🔥 Ищем НАСТОЯЩИЙ вызов, а не упоминание. Первая версия этого сторожа искала
+    подстроку и была зелёной БЕЗ правки: `sync_runner.status()` встречается в
+    комментариях `data/core.py` и `sync_engine.py`, а `/desk/sync/status` — в шапке
+    самого значка. То есть сторож подтверждал наличие потребителя по тексту, который
+    ничего не вызывает. Проверено обратным ходом, поэтому здесь разбор синтаксиса.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    callers = []
+
+    #Python: настоящий вызов вида `sync_runner.status()` — узел Call, а не текст.
+    for rel in ("main.py", "desktop", "data", "sync", "server/app"):
+        p = root / rel
+        files = [p] if p.is_file() else [f for f in p.rglob("*.py")
+                                         if "__pycache__" not in f.parts]
+        for f in files:
+            if f.name == "sync_runner.py":      #определение обёртки — не её вызов
+                continue
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "status"
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "sync_runner"):
+                    callers.append(f"{f.relative_to(root)}:{node.lineno}")
+
+    #Фронт: обращение к маршруту в КОДЕ, а не в комментарии. Строки-комментарии
+    #отбрасываем целиком — этого достаточно, внутри строкового литерала «//» у нас нет.
+    for f in (root / "web" / "src").rglob("*"):
+        if f.suffix not in (".js", ".vue"):
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            bare = line.strip()
+            if bare.startswith(("//", "*", "/*")):
+                continue
+            if "/desk/sync/status" in bare:
+                callers.append(f"{f.relative_to(root)}:{i}")
+
+    assert callers, ("у sync_runner.status() нет ни одного НАСТОЯЩЕГО потребителя в "
+                     "продукте — значит конфликты и отвергнутые сервером правки снова "
+                     "видны только строкой в логе, которую никто не читает")
 
 
 def test_agreeing_grade_is_not_a_conflict():

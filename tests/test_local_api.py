@@ -314,3 +314,59 @@ def test_plaintext_cleanup_targets_the_plain_file(monkeypatch, tmp_path):
 
     assert not (tmp_path / "plain.db").exists(), "открытая копия с ПДн обязана исчезнуть"
     assert (tmp_path / "enc.enc.db").exists(), "зашифрованную копию трогать нельзя"
+
+
+def test_sync_status_route_requires_the_local_caller(api):
+    """`/desk/sync/status` рассказывает, сколько у человека неотправленных и конфликтных
+    правок. Это не то, что стоит отдавать любому процессу на машине, поэтому охранник тот
+    же, что у прокси (`_local_caller_ok`), а не «мы же на петле»."""
+    code, _ = _get(api.url("/desk/sync/status"))
+    assert code == 403, "без локального токена состояние синка отдавать нельзя"
+
+
+def test_sync_status_passes_the_counters_through(api, monkeypatch):
+    """🔥 Тест на САМУ ПРОВОДКУ, ради которой маршрут и заведён.
+
+    До него `sync_runner.status()` не звал никто, кроме теста: индикатор жил в Qt и был
+    удалён вместе с ней. Значит конфликт оценки и отвергнутая сервером правка «звучали»
+    только строкой в `gradebook.log`, которую никто не открывает. Здесь проверяется, что
+    цифры доезжают до HTTP — то есть до интерфейса."""
+    from sync import sync_runner
+
+    monkeypatch.setattr(local_api, "_session_login", lambda: "t")
+    monkeypatch.setattr(sync_runner, "status",
+                        lambda: {"online": True, "fails": 0, "error": "", "auth_error": "",
+                                 "rejected": {"grades": 2}, "conflicts": 3})
+
+    access, _ = local_api.issue_local_session("t", "teacher")
+    code, body = _get(api.url("/desk/sync/status"),
+                      headers={"Authorization": f"Bearer {access}"})
+    assert code == 200
+    import json as _json
+    data = _json.loads(body)
+    assert data["available"] is True
+    assert data["conflicts"] == 3, "счётчик конфликтов не доехал до интерфейса"
+    assert data["rejected"] == {"grades": 2}, "отвергнутые правки не доехали"
+
+
+def test_sync_status_says_unknown_instead_of_inventing_zero(api, monkeypatch):
+    """Синк мог не запуститься вовсе (вход по сохранённой сессии, пароля нет). Тогда
+    честный ответ — «состояние неизвестно», а НЕ ноль конфликтов: ноль на экране значит
+    «всё сошлось», чего мы в этот момент не знаем. Обратная проверка к тесту выше — без
+    неё «починка» вида «всегда возвращать нули» осталась бы незамеченной."""
+    from sync import sync_runner
+
+    def _boom():
+        raise RuntimeError("синк не запущен")
+
+    monkeypatch.setattr(local_api, "_session_login", lambda: "t")
+    monkeypatch.setattr(sync_runner, "status", _boom)
+
+    access, _ = local_api.issue_local_session("t", "teacher")
+    code, body = _get(api.url("/desk/sync/status"),
+                      headers={"Authorization": f"Bearer {access}"})
+    assert code == 200, "недоступность синка — не ошибка HTTP, интерфейс не должен падать"
+    import json as _json
+    data = _json.loads(body)
+    assert data["available"] is False
+    assert "conflicts" not in data, "нельзя выдавать ноль за известное значение"

@@ -11,6 +11,8 @@ import HeaderBar from '@/components/HeaderBar.vue'
 import VectorDock from '@/components/VectorDock.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
+import ActivityJournal from '@/components/activity/ActivityJournal.vue'
+import TimerAlarm from '@/components/activity/timer/TimerAlarm.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
 import { useActivityStore } from '@/stores/activity'
@@ -201,6 +203,14 @@ onBeforeUnmount(() => {
     <ActivityLauncher v-if="!embed && activity.launcherFor"
                       :conversation-id="activity.launcherFor"
                       @close="activity.closeLauncher()" />
+    <!-- Журнал открывается ИЗНУТРИ окна активностей (ссылка под категориями), а
+         не отдельной кнопкой в шапке: место в шапке одно, и оно отдано частому
+         действию — запуску активности. -->
+    <!-- Окно «время вышло» — на ЛЮБОЙ вкладке: таймер ставят и идут работать. -->
+    <TimerAlarm />
+
+    <ActivityJournal v-if="!embed && activity.journalFor"
+                     :conversation-id="activity.journalFor" @close="activity.closeJournal()" />
 
     <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
             :aria-label="locale.t('vectorDock.showPanel', 'Показать панель Вектора')"

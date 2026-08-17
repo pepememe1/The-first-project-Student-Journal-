@@ -81,16 +81,29 @@ def test_no_activities_in_direct_chat(client):
     assert "групп" in r.json()["detail"].lower()
 
 
-def test_second_activity_in_same_conversation_is_refused(client):
-    """Вторая параллельная — гонка за экран студента и два источника правды «что идёт»."""
+def test_second_activity_of_the_SAME_kind_is_refused_but_others_are_allowed(client):
+    """Правило сменилось по живому отзыву: беседа держит НЕСКОЛЬКО активностей, но не
+    двух одинаковых.
+
+    Раньше активность была одна на беседу любого вида, и запустить таймер рядом с доской
+    было нельзя — а это ровно то, что делают на паре. Два таймера или два среза
+    по-прежнему бессмысленны: два отсчёта на экране и два одинаковых опроса понимания.
+    Опрос — исключение: он живёт сообщением в ленте и никому не мешает."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    assert _start(client, t, conv, "timer", {"duration_s": 60}, "Первая").status_code == 200
-    r = _start(client, t, conv, "poll",
-               {"question": "Понятно?", "options": ["Да", "Нет"]})
-    assert r.status_code == 409
-    assert "Первая" in r.json()["detail"]      #называем ТЕКУЩУЮ, иначе отказ непонятен
 
+    assert _start(client, t, conv, "timer", {"duration_s": 60}, "Первая").status_code == 200
+    #Тот же вид — отказ.
+    dup = _start(client, t, conv, "timer", {"duration_s": 60}, "Вторая")
+    assert dup.status_code == 409, dup.text
+    #Другой вид — можно: таймер рядом с доской это нормальная работа.
+    assert _start(client, t, conv, "board", {"sheet": "grid"}).status_code == 200
+    #Опросов можно несколько.
+    assert _start(client, t, conv, "poll", {"question": "А?", "options": ["1", "2"]}).status_code == 200
+    assert _start(client, t, conv, "poll", {"question": "Б?", "options": ["1", "2"]}).status_code == 200
+
+    running = client.get(f"{A}/running", params={"conversation_id": conv}, headers=b).json()["activities"]
+    assert sorted(x["kind"] for x in running) == ["board", "poll", "poll", "timer"], running
 
 def test_finishing_frees_the_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
@@ -538,7 +551,7 @@ def test_feed_card_carries_the_activity_object(client):
     меняется ПОСЛЕ отправки."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    a = _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка").json()["id"]
+    a = _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка").json()["id"]
     msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     assert card["activity"]["id"] == a
@@ -554,7 +567,7 @@ def test_chat_list_preview_also_resolves_the_card(client):
     сырой `act:9f3…` жил бы дольше всего незамеченным."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка")
+    _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка")
     chats = client.get("/web/messenger/chats", headers=b).json()["chats"]
     row = [x for x in chats if x["conversation_id"] == conv][0]
     assert row["last_message"]["activity"]["title"] == "Пятиминутка"
@@ -601,7 +614,7 @@ def test_activity_card_cannot_be_forwarded_to_another_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv1 = _group(client, t, [b_id], title="Первая")
     conv2 = _group(client, t, [c_id], title="Вторая")
-    _start(client, t, conv1, "timer", {"duration_s": 60}, "Контрольная по дробям")
+    _start(client, t, conv1, "board", {"sheet": "grid"}, "Контрольная по дробям")
     msgs = client.get(f"/web/messenger/chats/{conv1}/messages", headers=t).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     client.post("/web/messenger/messages/forward",
@@ -619,7 +632,7 @@ def test_card_object_is_not_attached_outside_its_own_conversation(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv1 = _group(client, t, [b_id], title="Первая")
     conv2 = _group(client, t, [c_id], title="Вторая")
-    aid = _start(client, t, conv1, "timer", {"duration_s": 60}, "Тема контрольной").json()["id"]
+    aid = _start(client, t, conv1, "board", {"sheet": "grid"}, "Тема контрольной").json()["id"]
     db = SessionLocal()
     db.add(Message(conversation_id=conv2, sender_id=t_id, body=aid,
                    created_at="2026-08-15T00:00:00+00:00", kind="activity", body_format="plain"))
@@ -637,7 +650,7 @@ def test_pinned_and_search_resolve_the_card_too(client):
     отовсюду: закреплённые, поиск, ветка ответов и модерация отдавали сырой `act:…`."""
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])
-    _start(client, t, conv, "timer", {"duration_s": 60}, "Пятиминутка")
+    _start(client, t, conv, "board", {"sheet": "grid"}, "Пятиминутка")
     msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
     card = [m for m in msgs if m["kind"] == "activity"][0]
     client.post(f"/web/messenger/messages/{card['id']}/pin", json={}, headers=t)
@@ -648,3 +661,381 @@ def test_pinned_and_search_resolve_the_card_too(client):
     mod = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()
     got2 = [m for m in mod["messages"] if m["kind"] == "activity"]
     assert got2 and got2[0]["activity"]["title"] == "Пятиминутка"
+
+
+def test_short_lived_activities_leave_no_trace_in_the_feed(client):
+    """Таймер и срез понимания НЕ оставляют карточку в ленте.
+
+    Они живут минуты и всплывают у всех сами — заходить в них из истории незачем, а на
+    паре их запускают по нескольку раз, и отметка о каждом превращала переписку в мусор.
+    Обратная половина обязательна: викторина/соревнование/доска карточку оставляют, иначе
+    «починка» вида «не создавать сообщение никогда» прошла бы незамеченной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+
+    for kind, params in (("timer", {"duration_s": 60}), ("pulse", {"duration_s": 60})):
+        a = _start(client, t, conv, kind, params).json()["id"]
+        msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+        assert not [m for m in msgs if m["kind"] == "activity"], f"{kind} оставил след в ленте"
+        client.post(f"{A}/{a}/finish", json={}, headers=t)
+
+    a = _start(client, t, conv, "board", {"sheet": "grid"}).json()["id"]
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    cards = [m for m in msgs if m["kind"] == "activity"]
+    assert len(cards) == 1 and cards[0]["activity"]["id"] == a, "доска обязана оставить карточку"
+
+
+def test_review_shows_the_key_only_after_submitting(client):
+    """Разбор с правильными ответами приходит ВМЕСТЕ с результатом отправки — и это
+    безопасно ровно потому, что пересдать нельзя (см. `submit_quiz` про оракул).
+
+    Проверяем обе половины: до отправки вопросы приходят БЕЗ ключа, после — с ключом и
+    с максимальным баллом. Без первой половины тест был бы зелёным и в том случае, если
+    ключ утекает студенту до начала прохождения."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    qs = client.get(f"{A}/{a}/questions", headers=b).json()["questions"]
+    raw = str(qs)
+    assert "is_correct" not in raw, "ключ не должен приходить ДО отправки"
+
+    r = client.post(f"{A}/{a}/submit", json={"answers": {}, "duration_ms": 1000}, headers=b)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("max_score"), "максимальный балл нужен экрану итогов"
+    assert body.get("review"), "разбор обязан прийти после отправки"
+    assert any(o["is_correct"] for q in body["review"] for o in q["options"]), \
+        "в разборе должен быть отмечен верный вариант"
+
+
+def test_poll_is_a_chat_message_not_a_link_to_an_overlay(client):
+    """Опрос — сообщение В ЛЕНТЕ с кнопками (как в Telegram), а не карточка-ссылка.
+
+    Обратная половина: доска по-прежнему оставляет `kind="activity"`. Без неё «починка»
+    вида «называть всё опросом» осталась бы незамеченной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Когда пересдача?", "options": ["Вторник", "Четверг"]}).json()["id"]
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    polls = [m for m in msgs if m["kind"] == "poll"]
+    assert len(polls) == 1, msgs
+    cell = polls[0]["activity"]
+    assert cell["id"] == a
+    assert cell["options"] == ["Вторник", "Четверг"], cell
+    assert cell["my_choice"] is None
+    #🔒 Распределение не создателю не отдаём.
+    assert "tally" not in cell, "чужие голоса студенту показывать нельзя"
+
+    host_msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    host_cell = [m for m in host_msgs if m["kind"] == "poll"][0]["activity"]
+    assert "tally" in host_cell, "автору опроса распределение нужно"
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    _start(client, t, conv, "board", {"sheet": "grid"})
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert [m for m in msgs if m["kind"] == "activity"], "доска обязана остаться карточкой"
+
+
+def test_match_pool_is_given_without_revealing_the_mapping(client):
+    """Сопоставление: студент получает СПИСОК правых половин (иначе выбирать не из чего),
+    но не узнаёт, какая к какой — `match_key` у вариантов по-прежнему нет."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[{
+        "type": "match", "text": "Сопоставьте", "points": 2,
+        "options": [{"text": "HTTP", "match_key": "протокол"},
+                    {"text": "HTML", "match_key": "разметка"}],
+    }])
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+
+    assert sorted(q["match_pool"]) == ["протокол", "разметка"], q
+    assert all("match_key" not in o for o in q["options"]), "ключ соответствия утёк"
+
+
+def test_quiz_time_limit_survives_save_and_reaches_the_player(client):
+    """Ограничение времени задаётся в конструкторе и доезжает до прохождения.
+    Ноль — «без ограничения», и это тоже проверяем: пустое поле не должно превращаться
+    в мгновенно истёкший таймер."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+
+    r = client.put(f"{A}/quizzes/{quiz}", json={"time_limit_s": 600}, headers=t)
+    assert r.status_code == 200, r.text
+    assert client.get(f"{A}/quizzes/{quiz}", headers=t).json()["time_limit_s"] == 600
+
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+    assert client.get(f"{A}/{a}/questions", headers=b).json()["time_limit_s"] == 600
+
+    client.put(f"{A}/quizzes/{quiz}", json={"time_limit_s": 0}, headers=t)
+    assert client.get(f"{A}/quizzes/{quiz}", headers=t).json()["time_limit_s"] == 0
+
+
+def test_finished_poll_keeps_its_results_in_the_feed(client):
+    """Завершённый опрос обязан ПОМНИТЬ голоса.
+
+    🔥 Живое состояние после завершения гасится, а опрос — это сообщение, которое
+    остаётся в ленте навсегда. Без снимка он показывал бы «проголосовало: 0» и пустые
+    полосы, то есть выглядел бы так, будто в нём никто не участвовал. Найдено
+    самопроверкой перед выкладкой, а не тестом, — поэтому тест и появился."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Когда пересдача?", "options": ["Вторник", "Четверг"]}).json()["id"]
+
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=b).status_code == 200
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=c).status_code == 200
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    cell = [m for m in msgs if m["kind"] == "poll"][0]["activity"]
+    assert cell["voted_count"] == 2, cell
+    assert cell["tally"] == [0, 2], cell
+
+    #И у проголосовавшего его выбор не должен потеряться вместе с живым состоянием.
+    mine = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    my_cell = [m for m in mine if m["kind"] == "poll"][0]["activity"]
+    assert my_cell["my_choice"] == 1, my_cell
+
+
+def test_host_sees_the_whole_roster_with_a_progress_scale(client):
+    """Ведущий видит ШКАЛУ по каждому участнику — и в викторине, и в соревновании.
+
+    Раньше он получал только тех, кто уже закончил, и «пусто» было неотличимо от «все
+    закончили мгновенно». Плюс шкале нужно число заданий: без `total_questions` делить
+    полосу не на что."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[
+        {"type": "single", "text": "1?", "points": 1,
+         "options": [{"text": "a", "is_correct": True}, {"text": "b"}]},
+        {"type": "single", "text": "2?", "points": 1,
+         "options": [{"text": "a", "is_correct": True}, {"text": "b"}]},
+    ])
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert st["total_questions"] == 2, st
+    #Оба участника беседы в списке, ещё до того как кто-то начал.
+    assert {r["user_id"] for r in st["progress"]} == {b_id, c_id}, st["progress"]
+    assert all(r["walked"] == 0 and not r["done"] for r in st["progress"])
+
+    #Студент дошёл до второго задания — шкала у ведущего сдвинулась.
+    assert client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b).status_code == 200
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [1], st["progress"]
+
+    #🔒 Чужой прогресс студенту не отдаём: у него в состоянии нет ни `walk`, ни `progress`.
+    st_b = client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]
+    assert "walk" not in st_b and "progress" not in st_b, st_b
+
+
+def test_progress_never_goes_backwards(client):
+    """Человек вернулся к предыдущему вопросу — пройденного это не отменяет.
+    Прыгающая назад шкала у ведущего читается как сбой."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    client.post(f"{A}/{a}/progress", json={"answered": 3}, headers=b)
+    client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b)
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [3], st["progress"]
+
+
+def test_contest_host_also_gets_the_roster_not_the_question(client):
+    """Соревнование: ведущему тоже нужен ход, а не задание — он его не решает."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert "progress" in st and {r["user_id"] for r in st["progress"]} == {b_id, c_id}, st
+    assert st.get("total_questions") == 1, st
+
+
+def test_contest_counts_everyone_who_answered_even_with_zero(client):
+    """Ответил на всё неправильно — это ТОЖЕ результат, и он обязан быть в таблице.
+
+    🔥 Раньше итоги собирались по `scores`, а туда человек попадает только когда что-то
+    заработал: ответивший мимо не получал строки ВООБЩЕ и пропадал из результатов — со
+    стороны выглядело как «соревнование не считает». Именно нулевая строка и говорит
+    преподавателю, с кем разбирать тему."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t, questions=[{
+        "type": "single", "text": "2+2?", "points": 1,
+        "options": [{"text": "4", "is_correct": True}, {"text": "5"}],
+    }])
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+
+    qs = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    wrong = [o["id"] for o in qs["options"] if o["text"] == "5"][0]
+    assert client.post(f"{A}/{a}/answer", json={"answer": wrong}, headers=b).status_code == 200
+
+    #Шкала у ведущего обязана видеть, что человек ответил, а не стоять на нуле.
+    st = client.get(f"{A}/{a}", headers=t).json()["state"]["payload"]
+    assert [r["walked"] for r in st["progress"] if r["user_id"] == b_id] == [1], st["progress"]
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    res = client.get(f"{A}/{a}/results", headers=t).json()["results"]
+    assert b_id in {r["user_id"] for r in res}, res
+    assert [r["score"] for r in res if r["user_id"] == b_id] == [0.0], res
+
+
+def test_host_progress_actually_reaches_the_host_over_the_socket(client, monkeypatch):
+    """🔥 СТОРОЖ НА ЖИВУЮ ШКАЛУ, а не на её расчёт.
+
+    Расчёт был исправен и покрыт тестом — а мониторинг у преподавателя всё равно выглядел
+    мёртвым: `progress` попадает клиенту только в проекции состояния, то есть ОДИН раз
+    при открытии, а кадры по сокету несут лишь изменившиеся поля и подмешиваются поверх.
+    Значит после открытия список застывал в моменте, когда никто ещё не начинал.
+    Проверяем именно ДОСТАВКУ: что при отчёте о прогрессе ведущему уходит кадр со шкалой.
+    """
+    sent = []
+
+    def _spy(user_ids, data):
+        sent.append((list(user_ids), data))
+
+    from app.routers import activities as act_mod
+    monkeypatch.setattr(act_mod, "_emit_to", _spy)
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+
+    sent.clear()
+    assert client.post(f"{A}/{a}/progress", json={"answered": 1}, headers=b).status_code == 200
+
+    to_host = [d for ids, d in sent if t_id in ids]
+    assert to_host, f"ведущему не ушёл ни один кадр: {sent}"
+    payload = to_host[-1]["payload"]
+    assert "progress" in payload, payload
+    assert [r["walked"] for r in payload["progress"] if r["user_id"] == b_id] == [1], payload
+
+    #🔒 И это ИМЕННО адресный кадр: чужой прогресс студентам не полагается.
+    assert all(t_id in ids for ids, _ in sent), sent
+
+
+def test_contest_advances_by_time_and_finishes_itself_after_the_last_question(client):
+    """Ход ведёт ВРЕМЯ, а ведущий может его обогнать.
+
+    🔥 Чинит тупик: на последнем вопросе «следующий» отвечал ошибкой «вопросы
+    закончились», выбрать ответ было уже нельзя, а итоги появлялись, только если ведущий
+    вручную нажимал «завершить». Двигает СЕРВЕР: у тридцати человек тридцать своих часов,
+    и переход по клиентскому таймеру случился бы тридцать раз в разные моменты."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    qs = [{"type": "single", "text": f"{i}?", "points": 1,
+           "options": [{"text": "да", "is_correct": True}, {"text": "нет"}]} for i in (1, 2)]
+    quiz = _quiz(client, t, questions=qs)
+    #Минимум, который принимает сервер, — 5 секунд (ниже вопрос не успеть прочитать).
+    #Ждать в тесте настоящие тридцать нельзя, поэтому берём именно минимум.
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz, "limit_ms": 5000}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    assert client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]["question_index"] == 0
+
+    import time
+    time.sleep(5.3)
+    #Любое обращение к API подметает истёкшее — как и у таймера.
+    client.get(f"{A}/running", params={"conversation_id": conv}, headers=b)
+    st = client.get(f"{A}/{a}", headers=b).json()["state"]["payload"]
+    assert st["question_index"] == 1, f"время вышло — вопрос обязан смениться сам: {st}"
+
+    time.sleep(5.3)
+    client.get(f"{A}/running", params={"conversation_id": conv}, headers=b)
+    fresh = client.get(f"{A}/{a}", headers=b).json()
+    assert fresh["status"] == "finished", "после последнего вопроса активность завершается сама"
+
+
+def test_contest_leaderboard_is_open_to_everyone_after_it_ends(client):
+    """Пьедестал — смысл категории, его видят ВСЕ. Но только после завершения: до него
+    чужие баллы никому не полагаются. В обычной викторине таблица так и остаётся личной."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    client.post(f"{A}/{a}/answer", json={"answer": q["options"][0]["id"]}, headers=b)
+    client.post(f"{A}/{a}/answer", json={"answer": q["options"][1]["id"]}, headers=c)
+
+    #До завершения участник видит только себя.
+    mine = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    assert {r["user_id"] for r in mine} <= {b_id}, mine
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    board = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    assert {b_id, c_id} <= {r["user_id"] for r in board}, board
+    #«Выполнено» считает ОТВЕТИВШИХ, даже если ответ неверный.
+    assert all(r["answered_count"] == 1 for r in board), board
+
+
+def test_correct_contest_answer_actually_scores(client):
+    """⚠️ Обратный тест к остальным: ВЕРНЫЙ ответ обязан давать баллы.
+
+    Нужен потому, что соседние тесты слали поле `value`, которого сервер не читает
+    (он ждёт `answer`): ответ молча считался неотвеченным и оценивался как неверный, а
+    проверки на ноль баллов при этом оставались зелёными. То есть весь путь начисления
+    баллов не был покрыт ни разу — тесты подтверждали не то, что проверяли."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    right = [o["id"] for o in q["options"] if o["text"] == "4"][0]
+    r = client.post(f"{A}/{a}/answer", json={"answer": right}, headers=b)
+    assert r.status_code == 200, r.text
+    assert r.json()["correct"] is True, r.json()
+    assert r.json()["gain"] > 0, r.json()
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    board = client.get(f"{A}/{a}/results", headers=b).json()["results"]
+    mine = [x for x in board if x["user_id"] == b_id][0]
+    assert mine["score"] > 0 and mine["correct_count"] == 1, mine
+
+
+def test_leaderboard_updates_live_for_everyone_during_the_contest(client):
+    """Табло обязано жить ВО ВРЕМЯ игры, а не только при открытии.
+
+    🔥 Тот же класс, что был у шкалы прогресса: `board` считается в проекции состояния и
+    попадает клиенту один раз — кнопка «Лидерборд» посреди соревнования показывала пустой
+    список всем, кто не перезаходил в активность. Проверяем, что кадр после ответа несёт
+    свежее табло."""
+    sent = []
+    from app.routers import activities as act_mod
+    orig = act_mod._emit
+
+    def _spy(db, conv_id, data):
+        sent.append(data)
+        return orig(db, conv_id, data)
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _quiz(client, t)
+    a = _start(client, t, conv, "contest", {"quiz_id": quiz}).json()["id"]
+    client.post(f"{A}/{a}/next", json={}, headers=t)
+    q = client.get(f"{A}/{a}/questions", headers=b).json()["questions"][0]
+    right = [o["id"] for o in q["options"] if o["text"] == "4"][0]
+
+    act_mod._emit = _spy
+    try:
+        client.post(f"{A}/{a}/answer", json={"answer": right}, headers=b)
+    finally:
+        act_mod._emit = orig
+
+    frames = [d for d in sent if "board" in (d.get("payload") or {})]
+    assert frames, f"кадр с табло не ушёл: {sent}"
+    board = frames[-1]["payload"]["board"]
+    assert any(r["user_id"] == b_id and r["score"] > 0 for r in board), board

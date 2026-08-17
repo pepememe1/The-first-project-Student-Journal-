@@ -4,10 +4,11 @@
 // Подтверждение — ЕДИНАЯ модалка на все категории («Вы выбрали X, подтвердить?»), а не
 // своя у каждой: шесть почти одинаковых диалогов разъезжаются формулировками уже на
 // третьем, и человек перестаёт их читать.
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { X, Presentation, ListChecks, Trophy, BarChart3, Gauge, Timer, ChevronLeft } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { useAuthStore } from '@/stores/auth'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
 import QuizEditor from './quiz/QuizEditor.vue'
@@ -16,6 +17,9 @@ const props = defineProps({ conversationId: { type: String, required: true } })
 const emit = defineEmits(['close'])
 const locale = useLocaleStore()
 const act = useActivityStore()
+//Видимость ссылки на журнал. Настоящая проверка прав — на сервере (эндпоинт
+//откажет студенту сам); здесь только то, показывать ли ссылку.
+const canSeeJournal = computed(() => ['teacher', 'admin'].includes(useAuthStore().user?.role))
 
 const KINDS = [
   { id: 'board', icon: Presentation },
@@ -58,9 +62,15 @@ async function choose(kind) {
   if (kind === 'quiz' || kind === 'contest') await loadQuizzes()
 }
 
+watch(() => chosen.value, (k) => { if (k === 'quiz' || k === 'contest') loadQuizzes() })
+
 async function loadQuizzes() {
   try {
-    const { data } = await activitiesApi.quizzes({ scope: quizScope.value, q: quizSearch.value })
+    //Библиотека РАЗДЕЛЬНАЯ: у соревнования свои наборы, у викторины свои. Общий список
+    //заставлял гадать, что откуда запускается, и позволял выбрать для соревнования набор
+    //с заданиями, которые оно не принимает (порядок, сопоставление).
+    const { data } = await activitiesApi.quizzes({ scope: quizScope.value, q: quizSearch.value,
+                                                  kind: chosen.value === 'contest' ? 'contest' : 'quiz' })
     quizzes.value = data.quizzes || []
   } catch { quizzes.value = [] }
 }
@@ -245,6 +255,15 @@ async function confirm() {
         </div>
       </div>
 
+      <!-- Журнал активностей беседы. Мелкой ссылкой под категориями, а не кнопкой в
+           шапке чата: место в шапке одно, и оно отдано частому действию — запуску.
+           Виден только тому, кто вправе запускать: студенту таблица чужих результатов
+           не полагается (свои строки он видит в самом журнале). -->
+      <button v-if="!chosen && canSeeJournal" type="button" @click="act.openJournal(conversationId)"
+              class="mx-4 mb-3 self-start text-xs text-text3 underline-offset-2 hover:text-accent hover:underline">
+        {{ locale.t('activity.journal.title', 'Журнал активностей') }}
+      </button>
+
       <div v-if="chosen" class="flex items-center justify-between gap-2 border-t border-border2 px-4 py-3">
         <span class="min-w-0 truncate text-xs text-text3">
           {{ locale.t('activity.launcher.confirm', { kind: chosenLabel }) }}
@@ -262,5 +281,6 @@ async function confirm() {
   </div>
 
   <QuizEditor v-if="editorFor !== null" :quiz-id="editorFor"
+              :kind="chosen === 'contest' ? 'contest' : 'quiz'"
               @close="editorFor = null" @saved="loadQuizzes" />
 </template>

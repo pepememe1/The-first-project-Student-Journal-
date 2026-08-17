@@ -148,6 +148,10 @@ export const useMessengerStore = defineStore('messenger', () => {
     // из списка/после перезагрузки она рендерится как обычный личный чат с ролью-заглушкой
     // «Студент» (см. ProfilePanel). Тип приходит из convInfo (kind='moderation').
     if (activeInfo.value?.kind === 'moderation') isModeration.value = true
+    //🔥 Подхватываем ИДУЩУЮ активность беседы. Без этого таймер, запущенный до ухода на
+    //другую вкладку, исчезал вместе со стором: полоски нет, завершить нечем, а сервер
+    //не даёт запустить второй — «одна активность на беседу». Выглядело как тупик.
+    try { await useActivityStore().adoptCurrent(convId) } catch { /* нет активности — обычное дело */ }
     await markReadActive()
     await loadChats()                    // обновить счётчик непрочитанного в списке
   }
@@ -318,6 +322,37 @@ export const useMessengerStore = defineStore('messenger', () => {
     try { await messengerApi.read(activeId.value, _lastId()) } catch { /* noop */ }
   }
 
+  /**
+   * Пометить карточку активности завершённой — и в открытой ленте, и в списке чатов.
+   *
+   * Нужна потому, что обычный путь обновления сюда не дотягивается: `pollOnce` спрашивает
+   * только сообщения новее последнего id, а карточка активности к моменту завершения уже
+   * старая. Перечитывать всю ленту ради одного поля дороже и заметно морганием.
+   */
+  function _patchActivityCard(activityId, finishedAt) {
+    if (!activityId) return
+    const patch = (m) => {
+      if (m && m.kind === 'activity' && m.activity && m.activity.id === activityId) {
+        m.activity = { ...m.activity, status: 'finished', finished_at: finishedAt }
+      }
+    }
+    messages.value.forEach(patch)
+    chats.value.forEach((c) => patch(c.last_message))
+  }
+
+  /** Обновить счётчик голосов у опроса прямо в ленте (см. про pollOnce выше). */
+  function _patchPollCard(activityId, votedCount, tally) {
+    if (!activityId) return
+    const patch = (m) => {
+      if (m && m.kind === 'poll' && m.activity && m.activity.id === activityId) {
+        m.activity = { ...m.activity, voted_count: votedCount,
+                       ...(tally ? { tally } : {}) }
+      }
+    }
+    messages.value.forEach(patch)
+    chats.value.forEach((c) => patch(c.last_message))
+  }
+
   // Опрос новых сообщений активной беседы + обновление списка чатов.
   async function pollOnce() {
     if (activeId.value) {
@@ -355,8 +390,23 @@ export const useMessengerStore = defineStore('messenger', () => {
           // идут этим же сокетом. Разбор — в сторе активности: тут только маршрутизация.
           const act = useActivityStore()
           if (ev.type === 'activity.started') act.onStarted(ev, activeId.value)
-          else if (ev.type === 'activity.state') act.applyFrame(ev)
-          else if (ev.type === 'activity.finished') act.onFinished(ev)
+          else if (ev.type === 'activity.state') {
+            act.applyFrame(ev)
+            // Опрос живёт СООБЩЕНИЕМ в ленте, а не окном: его счётчик обязан расти у
+            // всех сразу. Обычный опрос ленты сюда не дотянется — карточка старая, а
+            // `pollOnce` тянет только то, что новее последнего id.
+            const vc = ev.payload?.voted_count
+            if (vc !== undefined) _patchPollCard(ev.activity_id, vc, ev.payload?.tally)
+          }
+          else if (ev.type === 'activity.finished') {
+            act.onFinished(ev)
+            // 🔥 Карточку в ленте надо ПОЧИНИТЬ ЗДЕСЬ, а не ждать опроса. `pollOnce`
+            // тянет только сообщения НОВЕЕ последнего id, а карточка активности —
+            // сообщение старое: её статус менялся на сервере, но до клиента не доезжал
+            // никогда, и таймер «идёт · 38:49» продолжал тикать у завершённой
+            // активности до перезахода в чат. Тот же класс, что уже ловили с `/clear`.
+            _patchActivityCard(ev.activity_id, ev.finished_at || new Date().toISOString())
+          }
           if (ev.conversation_id === activeId.value) pollOnce()   // карточка в ленте
         } else if (ev.type === 'typing' && ev.conversation_id === activeId.value) {
           peerTyping.value = true
