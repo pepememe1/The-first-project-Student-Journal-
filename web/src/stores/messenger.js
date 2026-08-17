@@ -258,15 +258,11 @@ export const useMessengerStore = defineStore('messenger', () => {
     sending.value = true
     try {
       const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
-      // `/активность` — команда, а не сообщение: сервер вообще не создаёт строку в ленте
-      // и отвечает указанием открыть выбор категории. Проверяем ДО _appendUnique: иначе
-      // объект-команда лёг бы в ленту пузырём без текста.
-      if (data?.command === 'open_activity_launcher') {
-        useActivityStore().openLauncher(data.conversation_id || activeId.value)
-        replyTo.value = null
-        setNotice('')
-        return true
-      }
+      // ℹ️ Ветка `open_activity_launcher` убрана 17.08.2026 вместе с командой
+      // `/активность` (решение Влада: активности открывает кнопка в шапке беседы, и она
+      // зовёт лаунчер напрямую, не спрашивая сервер). Сервер такой ответ больше не шлёт —
+      // держать разбор «на всякий случай» значило бы оставить ветку, которую никто не
+      // выполняет и никто не проверяет.
       _appendUnique(data)
       replyTo.value = null
       setNotice('')

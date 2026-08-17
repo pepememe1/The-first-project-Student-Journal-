@@ -80,6 +80,21 @@ def _mk_student(client, admin, login, surname, name, group, pw="studpass1"):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+def _seed_config(**kv):
+    """Положить настройки ПРЯМО в БД — так, как это делает сайт.
+
+    ⚠️ Раньше тесты засеивали конфиг пушем админа. С 17.08.2026 `config` синком не
+    принимается вовсе (см. PUSH_SCOPE и tests/test_sync_config_clobber.py): устаревшая
+    копия десктопа откатывала правки, сделанные на сайте. Проверяют эти тесты РАЗДАЧУ
+    конфига на pull, а не приём, — поэтому меняется только способ засева."""
+    from app.models import ConfigKV
+    from app.db import SessionLocal
+    with SessionLocal() as db:
+        for k, v in kv.items():
+            db.add(ConfigKV(key=k, value=v, updated_at="", deleted=False))
+        db.commit()
+
+
 def test_pull_teacher_row_scope(client):
     """Преподаватель получает свою строку + студентов СВОИХ групп и занятия СВОИХ
     предметов; чужие группы/предметы/преподавателей и админа — не видит. Свой хеш есть,
@@ -90,8 +105,8 @@ def test_pull_teacher_row_scope(client):
     _push(client, admin,
           groups=[{"id": "grp:ИС-21", "name": "ИС-21", "subjects": ["Математика"]},
                   {"id": "grp:ИС-22", "name": "ИС-22", "subjects": ["Физика"]}],
-          config=[{"key": "gigachat_credentials", "value": "SECRET", "deleted": False},
-                  {"key": "vector_llm", "value": "gigachat", "deleted": False}])
+          )
+    _seed_config(gigachat_credentials="SECRET", vector_llm="gigachat")
     _mk_student(client, admin, "sa", "Иванов", "Иван", "ИС-21")
     _mk_student(client, admin, "sb", "Петров", "Пётр", "ИС-22")
     _push(client, admin, lessons=[
@@ -135,8 +150,7 @@ def test_pull_admin_gets_everything(client):
     """Админ получает полный дамп (хеши всех + секреты) — нужно для правки юзеров и ИИ."""
     admin = make_admin(client)
     make_teacher(client, admin, login="teacher1")
-    _push(client, admin, config=[
-        {"key": "gigachat_credentials", "value": "SECRET_TOKEN", "deleted": False}])
+    _seed_config(gigachat_credentials="SECRET_TOKEN")
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
     hashes = [u["password_hash"] for u in ch["users"] if u.get("login")]

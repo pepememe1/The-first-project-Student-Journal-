@@ -524,28 +524,14 @@ def test_snapshot_does_not_finish_the_board(client):
     assert client.get(f"{A}/{a}", headers=t).json()["status"] == "running"
 
 
-# ── Карточка в ленте и команда ───────────────────────────────────────────────────────
-def test_activity_command_leaves_no_literal_in_the_feed(client):
-    """`/активность` — команда, а не сообщение: литерал в ленте не оседает."""
-    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
-    conv = _group(client, t, [b_id, c_id])
-    r = client.post(f"/web/messenger/chats/{conv}/messages",
-                    json={"body": "/активность"}, headers=t)
-    assert r.status_code == 200, r.text
-    assert r.json()["command"] == "open_activity_launcher"
-    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
-    assert not any("/активность" in (m.get("body") or "") for m in msgs)
-
-
-def test_activity_command_is_refused_to_students_before_they_choose(client):
-    """Иначе студент узнал бы, что ему нельзя, уже ПОСЛЕ выбора категории."""
-    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
-    conv = _group(client, t, [b_id, c_id])
-    r = client.post(f"/web/messenger/chats/{conv}/messages",
-                    json={"body": "/активность"}, headers=b)
-    assert r.status_code == 403
-
-
+# ── Карточка в ленте ─────────────────────────────────────────────────────────────────
+#ℹ️ Здесь были два теста команды `/активность` — она удалена 17.08.2026 (решение Влада:
+#активности открывает кнопка в шапке беседы). Второй из них проверял важное: студенту
+#отказывали ДО выбора категории, а не после. Кнопка эту проверку не унаследовала, поэтому
+#её пришлось восстановить на клиенте (`ChatThread.vue`: у того, кто не вправе запускать,
+#кнопка ведёт в идущую активность, а при её отсутствии не показывается вовсе). Серверная
+#часть того инварианта жива и покрыта отдельно — `POST /activities/start` отвечает 403,
+#см. `test_student_cannot_start` в начале этого файла.
 def test_feed_card_carries_the_activity_object(client):
     """В теле сообщения лежит только id — объект подмешивает сервер, потому что статус
     меняется ПОСЛЕ отправки."""

@@ -155,9 +155,14 @@ def test_pull_never_leaks_other_peoples_password_hashes(client):
 def test_pull_never_leaks_ai_secrets_to_non_admin(client):
     """Секретные ключи config (токен GigaChat и подобные) не покидают сервер к не-админу."""
     admin = make_admin(client)
-    client.post("/sync/push", json={"changes": {"config": [
-        {"key": "gigachat_credentials", "value": "СЕКРЕТ"},
-        {"key": "ai_provider", "value": "gigachat"}]}}, headers=admin)
+    #Настройки кладём ПРЯМО в БД, как это делает сайт: синком `config` не принимается
+    #с 17.08.2026 (см. PUSH_SCOPE) — проверяем здесь РАЗДАЧУ, а не приём.
+    from app.models import ConfigKV
+    from app.db import SessionLocal
+    with SessionLocal() as db:
+        db.add(ConfigKV(key="gigachat_credentials", value="СЕКРЕТ", updated_at="", deleted=False))
+        db.add(ConfigKV(key="ai_provider", value="gigachat", updated_at="", deleted=False))
+        db.commit()
     th = make_teacher(client, admin)
     keys = {c["key"] for c in client.get("/sync/pull", headers=th).json()["changes"]["config"]}
     assert "gigachat_credentials" not in keys
