@@ -29,10 +29,17 @@ def _seed(client, admin):
     ]
     r = client.post("/sync/push", json={"changes": {
         "groups": [{"id": "g:ИС-21", "name": "ИС-21", "subjects": ["Математика"]}],
-        "subjects": [{"id": "s:Математика", "name": "Математика"}],
         "users": [student], "lessons": lessons, "grades": grades,
     }}, headers=admin)
     assert r.status_code == 200, r.text
+    #Каталог предметов кладём ПРЯМО в БД, как это делает сайт. Синком `subjects` не
+    #принимаются с 17.08.2026 (см. PUSH_SCOPE и tests/test_sync_config_clobber.py):
+    #десктоп физически не умел прислать надгробие и воскрешал удалённые предметы.
+    from app.models import Subject
+    from app.db import SessionLocal
+    with SessionLocal() as db:
+        db.add(Subject(id="s:Математика", name="Математика", updated_at="", deleted=False))
+        db.commit()
 
 
 def _login(client, login, password):

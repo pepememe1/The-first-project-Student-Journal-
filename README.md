@@ -452,7 +452,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 |---|---|
 | `main.py` | Точка входа: применение отложенного обновления → БД → окно |
 | `app_paths.py` | Единый источник путей (портативность .exe); кросс-совместимо с PyInstaller и Nuitka |
-| `subjects.py`, `log.py` | Справочник предметов, логирование |
+| `log.py` | Логирование |
 | `desktop/webview2_app.py`, `desktop/webview2_shell.py` | **Единственное окно программы** — системный движок Edge (WebView2) через pywebview |
 | `desktop/local_api.py` | Поднимает **настоящий** `server/app` на 127.0.0.1 в потоке; мост входа, передача сессии, прокси онлайн-разделов |
 | `desktop/local_mirror.py` | Дельта-зеркало боевой базы в локальную копию приложения |
