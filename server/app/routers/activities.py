@@ -61,6 +61,10 @@ MAX_QUESTIONS = 100
 #(поток штрихов и так режется клиентом до ~150 мс, см. §7 плана).
 MAX_STROKES_PER_BATCH = 500
 MAX_STROKES_TOTAL = 20000
+#Потолок на ОДИН штрих. Числа штрихов мало: сам штрих — непрозрачный словарь от клиента,
+#и без этого предела 20000 разрешённых штрихов могли весить сколько угодно (см.
+#`_clean_strokes`). 4 КБ — шестикратный запас к настоящему куску линии за 150 мс.
+MAX_STROKE_BYTES = 4096
 
 
 def _now() -> str:
@@ -141,6 +145,25 @@ def _require_running(a: Activity) -> Activity:
     if a.status != "running":
         raise HTTPException(status_code=400, detail="Активность уже завершена")
     return a
+
+
+def _throttle(bucket: str, user: User) -> None:
+    """Тормоз на действие участника (18.08.2026, адверсариальный разбор).
+
+    До этого в активностях не было НИ ОДНОГО ограничения частоты, хотя у сообщений оно
+    есть с 2.9.1 и заведено ровно по этой причине. Разница в том, что здесь дешёвый запрос
+    УСИЛИВАЕТСЯ: `progress` рассылает кадр всем участникам беседы и делает три запроса в
+    базу у ведущего, то есть в канале на сотню человек один POST превращается в сотню
+    кадров. Права тут не спасают — усилитель доступен любому законному участнику.
+
+    Отвечаем 429 с `Retry-After`: это не наказание, а просьба подождать, и клиент обязан
+    уметь её прочитать. Пороги — в `msg_limit._BUCKETS`, подобраны от реального поведения
+    клиента (штрихи идут кусками раз в 150 мс), а не от круглого числа."""
+    from .. import msg_limit
+    wait = msg_limit.bucket_check(bucket, user.id)
+    if wait:
+        raise HTTPException(status_code=429, detail="Слишком часто, подождите немного",
+                            headers={"Retry-After": str(wait)})
 
 
 # ── Рассылка ─────────────────────────────────────────────────────────────────────────
@@ -927,6 +950,7 @@ def vote(activity_id: str, payload: dict = Body(...),
          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Проголосовать. Повторный голос ЗАМЕНЯЕТ прежний — человек имеет право передумать
     и, что важнее, исправить промах пальцем по соседнему варианту."""
+    _throttle("answer", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind != "poll":
         raise HTTPException(status_code=400, detail="Это не опрос")
@@ -1001,6 +1025,7 @@ def poll_results(activity_id: str, user: User = Depends(get_current_user),
 def send_feedback(activity_id: str, payload: dict = Body(...),
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Отправить срез понимания. Повторная отправка заменяет прежнюю."""
+    _throttle("answer", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind != "pulse":
         raise HTTPException(status_code=400, detail="Это не срез понимания")
@@ -1501,6 +1526,7 @@ def report_progress(activity_id: str, payload: dict = Body(...),
     асинхронная викторина отправляет ответы одним запросом В КОНЦЕ, и до него сервер не
     знает о человеке ничего, кроме того, что он открыл вопросы.
     """
+    _throttle("progress", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind not in ("quiz", "contest"):
         raise HTTPException(status_code=400, detail="У этой активности нет заданий")
@@ -1542,6 +1568,7 @@ def submit_quiz(activity_id: str, payload: dict = Body(...),
     идемпотентный возврат: сетевой ретрай шлёт ТЕ ЖЕ ответы и обязан получить свой
     результат, а не ошибку. Найдено разбором Полковника, 15.08.2026.
     """
+    _throttle("answer", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind != "quiz":
         raise HTTPException(status_code=400,
@@ -1616,6 +1643,7 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     Повтор отвергаем (в отличие от опроса, где «передумал» — норма): здесь баллы зависят
     от скорости, и второй ответ был бы способом сначала выбрать наугад, а потом исправиться
     без потери времени."""
+    _throttle("answer", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind != "contest":
         raise HTTPException(status_code=400, detail="Это не соревнование")
@@ -1737,10 +1765,39 @@ def _may_draw(db: Session, a: Activity, user: User, payload: dict) -> bool:
     return a.host_id == user.id or payload.get("pen_user_id") == user.id
 
 
+def _clean_strokes(batch: list) -> list:
+    """Отсеять штрихи, которые не могут быть настоящими (18.08.2026).
+
+    ⚠️ Раньше ограничено было ТОЛЬКО ЧИСЛО штрихов, а размер каждого — ничем. Штрих это
+    непрозрачный для сервера словарь от клиента (он и должен таким быть — формат объектов
+    доски расширялся уже дважды), и в него помещалось сколько угодно: 500 штрихов в пачке
+    по мегабайту каждый упирались только в общий предел тела запроса Caddy (4 МБ), а
+    состояние доски держит до 20000 штрихов В ПАМЯТИ процесса, на машине с 960 МБ.
+    Получалась не дыра в правах, а способ занять память законным участником с пером.
+
+    Режем ПОШТУЧНО, а не всю пачку: одна битая точка не должна стирать честно нарисованную
+    линию рядом. 4 КБ — с шестикратным запасом к реальности (кусок за 150 мс это ~18 точек,
+    ~300 байт). Потолок памяти на доску становится определённым: 20000 × 4 КБ = 80 МБ, и
+    вместе с тормозом частоты выше набрать их быстро уже нельзя.
+    """
+    import json
+    out = []
+    for s in batch[:MAX_STROKES_PER_BATCH]:
+        if not isinstance(s, (dict, list)):
+            continue
+        try:
+            if len(json.dumps(s, ensure_ascii=False)) <= MAX_STROKE_BYTES:
+                out.append(s)
+        except (TypeError, ValueError):
+            continue          #несериализуемое в состояние не кладём — оно оттуда и уедет в WS
+    return out
+
+
 @router.post("/{activity_id}/strokes")
 def add_strokes(activity_id: str, payload: dict = Body(...),
                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Пачка штрихов. Пишет ведущий либо тот, кому он выдал перо."""
+    _throttle("stroke", user)
     a = _require_running(_require_activity_participant(db, activity_id, user))
     if a.kind != "board":
         raise HTTPException(status_code=400, detail="Это не доска")
@@ -1752,10 +1809,11 @@ def add_strokes(activity_id: str, payload: dict = Body(...),
     batch = payload.get("strokes")
     if not isinstance(batch, list):
         raise HTTPException(status_code=400, detail="Ожидается список штрихов")
+    batch = _clean_strokes(batch)
     strokes = list(snap["payload"].get("strokes") or [])
     if payload.get("clear"):
         strokes = []
-    strokes.extend(batch[:MAX_STROKES_PER_BATCH])
+    strokes.extend(batch)
     #Потолок — защита от бесконечно растущего состояния в памяти на длинной паре.
     #Режем СТАРЫЕ: свежее человеку нужнее, а «доска целиком» и так уезжает в артефакт.
     if len(strokes) > MAX_STROKES_TOTAL:
@@ -1764,7 +1822,7 @@ def add_strokes(activity_id: str, payload: dict = Body(...),
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
-           "payload": {"strokes_added": batch[:MAX_STROKES_PER_BATCH],
+           "payload": {"strokes_added": batch,
                        "cleared": bool(payload.get("clear"))}})
     return {"ok": True, "total": len(strokes)}
 
