@@ -177,3 +177,71 @@ def test_one_bad_stroke_does_not_take_the_good_ones_with_it(client):
                     headers=t)
     assert r.status_code == 200, r.text
     assert r.json()["total"] == 2
+
+
+# ── «Продолжить доску»: второй путь записи штрихов (разбор Полковника, 18.08.2026) ───
+def _saved_board(client, headers, conv, strokes):
+    """Сохранённая доска беседы с ЗАРАНЕЕ заданными штрихами.
+
+    Кладём в базу напрямую: артефакт мог быть записан ДО появления проверки размера, и
+    воспроизвести это через API уже нельзя — `add_strokes` теперь санирует на входе.
+    Именно такие, дофиксовые, артефакты и остались лежать на бою."""
+    from app.db import SessionLocal
+    from app.models import BoardArtifact
+    db = SessionLocal()
+    try:
+        art = BoardArtifact(id=f"board:probe{len(strokes)}", conversation_id=conv,
+                            activity_id="", author_id="teach:teacher1", sheet="blank",
+                            strokes=strokes, title="старая доска", created_at="2026-01-01 00:00:00")
+        db.add(art)
+        db.commit()
+        return art.id
+    finally:
+        db.close()
+
+
+def test_continuing_an_old_board_does_not_smuggle_giant_strokes(client):
+    """🔥 Дыра, из-за которой потолок памяти на доску не действовал вовсе.
+
+    `add_strokes` санирует вход, но «продолжить доску» тянуло штрихи ИЗ АРТЕФАКТА в
+    состояние напрямую. Доску, сохранённую до починки, достаточно было продолжить — и в
+    память процесса уезжал объём, на который потолок 20000 x 4 КБ не распространялся."""
+    admin, (t_id, t), (b_id, b) = _setup(client)
+    conv, act = _board(client, t, [b_id])
+    client.post(f"{A}/{act}/finish", headers=t, json={})
+
+    huge = dict(_stroke(), pts=[[i, i] for i in range(60000)])   # ~700 КБ в одном штрихе
+    src = _saved_board(client, t, conv, [_stroke(), huge, _stroke()])
+
+    r = client.post(f"{A}/start", headers=t,
+                    json={"conversation_id": conv, "kind": "board",
+                          "params": {"continue_board_id": src}})
+    assert r.status_code == 200, r.text
+    from app import activity_state
+    got = activity_state.get(r.json()["id"])["payload"]["strokes"]
+    assert len(got) == 2, ("штрих на 700 КБ переехал в состояние через «продолжить доску» — "
+                           "потолок памяти не действует")
+
+
+def test_continuing_a_big_but_honest_board_keeps_everything(client):
+    """ОБРАТНЫЙ ХОД, и он ловит самую вероятную неверную починку.
+
+    Санировать «продолжение» тем же пределом, что и пачку (500 штрихов), — первое, что
+    приходит в голову: тест выше остаётся зелёным. Но доска за пару это законно тысячи
+    штрихов, и такая «защита» молча стёрла бы человеку работу, оставив первые пятьсот.
+    У пачки и у целой доски пределы РАЗНЫЕ."""
+    admin, (t_id, t), (b_id, b) = _setup(client)
+    conv, act = _board(client, t, [b_id])
+    client.post(f"{A}/{act}/finish", headers=t, json={})
+
+    honest = [_stroke() for _ in range(1500)]        # больше предела пачки (500), но норма
+    src = _saved_board(client, t, conv, honest)
+
+    r = client.post(f"{A}/start", headers=t,
+                    json={"conversation_id": conv, "kind": "board",
+                          "params": {"continue_board_id": src}})
+    assert r.status_code == 200, r.text
+    from app import activity_state
+    got = activity_state.get(r.json()["id"])["payload"]["strokes"]
+    assert len(got) == 1500, (f"восстановленная доска обрезана до {len(got)} штрихов — "
+                              f"это потеря работы преподавателя, а не защита")
