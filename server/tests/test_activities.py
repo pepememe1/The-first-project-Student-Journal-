@@ -283,6 +283,56 @@ def test_poll_results_stay_private_after_finish(client):
     assert client.get(f"{A}/{a}/poll-results", headers=b).status_code == 403
 
 
+def test_timer_control_does_not_report_success_when_state_is_gone(client, monkeypatch):
+    """🔥 НАЙДЕНО ПОЛКОВНИКОМ, а не проверкой типов — и это важно: mypy это место НЕ
+    подсвечивает, потому что снимок здесь не индексируется, а просто возвращается наружу.
+
+    Та же гонка, что и у голосования (завершили активность между чтением и записью, либо
+    служба перезапускалась), но исход хуже: `_emit_state` молча выходит на None, и ведущий
+    получает **200 `{"ok": true, "state": null}`**. То есть «Продлить» отвечает УСПЕХОМ,
+    ничего не продлив и никому не разослав кадр. Тихий ложный успех опаснее пятисотки:
+    пятисотку видно, а этот отказ выглядит как исправная работа.
+
+    Обратный ход: снять `_require_state` у `control_timer` — тест краснеет (200 вместо 400).
+    """
+    from app import activity_state
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "timer", {"duration_s": 300}).json()["id"]
+
+    monkeypatch.setattr(activity_state, "patch", lambda *args, **kwargs: None)
+    r = client.post(f"{A}/{a}/timer", json={"action": "extend", "seconds": 60}, headers=t)
+    assert r.status_code == 400, f"тихий успех вместо отказа: {r.status_code} {r.text}"
+
+
+def test_vote_survives_activity_finished_between_read_and_write(client, monkeypatch):
+    """🔥 ГОНКА, НАЙДЕННАЯ ПРОВЕРКОЙ ТИПОВ. Обработчик голоса сперва читает состояние
+    (`activity_state.get` — с честной проверкой на None), а потом ПИШЕТ его
+    (`activity_state.patch`) и сразу лезет в результат: `snap["seq"]`. Между этими двумя
+    вызовами активность может исчезнуть из памяти процесса — ведущий нажал «Завершить»,
+    а обработчики FastAPI выполняются в пуле потоков, то есть параллельно по-настоящему.
+    Тогда `patch` возвращает None, и студент получает 500 с трейсбеком вместо внятного
+    «Опрос уже завершён».
+
+    Состояние активностей живёт В ПАМЯТИ ПРОЦЕССА (инвариант «один uvicorn»), поэтому
+    тот же None приходит и после обычного перезапуска службы — то есть после каждого
+    деплоя, пока в беседе идёт опрос.
+
+    Гонку воспроизводим детерминированно: `patch` подменяем на «активности уже нет».
+    Обратный ход: снять проверку после patch — тест краснеет (500 вместо 400).
+    """
+    from app import activity_state
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _poll(client, t, conv)
+
+    monkeypatch.setattr(activity_state, "patch", lambda *args, **kwargs: None)
+    r = client.post(f"{A}/{a}/vote", json={"choice": 0}, headers=b)
+    assert r.status_code == 400, f"ожидали внятный отказ, получили {r.status_code}"
+
+
 def test_revote_replaces_and_students_see_only_the_counter(client):
     admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, t, [b_id, c_id])

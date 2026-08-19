@@ -89,7 +89,13 @@ class SyncClient:
         повторяя у себя ни обрезку слэша, ни подмену localhost."""
         return _prefer_ipv4((base_url or "").rstrip("/"))
 
-    def __init__(self, base_url: str, token: str = None, refresh_token: str = None):
+    #⚠️ Токены объявлены как `str | None`, а не `str`: пустое значение здесь бывает ДВУХ
+    #видов и оба настоящие — «ещё не входили» и «вышли» (`logout` гасит токен в None,
+    #чтобы переиспользованный на общем ПК клиент не слал отозванный). Прежняя запись
+    #`token: str = None` была неявным Optional: аннотация обещала строку, а значением по
+    #умолчанию стоял None — и любой читатель (и mypy) делал по ней неверный вывод.
+    def __init__(self, base_url: str, token: str | None = None,
+                 refresh_token: str | None = None):
         self.base_url = self.normalize(base_url)
         if not self.base_url:
             #Пустой адрес раньше давал ОТНОСИТЕЛЬНЫЙ запрос и невнятную ошибку глубоко
@@ -241,7 +247,7 @@ class SyncClient:
         self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
 
-    def refresh(self, refresh_token: str = None) -> dict:
+    def refresh(self, refresh_token: str | None = None) -> dict:
         """Тихо обновляет access по refresh-токену (/auth/refresh). Обновляет self.token
         и возвращает данные {access_token, refresh_token, role, name}. Бросает HTTPError,
         если refresh недействителен/отозван — тогда вызывающий делает полный re-login."""
@@ -476,8 +482,8 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
-    def save_group_hours(self, group: str, hours: dict, teachers: dict = None,
-                        zet: dict = None) -> dict:
+    def save_group_hours(self, group: str, hours: dict, teachers: dict | None = None,
+                        zet: dict | None = None) -> dict:
         """Сохранить часы + назначение препода + ЗЕТ пачкой: {предмет: часов},
         {предмет: teacher_id|''} (§ролей препод↔предмет↔группа), {предмет: float|None}
         (docs/PLAN-ZET.md). {ok, saved, term}."""
@@ -583,7 +589,7 @@ class SyncClient:
         По умолчанию просим ВСЕ: вкладка показывает и прочитанные, как почта. Сервер без
         параметров отдаёт только непрочитанные (так исторически ждёт мобильное
         приложение), поэтому filter передаём явно."""
-        params = {"limit": limit}
+        params: dict = {"limit": limit}          #значения разнотипные (число + строка)
         if not only_unread:
             params["filter"] = "all"
         r = self._req("GET", "/me/events", params=params, timeout=8)
@@ -602,7 +608,7 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
-    def create_event(self, title: str, body: str, groups: list = None) -> dict:
+    def create_event(self, title: str, body: str, groups: list | None = None) -> dict:
         """§12: мероприятие/событие (олимпиада, конкурс и т.п.) — заводит препод/админ,
         уходит уведомлением kind="event" выбранной аудитории. groups=[] — все группы
         (доступно ТОЛЬКО админу; сервер сам проверяет роль и скоуп групп куратора)."""

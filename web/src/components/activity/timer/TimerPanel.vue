@@ -32,8 +32,20 @@ const label = computed(() => {
   return `${m}:${s}`
 })
 
+// Причину отказа показываем ЗДЕСЬ, а не в сторе. Раньше в этом catch стоял
+// комментарий «показано в сторе» — неправда дважды: вызов идёт мимо стора (напрямую
+// через activitiesApi), а `activity.error` рисуется только на экране запуска
+// (ActivityLauncher). То есть ведущий жал «Продлить», сервер отвечал «Активность уже
+// завершена», и человек видел ту же тишину, что и при прежнем ложном успехе.
+const err = ref('')
 async function control(action, seconds = 0) {
-  try { await activitiesApi.timer(act.activity.id, action, seconds) } catch { /* показано в сторе */ }
+  err.value = ''
+  try {
+    await activitiesApi.timer(act.activity.id, action, seconds)
+  } catch (e) {
+    err.value = e?.response?.data?.detail
+      || locale.t('activity.timer.controlFailed', 'Не удалось изменить таймер')
+  }
 }
 </script>
 
@@ -59,5 +71,6 @@ async function control(action, seconds = 0) {
         <Plus class="size-4" /> {{ locale.t('activity.timer.extend', '+1 минута') }}
       </AppButton>
     </div>
+    <p v-if="err" class="text-sm text-red">{{ err }}</p>
   </div>
 </template>

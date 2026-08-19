@@ -11,19 +11,28 @@ offline-first сохраняется, прога продолжает работ
 """
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import log
 from data import student_link
 from data.app_settings import get_api_url
+
+if TYPE_CHECKING:                      #только для проверки типов
+    #Настоящий импорт СОЗНАТЕЛЬНО ленивый (внутри методов): sync_client тянет requests,
+    #а модуль поднимается на пути запуска программы. Здесь он нужен лишь как аннотация.
+    from sync.sync_client import SyncClient
 
 _log = log.get("sync")
 
 
 class SyncManager:
     def __init__(self, interval_sec: int = 30):
-        self._thread = None
+        #Аннотации у полей, которые НАЧИНАЮТСЯ с None и позже получают значение:
+        #без них mypy выводит тип «None» из первого присваивания и дальше считает
+        #ошибкой и `self._thread.start()`, и любое обращение к клиенту.
+        self._thread: threading.Thread | None = None
         self._running = False
-        self._client = None
+        self._client: "SyncClient | None" = None
         self._login = ""
         self._password = ""
         self._role = ""
@@ -41,7 +50,7 @@ class SyncManager:
         #(не долбить мёртвый сервер каждые 30 c) и держим онлайн/офлайн-состояние
         #для индикатора. None = ещё не знаем, True/False = определились.
         self._fail_count = 0
-        self._online = None
+        self._online: bool | None = None
         self._last_error = ""
         #Причина последнего неудачного входа ('' — вход в порядке). Держим отдельно от
         #_last_error: сетевой сбой лечится сам, а отказ входа требует действия человека
@@ -112,8 +121,11 @@ class SyncManager:
         для текущего логина. ('', '') — если адрес/вход не заданы."""
         url = get_api_url()
         token = ""
-        if self._client and getattr(self._client, "token", ""):
-            token = self._client.token
+        #getattr с запасным значением тут был защитой от отсутствия поля, которого
+        #у SyncClient не бывает (оно задаётся в __init__ всегда). `or ""` — потому
+        #что токен может быть None: так `logout` гасит отозванный (см. sync_client).
+        if self._client and self._client.token:
+            token = self._client.token or ""
         elif self._login:
             from data import app_settings
             token = app_settings.get_saved_token(self._login)
@@ -185,7 +197,7 @@ class SyncManager:
         """Случайная задержка ПЕРЕД входом по паролю — один раз за процесс.
 
         Зачем: когда сотни ПК включают прогу в 9:00, все разом бьют в `/auth/login`,
-        а PBKDF2 (600k) на сервере упирается в CPU. Случайный сдвиг 0..N секунд
+        а PBKDF2 (200k) на сервере упирается в CPU. Случайный сдвиг 0..N секунд
         размазывает пик. Спим в фоновом потоке синка — UI не блокируется, локальные
         данные уже на экране (offline-first), задержка незаметна. N задаётся
         переменной GRADEBOOK_LOGIN_JITTER_SEC (по умолчанию 8 c; 0 — выключить)."""
@@ -475,8 +487,11 @@ class SyncManager:
         from data import app_settings
         url = get_api_url()
         token = ""
-        if self._client and getattr(self._client, "token", ""):
-            token = self._client.token
+        #getattr с запасным значением тут был защитой от отсутствия поля, которого
+        #у SyncClient не бывает (оно задаётся в __init__ всегда). `or ""` — потому
+        #что токен может быть None: так `logout` гасит отозванный (см. sync_client).
+        if self._client and self._client.token:
+            token = self._client.token or ""
         elif self._login:
             token = app_settings.get_saved_token(self._login)
         if not url or not token:

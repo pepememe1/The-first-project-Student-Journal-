@@ -457,6 +457,66 @@ def test_conflict_counter_reaches_the_sync_status():
     assert st["conflicts"] == 1
 
 
+def _seed_local_tombstone(at: str, lid: str = "les-1"):
+    """Локально удалённая оценка (надгробие) с заданной меткой."""
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO grades "
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,student_id) "
+                "VALUES (?,?,?,?,?,?,1,?)",
+                ("Иванов", "Иван", lid, "5", at, "dev-local", "stud:ivanov"))
+    conn.commit()
+    conn.close()
+
+
+def _local_grade_row(lid: str = "les-1"):
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT grade, COALESCE(deleted,0) FROM grades "
+                "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                ("Иванов", "Иван", lid))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def test_equal_timestamp_does_not_resurrect_deleted_grade():
+    """🔥 РАСХОЖДЕНИЕ ВНУТРИ ОДНОГО МОДУЛЯ: при РАВНЫХ метках удалённая оценка воскресала.
+
+    Правило tie-break у нас одно и записано в `_should_apply`: при равной метке
+    применяем ТОЛЬКО удаление — надгробие не должно воскресать из-за живой записи с той
+    же меткой. Ветка «локально удалено, с сервера пришла активная» в `_merge_grades`
+    жила своей жизнью (`if not (_ts_key(lat) > _ts_key(rat))`) и на равенстве делала
+    ровно обратное — принимала серверную.
+
+    Равенство меток здесь не экзотика, а штатный случай: метку обеим записям ставит
+    СЕРВЕР, а дискретность часов Windows ~16 мс — из-за этого же в проекте дельта-pull
+    фильтрует `>=`, а не `>`. Двое преподавателей в один тик: один снял оценку, другой
+    поправил — и снятая оценка возвращалась в журнал.
+
+    Обратный ход: вернуть `if not (_ts_key(lat) > _ts_key(rat))` — тест краснеет.
+    """
+    same = "2026-08-15T10:00:00+00:00"
+    _seed_local_tombstone(same)
+    sync_engine._merge_grades(_remote_grade("4", same))
+
+    grade, deleted = _local_grade_row()
+    assert deleted == 1, "надгробие воскресло от серверной записи с ТОЙ ЖЕ меткой"
+
+
+def test_strictly_newer_server_grade_still_revives_deleted():
+    """Обратная сторона того же правила: если серверная запись СТРОГО новее нашего
+    надгробия — оценку восстанавливаем. Без этого теста починка выше легко превращается
+    в «удалённое не воскрешаем никогда», то есть в потерю правки с другого ПК."""
+    _seed_local_tombstone("2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("4", "2026-08-15T10:00:01+00:00"))
+
+    grade, deleted = _local_grade_row()
+    assert deleted == 0 and grade == "4", "более свежая серверная оценка не восстановлена"
+
+
 def test_sync_status_has_a_real_consumer():
     """СТРУКТУРНЫЙ сторож: у `status()` обязан быть вызывающий В ПРОДУКТЕ, а не в тестах.
 

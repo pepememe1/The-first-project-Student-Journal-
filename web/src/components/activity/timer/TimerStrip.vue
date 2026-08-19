@@ -64,7 +64,10 @@ const label = computed(() => {
 const urgent = computed(() => left.value > 0 && left.value <= 60)
 
 async function control(action) {
-  try { await activitiesApi.timer(mine.value.id, action) } catch { /* noop */ }
+  //Молчание здесь осознанное, в отличие от панели (TimerPanel показывает причину):
+  //полоска сразу после вызова перечитывает состояние, и если активности уже нет —
+  //она просто исчезает. Это и есть ответ пользователю, отдельный текст был бы лишним.
+  try { await activitiesApi.timer(mine.value.id, action) } catch { /* см. refreshRunning ниже */ }
   await act.refreshRunning(mine.value?.conversation_id)
 }
 async function finish() {

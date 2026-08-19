@@ -218,6 +218,26 @@ def _emit_host_progress(db: Session, a: Activity) -> None:
                                                   "total_questions") if k in payload}})
 
 
+def _require_state(snap: dict | None) -> dict:
+    """Снимок состояния активности — или внятный отказ вместо 500.
+
+    `activity_state.patch/bump` отдают None, когда активности УЖЕ НЕТ в памяти процесса.
+    Случаев два, и оба живые:
+      • ведущий нажал «Завершить» МЕЖДУ чтением состояния и записью — обработчики
+        FastAPI выполняются в пуле потоков, то есть параллельно по-настоящему, и
+        проверки `if snap is None` сразу после `get()` для этого мало;
+      • служба перезапускалась (состояние живёт в памяти ОДНОГО uvicorn — инвариант
+        «один процесс»), то есть после каждого деплоя, пока идёт активность.
+    Дальше по коду шло `snap["seq"]`, и участник получал 500 с трейсбеком вместо
+    «активность завершена». Найдено проверкой типов (mypy, «dict | None is not
+    indexable»), держит
+    `tests/test_activities.py::test_vote_survives_activity_finished_between_read_and_write`.
+    """
+    if snap is None:
+        raise HTTPException(status_code=400, detail="Активность уже завершена")
+    return snap
+
+
 def _emit_state(db: Session, a: Activity, snapshot: dict | None) -> None:
     if not snapshot:
         return
@@ -935,7 +955,10 @@ def control_timer(activity_id: str, payload: dict = Body(...),
                    else {"ends_at": _plus_seconds(base, add)})
     else:
         raise HTTPException(status_code=400, detail="Неизвестное действие")
-    snap = activity_state.patch(a.id, changes)
+    #Тот же None, что и у голосования, но исход был хуже: `_emit_state` на None молча
+    #выходит, и ведущий получал 200 `{"ok": true, "state": null}` — «Продлить»
+    #отвечало успехом, ничего не продлив. Тихий ложный успех опаснее пятисотки.
+    snap = _require_state(activity_state.patch(a.id, changes))
     _emit_state(db, a, snap)
     return {"ok": True, "state": snap}
 
@@ -969,7 +992,7 @@ def vote(activity_id: str, payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Опрос уже завершён")
     votes = dict(snap["payload"].get("votes") or {})
     votes[user.id] = choice
-    snap = activity_state.patch(a.id, {"votes": votes})
+    snap = _require_state(activity_state.patch(a.id, {"votes": votes}))
     #Итог участника пишем и в БД: журнал беседы (§9) обязан пережить перезапуск, а один
     #голос — это одна запись на человека, а не поток (профиль нагрузки тот же, что у
     #`submit` викторины, который план прямо разрешает).
@@ -1058,7 +1081,7 @@ def send_feedback(activity_id: str, payload: dict = Body(...),
         answered = list(snap["payload"].get("answered") or [])
         if user.id not in answered:
             answered.append(user.id)
-        snap = activity_state.patch(a.id, {"answered": answered})
+        snap = _require_state(activity_state.patch(a.id, {"answered": answered}))
         #Наружу — только СЧЁТЧИК. Список ответивших сам по себе выдал бы автора отзыва
         #тому, кто следит за экраном: «ответил Петров — значит вот эта строка его».
         _emit(db, a.conversation_id,
@@ -1544,7 +1567,7 @@ def report_progress(activity_id: str, payload: dict = Body(...),
     #Назад не двигаем: человек мог вернуться к предыдущему вопросу, но пройденного это
     #не отменяет, а прыгающая назад шкала у ведущего читается как сбой.
     walk[user.id] = max(done, int(walk.get(user.id) or 0))
-    snap = activity_state.patch(a.id, {"walk": walk})
+    snap = _require_state(activity_state.patch(a.id, {"walk": walk}))
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -1679,7 +1702,7 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     answers[str(idx)] = slot
     scores = dict(snap["payload"].get("scores") or {})
     scores[user.id] = round(float(scores.get(user.id, 0) or 0) + gain, 2)
-    snap = activity_state.patch(a.id, {"answers": answers, "scores": scores})
+    snap = _require_state(activity_state.patch(a.id, {"answers": answers, "scores": scores}))
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -1829,7 +1852,7 @@ def add_strokes(activity_id: str, payload: dict = Body(...),
     #Режем СТАРЫЕ: свежее человеку нужнее, а «доска целиком» и так уезжает в артефакт.
     if len(strokes) > MAX_STROKES_TOTAL:
         strokes = strokes[-MAX_STROKES_TOTAL:]
-    snap = activity_state.patch(a.id, {"strokes": strokes})
+    snap = _require_state(activity_state.patch(a.id, {"strokes": strokes}))
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -1868,7 +1891,7 @@ def give_pen(activity_id: str, payload: dict = Body(default={}),
         target = str(payload.get("user_id") or "")
         if target and _participant(db, a.conversation_id, target) is None:
             raise HTTPException(status_code=404, detail="Этот человек не в беседе")
-    snap = activity_state.patch(a.id, {"pen_user_id": target, "pen_history": history})
+    snap = _require_state(activity_state.patch(a.id, {"pen_user_id": target, "pen_history": history}))
     name = ""
     if target:
         u = db.query(User).filter(User.id == target).first()

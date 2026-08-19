@@ -159,4 +159,8 @@ mypy_path = "."
 #транзитивных модулях (core и пр.) НЕ репортим — иначе один непроверенный модуль топит
 #всю проверку. Так mypy остаётся зелёным и полезным на уже аннотированных файлах.
 follow_imports = "silent"
-files = ["data/terms.py", "data/exports.py", "grading.py", "log.py", "app_paths.py"]
+#⚠️ Модуль попадает сюда, только когда чист ЦЕЛИКОМ (иначе проверка уходит в красное
+#и её перестают читать). Синк добавлен 18.08.2026: три модуля разом стали зелёными
+#после снятия неявных Optional и аннотаций у полей, начинающихся с None.
+files = ["data/terms.py", "data/exports.py", "grading.py", "log.py", "app_paths.py",
+         "sync/sync_client.py", "sync/sync_runner.py", "sync/sync_engine.py"]
