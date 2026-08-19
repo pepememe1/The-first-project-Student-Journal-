@@ -77,7 +77,13 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
                 cnt += 1
             elif l.type == "Лекция":
                 lec_total += 1
-                if v not in ("Н", "Б", "О"):
+                #⚠️ ВТОРОЙ расчёт посещаемости в продукте (первый — `webdata.absences`).
+                #«О» здесь НЕ считается отсутствием: это опоздание (3.7.6), студент на
+                #занятии был. Пока «О» стояло в этом наборе, один и тот же экран
+                #показывал «пропусков нет» и «посещаемость 0 %» — две правды рядом.
+                #Держит `tests/test_attendance_marks.py::
+                #test_attendance_percent_counts_late_as_present`.
+                if v not in ("Н", "Б"):
                     lec_present += 1
         grades_total += cnt
         subjects.append({"subject": subj, "grades": cnt})

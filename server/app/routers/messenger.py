@@ -3169,7 +3169,8 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """§12: дрилл-даун по предмету — журнал студентов группы (оценки построчно), справа
     средний балл и пропуски: часов пропущено и (в скобках) количество пропусков в
-    единицах — т.е. сколько раз стояло «Н» (неявка), без учёта Б/О (уважительных)."""
+    единицах — т.е. сколько раз стояло «Н» (неявка), без учёта «Б» (болезнь).
+    «О» (опоздание, 3.7.6) в пропуски не входит вовсе — студент был на занятии."""
     rep = db.query(CuratorReport).filter(CuratorReport.id == report_id).first()
     if rep is None:
         raise HTTPException(status_code=404, detail="Отчёт не найден")

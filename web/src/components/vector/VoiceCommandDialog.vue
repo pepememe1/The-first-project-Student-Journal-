@@ -41,7 +41,7 @@ const ACTION_LABEL = computed(() => ({
   present: locale.t('voiceCommandDialog.action.present', 'присутствовал'),
   absent_n: locale.t('voiceCommandDialog.action.absentN', 'пропуск (Н)'),
   absent_b: locale.t('voiceCommandDialog.action.absentB', 'по болезни (Б)'),
-  absent_o: locale.t('voiceCommandDialog.action.absentO', 'по уважительной (О)'),
+  absent_o: locale.t('voiceCommandDialog.action.absentO', 'опоздал (О)'),
 }))
 
 function toggle(i) {

@@ -748,6 +748,17 @@ async function downloadVedomost(fmt) {
       </table>
     </div>
 
+    <!-- ЛЕГЕНДА МЕТОК. Заведена в 3.7.6 вместе с переназначением «О» (было «уважительная
+         причина», стало «опоздал»). Раньше смысл букв не был написан НИГДЕ в журнале —
+         преподаватель выбирал их из списка по догадке, и именно так «О» и разъехалось
+         с тем, что считал сервер. Подпись стоит там, где метку ставят. -->
+    <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-tiny text-text3">
+      <span><b class="text-accent">✓</b> {{ locale.t('teacherJournal.legendPresent', 'был на занятии') }}</span>
+      <span><b class="text-red">Н</b> {{ locale.t('teacherJournal.legendN', 'неявка — идёт в пропуски') }}</span>
+      <span><b>Б</b> {{ locale.t('teacherJournal.legendB', 'болезнь — идёт в пропуски') }}</span>
+      <span><b>О</b> {{ locale.t('teacherJournal.legendO', 'опоздал — в пропуски НЕ идёт') }}</span>
+    </div>
+
     <!-- Контекстное меню (ПКМ) -->
     <div v-if="ctx.show" class="fixed z-50 min-w-48 rounded-lg border border-border2 bg-card py-1 shadow-card"
          :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @click.stop>
