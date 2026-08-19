@@ -17,7 +17,8 @@ import { useTranslateStore } from '@/stores/translate'
 import { useGifStore } from '@/stores/gif'
 import { useTtsStore } from '@/stores/tts'
 import { renderMarkdownLite } from '@/utils/markdownLite'
-import { extractVideos } from '@/utils/videoEmbed'
+import { extractVideos, embedMode } from '@/utils/videoEmbed'
+import { isNativeApp } from '@/api/server'
 import { extractGifLinks } from '@/utils/gifEmbed'
 import { formatSystemMessage } from '@/utils/messagePreview'
 import { copyText } from '@/utils/clipboard'
@@ -257,6 +258,38 @@ const mentionProfileId = ref('')
 function videoEmbeds(msg) {
   if (msg.deleted || isHiddenByIgnore(msg)) return []
   return extractVideos(msg.body)
+}
+
+// ГЕЙТ встроенного плеера. В браузере чужой фрейм ограничен и sandbox'ом, и заголовками
+// Caddy (frame-src белым списком), и самим origin-барьером. В мобильном приложении не
+// действует НИ ОДНО из трёх: страница отдаётся из бандла (https://localhost), заголовки
+// сервера туда не доезжают, а нативные мосты повешены через addJavascriptInterface —
+// у него нет привязки к origin (для неё у Google заведён отдельный addWebMessageListener
+// с allowedOriginRules). Значит внутри APK встроенного видеохостинга быть не должно.
+// Признак «мы в приложении» берём ОБЩИЙ (api/server.js) — вторая его копия разошлась бы
+// молча и именно в сторону «дверь снова открыта». Решение — в utils/videoEmbed.js,
+// сторож — web/tests/videoEmbedNative.test.mjs.
+const videoIframeAllowed = computed(() => embedMode(isNativeApp()) === 'iframe')
+
+// Имя площадки для запасной карточки. Названия сервисов не переводятся — переводится
+// только глагол вокруг них (ключ chatThread.openVideoAction).
+const VIDEO_HOSTS = { youtube: 'YouTube', vk: 'VK Видео', rutube: 'Rutube' }
+function videoHostLabel(v) { return VIDEO_HOSTS[v.provider] || v.provider }
+
+// Открыть ролик СНАРУЖИ приложения. Подтверждения «Переадресация» здесь нет намеренно:
+// в отличие от голой ссылки в тексте, тут человек жмёт кнопку, на которой написано, куда
+// он идёт, — второй вопрос об этом же был бы шумом. @capacitor/browser грузим ленивым
+// импортом: на сайте пакета в бандле быть не должно, а в приложении он уже установлен
+// (он есть в зависимостях с самого начала, пересборка APK ради этого не нужна).
+async function openExternalVideo(v) {
+  try {
+    const { Browser } = await import('@capacitor/browser')
+    await Browser.open({ url: v.sourceUrl })
+  } catch {
+    // Нет плагина (сайт, десктоп, старая сборка) — обычная вкладка. Отказ открыть ролик
+    // молча был бы хуже: человек нажал кнопку и не получил ничего.
+    window.open(v.sourceUrl, '_blank', 'noopener,noreferrer')
+  }
 }
 
 // Голая ссылка на CDN Klipy ВНУТРИ обычного текстового сообщения (не через пикер,
@@ -1323,10 +1356,25 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                      no-referrer для остальной страницы не трогаем. "origin" отдаёт
                      ТОЛЬКО домен (без пути) — этого плееру достаточно, полный URL
                      переписки видеохостингу не уходит. -->
-                <iframe :src="v.embedUrl" class="aspect-video w-full max-w-sm rounded-lg border-0"
+                <iframe v-if="videoIframeAllowed"
+                        :src="v.embedUrl" class="aspect-video w-full max-w-sm rounded-lg border-0"
                         sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
                         referrerpolicy="origin"
                         allowfullscreen />
+                <!-- Мобильное приложение: вместо чужого фрейма — карточка, уводящая ролик
+                     ЗА пределы приложения (см. videoIframeAllowed выше). Ветка обязательна:
+                     без неё видео в приложении исчезло бы без следа, и со стороны это
+                     читается как пустое сообщение, то есть как поломка мессенджера. -->
+                <button v-else type="button" @click="openExternalVideo(v)"
+                        class="flex w-full max-w-sm items-center gap-2.5 rounded-lg border border-border2
+                               px-3 py-2 text-left transition-colors hover:border-accent">
+                  <span class="grid size-8 shrink-0 place-items-center rounded-full bg-accent/15 text-accent"
+                        aria-hidden="true">&#9654;</span>
+                  <span class="min-w-0">
+                    <span class="block truncate text-sm text-text">{{ locale.t('chatThread.openVideoAction', { host: videoHostLabel(v) }) }}</span>
+                    <span class="block truncate text-tiny text-text3">{{ locale.t('chatThread.openVideoHint') }}</span>
+                  </span>
+                </button>
               </div>
               <!-- Голая ссылка на CDN Klipy в ОБЫЧНОМ тексте (не через пикер) — та же
                    картинка, что у msg.kind==='gif', и та же звезда-избранное по наведению. -->

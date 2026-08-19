@@ -237,3 +237,98 @@ def test_saving_cell_without_changes_does_not_bump_timestamp(client):
 
     _override(client, admin, "ИС-21", subject="Химия")       #а тут уже правка
     assert _stamp() != first, "реальная правка обязана обновить метку"
+
+
+# ── 152-ФЗ: у посредника не должно оседать НИЧЕГО, кроме факта «что-то пришло» ──────
+def test_push_text_is_built_from_type_not_from_caller(push_on):
+    """🔥 ГЛАВНОЕ СВОЙСТВО, а не частный случай: текст пуша собирает САМ `notify_login`
+    по типу события, а переданные вызывающим заголовок и тело в пуш НЕ ПОПАДАЮТ.
+
+    Почему именно так, а не «поправить восемь вызывающих»: проверка «нет ПДн» у каждого
+    отправителя — это восемь мест, где однажды забудут. Ровно этим путём в пуш и уехали
+    ФИО: докстринг обещал «ни ФИО», а мессенджер спокойно клал имя отправителя в
+    заголовок. Здесь дверь закрыта по построению — протащить текст наружу нечем.
+
+    Обратный ход: вернуть `send_to_token(row.token, title, body, data)` — тест краснеет.
+    """
+    from app import rustore_push
+
+    class _Row:
+        token, fail_count, login = "dev-1", 0, "ivanova"
+
+    class _DB:
+        def query(self, *a, **k): return self
+        def filter(self, *a, **k): return self
+        def all(self): return [_Row()]
+        def first(self): return None
+        def commit(self): pass
+        def rollback(self): pass
+        def delete(self, row): pass
+
+    rustore_push.notify_login(_DB(), "ivanova",
+                              "Иванова Мария Петровна",
+                              "Иванова Мария: Математика, оценка 2",
+                              {"type": "message", "conversation_id": "c1"})
+    text = str(push_on)
+    for leak in ("Иванова", "Мария", "Петровна", "Математика"):
+        assert leak not in text, f"в пуш протащили: {leak}"
+    assert "сообщени" in text.lower(), "человек должен понять, что именно пришло"
+
+
+def test_direct_message_push_does_not_carry_sender_name(client, push_on, monkeypatch):
+    """Живой путь целиком: личное сообщение → пуш. Имя отправителя раньше уезжало в
+    ЗАГОЛОВОК (`messenger.py::_notify_new_message`), то есть у RuStore оседал социальный
+    граф колледжа: кто кому и когда пишет.
+
+    ⚠️ `_online_logins` подменяем ОБЯЗАТЕЛЬНО. Первая версия этого теста была ЛОЖНО
+    ЗЕЛЁНОЙ: получатель только что вошёл, сервер считал его активным, пуш не отправлялся
+    вовсе — и проверка «в пуше нет ФИО» проходила по пустому списку. Поймано обратным
+    ходом: с откаченной починкой тест не краснел."""
+    from app.routers import messenger as messenger_router
+    from test_messenger import _make_student
+
+    monkeypatch.setattr(messenger_router, "_online_logins", lambda: set())
+
+    admin = make_admin(client)
+    _seed(client, admin)
+    sh = _student_headers(client)
+    client.post("/me/push-token", json={"token": "dev-token-1"}, headers=sh)
+    _, bob = _make_student(client, admin, "bob", "Боб Бобов")
+
+    r = client.post("/web/messenger/chats/direct/stud:ivanova", headers=bob)
+    assert r.status_code == 200, r.text
+    conv = r.json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "привет, встретимся в 14:00"}, headers=bob)
+
+    assert push_on, "пуш не ушёл вовсе — тест ничего не проверяет (см. _online_logins)"
+    text = str(push_on)
+    for leak in ("Боб", "Бобов", "bob", "встретимся"):
+        assert leak not in text, f"в пуш утекло: {leak}"
+
+
+def test_only_notify_login_may_send_a_push():
+    """СТРУКТУРНЫЙ сторож: `send_to_token` зовётся ровно из одного места.
+
+    Нейтрализация текста живёт внутри `notify_login`. Появится второй вызывающий —
+    и он унесёт в RuStore что угодно, а тесты выше этого не заметят: они проверяют
+    поведение `notify_login`, а не отсутствие обходных путей."""
+    import re
+    from pathlib import Path
+
+    #Смотрим и server/app, и КОРНЕВЫЕ общие модули: они тоже деплоятся на бой
+    #(grading.py, voice_command.py и т.п.), и вызов оттуда сторож обязан видеть.
+    repo = Path(__file__).resolve().parents[2]
+    files = list((repo / "server" / "app").rglob("*.py")) + list(repo.glob("*.py"))
+    callers = []
+    for f in files:
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if "def send_to_token" in line:
+                continue
+            if re.search(r"send_to_token\s*\(", line):
+                callers.append(f"{f.name}:{i}")
+    #⚠️ Номер строки в ожидание НЕ вписываем: он сдвигается при любой правке файла, и
+    #сторож начинает краснеть на ровном месте — а чинят такое «обновлением ожидания»,
+    #то есть ровно тем, от чего он защищает. Проверяем СВОЙСТВО: вызывающий один, и он
+    #в rustore_push.py.
+    assert len(callers) == 1 and callers[0].startswith("rustore_push.py:"),         f"пуш отправляется мимо нейтрализации: {callers}"
