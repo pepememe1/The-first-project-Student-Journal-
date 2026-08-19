@@ -1078,6 +1078,18 @@ def install_remote_proxy(app) -> None:
 _BOOTSTRAP_PATH = "/desktop/bootstrap"
 
 
+def _saved_session_alive() -> bool:
+    """Жив ли сохранённый вход (см. `app_settings.saved_session_alive`).
+
+    Отдельная обёртка — чтобы сбой чтения настроек не открывал дверь: любая ошибка
+    здесь означает «сессии нет», а не «сессия есть»."""
+    try:
+        from data import app_settings
+        return bool(app_settings.saved_session_alive())
+    except Exception:
+        return False
+
+
 def install_desktop_bootstrap(app) -> None:
     """Маршрут, который отдаёт странице сессию, тему и режим встраивания."""
     import json as _json
@@ -1098,6 +1110,15 @@ def install_desktop_bootstrap(app) -> None:
         except Exception:
             pass
         access, refresh = ("", "")
+        #🔒 СРОК СОХРАНЁННОГО ВХОДА. Раньше здесь хватало «логин в настройках есть» —
+        #и оболочка выписывала себе новый локальный токен при каждом запуске, сколько
+        #бы времени ни прошло. Серверный JWT честно умирал через 5 часов, но к локальной
+        #копии отношения не имел: журнал с ПДн студентов открывался любому, кто запустил
+        #.exe на этом компьютере (поймано на живой программе — неделя в аккаунте админа).
+        #Истёк — сессию НЕ выдаём, SPA покажет форму входа; пароль проверится локально
+        #по хешу, поэтому offline-first не страдает.
+        if login and not _saved_session_alive():
+            login = ""
         if login:
             #🔒 ПРИВЯЗКУ ОБЕСПЕЧИВАЕТ ТОТ, КТО ВЫДАЁТ СЕССИЮ. Эта страница — единственное
             #место, где сессия уходит в оболочку, и единственное, которое знает, ЧЬЯ она.
@@ -1198,13 +1219,11 @@ def install_login_bridge(app) -> None:
                 _remember_session(login, password, local.get("role", ""))
                 return JSONResponse(local)
 
-        remote = _try_remote_login(login, password)
+        remote, why = _try_remote_login(login, password)
         if remote is None:
-            #Ни локально, ни на бою. Причину не разделяем на «нет сети» и «неверный
-            #пароль» намеренно: подсказка «такой логин есть, но пароль не тот» — это
-            #подсказка и подбирающему тоже.
-            return JSONResponse({"detail": "Неверный логин или пароль, либо нет связи."},
-                                status_code=401)
+            #Причина различается только там, где это безопасно (см. login_failure_response).
+            code, detail = login_failure_response(remote, why)
+            return JSONResponse({"detail": detail}, status_code=code)
 
         role = remote.get("role") or "student"
         _remember_session(login, password, role)
@@ -1269,24 +1288,57 @@ def _try_local_login(login: str, password: str):
 
 
 def _try_remote_login(login: str, password: str):
-    """Войти на БОЕВОМ сервере. None — не вышло (нет сети или неверные данные)."""
+    """Войти на БОЕВОМ сервере. Возвращает (данные, причина).
+
+    Причина нужна ровно для одного: отличить «сервер сказал нет» от «до сервера не
+    дошли». Раньше обе ветки давали None, вызывающий отвечал одинаковым «неверный логин
+    или пароль, либо нет связи», и разбираться на чужой машине было НЕЧЕМ — тестировщик
+    склонировал репозиторий, не смог войти и логично решил, что дело в пароле.
+      ''  — вошли;
+      'unauthorized' — ответил сам сервер (пароль/логин неверны либо доступ закрыт);
+      'offline: …'   — до сервера не дошли (нет сети, TLS, нет пакета, таймаут).
+    """
     try:
         from data import app_settings
         base = (app_settings.get_api_url() or "").rstrip("/")
-    except Exception:
-        base = ""
+    except Exception as e:
+        return None, f"offline: не удалось прочитать адрес сервера ({e})"
     if not base:
-        return None
+        return None, "offline: адрес сервера не задан"
     try:
         import httpx
+    except Exception as e:
+        #Отдельная ветка не для красоты: без httpx вход по сети невозможен ФИЗИЧЕСКИ, и
+        #на чистой машине это первый подозреваемый. Сообщение обязано называть пакет.
+        return None, f"offline: нет пакета httpx ({e}) — установите зависимости"
+    try:
         r = httpx.post(f"{base}/auth/login", json={"login": login, "password": password},
                        headers={"X-Client": "web"}, timeout=20.0)
-        if r.status_code != 200:
-            return None
-        return r.json()
     except Exception as e:
-        _LOG.info(f"[login] боевой сервер недоступен: {e}")
-        return None
+        return None, f"offline: {type(e).__name__}: {e}"
+    if r.status_code == 200:
+        return r.json(), ""
+    if r.status_code in (400, 401, 403):
+        return None, "unauthorized"
+    return None, f"offline: сервер ответил {r.status_code}"
+
+
+def login_failure_response(data, reason: str):
+    """(код ответа, текст) для неудачного входа — по причине из `_try_remote_login`.
+
+    Неразличимость «логин не тот» и «пароль не тот» сохраняем ТОЛЬКО для ответа сервера:
+    подсказка «такой логин есть» помогает и подбирающему. Когда до сервера не дошли,
+    скрывать нечего — там нет ни логина, ни пароля, есть сеть, и молчание про это
+    отправляет человека менять пароль вместо того, чтобы проверить связь."""
+    if data is not None:
+        return 200, ""
+    if reason and reason.startswith("offline"):
+        #В лог — ПОДРОБНО (на чужой машине это единственный след), человеку — коротко.
+        _LOG.warning(f"[login] вход по сети не состоялся: {reason}")
+        return 503, ("Не удалось связаться с сервером. Проверьте интернет и адрес "
+                     "сервера в настройках программы.")
+    _LOG.warning("[login] сервер отклонил вход (логин или пароль)")
+    return 401, "Неверный логин или пароль."
 
 
 def _remember_session(login: str, password: str, role: str) -> None:

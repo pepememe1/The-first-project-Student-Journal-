@@ -281,8 +281,43 @@ def get_saved_session() -> dict:
         return {}
 
 
+#Сколько живёт СОХРАНЁННЫЙ вход в программу. Ровно столько же, сколько серверный JWT
+#(§6, «жёсткие 5 часов»), и это не совпадение: раньше срока не было вовсе, оболочка при
+#каждом запуске выписывала себе новый локальный токен по одному лишь логину из настроек,
+#и журнал с ПДн студентов открывался любому, кто запустил .exe на этом компьютере —
+#хоть через неделю. На общем ПК колледжа это ровно та ситуация, ради которой пятичасовой
+#потолок и вводили.
+#⚠️ Offline-first это НЕ ломает: пароль проверяется локально по хешу в личной копии
+#(`local_api._try_local_login`), то есть войти заново можно и без сети. Смягчает
+#повторный вход «Вход по Windows» (§4.7) — он для того и заведён.
+SAVED_SESSION_TTL_H = 5
+
+
 def set_saved_session(login: str, role: str) -> bool:
-    return _kv_set(_SESSION_KEY, {"login": login or "", "role": role or ""})
+    """Запомнить вход. Метка времени ОБЯЗАТЕЛЬНА — по ней считается срок жизни."""
+    from datetime import datetime, timezone
+    return _kv_set(_SESSION_KEY, {"login": login or "", "role": role or "",
+                                  "at": datetime.now(timezone.utc).isoformat()})
+
+
+def saved_session_alive(ttl_hours: float = SAVED_SESSION_TTL_H) -> bool:
+    """Не истёк ли сохранённый вход.
+
+    Запись БЕЗ метки времени считается истёкшей. Обратное решение («старые записи
+    считаем живыми, чтобы никого не потревожить») оставило бы вечный вход ровно у тех,
+    у кого он уже есть, — то есть починка не подействовала бы там, где дыра и живёт."""
+    from datetime import datetime, timedelta, timezone
+    rec = get_saved_session() or {}
+    at = (rec.get("at") or "").strip()
+    if not at:
+        return False
+    try:
+        when = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False
+    return datetime.now(timezone.utc) - when < timedelta(hours=ttl_hours)
 
 
 def clear_saved_session() -> bool:

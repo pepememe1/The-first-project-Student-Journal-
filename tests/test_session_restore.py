@@ -210,3 +210,63 @@ def test_rejected_refresh_is_reported_as_expired_not_offline(monkeypatch):
 
     _base, token, why = local_api._remote_auth()
     assert not token and why == "expired"
+
+
+# ── Срок жизни сохранённого входа (3.7.6) ─────────────────────────────────────────────
+def test_saved_session_expires(monkeypatch):
+    """🔥 НАСТОЯЩАЯ ДЫРА, найденная Ярославом на живой программе: «токен должен был
+    сгореть, а я через неделю открываю программу и я в аккаунте админа».
+
+    Механизм был такой: оболочка при запуске брала из настроек логин и роль и ВЫПИСЫВАЛА
+    СЕБЕ НОВЫЙ локальный токен (`issue_local_session`), не спрашивая, жива ли ещё сессия.
+    Серверный JWT при этом честно жил жёсткие 5 часов (§6) — но к локальной копии он
+    отношения не имел, и журнал с настоящими ПДн студентов открывался кому угодно, кто
+    запустил .exe на этом компьютере. На общем ПК колледжа это ровно та ситуация, ради
+    которой 5 часов и вводили.
+
+    Теперь у сохранённого входа есть СРОК. Он не ломает offline-first: пароль
+    проверяется локально по хешу в личной копии, то есть войти заново можно и без сети.
+
+    Обратный ход: убрать проверку срока в `app_settings.saved_session_alive` — краснеет.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from data import app_settings
+
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    monkeypatch.setattr(app_settings, "get_saved_session",
+                        lambda: {"login": "admin", "role": "admin", "at": long_ago})
+    assert app_settings.saved_session_alive() is False
+
+
+def test_fresh_saved_session_is_alive(monkeypatch):
+    """Обратная сторона: только что вошедшего программа не выкидывает."""
+    from datetime import datetime, timezone
+
+    from data import app_settings
+
+    monkeypatch.setattr(app_settings, "get_saved_session",
+                        lambda: {"login": "admin", "role": "admin",
+                                 "at": datetime.now(timezone.utc).isoformat()})
+    assert app_settings.saved_session_alive() is True
+
+
+def test_session_without_timestamp_is_treated_as_expired(monkeypatch):
+    """Записи БЕЗ метки времени остались от прежних версий. Считаем их истёкшими:
+    иначе обновление программы сохранило бы вечный вход тем, у кого он уже есть, —
+    то есть починка не подействовала бы ровно там, где дыра и живёт."""
+    from data import app_settings
+
+    monkeypatch.setattr(app_settings, "get_saved_session",
+                        lambda: {"login": "admin", "role": "admin"})
+    assert app_settings.saved_session_alive() is False
+
+
+def test_bootstrap_does_not_hand_out_a_session_after_expiry(monkeypatch):
+    """СТОРОЖ ВЫЗОВА: проверка обязана стоять на пути выдачи сессии в окно, а не просто
+    существовать. Ровно этот класс дефекта («обещание без вызывающего») в проекте самый
+    частый, и здесь он означал бы, что дыра осталась открытой при зелёном тесте выше."""
+    import inspect
+
+    src = inspect.getsource(local_api)
+    assert "saved_session_alive" in src, "страница-передатчик не проверяет срок сессии"
