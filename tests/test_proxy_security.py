@@ -26,6 +26,24 @@ def _schema():
     from app import models  # noqa: F401 — без импорта моделей metadata пуста
     from app.db import Base, engine
     Base.metadata.create_all(bind=engine)
+    #Люди, чьи токены выпускают тесты ниже, обязаны существовать в копии: с 3.7.7
+    #`issue_local_session` не выписывает сессию тому, кого в базе нет (мёртвый токен —
+    #это «вошёл и через секунду выкинуло», см. tests/test_desktop_first_login.py).
+    _seed_users("ivanov", "petrov")
+
+
+def _seed_users(*logins):
+    from app.db import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    try:
+        for lg in logins:
+            db.merge(User(id=f"stud:{lg}", login=lg, role="student", surname="Тестов",
+                          name="Тест", deleted=False,
+                          updated_at="2026-08-19T00:00:00+00:00"))
+        db.commit()
+    finally:
+        db.close()
 
 
 def _ok(auth: str) -> bool:
@@ -154,6 +172,10 @@ _ONLINE_ONLY_SUBSYSTEMS = {
     "/web/admin/registrations": "RegistrationRequest не в SYNC_MODELS, а одобрение заявки "
                                 "СОЗДАЁТ пользователя и шлёт письмо — выполнить это против "
                                 "локального зеркала значит завести фантомный аккаунт",
+    "/connect": "одобрение УСТРОЙСТВ живёт только на боевом сервере: список ожидающих "
+                "машин и белый список одобренных — серверные таблицы, в локальной копии "
+                "их нет и быть не может. Без пересылки администратор в программе видел "
+                "бы пустой список и не мог одобрить ничью машину",
     "/web/admin/zet-thresholds": "РЕДАКТОР порогов: сами пороги синкаются (ZetThreshold в "
                                  "SYNC_MODELS), но у Phase B-записи нет обратного пути из "
                                  "local_app.db на бой — сохранённый порог потерялся бы молча",

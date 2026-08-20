@@ -1075,3 +1075,112 @@ def test_leaderboard_updates_live_for_everyone_during_the_contest(client):
     assert frames, f"кадр с табло не ушёл: {sent}"
     board = frames[-1]["payload"]["board"]
     assert any(r["user_id"] == b_id and r["score"] > 0 for r in board), board
+
+
+def test_poll_card_names_who_asked(client):
+    """Опрос подписан АВТОРОМ, и подпись приходит с сервера.
+
+    Опрос постит система (в ленте у него нет обычного отправителя), поэтому без подписи
+    было непонятно, чей это вопрос — старосты, куратора или преподавателя. От этого
+    зависит, отвечать ли на него вообще: «когда удобно пересдача» от преподавателя и от
+    однокурсника — разные по весу вопросы.
+
+    Собирать ФИО на клиенте нечем: id автора (`teach:…`) в ленте есть, а справочника
+    пользователей у страницы нет — за именем пришлось бы ходить отдельным запросом на
+    каждое сообщение."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    _start(client, t, conv, "poll",
+           {"question": "Когда пересдача?", "options": ["Вторник", "Четверг"]})
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    cell = [m for m in msgs if m["kind"] == "poll"][0]["activity"]
+    assert cell.get("host_name"), f"опрос без подписи автора: {cell}"
+    #Имя, а не id: `teach:petrova` в ленте читается как техническая строка.
+    assert not cell["host_name"].startswith("teach:"), cell["host_name"]
+
+    #🔒 Подпись автора НЕ открывает распределение: это разные вещи, и добавление первой
+    #не имеет права протащить вторую.
+    assert "tally" not in cell, "чужие голоса студенту показывать нельзя"
+
+
+# ── Итог опроса: кто победил и кому это видно ────────────────────────────────────────
+def test_expired_poll_finishes_itself_and_keeps_the_votes(client):
+    """🔥 Опрос с истёкшим сроком обязан ЗАВЕРШИТЬСЯ САМ.
+
+    Раньше подметались только таймеры и соревнования. Опрос со сроком доходил до нуля и
+    оставался `running` навсегда: снимок итогов (`final_counts`) сохраняется ТОЛЬКО при
+    завершении, а живые голоса лежат в памяти процесса. Значит при первом же рестарте
+    сервера такой опрос закрывался общей уборкой `_sweep_stale` уже БЕЗ снимка — и
+    показывал «проголосовало: 0», хотя голосовала вся группа. Это не косметика: голоса
+    людей пропадали.
+
+    Заодно это условие видимости итога: пока опрос числится идущим, победителя показывать
+    нельзя (см. соседний тест)."""
+    from datetime import datetime, timedelta, timezone
+    from app.routers import activities as act
+
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Пересдача?", "options": ["Вторник", "Четверг"],
+                "duration_s": 60}).json()["id"]
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=b).status_code == 200
+    assert client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=c).status_code == 200
+
+    #Переводим стрелки, а не спим: минимальный срок опроса — 30 секунд (осознанное
+    #продуктовое ограничение), и ждать их в тесте незачем.
+    past = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    act.activity_state.patch(a, {"ends_at": past})
+    #Уборка идёт попутно на обычном запросе — отдельного планировщика у нас нет намеренно.
+    client.get(f"{A}/running", params={"conversation_id": conv}, headers=t)
+
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    cell = [m for m in msgs if m["kind"] == "poll"][0]["activity"]
+    assert cell["status"] == "finished", f"опрос со сроком остался идущим: {cell}"
+    assert cell["voted_count"] == 2, cell
+    assert cell["tally"] == [0, 2], cell
+
+
+def test_finished_poll_shows_the_result_to_everyone_by_default(client):
+    """Итог завершённого опроса виден всем — иначе кубок победителя не увидит никто,
+    кроме автора, и вся затея бессмысленна.
+
+    🔒 Обещание даётся ЗАРАНЕЕ, до голосования: подпись под опросом так и говорит, и
+    именно поэтому раскрытие после завершения не является нарушением. Задним числом
+    менять правила нельзя, а объявить их вперёд — можно."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Пересдача?", "options": ["Вторник", "Четверг"]}).json()["id"]
+    client.post(f"{A}/{a}/vote", json={"choice": 0}, headers=b)
+    client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=c)
+
+    #Пока идёт — распределения студенту НЕ отдаём ни при каких настройках: подсвеченный
+    #лидер тянет за собой голоса, и опрос перестаёт мерить то, ради чего затеян.
+    live = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert "tally" not in [m for m in live if m["kind"] == "poll"][0]["activity"]
+
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    done = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    cell = [m for m in done if m["kind"] == "poll"][0]["activity"]
+    assert cell.get("tally") == [1, 1], f"итог завершённого опроса не доехал до студента: {cell}"
+
+
+def test_author_can_keep_the_result_private(client):
+    """Обратная половина: автор вправе оставить итог себе — например, когда вопрос
+    чувствительный. Тогда после завершения студент по-прежнему не видит распределения."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "poll",
+               {"question": "Понятна ли тема?", "options": ["Да", "Нет"],
+                "reveal_results": False}).json()["id"]
+    client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=b)
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+
+    done = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    cell = [m for m in done if m["kind"] == "poll"][0]["activity"]
+    assert "tally" not in cell, f"автор запретил раскрытие, а итог всё равно виден: {cell}"
+    #Автору — как и раньше, всегда.
+    mine = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
+    assert "tally" in [m for m in mine if m["kind"] == "poll"][0]["activity"]

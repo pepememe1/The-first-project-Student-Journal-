@@ -75,6 +75,10 @@ async function loadQuizzes() {
   } catch { quizzes.value = [] }
 }
 
+// Показать ли итог всем после завершения. По умолчанию да: иначе победителя не увидит
+// никто, кроме автора. Выключается, когда вопрос чувствительный.
+const revealResults = ref(true)
+
 function addOption() { if (options.value.length < 12) options.value.push('') }
 function removeOption(i) { if (options.value.length > 2) options.value.splice(i, 1) }
 
@@ -96,7 +100,11 @@ function params() {
   if (chosen.value === 'timer') return { duration_s: Math.round(durationMin.value * 60) }
   if (chosen.value === 'pulse') return { duration_s: pulseSeconds.value }
   if (chosen.value === 'poll') {
-    return { question: question.value.trim(), options: options.value.map((o) => o.trim()).filter(Boolean) }
+    return {
+      question: question.value.trim(),
+      options: options.value.map((o) => o.trim()).filter(Boolean),
+      reveal_results: revealResults.value,
+    }
   }
   if (chosen.value === 'contest') return { quiz_id: quizId.value, limit_ms: limitSec.value * 1000 }
   return { quiz_id: quizId.value }
@@ -206,6 +214,10 @@ async function confirm() {
                 {{ locale.t('poll.addOption', 'Добавить вариант') }}
               </AppButton>
             </div>
+            <label class="flex items-start gap-2 text-xs text-text2">
+              <input v-model="revealResults" type="checkbox" class="mt-0.5 accent-accent" />
+              <span>{{ locale.t('poll.revealOption', 'Показать итог всем после завершения') }}</span>
+            </label>
           </template>
 
           <!-- Викторина и соревнование -->

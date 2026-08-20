@@ -618,7 +618,7 @@ def _report_archived(rep, db) -> bool:
         return False
 
 
-def _poll_cell(a, viewer_id: str) -> dict:
+def _poll_cell(a, viewer_id: str, host_name: str = "") -> dict:
     """Опрос ДЛЯ ЛЕНТЫ: голосуют прямо в сообщении, как в Telegram.
 
     🔒 Распределение голосов кладём ТОЛЬКО создателю либо когда автор явно включил
@@ -639,9 +639,23 @@ def _poll_cell(a, viewer_id: str) -> dict:
     cell = {"question": params.get("question") or "", "options": opts,
             "my_choice": mine if mine is not None else None,
             "voted_count": len(votes), "ends_at": live.get("ends_at") or "",
-            "public_votes": public}
-    if public or viewer_id == a.host_id:
+            "public_votes": public,
+            #Кто спросил. В ленте опрос выглядит сообщением «от Вектора» (его постит
+            #система), и без подписи было непонятно, чей это вопрос — старосты, куратора
+            #или преподавателя. От этого зависит, отвечать ли на него вообще.
+            "host_name": host_name}
+    #Кому видно распределение. Три двери, и каждая открыта заранее объявленным правилом:
+    #  • автору — всегда (он и спрашивал);
+    #  • всем сразу — если автор включил открытые голоса;
+    #  • всем ПОСЛЕ завершения — если автор не запретил раскрытие итога.
+    #⚠️ Третья дверь проверяет `status`, а не «время вышло»: истёкший, но не закрытый
+    #опрос итог НЕ раскрывает. Закрывает такие `_sweep_expired_polls`, и до этого момента
+    #голоса ещё могут меняться — раскрыть их раньше значило бы подсветить лидера в живом
+    #опросе, а это тянет за собой голоса остальных.
+    revealed = a.status != "running" and bool(params.get("reveal_results", True))
+    if public or viewer_id == a.host_id or revealed:
         cell["tally"] = [sum(1 for v in votes.values() if int(v) == i) for i in range(len(opts))]
+    cell["reveal_results"] = bool(params.get("reveal_results", True))
     return cell
 
 
@@ -657,6 +671,10 @@ def _attach_activity_meta(db: Session, msgs: list, viewer_id: str = "") -> None:
     board_ids = [m["body"] for m in msgs if m["kind"] == "board" and m["body"]]
     acts = ({a.id: a for a in db.query(Activity).filter(Activity.id.in_(act_ids)).all()}
             if act_ids else {})
+    #ФИО авторов опросов — ОДНИМ запросом на всю страницу, а не по строке на сообщение:
+    #в ленте опросов бывает много, и N+1 здесь превратился бы в десятки запросов ради
+    #одной подписи.
+    host_names = _names_for(db, [a.host_id for a in acts.values() if a.kind == "poll"])
     boards = ({b.id: b for b in db.query(BoardArtifact)
                .filter(BoardArtifact.id.in_(board_ids)).all()} if board_ids else {})
     #⚠️ Сверяем беседу: объект догружаем ТОЛЬКО там, где он и живёт. Без этой проверки
@@ -672,7 +690,8 @@ def _attach_activity_meta(db: Session, msgs: list, viewer_id: str = "") -> None:
                                  "status": a.status, "started_at": a.started_at or "",
                                  "finished_at": a.finished_at or ""}
                 if a.kind == "poll":
-                    m["activity"].update(_poll_cell(a, viewer_id))
+                    m["activity"].update(
+                        _poll_cell(a, viewer_id, host_names.get(a.host_id, "")))
         elif m["kind"] == "board":
             b = boards.get(m["body"])
             if b is not None and b.conversation_id == m.get("conversation_id"):

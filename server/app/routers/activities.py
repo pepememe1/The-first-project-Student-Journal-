@@ -340,6 +340,7 @@ def _sweep_stale(db: Session) -> None:
             a.finished_at = _now()
         db.commit()
     _sweep_expired_timers(db)
+    _sweep_expired_polls(db)
     _advance_expired_contests(db)
 
 
@@ -417,6 +418,32 @@ def _finish_activity_row(db: Session, a: Activity, save: bool = False,
     except Exception:
         pass
     return summary
+
+
+def _sweep_expired_polls(db: Session) -> None:
+    """Опрос, у которого вышел срок, ЗАВЕРШАЕТСЯ САМ.
+
+    🔥 Раньше подметались только таймеры и соревнования, и это стоило бы нам голосов.
+    Снимок итогов (`final_counts`/`final_votes`) сохраняется ТОЛЬКО при завершении, а
+    живые голоса лежат в памяти процесса. Опрос со сроком доходил до нуля и оставался
+    `running` навсегда — значит при первом же рестарте сервера его закрывала общая
+    уборка `_sweep_stale`, уже БЕЗ снимка, и в ленте навсегда оставалось «проголосовало:
+    0» при полной группе проголосовавших.
+
+    Второе следствие важно не меньше: пока опрос числится идущим, итог показывать
+    нельзя (см. `_poll_cell`), то есть без этой уборки победитель не появлялся бы вовсе
+    у опросов, которые никто не закрыл руками, — а это большинство."""
+    for a in db.query(Activity).filter(Activity.kind == "poll",
+                                       Activity.status == "running").all():
+        snap = activity_state.get(a.id)
+        if snap is None:
+            continue
+        ends = (snap.get("payload") or {}).get("ends_at") or ""
+        #Без срока опрос живёт, пока автор не закроет, — это законный режим.
+        if not ends or _seconds_left(ends) > 0:
+            continue
+        #save=True: та же ветка, что у кнопки «завершить», — снимок итогов обязателен.
+        _finish_activity_row(db, a, save=True, expired=True)
 
 
 def _sweep_expired_timers(db: Session) -> None:
@@ -552,6 +579,11 @@ def _validate_start(db: Session, kind: str, params: dict, user: User) -> dict:
         if len(options) < 2:
             raise HTTPException(status_code=400, detail="Нужно хотя бы два варианта")
         out = {"question": question, "options": options[:MAX_OPTIONS]}
+        #Показывать ли итог всем ПОСЛЕ завершения. По умолчанию да: иначе победителя не
+        #увидит никто, кроме автора, и подсветка теряет смысл. Обещание даётся ЗАРАНЕЕ —
+        #подпись под опросом сообщает об этом до голосования, поэтому раскрытие в конце
+        #не является изменением правил задним числом. Автор вправе выключить.
+        out["reveal_results"] = bool(p.get("reveal_results", True))
         #Срок окончания — как в Telegram. По умолчанию СУТКИ: бессрочный опрос висел в
         #ленте вечно, и никто не знал, когда смотреть результат. Явный 0 по-прежнему
         #значит «без срока» — но это осознанный выбор автора, а не молчаливое умолчание.

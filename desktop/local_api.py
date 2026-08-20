@@ -501,6 +501,9 @@ class LocalAPI:
                 #входа становится веб-овой, локальная копия обязана уметь пускать
                 #человека офлайн и сходить на бой при первом входе на этой машине.
                 install_login_bridge(app)
+                #Подтверждение устройства: без него новый ПК не мог попасть внутрь
+                #вообще никак, кроме правки базы руками (см. шапку моста).
+                install_connect_bridge(app)
                 #Раздел «Сервер»: управление боевой машиной по SSH. Живёт ТОЛЬКО здесь,
                 #в локальном сервере программы. На бою этого кода нет вовсе — там
                 #работает `routers/serverinfo.py`, который умеет только смотреть.
@@ -666,7 +669,18 @@ def issue_local_session(login: str, role: str) -> tuple:
     Заодно заводим запись сессии (AuthSession): без неё сервер отвергает токен с jti как
     отозванный. Побочная польза — локальный выход и отзыв работают ровно как на бою.
 
+    ⚠️ ЧЕЛОВЕКА НЕТ В КОПИИ — СЕССИИ НЕТ (3.7.7). Токен на отсутствующего пользователя
+    валиден по подписи, но мёртв по существу: `get_current_user` отвечает на него 401
+    «Пользователь не найден» на ПЕРВОМ же запросе кабинета. Раньше проверки не было, и
+    на чистой машине это давало худший из возможных исходов — вход «удавался», кабинет
+    мелькал и через секунду человека выбрасывало на форму входа без единого слова о
+    причине. Страховка вызывающего (`if not access: ...`) при этом не срабатывала
+    никогда: функция возвращала пустую пару только при ИСКЛЮЧЕНИИ.
+
     Пустая пара — если что-то не удалось (тогда SPA просто попросит войти)."""
+    if not user_exists(login):
+        _LOG.warning(f"[local-api] сессия не выписана: «{login}» ещё не доехал в локальную копию")
+        return "", ""
     try:
         prepare_env()
         from app.security import create_token_full
@@ -739,6 +753,11 @@ def instance() -> LocalAPI:
 #B-правок нет обратного моста из локального зеркала, и сохранённый порог потерялся бы.
 _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
                    "/me/prefs", "/me/events",
+                   #Одобрение чужих машин админом: список ожидающих живёт на БОЕВОМ
+                   #сервере, а в локальной копии его нет и быть не может — без пересылки
+                   #администратор в программе видел бы пустой список и не мог одобрить
+                   #никого. Пути с авторизацией, поэтому годится обычный прокси.
+                   "/connect/requests", "/connect/approve", "/connect/reject",
                    "/web/staff/parents", "/web/staff/parent-links", "/web/admin/parents",
                    "/web/admin/registrations", "/web/admin/zet-thresholds")
 
@@ -1192,6 +1211,68 @@ def install_login_bridge(app) -> None:
     """POST /auth/login: локальная проверка → при неудаче боевой сервер → СВОЙ токен."""
     from fastapi import Request
     from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    #🔥 ВЕСЬ ВХОД — В ПУЛЕ ПОТОКОВ, И ЭТО НЕ ОПТИМИЗАЦИЯ (3.7.7, возражение Полковника).
+    #Работа здесь блокирующая по существу и очень долгая: гибридный хеш пароля (200k+200k
+    #итераций), обращение к боевому серверу (до 20 с), ожидание зеркала (до 12 с со
+    #`sleep`). Выполняясь прямо в `async def`, она встаёт поперёк единственного цикла
+    #событий uvicorn — то есть на полминуты замирает ВЕСЬ локальный сервер: ни SPA, ни
+    #журнал, ни `/health`. Со стороны это ровно то, на что и жалуются: «программа
+    #зависла». Тело вынесено в обычную функцию и запускается через `run_in_threadpool`.
+    def _login_flow(login: str, password: str) -> tuple:
+        """(код ответа, тело). Никакого `async` — намеренно, см. комментарий выше."""
+        local = _try_local_login(login, password)
+        if local is not None:
+            _remember_session(login, password, local.get("role", ""))
+            return 200, local
+
+        #Человека в текущей копии нет — возможно, она ещё «анонимная» (сервер поднялся
+        #до входа). Переключаемся на ЕГО базу и пробуем ещё раз: вдруг он уже заходил на
+        #этой машине и его копия лежит готовая — тогда вход останется офлайновым.
+        if switch_user_db(login):
+            local = _try_local_login(login, password)
+            if local is not None:
+                _remember_session(login, password, local.get("role", ""))
+                return 200, local
+
+        remote, why = _try_remote_login(login, password)
+        if remote is None:
+            #Причина различается только там, где это безопасно (см. login_failure_response).
+            code, detail = login_failure_response(remote, why)
+            return code, {"detail": detail}
+
+        role = remote.get("role") or "student"
+        _remember_session(login, password, role)
+        #🔒 ГЛАВНОЕ: до синхронизации переключаем базу на ЛИЧНУЮ копию этого человека.
+        #Без этого его данные легли бы в общий «анонимный» файл, и следующий вошедший на
+        #этом компьютере увидел бы чужие оценки — ровно та утечка, ради которой копии и
+        #сделаны раздельными (см. local_db_file).
+        switch_user_db(login)
+        #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
+        #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
+        #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
+        ok, why_mirror = _wait_for_mirror(login, seconds=12)
+        if not ok:
+            #⚠️ ЗДЕСЬ РАНЬШЕ ОТДАВАЛИ БОЕВЫЕ ТОКЕНЫ «до докачки, через прокси». Это было
+            #неправдой дважды: пересылаются всего несколько онлайн-префиксов
+            #(`_PROXY_PREFIXES`), а весь журнал читается локально — и боевой токен
+            #локальный сервер отвергает, потому что подписан ЧУЖИМ секретом. Итог был
+            #ровно тот, что описан в tests/test_desktop_first_login.py: кабинет мелькал
+            #и выбрасывал. Лучше честный отказ с названной причиной, чем сессия,
+            #разваливающаяся через секунду.
+            code, detail = mirror_failure_response(why_mirror)
+            return code, {"detail": detail}
+        access, refresh = issue_local_session(login, role)
+        if not access:
+            #⚠️ Сюда попадаем, когда зеркало отчиталось об успехе, а человека в копии всё
+            #равно нет. Отдать здесь боевые токены нельзя (локальный сервер их не
+            #принимает — подписаны чужим секретом), поэтому тот же разбор причины.
+            code, detail = mirror_failure_response(why_mirror or "локальная сессия не выписана")
+            return code, {"detail": detail}
+        out = dict(remote)
+        out["access_token"], out["refresh_token"] = access, refresh
+        return 200, out
 
     @app.post("/auth/login")
     async def _login(request: Request):
@@ -1204,46 +1285,8 @@ def install_login_bridge(app) -> None:
         password = body.get("password") or ""
         if not login or not password:
             return JSONResponse({"detail": "Введите логин и пароль"}, status_code=400)
-
-        local = _try_local_login(login, password)
-        if local is not None:
-            _remember_session(login, password, local.get("role", ""))
-            return JSONResponse(local)
-
-        #Человека в текущей копии нет — возможно, она ещё «анонимная» (сервер поднялся
-        #до входа). Переключаемся на ЕГО базу и пробуем ещё раз: вдруг он уже заходил на
-        #этой машине и его копия лежит готовая — тогда вход останется офлайновым.
-        if switch_user_db(login):
-            local = _try_local_login(login, password)
-            if local is not None:
-                _remember_session(login, password, local.get("role", ""))
-                return JSONResponse(local)
-
-        remote, why = _try_remote_login(login, password)
-        if remote is None:
-            #Причина различается только там, где это безопасно (см. login_failure_response).
-            code, detail = login_failure_response(remote, why)
-            return JSONResponse({"detail": detail}, status_code=code)
-
-        role = remote.get("role") or "student"
-        _remember_session(login, password, role)
-        #🔒 ГЛАВНОЕ: до синхронизации переключаем базу на ЛИЧНУЮ копию этого человека.
-        #Без этого его данные легли бы в общий «анонимный» файл, и следующий вошедший на
-        #этом компьютере увидел бы чужие оценки — ровно та утечка, ради которой копии и
-        #сделаны раздельными (см. local_db_file).
-        switch_user_db(login)
-        #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
-        #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
-        #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
-        _wait_for_mirror(login, seconds=12)
-        access, refresh = issue_local_session(login, role)
-        if not access:
-            #Локальную сессию выпустить не удалось (человека всё ещё нет в копии) —
-            #отдаём боевые токены: кабинет будет работать через прокси, пока не докачается.
-            return JSONResponse(remote)
-        out = dict(remote)
-        out["access_token"], out["refresh_token"] = access, refresh
-        return JSONResponse(out)
+        code, data = await run_in_threadpool(_login_flow, login, password)
+        return JSONResponse(data, status_code=code)
 
     #В НАЧАЛО: иначе сработает штатный /auth/login серверного приложения (см. тот же
     #приём и ту же причину у bootstrap-маршрута выше).
@@ -1285,6 +1328,115 @@ def _try_local_login(login: str, password: str):
     except Exception as e:
         _LOG.info(f"[login] локальная проверка не удалась: {e}")
         return None
+
+
+#═══ Подтверждение УСТРОЙСТВА с десктопа ══════════════════════════════════════════════
+#🔥 Зачем это появилось (3.7.7). Барьер устройства для десктопа — жёсткий инвариант
+#(§4.11): неодобренный ПК получает 403 на `/sync/*`. А пути «запросить подтверждение и
+#ввести код» на десктопе не существовало ВООБЩЕ: методы `SyncClient.connect_request/
+#connect_status/connect_verify` были написаны и не имели ни одного вызывающего — тот
+#самый «обещание без вызывающего» из шапки CLAUDE.md. Одобрить новую машину можно было
+#только руками в базе, то есть при развёртывании в колледже за дверью оставался бы
+#КАЖДЫЙ новый компьютер преподавателя.
+#
+#Перехватываем ТЕ ЖЕ пути `/connect/*`, что зовёт `web/src/components/DeviceApproval.vue`,
+#и пересылаем их на боевой сервер. Правки в SPA не нужны вовсе: экран подтверждения уже
+#написан и уже показывается на 403 — не хватало ровно того, чтобы за этими адресами
+#внутри программы стоял боевой сервер, а не пустая локальная копия.
+def machine_device_id() -> str:
+    """Идентификатор ЭТОГО компьютера — тот самый, которым ходит синхронизация."""
+    try:
+        from data import app_settings
+        return (app_settings.get_device_id() or "").strip()
+    except Exception as e:
+        _LOG.warning(f"[connect] идентификатор машины недоступен: {e}")
+        return ""
+
+
+def _forward_to_server(method: str, path: str, payload: dict = None,
+                       params: dict = None) -> tuple:
+    """Переслать запрос на боевой сервер БЕЗ авторизации. Возвращает (код, данные).
+
+    Именно без авторизации, и это не упущение: подтверждение устройства по построению
+    происходит ДО входа — токена ещё нет и быть не может. Защита здесь не токен, а то,
+    что одобряет живой администратор и что запрос всегда касается ТОЛЬКО этой машины."""
+    try:
+        from data import app_settings
+        base = (app_settings.get_api_url() or "").rstrip("/")
+    except Exception as e:
+        return 503, {"detail": f"Адрес сервера недоступен: {e}"}
+    if not base:
+        return 503, {"detail": "Адрес сервера не задан — укажите его в настройках программы."}
+    try:
+        import httpx
+    except Exception as e:
+        return 503, {"detail": f"Нет пакета httpx ({e}) — установите зависимости."}
+    try:
+        r = httpx.request(method, f"{base}{path}", json=payload, params=params,
+                          headers={"X-Device-Id": machine_device_id()}, timeout=20.0)
+    except Exception as e:
+        _LOG.warning(f"[connect] {path}: {type(e).__name__}: {e}")
+        return 503, {"detail": "Нет связи с сервером. Проверьте интернет."}
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {"detail": r.text[:200]}
+
+
+def install_connect_bridge(app) -> None:
+    """`/connect/request|status|verify` внутри программы говорят с БОЕВЫМ сервером."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    #Та же причина, что у моста входа: `httpx.request` блокирующий, а экран подтверждения
+    #опрашивает состояние каждые несколько секунд. Прямо в `async def` каждый такой опрос
+    #занимал бы цикл событий до таймаута — и локальный сервер замирал бы у того самого
+    #человека, который и так не может войти.
+    async def _reply(method, path, payload=None, params=None):
+        code, data = await run_in_threadpool(_forward_to_server, method, path, payload, params)
+        return JSONResponse(data, status_code=code)
+
+    @app.post("/connect/request")
+    async def _connect_request(request: Request):
+        #🔒 device_id БЕРЁМ СВОЙ, присланный страницей ИГНОРИРУЕМ. У браузера свой
+        #идентификатор (localStorage, `api/tokens.js`), у программы — свой, и барьер на
+        #бою смотрит именно на машинный: им ходит синхронизация. Одобрив браузерный,
+        #администратор одобрил бы не ту машину — запрос ушёл бы в никуда, а человек
+        #остался бы за дверью в полной уверенности, что всё сделал правильно.
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        dev = machine_device_id()
+        if not dev:
+            return JSONResponse({"detail": "Идентификатор компьютера не определён."},
+                                status_code=503)
+        host = str((body or {}).get("hostname") or "")[:60]
+        return await _reply("POST", "/connect/request", {"device_id": dev, "hostname": host})
+
+    @app.get("/connect/status")
+    async def _connect_status():
+        return await _reply("GET", "/connect/status",
+                            params={"device_id": machine_device_id()})
+
+    @app.post("/connect/verify")
+    async def _connect_verify(request: Request):
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        code = str((body or {}).get("code") or "").strip()[:12]
+        return await _reply("POST", "/connect/verify",
+                            {"device_id": machine_device_id(), "code": code})
+
+    #В НАЧАЛО — по той же причине, что у моста входа: иначе сработали бы штатные
+    #маршруты серверного приложения и запрос ушёл бы в ЛОКАЛЬНУЮ копию, где одобрять
+    #нечего и некому.
+    for _ in range(3):
+        app.router.routes.insert(0, app.router.routes.pop())
 
 
 def _try_remote_login(login: str, password: str):
@@ -1358,20 +1510,60 @@ def _remember_session(login: str, password: str, role: str) -> None:
         pass
 
 
-def _wait_for_mirror(login: str, seconds: int = 12) -> bool:
-    """Дождаться, пока человек появится в локальной копии (после первого входа)."""
+def _wait_for_mirror(login: str, seconds: int = 12) -> tuple:
+    """Дождаться, пока человек появится в локальной копии. Возвращает (успех, причина).
+
+    ⚠️ ПРИЧИНУ ВОЗВРАЩАЕМ, А НЕ ГЛОТАЕМ (3.7.7). Раньше здесь стоял голый
+    `except Exception: pass`, а результат `mirror_once()` выбрасывался — при том, что
+    именно в нём лежит ЕДИНСТВЕННАЯ строка, объясняющая, почему копия осталась пустой.
+    На чужой машине это стоило суток гадания: тестировщик видел «аккаунт мелькнул и
+    выкинуло», а настоящая причина (403 барьера устройства на `/sync/*`) не доходила
+    вообще никуда."""
     import time
+    why = ""
     try:
         from desktop.local_mirror import mirror_once
-        mirror_once()
-    except Exception:
-        pass
+        why = (mirror_once() or {}).get("error") or ""
+    except Exception as e:
+        why = f"{type(e).__name__}: {e}"
     edge = time.time() + max(1, seconds)
     while time.time() < edge:
         if user_exists(login):
-            return True
+            return True, ""
         time.sleep(0.5)
-    return user_exists(login)
+    if user_exists(login):
+        return True, ""
+    if why:
+        _LOG.warning(f"[login] локальная копия не наполнилась: {why}")
+    return False, why
+
+
+#Что сказать человеку, когда вход на сервере прошёл, а копия не наполнилась.
+#Разделение не косметическое: «нет связи» и «устройство не подтверждено» лечатся в
+#РАЗНЫХ местах и разными людьми, и перепутать их значит отправить человека не туда.
+def mirror_failure_response(reason: str) -> tuple:
+    """(код ответа, текст) по причине неудачи зеркала.
+
+    🔑 403 выбран не произвольно: SPA уже умеет на него отвечать экраном подтверждения
+    устройства (`LoginPage.vue`: `if (e.response?.status === 403) needApproval.value = true`).
+    То есть правильный код здесь сам открывает человеку дверь, а неправильный (401)
+    отправил бы менять пароль, который он не терял.
+
+    «Нет активной сессии с сервером» тоже считаем барьером устройства, и вот почему:
+    боевой вход ТОЛЬКО ЧТО прошёл (иначе мы бы сюда не дошли) — значит сеть есть и
+    адрес верен. Синхронизация ходит тем же паролем, но уже как ДЕСКТОП, без
+    `X-Client: web`, и единственное, что отличает её от только что удавшегося входа, —
+    барьер устройства (§4.11). Ошибиться в эту сторону дёшево: человек увидит экран
+    подтверждения и, если дело всё же в сети, упрётся в понятный отказ на нём же."""
+    low = (reason or "").lower()
+    device = ("403" in low or "forbidden" in low or "устройств" in low
+              or "нет активной сессии" in low)
+    if device:
+        return 403, ("Устройство не подтверждено администратором. Нажмите «Запросить "
+                     "доступ» и введите код, который выдаст администратор.")
+    _LOG.warning(f"[login] вход прошёл, но копия не наполнилась: {reason or 'причина не названа'}")
+    return 503, ("Вход прошёл, но данные не успели скачаться на этот компьютер. "
+                 "Проверьте связь с сервером и попробуйте войти ещё раз.")
 
 
 def switch_user_db(login: str) -> bool:
