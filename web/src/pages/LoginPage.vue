@@ -289,6 +289,16 @@ const showRecover = ref(false)
           <p class="mt-2 hidden text-tiny text-text3 sm:block">Преподаватели и админ входят по данным от администратора.</p>
         </div>
 
+        <!-- Одностраничник для приёмной комиссии: три платформы, ИИ и сравнение защиты
+             ПДн с действующими системами вуза. Статический /offer.html (обычная
+             навигация, не роутер) — без внешних ресурсов, под нашим CSP. -->
+        <div class="mt-3 text-center">
+          <a href="/offer.html"
+             class="inline-flex items-center gap-2 rounded-sm border border-accent/40 px-4 py-2 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow">
+            <ShieldCheck class="size-4" /> Почему GradeBookAI — сравнение и безопасность
+          </a>
+        </div>
+
         <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную. -->
         <div class="mt-3 text-center">
           <button type="button" class="text-tiny text-text3 transition-colors hover:text-accent" @click="router.push('/connect')">
@@ -333,6 +343,10 @@ const showRecover = ref(false)
           <Trophy class="mt-0.5 size-4 shrink-0 text-yellow" />
           <p class="text-xs font-medium text-text3">Победитель хакатона «Мы — будущее IT Бурятии»</p>
         </div>
+          <a href="/offer.html"
+             class="mt-5 flex items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent2">
+            <ShieldCheck class="size-4" /> Почему мы — сравнение и безопасность
+          </a>
           <p class="mt-4 text-tiny text-text2">GradeBookAI · Web Edition</p>
         </div>
 
