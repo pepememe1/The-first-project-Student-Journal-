@@ -159,6 +159,52 @@ def test_pull_admin_gets_everything(client):
     assert cfg.get("gigachat_credentials") == "SECRET_TOKEN", "админ видит секреты ИИ"
 
 
+def test_pull_student_subgroups_scope(client):
+    """Студент получает роспись подгрупп ТОЛЬКО свою, а не всех студентов колледжа.
+
+    Регресс к находке безопасности: `student_subgroups` в SYNC_MODELS уходил НЕ порезанным
+    — студент выкачивал подгруппы всех (student_id+группа+предмет каждого). Скоуп режет по
+    своему неизменяемому user.id."""
+    admin = make_admin(client)
+    sa = _mk_student(client, admin, "sa", "Иванов", "Иван", "ИС-21")
+    _mk_student(client, admin, "sb", "Петров", "Пётр", "ИС-21")
+    #Узнаём id студента sa (студент видит только свою строку users — берём её id).
+    my_id = client.get("/sync/pull", headers=sa).json()["changes"]["users"][0]["id"]
+    _push(client, admin, student_subgroups=[
+        {"id": "sg:ИС-21|Математика|2025/2026|1|" + my_id, "group_name": "ИС-21",
+         "subject": "Математика", "year": "2025/2026", "semester": 1,
+         "student_id": my_id, "subgroup": 1},
+        {"id": "sg:ИС-21|Математика|2025/2026|1|stud:other", "group_name": "ИС-21",
+         "subject": "Математика", "year": "2025/2026", "semester": 1,
+         "student_id": "stud:other", "subgroup": 2}])
+
+    ch = client.get("/sync/pull", headers=sa).json()["changes"]
+    ids = {s["student_id"] for s in ch["student_subgroups"]}
+    assert ids == {my_id}, f"студент должен видеть ТОЛЬКО свою подгруппу, получил: {ids}"
+
+
+def test_pull_teacher_subgroups_scope(client):
+    """Преподаватель получает роспись подгрупп ТОЛЬКО по своим назначенным парам
+    (группа,предмет), а не по всему колледжу (тот же скоуп, что lessons/grades)."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="teacher1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
+    _push(client, admin,
+          groups=[{"id": "grp:ИС-21", "name": "ИС-21", "subjects": ["Математика"]},
+                  {"id": "grp:ИС-22", "name": "ИС-22", "subjects": ["Физика"]}])
+    _push(client, admin, student_subgroups=[
+        {"id": "sg:ИС-21|Математика|2025/2026|1|s1", "group_name": "ИС-21",
+         "subject": "Математика", "year": "2025/2026", "semester": 1,
+         "student_id": "s1", "subgroup": 1},
+        {"id": "sg:ИС-22|Физика|2025/2026|1|s2", "group_name": "ИС-22",
+         "subject": "Физика", "year": "2025/2026", "semester": 1,
+         "student_id": "s2", "subgroup": 1}])
+
+    ch = client.get("/sync/pull", headers=th).json()["changes"]
+    keys = {(s["group_name"], s["subject"]) for s in ch["student_subgroups"]}
+    assert keys == {("ИС-21", "Математика")}, f"только своя назначенная пара, получил: {keys}"
+
+
 def test_vector_voice_offline_echoes_facts(client):
     """/vector/voice в оффлайн-режиме (нет провайдера) возвращает факты как есть —
     десктоп получает озвучку через сервер, не держа токен у себя. Пустые факты → ''."""

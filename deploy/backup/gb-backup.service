@@ -1,0 +1,12 @@
+[Unit]
+Description=GradeBookAI — суточный зашифрованный бэкап БД с проверкой
+After=network.target gradebook.service
+# Не зависим жёстко от gradebook: бэкап нужен и когда сервис лежит (VACUUM INTO берёт
+# консистентный снимок с диска, живой процесс для этого не обязателен).
+
+[Service]
+Type=oneshot
+ExecStart=/root/gb-deploy/tools/gb_backup.sh
+# Низкий приоритет — бэкап не должен мешать выдаче сайта на одноядерной машине.
+Nice=10
+IOSchedulingClass=idle

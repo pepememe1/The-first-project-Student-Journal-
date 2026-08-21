@@ -292,10 +292,10 @@ const showRecover = ref(false)
         <!-- Одностраничник для приёмной комиссии: три платформы, ИИ и сравнение защиты
              ПДн с действующими системами вуза. Статический /offer.html (обычная
              навигация, не роутер) — без внешних ресурсов, под нашим CSP. -->
-        <div class="mt-3 text-center">
+        <div class="mt-4 text-center">
           <a href="/offer.html"
-             class="inline-flex items-center gap-2 rounded-sm border border-accent/40 px-4 py-2 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow">
-            <ShieldCheck class="size-4" /> Почему GradeBookAI — сравнение и безопасность
+             class="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-bold text-white shadow-lg shadow-accent/30 ring-1 ring-accent/50 transition-all hover:-translate-y-0.5 hover:bg-accent2 hover:shadow-xl hover:shadow-accent/40">
+            <ShieldCheck class="size-5" /> Почему GradeBookAI — сравнение и безопасность
           </a>
         </div>
 

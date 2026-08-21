@@ -70,8 +70,13 @@ async function saveStatusText() {
 
 <template>
   <div class="absolute bottom-full left-2 right-2 z-40 mb-2 overflow-hidden rounded-xl border border-border2 bg-card shadow-card">
-    <!-- Полоса цвета профиля — то же, что видят другие в мессенджере. -->
-    <div class="h-12" :style="plate ? { background: plate } : { background: 'var(--gb-accent)' }" />
+    <!-- Баннер профиля — то же, что видят другие в мессенджере: картинка/гифка, если
+         выбрана, иначе полоса цвета. Раньше показывался ТОЛЬКО цвет (баннер не виден
+         вовсе), хотя на карточке профиля он уже есть. -->
+    <div class="relative h-12 overflow-hidden">
+      <img v-if="profile.banner" :src="profile.banner" alt="" class="size-full object-cover" />
+      <div v-else class="size-full" :style="plate ? { background: plate } : { background: 'var(--gb-accent)' }" />
+    </div>
 
     <div class="px-3 pb-3">
       <!-- Аватар заходит на полосу, как в Discord. Карандаш по наведению — в «Профиль». -->

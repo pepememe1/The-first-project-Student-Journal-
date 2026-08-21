@@ -513,13 +513,19 @@ def test_presence_online_flag(client):
     assert bob["online"] is True
 
 
-def test_ws_connect_with_valid_token(client):
+def test_ws_query_token_is_no_longer_accepted(client):
+    """Обратный ход к правке безопасности: ?token= в query авторизацию БОЛЬШЕ не даёт.
+
+    Он клал JWT в access-лог Caddy (`uri` там не редактируется), а живые клиенты ходят
+    сабпротоколом. Вернут фолбэк — тест покраснеет. Валидный по подписи токен, поданный
+    через query, обязан привести к отказу: сокет не открывается."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
     _, (a_id, a), (b_id, b), _ = _setup(client)
     token = a["Authorization"].split(" ", 1)[1]
-    #Валидный токен → соединение открывается; typing не роняет сервер.
-    with client.websocket_connect(f"/web/messenger/ws?token={token}") as wsconn:
-        wsconn.send_json({"type": "typing", "conversation_id": "nope"})
-    #Контекст закрылся без исключений — соединение жило.
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/web/messenger/ws?token={token}"):
+            pass
 
 
 def test_ws_connect_with_subprotocol(client):
@@ -550,7 +556,7 @@ def test_typing_is_not_relayed_into_a_foreign_chat(client, monkeypatch):
     monkeypatch.setattr(mod.ws_manager, "send_users", spy)
 
     token = c["Authorization"].split(" ", 1)[1]
-    with client.websocket_connect(f"/web/messenger/ws?token={token}") as wsconn:
+    with client.websocket_connect("/web/messenger/ws", subprotocols=["bearer", token]) as wsconn:
         wsconn.send_json({"type": "typing", "conversation_id": conv})
     assert delivered == [], "посторонний не имеет права слать «печатает…» в чужую беседу"
 
@@ -568,7 +574,7 @@ def test_typing_still_reaches_the_other_participant(client, monkeypatch):
     monkeypatch.setattr(mod.ws_manager, "send_users", spy)
 
     token = a["Authorization"].split(" ", 1)[1]
-    with client.websocket_connect(f"/web/messenger/ws?token={token}") as wsconn:
+    with client.websocket_connect("/web/messenger/ws", subprotocols=["bearer", token]) as wsconn:
         wsconn.send_json({"type": "typing", "conversation_id": conv})
     assert delivered and delivered[0][0] == [b_id], delivered
 

@@ -45,12 +45,15 @@ onBeforeUnmount(() => { if (tick) clearInterval(tick) })
 
 const endsAt = computed(() => Date.parse(props.activity.ends_at || ''))
 const expired = computed(() => Number.isFinite(endsAt.value) && endsAt.value <= now.value)
-const leftLabel = computed(() => {
+// Абсолютное время окончания («закончится в 12:42»), а не обратный отсчёт: конкретный
+// момент держать в уме не нужно, в отличие от «осталось 3 мин». Считает клиент в СВОЁМ
+// поясе от присланного сервером `ends_at`.
+const endTimeLabel = computed(() => {
   if (!Number.isFinite(endsAt.value)) return ''
-  const s = Math.max(0, Math.round((endsAt.value - now.value) / 1000))
-  if (!s) return locale.t('poll.closed', 'опрос завершён')
-  if (s < 60) return locale.t('poll.leftSec', { n: s })
-  return locale.t('poll.leftMin', { n: Math.ceil(s / 60) })
+  const d = new Date(endsAt.value)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return locale.t('poll.endsAt', { time: `${hh}:${mm}` })
 })
 
 const total = computed(() => (tally.value || []).reduce((a, b) => a + b, 0) || votedCount.value)
@@ -139,8 +142,13 @@ async function vote(i) {
       <span v-if="isTie" class="flex items-center gap-1 font-semibold text-accent">
         <Trophy class="size-3" />{{ locale.t('poll.tie', 'ничья') }}
       </span>
-      <span v-if="leftLabel" class="flex items-center gap-1">
-        <Clock class="size-3" />{{ leftLabel }}
+      <!-- Завершённый опрос прямо говорит «завершён», и голосовать в нём уже нельзя
+           (кнопки disabled по `closed`). Пока идёт — показываем МОМЕНТ окончания. -->
+      <span v-if="closed" class="flex items-center gap-1 font-semibold text-text2">
+        {{ locale.t('poll.closed', 'опрос завершён') }}
+      </span>
+      <span v-else-if="endTimeLabel" class="flex items-center gap-1">
+        <Clock class="size-3" />{{ endTimeLabel }}
       </span>
       <!-- Честная подпись, и она же — ОБЕЩАНИЕ, данное ДО голосования. Именно поэтому
            раскрытие итога в конце не является изменением правил задним числом: человек

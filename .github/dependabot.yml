@@ -1,0 +1,79 @@
+# Dependabot — автоматический присмотр за зависимостями.
+#
+# Зачем именно НАМ: эксплойты находят в СТАРЫХ версиях библиотек, а руками мы за
+# CVE не следим. Dependabot делает две разные вещи:
+#   1. по расписанию (ниже — раз в неделю) открывает PR на обновление версий;
+#   2. НЕЗАВИСИМО от расписания — сразу открывает PR на устранение опубликованной
+#      уязвимости (security update), как только она попадает в GitHub Advisory.
+#
+# 🔒 ПРИНЦИП: обновление НЕ уезжает в прод само. Dependabot открывает PR → на нём
+# прогоняется CI (.github/workflows/ci.yml) → человек мёржит. Мажорный апдейт,
+# который молча положил бы сайт колледжу, так не пройдёт — ровно то, чего мы хотели
+# избежать, отказавшись от «автообновления фреймворков в бою».
+#
+# Группировка (`groups`) собирает мелкие бампы в ОДИН PR, чтобы не завалить ленту
+# двадцатью письмами и не жечь ревью на каждую патч-версию по отдельности.
+version: 2
+updates:
+  # ── Серверный Python (FastAPI/SQLAlchemy/cryptography и т.д.) ──
+  - package-ecosystem: "pip"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      server-deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(server)"
+    labels: ["dependencies", "server"]
+
+  # ── Корневой Python (общие модули десктопа/сборки) ──
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      root-deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies"]
+
+  # ── Веб (Vue/Vite/axios и т.д.) ──
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      web-deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(web)"
+    labels: ["dependencies", "web"]
+
+  # ── Android (Capacitor/Gradle) ──
+  - package-ecosystem: "gradle"
+    directory: "/web/android"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(android)"
+    labels: ["dependencies", "android"]
+
+  # ── Сами GitHub Actions в CI ──
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "ci"]

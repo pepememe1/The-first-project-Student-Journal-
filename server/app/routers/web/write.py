@@ -221,7 +221,9 @@ def create_event_notification(payload: dict = Body(...),
                                       author_login=user.login, batch_id=batch)
             sent += 1
         except Exception as e:      # noqa: BLE001 — рассылка не должна ронять запрос
-            print(f"[events] не удалось уведомить {stud.login}: {e}")
+            # Логин В ЛОГ НЕ ПИШЕМ (ПДн в journal): диагностично «почему не ушло», а не
+            # «кому». Кому — видно во вкладке «Уведомления»: письмо туда всё равно легло.
+            print(f"[events] пуш не отправлен: {type(e).__name__}: {e}")
     return {"ok": True, "sent": sent, "recipients": len(targets), "batch_id": batch}
 
 

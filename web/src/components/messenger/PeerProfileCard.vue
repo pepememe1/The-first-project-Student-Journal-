@@ -119,6 +119,11 @@ const metaLine = computed(() => {
 // верхнюю полосу. Поэтому «убрать баннер» возвращает цвет, а не оставляет пустоту.
 const bannerUrl = computed(() => shown.value.profile_banner || '')
 
+// Фуллскрин-просмотр аватарки/баннера ЧУЖОГО профиля по клику (Влад): полноценный файл
+// без круглой/квадратной обрезки. '' — закрыт. В своём (editable) профиле клик по картинке
+// уже занят редактированием, поэтому лупа только на чужой карточке.
+const lightbox = ref('')
+
 // ── Аватарка и баннер: выбор источника (только editable) ─────────────────────────────
 const editingAvatar = ref(false)
 const avatarMenuOpen = ref(false)
@@ -248,7 +253,9 @@ async function sendMessage() {
   <div class="overflow-hidden rounded-xl border border-border2 bg-card">
     <!-- Баннер: гифка, если выбрана, иначе однотонная плашка цвета профиля. -->
     <div class="relative h-20 overflow-hidden" :style="bannerUrl ? undefined : { background: plate }">
-      <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover" />
+      <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover"
+           :class="{ 'cursor-zoom-in': !editable }"
+           @click="!editable && (lightbox = bannerUrl)" />
       <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
            существует вовсе, и подсказка «здесь можно поменять» иначе не появилась бы
            никогда. При наведении просто становится заметнее. -->
@@ -276,6 +283,11 @@ async function sendMessage() {
           <span class="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
             <Camera class="size-6 text-white" />
           </span>
+        </button>
+        <button v-else-if="shown.avatar" type="button" @click="lightbox = shown.avatar"
+                class="block cursor-zoom-in rounded-full ring-4 ring-card"
+                :title="locale.t('peerProfile.viewAvatar', 'Открыть аватарку')">
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
         </button>
         <div v-else class="rounded-full ring-4 ring-card">
           <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
@@ -360,5 +372,12 @@ async function sendMessage() {
                  ? locale.t('profile.pickBannerGif', 'Гифка на баннер профиля')
                  : locale.t('profile.pickAvatarGif', 'Гифка на аватарку')"
                @pick="onGifPicked" @close="gifPickerFor = ''" />
+
+    <!-- Фуллскрин аватарки/баннера чужого профиля: полноценный файл без обрезки,
+         клик по фону закрывает (Влад). -->
+    <div v-if="lightbox" class="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4"
+         @click="lightbox = ''">
+      <img :src="lightbox" alt="" class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
+    </div>
   </div>
 </template>

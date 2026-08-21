@@ -30,6 +30,10 @@ esstu-gradebook.ru {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
+		# Cross-Origin-Opener-Policy: разрываем связь окна с чужими вкладками (window.opener).
+		# Межстраничных popup-ов у продукта нет (passkey работает без окна, GigaChat — на
+		# сервере), поэтому same-origin ничего не ломает, но закрывает класс атак через opener.
+		Cross-Origin-Opener-Policy "same-origin"
 		# Permissions-Policy: явный отказ от того, чем продукт не пользуется. Без него
 		# браузер разрешает эти способности встроенному содержимому по умолчанию.
 		# ⚠️ microphone НЕ запрещаем: на нём голосовой ввод Вектора (MicButton.vue +
@@ -48,6 +52,10 @@ esstu-gradebook.ru {
 		# вернётся сама ссылка на CDN.
 		Content-Security-Policy "default-src 'self'; img-src 'self' data: https://static.klipy.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'"
 		-Server
+		# Via: 1.1 Caddy раскрывал реверс-прокси. Снимаем ЗДЕСЬ, в блоке header (рядом с
+		# -Server), а не в reverse_proxy: Caddy добавляет свой Via на транспортном слое,
+		# и header_down в reverse_proxy (правит только ответ апстрима) его не достаёт.
+		-Via
 	}
 
 	# ━━ ЛИМИТ РАЗМЕРА ТЕЛА ЗАПРОСА ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -3459,27 +3459,32 @@ def mod_mute_user(uid: str, payload: dict = Body(default={}), request: Request =
 
 
 # ── WebSocket-эндпоинт ───────────────────────────────────────────────────────────────
-def _ws_token(ws: WebSocket, query_token: str) -> tuple:
-    """Достаёт JWT для WS. ПРЕДПОЧТИТЕЛЬНО — из заголовка Sec-WebSocket-Protocol (клиент шлёт
-    ['bearer', <jwt>]): так токен НЕ попадает в URL и, значит, в access-логи прокси. Фолбэк —
-    старый ?token= в query (для уже раздатых клиентов). Возвращает (token, subprotocol_echo):
-    если авторизация прошла через сабпротокол, его надо вернуть эхом в accept()."""
+def _ws_token(ws: WebSocket) -> tuple:
+    """Достаёт JWT для WS ТОЛЬКО из Sec-WebSocket-Protocol (клиент шлёт ['bearer', <jwt>]):
+    так токен НЕ попадает в URL и, значит, в access-логи прокси. Раньше был фолбэк на
+    ?token= в query — но он клал JWT в JSON-лог Caddy (`uri` там НЕ редактируется, в
+    отличие от заголовков Authorization/Cookie), а НИ ОДИН живой клиент им не пользуется:
+    веб/десктоп/мобилка ходят сабпротоколом (web/src/stores/messenger.js). Фолбэк убран —
+    клиент без валидного сабпротокола просто не поднимет сокет и останется на опросе (он и
+    так страховка, §мессенджера). Возвращает (token, subprotocol_echo): если авторизация
+    прошла через сабпротокол, его надо вернуть эхом в accept()."""
     raw = ws.headers.get("sec-websocket-protocol", "")
     if raw:
         parts = [p.strip() for p in raw.split(",") if p.strip()]
         #ожидаем ["bearer", "<jwt>"]; JWT состоит из tchar (base64url + точки) — валидный токен
         if len(parts) >= 2 and parts[0] == "bearer":
             return parts[1], "bearer"
-    return query_token, None
+    return "", None
 
 
 @router.websocket("/ws")
-async def messenger_ws(ws: WebSocket, token: str = Query("")):
-    """Живой канал событий. Авторизация — JWT через Sec-WebSocket-Protocol (не светит токен в
-    логах), с фолбэком на ?token= в query. Клиент получает {type:'changed', conversation_id}
+async def messenger_ws(ws: WebSocket):
+    """Живой канал событий. Авторизация — JWT ТОЛЬКО через Sec-WebSocket-Protocol (не светит
+    токен в логах). ?token= в query больше НЕ принимается: он клал JWT в access-лог, а им
+    никто не пользуется (см. _ws_token). Клиент получает {type:'changed', conversation_id}
     и подтягивает свежее; может слать {type:'typing', conversation_id} — сервер ретранслирует
     остальным участникам."""
-    jwt_token, subproto = _ws_token(ws, token)
+    jwt_token, subproto = _ws_token(ws)
     payload = decode_token(jwt_token) if jwt_token else None
     if not payload:
         await ws.close(code=4401)

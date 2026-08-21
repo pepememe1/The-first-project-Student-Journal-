@@ -20,6 +20,8 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
 import SyncIssuesBadge from '@/components/ui/SyncIssuesBadge.vue'
+import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
+import ReportProblemButton from '@/components/ReportProblemButton.vue'
 
 defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['navigate'])
@@ -69,10 +71,12 @@ function isActive(to) {
          ширину окна — здесь занимают ту же строку, но не отнимают высоту у контента. -->
     <div class="flex shrink-0 items-center gap-2.5 px-3 py-3">
       <BrandLogo :size="32" class="shrink-0" />
-      <div class="min-w-0 leading-tight">
+      <div class="min-w-0 flex-1 leading-tight">
         <p class="truncate font-title text-[15px] font-extrabold text-text">GradeBookAI</p>
         <p class="truncate text-[10px] font-semibold text-text3">{{ loc.t('app.college') }}</p>
       </div>
+      <!-- Версия для слабовидящих — всегда на виду в шапке (как иконка-очки на порталах). -->
+      <AccessibilityMenu placement="down" class="shrink-0" />
     </div>
     <div class="mx-3 h-px shrink-0 bg-border" />
 
@@ -118,6 +122,13 @@ function isActive(to) {
          остаётся только на этом ПК. Появляется, лишь когда есть о чём сказать. -->
     <div class="shrink-0 px-3 pb-1">
       <SyncIssuesBadge />
+    </div>
+
+    <!-- «Сообщить о проблеме» — встроенный канал обратной связи (ClassDojo, §9 №3).
+         Над карточкой себя, спокойным стилем: действие редкое, но должно быть под рукой
+         из любого раздела. Админу компонент себя не рисует (он и есть модерация). -->
+    <div class="shrink-0 px-2.5 pb-1">
+      <ReportProblemButton />
     </div>
 
     <!-- 3. Карточка себя — прижата к нижнему краю (Discord). Занимает ровно тот угол,

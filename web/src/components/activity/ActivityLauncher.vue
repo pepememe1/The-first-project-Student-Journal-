@@ -79,6 +79,16 @@ async function loadQuizzes() {
 // никто, кроме автора. Выключается, когда вопрос чувствительный.
 const revealResults = ref(true)
 
+// Срок опроса. Сервер по умолчанию ставит сутки и принимает duration_s (30 с .. 7 дней,
+// 0 — без срока); здесь даём выбрать пресетом, как в Telegram.
+const POLL_DURATIONS = [3600, 4 * 3600, 8 * 3600, 24 * 3600, 3 * 24 * 3600, 0]
+const pollDuration = ref(24 * 3600)
+function durLabel(s) {
+  if (!s) return locale.t('poll.durNone', 'Без срока')
+  if (s % 86400 === 0) return locale.t('poll.durDays', { n: s / 86400 })
+  return locale.t('poll.durHours', { n: s / 3600 })
+}
+
 function addOption() { if (options.value.length < 12) options.value.push('') }
 function removeOption(i) { if (options.value.length > 2) options.value.splice(i, 1) }
 
@@ -104,6 +114,7 @@ function params() {
       question: question.value.trim(),
       options: options.value.map((o) => o.trim()).filter(Boolean),
       reveal_results: revealResults.value,
+      duration_s: pollDuration.value,
     }
   }
   if (chosen.value === 'contest') return { quiz_id: quizId.value, limit_ms: limitSec.value * 1000 }
@@ -214,6 +225,13 @@ async function confirm() {
                 {{ locale.t('poll.addOption', 'Добавить вариант') }}
               </AppButton>
             </div>
+            <label class="flex flex-col gap-1">
+              <span class="text-xs font-medium text-text2">{{ locale.t('poll.deadline', 'Срок') }}</span>
+              <select v-model.number="pollDuration"
+                      class="w-full rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text">
+                <option v-for="s in POLL_DURATIONS" :key="s" :value="s">{{ durLabel(s) }}</option>
+              </select>
+            </label>
             <label class="flex items-start gap-2 text-xs text-text2">
               <input v-model="revealResults" type="checkbox" class="mt-0.5 accent-accent" />
               <span>{{ locale.t('poll.revealOption', 'Показать итог всем после завершения') }}</span>

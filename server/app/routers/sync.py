@@ -195,6 +195,11 @@ def _scope_for_student(changes: dict, user: User) -> None:
                          if gr.get("student_f") == f and gr.get("student_n") == n]
     changes["term_grades"] = [t for t in (changes.get("term_grades") or [])
                               if t.get("student_f") == f and t.get("student_n") == n]
+    #student_subgroups: студенту нужна ТОЛЬКО СВОЯ подгруппа. Раньше уходила роспись
+    #подгрупп ВСЕХ студентов колледжа (по неизменяемому student_id) — чужая ростер-
+    #структура мимо скоупа. Ключуем по своему user.id (id студента не меняется, §12).
+    changes["student_subgroups"] = [s for s in (changes.get("student_subgroups") or [])
+                                    if s.get("student_id") == (user.id or "")]
     #subjects — справочник имён (не ПДн), оставляем как есть.
 
 
@@ -233,6 +238,10 @@ def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
     changes["term_grades"] = [
         t for t in (changes.get("term_grades") or [])
         if (student_group.get((t.get("student_f"), t.get("student_n"))), t.get("subject")) in pairs]
+    #student_subgroups: только по НАЗНАЧЕННЫМ парам (как lessons/grades выше). Без фильтра
+    #препод получал роспись подгрупп всех групп колледжа — чужая ростер-структура.
+    changes["student_subgroups"] = [s for s in (changes.get("student_subgroups") or [])
+                                    if (s.get("group_name"), s.get("subject")) in pairs]
 
 
 def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:

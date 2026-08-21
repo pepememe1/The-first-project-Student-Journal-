@@ -5,6 +5,7 @@ import './style.css'
 import App from './App.vue'
 import { router } from './router'
 import { useThemeStore } from './stores/theme'
+import { useA11yStore } from './stores/a11y'
 
 const app = createApp(App)
 app.use(createPinia())
@@ -25,6 +26,10 @@ app.config.errorHandler = (err, instance, info) => {
 const theme = useThemeStore()
 theme.apply()
 theme.startScheduleWatcher()
+
+// Режим слабовидящих — тоже до монтирования: крупный шрифт/контраст должны быть уже
+// в первом кадре, иначе интерфейс дёрнется с обычного на увеличенный на глазах.
+useA11yStore().apply()
 
 app.use(router)
 // 🔊 Разблокировка звука. Браузер разрешает воспроизведение только после жеста человека,

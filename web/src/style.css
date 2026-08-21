@@ -347,6 +347,10 @@
   --gb-accent-glow: rgba(20, 124, 139, 0.14);
   --gb-blue: #2ba6b8;
 
+  /* Режим слабовидящих (stores/a11y.js): множитель rem. 1 = обычный вид. Меняется
+     на лету через inline-style на <html>, поэтому объявлен и здесь дефолтом. */
+  --gb-font-scale: 1;
+
   color-scheme: light dark;
 }
 
@@ -357,12 +361,19 @@
     height: 100%;
   }
 
+  /* Режим слабовидящих: масштаб применяется к КОРНЮ, поэтому растут все rem-размеры
+     Tailwind разом (текст, отступы). 100% = 16px по умолчанию. */
+  html {
+    font-size: calc(100% * var(--gb-font-scale, 1));
+  }
+
   body {
     margin: 0;
     background-color: var(--gb-bg);
     color: var(--gb-text);
     font-family: var(--font-body);
-    font-size: 14px;
+    /* База 14px тоже масштабируется — иначе текст без явного text-* класса не рос бы. */
+    font-size: calc(14px * var(--gb-font-scale, 1));
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -517,3 +528,31 @@
   правке менять надо оба — поэтому они рядом и подписаны.
 */
 .gb-feed-indent { padding-left: calc(2rem + 0.5rem); }
+
+
+/*
+  ВЫСОКИЙ КОНТРАСТ (режим слабовидящих, stores/a11y.js — класс `gb-contrast` на <html>).
+
+  ⚠️ Целим в utility-КЛАССЫ Tailwind, а НЕ в переменные --gb-text2/text3/border: их
+  theme-store выставляет INLINE-стилем на :root (root.style.setProperty), а inline
+  перебивает любое правило таблицы стилей. Через классы с !important обходим это и
+  работаем при любой теме (светлая/тёмная/кастом).
+
+  Что делаем: приглушённый вторичный/третичный текст поднимаем до полного (самая частая
+  причина нечитаемости — серый текст на светлом фоне), границы делаем ощутимее, фокус —
+  толще. Акцент и смысловые цвета (красный/оранжевый) НЕ трогаем: они несут значение.
+*/
+html.gb-contrast .text-text2,
+html.gb-contrast .text-text3 { color: var(--gb-text) !important; }
+
+html.gb-contrast .border-border,
+html.gb-contrast .border-border2 { border-color: var(--gb-text2) !important; }
+
+/* Фокус клавиатуры — толще и с подложкой: слабовидящему важно видеть, где он. */
+html.gb-contrast :focus-visible {
+  outline: 3px solid var(--gb-accent) !important;
+  outline-offset: 2px;
+}
+
+/* Ссылки-акценты подчёркиваем: в высоком контрасте цвет один читать труднее. */
+html.gb-contrast a { text-decoration-thickness: from-font; }
