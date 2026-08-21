@@ -89,7 +89,14 @@ fi
 chmod 600 "$dst"
 
 # 3) Ротация: держим последние $KEEP, остальное удаляем (только auto/).
-removed=$(ls -1t "$OUT"/gradebook_*.db 2>/dev/null | tail -n +$((KEEP + 1)) | tee /dev/stderr | xargs -r rm -f 2>/dev/null; true)
+# ⚠️ БЕЗ `tee /dev/stderr`: под systemd stderr — не файл, и `/dev/stderr` даёт
+# «No such device or address», засоряя журнал (хоть и не роняя бэкап). Список удаляемого
+# кладём в переменную и пишем СВОИМ log(), а не через терминальный дескриптор.
+removed=$(ls -1t "$OUT"/gradebook_*.db 2>/dev/null | tail -n +$((KEEP + 1)))
+if [ -n "$removed" ]; then
+    printf '%s\n' "$removed" | xargs -r rm -f 2>/dev/null || true
+    log "ротация: удалено $(printf '%s\n' "$removed" | wc -l) снимков сверх $KEEP"
+fi
 kept=$(ls -1 "$OUT"/gradebook_*.db 2>/dev/null | wc -l)
 
 sz=$(du -h "$dst" | cut -f1)

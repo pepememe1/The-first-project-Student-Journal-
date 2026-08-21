@@ -1076,6 +1076,75 @@ def direct_conversation_id(uid_a: str, uid_b: str) -> str:
     return f"direct:{lo}|{hi}"
 
 
+# ── КУРСЫ (учебные курсы: структура, материалы, задания; аналог «Курсы» портала) ──────
+# 🔒 СЕРВЕРНАЯ подсистема, как мессенджер: НЕ в SYNC_MODELS. Курсы контентные (материалы —
+# файлы/ссылки), офлайн-синк им не нужен и файлы по нему возить нельзя; на десктопе-онлайн
+# приходят через тот же REST. Все пять — НОВЫЕ таблицы, поэтому create_all заводит их сам
+# (ручной идемпотентный ALTER в db.py нужен ТОЛЬКО для новых КОЛОНОК в существующих таблицах,
+# см. §10 CLAUDE.md — здесь его заводить не надо).
+class Course(Base):
+    """Учебный курс по предмету для группы. Автор(ы) — преподаватель(и) (CourseAuthor).
+    Виден студентам своей группы, авторам и админу. Архивируется (`archived`), жёстко не
+    удаляется: на материалы/задания могут быть ссылки, а история курса — учебный документ."""
+    __tablename__ = "courses"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String, default="", index=True)
+    subject = Column(String, default="", index=True)      #предмет курса
+    group_name = Column(String, default="", index=True)   #для какой учебной группы
+    description = Column(String, default="")
+    created_by = Column(String, default="")               #user.id создателя
+    created_at = Column(String, default="")
+    updated_at = Column(String, default="")
+    archived = Column(Boolean, default=False)
+
+
+class CourseAuthor(Base):
+    """Автор курса (преподаватель). M2M курс↔преподаватель; создатель добавляется первым."""
+    __tablename__ = "course_authors"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    course_id = Column(Integer, index=True)
+    teacher_id = Column(String, default="", index=True)   #user.id преподавателя
+    added_at = Column(String, default="")
+
+
+class CourseSection(Base):
+    """Раздел структуры курса — нумерованный пункт списка «Структура курса»."""
+    __tablename__ = "course_sections"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    course_id = Column(Integer, index=True)
+    title = Column(String, default="")
+    position = Column(Integer, default=0)                 #порядок (№ п/п)
+    created_at = Column(String, default="")
+
+
+class CourseMaterial(Base):
+    """Материал курса. MVP — `kind='link'` (url) и `kind='text'` (пояснение в title/url);
+    `kind='file'` зарезервирован под загрузку файлов (следующий шаг, app/uploads.py)."""
+    __tablename__ = "course_materials"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    course_id = Column(Integer, index=True)
+    section_id = Column(Integer, default=0)               #0 — материал вне раздела
+    kind = Column(String, default="link")                #link | file | text
+    title = Column(String, default="")
+    url = Column(String, default="")                     #для link
+    file_path = Column(String, default="")               #для file (пока не используется)
+    position = Column(Integer, default=0)
+    created_at = Column(String, default="")
+
+
+class CourseAssignment(Base):
+    """Задание курса (таблица «Задания»): что сдать и до какого срока, кто выдал."""
+    __tablename__ = "course_assignments"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    course_id = Column(Integer, index=True)
+    title = Column(String, default="")
+    description = Column(String, default="")
+    due_date = Column(String, default="")                #срок ('ДД.ММ.ГГГГ' или ISO)
+    teacher_id = Column(String, default="")              #кто выдал (user.id)
+    url = Column(String, default="")                     #прикреплённая ссылка (файл — потом)
+    created_at = Column(String, default="")
+
+
 SYNC_MODELS = {
     "users": User,
     "groups": Group,

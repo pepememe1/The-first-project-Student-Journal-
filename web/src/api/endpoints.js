@@ -683,3 +683,23 @@ export const deskServerApi = {
 export const appApi = {
   apkInfo: () => api.get('/app/apk-info'),
 }
+
+// КУРСЫ ─────────────────────────────────────────────────────────────────────────
+// Учебные курсы (структура, материалы, задания). Скоуп по роли считает сервер
+// (routers/web/courses.py): студент — своя группа, преподаватель — свои, админ — все.
+export const coursesApi = {
+  list: (q = '', includeArchived = false) =>
+    api.get('/web/courses', { params: { q, include_archived: includeArchived } }),
+  get: (id) => api.get(`/web/courses/${id}`),
+  create: (payload) => api.post('/web/courses', payload),   // {title, subject, group_name, description}
+  archive: (id) => api.delete(`/web/courses/${id}`),
+  addSection: (id, title, position = 0) =>
+    api.post(`/web/courses/${id}/sections`, { title, position }),
+  delSection: (id, sectionId) => api.delete(`/web/courses/${id}/sections/${sectionId}`),
+  addMaterial: (id, { title, url = '', kind = 'link', sectionId = 0 }) =>
+    api.post(`/web/courses/${id}/materials`, { title, url, kind, section_id: sectionId }),
+  delMaterial: (id, materialId) => api.delete(`/web/courses/${id}/materials/${materialId}`),
+  addAssignment: (id, { title, dueDate = '', description = '', url = '' }) =>
+    api.post(`/web/courses/${id}/assignments`, { title, due_date: dueDate, description, url }),
+  delAssignment: (id, assignmentId) => api.delete(`/web/courses/${id}/assignments/${assignmentId}`),
+}

@@ -14,7 +14,7 @@ import {
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
   AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database,
-  Archive } from '@lucide/vue'
+  Archive, BookMarked } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -23,6 +23,7 @@ export const NAV = {
     { key: 'journal', label: 'Мой журнал', i18n: 'nav.journal', icon: ClipboardList, to: '/student/journal' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/student/schedule' },
     { key: 'stats', label: 'Статистика', i18n: 'nav.stats', icon: BarChart3, to: '/student/stats' },
+    { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/student/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/student/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/student/messages', badge: 'messagesUnread' },
     { section: 'Личное', i18n: 'nav.sectionPersonal' },
@@ -37,6 +38,7 @@ export const NAV = {
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/teacher/parents', curatorOnly: true },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/teacher/schedule' },
     { key: 'stats', label: 'Статистика', i18n: 'nav.stats', icon: BarChart3, to: '/teacher/stats' },
+    { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/teacher/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/teacher/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/teacher/messages', badge: 'messagesUnread' },
     { section: 'Личное', i18n: 'nav.sectionPersonal' },
@@ -49,6 +51,7 @@ export const NAV = {
   parent: [
     { section: 'Ребёнок', i18n: 'nav.section.child' },
     { key: 'journal', label: 'Журнал', i18n: 'nav.teacherJournal', icon: ClipboardList, to: '/parent' },
+    { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/parent/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/parent/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/parent/messages', badge: 'messagesUnread' },
     { section: 'Личное', i18n: 'nav.sectionPersonal' },
@@ -75,6 +78,7 @@ export const NAV = {
     { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
+    { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/admin/courses' },
     { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
     // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.

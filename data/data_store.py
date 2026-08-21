@@ -45,6 +45,20 @@ def _wake_sync() -> None:
             log.get("data_store").debug(
                 "[sync] не удалось разбудить синк (%s) — правка уедет очередным циклом", e)
 
+#Сбой одного и того же рода сообщаем ОДИН раз за запуск (те же соображения, что у
+#_wake_failures выше и _report_once в data/core.py): функции ниже зовутся на каждое
+#чтение таблицы/kv, построчный лог утопил бы настоящие записи, и его перестали бы читать.
+_reported: set[str] = set()
+
+
+def _report_once(tag: str, message: str, *args, level: str = "warning") -> None:
+    """Записать сбой в лог один раз за запуск (ключ повтора — tag)."""
+    if tag in _reported:
+        return
+    _reported.add(tag)
+    getattr(log.get("data_store"), level)(message, *args)
+
+
 from data.core import DBManager
 from data.security import hash_password, verify_password, encrypt_value, decrypt_value
 
@@ -104,7 +118,11 @@ def _kv_get(key: str, default):
         try:
             #decrypt_value прозрачно вернёт и открытый текст (на случай миграции).
             return json.loads(decrypt_value(row[0]))
-        except Exception:
+        except Exception as e:
+            #Значение в kv не расшифровалось/не разобралось — раньше молча возвращался
+            #default, и «настройка сбросилась» было неотличимо от «её не задавали».
+            #Значение по умолчанию оставляем (уронить чтение нельзя), но след обязателен.
+            _report_once(f"kv:{key}", "[kv] значение «%s» не прочитано (%s) — взят default", key, e)
             return default
     return default
 
@@ -330,8 +348,13 @@ def _ensure_groups_migrated() -> None:
     try:
         cur.execute("SELECT COUNT(*) FROM groups")
         has_rows = cur.fetchone()[0] > 0
-    except Exception:
-        has_rows = True   #таблицы ещё нет (init создаст) — не мигрируем сейчас
+    except Exception as e:
+        #«no such table» — штатно (init создаст), молчим. Любая ДРУГАЯ причина
+        #(залочена/битая база) тоже пропускает миграцию — это уже стоит видеть.
+        has_rows = True
+        if "no such table" not in str(e).lower():
+            _report_once("mig_groups",
+                         "[mig] проверка таблицы groups не удалась (%s) — миграция пропущена", e)
     conn.close()
     if has_rows:
         return
@@ -478,7 +501,16 @@ def _users_table_read() -> list:
         if blob:
             try:
                 d = json.loads(decrypt_value(blob))
-            except Exception:
+            except Exception as e:
+                #🔥 РАНЬШЕ МОЛЧА `d = {}`. Пустой payload — это НЕ «пустой пользователь»:
+                #из открытых колонок останутся только id/role, а логин, хеш пароля и
+                #назначения исчезнут — и такой «пустой» пользователь мог УЕХАТЬ синком
+                #поверх целого на сервере (LWW сравнивает содержимое). Значение оставляем
+                #(уронить чтение ВСЕХ пользователей из-за одной строки нельзя), но кричим:
+                #систематический сбой здесь = сломанный ключ шифрования, это надо видеть.
+                _report_once("user_blob",
+                             "[users] payload пользователя «%s» не расшифрован (%s) — строка "
+                             "прочитана без данных; возможны и другие", uid, e)
                 d = {}
         #Служебные поля берём из ОТКРЫТЫХ колонок (они — источник правды для синка).
         d["id"] = uid
@@ -515,8 +547,13 @@ def _ensure_users_migrated() -> None:
     try:
         cur.execute("SELECT COUNT(*) FROM users")
         has_rows = cur.fetchone()[0] > 0
-    except Exception:
-        has_rows = True   #таблицы ещё нет (init создаст) — не мигрируем сейчас
+    except Exception as e:
+        #«no such table» — штатно (init создаст), молчим. Любая ДРУГАЯ причина
+        #(залочена/битая база) тоже пропускает миграцию — это уже стоит видеть.
+        has_rows = True
+        if "no such table" not in str(e).lower():
+            _report_once("mig_users",
+                         "[mig] проверка таблицы users не удалась (%s) — миграция пропущена", e)
     conn.close()
     if has_rows:
         return
@@ -614,7 +651,12 @@ class LocalStore:
                 "AND group_name!='' AND subject!=''",
                 (teacher_id, year, int(semester or 0)))
             rows = cur.fetchall()
-        except Exception:
+        except Exception as e:
+            #Пустой список читается как «у преподавателя нет групп» — сбой чтения
+            #неотличим от реальной пустоты. Значение оставляем, но след обязателен.
+            _report_once("teacher_assign",
+                         "[assign] назначения преподавателя не прочитаны (%s) — "
+                         "список групп будет пуст", e)
             rows = []
         finally:
             conn.close()
@@ -636,7 +678,12 @@ class LocalStore:
                 "AND year=? AND semester=? AND COALESCE(deleted,0)=0 AND COALESCE(teacher_id,'')!=''",
                 (group, subject, year, int(semester or 0)))
             row = cur.fetchone()
-        except Exception:
+        except Exception as e:
+            #Сбой чтения → графа «Преподаватель» в редакторе расписания молча пустеет,
+            #как если бы никто не был назначен. Значение оставляем, но след обязателен.
+            _report_once("subject_teacher",
+                         "[assign] преподаватель предмета не прочитан (%s) — "
+                         "графа автозаполнения останется пустой", e)
             row = None
         finally:
             conn.close()

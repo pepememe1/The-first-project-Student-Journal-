@@ -49,6 +49,7 @@ from . import schedule                            # noqa: F401,E402
 from . import vector                              # noqa: F401,E402
 from . import write                                # noqa: F401,E402
 from . import datatransfer                        # noqa: F401,E402
+from . import courses                             # noqa: F401,E402
 
 #Совместимость: имена, которые импортируют снаружи.
 from ._common import (_resolve_term, _require, _ensure_current_term,  # noqa: F401,E402

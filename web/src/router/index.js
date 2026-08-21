@@ -17,6 +17,8 @@ import ResetPassword from '@/pages/ResetPassword.vue'
 import VectorPage from '@/pages/VectorPage.vue'
 import MessengerPage from '@/pages/MessengerPage.vue'
 import SchedulePage from '@/pages/SchedulePage.vue'
+import CoursesPage from '@/pages/CoursesPage.vue'
+import CourseDetailPage from '@/pages/CourseDetailPage.vue'
 import Profile from '@/pages/Profile.vue'
 import Settings from '@/pages/Settings.vue'
 import StudentDashboard from '@/pages/student/StudentDashboard.vue'
@@ -73,6 +75,8 @@ const routes = [
       page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам', 'nav.journal', 'router.journalSubtitle'),
       page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ', 'nav.schedule', 'router.scheduleSubtitle'),
       page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости', 'router.myStats', 'router.statsSubtitle'),
+      page('courses', CoursesPage, 'Курсы', 'Учебные курсы вашей группы', 'nav.courses', 'router.coursesSubtitle'),
+      { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
@@ -91,6 +95,8 @@ const routes = [
       page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
       page('schedule', SchedulePage, 'Расписание', undefined, 'nav.schedule'),
       page('stats', TeacherStats, 'Статистика группы', undefined, 'router.groupStats'),
+      page('courses', CoursesPage, 'Курсы', 'Ваши учебные курсы', 'nav.courses', 'router.coursesSubtitle'),
+      { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
@@ -111,6 +117,8 @@ const routes = [
       page('subject-archive', AdminSubjectArchive, 'Архив предметов',
            'Что изучалось раньше и что убрал последний реимпорт плана', 'nav.subjectArchive', 'router.subjectArchiveSubtitle'),
       page('subjects', AdminSubjects, 'Предметы', undefined, 'nav.subjects'),
+      page('courses', CoursesPage, 'Курсы', 'Учебные курсы', 'nav.courses', 'router.coursesSubtitle'),
+      { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
       page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ', 'nav.schedule', 'router.adminScheduleSubtitle'),
       page('schedule-issues', AdminScheduleIssues, 'Накладки расписания',
            'Один преподаватель или аудитория заняты дважды', 'router.scheduleIssuesTitle', 'router.scheduleIssuesSubtitle'),
@@ -142,6 +150,8 @@ const routes = [
     path: '/parent', component: AppShell, meta: { requiresAuth: true, role: 'parent' },
     children: [
       { path: '', component: ParentJournal, meta: { title: 'Журнал', subtitle: 'Успеваемость ребёнка', i18nTitle: 'nav.teacherJournal', i18nSubtitle: 'router.childPerformance' } },
+      page('courses', CoursesPage, 'Курсы', 'Учебные курсы группы ребёнка', 'nav.courses', 'router.coursesSubtitle'),
+      { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
