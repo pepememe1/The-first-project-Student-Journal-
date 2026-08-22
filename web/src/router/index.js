@@ -12,6 +12,8 @@ import { HOME_BY_ROLE } from '@/config/nav'
 
 import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
+import NotFoundPage from '@/pages/NotFoundPage.vue'
+import { decideMiss } from '@/utils/missedRoute'
 import ConnectServer from '@/pages/ConnectServer.vue'
 import ResetPassword from '@/pages/ResetPassword.vue'
 import VectorPage from '@/pages/VectorPage.vue'
@@ -159,7 +161,18 @@ const routes = [
     ],
   },
 
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  // ⚠️ «Не найдено» — НЕ универсальный ответ на любой промах. Правило такое:
+  //   • чужая роль в адресе (студент набрал /admin/…) → сюда, 404;
+  //   • своя роль, но такой страницы нет → молча на главную.
+  // Это разные события: первое значит «мне сюда нельзя», второе — «я ошибся буквой»,
+  // и раньше оба заканчивались дашбордом, из-за чего первое выглядело как сбой.
+  // Решение принимает страж ниже; здесь только сама страница внутри оболочки.
+  {
+    path: '/404', component: AppShell, meta: { requiresAuth: true },
+    children: [{ path: '', component: NotFoundPage,
+                 meta: { title: 'Страница не найдена', i18nTitle: 'notFound.title' } }],
+  },
+  { path: '/:pathMatch(.*)*', redirect: (to) => ({ path: '/404', query: { from: to.path } }) },
 ]
 
 export const router = createRouter({
@@ -177,7 +190,14 @@ router.beforeEach((to) => {
     return true
   }
   if (!auth.isAuthenticated) return { path: '/login' }
-  if (to.meta.role && to.meta.role !== auth.role) return HOME_BY_ROLE[auth.role] || '/login'
+  //Страница существует, но принадлежит другой роли — это «нельзя», а не «нет такой».
+  if (to.meta.role && to.meta.role !== auth.role) return { path: '/404', query: { from: to.path } }
+  //А несуществующий адрес разбираем по первому сегменту: свой раздел — обычная опечатка,
+  //возвращаем на главную; чужой — оставляем на 404, куда его уже направил catch-all.
+  if (to.path === '/404') {
+    if (decideMiss(String(to.query.from || ''), auth.role) === 'home')
+      return HOME_BY_ROLE[auth.role] || '/'
+  }
   return true
 })
 // Обрыв озвучки при уходе от Вектора живёт НЕ здесь: глушить на каждом переходе неверно
