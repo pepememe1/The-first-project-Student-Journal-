@@ -147,3 +147,60 @@ def test_retention_never_touches_the_achievements_themselves():
     assert "UserAchievement" not in src and "user_achievements" not in src, \
         "retention.py трогает ачивки — найденное не имеет срока давности"
     assert "EasterEggLog" in src, "лог срабатываний, наоборот, убираться обязан"
+
+
+def test_roll_is_refused_to_non_students(client):
+    """Пасхалки видит только студент — преподавателю не бросаем вовсе.
+
+    Иначе суточный кулдаун тратился бы на того, кому мы и показывать ничего не
+    собираемся: он «израсходовал» бы пасхалку, ни разу её не увидев."""
+    admin = make_admin(client)
+    teacher = make_teacher(client, admin, login="t9")
+    r = client.post("/web/easter-eggs/roll", json={"egg": "deltarune_tree"}, headers=teacher)
+    assert r.status_code == 200 and r.json()["egg"] is None
+
+
+def test_claim_without_a_trigger_is_refused(client):
+    """Главная защита ачивок: без свежего следа срабатывания закрыть находку нельзя.
+
+    Иначе `claim` был бы обычной ручкой «выдай мне ачивку», и весь список накрутили бы
+    одним curl'ом — вместе с ним обесценилась бы и витрина в чужом профиле."""
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="t10")
+    r = client.post("/web/easter-eggs/claim",
+                    json={"egg": "deltarune_tree", "achievement": "deltarune_egg"}, headers=st)
+    assert r.status_code == 400
+    assert client.get("/web/achievements", headers=st).json()["unlocked"] == []
+
+
+def test_claim_rejects_a_foreign_pair(client):
+    """Пара «пасхалка → ачивка» зафиксирована на сервере.
+
+    Подобрав оба идентификатора, нельзя получить чужую ачивку за свою пасхалку."""
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="t11")
+    r = client.post("/web/easter-eggs/claim",
+                    json={"egg": "deltarune_tree", "achievement": "portal_cake_lie"}, headers=st)
+    assert r.status_code == 400
+
+
+def test_claim_works_after_a_real_trigger(client):
+    """А с настоящим следом — работает и повторно ачивку не задваивает."""
+    from app.models import EasterEggLog
+    from datetime import datetime, timezone
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="t12")
+    uid = _db_user("t12").id
+    db = SessionLocal()
+    try:                                    # эмулируем состоявшийся бросок сервера
+        db.add(EasterEggLog(user_id=uid, egg_id="deltarune_tree",
+                            triggered_at=datetime.now(timezone.utc).isoformat(),
+                            created_ts=int(datetime.now(timezone.utc).timestamp())))
+        db.commit()
+    finally:
+        db.close()
+    body = {"egg": "deltarune_tree", "achievement": "deltarune_egg"}
+    assert client.post("/web/easter-eggs/claim", json=body, headers=st).json()["unlocked"] is True
+    assert client.post("/web/easter-eggs/claim", json=body, headers=st).json()["unlocked"] is False
+    rows = client.get("/web/achievements", headers=st).json()["unlocked"]
+    assert [r["id"] for r in rows] == ["deltarune_egg"]

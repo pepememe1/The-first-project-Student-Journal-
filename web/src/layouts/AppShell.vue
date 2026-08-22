@@ -13,6 +13,8 @@ import ActivityShell from '@/components/activity/ActivityShell.vue'
 import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
 import ActivityJournal from '@/components/activity/ActivityJournal.vue'
 import TimerAlarm from '@/components/activity/timer/TimerAlarm.vue'
+import EasterEggHost from '@/components/easter/EasterEggHost.vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
 import { useActivityStore } from '@/stores/activity'
@@ -102,6 +104,14 @@ onBeforeUnmount(() => {
   if (_mq) _mq.removeEventListener('change', _onMq)
   if (_unreadTimer) clearInterval(_unreadTimer)
 })
+
+// ━━ ПАСХАЛКИ ━━ Дерево Делтарун выпадает ИМЕННО на переходе между вкладками, поэтому
+// бросок живёт здесь, в оболочке: страница о нём знать не должна, а хост переживает
+// смену маршрута. Бросок серверный и с суточным кулдауном, так что запрос на каждый
+// переход не страшен — но роль отсекаем на клиенте, чтобы не ходить впустую.
+const easter = useEasterStore()
+watch(() => route.path, () => { easter.roll('deltarune_tree') })
+
 </script>
 
 <template>
@@ -219,6 +229,7 @@ onBeforeUnmount(() => {
       <PanelRightOpen class="size-5" />
     </button>
   </div>
+    <EasterEggHost />
 </template>
 
 <style scoped>

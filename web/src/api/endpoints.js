@@ -36,6 +36,13 @@ export const authApi = {
 }
 
 // ЛИЧНЫЕ НАСТРОЙКИ (тема и пр.) ──────────────────────────────────────────────────
+// Пасхалки: бросок шанса и закрытие находки. Обе ручки СЕРВЕРНЫЕ по существу —
+// клиент не решает ни выпала ли пасхалка, ни заслужена ли ачивка (см. easter_eggs.py).
+export const easterApi = {
+  roll: (body) => api.post('/web/easter-eggs/roll', body),
+  claim: (body) => api.post('/web/easter-eggs/claim', body),
+}
+
 export const meApi = {
   getPrefs: () => api.get('/me/prefs'),
   // Ачивки за пасхалки. Сервер отдаёт только идентификаторы — названия и значки

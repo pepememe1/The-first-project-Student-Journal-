@@ -50,3 +50,52 @@ def set_showcase(payload: dict = Body(...),
         r.showcase = r.achievement_id in want
     db.commit()
     return {"ok": True, "showcase": [r.achievement_id for r in rows if r.showcase]}
+
+
+@router.post("/easter-eggs/roll")
+def roll_eggs(payload: dict = Body(...),
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Бросок шанса. Возвращает id сработавшей пасхалки или null.
+
+    ⚠️ Бросок ЗДЕСЬ, а не в браузере: `Math.random()` правится инструментами
+    разработчика за секунду, и 1/666 перестала бы быть редкостью. Заодно бросок общий
+    для всех устройств человека — иначе телефон и ПК давали бы два шанса на одно событие.
+
+    Принимает либо `egg` (одна), либо `eggs` (список — тогда берётся ПЕРВАЯ сработавшая
+    и на этом перебор кончается: две пасхалки на одной загрузке перестают читаться как
+    редкая находка)."""
+    if user.role != "student":
+        #Пасхалки видит только студент (решение Влада). Преподавателю и админу не
+        #бросаем вовсе — иначе кулдаун тратился бы на того, кому и показывать не будем.
+        return {"egg": None}
+    many = payload.get("eggs")
+    if isinstance(many, list) and many:
+        return {"egg": easter_eggs.roll_one_of([str(x) for x in many], user.id, db)}
+    egg = str(payload.get("egg") or "")
+    return {"egg": egg if egg and easter_eggs.roll(egg, user.id, db) else None}
+
+
+@router.post("/easter-eggs/claim")
+def claim_achievement(payload: dict = Body(...),
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Закрыть находку: пасхалка доиграна до конца, выдаём ачивку.
+
+    ⚠️ ПОЧЕМУ ЭТО НЕ «ручка выдай мне ачивку». Ачивка выдаётся, ТОЛЬКО если у человека
+    есть свежий след срабатывания именно этой пасхалки (`EasterEggLog`, последний час).
+    То есть накрутить список curl'ом нельзя: сначала нужно, чтобы сервер сам бросил
+    шанс и он сошёлся. Клиент решает лишь МОМЕНТ — доиграл человек сцену или закрыл её.
+
+    Час, а не пять минут: доска Делтарун или ночная смена FNAF идут минутами, и жёсткое
+    окно отобрало бы ачивку у того, кто досмотрел до конца."""
+    egg = str(payload.get("egg") or "")
+    aid = str(payload.get("achievement") or "")
+    if not egg or not aid:
+        raise HTTPException(status_code=400, detail="Нужны egg и achievement")
+    if easter_eggs.ACHIEVEMENTS.get(aid) != egg:
+        #Пара «пасхалка → ачивка» зафиксирована на сервере: чужую ачивку за свою
+        #пасхалку не получить, даже подобрав оба идентификатора.
+        raise HTTPException(status_code=400, detail="Эта ачивка не от этой пасхалки")
+    if not easter_eggs.was_triggered_recently(user.id, egg, db):
+        raise HTTPException(status_code=400, detail="Пасхалка не срабатывала")
+    fresh = easter_eggs.unlock(user.id, aid, db)
+    return {"ok": True, "unlocked": fresh}

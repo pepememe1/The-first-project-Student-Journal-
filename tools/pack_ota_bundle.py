@@ -39,6 +39,7 @@ def main() -> int:
         os.remove(dst)
 
     count = 0
+    skipped = 0
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for root, _dirs, files in os.walk(src):
             for name in sorted(files):
@@ -46,8 +47,19 @@ def main() -> int:
                 # Имя ВНУТРИ архива задаём явно и приводим к прямым слэшам сами, не
                 # полагаясь на разделитель текущей системы, — это и есть суть файла.
                 rel = os.path.relpath(full, src).replace(os.sep, "/")
+                # ⚠️ Звук пасхалок в бандл НЕ кладём: он весит 4.2 МБ при всём бандле в
+                # 4.9 МБ, то есть удвоил бы каждое обновление «по воздуху» ради того, что
+                # у одного человека сработает раз в несколько месяцев. Картинки (260 КБ)
+                # остаются — без них сцена не собирается вовсе, а без звука она просто
+                # тихая: проигрывание и так обёрнуто в catch, autoplay браузеры режут.
+                if rel.startswith("easter/snd/"):
+                    skipped += 1
+                    continue
                 z.write(full, rel)
                 count += 1
+
+    if skipped:
+        print(f"   пропущено (звук пасхалок, качается с сайта): {skipped}")
 
     with zipfile.ZipFile(dst) as z:
         names = z.namelist()

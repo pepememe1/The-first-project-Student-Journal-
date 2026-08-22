@@ -159,3 +159,17 @@ def showcase_ids(user_id: str, db: Session) -> list[str]:
                       UserAchievement.showcase == True)          # noqa: E712
               .all())
     return [r.achievement_id for r in rows]
+
+def was_triggered_recently(user_id: str, egg_id: str, db: Session, within_s: int = 3600) -> bool:
+    """Срабатывала ли пасхалка у этого человека недавно.
+
+    На этом держится честность ачивок: закрыть находку можно, только если сервер сам
+    бросил шанс и он сошёлся. Без такой сверки `claim` превратился бы в «выдай мне
+    ачивку», и весь список накрутили бы одним curl'ом."""
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - within_s
+    return bool(db.query(EasterEggLog)
+                  .filter(EasterEggLog.user_id == user_id,
+                          EasterEggLog.egg_id == egg_id,
+                          EasterEggLog.created_ts >= cutoff)
+                  .first())
+
