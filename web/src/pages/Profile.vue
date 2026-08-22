@@ -25,6 +25,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import NameStyleDialog from '@/components/NameStyleDialog.vue'
+import AchievementsDialog from '@/components/AchievementsDialog.vue'
 import { Camera, Check, Film, Sparkles, SquareDashed } from '@lucide/vue'
 
 const auth = useAuthStore()
@@ -107,6 +108,7 @@ onBeforeRouteLeave(async () => {
 // добавились восемь эффектов, свёрнутым списком 3.6.1 это уже не показать. На странице
 // осталась одна строка-кнопка с ТЕКУЩИМ стилем, написанная им же.
 const styleDialogOpen = ref(false)
+const achievementsOpen = ref(false)     // список ачивок за пасхалки
 const currentFont = computed(() => NAME_FONTS.find((f) => f.id === draftFont.value) || NAME_FONTS[0])
 const currentEffect = computed(() => NAME_EFFECTS.find((e) => e.id === draftEffect.value) || NAME_EFFECTS[0])
 // Строка-кнопка показывает ЧЕРНОВИК, а не сохранённое: иначе примерка стиля не была бы
@@ -176,6 +178,16 @@ const styleSummary = computed(() => {
              с макетом Discord). Здесь остаётся одна строка-кнопка с текущим стилем,
              написанная им же — раньше тут был свёрнутый список из семи шрифтов, а с
              девятнадцатью шрифтами и восемью эффектами он занял бы всю колонку. -->
+        <!-- Достижения за пасхалки. Кнопкой, а не списком прямо здесь: закрытых
+             больше, чем открытых, и в колонке редактора они заняли бы весь экран. -->
+        <Card :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
+          <button type="button" @click="achievementsOpen = true"
+                  class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
+            <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-lg">🏆</span>
+            <span class="text-sm font-medium text-text">{{ locale.t('achievements.open', 'Открыть достижения') }}</span>
+          </button>
+        </Card>
+
         <Card :title="locale.t('profile.nameFont', 'Стиль имени')" :subtitle="locale.t('profile.nameFontHint', 'Видно всем — в сообщениях и в вашем профиле')">
           <button type="button" @click="styleDialogOpen = true"
                   class="flex w-full items-center justify-between gap-2 rounded-lg border border-border2 px-3 py-2 text-left transition-colors hover:border-accent hover:bg-bg2">
@@ -236,6 +248,7 @@ const styleSummary = computed(() => {
 
     <!-- Диалог правит ЧЕРНОВИК (v-model), сохраняет его общая кнопка выше — сам он на
          сервер не ходит, как и остальные три редактора на этой странице. -->
+    <AchievementsDialog v-if="achievementsOpen" @close="achievementsOpen = false" />
     <NameStyleDialog v-if="styleDialogOpen"
                      v-model:font="draftFont" v-model:effect="draftEffect"
                      v-model:color="draftNameColor" @close="styleDialogOpen = false" />

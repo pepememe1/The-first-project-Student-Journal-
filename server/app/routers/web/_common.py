@@ -34,7 +34,7 @@ from ...models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                        ScheduleJointMark, schedule_override_id, joint_mark_id,
                        SubjectHours, subject_hours_id, ZetThreshold, zet_threshold_id,
                        NotifyEvent, StudentSubgroup, student_subgroup_id,
-                       set_user_password)
+                       set_user_password, UserAchievement)
 from ... import webdata as W
 from ... import schedule_web
 from ... import reg_utils, mailer, gost, audit, vector_llm, translate_service
@@ -175,7 +175,7 @@ __all__ = [
     "AuthSession", "ConfigKV", "TermGrade", "ScheduleOverride", "ScheduleJointMark",
     "schedule_override_id", "joint_mark_id", "SubjectHours", "subject_hours_id",
     "ZetThreshold", "zet_threshold_id", "NotifyEvent",
-    "StudentSubgroup", "student_subgroup_id", "set_user_password",
+    "StudentSubgroup", "student_subgroup_id", "set_user_password", "UserAchievement",
     "W", "schedule_web", "reg_utils", "mailer", "gost", "audit", "vector_llm",
     "translate_service", "esstu_parser", "vector_nlu", "schedule_parser",
     # роутер и общие хелперы

@@ -1,77 +1,119 @@
 <script setup>
-// SharedGroupsChannels — правая колонка «Общие группы»/«Общие каналы» карточки
-// профиля (Discord-style). Общий компонент для ДВУХ мест, которые обязаны выглядеть
-// одинаково (заказчик прямо просил «по аналогии»): PeerProfileModal.vue (профиль
-// участника группы/канала, открывается ВТОРЫМ уровнем) и ConversationInfo.vue (профиль
-// собеседника в ЛС — там карточка теперь ПЕРВЫЙ и единственный уровень, см. её
-// докстринг про 3.6.1). Пересечение бесед — GET .../shared (см. её докстринг на
-// сервере): безопасно по построению, раскрывает только то, в чём вызывающий и так
-// уже состоит.
-import { ref, onMounted, watch } from 'vue'
-import { Radio, Users } from '@lucide/vue'
+// SharedGroupsChannels — правая колонка карточки чужого профиля: трофеи и общее.
+//
+// Общий компонент для ДВУХ мест, которые обязаны выглядеть одинаково: PeerProfileModal
+// (профиль участника группы или канала) и ConversationInfo (профиль собеседника в ЛС).
+//
+// ⚠️ ВКЛАДКАМИ, А НЕ СПИСКОМ ПОДРЯД (правка Влада). Раньше «Общие группы», «Общие
+// каналы» и трофеи шли друг под другом, и колонка захламлялась: у активного человека
+// там десяток строк ещё до того, как дойдёшь до трофеев. Теперь как в Discord —
+// выбрана ОДНА категория, счётчик стоит прямо в её заголовке, а содержимое ниже
+// принадлежит только ей.
+//
+// ⚠️ Трофеи чужого профиля — это ВИТРИНА, то есть только то, что человек сам отметил
+// галочкой. Полный список наружу не уходит: он показывает, чего у человека НЕТ, а это
+// уже про его поведение в продукте, а не про него.
+import { ref, computed, onMounted, watch } from 'vue'
+import { Radio, Users, Trophy } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
 import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
 import { messengerApi } from '@/api/endpoints'
+import { BY_ID, RARITY } from '@/config/achievements'
 
 const props = defineProps({
   userId: { type: String, default: '' },
 })
-const emit = defineEmits(['navigate'])   // сообщаем родителю «пора закрыться» — переход состоялся
+const emit = defineEmits(['navigate'])   // родителю: «переход состоялся, пора закрыться»
 const locale = useLocaleStore()
 const auth = useAuthStore()
 const messenger = useMessengerStore()
 const router = useRouter()
 
+const tab = ref('trophies')
 const groups = ref([])
 const channels = ref([])
-async function loadShared() {
-  groups.value = []
-  channels.value = []
+const trophyIds = ref([])
+
+// Незнакомый id (ачивку убрали из справочника) молча пропускаем, а не рисуем пустую
+// карточку: сервер хранит только идентификаторы, и рассинхрон возможен при откате.
+const trophies = computed(() => trophyIds.value.map((id) => BY_ID[id]).filter(Boolean))
+
+async function load() {
+  groups.value = []; channels.value = []; trophyIds.value = []
   if (!props.userId) return
   try {
     const { data } = await messengerApi.shared(props.userId)
     groups.value = data.groups || []
     channels.value = data.channels || []
-  } catch { /* нет доступа/сервера — тихо, список останется пустым */ }
+  } catch { /* нет доступа или сервера — колонка просто останется пустой */ }
+  try {
+    const { data } = await messengerApi.profile(props.userId)
+    trophyIds.value = data.achievements || []
+  } catch { /* то же самое: трофеи не критичны для карточки */ }
 }
-onMounted(loadShared)
-watch(() => props.userId, loadShared)
+onMounted(load)
+watch(() => props.userId, load)
 
 async function openConversation(conv) {
   await messenger.selectChat({ conversation_id: conv.id, title: conv.title })
   router.push(`/${auth.role}/messages`)
   emit('navigate')
 }
+
+const TABS = computed(() => [
+  { id: 'trophies', icon: Trophy, label: locale.t('peerProfile.trophies', 'Трофеи'), n: trophies.value.length },
+  { id: 'groups',   icon: Users,  label: locale.t('peerProfile.sharedGroups', 'Общие группы'), n: groups.value.length },
+  { id: 'channels', icon: Radio,  label: locale.t('peerProfile.sharedChannels', 'Общие каналы'), n: channels.value.length },
+])
 </script>
 
 <template>
-  <div class="w-56 shrink-0 overflow-y-auto border-l border-border2 bg-card p-4">
-    <p class="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
-      <Users class="size-3.5" />{{ locale.t('peerProfile.sharedGroups', 'Общие группы') }}
-    </p>
-    <ul v-if="groups.length" class="mb-4 space-y-0.5">
-      <li v-for="g in groups" :key="g.id">
-        <button type="button" @click="openConversation(g)"
-                class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
-          {{ g.title }}
-        </button>
-      </li>
-    </ul>
-    <p v-else class="mb-4 text-xs text-text3">{{ locale.t('peerProfile.noneYet', 'Пока нет') }}</p>
+  <div class="flex w-56 shrink-0 flex-col overflow-hidden border-l border-border2 bg-card">
+    <!-- Категории. Счётчик в самой вкладке: так видно, есть ли там что-то,
+         не переключаясь туда. -->
+    <div class="flex shrink-0 flex-col gap-0.5 border-b border-border p-2">
+      <button v-for="t in TABS" :key="t.id" type="button" @click="tab = t.id"
+              :aria-current="tab === t.id"
+              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors"
+              :class="tab === t.id ? 'bg-accent-glow font-semibold text-text' : 'text-text2 hover:bg-bg2 hover:text-text'">
+        <component :is="t.icon" class="size-3.5 shrink-0" />
+        <span class="min-w-0 flex-1 truncate">{{ t.label }}</span>
+        <span class="shrink-0 text-[11px] tabular-nums"
+              :class="tab === t.id ? 'text-accent' : 'text-text3'">{{ t.n }}</span>
+      </button>
+    </div>
 
-    <p class="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-text3">
-      <Radio class="size-3.5" />{{ locale.t('peerProfile.sharedChannels', 'Общие каналы') }}
-    </p>
-    <ul v-if="channels.length" class="space-y-0.5">
-      <li v-for="c in channels" :key="c.id">
-        <button type="button" @click="openConversation(c)"
-                class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
-          {{ c.title }}
-        </button>
-      </li>
-    </ul>
-    <p v-else class="text-xs text-text3">{{ locale.t('peerProfile.noneYet', 'Пока нет') }}</p>
+    <div class="min-h-0 flex-1 overflow-y-auto p-3">
+      <template v-if="tab === 'trophies'">
+        <ul v-if="trophies.length" class="space-y-1.5">
+          <li v-for="a in trophies" :key="a.id"
+              class="flex items-start gap-2 rounded-lg border border-border2 bg-card2 p-2">
+            <span class="grid size-7 shrink-0 place-items-center rounded-md bg-accent-glow text-base">{{ a.icon }}</span>
+            <span class="min-w-0">
+              <span class="block truncate text-[12.5px] font-semibold text-text">{{ a.title }}</span>
+              <span class="block text-[10.5px]" :style="{ color: RARITY[a.rarity].color }">
+                {{ locale.t(`achievements.rarity.${a.rarity}`, RARITY[a.rarity].label) }}</span>
+            </span>
+          </li>
+        </ul>
+        <p v-else class="text-xs text-text3">
+          {{ locale.t('peerProfile.noTrophies', 'Ничего не выставлено') }}
+        </p>
+      </template>
+
+      <template v-else>
+        <ul v-if="(tab === 'groups' ? groups : channels).length" class="space-y-0.5">
+          <li v-for="c in (tab === 'groups' ? groups : channels)" :key="c.id">
+            <button type="button" @click="openConversation(c)"
+                    class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
+              {{ c.title }}
+            </button>
+          </li>
+        </ul>
+        <p v-else class="text-xs text-text3">{{ locale.t('peerProfile.noneYet', 'Пока нет') }}</p>
+      </template>
+    </div>
   </div>
 </template>

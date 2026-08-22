@@ -67,7 +67,12 @@ def user_profile(user_id: str, _user: User = Depends(get_current_user),
     if u.role == "parent" and u.id != _user.id and not _may_list_parent(db, _user, u):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     sm = _status_map(db, [user_id])
-    return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id))}
+    #⚠️ Отдаём ТОЛЬКО витрину — то, что человек сам отметил галочкой, — а не весь его
+    #список. Полный список показывает, чего у него НЕТ, а это уже про его поведение в
+    #продукте: сколько он ищет, что нашёл, чего не нашёл. Наружу это не наше дело.
+    from ... import easter_eggs
+    return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id)),
+            "achievements": easter_eggs.showcase_ids(u.id, db)}
 
 
 @router.get("/users/{user_id}/shared")

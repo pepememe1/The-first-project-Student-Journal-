@@ -75,6 +75,11 @@ MESSAGE_EDIT_DAYS = int(os.environ.get("GRADEBOOK_MSG_EDIT_KEEP_DAYS", "180"))
 #уже не нужен.
 DELETED_BODY_DAYS = int(os.environ.get("GRADEBOOK_DELETED_BODY_KEEP_DAYS", "180"))
 
+#След срабатывания пасхалки. Нужен ровно для суточного кулдауна, дальше это балласт:
+#строка на каждое срабатывание у каждого человека, и растёт она монотонно. Полгода —
+#с большим запасом; сам кулдаун живёт сутки.
+EGG_LOG_DAYS = int(os.environ.get("GRADEBOOK_EGG_LOG_KEEP_DAYS", "180"))
+
 #Потолок строк на одну таблицу за прогон. Первая уборка на базе, копившейся годами, иначе
 #удалила бы десятки тысяч строк внутри чужого HTTP-запроса. Остаток уедет следующим днём.
 MAX_ROWS_PER_TABLE = int(os.environ.get("GRADEBOOK_RETENTION_BATCH", "5000"))
@@ -177,6 +182,18 @@ def purge_message_edits(db: Session, days: int = MESSAGE_EDIT_DAYS) -> int:
                           MessageEdit.edited_at < _cutoff(days))
 
 
+def purge_egg_log(db: Session, days: int = EGG_LOG_DAYS) -> int:
+    """След срабатывания пасхалок старше срока.
+
+    ⚠️ Ачивки (`user_achievements`) НЕ трогаем НИКОГДА и здесь их нет намеренно: это
+    то, что человек нашёл сам, и срока давности у находки не бывает. Убирается только
+    лог срабатываний, по которому считается суточный кулдаун."""
+    from .models import EasterEggLog
+    return _delete_capped(db, EasterEggLog,
+                          EasterEggLog.triggered_at != "",
+                          EasterEggLog.triggered_at < _cutoff(days))
+
+
 def blank_deleted_bodies(db: Session, days: int = DELETED_BODY_DAYS) -> int:
     """Погасить ТЕКСТ давно удалённых сообщений, оставив саму строку-надгробие.
 
@@ -209,6 +226,7 @@ def run_all(db: Session) -> dict:
         ("notifications", lambda: purge_notifications(db)),
         ("reminders", lambda: purge_reminders(db)),
         ("message_edits", lambda: purge_message_edits(db)),
+        ("egg_log", lambda: purge_egg_log(db)),
         ("deleted_bodies", lambda: blank_deleted_bodies(db)),
     )
     for name, fn in steps:

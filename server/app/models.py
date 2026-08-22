@@ -1145,6 +1145,42 @@ class CourseAssignment(Base):
     created_at = Column(String, default="")
 
 
+class UserAchievement(Base):
+    """Открытая пользователем ачивка (пасхалки, docs/PLAN-EASTER-EGGS.md).
+
+    ⚠️ Таблицы-справочника ачивок здесь НЕТ намеренно, хотя план её называл. Название,
+    описание, значок и редкость — статика, и держать её в БД значит завести вторую
+    копию того, что уже лежит в `web/src/config/achievements.js`, плюс миграцию на
+    каждую новую пасхалку и перевод, которого в БД взяться неоткуда. Сервер хранит
+    только ФАКТ открытия и сверяет id с белым списком `easter_eggs.ACHIEVEMENT_IDS` —
+    иначе в профиль можно было бы протащить произвольную строку и показать её другим.
+
+    ОНЛАЙН-ONLY: не в SYNC_MODELS, как весь мессенджер. Офлайн ачивки не выдаются.
+
+    `showcase` — «показывать в моём профиле». Это ПУБЛИЧНОЕ поле: отмеченные ачивки
+    видят другие люди, открывшие карточку. Поэтому список того, что показывать,
+    выбирает сам человек, а не мы за него."""
+    __tablename__ = "user_achievements"
+    user_id = Column(String, primary_key=True, index=True)
+    achievement_id = Column(String, primary_key=True)
+    unlocked_at = Column(String, default="")             #ISO UTC, ставит сервер
+    showcase = Column(Boolean, default=False)
+
+
+class EasterEggLog(Base):
+    """След срабатывания пасхалки — против того, чтобы одна и та же лезла каждый день.
+
+    Живёт отдельно от ачивки: ачивка выдаётся ОДИН раз, а пасхалка может сработать
+    снова (у неё свой суточный кулдаун). Строк будет много, поэтому уборка старше
+    полугода — в `retention.py`, рядом с надгробиями и уведомлениями."""
+    __tablename__ = "easter_egg_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True)
+    egg_id = Column(String, index=True)
+    triggered_at = Column(String, default="")            #ISO UTC
+    created_ts = Column(Integer, default=0, index=True)  #unix — быстрый фильтр уборки
+
+
 SYNC_MODELS = {
     "users": User,
     "groups": Group,

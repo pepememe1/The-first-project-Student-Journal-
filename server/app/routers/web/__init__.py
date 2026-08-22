@@ -26,6 +26,7 @@ routers/web — READ- и WRITE-представления для веб-верс
     vector.py      «Вектор», голосовой ввод и озвучка
     write.py       ЗАПИСЬ: оценки, занятия, CRUD администратора
     datatransfer.py выгрузка/загрузка данных и резервные копии
+    achievements.py ачивки за пасхалки и витрина в профиле
 
 ⚠️ ПОРЯДОК ИМПОРТА НИЖЕ ЗНАЧИМ. Маршруты регистрируются в момент импорта модуля, а
 FastAPI выбирает ПЕРВЫЙ подошедший — как было в едином файле, так и оставляем. Менять
@@ -48,6 +49,7 @@ from . import siteinfo                            # noqa: F401,E402
 from . import schedule                            # noqa: F401,E402
 from . import vector                              # noqa: F401,E402
 from . import write                                # noqa: F401,E402
+from . import achievements                        # noqa: F401,E402
 from . import datatransfer                        # noqa: F401,E402
 from . import courses                             # noqa: F401,E402
 
