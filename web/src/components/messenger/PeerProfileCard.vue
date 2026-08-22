@@ -87,7 +87,8 @@ const shown = computed(() => {
   if (props.editable) {
     return {
       id: myUserId.value, full_name: auth.user?.name || '', role: auth.role,
-      group_name: auth.user?.group_name || '', avatar: profile.avatar, bio: profile.bio,
+      group_name: auth.user?.group_name || '', birthday: profile.birthday || '',
+      avatar: profile.avatar, bio: profile.bio,
       profile_banner: profile.banner,
       profile_color: props.colorOverride ?? profile.color,
       name_font: props.fontOverride ?? profile.font,
@@ -110,6 +111,9 @@ const metaLine = computed(() => {
   const parts = [roleLabel(u.role)]
   if (u.role === 'teacher' && (u.subjects || []).length) parts.push(u.subjects.join(', '))
   else if (u.group_name) parts.push(u.group_name)
+  //День рождения — «ДД.ММ», без года: возраст отсюда не вычислить, и это намеренно.
+  //Показываем и в своей карточке, и в чужой — поздравить должно быть кому.
+  if (u.birthday) parts.push('🎂 ' + u.birthday)
   return parts.filter(Boolean).join(' · ')
 })
 

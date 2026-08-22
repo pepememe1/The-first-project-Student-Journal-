@@ -152,6 +152,7 @@ def init_db():
     _backfill_lesson_term()
     _ensure_user_curated_groups_column()
     _ensure_user_password_set_at_column()
+    _ensure_user_birthday_column()
     _ensure_grade_student_id_columns()
     _ensure_notify_event_columns()
     _ensure_participant_state_columns()
@@ -582,6 +583,25 @@ def _ensure_user_password_set_at_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE users ADD COLUMN password_set_at VARCHAR"))
+
+
+def _ensure_user_birthday_column():
+    """Идемпотентная мини-миграция: users.birthday («ДД.ММ», без года).
+
+    ⚠️ Одного `models.py` тут НЕДОСТАТОЧНО: `create_all` досоздаёт отсутствующие
+    ТАБЛИЦЫ, но не добавляет колонки в существующую. На свежей тестовой базе разницы
+    не видно — таблица создаётся сразу целиком, — поэтому проверять надо на боевой
+    схеме, и ровно на этом проект уже обжигался (см. participant_state)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("users")}
+    except Exception:
+        return
+    if "birthday" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN birthday VARCHAR"))
 
 
 def _ensure_message_report_target_column():

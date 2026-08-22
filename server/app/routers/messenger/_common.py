@@ -267,6 +267,10 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
         "full_name": u.full_name or u.name or u.login or "",
         "role": u.role,
         "group_name": u.group_name or "",
+        #День рождения («ДД.ММ», без года) — ПУБЛИЧНОЕ поле карточки: его видно и в
+        #своём профиле, и в чужом. Год мы не храним вовсе, поэтому возраст отсюда не
+        #вычисляется — показываем ровно то, что нужно, чтобы поздравить.
+        "birthday": u.birthday or "",
         "online": bool(online_logins) and (u.login in online_logins),
         #Аватарка (обрезанная 256×256 data:URL из prefs) — её видят ВСЕ (карточка, список,
         #модерация). Это публичное «лицо» аккаунта, не чувствительное поле.

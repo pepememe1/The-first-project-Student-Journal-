@@ -41,6 +41,9 @@ export const useProfileStore = defineStore('profile', () => {
   // заметка. Берём из /me/prefs (см. докстринг get_prefs на сервере): страница профиля
   // и так его дёргает, и уже выданные сессии чинятся без перезахода.
   const userId = ref('')
+  //Дату рождения задаёт АДМИН, поэтому она не в prefs и отсюда не редактируется —
+  //только показывается на своей карточке («ДД.ММ», без года).
+  const birthday = ref('')
   const saving = ref(false)
   let loaded = false
 
@@ -50,6 +53,7 @@ export const useProfileStore = defineStore('profile', () => {
       const { data } = await meApi.getPrefs()
       const p = data?.prefs || {}
       userId.value = data?.user_id || ''
+      birthday.value = data?.birthday || ''
       // Не настройка человека, а ПОЛИТИКА сервера: сколько приложение вправе работать
       // без связи. Приезжает здесь, потому что этот запрос и так делается при открытии,
       // — иначе цифра жила бы только внутри собранного APK и менялась бы перевыпуском.
@@ -140,9 +144,10 @@ export const useProfileStore = defineStore('profile', () => {
     effect.value = ''
     nameColor.value = ''
     userId.value = ''   //иначе заметка следующего вошедшего ушла бы под id предыдущего
+    birthday.value = ''
     loaded = false
   }
 
-  return { avatar, banner, bio, color, font, effect, nameColor, userId, saving,
+  return { avatar, banner, bio, color, font, effect, nameColor, userId, birthday, saving,
            load, save, saveProfile, reset }
 })

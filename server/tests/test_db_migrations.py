@@ -15,7 +15,7 @@ from sqlalchemy import text, inspect
 from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
                     _ensure_notify_event_columns, _ensure_group_category_column,
-                    _ensure_user_password_set_at_column,
+                    _ensure_user_password_set_at_column, _ensure_user_birthday_column,
                     _ensure_message_report_target_column)
 
 
@@ -154,6 +154,30 @@ def test_ensure_user_password_set_at_column_adds_to_old_schema(client):
     cols = {c["name"] for c in inspect(engine).get_columns("users")}
     assert "password_set_at" in cols
     _ensure_user_password_set_at_column()  # идемпотентность — второй вызов не падает
+
+
+def test_ensure_user_birthday_column_adds_to_old_schema(client):
+    """Таблица users без birthday (схема ДО поздравления с днём рождения).
+
+    Тот же случай, что и с password_set_at: users живёт на бою с самого начала, и
+    create_all колонку в неё не добавит. Без ALTER-а список студентов у админа и
+    КАЖДАЯ карточка профиля (`_safe_user` читает `u.birthday`) падали бы
+    «no such column» сразу после деплоя."""
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE users"))
+        conn.execute(text("""CREATE TABLE users (
+            id VARCHAR PRIMARY KEY, role VARCHAR NOT NULL, login VARCHAR,
+            password_hash VARCHAR, full_name VARCHAR, surname VARCHAR, name VARCHAR,
+            patronymic VARCHAR, group_name VARCHAR, subjects TEXT DEFAULT '[]',
+            group_assignments TEXT DEFAULT '{}', curated_groups TEXT DEFAULT '[]',
+            prefs TEXT DEFAULT '{}', updated_at VARCHAR DEFAULT '',
+            deleted BOOLEAN DEFAULT 0
+        )"""))
+    engine.dispose()
+    _ensure_user_birthday_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert "birthday" in cols
+    _ensure_user_birthday_column()   # идемпотентность — второй вызов не падает
 
 
 def test_ensure_message_report_target_column_adds_to_old_schema(client):

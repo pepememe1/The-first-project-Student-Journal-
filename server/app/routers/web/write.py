@@ -405,6 +405,34 @@ def _ensure_group_row(db: Session, name: str):
         row.updated_at = _now_iso()
 
 
+def _clean_birthday(raw) -> str:
+    """Приводит день рождения к «ДД.ММ» или к пустой строке.
+
+    ⚠️ Года здесь нет и не будет: для поздравления он не нужен, а полная дата рождения
+    — совсем другой уровень чувствительности. Если админ всё же вписал год, молча его
+    отбрасываем, а не отказываем: отказ на ровном месте заставит вводить заново.
+
+    Мусор гасим в пустоту, а не сохраняем: поле читает поздравление, и «31.02» или
+    «завтра» превратились бы в пасхалку, которая не сработает никогда, без единой
+    подсказки почему."""
+    import re
+    txt = str(raw or "").strip()
+    if not txt:
+        return ""
+    m = re.match(r"^(\d{1,2})[.\-/](\d{1,2})", txt)
+    if not m:
+        return ""
+    day, month = int(m.group(1)), int(m.group(2))
+    if not (1 <= month <= 12):
+        return ""
+    #Верхняя граница по месяцу, а не «31 всегда»: 31.04 не существует, и такой день
+    #рождения не наступил бы ни разу.
+    last = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[month - 1]
+    if not (1 <= day <= last):
+        return ""
+    return f"{day:02d}.{month:02d}"
+
+
 @router.post("/admin/students")
 def admin_create_student(payload: dict = Body(...),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -438,6 +466,7 @@ def admin_create_student(payload: dict = Body(...),
     row.name = key_name
     row.patronymic = patronymic
     row.group_name = group
+    row.birthday = _clean_birthday(payload.get("birthday"))
     row.full_name = ""
     row.subjects = []
     row.group_assignments = {}
@@ -516,6 +545,10 @@ def admin_update_student(login: str, payload: dict = Body(...),
         group = (payload.get("group") or "").strip()
         _ensure_group_row(db, group)
         row.group_name = group
+    #Ключ ПРИСУТСТВУЕТ — значит админ поле трогал, в том числе мог очистить.
+    #Отсутствует — не трогаем: иначе правка группы стирала бы дату рождения.
+    if "birthday" in payload:
+        row.birthday = _clean_birthday(payload.get("birthday"))
     password = payload.get("password") or ""
     if password:
         set_user_password(row, password)

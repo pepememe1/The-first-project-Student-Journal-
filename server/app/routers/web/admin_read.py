@@ -68,6 +68,9 @@ def admin_students(group: str = Query(""),
         {"id": u.id, "login": u.login, "surname": u.surname, "name": u.name,
          "first_name": W.first_name(u), "patronymic": W.patronymic_of(u),
          "group": u.group_name,
+         #«ДД.ММ», без года: поздравлению год не нужен, а полная дата рождения — другой
+         #уровень чувствительности. Пусто честно значит «админ не заполнял».
+         "birthday": u.birthday or "",
          #null — год поступления группы не задан администратором (сортировка по курсу
          #такие строки покажет отдельно, а не выдумает им первый курс).
          "course": course_by_group.get(u.group_name),

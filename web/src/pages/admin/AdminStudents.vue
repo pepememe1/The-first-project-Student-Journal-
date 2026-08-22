@@ -148,7 +148,7 @@ const rows = computed(() => {
 // Модалка создания/правки
 const showForm = ref(false)
 const editing = ref(null) // null = создание; иначе исходный login (ключ)
-const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', password: '' })
+const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' })
 const saving = ref(false)
 const formError = ref('')
 
@@ -214,7 +214,7 @@ function formGroupLabel(g) {
 
 function openCreate() {
   editing.value = null
-  form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '' }
+  form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' }
   formError.value = ''
   showForm.value = true
 }
@@ -223,7 +223,7 @@ function openEdit(r) {
   //Имя и отчество — раздельно: сервер отдаёт first_name/patronymic (name — полная форма-ключ).
   form.value = {
     surname: r.surname, name: r.first_name ?? r.name, patronymic: r.patronymic ?? '',
-    login: r.login, group: r.group, password: '',
+    login: r.login, group: r.group, password: '', birthday: r.birthday ?? '',
   }
   passwordSetAt.value = r.password_set_at || ''
   formError.value = ''
@@ -238,9 +238,9 @@ async function save() {
   formError.value = ''
   try {
     if (editing.value) {
-      await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password })
+      await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password, birthday: f.birthday })
     } else {
-      await adminApi.createStudent({ surname: f.surname, name: f.name, patronymic: f.patronymic, login: f.login, group: f.group, password: f.password })
+      await adminApi.createStudent({ surname: f.surname, name: f.name, patronymic: f.patronymic, login: f.login, group: f.group, password: f.password, birthday: f.birthday })
     }
     showForm.value = false
     await reload()
@@ -342,6 +342,13 @@ async function del(r) {
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.patronymic', 'Отчество') }} <span class="text-text3 normal-case">{{ locale.t('adminStudents.optionalHint', '(необязательно)') }}</span></span>
             <input v-model="form.patronymic" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <!-- День рождения БЕЗ ГОДА: для поздравления он не нужен, а полная дата
+               рождения — совсем другой уровень чувствительности. Сервер год отбрасывает
+               молча, даже если его вписали. -->
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.birthday', 'День рождения') }}
+            <span class="text-text3 normal-case">{{ locale.t('adminStudents.birthdayHint', '(день и месяц, например 07.03)') }}</span></span>
+            <input v-model="form.birthday" inputmode="numeric" placeholder="07.03" maxlength="10"
+                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colLogin', 'Логин') }}</span>
             <input v-model="form.login" :disabled="!!editing"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
