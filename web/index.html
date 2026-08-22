@@ -13,6 +13,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#147C8B" />
+
+    <!-- ━━ CSP ЖИВЁТ ЗДЕСЬ, А НЕ ТОЛЬКО В ЗАГОЛОВКАХ CADDY ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+         Причина — мобильное приложение. Заголовок Content-Security-Policy ставит Caddy
+         (server/Caddyfile), и он действует на ответы САЙТА. В приложении страница
+         отдаётся локальным сервером Capacitor из бандла (origin https://localhost), то
+         есть ответы нашего сервера — и все его заголовки — к ней отношения не имеют:
+         до 21.08.2026 в APK не действовало НИ ОДНОЙ директивы CSP. Цена там выше, чем в
+         браузере: рядом висят нативные мосты (addJavascriptInterface, у него нет
+         привязки к origin — см. web/src/utils/videoEmbed.js), а в localStorage лежит
+         токен сессии, который у мобильного клиента живёт до понедельника.
+
+         ⚠️ У ЭТОЙ МЕТЫ ТРИ ПОТРЕБИТЕЛЯ, А НЕ ДВА. Сайт (origin https://esstu-gradebook.ru),
+         приложение (https://localhost) и ПРОГРАММА НА ПК: .exe раздаёт этот же бандл со
+         своего локального сервера, то есть с origin **http://127.0.0.1:<порт>**. Третий
+         забывается легче всего, и цена забывчивости здесь наибольшая: у человека за
+         программой нет консоли, чтобы увидеть отказ, — экран просто перестанет работать.
+
+         ⚠️ ПОЭТОМУ В `connect-src` ЯВНО РАЗРЕШЕНЫ http: И ws:. Это не небрежность:
+         сервер задаётся в рантайме (экран «⚙ Сервер», сервер колледжа в своей сети —
+         обычно как раз `http://192.168.x.x:8000`), и `normalizeUrl` сохраняет введённую
+         схему как есть. Запретив http, мы молча отрезали бы ровно ту возможность, ради
+         которой список адресов не сужается до нашего домена. В мобильном приложении
+         открытый http всё равно не пролезет — его отдельно запрещает
+         network_security_config.xml, то есть строгость там держится на своём месте.
+
+         ⚠️ ЧЕСТНО ПРО ГРАНИЦЫ. `connect-src` здесь почти ничего не ограничивает —
+         и по причине выше, и потому что CapacitorHttp уводит fetch/XHR в нативный слой
+         мимо CSP. Он стоит не как ограничение, а как ЯВНОЕ РАЗРЕШЕНИЕ: без него
+         действовал бы `default-src 'self'`, и сторонний сервер отвалился бы везде.
+         Настоящую работу делают `script-src 'self'`, `object-src 'none'` и
+         `base-uri 'self'`: они закрывают исполнение постороннего кода, а не его связь
+         с сетью. Обещать большее было бы враньём.
+
+         ⚠️ `img-src` тоже нарочно широк (https:/http:): картинки-вложения приезжают с
+         АДРЕСА СЕРВЕРА, а он для приложения чужой origin (страница на https://localhost).
+         Сузив до 'self', мы бы получили пустые картинки при ответе 200 — отказ, который
+         не видно ни в одном логе.
+
+         На САЙТЕ эта мета ничего не ослабляет: браузер применяет ПЕРЕСЕЧЕНИЕ политик, а
+         заголовок Caddy (server/Caddyfile) строже и по connect-src, и по img-src.
+         Правишь одно — сверяй с другим. Держит web/tests/cspMeta.test.mjs. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; media-src 'self' data: blob: https: http:; connect-src 'self' https: http: wss: ws:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; object-src 'none'; form-action 'self'" />
+
     <title>Электронный журнал — Технологический колледж ВСГУТУ</title>
 
     <!-- PWA: устанавливаемое приложение (Android/десктоп — из манифеста; iOS — из

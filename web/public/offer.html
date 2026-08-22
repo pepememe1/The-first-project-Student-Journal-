@@ -359,7 +359,14 @@
         <tbody>
           <tr><td><span class="lab">Принудительный HTTPS (HSTS)</span></td>
             <td><span class="no">нет</span></td><td><span class="no">нет</span></td><td class="colus"><span class="yes">есть</span></td></tr>
-          <tr><td><span class="lab">Защита от внедрения скриптов (CSP)</span></td>
+          <!-- ⚠️ Строка проверена 21.08.2026 и с тех пор ВЕРНА ДЛЯ ОБЕИХ ПОСТАВОК.
+               До этого дня она была верна только для сайта: в мобильном приложении
+               страница отдаётся из бандла, и заголовки сервера до неё не доходили —
+               то есть покупателю обещалась мера, которой в приложении не было. Теперь
+               политика едет метой внутри самого бандла (web/index.html, сторож —
+               web/tests/cspMeta.test.mjs). Снимут мету — строку надо снимать тоже. -->
+          <tr><td><span class="lab">Защита от внедрения скриптов (CSP)</span>
+            <span class="sub">и на сайте, и в мобильном приложении</span></td>
             <td><span class="no">нет</span></td><td><span class="no">нет</span></td><td class="colus"><span class="yes">есть</span></td></tr>
           <tr><td><span class="lab">Защита от кликджекинга (X-Frame-Options)</span></td>
             <td><span class="no">нет</span></td><td><span class="no">нет</span></td><td class="colus"><span class="yes">есть</span></td></tr>

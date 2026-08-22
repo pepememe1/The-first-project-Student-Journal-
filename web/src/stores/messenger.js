@@ -14,6 +14,7 @@ import { useActivityStore } from '@/stores/activity'
 import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
 import { playMentionPing } from '@/utils/pingSound'
+import { draftFor, saveDraft, clearDraft } from '@/utils/drafts'
 
 const POLL_MS = 3500
 
@@ -742,24 +743,14 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch { return false }
   }
 
-  // ── Черновики (клиент-only, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики») ──────────────
+  // ── Черновики (клиент-только, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики») ────────────
   // Мессенджер и так не синкует состояние между устройствами (см. §5.4 CLAUDE.md) —
   // серверное хранилище черновика было бы лишней сущностью ради того же эффекта.
-  const _DRAFTS_KEY = 'gb_msg_drafts'
-  function _loadDraftsMap() {
-    try { return JSON.parse(localStorage.getItem(_DRAFTS_KEY) || '{}') } catch { return {} }
-  }
-  function draftFor(convId) {
-    return convId ? (_loadDraftsMap()[convId] || '') : ''
-  }
-  function saveDraft(convId, text) {
-    if (!convId) return
-    const map = _loadDraftsMap()
-    const t = (text || '')
-    if (t.trim()) map[convId] = t; else delete map[convId]
-    try { localStorage.setItem(_DRAFTS_KEY, JSON.stringify(map)) } catch { /* приватный режим — не критично */ }
-  }
-  function clearDraft(convId) { saveDraft(convId, '') }
+  // ⚠️ Сама механика хранения переехала в utils/drafts.js: карта ключуется ЛОГИНОМ и
+  // стирается при выходе. Прежняя версия жила здесь, ключевалась только id беседы и
+  // выход переживала — на общем телефоне следующий вошедший видел чужой недописанный
+  // текст в ОБЩЕМ канале. Разбор — в шапке utils/drafts.js. Здесь оставлена тонкая
+  // обёртка: вызывающие (ChatThread.vue) не менялись.
 
   // ── Шаблоны быстрых ответов преподавателя ───────────────────────────────────────────
   const templates = ref([])

@@ -10,6 +10,7 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 import { clearCache } from '@/api/offlineCache'
+import { clearDrafts } from '@/utils/drafts'
 import { resetOfflineSession } from '@/api/offlineSession'
 import { flushOutbox, reloadOutbox } from '@/api/outbox'
 import { registerToken, unregisterToken } from '@/services/push'
@@ -128,6 +129,12 @@ export const useAuthStore = defineStore('auth', () => {
     clearTokens()
     localStorage.removeItem(LS_USER)
     clearCache()   // стираем оффлайн-кэш — чтобы данные не показались другому юзеру
+    // ⚠️ И НЕДОПИСАННЫЕ сообщения. Раньше эта строка отсутствовала, а карта черновиков
+    // ключевалась только id беседы — то есть следующий вошедший на этом телефоне видел
+    // чужой текст в поле ввода общего канала. Ключ теперь с логином (utils/drafts.js),
+    // но уборка всё равно обязательна: выход — это момент, когда устройство меняет
+    // владельца. Держит web/tests/drafts.test.mjs.
+    clearDrafts()
     useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     useVectorStore().reset()      // и диалог с Вектором: он тоже жил в памяти store
     useProfileStore().reset()     // и профиль (аватар/«о себе»/цвет/шрифт) — та же причина
@@ -154,6 +161,7 @@ export const useAuthStore = defineStore('auth', () => {
     clearTokens()
     localStorage.removeItem(LS_USER)
     clearCache()
+    clearDrafts()      //та же причина, что в logout — см. комментарий выше
     useMessengerStore().reset()
     useVectorStore().reset()
     useProfileStore().reset()
