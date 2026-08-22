@@ -167,11 +167,9 @@ const routes = [
   // Это разные события: первое значит «мне сюда нельзя», второе — «я ошибся буквой»,
   // и раньше оба заканчивались дашбордом, из-за чего первое выглядело как сбой.
   // Решение принимает страж ниже; здесь только сама страница внутри оболочки.
-  {
-    path: '/404', component: AppShell, meta: { requiresAuth: true },
-    children: [{ path: '', component: NotFoundPage,
-                 meta: { title: 'Страница не найдена', i18nTitle: 'notFound.title' } }],
-  },
+  // ⚠️ БЕЗ AppShell: страница самостоятельная, как экран входа. Сюда попадают, только
+  // если в адресе чужая роль, и показывать при этом чужое меню было бы странно вдвойне.
+  { path: '/404', component: NotFoundPage, meta: { requiresAuth: true } },
   { path: '/:pathMatch(.*)*', redirect: (to) => ({ path: '/404', query: { from: to.path } }) },
 ]
 
