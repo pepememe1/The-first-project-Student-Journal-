@@ -1,25 +1,39 @@
 <script setup>
-// Skyrim: показывается ПОСЛЕ успешного входа, когда до него было несколько неудачных.
-// Реальное сообщение об ошибке не подменяет и вход не задерживает — идёт поверх.
+// Skyrim: показывается ПОСЛЕ успешного входа, если до него было несколько неудачных
+// попыток подряд. Пасхалка про момент «наконец зашёл», а не про сами ошибки.
 //
-// ⚠️ Кадр повозки — заглушка вёрсткой, пока Арина не отдаст рисунок. Показывать чужой
-// кадр из игры в продукте нельзя (docs/PLAN-EASTER-EGGS.md §В7).
-import { onMounted, ref } from 'vue'
+// ⚠️ Реальное сообщение об ошибке она не подменяет и вход не задерживает — идёт
+// отдельным слоем поверх уже открытого кабинета и уходит сама.
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 const emit = defineEmits(['close'])
 const on = ref(false)
-onMounted(() => { on.value = true; setTimeout(() => emit('close'), 5200) })
+const text = ref(false)
+let timers = []
+
+onMounted(() => {
+  requestAnimationFrame(() => { on.value = true })
+  timers.push(setTimeout(() => { text.value = true }, 900))
+  timers.push(setTimeout(() => { on.value = false }, 6200))
+  timers.push(setTimeout(() => emit('close'), 7000))
+})
+onBeforeUnmount(() => timers.forEach(clearTimeout))
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[92] grid place-items-center bg-black transition-opacity duration-700"
-       :class="on ? 'opacity-100' : 'opacity-0'">
-    <div class="w-[min(78vw,560px)] text-center">
-      <div class="grid h-40 place-items-center rounded-md font-mono text-[11px]"
-           style="background:linear-gradient(#1b2430,#0c1116);color:#3c4a58">
-        [ заглушка: кадр повозки ]
-      </div>
-      <p class="mt-4 font-title text-lg" style="color:#e9e2d0">Эй, ты. Наконец-то ты очнулся.</p>
-      <p class="mt-1.5 text-sm" style="color:#9a9382">Ты спросонья перепутал пароль, так ведь?</p>
+  <div class="pointer-events-none fixed inset-0 z-[92] bg-black transition-opacity duration-700"
+       :style="{ opacity: on ? 1 : 0 }">
+    <img src="/easter/img/skyrim-cart.webp" alt=""
+         class="h-full w-full object-cover" />
+    <!-- Текст поверх кадра, а не под ним: снизу у повозки самая тёмная часть,
+         и подпись там читается без всякой подложки. -->
+    <div class="absolute inset-x-0 bottom-[8%] text-center transition-opacity duration-700"
+         :style="{ opacity: text ? 1 : 0 }">
+      <p class="font-title text-lg" style="color:#e9e2d0;text-shadow:0 2px 14px #000">
+        Эй, ты. Наконец-то ты очнулся.
+      </p>
+      <p class="mt-1.5 text-sm" style="color:#b9b09a;text-shadow:0 2px 10px #000">
+        Ты спросонья перепутал пароль, так ведь?
+      </p>
     </div>
   </div>
 </template>
