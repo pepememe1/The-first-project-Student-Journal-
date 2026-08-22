@@ -37,6 +37,28 @@ ssh $O "$VPS" 'set -e
   mv /root/gb-deploy/webdist /root/gb-deploy/webdist.old 2>/dev/null || true
   mv /root/gb-deploy/webdist.new /root/gb-deploy/webdist
   rm -f /root/gb-deploy/webdist.tgz
+
+  # ━━ ПУБЛИКАЦИЯ СТАТИКИ ДЛЯ CADDY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # Зачем вторая копия: Caddy отдаёт ассеты сам, минуя Python (на одном ядре каждый
+  # ассет иначе будит uvicorn). Но ходит он под пользователем caddy, а /root закрыт
+  # правами drwx------ — из рабочего каталога он не прочитает НИЧЕГО и вернёт 403.
+  # ⚠️ Копия делается ЗДЕСЬ ЖЕ, одним действием с основной выкладкой. Разъехавшиеся
+  # копии — наш родной класс аварии; на этот случай в Caddyfile стоит матчер `file`:
+  # нет файла в /var/www — запрос уходит на Python, как раньше (медленно, но цело).
+  install -d -m 755 -o caddy -g caddy /var/www/gradebook
+  for d in assets fonts icons mascot; do
+    test -d "/root/gb-deploy/webdist/$d" && rsync -a --delete       "/root/gb-deploy/webdist/$d/" "/var/www/gradebook/$d/"
+  done
+
+  # Жмём ОДИН РАЗ при выкладке, а не на каждый запрос: 1.3 МБ бандла zstd-ом на одном
+  # ядре — это ощутимо, и платить за это при каждом промахе кэша незачем. woff2 и webp
+  # не трогаем: они уже сжаты, повторное сжатие только тратит место и время.
+  find /var/www/gradebook -type f \( -name "*.js" -o -name "*.css" -o -name "*.svg"        -o -name "*.json" -o -name "*.webmanifest" -o -name "*.txt" \) -size +1k        -print0 | while IFS= read -r -d "" f; do
+    zstd -19 -q -f --keep "$f" -o "$f.zst"
+    gzip -9 -kf "$f"
+  done
+  chown -R caddy:caddy /var/www/gradebook
+
   systemctl reload caddy 2>/dev/null || systemctl restart caddy'
 
 echo "== [5/5] Проверка =="

@@ -79,7 +79,7 @@ async function openChat() {
           <div class="mb-2 flex items-center gap-2">
             <MessageSquareWarning class="size-5 shrink-0 text-accent" />
             <p class="min-w-0 flex-1 truncate font-title text-base font-bold text-text">
-              {{ t('report.title', 'Сообщить о проблеме') }}
+              {{ t('report.problemTitle', 'Сообщить о проблеме') }}
             </p>
             <button type="button" @click="close()" :aria-label="t('common.close', 'Закрыть')"
                     class="grid size-7 shrink-0 place-items-center rounded text-text3 hover:bg-bg2 hover:text-text">

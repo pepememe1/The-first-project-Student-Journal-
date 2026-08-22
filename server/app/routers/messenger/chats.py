@@ -1,0 +1,611 @@
+"""
+chats.py — Жизненный цикл беседы: личный чат, «Избранное», список, закреп и архив,
+создание группы и канала, участники, роли и права, игнор, карточка и переименование.
+
+Часть пакета `routers/messenger` (разрез 3.7.7). Общий роутер, проверки прав и
+сборка ответов — в `_common.py`; порядок регистрации маршрутов задаёт `__init__.py`.
+"""
+from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
+
+
+@router.post("/chats/direct/{user_id}")
+def open_direct(user_id: str, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Открыть личный чат с пользователем (создать, если ещё нет). Идемпотентно — беседа
+    ключуется детерминированным id пары, повторный вызов вернёт ту же."""
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Нельзя написать самому себе")
+    peer = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
+    if peer is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    #Проверяем ЗДЕСЬ, а не только в каталоге: id собеседника можно подставить руками, и
+    #фильтр в поиске сам по себе ничего не защищает (инвариант «UI-скрытие — не защита»).
+    _guard_direct_allowed(db, user, peer)
+
+    conv_id = _ensure_direct(db, user, peer)
+    sm = _status_map(db, [peer.id])
+    return {"conversation_id": conv_id, "kind": "direct",
+            "peer": _safe_user(peer, _online_logins(), status=sm.get(peer.id))}
+
+
+# ── Список бесед ─────────────────────────────────────────────────────────────────────
+@router.get("/chats")
+def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Беседы текущего пользователя: собеседник/заголовок, последнее сообщение, непрочитанные.
+    Закреплённые чаты — сверху, дальше по времени последнего сообщения (убыв.)."""
+    parts = (db.query(ConversationParticipant)
+             .filter(ConversationParticipant.user_id == user.id).all())
+    onl = _online_logins()
+    out = []
+    for p in parts:
+        conv = db.query(Conversation).filter(Conversation.id == p.conversation_id).first()
+        if conv is None:
+            continue
+        #Всё, что старше моей метки очистки, для меня не существует (удалённая переписка).
+        lastq = db.query(Message).filter(Message.conversation_id == conv.id)
+        if p.cleared_upto_id:
+            lastq = lastq.filter(Message.id > p.cleared_upto_id)
+        if p.cleared_at:                     #legacy-строки, очищенные до появления id-границы
+            lastq = lastq.filter(Message.created_at > p.cleared_at)
+        last = lastq.order_by(Message.id.desc()).first()
+        #Чат удалён у меня и с тех пор ничего не приходило — не показываем его в списке.
+        #Появится новое сообщение — вернётся сам (см. _unhide_participants).
+        if p.hidden and last is None:
+            continue
+        #Непрочитанное: чужие сообщения позже моей метки прочтения, не удалённые у всех.
+        #Служебные события («вступил в беседу», «закреплено») в счётчик НЕ идут: это не
+        #обращение к тебе, а отметка в ленте, а красный кружок непрочитанного заставляет
+        #открыть чат — в канале на сотню читателей он не гас бы никогда.
+        unread = (db.query(Message)
+                  .filter(Message.conversation_id == conv.id,
+                          Message.sender_id != user.id,
+                          Message.kind != "system",
+                          Message.deleted_at == "",
+                          Message.created_at > (p.last_read_at or ""),
+                          Message.created_at > (p.cleared_at or ""),
+                          Message.id > (p.cleared_upto_id or 0))
+                  .count())
+        #Имя автора последнего сообщения нужно списку чатов (в группе/канале строка
+        #выглядит как «Иванов: текст» — без имени непонятно, кто написал). В личном чате
+        #и у своих сообщений имя не нужно: клиент подписывает их «Вы».
+        sender_name = ""
+        if last is not None and conv.kind in ("group", "channel") and last.sender_id != user.id:
+            if last.sender_id == "system":
+                sender_name = SYSTEM_SENDER_NAME
+            else:
+                su = db.query(User).filter(User.id == last.sender_id).first()
+                sender_name = (su.full_name or su.name or "") if su else ""
+        #Непрочитанная ОТМЕТКА меня: список чатов рисует «@» вместо числа сообщений, а
+        #сам чат — кнопку перемотки к этому сообщению. Ищем самое РАННЕЕ непрочитанное
+        #упоминание, а не последнее: перематывать нужно к началу пропущенного разговора,
+        #иначе всё, что писали до отметки, так и останется непрочитанным.
+        #mentions — JSON-список [{user_id, silent, loud}], поэтому фильтруем в Python:
+        #переносимого способа искать по элементу JSON-массива в SQLite и PostgreSQL
+        #одновременно нет (тот же приём, что в directory()).
+        #⚠️ Список чатов опрашивается раз в 3.5 с, поэтому выборку сужаем ДО Python:
+        #`body LIKE '%@%'` отсекает подавляющее большинство строк (отметка по построению
+        #содержит «@» в тексте — mentions собирается из него же), а лимит держит запрос
+        #дешёвым даже в канале на сотню непрочитанных. Без этого на одноядерном VPS
+        #каждый тик вычитывал бы всю непрочитанную переписку по всем беседам сразу.
+        mention_id, mention_loud = 0, False
+        for cand in (db.query(Message)
+                     .filter(Message.conversation_id == conv.id,
+                             Message.sender_id != user.id,
+                             Message.deleted_at == "",
+                             Message.body.like("%@%"),
+                             Message.created_at > (p.last_read_at or ""),
+                             Message.id > (p.cleared_upto_id or 0))
+                     .order_by(Message.id.asc()).limit(_MENTION_SCAN_LIMIT).all()):
+            hit = next((x for x in (cand.mentions or []) if x.get("user_id") == user.id), None)
+            if hit:
+                mention_id, mention_loud = cand.id, bool(hit.get("loud"))
+                break
+        item = {
+            "conversation_id": conv.id,
+            "kind": conv.kind,
+            "pinned": bool(p.pinned),
+            "archived": bool(p.archived),
+            "muted": bool(p.muted),
+            "unread": unread,
+            "mention_message_id": mention_id,     #0 — меня не отмечали
+            "mention_loud": mention_loud,
+            "last_message": _msg_out(last, user.id, sender_name) if last else None,
+            "last_at": (last.created_at if last else conv.created_at) or "",
+        }
+        if conv.kind == "direct":
+            peer = _peer_of_direct(db, conv.id, user.id)
+            item["title"] = (peer.full_name or peer.name or peer.login) if peer else "Диалог"
+            item["peer"] = _safe_user(peer, onl, status=_status_map(db, [peer.id]).get(peer.id)) if peer else None
+        else:
+            item["title"] = conv.title or ""
+        out.append(item)
+    #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
+    #сырой id из тела сообщения.
+    _attach_rich_meta(db, [x["last_message"] for x in out if x["last_message"]], user.id)
+    #Сортировка: сначала закреплённые, потом по времени последней активности (новые выше).
+    out.sort(key=lambda x: (not x["pinned"], _neg_key(x["last_at"])))
+    return {"chats": out}
+
+
+# ── Организация списка чатов: закреп/архив/избранное ─────────────────────────────────
+# Дополнения из docs/MESSENGER-ADDON-PLAN-GPT*.md, отобранные как «действительно полезное
+# и удобное» (без ИИ-упрощений учёбы — см. §5.4 CLAUDE.md). Личное состояние участника,
+# как mute — на собеседника не влияет.
+@router.post("/chats/{conv_id}/pin")
+def pin_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Закрепить чат в списке у СЕБЯ (сортировка — см. list_chats)."""
+    part = _require_participant(db, conv_id, user)
+    part.pinned = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/pin")
+def unpin_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    part = _require_participant(db, conv_id, user)
+    part.pinned = False
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/chats/{conv_id}/archive")
+def archive_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """В архив — чат уходит из основного списка, но НЕ удаляется (в отличие от DELETE
+    /chats/{conv_id}). В отличие от «удалить у себя» (hidden), новое сообщение чат из
+    архива само не выводит — только явная расархивация, это и есть смысл архива."""
+    part = _require_participant(db, conv_id, user)
+    part.archived = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/archive")
+def unarchive_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    part = _require_participant(db, conv_id, user)
+    part.archived = False
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/chats/saved")
+def open_saved(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """«Избранное» (Saved Messages) — личный чат с самим собой: заметки, ссылки, код себе,
+    без надобности заводить отдельную сущность заметок — переиспользуем ВСЮ инфраструктуру
+    сообщений (Markdown, реакции, правка, пересылка). Один на пользователя, создаётся лениво
+    при первом открытии. Закреплён по умолчанию — как в Telegram, всегда сверху списка."""
+    return {"conversation_id": _ensure_saved(db, user)}
+
+
+@router.delete("/chats/{conv_id}")
+def delete_conversation(conv_id: str, clear_only: bool = Query(False),
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Удалить переписку У СЕБЯ: история до текущего момента больше не показывается, чат
+    уходит из списка. У собеседника переписка остаётся — это личное действие, а не
+    удаление чужих данных (иначе один человек стирал бы историю другому).
+
+    clear_only=1 — «очистить историю»: сообщения скрываем, но чат остаётся в списке.
+    Группу/канал при удалении ещё и покидаем — иначе беседа вернулась бы с первым же
+    сообщением, хотя пользователь ушёл из неё осознанно."""
+    p = _require_participant(db, conv_id, user)
+    conv = _conversation(db, conv_id)
+    #Границу ставим по НОМЕРУ последнего сообщения, а не по времени: сообщение, пришедшее
+    #в тот же тик часов, что и очистка, иначе исчезло бы у пользователя навсегда.
+    #cleared_at гасим — он остаётся только у строк, очищенных до появления этого поля.
+    last = (db.query(Message).filter(Message.conversation_id == conv_id)
+            .order_by(Message.id.desc()).first())
+    p.cleared_upto_id = last.id if last else 0
+    p.cleared_at = ""
+    p.last_read_at = _now()                #«хвоста» непрочитанного после очистки нет
+    #«Избранное» — не переписка, а личный блокнот: он один на пользователя и всегда есть в
+    #списке (как в Telegram). Удалять его нечего и незачем — любое удаление сводим к очистке.
+    if conv.kind == "saved":
+        db.commit()
+        return {"ok": True, "conversation_id": conv_id, "cleared": True}
+    if clear_only:
+        db.commit()
+        return {"ok": True, "conversation_id": conv_id, "cleared": True}
+    if conv.kind in ("group", "channel"):
+        db.delete(p)                        #выйти из группы/канала = перестать получать
+    else:
+        p.hidden = True                     #личный чат/модерация — просто убрать из списка
+    db.commit()
+    return {"ok": True, "conversation_id": conv_id, "deleted": True}
+
+
+@router.post("/chats/{conv_id}/mute")
+def mute_conversation(conv_id: str, payload: dict = Body(default={}),
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Замьютить/размьютить беседу У СЕБЯ (без пушей по ней; переписка продолжает работать).
+    Это личное состояние участника, на других не влияет."""
+    p = _require_participant(db, conv_id, user)
+    p.muted = bool(payload.get("muted", True))
+    db.commit()
+    return {"ok": True, "conversation_id": conv_id, "muted": bool(p.muted)}
+
+
+@router.post("/chats/group")
+def create_group(payload: dict = Body(...), user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """Создать группу: создатель — owner, выбранные — участники (member).
+
+    `class_groups` (§12, режим куратора) — названия УЧЕБНЫХ групп (не путать с чат-
+    группой): все студенты этих групп добавляются автоматически, вперемешку с
+    индивидуально выбранными `member_ids`. Доступно ТОЛЬКО куратору и ТОЛЬКО для его
+    СОБСТВЕННЫХ `curated_groups` — иначе любой преподаватель массово добавлял бы чужих
+    студентов в свои чаты (роль/скоуп проверяются на сервере, а не на клиенте)."""
+    _guard_can_create(db, user)
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Нужно название группы")
+    now = _now()
+    conv_id = f"conv:{uuid4().hex}"
+    db.add(Conversation(id=conv_id, kind="group", title=title[:120],
+                        about=(payload.get("about") or "")[:500], owner_id=user.id, created_at=now))
+    db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                   role="owner", joined_at=now))
+    seen = {user.id}
+    member_ids = list(payload.get("member_ids") or [])
+    curated = set(user.curated_groups or [])
+    for gname in (payload.get("class_groups") or []):
+        if gname not in curated:            #скоуп: только СВОИ курируемые группы
+            continue
+        students = (db.query(User)
+                    .filter(User.role == "student", User.group_name == gname,
+                            User.deleted == False).all())  # noqa: E712
+        member_ids.extend(s.id for s in students)
+    for uid in member_ids:
+        if uid in seen or db.query(User).filter(User.id == uid, User.deleted == False).first() is None:  # noqa: E712
+            continue
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid,
+                                       role="member", joined_at=now))
+        seen.add(uid)
+    db.commit()
+    return {"conversation_id": conv_id, "kind": "group", "title": title}
+
+
+@router.post("/chats/channel")
+def create_channel(payload: dict = Body(...), user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Создать канал: создатель — owner, выбранные — writer (пишут); остальные вступают как reader."""
+    _guard_can_create(db, user)
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Нужно название канала")
+    now = _now()
+    conv_id = f"conv:{uuid4().hex}"
+    db.add(Conversation(id=conv_id, kind="channel", title=title[:120],
+                        about=(payload.get("about") or "")[:500], owner_id=user.id,
+                        is_public=bool(payload.get("is_public", True)), created_at=now))
+    db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                   role="owner", joined_at=now))
+    seen = {user.id}
+    for uid in (payload.get("writer_ids") or []):
+        if uid in seen or db.query(User).filter(User.id == uid, User.deleted == False).first() is None:  # noqa: E712
+            continue
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid,
+                                       role="writer", joined_at=now))
+        seen.add(uid)
+    db.commit()
+    return {"conversation_id": conv_id, "kind": "channel", "title": title}
+
+
+@router.get("/channels")
+def public_channels(q: str = Query(""), user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Каталог публичных каналов для вступления."""
+    rows = (db.query(Conversation)
+            .filter(Conversation.kind == "channel", Conversation.is_public == True).all())  # noqa: E712
+    ql = (q or "").strip().lower()
+    out = []
+    for c in rows:
+        if ql and ql not in (c.title or "").lower():
+            continue
+        subs = (db.query(ConversationParticipant)
+                .filter(ConversationParticipant.conversation_id == c.id).count())
+        out.append({"conversation_id": c.id, "title": c.title, "about": c.about,
+                    "subscribers": subs, "joined": _participant(db, c.id, user.id) is not None})
+    out.sort(key=lambda x: (x["title"] or "").lower())
+    return {"channels": out}
+
+
+@router.post("/chats/{conv_id}/join")
+def join_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Присоединиться к публичному каналу (как reader) → канал появится в списке чатов."""
+    conv = _conversation(db, conv_id)
+    if conv.kind != "channel" or not conv.is_public:
+        raise HTTPException(status_code=403, detail="К этой беседе нельзя присоединиться")
+    if _participant(db, conv_id, user.id) is None:
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="reader", joined_at=_now()))
+        db.commit()
+        #§D6: «вступил» — ТОЛЬКО для групп (см. add_members ниже). Этот эндпоинт вообще
+        #только для каналов (проверка kind=="channel" выше), поэтому здесь их нет никогда.
+        _broadcast(db, conv_id)
+    return {"ok": True, "conversation_id": conv_id}
+
+
+@router.post("/chats/{conv_id}/leave")
+def leave_chat(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Покинуть беседу (группу/канал)."""
+    p = _participant(db, conv_id, user.id)
+    if p is not None:
+        conv = _conversation(db, conv_id)
+        name = user.full_name or user.name or user.login
+        db.delete(p)
+        db.commit()
+        if conv.kind == "group":       #§D6: «вышел» — только для групп, не для каналов
+            _system(db, conv_id, "user_left", user.id, name)
+        _broadcast(db, conv_id)
+    return {"ok": True}
+
+
+@router.post("/chats/{conv_id}/members")
+def add_members(conv_id: str, payload: dict = Body(...),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Добавить участников (owner/admin). В канал добавляются как reader, в группу — member."""
+    _require_manager(db, conv_id, user)
+    conv = _conversation(db, conv_id)
+    role = "reader" if conv.kind == "channel" else "member"
+    now = _now()
+    added = 0
+    joined_names = []
+    for uid in (payload.get("user_ids") or []):
+        if _participant(db, conv_id, uid) is not None:
+            continue
+        u = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
+        if u is None:
+            continue
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role=role, joined_at=now))
+        joined_names.append((uid, u.full_name or u.name or u.login))
+        added += 1
+    db.commit()
+    if conv.kind == "group":            #§D6: системные «вступил» — ТОЛЬКО для групп. Канал
+        for uid, name in joined_names:  #может разом набрать сотню читателей (весь курс) —
+            _system(db, conv_id, "user_joined", uid, name)   #лента не должна утонуть в этом.
+    if added:
+        _broadcast(db, conv_id)
+    return {"added": added}
+
+
+@router.delete("/chats/{conv_id}/members/{uid}")
+def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Убрать участника (право kick — owner/admin по умолчанию, либо кастомная роль с этим
+    правом); себя может убрать любой (=покинуть). Владельца не трогаем."""
+    if uid != user.id:
+        _require_permission(db, conv_id, user, "kick")
+    else:
+        _require_participant(db, conv_id, user)
+    conv = _conversation(db, conv_id)
+    p = _participant(db, conv_id, uid)
+    if p is not None and p.role != "owner":
+        u = db.query(User).filter(User.id == uid).first()
+        name = (u.full_name or u.name or u.login) if u else uid
+        db.delete(p)
+        db.commit()
+        if conv.kind == "group":        #§D6: «вышел» — только для групп
+            _system(db, conv_id, "user_left", uid, name)
+        _broadcast(db, conv_id)
+    return {"ok": True}
+
+
+@router.post("/chats/{conv_id}/members/{uid}/role")
+def set_member_role(conv_id: str, uid: str, payload: dict = Body(...),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Назначить роль участнику — билдовую (`role`) ИЛИ кастомную (`custom_role_id`,
+    взаимоисключающе). Право manage_roles — по умолчанию owner/admin, либо обладатель
+    кастомной роли с этим правом (см. _permissions_for). Владельца не понижаем этим путём."""
+    _require_permission(db, conv_id, user, "manage_roles")
+    tp = _participant(db, conv_id, uid)
+    if tp is None:
+        raise HTTPException(status_code=404, detail="Участник не найден")
+    if tp.role == "owner":
+        raise HTTPException(status_code=400, detail="Нельзя изменить роль владельца")
+    custom_role_id = payload.get("custom_role_id")
+    if custom_role_id:
+        cr = (db.query(ConversationRole)
+              .filter(ConversationRole.id == custom_role_id,
+                      ConversationRole.conversation_id == conv_id).first())
+        if cr is None:
+            raise HTTPException(status_code=404, detail="Роль не найдена")
+        tp.custom_role_id = custom_role_id
+    else:
+        role = payload.get("role")
+        if role not in ("admin", "member", "writer", "reader"):
+            raise HTTPException(status_code=400, detail="Некорректная роль")
+        tp.role = role
+        tp.custom_role_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/chats/{conv_id}/roles")
+def list_roles(conv_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Кастомные роли беседы + шаблоны для быстрого создания (не хранятся, пока не
+    сохранены — см. create_role)."""
+    _require_participant(db, conv_id, user)
+    rows = (db.query(ConversationRole)
+            .filter(ConversationRole.conversation_id == conv_id)
+            .order_by(ConversationRole.created_at).all())
+    return {"roles": [{"id": r.id, "name": r.name, "permissions": r.permissions or []} for r in rows],
+            "templates": _ROLE_TEMPLATES, "all_permissions": list(_ALL_PERMISSIONS)}
+
+
+@router.post("/chats/{conv_id}/roles")
+def create_role(conv_id: str, payload: dict = Body(...),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_permission(db, conv_id, user, "manage_roles")
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно название роли")
+    perms = [p for p in (payload.get("permissions") or []) if p in _ALL_PERMISSIONS]
+    role = ConversationRole(id=f"crole:{uuid4().hex}", conversation_id=conv_id,
+                            name=name[:60], permissions=perms, created_at=_now())
+    db.add(role)
+    db.commit()
+    return {"id": role.id, "name": role.name, "permissions": role.permissions}
+
+
+@router.put("/chats/{conv_id}/roles/{role_id}")
+def update_role(conv_id: str, role_id: str, payload: dict = Body(...),
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_permission(db, conv_id, user, "manage_roles")
+    role = (db.query(ConversationRole)
+            .filter(ConversationRole.id == role_id, ConversationRole.conversation_id == conv_id).first())
+    if role is None:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Нужно название роли")
+        role.name = name[:60]
+    if "permissions" in payload:
+        role.permissions = [p for p in (payload.get("permissions") or []) if p in _ALL_PERMISSIONS]
+    db.commit()
+    return {"id": role.id, "name": role.name, "permissions": role.permissions}
+
+
+@router.delete("/chats/{conv_id}/roles/{role_id}")
+def delete_role(conv_id: str, role_id: str, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Удалить кастомную роль — участники с ней откатываются на билдовую member."""
+    _require_permission(db, conv_id, user, "manage_roles")
+    role = (db.query(ConversationRole)
+            .filter(ConversationRole.id == role_id, ConversationRole.conversation_id == conv_id).first())
+    if role is None:
+        raise HTTPException(status_code=404, detail="Роль не найдена")
+    (db.query(ConversationParticipant)
+     .filter(ConversationParticipant.conversation_id == conv_id,
+             ConversationParticipant.custom_role_id == role_id)
+     .update({"custom_role_id": None, "role": "member"}))
+    db.delete(role)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Игнор участника (личное, см. модель ConversationIgnore) ────────────────────────────
+@router.post("/chats/{conv_id}/ignore/{uid}")
+def ignore_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    _require_participant(db, conv_id, user)
+    exists = (db.query(ConversationIgnore)
+              .filter(ConversationIgnore.conversation_id == conv_id,
+                      ConversationIgnore.viewer_id == user.id,
+                      ConversationIgnore.ignored_user_id == uid).first())
+    if exists is None:
+        db.add(ConversationIgnore(conversation_id=conv_id, viewer_id=user.id, ignored_user_id=uid))
+        db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{conv_id}/ignore/{uid}")
+def unignore_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    _require_participant(db, conv_id, user)
+    (db.query(ConversationIgnore)
+     .filter(ConversationIgnore.conversation_id == conv_id,
+             ConversationIgnore.viewer_id == user.id,
+             ConversationIgnore.ignored_user_id == uid)
+     .delete())
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/chats/{conv_id}")
+def conversation_info(conv_id: str, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Инфо о беседе (для шапки группы/канала): тип, название, участники и их роли, моя роль."""
+    conv = _conversation(db, conv_id)
+    part = _require_participant(db, conv_id, user)
+    parts = (db.query(ConversationParticipant)
+             .filter(ConversationParticipant.conversation_id == conv_id).all())
+    urows = {u.id: u for u in db.query(User).filter(
+        User.id.in_([p.user_id for p in parts]))} if parts else {}
+    onl = _online_logins()
+    sm = _status_map(db, [p.user_id for p in parts])
+    #Кастомные роли участников — одним запросом, а не по одной на строку.
+    crole_ids = {p.custom_role_id for p in parts if p.custom_role_id}
+    croles = {r.id: r.name for r in (db.query(ConversationRole)
+              .filter(ConversationRole.id.in_(crole_ids)).all())} if crole_ids else {}
+    people = []
+    for p in parts:
+        u = urows.get(p.user_id)
+        prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
+        st = sm.get(p.user_id, {})
+        people.append({
+            "user_id": p.user_id,
+            "full_name": (u.full_name or u.name or u.login) if u else p.user_id,
+            "role": p.role,                       #owner | admin | writer | member | reader
+            "custom_role_id": p.custom_role_id or None,
+            "custom_role_name": croles.get(p.custom_role_id, "") if p.custom_role_id else "",
+            "silenced": bool(p.silenced),          #«/mute» модератора — не путать с muted
+            "online": bool(u) and u.login in onl,
+            #Карточка участника в панели «О беседе»: аватар и контекст (группа/предметы).
+            "avatar": prefs.get("avatar", "") or "",
+            "bio": prefs.get("bio", "") or "",
+            "profile_color": prefs.get("profile_color", "") or "",
+            "profile_banner": prefs.get("profile_banner", "") or "",   #гифка-баннер карточки
+            "name_font": prefs.get("name_font", "") or "",   #§5.4 «стиль никнейма»
+            "name_effect": prefs.get("name_effect", "") or "",   #3.7 — эффект и цвет имени
+            "name_color": prefs.get("name_color", "") or "",
+            "user_role": (u.role if u else ""),   #student | teacher | admin (роль в системе)
+            "group_name": (u.group_name or "") if u else "",
+            "subjects": (u.subjects or []) if (u is not None and u.role == "teacher") else [],
+            #§D7: статус поверх presence (dnd/studying/away + текст у преподавателя).
+            "status_kind": st.get("kind", "") or "",
+            "status_text": st.get("custom_text", "") or "",
+            #Галочки «отправлено/прочитано» в ЛС (клиент сравнивает created_at СВОИХ
+            #сообщений с last_read_at СОБЕСЕДНИКА — без похода на сервер за каждым тиком).
+            "last_read_at": p.last_read_at or "",
+        })
+    #Владелец — первым, дальше по роли и алфавиту: сразу видно, кто создал беседу.
+    _ORDER = {"owner": 0, "admin": 1, "writer": 2, "member": 3, "reader": 4}
+    people.sort(key=lambda x: (_ORDER.get(x["role"], 9), (x["full_name"] or "").lower()))
+    my_ignored = [r[0] for r in (db.query(ConversationIgnore.ignored_user_id)
+                                 .filter(ConversationIgnore.conversation_id == conv_id,
+                                         ConversationIgnore.viewer_id == user.id).all())]
+    return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
+            "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
+            "my_role": part.role, "participants": people, "subscribers": len(people),
+            #Свой id клиент иначе не знает (в JWT/сторе только логин+роль) — нужен, чтобы
+            #не рисовать кнопки «Выгнать»/«Игнорировать» на собственной строке участника.
+            "my_user_id": user.id,
+            #Права участника в ЭТОЙ беседе (§ролей) — веб решает по ним, показывать ли
+            #«Выгнать»/«Выдать роль» и доступность /mute, /clear в слэш-автодополнении.
+            "my_permissions": sorted(_permissions_for(db, part)),
+            "my_ignored_user_ids": my_ignored,
+            #§D5: метка прочтения ДО открытия чата — клиент строит по ней разделитель
+            #«Новые сообщения» (снимаем ДО markReadActive, иначе она бы уже сдвинулась).
+            "my_last_read_at": part.last_read_at or "",
+            #Системные каналы (§D12/§12): клиенту нужно различать их тип — например,
+            #показать команду /отчет только в канале отчётов куратора для группы.
+            "is_system": bool(conv.is_system), "system_kind": conv.system_kind or ""}
+
+
+@router.patch("/chats/{conv_id}")
+def rename_conversation(conv_id: str, payload: dict = Body(...),
+                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Переименовать группу/канал (owner/admin). Личный чат и беседу с модерацией не
+    переименовываем — у них нет своего названия. Пишет системное сообщение (§D6).
+
+    Проверяем ТИП беседы раньше роли: у личного чата участники всегда 'member' (не
+    owner/admin), и без этого порядка запрос падал бы в 403 «недостаточно прав» вместо
+    внятного 400 «эту беседу нельзя переименовать» — путало бы причину отказа."""
+    conv = _conversation(db, conv_id)
+    part = _require_participant(db, conv_id, user)
+    if conv.kind not in ("group", "channel"):
+        raise HTTPException(status_code=400, detail="Эту беседу нельзя переименовать")
+    if part.role not in _MANAGER_ROLES:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Нужно название")
+    title = title[:120]
+    if title != conv.title:
+        conv.title = title
+        if "about" in payload:
+            conv.about = (payload.get("about") or "").strip()[:500]
+        db.commit()
+        _system(db, conv_id, "title_changed", title)   #§D6
+        _broadcast(db, conv_id)
+    return {"ok": True, "title": conv.title, "about": conv.about}

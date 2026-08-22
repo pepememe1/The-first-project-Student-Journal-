@@ -184,8 +184,13 @@ def test_translation_never_rewrites_the_stored_message():
     """Перевод — способ ПРОЧИТАТЬ чужую реплику, а не её новая версия. В базе обязан
     остаться текст, который человек написал."""
     import pathlib
-    src = (pathlib.Path(__file__).resolve().parents[1]
-           / "app" / "routers" / "messenger.py").read_text(encoding="utf-8")
+    #⚠️ Мессенджер — ПАКЕТ, а не файл (разрез 3.7.7): читаем ВЕСЬ каталог и склеиваем.
+    #Раньше здесь стоял путь к `messenger.py`, и после разреза тест упал с ENOENT. Это
+    #хороший исход: читай он один модуль из восьми, эндпоинт мог бы переехать в соседний,
+    #и проверка молча перестала бы что-либо проверять, оставаясь зелёной.
+    pkg = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers" / "messenger"
+    src = "\n".join(f.read_text(encoding="utf-8") for f in sorted(pkg.glob("*.py")))
+    assert "def translate_text(" in src, "эндпоинт перевода не найден в пакете мессенджера"
     block = src.split("def translate_text(", 1)[1].split("\n@router", 1)[0]
     for forbidden in ("db.add(", "m.body =", "commit()"):
         assert forbidden not in block, f"эндпоинт перевода пишет в базу: {forbidden}"

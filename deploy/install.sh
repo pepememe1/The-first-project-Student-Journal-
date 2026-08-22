@@ -96,7 +96,14 @@ Description=GradeBookAI API server
 After=network.target
 [Service]
 WorkingDirectory=$APP_DIR/server
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $PORT
+# --loop uvloop --http httptools заданы ЯВНО, хотя uvicorn и так выбирает их сам,
+# когда пакеты установлены (--loop auto / --http auto). Явность нужна не ради
+# скорости — она уже есть, проверено по /proc/<pid>/maps живого процесса, — а ради
+# ГРОМКОГО отказа: пропадёт пакет из venv, и служба не поднимется вовсе вместо того,
+# чтобы тихо съехать на медленный asyncio и оставить это незамеченным на месяцы.
+# Воркер ОДИН и таким останется: реестр веб-сокетов и ход активностей живут в памяти
+# процесса (§13), второй воркер расколол бы их пополам. На одном ядре это и не нужно.
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $PORT \n  --loop uvloop --http httptools
 Restart=always
 User=root
 [Install]

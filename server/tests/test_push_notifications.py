@@ -11,6 +11,35 @@ import pytest
 from conftest import make_admin, make_teacher, assign_teacher
 
 
+def _patch_across_messenger(monkeypatch, name, value):
+    """Подменяет имя ВО ВСЕХ модулях пакета мессенджера, а не только в самом пакете.
+
+    ⚠️ ЗАЧЕМ ТАК, А НЕ `monkeypatch.setattr(messenger, name, value)`. С разреза 3.7.7
+    мессенджер — пакет, и каждый его модуль берёт хелперы через `from ._common import *`,
+    то есть заводит СВОЮ ссылку на функцию. Подмена атрибута на пакете такую ссылку не
+    достаёт: код продолжает звать оригинал.
+
+    Тихо и опасно это ровно потому, что тест от такой подмены НЕ КРАСНЕЕТ, а становится
+    ЛОЖНО ЗЕЛЁНЫМ — что и записано в докстринге теста ниже: получатель считается онлайн,
+    пуш не отправляется вовсе, и проверка «в пуше нет ФИО» проходит по пустому списку.
+    Обходим модули пакета перебором, а не списком имён: переедет функция в соседний
+    модуль — подмена продолжит работать сама.
+    """
+    import importlib
+    import pkgutil
+
+    from app.routers import messenger as pkg
+
+    targets = [pkg] + [importlib.import_module(f"{pkg.__name__}.{m.name}")
+                       for m in pkgutil.iter_modules(pkg.__path__)]
+    patched = 0
+    for mod in targets:
+        if hasattr(mod, name):
+            monkeypatch.setattr(mod, name, value)
+            patched += 1
+    assert patched, f"имени {name} нет ни в одном модуле пакета — подмена не подействовала"
+
+
 @pytest.fixture(autouse=True)
 def push_on(monkeypatch):
     """Включаем пуши и подменяем сетевой вызов на запись в список."""
@@ -284,10 +313,9 @@ def test_direct_message_push_does_not_carry_sender_name(client, push_on, monkeyp
     ЗЕЛЁНОЙ: получатель только что вошёл, сервер считал его активным, пуш не отправлялся
     вовсе — и проверка «в пуше нет ФИО» проходила по пустому списку. Поймано обратным
     ходом: с откаченной починкой тест не краснел."""
-    from app.routers import messenger as messenger_router
     from test_messenger import _make_student
 
-    monkeypatch.setattr(messenger_router, "_online_logins", lambda: set())
+    _patch_across_messenger(monkeypatch, "_online_logins", lambda: set())
 
     admin = make_admin(client)
     _seed(client, admin)

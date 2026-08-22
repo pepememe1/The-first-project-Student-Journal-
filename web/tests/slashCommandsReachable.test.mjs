@@ -13,14 +13,23 @@
 // подсказку и не гейт доступности. Правило, ругающееся на формулировки, начнут обходить.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..', '..')
 
-const server = readFileSync(resolve(root, 'server/app/routers/messenger.py'), 'utf-8')
+// ⚠️ Мессенджер — ПАКЕТ, а не файл (разрез 3.7.7): читаем ВСЕ модули каталога и склеиваем.
+// Раньше здесь стоял путь к `messenger.py`, и после разреза тест упал с ENOENT — это
+// хороший исход, потому что альтернатива хуже: читай он один модуль из восьми, команды
+// из остальных считались бы «не разбираемыми сервером», и сторож начал бы врать в ту
+// сторону, где его никто не проверяет. Каталог читается целиком именно поэтому.
+const messengerDir = resolve(root, 'server/app/routers/messenger')
+const server = readdirSync(messengerDir)
+  .filter((f) => f.endsWith('.py'))
+  .map((f) => readFileSync(join(messengerDir, f), 'utf-8'))
+  .join('\n')
 const thread = readFileSync(resolve(root, 'web/src/components/messenger/ChatThread.vue'), 'utf-8')
 
 // Команды, которые сервер РЕАЛЬНО разбирает: `re.compile(r"^/…")`. Берём первый литерал
