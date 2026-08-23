@@ -200,8 +200,13 @@ export const router = createRouter({
 // сам собой. А вот закрытие ОКНА роутер не видит — на этот случай ниже beforeunload.
 async function confirmLeavingEasterEgg(to, from) {
   const easter = useEasterStore()
-  if (!easter.pending) return true
   if (to.path === from.path || to.path === '/login') return true
+  // ⚠️ ЗАМОК ПРОВЕРЯЕМ ПЕРВЫМ и молча. Полноэкранная сцена только что возникла поверх
+  // страницы — спрашивать «точно уйти?» в этот момент бессмысленно: человек ещё не успел
+  // понять, что появилось, а диалог поверх сцены закрывает её же собой. Пара секунд
+  // задержки объясняет себя сама, потому что на экране в это время идёт находка.
+  if (easter.navLocked()) return false
+  if (!easter.pending) return true
   const { confirm } = useConfirm()
   const ask = leaveAsk(easter.pending)
   const ok = await confirm({

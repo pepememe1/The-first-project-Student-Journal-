@@ -77,12 +77,31 @@ test('у полноэкранной сцены есть предохраните
   assert.match(store, /clearTimeout\(stuckTimer\)/, 'предохранитель не снимается при закрытии')
 })
 
-test('обратный ход: несуществующий ассет и голый loadedmetadata ловятся', () => {
-  assert.ok(!existsSync(join(ROOT, 'public/easter/img/нет-такого.png')),
-    'проверка ассетов обязана опираться на реальное наличие файла')
-  const fake = "audio.addEventListener('loadedmetadata', start, { once: true })"
-  assert.match(fake, /addEventListener\('loadedmetadata'/,
-    'правило обязано ловить дословную строку, из-за которой оно и заведено')
+test('обратный ход: правила ловят дефект на СИНТЕТИЧЕСКОМ файле', () => {
+  // 🔥 Прежняя версия этого теста объявляла строку тут же и тут же сверяла её с
+  // регуляркой — то есть проверяла сама себя и осталась бы зелёной, даже если бы сторож
+  // выше деградировал до нуля проверок (нашёл Полковник). Настоящий обратный ход обязан
+  // прогонять ПРАВИЛО по заведомо плохому входу и убеждаться, что оно его находит.
+  //
+  // Правила вынесены сюда как чистые функции от текста файла — ровно те же выражения,
+  // что применяются выше к настоящим сценам.
+  const findsBareListener = (src) =>
+    /addEventListener\('loadedmetadata'/.test(src) && !src.includes('whenAudioReady')
+  const findsAsset = (src) => [...src.matchAll(/['"(](\/easter\/[^'")\s]+)/g)]
+    .map((m) => m[1])
+    .filter((rel) => !existsSync(join(ROOT, 'public', rel)))
+
+  const BAD = "audio.addEventListener('loadedmetadata', start, { once: true })\n"
+    + "<img src=\"/easter/img/нет-такого.png\" />"
+  const GOOD = "import { whenAudioReady } from '@/utils/audioReady'\n"
+    + "cancelReady = whenAudioReady(audio, start)\n"
+    + "<img src=\"/easter/img/d6.png\" />"
+
+  assert.ok(findsBareListener(BAD), 'правило НЕ видит голый loadedmetadata — оно бесполезно')
+  assert.ok(!findsBareListener(GOOD), 'правило ругается на исправный код')
+  assert.deepEqual(findsAsset(BAD), ['/easter/img/нет-такого.png'],
+    'правило НЕ видит ссылку на отсутствующий файл')
+  assert.deepEqual(findsAsset(GOOD), [], 'правило ругается на существующий файл')
 })
 
 test('редкость есть у каждой ачивки и она из известной шкалы', () => {
@@ -156,4 +175,43 @@ test('сценарий Stanley по секундам соблюдён', () => {
   assert.equal(speechAt - switchAt, 2000, 'подмена цифры обязана быть ровно за 2 с до речи')
   assert.equal(speechAt, 15000, 'речь начинается на 15-й секунде')
   assert.ok(shakeAt + shakeMs < switchAt, 'дрожь обязана стихнуть ДО подмены цифры')
+})
+
+test('полноэкранная сцена перехватывает мышь, а не пропускает клики насквозь', () => {
+  // 🔥 Правило Влада: сцена ведёт себя как окно про cookie — выйти мимо кнопок нельзя.
+  // Раньше корневой слой был прозрачным для мыши, и промах мимо дерева попадал в кнопку
+  // страницы ПОД сценой: страница уходила, находка исчезала. Так терялись ачивки у тех,
+  // кто ловил дерево специально.
+  //
+  // ⚠️ Исключения ЯВНЫЕ и с причиной. G-Man лишь проявляется поверх работающего
+  // интерфейса — запирать из-за него мышь нельзя; Far Cry и Stanley это подписи внизу
+  // экрана входа и страницы 404, они обязаны пропускать клики к форме под ними.
+  const TRANSPARENT_OK = new Set(['GmanWatcher.vue', 'FarCryQuote.vue', 'StanleyNarrator.vue'])
+  const bad = []
+  for (const f of files) {
+    if (TRANSPARENT_OK.has(f)) continue
+    const src = read(f)
+    if (/class="[^"]*pointer-events-none[^"]*fixed inset-0/.test(src)) bad.push(f)
+  }
+  assert.deepEqual(bad, [],
+    'сцена прозрачна для мыши — промах уносит находку:\n' + bad.join('\n'))
+})
+
+test('у дерева Делтарун выход открывается только после последней реплики', () => {
+  // Прокликивая диалог, легко проскочить в проход и уйти, не получив ачивку. Поэтому
+  // проход не существует, пока `wayOut` не поднят — а поднимается он в самом конце
+  // `advance`, ПОСЛЕ выдачи ачивки.
+  const src = read('DeltaruneTree.vue')
+  assert.ok(!/aria-label="Закрыть"/.test(src),
+    'вернулась кнопка «закрыть на весь экран» — один промах снова унесёт находку')
+  assert.match(src, /v-if="wayOut"/, 'проход виден всегда, а не после диалога')
+
+  const adv = src.split('async function advance()')[1].split('\n}')[0]
+  const claimAt = adv.indexOf("claim('deltarune_tree')")
+  const wayAt = adv.indexOf('wayOut.value = true')
+  assert.ok(claimAt >= 0 && wayAt >= 0, 'разбор advance() сломался')
+  assert.ok(claimAt < wayAt, 'проход открывается РАНЬШЕ выдачи ачивки — её можно потерять')
+
+  // И предохранитель: модальная сцена без объяснённого выхода — ловушка.
+  assert.match(src, /escapeShown/, 'нет позднего выхода на случай, если человек не понял')
 })

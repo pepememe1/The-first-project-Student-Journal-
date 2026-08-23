@@ -22,7 +22,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-0 z-[94]">
+  <!-- ⚠️ Слой ПЕРЕХВАТЫВАЕТ мышь (без pointer-events-none). Пока сцена идёт,
+       кликнуть можно только по ней: промах по интерфейсу под ней уносил находку —
+       страница уходила, а вместе с ней и пасхалка. Тот же приём, что у окна про
+       cookie: выйти мимо кнопок нельзя. -->
+  <div class="fixed inset-0 z-[94]">
     <div class="absolute inset-0 bg-black transition-opacity duration-1000"
          :style="{ opacity: veil ? 0.42 : 0 }"></div>
     <div class="absolute inset-x-0 top-1/2 grid h-[23%] -translate-y-1/2 place-items-center

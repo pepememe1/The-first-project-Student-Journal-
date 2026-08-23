@@ -333,18 +333,53 @@ def test_birthday_cake_leaves_a_trace_so_the_achievement_can_be_claimed(client):
         db.close()
 
 
-def test_deltarune_has_a_short_cooldown_and_the_rest_do_not(client):
-    """Кулдаун ПОШТУЧНО и только у дерева.
+def test_cooldown_only_where_the_trigger_is_frequent(client):
+    """Кулдаун ПОШТУЧНО и только там, где триггер частый.
 
     ⚠️ Это НЕ возврат общего суточного кулдауна, снятого выше, а решение обратной
-    задачи: дерево бросается на каждой смене вкладки (по журналу боевой машины — 3777
-    бросков за сутки), выпадало по нескольку раз за сеанс и перестало читаться как
-    находка. Обратный ход: повесь кулдаун на редкую пасхалку — она станет невидимой
-    вдвойне, ровно то, от чего избавлялись."""
-    assert easter_eggs.EGG_COOLDOWN_S == {"deltarune_tree": 300}
+    задачи. Дерево бросается на каждой смене вкладки (по журналу боевой машины — 3777
+    бросков за сутки), счётчик стиля — на каждой загрузке журнала у отличника: оба
+    примелькались и перестали читаться как находка.
+    Обратный ход: повесь кулдаун на РЕДКУЮ пасхалку — она станет невидимой вдвойне,
+    ровно то, от чего избавлялись."""
+    assert set(easter_eggs.EGG_COOLDOWN_S) == {"deltarune_tree", "ultrakill_rank"}
     #У пасхалок с редким триггером кулдауна быть НЕ должно.
     for egg in ("cyberpunk_login", "stanley_parable_404", "gman_observer", "hotline_miami"):
         assert egg not in easter_eggs.EGG_COOLDOWN_S
+
+
+def test_ultrakill_is_a_condition_plus_a_chance(client):
+    """Счётчик стиля — условие И бросок, а не одно условие.
+
+    ⚠️ Раньше он был чисто детерминированным, и отличник видел плашку при КАЖДОЙ
+    загрузке журнала. Доля записана в процентах намеренно: 30 % это про частоту показа
+    заслуженной плашки, а не про редкость находки, и знаменатель (1/3) называл бы её
+    не тем, что она есть."""
+    assert easter_eggs.EGG_PERCENT["ultrakill_rank"] == 30
+    #⚠️ В двух словарях сразу быть не должно: значения 3 и 3 означают там разное
+    #(33 % против 3 %), и двойное объявление — прямой путь промахнуться на порядок.
+    assert "ultrakill_rank" not in easter_eggs.EGG_CHANCES
+
+
+def test_percent_roll_lands_near_the_declared_share(client):
+    """Бросок по проценту действительно даёт заявленную долю.
+
+    Обратный ход: перепутай в `roll` проценты со знаменателем — доля уедет к 1/30,
+    и проверка краснеет."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="pc1")
+    uid = _db_user("pc1").id
+    db = SessionLocal()
+    try:
+        #Кулдаун обошёл бы бросок, поэтому проверяем чистую функцию доли.
+        import random
+        hits = sum(1 for _ in range(4000) if random.randint(1, 100) <= easter_eggs.EGG_PERCENT["ultrakill_rank"])
+        assert 0.25 < hits / 4000 < 0.35, f"доля {hits / 4000:.2f} далека от 30 %"
+        #И сам roll на первом же вызове обязан уметь сработать (кулдауна ещё нет).
+        got = any(easter_eggs.roll("ultrakill_rank", uid, db) for _ in range(1))
+        assert isinstance(got, bool)
+    finally:
+        db.close()
 
 
 def test_cooldown_actually_blocks_the_second_roll(client):

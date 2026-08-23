@@ -1,12 +1,26 @@
 <script setup>
-// Дерево Делтарун — выпадает на переключении между вкладками, 1/666.
+// Дерево Делтарун — выпадает на переключении между вкладками.
 //
 // ⚠️ ОВЕРЛЕЙ БЕЗ РОУТИНГА, и это принципиально: адрес не меняется, значит и подсмотреть
 // нечего, и напрямую зайти невозможно — это не URL, а временный элемент, который
 // существует, только пока показан. Перезагрузка страницы его убирает.
 //
-// Реплики листаются КЛИКОМ по окну, сами не пролистываются. Взял яйцо — дальше при
-// любом заходе остаётся только «Это дерево».
+// 🔥 ЗАКРЫТЬ ЕГО КЛИКОМ «КУДА ПОПАЛО» НЕЛЬЗЯ (правка Влада 23.08.2026). Раньше поверх
+// всей сцены лежала кнопка «закрыть», и ОДИН промах мимо дерева уносил находку целиком:
+// человек кликал, чтобы заговорить, попадал мимо — и сцены больше нет, а ачивки не
+// будет. Влад с Ярославом ловили дерево специально и не могли его пройти.
+//
+// Поэтому сцена ведёт себя как то самое окно про cookie, из которого нельзя выйти мимо
+// кнопок: кликабельны РОВНО два места — само дерево и окно диалога. Выход появляется
+// только ПОСЛЕ последней реплики: снизу открывается проход, душа уходит вниз (как
+// персонаж выходит из комнаты), и полоса внизу становится живой.
+//
+// ⚠️ Выход НЕ активен, пока диалог не дочитан до конца. Иначе, прокликивая реплики,
+// человек проскакивал бы в проход и терял ачивку ровно тем же промахом, от которого
+// эта правка и защищает.
+//
+// Реплики листаются КЛИКОМ по окну. Взял яйцо — дальше при любом заходе остаётся только
+// «Это дерево».
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { mumble } from '@/utils/mumble'
@@ -24,7 +38,26 @@ const lines = ref([])
 const dlg = ref('')
 const started = ref(false)
 const shown = ref(false)
+// Проход внизу. Открывается ТОЛЬКО когда диалог дочитан до последней реплики.
+const wayOut = ref(false)
+const leaving = ref(false)
+// ⚠️ ПРЕДОХРАНИТЕЛЬ ОТ ЛОВУШКИ. Сцена намеренно модальная: выйти можно только через
+// проход внизу, а он открывается лишь после разговора с деревом. Но человек, который не
+// играл в Deltarune, может просто не понять, что дерево кликабельно, — и окажется заперт
+// в журнале, пока не сработает пятиминутный предохранитель стора. Пять минут «продукт
+// завис» — цена, несопоставимая с пасхалкой.
+// Поэтому через 25 секунд БЕЗ ЕДИНОГО действия в углу появляется скромный выход. Он
+// поздний и мелкий: случайно попасть в него в первые секунды, ради чего всё и затевалось,
+// невозможно.
+const escapeShown = ref(false)
+let escapeTimer = 0
 let busy = false, music = null
+
+function armEscape() {
+  clearTimeout(escapeTimer)
+  escapeShown.value = false
+  escapeTimer = setTimeout(() => { escapeShown.value = true }, 25000)
+}
 
 onMounted(() => {
   requestAnimationFrame(() => { shown.value = true })
@@ -38,8 +71,9 @@ onMounted(() => {
     music.volume = 0.3 * k
     if (k >= 1) clearInterval(id)
   }, 50)
+  armEscape()
 })
-onBeforeUnmount(() => { if (music) music.pause() })
+onBeforeUnmount(() => { clearTimeout(escapeTimer); if (music) music.pause() })
 
 async function type(text) {
   busy = true
@@ -54,6 +88,7 @@ async function type(text) {
 
 let step = 0
 async function talk() {
+  armEscape()                    //человек разобрался — выход снова не нужен
   if (started.value) return
   started.value = true
   lines.value = taken.value ? SHORT : FULL
@@ -61,9 +96,13 @@ async function talk() {
 }
 
 async function advance() {
+  armEscape()
   if (!started.value || busy) return
   step += 1
   if (step < lines.value.length) { await type(lines.value[step]); return }
+
+  // Диалог дочитан. Ачивку закрываем ЗДЕСЬ — до того, как человек пойдёт к выходу:
+  // между «дочитал» и «ушёл» он может передумать, а находка уже состоялась.
   const first = lines.value.length > 1
   started.value = false; step = 0; dlg.value = ''
   if (first && !taken.value) {
@@ -71,14 +110,35 @@ async function advance() {
     localStorage.setItem('gb.egg.tree', '1')
     await easter.claim('deltarune_tree')
   }
+  wayOut.value = true          //только теперь снизу можно уйти
+}
+
+/** Уйти вниз. Работает лишь после последней реплики — см. докстринг. */
+async function leave() {
+  if (!wayOut.value || leaving.value) return
+  leaving.value = true
+  if (music) {
+    //Гасим музыку, а не обрываем: резкий обрыв слышен как сбой.
+    const v0 = music.volume, t0 = performance.now()
+    const id = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / 600)
+      music.volume = Math.max(0, v0 * (1 - k))
+      if (k >= 1) { clearInterval(id); music.pause() }
+    }, 40)
+  }
+  await new Promise((r) => setTimeout(r, 900))   //душа успевает уйти за нижний край
+  shown.value = false
+  await new Promise((r) => setTimeout(r, 400))
+  emit('close')
 }
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[95] grid place-items-center bg-black transition-opacity duration-500 soul"
+  <!-- ⚠️ Кнопки «закрыть на весь экран» здесь НЕТ и быть не должно: именно она уносила
+       находку одним промахом. Кликабельны только дерево, окно диалога и проход внизу. -->
+  <div class="soul fixed inset-0 z-[95] grid place-items-center overflow-hidden bg-black
+              transition-opacity duration-500"
        :style="{ opacity: shown ? 1 : 0 }">
-    <button type="button" class="soul absolute inset-0 cursor-[inherit]" aria-label="Закрыть"
-            @click="emit('close')"></button>
 
     <img src="/easter/img/tree.gif" alt="" class="relative w-[31%] max-w-[280px]"
          style="image-rendering:pixelated;filter:drop-shadow(0 0 26px rgba(200,30,90,.3))" />
@@ -90,6 +150,26 @@ async function advance() {
       <span>{{ dlg }}</span>
       <span class="absolute bottom-1 right-2.5 text-[9px] text-[#8a8a8a]">▼ клик</span>
     </div>
+
+    <!-- Поздний скромный выход: только если человек так и не тронул дерево. -->
+    <button v-if="escapeShown && !wayOut" type="button" @click.stop="emit('close')"
+            class="soul absolute right-3 top-3 rounded border border-[#3a3a3a] px-2 py-1
+                   font-mono text-[9px] text-[#6d6a5f] hover:text-[#c9c9c9]">
+      выйти
+    </button>
+
+    <!-- Проход вниз. До конца диалога его нет вовсе — ни полосы, ни подсказки. -->
+    <template v-if="wayOut">
+      <!-- Душа уходит за нижний край: это и есть подсказка «выход здесь», знакомая по
+           самой игре. Рисуем спрайт, а не двигаем курсор — курсором управляет человек. -->
+      <span class="gb-soul-walk" :class="leaving ? 'gb-soul-gone' : ''"></span>
+      <button type="button" @click.stop="leave" aria-label="Уйти вниз"
+              class="soul absolute inset-x-0 bottom-0 h-[13%] border-0 bg-transparent p-0">
+        <span class="pointer-events-none block pb-2 text-center text-[10px] tracking-[.3em] text-[#6d6a5f]">
+          ▼ УЙТИ ▼
+        </span>
+      </button>
+    </template>
   </div>
 </template>
 
@@ -98,4 +178,31 @@ async function advance() {
 .soul { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 8 8'%3E%3Cpath fill='%23f00' d='M1 1h2v1h2V1h2v1h1v3H7v1H6v1H5v1H3V7H2V6H1V5H0V2h1z'/%3E%3C/svg%3E") 9 9, auto; }
 .utbox { background:#000; border:4px solid #fff; color:#fff; padding:14px 16px; min-height:58px;
          font-family:'Press Start 2P', monospace; font-size:11px; line-height:1.95; }
+
+/* Душа, уходящая вниз. Тот же силуэт сердца, что и у курсора. */
+.gb-soul-walk {
+  position: absolute;
+  left: 50%;
+  bottom: 15%;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  background: center/contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 8 8'%3E%3Cpath fill='%23f00' d='M1 1h2v1h2V1h2v1h1v3H7v1H6v1H5v1H3V7H2V6H1V5H0V2h1z'/%3E%3C/svg%3E");
+  filter: drop-shadow(0 0 6px rgba(255, 40, 40, .7));
+  animation: gb-soul-hint 1.6s ease-in-out infinite;
+}
+/* Пошла к выходу — уезжает за нижний край и гаснет. */
+.gb-soul-gone { animation: gb-soul-leave .9s ease-in forwards }
+
+@keyframes gb-soul-hint {
+  0%, 100% { transform: translateY(0); opacity: .85 }
+  50%      { transform: translateY(10px); opacity: 1 }
+}
+@keyframes gb-soul-leave {
+  to { transform: translateY(22vh); opacity: 0 }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gb-soul-walk { animation: none }
+}
 </style>

@@ -111,8 +111,11 @@ const LEAVE_ASK = {
   },
   hotline_miami: {
     title: 'Вам звонили',
-    message: 'Пятьдесят благословений не любят, когда их звонки оставляют без ответа. '
-      + 'Вы точно хотите не брать трубку?',
+    // ⚠️ Без прямого называния источника (просьба Влада): намёк работает, пока его не
+    // объяснили вслух, а названная отсылка перестаёт быть отсылкой и становится
+    // подписью к ней.
+    message: 'Вам звонил некто, кто очень не любит, когда ему не отвечают. '
+      + 'Точно не брать трубку?',
     ok: 'Не брать', cancel: 'Ответить',
   },
 }
@@ -186,7 +189,6 @@ export const useEasterStore = defineStore('easterEggs', () => {
   async function afterLogin() {
     const auth = useAuthStore()
     if (auth.role !== 'student') return null
-    loadOwned()          // не ждём: вопрос при уходе понадобится не раньше первой находки
     try {
       const { data } = await easterApi.onLogin()
       // DOOM детерминирован и живёт СВОИМ полем: он не «выпал», он просто включён.
@@ -216,9 +218,32 @@ export const useEasterStore = defineStore('easterEggs', () => {
    */
   const STUCK_MS = 5 * 60 * 1000
   let stuckTimer = 0
+
+  // ━━ КОРОТКИЙ ЗАМОК НА ПЕРЕХОД ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // Наблюдение Влада: у пасхалок ДВА разных механизма, и обращаться с ними одинаково
+  // неправильно. Штамп или кубик ПОЯВЛЯЮТСЯ НА странице — их легко не заметить, и
+  // вопрос «останьтесь, а то не заберёте» там по делу. А дерево Делтарун или Hotline
+  // ЗАМЕНЯЮТ СОБОЙ ЭКРАН: пропустить их невозможно, и вопрос «на странице что-то есть»
+  // звучит нелепо — человек и так смотрит прямо на это «что-то».
+  //
+  // Опасен у них другой момент — ПЕРВЫЙ. Сцена возникает поверх страницы ровно тогда,
+  // когда рука уже нажимает соседнюю вкладку, и находка исчезает, не успев начаться.
+  // Поэтому вместо вопроса — беззвучная задержка на пару секунд сразу после появления.
+  //
+  // ⚠️ Задержка НЕ заменяет подтверждение целиком: когда она истекла, работает обычное
+  // правило (спросить, если ачивка ещё не получена). Иначе редкую находку можно было бы
+  // потерять одним случайным кликом на третьей секунде.
+  const NAV_LOCK_MS = 2500
+  const lockedUntil = ref(0)
+
+  /** Идёт ли сейчас та самая пара секунд, когда уходить нельзя. */
+  function navLocked() { return Date.now() < lockedUntil.value }
   function place(egg) {
     if (IN_PAGE.has(egg)) { inPage.value = { ...inPage.value, [egg]: true }; return }
     active.value = egg
+    //Замок ставим ТОЛЬКО полноэкранной сцене: слой внутри страницы никому не мешает
+    //уйти, и запирать навигацию из-за него значило бы наказывать за находку.
+    lockedUntil.value = Date.now() + NAV_LOCK_MS
     clearTimeout(stuckTimer)
     stuckTimer = setTimeout(() => {
       if (active.value !== egg) return
@@ -243,7 +268,7 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   /** Показать сцену без броска — для отладки и для повторного входа в уже начатую. */
   function show(egg) { place(egg) }
-  function close() { clearTimeout(stuckTimer); active.value = '' }
+  function close() { clearTimeout(stuckTimer); lockedUntil.value = 0; active.value = '' }
   /** Убрать пасхалку страницы: доиграла и больше не нужна. */
   function closeInPage(egg) {
     const next = { ...inPage.value }
@@ -280,6 +305,7 @@ export const useEasterStore = defineStore('easterEggs', () => {
    */
   function dismissPending() {
     clearTimeout(stuckTimer)
+    lockedUntil.value = 0
     active.value = ''
     const next = { ...inPage.value }
     for (const k of Object.keys(next)) if (MISSABLE_IN_PAGE.has(k)) delete next[k]
@@ -320,12 +346,13 @@ export const useEasterStore = defineStore('easterEggs', () => {
   function reset() {
     clearTimeout(stuckTimer)
     active.value = ''
+    lockedUntil.value = 0
     inPage.value = {}
     owned.value = new Set()
     lastUnlocked.value = null
     inFlight.clear()
   }
 
-  return { active, inPage, owned, lastUnlocked, pending, roll, afterLogin, rollJournal,
+  return { active, inPage, owned, lastUnlocked, pending, navLocked, roll, afterLogin, rollJournal,
            loadOwned, show, close, closeInPage, dismissPending, claim, clearToast, reset }
 })

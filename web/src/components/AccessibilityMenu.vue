@@ -6,19 +6,52 @@
 //
 // Размещается в сайдбаре (десктоп) и на мобильной полосе — всегда на виду, потому что
 // человеку со слабым зрением её нельзя прятать в глубину настроек.
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Glasses, Contrast, X } from '@lucide/vue'
 import { useA11yStore } from '@/stores/a11y'
 import { useLocaleStore } from '@/stores/locale'
 
 // Открывать меню вверх (в сайдбаре кнопка внизу) или вниз (на мобильной полосе сверху).
 // `placement` читается прямо в шаблоне (<script setup> раскрывает пропсы автоматически).
-defineProps({ placement: { type: String, default: 'up' } })
+const props = defineProps({ placement: { type: String, default: 'up' } })
 
 const a11y = useA11yStore()
 const loc = useLocaleStore()
 const open = ref(false)
 const rootEl = ref(null)
+
+// ━━ ПОЛОЖЕНИЕ МЕНЮ СЧИТАЕТСЯ, А НЕ ЗАДАЁТСЯ ПРИВЯЗКОЙ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔥 Куплено дефектом (23.08.2026, отзыв Влада со скриншотом). Меню было `absolute` с
+// шириной `w-60`, то есть 15rem — В ЕДИНИЦАХ ШРИФТА. А само оно этот шрифт и
+// увеличивает: включаешь «Максимум» — панель разом становится в полтора раза шире и
+// уезжает за левый край экрана, вместе с кнопкой «вернуть обычный вид». То есть режим
+// для слабовидящих ломал ровно тот элемент, которым из него выходят.
+//
+// ⚠️ Вторая причина того же: сайдбар теперь тянется, и в свёрнутом виде он шириной с
+// иконку — меню, привязанное правым краем к кнопке, ушло бы за экран и без всякого
+// шрифта.
+//
+// Поэтому: ширина в ПИКСЕЛЯХ (шрифт её не двигает), координаты считаются от кнопки при
+// открытии и ЗАЖИМАЮТСЯ границами окна. `fixed`, а не `absolute` — иначе прижатие к
+// окну невозможно в принципе, координаты считались бы от родителя.
+const MENU_W = 250
+const pos = ref({ left: 0, top: 0 })
+
+function place() {
+  const el = rootEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const pad = 8
+  //По горизонтали держим правый край кнопки, но не даём вылезти ни влево, ни вправо.
+  const left = Math.min(
+    Math.max(pad, r.right - MENU_W),
+    Math.max(pad, window.innerWidth - MENU_W - pad),
+  )
+  //По вертикали: вверх от кнопки или вниз, как просили; вылезло за край — прижимаем.
+  const up = props.placement === 'up'
+  const top = up ? r.top - pad : r.bottom + pad
+  pos.value = { left, top, up }
+}
 
 const t = (k, f) => loc.t(k, f)
 // Ступени крупности: подпись и множитель для показа.
@@ -32,13 +65,24 @@ function onDocClick(e) {
   if (open.value && rootEl.value && !rootEl.value.contains(e.target)) open.value = false
 }
 function onKey(e) { if (e.key === 'Escape') open.value = false }
+watch(open, (v) => { if (v) nextTick(place) })
+//Окно меняет размер (и шрифт меняет разметку) — пересчитываем, иначе меню «отклеится».
+function onViewportChange() { if (open.value) place() }
+
 onMounted(() => {
   document.addEventListener('pointerdown', onDocClick, true)
   document.addEventListener('keydown', onKey)
+  //⚠️ Прокрутка слушается в ФАЗЕ ЗАХВАТА и по всему документу: кнопка стоит в сайдбаре,
+  //у которого своя прокрутка, и обычный слушатель на window её не увидит — меню повисло
+  //бы в воздухе, оторвавшись от кнопки.
+  window.addEventListener('resize', onViewportChange)
+  document.addEventListener('scroll', onViewportChange, true)
 })
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocClick, true)
   document.removeEventListener('keydown', onKey)
+  window.removeEventListener('resize', onViewportChange)
+  document.removeEventListener('scroll', onViewportChange, true)
 })
 </script>
 
@@ -59,10 +103,10 @@ onBeforeUnmount(() => {
     <!-- Меню -->
     <transition name="a11y-pop">
       <div v-if="open"
-           class="absolute z-50 w-60 rounded-xl border border-border2 bg-card p-3 shadow-card"
-           :class="placement === 'up'
-             ? 'bottom-full left-0 mb-2'
-             : 'top-full right-0 mt-2'">
+           class="fixed z-50 rounded-xl border border-border2 bg-card p-3 shadow-card"
+           :style="{ left: pos.left + 'px', top: pos.top + 'px', width: MENU_W + 'px',
+                     maxWidth: 'calc(100vw - 16px)',
+                     transform: pos.up ? 'translateY(-100%)' : 'none' }">
         <div class="mb-2 flex items-center gap-2">
           <Glasses class="size-4 shrink-0 text-accent" />
           <p class="min-w-0 flex-1 truncate font-title text-sm font-bold text-text">

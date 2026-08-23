@@ -345,3 +345,103 @@ def test_delta_pull_does_not_lose_boundary_record(client):
     ids = [x["id"] for x in delta["changes"]["lessons"]]
     assert _LESSON["id"] in ids, ("занятие с меткой, равной метке клиента, обязано прийти "
                                   f"(иначе теряется навсегда), а пришло: {ids}")
+
+
+def test_grade_for_an_existing_lesson_is_accepted_after_the_map_was_narrowed(client):
+    """Оценка к занятию, которого НЕТ в этом пуше, но которое ЕСТЬ в базе, принимается.
+
+    🔥 Ради этого случая карта `lesson_id → (группа, предмет)` и ходит в базу. Раньше
+    она читала таблицу занятий ЦЕЛИКОМ; теперь — только строки, на которые ссылаются
+    пришедшие оценки. Ошибись в наборе идентификаторов, и преподаватель получил бы
+    МОЛЧА отвергнутые оценки: сервер ответил бы 200, счётчик `rejected` вырос, а
+    человек ничего бы не заметил до конца семестра. Потеря выставленной оценки — самый
+    дорогой отказ в продукте, поэтому проверяем именно этот путь.
+    """
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="tsc1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:tsc1", "ИС-21", "Математика")
+
+    #Занятие кладём ОТДЕЛЬНЫМ пушем — значит в следующем пакете его не будет.
+    r = client.post("/sync/push", json={"changes": {"lessons": [{
+        "id": "L-sc-1", "group_name": "ИС-21", "subject": "Математика",
+        "type": "Практика", "number": 1,
+    }]}}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    #А теперь пуш ТОЛЬКО с оценкой: занятия в нём нет, оно уже на сервере.
+    r = client.post("/sync/push", json={"changes": {"grades": [{
+        "id": "stud:x|L-sc-1", "student_id": "stud:x", "lesson_id": "L-sc-1", "value": "5",
+    }]}}, headers=th)
+    assert r.status_code == 200, r.text
+    #⚠️  — СЛОВАРЬ по таблицам, а не число: писать  тут значит
+    #сравнивать словарь с числом и получить TypeError вместо проверки.
+    assert not (r.json().get("rejected") or {}).get("grades"), f"оценку отвергли: {r.json()}"
+
+    from app.db import SessionLocal
+    from app.models import Grade
+    db = SessionLocal()
+    try:
+        assert db.get(Grade, "stud:x|L-sc-1") is not None, "оценка не сохранилась"
+    finally:
+        db.close()
+
+
+def test_grade_for_someone_elses_lesson_is_still_rejected(client):
+    """Обратный ход: сужение карты не должно ослабить проверку прав.
+
+    Занятие есть в базе, но принадлежит ЧУЖОЙ паре (группа, предмет) — оценку по нему
+    преподаватель ставить не вправе, и раньше это ловилось той же картой."""
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="tsc2", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:tsc2", "ИС-21", "Математика")
+    r = client.post("/sync/push", json={"changes": {"lessons": [{
+        "id": "L-sc-2", "group_name": "ИС-99", "subject": "Физика",
+        "type": "Лекция", "number": 1,
+    }]}}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    r = client.post("/sync/push", json={"changes": {"grades": [{
+        "id": "stud:y|L-sc-2", "student_id": "stud:y", "lesson_id": "L-sc-2", "value": "5",
+    }]}}, headers=th)
+    assert r.status_code == 200, r.text
+    assert (r.json().get("rejected") or {}).get("grades"), "чужая оценка прошла — права ослабли"
+
+    from app.db import SessionLocal
+    from app.models import Grade
+    db = SessionLocal()
+    try:
+        assert db.get(Grade, "stud:y|L-sc-2") is None, "чужая оценка сохранилась"
+    finally:
+        db.close()
+
+
+def test_term_grade_survives_a_surname_with_a_stray_space(client):
+    """Итоговая оценка студента, заведённого с краевым пробелом в фамилии, доезжает.
+
+    🔥 Найдено Полковником. Карта «(фамилия, имя) → группа» сузилась до фамилий из
+    пакета, но в SQL уходило ОБРЕЗАННОЕ значение, а искали потом по НЕОБРЕЗАННОМУ.
+    Раньше карта содержала всех, и совпадение было; после сужения студент с пробелом
+    в фамилии выпадал из выборки, `student_group` возвращала None, и оценка молча
+    отвергалась — ответ 200, счётчик `rejected`, человек ничего не замечает.
+
+    ⚠️ Пробел в фамилии не выдумка: `users` входит в SYNC_MODELS, десктоп шлёт поле как
+    есть, а вводит его человек руками.
+    """
+    admin = make_admin(client)
+    th = make_teacher(client, admin, login="tsp1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:tsp1", "ИС-21", "Математика")
+
+    r = client.post("/sync/push", json={"changes": {"users": [{
+        "id": "stud:sp1", "role": "student", "login": "sp1",
+        "surname": "Пробелова ", "name": "Анна", "group_name": "ИС-21",
+    }]}}, headers=admin)
+    assert r.status_code == 200, r.text
+
+    r = client.post("/sync/push", json={"changes": {"term_grades": [{
+        "id": "stud:sp1|Математика|2025/2026|1", "student_id": "stud:sp1",
+        "student_f": "Пробелова ", "student_n": "Анна",
+        "subject": "Математика", "year": "2025/2026", "semester": 1, "value": "5",
+    }]}}, headers=th)
+    assert r.status_code == 200, r.text
+    assert not (r.json().get("rejected") or {}).get("term_grades"), \
+        f"итоговую оценку отвергли из-за пробела в фамилии: {r.json()}"

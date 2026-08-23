@@ -145,8 +145,12 @@ def eggs_for_journal(user: User = Depends(get_current_user), db: Session = Depen
     records = W.student_records(db, user.surname, user.name, user.group_name)
     avg = W.average(lessons, records, cfg, scale=W.lesson_scale_map(db, lessons))
 
-    ultra = avg >= easter_eggs.ULTRAKILL_MIN_AVG
-    if ultra:
-        easter_eggs.mark_triggered("ultrakill_rank", user.id, db)
+    #⚠️ Теперь это УСЛОВИЕ + БРОСОК, а не чистое условие (просьба Влада 23.08.2026):
+    #отличник видел плашку при каждой загрузке журнала, и она перестала быть находкой.
+    #Порядок важен: сперва дешёвая проверка среднего, и только потом бросок — иначе
+    #шанс тратился бы на тех, кому плашка всё равно не полагается.
+    #След срабатывания и кулдаун берёт на себя сам `roll`, отдельный `mark_triggered`
+    #здесь больше не нужен и был бы вторым, лишним следом.
+    ultra = avg >= easter_eggs.ULTRAKILL_MIN_AVG and easter_eggs.roll("ultrakill_rank", user.id, db)
     egg = easter_eggs.roll_one_of(["binding_of_isaac_d6", "disco_elysium_voice"], user.id, db)
     return {"ultrakill": ultra, "average": avg, "egg": egg}

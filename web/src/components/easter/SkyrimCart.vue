@@ -20,7 +20,11 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-0 z-[92] bg-black transition-opacity duration-700"
+  <!-- ⚠️ Слой ПЕРЕХВАТЫВАЕТ мышь (без pointer-events-none). Пока сцена идёт,
+       кликнуть можно только по ней: промах по интерфейсу под ней уносил находку —
+       страница уходила, а вместе с ней и пасхалка. Тот же приём, что у окна про
+       cookie: выйти мимо кнопок нельзя. -->
+  <div class="fixed inset-0 z-[92] bg-black transition-opacity duration-700"
        :style="{ opacity: on ? 1 : 0 }">
     <img src="/easter/img/skyrim-cart.webp" alt=""
          class="h-full w-full object-cover" />

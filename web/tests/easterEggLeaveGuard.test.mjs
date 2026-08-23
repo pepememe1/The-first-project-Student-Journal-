@@ -158,3 +158,73 @@ test('стор пасхалок обнуляется при выходе из а
   assert.match(auth.replace(/\/\/.*$/gm, ''), /useEasterStore\(\)\.reset\(\)/,
     'logout не обнуляет стор пасхалок')
 })
+
+test('полноэкранная сцена запирает переход на пару секунд, слой страницы — нет', () => {
+  // ⚠️ У пасхалок два разных механизма, и обращаться с ними одинаково неправильно.
+  // Штамп ПОЯВЛЯЕТСЯ НА странице — его легко не заметить, там уместен вопрос. Дерево
+  // и Hotline ЗАМЕНЯЮТ собой экран: пропустить их невозможно, а опасен только первый
+  // миг, когда рука уже нажимает соседнюю вкладку. Отсюда беззвучная задержка вместо
+  // вопроса — но ТОЛЬКО для полноэкранных.
+  assert.match(store, /const NAV_LOCK_MS = \d+/, 'нет задержки перехода')
+  assert.match(store, /function navLocked\(\)/, 'нет признака «сейчас уходить нельзя»')
+
+  const placeBody = store.split('function place(egg)')[1].split('\n  }')[0]
+  const lockAt = placeBody.indexOf('lockedUntil.value = Date.now()')
+  const inPageReturn = placeBody.indexOf('IN_PAGE.has(egg)')
+  assert.ok(lockAt >= 0, 'замок не ставится вовсе')
+  assert.ok(inPageReturn >= 0 && inPageReturn < lockAt,
+    'слой внутри страницы обязан выходить ДО замка — иначе он тоже запрёт навигацию')
+})
+
+test('замок снимается вместе со сценой', () => {
+  // Переживи он сцену — навигация осталась бы запертой на пустом экране, и человек
+  // решил бы, что продукт завис. Проверяем все три выхода.
+  const store2 = readFileSync(join(ROOT, 'src/stores/easterEggs.js'), 'utf8')
+  for (const fn of ['function close()', 'function dismissPending()', 'function reset()']) {
+    const body = store2.split(fn)[1].split('\n  }')[0]
+    assert.ok(body.includes('lockedUntil.value = 0'), `${fn} не снимает замок`)
+  }
+})
+
+test('страж проверяет замок РАНЬШЕ вопроса', () => {
+  // Иначе диалог всплывёт поверх только что появившейся сцены и закроет её собой.
+  const code = router.replace(/\/\/.*$/gm, '')
+  const lockAt = code.indexOf('easter.navLocked()')
+  const askAt = code.indexOf('easter.pending')
+  assert.ok(lockAt >= 0 && askAt >= 0, 'разбор стража сломался')
+  assert.ok(lockAt < askAt, 'замок обязан проверяться до вопроса')
+})
+
+test('список полученных ачивок грузится НЕ под замком броска', () => {
+  // 🔥 Он лежал внутри afterLogin(), то есть под замком «один раз на вкладку». После
+  // обычного F5 замок уже стоял, список оставался пустым, и правило «не спрашивать про
+  // уже полученную ачивку» не работало ВООБЩЕ. Человек, давно закрывший находку, снова
+  // получал «останьтесь, а то не заберёте» — притом что забирать нечего.
+  const shell = readFileSync(join(ROOT, 'src/layouts/AppShell.vue'), 'utf8')
+    .replace(/\/\/.*$/gm, '')
+  const body = shell.split('async function askLoginEggs()')[1].split('\n}')[0]
+  const loadAt = body.indexOf('easter.loadOwned()')
+  const lockAt = body.indexOf('sessionStorage.getItem')
+  assert.ok(loadAt >= 0, 'список ачивок вообще не грузится в оболочке')
+  assert.ok(lockAt >= 0, 'разбор замка сломался')
+  assert.ok(loadAt < lockAt, 'загрузка списка снова оказалась ПОД замком броска')
+
+  const store2 = readFileSync(join(ROOT, 'src/stores/easterEggs.js'), 'utf8')
+  const after = store2.split('async function afterLogin()')[1].split('\n  }')[0]
+  assert.ok(!after.includes('loadOwned('),
+    'loadOwned вернулся внутрь afterLogin — он снова будет пропускаться после F5')
+})
+
+test('поздний ответ броска не садится на покинутую страницу', () => {
+  // Бросок уходит на сервер после загрузки журнала. Уйдёшь за это время — ответ поднимет
+  // флаг пасхалки на странице, которой уже нет, и продукт будет спрашивать «тут пасхалка»
+  // там, где её нечем показать, а «Прислушаться» ничего не покажет.
+  const page = readFileSync(join(ROOT, 'src/pages/student/StudentJournal.vue'), 'utf8')
+  assert.match(page, /onBeforeUnmount\(\(\) => \{ alive = false \}\)/,
+    'страница не отмечает, что её покинули')
+  const mounted = page.split('onMounted(async () => {')[1].split('\n})')[0]
+  assert.ok((mounted.match(/if \(!alive\)/g) || []).length >= 2,
+    'проверка «страница ещё жива» нужна и до броска, и после ответа')
+  assert.ok(mounted.includes('closeInPage'),
+    'поздний ответ не прибирается — флаг уедет на другую страницу')
+})

@@ -8,7 +8,11 @@ onMounted(() => { shown.value = true; setTimeout(() => emit('close'), 9000) })
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-0 z-[90] grid place-items-center p-6">
+  <!-- ⚠️ Слой ПЕРЕХВАТЫВАЕТ мышь (без pointer-events-none). Пока сцена идёт,
+       кликнуть можно только по ней: промах по интерфейсу под ней уносил находку —
+       страница уходила, а вместе с ней и пасхалка. Тот же приём, что у окна про
+       cookie: выйти мимо кнопок нельзя. -->
+  <div class="fixed inset-0 z-[90] grid place-items-center p-6">
     <div class="max-w-md rounded-sm border p-5 shadow-2xl transition-all duration-500"
          :class="shown ? 'opacity-100' : 'translate-y-3 opacity-0'"
          style="background:linear-gradient(#efe3c8,#e2d2b0);border-color:#b9a681;transform:rotate(-1.2deg)">

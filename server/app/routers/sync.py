@@ -79,6 +79,38 @@ PUSH_SCOPE = {
 }
 
 
+def _chunks(seq, size: int):
+    """Режет список на куски. Нужно из-за жёсткого предела SQLite на число параметров
+    в `IN (...)` — по умолчанию 999. Пакет синхронизации бывает и на тысячи оценок,
+    и один огромный `IN` упал бы «too many SQL variables» ровно на большом пуше, то
+    есть там, где ошибка дороже всего."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+def _incoming_lesson_ids(changes: dict) -> set:
+    """Идентификаторы занятий, упомянутые ВО ВХОДЯЩЕМ пакете, — и только они.
+
+    🔥 Ради этого набора всё и затевалось. Обе карты ниже (`lesson_id → пара` и
+    `lesson_id → группа`) строились выборкой ВСЕЙ таблицы занятий на КАЖДЫЙ push. У
+    колледжа на 8 000 человек это десятки тысяч строк, которые расшифровываются
+    SQLCipher-ом и материализуются в память одноядерной машины — по нескольку раз в
+    минуту, потому что каждый преподаватель синхронизируется раз в 30 секунд. А нужны
+    из них ровно те, на которые ссылаются пришедшие оценки: обе карты читаются
+    ИСКЛЮЧИТЕЛЬНО как `.get(item["lesson_id"])`.
+
+    ⚠️ Занятия из ЭТОГО ЖЕ пакета сюда не входят намеренно: их в базе ещё нет, и
+    доклеиваются они отдельно, из самого пакета (см. вызывающего).
+    """
+    out = set()
+    for g in (changes.get("grades") or []):
+        if isinstance(g, dict):
+            lid = g.get("lesson_id")
+            if lid:
+                out.add(lid)
+    return out
+
+
 def _build_lesson_pair_map(db: Session, changes: dict, allowed_pairs: set,
                            allowed_subjects: set) -> dict:
     """Карта lesson_id → (группа, предмет) для построчной проверки оценок преподавателя.
@@ -88,8 +120,15 @@ def _build_lesson_pair_map(db: Session, changes: dict, allowed_pairs: set,
     принималась в одном пуше вместе с самим занятием (а не отвергалась только потому,
     что занятие сервер ещё не видел) — сюда пускаем и по паре, и (для преподавателя без
     назначений) по одному предмету, тем же мостом, что и `_teacher_may_write`."""
-    m = {row[0]: (row[1], row[2])
-         for row in db.query(Lesson.id, Lesson.group_name, Lesson.subject).all()}
+    #Берём из базы ТОЛЬКО те занятия, на которые ссылаются пришедшие оценки. Пустой
+    #набор — в базу не ходим вовсе: карту всё равно спросят лишь по этим ключам.
+    wanted = _incoming_lesson_ids(changes)
+    m = {}
+    if wanted:
+        for chunk in _chunks(sorted(wanted), 500):
+            m.update({row[0]: (row[1], row[2])
+                      for row in db.query(Lesson.id, Lesson.group_name, Lesson.subject)
+                                   .filter(Lesson.id.in_(chunk)).all()})
     for item in (changes.get("lessons") or []):
         if not isinstance(item, dict) or not item.get("id"):
             continue
@@ -420,9 +459,35 @@ def push(payload: dict = Body(...), request: Request = None,
         teacher_subjects = {s for s in (user.subjects or []) if s}
         lesson_pairs = _build_lesson_pair_map(db, changes, pairs, teacher_subjects)
         if changes.get("term_grades"):
-            student_group = {(r[0], r[1]): r[2] for r in
-                             db.query(User.surname, User.name, User.group_name)
-                             .filter(User.role == "student").all()}
+            #Тот же приём, что и с картами занятий: раньше сюда выкачивался ВЕСЬ
+            #справочник студентов колледжа, а нужны только те, чьи итоговые оценки
+            #приехали в пакете. Карта читается исключительно как
+            #`student_group.get((фамилия, имя))`.
+            #⚠️ Фильтруем по ФАМИЛИИ, а не по паре: пара в SQL потребовала бы кортежного
+            #IN, который SQLite не поддерживает переносимо. Фамилий в пакете единицы,
+            #однофамильцы отсеются уже по имени при чтении карты — результат тот же.
+            #⚠️ Кладём в фильтр И ИСХОДНОЕ значение, И обрезанное. Ключ карты — фамилия
+            #ИЗ БАЗЫ, а ищут по ней фамилией ИЗ ПАКЕТА, без обрезки. Оставь только
+            #обрезанное — и студент, заведённый с краевым пробелом (десктоп шлёт поле
+            #как есть, `users` в SYNC_MODELS), в выборку не попадёт, `student_group`
+            #вернёт None, и его итоговая оценка будет МОЛЧА отвергнута: ответ 200,
+            #счётчик rejected, человек ничего не заметил. Раньше карта содержала всех,
+            #и такого отказа не было — сужение обязано быть эквивалентным, а не
+            #«почти эквивалентным». Нашёл Полковник; на бою таких строк сейчас нет, но
+            #цена ошибки — потерянная оценка, а это дороже лишнего элемента в списке.
+            _surnames = set()
+            for t in (changes.get("term_grades") or []):
+                if not isinstance(t, dict):
+                    continue
+                raw = t.get("student_f") or ""
+                _surnames.add(raw)
+                _surnames.add(raw.strip())
+            _surnames.discard("")
+            for _chunk in _chunks(sorted(_surnames), 500):
+                student_group.update({(r[0], r[1]): r[2] for r in
+                                      db.query(User.surname, User.name, User.group_name)
+                                      .filter(User.role == "student",
+                                              User.surname.in_(_chunk)).all()})
 
     #Карта занятие→группа: нужна, чтобы развести ПОЛНЫХ ТЁЗОК при нормализации ключа
     #оценки, пришедшей от старого клиента (без student_id). Двух Ивановых Иванов в одну
@@ -430,7 +495,13 @@ def push(payload: dict = Body(...), request: Request = None,
     #на запрос и только если оценки в payload вообще есть.
     lesson_group = {}
     if changes.get("grades"):
-        lesson_group = {r[0]: (r[1] or "") for r in db.query(Lesson.id, Lesson.group_name)}
+        #Та же выборка по списку, что и у карты пар: полная таблица здесь не нужна была
+        #никогда — карта читается только по `lesson_id` пришедших оценок.
+        _want = _incoming_lesson_ids(changes)
+        for _chunk in _chunks(sorted(_want), 500):
+            lesson_group.update({r[0]: (r[1] or "") for r in
+                                 db.query(Lesson.id, Lesson.group_name)
+                                   .filter(Lesson.id.in_(_chunk)).all()})
 
     for name, items in changes.items():
         model = SYNC_MODELS.get(name)

@@ -15,18 +15,48 @@ import { BY_ID } from '@/config/achievements'
 
 const easter = useEasterStore()
 
+/**
+ * Обёртка над ленивой загрузкой сцены.
+ *
+ * 🔥 ЗАЧЕМ (найдено 23.08.2026). Каждая сцена лежит отдельным файлом и подгружается в
+ * момент показа. Если файла на сервере уже нет — а после выкладки старые файлы именно
+ * исчезали, — `import()` падает, `defineAsyncComponent` МОЛЧА не рисует ничего, а стор
+ * продолжает считать, что сцена играет. Наружу это выглядит так: продукт говорит «на
+ * экране пасхалка», а на экране пусто, и слот занят до конца сессии.
+ *
+ * Само исчезновение файлов чинится в `deploy/deploy-web.sh` (старые чанки теперь
+ * переживают выкладку), но полагаться только на это нельзя: файл может не доехать и по
+ * сети. Поэтому здесь — второй рубеж: не смогли загрузить, значит СНИМАЕМ пасхалку и
+ * пишем в консоль причину. Лучше не показать находку, чем запереть все следующие.
+ *
+ * ⚠️ `suspensible: false` обязателен: иначе ошибка всплывает наружу, к ближайшему
+ * <Suspense> в дереве страницы, и роняет уже её.
+ */
+function lazyScene(loader, id) {
+  return defineAsyncComponent({
+    loader,
+    suspensible: false,
+    onError(err, retry, fail, attempts) {
+      if (attempts <= 1) { retry(); return }     // одна повторная попытка — на случай сети
+      console.warn('[пасхалки] не загрузилась сцена', id, '— снимаем:', err?.message || err)
+      useEasterStore().close()
+      fail()
+    },
+  })
+}
+
 const SCENES = {
-  deltarune_tree:      defineAsyncComponent(() => import('./DeltaruneTree.vue')),
-  cyberpunk_login:     defineAsyncComponent(() => import('./CyberpunkGlitch.vue')),
-  stanley_parable_404: defineAsyncComponent(() => import('./StanleyNarrator.vue')),
-  rdr2_404:            defineAsyncComponent(() => import('./Rdr2Plan.vue')),
-  dark_souls_logout:   defineAsyncComponent(() => import('./DarkSoulsFarewell.vue')),
-  gman_observer:       defineAsyncComponent(() => import('./GmanWatcher.vue')),
-  hotline_miami:       defineAsyncComponent(() => import('./HotlineScene.vue')),
-  skyrim_wake_up:      defineAsyncComponent(() => import('./SkyrimCart.vue')),
-  farcry_vaas_quote:   defineAsyncComponent(() => import('./FarCryQuote.vue')),
-  portal_cake:         defineAsyncComponent(() => import('./PortalCake.vue')),
-  fnaf_night_mode:     defineAsyncComponent(() => import('./FnafOffice.vue')),
+  deltarune_tree:      lazyScene(() => import('./DeltaruneTree.vue'), 'deltarune_tree'),
+  cyberpunk_login:     lazyScene(() => import('./CyberpunkGlitch.vue'), 'cyberpunk_login'),
+  stanley_parable_404: lazyScene(() => import('./StanleyNarrator.vue'), 'stanley_parable_404'),
+  rdr2_404:            lazyScene(() => import('./Rdr2Plan.vue'), 'rdr2_404'),
+  dark_souls_logout:   lazyScene(() => import('./DarkSoulsFarewell.vue'), 'dark_souls_logout'),
+  gman_observer:       lazyScene(() => import('./GmanWatcher.vue'), 'gman_observer'),
+  hotline_miami:       lazyScene(() => import('./HotlineScene.vue'), 'hotline_miami'),
+  skyrim_wake_up:      lazyScene(() => import('./SkyrimCart.vue'), 'skyrim_wake_up'),
+  farcry_vaas_quote:   lazyScene(() => import('./FarCryQuote.vue'), 'farcry_vaas_quote'),
+  portal_cake:         lazyScene(() => import('./PortalCake.vue'), 'portal_cake'),
+  fnaf_night_mode:     lazyScene(() => import('./FnafOffice.vue'), 'fnaf_night_mode'),
 }
 
 const scene = computed(() => SCENES[easter.active] || null)

@@ -1,7 +1,7 @@
 <script setup>
 // StudentJournal — журнал студента (порт ui/dashboards.py, страница "journal").
 // Занятия сгруппированы по предметам, у каждого — своя оценка и средний по предмету.
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { studentApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -30,10 +30,28 @@ async function load() {
 // ответа, что и сам счётчик, — второй методики среднего в продукте быть не должно.
 const easter = useEasterStore()
 const avg = ref(0)
+
+// 🔥 ПОЗДНИЙ ОТВЕТ НЕ САДИТСЯ НА ПОКИНУТУЮ СТРАНИЦУ (найдено 23.08.2026).
+// Бросок уходит на сервер ПОСЛЕ загрузки журнала. Если человек за это время ушёл на
+// другую вкладку, ответ возвращался в пустоту и всё равно поднимал флаг пасхалки — а
+// рисовать её было уже некому: голос и кубик живут только на этой странице. Дальше
+// продукт честно спрашивал «останьтесь, тут пасхалка» на дашборде, где её нет и быть
+// не может, а «Прислушаться» ничего не показывало. Ровно это Влад и поймал.
+let alive = true
+onBeforeUnmount(() => { alive = false })
+
 onMounted(async () => {
   await load()
   await nextTick()
+  if (!alive) return                 // ушли, пока грузился журнал — не бросаем вовсе
   const r = await easter.rollJournal()
+  if (!alive) {
+    //Ответ вернулся уже после ухода: снимаем всё, что он успел поднять.
+    for (const id of ['disco_elysium_voice', 'binding_of_isaac_d6', 'ultrakill_rank']) {
+      easter.closeInPage(id)
+    }
+    return
+  }
   avg.value = Number(r?.average || 0)
 })
 

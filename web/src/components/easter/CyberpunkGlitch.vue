@@ -133,7 +133,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="pointer-events-none fixed inset-0 z-[93] overflow-hidden">
+  <!-- ⚠️ Слой ПЕРЕХВАТЫВАЕТ мышь (без pointer-events-none). Пока сцена идёт,
+       кликнуть можно только по ней: промах по интерфейсу под ней уносил находку —
+       страница уходила, а вместе с ней и пасхалка. Тот же приём, что у окна про
+       cookie: выйти мимо кнопок нельзя. -->
+  <div class="fixed inset-0 z-[93] overflow-hidden">
     <canvas v-if="glitch" ref="canvas" class="absolute inset-0 h-full w-full"></canvas>
     <p v-if="!glitch" class="absolute inset-x-0 top-[46%] text-center font-mono text-xl font-bold
                              transition-opacity duration-500"

@@ -22,7 +22,11 @@ const store = read('src/stores/easterEggs.js')
 const host = read('src/components/easter/EasterEggHost.vue')
 
 const eggs = [...store.matchAll(/^\s{2}(\w+):\s+'\w+',$/gm)].map(m => m[1])
-const scenes = new Set([...host.matchAll(/^\s+(\w+):\s+defineAsyncComponent/gm)].map(m => m[1]))
+// ⚠️ Форма записи сменилась: сцены объявляются через собственную обёртку
+// , а не голым . Регулярка, привязанная к старой
+// форме, нашла бы НОЛЬ сцен и объявила все пасхалки неподключёнными — то есть покраснела
+// бы на исправном коде и научила бы «просто поправить ожидание».
+const scenes = new Set([...host.matchAll(/^\s+(\w+):\s+lazyScene\(/gm)].map(m => m[1]))
 const inPage = new Set([...store.split('const IN_PAGE = new Set([')[1].split('])')[0]
   .matchAll(/'([a-z0-9_]+)'/g)].map(m => m[1]))
 

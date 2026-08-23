@@ -89,8 +89,24 @@ EGG_CHANCES: dict[str, int] = {
 #⚠️ Кулдаун применим ТОЛЬКО к пасхалке с частым триггером. Повесь его на ту, что
 #бросается редко (вход, страница 404), и получится ровно та невидимая стена, от которой
 #мы избавлялись.
+#Доля в ПРОЦЕНТАХ — для пасхалок, у которых редкость естественно выражается долей, а
+#не «одним разом из N». Счётчик стиля ULTRAKILL показывается отличнику, то есть условие
+#уже отсекает почти всех; шанс тут нужен не для редкости, а чтобы плашка не мозолила
+#глаза тому, кто её заслужил. «Три из десяти заходов» — это про частоту показа, и
+#записывать её знаменателем (1/3) значило бы называть её редкостью, которой она не
+#является.
+#⚠️ Два словаря вместо одного — осознанно. Значение 3 в EGG_CHANCES и 3 в EGG_PERCENT
+#означают совершенно разное (33 % против 3 %), и слить их в один — верный способ
+#однажды промахнуться на порядок.
+EGG_PERCENT: dict[str, int] = {
+    "ultrakill_rank": 30,
+}
+
 EGG_COOLDOWN_S: dict[str, int] = {
     "deltarune_tree": 300,
+    #Счётчик стиля висит на видном месте и показывается на КАЖДОЙ загрузке журнала —
+    #без паузы отличник видел бы его весь день подряд.
+    "ultrakill_rank": 300,
 }
 
 #⚠️ СУТОЧНОГО КУЛДАУНА БОЛЬШЕ НЕТ (снят 23.08.2026 по решению Влада).
@@ -117,7 +133,8 @@ def roll(egg_id: str, user_id: str, db: Session) -> bool:
     Тихо возвращать False без следа нельзя, иначе опечатка в имени превратится в
     «пасхалка не работает» без единой подсказки почему."""
     chance = EGG_CHANCES.get(egg_id)
-    if not chance:
+    percent = EGG_PERCENT.get(egg_id)
+    if not chance and not percent:
         _log.warning("бросок для неизвестной пасхалки: %s", egg_id)
         return False
     if not user_id:
@@ -129,7 +146,8 @@ def roll(egg_id: str, user_id: str, db: Session) -> bool:
     if cooldown and was_triggered_recently(user_id, egg_id, db, within_s=cooldown):
         return False
 
-    if random.randint(1, chance) != 1:
+    hit = random.randint(1, 100) <= percent if percent else random.randint(1, chance) == 1
+    if not hit:
         return False
 
     db.add(EasterEggLog(user_id=user_id, egg_id=egg_id, triggered_at=_now_iso(),

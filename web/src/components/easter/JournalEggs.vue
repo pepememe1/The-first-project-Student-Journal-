@@ -132,6 +132,12 @@ function heedVoice() {
 // ⚠️ Тот же дефект уже был у штампа Papers Please и у пасхалок входа. Общее правило:
 // состояние, которое приезжает по сети, проверяется `watch`, а не `if` при монтаже.
 // Ошибка тихая — ни исключения, ни следа в консоли, просто ничего не происходит.
+/** Клик по плашке — убрать её. Ачивка к этому моменту уже выдана. */
+function dismissUltra() {
+  ultraIn.value = false
+  setTimeout(() => easter.closeInPage('ultrakill_rank'), 320)
+}
+
 watch(ultra, (on) => {
   if (!on) return
   requestAnimationFrame(() => { ultraIn.value = true })
@@ -171,9 +177,18 @@ onBeforeUnmount(() => {
           :style="{ left: t.left, animationDuration: t.dur, animationDelay: t.delay }"></span>
 
     <!-- ULTRAKILL: плашка развёрнута НАСТОЯЩЕЙ перспективой (perspective + rotateY),
-         а не плоским скосом — при скосе текст остаётся прямым и «смотрит» не туда. -->
-    <div v-if="ultra" class="gb-uk absolute right-4 top-[8%] w-[min(27%,240px)] px-3.5 pb-3.5 pt-3"
-         :class="ultraIn ? 'gb-uk-in' : ''">
+         а не плоским скосом — при скосе текст остаётся прямым и «смотрит» не туда.
+         ⚠️ Через Teleport и `fixed`: плашка обязана следовать за экраном, как окна
+         Undertale и Disco. Внутри страницы она оставалась у её верха, и стоило чуть
+         прокрутить журнал — счётчик уезжал, хотя формально «висел».
+         ⚠️ Снимается КЛИКОМ (просьба Влада): она заслуженная, но большая, и человек,
+         который уже полюбовался, должен иметь возможность убрать её с глаз. -->
+    <Teleport to="body">
+    <button v-if="ultra" type="button" @click="dismissUltra"
+            class="gb-uk fixed right-4 top-24 z-[86] w-[min(27%,240px)] min-w-[190px] cursor-pointer
+                   px-3.5 pb-3.5 pt-3 text-left"
+            :class="ultraIn ? 'gb-uk-in' : ''"
+            :title="'Убрать счётчик'">
       <div class="gb-uk-title">ULTRAKILL</div>
       <div class="my-2 h-[7px] overflow-hidden bg-black">
         <div class="h-full bg-white transition-[width] duration-1000" :style="{ width: ultraBar + '%' }"></div>
@@ -191,7 +206,8 @@ onBeforeUnmount(() => {
       </div>
       <div class="mt-[7px] py-[3px] text-center font-mono text-[clamp(7px,.9vw,11px)] font-bold"
            style="background:#ffb01f;color:#1a1206">FRESH: 1.50x</div>
-    </div>
+    </button>
+    </Teleport>
 
     <!-- Внутренний голос: только владельцу дневника, в базе ничего не остаётся -->
     <Teleport to="body">

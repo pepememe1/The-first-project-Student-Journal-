@@ -60,11 +60,17 @@ def main() -> int:
     # ── что откуда берём ────────────────────────────────────────────────────
     srv_pairs = dict(re.findall(r'"(\w+)":\s+"(\w+)",', block(srv, "ACHIEVEMENTS: dict", "}")))
     chances = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_CHANCES: dict", "}"))}
+    #Доля в процентах — вторая форма записи шанса (см. EGG_PERCENT в easter_eggs.py).
+    percents = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_PERCENT: dict", "}"))}
     cooldowns = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_COOLDOWN_S: dict", "}"))}
     cfg_ids = re.findall(r"^\s{2}\{\s*id:\s*'([a-z0-9_]+)'", cfg, re.M)
     cli_pairs = dict(re.findall(r"^\s{2}([a-z0-9_]+):\s+'([a-z0-9_]+)',",
                                 block(store, "EGG_ACHIEVEMENT = {", "\n}"), re.M))
-    scenes = set(re.findall(r"^\s+(\w+):\s+defineAsyncComponent", host, re.M))
+    #⚠️ Форма объявления сцены менялась (`defineAsyncComponent` → своя обёртка
+    #`lazyScene`, добавившая обработку неудачной загрузки). Принимаем ОБЕ: разбор,
+    #привязанный к одной, находит ноль сцен и объявляет все пасхалки неподключёнными —
+    #то есть сверка начинает врать ровно там, где должна ловить враньё.
+    scenes = set(re.findall(r"^\s+(\w+):\s+(?:defineAsyncComponent|lazyScene)\(", host, re.M))
     in_page = set(re.findall(r"'([a-z0-9_]+)'", block(store, "const IN_PAGE = new Set([", "])")))
     missable = set(re.findall(r"'([a-z0-9_]+)'", block(store, "const MISSABLE_IN_PAGE = new Set([", "])")))
     phrases = set(re.findall(r"^\s{2}([a-z0-9_]+):\s*\{", block(store, "const LEAVE_ASK = {", "\n}"), re.M))
@@ -103,13 +109,18 @@ def main() -> int:
             note(f"{egg}: ачивку никто не закрывает вызовом claim()")
 
     # ── 4. Шанс и кулдаун ───────────────────────────────────────────────────
-    for egg in sorted(set(chances) | set(cooldowns)):
-        if egg in cooldowns and egg not in chances:
+    both = set(chances) & set(percents)
+    if both:
+        note(f"шанс объявлен ДВАЖДЫ, знаменателем и процентом: {sorted(both)} — "
+             f"значения означают разное, промах на порядок гарантирован")
+    rolled = set(chances) | set(percents)
+    for egg in sorted(rolled | set(cooldowns)):
+        if egg in cooldowns and egg not in rolled:
             note(f"{egg}: кулдаун задан, а шанса нет — бросок не состоится никогда")
         if egg in cooldowns and chances.get(egg, 0) > 150:
             note(f"{egg}: редкий шанс 1/{chances[egg]} И кулдаун {cooldowns[egg]} с — "
                  f"вторая невидимая стена поверх первой")
-    deterministic = sorted(set(srv_by_egg) - set(chances))
+    deterministic = sorted(set(srv_by_egg) - rolled)
     for egg in deterministic:
         if "mark_triggered" not in srv or f'"{egg}"' not in srv:
             note(f"{egg}: детерминированная, но следа mark_triggered в сервере не видно — "
@@ -137,18 +148,19 @@ def main() -> int:
     # ── отчёт ───────────────────────────────────────────────────────────────
     #⚠️ Считаем шансы ТОЛЬКО у пасхалок с ачивкой: в EGG_CHANCES лежат ещё три
     #(skyrim, rdr2, far cry), у которых ачивки нет по замыслу, и общий счётчик врал.
-    with_chance = len([e for e in srv_by_egg if e in chances])
+    with_chance = len([e for e in srv_by_egg if e in rolled])
     print(f"ачивок: {len(srv_pairs)} · пасхалок: {len(srv_by_egg)} · "
           f"с шансом: {with_chance} · детерминированных: {len(deterministic)} · "
           f"с кулдауном: {len(cooldowns)} · без ачивки (по замыслу): "
-          f"{sorted(set(chances) - set(srv_by_egg))}")
+          f"{sorted(rolled - set(srv_by_egg))}")
     print(f"оверлеев: {len(scenes)} · слоёв в странице: {len(in_page)} · "
           f"пропускаемых: {len(missable)} · реплик: {len(phrases)}")
     print()
     print(f"{'пасхалка':24} {'ачивка':22} {'шанс':>8} {'кулдаун':>8}  показ")
     print("-" * 88)
     for egg in sorted(srv_by_egg):
-        ch = f"1/{chances[egg]}" if egg in chances else "условие"
+        ch = (f"1/{chances[egg]}" if egg in chances
+              else f"{percents[egg]} %" if egg in percents else "условие")
         cd = f"{cooldowns[egg]} с" if egg in cooldowns else "—"
         show = "оверлей" if egg in scenes else ("в странице" if egg in in_page else "НЕТ")
         print(f"{egg:24} {srv_by_egg[egg]:22} {ch:>8} {cd:>8}  {show}")
