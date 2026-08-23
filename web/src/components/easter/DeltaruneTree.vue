@@ -140,29 +140,38 @@ async function leave() {
               transition-opacity duration-500"
        :style="{ opacity: shown ? 1 : 0 }">
 
-    <img src="/easter/img/tree.gif" alt="" class="relative w-[31%] max-w-[280px]"
-         style="image-rendering:pixelated;filter:drop-shadow(0 0 26px rgba(200,30,90,.3))" />
-
+    <!-- 🔥 КЛИКАБЕЛЬНО САМО ДЕРЕВО, а не прямоугольник рядом с ним. Раньше хитбокс
+         стоял отдельным блоком «внизу по центру» и с картинкой не совпадал: Влад жал
+         туда, где дерево нарисовано, и не попадал — приходилось искать место ниже.
+         Область клика обязана совпадать с тем, что человек видит; иначе это не
+         секрет, а угадайка. -->
     <button type="button" @click.stop="talk" aria-label="Осмотреть дерево"
-            class="soul absolute bottom-[18%] left-1/2 h-[20%] w-[12%] -translate-x-1/2"></button>
+            class="soul relative z-[1] block w-[31%] max-w-[280px] border-0 bg-transparent p-0">
+      <img src="/easter/img/tree.gif" alt="" class="block w-full"
+           style="image-rendering:pixelated;filter:drop-shadow(0 0 26px rgba(200,30,90,.3))" />
+    </button>
 
     <div v-if="started" class="utbox soul absolute inset-x-[7%] bottom-[6%]" @click.stop="advance">
       <span>{{ dlg }}</span>
       <span class="absolute bottom-1 right-2.5 text-[9px] text-[#8a8a8a]">▼ клик</span>
     </div>
 
-    <!-- Поздний скромный выход: только если человек так и не тронул дерево. -->
-    <button v-if="escapeShown && !wayOut" type="button" @click.stop="emit('close')"
+    <!-- 🔥 ВЫХОД НЕ СУЩЕСТВУЕТ, ПОКА ИДЁТ ДИАЛОГ (`!started`), и это куплено ошибкой:
+         поздний выход появлялся прямо во время разговора, человек жал «дальше» по
+         реплике, попадал в него и вылетал из пасхалки не дочитав. Ровно тот промах, от
+         которого вся эта модальность и защищает.
+         Заодно и проход внизу прячется на время повторного разговора: открыл диалог
+         снова — выхода нет, пока не дочитаешь. -->
+    <button v-if="escapeShown && !wayOut && !started" type="button" @click.stop="emit('close')"
             class="soul absolute right-3 top-3 rounded border border-[#3a3a3a] px-2 py-1
                    font-mono text-[9px] text-[#6d6a5f] hover:text-[#c9c9c9]">
       выйти
     </button>
 
-    <!-- Проход вниз. До конца диалога его нет вовсе — ни полосы, ни подсказки. -->
-    <template v-if="wayOut">
-      <!-- Душа уходит за нижний край: это и есть подсказка «выход здесь», знакомая по
-           самой игре. Рисуем спрайт, а не двигаем курсор — курсором управляет человек. -->
-      <span class="gb-soul-walk" :class="leaving ? 'gb-soul-gone' : ''"></span>
+    <!-- Проход вниз. До конца диалога его нет вовсе — ни полосы, ни подсказки.
+         ⚠️ Второго красного сердца здесь БЫЛО и убрано: курсор и так душа, и две
+         одинаковые метки на экране читались как ошибка отрисовки. Подписи достаточно. -->
+    <template v-if="wayOut && !started">
       <button type="button" @click.stop="leave" aria-label="Уйти вниз"
               class="soul absolute inset-x-0 bottom-0 h-[13%] border-0 bg-transparent p-0">
         <span class="pointer-events-none block pb-2 text-center text-[10px] tracking-[.3em] text-[#6d6a5f]">
@@ -179,30 +188,7 @@ async function leave() {
 .utbox { background:#000; border:4px solid #fff; color:#fff; padding:14px 16px; min-height:58px;
          font-family:'Press Start 2P', monospace; font-size:11px; line-height:1.95; }
 
-/* Душа, уходящая вниз. Тот же силуэт сердца, что и у курсора. */
-.gb-soul-walk {
-  position: absolute;
-  left: 50%;
-  bottom: 15%;
-  width: 18px;
-  height: 18px;
-  margin-left: -9px;
-  background: center/contain no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 8 8'%3E%3Cpath fill='%23f00' d='M1 1h2v1h2V1h2v1h1v3H7v1H6v1H5v1H3V7H2V6H1V5H0V2h1z'/%3E%3C/svg%3E");
-  filter: drop-shadow(0 0 6px rgba(255, 40, 40, .7));
-  animation: gb-soul-hint 1.6s ease-in-out infinite;
-}
-/* Пошла к выходу — уезжает за нижний край и гаснет. */
-.gb-soul-gone { animation: gb-soul-leave .9s ease-in forwards }
-
-@keyframes gb-soul-hint {
-  0%, 100% { transform: translateY(0); opacity: .85 }
-  50%      { transform: translateY(10px); opacity: 1 }
-}
-@keyframes gb-soul-leave {
-  to { transform: translateY(22vh); opacity: 0 }
-}
 @media (prefers-reduced-motion: reduce) {
-  .gb-soul-walk { animation: none }
+  .utbox { transition: none }
 }
 </style>
