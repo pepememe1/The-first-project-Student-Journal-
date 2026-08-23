@@ -116,3 +116,29 @@ test('бросок одной пасхалки не глушит бросок д
   assert.ok(rollBody.includes('inFlight.has(key)'), 'бросок не защищён от самозадвоения')
   assert.ok(rollBody.includes('inFlight.delete(key)'), 'флаг не снимается — второй бросок не пройдёт')
 })
+
+test('пасхалка выхода закрывается ДО logout, а не в самой сцене', () => {
+  // 🔥 Ачивку за Dark Souls не выдавали никогда: сцена звала claim через 700 мс после
+  // показа, а `auth.logout()` стирает токен немедленно — запрос уходил без авторизации
+  // и получал 401. Человек видел пасхалку и справедливо считал, что его обманули.
+  const settings = readFileSync(join(ROOT, 'src/pages/Settings.vue'), 'utf8')
+  const scene = readFileSync(join(ROOT, 'src/components/easter/DarkSoulsFarewell.vue'), 'utf8')
+
+  // ⚠️ Комментарии выбрасываем ДО поиска. Первая версия этой проверки нашла
+  // `auth.logout()` в ПОЯСНЕНИИ к правке — оно стоит выше самого вызова — и покраснела
+  // на исправном коде. Тот же промах уже был со сторожем шрифтов; повторяется он
+  // потому, что искать подстроку в исходнике проще, чем в коде.
+  const logoutBody = settings.split('async function onLogout()')[1].split('\n}')[0]
+    .replace(/\/\/.*$/gm, '')
+  const claimAt = logoutBody.indexOf("claim('dark_souls_logout')")
+  const logoutAt = logoutBody.indexOf('auth.logout()')
+  assert.ok(claimAt >= 0, 'ачивка не закрывается в onLogout вовсе')
+  assert.ok(logoutAt >= 0, 'разбор onLogout сломался')
+  assert.ok(claimAt < logoutAt, 'claim обязан идти ДО logout — после него токена уже нет')
+
+  // Комментарии выбрасываем и здесь — по той же причине: пояснение «здесь стоял
+  // claim(...)» само содержит искомую строку. Проверка обязана смотреть на КОД.
+  const sceneCode = scene.replace(/\/\/.*$/gm, '')
+  assert.ok(!sceneCode.includes('claim('),
+    'в сцене снова появился claim — он там уходит в пустоту и создаёт видимость работы')
+})

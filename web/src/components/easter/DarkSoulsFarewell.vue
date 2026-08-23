@@ -1,12 +1,14 @@
 <script setup>
 // Dark Souls на выходе из аккаунта. Заменяет обычное прощание Вектора.
 //
-// ⚠️ Ачивка закрывается СРАЗУ при показе, а не по завершении анимации: следом идёт
-// реальный выход, страница перезагрузится, и «доиграть» будет уже негде.
+// ⚠️ АЧИВКУ ЗАКРЫВАЕТ НЕ ЭТА СЦЕНА, а `Settings.vue::onLogout` — ДО вызова `logout()`.
+// Здесь стоял `easter.claim(...)`, и он не срабатывал никогда: к моменту показа токен
+// уже стёрт, запрос уходил без авторизации и получал 401. Человек видел пасхалку, а
+// ачивку не получал, причём молча.
+// ⚠️ Не возвращать сюда вызов «для надёжности»: он снова будет уходить в пустоту и
+// создавать видимость, что закрытие находки происходит здесь.
 import { onMounted, ref } from 'vue'
-import { useEasterStore } from '@/stores/easterEggs'
 const emit = defineEmits(['close'])
-const easter = useEasterStore()
 const veil = ref(false), band = ref(false), text = ref(false)
 
 onMounted(async () => {
@@ -14,7 +16,6 @@ onMounted(async () => {
   veil.value = true
   await wait(400); band.value = true
   await wait(300); text.value = true
-  easter.claim('dark_souls_logout')
   await wait(2600); veil.value = band.value = text.value = false
   await wait(1700); emit('close')
 })
