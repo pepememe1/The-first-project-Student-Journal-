@@ -7,7 +7,7 @@ easter_eggs.py — ачивки и серверный бросок шанса д
 
 ━━ ПОЧЕМУ ШАНС СЧИТАЕТ СЕРВЕР ━━
 `Math.random()` в браузере правится через инструменты разработчика за секунду, и
-редкая пасхалка (1/666) перестала бы быть редкой. Плюс бросок должен быть общим для
+редкая пасхалка (1/500) перестала бы быть редкой. Плюс бросок должен быть общим для
 всех устройств человека: иначе, открыв журнал на телефоне и на ПК, он получал бы два
 независимых шанса на одно и то же событие.
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -51,10 +51,15 @@ ACHIEVEMENTS: dict[str, str] = {
 }
 ACHIEVEMENT_IDS = frozenset(ACHIEVEMENTS)
 
-#Шансы: знаменатель, то есть 666 — это «один раз из 666». Отдельным словарём, чтобы
+#Шансы: знаменатель, то есть 500 — это «один раз из 500». Отдельным словарём, чтобы
 #балансировать частоту, не трогая логику.
 EGG_CHANCES: dict[str, int] = {
-    "deltarune_tree":       666,
+    #⚠️ 66, а НЕ 666: решение Влада 23.08.2026. Отсылка к числу сохраняется, но при
+    #666 дерево не выпадало практически никому — переключений вкладок за сессию
+    #десяток-другой, то есть шанс увидеть его вообще был меньше, чем не увидеть ни разу
+    #за весь семестр. Редкость, которой никто не наблюдает, ничем не отличается от
+    #отсутствия пасхалки.
+    "deltarune_tree":        66,
     "binding_of_isaac_d6":  500,
     "gman_observer":        200,
     "undertale_save":       100,
@@ -71,10 +76,17 @@ EGG_CHANCES: dict[str, int] = {
     "farcry_vaas_quote":     10,      # 10% — на седьмой неудаче подряд
 }
 
-#Кулдаун: одна и та же пасхалка не показывается человеку чаще раза в сутки. Без него
-#редкость перестаёт читаться как редкость — на большой выборке страниц даже 1/500
-#срабатывает по нескольку раз за вечер.
-COOLDOWN_S = 24 * 60 * 60
+#⚠️ СУТОЧНОГО КУЛДАУНА БОЛЬШЕ НЕТ (снят 23.08.2026 по решению Влада).
+#Он задумывался как страховка «редкость должна читаться как редкость», но на деле
+#ограничителем и так работает САМ ШАНС, а кулдаун добавлял вторую, невидимую стену:
+#выпала пасхалка один раз — и следующие сутки человек, который специально пытается её
+#найти, не понимает, ловит он неудачу или упёрся в правило. Именно на этом Влад и
+#споткнулся, пытаясь выбить обе шутки на странице 404.
+#
+#⚠️ Строку в `EasterEggLog` при этом ПИШЕМ ПО-ПРЕЖНЕМУ, и это не рудимент: на ней
+#держится честность ачивок — `claim` выдаёт награду, только если у человека есть свежий
+#след срабатывания (`was_triggered_recently`). Убрать запись значило бы сделать `claim`
+#обычной ручкой «выдай мне ачивку».
 
 
 def _now_iso() -> str:
@@ -94,15 +106,6 @@ def roll(egg_id: str, user_id: str, db: Session) -> bool:
     if not user_id:
         return False
 
-    cutoff = int(datetime.now(timezone.utc).timestamp()) - COOLDOWN_S
-    recent = (db.query(EasterEggLog)
-                .filter(EasterEggLog.user_id == user_id,
-                        EasterEggLog.egg_id == egg_id,
-                        EasterEggLog.created_ts >= cutoff)
-                .first())
-    if recent:
-        return False
-
     if random.randint(1, chance) != 1:
         return False
 
@@ -110,6 +113,33 @@ def roll(egg_id: str, user_id: str, db: Session) -> bool:
                         created_ts=int(datetime.now(timezone.utc).timestamp())))
     db.commit()
     return True
+
+
+def mark_triggered(egg_id: str, user_id: str, db: Session) -> bool:
+    """Записать след срабатывания БЕЗ броска — для пасхалок без шанса.
+
+    ⚠️ Нужна ровно там, где условие детерминированное (ULTRAKILL показывается каждому
+    отличнику, а не раз в N заходов). Без следа `claim` откажет в ачивке, потому что
+    честность ачивок держится именно на нём.
+
+    ⚠️ Звать ТОЛЬКО после проверки условия НА СЕРВЕРЕ. Открытой ручки у этой функции
+    нет и быть не должно: `mark_triggered` без условия — это и есть «выдай мне ачивку»,
+    от которой защищает вся остальная конструкция."""
+    if egg_id not in ACHIEVEMENTS.values():
+        _log.warning("след для неизвестной пасхалки: %s", egg_id)
+        return False
+    if not user_id:
+        return False
+    db.add(EasterEggLog(user_id=user_id, egg_id=egg_id, triggered_at=_now_iso(),
+                        created_ts=int(datetime.now(timezone.utc).timestamp())))
+    db.commit()
+    return True
+
+
+#Порог «отличника» для ULTRAKILL. Тот же 4.5, что уже красит продукт в «отличники» у
+#куратора (`curator_report.categorize`) — своего набора порогов не заводим, иначе на
+#одном экране человек отличник, а на другом нет.
+ULTRAKILL_MIN_AVG = 4.5
 
 
 def roll_one_of(egg_ids: list[str], user_id: str, db: Session) -> str | None:
@@ -172,4 +202,100 @@ def was_triggered_recently(user_id: str, egg_id: str, db: Session, within_s: int
                           EasterEggLog.egg_id == egg_id,
                           EasterEggLog.created_ts >= cutoff)
                   .first())
+
+# ─────────────────────────── УСЛОВИЯ ВХОДА ───────────────────────────
+# Всё, что ниже, СПЕЦИАЛЬНО живёт на сервере, а не в браузере: «сейчас ночь», «до этого
+# было три неудачных попытки», «сегодня день рождения» — это факты, которые клиент
+# подделает одной строкой в консоли. Шанс без честного условия ничего не стоит.
+
+#Улан-Удэ, UTC+8. Ночь считаем по МЕСТНОМУ времени: пасхалка про то, что человек сидит
+#в журнале в три часа ночи, а не про то, который час на сервере.
+LOCAL_UTC_OFFSET_H = 8
+
+
+def _local_now() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=LOCAL_UTC_OFFSET_H)
+
+
+def _login_attempts(user_login: str, db: Session, limit: int = 12) -> list[bool]:
+    """Последние попытки входа: True — удачная. Свежие первыми.
+
+    ⚠️ Отдельной таблицы попыток в проекте НЕТ, и заводить её ради пасхалки не нужно:
+    `audit_events` уже пишет `login.ok` и `login.fail` с логином и меткой, и оба поля
+    проиндексированы. Счётчики `throttle.py` не подходят — они в ПАМЯТИ процесса и
+    переживают ровно до перезапуска."""
+    from .models import AuditEvent
+    rows = (db.query(AuditEvent)
+              .filter(AuditEvent.actor == user_login,
+                      AuditEvent.action.in_(("login.ok", "login.fail")))
+              .order_by(AuditEvent.created_ts.desc())
+              .limit(limit).all())
+    return [r.action == "login.ok" for r in rows]
+
+
+def _fail_streak_before_success(attempts: list[bool]) -> int:
+    """Сколько неудач подряд шло ПЕРЕД последней удачной попыткой."""
+    if not attempts or not attempts[0]:
+        return 0
+    n = 0
+    for ok in attempts[1:]:
+        if ok:
+            break
+        n += 1
+    return n
+
+
+def is_night(now: datetime = None) -> bool:
+    return 0 <= (now or _local_now()).hour < 6
+
+
+def birthday_today(user, now: datetime = None) -> bool:
+    """День рождения — «ДД.ММ», без года: сверяем ровно день и месяц."""
+    bd = (getattr(user, "birthday", "") or "").strip()
+    if not bd:
+        return False
+    return bd == (now or _local_now()).strftime("%d.%m")
+
+
+def pick_on_login(user, db: Session) -> str | None:
+    """Что показать сразу после входа. Не больше ОДНОГО за раз.
+
+    Порядок не случайный, он по «громкости»: поздравление с днём рождения адресное и
+    бывает раз в год — оно важнее любого шанса; ночная смена меняет весь вход, поэтому
+    идёт следом; дальше «наконец-то ты очнулся» — она осмысленна только сразу после
+    череды неудач; и лишь потом обычные шансовые."""
+    if user.role != "student":
+        return None
+    if birthday_today(user):
+        #⚠️ Без броска — но след ОБЯЗАТЕЛЕН: на нём держится `claim`. Забудь его, и
+        #человек увидит торт, а ачивки за него не получит никогда, причём молча.
+        mark_triggered("portal_cake", user.id, db)
+        return "portal_cake"
+    if is_night() and roll("fnaf_night_mode", user.id, db):
+        return "fnaf_night_mode"
+    if _fail_streak_before_success(_login_attempts(user.login, db)) >= 3 \
+            and roll("skyrim_wake_up", user.id, db):
+        return "skyrim_wake_up"
+    if roll("cyberpunk_login", user.id, db):
+        return "cyberpunk_login"
+    if roll("detroit_led", user.id, db):
+        return "detroit_led"
+    return None
+
+
+def farcry_due(user_login: str, db: Session, user_id: str = "") -> bool:
+    """Седьмая неудачная попытка подряд.
+
+    ⚠️ Седьмая, а НЕ восьмая, как было в плане: анти-брутфорс блокирует пару (IP, логин)
+    именно на седьмой (`throttle.MAX_FAILS`), и до восьмой проверки пароля дело не
+    доходит вовсе — пасхалка не сработала бы ни разу."""
+    attempts = _login_attempts(user_login, db)
+    streak = 0
+    for ok in attempts:
+        if ok:
+            break
+        streak += 1
+    if streak < 7:
+        return False
+    return roll("farcry_vaas_quote", user_id or user_login, db)
 

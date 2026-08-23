@@ -1,0 +1,25 @@
+// mumble.js — «бубнёж» Вектора: короткий щелчок на каждый второй символ при печати.
+//
+// Своего звукового файла для него в продукте НЕТ и заводить не нужно: это один щелчок
+// длиной 70 мс, а лишний ассет поехал бы и в OTA-бандл телефона, и в .exe. Тем же
+// приёмом уже сделаны пинг мессенджера и будильник тайм-бокса.
+//
+// ⚠️ Общий модуль, а не копия в каждой сцене: бубнят и дерево Делтарун, и точка
+// сохранения Undertale. Разъедься их звук — одна и та же реплика Вектора звучала бы
+// в двух местах по-разному, и это заметно сразу.
+let actx = null
+
+/** Один щелчок. Звук недоступен (нет жеста, политика браузера) — молча ничего. */
+export function mumble() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)()
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime
+    o.type = 'square'
+    o.frequency.setValueAtTime(340 + Math.random() * 80, t)
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(0.03, t + 0.008)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06)
+    o.connect(g).connect(actx.destination)
+    o.start(t); o.stop(t + 0.07)
+  } catch { /* звук недоступен — текст всё равно печатается */ }
+}

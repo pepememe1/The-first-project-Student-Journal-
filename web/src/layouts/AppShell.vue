@@ -112,6 +112,18 @@ onBeforeUnmount(() => {
 const easter = useEasterStore()
 watch(() => route.path, () => { easter.roll('deltarune_tree') })
 
+// Пасхалки входа спрашиваем ОДИН раз за сессию вкладки, а не на каждый монтаж оболочки:
+// иначе обычная перезагрузка страницы давала бы новый бросок, и «редкое при входе»
+// превратилось бы в «частое при F5». Условия (ночь, серия неудач, день рождения) считает
+// сервер — здесь только момент.
+onMounted(() => {
+  try {
+    if (sessionStorage.getItem('gb.egg.login') === '1') return
+    sessionStorage.setItem('gb.egg.login', '1')
+  } catch { /* приватный режим — значит просто спросим ещё раз, не страшно */ }
+  easter.afterLogin()
+})
+
 </script>
 
 <template>

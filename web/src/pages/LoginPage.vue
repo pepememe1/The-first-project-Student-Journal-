@@ -14,6 +14,8 @@ import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
+import EasterEggHost from '@/components/easter/EasterEggHost.vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
@@ -22,6 +24,7 @@ import RecoverDialog from '@/components/RecoverDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const easter = useEasterStore()
 const loc = useLocaleStore()
 
 const login = ref('')
@@ -153,6 +156,9 @@ async function submit() {
     router.push(HOME_BY_ROLE[user.role] || '/')
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
+    // Far Cry: решение принял СЕРВЕР (седьмая неудача подряд + шанс) и сообщил
+    // заголовком. Клиент только рисует — своего броска здесь нет и быть не может.
+    if (e.response?.headers?.['x-gb-egg'] === 'farcry_vaas_quote') easter.show('farcry_vaas_quote')
   }
 }
 
@@ -382,6 +388,7 @@ const showRecover = ref(false)
       © 2026 GradeBookAI · Технологический колледж ВСГУТУ · команда Synapse
     </p>
   </div>
+    <EasterEggHost />
 </template>
 
 <style scoped>

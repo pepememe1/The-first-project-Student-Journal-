@@ -3,6 +3,7 @@
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, computed, onMounted } from 'vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter } from 'vue-router'
 import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
@@ -38,9 +39,15 @@ const FAREWELL_MS = 1200
 const farewell = ref(false)
 const farewellName = computed(() => (auth.user?.name || '').trim())
 async function onLogout() {
-  farewell.value = true
+  // ⚠️ Dark Souls вместо обычного прощания: бросок делаем ДО выхода, пока токен ещё
+  // жив, — после `logout()` запрос уже некому авторизовать. Сцена сама закрывает
+  // находку ачивкой сразу при показе: следом идёт переход на экран входа, и «доиграть»
+  // будет негде.
+  const egg = await easter.roll('dark_souls_logout')
+  const wait = egg ? 5200 : FAREWELL_MS         // сцене нужно время догореть
+  if (!egg) farewell.value = true
   try { await auth.logout() } finally {
-    setTimeout(() => router.push('/login'), FAREWELL_MS)
+    setTimeout(() => router.push('/login'), wait)
   }
 }
 
@@ -284,6 +291,11 @@ async function removePasskey(id) {
   try { await authApi.webauthnDelete(id); await loadPasskeys() } finally { pkBusy.value = false }
 }
 function fmtDate(s) { return (s || '').slice(0, 10) }
+// G-Man в «Настройках»: он проявляется по мере того, как человек тут сидит,
+// поэтому бросок делаем на входе, а само проявление тянется внутри сцены.
+const easter = useEasterStore()
+onMounted(() => easter.roll('gman_observer'))
+
 </script>
 
 <template>

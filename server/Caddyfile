@@ -128,7 +128,7 @@ esstu-gradebook.ru {
 	# срабатывает, и запрос уходит на Python, как раньше. Худший исход — медленно,
 	# а не «битый сайт»; частичный деплой у нас уже ронял прод, второй раз не надо.
 	@static_file {
-		path /assets/* /fonts/* /icons/* /mascot/*
+		path /assets/* /fonts/* /icons/* /mascot/* /easter/*
 		file {
 			root /var/www/gradebook
 		}
@@ -141,7 +141,7 @@ esstu-gradebook.ru {
 		header @immutable Cache-Control "public, max-age=31536000, immutable"
 		# Шрифты, иконки и спрайты маскота хеша в имени НЕ имеют — им неделя. Год здесь
 		# означал бы, что заменённый шрифт доедет до людей через год.
-		@weekly path /fonts/* /icons/* /mascot/*
+		@weekly path /fonts/* /icons/* /mascot/* /easter/*
 		header @weekly Cache-Control "public, max-age=604800"
 		file_server {
 			# Файлы пожаты ОДИН РАЗ при выкладке (.zst/.gz рядом с оригиналом). На одном

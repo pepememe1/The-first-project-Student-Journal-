@@ -23,6 +23,20 @@
   font-style: normal;
   font-display: swap;
 }
+/* Пиксельный шрифт пасхалок. Свой файл, а не ссылка на Google: внутри программы
+   интернета может не быть, а из CSP боевого Caddy googleapis/gstatic убраны — ссылка
+   там просто не сработала бы, и текст молча свалился бы в monospace.
+   ⚠️ Press Start 2P выбран потому, что он ЕДИНСТВЕННЫЙ пиксельный в каталоге Google с
+   кириллицей (проверено запросом к их CSS API: у Pixelify Sans, VT323, Silkscreen,
+   Jersey и Handjet её нет вовсе). Собирается tools/build_pixel_font.py. */
+@font-face {
+  font-family: 'Press Start 2P';
+  src: url('/fonts/PressStart2P.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'DM Sans';
   src: url('/fonts/DMSans-Variable.woff2') format('woff2-variations');
@@ -556,3 +570,45 @@ html.gb-contrast :focus-visible {
 
 /* Ссылки-акценты подчёркиваем: в высоком контрасте цвет один читать труднее. */
 html.gb-contrast a { text-decoration-thickness: from-font; }
+
+/* ── Чёрно-белый глитч на цифре 404 (пасхалка Stanley Parable) ──────────────────
+   Отличительный знак: у RDR2 своя карточка, а рассказчик приходит без картинки, и
+   отличить одну шутку от другой было нечем. Глитч монохромный НАМЕРЕННО — у Cyberpunk
+   он цветной, и повторять там же ту же палитру значило бы смешать две разные отсылки.
+   Живёт в глобальных стилях, а не в самой сцене: цифра лежит НА СТРАНИЦЕ, снаружи
+   оверлея, и scoped-стиль до неё не достаёт. */
+.gb-glitch-bw {
+  filter: grayscale(1) contrast(1.6);
+  animation: gb-glitch-bw 0.42s steps(2, end) infinite;
+  position: relative;
+}
+.gb-glitch-bw::before,
+.gb-glitch-bw::after {
+  content: attr(data-glitch);
+  position: absolute;
+  inset: 0;
+  color: inherit;
+  background: var(--gb-card);
+  overflow: hidden;
+}
+.gb-glitch-bw::before { animation: gb-glitch-a 0.31s steps(2, end) infinite; }
+.gb-glitch-bw::after  { animation: gb-glitch-b 0.47s steps(2, end) infinite; }
+
+@keyframes gb-glitch-bw {
+  0%, 100% { transform: translateX(0) }
+  40%      { transform: translateX(-1.5px) }
+  70%      { transform: translateX(1.5px) }
+}
+@keyframes gb-glitch-a {
+  0%, 100% { clip-path: inset(12% 0 62% 0); transform: translateX(-3px) }
+  50%      { clip-path: inset(38% 0 34% 0); transform: translateX(3px) }
+}
+@keyframes gb-glitch-b {
+  0%, 100% { clip-path: inset(70% 0 8% 0);  transform: translateX(2px) }
+  50%      { clip-path: inset(52% 0 26% 0); transform: translateX(-2px) }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gb-glitch-bw,
+  .gb-glitch-bw::before,
+  .gb-glitch-bw::after { animation: none }
+}

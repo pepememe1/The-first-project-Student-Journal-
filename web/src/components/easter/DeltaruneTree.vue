@@ -9,6 +9,7 @@
 // любом заходе остаётся только «Это дерево».
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { mumble } from '@/utils/mumble'
 const emit = defineEmits(['close'])
 const easter = useEasterStore()
 
@@ -49,23 +50,6 @@ async function type(text) {
     await new Promise((r) => setTimeout(r, 30))
   }
   busy = false
-}
-
-// «Бубнёж» Вектора синтезируем: своего файла для него в продукте нет, и заводить ради
-// одного щелчка на символ незачем — тем же приёмом сделаны пинг мессенджера и будильник.
-let actx = null
-function mumble() {
-  try {
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)()
-    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime
-    o.type = 'square'
-    o.frequency.setValueAtTime(340 + Math.random() * 80, t)
-    g.gain.setValueAtTime(0.0001, t)
-    g.gain.exponentialRampToValueAtTime(0.03, t + 0.008)
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06)
-    o.connect(g).connect(actx.destination)
-    o.start(t); o.stop(t + 0.07)
-  } catch { /* звук недоступен — текст всё равно печатается */ }
 }
 
 let step = 0

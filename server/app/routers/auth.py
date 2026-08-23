@@ -179,7 +179,21 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         throttle.register_failure(ip, login_str, login_exists=u is not None)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
         audit.log(db, request, actor=login_str, action="login.fail", level="warn")
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        #Пасхалка Far Cry: седьмая неудача подряд у СТУДЕНТА. Решение принимает сервер и
+        #сообщает заголовком — тела ответа не трогаем, чтобы не менять форму ошибки,
+        #которую разбирает форма входа.
+        #⚠️ Утечки здесь нет: заголовок видит ровно тот, кто сам семь раз промахнулся
+        #мимо пароля, и ничего нового ему не сообщает — на седьмой попытке анти-брутфорс
+        #и так запирает пару (IP, логин).
+        headers = None
+        try:
+            from .. import easter_eggs
+            if u is not None and u.role == "student"                     and easter_eggs.farcry_due(login_str, db, u.id):
+                headers = {"X-Gb-Egg": "farcry_vaas_quote"}
+        except Exception:      # noqa: BLE001 — пасхалка не имеет права мешать входу
+            headers = None
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль",
+                            headers=headers)
 
     throttle.register_success(ip, login_str)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)

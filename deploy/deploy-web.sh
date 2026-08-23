@@ -46,7 +46,7 @@ ssh $O "$VPS" 'set -e
   # копии — наш родной класс аварии; на этот случай в Caddyfile стоит матчер `file`:
   # нет файла в /var/www — запрос уходит на Python, как раньше (медленно, но цело).
   install -d -m 755 -o caddy -g caddy /var/www/gradebook
-  for d in assets fonts icons mascot; do
+  for d in assets fonts icons mascot easter; do
     test -d "/root/gb-deploy/webdist/$d" && rsync -a --delete       "/root/gb-deploy/webdist/$d/" "/var/www/gradebook/$d/"
   done
 

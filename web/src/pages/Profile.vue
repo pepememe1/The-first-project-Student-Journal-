@@ -11,7 +11,7 @@
 // файле, «о себе»/заметка — внутри PeerProfileCard через commit()/discard(), см. её
 // докстринг). Уход со страницы с несохранённым черновиком — предупреждение с выбором
 // «Сохранить»/«Отменить» (onBeforeRouteLeave ниже), а не молчаливая потеря правок.
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
 import { useLocaleStore } from '@/stores/locale'
@@ -26,6 +26,9 @@ import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import NameStyleDialog from '@/components/NameStyleDialog.vue'
 import AchievementsDialog from '@/components/AchievementsDialog.vue'
+import ProfileEggs from '@/components/easter/ProfileEggs.vue'
+import { useEasterStore } from '@/stores/easterEggs'
+import { studentApi } from '@/api/endpoints'
 import { Camera, Check, Film, Sparkles, SquareDashed } from '@lucide/vue'
 
 const auth = useAuthStore()
@@ -33,6 +36,22 @@ const profile = useProfileStore()
 const locale = useLocaleStore()
 const { confirm } = useConfirm()
 const cardRef = ref(null)
+
+// ── Пасхалки профиля: штамп Papers Please и точка сохранения Undertale ──
+// Бросок один на две: сервер вернёт не больше ОДНОЙ, иначе штамп и звезда вылезут
+// вместе и обе перестанут читаться как редкая находка.
+const easter = useEasterStore()
+const eggsRef = ref(null)
+const saveStar = computed(() => !!easter.inPage.undertale_save)
+const eggLevel = ref(0)
+onMounted(async () => {
+  const egg = await easter.roll(['papers_please_stamp', 'undertale_save'])
+  //«Уровень» в файле сохранения — настоящий средний балл. Спрашиваем ТОЛЬКО когда
+  //звезда действительно выпала (раз в сотню заходов), а не на каждом открытии профиля.
+  if (egg === 'undertale_save' && auth.role === 'student') {
+    try { eggLevel.value = Number((await studentApi.stats()).data?.average || 0) } catch { /* останется 0 */ }
+  }
+})
 
 // ── Черновик цвета/шрифта — синхронизируется с сохранённым значением, ПОКА человек
 // его не тронул (см. lastSynced*: приход prefs с сервера ПОСЛЕ монтирования страницы
@@ -129,7 +148,8 @@ const styleSummary = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <!-- relative — якорь для слоя пасхалок (штамп ложится в случайное место страницы) -->
+  <div class="relative space-y-6">
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
       <!-- Левая колонка: редактор -->
       <div class="space-y-4 lg:order-1">
@@ -236,11 +256,21 @@ const styleSummary = computed(() => {
         <AppButton variant="ghost" size="sm" :disabled="saving" @click="discardAll">
           {{ locale.t('profile.discardAndLeave', 'Отменить') }}
         </AppButton>
-        <AppButton variant="green" size="sm" :disabled="saving" @click="saveAll">
+        <!-- Раз в сотню заходов слово «Сохранить» подменяется звездой Undertale.
+             Настоящее сохранение при этом НЕ откладывается: кнопка в жёлтом окне зовёт
+             тот же saveAll(), просто через диалог. -->
+        <button v-if="saveStar" type="button" :disabled="saving" aria-label="Сохранить"
+                class="grid size-9 place-items-center rounded-md p-0.5 transition hover:brightness-125"
+                style="filter:drop-shadow(0 0 6px #ffe27a)" @click="eggsRef?.start()">
+          <img src="/easter/img/star.gif" alt="" class="size-7" style="image-rendering:pixelated" />
+        </button>
+        <AppButton v-else variant="green" size="sm" :disabled="saving" @click="saveAll">
           {{ saving ? locale.t('profile.saving', 'Сохранение…') : locale.t('common.save') }}
         </AppButton>
       </div>
     </div>
+
+    <ProfileEggs ref="eggsRef" :name="auth.user?.name || ''" :level="eggLevel" @save="saveAll" />
 
     <Card :title="locale.t('settings.notifications', 'Уведомления')" :subtitle="locale.t('profile.notificationsHint', 'Оценки и изменения расписания')">
       <NotificationsInbox />

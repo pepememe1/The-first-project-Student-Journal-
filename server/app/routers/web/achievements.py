@@ -58,7 +58,7 @@ def roll_eggs(payload: dict = Body(...),
     """Бросок шанса. Возвращает id сработавшей пасхалки или null.
 
     ⚠️ Бросок ЗДЕСЬ, а не в браузере: `Math.random()` правится инструментами
-    разработчика за секунду, и 1/666 перестала бы быть редкостью. Заодно бросок общий
+    разработчика за секунду, и 1/500 перестала бы быть редкостью. Заодно бросок общий
     для всех устройств человека — иначе телефон и ПК давали бы два шанса на одно событие.
 
     Принимает либо `egg` (одна), либо `eggs` (список — тогда берётся ПЕРВАЯ сработавшая
@@ -99,3 +99,54 @@ def claim_achievement(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Пасхалка не срабатывала")
     fresh = easter_eggs.unlock(user.id, aid, db)
     return {"ok": True, "unlocked": fresh}
+
+@router.get("/easter-eggs/on-login")
+def egg_on_login(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Что показать сразу после входа: не больше одной пасхалки за раз.
+
+    ⚠️ Один запрос вместо пяти бросков подряд — и дело не в экономии. Условия («сейчас
+    ночь», «до этого было три неудачных попытки», «сегодня день рождения») обязаны
+    считаться на сервере: в браузере любое из них подделывается строкой в консоли, а
+    шанс без честного условия ничего не стоит.
+
+    ⚠️ `hud` — это DOOM, и он ОТДЕЛЬНОЕ поле, а не ещё один вариант `egg`. Он
+    детерминирован (морда в HUD видна всегда, оценка лишь задаёт её состояние), и попади
+    он в общий слот — занимал бы его каждый вход, то есть ни одна редкая пасхалка не
+    выпала бы больше никогда."""
+    hud = user.role == "student"
+    if hud:
+        #След обязателен и здесь: без него `claim` откажет, и ачивка не выдастся молча.
+        easter_eggs.mark_triggered("doom_avatar", user.id, db)
+    return {"egg": easter_eggs.pick_on_login(user, db), "hud": hud}
+
+
+@router.get("/easter-eggs/journal")
+def eggs_for_journal(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Что показать в журнале оценок: счётчик стиля и/или разовая находка.
+
+    ⚠️ Возвращаем ДВЕ величины, а не одну, потому что у них разная природа. Счётчик
+    ULTRAKILL детерминирован (его видит каждый отличник каждый раз — это не находка,
+    а плашка-похвала), а кубик Isaac и внутренний голос — редкие броски. Сложи их в
+    одно поле, и у отличника не выпадал бы больше НИ ОДИН редкий сюрприз: постоянная
+    плашка занимала бы единственный слот навсегда.
+
+    ⚠️ «Отличник» считается ЗДЕСЬ, а не в браузере: клиент передал бы любой средний.
+    Считаем тем же `W.average`, что и страница статистики, — второй методики среднего
+    в продукте быть не должно (инвариант §8)."""
+    if user.role != "student":
+        return {"ultrakill": False, "egg": None}
+
+    cfg = W.load_config(db)
+    #Тот же путь отбора занятий, что у `student_stats`: действующий план, текущий
+    #термин, своя подгруппа. Иначе средний тут и средний на соседнем экране разъедутся.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
+        db, user.group_name, W.current_subject_lessons(
+            db, user.group_name, W.group_lessons(db, user.group_name)), cfg), user.id)
+    records = W.student_records(db, user.surname, user.name, user.group_name)
+    avg = W.average(lessons, records, cfg, scale=W.lesson_scale_map(db, lessons))
+
+    ultra = avg >= easter_eggs.ULTRAKILL_MIN_AVG
+    if ultra:
+        easter_eggs.mark_triggered("ultrakill_rank", user.id, db)
+    egg = easter_eggs.roll_one_of(["binding_of_isaac_d6", "disco_elysium_voice"], user.id, db)
+    return {"ultrakill": ultra, "average": avg, "egg": egg}

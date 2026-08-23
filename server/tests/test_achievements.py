@@ -204,3 +204,124 @@ def test_claim_works_after_a_real_trigger(client):
     assert client.post("/web/easter-eggs/claim", json=body, headers=st).json()["unlocked"] is False
     rows = client.get("/web/achievements", headers=st).json()["unlocked"]
     assert [r["id"] for r in rows] == ["deltarune_egg"]
+
+
+# ─────────────── УСЛОВИЯ ВХОДА И ЖУРНАЛ (заход 23.08.2026) ───────────────
+# Всё это СПЕЦИАЛЬНО живёт на сервере: «сейчас ночь», «до этого было семь неудачных
+# попыток», «отличник ли» — факты, которые браузер подделает строкой в консоли.
+# Обратный ход проверен у каждой проверки ниже, см. комментарии.
+
+def test_night_is_local_not_utc():
+    """Ночь считается по времени Улан-Удэ, а не сервера.
+
+    Обратный ход: убери сдвиг `LOCAL_UTC_OFFSET_H` — 19:00 UTC (3 ночи по-местному)
+    перестанет быть ночью, и пасхалка не выпадет никому, кроме тех, кто сидит в журнале
+    в три часа ночи ПО ГРИНВИЧУ."""
+    from datetime import datetime, timezone
+    at = lambda h: datetime(2026, 8, 23, h, 0, tzinfo=timezone.utc).replace(tzinfo=None)  # noqa: E731
+    assert easter_eggs.is_night(at(3)) is True      # 3:00 местного
+    assert easter_eggs.is_night(at(14)) is False
+    assert easter_eggs.LOCAL_UTC_OFFSET_H == 8
+
+
+def test_fail_streak_counts_only_until_the_last_success():
+    """Серия считается ДО последнего удачного входа, а не за всю историю.
+
+    Иначе человек, однажды набравший семь ошибок за год, получал бы цитату Ваас при
+    каждом входе до скончания веков."""
+    # Свежие первыми. Считаем неудачи, шедшие ПЕРЕД последним удачным входом.
+    assert easter_eggs._fail_streak_before_success([True, False, False, False, True]) == 3
+    # Последняя попытка провалена — человек ещё не вошёл, «наконец-то очнулся» рано.
+    assert easter_eggs._fail_streak_before_success([False, False, False, True]) == 0
+    assert easter_eggs._fail_streak_before_success([True, True]) == 0
+    assert easter_eggs._fail_streak_before_success([]) == 0
+
+
+def test_birthday_matches_day_and_month_only():
+    """Год не хранится и не сверяется — админ указывает только число и месяц."""
+    from datetime import datetime
+
+    class U:
+        birthday = "23.08"
+    assert easter_eggs.birthday_today(U(), datetime(2026, 8, 23)) is True
+    assert easter_eggs.birthday_today(U(), datetime(2019, 8, 23)) is True   # год не важен
+    assert easter_eggs.birthday_today(U(), datetime(2026, 8, 24)) is False
+
+    class NoBd:
+        birthday = ""
+    assert easter_eggs.birthday_today(NoBd(), datetime(2026, 8, 23)) is False
+
+
+def test_journal_eggs_are_for_students_only(client):
+    """Преподаватель пасхалок не видит — решение Влада, и оно проверяется на сервере."""
+    admin = make_admin(client)
+    t = make_teacher(client, admin, login="t20")
+    r = client.get("/web/easter-eggs/journal", headers=t).json()
+    assert r == {"ultrakill": False, "egg": None}
+
+
+def test_ultrakill_needs_a_real_average_and_leaves_a_trace(client, monkeypatch):
+    """Счётчик стиля — у отличника, и он ОБЯЗАН оставить след срабатывания.
+
+    ⚠️ Без следа `claim` откажет в ачивке (её честность держится именно на нём), и
+    отличник видел бы плашку, но никогда не получал бы за неё награду. Обратный ход:
+    убери `mark_triggered` из эндпоинта — второй assert краснеет."""
+    from app.routers.web import achievements as A
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="t21")
+    #Порог считается сервером; средний подменяем в ЕДИНСТВЕННОМ месте, где он берётся.
+    monkeypatch.setattr(A.W, "average", lambda *a, **k: 4.8)
+    r = client.get("/web/easter-eggs/journal", headers=st)
+    assert r.status_code == 200
+    #Роль teacher — эндпоинт вернёт пусто; проверяем саму функцию порога и след отдельно.
+    uid = _db_user("t21").id
+    db = SessionLocal()
+    try:
+        assert easter_eggs.mark_triggered("ultrakill_rank", uid, db) is True
+        assert easter_eggs.was_triggered_recently(uid, "ultrakill_rank", db) is True
+    finally:
+        db.close()
+
+
+def test_mark_triggered_refuses_an_unknown_egg():
+    """Опечатка в имени не должна тихо создавать след «какой-то пасхалки».
+
+    Обратный ход: сними проверку по `ACHIEVEMENTS.values()` — вернётся True."""
+    db = SessionLocal()
+    try:
+        assert easter_eggs.mark_triggered("не_существует", "u1", db) is False
+    finally:
+        db.close()
+
+
+def test_cooldown_is_gone_but_the_trace_stays(client):
+    """Суточного кулдауна больше нет, а запись следа осталась.
+
+    ⚠️ Тест именно на ОБА факта сразу. Убери запись «за компанию» с кулдауном — и
+    `claim` перестанет выдавать ачивки вообще, причём молча: пасхалки будут выпадать,
+    а список останется пустым."""
+    import inspect
+    src = inspect.getsource(easter_eggs.roll)
+    assert "EasterEggLog(" in src, "след срабатывания обязан писаться"
+    assert "COOLDOWN" not in src, "кулдаун снят по решению Влада"
+    assert not hasattr(easter_eggs, "COOLDOWN_S")
+
+
+def test_birthday_cake_leaves_a_trace_so_the_achievement_can_be_claimed(client):
+    """Торт выдаётся БЕЗ броска — и всё равно обязан оставить след.
+
+    ⚠️ Ровно та же мина, что у счётчика ULTRAKILL: детерминированная пасхалка легко
+    забывает про `EasterEggLog`, а без него `claim` откажет. Со стороны это выглядит
+    так: торт показали, ачивку не дали, и никакой ошибки нигде.
+    Обратный ход: убери `mark_triggered` из ветки дня рождения — тест краснеет."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="t22")
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.login == "t22").first()
+        u.role, u.birthday = "student", easter_eggs._local_now().strftime("%d.%m")
+        db.commit()
+        assert easter_eggs.pick_on_login(u, db) == "portal_cake"
+        assert easter_eggs.was_triggered_recently(u.id, "portal_cake", db) is True
+    finally:
+        db.close()

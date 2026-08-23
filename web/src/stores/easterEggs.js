@@ -35,8 +35,22 @@ export const EGG_ACHIEVEMENT = {
   fnaf_night_mode:     'fnaf_night',
 }
 
+// Пасхалки, которые живут ВНУТРИ страницы, а не накрывают экран: кольцо Detroit вместо
+// кружка статуса, состояние DOOM на аватарке, кубик Isaac в журнале, счётчик ULTRAKILL,
+// штамп Papers Please на профиле, звезда сохранения Undertale.
+//
+// ⚠️ У них ОТДЕЛЬНЫЙ канал, и это не косметика. Полноэкранная сцена одна за раз —
+// иначе две шутки наложатся и обе перестанут читаться. Но кольцо на аватарке висит
+// постоянно: положи его в тот же слот, и оно навсегда заняло бы единственное место,
+// то есть ни одна другая пасхалка за сессию больше не выпала бы вовсе.
+const IN_PAGE = new Set([
+  'detroit_led', 'doom_avatar', 'ultrakill_rank',
+  'binding_of_isaac_d6', 'disco_elysium_voice', 'papers_please_stamp', 'undertale_save',
+])
+
 export const useEasterStore = defineStore('easterEggs', () => {
-  const active = ref('')          // id пасхалки, которая играет прямо сейчас
+  const active = ref('')          // полноэкранная сцена, которая играет прямо сейчас
+  const inPage = ref({})          // { id: true } — пасхалки внутри страницы, их может быть несколько
   const lastUnlocked = ref(null)  // для тоста «достижение открыто»
   const busy = ref(false)
 
@@ -50,7 +64,7 @@ export const useEasterStore = defineStore('easterEggs', () => {
     try {
       const body = Array.isArray(egg) ? { eggs: egg } : { egg }
       const { data } = await easterApi.roll(body)
-      if (data.egg) active.value = data.egg
+      if (data.egg) place(data.egg)
       return data.egg || null
     } catch {
       return null            // нет сети или сервер занят — пасхалка просто не выпала
@@ -59,9 +73,50 @@ export const useEasterStore = defineStore('easterEggs', () => {
     }
   }
 
+  /** Спросить сервер, что показать сразу после входа. */
+  async function afterLogin() {
+    const auth = useAuthStore()
+    if (auth.role !== 'student') return null
+    try {
+      const { data } = await easterApi.onLogin()
+      // DOOM детерминирован и живёт СВОИМ полем: он не «выпал», он просто включён.
+      if (data.hud) place('doom_avatar')
+      if (data.egg) place(data.egg)
+      return data.egg || null
+    } catch {
+      return null
+    }
+  }
+
+  /** Разложить выпавшую пасхалку по нужному каналу (см. IN_PAGE выше). */
+  function place(egg) {
+    if (IN_PAGE.has(egg)) inPage.value = { ...inPage.value, [egg]: true }
+    else active.value = egg
+  }
+
+  /** Спросить журнал: счётчик стиля отличнику и/или редкая находка. */
+  async function rollJournal() {
+    const auth = useAuthStore()
+    if (auth.role !== 'student') return
+    try {
+      const { data } = await easterApi.journal()
+      if (data.ultrakill) place('ultrakill_rank')
+      if (data.egg) place(data.egg)
+      return data
+    } catch {
+      return null                // нет сети — журнал просто откроется без шуток
+    }
+  }
+
   /** Показать сцену без броска — для отладки и для повторного входа в уже начатую. */
-  function show(egg) { active.value = egg }
+  function show(egg) { place(egg) }
   function close() { active.value = '' }
+  /** Убрать пасхалку страницы: доиграла и больше не нужна. */
+  function closeInPage(egg) {
+    const next = { ...inPage.value }
+    delete next[egg]
+    inPage.value = next
+  }
 
   /**
    * Находка доиграна: просим сервер закрыть её ачивкой.
@@ -83,5 +138,6 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   function clearToast() { lastUnlocked.value = null }
 
-  return { active, lastUnlocked, roll, show, close, claim, clearToast }
+  return { active, inPage, lastUnlocked, roll, afterLogin, rollJournal,
+           show, close, closeInPage, claim, clearToast }
 })

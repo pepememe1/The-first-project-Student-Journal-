@@ -29,6 +29,9 @@ const locale = useLocaleStore()
 // `latest` присылает журнал родителя (последняя попытка), `grade` — студенческий.
 // Одно правило покрывает оба кабинета, второй ветки заводить не нужно.
 const gradeOf = (l) => (l.latest || l.grade || '').trim()
+// ⚠️ `data-egg-grade` на клетке оценки ниже — не разметка ради разметки: по ней
+// пасхалки журнала (кубик Isaac, внутренний голос Disco Elysium) находят ячейки.
+// Снимешь — обе тихо перестанут работать, и ни один тест этого не заметит.
 
 // Плашка оценки — та же, что была в нативном журнале десктопа (ui/dashboards.py удалён
 // вместе с Qt; сегодня этот компонент и ЕСТЬ журнал на всех платформах): у числовых —
@@ -59,7 +62,7 @@ function gradeChip(g) {
           <!-- min-w-0 обязателен: без него длинная тема не сжимается, а распирает строку
                и уводит оценку за край — ровно та же ловушка flex, что и в шапке карточки. -->
           <span class="min-w-0 break-words text-sm font-medium text-text">{{ l.topic || '—' }}</span>
-          <span class="shrink-0 rounded-md text-center font-title text-base font-bold"
+          <span data-egg-grade class="shrink-0 rounded-md text-center font-title text-base font-bold"
                 :class="isNumericGrade(gradeOf(l)) ? 'px-2 py-0.5' : ''"
                 :style="gradeChip(gradeOf(l))">{{ gradeOf(l) || '—' }}</span>
         </div>
@@ -87,7 +90,7 @@ function gradeChip(g) {
             <td class="py-2.5 pr-3 text-text">{{ l.topic || '—' }}</td>
             <td class="whitespace-nowrap py-2.5 pr-3 text-text3">{{ l.date || '—' }}</td>
             <td class="py-2.5 text-right">
-              <span class="inline-block min-w-[2.2rem] rounded-md text-center font-title text-base font-bold"
+              <span data-egg-grade class="inline-block min-w-[2.2rem] rounded-md text-center font-title text-base font-bold"
                     :class="isNumericGrade(gradeOf(l)) ? 'px-2 py-0.5' : ''"
                     :style="gradeChip(gradeOf(l))">{{ gradeOf(l) || '—' }}</span>
             </td>

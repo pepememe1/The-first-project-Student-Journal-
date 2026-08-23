@@ -33,12 +33,19 @@ onMounted(async () => {
   // оказались бы две — настоящая под оверлеем и наша поверх.
   const code = document.querySelector('[data-404-code]')
   if (code) {
-    code.style.animation = 'gb-shake .5s steps(2) 3'
-    await wait(1500)
-    code.style.animation = ''
+    // Отличительный знак рассказчика: у RDR2 своя карточка, а он приходит без картинки,
+    // и отличить одну шутку от другой было нечем. Глитч МОНОХРОМНЫЙ — цветной уже занят
+    // Cyberpunk, и повторять его палитру значило бы смешать две разные отсылки.
+    code.dataset.glitch = code.textContent
+    code.classList.add('gb-glitch-bw')
+    await wait(1600)
     code.textContent = '427'
+    code.dataset.glitch = '427'
+    await wait(1400)
+    code.classList.remove('gb-glitch-bw')
+    code.removeAttribute('data-glitch')
   }
-  await wait(4000)
+  await wait(2600)
 
   const v = VARIANTS[Math.floor(Math.random() * VARIANTS.length)]
   const n = 1 + Math.floor(Math.random() * v.files)

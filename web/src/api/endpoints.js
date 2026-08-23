@@ -40,6 +40,11 @@ export const authApi = {
 // клиент не решает ни выпала ли пасхалка, ни заслужена ли ачивка (см. easter_eggs.py).
 export const easterApi = {
   roll: (body) => api.post('/web/easter-eggs/roll', body),
+  // Что показать сразу после входа. Одним запросом, а не пятью бросками: условия
+  // («ночь», «до этого были неудачи», «сегодня день рождения») считает сервер — в
+  // браузере любое из них подделывается строкой в консоли.
+  onLogin: () => api.get('/web/easter-eggs/on-login'),
+  journal: () => api.get('/web/easter-eggs/journal'),
   claim: (body) => api.post('/web/easter-eggs/claim', body),
 }
 

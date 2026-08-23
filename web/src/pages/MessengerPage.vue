@@ -5,6 +5,7 @@
 //   C — переписка СПРАВА (лента + композер)                  [ChatThread]
 // Транспорт Фазы 2 — опрос (store.startPolling); WebSocket добавим отдельной фазой.
 import { onMounted, onBeforeUnmount } from 'vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import { useMessengerStore } from '@/stores/messenger'
 import ChatList from '@/components/messenger/ChatList.vue'
 import ProfilePanel from '@/components/messenger/ProfilePanel.vue'
@@ -24,6 +25,10 @@ const embed = (() => {
 
 onMounted(() => { m.loadChats(); m.startPolling() })
 onBeforeUnmount(() => { m.stopPolling() })
+// Hotline Miami при входе во вкладку «Сообщения». Бросок серверный, как и везде.
+const easter = useEasterStore()
+onMounted(() => easter.roll('hotline_miami'))
+
 </script>
 
 <template>

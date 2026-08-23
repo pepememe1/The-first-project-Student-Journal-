@@ -1,13 +1,15 @@
 <script setup>
 // StudentJournal — журнал студента (порт ui/dashboards.py, страница "journal").
 // Занятия сгруппированы по предметам, у каждого — своя оценка и средний по предмету.
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { studentApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
 import DataFreshness from '@/components/ui/DataFreshness.vue'
+import JournalEggs from '@/components/easter/JournalEggs.vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -22,7 +24,18 @@ async function load() {
   loading.value = true
   try { data.value = (await studentApi.journal()).data } catch { data.value = null } finally { loading.value = false }
 }
-onMounted(load)
+// Пасхалки журнала (кубик Isaac, счётчик ULTRAKILL, внутренний голос). Спрашиваем
+// ПОСЛЕ загрузки данных: обе, что работают с клетками оценок, ищут их в разметке, а до
+// ответа сервера строк ещё нет вовсе. Средний по всем предметам берём из ТОГО ЖЕ
+// ответа, что и сам счётчик, — второй методики среднего в продукте быть не должно.
+const easter = useEasterStore()
+const avg = ref(0)
+onMounted(async () => {
+  await load()
+  await nextTick()
+  const r = await easter.rollJournal()
+  avg.value = Number(r?.average || 0)
+})
 
 // Сами занятия рисует общий SubjectLessons — он же стоит в журнале родителя, чтобы две
 // страницы, обязанные показывать одно и то же, не разъезжались (раньше вёрстка была
@@ -30,7 +43,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="space-y-5">
+  <!-- relative — якорь для слоя пасхалок: он позиционируется внутри страницы -->
+  <div class="relative space-y-5">
     <!-- Без сети журнал показывает сохранённую копию и выглядит как свежий. Подпись
          говорит, на какой момент эти оценки, — иначе человек примет вчерашнее за
          сегодняшнее и не станет перепроверять. -->
@@ -53,5 +67,7 @@ onMounted(load)
 
       <p v-if="data.methodology" class="px-1 text-xs text-text3">{{ data.methodology }}</p>
     </template>
+
+    <JournalEggs :average="avg" />
   </div>
 </template>

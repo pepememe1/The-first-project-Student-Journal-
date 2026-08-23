@@ -12,7 +12,7 @@
 // Кнопки выхода здесь НЕТ намеренно: она переехала в самый низ «Настроек» (отзыв
 // «случайно жму выход») — выход это редкое и необратимое действие, ему не место рядом
 // с постоянно нажимаемым меню.
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { Moon, Sun, ChevronDown } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -24,6 +24,9 @@ import { roleLabel as roleLabelOf } from '@/config/roles'
 import { nameDecor } from '@/config/nameEffects'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
+import AvatarEggs from '@/components/easter/AvatarEggs.vue'
+import { useEasterStore } from '@/stores/easterEggs'
+import { studentApi } from '@/api/endpoints'
 import SidebarUserOverlay from '@/components/SidebarUserOverlay.vue'
 
 const auth = useAuthStore()
@@ -47,6 +50,25 @@ const myNameDecor = computed(() => nameDecor({
 const cardOpen = ref(false)
 const myStatus = computed(() =>
   STATUS_KINDS.find(k => k.kind === messenger.myStatus.kind) || STATUS_KINDS[0])
+// Пасхалки на аватарке (Detroit и DOOM). Средний балл нужен обеим: у первой он задаёт
+// цвет кольца, у второй — состояние. Спрашиваем ОДИН раз и только у студента: другим
+// ролям пасхалки не показываются вовсе, а «своего среднего» у них и не существует.
+const easter = useEasterStore()
+const ledActive = computed(() => !!easter.inPage.detroit_led)
+const avgGrade = ref(0)
+// ⚠️ Средний спрашиваем ЛЕНИВО — только когда пасхалка реально включилась, и ровно один
+// раз. Безусловный запрос на монтировании стоил бы лишнего похода на сервер при КАЖДОМ
+// открытии программы ради того, что нужно одной картинке в углу.
+let avgAsked = false
+watch(() => easter.inPage.detroit_led || easter.inPage.doom_avatar, async (on) => {
+  if (!on || avgAsked || auth.role !== 'student') return
+  avgAsked = true
+  try {
+    const { data } = await studentApi.stats()
+    avgGrade.value = Number(data?.average || 0)
+  } catch { /* нет сети — пасхалка просто покажет нейтральное состояние */ }
+}, { immediate: true })
+
 const statusText = computed(() =>
   myStatusLabel(messenger.myStatus.kind, messenger.myStatus.custom_text))
 
@@ -85,8 +107,11 @@ onMounted(async () => {
               :title="locale.t('header.myStatus', { status: statusText })">
         <span class="relative shrink-0">
           <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="36" />
-          <span class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card"
+          <!-- Кружок статуса прячем, когда выпало кольцо Detroit: оно встаёт ВМЕСТО
+               него, а не рядом — два индикатора в одном углу читались бы как поломка. -->
+          <span v-if="!ledActive" class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card"
                 :style="{ background: myStatus.color }" />
+          <AvatarEggs :average="avgGrade" />
         </span>
         <span class="min-w-0 flex-1">
           <span class="block truncate text-[13px] font-semibold leading-tight text-text"
