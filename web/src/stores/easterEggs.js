@@ -11,7 +11,7 @@
 // иначе редкость правится через инструменты разработчика за секунду, а телефон и ПК
 // давали бы человеку два независимых шанса на одно событие.
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { easterApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 
@@ -46,6 +46,17 @@ export const EGG_ACHIEVEMENT = {
 const IN_PAGE = new Set([
   'detroit_led', 'doom_avatar', 'ultrakill_rank',
   'binding_of_isaac_d6', 'disco_elysium_voice', 'papers_please_stamp', 'undertale_save',
+])
+
+// Пасхалки, которые МОЖНО ПРОПУСТИТЬ, если уйти со страницы. Только их сторожит
+// подтверждение перехода (см. router/index.js).
+//
+// ⚠️ Постоянных здесь нет НАМЕРЕННО, и это важнее, чем кажется. Кольцо Detroit,
+// состояние DOOM и счётчик ULTRAKILL висят у студента всё время — попади они в этот
+// список, продукт спрашивал бы «точно уйти?» на КАЖДОМ переходе между вкладками.
+// Защита, которая срабатывает всегда, — это не защита, а поломка навигации.
+const MISSABLE_IN_PAGE = new Set([
+  'binding_of_isaac_d6', 'papers_please_stamp', 'undertale_save', 'disco_elysium_voice',
 ])
 
 export const useEasterStore = defineStore('easterEggs', () => {
@@ -88,10 +99,33 @@ export const useEasterStore = defineStore('easterEggs', () => {
     }
   }
 
-  /** Разложить выпавшую пасхалку по нужному каналу (см. IN_PAGE выше). */
+  /**
+   * Разложить выпавшую пасхалку по нужному каналу (см. IN_PAGE выше).
+   *
+   * ⚠️ У полноэкранной сцены заводится ПРЕДОХРАНИТЕЛЬ. Каждая сцена закрывает себя сама
+   * по таймеру, и это нормально — пока таймер заводится. Но однажды он не завёлся:
+   * Stanley и Far Cry раскладывали реплики по длительности mp3 и ждали `loadedmetadata`,
+   * а без звука это событие не приходит никогда. Сцена оставалась «играющей» вечно, и
+   * цена была не косметическая: занятый слот `active` запрещает выпадать всем остальным
+   * пасхалкам до конца сессии, а подтверждение перехода (23.08.2026) спрашивало бы
+   * «точно уйти?» на каждой вкладке.
+   *
+   * Пять минут — заведомо больше любой нашей сцены (самая длинная, ночная смена FNAF,
+   * идёт около минуты) и заведомо меньше «навсегда». Предохранитель не заменяет
+   * собственный таймер сцены и не должен срабатывать никогда: сработал — это дефект,
+   * и он теперь виден в консоли, а не проглочен.
+   */
+  const STUCK_MS = 5 * 60 * 1000
+  let stuckTimer = 0
   function place(egg) {
-    if (IN_PAGE.has(egg)) inPage.value = { ...inPage.value, [egg]: true }
-    else active.value = egg
+    if (IN_PAGE.has(egg)) { inPage.value = { ...inPage.value, [egg]: true }; return }
+    active.value = egg
+    clearTimeout(stuckTimer)
+    stuckTimer = setTimeout(() => {
+      if (active.value !== egg) return
+      console.warn('[пасхалки] сцена не закрыла себя сама и снята предохранителем:', egg)
+      active.value = ''
+    }, STUCK_MS)
   }
 
   /** Спросить журнал: счётчик стиля отличнику и/или редкая находка. */
@@ -110,11 +144,34 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   /** Показать сцену без броска — для отладки и для повторного входа в уже начатую. */
   function show(egg) { place(egg) }
-  function close() { active.value = '' }
+  function close() { clearTimeout(stuckTimer); active.value = '' }
   /** Убрать пасхалку страницы: доиграла и больше не нужна. */
   function closeInPage(egg) {
     const next = { ...inPage.value }
     delete next[egg]
+    inPage.value = next
+  }
+
+  /**
+   * Есть ли прямо сейчас на экране пасхалка, которую человек рискует ПРОПУСТИТЬ,
+   * уйдя со страницы. Пустая строка — нечего терять.
+   */
+  const pending = computed(() => {
+    if (active.value) return active.value
+    return Object.keys(inPage.value).find((k) => MISSABLE_IN_PAGE.has(k)) || ''
+  })
+
+  /**
+   * Человек подтвердил, что уходит. Снимаем пропускаемую пасхалку — иначе кубик или
+   * штамп уехали бы за ним на следующую страницу, где им нечего делать (штамп ищет
+   * профиль, кубик — клетки оценок) и где они висели бы мёртвой картинкой.
+   * ⚠️ Постоянные (кольцо, HUD, счётчик) НЕ трогаем: их не «пропускают».
+   */
+  function dismissPending() {
+    clearTimeout(stuckTimer)
+    active.value = ''
+    const next = { ...inPage.value }
+    for (const k of Object.keys(next)) if (MISSABLE_IN_PAGE.has(k)) delete next[k]
     inPage.value = next
   }
 
@@ -138,6 +195,6 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   function clearToast() { lastUnlocked.value = null }
 
-  return { active, inPage, lastUnlocked, roll, afterLogin, rollJournal,
-           show, close, closeInPage, claim, clearToast }
+  return { active, inPage, lastUnlocked, pending, roll, afterLogin, rollJournal,
+           show, close, closeInPage, dismissPending, claim, clearToast }
 })

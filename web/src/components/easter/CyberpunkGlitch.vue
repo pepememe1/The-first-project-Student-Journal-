@@ -12,6 +12,7 @@
 // обрывался на полуслове — а замена файла ломала бы расчёт снова.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { whenAudioReady } from '@/utils/audioReady'
 const emit = defineEmits(['close'])
 const easter = useEasterStore()
 
@@ -101,7 +102,9 @@ onMounted(async () => {
     }, Math.max(0, (d - 3.5) * 1000))
     timers.push(() => clearTimeout(id))
   }
-  guitar.readyState > 0 ? tail() : guitar.addEventListener('loadedmetadata', tail, { once: true })
+  //⚠️ Через whenAudioReady, а не голым 'loadedmetadata': без метаданных затухание
+  //не заведётся вовсе и гитара оборвётся на полуслове. См. utils/audioReady.js.
+  timers.push(whenAudioReady(guitar, tail))
 
   await wait(1100)
   glitch.value = false

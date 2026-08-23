@@ -12,6 +12,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
 import QuizEditor from './quiz/QuizEditor.vue'
+import ActivityWheel from './ActivityWheel.vue'
 
 const props = defineProps({ conversationId: { type: String, required: true } })
 const emit = defineEmits(['close'])
@@ -21,13 +22,17 @@ const act = useActivityStore()
 //откажет студенту сам); здесь только то, показывать ли ссылку.
 const canSeeJournal = computed(() => ['teacher', 'admin'].includes(useAuthStore().user?.role))
 
+//⚠️ Порядок здесь — это порядок ПО КОЛЕСУ, по часовой стрелке от 12 часов. Меняешь
+//местами — у людей меняется мышечная память: в радиальном меню на место жмут не глядя.
+//Эмодзи, а не только иконка Lucide: в колесе они различимы боковым зрением, потому что
+//цветные, а монохромная иконка на цветном секторе теряется.
 const KINDS = [
-  { id: 'board', icon: Presentation },
-  { id: 'quiz', icon: ListChecks },
-  { id: 'contest', icon: Trophy },
-  { id: 'poll', icon: BarChart3 },
-  { id: 'pulse', icon: Gauge },
-  { id: 'timer', icon: Timer },
+  { id: 'board', icon: Presentation, emoji: '🖊️' },
+  { id: 'quiz', icon: ListChecks, emoji: '📝' },
+  { id: 'contest', icon: Trophy, emoji: '🏆' },
+  { id: 'poll', icon: BarChart3, emoji: '📊' },
+  { id: 'pulse', icon: Gauge, emoji: '🌡️' },
+  { id: 'timer', icon: Timer, emoji: '⏱️' },
 ]
 
 const chosen = ref('')                 // '' — сетка категорий, иначе экран параметров
@@ -147,21 +152,12 @@ async function confirm() {
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
-        <!-- Сетка категорий. grid-cols-1 обязателен: без явной колонки браузер заводит
-             неявную дорожку `auto`, и один длинный неразрывный кусок распирает ВСЮ
-             колонку — на телефоне это уезжание за экран (см. §вёрстки CLAUDE.md). -->
-        <div v-if="!chosen" class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <button v-for="k in KINDS" :key="k.id" type="button" @click="choose(k.id)"
-                  class="flex min-w-0 flex-col items-start gap-1.5 rounded-xl border border-border2 bg-bg2 p-3 text-left transition-colors hover:border-accent hover:bg-accent-glow">
-            <component :is="k.icon" class="size-5 text-accent" />
-            <span class="min-w-0 truncate text-sm font-semibold text-text">
-              {{ locale.t(`activity.kind.${k.id}`, k.id) }}
-            </span>
-            <span class="text-[11px] leading-tight text-text3">
-              {{ locale.t(`activity.hint.${k.id}`, '') }}
-            </span>
-          </button>
-        </div>
+        <!-- Колесо выбора вместо прежней сетки 3×2 (23.08.2026). Почему колесо и как
+             оно устроено — в докстринге ActivityWheel.vue. Ссылка на журнал переехала
+             во ВТУЛКУ колеса: журнал относится ко всем шести активностям сразу, и
+             центр означает ровно это. -->
+        <ActivityWheel v-if="!chosen" :kinds="KINDS" :can-see-journal="canSeeJournal"
+                       @choose="choose" @journal="act.openJournal(conversationId)" />
 
         <div v-else class="flex flex-col gap-3">
           <label class="flex flex-col gap-1">
@@ -285,14 +281,10 @@ async function confirm() {
         </div>
       </div>
 
-      <!-- Журнал активностей беседы. Мелкой ссылкой под категориями, а не кнопкой в
-           шапке чата: место в шапке одно, и оно отдано частому действию — запуску.
-           Виден только тому, кто вправе запускать: студенту таблица чужих результатов
-           не полагается (свои строки он видит в самом журнале). -->
-      <button v-if="!chosen && canSeeJournal" type="button" @click="act.openJournal(conversationId)"
-              class="mx-4 mb-3 self-start text-xs text-text3 underline-offset-2 hover:text-accent hover:underline">
-        {{ locale.t('activity.journal.title', 'Журнал активностей') }}
-      </button>
+      <!-- ⚠️ Отдельной ссылки «Журнал активностей» здесь больше НЕТ: она переехала во
+           втулку колеса. Две двери в один раздел на одном экране — это не удобство, а
+           лишний вопрос «в чём разница». Права те же: видна только тому, кто вправе
+           запускать (студенту таблица чужих результатов не полагается). -->
 
       <div v-if="chosen" class="flex items-center justify-between gap-2 border-t border-border2 px-4 py-3">
         <span class="min-w-0 truncate text-xs text-text3">

@@ -8,6 +8,7 @@
 // Текстов три, озвучек семь: берём случайный текст и случайный файл из ЕГО пула.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { whenAudioReady } from '@/utils/audioReady'
 const emit = defineEmits(['close'])
 const easter = useEasterStore()
 
@@ -24,7 +25,7 @@ const VARIANTS = [
 ]
 
 const line = ref('')
-let audio = null, timers = []
+let audio = null, timers = [], cancelReady = null
 
 onMounted(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -65,9 +66,15 @@ onMounted(async () => {
       emit('close')
     }, acc * 1000 + 600))
   }
-  audio.readyState > 0 ? start() : audio.addEventListener('loadedmetadata', start, { once: true })
+  //⚠️ Через whenAudioReady, а НЕ голым 'loadedmetadata': не доехал звук —
+  //событие не придёт никогда, и сцена не закроется вовсе. См. utils/audioReady.js.
+  cancelReady = whenAudioReady(audio, start)
 })
-onBeforeUnmount(() => { timers.forEach(clearTimeout); if (audio) audio.pause() })
+onBeforeUnmount(() => {
+  timers.forEach(clearTimeout)
+  if (cancelReady) cancelReady()
+  if (audio) audio.pause()
+})
 </script>
 
 <template>

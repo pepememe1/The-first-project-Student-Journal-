@@ -15,6 +15,7 @@ import ActivityJournal from '@/components/activity/ActivityJournal.vue'
 import TimerAlarm from '@/components/activity/timer/TimerAlarm.vue'
 import EasterEggHost from '@/components/easter/EasterEggHost.vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useVectorStore } from '@/stores/vector'
 import { useActivityStore } from '@/stores/activity'
@@ -112,17 +113,38 @@ onBeforeUnmount(() => {
 const easter = useEasterStore()
 watch(() => route.path, () => { easter.roll('deltarune_tree') })
 
-// Пасхалки входа спрашиваем ОДИН раз за сессию вкладки, а не на каждый монтаж оболочки:
-// иначе обычная перезагрузка страницы давала бы новый бросок, и «редкое при входе»
-// превратилось бы в «частое при F5». Условия (ночь, серия неудач, день рождения) считает
-// сервер — здесь только момент.
-onMounted(() => {
+// Пасхалки входа спрашиваем один раз НА ЧЕЛОВЕКА, а не на вкладку. Замок нужен против
+// F5: без него перезагрузка страницы давала бы новый бросок, и «редкое при входе»
+// превратилось бы в «частое при обновлении».
+//
+// 🔥 ЗАМОК КЛЮЧУЕТСЯ ЛОГИНОМ, И ЭТО КУПЛЕНО ДЕФЕКТОМ (23.08.2026). Раньше он был
+// просто «=== '1'» на всю жизнь вкладки: поставили однажды — и больше пасхалки входа
+// не спрашивались НИ РАЗУ. Ни после выхода и повторного входа, ни при смене человека
+// за общим компьютером колледжа. Влад поставил себе сегодняшнюю дату рождения, вошёл
+// в той же вкладке — и торта не увидел вовсе, потому что запроса просто не было.
+// Ошибки при этом нигде: ни в консоли, ни в журнале сервера.
+//
+// ⚠️ И ЖДЁМ РОЛЬ. `afterLogin()` для не-студента выходит сразу и второй попытки не
+// делает, а роль к моменту монтажа оболочки может быть ещё не подставлена. Без
+// ожидания это тот же немой отказ, только по другой причине.
+const auth = useAuthStore()
+async function askLoginEggs() {
+  if (!auth.role) {
+    //Ждём роль, но не бесконечно: полсекунды с запасом, дальше просто не спрашиваем.
+    await new Promise((resolve) => {
+      const stop = watch(() => auth.role, (r) => { if (r) { stop(); resolve() } })
+      setTimeout(() => { stop(); resolve() }, 3000)
+    })
+  }
+  if (auth.role !== 'student') return
+  const key = `gb.egg.login:${auth.user?.login || ''}`
   try {
-    if (sessionStorage.getItem('gb.egg.login') === '1') return
-    sessionStorage.setItem('gb.egg.login', '1')
+    if (sessionStorage.getItem(key) === '1') return
+    sessionStorage.setItem(key, '1')
   } catch { /* приватный режим — значит просто спросим ещё раз, не страшно */ }
   easter.afterLogin()
-})
+}
+onMounted(askLoginEggs)
 
 </script>
 

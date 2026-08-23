@@ -74,6 +74,36 @@ def available() -> bool:
         return False
 
 
+def _may_close(window) -> bool:
+    """Спросить, точно ли закрывать окно, если на экране висит пасхалка.
+
+    ⚠️ ПОЧЕМУ ЭТО ЕДИНСТВЕННОЕ, ЧТО ПРИШЛОСЬ ДОПИСАТЬ ДЛЯ ДЕСКТОПА. Переход между
+    вкладками программа НЕ обрабатывает и обрабатывать не должна: в окне открыт ТОТ ЖЕ
+    Vue-SPA, что и на сайте (§11), и его собственный страж роутера
+    (`web/src/router/index.js`) там работает сам собой. Второй механизм рядом с первым
+    означал бы два разных вопроса на одно действие.
+    А вот ЗАКРЫТИЕ ОКНА роутер не видит вовсе — это событие оболочки, и до JS оно не
+    доходит. Отсюда этот мост: спрашиваем у страницы, есть ли что терять.
+
+    ⚠️ Возврат True — «закрывать». При ЛЮБОМ сбое возвращаем True: пасхалка не повод
+    запереть человека в программе. Не сумели спросить страницу — просто закрываемся.
+    """
+    try:
+        pending = window.evaluate_js(
+            "(window.__gbEasterPending && window.__gbEasterPending()) || ''")
+    except Exception:
+        return True
+    if not pending:
+        return True
+    try:
+        return bool(window.create_confirmation_dialog(
+            "Сейчас на экране пасхалка",
+            "Если закрыть программу, она пропадёт, а достижение останется закрытым.\n"
+            "Всё равно закрыть?"))
+    except Exception:
+        return True
+
+
 def run() -> bool:
     """Запустить программу. False — окно открыть не удалось, показывать больше нечего.
 
@@ -128,6 +158,7 @@ def run() -> bool:
     #отвечать даже на /health (проверено на собранном exe). Украшение не стоит риска.
     if not getattr(sys, "frozen", False) and not _is_compiled():
         window.events.shown += lambda: _apply_window_icon(window)
+    window.events.closing += lambda: _may_close(window)
     _LOG.info(f"[webview2] окно открыто: {url}")
     try:
         #⚠️ debug=True открывает DevTools (F12) — НАМЕРЕННО только при запуске ИЗ

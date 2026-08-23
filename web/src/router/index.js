@@ -6,6 +6,8 @@
  * защищённые страницы без входа.
  */
 import { createRouter, createWebHistory } from 'vue-router'
+import { useEasterStore } from '@/stores/easterEggs'
+import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
 import { needsServer } from '@/api/server'
 import { HOME_BY_ROLE } from '@/config/nav'
@@ -179,7 +181,59 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
-router.beforeEach((to) => {
+// ━━ ПАСХАЛКА НА ЭКРАНЕ: СПРАШИВАЕМ, ПРЕЖДЕ ЧЕМ УЙТИ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Просьба Влада: находка редкая, а заметить её можно не сразу — человек уже потянулся
+// к другой вкладке. Уйдёшь — пасхалка пропала, и второй раз она может не выпасть
+// месяцами. Тот же приём, что у несохранённой формы, и по той же причине: цена
+// случайного перехода несоразмерна цене одного вопроса.
+//
+// ⚠️ Спрашиваем ТОЛЬКО про то, что можно пропустить (`easter.pending`). Постоянные
+// пасхалки — кольцо Detroit, состояние DOOM, счётчик ULTRAKILL — висят у студента
+// всё время, и вопрос на каждом переходе сломал бы навигацию всему продукту.
+//
+// ⚠️ Выход из аккаунта не сторожим: на `/login` уводит logout, и «точно уйти?» поверх
+// уже начатого выхода — это ловушка, а не забота. Плюс сама сцена Dark Souls играет
+// ИМЕННО при выходе, то есть вопрос задавался бы всегда.
+//
+// ⚠️ На ДЕСКТОПЕ отдельного механизма не нужно и заводить его не надо: программа
+// показывает ЭТОТ ЖЕ Vue-SPA в окне на движке Edge (§11), то есть страж работает там
+// сам собой. А вот закрытие ОКНА роутер не видит — на этот случай ниже beforeunload.
+async function confirmLeavingEasterEgg(to, from) {
+  const easter = useEasterStore()
+  if (!easter.pending) return true
+  if (to.path === from.path || to.path === '/login') return true
+  const { confirm } = useConfirm()
+  const ok = await confirm({
+    title: 'Сейчас на экране пасхалка',
+    message: 'Если уйти со страницы, она пропадёт, а достижение останется закрытым. Всё равно уйти?',
+    okText: 'Уйти',
+    cancelText: 'Остаться',
+  })
+  if (ok) easter.dismissPending()
+  return ok
+}
+
+// Закрытие вкладки или окна программы роутер не перехватывает вовсе — только браузер.
+// Диалог здесь системный и текст свой поставить нельзя (так устроено во всех браузерах
+// с 2019 года); это осознанное ограничение, а не недоделка.
+// Мост для ОБОЛОЧКИ ПРОГРАММЫ: закрытие окна — событие рабочего стола, до JS оно не
+// доходит, и `beforeunload` там не срабатывает. Десктоп спрашивает эту функцию из
+// `desktop/webview2_app.py::_may_close` перед тем, как закрыть окно.
+// ⚠️ Возвращает СТРОКУ (id пасхалки) или '' — не объект: значение уезжает через
+// evaluate_js, и чем проще тип, тем меньше поводов ему сломаться по дороге.
+window.__gbEasterPending = () => {
+  try { return useEasterStore().pending || '' } catch { return '' }
+}
+
+window.addEventListener('beforeunload', (e) => {
+  let easter
+  try { easter = useEasterStore() } catch { return }   // Pinia ещё не поднялась
+  if (!easter.pending) return
+  e.preventDefault()
+  e.returnValue = ''
+})
+
+router.beforeEach(async (to, from) => {
   // Приложение без заданного адреса сервера (первый запуск) → сперва экран подключения.
   if (needsServer() && to.path !== '/connect') return '/connect'
   const auth = useAuthStore()
@@ -196,6 +250,10 @@ router.beforeEach((to) => {
     if (decideMiss(String(to.query.from || ''), auth.role) === 'home')
       return HOME_BY_ROLE[auth.role] || '/'
   }
+  //Вопрос про пасхалку задаём ПОСЛЕДНИМ: сначала пусть отработают все перенаправления
+  //(нет сервера, не вошёл, чужая роль). Иначе человека спрашивали бы «точно уйти?»
+  //перед переходом, который всё равно не состоится.
+  if (!(await confirmLeavingEasterEgg(to, from))) return false
   return true
 })
 // Обрыв озвучки при уходе от Вектора живёт НЕ здесь: глушить на каждом переходе неверно

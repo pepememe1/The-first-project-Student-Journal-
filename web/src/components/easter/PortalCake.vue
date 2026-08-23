@@ -5,9 +5,18 @@
 // «строго чёрный» оставляло бы тёмную кайму по мягкому краю) и вторая сцена «ТОРТ ЭТО
 // ЛОЖЬ», которая показывается после того, как свечу задули.
 //
-// ⚠️ Область клика по свече поставлена ПО СВЕЧЕ, с запасом: автоопределение огонька по
-// яркости упорно цепляло белые горошины на колпаке, а промахиваться по пиксельному
-// огоньку человеку не должно быть обидно.
+// 🔥 ПОЧЕМУ ПАСХАЛКА «НЕ РАБОТАЛА» (найдено 23.08.2026, отзыв Влада). Область клика
+// стояла НЕ НА СВЕЧЕ: хотспот занимал x 36–54 % ширины рисунка, а свеча нарисована на
+// x ≈ 27–31 %. То есть задуть её было физически нельзя — человек кликал по огоньку и
+// не попадал никуда. Координаты теперь ИЗМЕРЕНЫ по самому файлу (поиск жёлтого пламени
+// по пикселям), а не прикинуты на глаз, и хотспот взят с запасом.
+// ⚠️ Меняешь рисунок — перемеряй. Промах здесь не даёт ни ошибки, ни следа в консоли:
+// пасхалка просто молча не срабатывает, и понять это можно только вручную.
+//
+// ⚠️ Вторая половина той же ошибки — НЕВИДИМОСТЬ. Кнопка была полностью прозрачной, и
+// даже попав по ней случайно, человек не понял бы, что тут вообще можно нажать. Теперь
+// над свечой пульсирует мягкий ореол и есть подпись. Скрытое взаимодействие, о котором
+// невозможно догадаться, — это не секрет, а неработающая функция.
 import { ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 const emit = defineEmits(['close'])
@@ -31,11 +40,14 @@ async function blow() {
       <div class="relative">
         <img src="/easter/img/cake-vector.webp" alt=""
              class="max-h-[62vh] w-auto drop-shadow-2xl" />
+        <!-- Координаты измерены по файлу: пламя x 27–31 %, y 33–40 %. Берём с запасом,
+             промахиваться по пиксельному огоньку человеку не должно быть обидно. -->
         <button type="button" @click="blow" aria-label="Задуть свечу"
-                class="absolute left-[36%] top-[26%] h-[14%] w-[18%] cursor-pointer rounded-full
-                       border-0 bg-transparent outline-offset-4"></button>
+                class="gb-candle absolute left-[21%] top-[26%] h-[18%] w-[17%] cursor-pointer
+                       rounded-full border-0 bg-transparent outline-offset-4"></button>
       </div>
       <p class="font-title text-lg text-text">С днём рождения!</p>
+      <p class="-mt-2 text-xs text-text3">Свечу, кстати, можно задуть.</p>
       <button type="button" @click="emit('close')"
               class="rounded-lg bg-accent px-6 py-2 text-sm font-semibold text-white hover:brightness-110">
         ОК
@@ -52,3 +64,15 @@ async function blow() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Ореол вокруг свечи: тёплый, слабый и пульсирующий — заметно ровно настолько, чтобы
+   догадаться, что сюда можно нажать, и не настолько, чтобы перекрыть сам рисунок. */
+.gb-candle {
+  background: radial-gradient(circle, rgba(255, 214, 120, .55) 0%, rgba(255, 190, 60, .18) 45%, transparent 70%);
+  animation: gb-candle 1.9s ease-in-out infinite;
+}
+.gb-candle:hover { animation-duration: .9s }
+@keyframes gb-candle { 50% { opacity: .35; scale: 1.12 } }
+@media (prefers-reduced-motion: reduce) { .gb-candle { animation: none } }
+</style>

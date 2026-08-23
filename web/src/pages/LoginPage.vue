@@ -295,15 +295,12 @@ const showRecover = ref(false)
           <p class="mt-2 hidden text-tiny text-text3 sm:block">Преподаватели и админ входят по данным от администратора.</p>
         </div>
 
-        <!-- Одностраничник для приёмной комиссии: три платформы, ИИ и сравнение защиты
-             ПДн с действующими системами вуза. Статический /offer.html (обычная
-             навигация, не роутер) — без внешних ресурсов, под нашим CSP. -->
-        <div class="mt-4 text-center">
-          <a href="/offer.html"
-             class="inline-flex items-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-bold text-white shadow-lg shadow-accent/30 ring-1 ring-accent/50 transition-all hover:-translate-y-0.5 hover:bg-accent2 hover:shadow-xl hover:shadow-accent/40">
-            <ShieldCheck class="size-5" /> Почему GradeBookAI — сравнение и безопасность
-          </a>
-        </div>
+        <!-- ⚠️ Кнопка одностраничника для приёмной комиссии здесь БЫЛА и убрана
+             (23.08.2026): такая же стоит в правой панели, и две одинаковые кнопки на
+             одном экране читаются не как «важно», а как недоделка. Оставлена ПРАВАЯ —
+             она в блоке «о продукте», где её и ищет тот, кто пришёл смотреть, а не
+             входить. Ссылка одна и та же: /offer.html, обычная навигация, не роутер.
+             Не возвращать сюда, не сверившись с правой панелью. -->
 
         <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную. -->
         <div class="mt-3 text-center">

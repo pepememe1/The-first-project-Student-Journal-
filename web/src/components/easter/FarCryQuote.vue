@@ -8,6 +8,7 @@
 // Субтитры раскладываются по РЕАЛЬНОЙ длительности файла: жёстких таймкодов нет, чтобы
 // замена озвучки не рассыпала синхронизацию.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { whenAudioReady } from '@/utils/audioReady'
 const emit = defineEmits(['close'])
 
 const LINES = ['Я уже говорил тебе, что такое безумие?', 'Безумие —', 'это',
@@ -16,7 +17,7 @@ const LINES = ['Я уже говорил тебе, что такое безум�
   'Но этого не происходит.', 'Это… есть… безумие.']
 
 const line = ref('')
-let audio = null, timers = []
+let audio = null, timers = [], cancelReady = null
 
 onMounted(() => {
   audio = new Audio('/easter/snd/vaas.mp3')
@@ -33,9 +34,15 @@ onMounted(() => {
     })
     timers.push(setTimeout(() => emit('close'), acc * 1000 + 800))
   }
-  audio.readyState > 0 ? start() : audio.addEventListener('loadedmetadata', start, { once: true })
+  //⚠️ Через whenAudioReady, а НЕ голым 'loadedmetadata': не доехал звук —
+  //событие не придёт никогда, и сцена не закроется вовсе. См. utils/audioReady.js.
+  cancelReady = whenAudioReady(audio, start)
 })
-onBeforeUnmount(() => { timers.forEach(clearTimeout); if (audio) audio.pause() })
+onBeforeUnmount(() => {
+  timers.forEach(clearTimeout)
+  if (cancelReady) cancelReady()
+  if (audio) audio.pause()
+})
 </script>
 
 <template>
