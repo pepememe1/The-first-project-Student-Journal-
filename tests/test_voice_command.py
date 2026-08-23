@@ -501,3 +501,41 @@ def test_excused_wording_no_longer_marks_anything():
                    "Гордеев по справке", "Гордеев освобождён"):
         cmd = ok(phrase)
         assert cmd.action != "absent_o", f"«{phrase}» молча стало опозданием"
+
+
+def test_length_pruning_never_changes_the_match():
+    """Отсечение по длине обязано быть ТОЧНЫМ: тот же ответ, что и без него.
+
+    🔥 Куплено настоящим дефектом (найден Полковником 23.08.2026). Граница
+    2·min/(|a|+|b|) верна для ПРЯМОГО сравнения, но `_similar` берёт максимум с
+    ФОНЕТИЧЕСКИМ, а `_phon` строку укорачивает (удвоенные буквы схлопываются, ь и ъ
+    удаляются). Посчитанная по исходным длинам граница для фонетики занижена, и пара
+    отбрасывалась до того, как фонетика её вытянет.
+
+    Цена ошибки предметная: Whisper слышит бурятские ФИО с удвоениями — ровно тот
+    случай, ради которого фонетика и заведена. Настоящий студент проигрывал соседу по
+    ростеру, и оценка уходила не тому.
+
+    Сравниваем со ЭТАЛОНОМ — прямым перебором без всякого отсечения.
+    """
+    import random
+    from voice_command import _match_students, _norm, _stem, _similar
+
+    def reference(text, roster):
+        words = [w for w in _norm(text).split() if len(w) >= 3]
+        if not words or not roster:
+            return 0.0
+        return max(max((_similar(_stem(w), _stem(f)) for w in words), default=0.0)
+                   for f, _n in roster)
+
+    #Дословный случай, на котором дефект и поймали: «хаанн» → фонетически «хан».
+    assert _match_students("ханс хаанн пять", [("Хан", "Аюр")])[2] == 1.0
+
+    alphabet = "абвгдеёжзиклмнопрстухцчшыэюяьъй"
+    rnd = random.Random(7)
+    for _ in range(1500):
+        word = lambda: "".join(rnd.choice(alphabet) for _ in range(rnd.randint(3, 9)))  # noqa: E731
+        text = " ".join(word() for _ in range(rnd.randint(1, 4)))
+        roster = [(word(), word()) for _ in range(rnd.randint(1, 6))]
+        assert abs(reference(text, roster) - _match_students(text, roster)[2]) < 1e-9, \
+            f"отсечение изменило ответ: {text!r} {roster!r}"

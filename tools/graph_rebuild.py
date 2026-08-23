@@ -126,8 +126,17 @@ def main() -> int:
     labels = {cid: "Community " + str(cid) for cid in communities}
     questions = suggest_questions(G, communities, labels)
 
-    if not to_json(G, communities, str(OUT / "graph.json")):
+    # ⚠️ Защита от усадки существует не зря: испорченный прогон (пропали куски кэша,
+    # свалился разбор половины файлов) тоже даёт «карту поменьше», и затереть ею хорошую
+    # — значит остаться без карты и не заметить. Поэтому по умолчанию она НЕ обходится.
+    #
+    # Но усадка бывает и законной: удалили функцию, слили два модуля, вычистили мёртвый
+    # код. Тогда запускать с `--force`, ПРЕДВАРИТЕЛЬНО посмотрев на цифру в сообщении:
+    # «-1 узел после удаления одной функции» — это правда, «-3000 узлов» — это сбой.
+    force = "--force" in sys.argv
+    if not to_json(G, communities, str(OUT / "graph.json"), force=force):
         print("ОШИБКА: новая карта меньше прежней -- защита от усадки не дала перезаписать")
+        print("        Усадка законна (удалили код)? Проверь цифру выше и повтори с --force")
         return 1
     (OUT / "GRAPH_REPORT.md").write_text(
         generate(G, communities, cohesion, labels, gods, surprises, det,

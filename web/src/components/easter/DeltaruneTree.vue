@@ -23,6 +23,7 @@
 // «Это дерево».
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { useAuthStore } from '@/stores/auth'
 import { mumble } from '@/utils/mumble'
 const emit = defineEmits(['close'])
 const easter = useEasterStore()
@@ -33,7 +34,16 @@ const SHORT = ['* (Это дерево.)']
 
 // Яйцо уже брали? Помним на устройстве: сервер знает про ачивку, но спрашивать его
 // ради одной строки диалога — лишний запрос ровно в тот момент, когда важна плавность.
-const taken = ref(localStorage.getItem('gb.egg.tree') === '1')
+//
+// 🔥 КЛЮЧ С ЛОГИНОМ (24.08.2026). Раньше он был общий на всё устройство, и на общем
+// компьютере колледжа это стоило дорого: студенту Б показывалась КОРОТКАЯ реплика,
+// потому что яйцо когда-то взял студент А. А ачивку закрывает только полный диалог —
+// то есть Б не мог получить её на этой машине НИКОГДА, и ничто ему об этом не говорило.
+// Ключ ещё и стирается в `easterEggs.reset()` при выходе (правило «выход — это смена
+// владельца»); одного из двух было бы мало: логин защищает от соседа, стирание — от
+// того, кто войдёт под тем же логином на чужом компьютере.
+const eggKey = `gb.egg.tree:${useAuthStore().user?.login || ''}`
+const taken = ref(localStorage.getItem(eggKey) === '1')
 const lines = ref([])
 const dlg = ref('')
 const started = ref(false)
@@ -107,7 +117,7 @@ async function advance() {
   started.value = false; step = 0; dlg.value = ''
   if (first && !taken.value) {
     taken.value = true
-    localStorage.setItem('gb.egg.tree', '1')
+    localStorage.setItem(eggKey, '1')
     await easter.claim('deltarune_tree')
   }
   wayOut.value = true          //только теперь снизу можно уйти

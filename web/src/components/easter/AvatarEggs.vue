@@ -43,9 +43,16 @@ const doomRays = computed(() => doom.value && props.average >= 4.5)
 
 // Ачивку закрываем, как только показали: обе сцены живут на аватарке и «доиграть» их
 // нельзя — человек просто уходит с экрана.
+//
+// ⚠️ Уже полученную не переспрашиваем. Метка висит на аватарке ПОСТОЯННО, а сторож
+// стоит на `inPage` с `deep: true` — то есть без этой проверки каждое изменение любой
+// пасхалки в странице слало бы на сервер ещё один заведомо бесполезный `claim`. На
+// одноядерном VPS это не «лишний байт», а лишний поход в базу на каждый чих.
+// ⚠️ Пустой `owned` (список ещё не приехал) означает «не получена» — и это правильная
+// сторона ошибки: лучше один лишний запрос, чем незакрытая находка.
 function claimOnce() {
-  if (led.value) easter.claim('detroit_led')
-  if (doom.value) easter.claim('doom_avatar')
+  if (led.value && !easter.owned.has('detroit_led')) easter.claim('detroit_led')
+  if (doom.value && !easter.owned.has('doom_hud_face')) easter.claim('doom_avatar')
 }
 onMounted(claimOnce)
 watch(() => easter.inPage, claimOnce, { deep: true })
@@ -53,14 +60,17 @@ watch(() => easter.inPage, claimOnce, { deep: true })
 
 <template>
   <!-- Кольцо Detroit ВМЕСТО кружка статуса: сам кружок прячет родитель, когда led=true -->
-  <span v-if="led" class="pointer-events-none absolute -bottom-1 -right-1 size-[15px] rounded-full"
+  <!-- Кольцо стоит НА МЕСТЕ кружка статуса, значит и слой у него тот же (z-20):
+       оно не декорация поверх лица, а замена элемента интерфейса. -->
+  <span v-if="led" class="pointer-events-none absolute -bottom-1 -right-1 z-20 size-[15px] rounded-full"
         :class="ledBlink ? 'gb-led-blink' : ''"
         :style="{ border: `3px solid ${ledColor}`, boxShadow: `0 0 9px ${ledColor}` }"></span>
 
-  <span v-if="doom" class="pointer-events-none absolute inset-0 rounded-full transition-shadow duration-500"
+  <!-- ⚠️ Свечение и лучи — ПОД аватаркой (z-0). Они обрамляют лицо, а не закрывают его. -->
+  <span v-if="doom" class="pointer-events-none absolute inset-0 z-0 rounded-full transition-shadow duration-500"
         :style="{ boxShadow: `0 0 0 3px ${doomColor}88` }"></span>
 
-  <span v-if="doomRays" class="gb-doom-rays pointer-events-none absolute left-1/2 top-1/2"></span>
+  <span v-if="doomRays" class="gb-doom-rays pointer-events-none absolute left-1/2 top-1/2 z-0"></span>
 </template>
 
 <style scoped>

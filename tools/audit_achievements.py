@@ -61,7 +61,10 @@ def main() -> int:
     srv_pairs = dict(re.findall(r'"(\w+)":\s+"(\w+)",', block(srv, "ACHIEVEMENTS: dict", "}")))
     chances = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_CHANCES: dict", "}"))}
     #Доля в процентах — вторая форма записи шанса (см. EGG_PERCENT в easter_eggs.py).
-    percents = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_PERCENT: dict", "}"))}
+    #⚠️ Доля бывает ДРОБНОЙ (7.7 %), поэтому `[\d.]+` и `float`. С прежним `(\d+)`/`int`
+    #аудит читал «7.7» как «7» и печатал в отчёте чужую цифру — то есть инструмент,
+    #заведённый ловить расхождения половин, сам стал источником неправды.
+    percents = {k: float(v) for k, v in re.findall(r'"(\w+)":\s*([\d.]+)', block(srv, "EGG_PERCENT: dict", "}"))}
     cooldowns = {k: int(v) for k, v in re.findall(r'"(\w+)":\s*(\d+)', block(srv, "EGG_COOLDOWN_S: dict", "}"))}
     cfg_ids = re.findall(r"^\s{2}\{\s*id:\s*'([a-z0-9_]+)'", cfg, re.M)
     cli_pairs = dict(re.findall(r"^\s{2}([a-z0-9_]+):\s+'([a-z0-9_]+)',",
@@ -96,8 +99,25 @@ def main() -> int:
         note(f"пасхалка {egg} есть на сервере, но её нет в EGG_ACHIEVEMENT клиента")
 
     # ── 3. У каждой пасхалки есть чем нарисовать и кто зовёт ────────────────
+    #⚠️ Пасхалка может рисоваться не общим хостом, а САМОЙ страницей — но только с
+    #причиной, и причина обязана быть записана здесь. Проверка при этом не ослабевает:
+    #ниже сверяем, что названный файл действительно подключает компонент сцены.
+    drawn_by_page = {
+        "dark_souls_logout": ("web/src/pages/Settings.vue", "DarkSoulsFarewell",
+                              "прощальная сцена обязана пережить logout(), который "
+                              "обнуляет стор пасхалок"),
+    }
+    for egg, (page, comp, _why) in drawn_by_page.items():
+        if egg in scenes:
+            note(f"{egg}: рисуется и страницей, и общим хостом — два пути разъедутся")
+        try:
+            if f"<{comp}" not in read(*page.split("/")):
+                note(f"{egg}: объявлен рисуемым в {page}, но компонента {comp} там нет")
+        except OSError:
+            note(f"{egg}: страница {page} не найдена")
+
     for egg in sorted(srv_by_egg):
-        if egg not in scenes and egg not in in_page:
+        if egg not in scenes and egg not in in_page and egg not in drawn_by_page:
             note(f"{egg}: нет ни сцены-оверлея, ни слоя внутри страницы — бросок уйдёт впустую")
         if egg in scenes and egg in in_page:
             note(f"{egg}: объявлена И оверлеем, И слоем страницы — каналы путать нельзя")
@@ -160,9 +180,11 @@ def main() -> int:
     print("-" * 88)
     for egg in sorted(srv_by_egg):
         ch = (f"1/{chances[egg]}" if egg in chances
-              else f"{percents[egg]} %" if egg in percents else "условие")
+              #`:g` печатает 30 как «30», а 7.7 — как «7.7», не приписывая нулей.
+              else f"{percents[egg]:g} %" if egg in percents else "условие")
         cd = f"{cooldowns[egg]} с" if egg in cooldowns else "—"
-        show = "оверлей" if egg in scenes else ("в странице" if egg in in_page else "НЕТ")
+        show = ("оверлей" if egg in scenes else "в странице" if egg in in_page
+                else "своя страница" if egg in drawn_by_page else "НЕТ")
         print(f"{egg:24} {srv_by_egg[egg]:22} {ch:>8} {cd:>8}  {show}")
 
     print()

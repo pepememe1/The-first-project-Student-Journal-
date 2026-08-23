@@ -210,7 +210,10 @@ test('список полученных ачивок грузится НЕ по�
   assert.ok(loadAt < lockAt, 'загрузка списка снова оказалась ПОД замком броска')
 
   const store2 = readFileSync(join(ROOT, 'src/stores/easterEggs.js'), 'utf8')
-  const after = store2.split('async function afterLogin()')[1].split('\n  }')[0]
+  //⚠️ Ищем по ОТКРЫВАЮЩЕЙ скобке, без списка параметров: у `afterLogin` появился
+  //признак «нужен ли бросок сцены», и привязка к точной сигнатуре роняла тест на
+  //законной правке. Сторож должен реагировать на СУТЬ, а не на форму объявления.
+  const after = store2.split('async function afterLogin(')[1].split('\n  }')[0]
   assert.ok(!after.includes('loadOwned('),
     'loadOwned вернулся внутрь afterLogin — он снова будет пропускаться после F5')
 })

@@ -40,12 +40,17 @@ async function blow() {
     <!-- До: поздравление. Свечу можно задуть — и тогда всё меняется. -->
     <div v-if="!done" class="flex flex-col items-center gap-3">
       <div class="relative">
-        <img src="/easter/img/cake-vector.webp" alt=""
+        <!-- ⚠️ «-2» в имени — тот же приём, что у второй картинки: у ассетов пасхалок
+             нет хеша в имени, поэтому ЗАМЕНА СОДЕРЖИМОГО обязана менять ИМЯ, иначе
+             правка неделю не доедет из браузерного кеша. -->
+        <img src="/easter/img/cake-vector-2.webp" alt=""
              class="max-h-[62vh] w-auto drop-shadow-2xl" />
-        <!-- Координаты измерены по файлу: пламя x 27–31 %, y 33–40 %. Берём с запасом,
-             промахиваться по пиксельному огоньку человеку не должно быть обидно. -->
+        <!-- Координаты ПЕРЕМЕРЕНЫ по новому файлу: пламя x 27–29 %, y 37–38 %. Берём с
+             запасом — промахиваться по пиксельному огоньку человеку не должно быть
+             обидно. ⚠️ Меняешь рисунок — перемеряй: промах здесь не даёт ни ошибки, ни
+             следа в консоли, пасхалка просто молча не срабатывает. -->
         <button type="button" @click="blow" aria-label="Задуть свечу"
-                class="gb-candle absolute left-[21%] top-[26%] h-[18%] w-[17%] cursor-pointer
+                class="gb-candle absolute left-[20%] top-[30%] h-[16%] w-[16%] cursor-pointer
                        rounded-full border-0 bg-transparent outline-offset-4"></button>
       </div>
       <p class="font-title text-lg text-text">С днём рождения!</p>
@@ -72,7 +77,7 @@ async function blow() {
            Правило: у ассета пасхалки нет хеша в имени, поэтому ЗАМЕНА СОДЕРЖИМОГО
            обязана менять ИМЯ. Иначе правка не доедет, а проверить это нечем — сервер
            отдаёт правильное. -->
-      <img src="/easter/img/cake-lie-2.webp" alt="Торт — это ложь"
+      <img src="/easter/img/cake-lie-3.webp" alt="Торт — это ложь"
            class="max-h-[74vh] w-auto rounded-lg shadow-2xl" />
       <button type="button" @click="emit('close')" class="text-xs text-text3 hover:text-text">
         закрыть

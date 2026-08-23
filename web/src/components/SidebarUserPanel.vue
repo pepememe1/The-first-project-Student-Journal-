@@ -106,10 +106,18 @@ onMounted(async () => {
               :aria-label="locale.t('userOverlay.open', 'Профиль и статус')"
               :title="locale.t('header.myStatus', { status: statusText })">
         <span class="relative shrink-0">
-          <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="36" />
+          <!-- ⚠️ Аватарка поднята НАД эффектами пасхалок (z-10). Свечение DOOM и лучи
+               рисуются позже по разметке и без этого ложились ПОВЕРХ лица — человек
+               видел мутное пятно вместо себя.
+               ⚠️ Поднимаем аватарку, а НЕ утапливаем эффекты отрицательным z-index:
+               отрицательный увёл бы их за непрозрачный фон сайдбара, и лучей не стало
+               бы видно вовсе. На этом уже спотыкались (см. докстринг AvatarEggs). -->
+          <span class="relative z-10 block">
+            <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="36" />
+          </span>
           <!-- Кружок статуса прячем, когда выпало кольцо Detroit: оно встаёт ВМЕСТО
                него, а не рядом — два индикатора в одном углу читались бы как поломка. -->
-          <span v-if="!ledActive" class="absolute bottom-0 right-0 size-3 rounded-full border-2 border-card"
+          <span v-if="!ledActive" class="absolute bottom-0 right-0 z-20 size-3 rounded-full border-2 border-card"
                 :style="{ background: myStatus.color }" />
           <AvatarEggs :average="avgGrade" />
         </span>

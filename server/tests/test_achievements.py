@@ -14,7 +14,9 @@ test_achievements.py — ачивки за пасхалки: выдача, ви�
 """
 from conftest import make_admin, make_teacher
 
+from datetime import datetime, timezone
 from app import easter_eggs
+from app.routers.web import achievements as achievements_router
 from app.db import SessionLocal
 from app.models import User
 
@@ -361,25 +363,56 @@ def test_ultrakill_is_a_condition_plus_a_chance(client):
     assert "ultrakill_rank" not in easter_eggs.EGG_CHANCES
 
 
-def test_percent_roll_lands_near_the_declared_share(client):
-    """Бросок по проценту действительно даёт заявленную долю.
+def test_percent_roll_honours_the_fractional_share(monkeypatch):
+    """Дробная доля соблюдается ТОЧНО, а не «примерно».
 
-    Обратный ход: перепутай в `roll` проценты со знаменателем — доля уедет к 1/30,
-    и проверка краснеет."""
-    admin = make_admin(client)
-    make_teacher(client, admin, login="pc1")
-    uid = _db_user("pc1").id
-    db = SessionLocal()
-    try:
-        #Кулдаун обошёл бы бросок, поэтому проверяем чистую функцию доли.
-        import random
-        hits = sum(1 for _ in range(4000) if random.randint(1, 100) <= easter_eggs.EGG_PERCENT["ultrakill_rank"])
-        assert 0.25 < hits / 4000 < 0.35, f"доля {hits / 4000:.2f} далека от 30 %"
-        #И сам roll на первом же вызове обязан уметь сработать (кулдауна ещё нет).
-        got = any(easter_eggs.roll("ultrakill_rank", uid, db) for _ in range(1))
-        assert isinstance(got, bool)
-    finally:
-        db.close()
+    ⚠️ Здесь стояла статистическая проверка с допуском в один процентный пункт — и она
+    НЕ КРАСНЕЛА на настоящей поломке: `randint(1, 100) <= 7.7` даёт ровно 7 %, разница
+    0.7 п.п. умещалась в допуск. Сторож, переживающий поломку, неотличим от исправного
+    кода. Поэтому проверяем ГРАНИЦУ, а не среднее: при 7.7 % бросок 7.6 обязан попасть,
+    а 7.8 — промахнуться. Целочисленный бросок так не умеет: у него нет значений между
+    7 и 8, и подменённый `randint` тут же разойдётся с ожиданием.
+
+    Обратный ход: верни в `_hit` `random.randint(1, 100) <= percent` — оба утверждения
+    ниже падают."""
+    #⚠️ Именно `assert`. Здесь стояло голое выражение `... == 7.7` — оно вычисляется и
+    #результат выбрасывается, то есть «страховка» не страховала ничего. Ровно тот класс
+    #сторожа, который зелен всегда и хуже отсутствия проверки.
+    assert easter_eggs.EGG_PERCENT["cyberpunk_login"] == 7.7
+
+    def fixed(rnd, integer):
+        monkeypatch.setattr(easter_eggs.random, "random", lambda: rnd)
+        monkeypatch.setattr(easter_eggs.random, "randint", lambda a, b: integer)
+
+    #Доля 7.7: бросок «7.6 %» — попадание. Целочисленному пути даём 8, где `8 <= 7.7`
+    #ложно, — значит зелёным останется только дробная реализация.
+    fixed(0.076, 8)
+    assert easter_eggs._hit("cyberpunk_login") is True
+
+    #А «7.8 %» — промах. Целочисленному пути даём 7, где `7 <= 7.7` истинно.
+    fixed(0.078, 7)
+    assert easter_eggs._hit("cyberpunk_login") is False
+
+
+def test_declared_chances_are_actually_obeyed():
+    """Каждая заявленная частота выдерживается на большом числе бросков.
+
+    Проверяем НАСТОЯЩУЮ `_hit`, а не копию формулы в тесте: раньше тест повторял
+    вычисление у себя и остался бы зелёным, измени его кто-нибудь в продукте."""
+    n = 200_000
+    for egg, want in easter_eggs.EGG_PERCENT.items():
+        got = sum(1 for _ in range(n) if easter_eggs._hit(egg)) / n * 100
+        #Допуск 0.35 п.п. — это больше пяти стандартных отклонений при таком n (то есть
+        #случайное падение практически исключено) и заметно МЕНЬШЕ 0.7 п.п., на которые
+        #сдвинулась бы частота при округлении доли до целого процента.
+        assert abs(got - want) < 0.35, f"{egg}: заявлено {want}%, вышло {got:.2f}%"
+
+    #Знаменатель тоже: «один раз из N» обязан давать 1/N.
+    got = sum(1 for _ in range(n) if easter_eggs._hit("stanley_parable_404")) / n
+    assert abs(got - 1 / 10) < 0.005, f"1/10 дало {got:.3f}"
+
+    #Неизвестная пасхалка не выпадает никогда — иначе опечатка в имени «работала бы».
+    assert not any(easter_eggs._hit("не_существует") for _ in range(2000))
 
 
 def test_cooldown_actually_blocks_the_second_roll(client):
@@ -397,3 +430,223 @@ def test_cooldown_actually_blocks_the_second_roll(client):
         assert all(easter_eggs.roll("deltarune_tree", uid, db) is False for _ in range(100))
     finally:
         db.close()
+
+
+def test_avatar_eggs_are_a_pair_and_neither_is_unreachable(client):
+    """DOOM и Detroit — пара: ровно одна метка, и ни одна не недостижима.
+
+    ⚠️ Обе рисуются на ОДНОЙ аватарке. Покажи их вместе — получится кольцо поверх
+    свечения, то есть каша вместо двух разных отсылок.
+
+    ⚠️ Detroit раньше стоял ХВОСТОМ очереди `pick_on_login` и проверялся, только если
+    промахнулся Cyberpunk: реальный шанс 0.99 % за вход, и по боевой базе он не сработал
+    ни разу. Поэтому проверяем и то, что в общей очереди его больше нет.
+
+    ⚠️ Выбор ДЕТЕРМИНИРОВАННЫЙ (по человеку и дню), поэтому проверять «за 60 бросков
+    выпали обе» больше нельзя — у одного человека метка одна и та же весь день, и это
+    ровно то, чего мы добивались. Вместо этого смотрим по РАЗНЫМ людям: если ключ
+    выбора выродится (например, кто-то заменит хеш на константу), одна из отсылок
+    станет недостижимой для всего колледжа, и вот это тест обязан поймать."""
+    import inspect
+    src = inspect.getsource(easter_eggs.pick_on_login)
+    assert "detroit_led" not in src, "Detroit снова в очереди полноэкранных сцен"
+
+    admin = make_admin(client)
+    db = SessionLocal()
+    try:
+        seen = {}
+        for n in range(24):
+            login = f"avp{n}"
+            make_teacher(client, admin, login=login)
+            u = db.query(User).filter(User.login == login).first()
+            u.role = "student"
+            db.commit()
+            got = easter_eggs.pick_avatar_egg(u, db)
+            assert got in easter_eggs.AVATAR_EGGS, f"неожиданный выбор: {got}"
+            seen.setdefault(got, []).append(login)
+
+            #И у КАЖДОГО метка обязана быть устойчивой: повторный вопрос — тот же ответ.
+            assert easter_eggs.pick_avatar_egg(u, db) == got, \
+                f"{login}: метка изменилась при повторном обращении"
+
+        assert set(seen) == set(easter_eggs.AVATAR_EGGS), \
+            f"на 24 людях выпадала только {sorted(seen)} — вторая отсылка недостижима"
+    finally:
+        db.close()
+
+
+def test_avatar_mark_is_not_given_to_staff(client):
+    """Преподаватель и админ метки не получают — пасхалки только у студентов.
+
+    Обратный ход: убери проверку роли в `pick_avatar_egg` — тест краснеет."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="stf1")
+    db = SessionLocal()
+    try:
+        for login in ("stf1", "admin"):
+            u = db.query(User).filter(User.login == login).first()
+            if u is None:
+                continue
+            assert u.role != "student"
+            assert easter_eggs.pick_avatar_egg(u, db) is None, \
+                f"{login} ({u.role}) получил метку аватарки"
+    finally:
+        db.close()
+
+
+def test_lock_lets_the_eighth_attempt_check_the_password(client):
+    """Восьмая попытка ещё проверяется, запирает девятая.
+
+    🔥 При пороге 7 человек, ошибшийся семь раз, на восьмой вводил ВЕРНЫЙ пароль и
+    получал отказ: замок уже стоял, и пароль не проверялся вовсе. Со стороны это
+    «журнал не принимает мой пароль» — ровно то, на что пожаловался Влад."""
+    from app import throttle
+    assert throttle.MAX_FAILS == 8
+    #Far Cry срабатывает на СЕДЬМОЙ неудаче — она обязана быть строго до замка,
+    #иначе пасхалка не покажется никогда.
+    import inspect
+    assert "streak < 7" in inspect.getsource(easter_eggs.farcry_due)
+    assert 7 < throttle.MAX_FAILS, "Far Cry срабатывает не раньше замка — его не увидят"
+
+def test_every_achievement_in_the_registry_is_actually_obtainable(client):
+    """СКВОЗНАЯ проверка всех пятнадцати: след срабатывания → claim → строка в профиле.
+
+    ⚠️ Точечные тесты выше проверяют по одной ачивке и по одному правилу. Здесь
+    проверяется ЦЕЛОЕ: что реестр, пары «пасхалка → ачивка», выдача и витрина сходятся
+    для КАЖДОЙ записи. Наш самый частый класс дефекта — «обещание без вызывающего»:
+    ачивка объявлена, а получить её нельзя, и узнаётся это от человека, который полгода
+    её ловил. Новая ачивка, забытая в любом из четырёх мест, покраснеет здесь сама.
+
+    Обратный ход: убери любую пару из `ACHIEVEMENTS` или сломай `unlock` — тест падает
+    с именем конкретной ачивки, а не общим «не сошлось»."""
+    from app.models import EasterEggLog
+    from datetime import datetime, timezone
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="allach")
+    uid = _db_user("allach").id
+
+    for aid, egg in sorted(easter_eggs.ACHIEVEMENTS.items()):
+        db = SessionLocal()
+        try:
+            #След пишем напрямую: сам бросок проверяют другие тесты, здесь важно, что
+            #ПОСЛЕ состоявшегося срабатывания ачивку действительно можно забрать.
+            now = datetime.now(timezone.utc)
+            db.add(EasterEggLog(user_id=uid, egg_id=egg,
+                                triggered_at=now.isoformat(),
+                                created_ts=int(now.timestamp())))
+            db.commit()
+        finally:
+            db.close()
+        r = client.post("/web/easter-eggs/claim",
+                        json={"egg": egg, "achievement": aid}, headers=st)
+        assert r.status_code == 200, f"{aid} ({egg}): claim отказал — {r.text}"
+        assert r.json()["unlocked"] is True, f"{aid}: claim прошёл, но ачивка не выдана"
+
+    got = {r["id"] for r in client.get("/web/achievements", headers=st).json()["unlocked"]}
+    assert got == set(easter_eggs.ACHIEVEMENTS),         f"не доехали до профиля: {sorted(set(easter_eggs.ACHIEVEMENTS) - got)}"
+
+    #И витрина: любую из полученных можно выставить наружу. `GET /web/achievements`
+    #отдаёт отметку СТРОКОЙ (`showcase: true/false`), а не отдельным списком.
+    pick = sorted(easter_eggs.ACHIEVEMENTS)[:3]
+    r = client.post("/web/achievements/showcase", json={"ids": pick}, headers=st)
+    assert r.status_code == 200, r.text
+    assert r.json()["showcase"] == pick
+    rows = {x["id"]: x for x in client.get("/web/achievements", headers=st).json()["unlocked"]}
+    assert [a for a in pick if not rows[a]["showcase"]] == [], "витрина не отметила выбранное"
+
+
+def _make_student(client, admin, login):
+    """Завести пользователя и сделать его студентом (пасхалки только у них)."""
+    st = make_teacher(client, admin, login=login)
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.login == login).first()
+        u.role = "student"
+        db.commit()
+    finally:
+        db.close()
+    return st
+
+
+def test_avatar_mark_is_the_same_in_every_tab(client):
+    """Метка аватарки одинакова во всех вкладках и после каждой перезагрузки.
+
+    🔥 Разбор жалобы «украшения DOOM не снимаются» (24.08.2026). Метку выбирал
+    `roll_one_of` на КАЖДЫЙ запрос, а запрос делает каждая вкладка. Шанс у пары равен
+    единице (это «обычная» ступень редкости — её открывает сам вход), поэтому метка не
+    просто выпадала всегда, а ещё и МЕНЯЛАСЬ между окнами: кольцо Detroit в одном,
+    свечение DOOM в соседнем.
+
+    Обратный ход: верни `roll_one_of([...])` — двадцати обращений с запасом хватает,
+    чтобы увидеть обе метки, и тест падает."""
+    admin = make_admin(client)
+    st = _make_student(client, admin, "tab2")
+
+    seen = {client.get("/web/easter-eggs/on-login", headers=st).json()["avatar"]
+            for _ in range(20)}
+    assert len(seen) == 1, f"метка меняется между вкладками: {seen}"
+    assert seen.pop() in easter_eggs.AVATAR_EGGS
+
+
+def test_avatar_mark_refreshes_the_trace_so_claim_always_works(client):
+    """У метки ВСЕГДА свежий след — значит `claim` самолечится.
+
+    🔥 Находка Полковника (24.08.2026), отменившая предыдущее решение целиком. Первый
+    вариант починки хранил метку на клиенте и просил сервер её не перебрасывать. Но
+    след срабатывания живёт ЧАС (`was_triggered_recently`), а токен — пять: если первый
+    `claim` не прошёл (сеть моргнула, сервер ответил 500), восстановленная из памяти
+    метка след не обновляла, и ачивку до конца дня забрать было уже нечем. Молча:
+    отказ `claim` клиент проглатывает.
+
+    Обратный ход: убери `mark_triggered` из `pick_avatar_egg` — второй claim ниже
+    получит 400 «Пасхалка не срабатывала»."""
+    from app.models import EasterEggLog
+    admin = make_admin(client)
+    st = _make_student(client, admin, "tab3")
+    uid = _db_user("tab3").id
+
+    egg = client.get("/web/easter-eggs/on-login", headers=st).json()["avatar"]
+    aid = next(a for a, e in easter_eggs.ACHIEVEMENTS.items() if e == egg)
+
+    #Состариваем след: имитируем «человек вошёл давно, первый claim не прошёл».
+    db = SessionLocal()
+    try:
+        old_ts = int(datetime.now(timezone.utc).timestamp()) - 4000   # больше часа
+        rows = db.query(EasterEggLog).filter(EasterEggLog.user_id == uid,
+                                             EasterEggLog.egg_id == egg).all()
+        assert rows, "метка выдана, а следа нет вовсе — claim не сработает никогда"
+        for row in rows:
+            row.created_ts = old_ts
+        db.commit()
+    finally:
+        db.close()
+
+    body = {"egg": egg, "achievement": aid}
+    assert client.post("/web/easter-eggs/claim", json=body, headers=st).status_code == 400, \
+        "протухший след внезапно принят — проверка свежести не работает"
+
+    #Новая вкладка обращается к серверу — след обязан обновиться сам.
+    client.get("/web/easter-eggs/on-login?scene=0", headers=st)
+    r = client.post("/web/easter-eggs/claim", json=body, headers=st)
+    assert r.status_code == 200, f"claim не самолечится: {r.text}"
+    assert r.json()["unlocked"] is True
+
+
+def test_reload_skips_the_scene_roll_but_still_returns_the_mark(client):
+    """`scene=0` гасит бросок сцены и НЕ трогает метку.
+
+    ⚠️ Это про перезагрузку страницы: новый шанс за F5 не даётся, но украшение обязано
+    вернуться. Пока обе величины ехали одним неделимым ответом, клиент после F5 не
+    спрашивал ничего, и метка пропадала до конца сессии.
+
+    Обратный ход: убери `if scene` в ручке — сцена снова будет бросаться на каждой
+    перезагрузке."""
+    import inspect
+    src = inspect.getsource(achievements_router.egg_on_login)
+    assert "if scene" in src, "признак сцены не влияет на бросок"
+
+    admin = make_admin(client)
+    st = _make_student(client, admin, "tab4")
+    data = client.get("/web/easter-eggs/on-login?scene=0", headers=st).json()
+    assert data["egg"] is None, "перезагрузка всё-таки бросила сцену"
+    assert data["avatar"] in easter_eggs.AVATAR_EGGS, "метка не приехала после перезагрузки"

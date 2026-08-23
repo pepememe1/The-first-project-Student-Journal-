@@ -186,12 +186,17 @@ async function askLoginEggs() {
   // списка он отношения не имеет, и держать их вместе было ошибкой.
   easter.loadOwned()
 
+  // 🔥 ЗАМОК ГАСИТ ТОЛЬКО БРОСОК СЦЕНЫ, А НЕ ВЕСЬ ЗАПРОС. Раньше он стоял вокруг всего
+  // `afterLogin()`, и после F5 клиент не спрашивал сервер ни о чём — вместе с броском
+  // пропадала и метка аватарки, хотя она не бросок вовсе, а свойство человека и дня.
+  // Одно и то же украшение то появлялось само, то исчезало само.
+  let scene = true
   const key = `gb.egg.login:${auth.user?.login || ''}`
   try {
-    if (sessionStorage.getItem(key) === '1') return
-    sessionStorage.setItem(key, '1')
+    if (sessionStorage.getItem(key) === '1') scene = false
+    else sessionStorage.setItem(key, '1')
   } catch { /* приватный режим — значит просто спросим ещё раз, не страшно */ }
-  easter.afterLogin()
+  easter.afterLogin(scene)
 }
 onMounted(askLoginEggs)
 
