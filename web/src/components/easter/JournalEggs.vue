@@ -14,7 +14,7 @@
 // ⚠️ Слой НЕ перехватывает мышь (`pointer-events:none`), а право на клик выдаётся
 // точечно самому кубику. Иначе подсказки на клетках и кнопки под слоем перестают
 // работать — на это уже наступали на стенде.
-import { onMounted, onBeforeUnmount, ref, computed, nextTick } from 'vue'
+import { onBeforeUnmount, watch, ref, computed, nextTick } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 
 const props = defineProps({
@@ -123,19 +123,38 @@ function heedVoice() {
   setTimeout(() => { voice.value = null; easter.closeInPage('disco_elysium_voice') }, 320)
 }
 
-onMounted(async () => {
-  if (ultra.value) {
-    requestAnimationFrame(() => { ultraIn.value = true })
-    setTimeout(() => { ultraBar.value = 78 }, 300)
-    setTimeout(() => easter.claim('ultrakill_rank'), 1800)
-  }
+// 🔥 НАБЛЮДЕНИЕ, А НЕ ОДНОРАЗОВАЯ ПРОВЕРКА В onMounted (23.08.2026, третий случай).
+// Бросок делает СЕРВЕР, и его ответ приходит ПОЗЖЕ, чем монтируется этот компонент:
+// страница сперва грузит журнал, потом спрашивает пасхалки. На момент `onMounted`
+// `disco.value` и `ultra.value` ещё false ВСЕГДА — то есть голос не запускался ни разу,
+// хотя стор про него знал и подтверждение при уходе честно про него говорило.
+//
+// ⚠️ Тот же дефект уже был у штампа Papers Please и у пасхалок входа. Общее правило:
+// состояние, которое приезжает по сети, проверяется `watch`, а не `if` при монтаже.
+// Ошибка тихая — ни исключения, ни следа в консоли, просто ничего не происходит.
+watch(ultra, (on) => {
+  if (!on) return
+  requestAnimationFrame(() => { ultraIn.value = true })
+  setTimeout(() => { ultraBar.value = 78 }, 300)
+  setTimeout(() => easter.claim('ultrakill_rank'), 1800)
+}, { immediate: true })
+
+watch(disco, async (on) => {
+  if (!on || voice.value) return
   //Небольшая пауза перед голосом — он должен ПОЯВИТЬСЯ на глазах, а не оказаться на
   //экране сразу вместе со страницей: во втором случае его принимают за часть интерфейса.
-  if (disco.value) { await new Promise((r) => setTimeout(r, 1200)); speak() }
-})
+  await new Promise((r) => setTimeout(r, 1200))
+  if (disco.value) speak()
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (rollTimer) clearInterval(rollTimer)
+  // ⚠️ Прибираем за собой ОБЯЗАТЕЛЬНО. Пасхалки журнала рисует только эта страница;
+  // уйдя с неё, человек унёс бы в сторе флаг, показать который негде — и продукт
+  // спрашивал бы «на экране пасхалка» на страницах, где её нет и быть не может.
+  for (const id of ['disco_elysium_voice', 'binding_of_isaac_d6', 'ultrakill_rank']) {
+    if (easter.inPage[id]) easter.closeInPage(id)
+  }
 })
 </script>
 

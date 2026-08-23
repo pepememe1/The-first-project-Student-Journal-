@@ -208,6 +208,8 @@ export const MESSAGES = {
     'quiz.loadFailed': 'Не удалось загрузить викторину',
     'quiz.saveFailed': 'Не удалось сохранить',
     'app.subtitle': 'Система учёта успеваемости',
+    'sidebar.resize': 'Ширина меню',
+    'sidebar.resizeHint': 'Потяните, чтобы изменить ширину. Двойной щелчок — свернуть',
     'app.college': 'Технологический колледж ВСГУТУ',
 
     'login.login': 'Логин',
@@ -2245,6 +2247,8 @@ export const MESSAGES = {
     //Официальная английская аббревиатура — ESSTU (совпадает с доменом esstu.ru), НЕ
     //транслитерация «VSGUTU». На английской странице портала встречается и «ESSUTM» —
     //собственный сайт колледжа непоследователен, но ESSTU — более узнаваемый вариант.
+    'sidebar.resize': 'Menu width',
+    'sidebar.resizeHint': 'Drag to resize. Double-click to collapse',
     'app.college': 'ESSTU Technological College',
 
     'login.login': 'Username',
@@ -4272,6 +4276,8 @@ export const MESSAGES = {
     'quiz.loadFailed': '无法加载测验',
     'quiz.saveFailed': '保存失败',
     'app.subtitle': '学业成绩管理系统',
+    'sidebar.resize': '菜单宽度',
+    'sidebar.resizeHint': '拖动调整宽度，双击折叠',
     'app.college': '东西伯利亚国立技术大学工艺学院',
 
     'login.login': '用户名',

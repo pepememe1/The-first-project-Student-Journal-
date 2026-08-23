@@ -22,14 +22,23 @@ import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
 import SyncIssuesBadge from '@/components/ui/SyncIssuesBadge.vue'
 import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 import ReportProblemButton from '@/components/ReportProblemButton.vue'
+import SidebarResizer from '@/components/SidebarResizer.vue'
+import { useSidebarStore } from '@/stores/sidebar'
 
-defineProps({ open: { type: Boolean, default: false } })
+const props = defineProps({ open: { type: Boolean, default: false } })
+const openProp = computed(() => props.open)
 const emit = defineEmits(['navigate'])
 
 const auth = useAuthStore()
 const loc = useLocaleStore()
 const messenger = useMessengerStore()
 const route = useRoute()
+// ━━ ШИРИНА ━━ Тянется мышью за правый край и запоминается на устройстве (см. стор).
+// ⚠️ В ВЫЕЗЖАЮЩЕЙ шторке (телефон) ширина НЕ применяется: там сайдбар и так во весь
+// экран по высоте и занимает почти всю ширину, а свёрнутый до иконок он превратился бы
+// в бесполезную полоску поверх контента, которую нечем закрыть.
+const sidebar = useSidebarStore()
+const drawer = computed(() => !!openProp.value)
 // Значение бейджа пункта: непрочитанные сообщения берём из стора мессенджера (живой
 // счётчик), остальные — из локальной карты badges (напр., накладки расписания).
 function badgeCount(key) {
@@ -49,6 +58,8 @@ onMounted(async () => {
     try { badges.value.scheduleIssues = (await adminApi.scheduleConflicts()).data.count || 0 } catch { /* */ }
   }
 })
+// Свёрнут ли до иконок. В шторке — никогда: там ширина фиксированная.
+const compact = computed(() => !drawer.value && sidebar.compact)
 const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))
 
 function isActive(to) {
@@ -65,13 +76,18 @@ function isActive(to) {
        свой отступ уже учитывает (`HeaderBar.vue`), а сайдбар — нет, потому что он не
        часть той же колонки. Заодно нижняя вставка спасает карточку профиля внизу от
        полосы жестов. На сайте и в десктопе обе вставки нулевые — поведение прежнее. -->
-  <aside class="flex h-full w-[250px] shrink-0 flex-col border-r border-border bg-bg2"
-         style="padding-top: var(--gb-safe-top); padding-bottom: var(--gb-safe-bottom)">
+  <aside class="relative flex h-full shrink-0 flex-col border-r border-border bg-bg2"
+         :class="[drawer ? 'w-[250px]' : '', sidebar.dragging ? '' : 'transition-[width] duration-150']"
+         :style="{ ...(drawer ? {} : { width: sidebar.width + 'px' }),
+                   paddingTop: 'var(--gb-safe-top)', paddingBottom: 'var(--gb-safe-bottom)' }">
+    <!-- Полоску не показываем в шторке: там ширину менять нечем и незачем. -->
+    <SidebarResizer v-if="!drawer" />
     <!-- 1. Шапка: фирменный знак и название. Раньше стояли в акцентной полосе во всю
          ширину окна — здесь занимают ту же строку, но не отнимают высоту у контента. -->
-    <div class="flex shrink-0 items-center gap-2.5 px-3 py-3">
+    <div class="flex shrink-0 items-center gap-2.5 px-3 py-3"
+         :class="compact ? 'flex-col gap-2' : ''">
       <BrandLogo :size="32" class="shrink-0" />
-      <div class="min-w-0 flex-1 leading-tight">
+      <div v-if="!compact" class="min-w-0 flex-1 leading-tight">
         <p class="truncate font-title text-[15px] font-extrabold text-text">GradeBookAI</p>
         <p class="truncate text-[10px] font-semibold text-text3">{{ loc.t('app.college') }}</p>
       </div>
@@ -83,28 +99,46 @@ function isActive(to) {
     <!-- 2. Разделы — единственная прокручиваемая часть. -->
     <nav class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
       <template v-for="(item, i) in items" :key="i">
-        <p v-if="item.section" class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
+        <!-- Заголовок раздела в свёрнутом виде превращается в черту: слово туда не
+             влезает, а совсем убрать группировку значит слить меню в один список. -->
+        <p v-if="item.section && !compact"
+           class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
           {{ item.i18n ? loc.t(item.i18n, item.section) : item.section }}
         </p>
+        <div v-else-if="item.section" class="mx-2 my-2 h-px bg-border first:mt-0"></div>
         <RouterLink
           v-else
           :to="item.to"
-          class="mb-0.5 flex items-center gap-2.5 rounded-sm px-3.5 py-2.5 text-sm transition-colors"
-          :class="
+          :title="compact ? (item.i18n ? loc.t(item.i18n, item.label) : item.label) : null"
+          class="relative mb-0.5 flex rounded-sm transition-colors"
+          :class="[
+            compact ? 'flex-col items-center gap-1 px-1 py-2' : 'items-center gap-2.5 px-3.5 py-2.5 text-sm',
             isActive(item.to)
               ? 'bg-accent-glow font-semibold text-accent'
-              : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent'
-          "
+              : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent',
+          ]"
           @click="emit('navigate')"
         >
           <component :is="item.icon" class="size-[18px] shrink-0" />
-          <span class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
+          <!-- ⚠️ В СВЁРНУТОМ виде подпись ПОВЁРНУТА, а не обрезана. Обрезка до «Расп…»
+               не экономит место и не сообщает ничего; поворот на 90° сохраняет слово
+               целиком, а колонка остаётся шириной в иконку. Показывается ТОЛЬКО на
+               минимуме — на промежуточной ширине подпись обычная, горизонтальная. -->
+          <span v-if="compact" class="gb-vlabel">
+            {{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}
+          </span>
+          <span v-else class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
           <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
-               расписания — красным (требует вмешательства). Ноль не показываем. -->
+               расписания — красным (требует вмешательства). Ноль не показываем.
+               В свёрнутом виде — точкой в углу: число там нечитаемо, а факт «есть новое»
+               важнее его количества. -->
           <span v-if="item.badge && badgeCount(item.badge)"
-                class="ml-auto grid min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-tiny font-bold text-white"
-                :class="item.badge === 'messagesUnread' ? 'bg-accent' : 'bg-red'">
-            {{ badgeCount(item.badge) }}
+                class="grid shrink-0 place-items-center rounded-full font-bold text-white"
+                :class="[
+                  item.badge === 'messagesUnread' ? 'bg-accent' : 'bg-red',
+                  compact ? 'absolute right-1 top-1 size-2 p-0' : 'ml-auto min-w-5 px-1.5 text-tiny',
+                ]">
+            <template v-if="!compact">{{ badgeCount(item.badge) }}</template>
           </span>
         </RouterLink>
       </template>
@@ -114,14 +148,14 @@ function isActive(to) {
          аккаунта. В приложении виден всегда, на сайте появляется только при потере сети
          (см. сам компонент о том, почему постоянное «Онлайн» в браузере — шум). -->
     <div class="shrink-0 px-3 pb-1">
-      <ConnectionBadge />
+      <ConnectionBadge v-if="!compact" />
     </div>
 
     <!-- Рядом, но ОТДЕЛЬНО от значка связи: тот про «есть ли сеть», этот про «дошли ли
          правки». Состояния не совпадают — связь бывает прекрасной, а оценка всё равно
          остаётся только на этом ПК. Появляется, лишь когда есть о чём сказать. -->
     <div class="shrink-0 px-3 pb-1">
-      <SyncIssuesBadge />
+      <SyncIssuesBadge v-if="!compact" />
     </div>
 
     <!-- «Сообщить о проблеме» — встроенный канал обратной связи (ClassDojo, §9 №3).
@@ -136,3 +170,18 @@ function isActive(to) {
     <SidebarUserPanel />
   </aside>
 </template>
+
+<style scoped>
+/* Вертикальная подпись свёрнутого пункта. `writing-mode` вместо `rotate` намеренно:
+   поворот трансформацией не отдаёт высоту потоку, и соседние пункты налезали бы друг
+   на друга. Здесь браузер сам считает высоту строки как высоту блока. */
+.gb-vlabel {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  max-height: 92px;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: .02em;
+}
+</style>

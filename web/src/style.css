@@ -299,6 +299,18 @@
 }
 
 @theme {
+  /* ⚠️ `lg` СДВИНУТ С 1024 НА 940 px (23.08.2026, живой отзыв со скриншотами).
+     На нём держится вся оболочка: постоянный сайдбар против выезжающей шторки и
+     мобильная полоса с бургером. При стандартных 1024 окно шириной 1000 px — половина
+     обычного монитора — показывалось как телефон, и переключение происходило на 14
+     пикселях сужения.
+     ⚠️ Почему именно 940: самый широкий телефон в альбомной ориентации даёт около
+     930 px. Ниже этого числа «телефонная» раскладка честна, выше — уже нет.
+     ⚠️ Значение общее для всех 37 мест с `lg:` в разметке, и это НАМЕРЕННО: две
+     границы («оболочка отдельно, сетки отдельно») разъехались бы на первой же правке,
+     и появился бы диапазон, где сайдбара уже нет, а колонок ещё три. */
+  --breakpoint-lg: 940px;
+
   /* Фирменные шрифты Synapse: Syne — заголовки, DM Sans — текст (fallback — системные). */
   --font-body: 'DM Sans', 'Segoe UI', 'PT Sans', Arial, sans-serif;
   --font-title: 'Syne', 'Segoe UI Semibold', 'Segoe UI', 'PT Sans', sans-serif;
@@ -577,9 +589,16 @@ html.gb-contrast a { text-decoration-thickness: from-font; }
    он цветной, и повторять там же ту же палитру значило бы смешать две разные отсылки.
    Живёт в глобальных стилях, а не в самой сцене: цифра лежит НА СТРАНИЦЕ, снаружи
    оверлея, и scoped-стиль до неё не достаёт. */
+/* ⚠️ Глитч должен быть ЗАМЕТЕН. Первая версия ставила `grayscale(1)` на и без того
+   серую цифру и дрожала на полтора пикселя — на экране не менялось почти ничего, и
+   отличительного знака у пасхалки фактически не было (отзыв Влада: «глюков вообще нет
+   на цифре 404»). Теперь цифра становится белой и заметно дёргается. Монохромность
+   сохранена намеренно: цветной глитч занят Cyberpunk, и повторять его палитру значило
+   бы смешать две разные отсылки в одну. */
 .gb-glitch-bw {
-  filter: grayscale(1) contrast(1.6);
-  animation: gb-glitch-bw 0.42s steps(2, end) infinite;
+  color: #fff;
+  text-shadow: 0 0 12px rgba(255, 255, 255, .35);
+  animation: gb-glitch-bw 0.28s steps(2, end) infinite;
   position: relative;
 }
 .gb-glitch-bw::before,
@@ -595,9 +614,10 @@ html.gb-contrast a { text-decoration-thickness: from-font; }
 .gb-glitch-bw::after  { animation: gb-glitch-b 0.47s steps(2, end) infinite; }
 
 @keyframes gb-glitch-bw {
-  0%, 100% { transform: translateX(0) }
-  40%      { transform: translateX(-1.5px) }
-  70%      { transform: translateX(1.5px) }
+  0%, 100% { transform: translateX(0) skewX(0) }
+  25%      { transform: translateX(-4px) skewX(-6deg) }
+  55%      { transform: translateX(5px) skewX(4deg) }
+  80%      { transform: translateX(-2px) skewX(0) }
 }
 @keyframes gb-glitch-a {
   0%, 100% { clip-path: inset(12% 0 62% 0); transform: translateX(-3px) }

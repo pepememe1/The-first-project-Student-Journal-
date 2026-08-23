@@ -87,7 +87,11 @@ function doSave() {
 const lvLabel = computed(() => `LV ${props.level || 0}`)
 const whoLabel = computed(() => (props.name || 'ИГРОК').toUpperCase())
 
-onBeforeUnmount(() => timers.forEach(clearTimeout))
+onBeforeUnmount(() => {
+  timers.forEach(clearTimeout)
+  // Та же уборка, что и в журнале: звезду рисует только страница профиля.
+  if (easter.inPage.undertale_save) easter.closeInPage('undertale_save')
+})
 defineExpose({ start })
 </script>
 

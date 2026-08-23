@@ -73,11 +73,16 @@ const showDock = computed(() => !onVectorPage.value)
 // только на широком экране lg, на мобиле её нет). Озвучка звучит, пока виден хоть один
 // Вектор, и обрывается РОВНО когда пропал последний: ушли на вкладку без шторки — тишина;
 // на вкладке шторка открыта — Вектор договаривает; закрыли шторку — тишина.
-const isLg = ref(typeof window !== 'undefined' && window.matchMedia('(min-width:1024px)').matches)
+// ⚠️ ЧИСЛО ОБЯЗАНО СОВПАДАТЬ С `--breakpoint-lg` в style.css. Разъедутся — появится
+// полоса ширины, где разметка уже «настольная», а логика ещё считает нас телефоном (или
+// наоборот): сайдбар нарисован, а шторка думает, что она нужна. Держит
+// `web/tests/breakpoint.test.mjs`.
+const LG_PX = 940
+const isLg = ref(typeof window !== 'undefined' && window.matchMedia(`(min-width:${LG_PX}px)`).matches)
 let _mq = null
 const _onMq = (e) => { isLg.value = e.matches }
 if (typeof window !== 'undefined') {
-  _mq = window.matchMedia('(min-width:1024px)')
+  _mq = window.matchMedia(`(min-width:${LG_PX}px)`)
   _mq.addEventListener('change', _onMq)
 }
 const dockShown = computed(() => showDock.value && !vector.collapsed && isLg.value)

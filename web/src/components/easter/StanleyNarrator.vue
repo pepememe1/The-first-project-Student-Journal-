@@ -1,9 +1,20 @@
 <script setup>
 // Stanley Parable на странице 404.
 //
-// Страница открывается ОБЫЧНОЙ, с цифрой 404. Через пару секунд она подрагивает и
-// становится 427 (отсылка к самой игре), и лишь потом начинается речь — пауза здесь
-// часть шутки, а не задержка загрузки.
+// ━━ СЦЕНАРИЙ ПО СЕКУНДАМ (задан Владом 23.08.2026) ━━
+//   0.3 с   цифра начинает дёргаться — человек сразу видит, что что-то происходит;
+//   ~4 с    дрожь стихает, цифра остаётся прежней (404);
+//   13 с    короткий срыв, и на месте 404 оказывается 427 — за две секунды до речи;
+//   15 с    рассказчик начинает говорить.
+//
+// ⚠️ Пауза в пятнадцать секунд — ЧАСТЬ ШУТКИ, а не задержка загрузки: рассказчик
+// награждает того, кто остался стоять на пустой странице. Но именно поэтому начало
+// обязано быть заметным сразу: раньше первое изменение наступало через восемь секунд,
+// и пасхалка была неотличима от невыпавшей — человек уходил, не дождавшись.
+//
+// ⚠️ Тайминги — ИМЕНОВАННЫЕ КОНСТАНТЫ и отсчитываются ОТ ОТКРЫТИЯ, а не цепочкой
+// `await` друг за другом. С цепочкой «за две секунды до речи» приходилось бы каждый раз
+// пересчитывать в уме, и любая правка одного шага молча сдвигала все следующие.
 //
 // Текстов три, озвучек семь: берём случайный текст и случайный файл из ЕГО пула.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
@@ -24,52 +35,69 @@ const VARIANTS = [
       'Хотя эта страница совершенно не знает, зачем он пришёл.'] },
 ]
 
+// Отсечки от момента открытия страницы, миллисекунды.
+const SHAKE_AT = 350        // цифра начинает дёргаться
+const SHAKE_MS = 3800       // сколько дёргается
+const SWITCH_AT = 13000     // 404 -> 427, ровно за две секунды до речи
+const SPEECH_AT = 15000     // рассказчик заговорил
+
 const line = ref('')
 let audio = null, timers = [], cancelReady = null
 
-onMounted(async () => {
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
-  await wait(2500)
+onMounted(() => {
+  const at = (ms, fn) => { timers.push(setTimeout(fn, ms)) }
   // Цифру на странице 404 подменяем ПО МЕСТУ: сцена не рисует свою, иначе на экране
   // оказались бы две — настоящая под оверлеем и наша поверх.
   const code = document.querySelector('[data-404-code]')
-  if (code) {
-    // Отличительный знак рассказчика: у RDR2 своя карточка, а он приходит без картинки,
-    // и отличить одну шутку от другой было нечем. Глитч МОНОХРОМНЫЙ — цветной уже занят
-    // Cyberpunk, и повторять его палитру значило бы смешать две разные отсылки.
-    code.dataset.glitch = code.textContent
-    code.classList.add('gb-glitch-bw')
-    await wait(1600)
-    code.textContent = '427'
-    code.dataset.glitch = '427'
-    await wait(1400)
-    code.classList.remove('gb-glitch-bw')
-    code.removeAttribute('data-glitch')
-  }
-  await wait(2600)
 
-  const v = VARIANTS[Math.floor(Math.random() * VARIANTS.length)]
-  const n = 1 + Math.floor(Math.random() * v.files)
-  audio = new Audio('/easter/snd/narrator-' + v.key + '-' + n + '.mp3')
-  audio.volume = 0.7
-  audio.play().catch(() => {})
-  const start = () => {
-    const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : 12
-    let acc = 0
-    v.lines.forEach((t) => {
-      timers.push(setTimeout(() => { line.value = t }, acc * 1000))
-      acc += total / v.lines.length
+  if (code) {
+    at(SHAKE_AT, () => {
+      code.dataset.glitch = code.textContent
+      code.classList.add('gb-glitch-bw')
     })
-    timers.push(setTimeout(async () => {
-      line.value = ''
-      await easter.claim('stanley_parable_404')
-      emit('close')
-    }, acc * 1000 + 600))
+    at(SHAKE_AT + SHAKE_MS, () => {
+      code.classList.remove('gb-glitch-bw')
+    })
+    // Короткий срыв ПРИКРЫВАЕТ подмену: цифра, меняющаяся на спокойном экране, читается
+    // как опечатка, а меняющаяся в глитче — как то, чем она и является.
+    at(SWITCH_AT, () => {
+      code.dataset.glitch = '427'
+      code.classList.add('gb-glitch-bw')
+      code.textContent = '427'
+    })
+    at(SWITCH_AT + 700, () => {
+      code.classList.remove('gb-glitch-bw')
+      code.removeAttribute('data-glitch')
+    })
   }
-  //⚠️ Через whenAudioReady, а НЕ голым 'loadedmetadata': не доехал звук —
-  //событие не придёт никогда, и сцена не закроется вовсе. См. utils/audioReady.js.
-  cancelReady = whenAudioReady(audio, start)
+
+  at(SPEECH_AT, () => {
+    const v = VARIANTS[Math.floor(Math.random() * VARIANTS.length)]
+    const n = 1 + Math.floor(Math.random() * v.files)
+    audio = new Audio('/easter/snd/narrator-' + v.key + '-' + n + '.mp3')
+    audio.volume = 0.7
+    audio.play().catch(() => {})
+    // ⚠️ Текст раскладывается по длительности файла, но САМ ФАКТ показа от звука не
+    // зависит: `whenAudioReady` вызовет `start` и без метаданных (запасной срок), а
+    // автовоспроизведение браузер может запретить вовсе — на свежей странице жеста ещё
+    // не было. Пасхалка обязана читаться и полностью беззвучной.
+    const start = () => {
+      const total = (audio.duration && isFinite(audio.duration)) ? audio.duration : 12
+      let acc = 0
+      v.lines.forEach((t) => {
+        at(acc * 1000, () => { line.value = t })
+        acc += total / v.lines.length
+      })
+      at(acc * 1000 + 600, async () => {
+        line.value = ''
+        await easter.claim('stanley_parable_404')
+        emit('close')
+      })
+    }
+    cancelReady = whenAudioReady(audio, start)
+  })
 })
+
 onBeforeUnmount(() => {
   timers.forEach(clearTimeout)
   if (cancelReady) cancelReady()
