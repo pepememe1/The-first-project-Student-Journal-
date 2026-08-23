@@ -45,12 +45,16 @@ function lazyScene(loader, id) {
   })
 }
 
+// ⚠️ `dark_souls_logout` здесь НЕТ намеренно. Она прощальная и обязана пережить
+// `logout()`, который обнуляет стор пасхалок; поэтому её рисует сама страница настроек
+// своим состоянием (`Settings.vue`), рядом с обычным прощанием Вектора. Вернёшь сюда —
+// сцена снова будет стираться за мгновение до показа, а выход подвисать на пустом
+// экране. Держит `easterEggsWired.test.mjs`.
 const SCENES = {
   deltarune_tree:      lazyScene(() => import('./DeltaruneTree.vue'), 'deltarune_tree'),
   cyberpunk_login:     lazyScene(() => import('./CyberpunkGlitch.vue'), 'cyberpunk_login'),
   stanley_parable_404: lazyScene(() => import('./StanleyNarrator.vue'), 'stanley_parable_404'),
   rdr2_404:            lazyScene(() => import('./Rdr2Plan.vue'), 'rdr2_404'),
-  dark_souls_logout:   lazyScene(() => import('./DarkSoulsFarewell.vue'), 'dark_souls_logout'),
   gman_observer:       lazyScene(() => import('./GmanWatcher.vue'), 'gman_observer'),
   hotline_miami:       lazyScene(() => import('./HotlineScene.vue'), 'hotline_miami'),
   skyrim_wake_up:      lazyScene(() => import('./SkyrimCart.vue'), 'skyrim_wake_up'),

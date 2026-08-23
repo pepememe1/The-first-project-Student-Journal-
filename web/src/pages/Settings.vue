@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
+import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { useTtsStore } from '@/stores/tts'
 import { useVoiceStore } from '@/stores/voice'
@@ -37,6 +38,8 @@ const router = useRouter()
 // так, человек всё равно окажется разлогинен.
 const FAREWELL_MS = 1200
 const farewell = ref(false)
+// Прощание Dark Souls. Местное состояние, а не стор — см. onLogout ниже.
+const darkSouls = ref(false)
 const farewellName = computed(() => (auth.user?.name || '').trim())
 async function onLogout() {
   // ⚠️ Dark Souls ЗАМЕНЯЕТ обычное прощание Вектора: две прощальные заставки подряд
@@ -50,7 +53,22 @@ async function onLogout() {
   // считал, что его обманули. Ошибка тихая — на экране всё правильно.
   // ⚠️ Правило общее: пасхалка, привязанная к ВЫХОДУ, обязана закрываться до выхода.
   // Ждать её показа нельзя (см. ниже), значит момент один — этот.
-  if (egg) await easter.claim('dark_souls_logout')
+  if (egg) {
+    await easter.claim('dark_souls_logout')
+    // 🔥 СЦЕНУ ПОКАЗЫВАЕМ ИЗ МЕСТНОГО СОСТОЯНИЯ, А НЕ ИЗ СТОРА (найдено 24.08.2026 по
+    // точному наблюдению Влада: «ачивка есть, анимации нет, но выход подвисает на пару
+    // секунд»). Это подвисание и БЫЛО пасхалкой: `auth.logout()` ниже зовёт
+    // `easter.reset()` — он обнуляет стор, чтобы тост не утёк следующему человеку на
+    // общем компьютере, — и тем самым СТИРАЕТ сцену за мгновение до её показа. На
+    // экране оставались пустые 5.2 секунды ожидания, то есть ровно «фриз».
+    //
+    // ⚠️ Конфликт неустраним по существу: выход обязан стирать состояние пасхалок, а
+    // прощальная сцена обязана этот выход пережить. Значит она не состояние пасхалок, а
+    // состояние СТРАНИЦЫ — как обычное прощание Вектора рядом. Слот в сторе освобождаем
+    // сразу, чтобы он не держал ни замок перехода, ни вопрос «точно уйти?».
+    easter.close()
+    darkSouls.value = true
+  }
 
   const wait = egg ? 5200 : FAREWELL_MS         // сцене нужно время догореть
   if (!egg) farewell.value = true
@@ -600,4 +618,5 @@ onMounted(() => easter.roll('gman_observer'))
     </Card>
   </div>
   <FarewellOverlay v-if="farewell" :name="farewellName" />
+  <DarkSoulsFarewell v-if="darkSouls" @close="darkSouls = false" />
 </template>
