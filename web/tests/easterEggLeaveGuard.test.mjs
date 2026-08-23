@@ -142,3 +142,19 @@ test('пасхалка выхода закрывается ДО logout, а не 
   assert.ok(!sceneCode.includes('claim('),
     'в сцене снова появился claim — он там уходит в пустоту и создаёт видимость работы')
 })
+
+test('стор пасхалок обнуляется при выходе из аккаунта', () => {
+  // ⚠️ Выход на общем компьютере колледжа — это СМЕНА ВЛАДЕЛЬЦА. Без обнуления тост
+  // «достижение открыто» от прошлого человека всплывал на экране входа у следующего,
+  // а его список ачивок продолжал глушить вопросы. Тот же принцип, которым уже чистятся
+  // черновики мессенджера и оффлайн-кэш.
+  const store = readFileSync(join(ROOT, 'src/stores/easterEggs.js'), 'utf8')
+  const auth = readFileSync(join(ROOT, 'src/stores/auth.js'), 'utf8')
+  assert.match(store, /function reset\(\)/, 'в сторе пасхалок нет reset()')
+  for (const field of ['active.value', 'inPage.value', 'owned.value', 'lastUnlocked.value']) {
+    const body = store.split('function reset()')[1].split('\n  }')[0]
+    assert.ok(body.includes(field), `reset() не чистит ${field}`)
+  }
+  assert.match(auth.replace(/\/\/.*$/gm, ''), /useEasterStore\(\)\.reset\(\)/,
+    'logout не обнуляет стор пасхалок')
+})

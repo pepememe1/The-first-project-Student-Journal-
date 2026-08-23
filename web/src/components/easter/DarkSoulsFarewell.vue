@@ -33,6 +33,15 @@ onMounted(async () => {
                    fontSize:'clamp(20px,4.6vw,40px)', letterSpacing:'.24em',
                    color:'#d9c07a', textShadow:'0 0 22px rgba(217,192,122,.45)',
                    opacity: text ? 1 : 0 }">СЕССИЯ ЗАВЕРШЕНА</p>
+      <!-- ⚠️ О НАГРАДЕ ГОВОРИМ ЗДЕСЬ, а не общим тостом. Тост живёт в сторе, а стор при
+           выходе обнуляется — значит «достижение открыто» либо мелькнёт на долю секунды,
+           либо всплывёт уже на экране входа у СЛЕДУЮЩЕГО человека. Именно это Влад и
+           видел. Внутри сцены надпись живёт ровно столько, сколько сама сцена, и
+           попадает в тот момент, к которому относится. -->
+      <p class="mt-3 whitespace-nowrap transition-opacity duration-1000"
+         :style="{ fontFamily: '\'Cormorant Garamond\', Georgia, serif',
+                   fontSize: 'clamp(11px,1.7vw,15px)', letterSpacing: '.18em',
+                   color: '#9a865a', opacity: text ? 0.85 : 0 }">ДОСТИЖЕНИЕ ОТКРЫТО</p>
     </div>
   </div>
 </template>

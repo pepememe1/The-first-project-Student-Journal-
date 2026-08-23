@@ -20,6 +20,7 @@ import { loginWithPasskey } from '@/api/webauthn'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
+import { useEasterStore } from '@/stores/easterEggs'
 import { useActivityStore } from '@/stores/activity'
 
 const LS_USER = 'gb.user'
@@ -37,6 +38,8 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref(loadUser())
   const loading = ref(false)
   const error = ref('')
+  // Сколько секунд осталось до конца блокировки за перебор. Ноль — не заперты.
+  const lockedFor = ref(0)
 
   const isAuthenticated = computed(() => !!user.value && !!getAccess())
   const role = computed(() => user.value?.role || null)
@@ -44,6 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(login, password) {
     loading.value = true
     error.value = ''
+    lockedFor.value = 0
     try {
       const { data } = await authApi.login(login.trim(), password)
       setTokens({ access: data.access_token, refresh: data.refresh_token })
@@ -79,6 +83,9 @@ export const useAuthStore = defineStore('auth', () => {
       return user.value
     } catch (e) {
       const status = e.response?.status
+      //Секунды до разблокировки держим отдельно: по ним рисуется обратный отсчёт, и
+      //только он превращает «подождите» в понятное «осталось столько-то».
+      lockedFor.value = status === 429 ? Number(e.response?.headers?.['retry-after'] || 0) : 0
       if (status === 401) error.value = 'Неверный логин или пароль'
       else if (status === 403) error.value = e.response?.data?.detail || 'Устройство не подтверждено администратором'
       else if (status === 429) error.value = e.response?.data?.detail || 'Слишком много попыток входа. Подождите.'
@@ -142,6 +149,9 @@ export const useAuthStore = defineStore('auth', () => {
     // пользователя в той же вкладке: без сброса следующий вошедший увидел бы чужую
     // викторину поверх своего кабинета.
     useActivityStore().reset()
+    //И пасхалки: иначе тост «достижение открыто» от прошлого человека
+    //всплывает на экране входа у следующего (см. easterEggs.js::reset).
+    useEasterStore().reset()
     // Виджет на рабочем столе Android живёт ВНЕ страницы и переживает выход: без этой
     // строки он продолжал бы показывать группу предыдущего владельца сессии тому, кто
     // войдёт следом (на телефоне в колледже это норма, а не редкость).
@@ -166,6 +176,9 @@ export const useAuthStore = defineStore('auth', () => {
     useVectorStore().reset()
     useProfileStore().reset()
     useActivityStore().reset()
+    //И пасхалки: иначе тост «достижение открыто» от прошлого человека
+    //всплывает на экране входа у следующего (см. easterEggs.js::reset).
+    useEasterStore().reset()
     clearScheduleWidget()
     // Отсчёт суточного окна офлайна начинаем с нуля: оно принадлежит сессии, а не
     // устройству. Иначе следующий вошедший унаследовал бы чужой почти истёкший счётчик
@@ -177,5 +190,5 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, loading, error, isAuthenticated, role, login, loginPasskey, logout, clearSession }
+  return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey, logout, clearSession }
 })

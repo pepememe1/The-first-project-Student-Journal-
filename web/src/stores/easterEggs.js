@@ -308,6 +308,24 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   function clearToast() { lastUnlocked.value = null }
 
+  /**
+   * Полное обнуление при выходе из аккаунта.
+   *
+   * ⚠️ Без него состояние пасхалок ПЕРЕЖИВАЛО смену пользователя: на экране входа
+   * всплывал тост «достижение открыто» от предыдущего человека, а список его ачивок
+   * (`owned`) продолжал глушить вопросы у следующего. На общем компьютере колледжа
+   * выход — это смена владельца, и всё, что помнит стор, обязано стираться; ровно тем
+   * же соображением уже чистятся черновики мессенджера и оффлайн-кэш (§5.4).
+   */
+  function reset() {
+    clearTimeout(stuckTimer)
+    active.value = ''
+    inPage.value = {}
+    owned.value = new Set()
+    lastUnlocked.value = null
+    inFlight.clear()
+  }
+
   return { active, inPage, owned, lastUnlocked, pending, roll, afterLogin, rollJournal,
-           loadOwned, show, close, closeInPage, dismissPending, claim, clearToast }
+           loadOwned, show, close, closeInPage, dismissPending, claim, clearToast, reset }
 })

@@ -4,7 +4,7 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint } from '@lucide/vue'
+import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import { desktopApi, appApi } from '@/api/endpoints'
@@ -148,6 +148,28 @@ async function saveCredential(id, pass) {
   } catch { /* сохранение необязательно — не мешаем входу */ }
 }
 
+// ━━ ОБРАТНЫЙ ОТСЧЁТ БЛОКИРОВКИ ━━
+// Сервер присылает Retry-After один раз; дальше время идёт у человека на глазах.
+// Без отсчёта «подождите» ничего не сообщает: непонятно, минуту ждать или полчаса, и
+// люди продолжают жать кнопку, продлевая себе же ожидание.
+const lockLeft = ref(0)
+let lockTimer = 0
+watch(() => auth.lockedFor, (secs) => {
+  clearInterval(lockTimer)
+  lockLeft.value = secs || 0
+  if (!secs) return
+  lockTimer = setInterval(() => {
+    lockLeft.value -= 1
+    if (lockLeft.value <= 0) clearInterval(lockTimer)
+  }, 1000)
+})
+onBeforeUnmount(() => clearInterval(lockTimer))
+const lockLabel = computed(() => {
+  const s = Math.max(0, lockLeft.value)
+  const m = Math.floor(s / 60)
+  return m > 0 ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s} с`
+})
+
 async function submit() {
   needApproval.value = false
   try {
@@ -264,7 +286,23 @@ const showRecover = ref(false)
             </div>
           </div>
 
-          <p v-if="auth.error" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ auth.error }}</p>
+          <!-- ⚠️ БЛОКИРОВКА И ОПЕЧАТКА — РАЗНЫЕ СОСТОЯНИЯ, и выглядеть одинаково они не
+               должны. Раньше обе показывались одним красным прямоугольником, и человек,
+               набравший верный пароль после семи неудач, видел ровно то же, что и при
+               ошибке: единственный возможный вывод — «журнал не принимает мой пароль».
+               На самом деле восьмая попытка отвергается ДО сверки пароля: пара
+               (IP, логин) заперта на пять минут (throttle.MAX_FAILS). Пароль тут ни при
+               чём, и сказать это надо прямо. -->
+          <div v-if="lockLeft > 0"
+               class="flex items-start gap-2 rounded-sm border border-orange/40 bg-orange/10 px-3 py-2 text-sm">
+            <ShieldAlert class="mt-0.5 size-4 shrink-0 text-orange" />
+            <span class="text-text2">
+              <b class="text-text">Вход временно заперт</b> — слишком много неудачных попыток.
+              Это защита от подбора: пароль сейчас <b>не проверяется вовсе</b>, даже верный.
+              Осталось <b class="tabular-nums text-text">{{ lockLabel }}</b>.
+            </span>
+          </div>
+          <p v-else-if="auth.error" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ auth.error }}</p>
 
           <AppButton type="submit" class="w-full" :disabled="!canSubmit">
             {{ auth.loading ? loc.t('login.submitting') : loc.t('login.submit') }}
