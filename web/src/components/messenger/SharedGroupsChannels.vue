@@ -66,10 +66,18 @@ async function openConversation(conv) {
   emit('navigate')
 }
 
+// ⚠️ Ярлыки КОРОТКИЕ, и это не косметика. Полные («Общие группы», «Общие каналы») в ряд
+// из трёх не помещались никогда: у всех троих обрезалось начало, и на экране стояло
+// «Троф… Общ… Общи…» — то есть переключатель не сообщал ВООБЩЕ НИЧЕГО. Слово «общие»
+// при этом не несёт смысла: других групп и каналов в чужом профиле не показывают.
+// Полное название осталось в подсказке и в заголовке списка под вкладками.
 const TABS = computed(() => [
-  { id: 'trophies', icon: Trophy, label: locale.t('peerProfile.trophies', 'Трофеи'), n: trophies.value.length },
-  { id: 'groups',   icon: Users,  label: locale.t('peerProfile.sharedGroups', 'Общие группы'), n: groups.value.length },
-  { id: 'channels', icon: Radio,  label: locale.t('peerProfile.sharedChannels', 'Общие каналы'), n: channels.value.length },
+  { id: 'trophies', icon: Trophy, label: locale.t('peerProfile.trophies', 'Трофеи'),
+    full: locale.t('peerProfile.trophies', 'Трофеи'), n: trophies.value.length },
+  { id: 'groups',   icon: Users,  label: locale.t('peerProfile.tabGroups', 'Группы'),
+    full: locale.t('peerProfile.sharedGroups', 'Общие группы'), n: groups.value.length },
+  { id: 'channels', icon: Radio,  label: locale.t('peerProfile.tabChannels', 'Каналы'),
+    full: locale.t('peerProfile.sharedChannels', 'Общие каналы'), n: channels.value.length },
 ])
 </script>
 
@@ -80,20 +88,28 @@ const TABS = computed(() => [
          должен спорить по весу с содержимым под ним. -->
     <div class="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border px-2 pt-2">
       <button v-for="t in TABS" :key="t.id" type="button" @click="tab = t.id"
-              :aria-current="tab === t.id"
-              class="flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2
-                     px-2 pb-2 pt-1 text-[12.5px] transition-colors"
+              :aria-current="tab === t.id" :title="t.full"
+              class="flex flex-1 items-center justify-center gap-1 whitespace-nowrap border-b-2
+                     px-1.5 pb-2 pt-1 text-[12px] transition-colors"
               :class="tab === t.id
                 ? 'border-accent font-semibold text-text'
                 : 'border-transparent text-text2 hover:text-text'">
         <component :is="t.icon" class="size-3.5 shrink-0" />
-        <span class="min-w-0 truncate">{{ t.label }}</span>
+        <!-- ⚠️ Без truncate и без min-w-0: именно они и обрезали ярлык до многоточия.
+             Ширины теперь хватает, а если вдруг перестанет — пусть лучше вкладки
+             станут прокручиваться (overflow-x на родителе), чем превратятся в «Общ…». -->
+        <span class="shrink-0">{{ t.label }}</span>
         <span class="shrink-0 rounded px-1 text-[11px] tabular-nums"
               :class="tab === t.id ? 'bg-accent-glow text-accent' : 'text-text3'">{{ t.n }}</span>
       </button>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto p-3">
+      <!-- Полное название выбранной категории: короткий ярлык во вкладке экономит
+           место, а смысл («общие» — то есть общие С ВАМИ) остаётся здесь. -->
+      <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">
+        {{ TABS.find((t) => t.id === tab)?.full }}
+      </p>
       <template v-if="tab === 'trophies'">
         <ul v-if="trophies.length" class="space-y-1.5">
           <li v-for="a in trophies" :key="a.id"

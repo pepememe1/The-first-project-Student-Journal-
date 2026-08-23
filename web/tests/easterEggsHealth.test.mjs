@@ -84,3 +84,26 @@ test('обратный ход: несуществующий ассет и гол
   assert.match(fake, /addEventListener\('loadedmetadata'/,
     'правило обязано ловить дословную строку, из-за которой оно и заведено')
 })
+
+test('редкость есть у каждой ачивки и она из известной шкалы', () => {
+  // ⚠️ Незнакомая ступень роняет карточку в профиле: код читает `RARITY[a.rarity].color`
+  // и на опечатке падает на неопределённом. Ошибка при этом ВИДНА только тому, у кого
+  // эта ачивка открыта, — то есть может доехать до боя незамеченной.
+  const cfg = readFileSync(join(ROOT, 'src/config/achievements.js'), 'utf8')
+  const tiers = new Set([...cfg.split('export const RARITY = {')[1].split('\n}')[0]
+    .matchAll(/^\s{2}(\w+):/gm)].map(m => m[1]))
+  assert.ok(tiers.size >= 3, 'разбор шкалы редкостей сломался')
+  const bad = [...cfg.matchAll(/id: '(\w+)',[^\n]*?rarity: '(\w+)'/g)]
+    .filter(m => !tiers.has(m[2]))
+    .map(m => `${m[1]} → ${m[2]}`)
+  assert.deepEqual(bad, [], 'ачивка с неизвестной редкостью:\n' + bad.join('\n'))
+})
+
+test('лестница редкостей не выродилась в одну ступень', () => {
+  // Смысл шкалы в РАЗЛИЧИИ: если всё «обычное» или всё «легендарное», она ничего не
+  // сообщает. Проверяем, что заняты и низ, и верх.
+  const cfg = readFileSync(join(ROOT, 'src/config/achievements.js'), 'utf8')
+  const used = new Set([...cfg.matchAll(/rarity: '(\w+)'/g)].map(m => m[1]))
+  assert.ok(used.has('common'), 'нет ни одной обычной — «редкое» перестаёт быть редким')
+  assert.ok(used.size >= 4, `занято всего ${used.size} ступеней из пяти`)
+})

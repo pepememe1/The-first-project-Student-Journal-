@@ -13,43 +13,43 @@
 // и находить стало бы нечего.
 
 export const ACHIEVEMENTS = [
-  { id: 'deltarune_egg',     icon: '🥚', rarity: 'legendary',
+  { id: 'deltarune_egg',     icon: '🥚', rarity: 'rare',
     title: 'Не важное, но и не неважное',
     desc: 'Вы приняли яйцо у того, кто стоял за деревом.' },
-  { id: 'ultrakill_fuel',    icon: '🏆', rarity: 'rare',
+  { id: 'ultrakill_fuel',    icon: '🏆', rarity: 'mythic',
     title: 'Знание — топливо',
     desc: 'Идеальный семестр без единой пересдачи.' },
-  { id: 'isaac_reroll',      icon: '🎲', rarity: 'rare',
+  { id: 'isaac_reroll',      icon: '🎲', rarity: 'legendary',
     title: 'Перебросил',
     desc: 'Вы бросили кубик и на секунду перестали понимать свои оценки.' },
-  { id: 'gman_observer',     icon: '👁', rarity: 'rare',
+  { id: 'gman_observer',     icon: '👁', rarity: 'legendary',
     title: 'Скрытый наблюдатель',
     desc: 'Кто-то смотрел на вас из настроек. Вы заметили.' },
-  { id: 'fnaf_night',        icon: '🌙', rarity: 'rare',
+  { id: 'fnaf_night',        icon: '🌙', rarity: 'legendary',
     title: 'Пережил ночную смену',
     desc: 'Вы зашли в журнал глубокой ночью и не сбежали.' },
-  { id: 'portal_cake_lie',   icon: '🍰', rarity: 'legendary',
+  { id: 'portal_cake_lie',   icon: '🍰', rarity: 'epic',
     title: 'Торт — это ложь',
     desc: 'Вы задули свечу вместо того, чтобы нажать «ОК».' },
-  { id: 'cyberpunk_samurai', icon: '🎸', rarity: 'common',
+  { id: 'cyberpunk_samurai', icon: '🎸', rarity: 'rare',
     title: 'Проснись, самурай',
     desc: 'Вход, после которого захотелось учиться.' },
-  { id: 'darksouls_session', icon: '🔥', rarity: 'common',
+  { id: 'darksouls_session', icon: '🔥', rarity: 'rare',
     title: 'Сессия завершена',
     desc: 'Вы вышли из аккаунта красиво.' },
-  { id: 'stanley_427',       icon: '🚪', rarity: 'common',
+  { id: 'stanley_427',       icon: '🚪', rarity: 'epic',
     title: '427',
     desc: 'Вы остались на странице, которой не существует.' },
-  { id: 'hotline_50',        icon: '📼', rarity: 'common',
+  { id: 'hotline_50',        icon: '📼', rarity: 'rare',
     title: '50 зачётов',
     desc: 'Вам действительно нравится писать людям сообщения.' },
-  { id: 'papers_glory',      icon: '📕', rarity: 'common',
+  { id: 'papers_glory',      icon: '📕', rarity: 'rare',
     title: 'Слава Арстотцке',
     desc: 'Вы нашли штамп в чужом профиле и не удержались.' },
-  { id: 'undertale_resolve', icon: '⭐', rarity: 'common',
+  { id: 'undertale_resolve', icon: '⭐', rarity: 'epic',
     title: 'Решимость',
     desc: 'Профиль сохранён. Здоровье полностью восстановлено.' },
-  { id: 'disco_listen',      icon: '🎙', rarity: 'common',
+  { id: 'disco_listen',      icon: '🎙', rarity: 'rare',
     title: 'Может, стоит прислушаться?',
     desc: 'Внутренний голос высказался о вашей оценке.' },
   { id: 'detroit_led',       icon: '🔵', rarity: 'common',
@@ -64,8 +64,27 @@ export const BY_ID = Object.fromEntries(ACHIEVEMENTS.map((a) => [a.id, a]))
 
 // Цвет редкости. Отдельно от акцента темы: редкость — это СМЫСЛ, а не оформление,
 // и она обязана читаться одинаково при любом выбранном пресете палитры.
+// ━━ ЛЕСТНИЦА РЕДКОСТЕЙ ━━ (пересобрана 23.08.2026 по правилу Влада)
+//
+// Редкость — это ТРУДНОСТЬ УСЛОВИЯ, а не одна лишь вероятность. «Просто зайти в
+// аккаунт» и «быть отличником» не могут стоить одинаково, даже если числа похожи:
+// первое доступно каждому в любой день, второе — результат семестра.
+//
+//   обычная      просто пользуйся журналом            (DOOM, Detroit)
+//   редкая       шанс на обычном действии             (вход, выход, мессенджер, журнал)
+//   эпическая    надо намеренно попасть или дождаться (404, день рождения, правка профиля)
+//   легендарная  двойное условие или очень малый шанс (ночь + шанс, 1/200, 1/500)
+//   мифическая   надо БЫТЬ кем-то, а не что-то нажать (только отличнику)
+//
+// ⚠️ Порядок ключей здесь — это порядок по возрастанию, и на него опирается сортировка
+// витрины. Вставляешь ступень — вставляй НА МЕСТО, а не в конец.
 export const RARITY = {
-  common:    { label: 'Обычная',    color: '#7d8f99' },
-  rare:      { label: 'Редкая',     color: '#2ba6b8' },
+  common:    { label: 'Обычная',     color: '#7d8f99' },
+  rare:      { label: 'Редкая',      color: '#2ba6b8' },
+  epic:      { label: 'Эпическая',   color: '#9b6bd6' },
   legendary: { label: 'Легендарная', color: '#d4a017' },
+  mythic:    { label: 'Мифическая',  color: '#e0455e' },
 }
+
+/** Порядковый вес ступени — для сортировки «сначала самое ценное». */
+export const RARITY_ORDER = Object.keys(RARITY)

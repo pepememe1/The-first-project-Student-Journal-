@@ -32,6 +32,7 @@ import { messengerApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
 import AvatarCropper from '@/components/AvatarCropper.vue'
 import GifPicker from '@/components/messenger/GifPicker.vue'
+import StampEgg from '@/components/easter/StampEgg.vue'
 import { useToast } from '@/composables/useToast'
 
 const props = defineProps({
@@ -253,7 +254,11 @@ async function sendMessage() {
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-xl border border-border2 bg-card">
+  <!-- relative — якорь для штампа Papers Please: он ложится в случайное место
+       ИМЕННО этой карточки, а не всей страницы, поэтому виден в любом окне,
+       где карточку показывают (свой профиль, чужой из группы, чужой из ЛС). -->
+  <div class="relative overflow-hidden rounded-xl border border-border2 bg-card">
+    <StampEgg />
     <!-- Баннер: гифка, если выбрана, иначе однотонная плашка цвета профиля. -->
     <!-- ⚠️ Баннеру отдана заметная высота (было 80 px). Смысл баннера в том, чтобы
          его было видно; в узкой полосе гифка превращалась в мазок, то есть
