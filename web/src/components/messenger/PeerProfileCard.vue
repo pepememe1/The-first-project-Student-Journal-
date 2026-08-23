@@ -111,9 +111,8 @@ const metaLine = computed(() => {
   const parts = [roleLabel(u.role)]
   if (u.role === 'teacher' && (u.subjects || []).length) parts.push(u.subjects.join(', '))
   else if (u.group_name) parts.push(u.group_name)
-  //День рождения — «ДД.ММ», без года: возраст отсюда не вычислить, и это намеренно.
-  //Показываем и в своей карточке, и в чужой — поздравить должно быть кому.
-  if (u.birthday) parts.push('🎂 ' + u.birthday)
+  //⚠️ Дня рождения здесь БОЛЬШЕ НЕТ: он вынесен отдельной строкой ниже (правка Влада
+  //23.08.2026). В перечне «роль · группа · дата» его искали глазами и не находили.
   return parts.filter(Boolean).join(' · ')
 })
 
@@ -256,7 +255,11 @@ async function sendMessage() {
 <template>
   <div class="overflow-hidden rounded-xl border border-border2 bg-card">
     <!-- Баннер: гифка, если выбрана, иначе однотонная плашка цвета профиля. -->
-    <div class="relative h-20 overflow-hidden" :style="bannerUrl ? undefined : { background: plate }">
+    <!-- ⚠️ Баннеру отдана заметная высота (было 80 px). Смысл баннера в том, чтобы
+         его было видно; в узкой полосе гифка превращалась в мазок, то есть
+         возможность его поставить существовала, а возможности разглядеть — нет. -->
+    <div class="relative h-40 shrink-0 overflow-hidden sm:h-52"
+         :style="bannerUrl ? undefined : { background: plate }">
       <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover"
            :class="{ 'cursor-zoom-in': !editable }"
            @click="!editable && (lightbox = bannerUrl)" />
@@ -278,23 +281,26 @@ async function sendMessage() {
         <Trash2 class="size-4" />
       </button>
     </div>
-    <div class="-mt-10 px-5 pb-5">
+    <!-- ⚠️ Ширина текста ограничена. Окно теперь почти во весь экран, и без предела
+         «о себе» и заметка растягивались на всю ширину монитора — строку в 1800 px
+         невозможно читать, глаз теряет начало следующей. -->
+    <div class="mx-auto w-full max-w-3xl -mt-6 px-5 pb-6 sm:-mt-7">
       <div class="group relative inline-block">
         <button v-if="editable" type="button" @click="avatarMenuOpen = !avatarMenuOpen"
-                class="relative block size-20 overflow-hidden rounded-full ring-4 ring-card"
+                class="relative block size-24 overflow-hidden rounded-full ring-[5px] ring-card"
                 :title="locale.t('profile.editAvatar', 'Изменить аватарку')">
-          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="96" />
           <span class="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
             <Camera class="size-6 text-white" />
           </span>
         </button>
         <button v-else-if="shown.avatar" type="button" @click="lightbox = shown.avatar"
-                class="block cursor-zoom-in rounded-full ring-4 ring-card"
+                class="block cursor-zoom-in rounded-full ring-[5px] ring-card"
                 :title="locale.t('peerProfile.viewAvatar', 'Открыть аватарку')">
-          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="96" />
         </button>
-        <div v-else class="rounded-full ring-4 ring-card">
-          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="80" />
+        <div v-else class="w-fit rounded-full ring-[5px] ring-card">
+          <Avatar :src="shown.avatar" :name="shown.full_name" :role="shown.role" :color="plate" :size="96" />
         </div>
 
         <!-- Выбор источника аватарки. Тот же приём, что у MyStatusPicker: список плюс
@@ -321,20 +327,21 @@ async function sendMessage() {
         </template>
       </div>
 
-      <div class="mt-3 flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <p class="truncate font-title text-xl font-extrabold text-text" v-bind="nameDecoration">
-            {{ shown.full_name || '…' }}
-          </p>
-          <p class="truncate text-sm text-text3">
-            <span v-if="shown.login">@{{ shown.login }} · </span>{{ metaLine }}
-          </p>
-        </div>
-        <button v-if="!isSelf" type="button" @click="sendMessage"
-                class="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent2">
-          <Send class="size-3.5" />{{ locale.t('peerProfile.message', 'Сообщение') }}
-        </button>
+      <!-- Порядок задан Владом и повторяет Discord: имя → логин → действие. Имя и
+           логин разными строками, а не через точку: логин это адрес, а не подпись. -->
+      <div class="mt-3 min-w-0">
+        <p class="truncate font-title text-2xl font-extrabold leading-tight text-text" v-bind="nameDecoration">
+          {{ shown.full_name || '…' }}
+        </p>
+        <p v-if="shown.login" class="mt-0.5 truncate text-sm text-text3">@{{ shown.login }}</p>
+        <p class="mt-1 truncate text-[13px] text-text2">{{ metaLine }}</p>
       </div>
+
+      <button v-if="!isSelf" type="button" @click="sendMessage"
+              class="mt-3.5 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5
+                     text-sm font-semibold text-white transition hover:bg-accent2 sm:w-auto sm:justify-start">
+        <Send class="size-4" />{{ locale.t('peerProfile.messageLong', 'Написать сообщение') }}
+      </button>
 
       <!-- О себе -->
       <div class="mt-4 rounded-lg border border-border bg-card2 p-3">
@@ -356,7 +363,20 @@ async function sendMessage() {
         </p>
       </div>
 
-      <!-- Заметка — видна только автору, в обоих режимах. -->
+      <!-- День рождения отдельной строкой, а не в общей подписи под именем: его ищут
+           глазами, чтобы поздравить, и в перечне «роль · группа · дата» он терялся.
+           Год не хранится и не показывается — только день и месяц. -->
+      <div v-if="shown.birthday" class="mt-3 flex items-center gap-2 rounded-lg border border-border
+                                        bg-card2 px-3 py-2.5">
+        <span class="text-base leading-none">🎂</span>
+        <span class="text-[11px] uppercase tracking-wide text-text3">
+          {{ locale.t('peerProfile.birthday', 'День рождения') }}
+        </span>
+        <span class="ml-auto text-sm font-semibold text-text">{{ shown.birthday }}</span>
+      </div>
+
+      <!-- Заметка — видна только автору, в обоих режимах. САМАЯ НИЖНЯЯ: это рабочая
+           запись о человеке, а не часть его профиля. -->
       <div class="mt-3 rounded-lg border border-dashed border-border2 bg-card2 p-3">
         <p class="mb-1.5 text-[11px] uppercase tracking-wide text-text3">
           {{ locale.t('peerProfile.note', 'Заметка') }}

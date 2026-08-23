@@ -95,29 +95,32 @@ const DISCO = [
 ]
 const voice = ref(null)
 const voiceIn = ref(false)
-let hoverOff = null
 
+/**
+ * Голос выходит САМ, внизу экрана, и висит, пока по нему не кликнут.
+ *
+ * ⚠️ Раньше он ждал наведения на клетку оценки — и это было ошибкой дважды. Во-первых,
+ * догадаться было не о чем: пасхалка «сработала», а на экране пусто. Во-вторых, уход со
+ * страницы честно спрашивал «точно уйти?» про то, чего не видно, и это читалось как
+ * сбой продукта, а не как находка.
+ *
+ * ⚠️ Ачивку даёт КЛИК, а не показ. Реплика — это голос, к которому предлагают
+ * прислушаться; сама ачивка так и называется. Выдать её за то, что человек просто
+ * посмотрел на экран, значит обессмыслить и то и другое.
+ */
 function speak() {
   const avg = props.average
   const level = avg >= 4.5 ? 3 : avg >= 3.5 ? 2 : avg >= 2.5 ? 1 : 0
   const [skill, line] = pick(DISCO[level])
   voice.value = { skill, line }
   nextTick(() => { voiceIn.value = true })
-  setTimeout(() => easter.claim('disco_elysium_voice'), 1400)
-  setTimeout(() => { voiceIn.value = false }, 11000)
-  setTimeout(() => { voice.value = null; easter.closeInPage('disco_elysium_voice') }, 11400)
 }
 
-function armHover() {
-  // Голос выходит на ПЕРВОМ наведении и ровно один раз. Бросок при этом уже сделан
-  // сервером при загрузке страницы: спрашивать его на каждое движение мыши значило бы
-  // слать десятки запросов за минуту ради события, которое случается раз в 80 заходов.
-  const list = cells()
-  if (!list.length) return
-  const once = () => { off(); speak() }
-  const off = () => list.forEach((td) => td.removeEventListener('mouseenter', once))
-  list.forEach((td) => td.addEventListener('mouseenter', once, { once: true }))
-  hoverOff = off
+function heedVoice() {
+  if (!voice.value) return
+  easter.claim('disco_elysium_voice')
+  voiceIn.value = false
+  setTimeout(() => { voice.value = null; easter.closeInPage('disco_elysium_voice') }, 320)
 }
 
 onMounted(async () => {
@@ -126,12 +129,13 @@ onMounted(async () => {
     setTimeout(() => { ultraBar.value = 78 }, 300)
     setTimeout(() => easter.claim('ultrakill_rank'), 1800)
   }
-  if (disco.value) { await nextTick(); armHover() }
+  //Небольшая пауза перед голосом — он должен ПОЯВИТЬСЯ на глазах, а не оказаться на
+  //экране сразу вместе со страницей: во втором случае его принимают за часть интерфейса.
+  if (disco.value) { await new Promise((r) => setTimeout(r, 1200)); speak() }
 })
 
 onBeforeUnmount(() => {
   if (rollTimer) clearInterval(rollTimer)
-  if (hoverOff) hoverOff()
 })
 </script>
 
@@ -171,12 +175,19 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Внутренний голос: только владельцу дневника, в базе ничего не остаётся -->
-    <div v-if="voice" class="absolute inset-x-3.5 bottom-3 rounded-[5px] border px-3.5 py-3 transition duration-300"
-         :class="voiceIn ? 'translate-y-0 opacity-100' : 'translate-y-2.5 opacity-0'"
-         style="background:rgba(12,16,22,.94);border-color:#3c4f63">
+    <!-- Голос ЛИПНЕТ К НИЗУ ОКНА (fixed), а не к низу карточки: журнал длинный, и у
+         его подвала человека в этот момент обычно нет — реплику он бы не увидел. -->
+    <button v-if="voice" type="button" @click="heedVoice"
+            class="pointer-events-auto fixed inset-x-4 bottom-4 z-[88] mx-auto block max-w-xl rounded-[5px]
+                   border px-4 py-3 text-left transition duration-300 hover:brightness-125"
+            :class="voiceIn ? 'translate-y-0 opacity-100' : 'translate-y-2.5 opacity-0'"
+            style="background:rgba(12,16,22,.96);border-color:#3c4f63">
       <div class="font-mono text-[11px] font-bold tracking-wide" style="color:#d9a441">{{ voice.skill }}</div>
       <div class="mt-1.5 text-[12.5px] leading-normal" style="color:#c9d6e0">{{ voice.line }}</div>
-    </div>
+      <div class="mt-2 font-mono text-[10px]" style="color:#6d7f8f">
+        [ Прислушаться ]
+      </div>
+    </button>
   </div>
 </template>
 

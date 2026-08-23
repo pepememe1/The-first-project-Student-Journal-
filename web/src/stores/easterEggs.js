@@ -12,7 +12,7 @@
 // давали бы человеку два независимых шанса на одно событие.
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { easterApi } from '@/api/endpoints'
+import { easterApi, meApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 
 // Какая ачивка какой пасхалкой выдаётся. Пара продублирована на сервере и там же
@@ -59,19 +59,109 @@ const MISSABLE_IN_PAGE = new Set([
   'binding_of_isaac_d6', 'papers_please_stamp', 'undertale_save', 'disco_elysium_voice',
 ])
 
+// 🔥 УРОК, КОТОРЫЙ СТОИТ ПОМНИТЬ: ВЫПАЛО ≠ ВИДНО. Голос Disco Elysium сначала выходил
+// ПО НАВЕДЕНИЮ на оценку — то есть пасхалка «сработала», а на экране не было ничего, и
+// подтверждение ухода честно спрашивало «точно уйти?» про невидимое. Со стороны это
+// выглядит сбоем, а не находкой (живой отзыв Влада 23.08.2026).
+//
+// Лечилось это отдельной корзиной «выпало, но ещё не показано», а вылечилось проще:
+// голос теперь выходит САМ, внизу экрана. Правило на будущее — **пасхалка, которая
+// требует угадать действие, чтобы вообще появиться, не работает**; появляться она
+// должна сама, а взаимодействие может лишь довести её до конца.
+
+// Чем спросить, когда человек уходит, не досмотрев. Своя реплика на каждую пасхалку —
+// В ГОЛОСЕ ТОЙ САМОЙ ИГРЫ, а не общее «вы уверены?».
+//
+// ⚠️ Это не украшение. Общий текст сообщает только «что-то мешает уйти» и читается как
+// ошибка формы; реплика в голосе игры сама по себе И ЕСТЬ подсказка, что на экране
+// пасхалка и её стоит поискать глазами. То есть вопрос выполняет обе работы сразу.
+//
+// ⚠️ Спойлерить нельзя: фраза намекает на игру, но не называет, куда нажимать.
+const LEAVE_ASK = {
+  undertale_save: {
+    title: '* Вы уверены?',
+    message: 'Что-то подсказывает: уйти, не сохранившись, будет опаснее.',
+    ok: 'Всё равно уйти', cancel: 'Остаться',
+  },
+  disco_elysium_voice: {
+    title: 'ВНУТРЕННЯЯ ИМПЕРИЯ — Успех',
+    message: 'Голос внизу экрана ещё не договорил. Уйдёте — и, возможно, никогда не '
+      + 'узнаете, что он собирался вам сказать.',
+    ok: 'Не слушать', cancel: 'Прислушаться',
+  },
+  papers_please_stamp: {
+    title: 'Документы не в порядке',
+    message: 'Перепроверьте печати. Ошибка в штампе — это не ваша забота, пока она не ваша.',
+    ok: 'Пропустить', cancel: 'Проверить',
+  },
+  binding_of_isaac_d6: {
+    title: 'Кубик ещё не брошен',
+    message: 'В углу журнала лежит D6. Уйдёте — комната перегенерируется без вас.',
+    ok: 'Уйти', cancel: 'Бросить',
+  },
+  deltarune_tree: {
+    title: 'Странное место',
+    message: 'Вы оказались в странном месте. Хотите уйти?',
+    ok: 'Уйти', cancel: 'Осмотреться',
+  },
+  gman_observer: {
+    title: 'Кажется, за вами наблюдают',
+    message: 'Вы заметили кого-то. Или же вам показалось?',
+    ok: 'Показалось', cancel: 'Присмотреться',
+  },
+  hotline_miami: {
+    title: 'Вам звонили',
+    message: 'Пятьдесят благословений не любят, когда их звонки оставляют без ответа. '
+      + 'Вы точно хотите не брать трубку?',
+    ok: 'Не брать', cancel: 'Ответить',
+  },
+}
+
+/** Текст вопроса при уходе. Незнакомая пасхалка получает нейтральный, но честный. */
+export function leaveAsk(egg) {
+  return LEAVE_ASK[egg] || {
+    title: 'Сейчас на экране пасхалка',
+    message: 'Если уйти со страницы, она пропадёт, а достижение останется закрытым. Всё равно уйти?',
+    ok: 'Уйти', cancel: 'Остаться',
+  }
+}
+
 export const useEasterStore = defineStore('easterEggs', () => {
+  // Какие ачивки у человека УЖЕ есть. Нужны ровно для одного: не спрашивать «остаться?»
+  // про находку, которая ему больше ничего не даст.
+  //
+  // ⚠️ Список именно СВОИХ ачивок, и его отдаёт сервер. Здесь он держится копией только
+  // чтобы не ходить на сервер при каждом переходе между вкладками; решение «выдать или
+  // нет» по-прежнему серверное (`claim` сверяет след срабатывания).
+  const owned = ref(new Set())
   const active = ref('')          // полноэкранная сцена, которая играет прямо сейчас
   const inPage = ref({})          // { id: true } — пасхалки внутри страницы, их может быть несколько
   const lastUnlocked = ref(null)  // для тоста «достижение открыто»
-  const busy = ref(false)
+  // 🔥 ЗДЕСЬ БЫЛ ОБЩИЙ ФЛАГ `busy`, И ОН ГЛУШИЛ ПОЧТИ ВСЕ ПАСХАЛКИ СТРАНИЦ.
+  //
+  // Порядок событий при переходе на вкладку такой: сначала срабатывает сторож маршрута
+  // в оболочке и просит дерево Делтарун, а через несколько МИЛЛИСЕКУНД монтируется сама
+  // страница и просит свою пасхалку — Hotline в мессенджере, штамп в профиле, G-Man в
+  // настройках. Запрос дерева к этому моменту ещё летит, флаг поднят, и просьба
+  // страницы молча отбрасывалась. То есть Hotline, Papers Please, Undertale и G-Man
+  // почти НИКОГДА не бросались вовсе — Влад справедливо сообщил, что «кучу раз
+  // перезаходил и ничего».
+  //
+  // ⚠️ Флаг был нужен против ДВОЙНОГО броска ОДНОЙ И ТОЙ ЖЕ пасхалки (двойное
+  // монтирование, быстрый повторный переход). Эту задачу он решал, а заодно решал и ту,
+  // которую решать не должен был. Поэтому теперь он ПОШТУЧНЫЙ: одна пасхалка не мешает
+  // другой, но сама себя по-прежнему не задваивает.
+  const inFlight = new Set()
 
   /** Бросок. Принимает id или список (тогда сработает не больше ОДНОЙ). */
   async function roll(egg) {
     const auth = useAuthStore()
     // Пасхалки только у студентов. Сервер это тоже проверяет — здесь просто не тратим
     // запрос: преподаватель и админ переключают вкладки не реже, а показывать нечего.
-    if (auth.role !== 'student' || active.value || busy.value) return null
-    busy.value = true
+    if (auth.role !== 'student' || active.value) return null
+    const key = Array.isArray(egg) ? egg.join('|') : egg
+    if (inFlight.has(key)) return null
+    inFlight.add(key)
     try {
       const body = Array.isArray(egg) ? { eggs: egg } : { egg }
       const { data } = await easterApi.roll(body)
@@ -80,14 +170,23 @@ export const useEasterStore = defineStore('easterEggs', () => {
     } catch {
       return null            // нет сети или сервер занят — пасхалка просто не выпала
     } finally {
-      busy.value = false
+      inFlight.delete(key)
     }
+  }
+
+  /** Забрать список своих ачивок. Тихо: без него всё работает, просто вопрос лишний. */
+  async function loadOwned() {
+    try {
+      const { data } = await meApi.achievements()
+      owned.value = new Set((data.unlocked || []).map((r) => r.id))
+    } catch { /* нет сети — считаем, что не получено ничего, и спросим лишний раз */ }
   }
 
   /** Спросить сервер, что показать сразу после входа. */
   async function afterLogin() {
     const auth = useAuthStore()
     if (auth.role !== 'student') return null
+    loadOwned()          // не ждём: вопрос при уходе понадобится не раньше первой находки
     try {
       const { data } = await easterApi.onLogin()
       // DOOM детерминирован и живёт СВОИМ полем: он не «выпал», он просто включён.
@@ -156,9 +255,21 @@ export const useEasterStore = defineStore('easterEggs', () => {
    * Есть ли прямо сейчас на экране пасхалка, которую человек рискует ПРОПУСТИТЬ,
    * уйдя со страницы. Пустая строка — нечего терять.
    */
+  /**
+   * Что на экране прямо сейчас можно ПРОПУСТИТЬ. Пустая строка — терять нечего.
+   *
+   * ⚠️ Пасхалка, ачивка за которую УЖЕ получена, сюда не попадает (просьба Влада
+   * 23.08.2026). Смысл вопроса — «останьтесь, а то не заберёте находку»; когда забирать
+   * нечего, он превращается в помеху, и человек, нашедший всё, получал бы его до конца
+   * учёбы. Сама пасхалка при этом играет как обычно — молчит только вопрос.
+   */
+  function stillWorthIt(egg) {
+    const aid = EGG_ACHIEVEMENT[egg]
+    return !aid || !owned.value.has(aid)
+  }
   const pending = computed(() => {
-    if (active.value) return active.value
-    return Object.keys(inPage.value).find((k) => MISSABLE_IN_PAGE.has(k)) || ''
+    if (active.value) return stillWorthIt(active.value) ? active.value : ''
+    return Object.keys(inPage.value).find((k) => MISSABLE_IN_PAGE.has(k) && stillWorthIt(k)) || ''
   })
 
   /**
@@ -186,6 +297,8 @@ export const useEasterStore = defineStore('easterEggs', () => {
     if (!achievement) return false
     try {
       const { data } = await easterApi.claim({ egg, achievement })
+      //Пополняем копию в любом случае: `unlocked=false` означает «уже была», а не отказ.
+      owned.value = new Set(owned.value).add(achievement)
       if (data.unlocked) lastUnlocked.value = achievement
       return !!data.unlocked
     } catch {
@@ -195,6 +308,6 @@ export const useEasterStore = defineStore('easterEggs', () => {
 
   function clearToast() { lastUnlocked.value = null }
 
-  return { active, inPage, lastUnlocked, pending, roll, afterLogin, rollJournal,
-           show, close, closeInPage, dismissPending, claim, clearToast }
+  return { active, inPage, owned, lastUnlocked, pending, roll, afterLogin, rollJournal,
+           loadOwned, show, close, closeInPage, dismissPending, claim, clearToast }
 })

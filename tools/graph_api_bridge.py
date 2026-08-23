@@ -52,6 +52,16 @@ _ROUTE = re.compile(
     r"(?:async\s+)?def\s+(\w+)",
     re.M,
 )
+# ⚠️ `@router.api_route("/x", methods=["GET", "POST"])` — ОТДЕЛЬНАЯ форма, и без неё
+# маршрут невидим карте целиком. Так из графа выпали `/app/updates` и `/app/apk-info`:
+# на вопрос «кто зовёт обновление приложения» карта отвечала «никто», хотя зовёт
+# телефон каждого студента. Форма редкая (два места), но пропуск полный, а не частичный.
+_ROUTE_MULTI = re.compile(
+    r"@(\w+)\.api_route\(\s*[\"']([^\"']+)[\"']\s*,\s*methods=\[([^\]]*)\][^)]*\)\s*"
+    r"(?:@[^\n]*\n\s*)*"
+    r"(?:async\s+)?def\s+(\w+)",
+    re.M,
+)
 # Объявление обёртки: `имя: (аргументы) =>`. Сам вызов ищем ОТДЕЛЬНО и построчно —
 # тело бывает и выражением (`=> api.get(...)`), и блоком (`=> { const form = …;
 # return api.post(…) }`). Единая регулярка на оба случая ловила только первый и
@@ -79,11 +89,27 @@ def server_routes() -> list[dict]:
         prefixes = dict(_ROUTER_DECL.findall(text))
         if py == MAIN:
             prefixes = {"app": ""}   # `@app.get("/desktop-info")` — префикса нет
-        # Подмодули пакета routers/web/ берут общий роутер из _common (§3 CLAUDE.md).
-        if not prefixes and "from ._common import" in text and "router" in text:
-            prefixes = {"router": "/web"}
+        # 🔥 Подмодули пакета берут роутеры из СВОЕГО `_common.py` (`from ._common import *`).
+        # Раньше здесь стоял зашитый префикс "/web" — он верен только для `routers/web/`.
+        # После разреза мессенджера на пакет (3.7.7) все его ~90 маршрутов получили тот же
+        # "/web" вместо "/web/messenger", ни один не сошёлся с клиентом, и ВЕСЬ контракт
+        # мессенджера повис: карта показывала 92 «висячих вызова» и молчала о связях,
+        # ради которых мост и заведён.
+        # ⚠️ Читаем префиксы из соседнего `_common.py`, а не угадываем по имени папки:
+        # там их может быть НЕСКОЛЬКО (`router` и `mod_router` у мессенджера), и второй
+        # так же тихо потерялся бы.
+        if not prefixes and "from ._common import" in text:
+            common = py.parent / "_common.py"
+            if common.exists():
+                prefixes = dict(_ROUTER_DECL.findall(
+                    common.read_text(encoding="utf-8", errors="replace")))
         rel = py.relative_to(ROOT).as_posix()
-        for var, verb, path, fn in _ROUTE.findall(text):
+        found: list[tuple[str, str, str, str]] = list(_ROUTE.findall(text))
+        #Одна `api_route` даёт НЕСКОЛЬКО маршрутов — по одному на метод из списка.
+        for var, path, methods, fn in _ROUTE_MULTI.findall(text):
+            for verb in re.findall(r"[\"'](\w+)[\"']", methods):
+                found.append((var, verb.lower(), path, fn))
+        for var, verb, path, fn in found:
             prefix = prefixes.get(var)
             if prefix is None:
                 continue

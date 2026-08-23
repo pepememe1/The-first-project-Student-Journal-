@@ -10,6 +10,10 @@
 // выбрана ОДНА категория, счётчик стоит прямо в её заголовке, а содержимое ниже
 // принадлежит только ей.
 //
+// ⚠️ Вкладки идут В РЯД, а не столбиком (23.08.2026, по образцу Discord). Столбик из
+// трёх строк съедал верх колонки и читался как оглавление, хотя это переключатель:
+// в ряд сразу видно, что выбор один из трёх, и содержимому остаётся вся высота.
+//
 // ⚠️ Трофеи чужого профиля — это ВИТРИНА, то есть только то, что человек сам отметил
 // галочкой. Полный список наружу не уходит: он показывает, чего у человека НЕТ, а это
 // уже про его поведение в продукте, а не про него.
@@ -70,18 +74,22 @@ const TABS = computed(() => [
 </script>
 
 <template>
-  <div class="flex w-56 shrink-0 flex-col overflow-hidden border-l border-border2 bg-card">
-    <!-- Категории. Счётчик в самой вкладке: так видно, есть ли там что-то,
-         не переключаясь туда. -->
-    <div class="flex shrink-0 flex-col gap-0.5 border-b border-border p-2">
+  <div class="flex w-72 shrink-0 flex-col overflow-hidden border-l border-border2 bg-card lg:w-80">
+    <!-- Категории В РЯД. Счётчик прямо во вкладке: видно, есть ли там что-то, не
+         переключаясь туда. Подчёркивание активной, а не заливка — переключатель не
+         должен спорить по весу с содержимым под ним. -->
+    <div class="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border px-2 pt-2">
       <button v-for="t in TABS" :key="t.id" type="button" @click="tab = t.id"
               :aria-current="tab === t.id"
-              class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors"
-              :class="tab === t.id ? 'bg-accent-glow font-semibold text-text' : 'text-text2 hover:bg-bg2 hover:text-text'">
+              class="flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap border-b-2
+                     px-2 pb-2 pt-1 text-[12.5px] transition-colors"
+              :class="tab === t.id
+                ? 'border-accent font-semibold text-text'
+                : 'border-transparent text-text2 hover:text-text'">
         <component :is="t.icon" class="size-3.5 shrink-0" />
-        <span class="min-w-0 flex-1 truncate">{{ t.label }}</span>
-        <span class="shrink-0 text-[11px] tabular-nums"
-              :class="tab === t.id ? 'text-accent' : 'text-text3'">{{ t.n }}</span>
+        <span class="min-w-0 truncate">{{ t.label }}</span>
+        <span class="shrink-0 rounded px-1 text-[11px] tabular-nums"
+              :class="tab === t.id ? 'bg-accent-glow text-accent' : 'text-text3'">{{ t.n }}</span>
       </button>
     </div>
 

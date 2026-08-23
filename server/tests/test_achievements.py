@@ -294,17 +294,23 @@ def test_mark_triggered_refuses_an_unknown_egg():
         db.close()
 
 
-def test_cooldown_is_gone_but_the_trace_stays(client):
-    """Суточного кулдауна больше нет, а запись следа осталась.
+def test_global_cooldown_is_gone_but_the_trace_stays(client):
+    """ОБЩЕГО суточного кулдауна нет, а запись следа осталась.
 
     ⚠️ Тест именно на ОБА факта сразу. Убери запись «за компанию» с кулдауном — и
     `claim` перестанет выдавать ачивки вообще, причём молча: пасхалки будут выпадать,
-    а список останется пустым."""
+    а список останется пустым.
+
+    ⚠️ ЧТО ИМЕННО ЗАПРЕЩЕНО, а что нет. Запрещён ОБЩИЙ кулдаун на все пасхалки
+    (`COOLDOWN_S` одним числом): он был невидимой стеной, из-за которой человек не мог
+    понять, не везёт ему или сработало правило. Поштучный `EGG_COOLDOWN_S` — другое
+    дело и разрешён: он решает обратную задачу, см. соседний тест."""
     import inspect
     src = inspect.getsource(easter_eggs.roll)
     assert "EasterEggLog(" in src, "след срабатывания обязан писаться"
-    assert "COOLDOWN" not in src, "кулдаун снят по решению Влада"
-    assert not hasattr(easter_eggs, "COOLDOWN_S")
+    assert not hasattr(easter_eggs, "COOLDOWN_S"), "общий кулдаун снят по решению Влада"
+    #Поштучный словарь обязан существовать и быть именно словарём, а не числом.
+    assert isinstance(easter_eggs.EGG_COOLDOWN_S, dict)
 
 
 def test_birthday_cake_leaves_a_trace_so_the_achievement_can_be_claimed(client):
@@ -323,5 +329,36 @@ def test_birthday_cake_leaves_a_trace_so_the_achievement_can_be_claimed(client):
         db.commit()
         assert easter_eggs.pick_on_login(u, db) == "portal_cake"
         assert easter_eggs.was_triggered_recently(u.id, "portal_cake", db) is True
+    finally:
+        db.close()
+
+
+def test_deltarune_has_a_short_cooldown_and_the_rest_do_not(client):
+    """Кулдаун ПОШТУЧНО и только у дерева.
+
+    ⚠️ Это НЕ возврат общего суточного кулдауна, снятого выше, а решение обратной
+    задачи: дерево бросается на каждой смене вкладки (по журналу боевой машины — 3777
+    бросков за сутки), выпадало по нескольку раз за сеанс и перестало читаться как
+    находка. Обратный ход: повесь кулдаун на редкую пасхалку — она станет невидимой
+    вдвойне, ровно то, от чего избавлялись."""
+    assert easter_eggs.EGG_COOLDOWN_S == {"deltarune_tree": 300}
+    #У пасхалок с редким триггером кулдауна быть НЕ должно.
+    for egg in ("cyberpunk_login", "stanley_parable_404", "gman_observer", "hotline_miami"):
+        assert egg not in easter_eggs.EGG_COOLDOWN_S
+
+
+def test_cooldown_actually_blocks_the_second_roll(client):
+    """След свежий — второй бросок не делается вовсе.
+
+    Проверяем СВОЙСТВО, а не удачу: подкладываем след и убеждаемся, что `roll` вернул
+    False, сколько бы раз его ни звали. Обратный ход: убери проверку кулдауна из
+    `roll` — тест краснеет (при 1/66 сотня попыток почти наверняка даст выпадение)."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="cd1")
+    uid = _db_user("cd1").id
+    db = SessionLocal()
+    try:
+        easter_eggs.mark_triggered("deltarune_tree", uid, db)
+        assert all(easter_eggs.roll("deltarune_tree", uid, db) is False for _ in range(100))
     finally:
         db.close()

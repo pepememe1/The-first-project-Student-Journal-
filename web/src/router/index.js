@@ -6,7 +6,7 @@
  * защищённые страницы без входа.
  */
 import { createRouter, createWebHistory } from 'vue-router'
-import { useEasterStore } from '@/stores/easterEggs'
+import { useEasterStore, leaveAsk } from '@/stores/easterEggs'
 import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
 import { needsServer } from '@/api/server'
@@ -203,11 +203,9 @@ async function confirmLeavingEasterEgg(to, from) {
   if (!easter.pending) return true
   if (to.path === from.path || to.path === '/login') return true
   const { confirm } = useConfirm()
+  const ask = leaveAsk(easter.pending)
   const ok = await confirm({
-    title: 'Сейчас на экране пасхалка',
-    message: 'Если уйти со страницы, она пропадёт, а достижение останется закрытым. Всё равно уйти?',
-    okText: 'Уйти',
-    cancelText: 'Остаться',
+    title: ask.title, message: ask.message, okText: ask.ok, cancelText: ask.cancel,
   })
   if (ok) easter.dismissPending()
   return ok
