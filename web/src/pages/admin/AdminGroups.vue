@@ -362,6 +362,17 @@ async function importParsed() {
     } else {
       const suffix = r.building ? locale.t('adminGroups.bindSubjectsBuildingSuffix', ' (индекс ещё дообновляется — можно повторить для полноты)') : ''
       toast.success(locale.t('adminGroups.bindSubjectsDone', { bound: r.bound, subjects: r.subjects }) + suffix)
+      // Группы, которых расписание больше не знает (выпустились, переименовались).
+      // Сервер их НЕ удаляет намеренно: за ними живые студенты и оценки, а пропасть
+      // группа может и от сбоя портала. Но копиться молча они тоже не должны — иначе
+      // выпущенные курсы годами висят в каждом выпадающем списке.
+      const stale = r.stale_groups || []
+      if (stale.length) {
+        const head = stale.slice(0, 6)
+          .map((g) => (g.students ? `${g.name} (${g.students})` : g.name)).join(', ')
+        const tail = stale.length > head.split(', ').length ? '…' : ''
+        toast.info(locale.t('adminGroups.staleGroups', { n: stale.length, list: head + tail }))
+      }
       await reload()
       try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
     }

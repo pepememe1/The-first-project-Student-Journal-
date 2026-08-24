@@ -185,3 +185,71 @@ def test_vector_admin_counts_survive_wording(client):
         body = client.post("/web/vector/ask", json={"message": q}, headers=admin).json()
         assert body["intent"] == "group_stats", (q, body)
         assert body["facts"].get("students") == 1, (q, body)
+
+
+def test_teacher_group_average_question_is_answered_with_numbers(client):
+    """Дословно та фраза, на которой преподаватель дважды подряд получил знакомство с
+    Вектором вместо цифр: «что у меня по группам, средним баллам?».
+
+    Причина была в разборе: основа «что у меня по» (вес 3) уводила ЛЮБОЕ «что у меня
+    по …» в subject_grades, а обработчика subject_grades БЕЗ предмета нет ни у одной
+    роли — ветка молча заканчивалась общей справкой. Разбор детерминирован, поэтому
+    переспрашивать было бесполезно: ответ тот же самый."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+    th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
+
+    for q in ("что у меня по группам, средним баллам?",
+              "привет вектор, что у меня по группам, средним баллам?",
+              "средний по группам"):
+        body = _ask(client, th, q)
+        assert body["intent"] != "help", (q, body)
+        assert "ИС-21" in body["text"], (q, body)
+        assert body["facts"].get("groups") == 1, (q, body)
+
+
+def test_teacher_subject_grades_has_a_handler(client):
+    """«Что у Иванова по математике» — интент классификатор выдавал верно, а ветки
+    преподавателя под него не было ВОВСЕ: вопрос заканчивался общей справкой. Наш
+    обычный класс дефекта — интент есть, вызывающего нет."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+    th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
+
+    body = _ask(client, th, "что у Иванова по математике")
+    assert body["intent"] == "subject_grades", body
+    assert body["facts"]["subject"] == "Математика", body
+    assert body["facts"]["average"] == 4.5, body          # оценки 5 и 4
+
+    #Без фамилии — средний по предмету в группах преподавателя. («Как группа по
+    #математике» сюда НЕ годится: это вопрос про группу, и разбор верно даёт group_stats.)
+    body = _ask(client, th, "оценки по математике")
+    assert body["intent"] == "subject_grades", body
+    assert body["facts"]["groups"] == 1, body
+
+
+def test_teacher_never_gets_the_help_wall_for_a_recognised_intent(client):
+    """СВОЙСТВО: если разбор назвал интент, преподаватель обязан получить либо ответ,
+    либо ОБЪЯСНЕНИЕ, почему данных нет, — но не общий список умений. Именно общий
+    список и читается как «Вектор сломался», потому что не отличает «не понял» от
+    «понял, но не умею»."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _mk_student(client, admin, "iv", "Иванов", "Иван", "ИС-21")
+    th = make_teacher(client, admin, login="t1", subjects=["Математика"])
+    assign_teacher(client, admin, "teach:t1", "ИС-21", "Математика")
+
+    help_body = _ask(client, th, "что ты умеешь")["text"]
+    questions = [
+        "какие у меня группы", "кто в зоне риска", "у кого долги",
+        "список студентов", "что у Иванова по математике", "как группа по математике",
+        "какие преподаватели", "сколько оценок у Иванова", "сколько зет",
+        "что я задал", "расписание группы", "средний по группам",
+        "какие у меня предметы", "пропуски у Иванова",
+    ]
+    walls = [q for q in questions if _ask(client, th, q)["text"] == help_body]
+    assert not walls, f"вопросы, упирающиеся в общую справку: {walls}"

@@ -1404,7 +1404,7 @@
         "Информатика",
         "История"
       ],
-      "intent": "unknown",
+      "intent": "grades",
       "surname": "Иванова",
       "subject": "",
       "day": ""
@@ -1458,7 +1458,7 @@
         "Информатика",
         "История"
       ],
-      "intent": "unknown",
+      "intent": "grades",
       "surname": "Иванова",
       "subject": "",
       "day": ""
@@ -1496,7 +1496,7 @@
       ],
       "intent": "schedule",
       "surname": "",
-      "subject": "",
+      "subject": "Безопасность жизнедеятельности",
       "day": ""
     },
     {
@@ -1522,10 +1522,10 @@
         "Информатика",
         "История"
       ],
-      "intent": "unknown",
+      "intent": "schedule",
       "surname": "",
       "subject": "",
-      "day": ""
+      "day": 4
     },
     {
       "q": "надзор",
@@ -1785,6 +1785,286 @@
       "subjects": [],
       "intent": "unknown",
       "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "что у меня по группам, средним баллам?",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "average",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "привет вектор, что у меня по группам, средним баллам?",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "average",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "покажи средние баллы по моим группам",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "average",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "что у меня по расписанию",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "schedule",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "какой у меня средний балл",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "average",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "когда вторая пара",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "schedule",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "что у нас в среду",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "schedule",
+      "surname": "",
+      "subject": "",
+      "day": 2
+    },
+    {
+      "q": "что во вторник",
+      "surnames": [],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "schedule",
+      "surname": "",
+      "subject": "",
+      "day": 1
+    },
+    {
+      "q": "как у меня с физрой",
+      "surnames": [],
+      "subjects": [
+        "Физическая культура",
+        "Математика"
+      ],
+      "intent": "subject_grades",
+      "surname": "",
+      "subject": "Физическая культура",
+      "day": ""
+    },
+    {
+      "q": "что по бжд",
+      "surnames": [],
+      "subjects": [
+        "Безопасность жизнедеятельности",
+        "Математика"
+      ],
+      "intent": "subject_grades",
+      "surname": "",
+      "subject": "Безопасность жизнедеятельности",
+      "day": ""
+    },
+    {
+      "q": "оценки",
+      "surnames": [],
+      "subjects": [],
+      "intent": "grades",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "пары",
+      "surnames": [],
+      "subjects": [],
+      "intent": "schedule",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "дз",
+      "surnames": [],
+      "subjects": [],
+      "intent": "homework",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "долги",
+      "surnames": [],
+      "subjects": [],
+      "intent": "debtors",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "че у меня по оценкам",
+      "surnames": [],
+      "subjects": [],
+      "intent": "grades",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "нормально ли я учусь",
+      "surnames": [],
+      "subjects": [],
+      "intent": "grades",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "че по учебе",
+      "surnames": [],
+      "subjects": [],
+      "intent": "grades",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "какая у меня успеваемость",
+      "surnames": [],
+      "subjects": [],
+      "intent": "average",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "ты кто",
+      "surnames": [],
+      "subjects": [],
+      "intent": "help",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "покажи успехи",
+      "surnames": [],
+      "subjects": [],
+      "intent": "grades",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "сколько раз я не был",
+      "surnames": [],
+      "subjects": [],
+      "intent": "absences",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "задания есть",
+      "surnames": [],
+      "subjects": [],
+      "intent": "homework",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "покажи ростер",
+      "surnames": [],
+      "subjects": [],
+      "intent": "roster",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "каталог предметов",
+      "surnames": [],
+      "subjects": [],
+      "intent": "subjects",
+      "surname": "",
+      "subject": "",
+      "day": ""
+    },
+    {
+      "q": "что у Иванова",
+      "surnames": [
+        "Иванова",
+        "Петров",
+        "Дугаров"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "intent": "grades",
+      "surname": "Иванова",
       "subject": "",
       "day": ""
     }

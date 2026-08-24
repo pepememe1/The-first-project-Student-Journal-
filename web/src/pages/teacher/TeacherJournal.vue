@@ -127,9 +127,21 @@ const hasSubgroupButtons = computed(() => splitOwned.value.length === 2)
 // единственная своя; если кнопок нет и предмет не разделён — 0 (обычное занятие,
 // сервер её всё равно проигнорирует, но не подставлять произвольное число чище).
 const activeSubgroup = ref(0)
+// 🔥 ВЫБОР ЧЕЛОВЕКА ПЕРЕЖИВАЕТ ПЕРЕЗАГРУЗКУ ЖУРНАЛА. `splitOwned` — computed поверх
+// `data`, и он отдаёт НОВЫЙ массив при каждой загрузке, даже когда состав подгрупп не
+// менялся. Vue сравнивает ссылки, поэтому watch срабатывал после КАЖДОГО обновления
+// журнала — а простановка оценки как раз перезагружает его. Со стороны: выбрал 1ПГ,
+// поставил оценку, и тебя выбросило в «Совместно», и так каждый раз.
+// Сбрасываем только тогда, когда прежний выбор стал НЕВОЗМОЖЕН.
 watch(splitOwned, (owned) => {
-  activeSubgroup.value = owned.length === 1 ? owned[0] : 0
+  if (!owned.length) { activeSubgroup.value = 0; return }         //предмет не разделён
+  if (owned.length === 1) { activeSubgroup.value = owned[0]; return } //своя единственная
+  if (activeSubgroup.value && !owned.includes(activeSubgroup.value)) activeSubgroup.value = 0
 }, { immediate: true })
+// Сколько студентов группы куратор ещё не расписал по подгруппам этого предмета.
+// Молчать об этом нельзя: такой студент не попадает ни в одну подгруппу, и без явного
+// предупреждения преподаватель не узнает, что человека в журнале не хватает.
+const unassignedCount = computed(() => data.value?.split?.unassigned || 0)
 
 function subgroupLabel(n) {
   return n === 1 ? locale.t('teacherJournal.subgroup1', '1ПГ')
@@ -662,6 +674,15 @@ async function downloadVedomost(fmt) {
                 :class="activeSubgroup === 0 ? 'bg-accent text-white' : 'bg-card2 text-text2 hover:bg-bg2'"
                 @click="pickSubgroup(0)">{{ locale.t('teacherJournal.subgroupCombined', 'Совместно') }}</button>
       </div>
+    </div>
+
+    <!-- Нераспределённые студенты. Раньше такой человек просто не появлялся в журнале —
+         ни строки, ни причины: добавили студента в группу с раздельным обучением, и он
+         исчез. Тихая пропажа человека из журнала хуже любой неудобной надписи, поэтому
+         говорим о ней прямо и называем, кто это чинит. -->
+    <div v-if="unassignedCount" class="flex items-start gap-2 rounded-sm border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-text2">
+      <span aria-hidden="true">⚠️</span>
+      <span>{{ locale.t('teacherJournal.unassignedWarning', { n: unassignedCount }) }}</span>
     </div>
 
     <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"

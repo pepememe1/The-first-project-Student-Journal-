@@ -54,14 +54,20 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
         owned = W.teacher_owned_subgroups(sh_row, user.id)
         lessons = [l for l in lessons if not l.subgroup or l.subgroup in owned]
         sub_map = W.group_student_subgroups(db, group, subject, ty, ts)
-        if owned == {1, 2}:
-            #ведёт ОБЕ подгруппы — видит всех, кого куратор УЖЕ расставил (не «лимб»
-            #ещё не распределённых — им это занятие всё равно не адресовано).
-            studs = [s for s in studs if s.id in sub_map]
-        else:
+        #🔥 Студент, которого куратор ЕЩЁ НЕ РАСПИСАЛ по подгруппам, выпадал из ростера
+        #ВООБЩЕ — включая режим «Совместно». Добавили человека в группу с раздельным
+        #обучением, и в журнале он просто не появлялся: ни строки, ни следа, ни причины.
+        #Преподаватель не мог даже узнать, что такой студент существует, — а это худший
+        #вид дефекта: тихая пропажа человека из журнала.
+        #Прежний довод («занятие ему не адресовано») верен только для преподавателя ОДНОЙ
+        #подгруппы: показать ему чужого студента значит предложить поставить оценку не
+        #своему. Поэтому ему отдаём ЧИСЛО нераспределённых, а ведущему ОБЕ — самих людей
+        #(их подгруппа приедет как None, клиент пометит «не распределён»).
+        unassigned = [s for s in studs if s.id not in sub_map]
+        if owned != {1, 2}:
             only = next(iter(owned)) if owned else 0
             studs = [s for s in studs if sub_map.get(s.id) == only]
-        split_info = {"owned_subgroups": sorted(owned)}
+        split_info = {"owned_subgroups": sorted(owned), "unassigned": len(unassigned)}
     #Ключи пересдач экзаменов (как в десктопе: <id>_retake, дальше — _retake_N по extra).
     retake_keys = []
     for l in lessons:

@@ -14,6 +14,7 @@ import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useTranslateStore } from '@/stores/translate'
+import GifImage from '@/components/messenger/GifImage.vue'
 import { useGifStore } from '@/stores/gif'
 import { useTtsStore } from '@/stores/tts'
 import { renderMarkdownLite } from '@/utils/markdownLite'
@@ -1406,7 +1407,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                    тоже добавляет её в избранное (Discord), дедуп здесь по url — у сообщения
                    нет slug/title Klipy, только сама ссылка (см. stores/gif.js). -->
               <span v-else-if="msg.kind === 'gif'" class="group relative block w-fit">
-                <img :src="msg.body" alt="GIF" class="max-h-64 max-w-full rounded-lg" loading="lazy" />
+                <GifImage :src="msg.body" />
                 <span role="button" tabindex="0" @click.stop="gif.toggleFavoriteByUrl(msg.body)"
                       :aria-label="gif.isFavoriteUrl(msg.body) ? locale.t('gif.removeFavorite', 'Убрать из избранного') : locale.t('gif.addFavorite', 'В избранное')"
                       class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-black/50
@@ -1479,7 +1480,7 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                    картинка, что у msg.kind==='gif', и та же звезда-избранное по наведению. -->
               <span v-for="g in gifEmbeds(msg)" :key="g.sourceUrl"
                     class="group relative mt-1.5 block w-fit" @click.stop>
-                <img :src="g.sourceUrl" alt="GIF" class="max-h-64 max-w-full rounded-lg" loading="lazy" />
+                <GifImage :src="g.sourceUrl" />
                 <span role="button" tabindex="0" @click.stop="gif.toggleFavoriteByUrl(g.sourceUrl)"
                       :aria-label="gif.isFavoriteUrl(g.sourceUrl) ? locale.t('gif.removeFavorite', 'Убрать из избранного') : locale.t('gif.addFavorite', 'В избранное')"
                       class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-black/50

@@ -1091,6 +1091,72 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"Студента «{surname}» в ваших группах не нашёл.", "mood": "neutral",
                     "intent": "help", "facts": {}}
 
+        if intent == "subject_grades" and subject:
+            #«Что у Петровой по математике», «как группа по информатике». Обработчика у
+            #преподавателя не было ВОВСЕ: классификатор интент выдавал верно, а ветка
+            #заканчивалась общей справкой «я умею вот это» — наш обычный класс дефекта
+            #(интент есть, вызывающего нет), и со стороны он читается как «Вектор не
+            #видит базу».
+            own_groups = [g for g in groups if subject in subjects_by_group.get(g, set())]
+            if not own_groups:
+                return {"text": f"Предмет «{subject}» не в вашей нагрузке — по чужим "
+                                "предметам данных не покажу. 🐯",
+                        "mood": "neutral", "intent": "help", "facts": {}}
+            if surname:
+                for g in own_groups:
+                    for st in W.students_in_group(db, g):
+                        if st.surname != surname:
+                            continue
+                        gl = W.current_term_lessons(
+                            db, g, [l for l in W.group_lessons(db, g)
+                                    if l.subject == subject], cfg)
+                        rec = W.student_records(db, st.surname, st.name, g)
+                        a = W.average(gl, rec, cfg, scale=tscale)
+                        ab = W.absences(gl, rec)
+                        return {"text": f"{W.display_name(st)} ({g}) по предмету "
+                                        f"«{subject}»: средний балл {a}, "
+                                        f"пропусков {ab['всего']}.",
+                                "mood": _mood_by_avg(a), "intent": "subject_grades",
+                                "facts": {"student": W.display_name(st), "group": g,
+                                          "subject": subject, "average": a,
+                                          "absences": ab["всего"]}}
+                return {"text": f"Студента «{surname}» в ваших группах по предмету "
+                                f"«{subject}» не нашёл.",
+                        "mood": "neutral", "intent": "help", "facts": {}}
+            rows = []
+            for g in own_groups:
+                gl = W.current_term_lessons(
+                    db, g, [l for l in W.group_lessons(db, g) if l.subject == subject], cfg)
+                vals = []
+                for st in W.students_in_group(db, g):
+                    a = W.average(gl, W.student_records(db, st.surname, st.name, g),
+                                  cfg, scale=tscale)
+                    if a > 0:
+                        vals.append(a)
+                rows.append((g, round(sum(vals) / len(vals), 2) if vals else 0.0))
+            body = "; ".join(f"{g}: {a}" for g, a in rows)
+            return {"text": f"Средний по предмету «{subject}» — {body}.",
+                    "mood": "neutral", "intent": "subject_grades",
+                    "facts": {"subject": subject, "groups": len(rows)}}
+        if intent == "teachers":
+            #Состав преподавателей — служебный справочник, он и так открыт коллеге в
+            #каталоге мессенджера. Раньше вопрос упирался в общую справку.
+            rows = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
+            names = [W.display_name(t) for t in rows]
+            body = ", ".join(names) if names else "список пуст"
+            return {"text": f"Преподаватели колледжа ({len(names)}): {body}.",
+                    "mood": "neutral", "intent": "teachers",
+                    "facts": {"count": len(names)}, "no_voice": True}
+        if intent in ("grade_count", "zet"):
+            #Отвечаем ПРИЧИНОЙ, а не общей справкой: иначе преподаватель решит, что
+            #Вектор не понял вопрос, и будет переспрашивать его же другими словами —
+            #ровно это и происходило.
+            what = ("Счёт оценок" if intent == "grade_count" else "Зачётные единицы")
+            return {"text": f"{what} веду по студенту, а не по преподавателю. "
+                            "Спросите с фамилией — например «сколько пропусков у Иванова». "
+                            "Я также покажу ваши группы, средние баллы, долги и расписание. 🐯",
+                    "mood": "neutral", "intent": "help", "facts": {}}
+
         # Агрегаты по группам (средний + зона риска) + ПОИМЁННЫЙ список отстающих.
         # Преподаватель видит своих студентов в журнале, поэтому назвать их долги — не
         # раскрытие ПДн, а прямой ответ на «у кого долги». Раньше отдавался только счётчик,

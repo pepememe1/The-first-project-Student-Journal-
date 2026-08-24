@@ -92,6 +92,12 @@ def test_teacher_with_only_one_subgroup_sees_only_that_roster(client):
 
 
 def test_unassigned_student_invisible_to_either_teacher_until_curator_sorts_them(client):
+    """Преподаватель ОДНОЙ подгруппы чужого студента в своём ростере не видит — показать
+    его значило бы предложить поставить оценку не своему.
+
+    ⚠️ Но и молчать нельзя: раньше такой студент пропадал БЕССЛЕДНО, и преподаватель не
+    мог узнать, что человек в группе вообще есть. Теперь число нераспределённых приходит
+    отдельным полем, и журнал показывает предупреждение."""
     admin = make_admin(client)
     th1, th2 = _setup_split(client, admin)
     _students(client, admin, "G1", [("Сидоров", "Семён")])   # не распределён
@@ -101,6 +107,42 @@ def test_unassigned_student_invisible_to_either_teacher_until_curator_sorts_them
     jr2 = client.get("/web/teacher/journal",
                      params={"group": "G1", "subject": "Английский язык"}, headers=th2).json()
     assert jr1["students"] == [] and jr2["students"] == []
+    assert jr1["split"]["unassigned"] == 1, jr1["split"]
+    assert jr2["split"]["unassigned"] == 1, jr2["split"]
+
+
+def test_teacher_of_both_subgroups_sees_the_student_the_curator_has_not_sorted(client):
+    """🔥 Живой отчёт: «добавил студента в группу с раздельным обучением — он не
+    отображается».
+
+    Так и было: студент без строки StudentSubgroup выпадал из ростера ВООБЩЕ, включая
+    режим «Совместно». Ни строки, ни следа, ни причины — тихая пропажа человека из
+    журнала. Преподаватель, ведущий ОБЕ подгруппы, обязан его видеть: чужих у него нет
+    по определению, а поставить оценку иначе негде."""
+    admin = make_admin(client)
+    client.post("/web/admin/groups", json={"name": "G9", "subjects": ["Информатика"]}, headers=admin)
+    client.post("/web/curator/subject-split",
+                json={"group": "G9", "subject": "Информатика", "split": True}, headers=admin)
+    th = make_teacher(client, admin, login="t9", password="pass1234", subjects=["Информатика"])
+    r = client.post("/web/admin/group-hours",
+                    json={"group": "G9", "teachers": {"Информатика": "teach:t9"}}, headers=admin)
+    assert r.status_code == 200, r.text          # teachers2 не задан — ведёт обе
+
+    ids = _students(client, admin, "G9", [("Иванов", "Иван"), ("Новичок", "Пётр")])
+    r = client.post("/web/curator/subgroups", json={
+        "group": "G9", "subject": "Информатика",
+        "assignments": {ids[0]: 1}}, headers=admin)      # второго НЕ расписали
+    assert r.status_code == 200, r.text
+
+    jr = client.get("/web/teacher/journal",
+                    params={"group": "G9", "subject": "Информатика"}, headers=th).json()
+    assert jr["split"]["owned_subgroups"] == [1, 2], jr["split"]
+    names = sorted(s["surname"] for s in jr["students"])
+    assert names == ["Иванов", "Новичок"], jr["students"]
+    #Подгруппа нераспределённого приходит пустой — клиент по ней и рисует пометку.
+    nov = next(s for s in jr["students"] if s["surname"] == "Новичок")
+    assert nov["subgroup"] is None, nov
+    assert jr["split"]["unassigned"] == 1, jr["split"]
 
 
 def test_teacher_can_only_create_lesson_for_own_subgroup(client):
