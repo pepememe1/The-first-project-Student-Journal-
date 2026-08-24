@@ -1,8 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
 <meta charset="utf-8">
+<!-- ⚠️ ЭТОТ ТЕГ НЕ КОСМЕТИКА: без него вся мобильная вёрстка страницы МЁРТВАЯ.
+     Ниже в стилях есть @media (max-width:820px) и (max-width:560px), но телефонный
+     браузер без viewport считает ширину окна равной 980 CSS-пикселям — то есть ни
+     один из этих двух запросов не срабатывает НИКОГДА, страница рисуется настольной
+     и целиком ужимается до нечитаемого масштаба. Проверять правку адаптивности через
+     эмуляцию (Playwright задаёт viewport принудительно) бесполезно: там она пройдёт,
+     а на живом телефоне нет. Здесь, в отличие от web/index.html, масштабирование
+     НЕ запрещаем: страницу читает комиссия, и щипок для увеличения таблицы сравнения
+     ей нужен. И БЕЗ viewport-fit=cover: он снимает автоматические отступы под вырез
+     телефона, а env(safe-area-inset-*) в стилях этой страницы нет ни одного — в SPA
+     он уместен (там отступы прописаны), здесь дал бы только шапку под вырезом. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<!-- ━━ CSP: У ЭТОЙ СТРАНИЦЫ ЕЁ НЕ БЫЛО ВООБЩЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     Тот же урок, что и в index.html (21.08.2026), но здесь он был не закрыт: заголовок
+     ставит Caddy, и он действует ТОЛЬКО на ответы сайта. Внутри программы эту же
+     страницу отдаёт локальный сервер с origin http://127.0.0.1:<порт>, то есть до неё
+     не доходит ни одна директива — на ПК одностраничник открывался без политики вовсе.
+     Здесь она может быть СТРОЖЕ, чем у приложения: на странице нет ни одного скрипта
+     (все анимации — на CSS) и ни одного внешнего ресурса, картинки вшиты в base64.
+     `script-src 'none'` поэтому не ограничение возможностей, а фиксация факта — и
+     осознанный размен: скрипт, дописанный сюда позже, молча не заработает. Чтобы это
+     не выяснилось на бою, отсутствие скриптов проверяет web/tests/offerMeta.test.mjs.
+     ⚠️ frame-ancestors в МЕТЕ игнорируется браузером по спецификации — защиту от
+     встраивания даёт заголовок Caddy (X-Frame-Options: DENY), и только он. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'self'; object-src 'none'; form-action 'none'">
+
+<meta name="theme-color" content="#147C8B">
+
 <title>GradeBookAI для ВСГУТУ</title>
+<meta name="description" content="GradeBookAI — электронный журнал успеваемости с ИИ-помощником «Вектор» для Технологического колледжа ВСГУТУ: сайт, программа для Windows и приложение для Android. База шифруется целиком, пароли по российскому ГОСТ, данные остаются на сервере вуза.">
+<link rel="canonical" href="https://esstu-gradebook.ru/offer.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 
+<!-- ━━ КАРТОЧКА ССЫЛКИ (Open Graph) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     Это работает НЕЗАВИСИМО от robots.txt: Telegram, VK и почтовые клиенты строят
+     превью по этим тегам и запрет индексации не читают вовсе. А ссылку на
+     предложение отправляют людям именно так — сообщением. Без тегов получатель
+     видел голый адрес без названия и картинки. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="GradeBookAI">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:title" content="GradeBookAI — электронный журнал для ВСГУТУ">
+<meta property="og:description" content="Три платформы и ИИ там, где сейчас бумага: сайт, программа для Windows, приложение Android. Данные — внутри контура вуза.">
+<meta property="og:url" content="https://esstu-gradebook.ru/offer.html">
+<meta property="og:image" content="https://esstu-gradebook.ru/icons/icon-512.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta property="og:image:alt" content="Знак GradeBookAI">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="GradeBookAI — электронный журнал для ВСГУТУ">
+<meta name="twitter:description" content="Три платформы и ИИ там, где сейчас бумага. Данные — внутри контура вуза.">
+<meta name="twitter:image" content="https://esstu-gradebook.ru/icons/icon-512.png">
+
+<!-- ━━ СТРУКТУРИРОВАННЫЕ ДАННЫЕ (schema.org, JSON-LD) ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     Из всего списка поддерживаемых Google типов нам подходят РОВНО ДВА, и это не
+     скромность, а границы правды:
+       • Organization      — кто издаёт продукт (логотип и «источник» в выдаче);
+       • SoftwareApplication — сам продукт: категория, платформы, где скачать.
+     Остальное отвергнуто по существу, а не «на будущее»: Course/education-QA — наши
+     курсы и задания лежат ЗА входом и содержат ПДн; DiscussionForum — мессенджер
+     закрытый (152-ФЗ), его индексация была бы утечкой; Product/Review/AggregateRating
+     требуют цены и отзывов, которых на странице нет, а выдумать их — это ровно то,
+     чего продукт обещает не делать (см. анти-галлюцинационный принцип «Вектора»).
+     ⚠️ `softwareVersion` намеренно НЕ указан: строка версии в проекте живёт в одном
+     месте (desktop_update.py::APP_VERSION), и второй её литерал здесь начал бы
+     отставать — этой ошибкой уже платили дважды.
+     ⚠️ Инлайн-блок при CSP `script-src 'self'` НЕ блокируется: тип
+     application/ld+json — это data block, HTML прекращает подготовку скрипта до
+     проверки CSP (проверено на стенде с копией боевого заголовка: блок читается,
+     а обычный инлайн-скрипт при этом блокируется). Сторож проверяет не сам факт
+     чтения браузером, а состав разметки и отсутствие рядом исполняемых скриптов. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://esstu-gradebook.ru/#synapse",
+      "name": "Synapse",
+      "alternateName": "Команда Synapse",
+      "url": "https://esstu-gradebook.ru/",
+      "logo": "https://esstu-gradebook.ru/icons/icon-512.png",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Улан-Удэ",
+        "addressRegion": "Республика Бурятия",
+        "addressCountry": "RU"
+      },
+      "email": "synapse.team@yandex.ru",
+      "telephone": "+7-914-634-57-07",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "sales",
+        "email": "synapse.team@yandex.ru",
+        "telephone": "+7-914-634-57-07",
+        "availableLanguage": "ru"
+      },
+      "description": "Команда разработки GradeBookAI — электронного журнала успеваемости для Технологического колледжа ВСГУТУ (Улан-Удэ)."
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://esstu-gradebook.ru/#gradebookai",
+      "name": "GradeBookAI",
+      "alternateName": "Электронный журнал ВСГУТУ",
+      "applicationCategory": "EducationalApplication",
+      "applicationSubCategory": "Электронный журнал успеваемости",
+      "operatingSystem": "Windows 10, Windows 11, Android 8+, веб-браузер",
+      "url": "https://esstu-gradebook.ru/offer.html",
+      "downloadUrl": "https://esstu-gradebook.ru/downloads/GradeBookAI.exe",
+      "installUrl": "https://www.rustore.ru/catalog/app/ru.esstu.gradebook",
+      "inLanguage": "ru",
+      "isAccessibleForFree": false,
+      "publisher": { "@id": "https://esstu-gradebook.ru/#synapse" },
+      "description": "Электронный журнал успеваемости с ИИ-помощником «Вектор» для колледжа и вуза: оценки и посещаемость, расписание, домашние задания, мессенджер, отчёты куратора для родителей. Работает без интернета на рабочем месте преподавателя и синхронизируется с сервером учреждения.",
+      "featureList": [
+        "Журнал оценок и посещаемости с расчётом среднего балла",
+        "Расписание занятий с правками учебной части",
+        "ИИ-помощник «Вектор»: ответы по фактам из базы, без выдуманных цифр",
+        "Мессенджер: личные чаты, группы, каналы объявлений",
+        "Отчёты куратора для родителей и оценка риска отчисления",
+        "Шифрование базы целиком (AES-256) и пароли по ГОСТ Р 50.1.111-2016",
+        "Работа офлайн на десктопе с фоновой синхронизацией"
+      ]
+    }
+  ]
+}
+</script>
 <style>
-
   /* Свои шрифты (тот же набор, что и в приложении) — наш CSP не пускает Google Fonts,
      и это правильно: страница не тянет ничего со стороны. Моно — системный. */
   @font-face{font-family:'Syne';src:url('/fonts/Syne-Variable.woff2') format('woff2-variations');font-weight:400 800;font-style:normal;font-display:swap}
@@ -169,6 +297,10 @@
   .verify pre{margin:0; font-family:"DM Mono",ui-monospace,monospace; font-size:.78rem; line-height:1.9; color:var(--ink-soft); white-space:pre}
   .foot-meta{display:flex; flex-wrap:wrap; gap:8px 22px; margin-top:22px; font-size:.84rem; color:var(--ink-faint)}
   .foot-meta b{color:var(--ink)}
+  /* Единственное действие на странице — написать или позвонить. Строчная ссылка
+     даёт зону касания в 17 px, а палец требует около 24: увеличиваем её
+     отступами, не трогая размер текста. */
+  .foot-meta a{display:inline-block; padding:4px 0}
 
 
   .backbtn{display:inline-flex; align-items:center; gap:8px; margin-bottom:22px; padding:9px 16px;
@@ -206,6 +338,8 @@
   @media print{ body{background:#fff} .card,.secbanner{box-shadow:none} .mascot img{filter:none}
     .rise,.reveal{opacity:1 !important; animation:none !important} }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
@@ -427,7 +561,11 @@ curl -I https://esstu-gradebook.ru/    <span class="g"># наши заголов
       <span>Снимок заголовков: <b>20 августа 2026</b></span>
       <span>Данные получены <b>пассивно</b> — только публичные ответы сервера, без доступа в систему</span>
       <span>Команда <b>Synapse</b> · esstu-gradebook.ru</span>
+      <span>Связаться: <a href="mailto:synapse.team@yandex.ru"><b>synapse.team@yandex.ru</b></a> · <a href="tel:+79146345707"><b>+7 914 634-57-07</b></a></span>
     </div>
   </footer>
 
 </div>
+
+</body>
+</html>

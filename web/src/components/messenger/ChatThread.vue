@@ -7,7 +7,7 @@ import { storeToRefs } from 'pinia'
 import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
-  Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, PieChart,
+  Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
   Languages, Star, SmilePlus, ClipboardList,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
@@ -55,7 +55,48 @@ const auth = useAuthStore()
 const gif = useGifStore()
 const tts = useTtsStore()
 const { confirm } = useConfirm()
-const { activeId, activePeer, messages, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
+const { activeId, activePeer, messages, loadingMessages, loadingOlder, hasOlder, sending, replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, peerTyping, notice, activeChat, activeKind, mascotCooldown, templates, activeThread, searchResults, searching, searchExpanded } = storeToRefs(m)
+
+// ── Плавное появление НОВЫХ сообщений ────────────────────────────────────────────
+// ⚠️ Именно новых. Анимировать всю ленту при открытии беседы нельзя: пятьдесят
+// одновременно всплывающих пузырей — это не «плавно», это рябь, и на слабой машине
+// она ещё и роняет частоту кадров ровно в тот момент, когда человек ждёт содержимое.
+// Поэтому первый показ беседы идёт БЕЗ анимации (список известных id пуст — значит
+// это первичная загрузка), а анимируется только то, что пришло позже.
+const enteringIds = ref(new Set())
+let знакомыеId = new Set()
+watch(
+  () => messages.value.map((x) => x.id),
+  (ids) => {
+    if (знакомыеId.size) {
+      // ⚠️ ТОЛЬКО ХВОСТ. «Новое» — это пришедшее В КОНЕЦ ленты. При подгрузке истории
+      // пятьдесят сообщений подставляются В НАЧАЛО, и без этой проверки они всплывали
+      // все разом — та самая рябь, которую комментарий выше запрещает, причём прямо
+      // под рукой у прокручивающего. Поймано Полковником, а не тестом: моё утверждение
+      // «анимируются только новые» было верно лишь для открытия беседы.
+      const хвост = []
+      for (let i = ids.length - 1; i >= 0; i--) {
+        if (знакомыеId.has(ids[i])) break
+        хвост.unshift(ids[i])
+      }
+      const свежие = хвост
+      if (свежие.length) {
+        const next = new Set(enteringIds.value)
+        for (const id of свежие) next.add(id)
+        enteringIds.value = next
+        setTimeout(() => {
+          const после = new Set(enteringIds.value)
+          for (const id of свежие) после.delete(id)
+          enteringIds.value = после
+        }, 400)
+      }
+    }
+    знакомыеId = new Set(ids)
+  },
+)
+// Смена беседы — новая история: следующий список считаем первичным, иначе переход
+// между чатами давал бы ту самую рябь.
+watch(activeId, () => { знакомыеId = new Set(); enteringIds.value = new Set() })
 //Свой id клиент знает только из conversation_info: в JWT лежат логин и роль.
 //Нужен, чтобы не предлагать перевод СВОЕЙ же реплики.
 const myUserId = computed(() => activeInfo.value?.my_user_id || '')
@@ -109,6 +150,26 @@ function onScrollerScroll() {
   const el = scroller.value
   if (!el) return
   showScrollBtn.value = (el.scrollHeight - el.scrollTop - el.clientHeight) > 200
+  // Подошли к началу видимой истории — тянем предыдущую страницу. Порог не нулевой:
+  // ждать буквального упора в край значит показать человеку пустоту и рывок.
+  if (el.scrollTop < 200) подтянутьИсторию()
+}
+
+/**
+ * Догрузка истории вверх с СОХРАНЕНИЕМ ПОЛОЖЕНИЯ. Без второй половины первая бесполезна:
+ * пятьдесят сообщений, вставленных сверху, уносят прочитанное место вниз, и лента
+ * прыгает под руками — так «подгрузка» превращается в дефект.
+ */
+async function подтянутьИсторию() {
+  const el = scroller.value
+  if (!el || loadingOlder.value || !hasOlder.value) return
+  const высотаДо = el.scrollHeight
+  const сверхуДо = el.scrollTop
+  const добавлено = await m.loadOlder()
+  if (!добавлено) return
+  await nextTick()
+  // Сдвигаем ровно на прирост высоты — тогда под курсором остаётся та же строка.
+  el.scrollTop = сверхуДо + (el.scrollHeight - высотаДо)
 }
 
 watch(() => messages.value.length, async () => {
@@ -216,6 +277,14 @@ const mentionUidBySurname = computed(() => {
   return map
 })
 
+// ⚠️ ЗДЕСЬ БЫЛ КЭШ РАЗБОРА, И ОН БЫЛ УБРАН ПО ЗАМЕРУ (24.08.2026). Гипотеза выглядела
+// очевидной: функция зовётся из шаблона на каждое сообщение, внутри разбор Markdown, в
+// ленте бывает 400 сообщений. Замер на стенде (та же беседа, шесть прогонов, медиана
+// самой длинной задачи главного потока при приходе сообщения): 31 мс без кэша против
+// 32 мс с кэшем — разница внутри шума. Причина в том, что Vue патчит по ключу ТОЛЬКО
+// изменившийся узел, а не перерисовывает список целиком, и разбор старых тел заново не
+// выполняется. Кэш при этом стоил инвалидации по метке правки — то есть риска показать
+// старый текст у отредактированного сообщения. Не возвращать без нового замера.
 function renderBody(msg) {
   const html = renderMarkdownLite(msg.body, isChannel.value)
   //Подсвечиваем ВСЕ формы отметки, включая «/@» и «/@!» — иначе тихий и громкий пинги
@@ -1208,6 +1277,23 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
           </button>
           <p v-else-if="greetingGifLoading" class="mt-1 text-xs text-text3">{{ locale.t('common.loading') }}</p>
         </div>
+        <!-- Полоска «подгружаем предыдущие»: без неё пауза на медленной сети читается как
+             конец переписки. Показываем только когда действительно грузим. -->
+        <div v-if="loadingOlder" class="flex justify-center py-2">
+          <span class="gb-skeleton h-4 w-28 rounded-full" />
+        </div>
+        <!-- СКЕЛЕТ. Раньше на время загрузки здесь была пустота: шапка с именем уже
+             нарисована, а лента появлялась рывком через сетевой круг — этот разрыв и
+             читается как «дёшево». Заглушки держат ту же геометрию, что настоящие
+             пузыри, поэтому содержимое не прыгает, когда доедет. Показываем только при
+             ПЕРВОЙ загрузке беседы (messages пуст): на обновлении уже показанной ленты
+             скелет означал бы шаг назад. -->
+        <div v-if="loadingMessages && !messages.length" class="space-y-2" aria-hidden="true">
+          <div v-for="(w, i) in [58, 72, 40, 66, 50, 78]" :key="i"
+               class="flex" :class="i % 2 ? 'justify-end' : 'justify-start'">
+            <div class="gb-skeleton h-9 rounded-2xl" :style="{ width: w + '%' }" />
+          </div>
+        </div>
         <template v-for="msg in messages" :key="msg.id">
           <!-- Разделитель по датам — над «Новые сообщения», если оба совпали на одном msg. -->
           <div v-if="dateBreaks.has(msg.id)" class="my-3 flex justify-center">
@@ -1287,7 +1373,13 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                  @touchend="onTouchEnd" @touchcancel="onTouchEnd"
                  class="max-w-[75%] select-none rounded-2xl px-3 py-1.5 text-left text-sm shadow-sm outline-none transition-shadow hover:shadow"
                  :class="[msg.mine ? 'bg-accent text-white' : 'bg-card text-text',
-                          flashMentionId === msg.id ? 'ring-2 ring-accent' : '']"
+                          flashMentionId === msg.id ? 'ring-2 ring-accent' : '',
+                          // Черновик (ещё не подтверждён сервером) слегка приглушён — тот же
+                          // приём, что у Telegram: сообщение уже на месте и его видно, но
+                          // видно и то, что оно «в пути». Разница мягкая намеренно: резкая
+                          // читалась бы как ошибка отправки.
+                          msg.pending ? 'opacity-60' : '',
+                          enteringIds.has(msg.id) ? 'gb-msg-in' : '']"
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
               <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
@@ -1356,10 +1448,17 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                      no-referrer для остальной страницы не трогаем. "origin" отдаёт
                      ТОЛЬКО домен (без пути) — этого плееру достаточно, полный URL
                      переписки видеохостингу не уходит. -->
+                <!-- loading="lazy" — не косметика: КАЖДЫЙ такой фрейм это чужая страница
+                     со своим JS на сотни килобайт, и браузер поднимал их все сразу, включая
+                     те, что лежат в истории далеко выше экрана. В переписке с несколькими
+                     ссылками на разбор это несколько сторонних плееров, соревнующихся за тот
+                     же поток, что рисует ленту. С lazy браузер поднимает фрейм, когда тот
+                     подъезжает к видимой области; для уже видимого плеера не меняется ничего. -->
                 <iframe v-if="videoIframeAllowed"
                         :src="v.embedUrl" class="aspect-video w-full max-w-sm rounded-lg border-0"
                         sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
                         referrerpolicy="origin"
+                        loading="lazy"
                         allowfullscreen />
                 <!-- Мобильное приложение: вместо чужого фрейма — карточка, уводящая ролик
                      ЗА пределы приложения (см. videoIframeAllowed выше). Ветка обязательна:
@@ -1397,11 +1496,18 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                 {{ fmtTime(msg.created_at) }}
                 <!-- ЛС: галочки отправлено/прочитано (как в Telegram). -->
                 <template v-if="msg.mine && kind === 'direct'">
-                  <CheckCheck v-if="isReadByPeer(msg)" :title="locale.t('chatThread.readTitle', 'Прочитано')" class="ml-0.5 inline size-3" />
+                  <!-- Своё сообщение рисуется сразу по нажатию, до ответа сервера (см.
+                       messenger.js::send). Пока подтверждения нет — часики, а не галочка:
+                       галочка на неподтверждённом сообщении была бы прямой ложью о том,
+                       что оно доставлено. -->
+                  <Clock v-if="msg.pending" :title="locale.t('chatThread.sendingTitle', 'Отправляется')" class="ml-0.5 inline size-3 opacity-70" />
+                  <CheckCheck v-else-if="isReadByPeer(msg)" :title="locale.t('chatThread.readTitle', 'Прочитано')" class="ml-0.5 inline size-3" />
                   <Check v-else :title="locale.t('chatThread.sentTitle', 'Отправлено')" class="ml-0.5 inline size-3 opacity-70" />
                 </template>
+                <!-- Группа/канал: у неподтверждённого показывать «кто прочитал» нечего. -->
+                <Clock v-else-if="msg.mine && msg.pending" :title="locale.t('chatThread.sendingTitle', 'Отправляется')" class="ml-0.5 inline size-3 opacity-70" />
                 <!-- Группа/канал: читателей несколько — попап со списком (см. showReadBy). -->
-                <button v-else-if="msg.mine" type="button" @click.stop="showReadBy(msg)" :title="locale.t('chatThread.whoRead', 'Кто прочитал')"
+                <button v-else-if="msg.mine && !msg.pending" type="button" @click.stop="showReadBy(msg)" :title="locale.t('chatThread.whoRead', 'Кто прочитал')"
                         class="ml-0.5 inline-flex align-middle hover:opacity-80"><Eye class="size-2.5" /></button>
               </span>
 
@@ -1753,6 +1859,32 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
 </template>
 
 <style scoped>
+/* Появление нового сообщения: короткое и мелкое. Длинная или размашистая анимация в
+   ленте, куда сообщения приходят пачками, превращается в шум — Discord и Telegram
+   держатся тех же ~250 мс и нескольких пикселей смещения. */
+@keyframes gb-msg-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+.gb-msg-in { animation: gb-msg-in 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); }
+
+/* Скелет — «дышит», а не бежит: бегущий блик по всей ленте притягивает взгляд к
+   заглушке вместо содержимого, ради которого человек и открыл беседу. */
+@keyframes gb-skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.75; }
+}
+.gb-skeleton {
+  background: var(--gb-card2, rgba(127, 127, 127, 0.18));
+  animation: gb-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+/* Уважение к системной настройке: человеку, который выключил анимации, они выключены
+   и здесь. Содержимое при этом остаётся на месте — гасим движение, а не показ. */
+@media (prefers-reduced-motion: reduce) {
+  .gb-msg-in { animation: none; }
+  .gb-skeleton { animation: none; }
+}
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 

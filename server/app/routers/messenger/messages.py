@@ -248,8 +248,15 @@ def send_message(conv_id: str, payload: dict = Body(...),
     #возвращает уже созданное сообщение, а не плодит дубль.
     nonce = str(payload.get("client_nonce") or "").strip()[:64]
     if nonce:
+        #⚠️ И ПО ОТПРАВИТЕЛЮ ТОЖЕ. Метка уникальна только в пределах ОДНОГО клиента: она
+        #его собственная, а не общая на беседу. Без sender_id участник, взявший чужую
+        #метку из ленты, получал бы в ответ ЧУЖОЕ сообщение — и его собственный черновик
+        #подменялся бы чужим текстом. Прав это не даёт и ПДн не раскрывает (вредит только
+        #себе), но поведение бессмысленное, и стоило оно одной строки.
         dup = (db.query(Message)
-               .filter(Message.conversation_id == conv_id, Message.client_nonce == nonce).first())
+               .filter(Message.conversation_id == conv_id,
+                       Message.sender_id == user.id,
+                       Message.client_nonce == nonce).first())
         if dup is not None:
             out = _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
             _attach_rich_meta(db, [out], user.id)

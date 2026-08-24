@@ -1822,3 +1822,55 @@ def test_gif_avatar_is_visible_to_others_like_a_picture_one(client):
     client.post("/me/prefs", json={"avatar": url}, headers=a)
     card = client.get(f"/web/messenger/users/{a_id}/profile", headers=b).json()["profile"]
     assert card["avatar"] == url
+
+# ── Метка клиента (client_nonce) и оптимистичная отправка ────────────────────────────
+# Заведено 24.08.2026. Веб рисует своё сообщение СРАЗУ по нажатию, черновиком, и опознаёт
+# в ленте настоящую версию по этой метке: то же сообщение приходит двумя путями (ответом
+# на POST и событием сокета), кто успеет первым — зависит от сети.
+def test_client_nonce_returns_to_author_only(client):
+    """Свою метку автор получает, ЧУЖУЮ не видит никто.
+
+    Найдено Полковником: поле клали в ответ безусловно, то есть чужие метки уезжали всем
+    участникам беседы. Прав это не давало, но выносило наружу поле, до тех пор жившее
+    только в базе, — а вместе с дедупом без отправителя (см. следующий тест) позволяло
+    подменить себе собственный черновик чужим сообщением.
+    """
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "Черновик и метка", "client_nonce": "nonce-A-1"}, headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["client_nonce"] == "nonce-A-1", "автор обязан получить свою метку обратно"
+
+    #Собеседник видит сообщение, но метки в нём нет.
+    hist = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    чужое = [m for m in hist if m["sender_id"] == a_id]
+    assert чужое and all(m["client_nonce"] == "" for m in чужое), "чужая метка ушла наружу"
+    #А в своей истории автор её по-прежнему видит.
+    своё = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert [m["client_nonce"] for m in своё if m["sender_id"] == a_id] == ["nonce-A-1"]
+
+
+def test_nonce_dedup_is_per_sender(client):
+    """Метка уникальна для КЛИЕНТА, а не для беседы.
+
+    Без sender_id в дедупе участник, взявший чужую метку, получал бы в ответ ЧУЖОЕ
+    сообщение — и клиент подменил бы им собственный черновик.
+    """
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = client.post(f"/web/messenger/chats/direct/{b_id}", headers=a).json()["conversation_id"]
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "Сообщение автора", "client_nonce": "общая-метка"}, headers=a)
+    r = client.post(f"/web/messenger/chats/{conv}/messages",
+                    json={"body": "Сообщение собеседника", "client_nonce": "общая-метка"}, headers=b)
+    assert r.status_code == 200, r.text
+    assert r.json()["sender_id"] == b_id, "вернулось чужое сообщение вместо своего"
+    assert r.json()["body"] == "Сообщение собеседника"
+
+    #При этом СВОЙ повтор с той же меткой по-прежнему идемпотентен (§D10, ретрай сети).
+    повтор = client.post(f"/web/messenger/chats/{conv}/messages",
+                         json={"body": "Сообщение автора", "client_nonce": "общая-метка"}, headers=a)
+    assert повтор.json()["id"] == [m for m in
+        client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+        if m["sender_id"] == a_id][0]["id"], "повтор с той же меткой создал дубль"
+

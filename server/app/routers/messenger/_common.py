@@ -531,6 +531,16 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
         "edited_at": "" if deleted else (m.edited_at or ""),
         "deleted": deleted,
         "reply_to_id": m.reply_to_id or None,
+        #Метка отправителя (§D10). Клиент рисует своё сообщение СРАЗУ, не дожидаясь
+        #ответа сервера, и ему нужно опознать в ленте именно свой черновик: по WS то же
+        #сообщение может прийти РАНЬШЕ ответа на POST, и без метки в беседе появились бы
+        #две одинаковые строки.
+        #⚠️ ОТДАЁМ ТОЛЬКО СВОЮ метку. Чужая получателю не нужна ни для чего, а раздавать
+        #её всем участникам — значит без надобности вынести наружу поле, которое до сих
+        #пор жило только в базе. Парная защита стоит на приёме (дедуп ищет по паре
+        #«отправитель + метка», см. messages.py).
+        "client_nonce": ((getattr(m, "client_nonce", "") or "")
+                         if (bool(me_id) and m.sender_id == me_id) else ""),
         "pinned": bool(m.pinned) and not deleted,
         #Шапка «Переслано от …» (снимок имени источника):
         "forwarded_from": (m.fwd_sender_name or "") if (m.fwd_from_sender_id and not deleted) else None,

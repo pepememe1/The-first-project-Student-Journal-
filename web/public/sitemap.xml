@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Карта из ОДНОГО адреса, и это не заготовка: публичная страница у нас ровно одна.
+     Нужна, чтобы отправить предложение на индексацию через Search Console, не дожидаясь,
+     пока краулер набредёт на домен сам. Всё остальное закрыто в robots.txt. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://esstu-gradebook.ru/offer.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>

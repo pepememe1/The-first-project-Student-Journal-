@@ -92,6 +92,7 @@ watch(vectorShown, (now, was) => { if (was && !now) tts.stop() })
 // Фоновый счётчик непрочитанных для бейджа «Сообщения» в меню (живёт на всех страницах).
 // На самой вкладке мессенджера свой опрос чаще — этот лишь держит бейдж свежим глобально.
 let _unreadTimer = null
+let _onVisible = null       // обновить счётчик, когда вкладку вернули
 onMounted(() => {
   // ⚠️ (живой отзыв Влада) Тема веб≠десктоп на ОДНОМ аккаунте — оказалось, что здесь
   // роуминг был выключен для ВСЕХ embed-режимов разом, хотя причина («оболочка окна уже
@@ -104,11 +105,21 @@ onMounted(() => {
   // локальную зеркальную копию, а не на бой.
   if (embedMode !== '1') theme.loadFromPrefs()
   messenger.loadChats()
-  _unreadTimer = setInterval(() => messenger.loadChats(), 20000)
+  // ⚠️ Счётчик непрочитанного тикает и ВНЕ мессенджера (значок в меню), поэтому таймер
+  // живёт здесь, а не в сторе — и `stopPolling()` его не гасит. В свёрнутой вкладке
+  // ходить на сервер незачем: человек её не видит, а вернувшись, всё равно получит
+  // свежие числа первым же тиком (обновляем сразу при возврате).
+  _unreadTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return
+    messenger.loadChats()
+  }, 20000)
+  _onVisible = () => { if (!document.hidden) messenger.loadChats() }
+  document.addEventListener('visibilitychange', _onVisible)
 })
 onBeforeUnmount(() => {
   if (_mq) _mq.removeEventListener('change', _onMq)
   if (_unreadTimer) clearInterval(_unreadTimer)
+  if (_onVisible) document.removeEventListener('visibilitychange', _onVisible)
 })
 
 // ━━ ПАСХАЛКИ ━━ Дерево Делтарун выпадает ИМЕННО на переходе между вкладками, поэтому

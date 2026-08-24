@@ -15,8 +15,12 @@ import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
 import { playMentionPing } from '@/utils/pingSound'
 import { draftFor, saveDraft, clearDraft } from '@/utils/drafts'
+import { pollInterval, reconnectDelay } from '@/utils/livePolling'
+import { resolveIncoming } from '@/utils/messageMerge'
 
-const POLL_MS = 3500
+// Частота тика и паузы переподключения живут в utils/livePolling.js — там же
+// объяснено, почему интервала два и почему опрос не выключен совсем. Здесь только
+// вызовы: правило, лежащее внутри стора, нечем проверить тестом без браузера.
 
 // Параметры WebSocket-канала: та же база, что у REST, но схема ws/wss. Токен передаём
 // сабпротоколом (['bearer', <jwt>]) — так он НЕ попадает в URL и, значит, в access-логи
@@ -35,6 +39,8 @@ export const useMessengerStore = defineStore('messenger', () => {
   const messages = ref([])             // сообщения активной беседы (хронология)
   const loadingChats = ref(false)
   const loadingMessages = ref(false)
+  const loadingOlder = ref(false)       // идёт подгрузка истории вверх
+  const hasOlder = ref(true)            // есть ли что грузить выше (false — дошли до начала)
   const sending = ref(false)
   const replyTo = ref(null)             // сообщение, на которое отвечаем (или null)
   const pinned = ref([])                // закреплённые сообщения активной беседы
@@ -72,12 +78,28 @@ export const useMessengerStore = defineStore('messenger', () => {
   const dir = ref({ role: 'student', q: '', users: [], loading: false })
 
   let pollTimer = null
+  let pollEvery = 0            // текущий интервал тика (см. utils/livePolling.js)
   let ws = null
+  let wsRetry = 0              // сколько подряд не удалось подключиться
+  let wsRetryTimer = null
   let typingTimer = null
   let lastTypingSent = 0
 
+  /**
+   * Граница дельты для опроса (`?after=<id>`).
+   * 🔥 ТОЛЬКО ПОДТВЕРЖДЁННЫЕ СООБЩЕНИЯ. У оптимистичного черновика id ОТРИЦАТЕЛЬНЫЙ
+   * (см. _optimisticMessage), и стоит ему оказаться последним в ленте, как опрос уходит
+   * с `after=-1756…`, а сервер честно отвечает «всё, что новее» — то есть отдаёт первые
+   * 50 сообщений беседы, и они дописываются В КОНЕЦ, под свежими. Дублей при этом нет,
+   * поэтому проверка «дублей 1 шт» такое не ловит — ломается ПОРЯДОК. Гарантированно
+   * воспроизводится там, где ответ на POST идёт долго: `/vector`, `/отчет`.
+   */
   function _lastId() {
-    return messages.value.length ? messages.value[messages.value.length - 1].id : 0
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m0 = messages.value[i]
+      if (m0 && !m0.pending && m0.id > 0) return m0.id
+    }
+    return 0
   }
 
   // Громкие отметки (`/@!Фамилия`), по которым уже звонили. Держим id САМИХ СООБЩЕНИЙ, а
@@ -126,13 +148,47 @@ export const useMessengerStore = defineStore('messenger', () => {
     }
   }
 
+  const PAGE = 50                       // столько отдаёт сервер за один запрос истории
+
   async function loadMessages(convId) {
     loadingMessages.value = true
+    hasOlder.value = true
     try {
       const { data } = await messengerApi.messages(convId)
       messages.value = data.messages || []
-    } catch { messages.value = [] }
+      // Пришло меньше страницы — значит вся переписка уже здесь, тянуть выше нечего.
+      if (messages.value.length < PAGE) hasOlder.value = false
+    } catch { messages.value = []; hasOlder.value = false }
     finally { loadingMessages.value = false }
+  }
+
+  /**
+   * 🔥 ИСТОРИЯ ВВЕРХ. Сервер умел это с самого начала (`GET …/messages?before=<id>`), и
+   * даже докстринг в endpoints.js обещал «history (before=<id>)» — а вызова НЕ БЫЛО НИ
+   * ОДНОГО: в вебе переписку глубже последних 50 сообщений нельзя было прочитать вовсе.
+   * Ровно наш обычный класс дефекта — обещание без вызывающего, зелёное со всех сторон.
+   * @returns {number} сколько сообщений добавлено сверху (нужно для сохранения прокрутки)
+   */
+  async function loadOlder() {
+    if (loadingOlder.value || !hasOlder.value || !activeId.value) return 0
+    // Опираемся на ПЕРВОЕ настоящее сообщение: у неподтверждённых черновиков id
+    // отрицательные, и они бы увели границу в бессмыслицу.
+    const первое = messages.value.find(x => x && x.id > 0)
+    if (!первое) return 0
+    loadingOlder.value = true
+    const convId = activeId.value
+    try {
+      const { data } = await messengerApi.messages(convId, { before: первое.id })
+      const старые = data.messages || []
+      if (старые.length < PAGE) hasOlder.value = false
+      // Пока ходили на сервер, человек мог уйти в другую беседу — тогда это чужая история.
+      if (!старые.length || activeId.value !== convId) return 0
+      const есть = new Set(messages.value.map(x => x.id))
+      const свежие = старые.filter(x => !есть.has(x.id))
+      messages.value = [...свежие, ...messages.value]
+      return свежие.length
+    } catch { return 0 }
+    finally { loadingOlder.value = false }
   }
 
   async function _enterChat(convId, peer) {
@@ -142,19 +198,29 @@ export const useMessengerStore = defineStore('messenger', () => {
     peerTyping.value = false
     replyTo.value = null
     clearSelection()
-    await loadMessages(convId)
-    await loadPinned()
-    await loadConvInfo()
+    // 🔥 ОДНОЙ ВОЛНОЙ, А НЕ ЛЕСЕНКОЙ. Здесь стояли семь `await` подряд, и каждый — свой
+    // круг до сервера: замер 24.08.2026 показал ровно 7 последовательных волн на одно
+    // открытие чата. На локальном стенде это незаметно (ответ за 15 мс), а на боевом VPS
+    // круг стоит 50–100 мс — то есть до полусекунды, в течение которой экран дорисовывался
+    // КУСКАМИ: ник уже есть, ленты ещё нет, потом появляются закреплённые, потом панель
+    // участников. Именно это читается как «дёшево и несобранно», и никакая анимация этого
+    // не лечит — лечит одновременность. Запросы независимы, поэтому идут параллельно.
+    const дела = [loadMessages(convId), loadPinned(), loadConvInfo()]
+    //🔥 Подхватываем ИДУЩУЮ активность беседы. Без этого таймер, запущенный до ухода на
+    //другую вкладку, исчезал вместе со стором: полоски нет, завершить нечем, а сервер
+    //не даёт запустить второй — «одна активность на беседу». Выглядело как тупик.
+    дела.push(useActivityStore().adoptCurrent(convId).catch(() => {}))
+    await Promise.all(дела)
     // Модерационную беседу распознаём по ТИПУ, а не только по кнопке ⚙: иначе при открытии
     // из списка/после перезагрузки она рендерится как обычный личный чат с ролью-заглушкой
     // «Студент» (см. ProfilePanel). Тип приходит из convInfo (kind='moderation').
     if (activeInfo.value?.kind === 'moderation') isModeration.value = true
-    //🔥 Подхватываем ИДУЩУЮ активность беседы. Без этого таймер, запущенный до ухода на
-    //другую вкладку, исчезал вместе со стором: полоски нет, завершить нечем, а сервер
-    //не даёт запустить второй — «одна активность на беседу». Выглядело как тупик.
-    try { await useActivityStore().adoptCurrent(convId) } catch { /* нет активности — обычное дело */ }
-    await markReadActive()
-    await loadChats()                    // обновить счётчик непрочитанного в списке
+    // Хвост — В ФОНЕ. Отметка о прочтении и счётчик в списке чатов не влияют на то, что
+    // человек уже видит в открытой беседе; держать ради них экран в состоянии «грузится»
+    // значит платить двумя лишними кругами за чужую строчку в сайдбаре.
+    // ⚠️ Порядок между ними сохраняем: loadChats, запущенный параллельно с markRead,
+    // вернул бы ещё старый счётчик непрочитанного и нарисовал бы бейдж, которого нет.
+    markReadActive().then(loadChats).catch(() => {})
   }
 
   // reset=true — вход в ДРУГУЮ беседу (старую карточку показывать нельзя, чистим сразу).
@@ -234,9 +300,12 @@ export const useMessengerStore = defineStore('messenger', () => {
   // притащить наше же сообщение раньше, чем resolve'нется этот await. Ярче всего это
   // видно на «/vector»: ответ ИИ считается ПОСЛЕ отправки, POST висит секунды, и
   // сообщение гарантированно приезжает опросом первым — в ленте появлялся дубль.
+  // Правило слияния вынесено в utils/messageMerge.js — там же объяснено, почему оно
+  // важнее, чем выглядит (два пути доставки своего же сообщения). Здесь только применение.
   function _appendUnique(msg) {
-    if (!msg || messages.value.some(x => x.id === msg.id)) return
-    messages.value.push(msg)
+    const { action, index } = resolveIncoming(messages.value, msg)
+    if (action === 'replace') messages.value[index] = msg
+    else if (action === 'append') messages.value.push(msg)
   }
 
   // Общий хвост и для текста, и для GIF (см. sendGif ниже) — анти-флуд/мьют отвечают
@@ -253,23 +322,58 @@ export const useMessengerStore = defineStore('messenger', () => {
     }
   }
 
+  /**
+   * Черновик собственного сообщения — то, что человек видит МГНОВЕННО по нажатию.
+   * Отрицательный id гарантированно не столкнётся с серверным (те растут от 1), а
+   * `pending` отличает его в ленте: он приглушён, пока сервер не подтвердил.
+   */
+  function _optimisticMessage(body, nonce, reply) {
+    return {
+      id: -Date.now(), client_nonce: nonce, pending: true,
+      conversation_id: activeId.value, sender_id: '', sender_name: '', mine: true,
+      kind: 'text', body, body_format: 'markdown',
+      created_at: new Date().toISOString(), edited_at: '', deleted: false,
+      reply_to_id: reply?.id || null, pinned: false, forwarded_from: null,
+      mentions: [], reactions: [], reply_count: 0, report: null,
+    }
+  }
+
   async function send(text) {
     const body = (text || '').trim()
     if (!body || !activeId.value || sending.value) return false
     sending.value = true
+    // 🔥 РИСУЕМ СРАЗУ, НЕ ДОЖИДАЯСЬ СЕРВЕРА. Раньше сообщение появлялось только после
+    // ответа: на боевой сети это 100–200 мс пустоты после нажатия, и всё это время
+    // композер заблокирован. Дело не в экономии миллисекунд, а в том, что действие
+    // человека обязано иметь НЕМЕДЛЕННОЕ следствие — иначе интерфейс кажется вязким,
+    // даже когда сервер отвечает быстро. Безопасно ровно потому, что отправка
+    // идемпотентна по nonce (§D10): повтор с той же меткой не создаст второе сообщение.
+    const nonce = _nonce()
+    const черновик = _optimisticMessage(body, nonce, replyTo.value)
+    messages.value.push(черновик)
+    const убратьЧерновик = () => {
+      const i = messages.value.findIndex(x => x.pending && x.client_nonce === nonce)
+      if (i >= 0) messages.value.splice(i, 1)
+    }
     try {
-      const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, _nonce())
+      const { data } = await messengerApi.send(activeId.value, body, replyTo.value?.id || 0, nonce)
       // ℹ️ Ветка `open_activity_launcher` убрана 17.08.2026 вместе с командой
       // `/активность` (решение Влада: активности открывает кнопка в шапке беседы, и она
       // зовёт лаунчер напрямую, не спрашивая сервер). Сервер такой ответ больше не шлёт —
       // держать разбор «на всякий случай» значило бы оставить ветку, которую никто не
       // выполняет и никто не проверяет.
+      // Ответ может не нести метку (старый сервер) — тогда просто снимаем черновик,
+      // иначе он остался бы висеть приглушённым рядом с настоящим сообщением.
+      if (!data || !data.client_nonce) убратьЧерновик()
       _appendUnique(data)
       replyTo.value = null
       setNotice('')
-      await loadChats()
+      // Список чатов слева — в ФОН: он про соседнюю панель, а не про отправленное
+      // сообщение, и держать ради него композер занятым незачем.
+      loadChats().catch(() => {})
       return true
     } catch (e) {
+      убратьЧерновик()          // не доехало — строка не должна оставаться в ленте
       _handleSendError(e)
       return false
     } finally { sending.value = false }
@@ -411,12 +515,41 @@ export const useMessengerStore = defineStore('messenger', () => {
           typingTimer = setTimeout(() => { peerTyping.value = false }, 4000)
         }
       }
-      ws.onclose = () => { ws = null }
-      ws.onerror = () => { try { ws.close() } catch { /* noop */ } ws = null }
-    } catch { ws = null }
+      // 🔥 БЕЗ ПЕРЕПОДКЛЮЧЕНИЯ СОКЕТ УМИРАЛ НАВСЕГДА. Раньше здесь стояло только
+      // `ws = null`: один разрыв — уснул ноутбук, перескочил Wi-Fi, моргнул прокси — и
+      // до перезахода в раздел живость держалась ИСКЛЮЧИТЕЛЬНО опросом. Это же объясняет,
+      // почему опрос нельзя было проредить раньше: он молча стал основным транспортом.
+      ws.onopen = () => {
+        wsRetry = 0
+        _applyPollInterval()
+        // Пока сокета не было, события терялись — догоняем пропущенное сразу, а не
+        // через тик. Именно здесь, а не в _connectWS: соединение может и не открыться.
+        pollOnce()
+      }
+      ws.onclose = () => { ws = null; _applyPollInterval(); _scheduleReconnect() }
+      ws.onerror = () => { try { ws.close() } catch { /* noop */ } }
+    } catch { ws = null; _scheduleReconnect() }
   }
+
+  // Переподключение с нарастающей паузой: 1, 2, 4 … до 30 секунд. Без потолка первый же
+  // упавший сервер получил бы шквал попыток со всех вкладок колледжа сразу.
+  function _scheduleReconnect() {
+    if (!pollTimer) return                    // раздел закрыт — не воскрешаем
+    clearTimeout(wsRetryTimer)
+    const delay = reconnectDelay(wsRetry++)
+    wsRetryTimer = setTimeout(() => { if (pollTimer) _connectWS() }, delay)
+  }
+
   function _disconnectWS() {
-    if (ws) { try { ws.close() } catch { /* noop */ } ws = null }
+    clearTimeout(wsRetryTimer)
+    wsRetry = 0
+    if (ws) {
+      // Снимаем onclose ДО закрытия: иначе наш же обработчик назначит переподключение
+      // к разделу, который человек только что закрыл.
+      ws.onclose = null
+      try { ws.close() } catch { /* noop */ }
+      ws = null
+    }
   }
   // Сообщить собеседнику, что печатаю (не чаще раза в 2 c).
   function sendTyping() {
@@ -427,13 +560,50 @@ export const useMessengerStore = defineStore('messenger', () => {
     try { ws.send(JSON.stringify({ type: 'typing', conversation_id: activeId.value })) } catch { /* noop */ }
   }
 
+  /** Жив ли сокет ПРЯМО СЕЙЧАС (readyState 1 = OPEN). */
+  function _wsAlive() { return !!ws && ws.readyState === 1 }
+
+  /** Частота тика зависит от того, есть ли сокет; переустанавливаем при смене режима. */
+  function _applyPollInterval() {
+    if (!pollTimer) return                    // раздел закрыт — таймера быть не должно
+    const want = pollInterval({ wsAlive: _wsAlive(), hidden: false })
+    if (want === pollEvery) return
+    pollEvery = want
+    clearInterval(pollTimer)
+    pollTimer = setInterval(_tick, pollEvery)
+  }
+
+  // ⚠️ В СКРЫТОЙ ВКЛАДКЕ НЕ ОПРАШИВАЕМ ВОВСЕ. Человек держит журнал открытым весь день
+  // в соседней вкладке; сокет доставит всё сам, а при его смерти догоняем при возврате
+  // (см. _onVisibility). Смысл не только в трафике: разбор трёх ответов и переприсваивание
+  // массивов будят перерисовку в невидимой вкладке, отбирая такт у той, где человек работает.
+  function _tick() {
+    const hidden = typeof document !== 'undefined' && document.hidden
+    if (pollInterval({ wsAlive: _wsAlive(), hidden }) === 0) return
+    pollOnce()
+  }
+
+  //Не путать с _onVisibility ниже: тот про статус «отошёл» (idle watch), этот про
+  //транспорт. Слушателей на одном событии два, и это осознанно — иначе транспорт и
+  //присутствие оказались бы связаны одной функцией без всякой на то причины.
+  function _onVisibleAgain() {
+    if (typeof document === 'undefined' || document.hidden) return
+    if (!pollTimer) return
+    if (!_wsAlive()) { wsRetry = 0; _connectWS() }   // вернулись — чиним связь немедленно
+    pollOnce()                                       // и догоняем пропущенное
+  }
+
   function startPolling() {
     stopPolling()
-    pollTimer = setInterval(pollOnce, POLL_MS)
+    pollEvery = pollInterval({ wsAlive: false, hidden: false })
+    pollTimer = setInterval(_tick, pollEvery)
     _connectWS()
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', _onVisibleAgain)
   }
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    pollEvery = 0
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', _onVisibleAgain)
     _disconnectWS()
   }
 
@@ -828,11 +998,11 @@ export const useMessengerStore = defineStore('messenger', () => {
   function selectNone() { selectedIds.value = [] }
 
   return {
-    chats, activeId, activePeer, messages, loadingChats, loadingMessages, sending,
+    chats, activeId, activePeer, messages, loadingChats, loadingMessages, loadingOlder, hasOlder, sending,
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, activeKind,
     channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
-    loadChats, loadMessages, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
+    loadChats, loadMessages, loadOlder, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     deleteConversation, selectAll, selectNone,
