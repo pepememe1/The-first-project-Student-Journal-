@@ -28,7 +28,7 @@ from fastapi import (APIRouter, Body, Depends, HTTPException, Query, Request,
 from sqlalchemy.orm import Session
 
 from ...db import get_db
-from ...deps import get_current_user, require_admin
+from ...deps import get_current_user, require_admin, current_jti
 from ...models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                        AuthSession, ConfigKV, TermGrade, ScheduleOverride,
                        ScheduleJointMark, schedule_override_id, joint_mark_id,
@@ -170,7 +170,7 @@ __all__ = [
     "APIRouter", "Body", "Depends", "HTTPException", "Query", "Request",
     "UploadFile", "File", "Form", "Session",
     # приложение
-    "get_db", "get_current_user", "require_admin",
+    "get_db", "get_current_user", "require_admin", "current_jti",
     "User", "Group", "Subject", "Lesson", "Grade", "RegistrationRequest",
     "AuthSession", "ConfigKV", "TermGrade", "ScheduleOverride", "ScheduleJointMark",
     "schedule_override_id", "joint_mark_id", "SubjectHours", "subject_hours_id",

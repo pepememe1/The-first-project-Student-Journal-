@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from app import easter_eggs
 from app.routers.web import achievements as achievements_router
 from app.db import SessionLocal
-from app.models import User
+from app.models import User, UserAchievement
 
 
 def _db_user(login: str) -> User:
@@ -432,7 +432,7 @@ def test_cooldown_actually_blocks_the_second_roll(client):
         db.close()
 
 
-def test_avatar_eggs_are_a_pair_and_neither_is_unreachable(client):
+def test_avatar_eggs_are_a_pair_and_neither_is_unreachable(client, monkeypatch):
     """DOOM и Detroit — пара: ровно одна метка, и ни одна не недостижима.
 
     ⚠️ Обе рисуются на ОДНОЙ аватарке. Покажи их вместе — получится кольцо поверх
@@ -451,6 +451,14 @@ def test_avatar_eggs_are_a_pair_and_neither_is_unreachable(client):
     src = inspect.getsource(easter_eggs.pick_on_login)
     assert "detroit_led" not in src, "Detroit снова в очереди полноэкранных сцен"
 
+        #⚠️ Долю на время теста поднимаем до 100 %. Это не подгонка: тест проверяет ДРУГОЕ
+    #свойство (стабильность метки / обновление следа), и редкость здесь только мешала бы
+    #— половина прогонов получала бы `None` и «падала» без всякой поломки. За саму долю
+    #отвечает `test_avatar_share_matches_the_declared_percent`, и там она настоящая.
+    #⚠️ Обе по 50, а не одна на 100: розыгрыш ОДИН на пару, и подняв только первую, мы
+    #сделали бы вторую недостижимой — тест бы падал по своей же вине.
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "doom_avatar", 50)
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "detroit_led", 50)
     admin = make_admin(client)
     db = SessionLocal()
     try:
@@ -461,12 +469,12 @@ def test_avatar_eggs_are_a_pair_and_neither_is_unreachable(client):
             u = db.query(User).filter(User.login == login).first()
             u.role = "student"
             db.commit()
-            got = easter_eggs.pick_avatar_egg(u, db)
+            got = easter_eggs.pick_avatar_egg(u, db, session_key=f"tab{n}")
             assert got in easter_eggs.AVATAR_EGGS, f"неожиданный выбор: {got}"
             seen.setdefault(got, []).append(login)
 
             #И у КАЖДОГО метка обязана быть устойчивой: повторный вопрос — тот же ответ.
-            assert easter_eggs.pick_avatar_egg(u, db) == got, \
+            assert easter_eggs.pick_avatar_egg(u, db, session_key=f"tab{n}") == got, \
                 f"{login}: метка изменилась при повторном обращении"
 
         assert set(seen) == set(easter_eggs.AVATAR_EGGS), \
@@ -568,7 +576,7 @@ def _make_student(client, admin, login):
     return st
 
 
-def test_avatar_mark_is_the_same_in_every_tab(client):
+def test_avatar_mark_is_the_same_in_every_tab(client, monkeypatch):
     """Метка аватарки одинакова во всех вкладках и после каждой перезагрузки.
 
     🔥 Разбор жалобы «украшения DOOM не снимаются» (24.08.2026). Метку выбирал
@@ -579,6 +587,14 @@ def test_avatar_mark_is_the_same_in_every_tab(client):
 
     Обратный ход: верни `roll_one_of([...])` — двадцати обращений с запасом хватает,
     чтобы увидеть обе метки, и тест падает."""
+        #⚠️ Долю на время теста поднимаем до 100 %. Это не подгонка: тест проверяет ДРУГОЕ
+    #свойство (стабильность метки / обновление следа), и редкость здесь только мешала бы
+    #— половина прогонов получала бы `None` и «падала» без всякой поломки. За саму долю
+    #отвечает `test_avatar_share_matches_the_declared_percent`, и там она настоящая.
+    #⚠️ Обе по 50, а не одна на 100: розыгрыш ОДИН на пару, и подняв только первую, мы
+    #сделали бы вторую недостижимой — тест бы падал по своей же вине.
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "doom_avatar", 50)
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "detroit_led", 50)
     admin = make_admin(client)
     st = _make_student(client, admin, "tab2")
 
@@ -588,7 +604,7 @@ def test_avatar_mark_is_the_same_in_every_tab(client):
     assert seen.pop() in easter_eggs.AVATAR_EGGS
 
 
-def test_avatar_mark_refreshes_the_trace_so_claim_always_works(client):
+def test_avatar_mark_refreshes_the_trace_so_claim_always_works(client, monkeypatch):
     """У метки ВСЕГДА свежий след — значит `claim` самолечится.
 
     🔥 Находка Полковника (24.08.2026), отменившая предыдущее решение целиком. Первый
@@ -601,6 +617,14 @@ def test_avatar_mark_refreshes_the_trace_so_claim_always_works(client):
     Обратный ход: убери `mark_triggered` из `pick_avatar_egg` — второй claim ниже
     получит 400 «Пасхалка не срабатывала»."""
     from app.models import EasterEggLog
+        #⚠️ Долю на время теста поднимаем до 100 %. Это не подгонка: тест проверяет ДРУГОЕ
+    #свойство (стабильность метки / обновление следа), и редкость здесь только мешала бы
+    #— половина прогонов получала бы `None` и «падала» без всякой поломки. За саму долю
+    #отвечает `test_avatar_share_matches_the_declared_percent`, и там она настоящая.
+    #⚠️ Обе по 50, а не одна на 100: розыгрыш ОДИН на пару, и подняв только первую, мы
+    #сделали бы вторую недостижимой — тест бы падал по своей же вине.
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "doom_avatar", 50)
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "detroit_led", 50)
     admin = make_admin(client)
     st = _make_student(client, admin, "tab3")
     uid = _db_user("tab3").id
@@ -632,7 +656,7 @@ def test_avatar_mark_refreshes_the_trace_so_claim_always_works(client):
     assert r.json()["unlocked"] is True
 
 
-def test_reload_skips_the_scene_roll_but_still_returns_the_mark(client):
+def test_reload_skips_the_scene_roll_but_still_returns_the_mark(client, monkeypatch):
     """`scene=0` гасит бросок сцены и НЕ трогает метку.
 
     ⚠️ Это про перезагрузку страницы: новый шанс за F5 не даётся, но украшение обязано
@@ -645,8 +669,169 @@ def test_reload_skips_the_scene_roll_but_still_returns_the_mark(client):
     src = inspect.getsource(achievements_router.egg_on_login)
     assert "if scene" in src, "признак сцены не влияет на бросок"
 
+        #⚠️ Долю поднимаем до 100 %: тест про то, что `scene=0` гасит СЦЕНУ и не трогает
+    #метку. Редкость метки здесь посторонняя и давала бы ложные падения.
+    #⚠️ Обе по 50, а не одна на 100: розыгрыш ОДИН на пару, и подняв только первую, мы
+    #сделали бы вторую недостижимой — тест бы падал по своей же вине.
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "doom_avatar", 50)
+    monkeypatch.setitem(easter_eggs.EGG_PERCENT, "detroit_led", 50)
     admin = make_admin(client)
     st = _make_student(client, admin, "tab4")
     data = client.get("/web/easter-eggs/on-login?scene=0", headers=st).json()
     assert data["egg"] is None, "перезагрузка всё-таки бросила сцену"
     assert data["avatar"] in easter_eggs.AVATAR_EGGS, "метка не приехала после перезагрузки"
+
+def test_relogin_gives_a_fresh_avatar_mark(client):
+    """Выход и новый вход перевыбирают метку, а вкладки одного входа — нет.
+
+    🔥 Жалоба Влада и второго тестировщика 24.08.2026: «получил DOOM, вышел, зашёл —
+    тот же DOOM». Метка была привязана к паре (человек, ДЕНЬ), то есть до полуночи
+    вторую отсылку было не увидеть, а вторую ачивку не взять. День — слишком крупная
+    единица: за него человек входит десяток раз, и каждый вход обязан быть новым шансом.
+
+    Проверяем ОБА свойства сразу, потому что чинить одно, ломая другое, здесь очень
+    легко: сделаешь бросок на каждый запрос — метка снова начнёт меняться между
+    вкладками (дефект, из-за которого её вообще сделали детерминированной).
+
+    Обратный ход: верни в `pick_avatar_egg` ключ на дату вместо `session_key` — первая
+    половина теста падает; сделай выбор случайным — падает вторая."""
+    admin = make_admin(client)
+    st = make_teacher(client, admin, login="relog")
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.login == "relog").first()
+        u.role = "student"
+        db.commit()
+        uid = u.id
+
+        #Одна сессия = один `jti`: сколько вкладок ни открой, метка одна и та же.
+        #⚠️ `None` здесь такой же законный ответ, как метка, и он тоже обязан быть
+        #стабильным: «мигающее» украшение (есть в одной вкладке, нет в соседней) —
+        #ровно тот дефект, из-за которого выбор вообще сделали детерминированным.
+        one = {easter_eggs.pick_avatar_egg(u, db, session_key="jti-A") for _ in range(20)}
+        assert len(one) == 1, f"ответ меняется в пределах ОДНОГО входа: {one}"
+
+        #Разные входы — разные `jti`. За сотню входов обязаны встретиться обе метки
+        #(и, разумеется, промахи — метка показывается примерно в четверти случаев).
+        seen = {easter_eggs.pick_avatar_egg(u, db, session_key=f"jti-{i}")
+                for i in range(100)}
+        assert set(easter_eggs.AVATAR_EGGS) <= seen, \
+            f"за 100 входов выпадало только {seen} — перезаход не даёт нового шанса"
+    finally:
+        db.close()
+
+    #И на уровне ручки: два разных токена одного человека дают разные метки хотя бы
+    #иногда, а один и тот же токен — всегда одну.
+    #⚠️ `None` — законный ответ ручки: метка показывается не каждый вход.
+    first = client.get("/web/easter-eggs/on-login", headers=st).json()
+    assert first["avatar"] in (*easter_eggs.AVATAR_EGGS, None), first
+
+
+def test_owning_one_of_the_pair_guarantees_the_other(client):
+    """Получил DOOM — следующий вход обязан показать Detroit, без броска.
+
+    🔥 Слова Влада: «иначе получили дум и не сможем получить детроит». Одного
+    случайного выбора мало: 50/50 на вход означает, что невезучему одна и та же метка
+    выпадет пять раз подряд, и жалоба вернётся. Обе они «обычной» ступени — их
+    открывает сам факт входа, растягивать это на неделю невезения незачем.
+
+    Обратный ход: убери ветку `len(missing) == 1` — тест падает на первом же входе,
+    где сошёлся хеш."""
+    admin = make_admin(client)
+    make_teacher(client, admin, login="pairguard")
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.login == "pairguard").first()
+        u.role = "student"
+        db.commit()
+
+        for owned_egg in easter_eggs.AVATAR_EGGS:
+            #Чистим пару и выдаём ровно одну из двух.
+            db.query(UserAchievement).filter(UserAchievement.user_id == u.id).delete()
+            db.commit()
+            easter_eggs.unlock(u.id, easter_eggs._ACH_OF[owned_egg], db)
+
+            other = [e for e in easter_eggs.AVATAR_EGGS if e != owned_egg][0]
+            #Любой ключ сессии: правило владения сильнее хеша, иначе оно ничего не даёт.
+            #⚠️ `None` — законный ответ (метка показывается не каждый вход, см. долю в
+            #EGG_PERCENT). Проверяем не «показали всегда», а «никогда не показали ту,
+            #что уже есть»: именно это делает вторую ачивку недостижимой.
+            shown = [easter_eggs.pick_avatar_egg(u, db, session_key=f"s{i}")
+                     for i in range(60)]
+            wrong = [g for g in shown if g == owned_egg]
+            assert not wrong, \
+                f"владеет {owned_egg}, а показали её же {len(wrong)} раз — вторую не взять"
+            assert other in shown, \
+                f"за 60 входов вторая метка ({other}) не показалась ни разу"
+
+        #Когда обе получены, правило отключается и метка снова стабильна по входу.
+        db.query(UserAchievement).filter(UserAchievement.user_id == u.id).delete()
+        db.commit()
+        for e in easter_eggs.AVATAR_EGGS:
+            easter_eggs.unlock(u.id, easter_eggs._ACH_OF[e], db)
+        both = {easter_eggs.pick_avatar_egg(u, db, session_key="same") for _ in range(10)}
+        assert len(both) == 1, "с обеими ачивками метка снова обязана быть стабильной"
+    finally:
+        db.close()
+
+
+def test_avatar_pair_map_is_derived_not_copied():
+    """`_ACH_OF` выводится из `ACHIEVEMENTS`, а не написан руками второй копией.
+
+    ⚠️ Две таблицы одного соответствия — это две таблицы, которые однажды разъедутся
+    молча. Проверяем свойство, а не значения."""
+    assert easter_eggs._ACH_OF == {egg: aid for aid, egg in easter_eggs.ACHIEVEMENTS.items()}
+    for egg in easter_eggs.AVATAR_EGGS:
+        assert egg in easter_eggs._ACH_OF, f"{egg} не имеет ачивки — пара сломана"
+
+def test_avatar_share_matches_the_declared_percent():
+    """Заявленные доли — правда, и проверяется НАСТОЯЩАЯ функция, а не её копия.
+
+    🔥 Здесь тест дважды оказывался бессильным, и оба раза по разным причинам.
+    Сначала продукт брал `hash_byte % 100`: байт это 0..255, поэтому первым пятидесяти
+    шести значениям доставался лишний шанс, и объявленные 25 % на деле были 29.2 %.
+    Потом я это починил — но тест СЧИТАЛ ДОЛЮ САМ, повторяя формулу у себя. Обратный
+    ход (вернуть смещение в продукт) оставил его ЗЕЛЁНЫМ: копия сверялась с копией.
+    Поэтому решение вынесено в `easter_eggs.avatar_draw` и гоняется именно оно.
+
+    Обратный ход: подмени в `avatar_draw` расчёт на остаток по модулю — доля уезжает
+    на ~3.4 п.п., и допуск ниже это ловит."""
+    want = {e: easter_eggs.EGG_PERCENT[e] for e in easter_eggs.AVATAR_EGGS}
+    n = 60000
+    got = {e: 0 for e in want}
+    nothing = 0
+    for i in range(n):
+        e = easter_eggs.avatar_draw(f"stud:u:{i}", f"jti{i}")
+        if e is None:
+            nothing += 1
+        else:
+            got[e] += 1
+
+    for egg, share in want.items():
+        measured = got[egg] / n * 100
+        #Допуск 0.7 п.п. — заметно уже смещения по модулю (3.4 п.п. на этих долях) и
+        #много шире случайного разброса при таком n.
+        assert abs(measured - share) < 0.7, f"{egg}: заявлено {share} %, вышло {measured:.2f} %"
+
+    #Ничего не показано — оставшаяся доля. Заодно это проверка, что обе разом не выпали:
+    #сумма трёх исходов обязана сойтись ровно в n.
+    assert nothing + sum(got.values()) == n
+    assert abs(nothing / n * 100 - (100 - sum(want.values()))) < 0.7
+
+
+def test_owning_one_lets_it_take_the_whole_pair_share():
+    """Кому не хватает одной — она забирает долю ВСЕЙ пары, а не свою половину.
+
+    Иначе, получив первую ачивку, человек ждал бы вторую вдвое дольше — а жаловались
+    ровно на то, что вторую не взять."""
+    total = sum(easter_eggs.EGG_PERCENT[e] for e in easter_eggs.AVATAR_EGGS)
+    n = 60000
+    for missing in easter_eggs.AVATAR_EGGS:
+        other = [e for e in easter_eggs.AVATAR_EGGS if e != missing][0]
+        hits = 0
+        for i in range(n):
+            e = easter_eggs.avatar_draw(f"stud:u:{i}", f"jti{i}", missing=[missing])
+            assert e in (missing, None), f"показали {e}, хотя человеку не хватает {missing}"
+            hits += e is not None
+        assert abs(hits / n * 100 - total) < 0.7,             f"{missing}: доля {hits / n * 100:.2f} %, а должна быть вся пара ({total} %)"
+        assert other not in (missing,)

@@ -7,6 +7,7 @@ import { ref, watch, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid, PanelRightClose, Volume2, VolumeX } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import MicButton from '@/components/vector/MicButton.vue'
 import { useVectorStore } from '@/stores/vector'
 import { useTtsStore } from '@/stores/tts'
@@ -15,6 +16,7 @@ import { useLocaleStore } from '@/stores/locale'
 
 const vector = useVectorStore()
 const tts = useTtsStore()
+const easter = useEasterStore()
 const toast = useToast()
 const locale = useLocaleStore()
 // Те же ключи, что и у вкладки «ИИ Помощник» (VectorPage.vue) — одна переписка, одна
@@ -87,7 +89,12 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
     <!-- Маскот ФОНОМ (во всю площадь) + чат полупрозрачным слоем поверх -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <div class="pointer-events-none absolute inset-0">
-        <Mascot :anim="anim" class="h-full w-full" />
+        <!-- 🔥 НОЧНАЯ СМЕНА FNAF: Вектора может не быть на месте. Пустое место намеренно
+             НЕ подписано — вся игра в том, чтобы человек заметил пропажу сам и позвал
+             его вопросом. Величина одна на оба места показа (вкладка и шторка): держи
+             её в компоненте, и заметивший пропажу в шторке увидел бы на вкладке живого
+             Вектора, то есть игра развалилась бы там, где в неё поверили. -->
+        <Mascot v-if="!easter.fnaf.hidden" :anim="anim" class="h-full w-full" />
       </div>
       <!-- Чат: верхний край ~42% высоты (уровень туловища) → голова и плечи открыты;
            подложка полупрозрачная + лёгкое размытие фона, чтобы текст читался. -->

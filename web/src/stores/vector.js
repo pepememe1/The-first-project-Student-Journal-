@@ -13,6 +13,7 @@ import { chatEmote } from '@/config/mascot'
 import { QUICK_COMMANDS } from '@/config/vectorCommands'
 import { useAuthStore } from './auth'
 import { useTtsStore } from './tts'
+import { useEasterStore } from './easterEggs'
 import { useLocaleStore } from './locale'
 
 const GREETING_KEY = 'vectorPage.greeting'
@@ -157,6 +158,11 @@ export const useVectorStore = defineStore('vector', () => {
     tts.unlock()
     const t = (text ?? input.value).trim()
     if (!t || state.value === 'thinking') return
+    // 🔥 НОЧНАЯ СМЕНА FNAF. Если Вектора «нет на месте», заданный вопрос его возвращает.
+    // Хук стоит ЗДЕСЬ, а не в двух компонентах: спросить можно и со вкладки «ИИ
+    // Помощник», и из боковой шторки, и одно из двух мест однажды забыли бы — это наш
+    // самый частый класс дефекта. Когда игра не идёт, вызов ничего не стоит.
+    useEasterStore().fnafLure()
     //Новый вопрос — сразу глушим прежнюю озвучку (barge-in), не дожидаясь нового ответа:
     //Вектор не должен договаривать старое, пока пользователь уже спросил другое.
     tts.stop()

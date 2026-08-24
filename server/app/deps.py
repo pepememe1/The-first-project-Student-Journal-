@@ -127,6 +127,27 @@ def get_current_user(authorization: str = Header(None),
     return user
 
 
+def current_jti(authorization: str = Header(None)) -> str:
+    """`jti` выданного токена — устойчивая метка ОДНОГО входа.
+
+    Зачем: есть величины, которые обязаны быть одинаковыми во всех вкладках и после
+    любой перезагрузки, но разными после нового входа. День для этого не годится
+    (перезаход даёт то же самое до полуночи), а запрос — тем более (метка менялась бы
+    между вкладками). `jti` уникален на каждый выданный токен и живёт ровно столько же,
+    сколько сессия.
+
+    ⚠️ Это НЕ проверка доступа. Рядом всегда стоит `get_current_user`, который в том же
+    запросе уже отверг бы недействительный или отозванный токен. Здесь нужна только
+    стабильная строка, поэтому подпись не перепроверяется и ошибок не выбрасывается:
+    нет заголовка или токен старого формата без `jti` — возвращаем пустую строку, и
+    вызывающий сам решает, чем её заменить.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return ""
+    payload = decode_token(authorization.split(" ", 1)[1].strip())
+    return str((payload or {}).get("jti") or "")
+
+
 def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Требуются права администратора")

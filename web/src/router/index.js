@@ -51,10 +51,33 @@ import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
 import ParentJournal from '@/pages/parent/ParentJournal.vue'
 import AdminParents from '@/pages/admin/AdminParents.vue'
 
-// i18nTitle/i18nSubtitle — необязательные ключи словаря (см. AppShell.vue); без них
-// заголовок остаётся русским литералом title/subtitle (обратная совместимость).
-const page = (path, component, title, subtitle, i18nTitle, i18nSubtitle) =>
-  ({ path, component, meta: { title, subtitle, i18nTitle, i18nSubtitle } })
+// i18nTitle — необязательный ключ словаря; без него заголовок остаётся русским
+// литералом title (обратная совместимость).
+//
+// 🔥 ПОДЗАГОЛОВКА СТРАНИЦЫ БОЛЬШЕ НЕТ (25.08.2026, просьба Влада). Он стоял строкой над
+// содержимым и пересказывал название уже выбранной вкладки: «Расписание» → «Пары
+// ВСГУТУ», «Курсы» → «Учебные курсы вашей группы», «Журнал оценок» → «Ваши оценки по
+// предметам». Раздел подсвечен в сайдбаре, а на телефоне его называет мобильная полоса
+// — третья подпись к тому же месту была шумом.
+// ⚠️ Строки удалены ВМЕСТЕ с отрисовкой, а не оставлены «на всякий случай»: аргумент,
+// который никуда не едет, читается следующим как рабочий и однажды введёт в
+// заблуждение. Понадобится пояснение к конкретной странице — ему место ВНУТРИ этой
+// страницы, рядом с тем, что оно поясняет.
+const page = (path, component, title, i18nTitle) =>
+  ({ path, component, meta: { title, i18nTitle } })
+
+// ⚠️ `note` — НЕ вернувшийся подзаголовок, и разницу надо держать в голове, иначе он
+// расползётся обратно по всем страницам. Подзаголовок пересказывал название вкладки
+// («Расписание» → «Пары ВСГУТУ») и был шумом. Пояснение говорит о странице то, чего по
+// её названию НЕ ВИДНО, и что человек иначе поймёт неверно.
+//
+// Правило отбора простое: убери строку — потеряется ли ФАКТ? Если теряется только
+// повторение названия, строки быть не должно.
+//
+// Сейчас такая строка ровно одна (см. админское расписание ниже). Соберётся вторая —
+// проверь её этим же вопросом, а не «у соседней страницы же есть».
+const noted = (route, note, i18nNote) =>
+  ({ ...route, meta: { ...route.meta, note, i18nNote } })
 
 const routes = [
   { path: '/connect', component: ConnectServer, meta: { public: true } },
@@ -76,15 +99,15 @@ const routes = [
       // Главная показывает ИМЯ студента как заголовок (title_lbl в десктопе) — рендерит
       // сама StudentDashboard, поэтому статический title из AppShell тут не нужен.
       { path: '', component: StudentDashboard, meta: {} },
-      page('journal', StudentJournal, 'Журнал оценок', 'Ваши оценки по предметам', 'nav.journal', 'router.journalSubtitle'),
-      page('schedule', SchedulePage, 'Расписание', 'Пары ВСГУТУ', 'nav.schedule', 'router.scheduleSubtitle'),
-      page('stats', StudentStats, 'Моя статистика', 'Динамика успеваемости', 'router.myStats', 'router.statsSubtitle'),
-      page('courses', CoursesPage, 'Курсы', 'Учебные курсы вашей группы', 'nav.courses', 'router.coursesSubtitle'),
+      page('journal', StudentJournal, 'Журнал оценок', 'nav.journal'),
+      page('schedule', SchedulePage, 'Расписание', 'nav.schedule'),
+      page('stats', StudentStats, 'Моя статистика', 'router.myStats'),
+      page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
-      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
+      page('profile', Profile, 'Профиль', 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },
 
@@ -92,19 +115,19 @@ const routes = [
   {
     path: '/teacher', component: AppShell, meta: { requiresAuth: true, role: 'teacher' },
     children: [
-      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', subtitle: 'Оценки по группам', i18nTitle: 'router.teacherJournalTitle', i18nSubtitle: 'router.teacherJournalSubtitle' } },
-      page('students', TeacherStudents, 'Студенты группы', undefined, 'router.groupStudents'),
-      page('curator', CuratorView, 'Курирование', 'Ваши курируемые группы', 'nav.curator', 'router.curatorSubtitle'),
+      { path: '', component: TeacherJournal, meta: { title: 'Журнал преподавателя', i18nTitle: 'router.teacherJournalTitle', } },
+      page('students', TeacherStudents, 'Студенты группы', 'router.groupStudents'),
+      page('curator', CuratorView, 'Курирование', 'nav.curator'),
       // Куратор привязывает родителей к студентам СВОИХ групп (скоуп режет сервер).
-      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
-      page('schedule', SchedulePage, 'Расписание', undefined, 'nav.schedule'),
-      page('stats', TeacherStats, 'Статистика группы', undefined, 'router.groupStats'),
-      page('courses', CoursesPage, 'Курсы', 'Ваши учебные курсы', 'nav.courses', 'router.coursesSubtitle'),
+      page('parents', AdminParents, 'Родители', 'nav.parents'),
+      page('schedule', SchedulePage, 'Расписание', 'nav.schedule'),
+      page('stats', TeacherStats, 'Статистика группы', 'router.groupStats'),
+      page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
-      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
+      page('profile', Profile, 'Профиль', 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },
 
@@ -113,37 +136,38 @@ const routes = [
     path: '/admin', component: AppShell, meta: { requiresAuth: true, role: 'admin' },
     children: [
       { path: '', component: AdminDashboard, meta: { title: 'Панель администратора', i18nTitle: 'router.adminDashboardTitle' } },
-      page('teachers', AdminTeachers, 'Преподаватели', undefined, 'nav.teachers'),
-      page('students', AdminStudents, 'Студенты', undefined, 'nav.students'),
-      page('parents', AdminParents, 'Родители', 'Доступ родителей к журналу', 'nav.parents', 'router.parentsSubtitle'),
-      page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'Одобрение самостоятельной регистрации студентов', 'nav.registrations', 'router.registrationsSubtitle'),
-      page('groups', AdminGroups, 'Группы', undefined, 'nav.groups'),
-      page('subject-archive', AdminSubjectArchive, 'Архив предметов',
-           'Что изучалось раньше и что убрал последний реимпорт плана', 'nav.subjectArchive', 'router.subjectArchiveSubtitle'),
-      page('subjects', AdminSubjects, 'Предметы', undefined, 'nav.subjects'),
-      page('courses', CoursesPage, 'Курсы', 'Учебные курсы', 'nav.courses', 'router.coursesSubtitle'),
+      page('teachers', AdminTeachers, 'Преподаватели', 'nav.teachers'),
+      page('students', AdminStudents, 'Студенты', 'nav.students'),
+      page('parents', AdminParents, 'Родители', 'nav.parents'),
+      page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'nav.registrations'),
+      page('groups', AdminGroups, 'Группы', 'nav.groups'),
+      page('subject-archive', AdminSubjectArchive, 'Архив предметов', 'nav.subjectArchive'),
+      page('subjects', AdminSubjects, 'Предметы', 'nav.subjects'),
+      page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      page('schedule', AdminSchedule, 'Расписание', 'Правки поверх портала ВСГУТУ', 'nav.schedule', 'router.adminScheduleSubtitle'),
-      page('schedule-issues', AdminScheduleIssues, 'Накладки расписания',
-           'Один преподаватель или аудитория заняты дважды', 'router.scheduleIssuesTitle', 'router.scheduleIssuesSubtitle'),
-      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', subtitle: 'Провайдер «Вектора» — GigaChat / Ollama / Оффлайн', i18nTitle: 'router.aiSettingsTitle', i18nSubtitle: 'router.aiSettingsSubtitle' } },
+      // Пояснение оставлено намеренно (решение Влада 25.08.2026): админ правит не своё
+      // расписание, а НАЛОЖЕНИЕ поверх портала ВСГУТУ. По названию вкладки этого не
+      // видно, и без строки человек ждёт полноценный редактор.
+      noted(page('schedule', AdminSchedule, 'Расписание', 'nav.schedule'),
+            'Правки поверх портала ВСГУТУ', 'router.scheduleSubtitle'),
+      page('schedule-issues', AdminScheduleIssues, 'Накладки расписания', 'router.scheduleIssuesTitle'),
+      { path: 'api', component: AdminAiSettings, meta: { title: 'Настройки ИИ-помощника «Вектор»', i18nTitle: 'router.aiSettingsTitle', } },
       // В программе на этой же странице появляется управление по SSH (список серверов,
       // команды, перенос). На сайте его нет: маршруты /desk/* подключает только
       // локальный сервер программы — см. шапку AdminServer.vue.
-      page('server', AdminServer, 'Сервер', 'Состояние машины, база, диск, копии', 'nav.server', 'router.serverSubtitle'),
-      page('data', AdminData, 'Данные и резервные копии',
-           'Выгрузка всех данных в архив и загрузка обратно', 'router.dataTitle', 'router.dataSubtitle'),
-      page('requests', AdminRequests, 'Запросы на подключение', 'Одобрение устройств', 'nav.requests', 'router.requestsSubtitle'),
-      page('access', AdminSessions, 'Сессии и доступ', 'Выданные токены и отзыв', 'nav.sessions', 'router.accessSubtitle'),
+      page('server', AdminServer, 'Сервер', 'nav.server'),
+      page('data', AdminData, 'Данные и резервные копии', 'router.dataTitle'),
+      page('requests', AdminRequests, 'Запросы на подключение', 'nav.requests'),
+      page('access', AdminSessions, 'Сессии и доступ', 'nav.sessions'),
       // Раньше отсутствовал: SidebarUserOverlay/HeaderBar ссылаются на `/${role}/profile`
       // безусловно для ВСЕХ ролей — у админа маршрута не было, и переход падал в
       // catch-all редирект на "/". Найдено при разведке под Discord-style профиль (3.6).
-      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
-      { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', subtitle: 'Онлайн и события сервера', i18nTitle: 'nav.monitor', i18nSubtitle: 'router.monitorSubtitle' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      page('profile', Profile, 'Профиль', 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'nav.settings'),
+      { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', i18nTitle: 'nav.monitor', } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
-      page('moderation', AdminMessenger, 'Модерация чатов', 'Жалобы и просмотр переписок', 'nav.moderation', 'router.moderationSubtitle'),
+      page('moderation', AdminMessenger, 'Модерация чатов', 'nav.moderation'),
     ],
   },
 
@@ -153,13 +177,13 @@ const routes = [
   {
     path: '/parent', component: AppShell, meta: { requiresAuth: true, role: 'parent' },
     children: [
-      { path: '', component: ParentJournal, meta: { title: 'Журнал', subtitle: 'Успеваемость ребёнка', i18nTitle: 'nav.teacherJournal', i18nSubtitle: 'router.childPerformance' } },
-      page('courses', CoursesPage, 'Курсы', 'Учебные курсы группы ребёнка', 'nav.courses', 'router.coursesSubtitle'),
+      { path: '', component: ParentJournal, meta: { title: 'Журнал', i18nTitle: 'nav.teacherJournal', } },
+      page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', subtitle: 'Вектор', i18nTitle: 'nav.ai', i18nSubtitle: 'router.vectorName' } },
+      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
-      page('profile', Profile, 'Профиль', undefined, 'nav.profile'),
-      page('settings', Settings, 'Настройки', 'Оформление, безопасность, озвучка', 'nav.settings', 'router.settingsSubtitle'),
+      page('profile', Profile, 'Профиль', 'nav.profile'),
+      page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },
 
@@ -208,7 +232,7 @@ async function confirmLeavingEasterEgg(to, from) {
   if (easter.navLocked()) return false
   if (!easter.pending) return true
   const { confirm } = useConfirm()
-  const ask = leaveAsk(easter.pending)
+  const ask = leaveAsk(easter.pending, easter.pendingOwned)
   const ok = await confirm({
     title: ask.title, message: ask.message, okText: ask.ok, cancelText: ask.cancel,
   })

@@ -26,7 +26,7 @@ export const ACHIEVEMENTS = [
     title: 'Скрытый наблюдатель',
     desc: 'Кто-то смотрел на вас из настроек. Вы заметили.' },
   { id: 'fnaf_night',        icon: '🌙', rarity: 'legendary',
-    title: 'Пережил ночную смену',
+    title: 'Пять ночей во ВСГУТУ',
     desc: 'Вы зашли в журнал глубокой ночью и не сбежали.' },
   { id: 'portal_cake_lie',   icon: '🍰', rarity: 'epic',
     title: 'Торт — это ложь',

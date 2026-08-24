@@ -104,6 +104,7 @@ def claim_achievement(payload: dict = Body(...),
 def egg_on_login(
     scene: bool = True,
     user: User = Depends(get_current_user),
+    jti: str = Depends(current_jti),
     db: Session = Depends(get_db),
 ):
     """Что показать сразу после входа: не больше одной пасхалки за раз.
@@ -126,11 +127,12 @@ def egg_on_login(
     украшение пропадало до конца сессии.
 
     ⚠️ Метка НЕ бросается и клиентом не запоминается: `pick_avatar_egg` вычисляет её
-    детерминированно и сама обновляет след. Поэтому спрашивать её можно сколько угодно
-    раз — ответ один и тот же, а `claim` всегда находит свежий след."""
+    детерминированно по ВХОДУ (`jti` токена) и сама обновляет след. Поэтому спрашивать
+    её можно сколько угодно раз — в пределах одного входа ответ один и тот же, `claim`
+    всегда находит свежий след, а выход и новый вход дают новую метку."""
     return {
         "egg": easter_eggs.pick_on_login(user, db) if scene else None,
-        "avatar": easter_eggs.pick_avatar_egg(user, db),
+        "avatar": easter_eggs.pick_avatar_egg(user, db, session_key=jti),
     }
 
 
