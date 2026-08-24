@@ -8,6 +8,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Send, LayoutGrid } from '@lucide/vue'
 import Mascot from '@/components/Mascot.vue'
+import { useEasterStore } from '@/stores/easterEggs'
 import MicButton from '@/components/vector/MicButton.vue'
 import GradesOverview from '@/components/vector/GradesOverview.vue'
 import TeacherOverview from '@/components/vector/TeacherOverview.vue'
@@ -21,6 +22,7 @@ const vector = useVectorStore()
 const auth = useAuthStore()
 const toast = useToast()
 const locale = useLocaleStore()
+const easter = useEasterStore()
 // Правая колонка — СВОЯ у каждой роли (3.6). Раньше здесь была только сводка студента,
 // а у преподавателя и администратора вкладка «ИИ Помощник» пустовала наполовину, хотя
 // это самая просторная страница продукта. Что кому показываем:
@@ -120,7 +122,12 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <div class="pointer-events-none absolute inset-0 transition-opacity duration-300"
            :class="{ 'opacity-15 sm:opacity-100': focused }">
-        <Mascot :anim="anim" class="h-full w-full" />
+        <!-- 🔥 НОЧНАЯ СМЕНА FNAF: Вектора может не быть на месте. Пустое место намеренно
+             НЕ подписано — вся игра в том, чтобы человек заметил пропажу сам и позвал
+             его вопросом. Величина одна на оба места показа (вкладка и шторка): держи
+             её в компоненте, и заметивший пропажу в шторке увидел бы на вкладке живого
+             Вектора, то есть игра развалилась бы там, где в неё поверили. -->
+        <Mascot v-if="!easter.fnaf.hidden" :anim="anim" class="h-full w-full" />
       </div>
       <!-- Чат: верхний край ~40% высоты (уровень туловища), по центру, ограничен по
            ширине; подложка полупрозрачная + размытие — текст читаем, Вектор просвечивает.
