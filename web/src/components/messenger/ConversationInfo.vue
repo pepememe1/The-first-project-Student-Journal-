@@ -6,11 +6,12 @@
 // Здесь же — выход из группы/канала и удаление переписки у себя.
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical } from '@lucide/vue'
+import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical, UserPlus } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import Avatar from '@/components/ui/Avatar.vue'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
+import AddMembersDialog from '@/components/messenger/AddMembersDialog.vue'
 import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import SharedGroupsChannels from '@/components/messenger/SharedGroupsChannels.vue'
@@ -33,6 +34,28 @@ const myIgnoredIds = computed(() => new Set(activeInfo.value?.my_ignored_user_id
 const myUserId = computed(() => activeInfo.value?.my_user_id || '')
 const canKick = computed(() => myPermissions.value.has('kick'))
 const canManageRoles = computed(() => myPermissions.value.has('manage_roles'))
+// 🔥 ДОБАВЛЕНИЕ УЧАСТНИКОВ. Право то же, что у кика (`kick`): кто может выгнать —
+// может и позвать. Отдельного права не заводим — набор прав у нас намеренно узкий
+// (см. `_ALL_PERMISSIONS`), а сервер всё равно проверяет `_require_manager`.
+const addOpen = ref(false)
+const addBusy = ref(false)
+const canAdd = computed(() => activeKind.value !== 'direct'
+  && activeKind.value !== 'saved'
+  && (myPermissions.value.has('kick') || myPermissions.value.has('manage_roles')))
+const existingIds = computed(() => (activeInfo.value?.participants || []).map((p) => p.user_id))
+
+async function doAddMembers({ userIds, classGroups }) {
+  addBusy.value = true
+  const added = await m.addMembers(userIds, classGroups)
+  addBusy.value = false
+  addOpen.value = false
+  // ⚠️ Сообщаем ЧИСЛО, а не «готово»: сервер молча пропускает тех, кто уже в беседе,
+  // и бодрое «добавлено» при нуле заставило бы человека думать, что люди в чате.
+  toast(added
+    ? locale.t('members.added', { n: added })
+    : locale.t('members.addedNobody', 'Никого не добавили — возможно, они уже в беседе'))
+}
+
 const openMenuFor = ref(null)
 const roleDialogFor = ref(null)
 // §5.4: клик по аватарке/имени — открыть Discord-style карточку профиля поверх этой
@@ -242,6 +265,23 @@ async function clearHistory() {
           <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">
             {{ locale.t('profilePanel.participants', 'Участники') }} · {{ people.length }}
           </p>
+
+          <!-- 🔥 «Добавить участников» — до 25.08.2026 этой кнопки не было, и добавить
+               человека в беседу через продукт было НЕЛЬЗЯ ВОВСЕ: серверная ручка
+               работала, а звать её было некому. Стоит ПЕРВОЙ строкой списка, как в
+               Telegram: искать её в меню «ещё» никто не станет. -->
+          <button v-if="canAdd" type="button" @click="addOpen = true"
+                  class="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left
+                         text-accent transition-colors hover:bg-bg2">
+            <span class="grid size-7 place-items-center rounded-full border border-dashed border-accent/50">
+              <UserPlus :size="14" />
+            </span>
+            <span class="text-sm font-medium">
+              {{ activeKind === 'channel'
+                 ? locale.t('members.addToChannel', 'Добавить читателей')
+                 : locale.t('members.addToGroup', 'Добавить участников') }}
+            </span>
+          </button>
           <div class="space-y-1">
             <div v-for="p in people" :key="p.user_id"
                  class="relative flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-bg2">
@@ -297,6 +337,9 @@ async function clearHistory() {
           </div>
         </template>
       </div>
+
+      <AddMembersDialog v-if="addOpen" :existing-ids="existingIds" :kind="activeKind" :busy="addBusy"
+                        @add="doAddMembers" @close="addOpen = false" />
 
       <RoleManagerDialog v-if="roleDialogFor" :user-id="roleDialogFor.user_id"
                          :user-name="roleDialogFor.full_name" @close="roleDialogFor = null" />

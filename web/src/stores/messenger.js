@@ -742,6 +742,22 @@ export const useMessengerStore = defineStore('messenger', () => {
 
   // §ролей: выгнать/выдать роль/игнор — действуют на АКТИВНУЮ беседу, перегружают
   // activeInfo (там же лежат my_permissions/participants[].custom_role_id).
+  /**
+   * Добавить людей в активную беседу.
+   *
+   * ⚠️ Возвращает ЧИСЛО добавленных, а не `true`: сервер молча пропускает тех, кто уже
+   * состоит в беседе или удалён, и «успех» при нуле добавленных ввёл бы человека в
+   * заблуждение — он бы решил, что участники в чате, и не проверил.
+   */
+  async function addMembers(userIds, classGroups) {
+    if (!activeId.value) return 0
+    if (!userIds?.length && !classGroups?.length) return 0
+    try {
+      const { data } = await messengerApi.addMembers(activeId.value, userIds || [], classGroups || [])
+      await loadConvInfo()
+      return Number(data?.added || 0)
+    } catch { return 0 }
+  }
   async function kickMember(userId) {
     if (!activeId.value) return false
     try { await messengerApi.removeMember(activeId.value, userId); await loadConvInfo(); return true }
@@ -1024,7 +1040,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
-    kickMember, setMemberRole, toggleIgnore,
+    addMembers, kickMember, setMemberRole, toggleIgnore,
     openAnnouncementsChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus, startIdleWatch, stopIdleWatch,
     togglePinChat, toggleArchiveChat, openSaved,

@@ -1874,3 +1874,60 @@ def test_nonce_dedup_is_per_sender(client):
         client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
         if m["sender_id"] == a_id][0]["id"], "повтор с той же меткой создал дубль"
 
+
+
+def test_members_can_be_added_to_an_existing_chat(client):
+    """Добавление участников в УЖЕ СОЗДАННУЮ беседу — и людьми, и учебной группой.
+
+    🔥 До 25.08.2026 у ручки `POST /chats/{id}/members` не было НИ ОДНОГО вызывающего:
+    она работала, а через продукт добавить человека в беседу было нельзя вовсе —
+    только правкой базы руками. Влад сообщил это как «в беседы невозможно добавить
+    новых людей». Наш самый частый класс дефекта: поведение проверено, вызова нет.
+
+    Здесь проверяется САМА ручка; за то, что её кто-то зовёт, отвечает сверка контракта
+    `tools/graph_api_bridge.py` (она эту ручку всё время показывала в списке «сервер
+    никто не зовёт», просто список не печатался)."""
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Пустая"}, headers=a).json()["conversation_id"]
+    ids = {p["user_id"] for p in client.get(f"/web/messenger/chats/{conv}", headers=a).json()["participants"]}
+    assert ids == {a_id}, "в новой группе должен быть только создатель"
+
+    #Поимённо.
+    r = client.post(f"/web/messenger/chats/{conv}/members", json={"user_ids": [b_id]}, headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 1
+    ids = {p["user_id"] for p in client.get(f"/web/messenger/chats/{conv}", headers=a).json()["participants"]}
+    assert b_id in ids
+
+    #Повторное добавление того же человека не задваивает участника и не врёт про успех.
+    assert client.post(f"/web/messenger/chats/{conv}/members",
+                       json={"user_ids": [b_id]}, headers=a).json()["added"] == 0
+
+
+def test_adding_a_whole_class_group_obeys_the_same_curator_scope(client):
+    """Учебной группой добавлять можно, но ТОЛЬКО свою курируемую.
+
+    ⚠️ Правило то же, что при создании беседы, и это ОДНА функция на оба места
+    (`_expand_class_groups`). Вторая копия правила ДОСТУПА разошлась бы с первой молча
+    и в опасную сторону: «преподаватель массово добавил чужих студентов».
+
+    Обратный ход: убери проверку `gname not in curated` — второй assert падает."""
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Позовём группу"}, headers=a).json()["conversation_id"]
+
+    #Пока "a" НЕ куратор — чужая группа игнорируется молча.
+    r = client.post(f"/web/messenger/chats/{conv}/members",
+                    json={"user_ids": [], "class_groups": ["К-24"]}, headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == 0, "не куратор массово затащил чужую учебную группу"
+
+    #Делаем куратором — теперь та же просьба срабатывает.
+    client.post("/sync/push", json={"changes": {"users": [
+        {"id": a_id, "curated_groups": ["К-24"]}]}}, headers=admin)
+    r = client.post(f"/web/messenger/chats/{conv}/members",
+                    json={"user_ids": [], "class_groups": ["К-24"]}, headers=a)
+    assert r.json()["added"] >= 2, "куратор не смог добавить свою же группу"
+    ids = {p["user_id"] for p in client.get(f"/web/messenger/chats/{conv}", headers=a).json()["participants"]}
+    assert b_id in ids and c_id in ids

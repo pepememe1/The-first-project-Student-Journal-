@@ -470,6 +470,15 @@ export const messengerApi = {
     api.patch(`/web/messenger/chats/${encodeURIComponent(convId)}`, { title, about }),
   // §ролей: выгнать участника (право kick), назначить билдовую/кастомную роль, кастомные
   // роли беседы, личный игнор (не модерация — см. модель ConversationIgnore).
+  // 🔥 ДОБАВЛЕНИЕ УЧАСТНИКОВ. Ручка на сервере существует и работает с самого начала
+  // (`POST /chats/{id}/members`, messenger/chats.py::add_members), а вызывающего у неё
+  // не было НИ ОДНОГО — то есть добавить человека в беседу через продукт было нельзя
+  // вовсе, только правкой базы руками. Влад сообщил это как «в беседы невозможно
+  // добавить новых людей»; нашлось сверкой `tools/graph_api_bridge.py`, где эта ручка
+  // всё время лежала в списке «сервер никто не зовёт».
+  addMembers: (convId, userIds, classGroups) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members`,
+      { user_ids: userIds, class_groups: classGroups || [] }),
   removeMember: (convId, userId) =>
     api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/members/${encodeURIComponent(userId)}`),
   setMemberRole: (convId, userId, { role, customRoleId } = {}) =>

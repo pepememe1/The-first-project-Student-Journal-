@@ -223,6 +223,30 @@ def mute_conversation(conv_id: str, payload: dict = Body(default={}),
     return {"ok": True, "conversation_id": conv_id, "muted": bool(p.muted)}
 
 
+def _expand_class_groups(db: Session, user: User, names) -> list[str]:
+    """Названия УЧЕБНЫХ групп -> id их студентов. Только СВОИ курируемые.
+
+    ⚠️ ОДНА функция на создание беседы и на добавление в существующую. Раньше это был
+    вложенный цикл внутри `create_group`, и когда добавление участников наконец обрело
+    вызывающего (25.08.2026), логику пришлось бы написать второй раз — а вторая копия
+    правила ДОСТУПА расходится с первой молча и в опасную сторону: «преподаватель
+    массово добавил чужих студентов».
+
+    ⚠️ Чужое имя молча пропускаем, а не отвечаем ошибкой: клиентскому списку не верим,
+    но и подсказывать, какие группы существуют, тому, кто их не курирует, незачем.
+    """
+    curated = set(user.curated_groups or [])
+    out: list[str] = []
+    for gname in (names or []):
+        if gname not in curated:
+            continue
+        students = (db.query(User)
+                    .filter(User.role == "student", User.group_name == gname,
+                            User.deleted == False).all())  # noqa: E712
+        out.extend(s.id for s in students)
+    return out
+
+
 @router.post("/chats/group")
 def create_group(payload: dict = Body(...), user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
@@ -245,14 +269,7 @@ def create_group(payload: dict = Body(...), user: User = Depends(get_current_use
                                    role="owner", joined_at=now))
     seen = {user.id}
     member_ids = list(payload.get("member_ids") or [])
-    curated = set(user.curated_groups or [])
-    for gname in (payload.get("class_groups") or []):
-        if gname not in curated:            #скоуп: только СВОИ курируемые группы
-            continue
-        students = (db.query(User)
-                    .filter(User.role == "student", User.group_name == gname,
-                            User.deleted == False).all())  # noqa: E712
-        member_ids.extend(s.id for s in students)
+    member_ids.extend(_expand_class_groups(db, user, payload.get("class_groups")))
     for uid in member_ids:
         if uid in seen or db.query(User).filter(User.id == uid, User.deleted == False).first() is None:  # noqa: E712
             continue
@@ -342,14 +359,27 @@ def leave_chat(conv_id: str, user: User = Depends(get_current_user), db: Session
 @router.post("/chats/{conv_id}/members")
 def add_members(conv_id: str, payload: dict = Body(...),
                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Добавить участников (owner/admin). В канал добавляются как reader, в группу — member."""
+    """Добавить участников (owner/admin). В канал добавляются как reader, в группу — member.
+
+    ⚠️ У этой ручки ДО 25.08.2026 не было НИ ОДНОГО вызывающего: она работала, а через
+    продукт добавить человека в беседу было нельзя вовсе — только правкой базы руками.
+    Классическое «обещание без вызывающего»; нашлось сверкой контракта
+    (`tools/graph_api_bridge.py`), где ручка всё время лежала в списке «сервер никто
+    не зовёт».
+
+    `class_groups` — то же, что при создании группы: названия УЧЕБНЫХ групп, только
+    свои курируемые. Раскрывает общая `_expand_class_groups`, чтобы правило доступа не
+    существовало в двух копиях.
+    """
     _require_manager(db, conv_id, user)
     conv = _conversation(db, conv_id)
     role = "reader" if conv.kind == "channel" else "member"
     now = _now()
     added = 0
     joined_names = []
-    for uid in (payload.get("user_ids") or []):
+    wanted = list(payload.get("user_ids") or [])
+    wanted.extend(_expand_class_groups(db, user, payload.get("class_groups")))
+    for uid in wanted:
         if _participant(db, conv_id, uid) is not None:
             continue
         u = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
