@@ -476,6 +476,24 @@ export const messengerApi = {
   // вовсе, только правкой базы руками. Влад сообщил это как «в беседы невозможно
   // добавить новых людей»; нашлось сверкой `tools/graph_api_bridge.py`, где эта ручка
   // всё время лежала в списке «сервер никто не зовёт».
+  // ── Вложения и вкладки панели беседы (25.08.2026) ──────────────────────────
+  // ⚠️ Файл НЕ проходит через наш сервер: `signUpload` отдаёт подписанную ссылку,
+  // браузер кладёт файл ПРЯМО в хранилище, потом `confirmUpload`. Разбор, почему иначе
+  // нельзя, — docs/MESSENGER-ATTACHMENTS-PLAN.md и server/app/storage.py.
+  uploadLimits: () => api.get('/web/messenger/uploads/limits'),
+  signUpload: (convId, { name, size, mime }) =>
+    api.post('/web/messenger/uploads/sign', { conversation_id: convId, name, size, mime }),
+  confirmUpload: (attId) =>
+    api.post(`/web/messenger/uploads/${encodeURIComponent(attId)}/done`),
+  attachmentUrl: (attId) =>
+    api.get(`/web/messenger/attachments/${encodeURIComponent(attId)}/url`),
+  chatFiles: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/files`),
+  chatMedia: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/media`),
+  chatSaved: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/saved`),
+
   addMembers: (convId, userIds, classGroups) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members`,
       { user_ids: userIds, class_groups: classGroups || [] }),

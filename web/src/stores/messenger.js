@@ -413,6 +413,62 @@ export const useMessengerStore = defineStore('messenger', () => {
     } finally { sending.value = false }
   }
 
+  /**
+   * Отправить файл. Три шага, и ни на одном файл не проходит через наш сервер.
+   *
+   *   1. просим подпись → сервер проверяет участие, размер, тип и отдаёт ссылку;
+   *   2. кладём файл ПРЯМО в хранилище (PUT по подписанной ссылке);
+   *   3. подтверждаем загрузку и отправляем обычное сообщение с `attachment_id`.
+   *
+   * ⚠️ Шаг 3 разделён на два запроса не от лени: без подтверждения в базе копились бы
+   * записи о файлах, которых в хранилище нет, и человек видел бы в списке файлы,
+   * которые не открываются.
+   *
+   * ⚠️ `fetch`, а не наш axios-клиент: к хранилищу нельзя приложить наш заголовок
+   * авторизации — подпись уже в ссылке, а лишний заголовок ломает проверку подписи.
+   *
+   * @param {File} file
+   * @param {string} caption — подпись к файлу (необязательна: файл сам по себе сообщение)
+   * @param {(pct:number)=>void} onProgress
+   */
+  async function sendFile(file, caption = '', onProgress = null) {
+    if (!file || !activeId.value || sending.value) return false
+    sending.value = true
+    try {
+      const { data: sign } = await messengerApi.signUpload(activeId.value, {
+        name: file.name, size: file.size, mime: file.type || 'application/octet-stream',
+      })
+      onProgress?.(5)
+
+      const put = await fetch(sign.url, {
+        method: sign.method || 'PUT',
+        headers: sign.headers || {},
+        body: file,
+      })
+      if (!put.ok) throw new Error(`хранилище отказало: ${put.status}`)
+      onProgress?.(85)
+
+      await messengerApi.confirmUpload(sign.attachment_id)
+      const { data } = await messengerApi.send(
+        activeId.value, caption.trim(), replyTo.value?.id || 0, _nonce(),
+        { attachment_id: sign.attachment_id })
+      _appendUnique(data)
+      replyTo.value = null
+      setNotice('')
+      onProgress?.(100)
+      await loadChats()
+      return true
+    } catch (e) {
+      //Отдельная ветка для «хранилище не настроено»: это не сбой сети, и человеку надо
+      //сказать правду, а не «попробуйте ещё раз».
+      if (e?.response?.status === 503) setNotice('Хранилище файлов пока не настроено')
+      else if (e?.response?.status === 413) setNotice('Файл слишком большой')
+      else if (e?.response?.status === 415) setNotice('Такой тип файла не поддерживается')
+      else _handleSendError(e)
+      return false
+    } finally { sending.value = false }
+  }
+
   // Замьютить/размьютить активную беседу у себя (без пушей по ней).
   async function muteConversation(muted) {
     if (!activeId.value) return
@@ -1040,7 +1096,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
-    addMembers, kickMember, setMemberRole, toggleIgnore,
+    sendFile, addMembers, kickMember, setMemberRole, toggleIgnore,
     openAnnouncementsChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus, startIdleWatch, stopIdleWatch,
     togglePinChat, toggleArchiveChat, openSaved,

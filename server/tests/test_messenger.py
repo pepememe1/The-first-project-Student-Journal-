@@ -1931,3 +1931,281 @@ def test_adding_a_whole_class_group_obeys_the_same_curator_scope(client):
     assert r.json()["added"] >= 2, "куратор не смог добавить свою же группу"
     ids = {p["user_id"] for p in client.get(f"/web/messenger/chats/{conv}", headers=a).json()["participants"]}
     assert b_id in ids and c_id in ids
+
+
+def test_attachments_refuse_everything_that_should_be_refused(client, monkeypatch):
+    """Подпись загрузки проверяет участие, размер и тип — на СЕРВЕРЕ.
+
+    ⚠️ Клиентская проверка существует ради вежливого сообщения, а не ради безопасности:
+    обойти её можно curl'ом за секунду. Здесь проверяется настоящая дверь."""
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Файлы"}, headers=a).json()["conversation_id"]
+
+    #Без настроенного хранилища — ЧЕСТНЫЙ отказ, а не молчаливая потеря файла.
+    monkeypatch.setattr(storage, "ENDPOINT", "")
+    r = client.post("/web/messenger/uploads/sign", headers=a,
+                    json={"conversation_id": conv, "name": "x.pdf", "size": 10,
+                          "mime": "application/pdf"})
+    assert r.status_code == 503, "молча приняли файл при ненастроенном хранилище"
+
+    #Настраиваем фиктивное хранилище: подпись считается локально, наружу ничего не идёт.
+    for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+
+    #Чужая беседа — не участник.
+    r = client.post("/web/messenger/uploads/sign", headers=b,
+                    json={"conversation_id": conv, "name": "x.pdf", "size": 10,
+                          "mime": "application/pdf"})
+    assert r.status_code in (403, 404), "посторонний подписал загрузку в чужую беседу"
+
+    #Слишком большой файл.
+    r = client.post("/web/messenger/uploads/sign", headers=a,
+                    json={"conversation_id": conv, "name": "x.pdf",
+                          "size": storage.MAX_SIZE + 1, "mime": "application/pdf"})
+    assert r.status_code == 413
+
+    #Тип вне белого списка. ⚠️ Именно белого: чёрный всегда неполон, и первым же
+    #пропущенным типом окажется исполняемый.
+    r = client.post("/web/messenger/uploads/sign", headers=a,
+                    json={"conversation_id": conv, "name": "x.exe", "size": 10,
+                          "mime": "application/x-msdownload"})
+    assert r.status_code == 415
+
+    #Законный файл — подпись выдаётся, но вложение ещё НЕ готово.
+    r = client.post("/web/messenger/uploads/sign", headers=a,
+                    json={"conversation_id": conv, "name": "лекция.pdf", "size": 1024,
+                          "mime": "application/pdf"})
+    assert r.status_code == 200, r.text
+    att = r.json()["attachment_id"]
+    assert r.json()["url"].startswith("https://s3.example/gb/messenger/")
+    assert "X-Amz-Signature=" in r.json()["url"], "ссылка без подписи"
+
+    #Пока загрузка не подтверждена, приложить файл к сообщению нельзя: иначе в ленте
+    #появится карточка файла, которого в хранилище нет.
+    r = client.post(f"/web/messenger/chats/{conv}/messages", headers=a,
+                    json={"body": "вот", "attachment_id": att})
+    assert r.status_code == 400, "неподтверждённое вложение уехало в ленту"
+
+    #Подтверждаем — и теперь можно.
+    assert client.post(f"/web/messenger/uploads/{att}/done", headers=a).status_code == 200
+    r = client.post(f"/web/messenger/chats/{conv}/messages", headers=a,
+                    json={"body": "вот", "attachment_id": att})
+    assert r.status_code == 200, r.text
+    assert r.json()["kind"] == "file"
+    assert r.json()["attachment"]["name"] == "лекция.pdf"
+
+    #Вкладка «Файлы» его видит.
+    files = client.get(f"/web/messenger/chats/{conv}/files", headers=a).json()["files"]
+    assert [f["id"] for f in files] == [att]
+
+    #Ссылку на скачивание получает участник — и только он.
+    assert client.get(f"/web/messenger/attachments/{att}/url", headers=a).status_code == 200
+    assert client.get(f"/web/messenger/attachments/{att}/url", headers=b).status_code in (403, 404)
+
+
+def test_someone_elses_attachment_cannot_be_signed_onto_a_message(client, monkeypatch):
+    """Чужим вложением подписаться нельзя.
+
+    Обратный ход: убери из проверки `att.uploader_id != user.id` — тест краснеет."""
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Общая", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
+    r = client.post("/web/messenger/uploads/sign", headers=a,
+                    json={"conversation_id": conv, "name": "своё.pdf", "size": 10,
+                          "mime": "application/pdf"})
+    att = r.json()["attachment_id"]
+    client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+
+    #Загрузил "a", отправить пытается "b" — участник той же беседы.
+    r = client.post(f"/web/messenger/chats/{conv}/messages", headers=b,
+                    json={"body": "не моё", "attachment_id": att})
+    assert r.status_code == 400, "чужое вложение удалось приложить к своему сообщению"
+
+    #И подтвердить чужую загрузку тоже нельзя.
+    assert client.post(f"/web/messenger/uploads/{att}/done", headers=b).status_code == 404
+
+def test_a_file_alone_is_a_valid_message(client, monkeypatch):
+    """Файл БЕЗ подписи — законное сообщение.
+
+    🔥 Находка Полковника 25.08.2026. Гейт пустого текста стоял РАНЬШЕ разбора вложения,
+    поэтому «выбрал файл, ничего не написал, отправил» отвечало 400 — но уже ПОСЛЕ того,
+    как файл лёг в хранилище: объект оставался сиротой и оплаченным трафиком, а человек
+    видел ошибку на ровном месте. Оба прежних теста слали body="вот" и покраснеть не
+    могли — проверяли ровно тот путь, который работал.
+
+    Обратный ход: убери из гейта проверку attachment_id — тест падает."""
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+    monkeypatch.setattr(storage, "head_object", lambda key: {})
+
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Только файл"}, headers=a).json()["conversation_id"]
+    att = client.post("/web/messenger/uploads/sign", headers=a,
+                      json={"conversation_id": conv, "name": "к.pdf", "size": 100,
+                            "mime": "application/pdf"}).json()["attachment_id"]
+    client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+
+    r = client.post(f"/web/messenger/chats/{conv}/messages", headers=a,
+                    json={"body": "", "attachment_id": att})
+    assert r.status_code == 200, f"файл без подписи отвергнут: {r.text}"
+    assert r.json()["kind"] == "file"
+
+    #А вот совсем пустое сообщение по-прежнему нельзя.
+    assert client.post(f"/web/messenger/chats/{conv}/messages", headers=a,
+                       json={"body": ""}).status_code == 400
+
+
+def test_upload_confirmation_checks_what_actually_landed(client, monkeypatch):
+    """Подтверждение сверяет ФАКТ, а не заявленное.
+
+    🔥 Находка Полковника: подписанный PUT не умеет ограничивать РАЗМЕР
+    (content-length-range есть только у POST-policy). По ссылке, выданной под
+    «конспект.txt, 1 КБ», можно было положить пятигигабайтный исполняемый файл — наши
+    413/415 проверяли ЗАЯВЛЕННОЕ. Тип теперь связан подписью, размер сверяется здесь.
+
+    Обратный ход: убери вызов storage.head_object из confirm_upload — падает."""
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Проверка"}, headers=a).json()["conversation_id"]
+
+    def sign(name="к.txt", mime="text/plain"):
+        return client.post("/web/messenger/uploads/sign", headers=a,
+                           json={"conversation_id": conv, "name": name, "size": 100,
+                                 "mime": mime}).json()["attachment_id"]
+
+    deleted = []
+    monkeypatch.setattr(storage, "delete_object", lambda key: deleted.append(key) or True)
+
+    #Легло СИЛЬНО больше заявленного.
+    att = sign()
+    monkeypatch.setattr(storage, "head_object",
+                        lambda key: {"size": storage.MAX_SIZE + 1, "mime": "text/plain"})
+    r = client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+    assert r.status_code == 413, "подтвердили файл, который вырос после подписи"
+    assert deleted, "объект-нарушитель остался в хранилище"
+
+    #Лёг ЧУЖОЙ тип.
+    att = sign()
+    monkeypatch.setattr(storage, "head_object",
+                        lambda key: {"size": 100, "mime": "application/x-msdownload"})
+    assert client.post(f"/web/messenger/uploads/{att}/done", headers=a).status_code == 415
+
+    #Всё сошлось — и размер записывается НАСТОЯЩИЙ, а не заявленный.
+    att = sign()
+    monkeypatch.setattr(storage, "head_object", lambda key: {"size": 4242, "mime": "text/plain"})
+    r = client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+    assert r.status_code == 200, r.text
+    assert r.json()["attachment"]["size"] == 4242, "в базе осталось заявленное, а не реальное"
+
+
+def test_signature_binds_the_content_type_and_download_carries_the_name():
+    """Подпись связывает тип, а ссылка на скачивание несёт настоящее имя.
+
+    🔥 Обе половины — находки Полковника. content_type принимался и НИГДЕ не
+    использовался (подпись связывала только хост), а докстринг обещал подстановку имени
+    заголовком, чего в коде не было: браузер сохранял файл под ключом att:<hex>.
+
+    Обратный ход: убери content-type из signed — падает первое; убери extra из
+    download_url — второе."""
+    from app import storage
+    old = {k: getattr(storage, k) for k in ("ENDPOINT", "BUCKET", "ACCESS_KEY", "SECRET_KEY")}
+    try:
+        storage.ENDPOINT, storage.BUCKET = "https://s3.example", "gb"
+        storage.ACCESS_KEY, storage.SECRET_KEY = "key", "secret"
+
+        put = storage.upload_url("messenger/c/att1", "application/pdf")
+        assert "content-type" in put, "тип не входит в подпись — залить можно что угодно"
+
+        get = storage.download_url("messenger/c/att1", "лекция 1.pdf", "application/pdf")
+        assert "response-content-disposition" in get, "имя файла не уедет в скачивание"
+        #⚠️ Кодирование ДВОЙНОЕ, и это правильно: сначала имя по RFC 5987 (`%D0…`), потом
+        #весь параметр как значение query (`%25D0…`). Браузер раскодирует один раз и
+        #получит `filename*=UTF-8''%D0…`. Первая версия теста искала одинарное `%D0` и
+        #падала на КОРРЕКТНОЙ ссылке — проверка была неверна, а не код.
+        assert "filename%2A%3DUTF-8" in get, get
+        assert "%25D0" in get, "кириллица в имени не закодирована"
+        from urllib.parse import unquote
+        assert "filename*=UTF-8''%D0" in unquote(get), unquote(get)
+    finally:
+        for k, v in old.items():
+            setattr(storage, k, v)
+
+
+def test_thinning_never_returns_more_than_asked():
+    """`_thin` действительно прореживает — при любом лимите.
+
+    🔥 Находка Полковника: при limit < 3 хвост получался нулевым, а messages[-0:] — это
+    ВЕСЬ список. Функция, обещающая «проредить до limit», возвращала переписку целиком.
+    Дефект латентный: вылез бы у того, кто уменьшит SUMMARY_MESSAGES, увидев расход
+    токенов, — то есть когда причину искать будут в последнюю очередь.
+
+    Обратный ход: верни head = tail = limit // 3 — падает на limit 1 и 2."""
+    from app.messenger_ai import _thin
+    src = list(range(500))
+    for limit in (1, 2, 3, 7, 50, 400):
+        got = _thin(src, limit)
+        real = [x for x in got if x is not None]
+        #⚠️ При limit < 2 оба конца физически не помещаются. Держать конец переписки
+        #важнее, чем уложиться в бюджет: сводка без развязки бесполезна.
+        assert len(real) <= max(2, limit), f"limit={limit}: вернулось {len(real)} сообщений"
+        assert real[0] == src[0], f"limit={limit}: потеряно начало переписки"
+        assert real[-1] == src[-1], f"limit={limit}: потерян конец переписки"
+    assert _thin(src, 0) == []
+    assert _thin([1, 2, 3], 400) == [1, 2, 3], "короткую переписку трогать не надо"
+
+
+def test_attachment_survives_every_serialization_path(client, monkeypatch):
+    """Вложение видно и в ленте, и в закреплённых, и в списке чатов.
+
+    🔥 Находка Полковника: оно терялось на трёх путях сразу. Расхождение между
+    сериализациями ОДНОГО объекта замечают в последнюю очередь — каждая по отдельности
+    выглядит рабочей.
+
+    Обратный ход: верни в pinned_messages вызов _msg_out без карты вложений — падает
+    утверждение про закреплённые."""
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+    monkeypatch.setattr(storage, "head_object", lambda key: {})
+
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Пути"}, headers=a).json()["conversation_id"]
+    att = client.post("/web/messenger/uploads/sign", headers=a,
+                      json={"conversation_id": conv, "name": "план.pdf", "size": 10,
+                            "mime": "application/pdf"}).json()["attachment_id"]
+    client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", headers=a,
+                      json={"body": "", "attachment_id": att}).json()["id"]
+
+    #1. Лента.
+    msgs = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert any((x.get("attachment") or {}).get("name") == "план.pdf" for x in msgs), "лента"
+
+    #2. Список чатов: сообщение состоит ТОЛЬКО из файла, строка не должна быть пустой.
+    #⚠️ ПРОВЕРЯЕМ ДО ЗАКРЕПЛЕНИЯ: `pin` постит системное сообщение, и последним станет
+    #оно — проверка после смотрела бы не на тот объект. Поймано на себе.
+    chats = client.get("/web/messenger/chats", headers=a).json()["chats"]
+    row = [ch for ch in chats if ch["conversation_id"] == conv][0]
+    assert (row["last_message"].get("attachment") or {}).get("name") == "план.pdf",         "в списке чатов вложение потеряно — строка окажется пустой"
+
+    #3. Закреплённые.
+    client.post(f"/web/messenger/messages/{mid}/pin", headers=a)
+    pinned = client.get(f"/web/messenger/chats/{conv}/pinned", headers=a).json()["pinned"]
+    assert pinned and (pinned[0].get("attachment") or {}).get("name") == "план.pdf",         "в закреплённых вложение потеряно"

@@ -1,0 +1,225 @@
+"""Вложения и вкладки панели беседы: файлы, медиа, «Избранное».
+
+━━ ФАЙЛ ЧЕРЕЗ НАС НЕ ХОДИТ ━━
+Порядок работы (docs/MESSENGER-ATTACHMENTS-PLAN.md, механизм Б):
+
+    1. клиент  → POST /uploads/sign   {имя, размер, тип, беседа}
+    2. сервер  → проверяет участие, роль, размер, тип → подписанная ссылка на ЗАГРУЗКУ
+    3. клиент  → PUT файла НАПРЯМУЮ в хранилище (наш VPS не участвует)
+    4. клиент  → POST /uploads/{id}/done  — «файл доехал»
+    5. клиент  → обычная отправка сообщения с `attachment_id`
+    6. чтение  → GET /attachments/{id}/url → проверка доступа → ссылка на СКАЧИВАНИЕ
+
+⚠️ Шаг 4 обязателен и это не формальность: без него в базе копились бы записи о файлах,
+которых в хранилище нет, и человек видел бы в списке файлы, которые не открываются.
+
+⚠️ Каждая ссылка выдаётся ТОЛЬКО участнику беседы и живёт минуты. Ссылка утекает
+пересылкой в чужой чат — это нормально для короткого срока и недопустимо для вечного.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from fastapi import Body, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from ... import storage
+from ...models import Attachment, Conversation, Message, User
+from ._common import (Depends as _D, _conversation, _now, _participant,  # noqa: F401
+                      _require_participant, get_current_user, get_db, router)
+
+#Что считаем «медиа», а что «файлом». Гифки и видео-ссылки — медиа, документы — файлы.
+#⚠️ Разделение по СМЫСЛУ, а не по хранилищу: человек ищет «ту картинку» и «тот документ»
+#в разных местах, и складывать их в одну вкладку значит не сделать ни одной.
+_VIDEO_HOSTS = ("youtube.com", "youtu.be", "vk.com", "vkvideo.ru", "rutube.ru")
+
+
+def _iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _att_out(a: Attachment) -> dict:
+    return {"id": a.id, "name": a.name, "size": a.size, "mime": a.mime,
+            "uploader_id": a.uploader_id, "created_at": a.created_at}
+
+
+@router.post("/uploads/sign")
+def sign_upload(payload: dict = Body(...), user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    """Подписать ЗАГРУЗКУ файла. Проверки здесь, а не в браузере.
+
+    ⚠️ Размер и тип проверяем на сервере, хотя клиент их уже видел: клиентская проверка
+    существует ради вежливого сообщения, а не ради безопасности — обойти её можно
+    curl'ом за секунду.
+    """
+    if not storage.configured():
+        #Честный отказ вместо молчаливой потери: человек уверен, что отправил файл.
+        raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
+
+    conv_id = str(payload.get("conversation_id") or "")
+    _require_participant(db, conv_id, user)
+
+    name = (str(payload.get("name") or "")).strip()[:200]
+    size = int(payload.get("size") or 0)
+    mime = (str(payload.get("mime") or "")).strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно имя файла")
+    if size <= 0 or size > storage.MAX_SIZE:
+        raise HTTPException(status_code=413,
+                            detail=f"Файл больше {storage.MAX_SIZE // (1024 * 1024)} МБ")
+    if not storage.mime_ok(mime):
+        raise HTTPException(status_code=415, detail="Такой тип файла не поддерживается")
+
+    att_id = f"att:{uuid4().hex}"
+    key = storage.object_key(conv_id, att_id)
+    db.add(Attachment(id=att_id, conversation_id=conv_id, uploader_id=user.id,
+                      name=name, size=size, mime=mime, storage_key=key,
+                      created_at=_iso(), ready=False))
+    db.commit()
+    return {"attachment_id": att_id, "url": storage.upload_url(key, mime),
+            "method": "PUT", "headers": {"Content-Type": mime}}
+
+
+@router.post("/uploads/{att_id}/done")
+def confirm_upload(att_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """«Файл доехал» — и сервер ПРОВЕРЯЕТ, что доехал именно тот файл.
+
+    🔥 Одной декларации мало (находка Полковника 25.08.2026). Подписанный PUT не умеет
+    ограничивать РАЗМЕР — `content-length-range` есть только у POST-policy. Значит по
+    ссылке, выданной под «конспект.txt, 1 КБ», можно было положить пятигигабайтный
+    исполняемый файл: наши 413/415 проверяли ЗАЯВЛЕННОЕ, а не то, что легло.
+
+    Тип теперь связан подписью (`storage.presign` подписывает `content-type`), а размер
+    сверяем здесь по факту. Не сошлось — объект УДАЛЯЕМ и готовым не считаем: оставить
+    его значит оплачивать чужое хранилище и держать в бакете то, чего мы не разрешали.
+
+    ⚠️ Хранилище может не ответить на HEAD (сеть, права). Тогда доверяем заявленному:
+    отказать из-за сетевой заминки — сломать отправку на ровном месте. Разница с
+    прежним поведением в том, что ЛОЖЬ теперь ловится, а раньше не ловилась никогда.
+    """
+    a = db.query(Attachment).filter(Attachment.id == att_id).first()
+    if a is None or a.uploader_id != user.id:
+        raise HTTPException(status_code=404, detail="Вложение не найдено")
+
+    real = storage.head_object(a.storage_key)
+    if real:
+        bad_size = real.get("size", 0) > storage.MAX_SIZE
+        bad_mime = bool(real.get("mime")) and not storage.mime_ok(real["mime"])
+        if bad_size or bad_mime:
+            storage.delete_object(a.storage_key)
+            db.delete(a)
+            db.commit()
+            raise HTTPException(status_code=413 if bad_size else 415,
+                                detail="Файл не соответствует заявленному")
+        #Размер записываем НАСТОЯЩИЙ: в списке файлов человек должен видеть правду.
+        if real.get("size"):
+            a.size = real["size"]
+
+    a.ready = True
+    db.commit()
+    return {"ok": True, "attachment": _att_out(a)}
+
+
+@router.get("/attachments/{att_id}/url")
+def attachment_url(att_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Ссылка на СКАЧИВАНИЕ — только участнику той беседы, куда файл отправлен."""
+    a = db.query(Attachment).filter(Attachment.id == att_id).first()
+    if a is None or not a.ready:
+        raise HTTPException(status_code=404, detail="Вложение не найдено")
+    _require_participant(db, a.conversation_id, user)
+    if not storage.configured():
+        raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
+    #Имя и тип уходят в ссылку подписанными: браузер сохранит файл под настоящим
+    #именем, а не под ключом `att:<hex>` без расширения.
+    return {"url": storage.download_url(a.storage_key, a.name, a.mime),
+            "attachment": _att_out(a)}
+
+
+@router.get("/chats/{conv_id}/files")
+def chat_files(conv_id: str, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """Вкладка «Файлы»: документы беседы.
+
+    ⚠️ Тумбстоуны отбрасываем: удалённое сообщение не должно возвращаться списком файлов
+    — иначе «удалил у всех» перестанет что-либо значить.
+    """
+    _require_participant(db, conv_id, user)
+    rows = (db.query(Message, Attachment)
+            .join(Attachment, Attachment.id == Message.attachment_id)
+            .filter(Message.conversation_id == conv_id,
+                    Message.deleted_at == "",
+                    Attachment.ready == True)                     # noqa: E712
+            .order_by(Message.created_at.desc()).limit(300).all())
+    return {"files": [{**_att_out(a), "message_id": m.id, "sent_at": m.created_at}
+                      for m, a in rows]}
+
+
+@router.get("/chats/{conv_id}/media")
+def chat_media(conv_id: str, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """Вкладка «Медиа»: гифки и видео-ссылки.
+
+    ⚠️ Видео у нас живёт ССЫЛКОЙ на видеохостинг, а не файлом (механизм А плана) —
+    поэтому «медиа» собирается из тела сообщений, а не из вложений. Складывать это в
+    одну вкладку с документами нельзя: человек ищет «ту картинку» и «тот документ» в
+    разных местах.
+    """
+    _require_participant(db, conv_id, user)
+    rows = (db.query(Message)
+            .filter(Message.conversation_id == conv_id, Message.deleted_at == "")
+            .order_by(Message.created_at.desc()).limit(500).all())
+    out = []
+    for m in rows:
+        if m.kind == "gif":
+            out.append({"message_id": m.id, "kind": "gif", "url": m.body,
+                        "sent_at": m.created_at, "sender_id": m.sender_id})
+            continue
+        body = m.body or ""
+        if any(h in body for h in _VIDEO_HOSTS) and "http" in body:
+            out.append({"message_id": m.id, "kind": "video", "url": body,
+                        "sent_at": m.created_at, "sender_id": m.sender_id})
+    return {"media": out[:200]}
+
+
+@router.get("/chats/{conv_id}/saved")
+def chat_saved(conv_id: str, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """Вкладка «Избранное»: что ИЗ ЭТОЙ беседы человек унёс к себе в «Избранное».
+
+    ⚠️ Смотрим на `fwd_from_conv_id` пересланных сообщений в СОБСТВЕННОМ чате-избранном.
+    Никакой новой сущности заводить не пришлось: пересылка и так помнит источник.
+
+    ⚠️ Ответ строго ЛИЧНЫЙ. «Избранное» — чат с самим собой, и показать его содержимое
+    другим участникам беседы значило бы раскрыть, что человек счёл важным.
+    """
+    _require_participant(db, conv_id, user)
+    saved = (db.query(Conversation)
+             .filter(Conversation.kind == "saved", Conversation.owner_id == user.id)
+             .first())
+    if saved is None:
+        return {"saved": []}
+    rows = (db.query(Message)
+            .filter(Message.conversation_id == saved.id,
+                    Message.fwd_from_conv_id == conv_id,
+                    Message.deleted_at == "")
+            .order_by(Message.created_at.desc()).limit(200).all())
+    return {"saved": [{"message_id": m.id, "body": m.body, "kind": m.kind,
+                       "sent_at": m.created_at,
+                       "from_name": m.fwd_sender_name} for m in rows]}
+
+
+@router.get("/uploads/limits")
+def upload_limits(user: User = Depends(get_current_user)):
+    """Что клиенту показывать до выбора файла: потолок и типы.
+
+    ⚠️ Отдаём с сервера, а не хардкодим в браузере: потолок настраивается переменной
+    окружения, и вторая копия числа разошлась бы с первой ровно в тот день, когда его
+    поменяют.
+    """
+    return {"configured": storage.configured(),
+            "max_size": storage.MAX_SIZE,
+            "mime": sorted(storage.ALLOWED_MIME),
+            "ext": sorted(set(storage.ALLOWED_MIME.values()))}

@@ -437,11 +437,28 @@ def _fire_due_reminders(db: Session, user: User) -> int:
                .all())
         if not due:
             return 0
+
+        # 🔥 ЗВУК БЕСЕДЫ ГАСИТ И НАПОМИНАНИЯ (25.08.2026, просьба Влада: «кнопка звука,
+        # которая может полностью выключать уведомления от таймеров»). До этого мьют
+        # глушил пуши о сообщениях и громкие отметки, а напоминание из ТОЙ ЖЕ беседы
+        # всё равно звонило: оно материализуется по ЛОГИНУ и про беседу не спрашивало.
+        # Человек, выключивший звук у чата, справедливо считал это поломкой.
+        #
+        # ⚠️ Гасим ПУШ, но не само срабатывание: письмо во вкладке «Уведомления»
+        # остаётся. Это история, а не звонок, — то же правило, что у категорий
+        # уведомлений (§11). Напоминание, поставленное человеком САМОМУ СЕБЕ, стирать
+        # молча нельзя: он его планировал.
+        from ..models import ConversationParticipant
+        muted_convs = {p.conversation_id for p in db.query(ConversationParticipant)
+                       .filter(ConversationParticipant.user_id == (user.id or ""),
+                               ConversationParticipant.muted == True).all()}  # noqa: E712
+
         from .. import rustore_push
         for r in due:
             #Пуш шлём тем же путём, что и остальные события: человек мог поставить
             #напоминание неделю назад и приложение с тех пор не открывать.
-            rustore_push.notify_reminder(db, user.login, r.text, r.conversation_id)
+            if r.conversation_id not in muted_convs:
+                rustore_push.notify_reminder(db, user.login, r.text, r.conversation_id)
             r.fired_at = now
         db.commit()
         return len(due)

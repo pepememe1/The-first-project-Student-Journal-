@@ -30,6 +30,7 @@ from ...db import get_db, SessionLocal
 from ...deps import get_current_user, require_admin
 from ...security import decode_token
 from ...models import (
+    Attachment,
     AuthSession,
     Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
     CuratorReport, Group, Message, MessageHidden,
@@ -513,7 +514,30 @@ def _parse_mentions(db: Session, body: str, participant_ids) -> list:
     return out
 
 
-def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
+def _att_map(db, messages) -> dict:
+    """Метаданные вложений для пачки сообщений: ОДИН запрос на всю ленту.
+
+    ⚠️ Не подгружаем вложение внутри `_msg_out`: он вызывается на каждое сообщение, и
+    запрос оттуда дал бы классический N+1 — сотня обращений к базе на одну открытую
+    ленту. На боевой машине с одним ядром это заметно сразу.
+    """
+    ids = [m.attachment_id for m in messages if getattr(m, "attachment_id", "")]
+    if not ids:
+        return {}
+    rows = db.query(Attachment).filter(Attachment.id.in_(set(ids))).all()
+    return {a.id: {"id": a.id, "name": a.name, "size": a.size, "mime": a.mime}
+            for a in rows if a.ready}
+
+
+def _msgs_out(db, rows, me_id: str, names: dict) -> list:
+    """Сериализовать пачку сообщений вместе с вложениями."""
+    amap = _att_map(db, rows)
+    return [_msg_out(m, me_id, names.get(m.sender_id, ""),
+                     amap.get(getattr(m, "attachment_id", "") or ""))
+            for m in rows]
+
+
+def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = None) -> dict:
     """Сериализация сообщения для клиента. Удалённое-у-всех отдаём тумбстоуном (без текста).
     `mine` вычисляет сервер (клиент своего id не знает — в JWT/сторе только логин+роль).
     `sender_name` нужен в группах/каналах (в личном чате имя не показываем)."""
@@ -531,6 +555,11 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "") -> dict:
         "edited_at": "" if deleted else (m.edited_at or ""),
         "deleted": deleted,
         "reply_to_id": m.reply_to_id or None,
+        #Вложение — метаданные, БЕЗ ссылки. Ссылка выдаётся отдельной ручкой, живёт
+        #минуты и только участнику: положи её сюда — и она уедет пересылкой в чужой чат
+        #вместе с текстом сообщения, а срок у неё был бы вечный.
+        #⚠️ У тумбстоуна вложения нет: «удалил у всех» обязано убирать и файл из виду.
+        "attachment": None if deleted else att,
         #Метка отправителя (§D10). Клиент рисует своё сообщение СРАЗУ, не дожидаясь
         #ответа сервера, и ему нужно опознать в ленте именно свой черновик: по WS то же
         #сообщение может прийти РАНЬШЕ ответа на POST, и без метки в беседе появились бы

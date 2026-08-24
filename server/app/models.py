@@ -773,6 +773,8 @@ class Message(Base):
     #§D6: тип сообщения. text — обычное, system — служебное (вступил/вышел/закрепил/…).
     #Тело system-сообщения — шаблон "event:arg1:arg2" (см. routers/messenger._system).
     kind = Column(String, default="text")
+    #Вложение (см. Attachment). Пусто у обычных сообщений.
+    attachment_id = Column(String, default="", index=True)
     #§D1: формат тела. markdown — рендерить Markdown-lite, plain — как есть (старые строки).
     body_format = Column(String, default="markdown")
     #§D10: ключ идемпотентности от клиента (UUID). Повторный POST с тем же nonce возвращает
@@ -818,6 +820,35 @@ class Reminder(Base):
     remind_at = Column(String, index=True, default="")  #ISO UTC — когда напомнить
     created_at = Column(String, default="")
     fired_at = Column(String, default="")               #когда материализовано в событие
+
+
+class Attachment(Base):
+    """Вложение мессенджера: ТОЛЬКО метаданные. Самого файла у нас нет.
+
+    Файл лежит в объектном хранилище и ходит туда-обратно МИМО нашего сервера (см.
+    app/storage.py и docs/MESSENGER-ATTACHMENTS-PLAN.md): на боевой машине одно ядро и
+    один процесс uvicorn, раздающий журнал, и прогонять через него файлы нельзя.
+
+    ⚠️ `orphan_at` — когда у вложения не осталось ЖИВЫХ сообщений-ссылок. Физически
+    объект стирает уборка по сроку, а не удаление сообщения: сообщения у нас удаляются
+    тумбстоуном ради модерации (жалоба обязана показать оригинал, и автор не должен
+    заметать следы, удалив сообщение после жалобы). Файл — часть сообщения, правило то же.
+
+    ⚠️ Ссылок может быть НЕСКОЛЬКО: пересылка ссылается на тот же файл, а не копирует его.
+    Поэтому сирота считается по числу живых ссылок, а не по «удалили сообщение».
+
+    НЕ входит в SYNC_MODELS: мессенджер — онлайн-подсистема (§5.4)."""
+    __tablename__ = "attachments"
+    id = Column(String, primary_key=True)                 #att:<uuid4>
+    conversation_id = Column(String, index=True, default="")
+    uploader_id = Column(String, index=True, default="")
+    name = Column(String, default="")                     #исходное имя, для скачивания
+    size = Column(Integer, default=0)
+    mime = Column(String, default="")
+    storage_key = Column(String, default="")              #путь объекта в хранилище
+    created_at = Column(String, default="")
+    ready = Column(Boolean, default=False)                #загрузка подтверждена клиентом
+    orphan_at = Column(String, default="")                #когда осталось ноль ссылок
 
 
 class MessageEdit(Base):

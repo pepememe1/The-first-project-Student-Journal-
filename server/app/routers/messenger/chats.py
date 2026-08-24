@@ -109,7 +109,10 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             "unread": unread,
             "mention_message_id": mention_id,     #0 — меня не отмечали
             "mention_loud": mention_loud,
-            "last_message": _msg_out(last, user.id, sender_name) if last else None,
+            "last_message": (_msg_out(last, user.id, sender_name,
+                                              _att_map(db, [last]).get(
+                                                  getattr(last, "attachment_id", "") or ""))
+                             if last else None),
             "last_at": (last.created_at if last else conv.created_at) or "",
         }
         if conv.kind == "direct":

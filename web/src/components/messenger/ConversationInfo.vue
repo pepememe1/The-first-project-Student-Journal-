@@ -6,10 +6,13 @@
 // Здесь же — выход из группы/канала и удаление переписки у себя.
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical, UserPlus } from '@lucide/vue'
+import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical,
+         UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import Avatar from '@/components/ui/Avatar.vue'
+import { messengerApi } from '@/api/endpoints'
+import { humanSize } from '@/utils/docPreview'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 import AddMembersDialog from '@/components/messenger/AddMembersDialog.vue'
 import PeerProfileModal from '@/components/messenger/PeerProfileModal.vue'
@@ -20,11 +23,11 @@ import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { useLocaleStore } from '@/stores/locale'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
 const toast = useToast()
 const locale = useLocaleStore()
-const { activeInfo, activePeer, isModeration, activeKind } = storeToRefs(m)
+const { activeInfo, activePeer, isModeration, activeKind, activeChat } = storeToRefs(m)
 
 // §ролей: права звонящего в ЭТОЙ беседе + личный игнор-лист + мой user_id — всё уже
 // приезжает в conversation_info (см. routers/messenger.py::conversation_info). Свой id
@@ -55,6 +58,50 @@ async function doAddMembers({ userIds, classGroups }) {
     ? locale.t('members.added', { n: added })
     : locale.t('members.addedNobody', 'Никого не добавили — возможно, они уже в беседе'))
 }
+
+// ━━ ПАНЕЛЬ БЕСЕДЫ (переделка 25.08.2026 по образцу Telegram, просьба Влада) ━━
+//
+// Шапка (аватар, имя, описание) → три кнопки (звук/поиск/ещё) → вкладки. Поиск и
+// сводка ЖИЛИ В ЛЕНТЕ и переехали сюда — но код их не переехал: панель только шлёт
+// наверх событие, а открывает по-прежнему `ChatThread`. Вторая копия поиска разошлась
+// бы с первой, и разошлась бы молча.
+const tab = ref('members')            // members | media | saved | files
+const moreOpen = ref(false)
+const media = ref([])
+const files = ref([])
+const savedItems = ref([])
+const tabLoading = ref(false)
+
+const muted = computed(() => !!activeChat.value?.muted)
+
+/** Звук: гасит пуши беседы, громкие отметки И напоминания-таймеры (см. routers/me.py). */
+async function toggleMute() {
+  await m.muteConversation(!muted.value)
+}
+
+// ⚠️ Содержимое вкладки грузим ПРИ ОТКРЫТИИ, а не заранее: три лишних запроса на каждое
+// открытие панели ради вкладок, в которые чаще всего не заходят, — плохая сделка на
+// одноядерном сервере.
+async function openTab(name) {
+  tab.value = name
+  if (name === 'members') return
+  const cache = { media, files, saved: savedItems }[name]
+  if (cache.value.length) return
+  tabLoading.value = true
+  try {
+    if (name === 'media') media.value = (await messengerApi.chatMedia(m.activeId)).data.media || []
+    if (name === 'files') files.value = (await messengerApi.chatFiles(m.activeId)).data.files || []
+    if (name === 'saved') savedItems.value = (await messengerApi.chatSaved(m.activeId)).data.saved || []
+  } catch { /* пусто — покажем «ничего нет», это честнее ошибки */ }
+  finally { tabLoading.value = false }
+}
+
+const tabDefs = computed(() => [
+  ['members', locale.t('profilePanel.participants', 'Участники'), Users],
+  ['media', locale.t('conversationInfo.media', 'Медиа'), Image],
+  ['saved', locale.t('conversationInfo.saved', 'Избранное'), Star],
+  ['files', locale.t('conversationInfo.files', 'Файлы'), FileText],
+])
 
 const openMenuFor = ref(null)
 const roleDialogFor = ref(null)
@@ -260,8 +307,126 @@ async function clearHistory() {
           {{ locale.t('conversationInfo.modText', 'Сюда можно написать о проблеме: жалоба на пользователя, технический вопрос, нарушение правил. Переписка может быть просмотрена модерацией в целях безопасности.') }}
         </div>
 
-        <!-- Группа/канал: участники, владелец сверху и с короной -->
+        <!-- Группа/канал: панель в стиле Telegram — кнопки, вкладки, содержимое -->
         <template v-else-if="isGroupOrChannel">
+
+          <!-- ТРИ КНОПКИ. Поиск и сводка переехали сюда из ленты (просьба Влада):
+               в шапке чата они конкурировали за место с названием беседы, а тут у них
+               своя строка и понятная компания. Открывает их по-прежнему лента — панель
+               только сообщает о нажатии, чтобы не завести вторую копию поиска. -->
+          <div class="mb-3 grid grid-cols-3 gap-2">
+            <button type="button" @click="toggleMute"
+                    class="flex flex-col items-center gap-1 rounded-xl bg-card2 py-2.5 text-xs transition-colors hover:bg-bg2"
+                    :class="muted ? 'text-text3' : 'text-accent'">
+              <component :is="muted ? BellOff : Bell" class="size-5" />
+              {{ muted ? locale.t('conversationInfo.muted', 'без звука') : locale.t('conversationInfo.sound', 'звук') }}
+            </button>
+            <button type="button" @click="emit('search')"
+                    class="flex flex-col items-center gap-1 rounded-xl bg-card2 py-2.5 text-xs text-accent transition-colors hover:bg-bg2">
+              <Search class="size-5" />
+              {{ locale.t('conversationInfo.searchBtn', 'поиск') }}
+            </button>
+            <div class="relative">
+              <button type="button" @click="moreOpen = !moreOpen"
+                      class="flex w-full flex-col items-center gap-1 rounded-xl bg-card2 py-2.5 text-xs text-accent transition-colors hover:bg-bg2">
+                <MoreVertical class="size-5" />
+                {{ locale.t('conversationInfo.more', 'ещё') }}
+              </button>
+              <!-- «Ещё»: редкие и необратимые действия. Держать удаление переписки на
+                   виду рядом с обычными кнопками — способ однажды нажать не туда. -->
+              <div v-if="moreOpen"
+                   class="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-border bg-card shadow-xl">
+                <button type="button" @click="moreOpen = false; emit('summary')"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-bg2">
+                  <ScrollText class="size-4 text-text3" />
+                  {{ locale.t('conversationInfo.summaryAction', 'Краткая сводка') }}
+                </button>
+                <button type="button" @click="moreOpen = false; clearHistory()"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-bg2">
+                  <Trash2 class="size-4 text-text3" />
+                  {{ locale.t('conversationInfo.clearHistory', 'Очистить историю') }}
+                </button>
+                <button type="button" @click="moreOpen = false; removeChat()"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-bg2">
+                  <Trash2 class="size-4" />
+                  {{ locale.t('conversationInfo.deleteAction', 'Удалить переписку') }}
+                </button>
+                <button v-if="isGroupOrChannel" type="button" @click="moreOpen = false; leave()"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-bg2">
+                  <LogOut class="size-4" />
+                  {{ locale.t('conversationInfo.leaveAction', 'Покинуть') }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ВКЛАДКИ. Разделение по смыслу: человек ищет «того участника», «ту
+               картинку» и «тот документ» в разных местах, и одна общая лента не
+               заменяет ни одного из трёх. -->
+          <div class="mb-3 flex gap-1 rounded-xl bg-card2 p-1">
+            <button v-for="[key, label, icon] in tabDefs" :key="key" type="button" @click="openTab(key)"
+                    class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs transition-colors"
+                    :class="tab === key ? 'bg-card text-text shadow-sm' : 'text-text3 hover:text-text'">
+              <component :is="icon" class="size-3.5" />
+              <span class="hidden sm:inline">{{ label }}</span>
+            </button>
+          </div>
+
+          <p v-if="tabLoading" class="py-8 text-center text-xs text-text3">
+            {{ locale.t('common.loading', 'Загрузка…') }}
+          </p>
+
+          <!-- Медиа: гифки и видео-ссылки. Видео у нас живёт ССЫЛКОЙ на видеохостинг,
+               а не файлом, поэтому вкладка собирается из тела сообщений. -->
+          <div v-else-if="tab === 'media'">
+            <p v-if="!media.length" class="py-8 text-center text-xs text-text3">
+              {{ locale.t('conversationInfo.noMedia', 'В этой беседе пока нет медиа') }}
+            </p>
+            <div v-else class="grid grid-cols-3 gap-1.5">
+              <a v-for="it in media" :key="it.message_id" :href="it.url" target="_blank" rel="noopener"
+                 class="block overflow-hidden rounded-lg border border-border bg-card2">
+                <img v-if="it.kind === 'gif'" :src="it.url" alt="" class="h-24 w-full object-cover" loading="lazy" />
+                <span v-else class="flex h-24 items-center justify-center px-2 text-center text-[10px] text-text3">
+                  {{ locale.t('conversationInfo.videoLink', 'видео') }}
+                </span>
+              </a>
+            </div>
+          </div>
+
+          <!-- Избранное: что ИЗ ЭТОЙ беседы человек унёс к себе. Ответ строго личный —
+               показать это другим участникам значило бы раскрыть, что он счёл важным. -->
+          <div v-else-if="tab === 'saved'">
+            <p v-if="!savedItems.length" class="py-8 text-center text-xs text-text3">
+              {{ locale.t('conversationInfo.noSaved', 'Вы ничего не сохраняли из этой беседы') }}
+            </p>
+            <div v-else class="space-y-1">
+              <div v-for="it in savedItems" :key="it.message_id"
+                   class="rounded-lg border border-border bg-card2 px-3 py-2">
+                <p class="mb-0.5 text-[11px] text-text3">{{ it.from_name }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm text-text2">{{ it.body }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Файлы: документы беседы. Ссылку на скачивание здесь НЕ держим — её
+               выдаёт отдельная ручка, она живёт минуты и только участнику. -->
+          <div v-else-if="tab === 'files'">
+            <p v-if="!files.length" class="py-8 text-center text-xs text-text3">
+              {{ locale.t('conversationInfo.noFiles', 'В этой беседе пока нет файлов') }}
+            </p>
+            <div v-else class="space-y-1">
+              <button v-for="f in files" :key="f.id" type="button" @click="emit('open-file', f)"
+                      class="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2 text-left hover:border-accent">
+                <FileText class="size-4 shrink-0 text-text3" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm text-text">{{ f.name }}</span>
+                  <span class="block text-[11px] text-text3">{{ humanSize(f.size) }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <template v-else>
           <p class="mb-2 text-[11px] uppercase tracking-wide text-text3">
             {{ locale.t('profilePanel.participants', 'Участники') }} · {{ people.length }}
           </p>
@@ -335,6 +500,7 @@ async function clearHistory() {
               </div>
             </div>
           </div>
+          </template>
         </template>
       </div>
 
@@ -348,17 +514,18 @@ async function clearHistory() {
 
       <!-- Действия -->
       <div class="flex flex-wrap gap-2 border-t border-border p-3">
-        <button type="button" @click="clearHistory"
+        <!-- ⚠️ Для группы и канала этих кнопок здесь БОЛЬШЕ НЕТ: они переехали в «ещё»
+             наверху (25.08.2026). Два места для одного действия — верный способ
+             однажды поправить одно и забыть другое. В личном чате панели с кнопками
+             наверху нет, поэтому там ряд остаётся. -->
+        <button v-if="!isGroupOrChannel" type="button" @click="clearHistory"
                 class="rounded-lg border border-border2 px-3 py-2 text-sm text-text2 hover:bg-bg2">
           {{ locale.t('conversationInfo.clearHistory', 'Очистить историю') }}
         </button>
-        <button v-if="isGroupOrChannel" type="button" @click="leave"
-                class="flex items-center gap-1.5 rounded-lg border border-border2 px-3 py-2 text-sm text-text2 hover:bg-bg2">
-          <LogOut class="size-4" />{{ locale.t('conversationInfo.leaveAction', 'Покинуть') }}
-        </button>
+
         <!-- «Избранное» удалить нельзя: оно одно на пользователя и всегда есть в списке
              (как в Telegram). Для него доступна только очистка — кнопка выше. -->
-        <button v-if="!isSaved" type="button" @click="removeChat"
+        <button v-if="!isSaved && !isGroupOrChannel" type="button" @click="removeChat"
                 class="ml-auto flex items-center gap-1.5 rounded-lg border border-red/40 px-3 py-2 text-sm font-semibold text-red hover:bg-red/10">
           <Trash2 class="size-4" />{{ locale.t('conversationInfo.deleteConversation', 'Удалить переписку') }}
         </button>

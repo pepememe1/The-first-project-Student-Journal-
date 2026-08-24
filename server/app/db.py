@@ -239,9 +239,14 @@ def _ensure_message_addon_columns():
     except Exception:
         return          #таблицы ещё нет — create_all создал её сразу со столбцами
     is_pg = engine.url.get_backend_name().startswith("postgres")
+    #⚠️ Новая колонка в СУЩЕСТВУЮЩЕЙ таблице заводится только здесь: `create_all`
+    #досоздаёт лишь отсутствующие ТАБЛИЦЫ. В свежей тестовой БД ветка «колонки не было»
+    #не срабатывает никогда, поэтому зелёные тесты про эту миграцию ничего не говорят —
+    #её держит `tests/test_db_migrations.py`.
     wanted = (("kind", "VARCHAR DEFAULT 'text'"),
               ("body_format", "VARCHAR DEFAULT 'markdown'"),
               ("client_nonce", "VARCHAR DEFAULT ''"),
+              ("attachment_id", "VARCHAR DEFAULT ''"),
               ("mentions", "JSONB" if is_pg else "JSON"))
     with engine.begin() as conn:
         for name, coltype in wanted:
