@@ -1280,6 +1280,37 @@ def test_d12_schedule_publish_posts_to_channel(client):
     assert len(msgs) == 1 and "К-24" in msgs[0]["body"] and msgs[0]["sender_name"] == "Вектор"
 
 
+def test_d12_schedule_channel_addressable_for_group_with_slash(client):
+    """Канал «Расписание · Группа» у группы со слэшем в имени обязан открываться по HTTP.
+
+    Тот же класс дефекта, что уже был у объявлений/отчётов (см. _gtoken): слэш в id
+    («sys:schedule:К74/1») приезжает в URL как %2F, Starlette раскодирует его обратно —
+    путь распадается на лишний сегмент, GET проваливается в SPA-фолбэк (HTML вместо
+    JSON), и канал не открывается. Соседний тест держал группу «К-24» без слэша, поэтому
+    оставался зелёным рядом с дефектом — обратный ход обязателен именно на «К74/1»."""
+    from urllib.parse import quote
+    admin = make_admin(client)
+    a = make_teacher(client, admin)
+    sid = "stud:slashboy"
+    client.post("/sync/push", json={"changes": {"users": [{
+        "id": sid, "role": "student", "login": "slashboy",
+        "password_hash": hash_password("studpass1"), "full_name": "Слэшев Слэш",
+        "surname": "Слэшев", "name": "Слэш", "group_name": "К74/1",
+    }]}}, headers=admin)
+    r = client.post("/auth/login", json={"login": "slashboy", "password": "studpass1"})
+    b = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    r = client.post("/web/admin/schedule/publish", json={"group": "К74/1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    conv_id = r.json().get("conversation_id") or "sys:schedule:К74~1"
+    assert "/" not in conv_id, "слэш в id канала расписания делает его недоступным по HTTP"
+    resp = client.get(f"/web/messenger/chats/{quote(conv_id, safe='')}/messages", headers=b)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers.get("content-type", "").startswith("application/json"), \
+        "GET ушёл в SPA-фолбэк — путь со слэшем не совпал ни с одним роутом"
+    assert resp.json()["messages"], "канал пуст: публикация не доехала до адресуемой беседы"
+
+
 # ── Команда /vector — docs/MESSENGER-ADDON-PLAN-GPT.md (заметка в конце файла): «AI-поиск
 # по смыслу» реализован переиспользованием УЖЕ существующего анти-галлюцинационного Вектора
 # (/web/vector/ask), а не отдельной embedding-инфраструктурой — как и предложено в заметке.

@@ -66,6 +66,25 @@ app.add_middleware(
 )
 
 
+#🔒 Базовые заголовки безопасности НА УРОВНЕ ПРИЛОЖЕНИЯ. На бою их ставит Caddy (см.
+#server/Caddyfile), но в ДЕСКТОПНОЙ сборке этот же `app` поднимается локально на
+#127.0.0.1 БЕЗ Caddy (desktop/local_api.py) — и тогда единственный, кто может их
+#проставить, это само приложение. Ставим два самых дешёвых и важных для WebView2:
+#  • X-Content-Type-Options: nosniff — WebView2/браузер не «додумывает» тип ответа по
+#    содержимому (иначе картинку с HTML внутри можно заставить исполниться как страницу);
+#  • X-Frame-Options: DENY — нашу страницу нельзя вложить во фрейм (защита от кликджекинга).
+#⚠️ На бою Caddy заменяет эти заголовки своими ТЕМИ ЖЕ значениями (директива `header`
+#без `+` перезаписывает апстримовый) — двойного заголовка не будет. `setdefault` здесь
+#на случай, если конкретный ответ уже проставил своё (напр. раздача картинок из
+#app/uploads.py ставит nosniff сама) — не перетираем осознанный выбор эндпоинта.
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
+
 @app.exception_handler(Exception)
 async def _unhandled_error(request: Request, exc: Exception):
     """Любая НЕперехваченная ошибка попадает в админскую консоль и отдаётся клиенту

@@ -1152,8 +1152,13 @@ def notify_grade_posted(db: Session, student_id: str, teacher_name: str, subject
 
 def ensure_group_schedule_channel(db: Session, group_name: str, student_ids) -> str:
     """§D12(3): «Расписание · Группа» — read-only канал, публикует schedule.publish (админ,
-    web.py). Возвращает id канала (для _post_system_channel_message вызывающим кодом)."""
-    conv_id = f"sys:schedule:{group_name}"
+    web.py). Возвращает id канала (для _post_system_channel_message вызывающим кодом).
+
+    ⚠️ Имя группы идёт через `_gtoken` (см. его докстринг): у групп колледжа оно вида
+    «К74/1», и слэш в id разваливает адрес — GET проваливается в SPA-фолбэк. Объявления,
+    отчёты и замены починили ещё в 3.5, а ЭТОТ канал пропустили: тест мессенджера ставит
+    группу «К-24», без слэша, поэтому оставался зелёным рядом с дефектом."""
+    conv_id = f"sys:schedule:{_gtoken(group_name)}"
     _ensure_system_channel(db, conv_id, f"Расписание · {group_name}",
                           "Автоматические изменения расписания вашей группы.",
                           reader_ids=student_ids)

@@ -501,14 +501,17 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
         sent += 1
     #§D12: тот же факт — постом в канал «Расписание · Группа» (мессенджер). Изолировано
     #try/except: сбой мессенджера не должен мешать основной рассылке пушей выше.
+    channel_id = ""
     try:
         from ..messenger import ensure_group_schedule_channel, _post_system_channel_message
-        conv_id = ensure_group_schedule_channel(db, group, [s.id for s in students])
+        channel_id = ensure_group_schedule_channel(db, group, [s.id for s in students])
         _post_system_channel_message(
-            db, conv_id, f"⚠️ Расписание группы **{group}** изменилось — проверьте актуальные пары.")
+            db, channel_id, f"⚠️ Расписание группы **{group}** изменилось — проверьте актуальные пары.")
     except Exception:
         pass
     audit.log(db, actor=user.login, role="admin", action="schedule.publish",
               target=group, detail=f"уведомлено: {sent}")
-    return {"ok": True, "notified": sent,
+    #conversation_id отдаём наружу, чтобы клиент мог перейти в канал, а тест — адресовать
+    #беседу, не собирая id вручную (у групп со слэшем ручная сборка и прятала дефект).
+    return {"ok": True, "notified": sent, "conversation_id": channel_id,
             "students": len(students), "teachers": len(teachers)}
