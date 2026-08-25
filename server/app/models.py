@@ -1155,7 +1155,8 @@ class CourseSection(Base):
 
 class CourseMaterial(Base):
     """Материал курса. MVP — `kind='link'` (url) и `kind='text'` (пояснение в title/url);
-    `kind='file'` зарезервирован под загрузку файлов (следующий шаг, app/uploads.py)."""
+    `kind='file'` зарезервирован под загрузку файлов (следующий шаг — через уже готовую
+    инфраструктуру вложений `app/storage.py`, ту же, что у мессенджера)."""
     __tablename__ = "course_materials"
     id = Column(Integer, primary_key=True, autoincrement=True)
     course_id = Column(Integer, index=True)
