@@ -73,6 +73,8 @@ loadUploadLimits()
 
 function pickFile() {
   if (!uploadLimits.value.configured) {
+    // ⚠️ Причина важнее факта: «мало места» и «нет ключей» лечатся по-разному, и без
+    // подсказки администратор будет искать проблему не там.
     m.setNotice(locale.t('files.notConfigured', 'Хранилище файлов пока не настроено'))
     return
   }

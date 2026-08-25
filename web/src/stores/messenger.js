@@ -440,10 +440,21 @@ export const useMessengerStore = defineStore('messenger', () => {
       })
       onProgress?.(5)
 
+      // ⚠️ ДВА СПОСОБА, ОДИН КОД. Куда класть файл, решает сервер: в объектное
+      // хранилище — сырым PUT (иначе подпись не сойдётся), к нам на диск — обычной
+      // формой (чтобы обработчик остался синхронным и не встал поперёк цикла событий).
+      // Клиент про это знать не должен: он делает то, что сказано в ответе на подпись.
+      // Благодаря этому переезд на большую машину не требует правок в браузере.
+      let body = file
+      if (sign.form_field) {
+        body = new FormData()
+        body.append(sign.form_field, file, file.name)
+      }
       const put = await fetch(sign.url, {
         method: sign.method || 'PUT',
-        headers: sign.headers || {},
-        body: file,
+        //У формы заголовок ставит браузер сам (там граница multipart) — свой сломал бы.
+        headers: sign.form_field ? undefined : (sign.headers || {}),
+        body,
       })
       if (!put.ok) throw new Error(`хранилище отказало: ${put.status}`)
       onProgress?.(85)
@@ -747,6 +758,16 @@ export const useMessengerStore = defineStore('messenger', () => {
     if (!g) return 'Выберите группу'
     try {
       const { data } = await messengerApi.ensureAnnouncementsChannel(g)
+      await loadChats()
+      await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
+      return ''
+    } catch (e) { return _errText(e, 'Не удалось открыть канал объявлений') }
+  }
+  async function openPracticeChannel(groupName) {
+    const g = (groupName || '').trim()
+    if (!g) return 'Выберите группу'
+    try {
+      const { data } = await messengerApi.ensurePracticeChannel(g)
       await loadChats()
       await _enterChat(data.conversation_id, { full_name: data.title, role: 'channel' })
       return ''
@@ -1097,7 +1118,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
     sendFile, addMembers, kickMember, setMemberRole, toggleIgnore,
-    openAnnouncementsChannel, ensureReportsChannel, createReport,
+    openAnnouncementsChannel, openPracticeChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus, startIdleWatch, stopIdleWatch,
     togglePinChat, toggleArchiveChat, openSaved,
     draftFor, saveDraft, clearDraft,

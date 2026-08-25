@@ -26,11 +26,45 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import shutil
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-#Настройки — из окружения, как всё остальное (см. config.py). Ничего не хардкодим:
-#переезд на сервера ВСГУТУ или другой VPS не должен требовать правок кода.
+# ━━ СПОСОБ ХРАНЕНИЯ ВЫБИРАЕТСЯ САМ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# 🔥 Требование Влада (25.08.2026): «когда переедем, хранилище сразу будет большое —
+# сделай, чтобы при переезде лишних настроек не делать». Поэтому решает не человек, а
+# сама машина:
+#
+#   1. заданы ключи S3 → работаем через объектное хранилище (файл идёт мимо нас);
+#   2. иначе смотрим СВОБОДНОЕ МЕСТО. Хватает — храним у себя на диске;
+#   3. не хватает — вложения честно выключены (503), как сейчас на боевом VPS.
+#
+# ⚠️ Порог по свободному месту, а не тумблер, и это принципиально. Тумблер придётся
+# вспомнить и переключить — а забудут ровно в день переезда, и «файлы почему-то не
+# работают» будут искать в коде. Место машина знает про себя сама.
+#
+# ⚠️ Честная граница этого приёма: свободный диск — ПРОКСИ для «машина потянет», а не
+# доказательство. Второй половиной возражения было одно ядро (файлы идут через тот же
+# процесс, что раздаёт журнал), и её порогом по диску не измерить. Поэтому есть ручной
+# перекрыватель `GRADEBOOK_FILES_MODE` (off | local | s3 | auto): если окажется, что
+# машина большая по диску и слабая по процессору, режим ставится явно, а не правкой кода.
+MODE = os.environ.get("GRADEBOOK_FILES_MODE", "auto").strip().lower()
+
+#Куда складывать при локальном хранении. Рядом с развёртыванием, а не в /tmp: /tmp
+#вычищается перезагрузкой, и переписка молча лишилась бы вложений.
+LOCAL_DIR = os.environ.get(
+    "GRADEBOOK_FILES_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "attachments"),
+)
+
+#Сколько свободного места считать достаточным. 20 ГБ — не «много», а порог, ниже
+#которого хранение файлов начинает угрожать САМОМУ ЖУРНАЛУ: забитый диск роняет не
+#мессенджер, а весь сайт и API. На боевом VPS свободно 2.9 ГБ, то есть там режим
+#останется выключенным сам собой — ровно как и задумано.
+LOCAL_MIN_FREE_BYTES = int(os.environ.get("GRADEBOOK_FILES_MIN_FREE_GB", "20")) * 1024 ** 3
+
+#Настройки S3 — из окружения, как всё остальное (см. config.py).
 ENDPOINT = os.environ.get("GRADEBOOK_S3_ENDPOINT", "").strip().rstrip("/")
 REGION = os.environ.get("GRADEBOOK_S3_REGION", "ru-central1").strip()
 BUCKET = os.environ.get("GRADEBOOK_S3_BUCKET", "").strip()
@@ -65,9 +99,48 @@ ALLOWED_MIME = {
 }
 
 
-def configured() -> bool:
-    """Готово ли хранилище. Без него ручки вложений отвечают честным отказом."""
+def s3_ready() -> bool:
     return bool(ENDPOINT and BUCKET and ACCESS_KEY and SECRET_KEY)
+
+
+def free_bytes(path: str = "") -> int:
+    """Свободное место там, где будем хранить. 0 — узнать не удалось."""
+    try:
+        target = path or LOCAL_DIR
+        probe = target if os.path.isdir(target) else os.path.dirname(target) or "."
+        return shutil.disk_usage(probe).free
+    except Exception:
+        return 0
+
+
+def local_ready() -> bool:
+    """Хватает ли места, чтобы хранить вложения у себя.
+
+    ⚠️ Каталог создаём ЛЕНИВО и только когда собираемся им пользоваться: пустая папка
+    на боевой машине, где режим всё равно выключен, — лишний повод решить, что файлы
+    работают.
+    """
+    return free_bytes() >= LOCAL_MIN_FREE_BYTES
+
+
+def mode() -> str:
+    """`s3` | `local` | `off`. Решает машина, а не человек (см. шапку файла)."""
+    if MODE in ("off", "local", "s3"):
+        #Явно заданный режим уважаем, но не притворяемся, что он работает: без ключей
+        #S3 и без места на диске отвечать «готово» значит принять файл и потерять его.
+        if MODE == "s3":
+            return "s3" if s3_ready() else "off"
+        if MODE == "local":
+            return "local" if free_bytes() > 0 else "off"
+        return "off"
+    if s3_ready():
+        return "s3"
+    return "local" if local_ready() else "off"
+
+
+def configured() -> bool:
+    """Готово ли хранилище хоть каким-нибудь способом."""
+    return mode() != "off"
 
 
 def mime_ok(mime: str) -> bool:
@@ -92,8 +165,8 @@ def presign(method: str, key: str, expires: int, *, content_type: str = "",
     ⚠️ Ключ объекта кодируем с `safe="/"`: слэши в пути обязаны остаться слэшами, иначе
     хранилище увидит один объект со странным именем вместо папки.
     """
-    if not configured():
-        raise RuntimeError("хранилище не настроено")
+    if not s3_ready():
+        raise RuntimeError("объектное хранилище не настроено")
 
     now = datetime.now(timezone.utc)
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
@@ -173,7 +246,7 @@ def head_object(key: str) -> dict:
     range` есть только у POST-policy. Значит единственная честная проверка — посмотреть,
     что реально легло, и отвергнуть несовпадение (см. `confirm_upload`).
     """
-    if not configured():
+    if not s3_ready():
         return {}
     import urllib.error
     import urllib.request
@@ -186,6 +259,83 @@ def head_object(key: str) -> dict:
         return {}
     except Exception:
         return {}
+
+
+# ━━ ЛОКАЛЬНОЕ ХРАНЕНИЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Тот же порядок работы, что и с объектным хранилищем: клиент получает ССЫЛКУ и сам
+# кладёт по ней файл. Разница только в том, что ссылка ведёт к нам. Так клиентский код
+# один на оба способа, и при переезде на большую машину менять в браузере нечего.
+#
+# ⚠️ Ссылка подписана и живёт минуты — ровно как у S3. Без подписи это была бы дыра:
+# `PUT /uploads/local/att:<id>` угадывается, а «он же знает id» защитой не является.
+
+
+def _local_secret() -> bytes:
+    """Ключ подписи локальных ссылок — тот же секрет, что у JWT.
+
+    ⚠️ Отдельный ключ пришлось бы отдельно заводить, отдельно хранить и отдельно
+    ротировать; ещё один секрет в `.env` — ещё одно место, где однажды окажется
+    значение по умолчанию.
+    """
+    from .config import JWT_SECRET
+    return str(JWT_SECRET).encode()
+
+
+def local_path(att_id: str) -> str:
+    """Файл на диске. Имя — ТОЛЬКО id: имя от человека в путь не попадает никогда."""
+    safe = "".join(c for c in att_id if c.isalnum() or c in "-_")[:80]
+    return os.path.join(LOCAL_DIR, safe)
+
+
+def local_token(att_id: str, action: str, ttl: int) -> str:
+    """Подпись «этому файлу, на это действие, до этого времени»."""
+    exp = int(datetime.now(timezone.utc).timestamp()) + ttl
+    msg = f"{att_id}|{action}|{exp}".encode()
+    sig = hmac.new(_local_secret(), msg, hashlib.sha256).hexdigest()[:32]
+    return f"{exp}.{sig}"
+
+
+def local_token_ok(att_id: str, action: str, token: str) -> bool:
+    """Проверка подписи. Срок и действие входят в неё, поэтому подменить нечего."""
+    try:
+        exp_s, sig = str(token or "").split(".", 1)
+        exp = int(exp_s)
+    except Exception:
+        return False
+    if exp < int(datetime.now(timezone.utc).timestamp()):
+        return False
+    msg = f"{att_id}|{action}|{exp}".encode()
+    want = hmac.new(_local_secret(), msg, hashlib.sha256).hexdigest()[:32]
+    #⚠️ Сравнение постоянного времени: обычное `==` по строке подписи утекает её побайтно.
+    return hmac.compare_digest(want, sig)
+
+
+def local_ensure_dir() -> None:
+    os.makedirs(LOCAL_DIR, exist_ok=True)
+
+
+def local_stat(att_id: str) -> dict:
+    """Размер и наличие файла на диске — аналог `head_object` для локального способа."""
+    try:
+        return {"size": os.path.getsize(local_path(att_id))}
+    except OSError:
+        return {}
+
+
+def local_delete(att_id: str) -> bool:
+    try:
+        os.remove(local_path(att_id))
+        return True
+    except FileNotFoundError:
+        return True                      #уже нет — задача выполнена
+    except OSError:
+        return False
+
+
+def remove(att_id: str, storage_key: str) -> bool:
+    """Удалить объект тем способом, каким он хранится. Одна дверь для уборки."""
+    return local_delete(att_id) if mode() == "local" else delete_object(storage_key)
 
 
 def object_key(conv_id: str, att_id: str) -> str:
@@ -208,7 +358,7 @@ def delete_object(key: str) -> bool:
     Файл — часть сообщения, значит правило то же. Физически стираем позже, когда ссылок
     на вложение не осталось и срок разбора вышел.
     """
-    if not configured():
+    if not s3_ready():
         return False
     import urllib.error
     import urllib.request

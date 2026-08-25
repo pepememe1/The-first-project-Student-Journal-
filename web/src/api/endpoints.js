@@ -175,6 +175,11 @@ export const curatorApi = {
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
 export const adminApi = {
+  // 🔥 Журнал значимых действий. Ручка существовала и работала, а звать её было
+  // некому — журнал писался, посмотреть его было НЕГДЕ. Для продукта с ПДн это не
+  // косметика: аудит существует ради разбора «кто изменил оценку», и журнал без
+  // доступа эту задачу не решает вовсе.
+  audit: (params = {}) => api.get('/web/admin/audit', { params }),
   overview: () => api.get('/web/admin/overview'),
 
   // ── Данные и резервные копии (AdminData.vue) ─────────────────────────────────────
@@ -526,6 +531,12 @@ export const messengerApi = {
   // Starlette декодировал его обратно в «/», роут не совпадал и запрос молча 404-ил.
   ensureAnnouncementsChannel: (groupName) =>
     api.post('/web/messenger/channels/announcements', null, { params: { group: groupName } }),
+  // 🔥 Канал практики. Ручка была с самого начала и не имела ни одного вызывающего —
+  // то есть создать его из веба было нельзя вовсе (нашлось сверкой graph_api_bridge).
+  // ⚠️ Имя группы в QUERY, а не в пути: Starlette раскодирует `%2F` до роутинга, и
+  // группа «К74/1» развалила бы путь на лишний сегмент.
+  ensurePracticeChannel: (groupName) =>
+    api.post('/web/messenger/channels/practice', null, { params: { group: groupName } }),
   // §12: канал «Отчёты · Группа» (куратор). Группа — тоже в query, причина та же.
   ensureCuratorReportsChannel: (groupName) =>
     api.post('/web/messenger/channels/curator-reports', null, { params: { group: groupName } }),

@@ -21,7 +21,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import Body, Depends, HTTPException, Query
+import os
+
+from fastapi import Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ... import storage
@@ -77,8 +80,77 @@ def sign_upload(payload: dict = Body(...), user: User = Depends(get_current_user
                       name=name, size=size, mime=mime, storage_key=key,
                       created_at=_iso(), ready=False))
     db.commit()
+
+    #⚠️ Ответ РАЗНЫЙ по форме, и клиент ветвится по `form_field`. Причина не в лени:
+    #в объектное хранилище файл кладётся сырым PUT (иначе подпись не сойдётся), а к нам
+    #— обычной формой, чтобы обработчик остался ОБЫЧНЫМ `def`. FastAPI уводит такие в
+    #пул потоков, и запись файла на диск не встанет поперёк цикла событий (инвариант:
+    #блокирующий вызов в `async def` останавливает весь сервер).
+    if storage.mode() == "local":
+        storage.local_ensure_dir()
+        token = storage.local_token(att_id, "put", storage.UPLOAD_TTL_S)
+        return {"attachment_id": att_id, "method": "POST", "form_field": "file",
+                "url": f"/web/messenger/uploads/local/{att_id}?t={token}"}
     return {"attachment_id": att_id, "url": storage.upload_url(key, mime),
             "method": "PUT", "headers": {"Content-Type": mime}}
+
+
+@router.post("/uploads/local/{att_id}")
+def upload_local(att_id: str, t: str = Query(""), file: UploadFile = File(...),
+                 db: Session = Depends(get_db)):
+    """Приём файла при локальном хранении.
+
+    ⚠️ Обычный `def`, а не `async def`: запись файла на диск блокирующая, и в
+    асинхронной ручке она встала бы поперёк цикла событий — то есть подвесила бы
+    журнал, расписание и `/health` на всё время загрузки (инвариант в CLAUDE.md,
+    куплен настоящим дефектом с Whisper). Синхронные ручки FastAPI уводит в пул потоков.
+
+    ⚠️ Токена достаточно, обычная авторизация здесь НЕ нужна и была бы вредна: ссылку
+    выдал `sign_upload` уже после проверки участия и роли, а требовать заголовок с
+    токеном от загрузки файла значит запретить будущие способы загрузки (форма, фоновая
+    докачка). Подпись привязана к id файла, действию и сроку.
+    """
+    if not storage.local_token_ok(att_id, "put", t):
+        raise HTTPException(status_code=403, detail="Ссылка недействительна")
+    a = db.query(Attachment).filter(Attachment.id == att_id).first()
+    if a is None or a.ready:
+        #Повторная загрузка в уже подтверждённое вложение — способ подменить файл
+        #под чужим сообщением. Один id — одна загрузка.
+        raise HTTPException(status_code=404, detail="Вложение не найдено")
+
+    storage.local_ensure_dir()
+    written = 0
+    limit = storage.MAX_SIZE
+    with open(storage.local_path(att_id), "wb") as out:
+        while True:
+            chunk = file.file.read(1024 * 256)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > limit:
+                #⚠️ Режем ПО ХОДУ, а не проверяем в конце: иначе пятигигабайтный файл
+                #сначала ляжет на диск и только потом будет отвергнут.
+                out.close()
+                storage.local_delete(att_id)
+                raise HTTPException(status_code=413, detail="Файл слишком большой")
+            out.write(chunk)
+    return {"ok": True, "size": written}
+
+
+@router.get("/uploads/local/{att_id}")
+def download_local(att_id: str, t: str = Query(""), db: Session = Depends(get_db)):
+    """Отдача файла при локальном хранении. Доступ — по подписи, как и у загрузки."""
+    if not storage.local_token_ok(att_id, "get", t):
+        raise HTTPException(status_code=403, detail="Ссылка недействительна")
+    a = db.query(Attachment).filter(Attachment.id == att_id).first()
+    if a is None or not a.ready:
+        raise HTTPException(status_code=404, detail="Вложение не найдено")
+    path = storage.local_path(att_id)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    #Имя подставляем заголовком: на диске файл лежит под id, а человек ждёт своё имя.
+    return FileResponse(path, media_type=a.mime or "application/octet-stream",
+                        filename=a.name or att_id)
 
 
 @router.post("/uploads/{att_id}/done")
@@ -103,12 +175,15 @@ def confirm_upload(att_id: str, user: User = Depends(get_current_user),
     if a is None or a.uploader_id != user.id:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
 
-    real = storage.head_object(a.storage_key)
+    #Факт проверяем тем способом, каким хранили: у объектного хранилища HEAD,
+    #у локального — размер файла на диске. Одна проверка на оба пути.
+    real = (storage.local_stat(att_id) if storage.mode() == "local"
+            else storage.head_object(a.storage_key))
     if real:
         bad_size = real.get("size", 0) > storage.MAX_SIZE
         bad_mime = bool(real.get("mime")) and not storage.mime_ok(real["mime"])
         if bad_size or bad_mime:
-            storage.delete_object(a.storage_key)
+            storage.remove(att_id, a.storage_key)
             db.delete(a)
             db.commit()
             raise HTTPException(status_code=413 if bad_size else 415,
@@ -132,6 +207,10 @@ def attachment_url(att_id: str, user: User = Depends(get_current_user),
     _require_participant(db, a.conversation_id, user)
     if not storage.configured():
         raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
+    if storage.mode() == "local":
+        token = storage.local_token(att_id, "get", storage.DOWNLOAD_TTL_S)
+        return {"url": f"/web/messenger/uploads/local/{att_id}?t={token}",
+                "attachment": _att_out(a)}
     #Имя и тип уходят в ссылку подписанными: браузер сохранит файл под настоящим
     #именем, а не под ключом `att:<hex>` без расширения.
     return {"url": storage.download_url(a.storage_key, a.name, a.mime),
@@ -220,6 +299,10 @@ def upload_limits(user: User = Depends(get_current_user)):
     поменяют.
     """
     return {"configured": storage.configured(),
+            #Способ полезен не для красоты: по нему видно, почему файлы не работают —
+            #«места мало» и «ключи не заданы» лечатся по-разному.
+            "mode": storage.mode(),
+            "free_bytes": storage.free_bytes(),
             "max_size": storage.MAX_SIZE,
             "mime": sorted(storage.ALLOWED_MIME),
             "ext": sorted(set(storage.ALLOWED_MIME.values()))}
