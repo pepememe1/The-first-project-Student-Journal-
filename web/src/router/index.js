@@ -50,6 +50,7 @@ import AdminServer from '@/pages/admin/AdminServer.vue'
 import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
 import ParentJournal from '@/pages/parent/ParentJournal.vue'
 import AdminParents from '@/pages/admin/AdminParents.vue'
+import AdminAudit from '@/pages/admin/AdminAudit.vue'
 
 // i18nTitle — необязательный ключ словаря; без него заголовок остаётся русским
 // литералом title (обратная совместимость).
@@ -159,6 +160,7 @@ const routes = [
       page('data', AdminData, 'Данные и резервные копии', 'router.dataTitle'),
       page('requests', AdminRequests, 'Запросы на подключение', 'nav.requests'),
       page('access', AdminSessions, 'Сессии и доступ', 'nav.sessions'),
+      page('audit', AdminAudit, 'Журнал действий', 'nav.audit'),
       // Раньше отсутствовал: SidebarUserOverlay/HeaderBar ссылаются на `/${role}/profile`
       // безусловно для ВСЕХ ролей — у админа маршрута не было, и переход падал в
       // catch-all редирект на "/". Найдено при разведке под Discord-style профиль (3.6).

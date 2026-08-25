@@ -87,7 +87,11 @@ def _setup_group_with_parent(client, group="ИС-21"):
 
 
 def _ensure_channel(client, teach, group="ИС-21"):
-    r = client.post(f"/web/messenger/channels/curator-reports/{group}", headers=teach)
+    #⚠️ Имя группы в QUERY, а не в пути: путь-вариант удалён 25.08.2026 как
+    #нарушение инварианта — Starlette раскодирует `%2F` ДО роутинга, и группа
+    #«К74/1» разваливает путь на лишний сегмент.
+    r = client.post("/web/messenger/channels/curator-reports",
+                    params={"group": group}, headers=teach)
     assert r.status_code == 200, r.text
     return r.json()["conversation_id"]
 
@@ -96,7 +100,8 @@ def _ensure_channel(client, teach, group="ИС-21"):
 def test_channel_requires_curator_of_group(client):
     admin = make_admin(client)
     teach = make_teacher(client, admin)   # НЕ куратор
-    r = client.post("/web/messenger/channels/curator-reports/ИС-21", headers=teach)
+    r = client.post("/web/messenger/channels/curator-reports",
+                    params={"group": "ИС-21"}, headers=teach)
     assert r.status_code == 403
 
 
@@ -105,7 +110,8 @@ def test_channel_requires_active_parent(client):
     teach = _make_curator(client, admin)
     _student(client, admin, "ivanova", "Иванова", "Мария", group="ИС-21")
     #Родителя ещё нет вовсе — группа "без родителей".
-    r = client.post("/web/messenger/channels/curator-reports/ИС-21", headers=teach)
+    r = client.post("/web/messenger/channels/curator-reports",
+                    params={"group": "ИС-21"}, headers=teach)
     assert r.status_code == 400
 
 

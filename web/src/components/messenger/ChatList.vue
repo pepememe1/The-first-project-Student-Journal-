@@ -4,7 +4,7 @@
 // чату открывает переписку; по человеку — личный чат; по каналу — вступление/открытие.
 import { ref, computed, watch, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Search, Plus, Users, Radio, Megaphone, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
+import { Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
@@ -98,14 +98,31 @@ function preview(c) {
 const showGroupPick = ref(false)
 const dialogError = ref('')
 const dialogBusy = ref(false)
+// ⚠️ ОДИН диалог выбора группы на оба канала, а назначение хранится отдельно.
+// Второй такой же диалог означал бы две копии одного окна, которые разъедутся на первой
+// же правке — и заметить это можно будет только открыв оба.
+const groupPickFor = ref('announcements')      // announcements | practice
+
 function openAnnouncements() {
   showNew.value = false
   dialogError.value = ''
+  groupPickFor.value = 'announcements'
+  showGroupPick.value = true
+}
+// 🔥 Канал практики. Серверная ручка была с самого начала и не имела НИ ОДНОГО
+// вызывающего — создать его из веба было нельзя вовсе. Нашлось сверкой контракта
+// (`tools/graph_api_bridge.py`), где она лежала в списке «сервер никто не зовёт».
+function openPractice() {
+  showNew.value = false
+  dialogError.value = ''
+  groupPickFor.value = 'practice'
   showGroupPick.value = true
 }
 async function onGroupPicked(group) {
   dialogBusy.value = true
-  const err = await m.openAnnouncementsChannel(group)
+  const err = groupPickFor.value === 'practice'
+    ? await m.openPracticeChannel(group)
+    : await m.openAnnouncementsChannel(group)
   dialogBusy.value = false
   dialogError.value = err
   if (!err) showGroupPick.value = false
@@ -181,6 +198,9 @@ onMounted(() => { m.loadChats() })
             <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />{{ locale.t('messenger.newChannel', 'Новый канал') }}</button>
             <!-- §D12: авто-канал «Объявления · Группа» — студенты группы уже читатели. -->
             <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />{{ locale.t('messenger.groupAnnouncements', 'Объявления группы') }}</button>
+            <!-- §D12(5): «Практика · Группа» — канал НЕ автоматический: данных о практике
+                 в журнале нет и выдумывать их нельзя. Его ведёт руками учебная часть. -->
+            <button type="button" @click="openPractice" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Briefcase class="size-4 text-text3" />{{ locale.t('messenger.groupPractice', 'Практика группы') }}</button>
             <!-- §12: только куратору — отчёт по успеваемости своей группы для родителей. -->
             <button v-if="canSearchParents" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />{{ locale.t('messenger.parentReport', 'Отчёт для родителей') }}</button>
           </div>
@@ -322,8 +342,14 @@ onMounted(() => { m.loadChats() })
     </div>
 
     <CreateChatDialog v-if="createKind" :kind="createKind" @create="onCreate" @close="createKind = ''" />
-    <GroupPickDialog v-if="showGroupPick" :title="locale.t('messenger.groupAnnouncements', 'Объявления группы')" :submit-label="locale.t('messenger.openChannel', 'Открыть канал')"
-                     :hint="locale.t('messenger.announcementsHint', 'Канал «Объявления · Группа». Студенты группы уже подписаны.')"
+    <GroupPickDialog v-if="showGroupPick"
+                     :title="groupPickFor === 'practice'
+                       ? locale.t('messenger.groupPractice', 'Практика группы')
+                       : locale.t('messenger.groupAnnouncements', 'Объявления группы')"
+                     :submit-label="locale.t('messenger.openChannel', 'Открыть канал')"
+                     :hint="groupPickFor === 'practice'
+                       ? locale.t('messenger.practiceHint', 'Канал «Практика · Группа»: направления, договоры, сроки сдачи дневника. Студенты группы уже подписаны.')
+                       : locale.t('messenger.announcementsHint', 'Канал «Объявления · Группа». Студенты группы уже подписаны.')"
                      :error="dialogError" :busy="dialogBusy"
                      @pick="onGroupPicked" @close="showGroupPick = false" />
     <CuratorReportDialog v-if="showReport" :error="dialogError" :busy="dialogBusy"

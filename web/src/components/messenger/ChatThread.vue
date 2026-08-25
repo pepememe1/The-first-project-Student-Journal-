@@ -8,7 +8,7 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
-  Languages, Star, SmilePlus, ClipboardList,
+  Languages, Star, SmilePlus, ClipboardList, Paperclip,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -36,6 +36,8 @@ import ActivityCard from '@/components/activity/ActivityCard.vue'
 import BoardCard from '@/components/activity/BoardCard.vue'
 import TranslateDialog from './TranslateDialog.vue'
 import GifPicker from './GifPicker.vue'
+import FilePreview from './FilePreview.vue'
+import { humanSize } from '@/utils/docPreview'
 import Avatar from '@/components/ui/Avatar.vue'
 import { profilePlate } from '@/theme/palette'
 import { nameDecor } from '@/config/nameEffects'
@@ -52,6 +54,57 @@ const m = useMessengerStore()
 const tr = useTranslateStore()
 const showTranslate = ref(false)
 const showGifPicker = ref(false)
+
+// ── Вложение файла ─────────────────────────────────────────────────────────────────
+// ⚠️ Файл сначала ПОКАЗЫВАЕМ, потом отправляем. Мессенджер, отправляющий документ по
+// одному клику, рано или поздно отправит не тот файл не в тот чат — а «удалить у всех»
+// в учебной переписке уже не помогает: его увидели.
+const fileInput = ref(null)
+const pendingFile = ref(null)       //выбран, но ещё не отправлен
+const previewFile = ref(null)       //что показываем в просмотрщике
+const previewAtt = ref(null)
+const uploadPct = ref(0)
+const uploadLimits = ref({ configured: true, max_size: 0, ext: [] })
+
+async function loadUploadLimits() {
+  try { uploadLimits.value = (await messengerApi.uploadLimits()).data } catch { /* не критично */ }
+}
+loadUploadLimits()
+
+function pickFile() {
+  if (!uploadLimits.value.configured) {
+    // ⚠️ Причина важнее факта: «мало места» и «нет ключей» лечатся по-разному, и без
+    // подсказки администратор будет искать проблему не там.
+    m.setNotice(locale.t('files.notConfigured', 'Хранилище файлов пока не настроено'))
+    return
+  }
+  fileInput.value?.click()
+}
+
+function onFileChosen(e) {
+  const f = e.target.files?.[0]
+  e.target.value = ''            //чтобы выбор ТОГО ЖЕ файла второй раз снова сработал
+  if (!f) return
+  const cap = uploadLimits.value.max_size || 0
+  if (cap && f.size > cap) {
+    m.setNotice(locale.t('files.tooBig', { mb: Math.round(cap / 1048576) }))
+    return
+  }
+  pendingFile.value = f
+}
+
+async function sendPendingFile() {
+  if (!pendingFile.value) return
+  uploadPct.value = 1
+  const caption = draft.value.trim()
+  const ok = await m.sendFile(pendingFile.value, caption, (p) => { uploadPct.value = p })
+  uploadPct.value = 0
+  if (ok) {
+    pendingFile.value = null
+    draft.value = ''
+    m.clearDraft(activeId.value)
+  }
+}
 const auth = useAuthStore()
 const gif = useGifStore()
 const tts = useTtsStore()
@@ -1416,6 +1469,22 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                   <Star class="size-3.5" :class="gif.isFavoriteUrl(msg.body) ? 'fill-yellow-400 text-yellow-400' : 'text-white'" />
                 </span>
               </span>
+              <!-- Вложение: карточка с именем и размером. Клик — предпросмотр во вкладке
+                   (PDF рисует браузер, DOCX распаковываем сами), а не скачивание: чаще
+                   всего человеку нужно просто убедиться, что это тот файл. -->
+              <span v-else-if="msg.kind === 'file' && msg.attachment" class="block w-fit max-w-full">
+                <button type="button" @click="previewAtt = msg.attachment"
+                        class="flex items-center gap-2.5 rounded-lg border border-border2 bg-card2 px-3 py-2
+                               text-left transition-colors hover:border-accent">
+                  <Paperclip class="size-4 shrink-0 text-text3" />
+                  <span class="min-w-0">
+                    <span class="block truncate text-sm text-text">{{ msg.attachment.name }}</span>
+                    <span class="block text-[11px] text-text3">{{ humanSize(msg.attachment.size) }}</span>
+                  </span>
+                </button>
+                <span v-if="msg.body" class="msg-body mt-1 block whitespace-pre-wrap break-words"
+                      v-html="renderBody(msg)"></span>
+              </span>
               <!-- §D1: Markdown-lite (текст экранирован ДО рендера — см. utils/markdownLite). -->
               <div v-else class="msg-body whitespace-pre-wrap break-words" v-html="renderBody(msg)"
                    @click="onBodyClick" />
@@ -1673,13 +1742,38 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                       class="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-white disabled:opacity-40"><Plus class="size-3.5" /></button>
             </form>
           </div>
-          <form class="flex items-end gap-2 p-2.5" @submit.prevent="submit">
+          <!-- Выбранный файл: показываем ДО отправки, с возможностью открыть и передумать. -->
+          <div v-if="pendingFile" class="mx-2.5 mb-1 flex items-center gap-2 rounded-lg border border-border2 bg-card2 px-2.5 py-1.5">
+            <Paperclip class="size-4 shrink-0 text-text3" />
+            <button type="button" class="min-w-0 flex-1 truncate text-left text-xs text-text hover:text-accent"
+                    @click="previewFile = pendingFile">
+              {{ pendingFile.name }}
+              <span class="text-text3">· {{ humanSize(pendingFile.size) }}</span>
+            </button>
+            <span v-if="uploadPct" class="shrink-0 text-[11px] tabular-nums text-text3">{{ uploadPct }}%</span>
+            <button v-else type="button" class="shrink-0 text-text3 hover:text-red"
+                    :aria-label="locale.t('common.remove', 'Убрать')" @click="pendingFile = null">✕</button>
+          </div>
+
+          <form class="flex items-end gap-2 p-2.5" @submit.prevent="pendingFile ? sendPendingFile() : submit()">
+            <!-- 🔥 Кнопка прикрепления СЛЕВА от поля (просьба Влада 25.08.2026). Сам файл
+                 через наш сервер не проходит: браузер кладёт его прямо в хранилище по
+                 подписанной ссылке — см. stores/messenger.js::sendFile. -->
+            <input ref="fileInput" type="file" class="hidden" @change="onFileChosen"
+                   :accept="(uploadLimits.ext || []).join(',')" />
+            <button type="button" @click="pickFile" :disabled="mascotCooldown.active"
+                    :title="locale.t('files.attach', 'Прикрепить файл')"
+                    :aria-label="locale.t('files.attach', 'Прикрепить файл')"
+                    class="grid size-10 shrink-0 place-items-center rounded-lg border border-border2 text-text3
+                           transition-colors hover:border-accent hover:text-accent disabled:opacity-50">
+              <Paperclip class="size-5" />
+            </button>
             <!-- Разметку подсказывать не нужно: над полем есть кнопки B/I/U/S/код/цитата.
                Про /vector говорим только там, где команда работает — в «Избранном». -->
           <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
                       @keydown="onComposerKeydown" @input="onComposerInput" :disabled="mascotCooldown.active"
                       class="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none rounded-lg border border-border2 bg-card2 px-3 py-2 text-base text-text outline-none focus:border-accent focus:bg-card disabled:opacity-60 sm:text-sm" />
-            <button type="submit" :disabled="!draft.trim() || sending || mascotCooldown.active" :aria-label="locale.t('chatThread.send', 'Отправить')"
+            <button type="submit" :disabled="(!draft.trim() && !pendingFile) || sending || mascotCooldown.active" :aria-label="locale.t('chatThread.send', 'Отправить')"
                     class="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
               <Send class="size-5" />
             </button>
@@ -1693,6 +1787,9 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
         </div>
       </div>
     </template>
+
+    <FilePreview v-if="previewFile || previewAtt" :file="previewFile" :attachment="previewAtt"
+                 @close="previewFile = null; previewAtt = null" />
 
     <!-- Треды: ответы на сообщение (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
     <div v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"
@@ -1838,7 +1935,13 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
     </div>
 
     <!-- «О беседе»: профиль собеседника / участники группы с владельцем -->
-    <ConversationInfo v-if="showInfo" @close="showInfo = false" />
+    <!-- Панель беседы шлёт события, а открывает по-прежнему лента: поиск и сводка
+         живут здесь со своим состоянием, и вторая их копия в панели разошлась бы с
+         первой молча. -->
+    <ConversationInfo v-if="showInfo" @close="showInfo = false"
+                      @search="showInfo = false; showSearch = true"
+                      @summary="showInfo = false; openSummary()"
+                      @open-file="showInfo = false; previewAtt = $event" />
     <!-- Клик по отметке "@Фамилия"/"/@Фамилия"/"/@!Фамилия" в теле сообщения (см. onBodyClick) -->
     <PeerProfileModal v-if="mentionProfileId" :user-id="mentionProfileId" @close="mentionProfileId = ''" />
 

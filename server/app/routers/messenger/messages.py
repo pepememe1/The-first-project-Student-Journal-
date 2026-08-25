@@ -40,7 +40,7 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
         rows = q.order_by(Message.id.desc()).limit(limit).all()
         rows.reverse()
     names = _names_for(db, [m.sender_id for m in rows])
-    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
+    out = _msgs_out(db, rows, user.id, names)
     _attach_reactions(db, out, user.id)      #§D3: реакции пачкой
     _attach_reply_counts(db, out)            #Треды: бейдж «N ответов»
     _attach_rich_meta(db, out, user.id)               #кнопки: отчёт куратора, активность, доска
@@ -60,7 +60,7 @@ def message_thread(conv_id: str, message_id: int,
         q = q.filter(~Message.id.in_(hidden))
     rows = q.order_by(Message.id.asc()).all()
     names = _names_for(db, [m.sender_id for m in rows])
-    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in rows]
+    out = _msgs_out(db, rows, user.id, names)
     _attach_reactions(db, out, user.id)
     _attach_rich_meta(db, out, user.id)               #иначе в ветке ответов вместо кнопки сырой id
     return {"messages": out}
@@ -90,7 +90,7 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     limit = max(1, min(int(limit or 50), 100))
     matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
     names = _names_for(db, [m.sender_id for m in matched])
-    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
+    out = _msgs_out(db, matched, user.id, names)
     _attach_rich_meta(db, out, user.id)
     return {"messages": out}
 
@@ -131,7 +131,7 @@ def ai_search_messages(conv_id: str, q: str = Query(""), limit: int = Query(30),
     limit = max(1, min(int(limit or 30), 100))
     matched = [m for _s, m in scored[:limit]]
     names = _names_for(db, [m.sender_id for m in matched])
-    out = [_msg_out(m, user.id, names.get(m.sender_id, "")) for m in matched]
+    out = _msgs_out(db, matched, user.id, names)
     _attach_rich_meta(db, out, user.id)
     return {"messages": out,
             "expanded": extra}
@@ -224,7 +224,11 @@ def send_message(conv_id: str, payload: dict = Body(...),
         raise HTTPException(status_code=403, detail="Вы заглушены в этой беседе")
     _guard_can_write(db, user)               #глобальный мьют (403) + анти-флуд (429)
     body = (payload.get("body") or "").strip()
-    if not body:
+    #⚠️ ФАЙЛ САМ ПО СЕБЕ — ЗАКОННОЕ СООБЩЕНИЕ. Гейт пустого текста стоял РАНЬШЕ разбора
+    #вложения, поэтому «выбрал файл, ничего не написал, отправил» отвечало 400 — но уже
+    #ПОСЛЕ того, как файл лёг в хранилище: объект оставался сиротой и оплаченным
+    #трафиком, а человек видел ошибку на ровном месте. Найдено Полковником.
+    if not body and not str(payload.get("attachment_id") or ""):
         raise HTTPException(status_code=400, detail="Пустое сообщение")
     #GIF-пикер (Klipy, §messenger_gifs): тело — прямая ссылка на CDN, а не текст, набранный
     #человеком. Слэш-команды/упоминания/цензура ниже пропускаются целиком для этого вида —
@@ -297,9 +301,23 @@ def send_message(conv_id: str, payload: dict = Body(...),
         import profanity_filter
         body = profanity_filter.censor(body, mask=profanity_filter.MESSENGER_SAFE_MASK)
 
+    #Вложение: пришло `attachment_id` — проверяем, что оно НАШЕ, ГОТОВО и из ЭТОЙ беседы.
+    #⚠️ Все три проверки обязательны. Без первой чужим вложением можно подписаться, без
+    #второй в ленту попадёт файл, которого в хранилище нет, без третьей — файл «переедет»
+    #в беседу, участником которой отправитель может и не быть.
+    att_id = str(payload.get("attachment_id") or "")
+    kind = "gif" if is_gif else "text"
+    if att_id:
+        att = db.query(Attachment).filter(Attachment.id == att_id).first()
+        if (att is None or not att.ready
+                or att.uploader_id != user.id or att.conversation_id != conv_id):
+            raise HTTPException(status_code=400, detail="Вложение недоступно")
+        kind = "file"
+        att.orphan_at = ""          #ссылка появилась — сиротой больше не считается
+
     m = Message(conversation_id=conv_id, sender_id=user.id, body=body,
                 created_at=_now(), reply_to_id=reply_to, mentions=mentions,
-                kind="gif" if is_gif else "text",
+                kind=kind, attachment_id=att_id,
                 body_format="plain" if is_gif else "markdown", client_nonce=nonce)
     db.add(m)
     db.commit()
@@ -321,7 +339,10 @@ def send_message(conv_id: str, payload: dict = Body(...),
         gif_service.mark_shared((payload.get("gif_slug") or "").strip())
     else:
         _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
-    return _msg_out(m, user.id, user.full_name or user.name or user.login or "")
+    #Вложение отдаём сразу: клиент рисует сообщение до ответа сервера, и без
+    #метаданных карточка файла мигнула бы пустой.
+    return _msg_out(m, user.id, user.full_name or user.name or user.login or "",
+                    _att_map(db, [m]).get(att_id or ""))
 
 
 @router.post("/chats/{conv_id}/read")
@@ -510,7 +531,11 @@ def pinned_messages(conv_id: str, user: User = Depends(get_current_user),
     if hidden:
         q = q.filter(~Message.id.in_(hidden))
     rows = q.order_by(Message.id.desc()).all()
-    out = [_msg_out(m, user.id) for m in rows]
+    #⚠️ Вложение отдаём и здесь. Оно терялось на трёх путях сразу (находка Полковника
+    #25.08.2026): в ленте карточка файла была, а в закреплённых и в списке чатов —
+    #нет. Расхождение между сериализациями ОДНОГО объекта замечают в последнюю
+    #очередь: каждая по отдельности выглядит рабочей.
+    out = _msgs_out(db, rows, user.id, {})
     _attach_rich_meta(db, out, user.id)               #закреплённая карточка активности — не сырой id
     return {"pinned": out}
 

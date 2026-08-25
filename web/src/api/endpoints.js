@@ -175,6 +175,11 @@ export const curatorApi = {
 
 // АДМИН ──────────────────────────────────────────────────────────────────────────
 export const adminApi = {
+  // 🔥 Журнал значимых действий. Ручка существовала и работала, а звать её было
+  // некому — журнал писался, посмотреть его было НЕГДЕ. Для продукта с ПДн это не
+  // косметика: аудит существует ради разбора «кто изменил оценку», и журнал без
+  // доступа эту задачу не решает вовсе.
+  audit: (params = {}) => api.get('/web/admin/audit', { params }),
   overview: () => api.get('/web/admin/overview'),
 
   // ── Данные и резервные копии (AdminData.vue) ─────────────────────────────────────
@@ -470,6 +475,33 @@ export const messengerApi = {
     api.patch(`/web/messenger/chats/${encodeURIComponent(convId)}`, { title, about }),
   // §ролей: выгнать участника (право kick), назначить билдовую/кастомную роль, кастомные
   // роли беседы, личный игнор (не модерация — см. модель ConversationIgnore).
+  // 🔥 ДОБАВЛЕНИЕ УЧАСТНИКОВ. Ручка на сервере существует и работает с самого начала
+  // (`POST /chats/{id}/members`, messenger/chats.py::add_members), а вызывающего у неё
+  // не было НИ ОДНОГО — то есть добавить человека в беседу через продукт было нельзя
+  // вовсе, только правкой базы руками. Влад сообщил это как «в беседы невозможно
+  // добавить новых людей»; нашлось сверкой `tools/graph_api_bridge.py`, где эта ручка
+  // всё время лежала в списке «сервер никто не зовёт».
+  // ── Вложения и вкладки панели беседы (25.08.2026) ──────────────────────────
+  // ⚠️ Файл НЕ проходит через наш сервер: `signUpload` отдаёт подписанную ссылку,
+  // браузер кладёт файл ПРЯМО в хранилище, потом `confirmUpload`. Разбор, почему иначе
+  // нельзя, — docs/MESSENGER-ATTACHMENTS-PLAN.md и server/app/storage.py.
+  uploadLimits: () => api.get('/web/messenger/uploads/limits'),
+  signUpload: (convId, { name, size, mime }) =>
+    api.post('/web/messenger/uploads/sign', { conversation_id: convId, name, size, mime }),
+  confirmUpload: (attId) =>
+    api.post(`/web/messenger/uploads/${encodeURIComponent(attId)}/done`),
+  attachmentUrl: (attId) =>
+    api.get(`/web/messenger/attachments/${encodeURIComponent(attId)}/url`),
+  chatFiles: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/files`),
+  chatMedia: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/media`),
+  chatSaved: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/saved`),
+
+  addMembers: (convId, userIds, classGroups) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members`,
+      { user_ids: userIds, class_groups: classGroups || [] }),
   removeMember: (convId, userId) =>
     api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/members/${encodeURIComponent(userId)}`),
   setMemberRole: (convId, userId, { role, customRoleId } = {}) =>
@@ -499,6 +531,12 @@ export const messengerApi = {
   // Starlette декодировал его обратно в «/», роут не совпадал и запрос молча 404-ил.
   ensureAnnouncementsChannel: (groupName) =>
     api.post('/web/messenger/channels/announcements', null, { params: { group: groupName } }),
+  // 🔥 Канал практики. Ручка была с самого начала и не имела ни одного вызывающего —
+  // то есть создать его из веба было нельзя вовсе (нашлось сверкой graph_api_bridge).
+  // ⚠️ Имя группы в QUERY, а не в пути: Starlette раскодирует `%2F` до роутинга, и
+  // группа «К74/1» развалила бы путь на лишний сегмент.
+  ensurePracticeChannel: (groupName) =>
+    api.post('/web/messenger/channels/practice', null, { params: { group: groupName } }),
   // §12: канал «Отчёты · Группа» (куратор). Группа — тоже в query, причина та же.
   ensureCuratorReportsChannel: (groupName) =>
     api.post('/web/messenger/channels/curator-reports', null, { params: { group: groupName } }),

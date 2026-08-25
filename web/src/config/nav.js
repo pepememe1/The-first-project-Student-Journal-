@@ -14,7 +14,7 @@ import {
   BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
   MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
   AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database,
-  Archive, BookMarked } from '@lucide/vue'
+  Archive, BookMarked, ScrollText } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -95,6 +95,10 @@ export const NAV = {
     { key: 'data', label: 'Данные и копии', i18n: 'nav.data', icon: Database, to: '/admin/data' },
     { key: 'requests', label: 'Запросы на подключение', i18n: 'nav.requests', icon: MonitorSmartphone, to: '/admin/requests' },
     { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: ShieldCheck, to: '/admin/access' },
+    // 🔥 Журнал ПИСАЛСЯ, а посмотреть его было негде: ручка существовала и работала,
+    // а звать её было некому. Для продукта с ПДн аудит без доступа не решает задачу,
+    // ради которой заведён, — разобрать «кто изменил оценку».
+    { key: 'audit', label: 'Журнал действий', i18n: 'nav.audit', icon: ScrollText, to: '/admin/audit' },
     { section: 'Личное', i18n: 'nav.sectionPersonal' },
     { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/admin/profile' },
     { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/admin/settings' },

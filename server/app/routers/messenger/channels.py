@@ -1,15 +1,20 @@
-"""
-channels.py — Системные каналы (практика, объявления, отчёты куратора) и сами отчёты
-куратора для родителей (§5.5).
+"""Системные каналы и отчёты куратора.
 
-Часть пакета `routers/messenger` (разрез 3.7.7). Общий роутер, проверки прав и
-сборка ответов — в `_common.py`; порядок регистрации маршрутов задаёт `__init__.py`.
+⚠️ ИМЯ ГРУППЫ НЕ ИДЁТ В ПУТЬ URL — инвариант проекта. Starlette раскодирует `%2F` ДО
+роутинга, поэтому группа «К74/1» разваливает путь на лишний сегмент, и ручка отвечает
+404 на совершенно правильный запрос. Только query или body.
+
+🔥 До 25.08.2026 здесь жили ТРИ ручки с именем группы в пути. Две из них были мёртвыми
+дублями рабочих query-вариантов (их не звал никто, нашлось сверкой `graph_api_bridge`),
+а третья — «Практика» — была ЕДИНСТВЕННОЙ, то есть канал практики нельзя было создать
+из веба вовсе, а попытка сделать это для группы со слэшем в имени всё равно упала бы.
+Дубли удалены, практика переведена на query и получила вызывающего.
 """
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
 
 
-@router.post("/channels/practice/{group_name}")
-def ensure_practice_channel(group_name: str, user: User = Depends(get_current_user),
+@router.post("/channels/practice")
+def ensure_practice_channel(group: str = Query(...), user: User = Depends(get_current_user),
                             db: Session = Depends(get_db)):
     """§D12(5): «Практика · Группа» — канал производственной практики.
 
@@ -19,21 +24,21 @@ def ensure_practice_channel(group_name: str, user: User = Depends(get_current_us
     канала отличается тем, что появляется у студентов сам и его нельзя покинуть."""
     if user.role not in ("teacher", "admin"):
         raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
-    group_name = group_name.strip()
-    if not group_name:
+    group = group.strip()
+    if not group:
         raise HTTPException(status_code=400, detail="Нужна группа")
     #Куратор ведёт практику только своих групп; администрация — любых.
-    if user.role == "teacher" and group_name not in (user.curated_groups or []):
+    if user.role == "teacher" and group not in (user.curated_groups or []):
         raise HTTPException(status_code=403, detail="Эта группа вами не курируется")
     students = [u.id for u in db.query(User).filter(
-        User.role == "student", User.group_name == group_name,
+        User.role == "student", User.group_name == group,
         User.deleted == False).all()]  # noqa: E712
     writers = [user.id]
     if user.role != "admin":
         writers += [a.id for a in db.query(User).filter(
             User.role == "admin", User.deleted == False).all()]  # noqa: E712
-    conv_id = f"sys:practice:{_gtoken(group_name)}"
-    _ensure_system_channel(db, conv_id, f"Практика · {group_name}",
+    conv_id = f"sys:practice:{_gtoken(group)}"
+    _ensure_system_channel(db, conv_id, f"Практика · {group}",
                            "Производственная практика: направления, сроки, документы.",
                            reader_ids=students, writer_ids=writers)
     return {"ok": True, "conversation_id": conv_id}
@@ -74,6 +79,82 @@ def my_groups(user: User = Depends(get_current_user), db: Session = Depends(get_
     return {"groups": out}
 
 
+# ━━ РЕАЛИЗАЦИИ БЕЗ МАРШРУТА ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# 🔥 У этих двух функций БЫЛИ свои маршруты с именем группы В ПУТИ, и 25.08.2026 они
+# удалены: инвариант проекта запрещает имя группы в пути URL (Starlette раскодирует
+# `%2F` ДО роутинга, и группа «К74/1» разваливает путь на лишний сегмент — ручка
+# молча отвечает 404 на совершенно правильный запрос).
+#
+# ⚠️ Сначала я удалил их ЦЕЛИКОМ, приняв за мёртвые дубли, — и уронил 22 теста:
+# query-варианты их не дублировали, а ВЫЗЫВАЛИ. «Дубль» и «реализация, у которой
+# есть лишняя дверь» выглядят одинаково, пока не посмотришь, кто кого зовёт.
+# Правильный ход — убрать ЛИШНЮЮ ДВЕРЬ, оставив комнату.
+
+
+def ensure_announcements_channel(group: str, user: User,
+                                 db: Session):
+    """§D12(2): «Объявления · Группа» — teacher/admin открывают/создают канал (студенты
+    группы — читатели, преподаватели этой группы — авторы) и дальше публикуют ОБЫЧНЫМ
+    send_message (это простой kind='channel', отдельного эндпоинта «отправить объявление»
+    не требуется — переиспользуем всю уже готовую инфраструктуру постинга в канал)."""
+    if user.role not in ("teacher", "admin"):
+        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
+    group = group.strip()
+    if not group:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    students = [u.id for u in db.query(User).filter(
+        User.role == "student", User.group_name == group, User.deleted == False).all()]  # noqa: E712
+    #Авторы канала — преподаватели, которым НАЗНАЧЕНА эта группа (не «есть занятие с
+    #совпавшим названием предмета где-то ещё»), см. §ролей teacher_assignments.
+    from ... import webdata as W
+    ty, ts = W.current_term(W.load_config(db))
+    teacher_ids_here = {r.teacher_id for r in db.query(SubjectHours).filter(
+        SubjectHours.group_name == group, SubjectHours.year == ty,
+        SubjectHours.semester == ts, SubjectHours.teacher_id != "",
+        SubjectHours.deleted == False).all()}  # noqa: E712
+    teachers = [t.id for t in db.query(User).filter(
+        User.role == "teacher", User.deleted == False).all()  # noqa: E712
+        if t.id in teacher_ids_here]
+    if user.role == "teacher" and user.id not in teachers:
+        teachers.append(user.id)     #админ мог создать канал раньше, чем завёл занятия
+    conv_id = f"sys:announce:{_gtoken(group)}"
+    conv = _ensure_system_channel(db, conv_id, f"Объявления · {group}",
+                                  "Объявления от преподавателей и администрации.",
+                                  reader_ids=students, writer_ids=teachers)
+    #Уже существующий канал: если пользователь — преподаватель этой группы и ещё не писатель,
+    #добавляем (группа могла завести предметы уже ПОСЛЕ создания канала).
+    if user.role == "teacher" and _participant(db, conv_id, user.id) is None:
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="writer", joined_at=_now()))
+        db.commit()
+    return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
+
+
+def ensure_curator_reports_channel(group: str, user: User,
+                                   db: Session):
+    """§12: канал «Отчёты · Группа» — куратор публикует туда `/отчет`, читают студенты
+    группы И её активные родители. ТОЛЬКО куратор ЭТОЙ группы (curated_groups) и ТОЛЬКО
+    если у группы есть хоть один активный родитель — без родителей отчёт для родителей
+    не имеет смысла заводить."""
+    group = group.strip()
+    if not group:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    if user.role != "teacher" or group not in (user.curated_groups or []):
+        raise HTTPException(status_code=403, detail="Доступно только куратору этой группы")
+    parent_ids = _active_parent_ids_for_group(db, group)
+    if not parent_ids:
+        raise HTTPException(status_code=400, detail="У группы нет ни одной активной связи с родителем")
+    students = [u.id for u in db.query(User).filter(
+        User.role == "student", User.group_name == group,
+        User.deleted == False).all()]  # noqa: E712
+    conv_id = f"sys:curator_reports:{_gtoken(group)}"
+    conv = _ensure_system_channel(db, conv_id, f"Отчёты · {group}",
+                                  "Отчёты об успеваемости группы для родителей.",
+                                  reader_ids=students + parent_ids, writer_ids=[user.id])
+    return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
+
+
 @router.post("/channels/announcements")
 def ensure_announcements_channel_q(group: str = Query(...),
                                    user: User = Depends(get_current_user),
@@ -86,77 +167,12 @@ def ensure_announcements_channel_q(group: str = Query(...),
     return ensure_announcements_channel(group, user, db)
 
 
-@router.post("/channels/announcements/{group_name}")
-def ensure_announcements_channel(group_name: str, user: User = Depends(get_current_user),
-                                 db: Session = Depends(get_db)):
-    """§D12(2): «Объявления · Группа» — teacher/admin открывают/создают канал (студенты
-    группы — читатели, преподаватели этой группы — авторы) и дальше публикуют ОБЫЧНЫМ
-    send_message (это простой kind='channel', отдельного эндпоинта «отправить объявление»
-    не требуется — переиспользуем всю уже готовую инфраструктуру постинга в канал)."""
-    if user.role not in ("teacher", "admin"):
-        raise HTTPException(status_code=403, detail="Доступно преподавателям и администрации")
-    group_name = group_name.strip()
-    if not group_name:
-        raise HTTPException(status_code=400, detail="Нужна группа")
-    students = [u.id for u in db.query(User).filter(
-        User.role == "student", User.group_name == group_name, User.deleted == False).all()]  # noqa: E712
-    #Авторы канала — преподаватели, которым НАЗНАЧЕНА эта группа (не «есть занятие с
-    #совпавшим названием предмета где-то ещё»), см. §ролей teacher_assignments.
-    from ... import webdata as W
-    ty, ts = W.current_term(W.load_config(db))
-    teacher_ids_here = {r.teacher_id for r in db.query(SubjectHours).filter(
-        SubjectHours.group_name == group_name, SubjectHours.year == ty,
-        SubjectHours.semester == ts, SubjectHours.teacher_id != "",
-        SubjectHours.deleted == False).all()}  # noqa: E712
-    teachers = [t.id for t in db.query(User).filter(
-        User.role == "teacher", User.deleted == False).all()  # noqa: E712
-        if t.id in teacher_ids_here]
-    if user.role == "teacher" and user.id not in teachers:
-        teachers.append(user.id)     #админ мог создать канал раньше, чем завёл занятия
-    conv_id = f"sys:announce:{_gtoken(group_name)}"
-    conv = _ensure_system_channel(db, conv_id, f"Объявления · {group_name}",
-                                  "Объявления от преподавателей и администрации.",
-                                  reader_ids=students, writer_ids=teachers)
-    #Уже существующий канал: если пользователь — преподаватель этой группы и ещё не писатель,
-    #добавляем (группа могла завести предметы уже ПОСЛЕ создания канала).
-    if user.role == "teacher" and _participant(db, conv_id, user.id) is None:
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
-                                       role="writer", joined_at=_now()))
-        db.commit()
-    return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
-
-
 @router.post("/channels/curator-reports")
 def ensure_curator_reports_channel_q(group: str = Query(...),
                                      user: User = Depends(get_current_user),
                                      db: Session = Depends(get_db)):
     """Имя группы в QUERY — см. пояснение у ensure_announcements_channel_q (слэш в «К75/1»)."""
     return ensure_curator_reports_channel(group, user, db)
-
-
-@router.post("/channels/curator-reports/{group_name}")
-def ensure_curator_reports_channel(group_name: str, user: User = Depends(get_current_user),
-                                   db: Session = Depends(get_db)):
-    """§12: канал «Отчёты · Группа» — куратор публикует туда `/отчет`, читают студенты
-    группы И её активные родители. ТОЛЬКО куратор ЭТОЙ группы (curated_groups) и ТОЛЬКО
-    если у группы есть хоть один активный родитель — без родителей отчёт для родителей
-    не имеет смысла заводить."""
-    group_name = group_name.strip()
-    if not group_name:
-        raise HTTPException(status_code=400, detail="Нужна группа")
-    if user.role != "teacher" or group_name not in (user.curated_groups or []):
-        raise HTTPException(status_code=403, detail="Доступно только куратору этой группы")
-    parent_ids = _active_parent_ids_for_group(db, group_name)
-    if not parent_ids:
-        raise HTTPException(status_code=400, detail="У группы нет ни одной активной связи с родителем")
-    students = [u.id for u in db.query(User).filter(
-        User.role == "student", User.group_name == group_name,
-        User.deleted == False).all()]  # noqa: E712
-    conv_id = f"sys:curator_reports:{_gtoken(group_name)}"
-    conv = _ensure_system_channel(db, conv_id, f"Отчёты · {group_name}",
-                                  "Отчёты об успеваемости группы для родителей.",
-                                  reader_ids=students + parent_ids, writer_ids=[user.id])
-    return {"conversation_id": conv.id, "kind": "channel", "title": conv.title}
 
 
 @router.post("/curator-reports")
