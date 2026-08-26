@@ -1083,13 +1083,10 @@ const peerNameDecor = computed(() =>
   (!isGroupOrChannel.value && !isSaved.value && !isModeration.value)
     ? nameDecor(activePeer.value || {}) : {})
 
-// §правка: на телефоне четыре иконки (поиск/сводка/перевод/уведомления) съедали всю
-// ширину шапки, и полное имя/название беседы обрезалось раньше, чем должно. На sm+
-// они остаются прямо в строке как раньше; на телефоне — прячутся за одной кнопкой
-// со стрелкой (тот же приём «кнопка + абсолютный список + подложка», что уже есть в
-// MyStatusPicker.vue), открывается по тапу, закрывается тапом мимо или повторным тапом.
-const mobileActionsOpen = ref(false)
-watch(activeId, () => { mobileActionsOpen.value = false })
+// §правка (3.8): поиск, сводка и мьют переехали в панель беседы (ConversationInfo,
+// открывается кликом по шапке) — держать их вторым набором иконок в шапке было дублем
+// (указал Влад). В шапке остались только перевод (в панели его нет) и активности; на
+// телефоне — прямая иконка перевода. Прежнего мобильного меню-дропдауна больше нет.
 
 // §правка: Telegram-style «здесь ничего нет» + случайная гифка-приветствие — ТОЛЬКО
 // для личных чатов без единого сообщения (не групп/каналов/«Избранного»/модерации —
@@ -1141,27 +1138,11 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
 
-        <!-- Поиск/сводка/перевод/уведомления — на sm+ прямо в строке, как раньше. На
-             телефоне съедали всю ширину и обрезали название беседы — спрятаны за
-             кнопкой-стрелкой ниже (см. mobileActionsOpen). -->
+        <!-- Перевод и активности — на sm+ прямо в строке. Поиск, сводка и мьют переехали
+             в панель беседы (ConversationInfo, открывается кликом по шапке): держать их
+             ЗДЕСЬ вторым набором — тот самый дубль, на который указал Влад (3.8). Перевод
+             в панели нет, активности — отдельная подсистема, поэтому эти две остаются. -->
         <div class="hidden items-center gap-1 sm:flex">
-          <!-- Поиск внутри чата (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.1). -->
-          <button type="button" @click="toggleSearchPanel"
-                  :aria-label="locale.t('chatThread.searchInChat', 'Поиск по чату')" :title="locale.t('chatThread.searchInChat', 'Поиск по чату')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
-                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                    : (showSearch ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-            <Search class="size-5" />
-          </button>
-          <!-- §D18: сводка переписки — ТОЛЬКО по кнопке. Автоматический пересказ при каждом
-               открытии чата означал бы запрос к модели на каждый вход. -->
-          <button type="button" @click="openSummary"
-                  :aria-label="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')" :title="locale.t('chatThread.summaryAction', 'Краткая сводка переписки')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
-                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                    : 'text-text3 hover:bg-bg2 hover:text-text'">
-            <ScrollText class="size-5" />
-          </button>
           <!-- 🌐 — настройки перевода переписки. Ярче обычного, когда автоперевод включён:
                человек должен видеть, что его сообщения уходят переведёнными, а не гадать. -->
           <button type="button" @click="showTranslate = true"
@@ -1201,48 +1182,21 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
             <span v-if="activity.unseen"
                   class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
           </button>
-          <!-- 🔔 — мьют беседы у себя (без пушей). В чате модерации не показываем. -->
-          <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted)"
-                  :aria-label="muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
-                  :title="muted ? locale.t('chatThread.notifyOff', 'Уведомления выключены') : locale.t('chatThread.disableNotify', 'Отключить уведомления')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
-                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                    : (muted ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-            <BellOff v-if="muted" class="size-5" />
-            <Bell v-else class="size-5" />
-          </button>
         </div>
 
-        <!-- Телефон: та же четвёрка — за одной кнопкой-стрелкой (тот же приём, что
-             MyStatusPicker.vue). -->
+        <!-- Телефон: перевод прямой иконкой. Раньше здесь была кнопка-стрелка с меню из
+             четвёрки (поиск/сводка/перевод/мьют); поиск, сводка и мьют переехали в панель
+             беседы (открывается кликом по шапке), в меню оставался бы один перевод — а
+             дропдаун ради одного пункта не нужен. -->
         <div class="relative shrink-0 sm:hidden">
-          <button type="button" @click="mobileActionsOpen = !mobileActionsOpen"
-                  :aria-label="locale.t('chatThread.moreActions', 'Ещё действия')" :title="locale.t('chatThread.moreActions', 'Ещё действия')"
+          <button type="button" @click="showTranslate = true"
+                  :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
+                  :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
                   class="grid size-8 place-items-center rounded-md"
-                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white' : 'text-text3 hover:bg-bg2 hover:text-text'">
-            <ChevronDown class="size-5 transition-transform" :class="mobileActionsOpen ? 'rotate-180' : ''" />
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
+            <Languages class="size-5" />
           </button>
-          <div v-if="mobileActionsOpen" class="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-border2 bg-card p-1.5 shadow-card">
-            <button type="button" @click="toggleSearchPanel(); mobileActionsOpen = false"
-                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
-              <Search class="size-4 shrink-0 text-text3" /> {{ locale.t('chatThread.searchInChat', 'Поиск по чату') }}
-            </button>
-            <button type="button" @click="openSummary(); mobileActionsOpen = false"
-                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
-              <ScrollText class="size-4 shrink-0 text-text3" /> {{ locale.t('chatThread.summaryAction', 'Краткая сводка переписки') }}
-            </button>
-            <button type="button" @click="showTranslate = true; mobileActionsOpen = false"
-                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
-              <Languages class="size-4 shrink-0" :class="tr.enabled ? 'text-accent' : 'text-text3'" /> {{ locale.t('translate.title', 'Перевод') }}
-            </button>
-            <button v-if="!isModeration" type="button" @click="m.muteConversation(!muted); mobileActionsOpen = false"
-                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-text hover:bg-bg2">
-              <BellOff v-if="muted" class="size-4 shrink-0 text-accent" />
-              <Bell v-else class="size-4 shrink-0 text-text3" />
-              {{ muted ? locale.t('chatThread.enableNotify', 'Включить уведомления') : locale.t('chatThread.disableNotify', 'Отключить уведомления') }}
-            </button>
-          </div>
-          <div v-if="mobileActionsOpen" class="fixed inset-0 z-10" @click="mobileActionsOpen = false" />
         </div>
         <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
         <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"

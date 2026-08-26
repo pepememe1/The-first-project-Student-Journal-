@@ -122,8 +122,11 @@ onMounted(async () => {
           <AvatarEggs :average="avgGrade" />
         </span>
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[13px] font-semibold leading-tight text-text"
-                v-bind="myNameDecor">{{ fullName }}</span>
+          <!-- Полное ФИО не обрезаем в «…»: длинное «Фамилия Имя Отчество» переносим в
+               2 строки (line-clamp-2). tracking-tight — по apple-design §15 (крупный
+               текст хочет отрицательный трекинг) и заодно даёт лишний символ в строку. -->
+          <span class="block text-[13px] font-semibold leading-tight tracking-tight text-text [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden"
+                :title="fullName" v-bind="myNameDecor">{{ fullName }}</span>
           <span v-if="login" class="block truncate text-[11px] leading-tight text-text3">@{{ login }}</span>
         </span>
         <ChevronDown class="size-3.5 shrink-0 text-text3 transition-transform"

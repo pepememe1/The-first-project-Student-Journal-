@@ -86,9 +86,13 @@ function isActive(to) {
          ширину окна — здесь занимают ту же строку, но не отнимают высоту у контента. -->
     <div class="flex shrink-0 items-center gap-2.5 px-3 py-3"
          :class="compact ? 'flex-col gap-2' : ''">
-      <BrandLogo :size="32" class="shrink-0" />
+      <BrandLogo :size="28" class="shrink-0" />
       <div v-if="!compact" class="min-w-0 flex-1 leading-tight">
-        <p class="truncate font-title text-[15px] font-extrabold text-text">GradeBookAI</p>
+        <!-- 13px + отрицательный трекинг (apple-design §15): «GradeBookAI» в Syne
+             extrabold шире места между лого и меню-очками (замерено: натуральные 147px
+             против доступных ~139px при 15px) и обрезался в «GradeBoo…». Имя продукта
+             резать нельзя — 13px влезает с запасом; подпись колледжа под ним может. -->
+        <p class="truncate font-title text-[13px] font-extrabold tracking-tight text-text">GradeBookAI</p>
         <p class="truncate text-[10px] font-semibold text-text3">{{ loc.t('app.college') }}</p>
       </div>
       <!-- Версия для слабовидящих — всегда на виду в шапке (как иконка-очки на порталах). -->
