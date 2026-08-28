@@ -208,26 +208,68 @@ def per_subject_with_plan(db, group: str, lessons, records, cfg, scale=None,
     return rows
 
 
+def portal_course(row) -> int:
+    """Курс группы ПО ПОРТАЛУ ВСГУТУ (столбец индекса расписания) или None.
+
+    Читает тот же TTL-кэш индекса, что и вкладка «Расписание» с её кнопками курса —
+    второго похода на портал здесь не возникает, а значит и второй правды о курсе тоже.
+    Портал недоступен, группы нет в индексе, категория неизвестна — None, и вызывающий
+    честно падает на формулу.
+
+    ⚠️ Именно `groups_by_course_CACHED`, а не `groups_by_course`: вторая при промахе
+    кэша идёт в сеть с таймаутом 20 с, а эта функция стоит на пути ГЛАВНОЙ СТРАНИЦЫ
+    кабинета — внутри десктопной программы в оффлайне такой запрос ждал бы портал на
+    каждой загрузке. Кэш греется в фоне, курс доезжает со следующим запросом.
+
+    ⚠️ Категорию берём у САМОЙ группы (`Group.category`), а не подставляем колледж
+    всем подряд: у бакалавриата и заочного свои индексы, и группа из чужого индекса
+    просто не нашлась бы — курс молча стал бы «неизвестен» у всех, кроме колледжа."""
+    try:
+        from . import schedule_web
+        category = (getattr(row, "category", "") or "").strip() or schedule_web.default_category()
+        for course, names in schedule_web.groups_by_course_cached(category).items():
+            if row.name in names:
+                c = int(course)
+                return c if c >= 1 else None
+    except Exception:
+        return None
+    return None
+
+
 def group_course(db, group: str, cfg=None):
     """Курс группы (1..N) или None, если посчитать не из чего.
 
-    Считается от ГОДА ПОСТУПЛЕНИЯ (`Group.enrollment_year`, приезжает импортом учебного
-    плана ВСГУТУ) и ТЕКУЩЕГО учебного термина — через общий `study_hours.
-    course_and_semester`, а не своей арифметикой по календарю.
+    ДВА источника, и порядок между ними — суть этой функции:
+      1. **портал ВСГУТУ** (`portal_course`) — столбец индекса расписания. Авторитет;
+      2. год поступления (`Group.enrollment_year`) + текущий термин, через общий
+         `study_hours.course_and_semester`. Запасной путь, когда портал молчит.
 
-    ⚠️ Почему это вообще отдельная функция. Курс в продукте есть в ДВУХ видах: живой
-    признак с портала (столбец индекса расписания, `schedule/parser.py`) и вычисленный
-    из года поступления. Летом 2026 они расходились ровно на год — термин переключался
-    1 июля, а портал держал прежний учебный год (К74/1: по расписанию 2 курс, по нашей
-    дате 3). Границу термина сдвинули на 25 августа (`db.default_term`), и теперь оба
-    источника сходятся; но саму формулу всё равно держим в ОДНОМ месте, чтобы следующий
-    экран не завёл третью версию курса.
+    🔥 ПОЧЕМУ ПОРТАЛ ГЛАВНЕЕ, А НЕ НАША ДАТА. Одна и та же болезнь ловилась ТРИЖДЫ, и
+    каждый раз лечилась сдвигом календарной границы термина: 1 июля → 25 августа →
+    1 сентября (история — в докстринге `db.default_term`). Третий раз её принёс живой
+    отзыв 27.08.2026: портал уже перевёл К74/1 на 3 курс, вкладка расписания показывала
+    3, а профиль студента — по-прежнему 2, потому что наша граница ещё не наступила.
+    Обещание «1 сентября не разойдётся с порталом НИКОГДА» оказалось неправдой — портал
+    переключается когда переключается, и угадать эту дату календарём нельзя в принципе.
 
-    None — это честно «год поступления не задан», а не «первый курс»: подставлять
-    единицу значило бы приписать группе курс, которого никто не вводил."""
+    Поэтому курс больше не УГАДЫВАЕТСЯ: если группа стоит в столбце «3 курс», студенты
+    этой группы видят 3 курс в тот же момент, без нашей арифметики и без ожидания даты.
+
+    ⚠️ Портал задаёт КУРС, но НЕ учебный термин. Термин (`current_term`) двигает оценки,
+    часы, ЗЕТ и ключи `SubjectHours` — тянуть его за столбцом чужого сайта значило бы
+    переписать журнал по внешнему сигналу. Здесь меняется ровно то, о чём спрашивали:
+    число курса, которое видит человек.
+
+    None — это честно «посчитать не из чего», а не «первый курс»: подставлять единицу
+    значило бы приписать группе курс, которого никто не вводил."""
     row = db.query(Group).filter(Group.name == group,
                                  Group.deleted == False).first()  # noqa: E712
-    if not row or not row.enrollment_year:
+    if not row:
+        return None
+    from_portal = portal_course(row)
+    if from_portal is not None:
+        return from_portal
+    if not row.enrollment_year:
         return None
     ty, ts = current_term(cfg if cfg is not None else load_config(db))
     try:
@@ -689,6 +731,11 @@ def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, 
     hrows = {r.subject: r for r in db.query(SubjectHours).filter(
         SubjectHours.group_name == group, SubjectHours.year == (year or ""),
         SubjectHours.semester == int(semester or 0), SubjectHours.deleted == False).all()}  # noqa: E712
+    #РУБЕЖ СЕМЕСТРА (вариант C, docs/PLAN-ZET.md §2). Термин закрыт целиком, если он НЕ
+    #текущий (смотрят архив прошлого семестра). Внутри текущего рубеж по предмету проходит,
+    #когда пройдены его плановые часы (см. term_over на предмет ниже). Без этого предмет без
+    #экзамена засчитывал бы все ЗЕТ по первой же положительной оценке (баг Влада).
+    term_is_current = ((year or ""), int(semester or 0)) == current_term(load_config(db))
     by_subject = {}
     for l in lessons:
         by_subject.setdefault(l.subject, []).append(l)
@@ -706,8 +753,12 @@ def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, 
             continue
         ls = by_subject.get(subj, [])
         scale = scale_map.get(ls[0].id, grading.DEFAULT_SCALE) if ls else grading.DEFAULT_SCALE
-        earned = study_hours.subject_zet_earned(ls, records, zet, scale=scale)
-        rows.append({"subject": subj, "zet": zet, "earned": earned})
+        #Рубеж по предмету: архивный термин ИЛИ пройдены плановые часы (0 = план не задан,
+        #тогда единственный рубеж — экзамен или закрытие термина).
+        hours_total = int(row.hours_total or 0)
+        term_over = (not term_is_current) or (hours_total > 0 and study_hours.hours_done(ls) >= hours_total)
+        state = study_hours.subject_zet_state(ls, records, zet, term_over=term_over, scale=scale)
+        rows.append({"subject": subj, "zet": zet, "state": state})
     return study_hours.zet_summary(rows)
 
 

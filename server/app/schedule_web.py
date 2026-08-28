@@ -112,6 +112,61 @@ def groups_by_course(category: str = "") -> dict:
     return out
 
 
+_warming: set = set()                # категории, для которых прогрев уже идёт
+
+
+def _warm_index_async(category: str) -> None:
+    """Разогреть кэш индекса В ФОНЕ, не задерживая текущий запрос.
+
+    ⚠️ Это НЕ планировщик: поток одноразовый и заводится только на промахе кэша, то есть
+    не чаще раза в TTL (3 ч) на категорию. Флаг `_warming` не даёт запустить второй на
+    те же данные — иначе тридцать одновременных заходов дали бы тридцать потоков и
+    тридцать походов на портал за один и тот же файл.
+    """
+    with _lock:
+        if category in _warming:
+            return
+        _warming.add(category)
+
+    def _run():
+        try:
+            _load_index(category)
+        except Exception:
+            pass                     # оффлайн — обычное состояние, а не сбой
+        finally:
+            with _lock:
+                _warming.discard(category)
+
+    threading.Thread(target=_run, name=f"gb-warm-index-{category}", daemon=True).start()
+
+
+def groups_by_course_cached(category: str = "") -> dict:
+    """{курс: [группы]} ТОЛЬКО из уже прогретого кэша — портал здесь не дёргается НИКОГДА.
+
+    🔥 Зачем отдельная функция, а не просто `groups_by_course`. От этого индекса теперь
+    зависит КУРС в профиле студента (`webdata.group_course`), то есть обычная главная
+    страница кабинета. `groups_by_course` при промахе кэша идёт в сеть с таймаутом 20 с —
+    на боевом сервере это раз в три часа и незаметно, а внутри ДЕСКТОПНОЙ программы
+    (тот же `server/app` на 127.0.0.1) кэш в оффлайне не наполняется никогда, и каждая
+    загрузка главной ждала бы портал. Продукт offline-first — так нельзя.
+
+    Промах кэша → пустой словарь СЕЙЧАС и прогрев в фоне: вызывающий честно падает на
+    свой запасной расчёт, а следующий запрос уже получает настоящий курс.
+    """
+    category = category or default_category()
+    with _lock:
+        entry = _index.get(category, {"ts": 0.0, "pairs": []})
+        fresh = entry["pairs"] and (time.time() - entry["ts"] < _TTL)
+        pairs = list(entry["pairs"]) if fresh else []
+    if not fresh:
+        _warm_index_async(category)
+        return {}
+    out: dict[int, list] = {}
+    for name, _href, course in pairs:
+        out.setdefault(course, []).append(name)
+    return out
+
+
 def _href_for(name: str, category: str) -> str:
     for n, href, _course in _load_index(category):
         if n == name:
