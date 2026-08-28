@@ -146,7 +146,7 @@ onBeforeUnmount(() => clearInterval(tipTimer))
                появления ЗЕТ и прямо обещал в докстринге «для „до перевода: X ЗЕТ“ в
                дашборде», но страница его не читала — обещание не выполнялось ни разу. -->
           <ZetProgress :earned="zet.earned" :total="zet.total" :min-zet="zet.min_zet"
-                       :subjects="zet.subjects" show-details />
+                       :pending="zet.pending" :subjects="zet.subjects" show-details />
         </div>
 
         <div>

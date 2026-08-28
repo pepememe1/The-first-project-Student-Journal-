@@ -85,39 +85,75 @@ def course_and_semester(enrollment_year: int, term_year: str, term_semester: int
     return course, overall_semester
 
 
-def subject_zet_earned(lessons, records, zet, scale: str = "5"):
-    """ЗЕТ по ОДНОМУ предмету (lessons — занятия ТОЛЬКО этого предмета за термин),
-    если студент его СДАЛ, иначе None. zet=None (администратор не задавал) → всегда
-    None — так вызывающий код по этому же флагу решает, показывать ли предмет вообще.
+def subject_zet_state(lessons, records, zet, term_over: bool, scale: str = "5"):
+    """Состояние предмета по ЗЕТ: "passed" | "pending" | "failed" | None (docs/PLAN-ZET.md §2).
 
-    Критерий сдачи (docs/PLAN-ZET.md §2): если у предмета есть занятие «Экзамен» —
-    по ПОСЛЕДНЕЙ попытке (с учётом пересдач, как и everywhere в проекте); иначе —
-    средний балл по практике/ДЗ >= 3.0 (используем ЕДИНЫЙ grading.practice_average
-    с шкалой ведущего преподавателя — не изобретаем свою проверку "5/4/3/Зачтено")."""
+    Три состояния, а не два (решение по варианту C, 26.08.2026 — купленный багом урок,
+    см. CLAUDE.md): «ожидается» отделено от «не сдан».
+      • "passed"  — предмет СДАН, ЗЕТ идут в зачёт;
+      • "pending" — предмет ещё ИДЁТ («ожидается»): рубеж семестра не пройден, судить рано.
+                    ЗЕТ НЕ засчитываются, но и не «сгорают» — показываются серым отдельно;
+      • "failed"  — предмет ЗАВЕРШЁН, но НЕ сдан;
+      • None      — zet не задан администратором (предмет нигде не участвует).
+
+    `term_over` — пройден ли РУБЕЖ по этому предмету (его вычисляет вызывающий): архивный
+    (не текущий) термин, ИЛИ пройдены плановые часы предмета. Экзамен — сам себе рубеж и
+    обрабатывается независимо от `term_over`.
+
+    Зачем «ожидается» вообще (баг Влада): у предмета БЕЗ экзамена критерий — средний по
+    практике >= 3.0. Пока семестр идёт, ОДНА оценка «4» давала средний 4.0 >= 3.0 и весь
+    предмет мгновенно засчитывался — «одна оценка, а пишет, будто весь семестр прошёл».
+    Теперь до рубежа такой предмет «ожидается», а итог подводится, когда рубеж пройден.
+
+    Критерий СДАЧИ (не изменился): экзамен — по ПОСЛЕДНЕЙ попытке (с учётом пересдач);
+    без экзамена — средний по практике/ДЗ >= 3.0 через ЕДИНЫЙ grading.practice_average со
+    шкалой ведущего преподавателя (не изобретаем свою проверку «5/4/3/Зачтено»)."""
     import grading
     if zet is None:
         return None
     exam = next((l for l in lessons if l.type == "Экзамен"), None)
     if exam is not None:
         val = grading.latest_exam_value(exam.id, records)
-        passed = bool(val) and not grading.is_failed(val)
-    else:
-        avg = grading.practice_average(grading.pairs_from_objects(lessons), records, scale=scale)
-        passed = avg >= 3.0
-    return float(zet) if passed else None
+        if not val:
+            # Экзамен в плане есть, но оценки ещё нет — он впереди, а не провален.
+            return "pending"
+        return "passed" if not grading.is_failed(val) else "failed"
+    # Предмет без экзамена: пока рубеж не пройден — «ожидается» (вариант C), иначе итог.
+    if not term_over:
+        return "pending"
+    avg = grading.practice_average(grading.pairs_from_objects(lessons), records, scale=scale)
+    return "passed" if avg >= 3.0 else "failed"
+
+
+def subject_zet_earned(lessons, records, zet, scale: str = "5", term_over: bool = True):
+    """ЗЕТ по предмету, если студент его СДАЛ, иначе None. Тонкая обёртка над
+    subject_zet_state для обратной совместимости: по умолчанию term_over=True (историческое
+    поведение — подводить итог сразу), новый код передаёт настоящий term_over."""
+    state = subject_zet_state(lessons, records, zet, term_over=term_over, scale=scale)
+    return float(zet) if state == "passed" else None
 
 
 def zet_summary(subject_rows) -> dict:
-    """Сводка ЗЕТ студента за термин. subject_rows — [{"subject","zet","earned"}], где
-    earned уже посчитан вызывающим кодом через subject_zet_earned (этот модуль не хранит
-    занятий/оценок, только сводит готовые числа). Предметы без zet (None) в сводку не
-    попадают — «ЗЕТ не задан» показывать нигде нельзя (docs/PLAN-ZET.md §10)."""
+    """Сводка ЗЕТ студента за термин. subject_rows — [{"subject","zet","state"}], где state
+    посчитан вызывающим через subject_zet_state (этот модуль не хранит занятий/оценок,
+    только сводит готовые числа). Предметы без zet (None) в сводку не попадают — «ЗЕТ не
+    задан» показывать нигде нельзя (docs/PLAN-ZET.md §10).
+
+    `earned` — сумма ЗЕТ по СДАННЫМ предметам; `pending` — по «ожидающим» (семестр идёт).
+    pending НЕ входит в earned (вариант C): засчитываем только пройденное, но показываем
+    рядом серым, чтобы студент видел, сколько «в работе». В каждом subject — и `state`
+    (новое, три состояния для UI), и `passed` (булево, для обратной совместимости с
+    потребителями, читающими только его)."""
     rows = [r for r in subject_rows if r.get("zet") is not None]
     total = sum(r["zet"] for r in rows)
-    earned = sum(r["earned"] for r in rows if r.get("earned") is not None)
-    subjects = [{"subject": r["subject"], "zet": r["zet"], "earned": r.get("earned") or 0.0,
-                "passed": r.get("earned") is not None} for r in rows]
+    earned = sum(r["zet"] for r in rows if r.get("state") == "passed")
+    pending = sum(r["zet"] for r in rows if r.get("state") == "pending")
+    subjects = [{"subject": r["subject"], "zet": r["zet"],
+                 "earned": r["zet"] if r.get("state") == "passed" else 0.0,
+                 "state": r.get("state") or "failed",
+                 "passed": r.get("state") == "passed"} for r in rows]
     return {"earned": round(earned, 1), "total": round(total, 1),
+            "pending": round(pending, 1),
             "pct": round(earned / total * 100, 1) if total else 0.0,
             "subjects": subjects}
 
@@ -142,7 +178,11 @@ def group_zet_report(students, min_zet) -> list:
             "earned": summ["earned"], "total": summ["total"], "pct": summ["pct"],
             "eligible": eligible,
             "missing_zet": round((min_zet or 0) - summ["earned"], 1) if not eligible else 0.0,
-            "unsatisfied": [x["subject"] for x in summ["subjects"] if not x["passed"]],
+            # «Не удовлетворяет» — именно ПРОВАЛЕННЫЕ (failed), а НЕ «ожидающие» (pending):
+            # предмет, по которому семестр ещё идёт, — не проблема куратора, он просто не
+            # закрыт. Мешать их значило бы пугать куратора красным на каждом идущем предмете.
+            "unsatisfied": [x["subject"] for x in summ["subjects"] if x.get("state") == "failed"],
+            "pending": [x["subject"] for x in summ["subjects"] if x.get("state") == "pending"],
             "subjects": summ["subjects"],
         })
     out.sort(key=lambda x: (x["eligible"], x["earned"]))

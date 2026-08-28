@@ -8,10 +8,22 @@ const locale = useLocaleStore()
 defineProps({
   earned: { type: Number, required: true },
   total: { type: Number, required: true },
+  // «Ожидается» — ЗЕТ по предметам, семестр которых ещё идёт (вариант C, docs/PLAN-ZET.md §2):
+  // не засчитаны, но и не потеряны. Показываем серым отдельно от набранных.
+  pending: { type: Number, default: 0 },
   minZet: { type: Number, default: null },
-  subjects: { type: Array, default: () => [] },   // [{subject, zet, earned, passed}]
+  subjects: { type: Array, default: () => [] },   // [{subject, zet, earned, state, passed}]
   showDetails: { type: Boolean, default: false },
 })
+
+// Подпись и цвет строки предмета — по трём состояниям (passed/pending/failed).
+const SUBJECT_STATE = {
+  passed:  { cls: 'text-accent', key: 'zetProgress.passed',    fallback: '✅ засчитаны' },
+  pending: { cls: 'text-text3',  key: 'zetProgress.awaiting',  fallback: '⏳ ожидается' },
+  failed:  { cls: 'text-red',    key: 'zetProgress.notPassed', fallback: '❌ не сдан' },
+}
+// state может отсутствовать у старых ответов (до варианта C) — тогда падаем на passed-флаг.
+function stateOf(s) { return s.state || (s.passed ? 'passed' : 'failed') }
 
 // Цвет — по СТАТУСУ (набрано/почти/мало), не категориальный: accent (в этой палитре
 // он и есть «хорошо», отдельного зелёного токена в теме нет), yellow — 80–99% от порога,
@@ -37,7 +49,14 @@ function status(earned, total, minZet) {
     <div class="flex items-baseline justify-between gap-2">
       <span class="text-sm font-medium text-text2">{{ locale.t('zetProgress.title', 'ЗЕТ за семестр') }}</span>
       <span class="font-title text-base font-bold"
-            :class="STATUS_CLASSES[status(earned, total, minZet)].text">{{ earned }} / {{ total }}</span>
+            :class="STATUS_CLASSES[status(earned, total, minZet)].text">
+        {{ earned }} / {{ total }}
+        <!-- «Ожидается» — серым, рядом с набранным: сколько ЗЕТ ещё в идущих предметах. -->
+        <span v-if="pending > 0" class="ml-1 text-xs font-medium text-text3"
+              :title="locale.t('zetProgress.awaitingHint', 'ЗЕТ по предметам, семестр которых ещё идёт — засчитаются после его завершения')">
+          {{ locale.t('zetProgress.awaitingBadge', { n: pending }) }}
+        </span>
+      </span>
     </div>
     <div class="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-bg2">
       <div class="h-full rounded-full transition-all"
@@ -52,8 +71,9 @@ function status(earned, total, minZet) {
     <ul v-if="showDetails && subjects.length" class="mt-3 space-y-1">
       <li v-for="s in subjects" :key="s.subject" class="flex items-center justify-between text-xs">
         <span class="min-w-0 truncate text-text2" :title="s.subject">{{ s.subject }}</span>
-        <span class="shrink-0" :class="s.passed ? 'text-accent' : 'text-red'">
-          {{ locale.t('zetProgress.zetCount', { n: s.zet }) }} {{ s.passed ? locale.t('zetProgress.passed', '✅ засчитаны') : locale.t('zetProgress.notPassed', '❌ не сдан') }}
+        <span class="shrink-0" :class="SUBJECT_STATE[stateOf(s)].cls">
+          {{ locale.t('zetProgress.zetCount', { n: s.zet }) }}
+          {{ locale.t(SUBJECT_STATE[stateOf(s)].key, SUBJECT_STATE[stateOf(s)].fallback) }}
         </span>
       </li>
     </ul>

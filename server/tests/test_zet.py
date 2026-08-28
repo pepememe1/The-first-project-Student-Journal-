@@ -74,7 +74,7 @@ def test_zet_earned_when_exam_passed(client):
     body = r.json()
     assert body["earned"] == 2.0 and body["total"] == 2.0 and body["pct"] == 100.0
     assert body["subjects"] == [{"subject": "Математика", "zet": 2.0, "earned": 2.0,
-                                "passed": True}]
+                                "state": "passed", "passed": True}]
 
 
 def test_zet_not_earned_when_exam_failed(client):
@@ -111,13 +111,18 @@ def test_zet_earned_after_retake(client):
     assert body["earned"] == 2.0
 
 
-def test_zet_earned_without_exam_uses_practice_average(client):
+def test_zet_pending_without_exam_while_semester_runs(client):
+    """ВАРИАНТ C (баг Влада, 26.08.2026): предмет без экзамена, пока идёт семестр и не
+    пройдены плановые часы, — «ожидается», а НЕ засчитан. Одна оценка больше не закрывает
+    весь предмет («одна оценка, а пишет, будто весь семестр прошёл»).
+
+    Обратный ход: до варианта C средний 3.5 давал passed=True и earned=2.0 немедленно."""
     admin = make_admin(client)
     _group(client, admin)
     make_teacher(client, admin, subjects=["Математика"])
     assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     stud = _student(client, admin)
-    _set_zet(client, admin, "ИС-21", "Математика", 2.0)
+    _set_zet(client, admin, "ИС-21", "Математика", 2.0, hours=72)  # большой план — одной парой не пройти
     _push_lesson(client, admin, "P1", "ИС-21", "Математика", "Практика", number=1)
     _push_lesson(client, admin, "P2", "ИС-21", "Математика", "Практика", number=2)
     _push_grade(client, admin, "P1", "Иванова", "Мария", "4")
@@ -125,23 +130,48 @@ def test_zet_earned_without_exam_uses_practice_average(client):
 
     r = client.get("/web/student/zet", headers=stud)
     body = r.json()
-    assert body["subjects"][0]["passed"] is True     # средний 3.5 >= 3.0
-    assert body["earned"] == 2.0
+    assert body["earned"] == 0.0                       # средний 3.5, но семестр идёт — рано
+    assert body["pending"] == 2.0                      # показываем «ожидается»
+    assert body["subjects"][0]["state"] == "pending"
+    assert body["subjects"][0]["passed"] is False
 
 
-def test_zet_not_earned_when_practice_average_below_three(client):
+def test_zet_settled_without_exam_after_hours_completed(client):
+    """Тот же предмет без экзамена, но плановые часы ПРОЙДЕНЫ (рубеж по практике) — итог
+    подводится по среднему: сдан. План 2 ч = одна пара, одно проведённое занятие его
+    закрывает."""
     admin = make_admin(client)
     _group(client, admin)
     make_teacher(client, admin, subjects=["Математика"])
     assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
     stud = _student(client, admin)
-    _set_zet(client, admin, "ИС-21", "Математика", 2.0)
+    _set_zet(client, admin, "ИС-21", "Математика", 2.0, hours=2)
+    _push_lesson(client, admin, "P1", "ИС-21", "Математика", "Практика", number=1)
+    _push_grade(client, admin, "P1", "Иванова", "Мария", "4")
+
+    r = client.get("/web/student/zet", headers=stud)
+    body = r.json()
+    assert body["earned"] == 2.0                       # часы 2 из 2 пройдены → рубеж → сдан
+    assert body["pending"] == 0.0
+    assert body["subjects"][0]["state"] == "passed"
+
+
+def test_zet_not_earned_when_practice_average_below_three(client):
+    """Низкий средний в ИДУЩЕМ семестре — тоже не засчитан. Но состояние "pending", а не
+    "failed": семестр не закончен, у студента ещё есть время исправить (вариант C)."""
+    admin = make_admin(client)
+    _group(client, admin)
+    make_teacher(client, admin, subjects=["Математика"])
+    assign_teacher(client, admin, "teach:teacher1", "ИС-21", "Математика")
+    stud = _student(client, admin)
+    _set_zet(client, admin, "ИС-21", "Математика", 2.0)   # hours=72 по умолчанию — семестр идёт
     _push_lesson(client, admin, "P1", "ИС-21", "Математика", "Практика", number=1)
     _push_grade(client, admin, "P1", "Иванова", "Мария", "2")
 
     r = client.get("/web/student/zet", headers=stud)
     body = r.json()
     assert body["subjects"][0]["passed"] is False
+    assert body["subjects"][0]["state"] == "pending"
 
 
 def test_subject_without_zet_is_absent_from_summary(client):
@@ -180,7 +210,9 @@ def test_subject_with_zet_but_no_lessons_yet_still_counts_toward_total(client):
     assert body["total"] == 5.0             # 2.0 (Математика) + 3.0 (Физика), не 2.0
     assert body["earned"] == 2.0            # Физика ещё не сдана — занятий нет
     fiz = next(s for s in body["subjects"] if s["subject"] == "Физика")
-    assert fiz == {"subject": "Физика", "zet": 3.0, "earned": 0.0, "passed": False}
+    # Физика без занятий и без экзамена, семестр идёт → «ожидается» (не «не сдан»).
+    assert fiz == {"subject": "Физика", "zet": 3.0, "earned": 0.0,
+                   "state": "pending", "passed": False}
 
 
 def test_zet_sum_and_pct_across_subjects(client):
@@ -258,9 +290,10 @@ def test_group_zet_report_includes_per_subject_breakdown(client):
     assert row["earned"] == 2.0 and row["total"] == 5.0   # общая сумма — как раньше
     by_subject = {x["subject"]: x for x in row["subjects"]}
     assert by_subject["Математика"] == {"subject": "Математика", "zet": 2.0,
-                                        "earned": 2.0, "passed": True}
+                                        "earned": 2.0, "state": "passed", "passed": True}
+    # Физика: экзамен ПРОВАЛЕН — это уже итог "failed", а не «ожидается».
     assert by_subject["Физика"] == {"subject": "Физика", "zet": 3.0,
-                                    "earned": 0.0, "passed": False}
+                                    "earned": 0.0, "state": "failed", "passed": False}
 
 
 def test_promote_accepts_eligible_and_rejects_not_eligible(client):

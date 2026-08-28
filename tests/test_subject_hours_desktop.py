@@ -163,3 +163,36 @@ def test_subject_zet_earned_offline_uses_exam_result():
 
     records_failed = {lesson.id: "2 (Не зачтено)"}
     assert study_hours.subject_zet_earned(book.lessons, records_failed, 2.0, scale="5") is None
+
+
+def test_subject_without_exam_is_pending_until_boundary_then_settled():
+    """ВАРИАНТ C (баг Влада): предмет без экзамена НЕ засчитывается по первой же
+    положительной оценке — пока семестр идёт, он «ожидается».
+
+    Обратный ход прямо на чистой функции: одна «4» по практике — раньше это давало
+    средний 4.0 >= 3.0 и весь предмет мгновенно «сдан». Теперь до рубежа это "pending"
+    (ЗЕТ не начисляются), а итог подводится, когда рубеж пройден."""
+    book = GradeBook("К74/1", "Математика")
+    p1 = book.add_lesson("Практика", topic="п1")
+    records = {p1.id: "4"}
+
+    # Семестр идёт (term_over=False) — «ожидается», ЗЕТ НЕ засчитаны.
+    assert study_hours.subject_zet_state(book.lessons, records, 2.0, term_over=False, scale="5") == "pending"
+    assert study_hours.subject_zet_earned(book.lessons, records, 2.0, scale="5", term_over=False) is None
+
+    # Рубеж пройден (term_over=True) — тот же средний 4.0 подводит итог: сдан.
+    assert study_hours.subject_zet_state(book.lessons, records, 2.0, term_over=True, scale="5") == "passed"
+    assert study_hours.subject_zet_earned(book.lessons, records, 2.0, scale="5", term_over=True) == 2.0
+
+    # После рубежа, но средний ниже 3.0 — уже не «ожидается», а честно «не сдан».
+    assert study_hours.subject_zet_state(book.lessons, {p1.id: "2"}, 2.0, term_over=True, scale="5") == "failed"
+
+
+def test_subject_with_exam_but_no_mark_is_pending_not_failed():
+    """Экзамен в плане есть, но оценки ещё нет — он ВПЕРЕДИ, а не провален: "pending",
+    а не "failed" (иначе студент до самого экзамена видел бы «не сдан»)."""
+    book = GradeBook("К74/1", "Математика")
+    book.add_lesson("Экзамен", topic="итог")
+    # term_over не важен: экзамен — сам себе рубеж.
+    assert study_hours.subject_zet_state(book.lessons, {}, 2.0, term_over=False, scale="5") == "pending"
+    assert study_hours.subject_zet_state(book.lessons, {}, 2.0, term_over=True, scale="5") == "pending"

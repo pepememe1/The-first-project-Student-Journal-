@@ -88,7 +88,8 @@ watch(studentId, loadJournal)
 
     <template v-else>
       <Card v-if="zet?.subjects?.length" pad>
-        <ZetProgress :earned="zet.earned" :total="zet.total" :subjects="zet.subjects" show-details />
+        <ZetProgress :earned="zet.earned" :total="zet.total" :pending="zet.pending"
+                     :subjects="zet.subjects" show-details />
       </Card>
       <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
         <template #header>
