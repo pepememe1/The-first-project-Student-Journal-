@@ -5,7 +5,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
-  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings, Bell, BellOff,
+  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
   Languages, Star, SmilePlus, ClipboardList, Paperclip,
@@ -157,8 +157,6 @@ const myUserId = computed(() => activeInfo.value?.my_user_id || '')
 const canManageTemplates = computed(() => ['teacher', 'admin'].includes(auth.role))
 // Админ САМ и есть модерация — кнопка «Написать модерации» ему не нужна (и сервер её закрыл).
 const isAdmin = computed(() => auth.role === 'admin')
-// Замьючена ли текущая беседа у меня (без пушей). Кнопка-колокольчик — в шапке.
-const muted = computed(() => !!activeChat.value?.muted)
 
 // Тип беседы и права (для шапки/композера групп и каналов).
 //Тип беседы берём из стора (activeKind): он известен ещё до ответа /chats/{id}, иначе
@@ -514,11 +512,17 @@ function toggleReveal(id) {
 // чате список выходил пустым, и выглядело так, будто команд нет вовсе. Недоступные
 // показываем блёклыми и с причиной — сразу видно, где команда сработает.
 const SLASH_COMMANDS = computed(() => [
+  //⚠️ Подсказка РАЗНАЯ, и это не украшение: в «Избранном» разговор с Вектором остаётся
+  //в переписке, а в общей беседе ответ личный и исчезает при перезагрузке. Человек должен
+  //знать это ДО вопроса — иначе либо промолчит о нужном, решив, что увидят все, либо
+  //понадеется на историю, которой не будет.
   {
     cmd: '/vector',
-    hint: locale.t('chatThread.cmd.vectorHint', 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? Дальше отвечайте на его сообщения — префикс больше не нужен.'),
-    ok: isSaved.value,
-    why: locale.t('chatThread.cmd.vectorWhy', 'Работает в «Избранном» — это ваши личные заметки'),
+    hint: isSaved.value
+      ? locale.t('chatThread.cmd.vectorHintSaved', 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? Дальше отвечайте на его сообщения — префикс больше не нужен.')
+      : locale.t('chatThread.cmd.vectorHintChat', 'Спросить ИИ-помощника — ответ увидите только вы, в переписке он не останется.'),
+    ok: true,
+    why: '',
   },
   {
     cmd: '/отчет',
@@ -844,9 +848,53 @@ function bulkForward() {
 }
 function bulkDelete() { requestDelete(selectedMsgs.value) }
 
+// ── Личный вопрос Вектору из общей беседы ──────────────────────────────────────────
+// Ответ приходит ТОЛЬКО спросившему и НИГДЕ не сохраняется (см. серверную ручку
+// `vector_in_chat`): в группе реплика Вектора показала бы соседям выборку, скоупленную
+// по спросившему. Поэтому в общих беседах команда не отправляет сообщение вовсе — ни
+// вопрос, ни ответ; это личное обращение к помощнику из поля ввода.
+//
+// ⚠️ В «Избранном» поведение ПРЕЖНЕЕ — обычные сообщения через `m.send`. Там собеседника
+// нет, скрывать не от кого, а история разговора с Вектором как раз полезна.
+const VECTOR_CMD = /^\/vector\s+([\s\S]+)$/i
+const vectorReply = ref(null)     // { question, text, pending } — живёт до перезагрузки
+const vectorBusy = ref(false)
+
+function isVectorAsk(text) {
+  return activeKind.value !== 'saved' && VECTOR_CMD.test(text)
+}
+
+async function askVector(text) {
+  const question = (text.match(VECTOR_CMD) || [])[1]?.trim()
+  if (!question) return
+  vectorBusy.value = true
+  vectorReply.value = { question, text: '', pending: true }
+  try {
+    const { data } = await messengerApi.askVectorInChat(activeId.value, question)
+    vectorReply.value = { question, text: data.text || '', pending: false }
+  } catch (e) {
+    //Отказ показываем ЯВНО, а не молча гасим карточку: тишина после нажатия читается
+    //как «сломалось», и человек повторяет вопрос — а при 429 это ровно то, чего делать
+    //не надо. Текст берём серверный (там названа причина: мьют, частота, пустой вопрос).
+    vectorReply.value = {
+      question, pending: false,
+      text: e?.response?.data?.detail
+        || locale.t('chatThread.vectorFailed', 'Вектор сейчас не отвечает.'),
+    }
+  } finally { vectorBusy.value = false }
+}
+
 async function submit() {
   let t = draft.value.trim()
   if (!t) return
+  //Перехват ДО автоперевода: вопрос помощнику переводить собеседнику незачем — он его
+  //и не увидит.
+  if (isVectorAsk(t)) {
+    draft.value = ''
+    m.clearDraft(activeId.value)
+    await askVector(t)
+    return
+  }
   //Автоперевод исходящих. Делается ЗДЕСЬ, до отправки, а не на сервере: человек обязан
   //увидеть, что уйдёт собеседнику. Сбой переводчика возвращает исходный текст — съесть
   //уже написанное сообщение из-за недоступной модели недопустимо (см. stores/translate).
@@ -862,6 +910,10 @@ async function submit() {
   const ok = await m.send(t)
   if (!ok) { draft.value = t; m.saveDraft(activeId.value, t) }   //отклонили — вернуть текст и черновик
 }
+//Ответ Вектора относится к ТОЙ беседе, где его спросили: при переходе в другую он
+//обязан исчезнуть, иначе выглядит ответом на здешний разговор.
+watch(activeId, () => { vectorReply.value = null })
+
 function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
 
 // ── Быстрые ответы и шаблоны преподавателя (docs/MESSENGER-ADDON-PLAN-GPT.md) ───────────
@@ -896,13 +948,12 @@ function replyInThread() {
 }
 
 // ── Поиск внутри чата ────────────────────────────────────────────────────────────────
+// Панель поиска открывается напрямую из панели беседы (ConversationInfo → @search),
+// собственной кнопки в шапке чата больше нет (убрана как дубль в 3.8) — поэтому
+// отдельного toggle не осталось, только явное закрытие.
 const showSearch = ref(false)
 const searchQ = ref('')
 let searchTimer = null
-function toggleSearchPanel() {
-  showSearch.value = !showSearch.value
-  if (!showSearch.value) closeSearchPanel()
-}
 function closeSearchPanel() { showSearch.value = false; searchQ.value = ''; m.clearSearch() }
 function onSearchInput() {
   clearTimeout(searchTimer)
@@ -1588,6 +1639,31 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
       </div>
 
       <!-- §D2: Вектор с репликой вместо холодного 429 — композер блокируется на remaining c. -->
+      <!-- Личный ответ Вектора: НЕ сообщение ленты, а карточка над полем ввода. Место
+           выбрано не случайно — в ленте её приняли бы за реплику, которую видят все, а
+           здесь она читается как ответ лично тебе, рядом с местом, где вопрос задавали.
+           ⚠️ Подпись «видно только вам» обязательна: без неё человек не отличит личный
+           ответ от публичного и либо промолчит о нужном, либо расскажет лишнее. -->
+      <div v-if="vectorReply" class="mx-2.5 mb-1.5 rounded-xl border border-accent/40 bg-accent-glow px-3 py-2">
+        <div class="mb-1 flex items-center gap-2">
+          <img src="/mascot/vector-avatar.webp" alt="" class="size-5 shrink-0 rounded-full" />
+          <span class="min-w-0 flex-1 truncate text-xs font-semibold text-accent">
+            {{ locale.t('chatThread.vectorPrivate', 'Вектор · видно только вам') }}
+          </span>
+          <button type="button" @click="vectorReply = null"
+                  :aria-label="locale.t('common.close', 'Закрыть')"
+                  class="grid size-5 shrink-0 place-items-center rounded-md text-text3 hover:text-text">
+            <X class="size-3.5" />
+          </button>
+        </div>
+        <p class="mb-1 truncate text-[11px] text-text3">{{ vectorReply.question }}</p>
+        <p v-if="vectorReply.pending" class="text-sm text-text3">
+          {{ locale.t('chatThread.vectorThinking', 'Вектор думает…') }}
+        </p>
+        <p v-else class="max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm text-text">
+          {{ vectorReply.text }}
+        </p>
+      </div>
       <MascotCooldown v-if="mascotCooldown.active" :cooldown="mascotCooldown" />
 
       <!-- Плашка анти-флуда/мьюта: «не отправляйте так часто» / «вы ограничены модерацией» -->

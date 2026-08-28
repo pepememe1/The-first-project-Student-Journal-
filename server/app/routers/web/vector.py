@@ -596,8 +596,15 @@ def _zet_facts(db, surname: str, name: str, group: str, cfg: dict) -> dict:
                 "mood": "neutral", "intent": "zet", "facts": {}}
     threshold = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
     min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
-    unsatisfied = [s["subject"] for s in summ["subjects"] if not s["passed"]]
+    # «Не сдано» — только ПРОВАЛЕННЫЕ (failed). Идущие предметы (pending) — это «ожидается»,
+    # а не «не сдано»: назвать идущий предмет несданным — ровно то заблуждение, из-за
+    # которого завели вариант C (ЗЕТ «в процессе» до рубежа семестра).
+    unsatisfied = [s["subject"] for s in summ["subjects"] if s.get("state") == "failed"]
+    pending_val = summ.get("pending", 0.0)
     parts = [f"У тебя {summ['earned']} из {summ['total']} ЗЕТ за семестр ({summ['pct']}%)."]
+    if pending_val:
+        parts.append(f"Ещё {pending_val} ЗЕТ в предметах, которые ещё идут, — они "
+                     f"засчитаются, когда семестр по ним завершится.")
     if min_zet is not None:
         if summ["earned"] >= min_zet:
             parts.append(f"Порог для перевода — {min_zet} ЗЕТ, он уже набран.")
@@ -605,12 +612,17 @@ def _zet_facts(db, surname: str, name: str, group: str, cfg: dict) -> dict:
             parts.append(f"Порог для перевода — {min_zet} ЗЕТ, не хватает "
                          f"{round(min_zet - summ['earned'], 1)}.")
     if unsatisfied:
-        parts.append("Ещё не сдано: " + ", ".join(unsatisfied) + ".")
-    mood = "happy" if (min_zet is None or summ["earned"] >= min_zet) else \
-        ("neutral" if summ["pct"] >= 80 else "sad")
+        parts.append("Не сдано: " + ", ".join(unsatisfied) + ".")
+    # Пока семестр идёт (есть «ожидающие» предметы), низкий баланс — не повод грустить.
+    if min_zet is None or summ["earned"] >= min_zet:
+        mood = "happy"
+    elif summ["pct"] >= 80 or pending_val:
+        mood = "neutral"
+    else:
+        mood = "sad"
     return {"text": " ".join(parts), "mood": mood, "intent": "zet",
             "facts": {"earned": summ["earned"], "total": summ["total"], "pct": summ["pct"],
-                     "min_zet": min_zet, "unsatisfied": unsatisfied}}
+                     "pending": pending_val, "min_zet": min_zet, "unsatisfied": unsatisfied}}
 
 
 def _subj_match(detected: str, lesson_subject: str) -> bool:
