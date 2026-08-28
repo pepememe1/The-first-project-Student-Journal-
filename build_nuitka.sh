@@ -92,18 +92,34 @@ done
 # устарело, когда с десктопной стороны пропал последний импортёр (снос Qt).
 # Это ровно тот же класс отказа, что чинился в deploy/deploy-server.sh тем же приёмом:
 # снимок значения отказывает именно в тот день, когда он нужен.
+#
+# 🔥 ФОРСИРУЕМ ТОЛЬКО .py-ФАЙЛЫ И ТОЛЬКО НЕДОСТИЖИМЫЕ. Первая версия этой правки
+# добавляла ещё и `--include-package=schedule` (единственный корневой ПАКЕТ, который
+# импортирует server/app) — собранный .exe падал с «Nuitka: A segmentation fault has
+# occurred» ещё до первой строки Python, без лога и без окна. `schedule` и так попадает
+# в сборку: его импортируют из desktop/, куда анализ Nuitka заходит. Отсюда два правила:
+#   • пакет не форсируем — если он вдруг станет недостижим, отказ будет ГРОМКИМ
+#     (ImportError с именем модуля в логе), а не молчаливым segfault'ом;
+#   • модуль форсируем, только если анализ до него не дотянется сам — лишнее включение
+#     ничего не чинит, а поверхность отказа расширяет.
 ROOT_MODS="$(grep -rhoE '^[[:space:]]*(import|from)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*'                server/app --include='*.py' 2>/dev/null              | awk '{print $2}' | sort -u              | while read -r m; do
-                 if [ -f "$m.py" ]; then echo "--include-module=$m"; fi
-                 if [ -f "$m/__init__.py" ]; then echo "--include-package=$m"; fi
+                 # Только корневые .py-МОДУЛИ. Корневые ПАКЕТЫ (у нас это `schedule`)
+                 # НЕ форсируем: см. предупреждение ниже.
+                 if [ -f "$m.py" ]; then
+                   # И только те, до которых анализ Nuitka не дотянется сам. Он идёт от
+                   # main.py через desktop/ sync/ data/, поэтому импортируемое оттуда
+                   # попадает в сборку и без нас.
+                   if ! grep -rqE "^[[:space:]]*(import|from)[[:space:]]+$m"                           desktop sync data --include='*.py' 2>/dev/null; then
+                     echo "--include-module=$m"
+                   fi
+                 fi
                done | sort -u | tr '
 ' ' ')"
 if [ -z "$ROOT_MODS" ]; then
   echo "ОШИБКА: не нашлось ни одного корневого модуля server/app — разбор импортов сломался" >&2
   exit 1
 fi
-echo "[nuitka] корневые модули для server/app: $(echo "$ROOT_MODS" | tr ' ' '
-' | sed 's/^--include-[a-z]*=//' | tr '
-' ' ')"
+echo "[nuitka] корневые модули только-для-сервера: $(echo "$ROOT_MODS" | sed 's/--include-module=//g')"
 INC="$INC $ROOT_MODS"
 
 # paramiko — ЕДИНСТВЕННЫЙ путь входа по ПАРОЛЮ в разделе «Сервер» (desktop/server_admin.py).
