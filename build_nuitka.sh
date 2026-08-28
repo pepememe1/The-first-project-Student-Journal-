@@ -108,8 +108,11 @@ ROOT_MODS="$(grep -rhoE '^[[:space:]]*(import|from)[[:space:]]+[A-Za-z_][A-Za-z0
                  if [ -f "$m.py" ]; then
                    # И только те, до которых анализ Nuitka не дотянется сам. Он идёт от
                    # main.py через desktop/ sync/ data/, поэтому импортируемое оттуда
+                   # ⚠️ Граница слова — КЛАССОМ СИМВОЛОВ, а не `\b`: обратный слэш
+                   # в этом шаблоне уже один раз превратился в символ backspace,
+                   # grep перестал находить что-либо, и фильтр молча пропускал ВСЁ.
                    # попадает в сборку и без нас.
-                   if ! grep -rqE "^[[:space:]]*(import|from)[[:space:]]+$m"                           desktop sync data --include='*.py' 2>/dev/null; then
+                   if ! grep -rqE "^[[:space:]]*(import|from)[[:space:]]+$m([^A-Za-z0-9_]|$)" desktop sync data --include='*.py' 2>/dev/null; then
                      echo "--include-module=$m"
                    fi
                  fi
