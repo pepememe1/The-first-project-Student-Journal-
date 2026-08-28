@@ -44,7 +44,9 @@ def _no_real_session():
     #вход уводил бы сервер на другую базу прямо посреди прогона, и тесты проверяли бы
     #пустую копию вместо подготовленной фикстурой.
     original_switch = local_api.switch_user_db
-    local_api.switch_user_db = lambda login: False
+    #Сигнатура зеркалит продукт: у `switch_user_db` появился `authenticated` —
+    #заглушка без него роняла вход 500-й ошибкой, а не краснела внятно.
+    local_api.switch_user_db = lambda login, authenticated=False: False
     original = local_api._remember_session
     local_api._remember_session = lambda login, password, role: _remembered.append(
         (login, role))

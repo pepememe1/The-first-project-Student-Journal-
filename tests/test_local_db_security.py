@@ -456,3 +456,55 @@ def test_repack_never_destroys_a_value_it_cannot_read(tmp_path):
     finally:
         conn.close()
     assert v == broken, "нечитаемое значение затёрли — так теряют журнал аудита"
+
+
+# ── 7. Уборка необратима, поэтому за паролем ───────────────────────────────────────
+
+def test_purge_never_runs_before_the_password_is_checked(monkeypatch):
+    """🔥 Уборка чужих баз — ТОЛЬКО после подтверждённого входа.
+
+    `switch_user_db` зовётся в том числе ДО проверки пароля: в `_login_flow` есть
+    спекулятивная попытка «вдруг человек уже входил на этой машине — тогда пустим его
+    офлайн», и логин там ещё ничем не подтверждён. Повесив уборку на сам факт
+    переключения (а именно так я и сделал сначала), мы отдали бы любому, кто НАБРАЛ
+    чужой логин с любым паролем, право стереть локальные копии всех остальных
+    пользователей машины: вход честно отклоняется, а данные уже не вернуть.
+
+    Обратный ход: уберите проверку `if authenticated` в `switch_user_db` — краснеет."""
+    from desktop import local_api
+    local_api.ensure_server_path()
+    import app.db as _db
+
+    calls = []
+    monkeypatch.setattr(local_api, "_purge_previous_user", lambda login: calls.append(login))
+    monkeypatch.setattr(local_api, "prepare_env", lambda: None)
+    monkeypatch.setattr(local_api, "local_db_url", lambda login="": "sqlite:///" + login)
+    monkeypatch.setattr(local_api, "_ensure_copy_openable", lambda login, enc: None)
+    monkeypatch.setattr(local_api, "_local_db_key", lambda: "")
+    monkeypatch.setattr(_db, "DATABASE_URL", "sqlite:///kto-to-drugoy", raising=False)
+    monkeypatch.setattr(_db, "rebind", lambda url, key="": None, raising=False)
+
+    local_api.switch_user_db("ivanov")
+    assert calls == [], "чужие базы стёрты по одному лишь НАБРАННОМУ логину, без пароля"
+
+    local_api.switch_user_db("ivanov", authenticated=True)
+    assert calls == ["ivanov"], "после подтверждённого входа уборка обязана сработать"
+
+
+def test_purge_also_runs_when_the_database_is_already_the_right_one(monkeypatch):
+    """Ранний выход «переключать нечего» не должен пропускать уборку.
+
+    Иначе она не срабатывала бы ровно у того, кто входит на этой машине постоянно, —
+    то есть у обычного пользователя, а не у редкого."""
+    from desktop import local_api
+    local_api.ensure_server_path()
+    import app.db as _db
+
+    calls = []
+    monkeypatch.setattr(local_api, "_purge_previous_user", lambda login: calls.append(login))
+    monkeypatch.setattr(local_api, "prepare_env", lambda: None)
+    monkeypatch.setattr(local_api, "local_db_url", lambda login="": "sqlite:///" + login)
+    monkeypatch.setattr(_db, "DATABASE_URL", "sqlite:///ivanov", raising=False)
+
+    assert local_api.switch_user_db("ivanov", authenticated=True) is True
+    assert calls == ["ivanov"]
