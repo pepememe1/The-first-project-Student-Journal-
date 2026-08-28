@@ -320,7 +320,33 @@ def ensure_server_path() -> None:
         if os.path.isdir(server_dir):
             if server_dir not in sys.path:
                 sys.path.insert(0, server_dir)
+            _ensure_shared_path(os.path.dirname(server_dir))
             return
+
+
+def _ensure_shared_path(root: str) -> None:
+    """Общие КОРНЕВЫЕ модули (`vector_nlu`, `voice_command`, …) — в sys.path.
+
+    🔥 Зачем отдельная функция. `server/app` импортирует десяток корневых модулей, и в
+    исходниках они лежат прямо в корне репозитория — `webdata.py` добавляет туда sys.path
+    сам, и всё работает. В СОБРАННОМ .exe их там нет: часть из них не импортирует ни один
+    клиентский файл, поэтому анализ Nuitka до них не дотягивается, и в сборку они попадают
+    только явно. Без них локальный сервер падает на первом же импорте, окно не
+    открывается ВООБЩЕ — ровно этот отказ и случился при первой пересборке 3.8
+    (`No module named 'vector_nlu'`).
+
+    ⚠️ Они лежат в ПОДКАТАЛОГЕ `gb_shared`, а не в корне распаковки: в корне
+    onefile-распаковки живёт собственный payload Nuitka, и наложение своих файлов поверх
+    него давало segfault до первой строки Python.
+    ⚠️ Из исходников каталога `gb_shared` нет и не должно быть — там модули лежат в самом
+    корне, и `webdata.py` находит их сам. Отсутствие каталога здесь НЕ ошибка.
+    """
+    try:
+        shared = os.path.join(root, "gb_shared")
+        if os.path.isdir(shared) and shared not in sys.path:
+            sys.path.insert(0, shared)
+    except Exception:
+        pass
 
 
 def prepare_env() -> None:

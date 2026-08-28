@@ -129,15 +129,19 @@ if [ -z "$ROOT_MODS" ]; then
   echo "ОШИБКА: не нашлось ни одного корневого модуля server/app — разбор импортов сломался" >&2
   exit 1
 fi
-# Кладём их СЫРЫМИ ФАЙЛАМИ в корень распаковки — ровно туда, куда смотрит
-# `server/app/webdata.py` (он делает sys.path.insert на три каталога вверх от себя,
-# то есть на корень). Это в точности та же раскладка, что на боевом VPS:
-# /root/gb-deploy/<модуль>.py рядом с /root/gb-deploy/server/app/.
+# Кладём их СЫРЫМИ ФАЙЛАМИ в ОТДЕЛЬНЫЙ подкаталог `gb_shared`, а путь к нему добавляет
+# `desktop/local_api.py::ensure_server_path()` — рядом с тем местом, где он и так кладёт
+# в sys.path каталог `server/`.
+# ⚠️ ПОЧЕМУ НЕ В КОРЕНЬ РАСПАКОВКИ, хотя на боевом VPS раскладка именно такая
+# (/root/gb-deploy/<модуль>.py рядом с server/app/): в корне onefile-распаковки лежит
+# СОБСТВЕННЫЙ payload Nuitka — bootstrap, DLL, дерево dist. Класть туда свои файлы значит
+# накладывать их на чужую раскладку; сборка с `=.` падала segfault'ом ещё до первой
+# строки Python. Подкаталог ни на что не накладывается.
 ROOT_STAGE="$(mktemp -d)"
 trap 'rm -rf "$ROOT_STAGE"' EXIT
 for f in $ROOT_MODS; do cp "$f" "$ROOT_STAGE/"; done
 echo "[nuitka] корневые модули только-для-сервера (сырыми файлами): $ROOT_MODS"
-INC="$INC --include-raw-dir=$ROOT_STAGE=."
+INC="$INC --include-raw-dir=$ROOT_STAGE=gb_shared"
 
 # paramiko — ЕДИНСТВЕННЫЙ путь входа по ПАРОЛЮ в разделе «Сервер» (desktop/server_admin.py).
 # Системный ssh пароль ввести не может: он запускается с BatchMode=yes, а без него
