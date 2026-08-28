@@ -161,11 +161,50 @@ test('логотип из JSON-LD краулеру доступен', () => {
   )
 })
 
-test('карта сайта ведёт ровно на ту же страницу, что canonical', () => {
+test('карта сайта и robots.txt описывают ОДИН И ТОТ ЖЕ набор страниц', () => {
+  // ⚠️ Раньше здесь стоял снимок значения (`deepEqual(loc, ['…/offer.html'])`), и он
+  // краснел на КАЖДОМ законном добавлении публичной страницы, подталкивая «просто
+  // обновить ожидание» — то есть ровно к тому, от чего сторож и защищает. Проверяем
+  // СВОЙСТВО: что открыто в robots.txt, то и объявлено в карте сайта, и наоборот.
+  // Страница, открытая в одном и забытая в другом, — это либо документ, который нельзя
+  // найти поиском, либо адрес, который краулер откажется открыть.
   const sitemap = readFileSync(join(PUBLIC, 'sitemap.xml'), 'utf8')
-  const loc = sitemap.match(/<loc>([^<]+)<\/loc>/g).map((s) => s.replace(/<\/?loc>/g, ''))
-  assert.deepEqual(loc, ['https://esstu-gradebook.ru/offer.html'], 'в карте сайта не то, что открыто в robots.txt')
-  assert.ok(html.includes(`<link rel="canonical" href="${loc[0]}">`), 'canonical и карта сайта разошлись')
+  const loc = sitemap.match(/<loc>([^<]+)<\/loc>/g)
+    .map((s) => s.replace(/<\/?loc>/g, ''))
+    .map((u) => u.replace('https://esstu-gradebook.ru', ''))
+  const allowedPages = allows.filter((a) => a.endsWith('.html'))
+  assert.deepEqual([...loc].sort(), [...allowedPages].sort(),
+    'карта сайта и robots.txt разошлись по составу публичных страниц')
+  assert.ok(html.includes('<link rel="canonical" href="https://esstu-gradebook.ru/offer.html">'),
+    'canonical страницы для комиссии разошёлся с картой сайта')
+})
+
+test('политика ПДн и соглашение открыты БЕЗ входа', () => {
+  // 🔒 Это требование закона, а не удобство: пункт 1 части 2 статьи 18.1 152-ФЗ
+  // обязывает оператора обеспечить НЕОГРАНИЧЕННЫЙ доступ к документу, определяющему
+  // политику обработки персональных данных. Политика, доступная только после входа в
+  // кабинет, требованию не соответствует. Соглашение — оферта, акцептуемая до создания
+  // учётной записи, значит прочитать её надо тоже до входа.
+  // Обратный ход: уберите Allow: /privacy.html — краснеет.
+  for (const page of ['/privacy.html', '/terms.html']) {
+    assert.ok(allows.includes(page), `${page} закрыт от неограниченного доступа`)
+    assert.ok(existsSync(join(PUBLIC, page.slice(1))), `нет самого файла ${page}`)
+  }
+})
+
+test('у юридических страниц есть CSP, viewport и язык', () => {
+  // Тот же урок, что с offer.html: страницу отдаёт не только боевой Caddy, но и
+  // локальный сервер внутри программы, и бандл Android — туда заголовки прокси не
+  // доходят вовсе. А без viewport на телефоне мертвы все медиазапросы разом.
+  for (const page of ['privacy.html', 'terms.html']) {
+    const doc = readFileSync(join(PUBLIC, page), 'utf8')
+    assert.ok(/^<!doctype html>/i.test(doc.trim()), `${page}: нет doctype`)
+    assert.ok(/<html[^>]+lang="ru"/.test(doc), `${page}: нет <html lang>`)
+    assert.ok(/<meta[^>]+name="viewport"/.test(doc), `${page}: нет meta viewport`)
+    assert.ok(/http-equiv="Content-Security-Policy"/.test(doc), `${page}: нет меты CSP`)
+    assert.ok(/script-src 'none'/.test(doc), `${page}: скрипты не запрещены`)
+    assert.ok(!/<script/i.test(doc), `${page}: на странице появился скрипт — под script-src 'none' он молча не заработает`)
+  }
 })
 
 // ── скрипты и политика самой страницы ───────────────────────────────────────────

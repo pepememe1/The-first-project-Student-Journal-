@@ -347,6 +347,24 @@ const showRecover = ref(false)
           </button>
         </div>
 
+        <!-- 🔒 ЮРИДИЧЕСКИЕ ДОКУМЕНТЫ — ИМЕННО ЗДЕСЬ, НА ЭКРАНЕ ВХОДА, и это не украшение.
+             Соглашение акцептуется конклюдентными действиями (п. 3 ст. 438 ГК РФ): вход
+             в систему И ЕСТЬ акцепт. Значит документ обязан быть доступен ДО входа, а не
+             в настройках кабинета, куда попадают уже согласившись. Политику обработки
+             ПДн, кроме того, закон требует публиковать с НЕОГРАНИЧЕННЫМ доступом
+             (п. 1 ч. 2 ст. 18.1 152-ФЗ).
+             ⚠️ Обычные ссылки, а не роутер: страницы статические и лежат вне SPA. Так
+             они одинаково открываются и на сайте, и внутри программы (локальный сервер
+             отдаёт ту же сборку), и в приложении Android из бандла.
+             ⚠️ Не прятать за «Подробнее» и не превращать в галочку «согласен»:
+             галочка без прочитанного текста хуже её отсутствия. -->
+        <p class="mt-4 text-center text-tiny leading-relaxed text-text3">
+          {{ loc.t('login.legalIntro', 'Входя, вы принимаете') }}
+          <a href="/terms.html" class="text-text2 underline underline-offset-2 transition-colors hover:text-accent">{{ loc.t('login.legalTerms', 'Пользовательское соглашение') }}</a>
+          {{ loc.t('login.legalAnd', 'и') }}
+          <a href="/privacy.html" class="text-text2 underline underline-offset-2 transition-colors hover:text-accent">{{ loc.t('login.legalPrivacy', 'Политику обработки персональных данных') }}</a>.
+        </p>
+
         <DeviceApproval v-if="needApproval" @approved="onApproved" />
       </div>
 

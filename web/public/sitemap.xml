@@ -1,11 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Карта из ОДНОГО адреса, и это не заготовка: публичная страница у нас ровно одна.
-     Нужна, чтобы отправить предложение на индексацию через Search Console, не дожидаясь,
-     пока краулер набредёт на домен сам. Всё остальное закрыто в robots.txt. -->
+<!-- Публичных страниц ровно три, и все три здесь: одностраничник для комиссии и два
+     юридических документа. Последние открыты не по желанию, а по требованию п. 1 ч. 2
+     ст. 18.1 152-ФЗ (неограниченный доступ к политике обработки ПДн) — подробности в
+     robots.txt. Всё остальное закрыто.
+     ⚠️ Состав ЭТОГО файла и список Allow в robots.txt обязаны совпадать: страница,
+     открытая в одном и забытая в другом, — это либо документ, который нельзя найти,
+     либо адрес, который краулер не откроет. Держит web/tests/offerMeta.test.mjs. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://esstu-gradebook.ru/offer.html</loc>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://esstu-gradebook.ru/privacy.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://esstu-gradebook.ru/terms.html</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.5</priority>
   </url>
 </urlset>

@@ -616,6 +616,28 @@ onMounted(() => easter.roll('gman_observer'))
         </AppButton>
       </div>
     </Card>
+
+    <!-- 🔒 Юридические документы. Дублируют ссылки с экрана входа НАМЕРЕННО, и это не
+         тот случай, когда «две одинаковые кнопки читаются как недоделка»: на входе они
+         нужны ДО акцепта, здесь — чтобы перечитать их потом, не выходя из аккаунта.
+         Право субъекта ПДн получать сведения об обработке (ст. 14 152-ФЗ) не
+         прекращается после входа, а искать документ на экране, куда попадают раз в
+         пять часов, человек не станет.
+         Обычные ссылки, не роутер: страницы статические, лежат вне SPA и одинаково
+         открываются на сайте, внутри программы и в приложении Android. -->
+    <Card :title="loc.t('settings.legal', 'Документы')"
+          :subtitle="loc.t('settings.legalHint', 'Условия использования и порядок обработки персональных данных')">
+      <div class="flex flex-col gap-2 sm:flex-row">
+        <a href="/terms.html" target="_blank" rel="noopener"
+           class="flex-1 rounded-sm border border-border bg-card2 px-4 py-2.5 text-center text-sm font-semibold text-text transition-colors hover:border-accent hover:text-accent">
+          {{ loc.t('login.legalTerms', 'Пользовательское соглашение') }}
+        </a>
+        <a href="/privacy.html" target="_blank" rel="noopener"
+           class="flex-1 rounded-sm border border-border bg-card2 px-4 py-2.5 text-center text-sm font-semibold text-text transition-colors hover:border-accent hover:text-accent">
+          {{ loc.t('login.legalPrivacy', 'Политику обработки персональных данных') }}
+        </a>
+      </div>
+    </Card>
   </div>
   <FarewellOverlay v-if="farewell" :name="farewellName" />
   <DarkSoulsFarewell v-if="darkSouls" @close="darkSouls = false" />
