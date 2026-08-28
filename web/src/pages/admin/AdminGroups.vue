@@ -5,6 +5,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import TeacherSuggestionsDialog from '@/components/admin/TeacherSuggestionsDialog.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -257,6 +258,7 @@ async function runImport() {
 // ЗАВОДИМ саму группу как каталожную запись, связанную с расписанием, без
 // предметов/часов/журнала (у небюджетных категорий их нет и не будет).
 const showScheduleImport = ref(false)
+const showTeacherSuggest = ref(false)
 const scheduleImportCategory = ref('')
 const scheduleImportGroups = ref([])
 const scheduleImportGroupName = ref('')
@@ -392,6 +394,9 @@ async function importParsed() {
         {{ importing ? locale.t('adminGroups.updatingBtn', 'Обновление…') : locale.t('adminGroups.updateGroupsBtn', 'Обновить группы') }}
       </AppButton>
       <AppButton variant="ghost" size="sm" @click="openScheduleImport">{{ locale.t('adminGroups.importByCategoryBtn', '🌐 Импорт по категории') }}</AppButton>
+      <!-- Расписание знает, КТО ведёт пару, а у нас эта связь велась руками: смена
+           расписания меняла предметы группы и оставляла преподавателя без журнала. -->
+      <AppButton variant="ghost" size="sm" @click="showTeacherSuggest = true">{{ locale.t('adminGroups.teacherSuggestBtn', '👤 Кто ведёт предметы') }}</AppButton>
       <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminGroups.addBtn', '+ Добавить') }}</AppButton>
     </div>
 
@@ -665,4 +670,7 @@ async function importParsed() {
       </div>
     </div>
   </div>
+
+  <TeacherSuggestionsDialog v-if="showTeacherSuggest"
+                            @close="showTeacherSuggest = false" @applied="reload" />
 </template>

@@ -40,6 +40,7 @@ from ... import schedule_web
 from ... import reg_utils, mailer, gost, audit, vector_llm, translate_service
 from ...parsers import esstu_parser
 import vector_nlu   # общий с десктопом лексикон/классификатор (корень в sys.path через webdata)
+import teacher_match   # корневой общий модуль: ФИО с портала -> наш аккаунт преподавателя
 from schedule import parser as schedule_parser   # CATEGORIES — реестр категорий портала
 
 router = APIRouter(prefix="/web", tags=["web"])
@@ -177,7 +178,7 @@ __all__ = [
     "ZetThreshold", "zet_threshold_id", "NotifyEvent",
     "StudentSubgroup", "student_subgroup_id", "set_user_password", "UserAchievement",
     "W", "schedule_web", "reg_utils", "mailer", "gost", "audit", "vector_llm",
-    "translate_service", "esstu_parser", "vector_nlu", "schedule_parser",
+    "translate_service", "esstu_parser", "vector_nlu", "teacher_match", "schedule_parser",
     # роутер и общие хелперы
     "router", "_now_iso", "_contact_info", "_require", "_teacher_check_assignment",
     "_curator_check", "_admin_or_curator_check", "_mood_by_avg", "_resolve_term",

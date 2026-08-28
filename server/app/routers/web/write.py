@@ -829,6 +829,202 @@ def admin_import_schedule_category_all(payload: dict = Body(...),
             "skipped": 0, "total": len(snap.groups)}
 
 
+# ── Кто ведёт предмет: подсказка ИЗ РАСПИСАНИЯ ───────────────────────────────────────
+def _portal_subject_teachers(snap) -> dict:
+    """{(группа, предмет): {ФИО с портала: сколько пар}} из снимка расписания.
+
+    Считаем ПАРЫ, а не просто собираем множество имён: у одного предмета лекции и
+    практику часто ведут разные люди, и «сколько пар» — единственный доступный признак
+    того, кто здесь основной. Выбор всё равно за администратором, но список,
+    отсортированный по числу пар, экономит ему чтение.
+
+    ⚠️ Название предмета нормализуем тем же `strip_subgroup_tag`, что и весь сервер:
+    «Информатика- 1 п/г» и «Информатика» это ОДИН предмет плана, и без нормализации
+    подсказки разошлись бы с `Group.subjects`, куда предметы кладёт bind-subjects.
+    """
+    from collections import defaultdict
+    out = defaultdict(lambda: defaultdict(int))
+    for gname, gsched in (snap.groups or {}).items():
+        for _week, _day, ls in gsched.all_lessons():
+            subject = W.strip_subgroup_tag(getattr(ls, "subject", "") or "")
+            teacher = (getattr(ls, "teacher", "") or "").strip()
+            if subject and teacher:
+                out[(gname, subject)][teacher] += 1
+    return out
+
+
+@router.get("/admin/schedule/teacher-suggestions")
+def admin_teacher_suggestions(group: str = Query(""),
+                              _admin: User = Depends(require_admin),
+                              db: Session = Depends(get_db)):
+    """Что расписание портала говорит о том, КТО ведёт предмет, — сопоставленное с нашими
+    аккаунтами и с текущими назначениями `SubjectHours.teacher_id`.
+
+    🔥 ЗАЧЕМ ЭТО ВООБЩЕ. Портал в каждой ячейке пишет преподавателя, но эта связь у нас
+    не использовалась НИГДЕ: `bind-subjects` переносил в базу только НАЗВАНИЯ предметов,
+    а «кто ведёт» админ проставлял руками. Поэтому смена расписания меняла предметы
+    группы и молча оставляла преподавателя без журнала — живая жалоба 28.08.2026:
+    «изменилось расписание, а предметы, которые преподаёт препод, не изменились».
+
+    ⚠️ РУЧКА НИЧЕГО НЕ ПИШЕТ. Она только предлагает; применяет `apply-teachers` после
+    явного подтверждения. Причина — в докстринге `teacher_match`: разбор ячейки портала
+    best-effort (на живых данных встречается «АФХД ИМТЕНОВА Л.Ф.»), а цена ошибки —
+    чужой преподаватель с доступом к оценкам и посещаемости чужой группы.
+
+    Ответ:
+      {building, items: [{group, subject, hours_id, current_teacher_id, current_teacher,
+                          portal: [{name, lessons, status, teacher_id, teacher_name,
+                                    confidence, candidates}],
+                          suggested_teacher_id, state}]}
+    где `state` — что администратору с этой строкой делать:
+      "ok"        — портал и база уже согласны, трогать нечего;
+      "assign"    — уверенное предложение (сейчас пусто или стоит другой человек);
+      "conflict"  — портал называет НЕСКОЛЬКИХ разных людей на один предмет;
+      "ambiguous" — ФИО не сопоставилось однозначно (однофамильцы);
+      "unknown"   — такого преподавателя у нас нет вовсе;
+      "no_portal" — предмет в плане есть, а в расписании его никто не ведёт.
+    """
+    snap, building = schedule_web.full_state()
+    if snap is None or not snap.groups:
+        return {"building": building, "items": []}
+
+    ty, ts = W.current_term(W.load_config(db))
+    teachers = [{"id": u.id, "surname": u.surname or "", "name": u.name or "",
+                 "patronymic": getattr(u, "patronymic", "") or "",
+                 "full_name": u.full_name or ""}
+                for u in db.query(User).filter(User.role == "teacher",
+                                               User.deleted == False).all()]  # noqa: E712
+    names = {t["id"]: (t["full_name"] or f"{t['surname']} {t['name']}".strip())
+             for t in teachers}
+
+    portal = _portal_subject_teachers(snap)
+    #Разбираем КАЖДОЕ уникальное ФИО один раз: групп под сотню, предметов у каждой
+    #десяток, и повторный разбор одной и той же строки был бы чистой тратой.
+    seen = {}
+    for by_teacher in portal.values():
+        for raw in by_teacher:
+            if raw not in seen:
+                seen[raw] = teacher_match.match_teacher(raw, teachers)
+
+    rows = (db.query(SubjectHours)
+            .filter(SubjectHours.year == ty, SubjectHours.semester == ts,
+                    SubjectHours.deleted == False).all())  # noqa: E712
+    if group:
+        rows = [r for r in rows if r.group_name == group]
+
+    items = []
+    for r in rows:
+        subject = W.strip_subgroup_tag(r.subject or "")
+        by_teacher = portal.get((r.group_name, subject), {})
+        cur = r.teacher_id or ""
+        entry = {"group": r.group_name, "subject": r.subject,
+                 "hours_id": r.id,
+                 "current_teacher_id": cur,
+                 "current_teacher": names.get(cur, ""),
+                 "portal": [], "suggested_teacher_id": "", "state": "no_portal"}
+
+        for raw, cnt in sorted(by_teacher.items(), key=lambda kv: -kv[1]):
+            m = seen.get(raw) or {}
+            entry["portal"].append({
+                "name": raw, "lessons": cnt, "status": m.get("status", "unparsed"),
+                "teacher_id": m.get("teacher_id", ""),
+                "teacher_name": names.get(m.get("teacher_id", ""), ""),
+                "confidence": m.get("confidence", 0),
+                "candidates": [{"id": c["id"], "name": names.get(c["id"], c.get("name", ""))}
+                               for c in m.get("candidates", [])],
+            })
+
+        resolved = {p["teacher_id"] for p in entry["portal"]
+                    if p["status"] == "matched" and p["teacher_id"]}
+        if not entry["portal"]:
+            entry["state"] = "no_portal"
+        elif len(resolved) > 1:
+            #Портал называет РАЗНЫХ людей (лекции и практику ведут двое). Наша модель
+            #держит одного преподавателя на предмет, поэтому выбрать обязан человек:
+            #взять «того, у кого пар больше» значило бы молча лишить второго журнала.
+            entry["state"] = "conflict"
+        elif len(resolved) == 1:
+            tid = next(iter(resolved))
+            entry["suggested_teacher_id"] = tid
+            entry["state"] = "ok" if tid == cur else "assign"
+        elif any(p["status"] == "ambiguous" for p in entry["portal"]):
+            entry["state"] = "ambiguous"
+        else:
+            entry["state"] = "unknown"
+        items.append(entry)
+
+    #Сначала то, что требует действия: «уже согласовано» и «портал молчит» — в конец.
+    order = {"assign": 0, "conflict": 1, "ambiguous": 2, "unknown": 3, "no_portal": 4, "ok": 5}
+    items.sort(key=lambda x: (order.get(x["state"], 9), x["group"], x["subject"]))
+    return {"building": building, "items": items}
+
+
+@router.post("/admin/schedule/apply-teachers")
+def admin_apply_teachers(payload: dict = Body(...),
+                         _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Применяет ПОДТВЕРЖДЁННЫЕ назначения: [{hours_id, teacher_id}, ...].
+
+    ⚠️ Работает по `hours_id`, а не по паре «группа+предмет»: ключ `SubjectHours`
+    содержит ещё год и семестр (`models.subject_hours_id`), и без них правка могла бы
+    уехать в чужой термин — то есть переписать архив прошлого семестра.
+
+    ⚠️ Принимаем ТОЛЬКО существующие строки текущего термина и ТОЛЬКО реальных
+    преподавателей. Клиентскому списку не доверяем: подсказки он получил от нас, но
+    вернуть может что угодно — это обычная веб-запись, а не продолжение того же запроса.
+
+    ⚠️ ПРЕДМЕТ ДОПИСЫВАЕТСЯ В `User.subjects`, ЕСЛИ ЕГО ТАМ НЕТ. Соседняя ручка часов
+    (`admin_set_group_hours`) на такое назначение отвечает 400 «у преподавателя нет
+    предмета», и разойтись с ней нельзя — иначе появится второе правило записи, а
+    состояние «ведёт предмет, которого у него нет» недостижимо через админку. Но и
+    отказывать здесь неправильно: подтверждая подсказку, администратор ровно и утверждает
+    «этот человек ведёт этот предмет», и гонять его за тем же фактом в карточку
+    преподавателя — лишний экран на ровном месте. Поэтому правило ВЫПОЛНЯЕТСЯ, а не
+    обходится: список предмета пополняется тем же действием.
+
+    Пустой `teacher_id` — законное действие «снять преподавателя», а не ошибка.
+    """
+    entries = payload.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="Нужен непустой список entries")
+
+    ty, ts = W.current_term(W.load_config(db))
+    teachers = {u.id: u for u in db.query(User).filter(
+        User.role == "teacher", User.deleted == False).all()}          # noqa: E712
+    now = _now_iso()
+    applied, skipped, linked = 0, 0, 0
+    for e in entries:
+        if not isinstance(e, dict):
+            skipped += 1
+            continue
+        hid = (e.get("hours_id") or "").strip()
+        tid = (e.get("teacher_id") or "").strip()
+        row = db.get(SubjectHours, hid) if hid else None
+        if (row is None or row.deleted or row.year != ty or int(row.semester or 0) != ts
+                or (tid and tid not in teachers)):
+            skipped += 1
+            continue
+        if (row.teacher_id or "") == tid:
+            skipped += 1
+            continue
+        if tid:
+            t = teachers[tid]
+            subs = list(t.subjects or [])
+            if row.subject not in subs:
+                #Список пересобираем НОВЫМ объектом: SQLAlchemy не замечает изменение
+                #JSON-поля на месте, и правка молча не сохранилась бы.
+                t.subjects = subs + [row.subject]
+                t.updated_at = now
+                linked += 1
+        row.teacher_id = tid
+        #Метку ставит СЕРВЕР (инвариант §4.3) — иначе LWW на десктопах счёл бы правку
+        #устаревшей и вернул бы прежнего преподавателя следующим же синком.
+        row.updated_at = now
+        applied += 1
+    if applied:
+        db.commit()
+    return {"ok": True, "applied": applied, "skipped": skipped, "linked_subjects": linked}
+
+
 @router.post("/admin/groups/bind-subjects")
 def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Привязывает к КАЖДОЙ группе колледжа предметы ИЗ ЕЁ расписания (портал ВСГУТУ) и
