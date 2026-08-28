@@ -4,7 +4,7 @@
 // Подтверждение — ЕДИНАЯ модалка на все категории («Вы выбрали X, подтвердить?»), а не
 // своя у каждой: шесть почти одинаковых диалогов разъезжаются формулировками уже на
 // третьем, и человек перестаёт их читать.
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { X, Presentation, ListChecks, Trophy, BarChart3, Gauge, Timer, ChevronLeft } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
@@ -36,6 +36,20 @@ const KINDS = [
 ]
 
 const chosen = ref('')                 // '' — сетка категорий, иначе экран параметров
+
+/**
+ * Esc — единственный способ закрыть колесо с клавиатуры.
+ *
+ * ⚠️ Появился вместе с прозрачным экраном выбора: раньше закрытие держалось на крестике
+ * в шапке карточки, а карточки на этом шаге больше нет. Без Esc человек, дошедший сюда
+ * с клавиатуры, оказался бы заперт в колесе.
+ */
+function onKey(e) {
+  if (e.key !== 'Escape') return
+  if (chosen.value) { chosen.value = '' } else { emit('close') }
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onUnmounted(() => window.removeEventListener('keydown', onKey))
 const busy = ref(false)
 const title = ref('')
 
@@ -135,31 +149,39 @@ async function confirm() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
+  <!-- ЭКРАН ВЫБОРА: оверлеем является ТОЛЬКО КОЛЕСО (требование Влада к прототипу).
+       Ни затемняющей подложки, ни карточки под ним, ни шапки с заголовком: колесо и так
+       называет каждую активность, а рамка вокруг радиального меню возвращала ему вид
+       «окна с настройками», от которого от сетки 3×2 и уходили.
+       ⚠️ Оверлей прозрачный, но КЛИКАБЕЛЬНЫЙ (без `pointer-events: none`): сквозные
+       клики попадали бы по журналу и кнопкам под колесом — человек, промахнувшись мимо
+       сектора, запускал бы что-то на странице позади. Клик мимо закрывает, Esc тоже. -->
+  <div v-if="!chosen" class="fixed inset-0 z-[70] flex items-center justify-center p-3"
+       @click.self="emit('close')">
+    <!-- Почему колесо и как оно устроено — в докстринге ActivityWheel.vue. Ссылка на
+         журнал живёт во ВТУЛКЕ: журнал относится ко всем шести активностям сразу. -->
+    <ActivityWheel :kinds="KINDS" :can-see-journal="canSeeJournal"
+                   @choose="choose" @journal="act.openJournal(conversationId)" />
+  </div>
+
+  <!-- ЭКРАН ПАРАМЕТРОВ: обычная модалка — здесь поля ввода, и им нужны и подложка, и
+       шапка с «назад». -->
+  <div v-else class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
        @click.self="emit('close')">
     <div class="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
-        <button v-if="chosen" type="button" @click="chosen = ''"
+        <button type="button" @click="chosen = ''"
                 class="rounded-lg p-1 text-text3 hover:text-accent">
           <ChevronLeft class="size-5" />
         </button>
-        <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">
-          {{ chosen ? chosenLabel : locale.t('activity.launcher.title', 'Запустить активность') }}
-        </h2>
+        <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">{{ chosenLabel }}</h2>
         <button type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
           <X class="size-5" />
         </button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
-        <!-- Колесо выбора вместо прежней сетки 3×2 (23.08.2026). Почему колесо и как
-             оно устроено — в докстринге ActivityWheel.vue. Ссылка на журнал переехала
-             во ВТУЛКУ колеса: журнал относится ко всем шести активностям сразу, и
-             центр означает ровно это. -->
-        <ActivityWheel v-if="!chosen" :kinds="KINDS" :can-see-journal="canSeeJournal"
-                       @choose="choose" @journal="act.openJournal(conversationId)" />
-
-        <div v-else class="flex flex-col gap-3">
+        <div class="flex flex-col gap-3">
           <label class="flex flex-col gap-1">
             <span class="text-xs font-medium text-text2">{{ locale.t('activity.launcher.name', 'Название (необязательно)') }}</span>
             <input v-model="title" type="text" maxlength="120"
@@ -286,7 +308,7 @@ async function confirm() {
            лишний вопрос «в чём разница». Права те же: видна только тому, кто вправе
            запускать (студенту таблица чужих результатов не полагается). -->
 
-      <div v-if="chosen" class="flex items-center justify-between gap-2 border-t border-border2 px-4 py-3">
+      <div class="flex items-center justify-between gap-2 border-t border-border2 px-4 py-3">
         <span class="min-w-0 truncate text-xs text-text3">
           {{ locale.t('activity.launcher.confirm', { kind: chosenLabel }) }}
         </span>

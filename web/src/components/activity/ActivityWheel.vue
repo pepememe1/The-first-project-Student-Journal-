@@ -1,6 +1,7 @@
 <script setup>
 // ActivityWheel — выбор активности КОЛЕСОМ вместо сетки карточек (просьба Влада,
-// 23.08.2026, с эскизом).
+// 23.08.2026, с эскизом; предпросмотр картинкой — 27.08.2026, по присланному прототипу
+// `activity-wheel.html`, геометрия у обоих одна и та же намеренно).
 //
 // ━━ ЗАЧЕМ КОЛЕСО ━━
 // Активностей ровно шесть, и это число не растёт: сетка 3×2 показывала их как список
@@ -10,21 +11,45 @@
 // центре ровно это и означает.
 //
 // ━━ ЧТО ПРОИСХОДИТ ПРИ НАВЕДЕНИИ ━━
-// Сектор растёт И ПО РАДИУСУ, И ПО УГЛУ, а соседи ужимаются. Угол здесь не украшение:
-// внутри узкого сектора (60°) физически некуда положить картинку с подписью — у клина
-// ширина у основания стремится к нулю. На 96° в наружной трети помещается и то и другое.
+// Сектор растёт И ПО РАДИУСУ, И ПО УГЛУ, а соседи ужимаются, и внутрь него ложится
+// КАРТИНКА ТОГО ЭКРАНА, который человек получит. Угол здесь не украшение: раскрытие с
+// 60° до 96° даёт картинке примерно на 18 % большую сторону (посчитано, а не на глаз —
+// см. `wheelGeometry.test.mjs`), и на узком клине снимок читался бы заметно хуже.
 //
-// ⚠️ Картинки — СХЕМАТИЧЕСКИЕ, нарисованы здесь же в SVG, а не снимки экрана. Это
-// честно: настоящих снимков у нас нет, а поддельный «скриншот» обещал бы человеку не то,
-// что он увидит. Схема показывает суть («доска с рукописью», «вопрос и варианты»,
-// «пьедестал») и не устаревает при каждой правке вёрстки. Появятся настоящие снимки —
-// менять только блок предпросмотра в разметке ниже (<svg viewBox="0 0 120 64">).
+// 🔥 ЧЕТЫРЕ ТРЕБОВАНИЯ К КАРТИНКЕ, И КАЖДОЕ ЗАКРЫТО СВОИМ ПРИЁМОМ:
+//  1. НЕ ВЫХОДИТ ЗА КРАЙ КУСКА ПИРОГА → `clipPath` по ТОМУ ЖЕ пути `d`, что и подложка
+//     сектора. Не рамка поверх, а именно обрезка: рамка оставляла бы углы снаружи;
+//  2. ТО ЖЕ ПОЛОЖЕНИЕ, ЧТО У ОРИГИНАЛА → у `<image>` НЕТ `transform` вообще. Крутится
+//     и растёт только ФОРМА ОБРЕЗКИ, картинка живёт в обычных координатах. Ни поворота,
+//     ни зеркала — что на файле, то и на экране;
+//  3. ПУСТЫХ МЕСТ НЕТ → клин закрывает РАЗМЫТАЯ копия в режиме `slice` (заведомо больше
+//     клина), поверх неё — чёткая копия целиком;
+//  4. КАРТИНКУ ВИДНО ЦЕЛИКОМ, А ПОДПИСЬ НЕ ВЫЛЕЗАЕТ → снимок и плашка с названием
+//     вписываются в клин ОДНИМ блоком (`fitBlockInSector` с запасом под подпись), а не
+//     по очереди. Прототип клал подпись «на свободное место под снимком» и утверждал,
+//     что оно есть всегда — на пропорции 4:3 её угол уходил за край клина.
+//
+// ⚠️ Почему нельзя «просто растянуть снимок на весь клин». Снимок широкий (порядка 4:3),
+// клин узкий и высокий; чтобы закрыть его целиком, картинку надо увеличить в разы — и от
+// экрана остаются две случайные плитки. Узнать по ним активность невозможно, а ради
+// узнавания всё и затевалось. Отсюда пара «размытый фон + чёткий снимок».
+//
+// ⚠️ Картинки берутся из `web/public/activity/wheel/<id>.webp` (их собирает
+// `tools/build_activity_shots.py` из `docs/activity-shots/`) и проверяются ЗАГРУЗКОЙ, а
+// не наличием строки в списке: битый путь иначе дал бы пустой сектор, и выглядело бы это
+// как поломка колеса, а не как отсутствующий файл. Файла нет — рисуем СХЕМУ того же
+// экрана. Схема, а не поддельный «скриншот»: поддельный обещал бы человеку не то, что он
+// увидит, и устаревал бы при каждой правке вёрстки.
 //
 // ⚠️ Наведение мыши на телефоне не существует. Там первое касание РАСКРЫВАЕТ сектор
-// (показывает картинку и описание), второе — выбирает. Иначе выбор шёл бы вслепую, а
-// половина смысла колеса в том и состоит, чтобы сначала показать.
-import { ref, computed } from 'vue'
+// (показывает картинку), второе — выбирает. Иначе выбор шёл бы вслепую, а половина смысла
+// колеса в том и состоит, чтобы сначала показать.
+import { ref, computed, onMounted } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
+//Геометрия — в отдельном модуле: только так её можно проверить числами
+//(web/tests/wheelGeometry.test.mjs), не поднимая браузер. Копии формул здесь нет.
+import { C, HALF as half, pt, sectorPath, sectorBBox, fitBlockInSector, shotAndCaption,
+  CAPTION_GAP, CAPTION_H } from '@/utils/wheelGeometry'
 
 const props = defineProps({
   kinds: { type: Array, required: true },        // [{ id, emoji }]
@@ -42,11 +67,96 @@ const GAP = 1.1                   // просвет между секторам�
 const hovered = ref('')           // id раскрытого сектора ('' — колесо в покое)
 const revealed = ref('')          // то же для касания: первое касание раскрывает
 
-const C = 200                     // центр в координатах viewBox 0 0 400 400
-const half = 200
 
-const rad = (deg) => ((deg - 90) * Math.PI) / 180
-const pt = (r, deg) => [C + r * Math.cos(rad(deg)), C + r * Math.sin(rad(deg))]
+// ── Картинки активностей ──────────────────────────────────────────────────────────
+// id -> { src, aspect }. Пропорцию запоминаем СРАЗУ при загрузке: без неё «вписать
+// снимок целиком» посчитать нечем, а брать её из вёрстки поздно — картинка уже нарисована.
+const real = ref({})
+const IMG_DIR = '/activity/wheel/'
+
+onMounted(() => {
+  for (const k of props.kinds) {
+    const src = `${IMG_DIR}${k.id}.webp`
+    const im = new Image()
+    im.onload = () => {
+      real.value = { ...real.value, [k.id]: { src, aspect: im.naturalWidth / im.naturalHeight } }
+    }
+    im.onerror = () => {}          // файла нет — остаётся схема, это не ошибка
+    im.src = src
+  }
+})
+
+// Оттенок схемы по категории. Только для схем-заглушек: настоящие цвета интерфейса
+// живут в токенах `--gb-*`, а внутри data:URL до них не дотянуться — это отдельный
+// документ, CSS-переменные страницы в него не проникают.
+const HUE = { board: 172, quiz: 214, contest: 42, poll: 268, pulse: 8, timer: 130 }
+
+/**
+ * Схема экрана активности как data:URL. Повторяет СВОЙ экран продукта: доска с
+ * конспектом, вопрос с плитками, карточка опроса, шкала среза, таймер. Пропорция 4:3 —
+ * как у окна активности.
+ */
+function schema(id) {
+  const hue = HUE[id] ?? 200
+  const bg = '#171922'
+  const line = 'rgba(255,255,255,.16)'
+  const box = (x, y, w, h, f, r = 6) =>
+    `<rect x='${x}' y='${y}' width='${w}' height='${h}' rx='${r}' fill='${f}'/>`
+  let inner = ''
+
+  if (id === 'board') {
+    inner = box(24, 22, 200, 12, 'rgba(255,255,255,.85)', 6)
+      + [0, 1, 2, 3, 4, 5].map((i) => box(24, 52 + i * 22, 150 - i * 8, 9, line)).join('')
+      + "<g stroke='rgba(255,255,255,.75)' stroke-width='3' fill='none'>"
+      + "<path d='M250 60 L300 60 L300 170 L250 170 Z'/><path d='M250 60 L262 48 L312 48 L300 60'/>"
+      + "<path d='M312 48 L312 158 L300 170'/></g>"
+      + box(258, 76, 34, 8, 'rgba(255,255,255,.6)', 3)
+  } else if (id === 'quiz' || id === 'contest') {
+    const tiles = [['#d31f3c', 16, 60], ['#1160c4', 172, 60], ['#d99000', 16, 118], ['#1d8a3c', 172, 118]]
+    inner = box(16, 20, 90, 10, line) + box(16, 38, 210, 12, 'rgba(255,255,255,.8)')
+      + tiles.map(([c, x, y]) => box(x, y, 140, 44, c, 8)).join('')
+      + (id === 'quiz' ? box(16, 176, 140, 44, '#d31f3c', 8)
+                       : box(280, 18, 36, 18, 'rgba(255,255,255,.14)', 9))
+  } else if (id === 'poll') {
+    inner = box(20, 24, 200, 12, 'rgba(255,255,255,.8)') + box(20, 44, 120, 9, line)
+      + box(20, 70, 296, 34, 'rgba(53,201,192,.30)', 8) + box(20, 112, 296, 34, 'rgba(255,255,255,.08)', 8)
+      + box(30, 82, 60, 10, 'rgba(255,255,255,.75)') + box(30, 124, 76, 10, line)
+      + box(20, 162, 150, 9, line)
+  } else if (id === 'pulse') {
+    const seg = 10; const cx = 168; const cy = 176; const r0 = 66; const r1 = 116
+    let arcs = ''
+    for (let i = 0; i < seg; i++) {
+      const a0 = 180 + (i * 180) / seg + 1.6
+      const a1 = 180 + ((i + 1) * 180) / seg - 1.6
+      const p = (r, a) => [cx + r * Math.cos((a * Math.PI) / 180), cy + r * Math.sin((a * Math.PI) / 180)]
+      const [x0, y0] = p(r0, a0); const [x1, y1] = p(r1, a0)
+      const [x2, y2] = p(r1, a1); const [x3, y3] = p(r0, a1)
+      arcs += `<path d='M${x0} ${y0} L${x1} ${y1} A${r1} ${r1} 0 0 1 ${x2} ${y2} `
+        + `L${x3} ${y3} A${r0} ${r0} 0 0 0 ${x0} ${y0} Z' fill='hsl(${i * 12} 72% 46%)'/>`
+    }
+    inner = box(96, 26, 148, 12, 'rgba(255,255,255,.8)') + arcs
+      + `<circle cx='${cx}' cy='${cy}' r='11' fill='#fff'/>`
+  } else {
+    inner = box(110, 26, 116, 11, line)
+      + "<circle cx='168' cy='140' r='70' fill='none' stroke='rgba(255,255,255,.14)' stroke-width='14'/>"
+      + `<path d='M168 70 A70 70 0 1 1 98 140' fill='none' stroke='hsl(${hue} 65% 50%)' `
+      + "stroke-width='14' stroke-linecap='round'/>"
+      + box(126, 128, 84, 22, 'rgba(255,255,255,.85)', 5)
+  }
+
+  const s = "<svg xmlns='http://www.w3.org/2000/svg' width='336' height='252' viewBox='0 0 336 252'>"
+    + `<rect width='336' height='252' fill='${bg}'/>`
+    + `<rect x='.5' y='.5' width='335' height='251' fill='none' stroke='hsl(${hue} 50% 40%)' stroke-opacity='.5'/>`
+    + inner + '</svg>'
+  return `data:image/svg+xml;utf8,${encodeURIComponent(s)}`
+}
+
+//Ширина плашки подписи по длине названия. Метрик текста в SVG до отрисовки не
+//получить, поэтому оцениваем по числу символов — с запасом, чтобы название не упиралось
+//в края плашки.
+function labelWidth(id) {
+  return locale.t(`activity.kind.${id}`, id).length * 7.9 + 20
+}
 
 /**
  * Углы всех секторов с учётом раскрытого.
@@ -78,30 +188,35 @@ const layout = computed(() => {
     const a1 = out[i].to - GAP / 2
     const rOut = (open ? R_OUT_HOVER : R_OUT) * half
     const rIn = R_IN * half
-    const [x0, y0] = pt(rIn, a0)
-    const [x1, y1] = pt(rOut, a0)
-    const [x2, y2] = pt(rOut, a1)
-    const [x3, y3] = pt(rIn, a1)
-    const big = a1 - a0 > 180 ? 1 : 0
-    return {
-      ...k, open,
+    const seg = {
+      ...k,
+      open,
+      a0,
+      a1,
+      rIn,
+      rOut,
       mid: (a0 + a1) / 2,
-      d: `M ${x0} ${y0} L ${x1} ${y1} A ${rOut} ${rOut} 0 ${big} 1 ${x2} ${y2} `
-        + `L ${x3} ${y3} A ${rIn} ${rIn} 0 ${big} 0 ${x0} ${y0} Z`,
-      // Ярлык (эмодзи + название) — на середине кольца; у раскрытого он уезжает к
-      // основанию, освобождая наружную треть под картинку с описанием.
-      label: pt(open ? rIn + 22 : (rIn + rOut) / 2, (a0 + a1) / 2),
+      d: sectorPath(a0, a1, rIn, rOut),
+      label: pt((rIn + rOut) / 2, (a0 + a1) / 2),
     }
+    if (!open) return seg
+    // Тяжёлый расчёт — ТОЛЬКО для раскрытого: он один, и считается на смену наведения.
+    const got = real.value[k.id]
+    const src = got ? got.src : schema(k.id)
+    const aspect = got ? got.aspect : 336 / 252
+    const box = sectorBBox(a0, a1, rIn, rOut)
+    //Снимок и подпись вписываются в клин ОДНИМ блоком, а не по очереди: почему именно
+    //так — в докстринге `fitBlockInSector`, держит `wheelGeometry.test.mjs`.
+    const block = fitBlockInSector(aspect, CAPTION_GAP + CAPTION_H, a0, a1, rIn, rOut)
+    const lw = labelWidth(k.id)
+    const { shot, caption } = shotAndCaption(block, lw)
+    //Плашка не шире снимка, поэтому длинное название в неё может не поместиться. Сжимаем
+    //САМ ТЕКСТ (`textLength`), а не отпускаем его наружу: обрезать многоточием на трёх-
+    //четырёх буквах бессмысленно («Срез пон…»), а вылезший за плашку текст ляжет на
+    //картинку и будет срезан обрезкой клина.
+    const squeeze = lw > caption.w ? Math.max(caption.w - 12, 8) : 0
+    return { ...seg, src, box, fit: shot, caption, squeeze }
   })
-})
-
-// Точка, вокруг которой рисуется карточка предпросмотра, в ПРОЦЕНТАХ контейнера —
-// проценты, а не пиксели, чтобы колесо целиком масштабировалось на узком экране.
-const previewAt = computed(() => {
-  const seg = layout.value.find((s) => s.open)
-  if (!seg) return null
-  const [x, y] = pt(0.72 * half, seg.mid)
-  return { left: `${(x / 400) * 100}%`, top: `${(y / 400) * 100}%`, id: seg.id }
 })
 
 /**
@@ -119,7 +234,7 @@ function onEnter(e, id) {
 function onLeave() { hovered.value = '' }
 
 // Клавиатура: фокус раскрывает сектор так же, как наведение. Иначе человек, идущий по
-// Tab, выбирал бы вслепую — картинку и описание он бы не увидел ни разу.
+// Tab, выбирал бы вслепую — картинку он бы не увидел ни разу.
 function onFocus(id) { hovered.value = id }
 
 /** Касание: первое раскрывает, второе выбирает. Мышью сюда приходим уже раскрытыми. */
@@ -127,12 +242,25 @@ function onActivate(id) {
   if (revealed.value === id || hovered.value === id) { emit('choose', id); return }
   revealed.value = id
 }
+
 </script>
 
 <template>
   <div class="mx-auto w-full max-w-[420px]">
     <div class="relative aspect-square w-full select-none" @pointerleave="onLeave">
       <svg viewBox="0 0 400 400" class="h-full w-full overflow-visible">
+        <defs>
+          <!-- Размытие в единицах viewBox, а не пикселей — одинаково на любом размере. -->
+          <filter id="gb-wheel-soft" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="7" />
+          </filter>
+          <!-- Обрезка по ТОМУ ЖЕ пути, что и подложка сектора: картинка физически не
+               может выйти за край своего куска пирога. -->
+          <clipPath v-for="s in layout" :key="`clip-${s.id}`" :id="`gb-wheel-clip-${s.id}`">
+            <path :d="s.d" />
+          </clipPath>
+        </defs>
+
         <g v-for="s in layout" :key="s.id">
           <path :d="s.d" class="gb-seg" :class="s.open ? 'gb-seg-open' : ''"
                 role="button" tabindex="0" :aria-label="locale.t(`activity.kind.${s.id}`, s.id)"
@@ -140,14 +268,42 @@ function onActivate(id) {
                 @click="onActivate(s.id)"
                 @keydown.enter.prevent="emit('choose', s.id)"
                 @keydown.space.prevent="emit('choose', s.id)" />
-          <!-- Ярлык не перехватывает мышь: иначе курсор, наехав на текст, «выходил» бы
-               из сектора и раскрытие моргало бы. -->
-          <text :x="s.label[0]" :y="s.label[1] - 6" text-anchor="middle"
-                class="gb-emoji pointer-events-none">{{ s.emoji }}</text>
-          <text :x="s.label[0]" :y="s.label[1] + 12" text-anchor="middle"
-                class="gb-name pointer-events-none" :class="s.open ? 'gb-name-open' : ''">
-            {{ locale.t(`activity.kind.${s.id}`, s.id) }}
-          </text>
+
+          <!-- Раскрытый сектор: размытая копия закрывает клин целиком, чёткая показывает
+               экран в родных пропорциях. Обе — под обрезкой и БЕЗ transform. -->
+          <template v-if="s.open">
+            <image :href="s.src" :x="s.box.x" :y="s.box.y" :width="s.box.w" :height="s.box.h"
+                   preserveAspectRatio="xMidYMid slice" filter="url(#gb-wheel-soft)"
+                   opacity="0.55" :clip-path="`url(#gb-wheel-clip-${s.id})`"
+                   class="pointer-events-none" />
+            <path :d="s.d" class="gb-seg-veil pointer-events-none"
+                  :clip-path="`url(#gb-wheel-clip-${s.id})`" />
+            <image :href="s.src" :x="s.fit.x" :y="s.fit.y" :width="s.fit.w" :height="s.fit.h"
+                   preserveAspectRatio="xMidYMid meet"
+                   :clip-path="`url(#gb-wheel-clip-${s.id})`" class="pointer-events-none" />
+            <!-- Рамка снимка: без неё тёмный экран сливается с размытым фоном себя же. -->
+            <rect :x="s.fit.x" :y="s.fit.y" :width="s.fit.w" :height="s.fit.h" rx="4"
+                  class="gb-shot-frame pointer-events-none"
+                  :clip-path="`url(#gb-wheel-clip-${s.id})`" />
+            <rect :x="s.caption.x" :y="s.caption.y" :width="s.caption.w" :height="s.caption.h"
+                  rx="12" class="gb-cap-plate pointer-events-none" />
+            <text :x="s.caption.x + s.caption.w / 2" :y="s.caption.y + s.caption.h / 2 + 4"
+                  text-anchor="middle" class="gb-cap pointer-events-none"
+                  :textLength="s.squeeze || null" lengthAdjust="spacingAndGlyphs">
+              {{ locale.t(`activity.kind.${s.id}`, s.id) }}
+            </text>
+          </template>
+
+          <!-- Сектор в покое: эмодзи и название. Ярлык не перехватывает мышь — иначе
+               курсор, наехав на текст, «выходил» бы из сектора и раскрытие моргало. -->
+          <template v-else>
+            <text :x="s.label[0]" :y="s.label[1] - 6" text-anchor="middle"
+                  class="gb-emoji pointer-events-none">{{ s.emoji }}</text>
+            <text :x="s.label[0]" :y="s.label[1] + 12" text-anchor="middle"
+                  class="gb-name pointer-events-none">
+              {{ locale.t(`activity.kind.${s.id}`, s.id) }}
+            </text>
+          </template>
         </g>
 
         <!-- Втулка: журнал активностей — он про все шесть сразу, потому и в центре -->
@@ -159,54 +315,6 @@ function onActivate(id) {
           {{ locale.t('activity.journal.short', 'Журнал') }}
         </text>
       </svg>
-
-      <!-- Предпросмотр внутри раскрытого сектора: схема сверху, подпись снизу -->
-      <div v-if="previewAt" class="pointer-events-none absolute w-[38%] -translate-x-1/2 -translate-y-1/2
-                                   text-center"
-           :style="{ left: previewAt.left, top: previewAt.top }">
-        <svg viewBox="0 0 120 64" class="mx-auto w-full rounded-md" role="img"
-             :aria-label="locale.t(`activity.hint.${previewAt.id}`, '')">
-          <rect x="1" y="1" width="118" height="62" rx="5" class="gb-pv-bg" />
-          <g class="gb-pv-ink">
-            <!-- Доска: рукописный след и переданное перо -->
-            <template v-if="previewAt.id === 'board'">
-              <path d="M12 44 C28 20, 40 52, 56 30 S82 18, 100 38" fill="none" stroke-width="3" />
-              <circle cx="100" cy="38" r="4" class="gb-pv-accent" stroke="none" />
-            </template>
-            <!-- Викторина: вопрос и варианты, один отмечен -->
-            <template v-else-if="previewAt.id === 'quiz'">
-              <rect x="12" y="10" width="72" height="7" rx="3" />
-              <rect x="12" y="26" width="96" height="9" rx="4" class="gb-pv-accent" stroke="none" />
-              <rect x="12" y="40" width="80" height="9" rx="4" opacity=".45" />
-            </template>
-            <!-- Соревнование: пьедестал -->
-            <template v-else-if="previewAt.id === 'contest'">
-              <rect x="46" y="16" width="28" height="40" rx="2" class="gb-pv-accent" stroke="none" />
-              <rect x="16" y="30" width="26" height="26" rx="2" opacity=".6" />
-              <rect x="78" y="38" width="26" height="18" rx="2" opacity=".45" />
-            </template>
-            <!-- Опрос: столбики -->
-            <template v-else-if="previewAt.id === 'poll'">
-              <rect x="14" y="16" width="58" height="8" rx="4" class="gb-pv-accent" stroke="none" />
-              <rect x="14" y="30" width="88" height="8" rx="4" opacity=".55" />
-              <rect x="14" y="44" width="34" height="8" rx="4" opacity=".4" />
-            </template>
-            <!-- Срез понимания: шкала со стрелкой -->
-            <template v-else-if="previewAt.id === 'pulse'">
-              <path d="M18 48 A42 42 0 0 1 102 48" fill="none" stroke-width="5" opacity=".45" />
-              <path d="M18 48 A42 42 0 0 1 46 15" fill="none" stroke-width="5" class="gb-pv-accent-s" />
-              <line x1="60" y1="48" x2="76" y2="26" stroke-width="3" />
-            </template>
-            <!-- Тайм-бокс: циферблат -->
-            <template v-else>
-              <circle cx="60" cy="32" r="21" fill="none" stroke-width="3" opacity=".5" />
-              <path d="M60 32 L60 17" stroke-width="3" />
-              <path d="M60 32 L72 38" stroke-width="3" class="gb-pv-accent-s" />
-            </template>
-          </g>
-        </svg>
-        <p class="gb-pv-hint mt-1">{{ locale.t(`activity.hint.${previewAt.id}`, '') }}</p>
-      </div>
     </div>
   </div>
 </template>
@@ -220,19 +328,24 @@ function onActivate(id) {
   transition: d .22s cubic-bezier(.2, .9, .3, 1), fill .18s, stroke .18s;
 }
 .gb-seg:hover, .gb-seg:focus-visible { stroke: var(--gb-accent) }
-.gb-seg-open { fill: var(--gb-accent-glow); stroke: var(--gb-accent) }
+.gb-seg-open { fill: var(--gb-accent-glow); stroke: var(--gb-accent); stroke-width: 1.8 }
 
 /* Плавное «раскрытие» сектора. `transition: d` работает не во всех движках, поэтому
    форма пересчитывается покадрово и без анимации выглядит просто мгновенной — это
    допустимая деградация, а не поломка. */
 @media (prefers-reduced-motion: reduce) { .gb-seg { transition: none } }
 
+/* Затемнение поверх размытого фона: без него чёткий снимок теряется на копии себя же. */
+.gb-seg-veil { fill: #05070c; opacity: .40 }
+.gb-shot-frame { fill: none; stroke: rgba(255, 255, 255, .28); stroke-width: 1 }
+
 .gb-emoji { font-size: 17px; dominant-baseline: middle }
 .gb-name {
   font-size: 11px; font-weight: 600; fill: var(--gb-text);
   dominant-baseline: middle;
 }
-.gb-name-open { fill: var(--gb-accent) }
+.gb-cap-plate { fill: #0b0d13; opacity: .86 }
+.gb-cap { font-size: 12px; font-weight: 700; fill: #fff; dominant-baseline: middle }
 
 .gb-hub {
   fill: var(--gb-card);
@@ -242,13 +355,4 @@ function onActivate(id) {
 .gb-hub-live { cursor: pointer }
 .gb-hub-live:hover { stroke: var(--gb-accent) }
 .gb-hub-text { font-size: 10px; font-weight: 700; fill: var(--gb-text2); dominant-baseline: middle }
-
-.gb-pv-bg { fill: var(--gb-card); stroke: var(--gb-border2); stroke-width: 1 }
-.gb-pv-ink { stroke: var(--gb-text3); fill: var(--gb-text3); stroke-linecap: round }
-.gb-pv-accent { fill: var(--gb-accent) }
-.gb-pv-accent-s { stroke: var(--gb-accent) }
-.gb-pv-hint {
-  font-size: 10px; line-height: 1.25; color: var(--gb-text2);
-  text-wrap: balance;
-}
 </style>

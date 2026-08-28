@@ -1,10 +1,13 @@
 <script setup>
-// ActivityPortfolio — «Портфолио»: список проведённых активностей с номерами и датами,
-// и по клику — результаты ВСЕХ участников.
+// ActivityPortfolio — ЖУРНАЛ активностей беседы: список проведённых с номерами и
+// датами, и по клику — результаты всех участников с баллами.
 //
-// Отличие от журнала беседы: журнал отвечает «что тут было», портфолио — «как это
-// прошло». Поэтому здесь список сразу разворачивается в таблицу участников, а не в
-// строку с одним числом.
+// ⚠️ Раньше журналов было ДВА, и открывались они из разных мест: старая таблица
+// `ActivityJournal.vue` (строка = одно число) висела на втулке колеса, а этот разбор по
+// участникам — только ссылкой внутри уже запущенной активности. То есть человек, нажавший
+// «Журнал», попадал ровно в ту версию, где не видно ни участников, ни результатов, и
+// считал, что их не существует. Старая таблица удалена, осталась одна дверь и один
+// журнал; её выгрузка CSV перенесена сюда, чтобы ничего не потерять.
 //
 // 🔒 Открыт только тому, кто вправе вести активности. Настоящая проверка на сервере:
 // `/results` отдаёт чужие результаты лишь ведущему, участнику — только его строку.
@@ -37,6 +40,26 @@ onMounted(async () => {
   } catch { items.value = [] } finally { loading.value = false }
 })
 
+/**
+ * Выгрузка таблицей — прямо из уже загруженных строк: второй серверный формат ради одной
+ * кнопки заводить незачем. Перенесена из удалённого ActivityJournal.vue.
+ *
+ * ⚠️ BOM в начале файла обязателен: без него Excel открывает кириллицу кракозябрами, и
+ * выгрузка выглядит сломанной, хотя данные целы.
+ */
+function exportCsv() {
+  const head = ['date', 'kind', 'title', 'host', 'participants']
+  const rows = items.value.map((r) => [r.started_at, r.kind, r.title, r.host_name, r.participants])
+  const csv = [head, ...rows]
+    .map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'activities.csv'
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 async function toggle(a) {
   if (openId.value === a.id) { openId.value = ''; return }
   openId.value = a.id
@@ -56,10 +79,14 @@ async function toggle(a) {
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border2 px-4 py-3">
-        <h3 class="font-title text-base font-bold text-text">
-          {{ locale.t('activity.portfolio.title', 'Портфолио активностей') }}
+        <h3 class="min-w-0 flex-1 truncate font-title text-base font-bold text-text">
+          {{ locale.t('activity.portfolio.title', 'Журнал активностей') }}
         </h3>
-        <button type="button" @click="emit('close')" class="text-text3 hover:text-text">
+        <button v-if="items.length" type="button" @click="exportCsv"
+                class="shrink-0 rounded-lg border border-border2 px-2 py-1 text-xs text-text2 hover:border-accent hover:text-accent">
+          {{ locale.t('activity.journal.export', 'Выгрузить') }}
+        </button>
+        <button type="button" @click="emit('close')" class="shrink-0 text-text3 hover:text-text">
           <X class="size-5" />
         </button>
       </div>

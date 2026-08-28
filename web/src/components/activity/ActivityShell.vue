@@ -134,13 +134,13 @@ async function close() {
            тот же экземпляр, начал другую — новый. -->
       <component :is="player" v-if="player" :key="act.activity?.id" />
     </div>
-    <!-- «Портфолио» — внизу и только у ведущего: студенту чужие результаты не
+    <!-- «Журнал» — внизу и только у ведущего: студенту чужие результаты не
          полагаются, а сервер их ему и не отдаст (`/results` отдаёт участнику лишь
          его строку). -->
     <div v-if="act.isHost" class="shrink-0 border-t border-border2 px-4 py-2 sm:px-6">
       <button type="button" @click="portfolioOpen = true"
               class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline">
-        {{ locale.t('activity.portfolio.title', 'Портфолио активностей') }}
+        {{ locale.t('activity.portfolio.title', 'Журнал активностей') }}
       </button>
     </div>
   </div>
