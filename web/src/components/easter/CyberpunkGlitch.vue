@@ -78,7 +78,7 @@ onMounted(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms))
   startCanvas()
 
-  const guitar = new Audio('/easter/snd/guitar.mp3')
+  const guitar = new Audio('/easter/snd/guitar.m4a')
   guitar.volume = 0
   guitar.play().catch(() => {})
   sounds.push(guitar)
@@ -111,7 +111,7 @@ onMounted(async () => {
   cancelAnimationFrame(raf)
   await wait(900)
 
-  const johnny = new Audio('/easter/snd/johnny.mp3')
+  const johnny = new Audio('/easter/snd/johnny.m4a')
   johnny.volume = 0.7
   johnny.play().catch(() => {})
   sounds.push(johnny)

@@ -8,14 +8,32 @@
  *     отдаём закэшированную оболочку, чтобы приложение открылось без сети.
  *   • Статика (/assets/* с хэшем в имени) — cache-first: файлы неизменяемы, берём из
  *     кэша мгновенно, чего нет — догружаем и кладём.
+ *   • Тяжёлый арт (/easter/*, /mascot/*) — тоже cache-first, см. MEDIA_PREFIXES ниже.
  */
-const VERSION = 'gb-v2'   // bump очищает старый (возможно «отравленный» HTML-заглушкой) кэш
+const VERSION = 'gb-v3'   // bump очищает старый (возможно «отравленный» HTML-заглушкой) кэш
 const SHELL = `${VERSION}-shell`
 const ASSETS = `${VERSION}-assets`
 const APP_SHELL = ['/', '/index.html', '/favicon.svg', '/manifest.webmanifest']
 
 // Пути API — их запросы проходят мимо кэша.
 const API_PREFIXES = ['/auth', '/me', '/sync', '/admin', '/connect', '/web', '/health', '/docs', '/openapi.json']
+
+// 🔥 ТЯЖЁЛЫЙ НЕИЗМЕНЯЕМЫЙ АРТ — CACHE-FIRST (28.08.2026, просьба Ярослава «пасхалки много
+// весят, желательно их кешировать»).
+//
+// Раньше эти файлы попадали в общую ветку «прочая статика», а она NETWORK-FIRST: браузер
+// шёл в сеть КАЖДЫЙ раз и лишь при неудаче брал копию. Для пасхалок это худший из
+// возможных выборов — один только фоновый шум офиса весит 2.4 МБ, и он перекачивался при
+// каждом срабатывании, хотя файл не менялся с момента появления.
+//
+// ⚠️ Cache-first здесь безопасен ровно потому, что арт неизменяем ПО СМЫСЛУ: звук и
+// картинка пасхалки не правятся, а заменяются новым файлом. У маскота, который всё-таки
+// пересобирают, в адресе стоит `?v=ART_VERSION` (см. config/mascot.js) — при пересборке
+// меняется адрес, то есть ключ кэша, и старая копия не мешает.
+//
+// ⚠️ Сюда НЕ входит `/activity/` — снимки экранов активностей меняются вместе с
+// интерфейсом, и версии в адресе у них нет; пусть остаются network-first.
+const MEDIA_PREFIXES = ['/easter/', '/mascot/', '/fonts/']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(SHELL).then((c) => c.addAll(APP_SHELL)).then(() => self.skipWaiting()))
@@ -54,8 +72,9 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Хешированные ассеты (/assets/*) — cache-first: имена уникальны, безопасно.
-  if (url.pathname.startsWith('/assets/')) {
+  // Хешированные ассеты (/assets/*) и тяжёлый неизменяемый арт — cache-first.
+  if (url.pathname.startsWith('/assets/')
+      || MEDIA_PREFIXES.some((p) => url.pathname.startsWith(p))) {
     event.respondWith(
       caches.match(request).then((hit) =>
         hit ||

@@ -74,7 +74,7 @@ function close() {
 }
 function cancel() { close() }
 function doSave() {
-  try { new Audio('/easter/snd/savepoint.mp3').play().catch(() => {}) } catch { /* без звука */ }
+  try { new Audio('/easter/snd/savepoint.m4a').play().catch(() => {}) } catch { /* без звука */ }
   //Улан-Удэ, UTC+8: часы в файле сохранения местные, а не браузерные — человек сверяет
   //их с настенными, а не с настройками своей системы.
   const t = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000)

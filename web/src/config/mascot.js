@@ -69,11 +69,31 @@ export const CHAT_ANIMS = ['idle', 'greeting', 'thinking', 'speaking']
 // Предзагружать обязательно: анимация должна начаться на ПЕРВОМ введённом символе, а не
 // после того, как файл доедет по сети — иначе жест опаздывает и выглядит случайным.
 export const LOGIN_ANIMS = ['eyes_close', 'eyes_open']
-let _animsPreloaded = false
-export function preloadAnims() {
-  if (_animsPreloaded || typeof Image === 'undefined') return
-  _animsPreloaded = true
-  for (const a of [...CHAT_ANIMS, ...LOGIN_ANIMS]) {
+//🔥 ПРЕДЗАГРУЖАЕМ ТО, ЧТО НУЖНО ЭТОМУ ЭКРАНУ, А НЕ ВСЁ СРАЗУ (28.08.2026, Ярослав
+//увидел лишние файлы во вкладке «Сеть» и попросил убрать то, что замедляет веб).
+//
+//Раньше `preloadAnims()` без разбора тянул ВСЕ шесть анимаций, а `preloadMascots()` —
+//восемь спрайтов, и звалось это из `Mascot.vue::onMounted`, то есть на КАЖДОМ экране с
+//маскотом. На экране входа это 2.3 МБ анимаций и ~290 кБ спрайтов, из которых там нужны
+//ровно три файла: покой и пара «закрыл/открыл глаза». Полтора мегабайта уходило на
+//`greeting`/`thinking`/`speaking` — состояния ЧАТА, которых на входе нет вовсе, — и на
+//эмоции дашборда, которых там нет тоже.
+//
+//⚠️ Предзагрузка сама по себе нужна и остаётся: жест «закрываю глаза» обязан начаться на
+//ПЕРВОМ введённом символе, а не после того, как файл доедет по сети, иначе он опаздывает
+//и читается как случайный. Вопрос только в том, ЧТО грузить заранее.
+const ANIM_SCOPES = {
+  //Вход: покой + жест с глазами. `idle` нужен как исходная поза.
+  login: ['idle', ...LOGIN_ANIMS],
+  //Чат Вектора: думает и говорит. Глаза здесь не используются.
+  chat: CHAT_ANIMS,
+}
+const _animsDone = new Set()
+
+export function preloadAnims(scope = 'chat') {
+  if (typeof Image === 'undefined' || _animsDone.has(scope)) return
+  _animsDone.add(scope)
+  for (const a of ANIM_SCOPES[scope] || []) {
     const img = new Image(); img.src = `/mascot/anim/${a}.webp?v=${ART_VERSION}`
   }
 }

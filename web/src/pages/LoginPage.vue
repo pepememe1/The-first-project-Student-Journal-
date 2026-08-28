@@ -237,7 +237,7 @@ const showRecover = ref(false)
             <div class="absolute -bottom-2 left-1/2 size-4 -translate-x-1/2 rotate-45 border-b border-r border-border2 bg-card" />
           </div>
         </transition>
-        <Mascot :anim="loginAnim" class="h-[30rem] w-80 cursor-pointer" />
+        <Mascot :anim="loginAnim" scope="login" class="h-[30rem] w-80 cursor-pointer" />
       </div>
 
       <!-- Карточка входа (центр экрана) -->

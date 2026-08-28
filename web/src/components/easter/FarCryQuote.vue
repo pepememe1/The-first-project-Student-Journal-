@@ -23,7 +23,7 @@ const line = ref('')
 let audio = null, timers = [], cancelReady = null
 
 onMounted(() => {
-  audio = new Audio('/easter/snd/vaas.mp3')
+  audio = new Audio('/easter/snd/vaas.m4a')
   audio.volume = 0.7
   audio.play().catch(() => {})       // автоплей мог быть закрыт — субтитры всё равно идут
   const start = () => {

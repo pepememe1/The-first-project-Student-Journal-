@@ -4,6 +4,10 @@
 // показывает свой заголовок (как title_lbl в десктопе). Адаптив: на телефоне
 // сайдбар выезжает поверх как drawer.
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+//Тихая догрузка остальных страниц СВОЕЙ роли: страницы разрезаны по маршрутам,
+//и без прогрева не посещённая страница не попадёт в офлайн-кэш браузера.
+import { routes as appRoutes } from '@/router'
+import { prefetchRoutes } from '@/utils/routePrefetch'
 import { useRoute } from 'vue-router'
 import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -11,7 +15,7 @@ import HeaderBar from '@/components/HeaderBar.vue'
 import VectorDock from '@/components/VectorDock.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
-import ActivityJournal from '@/components/activity/ActivityJournal.vue'
+import ActivityPortfolio from '@/components/activity/ActivityPortfolio.vue'
 import TimerAlarm from '@/components/activity/timer/TimerAlarm.vue'
 import EasterEggHost from '@/components/easter/EasterEggHost.vue'
 import { useEasterStore } from '@/stores/easterEggs'
@@ -110,6 +114,9 @@ onMounted(() => {
   // локальную зеркальную копию, а не на бой.
   if (embedMode !== '1') theme.loadFromPrefs()
   messenger.loadChats()
+  //Прогрев идёт в простое время и НИЧЕГО не блокирует: экран уже показан. Смысл —
+  //офлайн-кэш браузера и мгновенный первый переход по меню (см. utils/routePrefetch.js).
+  prefetchRoutes(appRoutes, auth.role)
   // ⚠️ Счётчик непрочитанного тикает и ВНЕ мессенджера (значок в меню), поэтому таймер
   // живёт здесь, а не в сторе — и `stopPolling()` его не гасит. В свёрнутой вкладке
   // ходить на сервер незачем: человек её не видит, а вернувшись, всё равно получит
@@ -321,8 +328,11 @@ onMounted(askLoginEggs)
     <!-- Окно «время вышло» — на ЛЮБОЙ вкладке: таймер ставят и идут работать. -->
     <TimerAlarm />
 
-    <ActivityJournal v-if="!embed && activity.journalFor"
-                     :conversation-id="activity.journalFor" @close="activity.closeJournal()" />
+    <!-- Втулка колеса открывает ТОТ ЖЕ журнал, что и ссылка внутри активности
+         (ActivityShell): раньше здесь висела вторая, урезанная его версия — строка с одним
+         числом вместо участников и баллов, — и нажавший «Журнал» видел именно её. -->
+    <ActivityPortfolio v-if="!embed && activity.journalFor"
+                       :conversation-id="activity.journalFor" @close="activity.closeJournal()" />
 
     <button v-if="!embed && showDock && vector.collapsed" @click="vector.setCollapsed(false)"
             :aria-label="locale.t('vectorDock.showPanel', 'Показать панель Вектора')"

@@ -37,10 +37,17 @@ test('таблица озвучки рассказчика совпадает с
   const src = read('StanleyNarrator.vue')
   const table = [...src.matchAll(/\{\s*files:\s*(\d+),\s*key:\s*'(\w+)'/g)]
   assert.ok(table.length >= 3, 'разбор таблицы VARIANTS сломался')
+  // ⚠️ Расширение берём ИЗ САМОГО КОДА, а не держим здесь копию. Когда звук пасхалок
+  // пережали (28.08.2026, .mp3/.mp4 → .m4a), захардкоженный «.mp3» покраснел не на
+  // дефекте, а на законной правке — то есть сторож стал требовать вернуть старый формат.
+  // Проверять надо СВЯЗЬ «что обещано в таблице ↔ что лежит на диске», а не формат.
+  const extMatch = src.match(/'\/easter\/snd\/narrator-'[^\n]*?\+\s*'(\.[a-z0-9]+)'/)
+  assert.ok(extMatch, 'не нашёл, каким расширением Stanley собирает имя файла')
+  const ext = extMatch[1]
   const missing = []
   for (const [, count, key] of table) {
     for (let n = 1; n <= Number(count); n++) {
-      const rel = `public/easter/snd/narrator-${key}-${n}.mp3`
+      const rel = `public/easter/snd/narrator-${key}-${n}${ext}`
       if (!existsSync(join(ROOT, rel))) missing.push(rel)
     }
   }

@@ -12,45 +12,64 @@ import { useAuthStore } from '@/stores/auth'
 import { needsServer } from '@/api/server'
 import { HOME_BY_ROLE } from '@/config/nav'
 
+// 🔥 СТРАНИЦЫ ГРУЖУТСЯ ПО ТРЕБОВАНИЮ, А НЕ ВСЕ СРАЗУ (28.08.2026, просьба Ярослава
+// «убери мусор, который замедляет веб»).
+//
+// До этого все 45 страниц импортировались статически, и сборщик складывал их в ОДИН
+// файл на 1 468 кБ (415 кБ после сжатия). Его целиком скачивал каждый — студент вместе
+// с админкой, экраном сервера, модерацией и разбором расписания, то есть с кодом,
+// которого он не увидит никогда. На телефоне по вузовскому Wi-Fi это и есть та самая
+// пауза перед первым экраном.
+//
+// `() => import(...)` заставляет Vite нарезать по маршрутам: страница едет в момент
+// перехода на неё. Роутер такую форму понимает сам, никаких дополнительных обёрток.
+//
+// ⚠️ ТРИ ИСКЛЮЧЕНИЯ ОСТАЮТСЯ СТАТИЧЕСКИМИ, и это не недосмотр: `AppShell` — оболочка,
+// она нужна в первом же кадре; `LoginPage` — первый экран, отложить его значит добавить
+// сетевой круг ровно там, где задержка заметнее всего; `NotFoundPage` крошечная, и
+// подгружать её отдельным запросом ради экономии килобайта бессмысленно.
+//
+// ⚠️ Оффлайн (десктоп и мобилка) не страдает: там весь бандл уже лежит на устройстве —
+// service worker и OTA-бандл кладут все чанки рядом, «подгрузка» читается с диска.
 import AppShell from '@/layouts/AppShell.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import NotFoundPage from '@/pages/NotFoundPage.vue'
 import { decideMiss } from '@/utils/missedRoute'
-import ConnectServer from '@/pages/ConnectServer.vue'
-import ResetPassword from '@/pages/ResetPassword.vue'
-import VectorPage from '@/pages/VectorPage.vue'
-import MessengerPage from '@/pages/MessengerPage.vue'
-import SchedulePage from '@/pages/SchedulePage.vue'
-import CoursesPage from '@/pages/CoursesPage.vue'
-import CourseDetailPage from '@/pages/CourseDetailPage.vue'
-import Profile from '@/pages/Profile.vue'
-import Settings from '@/pages/Settings.vue'
-import StudentDashboard from '@/pages/student/StudentDashboard.vue'
-import StudentJournal from '@/pages/student/StudentJournal.vue'
-import StudentStats from '@/pages/student/StudentStats.vue'
-import TeacherJournal from '@/pages/teacher/TeacherJournal.vue'
-import TeacherStudents from '@/pages/teacher/TeacherStudents.vue'
-import TeacherStats from '@/pages/teacher/TeacherStats.vue'
-import CuratorView from '@/pages/teacher/CuratorView.vue'
-import AdminDashboard from '@/pages/admin/AdminDashboard.vue'
-import AdminTeachers from '@/pages/admin/AdminTeachers.vue'
-import AdminStudents from '@/pages/admin/AdminStudents.vue'
-import AdminRegistrations from '@/pages/admin/AdminRegistrations.vue'
-import AdminGroups from '@/pages/admin/AdminGroups.vue'
-import AdminSubjectArchive from '@/pages/admin/AdminSubjectArchive.vue'
-import AdminSubjects from '@/pages/admin/AdminSubjects.vue'
-import AdminSchedule from '@/pages/admin/AdminSchedule.vue'
-import AdminScheduleIssues from '@/pages/admin/AdminScheduleIssues.vue'
-import AdminSessions from '@/pages/admin/AdminSessions.vue'
-import AdminRequests from '@/pages/admin/AdminRequests.vue'
-import MonitorPage from '@/pages/admin/MonitorPage.vue'
-import AdminAiSettings from '@/pages/admin/AdminAiSettings.vue'
-import AdminData from '@/pages/admin/AdminData.vue'
-import AdminServer from '@/pages/admin/AdminServer.vue'
-import AdminMessenger from '@/pages/admin/AdminMessenger.vue'
-import ParentJournal from '@/pages/parent/ParentJournal.vue'
-import AdminParents from '@/pages/admin/AdminParents.vue'
-import AdminAudit from '@/pages/admin/AdminAudit.vue'
+const ConnectServer = () => import('@/pages/ConnectServer.vue')
+const ResetPassword = () => import('@/pages/ResetPassword.vue')
+const VectorPage = () => import('@/pages/VectorPage.vue')
+const MessengerPage = () => import('@/pages/MessengerPage.vue')
+const SchedulePage = () => import('@/pages/SchedulePage.vue')
+const CoursesPage = () => import('@/pages/CoursesPage.vue')
+const CourseDetailPage = () => import('@/pages/CourseDetailPage.vue')
+const Profile = () => import('@/pages/Profile.vue')
+const Settings = () => import('@/pages/Settings.vue')
+const StudentDashboard = () => import('@/pages/student/StudentDashboard.vue')
+const StudentJournal = () => import('@/pages/student/StudentJournal.vue')
+const StudentStats = () => import('@/pages/student/StudentStats.vue')
+const TeacherJournal = () => import('@/pages/teacher/TeacherJournal.vue')
+const TeacherStudents = () => import('@/pages/teacher/TeacherStudents.vue')
+const TeacherStats = () => import('@/pages/teacher/TeacherStats.vue')
+const CuratorView = () => import('@/pages/teacher/CuratorView.vue')
+const AdminDashboard = () => import('@/pages/admin/AdminDashboard.vue')
+const AdminTeachers = () => import('@/pages/admin/AdminTeachers.vue')
+const AdminStudents = () => import('@/pages/admin/AdminStudents.vue')
+const AdminRegistrations = () => import('@/pages/admin/AdminRegistrations.vue')
+const AdminGroups = () => import('@/pages/admin/AdminGroups.vue')
+const AdminSubjectArchive = () => import('@/pages/admin/AdminSubjectArchive.vue')
+const AdminSubjects = () => import('@/pages/admin/AdminSubjects.vue')
+const AdminSchedule = () => import('@/pages/admin/AdminSchedule.vue')
+const AdminScheduleIssues = () => import('@/pages/admin/AdminScheduleIssues.vue')
+const AdminSessions = () => import('@/pages/admin/AdminSessions.vue')
+const AdminRequests = () => import('@/pages/admin/AdminRequests.vue')
+const MonitorPage = () => import('@/pages/admin/MonitorPage.vue')
+const AdminAiSettings = () => import('@/pages/admin/AdminAiSettings.vue')
+const AdminData = () => import('@/pages/admin/AdminData.vue')
+const AdminServer = () => import('@/pages/admin/AdminServer.vue')
+const AdminMessenger = () => import('@/pages/admin/AdminMessenger.vue')
+const ParentJournal = () => import('@/pages/parent/ParentJournal.vue')
+const AdminParents = () => import('@/pages/admin/AdminParents.vue')
+const AdminAudit = () => import('@/pages/admin/AdminAudit.vue')
 
 // i18nTitle — необязательный ключ словаря; без него заголовок остаётся русским
 // литералом title (обратная совместимость).
@@ -80,7 +99,9 @@ const page = (path, component, title, i18nTitle) =>
 const noted = (route, note, i18nNote) =>
   ({ ...route, meta: { ...route.meta, note, i18nNote } })
 
-const routes = [
+//Экспортируем таблицу: по ней `utils/routePrefetch.js` находит ленивые загрузчики
+//страниц роли, а тест проверяет, что нарезка вообще состоялась.
+export const routes = [
   { path: '/connect', component: ConnectServer, meta: { public: true } },
   { path: '/login', component: LoginPage, meta: { public: true } },
   // Публичная намеренно: человек приходит сюда именно потому, что войти не может.

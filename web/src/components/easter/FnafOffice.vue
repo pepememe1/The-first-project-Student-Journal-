@@ -36,7 +36,7 @@ const ANSWER_MS = 60000
 const NEXT_HIDE_MS = 14000
 
 onMounted(() => {
-  amb = ['/easter/snd/office-amb-1.mp4', '/easter/snd/office-amb-2.mp4'].map((src) => {
+  amb = ['/easter/snd/office-amb-1.m4a', '/easter/snd/office-amb-2.m4a'].map((src) => {
     const a = new Audio(src)
     a.volume = 0.35
     a.play().catch(() => {})

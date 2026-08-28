@@ -74,7 +74,7 @@ onMounted(() => {
   at(SPEECH_AT, () => {
     const v = VARIANTS[Math.floor(Math.random() * VARIANTS.length)]
     const n = 1 + Math.floor(Math.random() * v.files)
-    audio = new Audio('/easter/snd/narrator-' + v.key + '-' + n + '.mp3')
+    audio = new Audio('/easter/snd/narrator-' + v.key + '-' + n + '.m4a')
     audio.volume = 0.7
     audio.play().catch(() => {})
     // ⚠️ Текст раскладывается по длительности файла, но САМ ФАКТ показа от звука не
