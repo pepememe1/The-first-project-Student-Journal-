@@ -340,13 +340,20 @@ def _ensure_shared_path(root: str) -> None:
     него давало segfault до первой строки Python.
     ⚠️ Из исходников каталога `gb_shared` нет и не должно быть — там модули лежат в самом
     корне, и `webdata.py` находит их сам. Отсутствие каталога здесь НЕ ошибка.
+
+    ⚠️ **`import sys` — ЛОКАЛЬНЫЙ, и это не небрежность: модульного `sys` в этом файле
+    нет.** Первая версия функции его не импортировала и падала на `NameError`, а сама же
+    была обёрнута в `try/except: pass` — то есть ошибка гасилась своей же страховкой, и
+    собранная программа отвечала «No module named 'dropout_risk'», как будто модуль вообще
+    не приехал (он приехал и лежал рядом). Ровно тот класс тихого `except`, который у нас
+    записан в отложенных, и он стоил отдельной двадцатиминутной сборки.
+    ⚠️ Страховки здесь БОЛЬШЕ НЕТ намеренно: если путь не добавить, локальный сервер не
+    поднимется вовсе, и молчать об этом нельзя — пусть падает громко и с именем.
     """
-    try:
-        shared = os.path.join(root, "gb_shared")
-        if os.path.isdir(shared) and shared not in sys.path:
-            sys.path.insert(0, shared)
-    except Exception:
-        pass
+    import sys                    # см. предупреждение ниже — модульного `sys` тут нет
+    shared = os.path.join(root, "gb_shared")
+    if os.path.isdir(shared) and shared not in sys.path:
+        sys.path.insert(0, shared)
 
 
 def prepare_env() -> None:

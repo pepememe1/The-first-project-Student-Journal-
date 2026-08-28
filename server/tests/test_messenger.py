@@ -656,13 +656,24 @@ def test_muted_user_flag_visible_to_admin_only(client):
     assert all(u["muted"] is False for u in cat)
 
 
-def test_only_teachers_create_groups_and_channels(client):
-    """Группы и каналы создаёт только преподаватель/админ; студент — 403 (личные чаты ему ок)."""
+def test_only_teachers_create_channels(client):
+    """КАНАЛЫ создаёт только преподаватель/админ. Группы студенту открыты (28.08.2026).
+
+    🔥 Раньше этот тест назывался «...groups_and_channels» и требовал 403 на ОБА вида.
+    Правило изменено по решению Ярослава: «разрешить студентам делать группы между
+    собой». Тест не удалён и не ослаблен до бессмысленного — сужен до половины, которая
+    ОСТАЛАСЬ в силе, и она важна: канал это вещание (один пишет, сотня читает), и такой
+    рупор студенту по-прежнему не даём. Именно ради этого запрет и заводился.
+
+    Что стало можно и почему это безопасно — `test_student_groups.py`: собрать в группу
+    можно только тех, кого человек и так находит в каталоге, войти в чужую по своей воле
+    нельзя, а СОТРУДНИКА студент не записывает, а приглашает заявкой."""
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
-    assert client.post("/web/messenger/chats/group",
-                       json={"title": "Студгруппа"}, headers=b).status_code == 403
     assert client.post("/web/messenger/chats/channel",
                        json={"title": "Студканал"}, headers=b).status_code == 403
+    #А группу — теперь может.
+    assert client.post("/web/messenger/chats/group",
+                       json={"title": "Студгруппа"}, headers=b).status_code == 200
     assert client.post("/web/messenger/chats/group",
                        json={"title": "Проект", "member_ids": [b_id]}, headers=a).status_code == 200
     #Студент всё ещё может открыть личный чат.
