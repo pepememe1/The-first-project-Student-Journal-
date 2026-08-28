@@ -8,6 +8,8 @@ core.py — Журнал ВСГУТУ.
   - Оффлайн: работаем с SQLite, при восстановлении сети — автосинхронизация.
 """
 import sqlite3
+
+from data import local_db
 import log
 import uuid
 import re
@@ -91,6 +93,16 @@ def _is_network_path(path: str) -> bool:
     return False
 
 
+def _db_key() -> str:
+    """Ключ шифрования базы ('' — на этой машине шифровать нечем).
+
+    Тот же самый ключ устройства, которым уже шифруется копия локального сервера
+    (`local_app_*.enc.db`). Второй ключ на одну машину означал бы, что одна из двух
+    баз однажды не откроется — см. докстринг `data/device_key.py`."""
+    from data import device_key
+    return device_key.db_key()
+
+
 DATA_DIR = app_paths.data_dir()
 LOCAL_DB = _os.path.join(DATA_DIR, "vsgutu_grades.db")
 BACKUP_DIR = _os.path.join(DATA_DIR, "backups")
@@ -150,27 +162,39 @@ class DBManager:
         Прямого подключения к серверной БД с клиента НЕТ — обмен с общей базой
         колледжа идёт через REST API-сервер (см. sync_runner). Offline-first
         сохраняется: приложение всегда работает на локальном SQLite, а синхронизация
-        подхватывается фоном при наличии сети."""
+        подхватывается фоном при наличии сети.
+
+        🔒 ЗДЕСЬ ЖЕ ПРОИСХОДИТ ПЕРЕВОД БАЗЫ НА ШИФРОВАНИЕ, и место выбрано не
+        случайно: это единственная точка, которая заведомо отрабатывает ДО первого
+        обращения к данным и ровно один раз за запуск. Перевод идемпотентен —
+        зашифрованную базу `encrypt_in_place` не трогает вовсе."""
+        key = _db_key()
+        if key and local_db.encrypt_in_place(LOCAL_DB, key):
+            #Копии, снятые ДО перехода, — это полные снимки журнала открытым текстом.
+            #Оставить их значило бы зашифровать дверь и не тронуть окно.
+            local_db.purge_plaintext_backups(BACKUP_DIR)
         cls._init_sqlite_tables()
+        #Разовая перекладка крупных значений в сжатую форму. На живых данных 92 %
+        #файла занимал ОДИН ключ (кэш расписания), и сжимается он в 19.6 раза.
+        local_db.repack_large_values(LOCAL_DB, key)
+        if not key:
+            #Молчать нельзя: человек вправе считать, что его данные защищены. Из .exe
+            #эта ветка не срабатывает (драйвер вшит) — она про запуск из исходников.
+            log.get("core").warning(
+                "[DBManager] драйвера sqlcipher3 нет — локальная база НЕ ЗАШИФРОВАНА, "
+                "ФИО и оценки в файле читаются любым просмотрщиком")
         print("ℹ️  Локальный SQLite (синхронизация с сервером — через API)")
 
     @classmethod
     def get_conn(cls):
-        """Всегда локальное SQLite соединение. WAL + busy_timeout снижают
-        риск блокировок и порчи, если файл всё же оказался общим."""
-        conn = sqlite3.connect(LOCAL_DB, timeout=10)
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA synchronous=NORMAL")
-        except Exception as e:
-            #Соединение отдаём в любом случае — без этих PRAGMA база работает, просто
-            #становится уязвимой ровно к тому, ради чего они и стоят: блокировкам и
-            #порче файла при параллельном доступе. Раз в запуск: зовётся на КАЖДОЕ
-            #соединение, и построчный лог утопил бы всё остальное.
-            _report_once("pragma", "[DBManager] PRAGMA (WAL/busy_timeout) не применились: %s "
-                         "— возможны блокировки базы", e)
-        return conn
+        """Всегда локальное соединение — ЗАШИФРОВАННОЕ, если на машине есть чем.
+
+        ⚠️ Единственная точка, где эта база открывается. Раньше `sqlite3.connect`
+        стоял в пяти местах, и добавить шифрование «в основном пути», забыв про
+        резервное копирование или восстановление, было бы очень легко — а забытое
+        место как раз и оставляло бы файл с ФИО открытым.
+        WAL, busy_timeout и secure_delete ставит сам `local_db.connect`."""
+        return local_db.connect(LOCAL_DB, _db_key(), timeout=10)
 
     #Авто-бэкапы локальной базы
     @classmethod
@@ -200,7 +224,7 @@ class DBManager:
                 dst = f"{base}_{n}.db"
             #WAL: гарантируем, что данные на диске, затем копируем
             try:
-                c = sqlite3.connect(LOCAL_DB)
+                c = local_db.connect(LOCAL_DB, _db_key())
                 c.execute("PRAGMA wal_checkpoint(FULL)")
                 c.close()
             except Exception as e:
@@ -321,7 +345,7 @@ class DBManager:
             #Сбрасываем WAL текущей базы в её же файл и отпускаем соединение. TRUNCATE (а
             #не FULL) — чтобы журнал обнулился, а не остался лежать с кадрами.
             try:
-                c = sqlite3.connect(LOCAL_DB, timeout=10)
+                c = local_db.connect(LOCAL_DB, _db_key(), timeout=10)
                 c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 c.close()
             except Exception as e:
@@ -390,7 +414,7 @@ class DBManager:
         #Сбрасываем WAL в основной файл и отпускаем соединение — чтобы -wal/-shm не
         #держали данные и файлы освободились для удаления.
         try:
-            c = sqlite3.connect(LOCAL_DB)
+            c = local_db.connect(LOCAL_DB, _db_key())
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             c.close()
         except Exception as e:
@@ -568,7 +592,7 @@ class DBManager:
 
     @classmethod
     def _init_sqlite_tables(cls):
-        conn = sqlite3.connect(LOCAL_DB)
+        conn = local_db.connect(LOCAL_DB, _db_key())
         cur  = conn.cursor()
         cur.execute("""CREATE TABLE IF NOT EXISTS lessons
             (id TEXT PRIMARY KEY, group_name TEXT, subject TEXT,

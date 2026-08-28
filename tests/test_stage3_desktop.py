@@ -10,6 +10,7 @@ import sqlite3
 
 from data import student_link
 from sync import sync_engine
+from data import local_db
 from data.core import DBManager, term_grade_id
 from data.data_store import get_store
 
@@ -22,7 +23,9 @@ def _seed_student(surname="Иванова", name="Мария", group="К-101") -
 
 def _rows(sql):
     conn = DBManager.get_conn()
-    conn.row_factory = sqlite3.Row
+    #Фабрику берём у драйвера соединения: база зашифрована (SQLCipher), и
+    #`sqlite3.Row` к её курсору не подходит — см. local_db.use_named_rows.
+    local_db.use_named_rows(conn)
     cur = conn.cursor()
     cur.execute(sql)
     out = [dict(r) for r in cur.fetchall()]

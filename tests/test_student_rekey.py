@@ -6,6 +6,7 @@ test_student_rekey.py — ДЕСКТОП: смена ФИО студента н�
 """
 import sqlite3
 
+from data import local_db
 from data.core import DBManager
 from data.data_store import rekey_student_grades
 
@@ -25,7 +26,9 @@ def _seed():
 
 def _rows(sql, args=()):
     conn = DBManager.get_conn()
-    conn.row_factory = sqlite3.Row
+    #Фабрику берём у драйвера соединения: база зашифрована (SQLCipher), и
+    #`sqlite3.Row` к её курсору не подходит — см. local_db.use_named_rows.
+    local_db.use_named_rows(conn)
     cur = conn.cursor()
     cur.execute(sql, args)
     out = [dict(r) for r in cur.fetchall()]

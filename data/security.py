@@ -230,23 +230,76 @@ def _save_data_key(key: bytes, path: str):
         log.get("security").warning(f"[Security] не удалось сохранить ключ: {e}")
 
 
+#━━ СЖАТАЯ ФОРМА ЗНАЧЕНИЯ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#Замер 28.08.2026 (просьба Ярослава «желательно чтобы файл был максимально мелким»):
+#из 2 785 280 байт локальной базы 2 565 284 занимал ОДИН ключ `_local:schedule_cache`,
+#то есть 92 % файла. Разобрали по слоям:
+#   • сам JSON расписания                        1 442 897 байт
+#   • токен Fernet (внутри уже base64)           1 923 960   (+33 %)
+#   • наш ВТОРОЙ base64 поверх токена            2 565 284   (+33 % ещё раз)
+#Итого структура раздувала данные в 1.78 раза, а JSON при этом сжимается в 19.6 раза.
+#
+#Отсюда сжатая форма `encz:`, и в ней два отличия от `enc:`:
+#   1. текст сжимается ДО шифрования (после — бессмысленно: шифротекст не сжимается
+#      по построению, иначе он был бы предсказуем; замер это подтвердил — 1.3x);
+#   2. токен Fernet кладётся КАК ЕСТЬ. Он и так ascii-безопасен, и второй base64
+#      поверх него был чистой потерей трети объёма.
+#Итог на живых данных: файл базы 2.78 МБ → ~300 КБ.
+#
+#⚠️ ПОРОГ, А НЕ «ВСЕГДА», И ПРИЧИНА НЕ В ПРОИЗВОДИТЕЛЬНОСТИ. Старая сборка про
+#`encz:` не знает: `is_encrypted` вернёт False, и значение придёт к ней строкой
+#«encz:gAAAA…» как будто это открытый текст. Для КЭША это неприятно и только (он
+#скачается заново), а для токена, сохранённого входа или журнала аудита — потеря.
+#Поэтому сжимаем лишь заведомо крупные блобы, где выигрыш реальный, а содержимое
+#восстановимо. Всё мелкое (токены, сессия, device_id, config) остаётся в прежней
+#форме байт в байт, и откат на предыдущую версию программы их читает как раньше.
+_ENCZ_PREFIX = "encz:"
+_COMPRESS_MIN = 64 * 1024
+
+
 def is_encrypted(value) -> bool:
-    return isinstance(value, str) and value.startswith(_ENC_PREFIX)
+    """Значение зашифровано — в любой из двух форм.
+
+    ⚠️ Проверять надо ОБЕ. Забыв здесь `encz:`, мы получили бы худший из возможных
+    исходов: `decrypt_value` вернул бы шифротекст как «обычный текст старых данных»,
+    и он молча уехал бы дальше по программе вместо расписания."""
+    if not isinstance(value, str):
+        return False
+    return value.startswith(_ENC_PREFIX) or value.startswith(_ENCZ_PREFIX)
 
 
 def encrypt_value(plaintext: str) -> str:
-    """Шифрует строку. Возвращает 'enc:<base64>'."""
+    """Шифрует строку: 'enc:<base64>' либо (для крупных) сжатую 'encz:<токен>'."""
     if plaintext is None:
         plaintext = ""
-    ct = _encrypt_bytes(plaintext.encode("utf-8"), get_data_key())
+    raw = plaintext.encode("utf-8")
+    key = get_data_key()
+    if len(raw) >= _COMPRESS_MIN:
+        try:
+            import zlib
+            packed = _ENCZ_PREFIX + _encrypt_bytes(zlib.compress(raw, 9), key).decode("ascii")
+            plain = _ENC_PREFIX + base64.urlsafe_b64encode(
+                _encrypt_bytes(raw, key)).decode("ascii")
+            #Сравниваем РЕЗУЛЬТАТЫ, а не верим, что сжатие всегда выигрывает: уже
+            #сжатое содержимое (архив, картинка) от zlib только растёт.
+            return packed if len(packed) < len(plain) else plain
+        except Exception as e:                      # noqa: BLE001
+            #Сжатие — оптимизация. Не вышло — пишем как раньше, но не молча: иначе
+            #«почему база снова разбухла» будет нечем объяснить.
+            log.get("security").warning(f"[Security] значение не сжалось ({e}) — пишем как есть")
+    ct = _encrypt_bytes(raw, key)
     return _ENC_PREFIX + base64.urlsafe_b64encode(ct).decode("ascii")
 
 
 def decrypt_value(value: str) -> str:
-    """Расшифровывает 'enc:...'. Обычный текст (старые данные) возвращает как есть."""
+    """Расшифровывает обе формы. Обычный текст (старые данные) возвращает как есть."""
     if not is_encrypted(value):
         return value
     try:
+        if value.startswith(_ENCZ_PREFIX):
+            import zlib
+            pt = _decrypt_bytes(value[len(_ENCZ_PREFIX):].encode("ascii"), get_data_key())
+            return zlib.decompress(pt).decode("utf-8")
         ct = base64.urlsafe_b64decode(value[len(_ENC_PREFIX):].encode("ascii"))
         pt = _decrypt_bytes(ct, get_data_key())
         return pt.decode("utf-8")

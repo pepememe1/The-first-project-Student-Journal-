@@ -38,10 +38,14 @@ def _write(marker: str) -> None:
 
 
 def _markers() -> list:
-    conn = sqlite3.connect(LOCAL_DB, timeout=10)
+    #⚠️ ЧЕРЕЗ DBManager, а не голым `sqlite3`: база зашифрована, и прямое открытие
+    #файла отдаёт «file is not a database». Прежняя версия глушила это как
+    #`sqlite3.Error` и возвращала пустой список — то есть тест краснел бы с
+    #формулировкой «восстановление не сработало», хотя оно работает.
+    conn = DBManager.get_conn()
     try:
         return [r[0] for r in conn.execute("SELECT marker FROM restore_probe").fetchall()]
-    except sqlite3.Error:
+    except Exception:
         return []
     finally:
         conn.close()

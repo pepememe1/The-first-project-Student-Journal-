@@ -8,13 +8,16 @@ id строки users. Проверяем именно совместимост�
 import sqlite3
 
 from sync import sync_engine
+from data import local_db
 from data.core import DBManager, resolve_student_id
 from data.data_store import get_store, student_id_by_name
 
 
 def _grade_rows():
     conn = DBManager.get_conn()
-    conn.row_factory = sqlite3.Row
+    #Фабрику берём у драйвера соединения: база зашифрована (SQLCipher), и
+    #`sqlite3.Row` к её курсору не подходит — см. local_db.use_named_rows.
+    local_db.use_named_rows(conn)
     cur = conn.cursor()
     cur.execute("SELECT student_f,student_n,lesson_id,grade,COALESCE(student_id,'') "
                 "AS student_id FROM grades")
