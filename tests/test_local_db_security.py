@@ -508,3 +508,46 @@ def test_purge_also_runs_when_the_database_is_already_the_right_one(monkeypatch)
 
     assert local_api.switch_user_db("ivanov", authenticated=True) is True
     assert calls == ["ivanov"]
+
+
+def test_schema_is_rebuilt_after_the_owner_changes(monkeypatch, tmp_path):
+    """🔥 После смены владельца база обязана снова иметь ВСЕ таблицы.
+
+    `adopt` уносит файл целиком, из одиннадцати таблиц остаётся одна (`kv_store`), а
+    `_init_sqlite_tables` зовётся только на СТАРТЕ программы — смена же аккаунта идёт
+    без перезапуска. Без пересоздания схемы синхронизация до конца сеанса работала бы
+    по базе без таблиц: сбор дельты молча отдавал бы пустоту (там `except` вокруг
+    каждого запроса), а слияние падало бы на «no such table: grades».
+    Проверено вживую до починки: 11 таблиц превращались в 1.
+
+    Обратный ход: уберите `core.DBManager.init()` из `_purge_previous_user` — краснеет."""
+    from desktop import local_api
+    from data import core
+
+    monkeypatch.setattr(local_api, "purge_other_user_copies", lambda login: 0)
+    monkeypatch.setattr(local_api, "_local_db_key", lambda: device_key.db_key())
+
+    core.DBManager.init()
+    key = device_key.db_key()
+    local_db.write_owner(core.LOCAL_DB, key, "ivanov")
+
+    conn = local_db.connect(core.LOCAL_DB, key)
+    try:
+        before = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        conn.close()
+    assert "grades" in before, "тест выродился — таблиц не было и до смены владельца"
+
+    local_api._purge_previous_user("petrov")
+
+    conn = local_db.connect(core.LOCAL_DB, key)
+    try:
+        after = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        #Главное: журнал снова работоспособен, а не «файл существует».
+        assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 0
+    finally:
+        conn.close()
+    missing = before - after
+    assert not missing, f"после смены владельца пропали таблицы: {sorted(missing)}"
