@@ -96,6 +96,28 @@ async function openTab(name) {
   finally { tabLoading.value = false }
 }
 
+const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
+
+/**
+ * Время отправки сохранённого сообщения.
+ *
+ * ⚠️ Здесь НЕЛЬЗЯ показывать одно только «ЧЧ:ММ», как в ленте: лента идёт по порядку и
+ * разбита разделителями дат, а «Избранное» — выжимка за всё время беседы, и «22:53» без
+ * даты не отвечает ни на один вопрос. Сегодняшнее показываем часами (дата очевидна),
+ * остальное — с датой.
+ */
+function savedTime(it) {
+  const d = new Date(it.sent_at || '')
+  if (Number.isNaN(d.getTime())) return ''
+  const loc = BCP47[locale.active] || 'ru-RU'
+  const now = new Date()
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  return sameDay
+    ? d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString(loc, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 const tabDefs = computed(() => [
   ['members', locale.t('profilePanel.participants', 'Участники'), Users],
   ['media', locale.t('conversationInfo.media', 'Медиа'), Image],
@@ -399,11 +421,23 @@ async function clearHistory() {
             <p v-if="!savedItems.length" class="py-8 text-center text-xs text-text3">
               {{ locale.t('conversationInfo.noSaved', 'Вы ничего не сохраняли из этой беседы') }}
             </p>
+            <!-- Строка сохранённого — та же карточка, что у сообщения в ленте: аватарка,
+                 полное имя автора, текст и ВРЕМЯ ОТПРАВКИ оригинала. Раньше здесь было
+                 одно имя и текст, и понять, чьё это и когда сказано, было нельзя. -->
             <div v-else class="space-y-1">
               <div v-for="it in savedItems" :key="it.message_id"
-                   class="rounded-lg border border-border bg-card2 px-3 py-2">
-                <p class="mb-0.5 text-[11px] text-text3">{{ it.from_name }}</p>
-                <p class="whitespace-pre-wrap break-words text-sm text-text2">{{ it.body }}</p>
+                   class="flex min-w-0 gap-2.5 rounded-lg border border-border bg-card2 px-3 py-2">
+                <Avatar :src="it.from_avatar" :name="it.from_name" :role="it.from_role"
+                        :color="profilePlate(it.from_color)" :size="32" class="mt-0.5 shrink-0" />
+                <div class="min-w-0 flex-1">
+                  <div class="mb-0.5 flex items-baseline gap-2">
+                    <span class="min-w-0 flex-1 truncate text-xs font-semibold text-text">
+                      {{ it.from_name || locale.t('conversationInfo.savedUnknownAuthor', 'Неизвестный автор') }}
+                    </span>
+                    <span class="shrink-0 text-[11px] tabular-nums text-text3">{{ savedTime(it) }}</span>
+                  </div>
+                  <p class="whitespace-pre-wrap break-words text-sm text-text2">{{ it.body }}</p>
+                </div>
               </div>
             </div>
           </div>

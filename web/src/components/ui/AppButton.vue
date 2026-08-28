@@ -18,9 +18,12 @@ const VARIANTS = {
 }
 
 const sizeCls = computed(() => (props.size === 'sm' ? 'h-9 px-3.5 text-xs' : 'h-11 px-5 text-sm'))
+// transition (а не transition-colors) — чтобы вместе с цветом плавно ехал и transform
+// «вдавливания». active:scale-[0.97] — отклик на нажатие (apple-design §1); дублирует
+// глобальное правило button:active из style.css, но стоит здесь явно как эталон контрола.
 const cls = computed(
   () =>
-    `inline-flex items-center justify-center gap-2 rounded-sm font-semibold transition-colors ` +
+    `inline-flex items-center justify-center gap-2 rounded-sm font-semibold transition active:scale-[0.97] ` +
     `disabled:opacity-50 disabled:pointer-events-none ${sizeCls.value} ${VARIANTS[props.variant] || VARIANTS.green}`,
 )
 </script>

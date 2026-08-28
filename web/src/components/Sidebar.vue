@@ -119,7 +119,7 @@ function isActive(to) {
             compact ? 'flex-col items-center gap-1 px-1 py-2' : 'items-center gap-2.5 px-3.5 py-2.5 text-sm',
             isActive(item.to)
               ? 'bg-accent-glow font-semibold text-accent'
-              : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent',
+              : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent active:bg-accent-glow active:text-accent',
           ]"
           @click="emit('navigate')"
         >

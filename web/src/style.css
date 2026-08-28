@@ -436,6 +436,65 @@
     outline: 2px solid var(--gb-accent);
     outline-offset: 2px;
   }
+
+  /*
+    ОТКЛИК НА НАЖАТИЕ (apple-design §1 «Response»). До этого во всём вебе не было НИ ОДНОГО
+    :active-состояния — контрол не отвечал на палец/клик мгновенно, а скилл называет это
+    ощущение «мёртвым» («respond on pointer-down, not on release»). Одно правило на
+    `button`/`[role=button]`/`summary` покрывает разом все контролы (431 raw <button> + 240
+    AppButton) и едет на ВСЕ три платформы: сайт, мобилку (Capacitor) и десктоп (WebView2) —
+    это один и тот же SPA.
+      • scale, а не сдвиг раскладки: композитится на GPU, не пересчитывает вёрстку у сотен
+        кнопок сразу;
+      • на самом :active переход нулевой (вдавливание МГНОВЕННОЕ), возврат мягкий за 140 мс;
+      • :disabled/aria-disabled исключены — вдавливать нечего, отклик солгал бы;
+      • свой отклик появился => гасим серую вспышку тапа, иначе она легла бы поверх scale.
+    ⚠️ Ссылки-строки навигации (RouterLink => <a>) НАМЕРЕННО не входят сюда: список не
+    «вдавливают», его подсвечивают (см. active:bg в Sidebar.vue) — как строку списка в iOS.
+  */
+  button,
+  [role='button'],
+  summary {
+    transition: scale 140ms ease-out;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* ⚠️ Именно свойство `scale`, а НЕ `transform: scale(...)`. В Tailwind v4
+     translate/scale/rotate — ОТДЕЛЬНЫЕ свойства, а `transform` — своё. Через `transform`
+     это правило (в @layer base) молча проигрывало бы утилитам из @layer utilities и не
+     срабатывало у кнопок с `-translate-y-1/2` (глазок пароля) — поймал Полковник. Свойство
+     `scale` КОМПОНУЕТСЯ с `translate` соседа: глазок и центрирован (translate), и
+     вдавливается (scale). Осознанный размен: у 4 кнопок с явной scale-утилитой
+     (hover:scale в квизе) на hover побеждает утилита — там своя логика роста, не ломаем. */
+  button:not(:disabled):active,
+  [role='button']:not([aria-disabled='true']):active,
+  summary:active {
+    scale: 0.97;
+    transition-duration: 0s;
+  }
+
+  /* Убираем задержку двойного тапа (~300 мс) у всего нажимаемого/вводимого — скилл §1
+     «be vigilant about every latency». Панорамирование/скролл при этом сохраняются. */
+  button,
+  [role='button'],
+  a,
+  summary,
+  label,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+
+  /* Reduced-motion: отклик ОСТАЁТСЯ, но без вестибулярного «вдавливания» — заменяем на
+     мягкое затемнение (скилл §14: «gentler, non-vestibular equivalent», не «no feedback»). */
+  @media (prefers-reduced-motion: reduce) {
+    button:not(:disabled):active,
+    [role='button']:not([aria-disabled='true']):active,
+    summary:active {
+      scale: 1;
+      filter: brightness(0.94);
+    }
+  }
 }
 
 /*
@@ -631,4 +690,44 @@ html.gb-contrast a { text-decoration-thickness: from-font; }
   .gb-glitch-bw,
   .gb-glitch-bw::before,
   .gb-glitch-bw::after { animation: none }
+}
+
+
+/*
+  МЕНЬШЕ ПРОЗРАЧНОСТИ ПО СИСТЕМНОМУ СИГНАЛУ (apple-design §14). Стеклянные поверхности
+  (`backdrop-blur`, 7 мест в проекте) при системной настройке «уменьшить прозрачность»
+  обязаны становиться сплошными: у человека, который её включил (часто — по зрению),
+  полупрозрачная панель с текстом нечитаема. Размытие снимаем у всех; полупрозрачный фон
+  читаемых панелей Вектора (bg-card/70) поднимаем до сплошного — иначе БЕЗ размытия он
+  просто просвечивал бы (скилл: «raise background opacity, drop the blur»). Едет на все три
+  платформы разом. Держать в паре с §12: заведёшь новую стеклянную поверхность — она
+  попадёт сюда автоматически по подстроке класса, а вот её полупрозрачный фон, если он не
+  bg-card/70, надо будет здесь дописать.
+*/
+@media (prefers-reduced-transparency: reduce) {
+  [class*='backdrop-blur'] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  [class*='bg-card/70'] { background-color: var(--gb-card) !important; }
+}
+
+/*
+  ТО ЖЕ ВЫСОКОКОНТРАСТНОЕ ЛЕЧЕНИЕ, НО ПО СИСТЕМНОМУ СИГНАЛУ ОС (apple-design §14:
+  откликаться на prefers-contrast, а не только на наш ручной тумблер a11y выше). Человек,
+  включивший «увеличить контраст» в самой системе, получает тот же результат, что и
+  html.gb-contrast, ничего не открывая в приложении. Правила — БЛИЗНЕЦЫ блока html.gb-contrast
+  над этим: приглушённый вторичный/третичный текст поднимаем до полного, границы делаем
+  ощутимее, фокус — толще; смысловые цвета (акцент/красный/оранжевый) НЕ трогаем. Трогаешь
+  один блок — поправь второй.
+*/
+@media (prefers-contrast: more) {
+  .text-text2,
+  .text-text3 { color: var(--gb-text) !important; }
+  .border-border,
+  .border-border2 { border-color: var(--gb-text2) !important; }
+  :focus-visible {
+    outline-width: 3px !important;
+    outline-offset: 2px;
+  }
 }

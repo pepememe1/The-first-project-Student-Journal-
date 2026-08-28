@@ -216,6 +216,13 @@ export const adminApi = {
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
   // Привязать предметы из расписания ко ВСЕМ группам (+ пополнить каталог).
   bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
+  // Кто ведёт предмет ПО РАСПИСАНИЮ портала — подсказки админу. Ручка ничего не пишет:
+  // разбор ФИО в ячейке best-effort, и молчаливое назначение выдало бы чужой журнал.
+  teacherSuggestions: (group) =>
+    api.get('/web/admin/schedule/teacher-suggestions', { params: group ? { group } : {} }),
+  // Применить ПОДТВЕРЖДЁННЫЕ назначения: [{hours_id, teacher_id}].
+  applyTeachers: (entries) =>
+    api.post('/web/admin/schedule/apply-teachers', { entries }),
   // Завести группу-каталожную запись из НЕколледжевой категории расписания
   // (Бакалавриат/Заочное 1/2) — имя сверяется с реальным списком портала.
   importScheduleCategory: (category, groupName) =>
@@ -498,6 +505,11 @@ export const messengerApi = {
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/media`),
   chatSaved: (convId) =>
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/saved`),
+  // Личный вопрос Вектору из ЛЮБОЙ беседы. Ответ приходит СЮДА и нигде не сохраняется:
+  // в общем чате реплика Вектора показала бы соседям выборку, скоупленную по спросившему.
+  // В «Избранном» команда работает по-старому — обычным сообщением, там история нужна.
+  askVectorInChat: (convId, question) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/vector`, { question }),
 
   addMembers: (convId, userIds, classGroups) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members`,

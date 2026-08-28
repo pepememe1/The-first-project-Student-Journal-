@@ -285,9 +285,32 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
                     Message.fwd_from_conv_id == conv_id,
                     Message.deleted_at == "")
             .order_by(Message.created_at.desc()).limit(200).all())
-    return {"saved": [{"message_id": m.id, "body": m.body, "kind": m.kind,
-                       "sent_at": m.created_at,
-                       "from_name": m.fwd_sender_name} for m in rows]}
+    #Карточка автора (аватарка, полное имя, цвет плашки, роль) — ОДНИМ запросом на всю
+    #вкладку, а не по строке на сообщение: сохранённых бывает две сотни, и N+1 здесь
+    #упёрся бы в единственное ядро боевой машины ровно при открытии панели.
+    #⚠️ `fwd_sender_name` остаётся ЗАПАСНЫМ именем и не выбрасывается: автор мог быть
+    #удалён после пересылки, а снимок имени в сообщении переживает удаление аккаунта.
+    ids = {m.fwd_from_sender_id for m in rows if m.fwd_from_sender_id}
+    authors = {u.id: u for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
+    out = []
+    for m in rows:
+        u = authors.get(m.fwd_from_sender_id)
+        prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
+        out.append({
+            "message_id": m.id, "body": m.body, "kind": m.kind,
+            #ДВЕ разных метки, и путать их нельзя: `sent_at` — когда автор написал
+            #сообщение в беседе (её и показываем, о ней спрашивают «время отправки»),
+            #`saved_at` — когда читатель унёс его к себе. У старых строк снимка времени
+            #оригинала нет вовсе (поле завели позже) — тогда честно падаем на вторую.
+            "sent_at": m.fwd_from_created_at or m.created_at,
+            "saved_at": m.created_at,
+            "from_id": m.fwd_from_sender_id or "",
+            "from_name": (u.full_name or u.name or "") if u is not None else (m.fwd_sender_name or ""),
+            "from_role": (u.role if u is not None else ""),
+            "from_avatar": prefs.get("avatar", "") or "",
+            "from_color": prefs.get("profile_color", "") or "",
+        })
+    return {"saved": out}
 
 
 @router.get("/uploads/limits")
