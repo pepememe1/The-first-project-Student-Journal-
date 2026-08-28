@@ -111,6 +111,23 @@ const TILE = [
 //бесцветные плитки: серая плитка среди цветных читается как недоступная.
 const tileOf = (i) => TILE[i % TILE.length]
 
+//🎮 СОРЕВНОВАНИЕ И ВИКТОРИНА ОТВЕЧАЮТ ПО-РАЗНОМУ, И ЭТО НЕ УКРАШЕНИЕ (просьба Ярослава).
+//Соревнование идёт вслух и на время: ведущий читает вопрос, участник ищет ответ глазами
+//за секунды — отсюда крупные цветные плитки с ФИГУРАМИ, как в Kahoot. Фигура здесь не
+//декор: ведущий говорит «жмите треугольник», и по одному цвету это не скажешь, а ещё
+//цвет не различает часть людей — фигура работает и для них.
+//Викторина — работа в своём темпе, с возвращением к вопросам и несколькими типами
+//заданий; там нужна ФОРМА (как в OnlineTestPad): переключатели и галочки, по которым
+//сразу видно, один ответ ждут или несколько. Игровые плитки этого не показывают вовсе —
+//именно поэтому «выбрать несколько» в викторине выглядело как «выбрать один».
+const TILE_SHAPE = ['▲', '◆', '●', '■', '★', '⬟']
+const shapeOf = (i) => TILE_SHAPE[i % TILE_SHAPE.length]
+
+//Буквы вариантов в викторине: человек называет ответ вслух («вариант Б»), сверяет с
+//разбором и ищет строку глазами — по номеру это делается заметно хуже, чем по букве.
+const LETTERS = 'АБВГДЕЖЗИКЛМНОП'
+const letterOf = (i) => LETTERS[i] || String(i + 1)
+
 const isContest = computed(() => act.kind === 'contest')
 const current = computed(() => questions.value[isContest.value ? 0 : index.value] || null)
 //🔥 Локальный признак «я уже ответил» ОБЯЗАТЕЛЕН. Серверное поле `answered` считается в
@@ -146,7 +163,8 @@ onBeforeUnmount(() => { if (quizTick) clearInterval(quizTick) })
 // В соревновании вопрос показывает ХОСТ — перечитываем по кадру со сменой номера.
 watch(() => act.state.question_index, () => {
   if (!isContest.value) return
-  draft.value = null            //новый вопрос — выбор с чистого листа
+  draft.value = null
+  draftSet.value = []   //иначе на новый вопрос уехал бы набор, отмеченный на прошлом
   confirmedHere.value = false
   load()
 })
@@ -198,9 +216,34 @@ async function submitAll() {
 
 /** Подтвердить выбранный вариант. После подтверждения сменить его нельзя (баллы зависят
  *  от скорости, и «сначала наугад, потом исправлю» обесценило бы соревнование). */
+// 🔥 В СОРЕВНОВАНИИ БЫВАЕТ ВОПРОС С НЕСКОЛЬКИМИ ОТВЕТАМИ, И ЭТО НЕ ТЕОРИЯ.
+// Сервер допускает в соревнование `single` И `multi` (`CONTEST_TYPES` в
+// routers/activities.py), а сюда такой набор попадает переносом викторины в библиотеку
+// соревнований. Плитки же отправляли РОВНО ОДИН id — а `activity_grading.check_answer`
+// для `multi` требует СПИСОК и сверяет его целиком. То есть участник, знающий ответ,
+// получал ноль по построению, и понять причину было нечем: экран не отличался от
+// обычного вопроса. Здесь тип задания решает и вид плиток, и форму отправки.
+const isMultiHere = computed(() => (current.value?.type || 'single') === 'multi')
+const draftSet = ref([])            //выбранные варианты, когда ответов несколько
+
+function toggleContestOption(optId) {
+  if (answeredHere.value || busy.value) return
+  if (!isMultiHere.value) { draft.value = optId; return }
+  const i = draftSet.value.indexOf(optId)
+  if (i >= 0) draftSet.value.splice(i, 1)
+  else draftSet.value.push(optId)
+}
+const contestPicked = (optId) => (isMultiHere.value
+  ? draftSet.value.includes(optId)
+  : draft.value === optId)
+//Пустой ответ не отправляем: он гарантированно неверен, а вопрос закрывается навсегда.
+const canConfirmContest = computed(() => (isMultiHere.value
+  ? draftSet.value.length > 0
+  : draft.value !== null))
+
 async function confirmAnswer() {
-  if (draft.value === null || answeredHere.value || busy.value) return
-  await answerContest(draft.value)
+  if (answeredHere.value || busy.value || !canConfirmContest.value) return
+  await answerContest(isMultiHere.value ? [...draftSet.value] : draft.value)
 }
 
 async function answerContest(value) {
@@ -322,6 +365,17 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
           {{ locale.t('quiz.questionNo', { n: (act.state.question_index || 0) + 1, total }) }}
         </p>
         <p class="text-sm font-semibold text-text">{{ current.text }}</p>
+        <!-- Варианты С ФИГУРАМИ — ведущему, чтобы читать вслух: «правильный — треугольник».
+             Без них он видит только текст вопроса и не может назвать вариант так, как его
+             видят участники на своих экранах. -->
+        <div v-if="(current.options || []).length" class="mt-1.5 flex flex-wrap gap-1.5">
+          <span v-for="(o, i) in current.options" :key="o.id"
+                class="inline-flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-white"
+                :style="{ backgroundColor: tileOf(i).bg }">
+            <span class="leading-none">{{ shapeOf(i) }}</span>
+            <span class="min-w-0 max-w-[14rem] truncate">{{ o.text }}</span>
+          </span>
+        </div>
       </div>
 
       <!-- Табло по кнопке -->
@@ -382,22 +436,28 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button v-for="(o, i) in current.options" :key="o.id" type="button"
                   :disabled="answeredHere || busy"
-                  @click="!answeredHere && (draft = o.id)"
+                  @click="toggleContestOption(o.id)"
                   class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-all disabled:cursor-default"
                   :style="{ backgroundColor: tileOf(i).bg,
-                            outline: draft === o.id ? `3px solid ${tileOf(i).ring}` : 'none',
+                            outline: contestPicked(o.id) ? `3px solid ${tileOf(i).ring}` : 'none',
                             outlineOffset: '2px' }"
-                  :class="[draft !== null && draft !== o.id ? 'scale-[0.97] opacity-45' : '',
-                           draft === o.id ? 'scale-[1.03]' : '',
+                  :class="[canConfirmContest && !contestPicked(o.id) ? 'scale-[0.97] opacity-45' : '',
+                           contestPicked(o.id) ? 'scale-[1.03]' : '',
                            answeredHere ? 'cursor-default' : '']">
-            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
-              {{ i + 1 }}
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-lg font-bold leading-none text-white">
+              {{ shapeOf(i) }}
             </span>
             <span class="min-w-0 flex-1 break-words text-lg font-bold leading-tight text-white">{{ o.text }}</span>
           </button>
         </div>
 
-        <AppButton v-if="draft !== null && !answeredHere" :disabled="busy" @click="confirmAnswer">
+        <!-- Сказать «ответов несколько» НАДО ДО выбора: плитки выглядят одинаково, а
+             ответ принимается один раз и навсегда. Человек, отметивший один вариант и
+             нажавший «Подтвердить», второй попытки не получит. -->
+        <p v-if="isMultiHere && !answeredHere" class="text-sm font-semibold text-accent">
+          {{ locale.t('quiz.pickSeveral', 'Отметьте ВСЕ верные варианты') }}
+        </p>
+        <AppButton v-if="canConfirmContest && !answeredHere" :disabled="busy" @click="confirmAnswer">
           {{ locale.t('quiz.confirm', 'Подтвердить') }}
         </AppButton>
         <p v-if="answeredHere" class="text-sm text-text2">
@@ -488,17 +548,33 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
             <span class="min-w-0 flex-1 truncate text-text">{{ o.text }}</span>
           </button>
         </div>
-        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <!-- ВИКТОРИНА — ФОРМА, А НЕ ИГРОВЫЕ ПЛИТКИ (просьба Ярослава: «в соревновании
+             как в кахуте, а викторина как в онлайнтестпад»). Здесь работают в своём
+             темпе, возвращаются к вопросам и отвечают на задания разных типов — нужен
+             спокойный список, где ВИДНО, один ответ ждут или несколько.
+             ⚠️ Раньше здесь стояли те же плитки, что в соревновании, и «выбрать
+             несколько» было неотличимо от «выбрать один»: человек отмечал один вариант
+             и шёл дальше, теряя баллы там, где знал ответ. Кружок и квадратик — не
+             украшение, а единственное, что это различает. -->
+        <div v-else class="flex flex-col gap-2">
           <button v-for="(o, i) in current.options" :key="o.id" type="button"
                   @click="pick(current, o.id)"
-                  class="flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl px-4 py-4 text-left transition-transform hover:scale-[1.02]"
-                  :style="{ backgroundColor: tileOf(i).bg,
-                            outline: chosen(current, o.id) ? `3px solid ${tileOf(i).ring}` : 'none',
-                            outlineOffset: '2px' }">
-            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-black/25 text-base font-bold text-white">
-              {{ i + 1 }}
+                  class="flex min-w-0 items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors"
+                  :class="chosen(current, o.id)
+                            ? 'border-accent bg-accent-glow'
+                            : 'border-border2 bg-bg2 hover:border-accent'">
+            <!-- Круг — «только один», квадрат — «можно несколько». Та же условность,
+                 что у radio/checkbox в любой форме, поэтому объяснять её не надо. -->
+            <span class="mt-0.5 grid size-5 shrink-0 place-items-center border-2 transition-colors"
+                  :class="[current.type === 'multi' ? 'rounded-[5px]' : 'rounded-full',
+                           chosen(current, o.id) ? 'border-accent bg-accent' : 'border-border2 bg-card']">
+              <span v-if="chosen(current, o.id)"
+                    class="block bg-white"
+                    :class="current.type === 'multi'
+                              ? 'size-2 rounded-[1px]' : 'size-2 rounded-full'" />
             </span>
-            <span class="min-w-0 flex-1 break-words text-lg font-bold leading-tight text-white">{{ o.text }}</span>
+            <span class="shrink-0 text-sm font-bold text-text3">{{ letterOf(i) }}.</span>
+            <span class="min-w-0 flex-1 break-words text-sm text-text">{{ o.text }}</span>
           </button>
         </div>
 

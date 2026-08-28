@@ -11,6 +11,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
+import InviteDialog from '@/components/admin/InviteDialog.vue'
 
 const { confirm } = useConfirm()
 const toast = useToast()
@@ -18,6 +19,10 @@ const locale = useLocaleStore()
 
 const groups = ref([])
 const group = ref('')
+//Приглашение студентов ссылкой — работа куратора, а не админа: набор группы
+//идёт у него, и гонять администратора за каждой ссылкой незачем. Права всё
+//равно проверит сервер (группа обязана быть в curated_groups).
+const showInvite = ref(false)
 const subjects = ref([])
 const subject = ref('')
 const data = ref(null)
@@ -281,7 +286,13 @@ async function exportReport(fmt) {
             👥 {{ locale.t('curatorView.subgroupsButton', 'Подгруппы') }}
           </button>
         </template>
+        <button v-if="group" type="button" class="text-sm font-medium text-accent hover:underline"
+                :class="subgroupInfo ? '' : 'ml-auto'" @click="showInvite = true">
+          ✉ {{ locale.t('curatorView.inviteButton', 'Пригласить студентов') }}
+        </button>
       </div>
+
+      <InviteDialog v-if="showInvite" :group="group" @close="showInvite = false" />
 
       <!-- Журнал (read-only) / ЗЕТ·Перевод (docs/PLAN-ZET.md §7.4) -->
       <div class="flex gap-1 border-b border-border">

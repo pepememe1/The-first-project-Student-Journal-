@@ -71,3 +71,75 @@ def resolve_group(group_input: str, existing_names) -> str:
 def valid_full_name(full_name: str) -> bool:
     parts = (full_name or "").strip().split()
     return len(parts) >= 2 and all(len(p) >= 2 for p in parts[:2])
+
+
+def gen_invite_token() -> str:
+    """Токен приглашения в группу. 32 символа urlsafe — это и есть право на регистрацию.
+
+    ⚠️ `secrets`, а не `uuid4`: uuid4 в CPython тоже берёт криптостойкий источник, но это
+    не его назначенная роль, и следующий читатель не обязан это знать. Секрет должен
+    выглядеть секретом в коде.
+    """
+    return secrets.token_urlsafe(24)
+
+
+def create_student_account(db, email: str, full_name: str, group: str, now_iso: str):
+    """Завести студента по подтверждённым данным. Возвращает (row, сгенерированный пароль).
+
+    🔑 ЕДИНСТВЕННЫЙ путь создания студента «снаружи»: им пользуются И одобрение заявки
+    администратором (`/web/admin/registrations/approve`), И регистрация по приглашению
+    куратора (`/auth/register-invite`). Второй копии этой логики быть не должно — в ней
+    сидят формат id (`stud:{email}`, тот же, что в синке), разбор ФИО на фамилию/имя/
+    отчество и серверная метка времени. Разъехавшись, две копии дали бы студентов,
+    которых десктоп считает разными людьми.
+
+    ⚠️ Проверку «такой почты ещё нет» делает ВЫЗЫВАЮЩИЙ: у заявки и у приглашения на
+    дубликат разные ответы (одну надо пометить отклонённой, второй — просто отказать).
+    """
+    from .models import User, set_user_password
+    pw = gen_password()
+    #name = «Имя Отчество» (parts[1:]) — исторический КЛЮЧ, не менять: по нему ключуются
+    #оценки и ростер. Отчество дополнительно кладём в своё поле.
+    parts = (full_name or "").split()
+    sid = f"stud:{email}"
+    row = db.get(User, sid)
+    if row is None:
+        row = User(id=sid)
+        db.add(row)
+    row.role = "student"
+    row.login = email
+    set_user_password(row, pw)
+    row.full_name = full_name
+    row.surname = parts[0] if parts else ""
+    row.name = " ".join(parts[1:]) if len(parts) > 1 else ""
+    row.patronymic = " ".join(parts[2:]) if len(parts) > 2 else ""
+    row.group_name = group
+    row.subjects = []
+    row.group_assignments = {}
+    row.updated_at = now_iso
+    row.deleted = False
+    return row, pw
+
+
+def invite_blocked_reason(inv, now_iso: str) -> str:
+    """'' — приглашение действует; иначе причина отказа человеческим языком.
+
+    🔑 Живёт ЗДЕСЬ, а не рядом с ручкой выдачи, потому что смотрят на него ДВЕ стороны:
+    куратор в своём списке («ссылка ещё жива?») и публичная регистрация («пустить ли по
+    ней?»). Две копии этой проверки разъехались бы молча и в худшую сторону: ссылка
+    зелёная в списке куратора, а студенту отвечает отказом — и объяснить это студенту
+    куратор не сможет.
+
+    ⚠️ Три ограничителя проверяются ВМЕСТЕ, и ни один не лишний: срок (вечная ссылка
+    переживёт выпуск и смену куратора), число мест (утёкшая ссылка не должна заводить
+    сто аккаунтов) и отзыв (единственный способ закрыть утёкшую ссылку немедленно).
+    """
+    if inv is None:
+        return "Приглашение не найдено"
+    if getattr(inv, "revoked", False):
+        return "Приглашение отозвано"
+    if inv.expires_at and now_iso > inv.expires_at:
+        return "Срок действия приглашения истёк"
+    if inv.max_uses and int(inv.uses or 0) >= int(inv.max_uses):
+        return "Приглашение уже использовано максимальное число раз"
+    return ""

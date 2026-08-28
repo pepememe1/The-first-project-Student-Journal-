@@ -260,7 +260,7 @@ def create_group(payload: dict = Body(...), user: User = Depends(get_current_use
     индивидуально выбранными `member_ids`. Доступно ТОЛЬКО куратору и ТОЛЬКО для его
     СОБСТВЕННЫХ `curated_groups` — иначе любой преподаватель массово добавлял бы чужих
     студентов в свои чаты (роль/скоуп проверяются на сервере, а не на клиенте)."""
-    _guard_can_create(db, user)
+    _guard_can_create(db, user, "group")
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="Нужно название группы")
@@ -271,23 +271,36 @@ def create_group(payload: dict = Body(...), user: User = Depends(get_current_use
     db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
                                    role="owner", joined_at=now))
     seen = {user.id}
+    invited = 0
     member_ids = list(payload.get("member_ids") or [])
     member_ids.extend(_expand_class_groups(db, user, payload.get("class_groups")))
     for uid in member_ids:
-        if uid in seen or db.query(User).filter(User.id == uid, User.deleted == False).first() is None:  # noqa: E712
+        if uid in seen:
+            continue
+        u = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
+        if u is None:
+            continue
+        seen.add(uid)
+        if _needs_invite(user, u):
+            #Студент позвал преподавателя: участником он станет, только когда согласится.
+            db.add(ConversationInvite(conversation_id=conv_id, user_id=uid,
+                                      invited_by=user.id, created_at=now))
+            invited += 1
             continue
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid,
                                        role="member", joined_at=now))
-        seen.add(uid)
     db.commit()
-    return {"conversation_id": conv_id, "kind": "group", "title": title}
+    if invited:
+        _notify_invites(db, conv_id, title, user)
+    return {"conversation_id": conv_id, "kind": "group", "title": title, "invited": invited}
 
 
 @router.post("/chats/channel")
 def create_channel(payload: dict = Body(...), user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
     """Создать канал: создатель — owner, выбранные — writer (пишут); остальные вступают как reader."""
-    _guard_can_create(db, user)
+    #Канал — вещание, и студенту он закрыт: см. _CHANNEL_CREATOR_ROLES.
+    _guard_can_create(db, user, "channel")
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="Нужно название канала")
@@ -326,6 +339,88 @@ def public_channels(q: str = Query(""), user: User = Depends(get_current_user),
                     "subscribers": subs, "joined": _participant(db, c.id, user.id) is not None})
     out.sort(key=lambda x: (x["title"] or "").lower())
     return {"channels": out}
+
+
+#──────────────────────────────────────────────────────────────────────────────────────
+#Заявки: студент позвал преподавателя в свою группу (см. _needs_invite в _common.py).
+#Пока заявка не принята, участника НЕТ — то есть человек не в списке, не получает
+#сообщений и не считается ни в одной существующей выборке. Это не флаг, который надо
+#не забыть в двадцати запросах, а отсутствие строки.
+#──────────────────────────────────────────────────────────────────────────────────────
+
+@router.get("/invites")
+def my_invites(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Мои непринятые приглашения в беседы."""
+    rows = (db.query(ConversationInvite)
+            .filter(ConversationInvite.user_id == user.id)
+            .order_by(ConversationInvite.id.desc()).all())
+    out = []
+    for inv in rows:
+        conv = (db.query(Conversation)
+                .filter(Conversation.id == inv.conversation_id).first())
+        if conv is None:
+            #Беседу удалили, пока заявка висела — показывать нечего.
+            continue
+        by = db.query(User).filter(User.id == inv.invited_by).first()
+        members = (db.query(ConversationParticipant)
+                   .filter(ConversationParticipant.conversation_id == conv.id).count())
+        out.append({
+            "conversation_id": conv.id,
+            "title": conv.title,
+            "about": conv.about,
+            "kind": conv.kind,
+            "members": members,
+            "invited_by": inv.invited_by,
+            "invited_by_name": (by.full_name or by.name or by.login) if by else "",
+            "created_at": inv.created_at,
+        })
+    return {"invites": out}
+
+
+@router.post("/invites/{conv_id}/accept")
+def accept_invite(conv_id: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Принять приглашение: заявка превращается в обычного участника.
+
+    ⚠️ Роль — `member`, а не `admin`: преподаватель вошёл в ЧУЖУЮ беседу, которую завели
+    студенты, и выдавать ему права над ней по факту должности значило бы отдать чужую
+    группу первому приглашённому. Понадобятся права — их даёт владелец, как и всем."""
+    inv = _invite(db, conv_id, user.id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    conv = _conversation(db, conv_id)
+    db.delete(inv)
+    if _participant(db, conv_id, user.id) is None:
+        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                       role="member", joined_at=_now()))
+    db.commit()
+    name = user.full_name or user.name or user.login
+    if conv.kind == "group":     #§D6: «вступил» — только для групп
+        _system(db, conv_id, "user_joined", user.id, name)
+    _broadcast(db, conv_id)
+    return {"ok": True, "conversation_id": conv_id}
+
+
+@router.post("/invites/{conv_id}/decline")
+def decline_invite(conv_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """Отклонить приглашение.
+
+    ⚠️ Отказ объявляется в беседе. Тихий отказ выглядит для пригласивших так же, как
+    «ещё не посмотрел», и они ждут молча — а потом зовут снова, потому что решают, что
+    заявка не дошла. Строка нейтральна и не добавляет ничего, чего они не знают: кого
+    звали, им известно."""
+    inv = _invite(db, conv_id, user.id)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    conv = _conversation(db, conv_id)
+    db.delete(inv)
+    db.commit()
+    name = user.full_name or user.name or user.login
+    if conv.kind == "group":
+        _system(db, conv_id, "invite_declined", user.id, name)
+    _broadcast(db, conv_id)
+    return {"ok": True}
 
 
 @router.post("/chats/{conv_id}/join")
@@ -382,22 +477,34 @@ def add_members(conv_id: str, payload: dict = Body(...),
     joined_names = []
     wanted = list(payload.get("user_ids") or [])
     wanted.extend(_expand_class_groups(db, user, payload.get("class_groups")))
+    invited = 0
     for uid in wanted:
         if _participant(db, conv_id, uid) is not None:
             continue
         u = db.query(User).filter(User.id == uid, User.deleted == False).first()  # noqa: E712
         if u is None:
             continue
+        if _needs_invite(user, u):
+            #То же правило, что при создании группы: студент сотрудника не записывает, а
+            #зовёт. Держать его в двух местах нельзя — потому решение и вынесено в
+            #_needs_invite, а не написано условием здесь.
+            if _invite(db, conv_id, uid) is None:
+                db.add(ConversationInvite(conversation_id=conv_id, user_id=uid,
+                                          invited_by=user.id, created_at=now))
+                invited += 1
+            continue
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role=role, joined_at=now))
         joined_names.append((uid, u.full_name or u.name or u.login))
         added += 1
     db.commit()
+    if invited:
+        _notify_invites(db, conv_id, conv.title or "", user)
     if conv.kind == "group":            #§D6: системные «вступил» — ТОЛЬКО для групп. Канал
         for uid, name in joined_names:  #может разом набрать сотню читателей (весь курс) —
             _system(db, conv_id, "user_joined", uid, name)   #лента не должна утонуть в этом.
     if added:
         _broadcast(db, conv_id)
-    return {"added": added}
+    return {"added": added, "invited": invited}
 
 
 @router.delete("/chats/{conv_id}/members/{uid}")

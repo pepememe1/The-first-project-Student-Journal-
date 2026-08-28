@@ -55,6 +55,10 @@ def teacher_set_grade(payload: dict = Body(...),
         User.group_name == lesson.group_name, User.deleted == False).first()  # noqa: E712
     if not stud:
         raise HTTPException(status_code=400, detail="Студент не найден в группе занятия")
+    #🔒 Зачётка закрыта — текущие оценки по этому предмету больше не пишутся (см.
+    #_ensure_term_open). Проверяем ПОСЛЕ поиска студента: замок персональный, у соседа
+    #по группе итоговой может ещё не быть.
+    _ensure_term_open(db, stud.id, lesson.subject, lesson.year, lesson.semester)
     from ...models import grade_id as _grade_key
     gid = _grade_key(stud.id, lesson_id)   #ЭТАП 3: ключ по неизменяемому id студента
     now = _now_iso()
@@ -1522,6 +1526,111 @@ def admin_delete_teacher(login: str,
 
 
 # --- Заявки на регистрацию студентов (одобрение админом) ------------------------
+# ── ПРИГЛАШЕНИЯ СТУДЕНТОВ В ГРУППУ ────────────────────────────────────────────────
+# Просьба Ярослава: до этого путей было ровно два, и оба плохие для сентября — админ
+# заводит тридцать человек руками либо каждый студент подаёт заявку и ждёт одобрения по
+# одной. Ссылка-приглашение снимает второй круг: она И ЕСТЬ одобрение.
+#
+# 🔒 Кто вправе выдать: администратор — любой группе, преподаватель — ТОЛЬКО своим
+# курируемым (`_admin_or_curator_check`, та же проверка, что у перевода на курс). Иначе
+# любой преподаватель заводил бы студентов в чужую группу.
+
+_INVITE_TTL_DAYS = 14
+_INVITE_MAX_USES = 60
+
+
+def _invite_public(inv, base_url: str = "") -> dict:
+    """Что показываем выдавшему. Ссылку собираем здесь — чтобы не собирали в трёх местах."""
+    left = None if not inv.max_uses else max(0, inv.max_uses - int(inv.uses or 0))
+    return {"token": inv.id, "group": inv.group_name, "note": inv.note or "",
+            "created_at": inv.created_at, "expires_at": inv.expires_at,
+            "max_uses": inv.max_uses, "uses": int(inv.uses or 0), "uses_left": left,
+            "revoked": bool(inv.revoked),
+            "link": f"{base_url.rstrip('/')}/invite/{inv.id}" if base_url else ""}
+
+
+def _invite_alive(inv) -> str:
+    """'' — приглашение действует; иначе причина. Само правило — в reg_utils, ОБЩЕЕ с
+    публичной регистрацией по ссылке: две копии разъехались бы молча."""
+    return reg_utils.invite_blocked_reason(inv, _now_iso())
+
+
+@router.post("/admin/invites")
+def create_invite(payload: dict = Body(...), user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Выдать ссылку-приглашение в группу (админ или КУРАТОР этой группы)."""
+    group = (payload.get("group") or "").strip()
+    if not group:
+        raise HTTPException(status_code=400, detail="Нужна группа")
+    _admin_or_curator_check(user, group)
+    if db.query(Group).filter(Group.name == group, Group.deleted == False).first() is None:  # noqa: E712
+        raise HTTPException(status_code=404, detail=f"Группа «{group}» не найдена")
+
+    days = int(payload.get("days") or _INVITE_TTL_DAYS)
+    #Границы не «на всякий случай»: бессрочная ссылка в чате курса переживёт и выпуск, и
+    #смену куратора, а нулевой срок сделал бы приглашение мёртвым в момент выдачи.
+    days = max(1, min(days, 90))
+    uses = int(payload.get("max_uses") or _INVITE_MAX_USES)
+    uses = max(1, min(uses, 300))
+
+    inv = StudentInvite(
+        id=reg_utils.gen_invite_token(), group_name=group, created_by=user.id,
+        created_at=_now_iso(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(days=days))
+                   .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        max_uses=uses, uses=0, revoked=False,
+        note=(payload.get("note") or "").strip()[:120])
+    db.add(inv)
+    db.commit()
+    audit.log(db, actor=user.login, role=user.role, action="invite.create",
+              target=group, detail=f"дней: {days}, мест: {uses}")
+    from ...config import SITE_URL
+    return {"ok": True, "invite": _invite_public(inv, SITE_URL)}
+
+
+@router.get("/admin/invites")
+def list_invites(group: str = Query(""), user: User = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    """Выданные приглашения. Админ видит все, куратор — только по своим группам.
+
+    ⚠️ Куратору отдаём приглашения ЕГО ГРУПП, а не только выданные лично им: группу ведут
+    вдвоём с админом, и ссылка, о которой куратор не знает, — это открытая дверь, которую
+    он не может закрыть."""
+    q = db.query(StudentInvite)
+    if user.role != "admin":
+        mine = list(user.curated_groups or [])
+        if not mine:
+            raise HTTPException(status_code=403, detail="Вы не куратор ни одной группы")
+        q = q.filter(StudentInvite.group_name.in_(mine))
+    if group:
+        _admin_or_curator_check(user, group)
+        q = q.filter(StudentInvite.group_name == group)
+    rows = q.order_by(StudentInvite.created_at.desc()).all()
+    from ...config import SITE_URL
+    out = []
+    for inv in rows:
+        d = _invite_public(inv, SITE_URL)
+        d["alive"] = (_invite_alive(inv) == "")
+        d["reason"] = _invite_alive(inv)
+        out.append(d)
+    return {"invites": out}
+
+
+@router.post("/admin/invites/{token}/revoke")
+def revoke_invite(token: str, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """Закрыть ссылку немедленно — единственный способ погасить утёкшее приглашение."""
+    inv = db.get(StudentInvite, token)
+    if inv is None:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    _admin_or_curator_check(user, inv.group_name)
+    inv.revoked = True
+    db.commit()
+    audit.log(db, actor=user.login, role=user.role, action="invite.revoke",
+              target=inv.group_name, detail=token[:8] + "…")
+    return {"ok": True}
+
+
 @router.get("/admin/registrations")
 def admin_registrations(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Список заявок студентов на самостоятельную регистрацию, ждущих решения."""
@@ -1550,29 +1659,11 @@ def admin_approve_registration(payload: dict = Body(...),
         db.commit()
         raise HTTPException(status_code=409, detail="Аккаунт с такой почтой уже существует")
 
-    pw = reg_utils.gen_password()
-    #name = «Имя Отчество» (parts[1:]) — прежний КЛЮЧ (не меняем). Отчество (parts[2:])
-    #дополнительно кладём в отдельное поле patronymic. Формат ключа не трогаем.
-    parts = req.full_name.split()
-    surname = parts[0] if parts else ""
-    name = " ".join(parts[1:]) if len(parts) > 1 else ""
-    patronymic = " ".join(parts[2:]) if len(parts) > 2 else ""
-    sid = f"stud:{email}"
-    row = db.get(User, sid) or User(id=sid)
-    if db.get(User, sid) is None:
-        db.add(row)
-    row.role = "student"
-    row.login = email
-    set_user_password(row, pw)
-    row.full_name = req.full_name
-    row.surname = surname
-    row.name = name
-    row.patronymic = patronymic
-    row.group_name = req.group_name
-    row.subjects = []
-    row.group_assignments = {}
-    row.updated_at = _now_iso()
-    row.deleted = False
+    #Заведение студента — ОБЩЕЕ с регистрацией по приглашению куратора
+    #(reg_utils.create_student_account). Второй копии этой логики быть не должно: в ней
+    #сидят формат id, разбор ФИО и серверная метка времени.
+    _row, pw = reg_utils.create_student_account(db, email, req.full_name, req.group_name,
+                                                _now_iso())
     req.status = "approved"
     db.commit()
     audit.log(db, actor=_admin.login, role="admin", action="reg.approve",

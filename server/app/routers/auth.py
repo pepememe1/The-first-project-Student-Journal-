@@ -352,7 +352,8 @@ import threading                                                      # noqa: E4
 import uuid as _uuid                                                   # noqa: E402
 from datetime import timedelta                                        # noqa: E402
 from fastapi import Body                                              # noqa: E402
-from ..models import RegistrationRequest, Group, PasswordReset        # noqa: E402
+from ..models import (RegistrationRequest, Group, PasswordReset,      # noqa: E402
+                      StudentInvite, User)
 from ..config import SITE_URL, PASSWORD_RESET_TTL_MIN                 # noqa: E402
 from .. import reg_utils, mailer, gost                                # noqa: E402
 
@@ -409,6 +410,97 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
         pass
     audit.log(db, request, actor=email, action="reg.request", target=group)
     return {"ok": True, "group": group}
+
+
+# ── РЕГИСТРАЦИЯ ПО ПРИГЛАШЕНИЮ КУРАТОРА ───────────────────────────────────────────
+# Отличие от `/register` выше принципиальное: там заявка ЖДЁТ одобрения администратора,
+# здесь одобрением служит сама ссылка — её выдал куратор группы (`/web/admin/invites`).
+# Поэтому аккаунт заводится сразу, и поэтому же у ссылки три ограничителя (срок, число
+# мест, отзыв), которые проверяет ОБЩЕЕ с выдающей стороной правило
+# `reg_utils.invite_blocked_reason`.
+
+@router.get("/invite/{token}")
+def invite_info(token: str, request: Request = None, db: Session = Depends(get_db)):
+    """Публично: что за приглашение (для экрана регистрации — «вы вступаете в К-24»).
+
+    ⚠️ Под тем же ограничителем попыток, что и регистрация: без него этот адрес — готовый
+    оракул для перебора токенов, отвечающий «да/нет» без единой задержки.
+    ⚠️ Группу отдаём ТОЛЬКО по действующему приглашению: имя учебной группы само по себе
+    не секрет, но подтверждать существование токена перебором незачем."""
+    ip = throttle.client_ip(request) if request is not None else ""
+    left = throttle.seconds_until_reg_unlocked(ip)
+    if left:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много попыток. Подождите {left // 60 + 1} мин.")
+    inv = db.get(StudentInvite, (token or "").strip())
+    reason = reg_utils.invite_blocked_reason(inv, _now())
+    if reason:
+        throttle.register_reg_failure(ip)
+        raise HTTPException(status_code=404, detail=reason)
+    return {"ok": True, "group": inv.group_name, "note": inv.note or "",
+            "expires_at": inv.expires_at}
+
+
+@router.post("/register-invite")
+def register_by_invite(body: dict = Body(...), request: Request = None,
+                       db: Session = Depends(get_db)):
+    """Регистрация студента по ссылке-приглашению: аккаунт создаётся СРАЗУ.
+
+    Группу берём ИЗ ПРИГЛАШЕНИЯ, а не из тела запроса — иначе ссылка в группу К-24
+    заводила бы студента в любую другую, и весь смысл ограничения пропал бы.
+    """
+    ip = throttle.client_ip(request) if request is not None else ""
+    left = throttle.seconds_until_reg_unlocked(ip)
+    if left:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много попыток регистрации. Подождите {left // 60 + 1} мин.")
+
+    def _fail(msg: str, code: int = 400):
+        throttle.register_reg_failure(ip)
+        raise HTTPException(status_code=code, detail=msg)
+
+    inv = db.get(StudentInvite, (body.get("token") or "").strip())
+    reason = reg_utils.invite_blocked_reason(inv, _now())
+    if reason:
+        _fail(reason, 404)
+
+    full_name = " ".join((body.get("full_name") or "").split())
+    email = (body.get("email") or "").strip().lower()
+    phone = reg_utils.normalize_phone(body.get("phone") or "")
+    if not reg_utils.valid_full_name(full_name):
+        _fail("Укажите ФИО полностью (минимум фамилия и имя)")
+    if not reg_utils.valid_email(email):
+        _fail("Разрешены только почты @yandex.ru, @mail.ru, @esstu.ru")
+    if not phone:
+        _fail("Некорректный номер телефона")
+    if db.query(User).filter(User.login == email, User.deleted == False).first():  # noqa: E712
+        _fail("Аккаунт с такой почтой уже существует", 409)
+
+    #Заведение студента — ТА ЖЕ функция, что у одобрения заявки администратором.
+    #Второй копии быть не должно: в ней формат id, разбор ФИО и серверная метка.
+    _row, pw = reg_utils.create_student_account(db, email, full_name, inv.group_name, _now())
+    #Место расходуем ТОЛЬКО после успешного создания: отказ на дубликате почты не должен
+    #съедать чужое место в приглашении.
+    inv.uses = int(inv.uses or 0) + 1
+    db.commit()
+    throttle.register_reg_success(ip)
+    audit.log(db, request, actor=email, action="reg.invite", target=inv.group_name)
+
+    sent = mailer.send_email(
+        email, "GradeBookAI — доступ к электронному журналу",
+        f"Здравствуйте, {full_name}!\n\nВы зарегистрированы в электронном журнале.\n"
+        f"Логин: {email}\nПароль: {pw}\nГруппа: {inv.group_name}\n\n"
+        f"Войдите на {SITE_URL or 'https://esstu-gradebook.ru'}",
+        html=mailer._brand_html("Доступ к журналу готов", [
+            f"Здравствуйте, <b>{full_name}</b>! Вы зарегистрированы в электронном журнале.",
+            f"Логин: <b>{email}</b>",
+            f"Пароль: <b style='font-size:18px'>{pw}</b>",
+            f"Группа: <b>{inv.group_name}</b>"]))
+    #Пароль возвращаем ТОЛЬКО когда письмо не ушло: иначе он лёг бы в историю браузера и
+    #в логи прокси у всех, кто регистрировался успешно. Без почты альтернативы нет —
+    #человек иначе не узнает пароль вовсе.
+    return {"ok": True, "login": email, "group": inv.group_name, "sent": sent,
+            "password": None if sent else pw}
 
 
 @router.post("/recover")

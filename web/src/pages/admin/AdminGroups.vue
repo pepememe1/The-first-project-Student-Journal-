@@ -6,6 +6,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import TeacherSuggestionsDialog from '@/components/admin/TeacherSuggestionsDialog.vue'
+import InviteDialog from '@/components/admin/InviteDialog.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -144,6 +145,9 @@ const hoursRows = ref([])          // [{subject, hours_total, hours_done}]
 const hoursTerm = ref(null)
 const hoursLoading = ref(false)
 const hoursSaving = ref(false)
+
+//Приглашения в группу: ссылка вместо «заведи тридцать человек руками».
+const inviteGroup = ref('')
 
 async function openHours(g) {
   hoursGroup.value = g.name
@@ -451,6 +455,7 @@ async function importParsed() {
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
               <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.importEsstuTitle', 'Импорт специальности/плана с сайта ВСГУТУ')" @click="openImport(g)">🎓</button>
               <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.hoursTitle', 'Учебные часы по предметам')" @click="openHours(g)">🕐</button>
+              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.inviteTitle', 'Пригласить студентов ссылкой')" @click="inviteGroup = g.name">✉</button>
               <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.editBtnTitle', 'Изменить')" @click="openEdit(g)">✎</button>
               <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(g)">✕</button>
             </td>
@@ -673,4 +678,6 @@ async function importParsed() {
 
   <TeacherSuggestionsDialog v-if="showTeacherSuggest"
                             @close="showTeacherSuggest = false" @applied="reload" />
+
+  <InviteDialog v-if="inviteGroup" :group="inviteGroup" @close="inviteGroup = ''" />
 </template>

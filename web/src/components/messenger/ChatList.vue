@@ -4,7 +4,7 @@
 // чату открывает переписку; по человеку — личный чат; по каналу — вступление/открытие.
 import { ref, computed, watch, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart } from '@lucide/vue'
+import { Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, MoreVertical, Pin, PinOff, ArchiveRestore, PieChart, UserPlus } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
@@ -22,10 +22,23 @@ import Avatar from '@/components/ui/Avatar.vue'
 const m = useMessengerStore()
 const auth = useAuthStore()
 const locale = useLocaleStore()
-const { chats, dir, channels, activeId, loadingChats } = storeToRefs(m)
-// Группы и каналы создают ТОЛЬКО преподаватели (и админ) — у студента кнопку «+» прячем
-// (сервер тоже вернёт 403, см. create_group/create_channel). Личные чаты студенту доступны.
-const canCreate = computed(() => ['teacher', 'admin'].includes(auth.role))
+const { chats, invites, dir, channels, activeId, loadingChats } = storeToRefs(m)
+// ГРУППЫ студентам открыты (решение Ярослава 28.08.2026): «разрешить студентам делать
+// группы между собой». КАНАЛЫ — по-прежнему только преподавателям и админу: канал это
+// вещание (один пишет, сотня читает), и такой рупор студенту не даём.
+// ⚠️ Родитель не создаёт ничего: каталог не показывает ему ни студентов, ни
+// преподавателей, и собирать группу ему не из кого (сервер это тоже проверит).
+const canCreateGroup = computed(() => ['student', 'teacher', 'admin'].includes(auth.role))
+const canCreateChannel = computed(() => ['teacher', 'admin'].includes(auth.role))
+const canCreate = computed(() => canCreateGroup.value || canCreateChannel.value)
+
+// Пока ответ едет, кнопки заявки блокируем: второй клик по «Принять» ушёл бы уже
+// на израсходованную заявку и вернул 404, а человек увидел бы отказ на успешное действие.
+const answering = ref('')
+async function answerInvite(convId, accept) {
+  answering.value = convId
+  try { await m.answerInvite(convId, accept) } finally { answering.value = '' }
+}
 
 const tab = ref('chats')            // chats | teacher | student | channels | archive
 const q = ref('')
@@ -195,12 +208,12 @@ onMounted(() => { m.loadChats() })
                   class="grid size-9 place-items-center rounded-lg bg-accent text-white hover:bg-accent2"><Plus class="size-5" /></button>
           <div v-if="showNew" class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
             <button type="button" @click="startCreate('group')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Users class="size-4 text-text3" />{{ locale.t('messenger.newGroup', 'Новая группа') }}</button>
-            <button type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />{{ locale.t('messenger.newChannel', 'Новый канал') }}</button>
+            <button v-if="canCreateChannel" type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />{{ locale.t('messenger.newChannel', 'Новый канал') }}</button>
             <!-- §D12: авто-канал «Объявления · Группа» — студенты группы уже читатели. -->
-            <button type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />{{ locale.t('messenger.groupAnnouncements', 'Объявления группы') }}</button>
+            <button v-if="canCreateChannel" type="button" @click="openAnnouncements" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Megaphone class="size-4 text-text3" />{{ locale.t('messenger.groupAnnouncements', 'Объявления группы') }}</button>
             <!-- §D12(5): «Практика · Группа» — канал НЕ автоматический: данных о практике
                  в журнале нет и выдумывать их нельзя. Его ведёт руками учебная часть. -->
-            <button type="button" @click="openPractice" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Briefcase class="size-4 text-text3" />{{ locale.t('messenger.groupPractice', 'Практика группы') }}</button>
+            <button v-if="canCreateChannel" type="button" @click="openPractice" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Briefcase class="size-4 text-text3" />{{ locale.t('messenger.groupPractice', 'Практика группы') }}</button>
             <!-- §12: только куратору — отчёт по успеваемости своей группы для родителей. -->
             <button v-if="canSearchParents" type="button" @click="openCuratorReports" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><PieChart class="size-4 text-text3" />{{ locale.t('messenger.parentReport', 'Отчёт для родителей') }}</button>
           </div>
@@ -242,8 +255,39 @@ onMounted(() => { m.loadChats() })
           <button type="button" @click="tab = 'chats'" class="text-xs font-semibold text-accent hover:underline">← {{ locale.t('messenger.backToChats', 'Назад к чатам') }}</button>
         </div>
 
-        <p v-if="!loadingChats && !shownChats.length" class="p-4 text-center text-sm text-text3">
-          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'"> {{ locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') }}</span>.
+        <!-- ЗАЯВКИ В БЕСЕДУ. Студент позвал преподавателя в свою группу; пока заявка не
+             принята, участника НЕТ вовсе, поэтому такая беседа не приходит в /chats и
+             показать её больше негде. Держим НАД списком: заявка требует ответа, а
+             ниже по списку её просто не заметят и она провисит неделю. -->
+        <div v-if="tab === 'chats' && invites.length" class="border-b border-border/50 bg-accent-glow/40">
+          <div v-for="inv in invites" :key="inv.conversation_id" class="px-3 py-2.5">
+            <div class="flex items-start gap-2">
+              <UserPlus class="mt-0.5 size-4 shrink-0 text-accent" />
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-semibold text-text">{{ inv.title }}</div>
+                <div class="truncate text-[11px] text-text3">
+                  {{ locale.t('messenger.invitedBy', { name: inv.invited_by_name }) }}
+                  <span v-if="inv.members"> · {{ locale.t('messenger.inviteMembers', { n: inv.members }) }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="mt-2 flex gap-2">
+              <button type="button" :disabled="answering === inv.conversation_id"
+                      @click="answerInvite(inv.conversation_id, true)"
+                      class="flex-1 rounded-md bg-accent px-2 py-1.5 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
+                {{ locale.t('messenger.inviteAccept', 'Принять') }}
+              </button>
+              <button type="button" :disabled="answering === inv.conversation_id"
+                      @click="answerInvite(inv.conversation_id, false)"
+                      class="flex-1 rounded-md border border-border2 px-2 py-1.5 text-xs font-semibold text-text3 hover:bg-bg2 disabled:opacity-50">
+                {{ locale.t('messenger.inviteDecline', 'Отклонить') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="!loadingChats && !shownChats.length && !invites.length" class="p-4 text-center text-sm text-text3">
+          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'"> {{ canCreateChannel ? locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') : locale.t('messenger.orCreateGroupHint', 'или соберите группу кнопкой «+»') }}</span>.
         </p>
         <div v-for="c in shownChats" :key="c.conversation_id"
              class="group relative flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 transition-colors"

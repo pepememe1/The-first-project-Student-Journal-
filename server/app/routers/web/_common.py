@@ -34,7 +34,7 @@ from ...models import (User, Group, Subject, Lesson, Grade, RegistrationRequest,
                        ScheduleJointMark, schedule_override_id, joint_mark_id,
                        SubjectHours, subject_hours_id, ZetThreshold, zet_threshold_id,
                        NotifyEvent, StudentSubgroup, student_subgroup_id,
-                       set_user_password, UserAchievement)
+                       set_user_password, UserAchievement, StudentInvite)
 from ... import webdata as W
 from ... import schedule_web
 from ... import reg_utils, mailer, gost, audit, vector_llm, translate_service
@@ -147,6 +147,43 @@ def _ensure_current_term(cfg: dict, lesson):
                    "в текущем учебном периоде.")
 
 
+def _final_grade_row(db, student_id: str, subject: str, year: str, semester: int):
+    """Живая итоговая оценка студента по предмету за термин (None — её нет).
+
+    «Живая» = не надгробие: снятая итоговая (`grade == ""`, `deleted`) семестр не
+    закрывает, иначе исправить ошибку было бы нечем."""
+    from ...models import term_grade_id
+    row = db.get(TermGrade, term_grade_id(student_id, subject, year, semester))
+    if row is None or row.deleted or not (row.grade or "").strip():
+        return None
+    return row
+
+
+def _ensure_term_open(db, student_id: str, subject: str, year: str, semester: int):
+    """🔒 ЗАМОК ЗАЧЁТКИ: выставлена итоговая — текущие оценки по предмету больше не пишутся.
+
+    Требование Ярослава (28.08.2026): «если это поле есть, то препод не сможет новые
+    ставить». Смысл не в удобстве: итоговая уходит в зачётку, и балл, дописанный ПОСЛЕ
+    неё, меняет средний, по которому итоговую и выводили, — то есть документ перестаёт
+    соответствовать журналу, и заметить это можно только сверив их вручную.
+
+    ⚠️ Проверка живёт НА СЕРВЕРЕ, а не в интерфейсе. Спрятать поле — не защита: тот же
+    запрос уходит из десктопа, из офлайн-очереди (`outbox.js`) и голосом.
+    ⚠️ Дверь наружу есть и она одна: снять итоговую (пустое значение) — семестр снова
+    открыт. Замок без выхода означал бы, что опечатка в оценке неисправима навсегда.
+    ⚠️ Посещаемость («Н», «Б», «О») запирается ТОЖЕ, и это осознанно: она входит в тот
+    же расчёт (пропуски, допуск), и «оценки закрыты, а пропуски дописываются» —
+    полузакрытый семестр, худший из вариантов.
+    """
+    row = _final_grade_row(db, student_id, subject, year, semester)
+    if row is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"По предмету «{subject}» уже выставлена итоговая оценка "
+                   f"«{row.grade}» — семестр закрыт. Чтобы править текущие оценки, "
+                   f"сначала снимите итоговую.")
+
+
 # ── Выгрузка файлов (xlsx/docx) — общая для ведомостей, журналов и отчётов ──────────
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -173,7 +210,9 @@ __all__ = [
     # приложение
     "get_db", "get_current_user", "require_admin", "current_jti",
     "User", "Group", "Subject", "Lesson", "Grade", "RegistrationRequest",
+    "StudentInvite",
     "AuthSession", "ConfigKV", "TermGrade", "ScheduleOverride", "ScheduleJointMark",
+    "_final_grade_row", "_ensure_term_open",
     "schedule_override_id", "joint_mark_id", "SubjectHours", "subject_hours_id",
     "ZetThreshold", "zet_threshold_id", "NotifyEvent",
     "StudentSubgroup", "student_subgroup_id", "set_user_password", "UserAchievement",

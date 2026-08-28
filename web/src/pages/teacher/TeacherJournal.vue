@@ -572,11 +572,52 @@ const attSaving = ref(false)
 const ATT_FORMS = ['экзамен', 'зачёт', 'диффзачёт']
 const ATT_GRADES = ['', '5', '4', '3', '2', 'Зачтено', 'Не зачтено']
 
+// ⚠️ ВТОРОГО ИСТОЧНИКА ДАННЫХ ЗДЕСЬ НЕТ. Средний балл и оценки берём из УЖЕ
+// загруженного журнала (`data.value`), а не отдельной ручкой: два расчёта среднего
+// разошлись бы, и преподаватель увидел бы в журнале одно число, а в аттестации другое —
+// причём заметил бы это в тот момент, когда решает судьбу семестра.
+const examLessons = computed(() =>
+  (data.value?.lessons || []).filter((l) => l.type === 'Экзамен'))
+// Предмет БЕЗ экзамена аттестуется как раньше (зачёт/диффзачёт): требовать экзаменационную
+// оценку там, где экзамена нет, значило бы закрыть аттестацию таким предметам совсем.
+const subjectHasExam = computed(() => examLessons.value.length > 0)
+
+// Все оценки студента по этому предмету — для колонки «оценки» в аттестации: по ним
+// человек и решает, дотягивает ли средний. Пропуски (Н/Б/О) сюда не идут — это не баллы.
+function studentMarks(s) {
+  const out = []
+  for (const l of (data.value?.lessons || [])) {
+    const v = (s.grades || {})[l.id]
+    if (v && !['Н', 'Б', 'О'].includes(v)) out.push({ v, type: l.type, date: l.date })
+  }
+  return out
+}
+// Экзаменационная оценка — включая пересдачи (ключи <id>_retake[_N], как в десктопе):
+// решает ПОСЛЕДНЯЯ, иначе допуск считался бы по заваленной первой попытке.
+function examMark(s) {
+  let last = ''
+  for (const l of examLessons.value) {
+    for (const key of [l.id, `${l.id}_retake`, `${l.id}_retake_2`, `${l.id}_retake_3`,
+                       `${l.id}_retake_4`, `${l.id}_retake_5`]) {
+      const v = (s.grades || {})[key]
+      if (v && !['Н', 'Б', 'О'].includes(v)) last = v
+    }
+  }
+  return last
+}
+
 async function openAtt() {
   try {
     const tg = (await teacherApi.termGrades(group.value, subject.value)).data.grades || {}
     attRows.value = (data.value?.students || []).map((s) => ({
-      surname: s.surname, name: s.name, grade: tg[`${s.surname}|${s.name}`]?.grade || '',
+      surname: s.surname, name: s.name,
+      grade: tg[`${s.surname}|${s.name}`]?.grade || '',
+      //Снимок исходного значения: по нему видно, у кого семестр УЖЕ закрыт (и, значит,
+      //текущие оценки заперты), а кому итоговую только предстоит выставить.
+      was: tg[`${s.surname}|${s.name}`]?.grade || '',
+      average: s.average,
+      marks: studentMarks(s),
+      exam: examMark(s),
     }))
     showAtt.value = true
   } catch { toast.error(locale.t('teacherJournal.loadFinalGradesFailed', 'Не удалось загрузить итоговые оценки')) }
@@ -610,6 +651,10 @@ async function saveAtt() {
       }
     }
     showAtt.value = false
+    //Журнал перечитываем: у кого итоговая теперь стоит, тому ячейки заперты (сервер
+    //ответит 409), и человек должен видеть актуальное состояние, а не то, что было до
+    //сохранения. Без этого он попробует поставить балл и получит отказ «из ниоткуда».
+    await load()
     toast.success(locale.t('teacherJournal.finalGradesSaved', 'Итоговые оценки сохранены'))
   } catch (e) { toast.error(locale.t('teacherJournal.saveFailedPrefix', 'Не удалось сохранить: ') + (e?.response?.data?.detail || e.message)) }
   finally { attSaving.value = false }
@@ -841,12 +886,46 @@ async function downloadVedomost(fmt) {
             <option v-for="f in ATT_FORMS" :key="f" :value="f">{{ f }}</option>
           </select>
         </label>
-        <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
-          <div v-for="(r, i) in attRows" :key="i" class="flex items-center gap-2">
-            <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.surname }} {{ r.name }}</span>
-            <select v-model="r.grade" class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="g in ATT_GRADES" :key="g" :value="g">{{ g || '—' }}</option>
-            </select>
+        <!-- 🔒 Замок зачётки: выставленная итоговая закрывает семестр по предмету, и
+             текущие оценки этому студенту больше не пишутся (сервер отвечает 409).
+             Говорим об этом ДО сохранения, а не после отказа в журнале. -->
+        <p class="mb-2 rounded-sm border border-border2 bg-bg2 px-2.5 py-2 text-[11px] leading-snug text-text3">
+          {{ locale.t('teacherJournal.attLockHint', 'Выставленная итоговая закрывает семестр: новые текущие оценки и посещаемость по этому предмету записать будет нельзя. Чтобы снова открыть — снимите итоговую («—»).') }}
+        </p>
+
+        <div class="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+          <div v-for="(r, i) in attRows" :key="i"
+               class="rounded-sm border border-border2/60 px-2 py-1.5"
+               :class="r.was ? 'bg-bg2/60' : ''">
+            <div class="flex items-center gap-2">
+              <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.surname }} {{ r.name }}</span>
+              <!-- Средний балл рядом с полем — ровно то, ради чего диалог и открывают:
+                   «дотягивает ли до пятёрки». Держать его на другом экране значит
+                   заставить человека помнить число, пока он выбирает оценку. -->
+              <span class="shrink-0 text-xs font-semibold"
+                    :class="r.average >= 4.5 ? 'text-green' : r.average >= 3.5 ? 'text-accent' : 'text-text3'">
+                {{ locale.t('teacherJournal.attAvg', 'ср.') }} {{ Number(r.average || 0).toFixed(2) }}
+              </span>
+              <select v-model="r.grade"
+                      :disabled="subjectHasExam && !r.exam && !r.was"
+                      :title="subjectHasExam && !r.exam && !r.was ? locale.t('teacherJournal.attNeedsExam', 'Сначала выставьте оценку за экзамен') : ''"
+                      class="h-9 w-28 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent disabled:opacity-40">
+                <option v-for="g in ATT_GRADES" :key="g" :value="g">{{ g || '—' }}</option>
+              </select>
+            </div>
+            <div class="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
+              <span v-if="r.exam" class="rounded-sm bg-accent-glow px-1.5 py-0.5 text-[11px] font-semibold text-accent">
+                {{ locale.t('teacherJournal.attExam', 'экзамен') }}: {{ r.exam }}
+              </span>
+              <span v-else-if="subjectHasExam" class="rounded-sm bg-bg2 px-1.5 py-0.5 text-[11px] text-text3">
+                {{ locale.t('teacherJournal.attNoExam', 'экзамен не сдан') }}
+              </span>
+              <!-- Сами оценки: по ним видно, из чего сложился средний, — одна «5» при
+                   среднем 4.4 читается иначе, чем ровный ряд четвёрок. -->
+              <span v-for="(mk, j) in r.marks" :key="j"
+                    class="rounded-sm bg-bg2 px-1.5 py-0.5 text-[11px] text-text2" :title="`${mk.type} · ${mk.date}`">{{ mk.v }}</span>
+              <span v-if="!r.marks.length" class="text-[11px] text-text3">{{ locale.t('teacherJournal.attNoMarks', 'оценок нет') }}</span>
+            </div>
           </div>
         </div>
         <div class="mt-4 flex flex-wrap justify-end gap-2">

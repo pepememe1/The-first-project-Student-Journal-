@@ -37,6 +37,7 @@ import NotFoundPage from '@/pages/NotFoundPage.vue'
 import { decideMiss } from '@/utils/missedRoute'
 const ConnectServer = () => import('@/pages/ConnectServer.vue')
 const ResetPassword = () => import('@/pages/ResetPassword.vue')
+const InviteRegister = () => import('@/pages/InviteRegister.vue')
 const VectorPage = () => import('@/pages/VectorPage.vue')
 const MessengerPage = () => import('@/pages/MessengerPage.vue')
 const SchedulePage = () => import('@/pages/SchedulePage.vue')
@@ -106,6 +107,10 @@ export const routes = [
   { path: '/login', component: LoginPage, meta: { public: true } },
   // Публичная намеренно: человек приходит сюда именно потому, что войти не может.
   { path: '/reset-password', component: ResetPassword, meta: { public: true } },
+  // Приглашение куратора: сюда человек приходит ДО того, как у него появился аккаунт.
+  // Токен в ПУТИ, а не в query: так ссылка читается как приглашение и переживает
+  // пересылку мессенджерами, которые любят обрезать «?…».
+  { path: '/invite/:token', component: InviteRegister, meta: { public: true } },
   {
     path: '/',
     redirect: () => {

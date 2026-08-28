@@ -33,6 +33,12 @@ export function formatSystemMessage(body) {
     return type === 'muted' ? t('messagePreview.muted', { name }) : t('messagePreview.unmuted', { name })
   }
   if (type === 'cleared') return t('messagePreview.cleared', { n: rest[0] || '0' })
+  //Приглашённый отклонил заявку. Строка объявляется в беседе намеренно: тихий отказ
+  //неотличим от «ещё не посмотрел», и пригласившие ждали бы молча, а потом звали снова.
+  if (type === 'invite_declined') {
+    const name = rest[1] || rest[0] || t('messagePreview.participant', 'Участник')
+    return t('messagePreview.inviteDeclined', { name })
+  }
   return body
 }
 

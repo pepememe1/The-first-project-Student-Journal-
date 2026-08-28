@@ -32,7 +32,8 @@ from ...security import decode_token
 from ...models import (
     Attachment,
     AuthSession,
-    Conversation, ConversationIgnore, ConversationParticipant, ConversationRole,
+    Conversation, ConversationIgnore, ConversationInvite, ConversationParticipant,
+    ConversationRole,
     CuratorReport, Group, Message, MessageHidden,
     MessageReport, MessageReaction, MessageEdit, MessageTemplate, MutedUser,
     NotifyEvent, ParentLink, SubjectHours,
@@ -365,19 +366,84 @@ def _guard_can_write(db: Session, user: User) -> None:
             headers={"Retry-After": str(wait)})
 
 
-#Создавать группы и каналы могут ТОЛЬКО преподаватели (и админ как суперпользователь).
-#Требование заказчика: студенты не заводят каналы/группы, чтобы не спамить и не собирать
-#людей без ведома. Личные чаты студентам по-прежнему доступны (open_direct не ограничен).
-_CREATOR_ROLES = ("teacher", "admin")
+#Каналы создают ТОЛЬКО преподаватели и админ. Канал — вещание: один пишет, сотня читает,
+#и завести такой рупор студенту нельзя (исходное требование заказчика про спам в силе).
+_CHANNEL_CREATOR_ROLES = ("teacher", "admin")
+#ГРУППЫ студентам открыты (решение Ярослава 28.08.2026): «разрешить студентам делать
+#группы между собой». Группа симметрична — в ней все пишут друг другу, собрать в неё
+#можно только тех, кого человек и так может найти в каталоге, а войти в чужую группу
+#по своей воле нельзя (публичны только каналы, см. join_chat). Родитель сюда не попадает:
+#каталог ему студентов не показывает, а _guard_direct_allowed держит его отдельно.
+_GROUP_CREATOR_ROLES = ("student", "teacher", "admin")
+
+#Кого студент не может добавить в свою группу молча. Преподаватель и админ — это рабочее
+#время и имя человека в переписке, на которую он не соглашался; их зовут ЗАЯВКОЙ.
+_STAFF_ROLES = ("teacher", "admin")
 
 
-def _guard_can_create(db: Session, user: User) -> None:
-    if user.role not in _CREATOR_ROLES:
+def _needs_invite(actor: User, target: User) -> bool:
+    """Правило одной строкой: студент не записывает сотрудника в беседу, а приглашает.
+
+    Обратное направление (преподаватель добавляет студентов) осталось прямым — это его
+    учебная группа и его полномочия. Симметрию здесь заводить не надо: она превратила бы
+    каждый рабочий чат в очередь согласований."""
+    return actor.role == "student" and target.role in _STAFF_ROLES
+
+
+def _guard_can_create(db: Session, user: User, kind: str = "group") -> None:
+    allowed = _GROUP_CREATOR_ROLES if kind == "group" else _CHANNEL_CREATOR_ROLES
+    if user.role not in allowed:
         raise HTTPException(
-            status_code=403, detail="Группы и каналы могут создавать только преподаватели.")
+            status_code=403,
+            detail=("Каналы могут создавать только преподаватели." if kind == "channel"
+                    else "Вам недоступно создание бесед."))
     if _is_muted(db, user.id):
         raise HTTPException(
             status_code=403, detail="Вы ограничены модерацией и не можете создавать беседы.")
+
+
+def _invite(db: Session, conv_id: str, uid: str):
+    """Непринятая заявка этому человеку в эту беседу (None — заявки нет)."""
+    return (db.query(ConversationInvite)
+            .filter(ConversationInvite.conversation_id == conv_id,
+                    ConversationInvite.user_id == uid).first())
+
+
+def _notify_invites(db: Session, conv_id: str, title: str, actor: User) -> None:
+    """Письмо во вкладку «Уведомления» + пуш всем, у кого висит заявка в эту беседу.
+
+    ⚠️ Приглашение БЕЗ уведомления бесполезно: преподаватель не открывает раздел чатов
+    по расписанию, и заявка провисела бы, пока про неё не напомнят голосом. Ровно так
+    уже отказывали «обещания без вызывающего» — код есть, а до человека не доходит.
+    ⚠️ Сбой уведомления НЕ должен ронять создание беседы, поэтому вся функция под
+    try/except: группа уже создана, а заявка видна и в разделе чатов.
+    """
+    try:
+        rows = (db.query(ConversationInvite)
+                .filter(ConversationInvite.conversation_id == conv_id).all())
+        if not rows:
+            return
+        who = actor.full_name or actor.name or actor.login
+        online = _online_logins()
+        for inv in rows:
+            u = db.query(User).filter(User.id == inv.user_id).first()
+            if u is None or not u.login:
+                continue
+            #В НАШЕМ письме имена есть — оно едет по TLS в нашу же базу. Наружу, в пуш,
+            #уходит только нейтральный текст, который собирает rustore_push (§3.7.6).
+            db.add(NotifyEvent(
+                id=str(uuid4()), login=u.login, kind="chat_invite", subject="",
+                lesson_id="", created_at=_now(), read_at="",
+                title="Приглашение в беседу",
+                body=f"{who} приглашает вас в «{title}».",
+                payload={"conversation_id": conv_id}))
+            if u.login not in online:
+                from ... import rustore_push
+                rustore_push.notify_login(db, u.login, "", "",
+                                          {"type": "chat_invite"})
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 def _parent_group_names(db: Session, parent: User) -> set:

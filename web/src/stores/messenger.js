@@ -34,6 +34,9 @@ function _wsConn() {
 
 export const useMessengerStore = defineStore('messenger', () => {
   const chats = ref([])                 // список бесед (см. /chats)
+  //Заявки: студент позвал преподавателя в свою группу. Пока не принята, участника НЕТ,
+  //поэтому такая беседа НЕ приходит в /chats — её видно только здесь.
+  const invites = ref([])
   const activeId = ref('')              // id активной беседы
   const activePeer = ref(null)          // карточка собеседника активной беседы
   const messages = ref([])             // сообщения активной беседы (хронология)
@@ -116,6 +119,29 @@ export const useMessengerStore = defineStore('messenger', () => {
       _ringLoudMentions()
     } catch { /* сервер ещё не поднят / оффлайн — пустой список */ }
     finally { loadingChats.value = false }
+    loadInvites()
+  }
+
+  // ── Заявки в беседу ────────────────────────────────────────────────────────────────
+  // ⚠️ Едут ОТДЕЛЬНЫМ запросом, а не полем в /chats: непринятая заявка — это как раз НЕ
+  // беседа человека, и класть её в общий список значило бы показывать её всем выборкам,
+  // которые с этим списком работают (счётчик непрочитанного, поиск, последнее сообщение).
+  // Сбой запроса гасим молча: заявки — дополнение к списку чатов, а не он сам.
+  async function loadInvites() {
+    try { invites.value = (await messengerApi.invites()).data.invites || [] }
+    catch { invites.value = [] }
+  }
+
+  async function answerInvite(convId, accept) {
+    try {
+      if (accept) await messengerApi.acceptInvite(convId)
+      else await messengerApi.declineInvite(convId)
+    } catch { return false }
+    //Список чатов перечитываем в любом случае: принял — беседа появилась, отклонил —
+    //заявка ушла, и оба состояния должны быть видны сразу, а не после ручного обновления.
+    await loadChats()
+    if (accept) await selectChat(convId)
+    return true
   }
 
   // Карточка собеседника бралась ОДИН раз при входе в чат и дальше не обновлялась: смена
@@ -716,6 +742,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     stopIdleWatch()          //иначе авто-«отошёл» продолжил бы жить от прошлого аккаунта
     clearActive()
     chats.value = []
+    invites.value = []       //на общем телефоне выход — это смена владельца (§5.4)
     channels.value = []
     peerTyping.value = false
     _pinged.clear()          //чужие «уже звонили» новому аккаунту не наследуем
@@ -1105,11 +1132,11 @@ export const useMessengerStore = defineStore('messenger', () => {
   function selectNone() { selectedIds.value = [] }
 
   return {
-    chats, activeId, activePeer, messages, loadingChats, loadingMessages, loadingOlder, hasOlder, sending,
+    chats, invites, activeId, activePeer, messages, loadingChats, loadingMessages, loadingOlder, hasOlder, sending,
     replyTo, pinned, selectionMode, selectedIds, isModeration, activeInfo, activeKind,
     channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
-    loadChats, loadMessages, loadOlder, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
+    loadChats, loadInvites, answerInvite, loadMessages, loadOlder, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
     openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     deleteConversation, selectAll, selectNone,

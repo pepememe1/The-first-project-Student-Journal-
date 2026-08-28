@@ -21,6 +21,11 @@ export const authApi = {
   // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
   register: (payload) => api.post('/auth/register', payload),
   recover: (email) => api.post('/auth/recover', { email }),
+  // Регистрация по ссылке-приглашению куратора. Отличие от `register` выше: там заявка
+  // ЖДЁТ одобрения администратора, здесь одобрением служит сама ссылка — аккаунт
+  // создаётся сразу. Группу берёт сервер ИЗ ПРИГЛАШЕНИЯ, из тела её подставить нельзя.
+  inviteInfo: (token) => api.get(`/auth/invite/${encodeURIComponent(token)}`),
+  registerByInvite: (payload) => api.post('/auth/register-invite', payload),
   // Смена пароля по одноразовой ссылке из письма — ЕДИНСТВЕННОЕ место, где
   // пароль реально меняется (сам /auth/recover его больше не трогает).
   recoverConfirm: (token, password) =>
@@ -271,6 +276,14 @@ export const adminApi = {
   // Перевод на курс (rollover): продвинуть текущий учебный период. Прошлые — в архив.
   rolloverTerm: (payload = {}) => api.post('/web/admin/term/rollover', payload),
   // Заявки на регистрацию студентов.
+  // Приглашения студентов ссылкой. Выдать может админ ЛЮБОЙ группе, преподаватель —
+  // только своим курируемым (проверяет сервер, клиентскому списку он не верит).
+  invites: (group = '') => api.get('/web/admin/invites', { params: group ? { group } : {} }),
+  createInvite: (group, { days, maxUses, note } = {}) =>
+    api.post('/web/admin/invites', { group, days, max_uses: maxUses, note }),
+  revokeInvite: (token) =>
+    api.post(`/web/admin/invites/${encodeURIComponent(token)}/revoke`),
+
   registrations: () => api.get('/web/admin/registrations'),
   approveRegistration: (id) => api.post('/web/admin/registrations/approve', { id }),
   rejectRegistration: (id, note = '') => api.post('/web/admin/registrations/reject', { id, note }),
@@ -510,6 +523,14 @@ export const messengerApi = {
   // В «Избранном» команда работает по-старому — обычным сообщением, там история нужна.
   askVectorInChat: (convId, question) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/vector`, { question }),
+
+  // Заявки: студент позвал преподавателя в свою группу. Пока заявка не принята, участника
+  // НЕТ вовсе — это отдельная таблица, а не флаг на участнике (см. ConversationInvite).
+  invites: () => api.get('/web/messenger/invites'),
+  acceptInvite: (convId) =>
+    api.post(`/web/messenger/invites/${encodeURIComponent(convId)}/accept`),
+  declineInvite: (convId) =>
+    api.post(`/web/messenger/invites/${encodeURIComponent(convId)}/decline`),
 
   addMembers: (convId, userIds, classGroups) =>
     api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/members`,

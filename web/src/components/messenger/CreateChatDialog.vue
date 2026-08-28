@@ -32,7 +32,9 @@ search()
 function toggle(u) {
   const i = chosen.value.findIndex(x => x.id === u.id)
   if (i >= 0) chosen.value.splice(i, 1)
-  else chosen.value.push({ id: u.id, full_name: u.full_name })
+  //Роль запоминаем вместе с человеком: по ней решается, показывать ли подсказку про
+  //подтверждение. Вкладка (role.value) для этого не годится — выбирают из разных.
+  else chosen.value.push({ id: u.id, full_name: u.full_name, role: u.user_role || u.role || role.value })
 }
 const isChosen = (id) => chosen.value.some(x => x.id === id)
 
@@ -54,6 +56,11 @@ function toggleGroup(g) {
   if (i >= 0) chosenGroups.value.splice(i, 1)
   else chosenGroups.value.push(g)
 }
+// Студент, выбравший преподавателя, должен ЗАРАНЕЕ понимать, что тот появится не сразу:
+// иначе он создаст группу, не увидит преподавателя в списке и решит, что не сработало.
+const staffChosen = computed(() =>
+  auth.role === 'student' && chosen.value.some(x => x.role === 'teacher' || x.role === 'admin'))
+
 const roleTabs = computed(() => {
   const t = [['student', locale.t('messenger.tab.student', 'Студенты')], ['teacher', locale.t('createChat.teachers', 'Преподаватели')]]
   if (curatedGroups.value.length) t.push(['parent', locale.t('messenger.tab.parent', 'Родители')])
@@ -132,6 +139,13 @@ function submit() {
           <p v-if="!found.length" class="p-3 text-center text-xs text-text3">{{ locale.t('messenger.nobodyFound', 'Никого не найдено.') }}</p>
         </div>
       </div>
+
+      <!-- Студент выбрал преподавателя: он появится в беседе не сразу, а когда согласится.
+           Сказать это НАДО ЗАРАНЕЕ — иначе человек создаст группу, не увидит там
+           преподавателя и решит, что выбор не сохранился. -->
+      <p v-if="staffChosen" class="border-t border-border px-3 py-2 text-xs text-text3">
+        {{ locale.t('createChat.staffNeedsConfirm', 'Преподаватель получит приглашение и войдёт в беседу, когда его примет.') }}
+      </p>
 
       <div class="flex justify-end gap-2 border-t border-border p-3">
         <button type="button" @click="emit('close')" class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
