@@ -42,8 +42,15 @@ export const api = axios.create({
 
 // Обработчик «сессия истекла» регистрирует App (чтобы не тянуть сюда router и не плодить циклы).
 let authExpiredHandler = null
+//Обработчик «админу нужен второй фактор». Ставит оболочка приложения.
+let mfaSetupHandler = null
 export function setAuthExpiredHandler(fn) {
   authExpiredHandler = fn
+}
+
+/** Куда сообщать, что администратору нужно завести второй фактор. */
+export function setMfaSetupHandler(fn) {
+  mfaSetupHandler = fn
 }
 
 api.interceptors.request.use((config) => {
@@ -105,6 +112,15 @@ api.interceptors.response.use(
           headers: { 'x-gb-stale': '1' }, config, request: null, cached: true,
         })
       }
+    }
+    // Администратор без второго фактора: сервер отвечает 403 на ВСЁ, кроме его
+    // настройки (см. deps._require_second_factor_setup). Без этой ветки человек
+    // увидел бы россыпь «нет прав» на исправных страницах и пошёл бы искать, кто
+    // отобрал у него доступ, — вместо настройки за минуту. Заголовок для того и
+    // машиночитаемый.
+    if (response?.status === 403 && response.headers?.['x-gb-reason'] === 'mfa_setup_required') {
+      if (mfaSetupHandler) mfaSetupHandler(response.data?.detail || '')
+      return Promise.reject(error)
     }
     if (!response || response.status !== 401 || config._retried) {
       return Promise.reject(error)

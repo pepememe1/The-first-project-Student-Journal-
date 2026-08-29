@@ -7,6 +7,10 @@ config.py — Настройки бэкенда из переменных окр
 """
 import os
 
+#Секреты читаются НЕ напрямую из окружения: см. secrets_source — там
+#объяснено, почему переменная окружения это худший из трёх источников.
+from . import secrets_source
+
 
 def _load_dotenv():
     """Минимальный загрузчик server/.env (KEY=VALUE), без сторонних пакетов."""
@@ -35,11 +39,11 @@ DATABASE_URL = os.environ.get("GRADEBOOK_DB_URL", "sqlite:///./gradebook_server.
 #64 hex (32 байта), хранится в server/.env (chmod 600), НЕ в git. Задан + драйвер
 #sqlcipher3 установлен → файл БД шифруется целиком, приложение работает как обычно
 #(схема id не меняется). Пусто/нет драйвера → обычный SQLite (dev/Windows). См. db.py.
-DB_KEY = os.environ.get("GRADEBOOK_DB_KEY", "").strip()
+DB_KEY = secrets_source.get("GRADEBOOK_DB_KEY")
 
 #Секрет подписи JWT. На бою ОБЯЗАТЕЛЬНО переопределить длинной случайной строкой.
 DEV_JWT_SECRET = "dev-secret-change-me"
-JWT_SECRET = os.environ.get("GRADEBOOK_JWT_SECRET", DEV_JWT_SECRET)
+JWT_SECRET = secrets_source.get("GRADEBOOK_JWT_SECRET", DEV_JWT_SECRET)
 JWT_ALG = "HS256"
 #Access-токен сгорает через 5 часов. ВАЖНО: exp — АБСОЛЮТНАЯ метка времени, выставленная
 #сервером при выдаче, и проверяется сервером на каждом запросе. Поэтому офлайн-время тоже
@@ -217,7 +221,7 @@ PASSWORD_RESET_TTL_MIN = int(os.environ.get("GRADEBOOK_PASSWORD_RESET_TTL_MIN", 
 #рассылать уведомления всем пользователям приложения, утечка = чужая рассылка от нашего
 #имени. Пусто — пуши просто выключены, сервер работает как раньше.
 RUSTORE_PROJECT_ID = os.environ.get("GRADEBOOK_RUSTORE_PROJECT_ID", "").strip()
-RUSTORE_SERVICE_TOKEN = os.environ.get("GRADEBOOK_RUSTORE_SERVICE_TOKEN", "").strip()
+RUSTORE_SERVICE_TOKEN = secrets_source.get("GRADEBOOK_RUSTORE_SERVICE_TOKEN")
 #Сколько дней держим токен устройства без подтверждения. Приложение подтверждает токен
 #при каждом запуске; молчит дольше — считаем, что программу удалили.
 PUSH_TOKEN_TTL_DAYS = int(os.environ.get("GRADEBOOK_PUSH_TOKEN_TTL_DAYS", "90"))
@@ -232,4 +236,4 @@ def push_enabled() -> bool:
 #GIF-пикер мессенджера (Klipy) — фиксированный инфраструктурный ключ на всё
 #развёртывание (не выбор ИИ-провайдера, поэтому НЕ в /web/admin/ai-config, тот же
 #принцип, что у RuStore выше). Пусто — пикер выключен, чат работает как раньше.
-KLIPY_API_KEY = os.environ.get("GRADEBOOK_KLIPY_API_KEY", "").strip()
+KLIPY_API_KEY = secrets_source.get("GRADEBOOK_KLIPY_API_KEY")

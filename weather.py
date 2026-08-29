@@ -66,7 +66,8 @@ def _fetch() -> dict:
     })
     req = urllib.request.Request(f"{WEATHER_URL}?{q}",
                                  headers={"User-Agent": "GradeBookAI/2.9"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+    #SAST B310: адрес — константа модуля (WEATHER_URL), извне не подставляется.
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # nosec B310
         payload = json.loads(r.read().decode("utf-8"))
     cur = payload.get("current") or {}
     if "temperature_2m" not in cur:

@@ -7,8 +7,10 @@ core.py — Журнал ВСГУТУ.
     фоновым потоком (см. sync_runner), а не прямым подключением к БД с клиента.
   - Оффлайн: работаем с SQLite, при восстановлении сети — автосинхронизация.
 """
-import sqlite3
-
+#⚠️ Прямого `import sqlite3` здесь БОЛЬШЕ НЕТ и быть не должно: соединение к
+#локальной базе открывает ТОЛЬКО `local_db.connect` (иначе файл откроется без
+#ключа SQLCipher и ляжет открытым текстом). Держит
+#`test_no_direct_sqlite_connect_to_the_sync_database`.
 from data import local_db
 import log
 import uuid
@@ -484,7 +486,9 @@ class DBManager:
         conn = cls.get_conn(); cur = conn.cursor()
         try:
             for t in ("grades", "lessons", "term_grades", "groups", "users", "sync_conflicts"):
-                cur.execute(f"DELETE FROM {t}")
+                #{t} — элемент литерального кортежа строкой выше, а не значение
+                #извне. Имя таблицы параметром не передать, поэтому f-строка.
+                cur.execute(f"DELETE FROM {t}")  # nosec B608
             conn.commit()
         finally:
             conn.close()
@@ -952,7 +956,10 @@ class GradeBook:
             cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} TEXT DEFAULT ''")
         except Exception as e:
             _alter_ignored("lessons", col, e)
-        cur.execute(f"UPDATE lessons SET {col}=? WHERE id=?", (retake_date, lesson_id))
+        #SAST B608: {col} — имя колонки из нашего же списка миграции; данные
+        #идут параметрами.
+        cur.execute(f"UPDATE lessons SET {col}=? WHERE id=?",  # nosec B608
+                    (retake_date, lesson_id))
         conn.commit()
         conn.close()
 

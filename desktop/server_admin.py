@@ -204,6 +204,42 @@ def _ssh_argv(server: dict) -> list:
     return argv
 
 
+def _remember_host_keys(client) -> None:
+    """Сделать доверие к ключу хоста ПОСТОЯННЫМ, а не разовым.
+
+    🔥 Здесь был настоящий разрыв между комментарием и кодом (найден 29.08.2026
+    статическим анализом). Ниже стояло `load_system_host_keys()` + `AutoAddPolicy`
+    и пояснение, что это «то же самое, что StrictHostKeyChecking=accept-new».
+    Это неверно: системный файл paramiko считает ТОЛЬКО ДЛЯ ЧТЕНИЯ, а `AutoAddPolicy`
+    кладёт принятый ключ в память процесса. Своего файла не было — значит запомнить
+    было некуда, и КАЖДОЕ подключение по паролю оказывалось «первым знакомством».
+    Подмена сервера в этот момент не обнаруживалась ничем.
+
+    Цена ровно там, где больно: путь с паролем существует для НОВОЙ машины, к
+    которой ключ ещё не положен, — то есть человек как раз набирает пароль.
+
+    Заводим СВОЙ файл рядом с данными программы, а не правим `~/.ssh/known_hosts`:
+    paramiko перезаписывает его целиком и теряет хешированные записи и комментарии,
+    сделанные обычным ssh. Системный продолжаем читать — чтобы программа и терминал
+    одинаково отвечали на подмену ключа у уже известного хоста.
+    """
+    try:
+        client.load_system_host_keys()
+    except Exception:      # noqa: BLE001 — нет файла known_hosts, это нормально
+        pass
+    try:
+        import app_paths
+        path = os.path.join(app_paths.data_dir(), "known_hosts")
+    except Exception:      # noqa: BLE001 — без пути просто останемся без памяти
+        return
+    try:
+        #Имя файла ставится ПЕРВОЙ строкой самого load_host_keys, поэтому даже когда
+        #файла ещё нет и загрузка падает, AutoAddPolicy уже знает, куда сохранять.
+        client.load_host_keys(path)
+    except Exception:      # noqa: BLE001 — файла нет: первое знакомство, так и надо
+        pass
+
+
 def _run_with_password(server: dict, command: str, timeout: int) -> dict:
     """Команда по паролю — через paramiko.
 
@@ -219,16 +255,12 @@ def _run_with_password(server: dict, command: str, timeout: int) -> dict:
                        "(pip install paramiko). Либо используйте вход по ключу."}
     client = paramiko.SSHClient()
     try:
-        #Известные хосты читаем СИСТЕМНЫЕ — те же, что у обычного ssh: иначе программа
-        #и терминал по-разному отвечали бы на подмену ключа сервера.
-        try:
-            client.load_system_host_keys()
-        except Exception:      # noqa: BLE001 — нет файла known_hosts, это нормально
-            pass
-        #AutoAdd принимает ТОЛЬКО НЕИЗВЕСТНЫЙ хост. Смена ключа у уже известного всё
-        #равно валится с BadHostKeyException — то есть ведём себя как
-        #`StrictHostKeyChecking=accept-new`, а не как «доверять чему угодно».
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        _remember_host_keys(client)
+        #AutoAdd принимает ТОЛЬКО НЕИЗВЕСТНЫЙ хост и, поскольку выше задан наш файл
+        #known_hosts, СОХРАНЯЕТ принятый ключ в него. Смена ключа у уже известного
+        #валится с BadHostKeyException — вот теперь это действительно
+        #`StrictHostKeyChecking=accept-new`, а не «доверять чему угодно».
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec B507
         client.connect(hostname=(server.get("host") or "").strip(),
                        port=int(server.get("port") or 22),
                        username=(server.get("user") or "root").strip(),
@@ -237,7 +269,11 @@ def _run_with_password(server: dict, command: str, timeout: int) -> dict:
                        #съедают лимит неудачных проверок и роняют соединение.
                        look_for_keys=False, allow_agent=False,
                        timeout=15, auth_timeout=20, banner_timeout=20)
-        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        #SAST B601: выполнить произвольную команду на СВОЁМ сервере — и есть
+        #назначение вкладки «Команды» (§16). Барьер здесь не в разборе строки, а
+        #в том, что модуль подключается ТОЛЬКО к локальному серверу программы и
+        #на боевом сервере его нет вовсе.
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601
         out = stdout.read().decode("utf-8", "replace")
         err = stderr.read().decode("utf-8", "replace")
         code = stdout.channel.recv_exit_status()
@@ -754,11 +790,8 @@ def _sftp_copy(server: dict, remote: str, local: str, pull: bool) -> dict:
         return {"ok": False, "log": "Для входа по паролю нужен пакет paramiko."}
     client = paramiko.SSHClient()
     try:
-        try:
-            client.load_system_host_keys()
-        except Exception:      # noqa: BLE001
-            pass
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        _remember_host_keys(client)
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec B507
         client.connect(hostname=(server.get("host") or "").strip(),
                        port=int(server.get("port") or 22),
                        username=(server.get("user") or "root").strip(),

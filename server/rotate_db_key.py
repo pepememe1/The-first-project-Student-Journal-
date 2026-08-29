@@ -31,7 +31,6 @@ import re
 import secrets
 import shutil
 import subprocess
-import sys
 import tempfile
 from datetime import datetime, timezone
 
@@ -233,8 +232,9 @@ def main() -> None:
     try:
         import sqlcipher3  # noqa: F401
     except ImportError:
+        #from None: причина здесь и есть сообщение, а трейсбек ImportError только шумит.
         raise SystemExit("Нет драйвера sqlcipher3 — ротация возможна только там, где он установлен "
-                         "(боевой venv). На Windows-dev его нет by design.")
+                         "(боевой venv). На Windows-dev его нет by design.") from None
 
     if not args.apply:
         cmd_check(db, old_key)

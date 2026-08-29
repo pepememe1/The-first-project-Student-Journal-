@@ -24,6 +24,7 @@ import RecoverDialog from '@/components/RecoverDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+import MfaPrompt from '@/components/auth/MfaPrompt.vue'
 const easter = useEasterStore()
 const loc = useLocaleStore()
 
@@ -174,6 +175,10 @@ async function submit() {
   needApproval.value = false
   try {
     const user = await auth.login(login.value, password.value)
+    //Пароль верен, но нужен второй фактор: токенов ещё нет, и переходить некуда.
+    //⚠️ Пароль в связку НЕ сохраняем до конца входа — иначе браузер запомнил бы
+    //его как рабочий, а вход мог и не состояться.
+    if (user?.mfaRequired) return
     await saveCredential(login.value, password.value)
     router.push(HOME_BY_ROLE[user.role] || '/')
   } catch (e) {
@@ -195,6 +200,12 @@ async function submitPasskey() {
   }
 }
 function onApproved() { needApproval.value = false; submit() }
+
+//Второй шаг входа завершён — дальше как при обычном входе.
+async function onMfaDone(user) {
+  await saveCredential(login.value, password.value)
+  router.push(HOME_BY_ROLE[user.role] || '/')
+}
 
 // Регистрация студента / восстановление пароля — модалки под кнопкой «Войти».
 const showRegister = ref(false)
@@ -266,7 +277,12 @@ const showRecover = ref(false)
           <p class="mt-1 text-xs font-semibold text-accent sm:text-sm">{{ loc.t('app.college') }}</p>
         </div>
 
-        <form class="space-y-3 sm:space-y-4" @submit.prevent="submit">
+        <!-- Второй фактор: пароль уже принят, показываем ТОЛЬКО поле кода.
+             Форму входа при этом прячем целиком — оставлять её рядом значит
+             предлагать человеку ввести пароль ещё раз там, где он не нужен. -->
+        <MfaPrompt v-if="auth.mfaChallenge" @done="onMfaDone" @cancel="password = ''" />
+
+        <form v-else class="space-y-3 sm:space-y-4" @submit.prevent="submit">
           <div>
             <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.login') }}</label>
             <input v-model="login" id="login" name="username" autocomplete="username"
@@ -312,7 +328,7 @@ const showRecover = ref(false)
         <!-- Вход по passkey. На телефоне это Face ID/отпечаток, на ПК — «ключ доступа»
              (Windows Hello / PIN / аппаратный ключ), поэтому подпись зависит от устройства.
              Включается в настройках профиля после обычного входа. -->
-        <div v-if="canBiometric" class="mt-3">
+        <div v-if="canBiometric && !auth.mfaChallenge" class="mt-3">
           <button type="button" :disabled="auth.loading"
                   class="flex w-full items-center justify-center gap-2 rounded-sm border border-accent/50 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow disabled:opacity-50"
                   @click="submitPasskey">

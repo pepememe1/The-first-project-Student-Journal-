@@ -28,7 +28,12 @@ def admin_server_info(request: Request = None,
     from ...config import DATABASE_URL, ALLOWED_ORIGINS
     from ... import gost, security, events as _events
     is_sqlite = DATABASE_URL.startswith("sqlite")
-    db_key = os.environ.get("GRADEBOOK_DB_KEY", "").strip()
+    #⚠️ НЕ os.environ: ключ может приходить из учётных данных службы или из
+    #файла (см. app/secrets_source.py). Читая окружение напрямую, эта страница
+    #показала бы админу «шифрование выключено» на сервере, где оно включено, —
+    #то есть правдоподобную ложь ровно на экране безопасности.
+    from ... import secrets_source
+    db_key = secrets_source.get("GRADEBOOK_DB_KEY")
     sqlcipher = False
     if is_sqlite and db_key:
         try:
@@ -60,6 +65,13 @@ def admin_server_info(request: Request = None,
         "crypto_algorithm": bi.get("algorithm", ""),
         "crypto_certified": bi.get("certified", False),
         "gost_hash_backend": gost_hash or "gostcrypto (pure-python)",
+        #ОТКУДА взяты секреты, а не сами секреты. Нужно на приёмке и при
+        #переходе на учётные данные службы: вопрос «точно ли сервер читает
+        #ключ из хранилища, а не из старой переменной окружения» иначе
+        #проверяется только чтением кода, то есть верой. Значения не
+        #возвращаются никогда — `source_of` их не выдаёт по построению.
+        "secret_sources": {name: secrets_source.source_of(name)
+                           for name in secrets_source.SECRET_NAMES},
         "online_count": len(_events.online()),
         "term": {"year": cy, "semester": cs},
         "counts": {

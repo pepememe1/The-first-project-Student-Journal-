@@ -600,7 +600,8 @@ class LocalAPI:
         while time.time() < deadline:
             if self._server is not None and getattr(self._server, "started", False):
                 try:
-                    with urllib.request.urlopen(url, timeout=2) as r:
+                    #SAST B310: адрес — наша же петля 127.0.0.1.
+                    with urllib.request.urlopen(url, timeout=2) as r:  # nosec B310
                         if r.status == 200:
                             return True
                 except (urllib.error.URLError, OSError):

@@ -41,8 +41,54 @@ export const useAuthStore = defineStore('auth', () => {
   // Сколько секунд осталось до конца блокировки за перебор. Ноль — не заперты.
   const lockedFor = ref(0)
 
+  //Незавершённый вход: пароль принят, ждём код. Живёт только в памяти вкладки —
+  //класть challenge в localStorage нельзя, это половина пропуска, и переживать
+  //перезагрузку она не должна.
+  const mfaChallenge = ref('')
+  const mfaLogin = ref('')
+
   const isAuthenticated = computed(() => !!user.value && !!getAccess())
   const role = computed(() => user.value?.role || null)
+
+  /**
+   * Общий хвост УСПЕШНОГО входа — каким бы способом он ни произошёл.
+   *
+   * ⚠️ Раньше этот код был скопирован в парольный вход и во вход по биометрии, и
+   * копии уже разошлись: у входящего по отпечатку виджет расписания не наполнялся
+   * ВООБЩЕ и молча оставался пустым (это прямо описано в комментарии, который тут
+   * стоял). Со вторым фактором появилась бы ТРЕТЬЯ копия — то есть третье место,
+   * где однажды забудут строку. Поэтому одна функция.
+   */
+  function _afterLogin(data, loginStr) {
+    setTokens({ access: data.access_token, refresh: data.refresh_token })
+    user.value = {
+      login: loginStr || data.login || '',
+      role: data.role,
+      name: data.name || loginStr || data.login || '',
+    }
+    localStorage.setItem(LS_USER, JSON.stringify(user.value))
+    // Привязываем телефон к ЭТОМУ аккаунту: на одном устройстве могли входить
+    // разные люди, и уведомления должны идти последнему вошедшему.
+    registerToken()
+    // Язык интерфейса аккаунта. Человек мог выбрать его на ДРУГОМ устройстве, и
+    // заставлять выставлять заново — ровно та мелочь, из-за которой настройкой
+    // перестают пользоваться.
+    import('@/stores/locale')
+      .then(({ useLocaleStore }) => useLocaleStore().loadFromAccount())
+      .catch(() => { /* язык — не условие входа */ })
+    // Виджет расписания на рабочем столе Android наполняем ИМЕННО ЗДЕСЬ: на страницу
+    // «Расписание» человек может не заходить неделями, а вход случается гарантированно.
+    // Адрес сервера — обязательно рядом со снимком, иначе нативная часть не знает, куда
+    // ходить. Ошибку глотаем: виджет — дополнение, из-за него вход падать не должен.
+    saveWidgetEndpoint()
+    refreshWidgetSchedule(data.role).catch(() => {})
+    // Очередь оценок принадлежит логину и пережила выход из аккаунта. Перечитываем её
+    // под нового вошедшего и сразу пробуем отправить: сеть только что была — вход по
+    // ней и произошёл, лучшего момента не будет.
+    reloadOutbox()
+    flushOutbox().catch(() => {})
+    return user.value
+  }
 
   async function login(login, password) {
     loading.value = true
@@ -50,37 +96,16 @@ export const useAuthStore = defineStore('auth', () => {
     lockedFor.value = 0
     try {
       const { data } = await authApi.login(login.trim(), password)
-      setTokens({ access: data.access_token, refresh: data.refresh_token })
-      user.value = { login: login.trim(), role: data.role, name: data.name || login.trim() }
-      localStorage.setItem(LS_USER, JSON.stringify(user.value))
-      // Привязываем телефон к ЭТОМУ аккаунту: на одном устройстве могли входить
-      // разные люди, и уведомления должны идти последнему вошедшему.
-      registerToken()
-      // Язык интерфейса аккаунта. Человек мог выбрать его на ДРУГОМ устройстве, и
-      // заставлять выставлять заново — ровно та мелочь, из-за которой настройкой
-      // перестают пользоваться. Локальный выбор при этом не теряется: если на сервере
-      // языка нет, остаётся тот, что выбран на экране входа (см. stores/locale.js).
-      import('@/stores/locale')
-        .then(({ useLocaleStore }) => useLocaleStore().loadFromAccount())
-        .catch(() => { /* язык — не условие входа */ })
-      // Виджет расписания на рабочем столе Android наполняем ИМЕННО ЗДЕСЬ, а не на
-      // странице «Расписание»: туда человек может не заходить неделями, а виджет всё
-      // это время показывал бы данные с прошлого захода. Вход — единственный момент,
-      // который случается гарантированно и однозначно определяет, ЧЬЁ расписание брать.
-      // Ошибку глотаем: виджет — дополнение, из-за него вход падать не должен.
-      // Адрес сервера — ОБЯЗАТЕЛЬНО рядом со снимком: без него нативная часть не знает,
-      // куда ходить, и виджет живёт ровно тем, что положили при входе. Человек может не
-      // открывать приложение неделями, а расписание за это время правят — и виджет
-      // уверенно показывает не то. Зашить адрес в нативный код нельзя: сервер задаётся
-      // в рантайме (свой сервер колледжа), и зашитый указывал бы не туда.
-      saveWidgetEndpoint()
-      refreshWidgetSchedule(data.role).catch(() => {})
-      // Очередь оценок принадлежит логину и пережила выход из аккаунта. Перечитываем
-      // её под нового вошедшего и сразу пробуем отправить: сеть только что была —
-      // вход по ней и произошёл, лучшего момента не будет.
-      reloadOutbox()
-      flushOutbox().catch(() => {})
-      return user.value
+      // ── Второй фактор ────────────────────────────────────────────────────────
+      // Сервер ответил 200, но токенов НЕ ПРИСЛАЛ: пароль верен, нужен код.
+      // Возвращаем это ВЫЗЫВАЮЩЕМУ, а не бросаем ошибку: для человека второй шаг
+      // входа — не сбой, и экран должен показать поле для кода, а не красную плашку.
+      if (data?.mfa_required) {
+        mfaChallenge.value = data.challenge || ''
+        mfaLogin.value = login.trim()
+        return { mfaRequired: true }
+      }
+      return _afterLogin(data, login.trim())
     } catch (e) {
       const status = e.response?.status
       //Секунды до разблокировки держим отдельно: по ним рисуется обратный отсчёт, и
@@ -103,20 +128,7 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     try {
       const data = await loginWithPasskey('')
-      setTokens({ access: data.access_token, refresh: data.refresh_token })
-      user.value = { login: data.login || '', role: data.role, name: data.name || data.login || '' }
-      localStorage.setItem(LS_USER, JSON.stringify(user.value))
-      // ⚠️ То же, что и в парольном входе, — и раньше этого здесь НЕ БЫЛО: у того, кто
-      // заходит по биометрии, виджет не наполнялся вовсе и молча оставался пустым.
-      // Вход есть вход, каким бы способом он ни произошёл.
-      saveWidgetEndpoint()
-      refreshWidgetSchedule(data.role).catch(() => {})
-      // Очередь оценок принадлежит логину и пережила выход из аккаунта. Перечитываем
-      // её под нового вошедшего и сразу пробуем отправить: сеть только что была —
-      // вход по ней и произошёл, лучшего момента не будет.
-      reloadOutbox()
-      flushOutbox().catch(() => {})
-      return user.value
+      return _afterLogin(data, data.login || '')
     } catch (e) {
       // Отмена пользователем (NotAllowedError/AbortError) — не ошибка, пробрасываем молча.
       if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') throw e
@@ -125,6 +137,46 @@ export const useAuthStore = defineStore('auth', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  /**
+   * Второй шаг входа: код из приложения или код восстановления.
+   *
+   * ⚠️ Логин берём из `mfaLogin`, а не из поля формы: к этому моменту человек уже
+   * на другом экране, и поле может быть очищено.
+   */
+  async function verifyMfa(code) {
+    if (!mfaChallenge.value) throw new Error('нет незавершённого входа')
+    loading.value = true
+    error.value = ''
+    try {
+      const { data } = await authApi.mfaVerify(mfaChallenge.value, String(code || '').trim())
+      const u = _afterLogin(data, mfaLogin.value)
+      mfaChallenge.value = ''
+      mfaLogin.value = ''
+      return u
+    } catch (e) {
+      const status = e.response?.status
+      if (status === 401) {
+        //Срок challenge вышел — возвращаем человека к паролю ЯВНО. Иначе он будет
+        //вводить коды в поле, которое уже ничего не значит.
+        mfaChallenge.value = ''
+        error.value = 'Время подтверждения истекло — войдите заново'
+      } else if (status === 429) {
+        error.value = e.response?.data?.detail || 'Слишком много попыток. Подождите.'
+      } else {
+        error.value = e.response?.data?.detail || 'Код не подошёл'
+      }
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function cancelMfa() {
+    mfaChallenge.value = ''
+    mfaLogin.value = ''
+    error.value = ''
   }
 
   async function logout() {
@@ -190,5 +242,6 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey, logout, clearSession }
+  return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey,
+           mfaChallenge, verifyMfa, cancelMfa, logout, clearSession }
 })

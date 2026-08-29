@@ -51,7 +51,8 @@ def backend_info() -> dict:
 
 
 def _data_key() -> bytes | None:
-    k = os.environ.get("GRADEBOOK_DATA_KEY", "").strip()
+    from . import secrets_source
+    k = secrets_source.get("GRADEBOOK_DATA_KEY")
     if len(k) == 64:
         try:
             return bytes.fromhex(k)
@@ -61,7 +62,8 @@ def _data_key() -> bytes | None:
 
 
 def _index_key() -> bytes:
-    k = os.environ.get("GRADEBOOK_INDEX_KEY", "").strip()
+    from . import secrets_source
+    k = secrets_source.get("GRADEBOOK_INDEX_KEY")
     return bytes.fromhex(k) if len(k) in (32, 64) and _is_hex(k) else (k.encode() or b"gb-index")
 
 

@@ -80,8 +80,10 @@ def _old_exe_path() -> str:
 
 
 def _get(url: str, timeout: int = _TIMEOUT) -> bytes:
+    #SAST B310: схему проверяет `_transport_ok()` ДО вызова (строка 142) —
+    #http и файловые схемы отвергаются там же, где объяснено почему.
     req = urllib.request.Request(url, headers={"User-Agent": "GradeBookAI-updater/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310
         return r.read()
 
 
@@ -156,7 +158,8 @@ def _download(url: str, dest: str, expect_sha: str) -> bool:
     tmp = dest + ".part"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "GradeBookAI-updater/1.0"})
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r, open(tmp, "wb") as f:
+        #SAST B310: см. `_transport_ok()` — качаем только по проверенной схеме.
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as r, open(tmp, "wb") as f:  # nosec B310
             total = 0
             while True:
                 chunk = r.read(1 << 20)
@@ -356,7 +359,13 @@ def ask_yes_no(title: str, message: str) -> bool:
 
     На не-Windows (только dev-запуск тестов на другой ОС, релиз — Windows-only, DPAPI/
     WebView2/SQLCipher) — молча отвечает «нет», чтобы автотесты не поймали реальный
-    диалог; тесты самой функции подменяют ctypes.windll, а не полагаются на эту ветку."""
+    диалог.
+
+    ⚠️ Здесь стояло «тесты самой функции подменяют ctypes.windll, а не полагаются на
+    эту ветку» — и это было НЕПРАВДОЙ: заслонка ниже срабатывает ПЕРВОЙ, до всякого
+    windll. Из-за неё на Linux тест «ответ НЕТ» был зелёным, ни разу не дойдя до
+    диалога, а тест «ответ ДА» падал — и его падение списывали на среду. Тесты теперь
+    подменяют И платформу; см. tests/test_desktop_update.py."""
     if sys.platform != "win32":
         _LOG.info(f"[update] {title}: {message} (не Windows — диалог недоступен)")
         return False

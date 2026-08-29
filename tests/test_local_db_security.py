@@ -38,7 +38,7 @@ def _make_plain(path, rows=40):
     conn.execute("CREATE TABLE grades (id TEXT PRIMARY KEY, student TEXT, value TEXT)")
     for i in range(rows):
         conn.execute("INSERT INTO grades VALUES (?,?,?)",
-                     (f"g{i}", f"Загдаева|Арина|К64/2", "5"))
+                     (f"g{i}", "Загдаева|Арина|К64/2", "5"))
     conn.commit()
     conn.close()
     return path

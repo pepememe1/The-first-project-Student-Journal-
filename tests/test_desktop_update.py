@@ -180,6 +180,14 @@ def test_ask_yes_no_true_on_idyes(updater_env, monkeypatch):
     fake = _FakeUser32(answer=6)                                # IDYES
     monkeypatch.setattr(updater.ctypes, "windll",
                         type("W", (), {"user32": fake})(), raising=False)
+    #🔥 Без подмены платформы тест НЕ ПРОВЕРЯЕТ НИЧЕГО. `ask_yes_no` первой
+    #строкой выходит по `sys.platform != "win32"`, то есть на Linux до
+    #подменённого `windll` дело не доходит вовсе. Соседний тест (ответ «нет»)
+    #из-за этого годами был ЗЕЛЁНЫМ ПО НЕВЕРНОЙ ПРИЧИНЕ: ждал False и получал
+    #его от заслонки платформы, а не от диалога. Докстринг функции при этом
+    #прямо утверждал обратное — «тесты подменяют ctypes.windll, а не
+    #полагаются на эту ветку». Поправлено 29.08.2026 вместе с докстрингом.
+    monkeypatch.setattr(updater.sys, "platform", "win32")
     assert updater.ask_yes_no("Заголовок", "Текст") is True
     assert fake.calls and fake.calls[0][1] == "Заголовок"
 
@@ -189,6 +197,14 @@ def test_ask_yes_no_false_on_idno(updater_env, monkeypatch):
     fake = _FakeUser32(answer=7)                                # IDNO
     monkeypatch.setattr(updater.ctypes, "windll",
                         type("W", (), {"user32": fake})(), raising=False)
+    #🔥 Без подмены платформы тест НЕ ПРОВЕРЯЕТ НИЧЕГО. `ask_yes_no` первой
+    #строкой выходит по `sys.platform != "win32"`, то есть на Linux до
+    #подменённого `windll` дело не доходит вовсе. Соседний тест (ответ «нет»)
+    #из-за этого годами был ЗЕЛЁНЫМ ПО НЕВЕРНОЙ ПРИЧИНЕ: ждал False и получал
+    #его от заслонки платформы, а не от диалога. Докстринг функции при этом
+    #прямо утверждал обратное — «тесты подменяют ctypes.windll, а не
+    #полагаются на эту ветку». Поправлено 29.08.2026 вместе с докстрингом.
+    monkeypatch.setattr(updater.sys, "platform", "win32")
     assert updater.ask_yes_no("Заголовок", "Текст") is False
 
 

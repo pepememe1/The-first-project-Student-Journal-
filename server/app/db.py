@@ -738,7 +738,9 @@ def _migrate_slash_in_ids():
         for table, column, where in targets:
             try:
                 res = conn.execute(text(
-                    f"UPDATE {table} SET {column} = replace({column}, '/', '~') WHERE {where}"))
+                    #SAST B608: table/column/where — из нашего же описания
+                    #миграции, снаружи не приходят.
+                    f"UPDATE {table} SET {column} = replace({column}, '/', '~') WHERE {where}"))  # nosec B608
                 fixed += res.rowcount or 0
             except Exception:
                 continue        #таблицы ещё нет (свежая БД) — чинить нечего

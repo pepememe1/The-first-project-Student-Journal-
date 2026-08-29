@@ -29,7 +29,12 @@ function whenIdle(fn) {
 
 /** Стоит ли вообще качать впрок. */
 function allowed() {
-  const c = navigator.connection
+  //⚠️ `navigator` берём через `globalThis`, а не голым именем. В браузере он есть
+  //всегда, но этот модуль грузят ещё и тесты в Node — а там глобальный `navigator`
+  //появился только в 21-й версии. Голое имя валило прогон на Node 20 с
+  //«navigator is not defined», и падал он именно в CI, где версия старее, чем на
+  //машине разработчика. Тот же приём защитит и от исполнения в web worker.
+  const c = globalThis.navigator?.connection
   if (!c) return true
   if (c.saveData) return false
   return !['slow-2g', '2g'].includes(c.effectiveType || '')

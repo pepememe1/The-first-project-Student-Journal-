@@ -63,7 +63,9 @@ def _get(path: str, params: dict) -> dict | None:
         url += f"?{query}"
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": _UA})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+        #SAST B310: адрес собран из константы API и параметров запроса; хост
+        #дополнительно сверяется белым списком (`is_allowed_url`).
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # nosec B310
             return json.loads(r.read().decode("utf-8"))
     except Exception as e:      # noqa: BLE001 — сбой GIF-провайдера не роняет чат
         log.warning("Klipy недоступен (%s): %s", path, e)
@@ -150,7 +152,7 @@ def mark_shared(slug: str) -> None:
     req = urllib.request.Request(url, data=b"{}", method="POST",
                                  headers={"Content-Type": "application/json", "User-Agent": _UA})
     try:
-        urllib.request.urlopen(req, timeout=TIMEOUT_S)
+        urllib.request.urlopen(req, timeout=TIMEOUT_S)  # nosec B310
     except Exception as e:      # noqa: BLE001
         log.warning("Klipy share-уведомление не удалось (%s): %s", slug, e)
 

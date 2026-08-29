@@ -28,7 +28,8 @@ def send_email(to: str, subject: str, body: str, html: str = "") -> bool:
     """Отправляет письмо. True — ушло, False — не настроено/ошибка (не роняем поток)."""
     host = os.environ.get("GRADEBOOK_SMTP_HOST", "").strip()
     user = os.environ.get("GRADEBOOK_SMTP_USER", "").strip()
-    pwd = os.environ.get("GRADEBOOK_SMTP_PASS", "").strip()
+    from . import secrets_source
+    pwd = secrets_source.get("GRADEBOOK_SMTP_PASS")
     if not (host and user and pwd):
         return False
     port = int(os.environ.get("GRADEBOOK_SMTP_PORT", "465"))

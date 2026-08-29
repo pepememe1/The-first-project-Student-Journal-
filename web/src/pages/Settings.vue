@@ -10,6 +10,7 @@ import { authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
+import MfaCard from '@/components/settings/MfaCard.vue'
 import { useTtsStore } from '@/stores/tts'
 import { useVoiceStore } from '@/stores/voice'
 import { useAuthStore } from '@/stores/auth'
@@ -569,6 +570,15 @@ onMounted(() => easter.roll('gman_observer'))
           <Check v-if="gradingScale === s.id" class="size-4 shrink-0 text-accent" />
         </button>
       </div>
+    </Card>
+
+    <!-- Второй фактор входа. ⚠️ БЕЗ v-if по устройству, в отличие от блока ниже:
+         код из приложения работает где угодно, а администратору он ОБЯЗАТЕЛЕН —
+         спрятать эту карточку значило бы спрятать единственный способ вернуть себе
+         доступ к разделам. -->
+    <Card :title="loc.t('settings.mfa', 'Второй фактор входа')"
+          :subtitle="loc.t('settings.mfaHint', 'Одноразовый код из приложения-аутентификатора в дополнение к паролю')">
+      <MfaCard />
     </Card>
 
     <!-- Вход по биометрии / 2FA — виден только на устройствах с Face ID/отпечатком. -->

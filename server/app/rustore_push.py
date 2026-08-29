@@ -49,7 +49,8 @@ def _post(payload: dict) -> tuple:
         "Authorization": f"Bearer {config.RUSTORE_SERVICE_TOKEN}",
     })
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+        #SAST B310: адрес RuStore — константа модуля.
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # nosec B310
             return True, r.status, r.read().decode("utf-8", "replace")[:500]
     except urllib.error.HTTPError as e:
         return False, e.code, e.read().decode("utf-8", "replace")[:500]

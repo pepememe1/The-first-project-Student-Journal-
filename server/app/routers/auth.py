@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -210,6 +211,22 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
             schedule_web.warm()
         except Exception:
             pass        #прогрев — удобство, а не условие входа; сбой не мешает логину
+
+    #── ВТОРОЙ ФАКТОР ────────────────────────────────────────────────────────────
+    #Пароль сошёлся, но фактор включён — токенов НЕ ВЫДАЁМ ВОВСЕ. Вместо них
+    #короткий challenge, который годится ровно на один вызов /auth/mfa/verify.
+    #
+    #⚠️ Почему не «выдать токен с пометкой». Пометку пришлось бы проверять в каждой
+    #из двух с лишним сотен ручек; первая забытая — это доступ к журналу по одному
+    #паролю, причём молча. Здесь забыть негде: токена просто нет.
+    from . import mfa as _mfa
+    if _mfa.is_active(db, u.id):
+        events.record("info", "mfa_challenge", "запрошен второй фактор", login_str, ip)
+        #JSONResponse, а НЕ обычный dict: у этой ручки объявлен response_model=TokenOut,
+        #и он молча выбросил бы поля mfa_required/challenge — клиент получил бы пустой
+        #ответ и решил, что вход сломался. Возврат готового Response отключает
+        #фильтрацию по модели; это документированный способ, а не обход.
+        return JSONResponse({"mfa_required": True, "challenge": _mfa.make_challenge(u)})
     return _issue_token_pair(db, u, request)
 
 

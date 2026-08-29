@@ -68,8 +68,9 @@ LOCAL_MIN_FREE_BYTES = int(os.environ.get("GRADEBOOK_FILES_MIN_FREE_GB", "20")) 
 ENDPOINT = os.environ.get("GRADEBOOK_S3_ENDPOINT", "").strip().rstrip("/")
 REGION = os.environ.get("GRADEBOOK_S3_REGION", "ru-central1").strip()
 BUCKET = os.environ.get("GRADEBOOK_S3_BUCKET", "").strip()
-ACCESS_KEY = os.environ.get("GRADEBOOK_S3_KEY", "").strip()
-SECRET_KEY = os.environ.get("GRADEBOOK_S3_SECRET", "").strip()
+from . import secrets_source
+ACCESS_KEY = secrets_source.get("GRADEBOOK_S3_KEY")
+SECRET_KEY = secrets_source.get("GRADEBOOK_S3_SECRET")
 
 #Потолок размера. 25 МБ — это учебный документ, презентация или скан, но не видео:
 #видео живёт ссылкой на видеохостинг (механизм А в плане), и так и должно остаться.
@@ -252,7 +253,8 @@ def head_object(key: str) -> dict:
     import urllib.request
     req = urllib.request.Request(presign("HEAD", key, 300), method="HEAD")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        #SAST B310: ссылку подписали мы сами (`presign`) из GRADEBOOK_S3_ENDPOINT.
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
             return {"size": int(resp.headers.get("Content-Length") or 0),
                     "mime": (resp.headers.get("Content-Type") or "").split(";")[0].strip()}
     except urllib.error.HTTPError:
@@ -364,7 +366,8 @@ def delete_object(key: str) -> bool:
     import urllib.request
     req = urllib.request.Request(presign("DELETE", key, 300), method="DELETE")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        #SAST B310: ссылка подписана нами же (`presign`).
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
         return e.code == 404          #уже нет — считаем, что задача выполнена

@@ -101,7 +101,8 @@ def _ensure_model_file(path: str) -> None:
         return
     import urllib.request
     tmp = path + ".part"
-    urllib.request.urlretrieve(_MODEL_URL, tmp)
+    #SAST B310: _MODEL_URL — константа модуля (модель Silero).
+    urllib.request.urlretrieve(_MODEL_URL, tmp)  # nosec B310
     os.replace(tmp, path)
 
 
@@ -192,7 +193,7 @@ def synthesize(text: str, voice: str = _DEFAULT_VOICE,
         engine = _DEFAULT_ENGINE
     speaker = _SPEAKERS.get(voice, _SPEAKERS[_DEFAULT_VOICE])
     #Ключ кэша включает движок и голос — разные движки/голоса дают разное аудио.
-    key = (engine, speaker, hashlib.sha1(text.encode("utf-8")).hexdigest())
+    key = (engine, speaker, hashlib.sha256(text.encode("utf-8")).hexdigest())
 
     with _cache_lock:
         hit = _cache.get(key)

@@ -32,6 +32,17 @@ export const authApi = {
     api.post('/auth/recover/confirm', { token, password }),
   // Passkeys (вход по Face ID / отпечатку). begin выдаёт опции с challenge, complete
   // проверяет ответ устройства. register — под токеном (включить), login — публичный.
+  // ── Второй фактор входа (TOTP) ──
+  // ⚠️ `mfaVerify` — ВТОРОЙ шаг входа, и токена авторизации у него нет: пропуском
+  // служит короткий challenge из ответа /auth/login. Остальные ручки требуют уже
+  // открытой сессии (фактор заводят изнутри кабинета).
+  mfaStatus: () => api.get('/auth/mfa/status'),
+  mfaSetup: () => api.post('/auth/mfa/setup'),
+  mfaConfirm: (code) => api.post('/auth/mfa/confirm', { code }),
+  mfaDisable: (code) => api.post('/auth/mfa/disable', { code }),
+  mfaRegenerate: (code) => api.post('/auth/mfa/recovery/regenerate', { code }),
+  mfaVerify: (challenge, code) => api.post('/auth/mfa/verify', { challenge, code }),
+
   webauthnRegisterBegin: () => api.post('/auth/webauthn/register/begin'),
   webauthnRegisterComplete: (payload) => api.post('/auth/webauthn/register/complete', payload),
   webauthnLoginBegin: (login = '') => api.post('/auth/webauthn/login/begin', { login }),

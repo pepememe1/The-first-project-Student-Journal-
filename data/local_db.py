@@ -255,7 +255,9 @@ def _row_census(path: str, key: str):
         names = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
         for n in names:
-            out[n] = conn.execute('SELECT COUNT(*) FROM "%s"' % n).fetchone()[0]
+            #SAST B608: имя таблицы взято из sqlite_master ЭТОЙ ЖЕ базы и
+            #заключено в кавычки. Имя таблицы параметром не передать.
+            out[n] = conn.execute('SELECT COUNT(*) FROM "%s"' % n).fetchone()[0]  # nosec B608
         return out
     except Exception as e:                          # noqa: BLE001
         _LOG.warning("[local-db] не удалось пересчитать строки в %s: %s", path, e)
@@ -325,7 +327,8 @@ def _machine_keys(path: str, key: str) -> list:
         conn = connect(path, key)
         marks = ",".join("?" for _ in MACHINE_KEYS)
         rows = conn.execute(
-            "SELECT key, value FROM kv_store WHERE key IN (%s)" % marks,
+            #SAST B608: marks — строка из «?», сами ключи идут параметрами.
+            "SELECT key, value FROM kv_store WHERE key IN (%s)" % marks,  # nosec B608
             tuple(MACHINE_KEYS)).fetchall()
         return [(k, v) for k, v in rows]
     except Exception:                               # noqa: BLE001

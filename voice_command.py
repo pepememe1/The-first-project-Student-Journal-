@@ -278,7 +278,7 @@ def _match_students(text: str, roster: list[tuple[str, str]],
     #иначе «Иванову» само похоже на «Иван».
     fam_stem = _stem(near[0][0])
     #Здесь тоже берём уже посчитанные основы, а не считаем их по третьему разу.
-    name_words = [w for w, st in zip(words, stems) if _similar(st, fam_stem) < top - 0.05]
+    name_words = [w for w, st in zip(words, stems, strict=True) if _similar(st, fam_stem) < top - 0.05]
     by_name = []
     for (f, n) in near:
         nst = _stem(n)

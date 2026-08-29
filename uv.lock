@@ -39,19 +39,6 @@ wheels = [
 ]
 
 [[package]]
-name = "beautifulsoup4"
-version = "4.15.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "soupsieve" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/43/65/318323f98dbee45d42dff61d8f047181bc6f2268a9068cfad035a46be5af/beautifulsoup4-4.15.0.tar.gz", hash = "sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7", size = 632571, upload-time = "2026-06-07T16:44:20.453Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/c6/92fcd42f1ba33e1184263f25bfabf3d27c383410470f169e4b8163bf9c17/beautifulsoup4-4.15.0-py3-none-any.whl", hash = "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9", size = 109924, upload-time = "2026-06-07T16:44:21.566Z" },
-]
-
-[[package]]
 name = "bottle"
 version = "0.13.4"
 source = { registry = "https://pypi.org/simple" }
@@ -471,19 +458,6 @@ wheels = [
 ]
 
 [[package]]
-name = "deep-translator"
-version = "1.11.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/03/8fa7635c729a01de71151894cdf002ad6d245bfd6d1a731da864cf534dcf/deep_translator-1.11.4.tar.gz", hash = "sha256:801260c69231138707ea88a0955e484db7d40e210c9e0ae0f77372ffda5f4bf5", size = 36043, upload-time = "2023-06-28T19:55:23.499Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/3f/61a8ef73236dbea83a1a063a8af2f8e1e41a0df64f122233938391d0f175/deep_translator-1.11.4-py3-none-any.whl", hash = "sha256:d635df037e23fa35d12fd42dab72a0b55c9dd19e6292009ee7207e3f30b9e60a", size = 42285, upload-time = "2023-06-28T19:55:20.928Z" },
-]
-
-[[package]]
 name = "ecdsa"
 version = "0.19.2"
 source = { registry = "https://pypi.org/simple" }
@@ -642,18 +616,20 @@ dev = [
     { name = "brotli" },
     { name = "fonttools" },
     { name = "pytest" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 server = [
-    { name = "deep-translator" },
     { name = "fastapi" },
     { name = "gigachat" },
     { name = "httpx" },
     { name = "pdfplumber" },
     { name = "psycopg2-binary" },
+    { name = "pydantic" },
     { name = "python-jose", extra = ["cryptography"] },
     { name = "python-multipart" },
     { name = "sqlalchemy" },
     { name = "sqlcipher3-binary", marker = "sys_platform == 'linux'" },
+    { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "webauthn" },
 ]
@@ -662,7 +638,6 @@ server = [
 requires-dist = [
     { name = "brotli", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "cryptography", specifier = ">=42.0" },
-    { name = "deep-translator", marker = "extra == 'server'", specifier = ">=1.11" },
     { name = "fastapi", marker = "extra == 'desktop'", specifier = ">=0.110" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.110" },
     { name = "fonttools", marker = "extra == 'dev'", specifier = ">=4.50" },
@@ -674,6 +649,7 @@ requires-dist = [
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "pdfplumber", marker = "extra == 'server'", specifier = ">=0.11" },
     { name = "psycopg2-binary", marker = "extra == 'server'", specifier = ">=2.9" },
+    { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-docx", specifier = ">=1.1" },
     { name = "python-jose", extras = ["cryptography"], marker = "extra == 'desktop'", specifier = ">=3.3" },
@@ -686,6 +662,8 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "sqlcipher3", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=0.5" },
     { name = "sqlcipher3-binary", marker = "sys_platform == 'linux' and extra == 'server'", specifier = ">=0.5" },
+    { name = "starlette", marker = "extra == 'server'", specifier = ">=0.36" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'desktop'", specifier = ">=0.29" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.29" },
     { name = "webauthn", marker = "extra == 'desktop'", specifier = ">=2.0" },
@@ -1627,15 +1605,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
-]
-
-[[package]]
-name = "soupsieve"
-version = "2.9.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d9/38/e12680bbe6b4f8f3d17adcaf38d26850aa756c85cf4a80e79fc12a018fe8/soupsieve-2.9.1.tar.gz", hash = "sha256:c33e6605bbc71dd628b00c632d58ae607c22bade247e52553928f83bbb75b4ba", size = 122261, upload-time = "2026-07-21T16:57:17.452Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/2c/437fe806897c2d6cfdc3ee43a18da8bf8e568530a4ae9bac781541ca9896/soupsieve-2.9.1-py3-none-any.whl", hash = "sha256:4f4477399246b7a0c720a88ca2454b11cd6bb9ae4c9d170140786e916776c14c", size = 37404, upload-time = "2026-07-21T16:57:16.421Z" },
 ]
 
 [[package]]

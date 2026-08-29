@@ -28,7 +28,7 @@ class _GroupSched:
         self._lessons = lessons
 
     def all_lessons(self):
-        for i, ls in enumerate(self._lessons):
+        for ls in self._lessons:
             yield (1, "Пн", ls)
 
 

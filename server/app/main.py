@@ -10,7 +10,7 @@ main.py — Точка входа бэкенда GradeBookAI (FastAPI).
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -20,6 +20,7 @@ from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import activities as activities_router
 from .routers import connect as connect_router
 from .routers import webauthn_router
+from .routers import mfa as mfa_router
 from .routers import appupdate
 from .routers import desktopupdate
 from .routers import publicschedule
@@ -163,6 +164,9 @@ app.include_router(admin.router)
 app.include_router(vector.router)
 app.include_router(connect_router.router)
 app.include_router(webauthn_router.router)
+#Второй фактор входа. ⚠️ Идёт МИМО require_admin намеренно: иначе
+#администратор без фактора не смог бы его завести — замок без двери.
+app.include_router(mfa_router.router)
 app.include_router(web.router)
 app.include_router(parent.router)          # кабинет родителя + согласие студента (/web/parent/*)
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла
@@ -232,6 +236,27 @@ def download_file(fname: str):
     return _serve_download(fname)
 
 
+#Префиксы, за которыми живёт API. Всё, что начинается с них и не совпало ни с
+#одним маршрутом, обязано получить честный 404, а не страницу сайта.
+#⚠️ Список ДЕРЖАТЬ В СОГЛАСИИ с подключёнными роутерами; сторож
+#`test_api_paths_never_fall_into_the_spa` проверяет, что ни один существующий
+#маршрут не остался снаружи этого списка — то есть забыть префикс нельзя молча.
+_API_PREFIXES = (
+    "auth", "me", "web", "sync", "connect", "app", "desktop", "admin", "vector",
+    "health", "docs", "openapi.json", "redoc",
+)
+
+
+def _is_api_path(path: str) -> bool:
+    """Начинается ли путь с API-префикса.
+
+    ⚠️ Сравниваем СЕГМЕНТАМИ, а не подстрокой. С «me/» не совпадал бы сам «/me»
+    (поймано сторожем), а с голой подстрокой «app» под API уехал бы, например,
+    «/application-form» — то есть законный адрес сайта начал бы отвечать 404.
+    """
+    p = path.strip("/")
+    return any(p == pref or p.startswith(pref + "/") for pref in _API_PREFIXES)
+
 #САЙТ (SPA): отдаём собранный фронтенд с ТОГО ЖЕ адреса, что и API. Монтируем ПОСЛЕ
 #всех API-роутеров, поэтому /auth, /web, /docs и т.п. имеют приоритет. Неизвестные
 #НЕ-API пути возвращают index.html (клиентский роутинг Vue), существующие файлы
@@ -245,6 +270,18 @@ if WEB_DIST:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
+        #🔥 API-ПУТИ СЮДА НЕ ПОПАДАЮТ. Заглушка обязана ловить ТОЛЬКО адреса
+        #клиентского роутинга Vue. Неизвестный адрес под API-префиксом — это
+        #опечатка или удалённый эндпоинт, и отвечать на него страницей нельзя:
+        #  • клиент получает 200 и HTML там, где ждёт JSON, и ломается разбором
+        #    вместо понятного 404. Ровно этим дефектом канал «Расписание · Группа»
+        #    для группы со слэшем не открывался (см. CLAUDE.md, 3.8);
+        #  • ТЕСТ, стучащийся в опечатанный адрес, получает 200 и ЗЕЛЕНЕЕТ. Поймано
+        #    на себе 29.08.2026 дважды за час: проверки второго фактора ходили в
+        #    «/me» и «/web/admin/users», которых не существует, и обе «проходили».
+        #    Зелёный тест, не дошедший до кода, — худший вид сторожа.
+        if _is_api_path(full_path):
+            raise HTTPException(status_code=404, detail="Неизвестный адрес API")
         target = os.path.realpath(os.path.join(WEB_DIST, full_path))
         #защита от path traversal: отдаём файл только СТРОГО ВНУТРИ dist (root + os.sep),
         #иначе неизвестный путь → отдаём index.html (клиентский роутинг Vue).

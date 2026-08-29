@@ -28,6 +28,25 @@ os.environ["GRADEBOOK_DB_KEY"] = ""
 HOST_DEVICE_ID = "test-host-device"
 os.environ["GRADEBOOK_HOST_DEVICE_ID"] = HOST_DEVICE_ID
 
+# 🔥 ТА ЖЕ ГРАБЛЯ, ЧТО С GRADEBOOK_DB_KEY ВЫШЕ, — и она была ШИРЕ, чем один ключ.
+# `config.py` дочитывает `server/.env` через `setdefault`, то есть занимает ЛЮБУЮ
+# отсутствующую переменную. У кого файл есть (машина разработчика) — одно поведение,
+# у кого нет (CI) — другое. Найдено 29.08.2026: 436 серверных тестов падали локально
+# и проходили в CI, потому что из .env приезжал `GRADEBOOK_ALLOWED_ORIGINS`, а
+# `config.IS_PROD` выводится из него. То есть «1146 зелёных» у разных людей означали
+# РАЗНЫЕ прогоны, и никто этого не знал.
+#
+# ⚠️ Гасим ЯВНО и все, от которых зависит поведение, а не только замеченную:
+#   • ALLOWED_ORIGINS → IS_PROD (боевые проверки, обязательность второго фактора);
+#   • DATA_KEY/INDEX_KEY → шифрование полей ПДн «Кузнечик» (у кого ключи есть —
+#     тесты идут по другой ветке кода);
+#   • DOMAIN → адреса в ответах и ссылки в письмах.
+# Тесты, которым нужен «бой», включают его САМИ (monkeypatch на config.IS_PROD).
+os.environ["GRADEBOOK_ALLOWED_ORIGINS"] = "*"
+os.environ["GRADEBOOK_DATA_KEY"] = ""
+os.environ["GRADEBOOK_INDEX_KEY"] = ""
+os.environ["GRADEBOOK_DOMAIN"] = ""
+
 import pytest
 from fastapi.testclient import TestClient
 

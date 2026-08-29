@@ -1,13 +1,42 @@
 name: CI
 
-# Ловим регрессии ДО сборки .exe и деплоя: синтаксис во всех файлах, серверные тесты
-# (52 шт.) и клиентские тесты (включая статический инвариант «QScrollArea без setWidget»,
-# который поймал бы пустую вкладку «Сервер» этого сеанса). Гоняем на каждый push/PR.
+# Гейт перед сборкой .exe и деплоем.
+#
+# 🔥 ЧТО ЗДЕСЬ БЫЛО НЕ ТАК ДО 29.08.2026 (важнее, чем то, что здесь есть).
+# Этот файл существовал давно, и все 23 прогона, которые отдавала история GitHub,
+# были КРАСНЫМИ. При этом локально всё зелёное: сервер 1146, клиент 733, веб 290.
+# То есть гейт был, в него верили, и он не значил ничего — наш обычный класс
+# дефекта «обещание без вызывающего», только в инфраструктуре.
+# Причины оказались настоящими, все четыре:
+#   • web/build/stripHtmlComments.js не был в git (его глотала строка `build/`
+#     в .gitignore) — а `vite.config.js` его импортирует. На чистом клоне
+#     `npm run build` падал вовсе. Держит web/tests/buildFromCleanClone.test.mjs;
+#   • server/requirements.txt не объявлял requests/pydantic/starlette — на бою они
+#     стояли транзитивно. Держит server/tests/test_requirements_complete.py;
+#   • ruff давал 1328 ошибок, из них 1312 — осознанный `import *` в пакете
+#     мессенджера, о котором линтеру не сказали при разрезе 3.7.7;
+#   • compileall ходил в каталог `ui`, переименованный в `desktop` 13.08.2026,
+#     и «проходил» только потому, что отсутствующий каталог для него не ошибка.
+#
+# ⚠️ ПРАВИЛО НА БУДУЩЕЕ: красный CI чинится в тот же день. Гейт, который красный
+# всегда, ничем не отличается от выключенного, но создаёт ощущение защиты.
+
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+
+# Новый push в ту же ветку отменяет предыдущий прогон: очередь на бесплатных
+# раннерах общая, а смысла проверять устаревший коммит нет.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"      # ⚠️ не 20: на нём нет глобального `navigator`, и прогон
+                          # падал на коде, который в браузере совершенно исправен
 
 jobs:
   compile:
@@ -17,10 +46,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      # Компилируем ВСЕ .py — падаем на любой синтаксической ошибке (как двойная }} была бы,
-      # будь она синтаксисом). Быстро и без зависимостей.
-      - run: python -m compileall -q ui sync data server/app *.py
+          python-version: ${{ env.PYTHON_VERSION }}
+      # ⚠️ Каталоги перечислены ЯВНО и проверяются на существование: сам compileall
+      # молча считает успехом отсутствующий каталог, из-за чего шаг годами был
+      # зелёным, не компилируя половину проекта.
+      - name: Каталоги на месте
+        run: |
+          for d in desktop sync data server/app; do
+            test -d "$d" || { echo "НЕТ КАТАЛОГА $d — поправь список в ci.yml"; exit 1; }
+          done
+      - run: python -m compileall -q desktop sync data server/app *.py
 
   lint-python:
     name: Линтер Python (ruff)
@@ -29,26 +64,38 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      # Высокосигнальный набор правил задан в pyproject.toml [tool.ruff] — ловим
-      # неопределённые имена, мёртвые импорты, дубли определений (реальные баги).
-      - run: pip install ruff
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Набор правил — в pyproject.toml [tool.ruff]: только высокосигнальные,
+      # ловящие настоящие ошибки, а не стиль.
+      - run: pip install ruff==0.14.4
       - run: ruff check .
 
-  lint-web:
-    name: Линтер веба (eslint)
+  web:
+    name: Веб (линтер, тесты, сборка)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-      # npm ci — детерминированная установка по package-lock.json. eslint падает
-      # только на ошибках; предупреждения стиля не блокируют (форматом владеет prettier).
-      - run: cd web && npm ci
-      - run: cd web && npm run lint
-      # Контрактные тесты (node:test): fail-логика оценок JS = Python (grade-cases.json).
-      - run: cd web && npm test
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run lint
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      # Сборка идёт ЗДЕСЬ и один раз: её результат нужен клиентским тестам (SPA
+      # раздаёт локальный сервер) и смоук-прогону. Заодно это и есть проверка
+      # «репозиторий собирается сам по себе», без файлов, уцелевших локально.
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webdist
+          path: web/dist
+          retention-days: 7
 
   server-tests:
     name: Серверные тесты
@@ -57,21 +104,158 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r server/requirements.txt pytest
-      - run: cd server && pytest -q
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # Ставим РОВНО то, что объявлено. Это и есть проверка инструкции по
+      # установке: на машине ВСГУТУ будет ровно этот список и ничего больше.
+      - run: pip install -r server/requirements.txt
+      - run: pytest -q
+        working-directory: server
 
   client-tests:
     name: Клиентские тесты
     runs-on: ubuntu-latest
-    env:
-      QT_QPA_PLATFORM: offscreen   # Qt без дисплея (headless CI)
+    needs: web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      # Системные библиотеки, без которых PySide6 не импортируется на голом ubuntu-runner.
-      - run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
-      - run: pip install -r requirements.txt pytest
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      # ⚠️ Системных библиотек Qt здесь БОЛЬШЕ НЕТ: PySide6 удалён из проекта
+      # 13.08.2026, окно рисует WebView2. Ставить их — тянуть на раннер 200 МБ
+      # ради кода, которого нет.
+      - uses: actions/download-artifact@v4
+        with:
+          name: webdist
+          path: web/dist
+      - run: pip install -r requirements.txt
       - run: pytest -q
+
+  release:
+    name: Артефакт релиза (сборка, воспроизводимость, смоук)
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/download-artifact@v4
+        with:
+          name: webdist
+          path: web/dist
+      - run: pip install -r server/requirements.txt
+
+      - name: Сборка артефакта
+        run: python -X utf8 tools/build_release.py
+
+      # Воспроизводимость проверяется СРАВНЕНИЕМ, а не обещанием в докстринге.
+      # Без неё «сверьте sha256 поставки» — пустые слова: хеш различался бы от
+      # запуска к запуску, и единственной проверкой осталось бы доверие.
+      - name: Две сборки подряд обязаны совпасть побайтово
+        run: |
+          FIRST=$(ls -t dist-release/gradebook-*.tar.gz | head -1)
+          A=$(sha256sum "$FIRST" | cut -d' ' -f1)
+          python -X utf8 tools/build_release.py >/dev/null
+          B=$(sha256sum "$FIRST" | cut -d' ' -f1)
+          echo "первая: $A"; echo "вторая: $B"
+          test "$A" = "$B" || { echo "АРТЕФАКТ НЕВОСПРОИЗВОДИМ"; exit 1; }
+
+      # Тесты проверяют код в дереве разработки. Артефакт — ДРУГАЯ раскладка,
+      # и всё, что связано именно с ней, они не видят по построению. Здесь
+      # сервер поднимается ИЗ АРХИВА и опрашивается по живым адресам.
+      - name: Смоук — поднять из артефакта и опросить
+        run: python -X utf8 tools/smoke_release.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist-release/*.tar.gz
+            dist-release/*.sha256
+          retention-days: 30
+
+  security:
+    name: Безопасность (SAST, зависимости, секреты)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # gitleaks смотрит ИСТОРИЮ, а не только рабочее дерево
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Установка инструментов
+        run: pip install "bandit[toml]==1.8.6" pip-audit==2.9.0
+
+      # ── SAST: ищем опасные приёмы в НАШЕМ коде ──
+      # Конфигурация — в pyproject.toml [tool.bandit] (для её чтения bandit нужен
+      # с экстрасом [toml], иначе он молча возьмёт настройки по умолчанию).
+      # Гейт на MEDIUM и выше: всё, что этого уровня, разобрано поимённо 29.08.2026 —
+      # две настоящие находки починены, остальные помечены `# nosec` с причиной.
+      # Значит ноль здесь — не послабление, а состояние; любая новая находка красит.
+      - name: SAST (bandit)
+        run: bandit -c pyproject.toml -r server/app desktop sync data schedule *.py -q --severity-level medium
+
+      # ── Уязвимости зависимостей ──
+      # ⚠️ Не блокируем сборку: свежая CVE в чужом пакете не должна останавливать
+      # выкладку исправления в журнале. Отчёт читаем глазами, чинит Dependabot.
+      - name: Уязвимости Python-зависимостей
+        continue-on-error: true
+        run: |
+          pip-audit -r server/requirements.txt --desc || true
+          pip-audit -r requirements.txt --desc || true
+
+      - name: Уязвимости веб-зависимостей
+        continue-on-error: true
+        working-directory: web
+        run: npm audit --audit-level=high || true
+
+      # ── Секреты ──
+      # 🔒 Репозиторий приватный, но историю уже приходилось переписывать
+      # (filter-branch + force-push). Уверенности, что в ней чисто, у нас нет —
+      # только надежда. Это единственная проверка, которая её заменяет.
+      # ⚠️ НЕ официальное действие `gitleaks/gitleaks-action@v2`: для ПРИВАТНЫХ
+      # репозиториев оно требует платный GITLEAKS_LICENSE и без него падает. У нас
+      # репозиторий приватный — то есть CI покраснел бы на первом же прогоне по
+      # лицензионной причине, а мы только что закончили чинить его от красноты.
+      # Сам gitleaks — MIT и бесплатен, ставим бинарник.
+      - name: Секреты в дереве и в истории (gitleaks)
+        run: |
+          VER=8.29.0
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          # `detect` смотрит ИСТОРИЮ (для этого выше fetch-depth: 0), а не только
+          # рабочее дерево: репозиторий уже переписывали filter-branch, и
+          # уверенности, что в истории чисто, у нас нет — только надежда.
+          /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1
+
+  sbom:
+    name: SBOM (состав поставки)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Формат CycloneDX. Нужен дважды: покупателю (ФГБОУ спросит состав
+      # поставки) и в заявку в реестр Минцифры — там смотрят на отсутствие
+      # принудительной зависимости от иностранного ПО.
+      - run: pip install cyclonedx-bom==6.1.3
+      - run: npm ci
+        working-directory: web
+      - run: bash tools/make_sbom.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+          retention-days: 90

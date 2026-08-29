@@ -114,7 +114,11 @@ def test_android_admin_logs_in_and_works_without_approval(client):
     assert r.json()["role"] == "admin"
     token = {"Authorization": f"Bearer {r.json()['access_token']}", **ANDROID_DEV}
     #Барьер стоит и на защищённых ручках — проверяем, что и там телефон не отсекается.
-    me = client.get("/me", headers=token)
+    #⚠️ Адрес был «/me», а такого маршрута НЕТ: запрос уходил в SPA-заглушку и получал
+    #200 со страницей. То есть проверка «на защищённых ручках телефон не отсекается»
+    #не выполнялась НИ РАЗУ — тест был зелёным, не дойдя до кода. Вскрылось 29.08.2026,
+    #когда заглушка перестала проглатывать адреса API (см. app/main.py::_is_api_path).
+    me = client.get("/me/prefs", headers=token)
     assert me.status_code == 200, me.text
 
 
