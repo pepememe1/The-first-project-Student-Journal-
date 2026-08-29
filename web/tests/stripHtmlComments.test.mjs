@@ -53,3 +53,38 @@ test('плагин работает только на сборке, а в dev п
   assert.equal(p.name, 'gb-strip-html-comments')
   assert.equal(p.transformIndexHtml('<!-- x -->a'), 'a')
 })
+
+
+test('страницы из public/ тоже теряют пояснения — их Vite копирует мимо плагинов', async () => {
+  // 🔥 `transformIndexHtml` НЕ ВИДИТ файлов из `public/`: Vite кладёт их в `dist`
+  // дословно. Починка 28.08.2026 закрыла ровно одну страницу из четырёх и молчала про
+  // остальные — а там `offer.html` для комиссии и два юридических документа, и в каждом
+  // подробные пояснения, включая устройство CSP. Найдено 29.08.2026 проверкой самого
+  // dist, а не чтением конфига.
+  //
+  // Обратный ход: уберите хук `writeBundle` из плагина — краснеет.
+  const { mkdtemp, writeFile, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const dir = await mkdtemp(join(tmpdir(), 'gb-strip-'))
+  const page = '<!doctype html>\n<!-- пояснение про CSP -->\n' +
+               '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'">\n' +
+               '<p>видимый текст</p>\n<!--[if IE]>условный<![endif]-->'
+  await writeFile(join(dir, 'privacy.html'), page)
+  await writeFile(join(dir, 'notes.txt'), '<!-- это не html, не трогать -->')
+
+  const p = plugin()
+  assert.equal(typeof p.writeBundle, 'function',
+    'у плагина нет хука writeBundle — страницы из public/ уедут в бой с пояснениями')
+  await p.writeBundle({ dir })
+
+  const out = await readFile(join(dir, 'privacy.html'), 'utf8')
+  assert.ok(!out.includes('пояснение про CSP'), 'пояснение уехало бы в бой')
+  assert.ok(out.includes('Content-Security-Policy'), 'вырезали саму защиту, а не пояснение')
+  assert.ok(out.includes('видимый текст'), 'вырезали содержимое страницы')
+  assert.ok(out.includes('<![endif]-->'), 'условный комментарий IE исполняемый, его не трогаем')
+
+  const txt = await readFile(join(dir, 'notes.txt'), 'utf8')
+  assert.ok(txt.includes('это не html'), 'плагин полез в файлы, которые его не касаются')
+})
