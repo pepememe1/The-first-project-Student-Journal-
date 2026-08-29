@@ -551,3 +551,40 @@ def test_schema_is_rebuilt_after_the_owner_changes(monkeypatch, tmp_path):
         conn.close()
     missing = before - after
     assert not missing, f"после смены владельца пропали таблицы: {sorted(missing)}"
+
+
+def test_plaintext_file_opens_without_noise_before_migration(tmp_path, caplog):
+    """Открытый ещё файл открывается БЕЗ ключа и без ошибок в журнале.
+
+    🔥 Между запуском программы и миграцией есть окно, в котором ключ уже есть, а база
+    ещё открытая: в него успевает попасть чтение адреса сервера. Попытка открыть такой
+    файл С ключом даёт «file is not a database», и в логе ПЕРВОГО старта после
+    обновления появлялись две строки ошибок на ровном месте (поймано живым прогоном
+    автообновления 29.08.2026). Само лечится через секунду, но такой шум прячет
+    настоящие сбои — по ним же потом и ищут причину.
+
+    Обратный ход: уберите ветку `if key and is_plaintext(path): key = ""` — краснеет."""
+    import logging
+    p = _make_plain(str(tmp_path / "db.db"))
+    with caplog.at_level(logging.WARNING, logger="gradebook.local_db"):
+        conn = local_db.connect(p, KEY)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 40
+        finally:
+            conn.close()
+    noisy = [r.getMessage() for r in caplog.records
+             if "not a database" in r.getMessage() or "PRAGMA" in r.getMessage()]
+    assert not noisy, f"в журнале шум на ровном месте: {noisy}"
+
+
+def test_migration_still_happens_after_a_plaintext_open(tmp_path):
+    """И главное: поблажка выше НЕ отменяет шифрование — миграция отрабатывает следом.
+
+    Иначе получилось бы худшее из возможного: база молча осталась бы открытой, а в
+    журнале не было бы даже предупреждения, потому что мы его сами и убрали."""
+    p = _make_plain(str(tmp_path / "db.db"))
+    conn = local_db.connect(p, KEY)
+    conn.close()
+    assert local_db.is_plaintext(p), "до миграции файл обязан оставаться открытым"
+    assert local_db.encrypt_in_place(p, KEY) is True
+    assert not local_db.is_plaintext(p), "после миграции файл обязан быть зашифрован"
