@@ -226,8 +226,12 @@ export const MESSAGES = {
     //доступен ДО входа, а не в настройках кабинета.
     'login.legalIntro': 'Входя, вы принимаете',
     'login.legalTerms': 'Пользовательское соглашение',
-    'login.legalAnd': 'и',
-    'login.legalPrivacy': 'Политику обработки персональных данных',
+    //⚠️ Политику НЕ «принимают»: это односторонний документ оператора, а не договор.
+    //Принимают соглашение (оферту), с политикой — знакомятся. Разница не
+    //стилистическая: «принял политику» подразумевает согласие на обработку, а
+    //обработка учебных данных идёт по п. 2 и 5 ч. 1 ст. 6 152-ФЗ, БЕЗ согласия.
+    'login.legalAnd': 'и подтверждаете, что ознакомлены с',
+    'login.legalPrivacy': 'обработкой персональных данных',
     'settings.legal': 'Документы',
     'settings.legalHint': 'Условия использования и порядок обработки персональных данных',
     'login.biometry': 'Войти по Face ID / отпечатку',
@@ -2404,8 +2408,8 @@ export const MESSAGES = {
     'login.passkey': 'Sign in with a passkey',
     'login.legalIntro': 'By signing in you accept the',
     'login.legalTerms': 'Terms of Use',
-    'login.legalAnd': 'and the',
-    'login.legalPrivacy': 'Personal Data Processing Policy',
+    'login.legalAnd': 'and confirm that you have read how',
+    'login.legalPrivacy': 'personal data is processed',
     'settings.legal': 'Documents',
     'settings.legalHint': 'Terms of use and how personal data is processed',
     'login.biometry': 'Sign in with Face ID / fingerprint',
@@ -4572,8 +4576,8 @@ export const MESSAGES = {
     'login.passkey': '使用通行密钥登录',
     'login.legalIntro': '登录即表示您接受',
     'login.legalTerms': '用户协议',
-    'login.legalAnd': '和',
-    'login.legalPrivacy': '个人数据处理政策',
+    'login.legalAnd': '并确认您已了解',
+    'login.legalPrivacy': '个人数据处理方式',
     'settings.legal': '文件',
     'settings.legalHint': '使用条款和个人数据处理方式',
     'login.biometry': '使用面容 ID / 指纹登录',
