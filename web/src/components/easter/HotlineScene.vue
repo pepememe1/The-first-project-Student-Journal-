@@ -66,20 +66,39 @@ async function onClick() {
          у краёв треугольные прорехи — то самое, из-за чего кадр читался как
          незагрузившаяся картинка.
          ⚠️ Слой НИЖНИЙ (z-0): чёрная полоса с репликой ложится поверх. -->
-    <div class="quad absolute -top-[6%] -right-[8%] z-0 h-[86%] w-[46%] transition-transform duration-500"
+    <div class="quad absolute -top-[6%] -right-[8%] z-0 hidden h-[86%] w-[46%] transition-transform duration-500 sm:block"
          :style="{ transform: inPlace ? 'skewX(-7deg)' : 'skewX(-7deg) translateX(140%)' }"></div>
 
-    <div class="absolute inset-x-0 bottom-0 z-10 h-[31%] bg-[#0a0a0a] transition-transform duration-500"
+    <!-- ⚠️ ТЕЛЕФОН — ОТДЕЛЬНАЯ ФИГУРА, а не та же с поправками (раскладка Влада,
+         31.08.2026). На узком экране косой четырёхугольник справа занимал меньше
+         четверти ширины и читался полоской сбоку, а не кадром. Здесь полоса идёт от
+         СЕРЕДИНЫ верхней грани вниз-влево и упирается в правый край — то есть кадр
+         держит верхнюю половину целиком, а нижнюю отдаёт реплике.
+         ⚠️ Скоса (`skewX`) тут НЕТ намеренно: наклон задан самой формой через
+         `clip-path`, и второй наклон поверх увёл бы диагональ мимо задуманной.
+         Поэтому и элемент отдельный: на одном совместить обрезку с прежним скосом
+         нельзя, не сломав анимацию выезда. -->
+    <div class="quad quad-phone absolute inset-x-0 top-0 z-0 h-1/2 transition-transform duration-500 sm:hidden"
+         :style="{ transform: inPlace ? 'none' : 'translateX(140%)' }"></div>
+
+    <!-- Чёрное окно: на телефоне РОВНО половина экрана, на ПК прежняя узкая полоса. -->
+    <div class="absolute inset-x-0 bottom-0 z-10 h-1/2 bg-[#0a0a0a] transition-transform duration-500 sm:h-[31%]"
          :style="{ transform: inPlace ? 'none' : 'translateY(100%)' }"></div>
 
+    <!-- ⚠️ Тигр СОЗНАТЕЛЬНО заходит за левый край полосы: ровно вписанный в неё, он
+         читается как часть заливки, а свисающий — как персонаж поверх кадра. -->
     <img src="/easter/img/head.webp" alt=""
-         class="absolute right-[9%] top-[13%] z-[5] w-[24%] transition-transform duration-500"
+         class="absolute left-[36%] top-[13%] z-[5] w-[52%] transition-transform duration-500
+                sm:left-auto sm:right-[9%] sm:w-[24%]"
          :class="inPlace ? 'sway' : ''"
          :style="{ transform: inPlace ? 'none' : 'translateX(140%)',
                    filter: 'drop-shadow(0 6px 14px rgba(0,0,0,.5))' }" />
 
     <!-- Реплика и подсказка — поверх чёрной полосы, иначе она их накроет. -->
-    <p v-if="step >= 1" class="px absolute bottom-[17%] left-[5%] right-[38%] z-20 text-[11px] leading-[1.9]"
+    <!-- На телефоне реплика встаёт СВЕРХУ чёрного окна и во всю его ширину: окно теперь
+         в половину экрана, и текст, прижатый к низу, висел бы в пустоте. -->
+    <p v-if="step >= 1" class="px absolute left-[7%] right-[7%] top-[55%] z-20 text-[11px] leading-[1.9]
+                               sm:bottom-[17%] sm:left-[5%] sm:right-[38%] sm:top-auto"
        style="color:#ffe27a">{{ text }}</p>
     <p v-else-if="inPlace" class="absolute bottom-[5%] left-[5%] z-20 font-mono text-[9px]"
        style="color:#6d6a5f">кликните</p>
@@ -87,6 +106,11 @@ async function onClick() {
 </template>
 
 <style scoped>
+/* Телефонная форма: левая грань — диагональ от СЕРЕДИНЫ верхней грани вниз-влево,
+   правая уходит в край экрана. Считается в процентах самого элемента, а он во всю
+   ширину окна, поэтому «58 % / 38 %» — это доли ЭКРАНА, как на эскизе. */
+.quad-phone { clip-path: polygon(58% 0, 100% 0, 100% 100%, 38% 100%); }
+
 .quad { background: linear-gradient(150deg, #ffb01f, #ff2fb9); box-shadow: 0 0 26px #ff2fb977;
         animation: shimmer 3.4s linear infinite; }
 @keyframes shimmer { to { filter: hue-rotate(360deg) } }

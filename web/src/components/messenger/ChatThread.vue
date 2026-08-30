@@ -8,7 +8,7 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
-  Languages, Star, SmilePlus, ClipboardList, Paperclip,
+  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -1160,6 +1160,35 @@ watch(isNewDirectConversation, (on) => { if (on) loadGreetingGif(); else greetin
 // Клик по гифке = отправка ЕЁ ЖЕ, без промежуточного пикера (тот же sendGif, что и у
 // GifPicker.vue) — «нажимаем и отправляется именно она».
 async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greetingGif.value) }
+
+// Меню «⋮» в шапке — ТОЛЬКО на телефоне. Образец взят у строки чата в `ChatList.vue`,
+// чтобы два меню в одном разделе открывались и закрывались одинаково.
+// ⚠️ Меню собрано не ради чистоты шапки, а потому что кнопка активностей на узком
+// экране не показывалась ВООБЩЕ: она жила в блоке `hidden sm:flex`, и другой двери в
+// подсистему в интерфейсе нет (команду `/активность` удалили). То есть на телефоне —
+// а значит и в приложении RuStore, это та же SPA — ни запустить активность, ни войти
+// в идущую было нельзя.
+const headerMenu = ref(false)
+function closeHeaderMenu() { headerMenu.value = false }
+// Смена беседы обязана закрывать меню: иначе оно висит поверх ДРУГОГО чата, и его
+// пункты («написать модерации», «активности») относятся уже не к тому, что на экране.
+// ⚠️ Вотчер объявлен ЗДЕСЬ, а не рядом с остальными наверху файла: там он читал бы
+// `headerMenu` из мёртвой зоны — ровно та грабля, что описана в §7.1.
+watch(activeId, closeHeaderMenu)
+
+// ⚠️ Условие видимости активностей — ОДНО на обе точки показа (кнопка на ПК и пункт
+// меню на телефоне). Двумя копиями оно разъехалось бы молча и в худшую сторону: на
+// одной ширине дверь есть, на другой нет, и понять это можно только открыв продукт
+// на втором устройстве.
+const canOpenActivities = computed(() =>
+  isGroupLike.value && (canRunActivity.value || activity.running.length > 0))
+// Куда ведёт кнопка, зависит от прав: кто вправе — в выбор категории, кто нет — сразу
+// в идущую активность (ради неё он и нажал). Пояснение — у кнопки в разметке.
+function openActivities() {
+  closeHeaderMenu()
+  if (canRunActivity.value) activity.openLauncher(activeId.value)
+  else if (activity.running.length) activity.open(activity.running[0].id)
+}
 </script>
 
 <template>
@@ -1221,9 +1250,8 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
                удалённый обработчик. Поэтому: кто вправе — открывает выбор категории, кто
                нет — попадает в ИДУЩУЮ активность (ради неё он и нажал), а если ничего не
                идёт, кнопки у него нет вовсе: пустая дверь читается как поломка. -->
-          <button v-if="isGroupLike && (canRunActivity || activity.running.length)" type="button"
-                  @click="canRunActivity ? activity.openLauncher(activeId)
-                                         : activity.open(activity.running[0].id)"
+          <button v-if="canOpenActivities" type="button"
+                  @click="openActivities()"
                   :aria-label="locale.t('activity.open', 'Активности')"
                   :title="locale.t('activity.open', 'Активности')"
                   class="relative grid size-8 shrink-0 place-items-center rounded-md"
@@ -1233,30 +1261,58 @@ async function sendGreetingGif() { if (greetingGif.value) await m.sendGif(greeti
             <span v-if="activity.unseen"
                   class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
           </button>
-        </div>
-
-        <!-- Телефон: перевод прямой иконкой. Раньше здесь была кнопка-стрелка с меню из
-             четвёрки (поиск/сводка/перевод/мьют); поиск, сводка и мьют переехали в панель
-             беседы (открывается кликом по шапке), в меню оставался бы один перевод — а
-             дропдаун ради одного пункта не нужен. -->
-        <div class="relative shrink-0 sm:hidden">
-          <button type="button" @click="showTranslate = true"
-                  :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
-                  :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
-                  class="grid size-8 place-items-center rounded-md"
+          <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
+          <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
+                  :aria-label="locale.t('nav.moderation', 'Модерация')" :title="locale.t('chatThread.writeToModeration', 'Написать модерации')"
+                  class="grid size-8 shrink-0 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                    : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
-            <Languages class="size-5" />
+                    : 'text-text3 hover:bg-bg2 hover:text-text'">
+            <Settings class="size-5" />
           </button>
         </div>
-        <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
-        <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
-                :aria-label="locale.t('nav.moderation', 'Модерация')" :title="locale.t('chatThread.writeToModeration', 'Написать модерации')"
-                class="grid size-8 shrink-0 place-items-center rounded-md"
-                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
-                  : 'text-text3 hover:bg-bg2 hover:text-text'">
-          <Settings class="size-5" />
-        </button>
+
+        <!-- Телефон: те же действия, свёрнутые в «⋮». Раньше здесь стоял ОДИН перевод, а
+             активности и модерация жили в блоке `hidden sm:flex` — то есть на узком экране
+             активностей не было вовсе (см. пояснение у `canOpenActivities`).
+             ⚠️ Значок «идёт активность» ДУБЛИРУЕТСЯ на самой кнопке «⋮»: свёрнутый в меню
+             он не виден, а он и есть повод её открыть. -->
+        <div class="relative shrink-0 sm:hidden">
+          <button type="button" @click.stop="headerMenu = !headerMenu"
+                  :aria-label="locale.t('messenger.actions', 'Действия')"
+                  class="relative grid size-8 place-items-center rounded-md"
+                  :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
+                    : 'text-text3 hover:bg-bg2 hover:text-text'">
+            <MoreVertical class="size-5" />
+            <span v-if="canOpenActivities && activity.unseen"
+                  class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
+          </button>
+          <!-- Подложка закрывает меню кликом мимо. Отдельным элементом, а не слушателем на
+               документе: слушатель надо снимать при размонтировании, и забытый снимок —
+               обычный источник «меню закрывается от клика в другом чате». -->
+          <div v-if="headerMenu" class="fixed inset-0 z-20" @click="closeHeaderMenu()"></div>
+          <div v-if="headerMenu"
+               class="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
+            <button type="button" @click="closeHeaderMenu(); showTranslate = true"
+                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-bg2"
+                    :class="tr.enabled ? 'text-accent' : 'text-text'">
+              <Languages class="size-4 shrink-0" :class="tr.enabled ? 'text-accent' : 'text-text3'" />
+              {{ tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён')
+                            : locale.t('chatThread.configureTranslate', 'Настроить перевод') }}
+            </button>
+            <button v-if="canOpenActivities" type="button" @click="openActivities()"
+                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">
+              <ClipboardList class="size-4 shrink-0 text-text3" />
+              <span class="flex-1">{{ locale.t('activity.open', 'Активности') }}</span>
+              <span v-if="activity.unseen"
+                    class="grid size-4 shrink-0 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
+            </button>
+            <button v-if="!isModeration && !isAdmin" type="button" @click="closeHeaderMenu(); m.openModeration()"
+                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">
+              <Settings class="size-4 shrink-0 text-text3" />
+              {{ locale.t('chatThread.writeToModeration', 'Написать модерации') }}
+            </button>
+          </div>
+        </div>
       </div>
       <div v-else class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
         <button type="button" @click="m.clearSelection()" :aria-label="locale.t('common.cancel')"

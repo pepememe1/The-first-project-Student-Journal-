@@ -28,6 +28,64 @@ const boo = ref(false)
 const out = ref(false)
 let amb = [], hideTimer = null, scareTimer = null
 
+// ━━ ПОВОРОТ ЭКРАНА ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Кадр офиса нарисован широким (office.webp — 1600x891, соотношение 1.80), а лежит под
+// `bg-cover`. Замер на телефоне 360x740: видно 27 % ШИРИНЫ кадра, то есть три четверти
+// сцены срезано — остаётся центральная колонка со столом, а ноутбук у края и вентилятор
+// пропадают. Ноутбук при этом — единственная кнопка, ради которой сцена и существует.
+// Поэтому на узком экране сперва просим повернуть, а на время смены держим ландшафт.
+//
+// ⚠️ ЗАМОК ОРИЕНТАЦИИ НЕЛЬЗЯ ПОСТАВИТЬ БЕЗ ПОЛНОЭКРАННОГО РЕЖИМА, а полноэкранный — без
+// ЖЕСТА человека. Пасхалка же выпадает сама, на входе, без единого нажатия. Отсюда
+// кнопка на заставке: она и есть тот жест. Без неё `lock()` отвергается браузером
+// молча, и «замок» существовал бы только в наших словах.
+// ⚠️ Настольный браузер не трогаем вовсе: `lock()` там не поддержан, а разворачивать
+// окно человеку на весь экран ради пасхалки — наглость.
+const NARROW_PX = 900
+const needRotate = ref(false)     // показываем заставку «поверните экран»
+const lockFailed = ref(false)     // замок не дали — значит ждём поворота руками
+let fsEl = null
+
+function isNarrow() { return window.innerWidth < NARROW_PX || window.innerHeight < NARROW_PX }
+function isPortrait() { return window.innerHeight > window.innerWidth }
+
+function updateGate() {
+  // Заставка нужна только пока человек В ОФИСЕ: открыв ноутбук, он ходит по обычному
+  // сайту, и требовать от него ландшафт там не за что.
+  needRotate.value = inOffice.value && isNarrow() && isPortrait()
+}
+
+/** Полный экран + замок ландшафта. Зовётся ТОЛЬКО из обработчика нажатия. */
+async function lockLandscape() {
+  try {
+    fsEl = document.documentElement
+    if (fsEl.requestFullscreen) await fsEl.requestFullscreen({ navigationUI: 'hide' })
+    await screen.orientation.lock('landscape')
+    lockFailed.value = false
+  } catch {
+    // Не дали — не беда и не повод прятать сцену: просим повернуть руками и живём
+    // дальше. Молчаливый провал здесь честнее исключения: пасхалка не обязана падать
+    // из-за того, что браузер не разрешил замок.
+    lockFailed.value = true
+    // ⚠️ И полноэкранный режим тогда ОТДАЁМ обратно. Он брался не сам по себе, а как
+    // условие замка (без него `lock()` отвергают); замка нет — значит мы забрали у
+    // человека весь экран ни за что, да ещё и не спросив. Проверено на настольном
+    // Chromium: полный экран даётся, замок нет — ровно этот случай.
+    try { if (document.fullscreenElement) await document.exitFullscreen() } catch { /* уже вышли */ }
+  }
+  updateGate()
+}
+
+function releaseLock() {
+  try { screen.orientation.unlock() } catch { /* не был поставлен — нечего снимать */ }
+  try { if (document.fullscreenElement) document.exitFullscreen() } catch { /* уже вышли */ }
+  fsEl = null
+}
+
+// Ушёл в журнал и вернулся — заставку надо пересчитать: пока он ходил по сайту, телефон
+// мог оказаться в портрете (замок не дали), и офис снова показался бы обрезанным.
+watch(inOffice, updateGate)
+
 // Сколько даётся на вопрос, пока Вектора нет. Минута — не «сложность», а запас: человек
 // в этот момент ещё соображает, куда делся маскот.
 const ANSWER_MS = 60000
@@ -47,10 +105,22 @@ onMounted(() => {
     })
     return a
   })
+  updateGate()
+  window.addEventListener('resize', updateGate)
+  // `orientationchange` — на случай поворота при неизменившемся размере окна (бывает в
+  // WebView). Дублирует resize намеренно: пропущенный поворот оставит заставку висеть
+  // поверх уже правильно повёрнутого экрана, и это читается как зависание.
+  window.addEventListener('orientationchange', updateGate)
 })
 onBeforeUnmount(() => {
   amb.forEach((a) => a.pause())
   clearTimeout(hideTimer); clearTimeout(scareTimer)
+  window.removeEventListener('resize', updateGate)
+  window.removeEventListener('orientationchange', updateGate)
+  // ⚠️ Замок снимаем ВСЕГДА и здесь, а не в `shoo()`: сцена закрывается ещё и Esc'ом,
+  // и уходом со страницы. Оставленный замок означал бы телефон, застрявший в ландшафте
+  // до перезагрузки вкладки, — цена ошибки несоизмерима с пасхалкой.
+  releaseLock()
   easter.fnafEnd()
 })
 
@@ -111,6 +181,33 @@ async function shoo() {
 </script>
 
 <template>
+  <!-- Заставка «поверните экран». Стоит ПЕРЕД офисом и перекрывает его (z выше): пока
+       телефон в портрете, показывать обрезанный на три четверти кадр незачем — человек
+       увидит стол без ноутбука и решит, что пасхалка сломана. -->
+  <div v-if="needRotate" class="fixed inset-0 z-[95] grid place-items-center bg-black px-6 text-center">
+    <div>
+      <!-- Значок телефона, доворачивающийся в ландшафт: он объясняет просьбу быстрее
+           текста, а на этой сцене текста и так минимум. -->
+      <div class="mx-auto mb-6 h-12 w-20 rounded-[7px] border-2 gb-turn"
+           style="border-color:#dfe8ec"></div>
+      <p class="px text-[13px] leading-relaxed" style="color:#dfe8ec">Поверните экран</p>
+      <p class="px mt-3 text-[9px] leading-relaxed" style="color:#7f8c93">
+        ночная смена идёт в&nbsp;ландшафте
+      </p>
+      <button type="button" @click="lockLandscape"
+              class="px mt-7 rounded-md border px-5 py-2.5 text-[10px]"
+              style="background:rgba(255,255,255,.06);color:#dfe8ec;border-color:rgba(255,255,255,.25)">
+        {{ lockFailed ? 'жду поворота' : 'заступить на смену' }}
+      </button>
+      <!-- Говорим правду, когда замок не дали: иначе человек крутит телефон и не
+           понимает, почему «не поворачивается» — при том что это МЫ не смогли. -->
+      <p v-if="lockFailed" class="px mx-auto mt-4 max-w-[15rem] text-[8px] leading-relaxed"
+         style="color:#6d6a5f">
+        браузер не дал повернуть сам — поверните телефон рукой
+      </p>
+    </div>
+  </div>
+
   <div v-if="inOffice" class="fixed inset-0 z-[94] bg-black bg-cover bg-center bg-no-repeat"
        style="background-image:url(/easter/img/office.webp)">
     <!-- ⚠️ ХИТБОКС НОУТБУКА БЕЗ ОБВОДКИ (просьба Влада): пунктирная рамка поверх
@@ -153,4 +250,17 @@ async function shoo() {
 
 <style scoped>
 .px { font-family: 'Press Start 2P', monospace; line-height: 1.5; }
+
+/* Телефон, доворачивающийся в ландшафт и обратно. Пауза в конце цикла нужна, иначе
+   значок «дёргается» без передышки и читается как ошибка отрисовки, а не как просьба. */
+.gb-turn { animation: gb-turn 2.6s ease-in-out infinite; }
+@keyframes gb-turn {
+  0%, 25%   { transform: rotate(90deg) }
+  45%, 100% { transform: rotate(0deg) }
+}
+/* Тем, кто просил уменьшить анимацию, показываем значок сразу в конечном положении —
+   просьба «поверните» остаётся понятной и без движения. */
+@media (prefers-reduced-motion: reduce) {
+  .gb-turn { animation: none; }
+}
 </style>
