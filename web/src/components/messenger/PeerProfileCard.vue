@@ -310,11 +310,25 @@ async function sendMessage() {
 
         <!-- Выбор источника аватарки. Тот же приём, что у MyStatusPicker: список плюс
              прозрачная подложка на весь экран, закрывающая его кликом мимо, — иначе на
-             телефоне меню нечем закрыть, не выбрав пункт. -->
+             телефоне меню нечем закрыть, не выбрав пункт.
+             🔥 НА ТЕЛЕФОНЕ МЕНЮ — ЛИСТ СНИЗУ, А НЕ ВЫПАДАЮЩИЙ СПИСОК (жалоба Ярослава,
+             31.08.2026: «нажимаешь изменить аву — всё ломается и ничего не вылазит»).
+             Причина: список привязан `absolute` к АВАТАРКЕ внутри карточки, а открывают
+             его ещё и кнопкой из левой колонки редактора профиля. На широком экране
+             колонки стоят рядом и меню рядом с кнопкой; на узком они складываются
+             стопкой, карточка уезжает вниз — и меню открывалось на 1298 px при высоте
+             экрана 740, то есть на 558 px ниже видимой области (замерено).
+             ⚠️ Хуже всего было то, что подложка `fixed inset-0` при этом рисуется
+             ИСПРАВНО и на весь экран: невидимое меню плюс прозрачная стена, глотающая
+             нажатия, читаются как «приложение зависло», а не как «меню за краем». Отсюда
+             вторая половина жалобы — «всё ломается».
+             ⚠️ Якорь к аватарке на `sm+` СОХРАНЁН: в карточке собеседника меню открывают
+             нажатием на саму аватарку, и там выпадающий список стоит на своём месте. -->
         <template v-if="editable && avatarMenuOpen">
           <div class="fixed inset-0 z-30" @click="avatarMenuOpen = false" />
-          <div class="absolute left-0 top-[calc(100%+0.375rem)] z-40 w-52 overflow-hidden rounded-lg
-                      border border-border2 bg-card py-1 shadow-card">
+          <div class="fixed inset-x-3 bottom-3 z-40 overflow-hidden rounded-lg border border-border2
+                      bg-card py-1 shadow-card
+                      sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-[calc(100%+0.375rem)] sm:w-52">
             <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"
                     @click="avatarMenuOpen = false; editingAvatar = true">
               <ImageIcon class="size-4 shrink-0 text-text3" />{{ locale.t('profile.avatarImage', 'Изображение') }}
