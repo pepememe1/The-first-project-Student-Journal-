@@ -2,10 +2,10 @@
 // Settings — «Настройки» (для студента/преподавателя/админа). Сюда вынесены персональные
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter } from 'vue-router'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, Palette, Bell, UserCog, Info, X } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
@@ -331,22 +331,108 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 const easter = useEasterStore()
 onMounted(() => easter.roll('gman_observer'))
 
+// ── Разбивка по категориям (просьба Влада, 31.08.2026: «как в дс») ───────────────────
+// На ПК настройки показываются оверлеем: слева список категорий, справа — только
+// выбранная. Раньше все одиннадцать блоков лежали одной простынёй, и до «Аккаунта» с
+// «Документами» надо было прокрутить мимо тем, языка, уведомлений и микрофона.
+//
+// ⚠️ РАЗБИВКА CSS-НАЯ, БЕЗ ВТОРОГО БРЕЙКПОИНТА В JS. Категория гасит секцию классом
+// `lg:hidden`, поэтому на телефоне всё по-прежнему идёт одной страницей и ничего не
+// прячется. Завести здесь свой `matchMedia` значило бы получить вторую границу ширины
+// рядом с `LG_PX` оболочки — а `web/tests/breakpoint.test.mjs` заведён ровно против
+// этого: разъехавшиеся границы дают полосу ширины, где раскладка и логика спорят.
+//
+// ⚠️ Категории общие для ВСЕХ ролей, а не свои у каждой. Роль решает только, показывать
+// ли отдельные блоки внутри (шкала оценивания — преподавателю), и это уже сделано
+// `v-if` на самих карточках. Свой набор категорий на роль означал бы четыре списка,
+// которые обязаны разойтись: добавили настройку — забыли в трёх.
+const CATS = [
+  { id: 'appearance',    icon: Palette,     label: () => loc.t('settings.catAppearance', 'Внешний вид') },
+  { id: 'notifications', icon: Bell,        label: () => loc.t('settings.notifications', 'Уведомления') },
+  { id: 'voice',         icon: AudioLines,  label: () => loc.t('settings.catVoice', 'Голос и звук') },
+  { id: 'teaching',      icon: GraduationCap, label: () => loc.t('settings.catTeaching', 'Оценивание'),
+    when: () => auth.role === 'teacher' },
+  { id: 'security',      icon: ShieldCheck, label: () => loc.t('settings.catSecurity', 'Безопасность') },
+  { id: 'account',       icon: UserCog,     label: () => loc.t('settings.account', 'Аккаунт') },
+  { id: 'about',         icon: Info,        label: () => loc.t('settings.catAbout', 'О программе') },
+]
+const cats = computed(() => CATS.filter((c) => !c.when || c.when()))
+const cat = ref('appearance')
+// ⚠️ Выбранная категория может пропасть у роли (или после выхода из режима, где она
+// была): тогда правая часть оказалась бы пустой без объяснения. Возвращаемся к первой.
+watch(cats, (list) => { if (!list.some((c) => c.id === cat.value)) cat.value = list[0]?.id || 'appearance' })
+
+/** Классы секции: на ПК прячем всё, кроме выбранной категории; на телефоне — ничего. */
+function sec(id) { return cat.value === id ? '' : 'lg:hidden' }
+
+// Закрытие оверлея = уход со страницы настроек. `back()` возвращает туда, откуда
+// пришли; если истории нет (открыли по прямой ссылке) — на главную своей роли.
+function closeSettings() {
+  if (window.history.length > 1) router.back()
+  else router.push(`/${auth.role || 'student'}`)
+}
+function onEsc(e) { if (e.key === 'Escape') closeSettings() }
+onMounted(() => window.addEventListener('keydown', onEsc))
+onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 </script>
 
 <template>
   <!-- flex+gap, а НЕ space-y-*: в Tailwind 4 `space-y` разворачивается в правило с
        нулевой специфичностью, и любой конкурирующий margin съедает промежуток без следа
        в разметке (уже ловили на статистике студента). -->
-  <div class="flex flex-col gap-6">
+  <!-- ⚠️ НА ПК ЭТО ОВЕРЛЕЙ, НА ТЕЛЕФОНЕ — ОБЫЧНАЯ СТРАНИЦА, и переключает их ТОЛЬКО CSS
+       (`lg:`). Второй `matchMedia` здесь завёл бы вторую границу ширины рядом с `LG_PX`
+       оболочки; `web/tests/breakpoint.test.mjs` заведён ровно против этого — разъехавшись,
+       они дают полосу ширины, где раскладка и логика спорят, и видно это на одной
+       конкретной ширине окна, то есть почти никогда.
+       Размытие — `lg:backdrop-blur-md` по подложке: за ней остаётся оболочка (сайдбар,
+       шапка), и это и есть «фон размывается». -->
+  <div class="lg:fixed lg:inset-0 lg:z-40 lg:grid lg:place-items-center lg:bg-black/55 lg:p-6 lg:backdrop-blur-md"
+       @click.self="closeSettings()">
+    <div class="lg:flex lg:h-full lg:max-h-[52rem] lg:w-full lg:max-w-5xl lg:overflow-hidden
+                lg:rounded-2xl lg:border lg:border-border2 lg:bg-card lg:shadow-card">
+
+      <!-- Левый столбец: категории. На телефоне его нет вовсе — там всё идёт подряд,
+           и список категорий был бы вторым оглавлением к тому, что и так на экране. -->
+      <aside class="hidden lg:flex lg:w-60 lg:shrink-0 lg:flex-col lg:gap-0.5 lg:overflow-y-auto
+                    lg:border-r lg:border-border lg:bg-bg2 lg:p-3">
+        <p class="mb-2 px-2 pt-1 text-tiny font-bold uppercase tracking-wide text-text3">
+          {{ loc.t('nav.settings', 'Настройки') }}
+        </p>
+        <button v-for="c in cats" :key="c.id" type="button" @click="cat = c.id"
+                class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors"
+                :class="cat === c.id ? 'bg-accent-glow font-semibold text-accent'
+                                     : 'text-text2 hover:bg-bg hover:text-text'">
+          <component :is="c.icon" class="size-4 shrink-0" />
+          <span class="truncate">{{ c.label() }}</span>
+        </button>
+      </aside>
+
+      <!-- Правый столбец: только выбранная категория. -->
+      <div class="flex flex-col gap-6 lg:min-w-0 lg:flex-1 lg:overflow-y-auto lg:p-6">
+        <!-- Заголовок с крестиком — только на ПК: на телефоне выход со страницы делает
+             обычная кнопка «назад» оболочки, и второй крестик читался бы как дубль. -->
+        <div class="hidden lg:flex lg:items-center lg:justify-between lg:gap-4">
+          <h2 class="font-title text-xl font-extrabold text-text">
+            {{ cats.find((c) => c.id === cat)?.label() }}
+          </h2>
+          <button type="button" @click="closeSettings()"
+                  :aria-label="loc.t('common.close', 'Закрыть')"
+                  :title="loc.t('common.close', 'Закрыть') + ' (Esc)'"
+                  class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+            <X class="size-5" />
+          </button>
+        </div>
+
     <!-- Оформление (полный кастомайзер тем: пресеты + свой цвет + режим + расписание). -->
-    <div>
-      <h2 class="mb-3 font-title text-lg font-extrabold text-text">{{ loc.t('settings.appearance') }}</h2>
+    <div :class="sec('appearance')">
+      <h2 class="mb-3 font-title text-lg font-extrabold text-text lg:hidden">{{ loc.t('settings.appearance') }}</h2>
       <ThemeCustomizer />
     </div>
 
     <!-- Язык интерфейса. Выбор делается ещё на экране входа (там глобус), здесь его
          можно сменить и, главное, ВЫКЛЮЧИТЬ перевод — не теряя выбранный язык. -->
-    <Card :title="loc.t('settings.language')" :subtitle="loc.t('settings.languageHint')" pad>
+    <Card :class="sec('appearance')" :title="loc.t('settings.language')" :subtitle="loc.t('settings.languageHint')" pad>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap gap-2">
           <button v-for="l in loc.locales" :key="l.code" type="button"
@@ -370,7 +456,7 @@ onMounted(() => easter.roll('gman_observer'))
 
     <!-- Уведомления: что присылать. Настройка АККАУНТА — решение принимает сервер до
          отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
-    <Card :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
+    <Card :class="sec('notifications')" :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
       <div class="flex flex-col gap-2">
         <ToggleRow v-for="k in visibleNotifyKinds" :key="k.key"
                    :label="k.label" :hint="k.hint"
@@ -409,7 +495,7 @@ onMounted(() => easter.roll('gman_observer'))
 
     <!-- Версия веб-части. Только в приложении: на сайте и десктопе обновление приезжает
          обычной загрузкой страницы, и показывать номер бандла там не о чем. -->
-    <Card v-if="bundle" :title="loc.t('settings.appVersion', 'Версия приложения')"
+    <Card :class="sec('about')" v-if="bundle" :title="loc.t('settings.appVersion', 'Версия приложения')"
           :subtitle="loc.t('settings.appVersionHint', 'Интерфейс обновляется сам, без переустановки из магазина')">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-text2">{{ loc.t('settings.installed', 'Установлена:') }} <span class="font-semibold text-text">{{ bundle.version }}</span></p>
@@ -452,7 +538,7 @@ onMounted(() => easter.roll('gman_observer'))
     </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->
-    <Card :title="loc.t('settings.tts')" :subtitle="loc.t('settings.ttsHint', 'Как Вектор проговаривает свои ответы')">
+    <Card :class="sec('voice')" :title="loc.t('settings.tts')" :subtitle="loc.t('settings.ttsHint', 'Как Вектор проговаривает свои ответы')">
       <button type="button"
               class="flex w-full items-center gap-3 rounded-md border border-border p-3 text-left transition-colors hover:border-accent"
               @click="cycleVoiceMode">
@@ -495,7 +581,7 @@ onMounted(() => easter.roll('gman_observer'))
     </Card>
 
     <!-- Голосовой ввод: тумблер + выбор микрофона (настройка ЭТОГО устройства). -->
-    <Card :title="loc.t('settings.voice')" :subtitle="loc.t('settings.voiceHint', 'Микрофон для «Вектора»: сказать вместо набора текста')">
+    <Card :class="sec('voice')" :title="loc.t('settings.voice')" :subtitle="loc.t('settings.voiceHint', 'Микрофон для «Вектора»: сказать вместо набора текста')">
       <div v-if="!voice.supported"
            class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <MicOff class="mt-0.5 size-4 shrink-0" />
@@ -558,7 +644,7 @@ onMounted(() => easter.roll('gman_observer'))
     </Card>
 
     <!-- Шкала оценивания — только преподаватель. -->
-    <Card v-if="auth.role === 'teacher'" :title="loc.t('settings.gradingScale', 'Шкала оценивания')"
+    <Card :class="sec('teaching')" v-if="auth.role === 'teacher'" :title="loc.t('settings.gradingScale', 'Шкала оценивания')"
           :subtitle="loc.t('settings.gradingScaleHint', 'В чём вы вводите и видите оценки за практики/ДЗ. Средний балл и итоговая — всегда в 5-балльной')">
       <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button v-for="s in scaleOptions" :key="s.id" type="button" :disabled="scaleSaving"
@@ -576,13 +662,13 @@ onMounted(() => easter.roll('gman_observer'))
          код из приложения работает где угодно, а администратору он ОБЯЗАТЕЛЕН —
          спрятать эту карточку значило бы спрятать единственный способ вернуть себе
          доступ к разделам. -->
-    <Card :title="loc.t('settings.mfa', 'Второй фактор входа')"
+    <Card :class="sec('security')" :title="loc.t('settings.mfa', 'Второй фактор входа')"
           :subtitle="loc.t('settings.mfaHint', 'Одноразовый код из приложения-аутентификатора в дополнение к паролю')">
       <MfaCard />
     </Card>
 
     <!-- Вход по биометрии / 2FA — виден только на устройствах с Face ID/отпечатком. -->
-    <Card v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
+    <Card :class="sec('security')" v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
           :subtitle="loc.t('settings.biometricHint', 'Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля')">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
@@ -615,7 +701,7 @@ onMounted(() => easter.roll('gman_observer'))
 
     <!-- ВЫХОД — в самом низу страницы, последним блоком. Раньше жил в шапке рядом с
          темой и статусом; здесь до него надо осознанно долистать. -->
-    <Card :title="loc.t('settings.account', 'Аккаунт')"
+    <Card :class="sec('account')" :title="loc.t('settings.account', 'Аккаунт')"
           :subtitle="loc.t('settings.accountHint', 'Вход в систему на этом устройстве')">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-text3">
@@ -635,7 +721,7 @@ onMounted(() => easter.roll('gman_observer'))
          пять часов, человек не станет.
          Обычные ссылки, не роутер: страницы статические, лежат вне SPA и одинаково
          открываются на сайте, внутри программы и в приложении Android. -->
-    <Card :title="loc.t('settings.legal', 'Документы')"
+    <Card :class="sec('about')" :title="loc.t('settings.legal', 'Документы')"
           :subtitle="loc.t('settings.legalHint', 'Условия использования и порядок обработки персональных данных')">
       <div class="flex flex-col gap-2 sm:flex-row">
         <a href="/terms.html" target="_blank" rel="noopener"
@@ -648,7 +734,11 @@ onMounted(() => easter.roll('gman_observer'))
         </a>
       </div>
     </Card>
-  </div>
+      </div><!-- правый столбец -->
+    </div><!-- панель -->
+  </div><!-- подложка -->
+  <!-- ⚠️ Прощальные сцены — ВНЕ оверлея: они показываются в момент выхода, когда панель
+       настроек уже не нужна, и внутри неё оказались бы обрезаны её же рамкой. -->
   <FarewellOverlay v-if="farewell" :name="farewellName" />
   <DarkSoulsFarewell v-if="darkSouls" @close="darkSouls = false" />
 </template>
