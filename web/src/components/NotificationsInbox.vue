@@ -227,10 +227,13 @@ async function submitEvent() {
 
     <!-- ── Список писем ──────────────────────────────────────────────────────── -->
     <div v-else>
-      <div class="mb-3 flex flex-wrap items-center gap-1">
+      <div class="mb-3 flex flex-wrap items-center gap-1 border-b border-border">
+        <!-- Вкладки-категории в духе Gmail: подчёркивание активной, а не заливка.
+             Залитая пилюля читалась как кнопка действия, хотя это фильтр списка. -->
         <button v-for="t in TABS" :key="t.key" type="button"
-                class="rounded-sm px-3 py-1.5 text-sm transition-colors"
-                :class="tab === t.key ? 'bg-accent font-bold text-bg' : 'text-text3 hover:bg-card2 hover:text-text'"
+                class="-mb-px border-b-2 px-3 py-2 text-sm transition-colors"
+                :class="tab === t.key ? 'border-accent font-semibold text-accent'
+                                      : 'border-transparent text-text3 hover:text-text'"
                 @click="tab = t.key">
           {{ t.label }}
           <span v-if="tabUnread(t.key)"
@@ -324,19 +327,32 @@ async function submitEvent() {
       </div>
 
       <ul v-else class="divide-y divide-border">
+        <!-- ⚠️ СТРОКА В ОДНУ ЛИНИЮ, КАК В GMAIL: тема, следом серым фрагмент письма,
+             справа время. Раньше тема и текст шли двумя строками, и десяток уведомлений
+             занимал экран целиком — список переставал читаться взглядом.
+             Непрочитанное отличается НАСЫЩЕННОСТЬЮ строки, а не только точкой: в Gmail
+             это первое, что видно, и на телефоне точка 10 px теряется вовсе. -->
         <li v-for="item in visible" :key="item.id">
           <button type="button"
-                  class="flex w-full items-start gap-3 px-1 py-3 text-left transition-colors hover:bg-card2"
+                  class="flex w-full items-center gap-3 px-2 py-2.5 text-left transition-colors hover:bg-card2"
+                  :class="item.read_at ? 'bg-transparent' : 'bg-accent-glow/40'"
                   @click="open(item)">
-            <!-- Красная точка — непрочитано; выколотая (контурная) — прочитано. -->
-            <span class="mt-1.5 size-2.5 shrink-0 rounded-full"
-                  :class="item.read_at ? 'border-2 border-text3' : 'bg-red'"
+            <span class="size-2 shrink-0 rounded-full"
+                  :class="item.read_at ? 'bg-transparent' : 'bg-accent'"
                   :aria-label="item.read_at ? locale.t('notifications.read', 'Прочитано') : locale.t('notifications.unread', 'Непрочитано')" />
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm text-text">{{ titleOf(item) }}</span>
-              <span class="mt-0.5 block truncate text-tiny text-text3">{{ bodyOf(item) }}</span>
+            <!-- Отправитель — вид уведомления: у письма всегда есть «от кого», и здесь
+                 это «Оценки», «Расписание», «Мероприятия». Ширина фиксированная, чтобы
+                 темы выстроились в колонку и взгляд шёл по ней вниз. -->
+            <span class="hidden w-32 shrink-0 truncate text-sm sm:block"
+                  :class="item.read_at ? 'text-text3' : 'font-semibold text-text'">
+              {{ KIND_LABEL[item.kind] || locale.t('notifications.kind.default', 'Уведомление') }}
             </span>
-            <span class="shrink-0 text-tiny text-text3">{{ fmtWhen(item.created_at) }}</span>
+            <span class="min-w-0 flex-1 truncate text-sm">
+              <span :class="item.read_at ? 'text-text2' : 'font-semibold text-text'">{{ titleOf(item) }}</span>
+              <span class="text-text3"> — {{ bodyOf(item) }}</span>
+            </span>
+            <span class="shrink-0 text-tiny"
+                  :class="item.read_at ? 'text-text3' : 'font-semibold text-text2'">{{ fmtWhen(item.created_at) }}</span>
           </button>
         </li>
       </ul>

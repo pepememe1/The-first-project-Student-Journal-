@@ -8,13 +8,23 @@
  * их порядок и секции задаются ЗДЕСЬ, и это не «порт» чего-то, а оригинал.
  *
  * Пункт-секция: { section: 'ЗАГОЛОВОК' }. Пункт-ссылка: { key, label, icon, to }.
+ *
+ * ⚠️ `phoneOnly: true` — пункт виден ТОЛЬКО на узком экране (класс `lg:hidden`).
+ * Так помечены «Настройки»: на ПК кнопка переехала в карточку себя в левом нижнем углу
+ * (как в Discord), и второй вход тем же именем в меню читался бы как два разных места.
+ * На телефоне угловой карточки с шестерёнкой нет — там пункт меню остаётся единственной
+ * дверью, поэтому убрать его совсем нельзя.
+ *
+ * ⚠️ «Профиль» из меню УБРАН НАСОВСЕМ (31.08.2026): он стал категорией внутри настроек.
+ * Маршрут `/…/profile` намеренно ОСТАВЛЕН в роутере — на него ведут ссылки из чужих
+ * карточек и старые закладки, и отдавать по ним 404 значило бы сломать работающее.
  */
 import {
-  Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot, User,
-  BookOpen, Users, GraduationCap, Boxes, Library, Settings, Server,
-  MonitorSmartphone, ShieldCheck, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, SlidersHorizontal, MessagesSquare, ShieldAlert, UsersRound, Database,
-  Archive, BookMarked, ScrollText } from '@lucide/vue'
+  Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot,
+  BookOpen, Users, GraduationCap, Boxes, Library, Server,
+  MonitorSmartphone, Activity, LayoutDashboard, UserPlus,
+  AlertTriangle, MessagesSquare, ShieldAlert, UsersRound, Database,
+  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -26,9 +36,7 @@ export const NAV = {
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/student/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/student/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/student/messages', badge: 'messagesUnread' },
-    { section: 'Личное', i18n: 'nav.sectionPersonal' },
-    { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/student/profile' },
-    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/student/settings' },
+    { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/student/notifications', badge: 'notifyUnread' },
   ],
   teacher: [
     { section: 'Преподавание', i18n: 'nav.sectionTeaching' },
@@ -41,9 +49,7 @@ export const NAV = {
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/teacher/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/teacher/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/teacher/messages', badge: 'messagesUnread' },
-    { section: 'Личное', i18n: 'nav.sectionPersonal' },
-    { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/teacher/profile' },
-    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/teacher/settings' },
+    { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/teacher/notifications', badge: 'notifyUnread' },
   ],
   // РОДИТЕЛЬ — ровно пять пунктов и ничего сверх. Ни списка студентов, ни статистики
   // группы, ни расписания преподавателей: это внешний человек, которому открыт доступ
@@ -54,9 +60,7 @@ export const NAV = {
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/parent/courses' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/parent/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/parent/messages', badge: 'messagesUnread' },
-    { section: 'Личное', i18n: 'nav.sectionPersonal' },
-    { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/parent/profile' },
-    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/parent/settings' },
+    { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/parent/notifications', badge: 'notifyUnread' },
   ],
   // §живой отзыв: пункты «понапиханы что-куда» — было ОДНО «Система» на всё, что не
   // «Управление», хотя туда смешались три РАЗНЫХ вещи: инфраструктура/безопасность
@@ -87,21 +91,19 @@ export const NAV = {
     { section: 'Общение', i18n: 'nav.sectionCommunication' },
     { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/admin/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/admin/messages', badge: 'messagesUnread' },
+    { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/admin/notifications', badge: 'notifyUnread' },
     { key: 'moderation', label: 'Модерация чатов', i18n: 'nav.moderation', icon: ShieldAlert, to: '/admin/moderation' },
     { section: 'Система', i18n: 'nav.sectionSystem' },
-    { key: 'api', label: 'Настройки ИИ', i18n: 'nav.aiSettings', icon: Settings, to: '/admin/api' },
+    { key: 'api', label: 'Настройки ИИ', i18n: 'nav.aiSettings', icon: Cpu, to: '/admin/api' },
     { key: 'server', label: 'Сервер', i18n: 'nav.server', icon: Server, to: '/admin/server' },
     { key: 'mon', label: 'Мониторинг', i18n: 'nav.monitor', icon: Activity, to: '/admin/monitor' },
     { key: 'data', label: 'Данные и копии', i18n: 'nav.data', icon: Database, to: '/admin/data' },
     { key: 'requests', label: 'Запросы на подключение', i18n: 'nav.requests', icon: MonitorSmartphone, to: '/admin/requests' },
-    { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: ShieldCheck, to: '/admin/access' },
+    { key: 'sessions', label: 'Сессии и доступ', i18n: 'nav.sessions', icon: KeyRound, to: '/admin/access' },
     // 🔥 Журнал ПИСАЛСЯ, а посмотреть его было негде: ручка существовала и работала,
     // а звать её было некому. Для продукта с ПДн аудит без доступа не решает задачу,
     // ради которой заведён, — разобрать «кто изменил оценку».
     { key: 'audit', label: 'Журнал действий', i18n: 'nav.audit', icon: ScrollText, to: '/admin/audit' },
-    { section: 'Личное', i18n: 'nav.sectionPersonal' },
-    { key: 'profile', label: 'Профиль', i18n: 'nav.profile', icon: User, to: '/admin/profile' },
-    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: SlidersHorizontal, to: '/admin/settings' },
   ],
 }
 

@@ -2,10 +2,10 @@
 // Settings — «Настройки» (для студента/преподавателя/админа). Сюда вынесены персональные
 // настройки, раньше сваленные в «Профиль»: оформление (темы), вход по биометрии (2FA) и
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter } from 'vue-router'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, Palette, Bell, UserCog, Info, X } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
@@ -21,12 +21,20 @@ import ToggleRow from '@/components/ui/ToggleRow.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { catsForRole } from '@/config/settingsSections'
+// Профиль переехал ВНУТРЬ настроек отдельной категорией (просьба Влада): страницы
+// `/…/profile` больше нет в меню, редактор открывается отсюда и из карточки себя.
+import ProfilePage from '@/pages/Profile.vue'
+import Avatar from '@/components/ui/Avatar.vue'
+import { useProfileStore } from '@/stores/profile'
+import { profilePlate } from '@/theme/palette'
 
 const tts = useTtsStore()
 const auth = useAuthStore()
 const voice = useVoiceStore()
 const loc = useLocaleStore()
 const router = useRouter()
+const profileStore = useProfileStore()
 
 // ── Выход из аккаунта ────────────────────────────────────────────────────────────
 // Переехал сюда из шапки (живой отзыв 3.5.6). Причина не косметическая: выход стоял
@@ -331,39 +339,52 @@ function fmtDate(s) { return (s || '').slice(0, 10) }
 const easter = useEasterStore()
 onMounted(() => easter.roll('gman_observer'))
 
-// ── Разбивка по категориям (просьба Влада, 31.08.2026: «как в дс») ───────────────────
-// На ПК настройки показываются оверлеем: слева список категорий, справа — только
-// выбранная. Раньше все одиннадцать блоков лежали одной простынёй, и до «Аккаунта» с
-// «Документами» надо было прокрутить мимо тем, языка, уведомлений и микрофона.
-//
-// ⚠️ РАЗБИВКА CSS-НАЯ, БЕЗ ВТОРОГО БРЕЙКПОИНТА В JS. Категория гасит секцию классом
-// `lg:hidden`, поэтому на телефоне всё по-прежнему идёт одной страницей и ничего не
-// прячется. Завести здесь свой `matchMedia` значило бы получить вторую границу ширины
-// рядом с `LG_PX` оболочки — а `web/tests/breakpoint.test.mjs` заведён ровно против
-// этого: разъехавшиеся границы дают полосу ширины, где раскладка и логика спорят.
-//
-// ⚠️ Категории общие для ВСЕХ ролей, а не свои у каждой. Роль решает только, показывать
-// ли отдельные блоки внутри (шкала оценивания — преподавателю), и это уже сделано
-// `v-if` на самих карточках. Свой набор категорий на роль означал бы четыре списка,
-// которые обязаны разойтись: добавили настройку — забыли в трёх.
-const CATS = [
-  { id: 'appearance',    icon: Palette,     label: () => loc.t('settings.catAppearance', 'Внешний вид') },
-  { id: 'notifications', icon: Bell,        label: () => loc.t('settings.notifications', 'Уведомления') },
-  { id: 'voice',         icon: AudioLines,  label: () => loc.t('settings.catVoice', 'Голос и звук') },
-  { id: 'teaching',      icon: GraduationCap, label: () => loc.t('settings.catTeaching', 'Оценивание'),
-    when: () => auth.role === 'teacher' },
-  { id: 'security',      icon: ShieldCheck, label: () => loc.t('settings.catSecurity', 'Безопасность') },
-  { id: 'account',       icon: UserCog,     label: () => loc.t('settings.account', 'Аккаунт') },
-  { id: 'about',         icon: Info,        label: () => loc.t('settings.catAbout', 'О программе') },
-]
-const cats = computed(() => CATS.filter((c) => !c.when || c.when()))
-const cat = ref('appearance')
-// ⚠️ Выбранная категория может пропасть у роли (или после выхода из режима, где она
-// была): тогда правая часть оказалась бы пустой без объяснения. Возвращаемся к первой.
-watch(cats, (list) => { if (!list.some((c) => c.id === cat.value)) cat.value = list[0]?.id || 'appearance' })
+// ── Категории и подкатегории (просьба Влада, 31.08.2026: «как в дс») ────────────────
+// Состав живёт в `@/config/settingsSections.js` — один список на ТРИ потребителя:
+// рельс категорий на ПК, двухуровневый список на телефоне и выпадающие подкатегории.
+// Держать его здесь означало бы три копии, обязанные разойтись.
+const cats = computed(() => catsForRole(auth.role))
+const cat = ref('profile')
+// Телефон: сперва список категорий (как в Discord), потом содержимое с кнопкой «назад».
+// На ПК не используется вовсе — там рельс и содержимое видны одновременно.
+const showList = ref(true)
+// Какая категория раскрыта в рельсе (выпадающий список подкатегорий).
+const openSub = ref('profile')
 
-/** Классы секции: на ПК прячем всё, кроме выбранной категории; на телефоне — ничего. */
-function sec(id) { return cat.value === id ? '' : 'lg:hidden' }
+// ⚠️ Выбранная категория может пропасть у роли: тогда правая часть оказалась бы пустой
+// без объяснения. Возвращаемся к первой доступной.
+watch(cats, (list) => { if (!list.some((c) => c.id === cat.value)) cat.value = list[0]?.id || 'profile' })
+
+/**
+ * Классы секции: показываем только выбранную категорию.
+ * ⚠️ Именно `hidden`, а не `lg:hidden`: с двухуровневым телефоном (список → раздел)
+ * категории работают на ОБЕИХ платформах. С `lg:` телефон показывал бы все разделы
+ * подряд под заголовком одного — то есть заголовок врал бы о содержимом.
+ */
+function sec(id) { return cat.value === id ? '' : 'hidden' }
+
+// Профиль монтируем при первом открытии его категории и больше не снимаем — см.
+// пояснение у <ProfilePage> в разметке (пасхалки бросаются в onMounted).
+const profileSeen = ref(false)
+watch(cat, (id) => { if (id === 'profile') profileSeen.value = true }, { immediate: true })
+
+function pickCat(id) {
+  cat.value = id
+  openSub.value = openSub.value === id ? '' : id   // повторное нажатие складывает список
+  showList.value = false
+}
+
+/**
+ * Прокрутка к подкатегории. Якорь — `set-<id>`, он же `id` карточки в разметке.
+ * ⚠️ Промах здесь ТИХИЙ: элемента нет — ничего не происходит, ошибки не будет. Поэтому
+ * состав подкатегорий и якоря в разметке держит `web/tests/settingsCategories.test.mjs`.
+ */
+async function goSub(catId, subId) {
+  if (cat.value !== catId) { cat.value = catId; showList.value = false }
+  await nextTick()
+  const el = document.getElementById(`set-${subId}`)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 // Закрытие оверлея = уход со страницы настроек. `back()` возвращает туда, откуда
 // пришли; если истории нет (открыли по прямой ссылке) — на главную своей роли.
@@ -392,47 +413,106 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     <div class="lg:flex lg:h-full lg:max-h-[52rem] lg:w-full lg:max-w-5xl lg:overflow-hidden
                 lg:rounded-2xl lg:border lg:border-border2 lg:bg-card lg:shadow-card">
 
-      <!-- Левый столбец: категории. На телефоне его нет вовсе — там всё идёт подряд,
-           и список категорий был бы вторым оглавлением к тому, что и так на экране. -->
-      <aside class="hidden lg:flex lg:w-60 lg:shrink-0 lg:flex-col lg:gap-0.5 lg:overflow-y-auto
-                    lg:border-r lg:border-border lg:bg-bg2 lg:p-3">
-        <p class="mb-2 px-2 pt-1 text-tiny font-bold uppercase tracking-wide text-text3">
+      <!-- ЛЕВЫЙ СТОЛБЕЦ (ПК) / ПЕРВЫЙ ЭКРАН (телефон): профиль сверху + категории.
+           ⚠️ На телефоне это ОТДЕЛЬНЫЙ экран, а не колонка: список категорий и их
+           содержимое рядом на 360 px не помещаются, и попытка ужать рельс дала бы
+           колонку в треть экрана с обрезанными подписями. Поэтому два уровня, как в
+           приложении Discord: список → раздел → «назад». -->
+      <aside class="flex flex-col gap-0.5 lg:w-60 lg:shrink-0 lg:overflow-y-auto
+                    lg:border-r lg:border-border lg:bg-bg2 lg:p-3"
+             :class="showList ? 'flex' : 'hidden lg:flex'">
+
+        <!-- Шапка с профилем. Нажатие открывает редактор профиля — он же категория
+             «Профиль», переехавшая сюда из отдельной вкладки меню. -->
+        <button type="button" @click="pickCat('profile')"
+                class="mb-2 flex items-center gap-2.5 rounded-lg border border-border2 bg-card px-2.5 py-2
+                       text-left transition-colors hover:border-accent lg:bg-card"
+                :aria-label="loc.t('profile.openEditor', 'Открыть редактор профиля')">
+          <Avatar :src="profileStore.avatar" :name="auth.user?.name || ''" :role="auth.role"
+                  :color="profilePlate(profileStore.color)" :size="36" />
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-[13px] font-semibold leading-tight text-text">{{ auth.user?.name || '' }}</span>
+            <span class="block truncate text-[11px] leading-tight text-text3">
+              {{ loc.t('profile.editProfile', 'Редактировать профиль') }}
+            </span>
+          </span>
+          <Pencil class="size-3.5 shrink-0 text-text3" />
+        </button>
+
+        <p class="mb-1 px-2 pt-1 text-tiny font-bold uppercase tracking-wide text-text3">
           {{ loc.t('nav.settings', 'Настройки') }}
         </p>
-        <button v-for="c in cats" :key="c.id" type="button" @click="cat = c.id"
-                class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors"
-                :class="cat === c.id ? 'bg-accent-glow font-semibold text-accent'
-                                     : 'text-text2 hover:bg-bg hover:text-text'">
-          <component :is="c.icon" class="size-4 shrink-0" />
-          <span class="truncate">{{ c.label() }}</span>
-        </button>
+
+        <template v-for="c in cats" :key="c.id">
+          <button type="button" @click="pickCat(c.id)"
+                  class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors"
+                  :class="cat === c.id ? 'bg-accent-glow font-semibold text-accent'
+                                       : 'text-text2 hover:bg-bg hover:text-text'">
+            <component :is="c.icon" class="size-4 shrink-0" />
+            <span class="min-w-0 flex-1 truncate">{{ loc.t(c.i18n, c.label) }}</span>
+            <!-- Стрелка: на телефоне «войти в раздел», на ПК «раскрыть подкатегории».
+                 ⚠️ Крутим её ТОЛЬКО когда список раскрыт, иначе она обещает раскрытие
+                 там, где его уже нет. -->
+            <ChevronRight class="size-3.5 shrink-0 text-text3 transition-transform"
+                          :class="openSub === c.id ? 'lg:rotate-90' : ''" />
+          </button>
+
+          <!-- Подкатегории: прокрутка к нужному месту раздела. На телефоне не
+               показываем — там раздел открывается целиком отдельным экраном, и
+               оглавление к одному экрану было бы лишним уровнем. -->
+          <div v-if="openSub === c.id && c.subs.length > 1" class="hidden lg:block lg:pb-1 lg:pl-8">
+            <button v-for="s in c.subs" :key="s.id" type="button" @click="goSub(c.id, s.id)"
+                    class="block w-full truncate rounded px-2 py-1 text-left text-[12.5px] text-text3
+                           transition-colors hover:bg-bg hover:text-text">
+              {{ loc.t(s.i18n, s.label) }}
+            </button>
+          </div>
+        </template>
       </aside>
 
-      <!-- Правый столбец: только выбранная категория. -->
-      <div class="flex flex-col gap-6 lg:min-w-0 lg:flex-1 lg:overflow-y-auto lg:p-6">
+      <!-- ПРАВЫЙ СТОЛБЕЦ (ПК) / ВТОРОЙ ЭКРАН (телефон). -->
+      <div class="flex-col gap-6 lg:min-w-0 lg:flex-1 lg:overflow-y-auto lg:p-6"
+           :class="showList ? 'hidden lg:flex' : 'flex'">
         <!-- Заголовок с крестиком — только на ПК: на телефоне выход со страницы делает
              обычная кнопка «назад» оболочки, и второй крестик читался бы как дубль. -->
-        <div class="hidden lg:flex lg:items-center lg:justify-between lg:gap-4">
-          <h2 class="font-title text-xl font-extrabold text-text">
-            {{ cats.find((c) => c.id === cat)?.label() }}
+        <div class="flex items-center gap-2">
+          <!-- «Назад» к списку категорий — только на телефоне: на ПК рельс виден всегда,
+               и кнопка возврата к нему вела бы в никуда. -->
+          <button type="button" @click="showList = true" class="grid size-8 shrink-0 place-items-center
+                  rounded-md text-text2 hover:bg-bg2 hover:text-text lg:hidden"
+                  :aria-label="loc.t('common.back', 'Назад')">
+            <ChevronLeft class="size-5" />
+          </button>
+          <h2 class="min-w-0 flex-1 truncate font-title text-xl font-extrabold text-text">
+            {{ loc.t(cats.find((c) => c.id === cat)?.i18n || 'nav.settings',
+                     cats.find((c) => c.id === cat)?.label || 'Настройки') }}
           </h2>
           <button type="button" @click="closeSettings()"
                   :aria-label="loc.t('common.close', 'Закрыть')"
                   :title="loc.t('common.close', 'Закрыть') + ' (Esc)'"
-                  class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
+                  class="hidden size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text lg:grid">
             <X class="size-5" />
           </button>
         </div>
 
+    <!-- ПРОФИЛЬ — переехал сюда из отдельной вкладки меню (просьба Влада).
+         🔥 МОНТИРУЕТСЯ ОДИН РАЗ И БОЛЬШЕ НЕ СНИМАЕТСЯ, дальше прячется классом. Так
+         сделано ради пасхалок: страница профиля бросает штамп Papers Please и точку
+         сохранения Undertale в `onMounted`, а у этих двух нет кулдауна. Через обычный
+         `v-if` бросок случался бы на КАЖДОМ возврате в категорию — щёлкая по рельсу,
+         человек выбивал бы «редкую находку» за полминуты, и она перестала бы быть
+         находкой. Один монтаж = один бросок за визит, как было у отдельной страницы. -->
+    <ProfilePage v-if="profileSeen" :class="sec('profile')" />
+
     <!-- Оформление (полный кастомайзер тем: пресеты + свой цвет + режим + расписание). -->
-    <div :class="sec('appearance')">
+    <div id="set-theme" :class="sec('appearance')">
       <h2 class="mb-3 font-title text-lg font-extrabold text-text lg:hidden">{{ loc.t('settings.appearance') }}</h2>
       <ThemeCustomizer />
     </div>
 
     <!-- Язык интерфейса. Выбор делается ещё на экране входа (там глобус), здесь его
          можно сменить и, главное, ВЫКЛЮЧИТЬ перевод — не теряя выбранный язык. -->
-    <Card :class="sec('appearance')" :title="loc.t('settings.language')" :subtitle="loc.t('settings.languageHint')" pad>
+    <Card id="set-language" :class="sec('appearance')" :title="loc.t('settings.language')" :subtitle="loc.t('settings.languageHint')" pad>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap gap-2">
           <button v-for="l in loc.locales" :key="l.code" type="button"
@@ -456,7 +536,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 
     <!-- Уведомления: что присылать. Настройка АККАУНТА — решение принимает сервер до
          отправки, поэтому она одинакова на телефоне, сайте и десктопе. -->
-    <Card :class="sec('notifications')" :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
+    <Card id="set-notify" :class="sec('notifications')" :title="loc.t('settings.notifications')" :subtitle="loc.t('settings.notifyHint', 'Что присылать на телефон')">
       <div class="flex flex-col gap-2">
         <ToggleRow v-for="k in visibleNotifyKinds" :key="k.key"
                    :label="k.label" :hint="k.hint"
@@ -495,7 +575,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 
     <!-- Версия веб-части. Только в приложении: на сайте и десктопе обновление приезжает
          обычной загрузкой страницы, и показывать номер бандла там не о чем. -->
-    <Card :class="sec('about')" v-if="bundle" :title="loc.t('settings.appVersion', 'Версия приложения')"
+    <Card id="set-version" :class="sec('about')" v-if="bundle" :title="loc.t('settings.appVersion', 'Версия приложения')"
           :subtitle="loc.t('settings.appVersionHint', 'Интерфейс обновляется сам, без переустановки из магазина')">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-text2">{{ loc.t('settings.installed', 'Установлена:') }} <span class="font-semibold text-text">{{ bundle.version }}</span></p>
@@ -538,7 +618,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->
-    <Card :class="sec('voice')" :title="loc.t('settings.tts')" :subtitle="loc.t('settings.ttsHint', 'Как Вектор проговаривает свои ответы')">
+    <Card id="set-tts" :class="sec('voice')" :title="loc.t('settings.tts')" :subtitle="loc.t('settings.ttsHint', 'Как Вектор проговаривает свои ответы')">
       <button type="button"
               class="flex w-full items-center gap-3 rounded-md border border-border p-3 text-left transition-colors hover:border-accent"
               @click="cycleVoiceMode">
@@ -581,7 +661,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     </Card>
 
     <!-- Голосовой ввод: тумблер + выбор микрофона (настройка ЭТОГО устройства). -->
-    <Card :class="sec('voice')" :title="loc.t('settings.voice')" :subtitle="loc.t('settings.voiceHint', 'Микрофон для «Вектора»: сказать вместо набора текста')">
+    <Card id="set-mic" :class="sec('voice')" :title="loc.t('settings.voice')" :subtitle="loc.t('settings.voiceHint', 'Микрофон для «Вектора»: сказать вместо набора текста')">
       <div v-if="!voice.supported"
            class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <MicOff class="mt-0.5 size-4 shrink-0" />
@@ -644,7 +724,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     </Card>
 
     <!-- Шкала оценивания — только преподаватель. -->
-    <Card :class="sec('teaching')" v-if="auth.role === 'teacher'" :title="loc.t('settings.gradingScale', 'Шкала оценивания')"
+    <Card id="set-scale" :class="sec('teaching')" v-if="auth.role === 'teacher'" :title="loc.t('settings.gradingScale', 'Шкала оценивания')"
           :subtitle="loc.t('settings.gradingScaleHint', 'В чём вы вводите и видите оценки за практики/ДЗ. Средний балл и итоговая — всегда в 5-балльной')">
       <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button v-for="s in scaleOptions" :key="s.id" type="button" :disabled="scaleSaving"
@@ -662,13 +742,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
          код из приложения работает где угодно, а администратору он ОБЯЗАТЕЛЕН —
          спрятать эту карточку значило бы спрятать единственный способ вернуть себе
          доступ к разделам. -->
-    <Card :class="sec('security')" :title="loc.t('settings.mfa', 'Второй фактор входа')"
+    <Card id="set-mfa" :class="sec('security')" :title="loc.t('settings.mfa', 'Второй фактор входа')"
           :subtitle="loc.t('settings.mfaHint', 'Одноразовый код из приложения-аутентификатора в дополнение к паролю')">
       <MfaCard />
     </Card>
 
     <!-- Вход по биометрии / 2FA — виден только на устройствах с Face ID/отпечатком. -->
-    <Card :class="sec('security')" v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
+    <Card id="set-biometric" :class="sec('security')" v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
           :subtitle="loc.t('settings.biometricHint', 'Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля')">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
@@ -701,7 +781,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 
     <!-- ВЫХОД — в самом низу страницы, последним блоком. Раньше жил в шапке рядом с
          темой и статусом; здесь до него надо осознанно долистать. -->
-    <Card :class="sec('account')" :title="loc.t('settings.account', 'Аккаунт')"
+    <Card id="set-logout" :class="sec('account')" :title="loc.t('settings.account', 'Аккаунт')"
           :subtitle="loc.t('settings.accountHint', 'Вход в систему на этом устройстве')">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p class="text-sm text-text3">
@@ -721,7 +801,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
          пять часов, человек не станет.
          Обычные ссылки, не роутер: страницы статические, лежат вне SPA и одинаково
          открываются на сайте, внутри программы и в приложении Android. -->
-    <Card :class="sec('about')" :title="loc.t('settings.legal', 'Документы')"
+    <Card id="set-legal" :class="sec('about')" :title="loc.t('settings.legal', 'Документы')"
           :subtitle="loc.t('settings.legalHint', 'Условия использования и порядок обработки персональных данных')">
       <div class="flex flex-col gap-2 sm:flex-row">
         <a href="/terms.html" target="_blank" rel="noopener"

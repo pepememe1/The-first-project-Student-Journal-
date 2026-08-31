@@ -22,7 +22,6 @@ import { NAME_EFFECTS, nameDecor } from '@/config/nameEffects'
 import { useAuthStore } from '@/stores/auth'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
-import NotificationsInbox from '@/components/NotificationsInbox.vue'
 import PeerProfileCard from '@/components/messenger/PeerProfileCard.vue'
 import NameStyleDialog from '@/components/NameStyleDialog.vue'
 import AchievementsDialog from '@/components/AchievementsDialog.vue'
@@ -153,7 +152,7 @@ const styleSummary = computed(() => {
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
       <!-- Левая колонка: редактор -->
       <div class="space-y-4 lg:order-1">
-        <Card :title="locale.t('profile.avatarSection', 'Аватарка')" :pad="true">
+        <Card id="set-avatar" class="hidden lg:block" :title="locale.t('profile.avatarSection', 'Аватарка')" :pad="true">
           <button type="button" @click="cardRef?.openAvatarEditor()"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
             <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-accent">
@@ -166,7 +165,7 @@ const styleSummary = computed(() => {
         <!-- Баннер вынесен и сюда, не только на карандаш поверх карточки: карандаш
              находят не все, а строка в редакторе слева стоит там же, где остальные
              настройки внешнего вида. -->
-        <Card :title="locale.t('profile.bannerSection', 'Баннер')" :subtitle="locale.t('profile.bannerHint', 'Гифка вместо цветной полосы вверху карточки')" :pad="true">
+        <Card id="set-banner" class="hidden lg:block" :title="locale.t('profile.bannerSection', 'Баннер')" :subtitle="locale.t('profile.bannerHint', 'Гифка вместо цветной полосы вверху карточки')" :pad="true">
           <div class="flex flex-col gap-2">
             <button type="button" @click="cardRef?.openBannerPicker()"
                     class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
@@ -182,7 +181,7 @@ const styleSummary = computed(() => {
           </div>
         </Card>
 
-        <Card :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">
+        <Card id="set-color" :title="locale.t('profile.color', 'Цвет профиля')" :subtitle="locale.t('profile.colorHint', 'Фон плашки с вашим именем')">
           <div class="flex flex-wrap gap-2">
             <button v-for="p in PRESETS" :key="p.id" type="button" @click="pickColor(p.id)"
                     :title="locale.t(`theme.preset.${p.id}`, p.name)" :aria-label="locale.t(`theme.preset.${p.id}`, p.name)"
@@ -200,7 +199,7 @@ const styleSummary = computed(() => {
              девятнадцатью шрифтами и восемью эффектами он занял бы всю колонку. -->
         <!-- Достижения за пасхалки. Кнопкой, а не списком прямо здесь: закрытых
              больше, чем открытых, и в колонке редактора они заняли бы весь экран. -->
-        <Card :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
+        <Card id="set-achievements" :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
           <button type="button" @click="achievementsOpen = true"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
             <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-lg">🏆</span>
@@ -208,7 +207,7 @@ const styleSummary = computed(() => {
           </button>
         </Card>
 
-        <Card :title="locale.t('profile.nameFont', 'Стиль имени')" :subtitle="locale.t('profile.nameFontHint', 'Видно всем — в сообщениях и в вашем профиле')">
+        <Card id="set-namefont" :title="locale.t('profile.nameFont', 'Стиль имени')" :subtitle="locale.t('profile.nameFontHint', 'Видно всем — в сообщениях и в вашем профиле')">
           <button type="button" @click="styleDialogOpen = true"
                   class="flex w-full items-center justify-between gap-2 rounded-lg border border-border2 px-3 py-2 text-left transition-colors hover:border-accent hover:bg-bg2">
             <span class="min-w-0 flex-1">
@@ -241,7 +240,13 @@ const styleSummary = computed(() => {
       <!-- Центр: живой предпросмотр (= карточка, которую видят другие). Цвет/шрифт —
            ЧЕРНОВИК (colorOverride/fontOverride): смена видна здесь сразу, не дожидаясь
            «Сохранить» — иначе предпросмотр не был бы предпросмотром. -->
-      <div class="lg:order-2">
+      <!-- ⚠️ На телефоне карточка идёт ПЕРВОЙ (`order-first`). С тех пор как
+           аватарку и баннер меняют нажатием по ним самим, карточка перестала быть
+           предпросмотром и стала органом управления — а лежала она под всеми
+           настройками, то есть до единственной кнопки смены аватарки надо было
+           прокрутить весь раздел. На ПК порядок прежний: там слева редактор,
+           справа живой предпросмотр, и менять их местами незачем. -->
+      <div class="order-first lg:order-2">
         <PeerProfileCard ref="cardRef" editable
                          :color-override="draftColor" :font-override="draftFont"
                          :effect-override="draftEffect" :name-color-override="draftNameColor" />
@@ -272,9 +277,7 @@ const styleSummary = computed(() => {
 
     <ProfileEggs ref="eggsRef" :name="auth.user?.name || ''" :level="eggLevel" @save="saveAll" />
 
-    <Card :title="locale.t('settings.notifications', 'Уведомления')" :subtitle="locale.t('profile.notificationsHint', 'Оценки и изменения расписания')">
-      <NotificationsInbox />
-    </Card>
+    
 
     <!-- Диалог правит ЧЕРНОВИК (v-model), сохраняет его общая кнопка выше — сам он на
          сервер не ходит, как и остальные три редактора на этой странице. -->

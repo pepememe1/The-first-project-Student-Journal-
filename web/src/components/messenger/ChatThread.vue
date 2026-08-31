@@ -5,7 +5,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
-  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, Settings,
+  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, LifeBuoy,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
   Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical,
@@ -1267,7 +1267,7 @@ function openActivities() {
                   class="grid size-8 shrink-0 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                     : 'text-text3 hover:bg-bg2 hover:text-text'">
-            <Settings class="size-5" />
+            <LifeBuoy class="size-5" />
           </button>
         </div>
 
@@ -1308,7 +1308,7 @@ function openActivities() {
             </button>
             <button v-if="!isModeration && !isAdmin" type="button" @click="closeHeaderMenu(); m.openModeration()"
                     class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">
-              <Settings class="size-4 shrink-0 text-text3" />
+              <LifeBuoy class="size-4 shrink-0 text-text3" />
               {{ locale.t('chatThread.writeToModeration', 'Написать модерации') }}
             </button>
           </div>

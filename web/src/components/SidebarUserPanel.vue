@@ -13,7 +13,8 @@
 // «случайно жму выход») — выход это редкое и необратимое действие, ему не место рядом
 // с постоянно нажимаемым меню.
 import { ref, computed, watch, onMounted } from 'vue'
-import { Moon, Sun, ChevronDown } from '@lucide/vue'
+import { RouterLink } from 'vue-router'
+import { Moon, Sun, ChevronDown, SlidersHorizontal } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useProfileStore } from '@/stores/profile'
@@ -139,6 +140,23 @@ onMounted(async () => {
         <Sun v-if="theme.isDark" class="size-4" />
         <Moon v-else class="size-4" />
       </button>
+
+      <!-- Шестерёнка настроек — рядом с карточкой себя, в нижнем углу (Discord,
+           просьба Влада 31.08.2026). Раньше это был пункт меню наравне с разделами
+           кабинета, хотя настройки к учебным разделам не относятся вовсе.
+           ⚠️ Видна и на телефоне: сама панель там тоже прижата к низу выезжающей шторки,
+           то есть «нижний угол» существует на обеих платформах. Первая редакция прятала
+           её под `lg:grid` из предположения, что на телефоне такого угла нет, — Влад
+           открыл шторку и показал, что есть. Предположение о чужом экране стоило
+           лишнего пункта меню.
+           ⚠️ Пункт «Настройки» из меню при этом УБРАН: две двери в одно место, видимые
+           одновременно, читаются как два разных места. -->
+      <RouterLink :to="`/${auth.role || 'student'}/settings`"
+                  class="grid size-8 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent"
+                  :aria-label="locale.t('nav.settings', 'Настройки')"
+                  :title="locale.t('nav.settings', 'Настройки')">
+        <SlidersHorizontal class="size-4" />
+      </RouterLink>
     </div>
 
     <!-- Нет связи — единственное состояние сети, о котором стоит сообщать. -->
