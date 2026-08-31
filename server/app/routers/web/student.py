@@ -68,26 +68,20 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
         subj_lessons[subj] = []
     subjects = []
     grades_total = 0
-    lec_total = lec_present = 0
     for subj, ls in subj_lessons.items():
         cnt = 0
         for l in ls:
             v = (records.get(l.id) or "").strip()
             if l.type in ("Практика", "Экзамен") and v:
                 cnt += 1
-            elif l.type == "Лекция":
-                lec_total += 1
-                #⚠️ ВТОРОЙ расчёт посещаемости в продукте (первый — `webdata.absences`).
-                #«О» здесь НЕ считается отсутствием: это опоздание (3.7.6), студент на
-                #занятии был. Пока «О» стояло в этом наборе, один и тот же экран
-                #показывал «пропусков нет» и «посещаемость 0 %» — две правды рядом.
-                #Держит `tests/test_attendance_marks.py::
-                #test_attendance_percent_counts_late_as_present`.
-                if v not in ("Н", "Б"):
-                    lec_present += 1
         grades_total += cnt
         subjects.append({"subject": subj, "grades": cnt})
-    attendance = round(100 * lec_present / lec_total) if lec_total else 100
+    #⚠️ ЗДЕСЬ БЫЛ ВТОРОЙ РАСЧЁТ ПОСЕЩАЕМОСТИ (убран 31.08.2026). Он считал свой процент
+    #по ЛЕКЦИЯМ и только по ним: прогулявший все практики видел «посещаемость 100 %»
+    #рядом с честным числом пропущенных часов на том же экране. В 3.7.6 этот же цикл уже
+    #ловил Полковник — тогда из-за метки «О», — и его поправили, оставив вторым. Правда
+    #теперь одна: `webdata.attendance_percent` считает из тех же часов, что и `absences`.
+    attendance = W.attendance_percent(lessons, records)
 
     return {
         "name": W.display_name(user),

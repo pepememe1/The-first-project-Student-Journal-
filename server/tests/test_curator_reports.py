@@ -229,7 +229,11 @@ def test_report_subject_drilldown_shows_grades_and_absences(client):
     assert len(data["lessons"]) == 2
     row = data["rows"][0]
     assert row["student"] == "Иванова Мария"
-    assert row["missed_count"] == 1 and row["missed_hours"] == 1
+    #🔥 2 часа, а не 1 (31.08.2026). Пропущена ОДНА ПРАКТИКА — это целая пара, то есть
+    #2 академических часа. Прежнее ожидание «1» закрепляло дефект: практика лежит одной
+    #строкой, лекция двумя, и счёт по СТРОКАМ занижал практику ровно вдвое. Оба ключа —
+    #часы (второй переименован из `missed_count`, потому что часами он был и раньше).
+    assert row["missed_unexcused"] == 2 and row["missed_hours"] == 2
 
 
 def test_report_excludes_subject_not_in_current_plan(client):

@@ -62,7 +62,7 @@ zet_hint = round(total_hours / 36, 1)
 | ЗЕТ не задан администратором | — Не показывать нигде |
 
 Расчёт — чистая `study_hours.subject_zet_state(...)` (един для студента/куратора/родителя,
-десктоп берёт через локальный сервер). Обёртка `subject_zet_earned` (float|None) оставлена
+десктоп берёт через локальный сервер). Обёртка `subject_zet_earned (УДАЛЕНА 31.08.2026, зови subject_zet_state)` (float|None) оставлена
 для обратной совместимости. Держат `server/tests/test_zet.py` и
 `tests/test_subject_hours_desktop.py` (обратный ход: одна «4» в идущем семестре → pending).
 

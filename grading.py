@@ -1,7 +1,7 @@
 """
 grading.py — ЕДИНЫЙ источник правды для расчёта среднего балла.
 
-Раньше формула жила в двух местах (core.GradeBook.calculate_average и
+Раньше формула жила в двух местах (в удалённом ныне core.GradeBook.calculate_average и
 vector/intents._practice_average) и могла разойтись. Теперь обе считают через
 этот модуль — расхождение исключено по построению.
 
@@ -177,7 +177,7 @@ def practice_average(items: Iterable[tuple[str, str]],
 
 
 def pairs_from_objects(lessons) -> list[tuple[str, str]]:
-    """Адаптер для core.Lesson: [(l.id, l.type), ...]."""
+    """Адаптер для объектов занятия с полями .id/.type: [(l.id, l.type), ...]."""
     return [(l.id, l.type) for l in lessons]
 
 

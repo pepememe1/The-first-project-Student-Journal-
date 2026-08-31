@@ -316,7 +316,13 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
             "student": f"{s.surname} {s.name}".strip(),
             "grades": grades,
             "average": W.average(lessons, recs, cfg, scale=scale_map),
-            "missed_hours": absc["всего"], "missed_count": absc["Н"],
+            #⚠️ ОБЕ величины — АКАДЕМИЧЕСКИЕ ЧАСЫ (31.08.2026). Второй ключ звался
+            #`missed_count` и читался как «сколько раз не пришёл», но всегда был той же
+            #единицы, что и первый, — просто без «Б». Теперь, когда `absences` считает
+            #настоящие часы, старое имя стало прямым враньём в контракте, поэтому
+            #переименовано в `missed_unexcused`. Единственный потребитель —
+            #`web/src/components/messenger/CuratorReportOverlay.vue`.
+            "missed_hours": absc["всего"], "missed_unexcused": absc["Н"],
         })
     return {"group": rep.group_name, "subject": subject,
             "lessons": [{"id": l.id, "type": l.type, "number": l.number,

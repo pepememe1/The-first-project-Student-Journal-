@@ -802,6 +802,7 @@ export const MESSAGES = {
     'curatorReport.asOf': 'на {date}',
     'curatorReport.noData': 'Без оценок: {n}',
     'curatorReport.hoursShort': '{n} ч.',
+    'curatorReport.unexcusedHint': 'из них по неуважительной причине',
 
     'gif.toCategories': 'К категориям',
     'gif.searchPlaceholder': 'Поиск в Klipy…',
@@ -2985,6 +2986,7 @@ export const MESSAGES = {
     'curatorReport.asOf': 'as of {date}',
     'curatorReport.noData': 'No grades: {n}',
     'curatorReport.hoursShort': '{n} h.',
+    'curatorReport.unexcusedHint': 'of them unexcused',
 
     'gif.toCategories': 'To categories',
     'gif.searchPlaceholder': 'Search Klipy…',
@@ -5160,6 +5162,7 @@ export const MESSAGES = {
     'curatorReport.asOf': '截至 {date}',
     'curatorReport.noData': '无成绩：{n}',
     'curatorReport.hoursShort': '{n} 小时',
+    'curatorReport.unexcusedHint': '其中无故缺勤',
 
     'gif.toCategories': '返回分类',
     'gif.searchPlaceholder': '在 Klipy 中搜索…',

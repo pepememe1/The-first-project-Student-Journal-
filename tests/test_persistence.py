@@ -1,20 +1,22 @@
 """
 test_persistence.py — Персистентность по действию: выставленная оценка попадает на
-диск СРАЗУ и переживает перезагрузку журнала (раньше жила только в памяти до «Сохранить»).
+диск СРАЗУ и переживает пересоздание соединения (раньше жила только в памяти до
+кнопки «Сохранить»).
+
+⚠️ Переписано 31.08.2026 без `core.GradeBook`. Прежняя версия заводила журнал этим
+классом и перечитывала его — но класс мёртв в продукте (ни одного вызывающего вне
+тестов) и удалён тем же заходом. Проверяемое свойство от него не зависело ни разу:
+речь про ХРАНИЛИЩЕ — `upsert_grade` + `commit` обязаны пережить закрытие соединения.
+Оценку на живом пути пишет серверный `POST /web/teacher/grade` (внутри программы — на
+локальном сервере), а сюда она приезжает синком.
 """
-from data.core import DBManager, GradeBook, Student
+from data.core import DBManager
 
 G, S = "ИС-21", "Математика"
 
 
 def _persist_grade(student_f, student_n, key, val):
-    """Запись оценки «как в продукте»: сразу на диск, отдельной транзакцией.
-
-    ⚠️ Раньше здесь стояло «то же, что делает teacher_dashboard._persist_grade» — того
-    модуля нет с удаления Qt, и ссылка вводила в заблуждение: сегодня оценку пишет
-    серверный `POST /web/teacher/grade` (внутри программы — на локальном сервере), а
-    сюда она приезжает синком. Проверяется НЕ чужой вызывающий, а само свойство
-    хранилища: `upsert_grade` + `commit` обязаны переживать пересоздание журнала."""
+    """Запись оценки «как в продукте»: сразу на диск, отдельной транзакцией."""
     conn = DBManager.get_conn()
     cur = conn.cursor()
     DBManager.upsert_grade(cur, (student_f, student_n, key, val))
@@ -22,30 +24,31 @@ def _persist_grade(student_f, student_n, key, val):
     conn.close()
 
 
+def _read_records(student_f, student_n) -> dict:
+    """Оценки студента ИЗ БАЗЫ, новым соединением — то есть точно не из памяти."""
+    DBManager._init_sqlite_tables()
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT lesson_id, grade FROM grades "
+                "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0",
+                (student_f, student_n))
+    out = {lid: g for lid, g in cur.fetchall()}
+    conn.close()
+    return out
+
+
 def test_grade_survives_journal_reload(fresh_db):
-    gb = GradeBook(G, S)
-    gb.add_student(Student("Иван", "Иванов", G))
-    lesson = gb.add_lesson("Практика", "Тема", "01.09.2025")
-
-    #имитируем ввод оценки в журнале (per-action save, без кнопки «Сохранить»)
-    _persist_grade("Иванов", "Иван", lesson.id, "5")
-
-    #перезагрузка журнала из БД (как при смене группы/предмета или перезапуске)
-    reloaded = GradeBook(G, S)
-    st = [s for s in reloaded.spisok_stud if s.f == "Иванов"][0]
-    assert st.records.get(lesson.id) == "5", "оценка должна сохраниться сразу, а не потеряться"
+    _persist_grade("Иванов", "Иван", "L1", "5")
+    assert _read_records("Иванов", "Иван").get("L1") == "5", \
+        "оценка должна сохраниться сразу, а не потеряться до «Сохранить»"
 
 
 def test_retake_key_persists_separately(fresh_db):
     """Пересдача хранится под отдельным ключом lesson_id+'_retake' и не затирает
-    основную оценку — обе переживают перезагрузку."""
-    gb = GradeBook(G, S)
-    gb.add_student(Student("Пётр", "Петров", G))
-    lesson = gb.add_lesson("Практика", "Тема", "01.09.2025")
-    _persist_grade("Петров", "Пётр", lesson.id, "2 (Не зачтено)")
-    _persist_grade("Петров", "Пётр", lesson.id + "_retake", "4 (Зачтено)")
+    основную оценку — обе переживают перечитывание."""
+    _persist_grade("Петров", "Пётр", "L1", "2 (Не зачтено)")
+    _persist_grade("Петров", "Пётр", "L1_retake", "4 (Зачтено)")
 
-    reloaded = GradeBook(G, S)
-    st = [s for s in reloaded.spisok_stud if s.f == "Петров"][0]
-    assert st.records.get(lesson.id) == "2 (Не зачтено)"
-    assert st.records.get(lesson.id + "_retake") == "4 (Зачтено)"
+    recs = _read_records("Петров", "Пётр")
+    assert recs.get("L1") == "2 (Не зачтено)"
+    assert recs.get("L1_retake") == "4 (Зачтено)"

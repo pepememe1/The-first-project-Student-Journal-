@@ -13,12 +13,7 @@ core.py — Журнал ВСГУТУ.
 #`test_no_direct_sqlite_connect_to_the_sync_database`.
 from data import local_db
 import log
-import uuid
-import re
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment
 
 #Строка версии живёт в ОДНОМ месте — корневом `desktop_update.py` (там же, где логика
 #сравнения версий). Здесь ре-экспорт, чтобы `core.APP_VERSION` продолжал работать у всех,
@@ -715,26 +710,10 @@ class DBManager:
         conn.commit()
         conn.close()
 
-    @classmethod
-    def upsert_lesson(cls, cur, vals: tuple):
-        """INSERT OR REPLACE для занятия в SQLite.
-        vals = (id, group, subject, type, number, topic, date, retake_date, hour[, year, semester]).
-        Проставляем updated_at — нужно для синхронизации через API (LWW). year/semester —
-        учебный период (по умолчанию пусто/0; журнал усыновляет пустые в текущий термин)."""
-        now = datetime.now(timezone.utc).isoformat()
-        base = tuple(vals[:9])
-        year = vals[9] if len(vals) > 9 else ""
-        semester = int(vals[10]) if len(vals) > 10 else 0
-        #deleted=0 — это сохранение АКТИВНОГО занятия (в т.ч. «воскрешает» ранее
-        #удалённое, если занятие создали заново с тем же id — на практике id новый).
-        cur.execute("INSERT OR REPLACE INTO lessons "
-                    "(id,group_name,subject,type,number,topic,date,retake_date,hour,"
-                    "year,semester,updated_at,deleted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
-                    base + (year, semester, now))
-
-    @classmethod
-    def upsert_student(cls, cur, vals: tuple):
-        cur.execute("INSERT OR IGNORE INTO students (f,n,group_name) VALUES (?,?,?)", vals)
+    #⚠️ `upsert_lesson` и `upsert_student` удалены 31.08.2026 вместе с `GradeBook` — он был
+    #их ЕДИНСТВЕННЫМ вызывающим. Занятия и студентов в локальную базу кладёт синхронизация
+    #(`sync/sync_engine.py`) своим SQL, и второй способ записи ей не нужен. `upsert_grade`
+    #ниже остаётся: его зовут напрямую и продуктовый путь доклейки id, и тесты.
 
     @classmethod
     def upsert_grade(cls, cur, vals: tuple):
@@ -845,411 +824,31 @@ class DBManager:
         return out
 
 
-#Датаклассы
-@dataclass
-class Lesson:
-    id: str
-    type: str
-    number: int
-    topic: str
-    date: str
-    retake_date: str = ""
-    hour: int = 0
-    year: str = ""          #учебный год «YYYY/YYYY+1» (период занятия)
-    semester: int = 0       #семестр 1 (осень) | 2 (весна)
-
-
-@dataclass
-class Student:
-    n: str
-    f: str
-    group: str
-    records: dict[str, str] = field(default_factory=dict)
-
-
-#Журнал
-class GradeBook:
-    def __init__(self, group: str, subject: str, year: str = "", semester: int = 0):
-        self.group   = group
-        self.subject = subject
-        #Учебный период журнала. Пусто → БЕЗ фильтра (все периоды — прежнее поведение,
-        #обратная совместимость для вызовов без термина). Задан → журнал показывает
-        #только этот семестр; прошлые периоды в UI открываются read-only (архив).
-        self.year    = year or ""
-        self.semester = int(semester or 0)
-        DBManager._init_sqlite_tables()
-        self.lessons: list[Lesson] = []
-        self.spisok_stud: list[Student] = []
-        self.load_from_db()
-
-    def add_student(self, st: Student):
-        self.spisok_stud.append(st)
-        self.save_to_db()
-
-    def delete_student(self, surname: str, name: str):
-        surname = surname.strip()
-        name    = name.strip()
-        self.spisok_stud = [
-            s for s in self.spisok_stud
-            if not (s.f.strip().lower() == surname.lower()
-                    and s.n.strip().lower() == name.lower())
-        ]
-        conn = DBManager.get_conn()
-        cur  = conn.cursor()
-        #Оценки удаляем НЕ физически, а надгробием (deleted=1 + свежий updated_at):
-        #так удаление доедет до других ПК через синхронизацию, а не «воскреснет» при
-        #следующем pull. Физическое удаление оставило бы серверную копию живой.
-        now = datetime.now(timezone.utc).isoformat()
-        cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? "
-                    "WHERE student_f=? AND student_n=?", (now, DEVICE_ID, surname, name))
-        cur.execute("DELETE FROM students WHERE f=? AND n=?", (surname, name))
-        conn.commit()
-        conn.close()
-
-    def delete_lesson(self, lesson_id: str):
-        """Удаляет занятие НАДГРОБИЕМ (deleted=1), а не физически — иначе удаление не
-        доезжало бы до других ПК и занятие воскресало бы при следующем pull. Раньше
-        занятие лишь убиралось из списка в памяти, а строка в SQLite оставалась —
-        и при перезагрузке журнала столбец возвращался. Заодно надгробим оценки
-        этого занятия, чтобы они не висели «осиротевшими» и тоже удалились везде."""
-        self.lessons = [l for l in self.lessons if l.id != lesson_id]
-        conn = DBManager.get_conn()
-        cur  = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat()
-        cur.execute("UPDATE lessons SET deleted=1, updated_at=? WHERE id=?", (now, lesson_id))
-        cur.execute("UPDATE grades SET deleted=1, updated_at=?, device=? WHERE lesson_id=?",
-                    (now, DEVICE_ID, lesson_id))
-        conn.commit()
-        conn.close()
-
-    def add_lesson(self, lesson_type: str, topic: str = "", date: str = "", hour: int = 0) -> "Lesson":
-        nums     = [l.number for l in self.lessons if l.type == lesson_type and getattr(l, 'hour', 0) in (0, 1)]
-        next_num = max(nums) + 1 if nums else 1
-        dt = date or datetime.now().strftime('%d.%m.%Y')
-
-        #Новое занятие штампуем текущим периодом журнала (self.year/semester) — чтобы
-        #оно попало в правильный семестр. Если период не задан (легаси-вызов) — пусто,
-        #сервер проставит термин при push, а бэкфилл усыновит его в текущий период.
-        yr, sem = self.year, self.semester
-        if lesson_type == "Лекция" and hour == 0:
-            l1 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=1, year=yr, semester=sem)
-            l2 = Lesson(id=str(uuid.uuid4()), type="Лекция", number=next_num, topic=topic, date=dt, retake_date="", hour=2, year=yr, semester=sem)
-            self.lessons.extend([l1, l2])
-            self.save_to_db()
-            return l1
-        else:
-            l = Lesson(id=str(uuid.uuid4()), type=lesson_type, number=next_num, topic=topic, date=dt, retake_date="", hour=hour, year=yr, semester=sem)
-            self.lessons.append(l)
-            self.save_to_db()
-            return l
-
-    def set_retake_date(self, lesson_id: str, retake_date: str, retake_n: int = 1):
-        attr = 'retake_date' if retake_n == 1 else f'retake_date_{retake_n}'
-        for l in self.lessons:
-            if l.id == lesson_id:
-                setattr(l, attr, retake_date)
-                break
-        col = 'retake_date' if retake_n == 1 else f'retake_date_{retake_n}'
-        conn = DBManager.get_conn()
-        cur  = conn.cursor()
-        try:
-            cur.execute(f"ALTER TABLE lessons ADD COLUMN {col} TEXT DEFAULT ''")
-        except Exception as e:
-            _alter_ignored("lessons", col, e)
-        #SAST B608: {col} — имя колонки из нашего же списка миграции; данные
-        #идут параметрами.
-        cur.execute(f"UPDATE lessons SET {col}=? WHERE id=?",  # nosec B608
-                    (retake_date, lesson_id))
-        conn.commit()
-        conn.close()
-
-    def save_to_db(self):
-        conn = DBManager.get_conn()
-        cur  = conn.cursor()
-        for l in self.lessons:
-            DBManager.upsert_lesson(cur, (
-                l.id, self.group, self.subject, l.type,
-                l.number, l.topic, l.date,
-                getattr(l, 'retake_date', ''),
-                getattr(l, 'hour', 0),
-                #период занятия сохраняем как есть (архивные не переносим в текущий);
-                #если у занятия периода нет — берём период журнала.
-                getattr(l, 'year', '') or self.year,
-                getattr(l, 'semester', 0) or self.semester,
-            ))
-        for s in self.spisok_stud:
-            DBManager.upsert_student(cur, (s.f, s.n, s.group))
-            for lesson_id, grade in s.records.items():
-                DBManager.upsert_grade(cur, (s.f, s.n, lesson_id, grade))
-        conn.commit()
-        conn.close()
-
-    def load_from_db(self):
-        conn = DBManager.get_conn()
-        cur  = conn.cursor()
-
-        #Бэкфилл периода: занятия без учебного периода (старые базы, до семестров)
-        #«усыновляем» в ТЕКУЩИЙ термин — иначе при фильтрации по семестру они бы не
-        #показались ни в одном. Только когда журнал открыт с термином (self.year задан).
-        if self.year:
-            try:
-                from data import terms
-                cy, cs = terms.current_term()
-                cur.execute(
-                    "UPDATE lessons SET year=?, semester=? "
-                    "WHERE group_name=? AND subject=? AND COALESCE(year,'')='' "
-                    "AND COALESCE(deleted,0)=0",
-                    (cy, int(cs or 0), self.group, self.subject))
-                conn.commit()
-            except Exception as e:
-                log.get("core").warning(f"[GradeBook] бэкфилл периода пропущен: {e}")
-
-        #deleted=0 — удалённые (надгробия) занятия в журнал не показываем. Если задан
-        #период журнала (self.year) — показываем только его семестр (архив/текущий).
-        base_sql = ("SELECT id, type, number, topic, date, retake_date, hour, "
-                    "COALESCE(year,''), COALESCE(semester,0) "
-                    "FROM lessons WHERE group_name=? AND subject=? AND COALESCE(deleted,0)=0")
-        params = [self.group, self.subject]
-        if self.year:
-            base_sql += " AND COALESCE(year,'')=? AND COALESCE(semester,0)=?"
-            params += [self.year, self.semester]
-        base_sql += " ORDER BY type, number, hour"
-        cur.execute(base_sql, tuple(params))
-        self.lessons = []
-        for row in cur.fetchall():
-            l = Lesson(
-                id=row[0], type=row[1], number=row[2],
-                topic=row[3], date=row[4],
-                retake_date=row[5] if row[5] else "",
-                hour=row[6] if row[6] else 0,
-                year=row[7] or "", semester=row[8] or 0,
-            )
-            self.lessons.append(l)
-
-        #Синхронизация студентов из общего хранилища (data_store)
-        #Студентами управляет администратор через data_store (kv_store в SQLite,
-        #а общая база — через API-сервер). Здесь мы лишь дозаполняем локальную
-        #таблицу students теми, кого ещё нет. ВАЖНО: НЕ удаляем студентов из SQLite —
-        #иначе добавленные администратором студенты исчезали бы при каждой
-        #перезагрузке журнала.
-        try:
-            from data.data_store import get_store
-            store = get_store()
-            if store:
-                known_students = store.get_students()
-                existing = set()
-                cur.execute("SELECT f, n FROM students WHERE group_name=?", (self.group,))
-                for row in cur.fetchall():
-                    existing.add((row[0].strip().lower(), row[1].strip().lower()))
-                for s in known_students:
-                    if s.get("group", "") != self.group:
-                        continue
-                    surname = s.get("surname", "").strip()
-                    name    = s.get("name", "").strip()
-                    if surname and name and (surname.lower(), name.lower()) not in existing:
-                        DBManager.upsert_student(cur, (surname, name, self.group))
-                        existing.add((surname.lower(), name.lower()))
-                conn.commit()
-        except Exception as e:
-            log.get("core").warning(f"[GradeBook] синхронизация студентов в load_from_db: {e}")
-
-        cur.execute("SELECT f, n, group_name FROM students WHERE group_name=?", (self.group,))
-        self.spisok_stud = []
-        for f, n, g in cur.fetchall():
-            student = Student(n, f, g)
-            #deleted=0 — удалённые (надгробия) оценки в журнал/расчёт не берём.
-            cur.execute("SELECT lesson_id, grade FROM grades "
-                        "WHERE student_f=? AND student_n=? AND COALESCE(deleted,0)=0", (f, n))
-            student.records = {row[0]: row[1] for row in cur.fetchall()}
-            self.spisok_stud.append(student)
-        conn.close()
-
-    def _hours_plan_keys(self) -> list:
-        """Ключи subject_hours, по которым ищем план — в порядке убывания точности.
-
-        Журнал открыт с ЯВНЫМ периодом (архив прошлого семестра) — берём только его:
-        подставить туда план текущего семестра значило бы показать чужую цифру.
-
-        Периода нет (так журнал открывают экраны студента и часть экранов препода) —
-        сначала пробуем ТЕКУЩИЙ термин, и только потом бестерминный ключ. Это и есть
-        причина, по которой часы не появлялись на ПК: админ сохраняет их с сайта, а там
-        период подставляется всегда (`hrs:Группа|Предмет|2025/2026|1`), тогда как журнал
-        без периода искал `hrs:Группа|Предмет||0` — ключи не совпадали никогда.
-        Бестерминный вариант оставляем запасным: с ним лежат строки, заведённые до
-        появления учебных периодов."""
-        def _key(year, semester):
-            return f"hrs:{self.group}|{self.subject}|{year}|{int(semester or 0)}"
-        if self.year and self.semester:
-            return [_key(self.year, self.semester)]
-        keys = []
-        try:
-            from data import terms
-            y, s = terms.current_term()
-            keys.append(_key(y, s))
-        except Exception as e:
-            #Обойдёмся бестерминным ключом ниже — но это ровно тот сценарий, из-за
-            #которого часы «не появлялись на ПК»: админ сохраняет их С периодом, а мы
-            #ищем `hrs:Группа|Предмет||0`, и ключи не совпадают никогда. Раз в запуск:
-            #зовётся на каждое открытие журнала.
-            _report_once("hours_term", "[GradeBook] текущий учебный период не определён (%s) — "
-                         "план часов ищу по бестерминному ключу, он может не найтись", e)
-        keys.append(_key("", 0))
-        return keys
-
-    def hours_progress(self) -> tuple:
-        """(пройдено, план) академических часов по этому журналу.
-
-        Пройденное считает общий с сервером study_hours (лекция = пара из двух строк,
-        практика = одна строка, обе дают по 2 часа). План приходит от админа синком; его
-        нет — возвращаем 0, и интерфейс просто не показывает строку. Придумывать план
-        нельзя: «пройдено 24 из 0» выглядит как поломка данных."""
-        import study_hours
-        from contextlib import closing
-        done = study_hours.hours_done(self.lessons)
-        total = 0
-        try:
-            with closing(DBManager.get_conn()) as conn:
-                cur = conn.cursor()
-                for hid in self._hours_plan_keys():
-                    cur.execute("SELECT COALESCE(hours_total,0) FROM subject_hours "
-                                "WHERE id=? AND COALESCE(deleted,0)=0", (hid,))
-                    row = cur.fetchone()
-                    if row:
-                        total = int(row[0])
-                        break
-        except Exception:
-            #Нет таблицы (старая база до первого синка) — молча считаем «план не задан».
-            total = 0
-        return done, total
-
-    def calculate_average(self, student: Student, cfg=None, scale=None) -> float:
-        """Средний балл через единый модуль grading (та же формула, что у Вектора).
-        Методика (Н=вес, учитывать ли пропуск, включать ли экзамены) берётся из config,
-        дефолты сохраняют прежнее поведение. cfg можно передать явно — например, чтобы
-        ВРЕМЕННО (визуально) отключить учёт пропусков «Н=2» тумблером в интерфейсе, не
-        меняя общий config. scale — шкала преподавателя (§ролей, 3.3.1), ведущего эти
-        занятия; без него — "5" (сегодняшнее поведение). Разрешение «чья шкала» — забота
-        вызывающего: шкалу знает тот, кто знает преподавателя (на сервере — `webdata.
-        lesson_scale_map` по назначению препод↔предмет↔группа), а этот модуль ролей не
-        видит и решать за них не должен. Прежняя ссылка на `teacher_dashboard` устарела —
-        нативных экранов нет с удаления Qt."""
-        import grading
-        if cfg is None:
-            try:
-                from data.data_store import get_store
-                cfg = get_store()._config()
-            except Exception:
-                cfg = {}
-        if scale is None:
-            scale = grading.DEFAULT_SCALE
-        return grading.practice_average(
-            grading.pairs_from_objects(self.lessons), student.records, cfg, scale=scale)
-
-    def export_to_excel(self, file_path: str, scale=None):
-        """Экспорт журнала в аккуратный xlsx: титульная шапка (группа/предмет/дата),
-        фирменные цвета, рамки, цвет оценок по уровню, закреплённые области и строка
-        «средний по группе». Весь текст — Times New Roman 14 (требование заказчика).
-        scale — шкала преподавателя (§ролей, 3.3.1); журнал — один предмет/один препод,
-        поэтому одна строка на весь экспорт (как в calculate_average)."""
-        from openpyxl.styles import Border, Side
-        from openpyxl.utils import get_column_letter
-        from datetime import datetime
-
-        #ЕДИНЫЙ стиль десктопа и веба: Times New Roman 14, БЕЗ цветов (ч/б), рамки,
-        #адаптивная ширина. Совпадает с server/app/xlsx_export.py.
-        FNT = "Times New Roman"
-        thin = Side(style="thin", color="000000")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-        wb = Workbook()
-        ws = wb.active
-        safe_title = re.sub(r'[\[\]:*?/\\]', '_', f"Успеваемость {self.group}")
-        ws.title = safe_title[:31]
-
-        headers = ["Фамилия", "Имя"]
-        for l in self.lessons:
-            if l.type == "Экзамен":
-                headers.append(f"Экзамен №{l.number}\n({l.date})\n{l.topic}")
-                if l.retake_date:
-                    headers.append(f"Пересдача\n({l.retake_date})")
-            else:
-                headers.append(f"{l.type} №{l.number}\n({l.date})")
-        headers.append("Средний балл")
-        ncols = len(headers)
-        last_col = get_column_letter(ncols)
-
-        #Титульная шапка: что это, чья группа, когда выгружено.
-        ws.merge_cells(f"A1:{last_col}1")
-        ws["A1"] = "Журнал успеваемости"
-        ws["A1"].font = Font(name=FNT, size=16, bold=True)
-        ws["A1"].alignment = Alignment(horizontal="center")
-        ws.merge_cells(f"A2:{last_col}2")
-        ws["A2"] = f"Группа {self.group}  ·  {self.subject}"
-        ws["A2"].font = Font(name=FNT, size=14, bold=True)
-        ws["A2"].alignment = Alignment(horizontal="center")
-        ws.merge_cells(f"A3:{last_col}3")
-        ws["A3"] = (f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
-                    f"GradeBookAI · Технологический колледж ВСГУТУ")
-        ws["A3"].font = Font(name=FNT, size=12, italic=True)
-        ws["A3"].alignment = Alignment(horizontal="center")
-
-        HDR = 5                                             #строка заголовков таблицы
-        ws.append([])                                       #строка 4 — воздух
-        ws.append(headers)
-        for cell in ws[HDR]:
-            cell.font = Font(name=FNT, size=14, bold=True)
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cell.border = border
-
-        averages = []
-        for i, s in enumerate(self.spisok_stud):
-            row = [s.f, s.n]
-            for l in self.lessons:
-                base = s.records.get(l.id, "")
-                row.append(base)
-                if l.type == "Экзамен" and l.retake_date:
-                    rv = s.records.get(l.id + "_retake", "")
-                    if not rv:
-                        #пересдача только у заваливших основной экзамен
-                        b = (base or "").strip()
-                        failed = b.startswith(("2", "Н")) or "Не зачтено" in b
-                        rv = "" if failed else "—"
-                    row.append(rv)
-            avg = round(self.calculate_average(s, scale=scale), 2)
-            averages.append(avg)
-            row.append(avg if avg > 0 else "")
-            ws.append(row)
-            r = HDR + 1 + i
-            for c in range(1, ncols + 1):
-                cell = ws.cell(row=r, column=c)
-                cell.border = border
-                cell.font = Font(name=FNT, size=14, bold=(c == ncols))
-                cell.alignment = Alignment(
-                    horizontal="left" if c <= 2 else "center", vertical="center")
-
-        #Итог: средний по группе (только по студентам с оценками).
-        vals = [a for a in averages if a > 0]
-        total_row = HDR + len(self.spisok_stud) + 1
-        ws.cell(row=total_row, column=1, value="Средний по группе:")
-        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row,
-                       end_column=ncols - 1)
-        ws.cell(row=total_row, column=1).font = Font(name=FNT, size=14, bold=True)
-        ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="right")
-        tc = ws.cell(row=total_row, column=ncols,
-                     value=round(sum(vals) / len(vals), 2) if vals else "—")
-        tc.font = Font(name=FNT, size=14, bold=True)
-        tc.alignment = Alignment(horizontal="center")
-
-        #Адаптивная ширина по содержимому (шапка + строки студентов + «средний»), чтобы
-        #текст не обрезался. Титульные merge-строки не мерим. TNR 14 шире — коэф. 1.45.
-        for c in range(1, ncols + 1):
-            best = 0
-            for rr in [HDR] + list(range(HDR + 1, total_row + 1)):
-                v = ws.cell(row=rr, column=c).value
-                if v is None:
-                    continue
-                best = max(best, max((len(s) for s in str(v).split("\n")), default=0))
-            ws.column_dimensions[get_column_letter(c)].width = max(10, min(44, best * 1.45 + 2))
-        ws.row_dimensions[HDR].height = 62
-        ws.freeze_panes = f"C{HDR + 1}"
-        wb.save(file_path)
+#⚠️ ЗДЕСЬ ЖИЛИ `Lesson`, `Student` И КЛАСС `GradeBook` (удалены 31.08.2026, история в git).
+#
+#Почему удалены, а не починены. В продукте их не звал НИКТО: единственными вызывающими
+#были пять тестовых файлов и ручной скрипт `tests/e2e_sync.py`, который pytest даже не
+#собирал (в нём нет ни одной функции `test_*`). Нативный журнал, ради которого класс
+#существовал, снесён вместе с Qt 13.08.2026 — оценку сегодня пишет серверный
+#`POST /web/teacher/grade`, в том числе внутри программы, через локальный сервер.
+#
+#Внутри лежал ЛАТЕНТНЫЙ дефект, который выстрелил бы при первой же попытке «оживить»
+#класс: `save_to_db` переписывал ВСЕ оценки из памяти с `deleted=0` и свежей меткой,
+#то есть снимал надгробие с оценки, удалённой на другом ПК, и по LWW воскрешал её
+#повсюду. Держать такой код «на всякий случай» — держать заряженную мину.
+#
+#Что ушло вместе с ним и почему это не потеря:
+#  • `upsert_lesson`/`upsert_student` — их звал только он (синк пишет своим SQL);
+#  • `export_to_excel` — ноль вызывающих, живой экспорт это `server/app/xlsx_export.py`;
+#  • `_hours_plan_keys` — подстановка текущего термина в ключ `hrs:` при журнале БЕЗ
+#    периода. Урок, который её купил, сохранён в §14: админ сохраняет часы С периодом
+#    (`hrs:Группа|Предмет|2025/2026|1`), а журнал без периода искал `hrs:Группа|Предмет||0`
+#    — ключи не совпадали никогда. На сервере этого случая нет: он резолвит термин
+#    (`_resolve_term`) ДО обращения к `SubjectHours`, то есть безтерминных ключей не строит.
+#
+#Тесты: `test_persistence.py` и `test_subjects_visibility.py` переписаны на живой путь
+#(прямая работа с хранилищем), `test_tombstones.py`/`test_terms_desktop.py`/
+#`test_subject_hours_desktop.py`/`e2e_sync.py` удалены — они проверяли поведение самого
+#класса. Надгробия и LWW остаются под `tests/test_sync_reliability.py`,
+#`tests/test_lww_compare.py` и серверным `server/tests/test_sync.py`, то есть на пути,
+#которым продукт действительно ходит.

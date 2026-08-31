@@ -205,7 +205,7 @@ function fmtGrade(v) {
                   </td>
                   <td class="px-2 py-1.5 text-center font-semibold text-text">{{ row.average ? row.average.toFixed(2) : '—' }}</td>
                   <td class="px-2 py-1.5 text-center text-text2">
-                    {{ locale.t('curatorReport.hoursShort', { n: row.missed_hours }) }} <span class="text-text3">({{ row.missed_count }})</span>
+                    {{ locale.t('curatorReport.hoursShort', { n: row.missed_hours }) }} <span class="text-text3" :title="locale.t('curatorReport.unexcusedHint', 'из них по неуважительной причине')">({{ row.missed_unexcused }})</span>
                   </td>
                 </tr>
               </tbody>

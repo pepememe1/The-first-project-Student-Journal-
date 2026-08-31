@@ -115,7 +115,7 @@ def teacher_set_grade(payload: dict = Body(...),
     return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now}
 
 
-# --- Занятия (CRUD) --- id = str(uuid4), как создаёт десктоп (core.GradeBook) →
+# --- Занятия (CRUD) --- id = str(uuid4), тот же формат, что уезжает в синк →
 # десктоп подхватывает занятия pull'ом. Преподаватель ведёт только СВОИ предметы.
 @router.post("/teacher/lesson")
 def teacher_create_lesson(payload: dict = Body(...),
