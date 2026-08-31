@@ -19,6 +19,7 @@
 // проёма влево: правый край двери режет Вектора, пока он в темноте, а выйдя, он стоит
 // в комнате целиком.
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { easterSound } from '@/utils/easterAssetUrl'
 import { useEasterStore } from '@/stores/easterEggs'
 const emit = defineEmits(['close'])
 const easter = useEasterStore()
@@ -94,7 +95,7 @@ const ANSWER_MS = 60000
 const NEXT_HIDE_MS = 14000
 
 onMounted(() => {
-  amb = ['/easter/snd/office-amb-1.m4a', '/easter/snd/office-amb-2.m4a'].map((src) => {
+  amb = [easterSound('office-amb-1.m4a'), easterSound('office-amb-2.m4a')].map((src) => {
     const a = new Audio(src)
     a.volume = 0.35
     a.play().catch(() => {})

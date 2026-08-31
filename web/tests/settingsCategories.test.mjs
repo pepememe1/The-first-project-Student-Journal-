@@ -28,11 +28,21 @@ const SETTINGS = new URL('../src/pages/Settings.vue', import.meta.url).pathname
 const text = readFileSync(SETTINGS, 'utf8')
 const template = text.slice(text.indexOf('<template>'))
 
-/** Идентификаторы категорий, объявленные в CATS. */
+const CONFIG = new URL('../src/config/settingsSections.js', import.meta.url).pathname
+  .replace(/^\/([A-Za-z]:)/, '$1')
+
+/**
+ * Идентификаторы КАТЕГОРИЙ из `settingsSections.js` (там же живут подкатегории).
+ * ⚠️ Берём только строки вида `  id: 'x',` с отступом в две ступени — у подкатегорий
+ * формат другой (`{ id: 'x', i18n: … }` в одну строку), и смешать их нельзя: тогда
+ * «пустой категорией» считалась бы каждая подкатегория, и сторож краснел бы всегда.
+ */
 function declaredCats() {
-  const block = text.match(/const CATS = \[([\s\S]*?)\n\]/)
-  assert.ok(block, 'не нашёл CATS — разбивка переехала, сторож проверяет пустоту')
-  return [...block[1].matchAll(/id:\s*'([^']+)'/g)].map((m) => m[1])
+  const cfg = readFileSync(CONFIG, 'utf8')
+  const ids = [...cfg.matchAll(/^ {4}id: '([^']+)',$/gm)].map((m) => m[1])
+  assert.ok(ids.length >= 5,
+    `категорий нашлось ${ids.length} — образец устарел, и сторож проверяет пустоту`)
+  return ids
 }
 
 /** Категории, реально расставленные по карточкам. */
@@ -84,6 +94,34 @@ test('оверлей не включается на телефоне: все е�
     `классы оверлея без префикса lg: (${безПрефикса.join(', ')}). На узком экране ` +
     'настройки схлопнутся в модалку шириной с телефон, а крестик закрытия там не ' +
     'рисуется вовсе (он тоже lg:) — выхода из неё не будет.')
+})
+
+test('у каждой подкатегории есть якорь в разметке', () => {
+  /*
+   * 🔥 Промах здесь ТИХИЙ: `goSub` ищет `document.getElementById('set-<id>')`, и если
+   * элемента нет — не происходит ничего. Ни ошибки, ни следа в консоли. Со стороны это
+   * выглядит как «пункт не нажимается», и причину без чтения кода не найти.
+   *
+   * ⚠️ Якоря живут в ДВУХ файлах: настройки в `Settings.vue`, профиль (он теперь
+   * категория настроек) — в `Profile.vue`. Ищем по обоим: иначе, разложив профиль по
+   * подкатегориям, мы бы получили зелёного сторожа рядом с шестью мёртвыми пунктами.
+   */
+  const settings = readFileSync(SETTINGS, 'utf8')
+  const profile = readFileSync(
+    new URL('../src/pages/Profile.vue', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
+    'utf8')
+  const разметка = settings + profile
+
+  const cfg = readFileSync(
+    new URL('../src/config/settingsSections.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
+    'utf8')
+  const subs = [...cfg.matchAll(/\{ id: '([^']+)', i18n:/g)].map((m) => m[1])
+  assert.ok(subs.length >= 10, `подкатегорий нашлось ${subs.length} — образец устарел`)
+
+  const без = subs.filter((id) => !разметка.includes(`id="set-${id}"`))
+  assert.deepEqual(без, [],
+    `у подкатегорий ${без.join(', ')} нет якоря id="set-<id>" в разметке. Нажатие на ` +
+    'такой пункт не сделает НИЧЕГО и не сообщит об этом — прокрутка просто не найдёт цели.')
 })
 
 test('обратный ход: сторож ловит карточку, забытую без категории', () => {

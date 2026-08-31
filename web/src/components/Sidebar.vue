@@ -10,12 +10,12 @@ import { useLocaleStore } from '@/stores/locale'
 //   3) карточка себя (SidebarUserPanel) — аватар/ФИО/логин/роль/статус, компоновка Discord.
 // Из-за этого корневой aside стал flex-колонкой с overflow-y ТОЛЬКО на середине: иначе
 // карточка себя уезжала бы вверх вместе с прокруткой длинного админского меню.
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
 import { NAV } from '@/config/nav'
-import { curatorApi, adminApi } from '@/api/endpoints'
+import { curatorApi, adminApi, meApi } from '@/api/endpoints'
 import BrandLogo from '@/components/BrandLogo.vue'
 import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
@@ -47,8 +47,20 @@ function badgeCount(key) {
 }
 // Пункт «Курирование» (curatorOnly) виден только преподавателю-куратору.
 const isCurator = ref(false)
-// Счётчики у пунктов меню (nav.badge → число). Пока нужен один — накладки расписания.
+// Счётчики у пунктов меню (nav.badge → число): накладки расписания и непрочитанные
+// уведомления.
 const badges = ref({})
+let notifyTimer = null
+/**
+ * Непрочитанные уведомления для значка у пункта «Уведомления».
+ * 🔎 Ручка `GET /me/events/unread-count` существовала и была объявлена в контракте, но
+ * её не звал НИКТО — наш обычный класс дефекта («обещание без вызывающего»). Раз лента
+ * стала отдельным разделом, значок нужен: иначе о новом письме узнают, только зайдя.
+ */
+async function loadNotifyUnread() {
+  try { badges.value.notifyUnread = (await meApi.unreadCount()).data?.count || 0 }
+  catch { /* нет связи — значок просто не обновится, ломать меню незачем */ }
+}
 onMounted(async () => {
   if (auth.role === 'teacher') {
     try { isCurator.value = ((await curatorApi.groups()).data.groups || []).length > 0 } catch { /* */ }
@@ -57,7 +69,13 @@ onMounted(async () => {
     // Ошибку глушим намеренно: недоступная проверка расписания не повод ломать меню.
     try { badges.value.scheduleIssues = (await adminApi.scheduleConflicts()).data.count || 0 } catch { /* */ }
   }
+  loadNotifyUnread()
+  // ⚠️ Тикает РЕДКО (минута): значок «есть непрочитанные» — не чат, задержка в минуту
+  // ничего не стоит, а частый опрос на одноядерном бою стоит. Тот же расчёт, что у
+  // счётчика сообщений (20 с) — там письмо ждут сразу, здесь нет.
+  notifyTimer = setInterval(loadNotifyUnread, 60000)
 })
+onBeforeUnmount(() => clearInterval(notifyTimer))
 // Свёрнут ли до иконок. В шторке — никогда: там ширина фиксированная.
 const compact = computed(() => !drawer.value && sidebar.compact)
 const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))
@@ -117,6 +135,12 @@ function isActive(to) {
           class="relative mb-0.5 flex rounded-sm transition-colors"
           :class="[
             compact ? 'flex-col items-center gap-1 px-1 py-2' : 'items-center gap-2.5 px-3.5 py-2.5 text-sm',
+            // `phoneOnly` — пункт только для узкого экрана (см. nav.js). Сейчас так
+            // помечены «Настройки»: на ПК их дверь — шестерёнка в карточке себя внизу
+            // слева, и дублировать её пунктом меню значило бы показать два входа в одно
+            // место. Прячем КЛАССОМ, а не `v-if`: разбор ширины в JS завёл бы вторую
+            // границу рядом с `LG_PX` оболочки (см. web/tests/breakpoint.test.mjs).
+            item.phoneOnly ? 'lg:hidden' : '',
             isActive(item.to)
               ? 'bg-accent-glow font-semibold text-accent'
               : 'font-medium text-text3 hover:bg-accent-glow hover:text-accent active:bg-accent-glow active:text-accent',

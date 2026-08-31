@@ -263,22 +263,31 @@ async function sendMessage() {
     <!-- ⚠️ Баннеру отдана заметная высота (было 80 px). Смысл баннера в том, чтобы
          его было видно; в узкой полосе гифка превращалась в мазок, то есть
          возможность его поставить существовала, а возможности разглядеть — нет. -->
+    <!-- 🔥 У СЕБЯ БАННЕР КЛИКАБЕЛЕН ЦЕЛИКОМ (просьба Влада, 31.08.2026: «чтобы при
+         нажатии на текущую аватарку или баннер можно было менять»). Раньше менять его
+         давал только карандаш 32×32 в углу — на телефоне это цель меньше подушечки
+         пальца, а сам баннер, занимающий полэкрана, на нажатие не отвечал никак. Теперь
+         нажимается вся полоса; карандаш остаётся ПОДСКАЗКОЙ, что тут вообще что-то
+         меняется (без него у пустой цветной плашки нет ни одного признака кнопки).
+         ⚠️ На ЧУЖОМ профиле поведение прежнее — лупа во весь экран: там менять нечего. -->
     <div class="relative h-40 shrink-0 overflow-hidden sm:h-52"
-         :style="bannerUrl ? undefined : { background: plate }">
+         :class="editable ? 'cursor-pointer' : ''"
+         :style="bannerUrl ? undefined : { background: plate }"
+         @click="editable && (gifPickerFor = 'banner')">
       <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover"
            :class="{ 'cursor-zoom-in': !editable }"
            @click="!editable && (lightbox = bannerUrl)" />
       <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
            существует вовсе, и подсказка «здесь можно поменять» иначе не появилась бы
            никогда. При наведении просто становится заметнее. -->
-      <button v-if="editable" type="button" @click="gifPickerFor = 'banner'"
+      <button v-if="editable" type="button" @click.stop="gifPickerFor = 'banner'"
               class="absolute right-2 top-2 grid size-8 place-items-center rounded-full bg-black/45
                      text-white opacity-80 transition hover:bg-black/70 hover:opacity-100"
               :title="locale.t('profile.editBanner', 'Сменить баннер')"
               :aria-label="locale.t('profile.editBanner', 'Сменить баннер')">
         <Pencil class="size-4" />
       </button>
-      <button v-if="editable && bannerUrl" type="button" @click="applyBanner('')"
+      <button v-if="editable && bannerUrl" type="button" @click.stop="applyBanner('')"
               class="absolute right-11 top-2 grid size-8 place-items-center rounded-full bg-black/45
                      text-white opacity-80 transition hover:bg-black/70 hover:opacity-100"
               :title="locale.t('profile.removeBanner', 'Убрать баннер')"

@@ -4,7 +4,7 @@
 // стат-карточки (Преподавателей/Студентов/Групп/Предметов) + плитки-навигация.
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { GraduationCap, Users, Boxes, Library, Settings, Server } from '@lucide/vue'
+import { GraduationCap, Users, Boxes, Library, Cpu, Server } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
 import { useLocaleStore } from '@/stores/locale'
@@ -19,7 +19,7 @@ const tiles = computed(() => [
   { icon: Users, title: locale.t('nav.students', 'Студенты'), sub: locale.t('adminDashboard.listAndGroups', 'Список и группы'), to: '/admin/students' },
   { icon: Boxes, title: locale.t('nav.groups', 'Группы'), sub: locale.t('adminDashboard.groupsAndSubjects', 'Группы и предметы'), to: '/admin/groups' },
   { icon: Library, title: locale.t('nav.subjects', 'Предметы'), sub: locale.t('adminDashboard.subjectsCatalog', 'Каталог предметов'), to: '/admin/subjects' },
-  { icon: Settings, title: locale.t('adminDashboard.aiSettings', 'Настройки ИИ'), sub: locale.t('adminDashboard.vectorProvider', 'Провайдер «Вектора»'), to: '/admin/api' },
+  { icon: Cpu, title: locale.t('adminDashboard.aiSettings', 'Настройки ИИ'), sub: locale.t('adminDashboard.vectorProvider', 'Провайдер «Вектора»'), to: '/admin/api' },
   { icon: Server, title: locale.t('nav.server', 'Сервер'), sub: locale.t('adminDashboard.addressDbSite', 'Адрес, БД и сайт'), to: '/admin/server' },
 ])
 </script>

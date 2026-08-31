@@ -22,6 +22,7 @@
 // Реплики листаются КЛИКОМ по окну. Взял яйцо — дальше при любом заходе остаётся только
 // «Это дерево».
 import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
+import { easterSound } from '@/utils/easterAssetUrl'
 import { useEasterStore } from '@/stores/easterEggs'
 import { mumble } from '@/utils/mumble'
 const emit = defineEmits(['close'])
@@ -76,7 +77,7 @@ function armEscape() {
 
 onMounted(() => {
   requestAnimationFrame(() => { shown.value = true })
-  music = new Audio('/easter/snd/tree.ogg')
+  music = new Audio(easterSound('tree.ogg'))
   music.loop = true
   music.volume = 0
   music.play().catch(() => {})
