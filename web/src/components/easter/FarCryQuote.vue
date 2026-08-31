@@ -11,6 +11,7 @@
 // Субтитры раскладываются по РЕАЛЬНОЙ длительности файла: жёстких таймкодов нет, чтобы
 // замена озвучки не рассыпала синхронизацию.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { easterSound } from '@/utils/easterAssetUrl'
 import { whenAudioReady } from '@/utils/audioReady'
 const emit = defineEmits(['close'])
 
@@ -23,7 +24,7 @@ const line = ref('')
 let audio = null, timers = [], cancelReady = null
 
 onMounted(() => {
-  audio = new Audio('/easter/snd/vaas.m4a')
+  audio = new Audio(easterSound('vaas.m4a'))
   audio.volume = 0.7
   audio.play().catch(() => {})       // автоплей мог быть закрыт — субтитры всё равно идут
   const start = () => {

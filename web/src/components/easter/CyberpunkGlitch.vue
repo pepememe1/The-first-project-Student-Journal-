@@ -11,6 +11,7 @@
 // затухает по РЕАЛЬНОЙ длительности файла: раньше стоял фиксированный срок, и звук
 // обрывался на полуслове — а замена файла ломала бы расчёт снова.
 import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { easterSound } from '@/utils/easterAssetUrl'
 import { useEasterStore } from '@/stores/easterEggs'
 import { whenAudioReady } from '@/utils/audioReady'
 const emit = defineEmits(['close'])
@@ -78,7 +79,7 @@ onMounted(async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms))
   startCanvas()
 
-  const guitar = new Audio('/easter/snd/guitar.m4a')
+  const guitar = new Audio(easterSound('guitar.m4a'))
   guitar.volume = 0
   guitar.play().catch(() => {})
   sounds.push(guitar)
@@ -111,7 +112,7 @@ onMounted(async () => {
   cancelAnimationFrame(raf)
   await wait(900)
 
-  const johnny = new Audio('/easter/snd/johnny.m4a')
+  const johnny = new Audio(easterSound('johnny.m4a'))
   johnny.volume = 0.7
   johnny.play().catch(() => {})
   sounds.push(johnny)
