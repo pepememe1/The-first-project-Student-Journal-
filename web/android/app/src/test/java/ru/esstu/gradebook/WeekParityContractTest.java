@@ -93,23 +93,39 @@ public class WeekParityContractTest {
      * Контракт из 30 дат этого НЕ ловил — он сверял Python с Java, а обе стороны были
      * одинаково неправы. Инвариант ловит то, чего не ловят конкретные значения.
      *
-     * ⚠️ Учебная неделя в этой формуле начинается с ВОСКРЕСЕНЬЯ (наследие JS-идиомы,
-     * где `getDay()` считает от воскресенья), поэтому проверяем Вс..Сб, а не Пн..Вс.
+     * ⚠️ НЕДЕЛЯ НАЧИНАЕТСЯ С ПОНЕДЕЛЬНИКА (31.08.2026). Раньше тут стояло воскресенье —
+     * наследие JS-идиомы «номер недели года». С переходом на правило портала
+     * (getReferenceDate: отсчёт от понедельника первой учебной недели) граница недели
+     * сдвинулась на день, и воскресенье теперь относится к ПРЕДЫДУЩЕЙ неделе.
      */
     @Test
     public void parityIsStableInsideWeekAndFlipsBetween() {
-        Calendar sunday = calendarOf("2026-02-08");         //воскресенье — начало недели
-        int first = ScheduleWidgetData.weekParity(sunday);
-        for (int i = 1; i < 7; i++) {                       //Пн..Сб той же недели
-            Calendar c = (Calendar) sunday.clone();
+        Calendar monday = calendarOf("2026-02-09");         //понедельник — начало недели
+        int first = ScheduleWidgetData.weekParity(monday);
+        for (int i = 1; i < 7; i++) {                       //Вт..Вс той же недели
+            Calendar c = (Calendar) monday.clone();
             c.add(Calendar.DAY_OF_YEAR, i);
             assertEquals("чётность не должна меняться внутри недели",
                     first, ScheduleWidgetData.weekParity(c));
         }
-        Calendar nextSunday = (Calendar) sunday.clone();
-        nextSunday.add(Calendar.DAY_OF_YEAR, 7);
+        Calendar nextMonday = (Calendar) monday.clone();
+        nextMonday.add(Calendar.DAY_OF_YEAR, 7);
         assertTrue("чётность обязана смениться на следующей неделе",
-                first != ScheduleWidgetData.weekParity(nextSunday));
+                first != ScheduleWidgetData.weekParity(nextMonday));
+    }
+
+    /**
+     * День, на котором нашли расхождение с порталом: 31.08.2026 — портал показывал
+     * I неделю, а виджет II. Отдельным случаем, потому что общее правило можно
+     * перенести верно и всё равно промахнуться на границе полугодия: 31 августа лежит
+     * ДО 1 сентября, а точку отсчёта берёт из ТЕКУЩЕГО года (месяц 8 > 7).
+     */
+    @Test
+    public void theDayTheDefectWasFound() {
+        assertEquals("31.08.2026 обязана быть I неделя, как на портале",
+                1, ScheduleWidgetData.weekParity(calendarOf("2026-08-31")));
+        assertEquals("следующая неделя обязана быть II",
+                2, ScheduleWidgetData.weekParity(calendarOf("2026-09-07")));
     }
 
     /** Разбор «10:45-12:20» — от него зависит подсветка идущей пары. */

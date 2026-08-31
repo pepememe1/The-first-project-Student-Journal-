@@ -52,21 +52,43 @@ def categories() -> list:
            for k, v in p.CATEGORIES.items()]
 
 
+def _academic_week_start(d: date) -> date:
+    """Понедельник первой учебной недели полугодия — перенос `getReferenceDate()`
+    портала. Полное объяснение правила (включая асимметрию «будни назад, выходные
+    вперёд») — в докстринге `schedule/store.py::academic_week_start`."""
+    ref_year = d.year - 1 if d.month <= 7 else d.year
+    first_sep = date(ref_year, 9, 1)
+    dow = (first_sep.weekday() + 1) % 7          # JS getDay(): Вс=0, Пн=1 … Сб=6
+    if dow == 1:
+        return date(ref_year, 9, 1)
+    if 2 <= dow <= 5:
+        return date(ref_year, 8, 31 - dow + 2)
+    if dow == 6:
+        return date(ref_year, 9, 3)
+    return date(ref_year, 9, 2)
+
+
 def current_week_parity(d: date | None = None) -> int:
     """1 (I неделя) / 2 (II неделя) — тот же расчёт, что в schedule/store.py.
 
-    🔥 ИСПРАВЛЕНО (3.6.9): раньше первым слагаемым шёл день недели САМОЙ ДАТЫ, из-за
-    чего чётность менялась внутри одной календарной недели по два-три раза. Полный
-    разбор и причина — в докстринге `schedule/store.py::current_week_parity`, там же
-    оговорка про сверку с порталом. Здесь копия формулы, а не второй расчёт: держит
-    контракт `docs/contracts/week-parity-cases.json` (Python ↔ Java-виджет Android).
+    🔥 ИСПРАВЛЕНО (31.08.2026): считаем от начала УЧЕБНОГО года, как портал, а не
+    «номер недели с 1 января». Прежняя формула разошлась с порталом ровно на неделю
+    (у нас II, у портала I), и студент видел расписание чужой недели. Разбор, ссылка
+    на исходник портала (`portal.esstu.ru/menu.htm`) и объяснение обеих веток — в
+    докстринге `schedule/store.py::current_week_parity`.
+
+    ⚠️ ЗДЕСЬ КОПИЯ, А НЕ ИМПОРТ, и это осознанно: `schedule/store.py` десктопный,
+    тянет `log`, `data_store` и `core.DBManager`, а на сервере их нет — когда store
+    однажды подтянулся сюда импортом, снимок расписания для сайта не собирался
+    ВООБЩЕ (держит `tests/test_schedule_pkg_server_safe.py`). Согласованность копий
+    держит контракт `docs/contracts/week-parity-cases.json` (Python ↔ Java-виджет).
     """
     d = d or date.today()
-    one_jan = date(d.year, 1, 1)
-    days = (d - one_jan).days
-    jan1_js_getday = (one_jan.weekday() + 1) % 7
-    result = math.ceil((days + jan1_js_getday + 1) / 7)
-    return 2 if result % 2 == 0 else 1
+    ref = _academic_week_start(d)
+    diff = (d - ref).days / 7
+    if diff >= 0:
+        return 1 if math.trunc(diff) % 2 == 0 else 2
+    return 2 if math.trunc(diff + 1 / 7) % 2 == 0 else 1
 
 
 def _load_index(category: str = "", force: bool = False):

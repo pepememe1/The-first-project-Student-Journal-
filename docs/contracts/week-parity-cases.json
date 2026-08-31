@@ -1,9 +1,9 @@
 {
-  "_comment": "Чётность учебной недели (1 = I, 2 = II). Источник правды — server/app/schedule_web.py::current_week_parity (та же арифметика в schedule/store.py). Файл держит в согласии Python и НАТИВНУЮ Java-копию в Android-виджете (ScheduleWidgetData.weekParity), которая иначе не имела бы способа свериться с оригиналом. Перегенерировать: pytest tests/test_week_parity_contract.py --regen-parity",
+  "_comment": "Чётность учебной недели (1 = I, 2 = II). Источник правды — server/app/schedule_web.py::current_week_parity (та же арифметика в schedule/store.py). Файл держит в согласии Python и НАТИВНУЮ Java-копию в Android-виджете (ScheduleWidgetData.weekParity), которая иначе не имела бы способа свериться с оригиналом. Правило перенесено с portal.esstu.ru/menu.htm (getReferenceDate/getWeekNum): отсчёт от понедельника первой учебной недели, а не от 1 января. ВНИМАНИЕ: прежний комментарий обещал перегенерацию ключом `pytest --regen-parity` — такого ключа в проекте НЕТ и не было. Пересчитывать значения скриптом по current_week_parity, даты не трогать (в них заложены 1 января, 31 декабря и сплошной отрезок в 14 дней, которых требуют тесты).",
   "cases": [
     {
       "date": "2026-01-01",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-01-04",
@@ -11,11 +11,11 @@
     },
     {
       "date": "2026-01-05",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-12-31",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2024-02-28",
@@ -35,15 +35,15 @@
     },
     {
       "date": "2025-09-01",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-08-07",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-08-08",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-08-09",
@@ -51,11 +51,11 @@
     },
     {
       "date": "2026-08-10",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2027-01-01",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2027-01-03",
@@ -63,31 +63,31 @@
     },
     {
       "date": "2027-01-04",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-02",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-03",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-04",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-05",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-06",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-07",
-      "parity": 2
+      "parity": 1
     },
     {
       "date": "2026-02-08",
@@ -95,27 +95,27 @@
     },
     {
       "date": "2026-02-09",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-10",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-11",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-12",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-13",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-14",
-      "parity": 1
+      "parity": 2
     },
     {
       "date": "2026-02-15",

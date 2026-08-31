@@ -74,20 +74,48 @@ final class ScheduleWidgetData {
      * одной арифметики, и другого пути нет: виджет считает неделю сам, спросить ему
      * не у кого. Согласованность держит `docs/contracts/week-parity-cases.json`.
      *
-     * 🔥 Здесь берётся день недели 1 ЯНВАРЯ, а НЕ текущей даты. Ровно на этом месте
-     * жил баг (починен в 3.6.9): с днём недели текущей даты числитель растёт на два
-     * в сутки, и чётность менялась ВНУТРИ календарной недели по два-три раза.
-     * `jsGetDay` — нумерация JavaScript (0 = воскресенье): формула пришла из
-     * JS-идиомы «номер недели года», и менять её вид без нужды не стоит.
+     * 🔥 ИСПРАВЛЕНО 31.08.2026: считаем от начала УЧЕБНОГО года, как портал, а не
+     * «номер недели с 1 января». Прежняя формула расходилась с порталом ровно на
+     * неделю — виджет на экране телефона показывал расписание ЧУЖОЙ недели, и это
+     * ХУЖЕ, чем пустой виджет: пустой заставляет открыть приложение, а неверный
+     * выглядит рабочим. Исходник правила — `portal.esstu.ru/menu.htm`,
+     * `getReferenceDate()` / `getWeekNum()`.
      */
     static int weekParity(Calendar cal) {
-        Calendar jan1 = (Calendar) cal.clone();
-        jan1.set(Calendar.MONTH, Calendar.JANUARY);
-        jan1.set(Calendar.DAY_OF_MONTH, 1);
-        int daysFromJan1 = cal.get(Calendar.DAY_OF_YEAR) - 1;
-        int jan1JsGetDay = jan1.get(Calendar.DAY_OF_WEEK) - 1;   // Calendar: 1=Вс → 0=Вс
-        int result = (int) Math.ceil((daysFromJan1 + jan1JsGetDay + 1) / 7.0);
-        return result % 2 == 0 ? 2 : 1;
+        Calendar ref = academicWeekStart(cal);
+        //Целые сутки между датами: обе величины приводим к полуночи, иначе разница
+        //поедет от времени суток и на границе недели чётность перевернётся.
+        long days = Math.round((midnight(cal) - midnight(ref)) / 86400000.0);
+        double diff = days / 7.0;
+        if (diff >= 0) return ((long) diff) % 2 == 0 ? 1 : 2;
+        //Ветка «до точки отсчёта» у портала своя и несимметричная — переносим как есть.
+        return ((long) (diff + 1.0 / 7.0)) % 2 == 0 ? 2 : 1;
+    }
+
+    /** Понедельник первой учебной недели полугодия — порт `getReferenceDate()`. */
+    static Calendar academicWeekStart(Calendar cal) {
+        int year = cal.get(Calendar.YEAR);
+        //Январь-июль — весеннее полугодие, точка отсчёта в ПРОШЛОМ учебном году.
+        int refYear = (cal.get(Calendar.MONTH) <= Calendar.JULY) ? year - 1 : year;
+        Calendar sep1 = (Calendar) cal.clone();
+        sep1.set(refYear, Calendar.SEPTEMBER, 1);
+        int dow = sep1.get(Calendar.DAY_OF_WEEK) - 1;            // Calendar: 1=Вс → 0=Вс
+        Calendar out = (Calendar) sep1.clone();
+        if (dow == 1) out.set(refYear, Calendar.SEPTEMBER, 1);
+        else if (dow >= 2 && dow <= 5) out.set(refYear, Calendar.AUGUST, 31 - dow + 2);
+        else if (dow == 6) out.set(refYear, Calendar.SEPTEMBER, 3);
+        else out.set(refYear, Calendar.SEPTEMBER, 2);
+        return out;
+    }
+
+    /** Полночь той же даты — чтобы разница считалась в сутках, а не в часах. */
+    private static long midnight(Calendar cal) {
+        Calendar c = (Calendar) cal.clone();
+        c.set(Calendar.HOUR_OF_DAY, 0);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
     }
 
     /** «Пнд».. «Сбт», либо null для воскресенья (в расписании колледжа его нет). */
