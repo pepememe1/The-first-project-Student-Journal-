@@ -4,8 +4,9 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert } from '@lucide/vue'
+import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
+import { RouterLink } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
 import { desktopApi, appApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
@@ -374,6 +375,21 @@ const showRecover = ref(false)
              отдаёт ту же сборку), и в приложении Android из бандла.
              ⚠️ Не прятать за «Подробнее» и не превращать в галочку «согласен»:
              галочка без прочитанного текста хуже её отсутствия. -->
+        <!-- 🔥 РАСПИСАНИЕ ДОСТУПНО БЕЗ ВХОДА (01.09.2026, просьба Ярослава). Причина
+             живая: «из акка вылетело, надо быстро чекнуть расписание, а его нет». Токен
+             живёт ограниченно, и вместе с ним пропадала информация, которая ОБЩЕДОСТУПНА
+             — расписание лежит на портале ВСГУТУ открыто. Ссылка стоит ЗДЕСЬ, потому что
+             сюда и выбрасывает после истечения сессии: именно в этот момент она нужна.
+             ⚠️ Роутером, а не обычной ссылкой: страница — часть SPA, и переход по href
+             перезагрузил бы всё приложение ради одного экрана. -->
+        <p class="mt-5 text-center">
+          <RouterLink to="/public/schedule"
+                      class="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow">
+            <CalendarDays class="size-4" />
+            {{ loc.t('login.publicSchedule', 'Расписание без входа') }}
+          </RouterLink>
+        </p>
+
         <p class="mt-4 text-center text-tiny leading-relaxed text-text3">
           {{ loc.t('login.legalIntro', 'Входя, вы принимаете') }}
           <a href="/terms.html" class="text-text2 underline underline-offset-2 transition-colors hover:text-accent">{{ loc.t('login.legalTerms', 'Пользовательское соглашение') }}</a>

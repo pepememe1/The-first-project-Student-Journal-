@@ -5,7 +5,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter } from 'vue-router'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil, Vibrate, VibrateOff } from '@lucide/vue'
 import { authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
@@ -22,6 +22,7 @@ import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { catsForRole } from '@/config/settingsSections'
+import haptics from '@/utils/haptics'
 // Профиль переехал ВНУТРЬ настроек отдельной категорией (просьба Влада): страницы
 // `/…/profile` больше нет в меню, редактор открывается отсюда и из карточки себя.
 import ProfilePage from '@/pages/Profile.vue'
@@ -33,6 +34,24 @@ const tts = useTtsStore()
 const auth = useAuthStore()
 const voice = useVoiceStore()
 const loc = useLocaleStore()
+
+//Вибрация: настройка УСТРОЙСТВА (localStorage), как микрофон и озвучка. Держим локальным
+//ref'ом, а не стором: у неё нет ни сетевой части, ни состояния сложнее «вкл/выкл», и
+//отдельный стор ради булева значения — лишний слой.
+const hapticsSupported = haptics.supported()
+const hapticsOn = ref(haptics.enabled())
+//Системное «уменьшить движение» сильнее нашего тумблера — показываем это честно, иначе
+//включённая и молчащая отдача читается как поломка.
+const reducedMotion = ref(false)
+try {
+  reducedMotion.value = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+} catch {
+  //Старый движок без matchMedia — считаем, что ограничения нет.
+}
+function toggleHaptics() {
+  hapticsOn.value = !hapticsOn.value
+  haptics.setEnabled(hapticsOn.value)
+}
 const router = useRouter()
 const profileStore = useProfileStore()
 
@@ -720,6 +739,49 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             {{ loc.t('settings.micPrivacyHint', 'Речь распознаёт сервер, с которого открыт интерфейс. Внутри программы это локальный сервер на вашем компьютере — запись его не покидает.') }}
           </p>
         </div>
+      </template>
+    </Card>
+
+    <!-- Вибрация (тактильная отдача). Настройка УСТРОЙСТВА, как микрофон и озвучка:
+         вибромотор — свойство телефона, а не человека, и на компьютере его нет вовсе. -->
+    <Card id="set-haptics" :class="sec('voice')" :title="loc.t('settings.haptics', 'Вибрация')"
+          :subtitle="loc.t('settings.hapticsHint', 'Короткий отклик на нажатие, подтверждение и ошибку')">
+      <div v-if="!hapticsSupported"
+           class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
+        <VibrateOff class="mt-0.5 size-4 shrink-0" />
+        <p>{{ loc.t('settings.hapticsUnsupported', 'Это устройство не умеет вибрировать — на компьютере отдачи не бывает.') }}</p>
+      </div>
+
+      <template v-else>
+        <button type="button" @click="toggleHaptics"
+                class="flex w-full items-center gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-left transition-colors hover:border-accent">
+          <span class="grid size-10 shrink-0 place-items-center rounded-md"
+                :class="hapticsOn ? 'bg-accent-glow text-accent' : 'bg-card2 text-text3'">
+            <Vibrate v-if="hapticsOn" class="size-5" />
+            <VibrateOff v-else class="size-5" />
+          </span>
+          <span class="flex-1">
+            <span class="block text-sm font-semibold text-text">
+              {{ hapticsOn ? loc.t('settings.on', 'Включена') : loc.t('settings.off', 'Выключена') }}
+            </span>
+            <span class="block text-xs text-text3">
+              {{ hapticsOn
+                 ? loc.t('settings.hapticsOnDesc', 'Телефон коротко откликается на действия')
+                 : loc.t('settings.hapticsOffDesc', 'Отдача выключена — телефон молчит') }}
+            </span>
+          </span>
+          <span class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+                :class="hapticsOn ? 'bg-accent' : 'bg-border2'">
+            <span class="absolute top-0.5 size-5 rounded-full bg-white transition-all"
+                  :class="hapticsOn ? 'left-[22px]' : 'left-0.5'" />
+          </span>
+        </button>
+
+        <!-- ⚠️ Системная настройка сильнее нашей, и об этом надо сказать прямо: иначе
+             человек включает тумблер, ничего не чувствует и считает функцию сломанной. -->
+        <p v-if="hapticsOn && reducedMotion" class="mt-3 text-xs text-text3">
+          {{ loc.t('settings.hapticsReduced', 'В системе включено «уменьшить движение» — отдача не срабатывает, пока это так.') }}
+        </p>
       </template>
     </Card>
 

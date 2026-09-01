@@ -51,6 +51,7 @@ const isCurator = ref(false)
 // уведомления.
 const badges = ref({})
 let notifyTimer = null
+let onNotifyVisible = null
 /**
  * Непрочитанные уведомления для значка у пункта «Уведомления».
  * 🔎 Ручка `GET /me/events/unread-count` существовала и была объявлена в контракте, но
@@ -73,9 +74,17 @@ onMounted(async () => {
   // ⚠️ Тикает РЕДКО (минута): значок «есть непрочитанные» — не чат, задержка в минуту
   // ничего не стоит, а частый опрос на одноядерном бою стоит. Тот же расчёт, что у
   // счётчика сообщений (20 с) — там письмо ждут сразу, здесь нет.
-  notifyTimer = setInterval(loadNotifyUnread, 60000)
+  //⚠️ И молчим, пока экрана не видно: в свёрнутом приложении таймер WebView продолжает
+  //тикать, и мы будили бы радиомодуль раз в минуту при погашенном экране — ради значка,
+  //которого человек в этот момент не видит. Вернулся — обновляем сразу.
+  notifyTimer = setInterval(() => { if (!document.hidden) loadNotifyUnread() }, 60000)
+  onNotifyVisible = () => { if (!document.hidden) loadNotifyUnread() }
+  document.addEventListener('visibilitychange', onNotifyVisible)
 })
-onBeforeUnmount(() => clearInterval(notifyTimer))
+onBeforeUnmount(() => {
+  clearInterval(notifyTimer)
+  if (onNotifyVisible) document.removeEventListener('visibilitychange', onNotifyVisible)
+})
 // Свёрнут ли до иконок. В шторке — никогда: там ширина фиксированная.
 const compact = computed(() => !drawer.value && sidebar.compact)
 const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))

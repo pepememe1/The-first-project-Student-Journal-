@@ -557,7 +557,15 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
               <div class="mb-1 flex items-center justify-between gap-2">
                 <!-- Время не переносим: «10:45–12:20» на двух строках читается как две пары. -->
                 <span class="whitespace-nowrap text-xs font-semibold text-text3">{{ l.pair_no }}. {{ l.time }}</span>
-                <Badge v-if="l.kind" :variant="(KIND[l.kind] || ['', 'muted'])[1]">{{ (KIND[l.kind] || [l.kind])[0] }}</Badge>
+                <span class="flex items-center gap-1.5">
+                  <!-- 🔥 ПОДГРУППА (01.09.2026). Портал кладёт в одну клетку ДВА разных
+                       занятия — своё для каждой подгруппы, — и до этой правки второе
+                       пропадало бесследно: половина группы не видела своей пары.
+                       Теперь показаны обе, и метка обязательна: без неё в расписании
+                       просто две пары в одно время, и понять, которая твоя, нельзя. -->
+                  <Badge v-if="l.subgroup" variant="muted">{{ locale.t('schedulePage.subgroup', { n: l.subgroup }) }}</Badge>
+                  <Badge v-if="l.kind" :variant="(KIND[l.kind] || ['', 'muted'])[1]">{{ (KIND[l.kind] || [l.kind])[0] }}</Badge>
+                </span>
               </div>
               <p class="text-sm font-medium text-text">{{ l.subject || l.raw }}</p>
               <!-- У пары преподавателя показываем ГРУППУ (у кого ведёт), у групповой — преподавателя. -->

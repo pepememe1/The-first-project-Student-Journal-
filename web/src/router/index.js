@@ -106,6 +106,12 @@ const noted = (route, note, i18nNote) =>
 export const routes = [
   { path: '/connect', component: ConnectServer, meta: { public: true } },
   { path: '/login', component: LoginPage, meta: { public: true } },
+  //🔥 Расписание БЕЗ входа (01.09.2026). Раньше, вылетев из аккаунта по истечении токена,
+  //человек терял и расписание — хотя оно общедоступно и лежит на портале ВСГУТУ открыто.
+  //Ленивый импорт: страницу открывают редко, а её вес иначе поехал бы в первый кадр
+  //всем, включая тех, кто просто входит.
+  { path: '/public/schedule', component: () => import('@/pages/PublicSchedule.vue'),
+    meta: { public: true } },
   // Публичная намеренно: человек приходит сюда именно потому, что войти не может.
   { path: '/reset-password', component: ResetPassword, meta: { public: true } },
   // Приглашение куратора: сюда человек приходит ДО того, как у него появился аккаунт.

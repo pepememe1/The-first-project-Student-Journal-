@@ -10,6 +10,7 @@ import { Mic, Square } from '@lucide/vue'
 import { recordingSupported, browserRecognitionSupported, sttStatus, startVoice } from '@/utils/voiceInput'
 import { useVoiceStore } from '@/stores/voice'
 import { useLocaleStore } from '@/stores/locale'
+import haptics from '@/utils/haptics'
 
 const emit = defineEmits(['text', 'error'])
 
@@ -61,18 +62,26 @@ async function toggle() {
     try {
       session = await startVoice(engine.value, voice.effectiveDeviceId)
       recording.value = true
+      //Запись ПОШЛА. Случай «палец действует вслепую» в чистом виде: между нажатием и
+      //реальным стартом записи есть задержка (разрешение, инициализация устройства), и
+      //без отдачи человек говорит в ещё не начавшийся микрофон, а понимает это только по
+      //пустому результату.
+      haptics.tap()
     } catch {
       emit('error', locale.t('micButton.noMicAccess', 'Нет доступа к микрофону. Разрешите запись в настройках.'))
     }
     return
   }
   recording.value = false
+  //Запись ОСТАНОВЛЕНА — можно опускать телефон и не договаривать в тишину.
+  haptics.tap()
   busy.value = true
   try {
     const text = await session.stop()
     if (text) emit('text', text)
-    else emit('error', locale.t('micButton.noSpeechRecognized', 'Не удалось разобрать речь — попробуйте ещё раз.'))
+    else { haptics.error(); emit('error', locale.t('micButton.noSpeechRecognized', 'Не удалось разобрать речь — попробуйте ещё раз.')) }
   } catch (e) {
+    haptics.error()
     emit('error', e.message || locale.t('micButton.recognitionFailed', 'Не удалось распознать речь.'))
   } finally {
     session = null

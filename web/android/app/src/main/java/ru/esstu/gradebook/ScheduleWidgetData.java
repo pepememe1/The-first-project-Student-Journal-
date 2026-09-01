@@ -168,6 +168,7 @@ final class ScheduleWidgetData {
         String kind = "";       //лек/пр/лаб — как распознал парсер, может быть пустым
         String room = "";
         String who = "";        //преподаватель (у студента) или группа (у преподавателя)
+        int subgroup = 0;       //0 — вся группа, 1|2 — подгруппа (см. parse_cell_all)
         int startMin = -1;      //минуты от полуночи; -1 — время не разобралось
         int endMin = -1;
     }
@@ -234,6 +235,10 @@ final class ScheduleWidgetData {
             p.kind = o.optString("k", "");
             p.room = o.optString("r", "");
             p.who = o.optString("w", "");
+            //Подгруппа (0 — вся группа). Портал кладёт занятия обеих подгрупп в ОДНУ
+            //клетку, и в виджете они идут двумя строками в одно время — без этой метки
+            //человек не поймёт, которая из них его.
+            p.subgroup = o.optInt("g", 0);
             int[] span = parseSpan(p.time);
             p.startMin = span[0];
             p.endMin = span[1];

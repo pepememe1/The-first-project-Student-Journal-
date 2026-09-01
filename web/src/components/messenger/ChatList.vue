@@ -302,6 +302,16 @@ onMounted(() => { m.loadChats() })
                     :role="c.peer?.role" :color="profilePlate(c.peer?.profile_color)"
                     :online="!!c.peer?.online" :size="40" />
             <Avatar v-else-if="c.kind === 'moderation'" :name="c.title" role="moderation" :size="40" />
+            <!-- «Избранное» и системные каналы («Мои оценки», «Расписание · Группа»,
+                 «Объявления») ведёт ВЕКТОР — показываем его лицо, а не кружок с
+                 инициалами. Инициалы там читались как чужой аккаунт («МО», «РГ»), хотя
+                 собеседника у этих бесед нет вовсе: пишет в них продукт.
+                 ⚠️ `is_system` приходит С СЕРВЕРА (см. chats.py::list_chats), а не
+                 выводится из формата id: разбирать `sys:*:{группа}` в браузере значило бы
+                 завести второй источник правды о том, что такое системный канал. -->
+            <img v-else-if="c.kind === 'saved' || c.is_system" src="/mascot/vector-avatar.webp"
+                 alt="" width="40" height="40" loading="lazy" decoding="async"
+                 class="size-10 shrink-0 rounded-full bg-bg2 object-cover" />
             <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
                  :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
               {{ initials(c.title) }}

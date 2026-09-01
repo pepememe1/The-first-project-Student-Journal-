@@ -68,7 +68,17 @@ async function poll() {
 export function start() {
   if (timer || stopped) return
   poll()
-  timer = setInterval(poll, POLL_MS)
+  //⚠️ Окно свёрнуто — не спрашиваем. Здесь запрос идёт к СВОЕМУ же локальному серверу и
+  //батарею телефона не тратит (программа живёт на ПК), но правило «опрос не ходит в сеть,
+  //пока его никто не видит» держится БЕЗ исключений намеренно: исключения размножаются,
+  //и следующий таймер заведут по образцу этого. Цена соблюдения — одна строка.
+  timer = setInterval(() => { if (!document.hidden) poll() }, POLL_MS)
+  //Вернулись к окну — сразу свежее состояние, а не через минуту.
+  document.addEventListener('visibilitychange', onVisible)
+}
+
+function onVisible() {
+  if (!document.hidden && !stopped) poll()
 }
 
 export function stop() {
@@ -77,5 +87,6 @@ export function stop() {
     clearInterval(timer)
     timer = null
   }
+  document.removeEventListener('visibilitychange', onVisible)
   syncState.value = null
 }

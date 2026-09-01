@@ -162,6 +162,44 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         }
     }
 
+    /**
+     * Непрозрачность подложки, выбранная человеком.
+     *
+     * ⚠️ Красим ЦВЕТОМ, а не `setAlpha` на корневом контейнере: `setAlpha` у RemoteViews
+     * поддержан не всеми лаунчерами (и на части из них молча ничего не делает), а
+     * `setInt(..., "setBackgroundColor", ...)` работает везде одинаково. Цена — теряется
+     * скруглённый фон из `@drawable/widget_bg`, поэтому при 100 % оставляем именно
+     * drawable и ничего не трогаем: у подавляющего большинства виджет так и стоит.
+     */
+    private static void applyBackground(Context ctx, RemoteViews rv, int widgetId) {
+        int alpha = ScheduleWidgetOptions.alpha(ctx, widgetId);
+        if (alpha >= 100) {
+            rv.setInt(R.id.widget_root, "setBackgroundResource", R.drawable.widget_bg);
+            return;
+        }
+        int base = ctx.getResources().getColor(R.color.gb_widget_bg);
+        rv.setInt(R.id.widget_root, "setBackgroundColor",
+                ScheduleWidgetOptions.tintBackground(base, alpha));
+    }
+
+    /**
+     * Виджет убрали со стола — убираем и его настройки.
+     *
+     * ⚠️ Обязательно: система ПЕРЕИСПОЛЬЗУЕТ номера виджетов, и оставленные настройки
+     * однажды достанутся новому виджету. Человек поставил бы чистый виджет и увидел его
+     * уже настроенным неизвестно кем — объяснить это было бы нечем.
+     */
+    @Override
+    public void onDeleted(Context ctx, int[] ids) {
+        super.onDeleted(ctx, ids);
+        if (ids == null) {
+            return;
+        }
+        for (int id : ids) {
+            ScheduleWidgetOptions.clear(ctx, id);
+        }
+    }
+
     private static void render(Context ctx, AppWidgetManager mgr, int id) {
         Bundle opts = mgr.getAppWidgetOptions(id);
         int wDp = opts != null ? opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0) : 0;
@@ -207,6 +245,7 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
             rv.setTextViewText(R.id.w_state, "");
             rv.setTextViewText(R.id.w_time, "—");
             rv.setTextViewText(R.id.w_subject, "Откройте приложение, чтобы загрузить расписание");
+            rv.setViewVisibility(R.id.w_room, android.view.View.GONE);
             rv.setTextViewText(R.id.w_foot, "");
             return rv;
         }
@@ -219,6 +258,7 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
             rv.setTextViewText(R.id.w_state, "");
             rv.setTextViewText(R.id.w_time, "Пар нет");
             rv.setTextViewText(R.id.w_subject, "На ближайшую неделю занятий не найдено");
+            rv.setViewVisibility(R.id.w_room, android.view.View.GONE);
             rv.setTextViewText(R.id.w_foot, updatedLabel(snap));
             return rv;
         }
@@ -258,6 +298,7 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
                 rv.setTextViewText(R.id.w_state, "На сегодня всё");
                 rv.setTextViewText(R.id.w_time, "Пар нет");
                 rv.setTextViewText(R.id.w_subject, "Занятий сегодня больше нет");
+            rv.setViewVisibility(R.id.w_room, android.view.View.GONE);
                 rv.setTextViewText(R.id.w_foot, updatedLabel(snap));
                 return rv;
             }
@@ -295,20 +336,20 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
                 ? (chosen.no + " пара") : chosen.time.replace('-', '–'));
         rv.setTextViewText(R.id.w_subject, chosen.subject.isEmpty() ? "—" : chosen.subject);
 
-        StringBuilder foot = new StringBuilder();
-        if (!chosen.room.isEmpty()) {
-            foot.append("ауд. ").append(chosen.room);
+        //Аудитория — своя строка и свой вес (см. пояснение в widget_schedule_small.xml).
+        //⚠️ GONE, а не пустой текст: пустой TextView занимает высоту строки, и название
+        //предмета лишалось бы её впустую — на 110dp это заметно.
+        if (chosen.room.isEmpty()) {
+            rv.setViewVisibility(R.id.w_room, android.view.View.GONE);
+        } else {
+            rv.setViewVisibility(R.id.w_room, android.view.View.VISIBLE);
+            rv.setTextViewText(R.id.w_room, "ауд. " + chosen.room);
         }
-        if (left > 0) {
-            if (foot.length() > 0) {
-                foot.append(" · ");
-            }
-            foot.append("ещё ").append(left);
-        }
-        if (foot.length() == 0) {
-            foot.append(updatedLabel(snap));
-        }
-        rv.setTextViewText(R.id.w_foot, foot.toString());
+        //В хвосте остаётся только служебное: сколько ещё пар, а если их нет — когда
+        //обновлялись. Смешивать это с аудиторией в одну строку было ошибкой: человек
+        //искал глазами номер кабинета среди «ещё 2».
+        rv.setTextViewText(R.id.w_foot,
+                left > 0 ? ("ещё " + left) : updatedLabel(snap));
         return rv;
     }
 
@@ -412,6 +453,8 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         svc.setData(android.net.Uri.parse(svc.toUri(Intent.URI_INTENT_SCHEME)));
         rv.setRemoteAdapter(R.id.w_rows, svc);
         rv.setEmptyView(R.id.w_rows, R.id.w_empty);
+
+        applyBackground(ctx, rv, widgetId);
 
         //Шаблон клика для строк списка: у элементов коллекции своего PendingIntent быть
         //не может, система склеивает этот шаблон с fill-in из getViewAt.

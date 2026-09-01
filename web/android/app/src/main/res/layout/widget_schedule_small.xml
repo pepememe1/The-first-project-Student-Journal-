@@ -64,7 +64,44 @@
         android:textColor="@color/gb_widget_accent"
         android:text="Сейчас" />
 
-    <!-- Время — самая крупная строка: её ищут глазами первой -->
+    <!--
+      🔥 ИЕРАРХИЯ РАЗВЁРНУТА (01.09.2026). Самой крупной строкой было ВРЕМЯ (17sp
+      жирным), а предмет шёл 12sp и цветом `text3` — самым тусклым из трёх, то есть
+      главное содержимое было набрано вспомогательным цветом. На вытянутой руке человек
+      читал «10:45–12:20» — расписание звонков, которое он и так знает наизусть.
+
+      Виджет 2×2 отвечает на два вопроса, и в этом порядке: ЧТО за пара и КУДА идти.
+      Время третье — оно уточняет, а не отвечает.
+    -->
+    <TextView
+        android:id="@+id/w_subject"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="2dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        android:lineSpacingMultiplier="0.95"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="@color/gb_widget_text"
+        android:text="Основы алгоритмизации" />
+
+    <!-- Аудитория — ответ на «куда идти». Отдельной строкой и акцентом: в общем хвосте
+         она терялась среди служебных подписей, хотя именно ради неё на виджет и смотрят
+         на ходу. Прячется (GONE), когда аудитории нет, — пустая строка съедала бы место
+         у названия предмета. -->
+    <TextView
+        android:id="@+id/w_room"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="@color/gb_widget_accent"
+        android:text="ауд. 3-301" />
+
     <TextView
         android:id="@+id/w_time"
         android:layout_width="match_parent"
@@ -72,25 +109,11 @@
         android:layout_marginTop="1dp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:textSize="17sp"
-        android:textStyle="bold"
-        android:textColor="@color/gb_widget_text"
+        android:textSize="12sp"
+        android:textColor="@color/gb_widget_text2"
         android:text="10:45–12:20" />
 
-    <TextView
-        android:id="@+id/w_subject"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:layout_marginTop="3dp"
-        android:maxLines="3"
-        android:ellipsize="end"
-        android:lineSpacingMultiplier="0.95"
-        android:textSize="12sp"
-        android:textColor="@color/gb_widget_text3"
-        android:text="Основы алгоритмизации" />
-
-    <!-- Хвост: аудитория и сколько ещё осталось за день -->
+    <!-- Хвост: сколько пар ещё осталось за день (или когда обновлялись, если их нет). -->
     <TextView
         android:id="@+id/w_foot"
         android:layout_width="match_parent"
@@ -98,6 +121,6 @@
         android:maxLines="1"
         android:ellipsize="end"
         android:textSize="10sp"
-        android:textColor="@color/gb_widget_text2"
-        android:text="ауд. 3-301 · ещё 2" />
+        android:textColor="@color/gb_widget_text3"
+        android:text="ещё 2" />
 </LinearLayout>

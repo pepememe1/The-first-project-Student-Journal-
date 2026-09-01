@@ -114,6 +114,13 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
                                                   getattr(last, "attachment_id", "") or ""))
                              if last else None),
             "last_at": (last.created_at if last else conv.created_at) or "",
+            #Системный канал («Мои оценки», «Расписание · Группа», «Объявления») ведёт
+            #Вектор, и в списке он показывается его лицом, а не кружком с инициалами.
+            #⚠️ Отдаём ПРИЗНАК, а не заставляем клиент разбирать id: формат `sys:*:{группа}`
+            #— серверная деталь, и полагаться на неё в браузере значит завести второй
+            #источник правды, который однажды разойдётся с первым (у нас это уже было с
+            #группой со слэшем в id).
+            "is_system": bool(conv.is_system),
         }
         if conv.kind == "direct":
             peer = _peer_of_direct(db, conv.id, user.id)

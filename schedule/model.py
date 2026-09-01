@@ -77,6 +77,11 @@ class Lesson:
     room: str = ""
     raw: str = ""
     extra: str = ""
+    #Номер подгруппы: 0 — занятие для всей группы, 1|2 — «1 п/г»/«2 п/г» из портала.
+    #⚠️ Нужен потому, что портал кладёт ДВА РАЗНЫХ занятия в одну ячейку, и без номера
+    #студент не понимает, которое из них его. Раньше второе занятие вообще пропадало —
+    #см. tests/test_schedule_subgroups.py.
+    subgroup: int = 0
 
     def is_empty(self) -> bool:
         """Пустая клетка («окно»): на сайте это «_» или пробелы."""
@@ -96,6 +101,7 @@ class Lesson:
             room=d.get("room", ""),
             raw=d.get("raw", ""),
             extra=d.get("extra", ""),
+            subgroup=int(d.get("subgroup", 0) or 0),
         )
 
 

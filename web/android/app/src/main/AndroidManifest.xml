@@ -48,14 +48,43 @@
             </intent-filter>
         </service>
 
-        <!-- Виджет расписания на рабочем столе. exported="false": наш собственный
-             AppWidgetProvider — обновляет его система и мы сами, снаружи дёргать
-             нечего. Приёмник слушает ещё и смену даты/времени, иначе после полуночи
-             виджет до получаса показывал бы вчерашний день (см. onReceive). -->
+        <!-- Виджет расписания на рабочем столе.
+
+             🔥 `exported="true"` ОБЯЗАТЕЛЕН, и прежнее `false` было настоящим дефектом
+             (01.09.2026): у человека виджет вообще не появлялся в списке добавления, и
+             поставить его было нельзя. Прежний комментарий здесь объяснял запрет так —
+             «наш собственный провайдер, снаружи дёргать нечего», — и это неверно по
+             существу: широковещательные сообщения виджету шлёт СИСТЕМА, а список
+             виджетов рисует ЛАУНЧЕР, и оба они — сторонние для нас приложения. С
+             `exported="false"` часть оболочек (MIUI, EMUI, ColorOS и другие) просто не
+             показывает такой виджет.
+             ⚠️ Опасности в экспорте нет: провайдер принимает только системные действия
+             из intent-filter ниже и ничего не отдаёт наружу.
+
+             Приёмник слушает ещё и смену даты/времени, иначе после полуночи виджет до
+             получаса показывал бы вчерашний день (см. onReceive). -->
+        <!--
+          Экран настройки виджета. `exported="true"` обязателен: его запускает СИСТЕМА
+          (лаунчер) при добавлении виджета, а не наше приложение. Без этого добавление
+          виджета молча заканчивается ничем — заготовка исчезает, ошибки человек не видит.
+          ⚠️ Опасности в экспорте здесь нет: активность принимает только id виджета и
+          ничего не читает из чужих данных. Наружу она тоже ничего не отдаёт.
+        -->
+        <activity
+            android:name=".ScheduleWidgetConfigure"
+            android:label="@string/wcfg_title"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog.NoActionBar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".ScheduleWidgetProvider"
             android:label="@string/widget_schedule_label"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
@@ -77,7 +106,7 @@
         <receiver
             android:name=".ScheduleWidgetSizes$Small"
             android:label="@string/widget_schedule_label"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
@@ -92,7 +121,7 @@
         <receiver
             android:name=".ScheduleWidgetSizes$Medium"
             android:label="@string/widget_schedule_label"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
@@ -107,7 +136,7 @@
         <receiver
             android:name=".ScheduleWidgetSizes$Large"
             android:label="@string/widget_schedule_label"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
@@ -149,6 +178,25 @@
     <!-- Android 13+ требует явного разрешения на показ уведомлений; на более старых
          версиях оно выдаётся при установке и запрос просто пропускается. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      VIBRATE — тактильная отдача (короткий отклик на подтверждение, отказ и важное
+      событие; web/src/utils/haptics.js).
+
+      ⚠️ Разрешение нужно даже для веб-API `navigator.vibrate`: без него WebView молча
+      ничего не делает — ни ошибки, ни исключения, вызов просто возвращает false. То есть
+      отсутствие этой строки выглядело бы как «вибрация не работает на этом телефоне», и
+      искать причину пришлось бы в коде, где всё правильно.
+
+      ⚠️ Разрешение НЕ опасное (normal): системного запроса человеку не показывается,
+      диалога согласия нет. Выключается оно в наших настройках, а не в системных, и по
+      умолчанию включено — способность есть, значит должна быть под рукой.
+
+      Плагин @capacitor/haptics намеренно НЕ ставим: он нативный, а значит каждая правка
+      отдачи требовала бы пересборки APK и перезалива в RuStore. Веб-API едет обычным
+      OTA-бандлом.
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- REQUEST_INSTALL_PACKAGES убрано по требованию модерации RuStore: нативная
          установка APK в обход магазина запрещена. Обновления приложения — только через
          RuStore; веб-слой обновляется незаметно через Capgo OTA (установка APK не нужна). -->

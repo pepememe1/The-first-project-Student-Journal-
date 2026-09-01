@@ -3,6 +3,7 @@ package ru.esstu.gradebook;
 import android.appwidget.AppWidgetManager;
 import android.content.Context;
 import android.content.Intent;
+import android.util.TypedValue;
 import android.widget.RemoteViews;
 import android.widget.RemoteViewsService;
 
@@ -38,18 +39,30 @@ public class ScheduleWidgetService extends RemoteViewsService {
     @Override
     public RemoteViewsFactory onGetViewFactory(Intent intent) {
         boolean showPast = intent.getBooleanExtra(EXTRA_SHOW_PAST, true);
-        return new Factory(getApplicationContext(), showPast);
+        //id виджета нужен, чтобы прочитать ЕГО настройки: у двух виджетов на столе они
+        //разные, и общий список строк на оба обслуживал бы плохо оба.
+        int widgetId = intent.getIntExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID,
+                android.appwidget.AppWidgetManager.INVALID_APPWIDGET_ID);
+        return new Factory(getApplicationContext(), showPast, widgetId);
     }
 
     private static class Factory implements RemoteViewsService.RemoteViewsFactory {
         private final Context ctx;
         private final boolean showPast;
+        private final int widgetId;
         private final List<ScheduleWidgetData.Pair> rows = new ArrayList<>();
         private int nowIndex = -1;
 
-        Factory(Context ctx, boolean showPast) {
+        Factory(Context ctx, boolean showPast, int widgetId) {
             this.ctx = ctx;
             this.showPast = showPast;
+            this.widgetId = widgetId;
+        }
+
+        /** Кегль с учётом выбранного человеком масштаба (см. ScheduleWidgetOptions). */
+        private float sp(float base) {
+            return ScheduleWidgetOptions.scaledSp(base,
+                    ScheduleWidgetOptions.textScale(ctx, widgetId));
         }
 
         @Override
@@ -68,7 +81,23 @@ public class ScheduleWidgetService extends RemoteViewsService {
                 return;
             }
             Calendar now = Calendar.getInstance();
-            ScheduleWidgetData.Day day = ScheduleWidgetData.nextDayWithPairs(snap, now);
+            //Какой день показывать — выбирает человек в настройках виджета.
+            //⚠️ «Только сегодня» и «только завтра» ищут ИМЕННО ЭТОТ день и, если пар нет,
+            //честно показывают пустоту: человек попросил конкретный день, и подставить
+            //ему вместо этого послезавтра значило бы ответить не на его вопрос. Режим по
+            //умолчанию (SHOW_TODAY_THEN_TOMORROW) — прежнее поведение: ближайший день с
+            //парами, чтобы в воскресенье и на каникулах виджет оставался полезным.
+            int mode = ScheduleWidgetOptions.mode(ctx, widgetId);
+            ScheduleWidgetData.Day day;
+            if (mode == ScheduleWidgetOptions.SHOW_TODAY) {
+                day = ScheduleWidgetData.dayAt(snap, now, 0);
+            } else if (mode == ScheduleWidgetOptions.SHOW_TOMORROW) {
+                Calendar t = (Calendar) now.clone();
+                t.add(Calendar.DAY_OF_YEAR, 1);
+                day = ScheduleWidgetData.dayAt(snap, t, 1);
+            } else {
+                day = ScheduleWidgetData.nextDayWithPairs(snap, now);
+            }
             if (day == null) {
                 return;
             }
@@ -132,8 +161,25 @@ public class ScheduleWidgetService extends RemoteViewsService {
             rv.setTextViewText(R.id.row_pair, isNow ? "идёт" : (p.no + " пара"));
             rv.setTextViewText(R.id.row_subject, p.subject.isEmpty() ? "—" : p.subject);
 
+            //Масштаб текста. Кегли те же, что в разметке, — здесь только множитель:
+            //держать «настоящий» размер в двух местах значило бы, что правка в XML молча
+            //не подействует на настроенные виджеты.
+            rv.setTextViewTextSize(R.id.row_time, TypedValue.COMPLEX_UNIT_SP, sp(16f));
+            rv.setTextViewTextSize(R.id.row_pair, TypedValue.COMPLEX_UNIT_SP, sp(11f));
+            rv.setTextViewTextSize(R.id.row_subject, TypedValue.COMPLEX_UNIT_SP, sp(16f));
+            rv.setTextViewTextSize(R.id.row_meta, TypedValue.COMPLEX_UNIT_SP, sp(12f));
+            rv.setTextViewTextSize(R.id.row_room, TypedValue.COMPLEX_UNIT_SP, sp(14f));
+
             StringBuilder meta = new StringBuilder();
+            //Подгруппа идёт ПЕРВОЙ в подписи: когда в одно время стоят две пары, это
+            //единственное, что отвечает на вопрос «которая моя».
+            if (p.subgroup > 0) {
+                meta.append(p.subgroup).append(" п/г");
+            }
             if (!p.kind.isEmpty()) {
+                if (meta.length() > 0) {
+                    meta.append(" · ");
+                }
                 meta.append(p.kind);
             }
             if (!p.who.isEmpty()) {
@@ -142,15 +188,21 @@ public class ScheduleWidgetService extends RemoteViewsService {
                 }
                 meta.append(p.who);
             }
-            if (meta.length() == 0) {
+            //Строку с преподавателем/группой можно выключить: на узком виджете она
+            //съедает место, а часть людей и так знает, кто ведёт предмет.
+            if (meta.length() == 0 || !ScheduleWidgetOptions.showTeacher(ctx, widgetId)) {
                 rv.setViewVisibility(R.id.row_meta, android.view.View.GONE);
             } else {
+                rv.setViewVisibility(R.id.row_meta, android.view.View.VISIBLE);
                 rv.setTextViewText(R.id.row_meta, meta.toString());
             }
 
-            if (p.room.isEmpty()) {
+            //⚠️ Аудиторию прячем через GONE, а не пустым текстом: пустой TextView всё
+            //равно занимает отступы, и заголовок предмета не расширится на его место.
+            if (p.room.isEmpty() || !ScheduleWidgetOptions.showRoom(ctx, widgetId)) {
                 rv.setViewVisibility(R.id.row_room, android.view.View.GONE);
             } else {
+                rv.setViewVisibility(R.id.row_room, android.view.View.VISIBLE);
                 rv.setTextViewText(R.id.row_room, p.room);
             }
 

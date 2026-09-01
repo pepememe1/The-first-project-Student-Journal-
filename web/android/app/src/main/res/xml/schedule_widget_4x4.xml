@@ -7,6 +7,20 @@
   Подробности про три пункта в списке добавления и про updatePeriodMillis — в
   schedule_widget_2x2.xml, дублировать здесь не стали.
 -->
+<!--
+  ⚠️ `android:configure` ниже — экран настройки виджета. Система откроет его САМА при
+  добавлении, и там человек выбирает, что показывать, каким шрифтом и насколько прозрачно.
+  Виджет с `configure` НЕ появится на столе, пока экран не вернёт RESULT_OK — поэтому в
+  самой активности результат выставляется первой строкой `onCreate` (см. её шапку), иначе
+  кнопка «назад» оставила бы пустую заготовку.
+
+  🔥 `previewImage` НУЖЕН ВМЕСТЕ С `previewLayout`, а не вместо (01.09.2026).
+  `previewLayout` — атрибут API 31+ (Android 12). На Android 7–11, а `minSdkVersion = 24`,
+  лаунчер его не понимает и ищет `previewImage`; без него в списке виджетов показывается
+  иконка приложения или пустое место, а часть оболочек (MIUI, EMUI, ColorOS) такой виджет
+  не рисует вовсе — со стороны это выглядит как «виджетов у приложения нет». Ровно на это
+  и жаловались. Картинки рисует tools/build_widget_previews.py по той же раскладке.
+-->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:minWidth="180dp"
@@ -18,8 +32,10 @@
     android:targetCellWidth="4"
     android:targetCellHeight="4"
     android:updatePeriodMillis="1800000"
+    android:configure="ru.esstu.gradebook.ScheduleWidgetConfigure"
     android:initialLayout="@layout/widget_schedule_list"
     android:previewLayout="@layout/widget_schedule_list"
+    android:previewImage="@drawable/widget_preview_4x4"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:description="@string/widget_schedule_description_4x4"

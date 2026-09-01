@@ -337,9 +337,33 @@
   }
   @media print{ body{background:#fff} .card,.secbanner{box-shadow:none} .mascot img{filter:none}
     .rise,.reveal{opacity:1 !important; animation:none !important} }
+  .topbar{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);
+    padding:.6rem 1rem}
+  .topbar .back{display:inline-flex;align-items:center;gap:.4rem;font-size:.95rem;font-weight:600;
+    color:var(--accent);text-decoration:none;padding:.35rem .1rem;
+    /* Палец на телефоне промахивается по мелким целям: держим высоту не меньше 44 px
+       (рекомендация и Apple, и Material) — это единственная навигация на странице. */
+    min-height:44px;line-height:1.6}
+  .topbar .back:hover{text-decoration:underline}
+  /* На печати навигация не нужна и только съедает первую строку документа. */
+  @media print{.topbar{display:none}}
 </style>
 </head>
 <body>
+<!-- ⚠️ ВЫХОД СО СТРАНИЦЫ (01.09.2026). Его не было ВООБЩЕ, и это тупик: страницу
+     открывают с экрана входа и из настроек, а внутри мобильного приложения нет ни
+     адресной строки, ни вкладок — уйти отсюда было нечем, кроме аппаратной кнопки
+     «назад», которой у части устройств нет вовсе (жестовая навигация).
+     ⚠️ Ссылка, а НЕ кнопка с history.back(): у страницы `script-src 'none'`, скриптов
+     здесь нет и быть не должно (см. мету CSP выше). Ссылка работает всегда — и в
+     браузере, и в WebView приложения, и при открытии файла напрямую.
+     Ведёт на «/» намеренно: там либо экран входа (если человек не вошёл), либо его
+     кабинет. Обе цели осмысленны, а «вернуться ровно туда, откуда пришёл» без JS не
+     сделать. -->
+<div class="topbar">
+  <a class="back" href="/">← Вернуться в журнал</a>
+</div>
+
 
 <div class="wrap">
 

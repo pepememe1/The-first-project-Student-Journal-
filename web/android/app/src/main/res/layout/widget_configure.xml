@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Экран настройки виджета расписания.
+
+  ⚠️ Открывается ДВАЖДЫ по разным поводам: при добавлении виджета (система сама зовёт
+  configure-активность) и по нажатию на шестерёнку уже стоящего виджета. Разметка одна,
+  различается только заголовок кнопки — «Добавить» против «Сохранить»: в первом случае
+  отмена означает, что виджет не появится вовсе, и человек должен это понимать.
+
+  ⚠️ Ползунок прозрачности ограничен снизу (см. ScheduleWidgetConfigure): полностью
+  прозрачный фон на светлых обоях делает виджет нечитаемым, а вернуть настройку человек
+  сможет только вслепую — по невидимому виджету.
+
+  ⚠️ ScrollView обязателен. На маленьком экране с крупным системным шрифтом содержимое
+  не помещается, и без прокрутки кнопка «Добавить» уезжает за край — виджет становится
+  невозможно поставить вообще.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="?android:attr/colorBackground">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wcfg_title"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wcfg_subtitle"
+            android:textSize="14sp"
+            android:alpha="0.7"
+            android:paddingBottom="18dp" />
+
+        <!-- ЧТО ПОКАЗЫВАТЬ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wcfg_show"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:paddingBottom="6dp" />
+
+        <RadioGroup
+            android:id="@+id/cfg_mode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingBottom="18dp">
+
+            <RadioButton
+                android:id="@+id/cfg_mode_auto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_show_auto" />
+
+            <RadioButton
+                android:id="@+id/cfg_mode_today"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_show_today" />
+
+            <RadioButton
+                android:id="@+id/cfg_mode_tomorrow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_show_tomorrow" />
+        </RadioGroup>
+
+        <!-- РАЗМЕР ТЕКСТА -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wcfg_text_size"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:paddingBottom="6dp" />
+
+        <RadioGroup
+            android:id="@+id/cfg_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingBottom="18dp">
+
+            <RadioButton
+                android:id="@+id/cfg_text_small"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_text_small" />
+
+            <RadioButton
+                android:id="@+id/cfg_text_normal"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_text_normal" />
+
+            <RadioButton
+                android:id="@+id/cfg_text_large"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_text_large" />
+        </RadioGroup>
+
+        <!-- ПРОЗРАЧНОСТЬ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="@string/wcfg_opacity"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/cfg_alpha_value"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="15sp"
+                android:text="100%" />
+        </LinearLayout>
+
+        <SeekBar
+            android:id="@+id/cfg_alpha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="100"
+            android:paddingBottom="18dp" />
+
+        <!-- ЧТО ПИСАТЬ В СТРОКЕ -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wcfg_details"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:paddingBottom="6dp" />
+
+        <CheckBox
+            android:id="@+id/cfg_teacher"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/wcfg_show_teacher" />
+
+        <CheckBox
+            android:id="@+id/cfg_room"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/wcfg_show_room"
+            android:paddingBottom="18dp" />
+
+        <!-- Кнопки. «Отмена» слева, подтверждение справа — как везде в системе. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="end"
+            android:paddingTop="8dp">
+
+            <Button
+                android:id="@+id/cfg_cancel"
+                style="?android:attr/buttonBarButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/wcfg_cancel" />
+
+            <Button
+                android:id="@+id/cfg_save"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:layout_marginLeft="8dp"
+                android:text="@string/wcfg_add" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

@@ -68,6 +68,9 @@ export const SETTINGS_CATS = [
     subs: [
       { id: 'tts', i18n: 'settings.tts', label: 'Озвучка Вектора' },
       { id: 'mic', i18n: 'settings.voice', label: 'Голосовой ввод' },
+      //Вибрация живёт здесь, а не во «Внешнем виде»: это про ОЩУЩЕНИЯ от устройства,
+      //и человек ищет её рядом со звуком, а не рядом с темой оформления.
+      { id: 'haptics', i18n: 'settings.haptics', label: 'Вибрация' },
     ],
   },
   {

@@ -39,6 +39,7 @@ import GifPicker from './GifPicker.vue'
 import FilePreview from './FilePreview.vue'
 import { humanSize } from '@/utils/docPreview'
 import Avatar from '@/components/ui/Avatar.vue'
+import haptics from '@/utils/haptics'
 import { profilePlate } from '@/theme/palette'
 import { nameDecor } from '@/config/nameEffects'
 import { statusLabel } from '@/config/status'
@@ -705,7 +706,13 @@ function onTouchStart(msg, e) {
   clearTimeout(pressTimer)
   // Свой таймер долгого нажатия — в WebView приложения contextmenu приходит не всегда.
   pressTimer = setTimeout(() => {
-    if (!touchMoved && touchStart) openMenu(msg, touchStart.x, touchStart.y)
+    if (!touchMoved && touchStart) {
+      //Отдача РОВНО в момент срабатывания: у долгого нажатия нет визуального якоря, и до
+      //появления меню человек не знает, сколько держать. Это первый из двух случаев в
+      //haptics.js — «палец действует вслепую».
+      haptics.tap()
+      openMenu(msg, touchStart.x, touchStart.y)
+    }
   }, LONG_PRESS_MS)
 }
 
@@ -720,7 +727,12 @@ function onTouchMove(e) {
   }
   // Горизонтальный жест вправо — тянем пузырь за пальцем (вертикальную прокрутку не трогаем).
   if (Math.abs(dx) > Math.abs(dy) && dx > 0 && !touchStart.msg.deleted) {
+    const wasArmed = swipe.value.dx >= SWIPE_REPLY_PX
     swipe.value = { id: touchStart.msg.id, dx: Math.min(dx, 90) }
+    //Отдача в момент ПЕРЕСЕЧЕНИЯ порога, а не при отпускании: она отвечает на вопрос
+    //«уже хватит тянуть?», который человек задаёт себе ВО ВРЕМЯ жеста. Сработай она
+    //в конце — сообщила бы о том, что и так видно по появившейся цитате.
+    if (!wasArmed && swipe.value.dx >= SWIPE_REPLY_PX) haptics.tap()
   }
 }
 

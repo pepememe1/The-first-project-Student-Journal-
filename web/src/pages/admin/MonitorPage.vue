@@ -33,11 +33,21 @@ async function tick() {
   }
 }
 
+//⚠️ Мониторинг — самый частый кандидат на «оставили открытым и забыли»: его держат на
+//втором экране целый день. Опрос раз в 5 секунд это 720 запросов в час, и в WebView
+//Capacitor таймер продолжает тикать после сворачивания приложения. Пока экрана не видно,
+//цифры никому не нужны — а радиомодуль они будят.
+let onVisible = null
 onMounted(() => {
   tick()
-  timer = setInterval(tick, 5000)
+  timer = setInterval(() => { if (!document.hidden) tick() }, 5000)
+  onVisible = () => { if (!document.hidden) tick() }
+  document.addEventListener('visibilitychange', onVisible)
 })
-onUnmounted(() => timer && clearInterval(timer))
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+  if (onVisible) document.removeEventListener('visibilitychange', onVisible)
+})
 </script>
 
 <template>

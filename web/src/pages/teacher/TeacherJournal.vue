@@ -25,6 +25,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
 import VoiceCommandDialog from '@/components/vector/VoiceCommandDialog.vue'
 import { useLocaleStore } from '@/stores/locale'
+import haptics from '@/utils/haptics'
 
 const toast = useToast()
 const { confirm, prompt } = useConfirm()
@@ -371,6 +372,11 @@ async function setGrade(s, key, value) {
   saving.value = true
   try {
     await teacherApi.setGrade(s.surname, s.name, key, value)
+    //Оценка ЗАПИСАНА. Второй случай из haptics.js — «действие значимо»: преподаватель в
+    //этот момент смотрит на студента и на журнал, а не на всплывающие подтверждения, и
+    //«получилось» должен узнать рукой. Отдача ПОСЛЕ ответа сервера, а не по нажатию:
+    //иначе она подтверждала бы намерение, а не результат.
+    haptics.success()
     await load()
   } catch (e) {
     // ⚠️ Различаем «сервер отказал» и «сервер не ответил» — это противоположные случаи.
@@ -381,11 +387,18 @@ async function setGrade(s, key, value) {
     // повторить. Такую оценку кладём в очередь — она уедет сама (см. api/outbox.js).
     if (!e?.response) {
       enqueueGrade({ surname: s.surname, name: s.name, lesson_id: key, grade: value })
+      //Оценка не потеряна, но и не уехала — это НЕ успех и не отказ. Отдельного узора
+      //заводить не стали: важнее, что ощущение отличается от «записано», а подробность
+      //человек прочитает в подсказке.
+      haptics.tap()
       toast.info(locale.t('teacherJournal.queuedOffline',
         'Нет сети — оценка сохранена и уйдёт, когда появится связь'))
       return
     }
     s.grades[key] = prev
+    //Отказ сервера: оценка ОТКАТИЛАСЬ, и это надо почувствовать иначе, чем успех, —
+    //две коротких с паузой против одной (см. haptics.js).
+    haptics.error()
     toast.error(locale.t('teacherJournal.saveFailedPrefix', 'Не удалось сохранить: ') + (e?.response?.data?.detail || e.message))
   } finally { saving.value = false }
 }

@@ -36,6 +36,9 @@ async function requestAccess() {
 function startPolling() {
   stopPolling()
   poll = setInterval(async () => {
+    //⚠️ Экран не виден — не спрашиваем. Одобрения человек всё равно не дождётся глазами
+    //в свёрнутом приложении, а радиомодуль будился бы каждые четыре секунды.
+    if (document.hidden) return
     try {
       const { data } = await connectApi.status(getDeviceId())
       if (data.status === 'approved') { stopPolling(); emit('approved') }

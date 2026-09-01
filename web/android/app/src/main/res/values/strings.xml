@@ -17,4 +17,25 @@
     <string name="widget_no_pairs">Пар нет</string>
     <!-- Только для чтения с экрана: стрелка помечает пару, которая идёт прямо сейчас. -->
     <string name="widget_now_desc">Идёт сейчас</string>
+
+    <!-- Экран настройки виджета (ScheduleWidgetConfigure). -->
+    <string name="wcfg_title">Виджет расписания</string>
+    <string name="wcfg_subtitle">Настройки этого виджета. У других виджетов они свои — можно поставить несколько разных.</string>
+    <string name="wcfg_show">Что показывать</string>
+    <string name="wcfg_show_auto">Сегодня, а после пар — завтра</string>
+    <string name="wcfg_show_today">Только сегодня</string>
+    <string name="wcfg_show_tomorrow">Только завтра</string>
+    <string name="wcfg_text_size">Размер текста</string>
+    <string name="wcfg_text_small">Мельче</string>
+    <string name="wcfg_text_normal">Обычный</string>
+    <string name="wcfg_text_large">Крупнее</string>
+    <string name="wcfg_opacity">Непрозрачность фона</string>
+    <string name="wcfg_percent">%1$d%%</string>
+    <string name="wcfg_details">Что писать в строке</string>
+    <string name="wcfg_show_teacher">Преподаватель</string>
+    <string name="wcfg_show_room">Аудитория</string>
+    <string name="wcfg_cancel">Отмена</string>
+    <string name="wcfg_add">Добавить</string>
+    <string name="wcfg_save">Сохранить</string>
+    <string name="wcfg_settings_desc">Настроить виджет</string>
 </resources>

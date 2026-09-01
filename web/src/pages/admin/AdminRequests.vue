@@ -14,12 +14,27 @@ const rows = ref([])
 const loading = ref(true)
 const codes = ref({}) // device_id -> выданный код
 let timer = null
+let onVisible = null
 
 async function load() {
   try { rows.value = (await connectApi.list()).data.requests || [] } catch { rows.value = [] } finally { loading.value = false }
 }
-onMounted(() => { load(); timer = setInterval(load, 5000) })
-onUnmounted(() => timer && clearInterval(timer))
+//⚠️ В СВЁРНУТОМ ПРИЛОЖЕНИИ И СКРЫТОЙ ВКЛАДКЕ НА СЕРВЕР НЕ ХОДИМ (01.09.2026).
+//Опрос раз в 5 секунд — это двенадцать запросов в минуту с каждого открытого экрана, и в
+//WebView Capacitor таймеры продолжают тикать после сворачивания приложения: телефон
+//лежит в кармане, экран погашен, а мы будим радиомодуль. Человек, который экрана не
+//видит, ничего от этих запросов не получает — а батарею они тратят. Вернувшись, он
+//получит свежие данные первым же тиком.
+onMounted(() => {
+  load()
+  timer = setInterval(() => { if (!document.hidden) load() }, 5000)
+  onVisible = () => { if (!document.hidden) load() }
+  document.addEventListener('visibilitychange', onVisible)
+})
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+  if (onVisible) document.removeEventListener('visibilitychange', onVisible)
+})
 
 async function approve(dev) {
   try { codes.value = { ...codes.value, [dev]: (await connectApi.approve(dev)).data.code }; await load() } catch { /* */ }
