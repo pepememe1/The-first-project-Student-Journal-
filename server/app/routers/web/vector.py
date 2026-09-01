@@ -1069,8 +1069,15 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             g = groups[0]
             names = [W.display_name(s) for s in W.students_in_group(db, g)]
             body = ", ".join(names) if names else "список пуст"
+            #🔒 no_voice — ЗДЕСЬ ЕГО ЗАБЫЛИ, и это была настоящая утечка (найдено
+            #сторожем-свойством 01.09.2026, до того — ничем). Ответ целиком состоит из
+            #ФИО студентов группы, и без флага он уезжал в GigaChat вместе с ними. Ровно
+            #тот класс дефекта, ради которого заведён `test_vector_never_voices_names.py`:
+            #ничего не ломается, ответ выглядит правдоподобно, а имена людей уходят
+            #внешнему сервису — заметить это можно только чтением этой строки.
             return {"text": f"Студенты группы {g} ({len(names)}): {body}.", "mood": "neutral",
-                    "intent": "roster", "facts": {"group": g, "count": len(names)}}
+                    "intent": "roster", "facts": {"group": g, "count": len(names)},
+                    "no_voice": True}
         if intent == "homework":
             #Что ЗАДАЛ САМ преподаватель: занятия его групп по его же предметам.
             #Статуса сдачи нет — вопрос про группу целиком, и «сдано» относилось бы

@@ -167,3 +167,60 @@ def test_current_term_ignores_a_future_override_left_in_the_database(client, mon
     db.commit()
     assert W.current_term(W.load_config(db)) == (past_year, 1), "оверрайд назад — законный сценарий"
     db.close()
+
+
+# ── ОТСТАВШИЙ ОВЕРРАЙД ТЕРМИНА (01.09.2026) ────────────────────────────────────────
+# Оверрайд ВПЕРЁД уже игнорируется и пишет в лог — он дважды уводил продукт на год
+# вперёд календаря. Обратный случай был молчаливым, а стоит не меньше: ключ
+# `current_year`, оставшийся с весны, 1 сентября НЕ ДАЁТ учебному году начаться.
+# Продукт продолжает штамповать занятия прошлым семестром, курс студентов не растёт,
+# новые предметы ложатся в закрытый период — и понять это можно только разбором
+# боевой базы, как оба прошлых раза.
+#
+# ⚠️ Само поведение (оверрайд назад работает) НЕ меняем: открыть закрытый семестр —
+# законный сценарий, и запретить его значило бы отобрать у админа архив. Меняем
+# ровно молчание.
+
+
+def test_a_stale_term_override_is_reported_but_still_honoured(caplog):
+    """Оверрайд, отставший от календаря, ПРИМЕНЯЕТСЯ (архив — законный сценарий), но
+    сообщает о себе в лог ровно один раз за запуск.
+
+    Обратный ход: убрать ветку предупреждения — тест краснеет на пустом логе."""
+    import logging
+    from app import webdata as W
+
+    W._stale_term_warned = False
+    past = (f"{int(W.default_term_by_date()[0].split('/')[0]) - 1}/"
+            f"{int(W.default_term_by_date()[0].split('/')[1]) - 1}")
+    cfg = {"current_year": past, "current_semester": 1}
+
+    with caplog.at_level(logging.WARNING, logger="gradebook.webdata"):
+        assert W.current_term(cfg) == (past, 1), "архивный оверрайд обязан применяться"
+    assert any("ОТСТАЁТ" in r.message or "отстаёт" in r.message.lower()
+               for r in caplog.records), "молчаливое залипание в прошлом семестре"
+
+    #Второй раз — молчим: строка на каждый запрос превратила бы лог в шум.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="gradebook.webdata"):
+        W.current_term(cfg)
+    assert not caplog.records, "предупреждение повторяется на каждый запрос"
+
+
+def test_the_current_term_override_is_not_reported():
+    """Оверрайд, СОВПАДАЮЩИЙ с календарём, — обычное дело и в лог не идёт."""
+    import logging
+    from app import webdata as W
+
+    W._stale_term_warned = False
+    y, s = W.default_term_by_date()
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    log = logging.getLogger("gradebook.webdata")
+    log.addHandler(handler)
+    try:
+        assert W.current_term({"current_year": y, "current_semester": s}) == (y, s)
+    finally:
+        log.removeHandler(handler)
+    assert not records

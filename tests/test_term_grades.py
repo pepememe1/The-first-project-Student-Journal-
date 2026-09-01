@@ -66,10 +66,10 @@ def test_stale_remote_does_not_override_local(fresh_db):
     assert DBManager.get_term_grades(SUBJ, YEAR, SEM)["Волков|Илья"]["grade"] == "5"
 
 
-def test_vedomost_xlsx_bytes():
-    """Экспорт ведомости в xlsx отдаёт непустой файл."""
-    from data import exports
-    rows = [{"surname": "Иванов", "name": "Иван", "patronymic": "Петрович", "grade": "5"}]
-    data = exports.build_vedomost_xlsx("ИС-21", SUBJ, {"year": YEAR, "semester": SEM},
-                                       "экзамен", rows, teacher="Тестов Т.Т.")
-    assert data[:2] == b"PK" and len(data) > 500   #xlsx — это zip (PK)
+#⚠️ ЗДЕСЬ БЫЛ `test_vedomost_xlsx_bytes` (удалён 01.09.2026). Он проверял, что ведомость
+#собирается в непустой xlsx, — но собирал её МЁРТВОЙ копией `data/exports.py`: полным
+#дублем `server/app/xlsx_export.py`, оставшимся от нативного журнала и не имевшим в
+#продукте ни одного вызывающего. То есть проверка была, а защиты не было: сломай живой
+#модуль — тест остался бы зелёным.
+#Живой путь (`GET /web/teacher/vedomost` → `xlsx_export.build_vedomost_xlsx`) покрыт
+#`server/tests/test_vedomost.py`. Сам `data/exports.py` удалён вместе с этим тестом.

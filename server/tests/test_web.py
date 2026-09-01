@@ -110,12 +110,21 @@ def test_overview_does_not_blend_a_recurring_subject_across_past_courses(client)
     student = {"id": "stud:phys1", "role": "student", "login": "phys1",
                "password_hash": hash_password("physpass1"),
                "surname": "Орлов", "name": "Олег", "group_name": "ИС-99"}
+    #⚠️ ТЕРМИН БЕРЁТСЯ ИЗ ПРОДУКТА, А НЕ ПИШЕТСЯ ЧИСЛОМ (починено 01.09.2026). Здесь
+    #стояло «2025/2026, семестр 2» как «сегодняшний», и тест краснел ровно в ночь на
+    #1 сентября: `db.default_term` переключился на 2026/2027, занятие перестало быть
+    #текущим, средний стал 0.0 вместо 5.0. Это не дефект продукта, а сторож со снимком
+    #значения — тот самый класс, от которого мы отучаемся: проверять надо СВОЙСТВО
+    #(«прошлый курс не подмешивается к нынешнему»), а не конкретный учебный год.
+    from app.db import default_term
+    cur_year, cur_sem = default_term()
+    old_year = f"{int(cur_year.split('/')[0]) - 3}/{int(cur_year.split('/')[1]) - 3}"
     old_lesson = {"id": "PhysOld", "group_name": "ИС-99", "subject": "Физическая культура",
                   "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2022",
-                  "year": "2022/2023", "semester": 1}
+                  "year": old_year, "semester": 1}
     new_lesson = {"id": "PhysNew", "group_name": "ИС-99", "subject": "Физическая культура",
                   "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2025",
-                  "year": "2025/2026", "semester": 2}
+                  "year": cur_year, "semester": cur_sem}
     r = client.post("/sync/push", json={"changes": {
         "groups": [{"id": "g:ИС-99", "name": "ИС-99", "subjects": ["Физическая культура"]}],
         "users": [student], "lessons": [old_lesson, new_lesson],
