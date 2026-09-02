@@ -25,6 +25,14 @@ export function formatSystemMessage(body) {
     return type === 'user_joined' ? t('messagePreview.joined', { name }) : t('messagePreview.left', { name })
   }
   if (type === 'title_changed') return t('messagePreview.titleChanged', { title: rest[0] || '' })
+  //Аватарка беседы (02.09.2026). В теле события САМОЙ КАРТИНКИ нет — только признак
+  //«поставили/убрали»: тело системного сообщения хранится строкой и попадает в
+  //предпросмотр списка чатов, а data:URL на сотню килобайт там не место.
+  if (type === 'avatar_changed') {
+    return rest[0]
+      ? t('messagePreview.avatarChanged', 'Аватарка беседы обновлена')
+      : t('messagePreview.avatarRemoved', 'Аватарка беседы убрана')
+  }
   if (type === 'pin_added') return t('messagePreview.pinAdded', '📌 Сообщение закреплено')
   if (type === 'pin_removed') return t('messagePreview.pinRemoved', 'Сообщение откреплено')
   //§ролей: /mute и /clear тоже постят системную строку — тот же приём, что «вступил/вышел».

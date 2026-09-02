@@ -128,6 +128,9 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             item["peer"] = _safe_user(peer, onl, status=_status_map(db, [peer.id]).get(peer.id)) if peer else None
         else:
             item["title"] = conv.title or ""
+            #Аватарка группы/канала. У личного чата её нет намеренно: там лицо беседы —
+            #сам собеседник, и он уже приходит в `peer`.
+            item["avatar"] = conv.avatar or ""
         out.append(item)
     #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
     #сырой id из тела сообщения.
@@ -343,6 +346,7 @@ def public_channels(q: str = Query(""), user: User = Depends(get_current_user),
         subs = (db.query(ConversationParticipant)
                 .filter(ConversationParticipant.conversation_id == c.id).count())
         out.append({"conversation_id": c.id, "title": c.title, "about": c.about,
+                    "avatar": c.avatar or "",
                     "subscribers": subs, "joined": _participant(db, c.id, user.id) is not None})
     out.sort(key=lambda x: (x["title"] or "").lower())
     return {"channels": out}
@@ -712,6 +716,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
                                  .filter(ConversationIgnore.conversation_id == conv_id,
                                          ConversationIgnore.viewer_id == user.id).all())]
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
+            "avatar": conv.avatar or "",
             "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
             "my_role": part.role, "participants": people, "subscribers": len(people),
             #Свой id клиент иначе не знает (в JWT/сторе только логин+роль) — нужен, чтобы
@@ -732,27 +737,68 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
 @router.patch("/chats/{conv_id}")
 def rename_conversation(conv_id: str, payload: dict = Body(...),
                         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Переименовать группу/канал (owner/admin). Личный чат и беседу с модерацией не
-    переименовываем — у них нет своего названия. Пишет системное сообщение (§D6).
+    """Название, описание и АВАТАРКА группы/канала (owner/admin). Личный чат и беседу с
+    модерацией не трогаем — у них нет своего лица: там его задаёт собеседник. Смена
+    названия и картинки пишет системное сообщение (§D6).
 
     Проверяем ТИП беседы раньше роли: у личного чата участники всегда 'member' (не
     owner/admin), и без этого порядка запрос падал бы в 403 «недостаточно прав» вместо
-    внятного 400 «эту беседу нельзя переименовать» — путало бы причину отказа."""
+    внятного 400 «эту беседу нельзя переименовать» — путало бы причину отказа.
+
+    🔥 ОПИСАНИЕ СОХРАНЯЛОСЬ ТОЛЬКО ВМЕСТЕ С НАЗВАНИЕМ (найдено 02.09.2026 при добавлении
+    аватарки). `about` лежал ВНУТРИ `if title != conv.title`, поэтому правка одного лишь
+    описания молча не доезжала: запрос отвечал `{"ok": true}` и прежним текстом, клиент
+    закрывал форму, а через минуту текст возвращался к старому. Отказ тихий и
+    правдоподобный — ровно тот класс, который у нас ловится только чтением.
+
+    ⚠️ Поля НЕОБЯЗАТЕЛЬНЫЕ и смотрим на ПРИСУТСТВИЕ ключа, а не на непустоту (тот же
+    приём, что у дня рождения в §инвариантов): иначе форма, где меняют одну картинку,
+    затирала бы описание, а явно очищенное описание не доезжало бы никогда."""
     conv = _conversation(db, conv_id)
     part = _require_participant(db, conv_id, user)
     if conv.kind not in ("group", "channel"):
         raise HTTPException(status_code=400, detail="Эту беседу нельзя переименовать")
     if part.role not in _MANAGER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
-    title = (payload.get("title") or "").strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Нужно название")
-    title = title[:120]
-    if title != conv.title:
-        conv.title = title
-        if "about" in payload:
-            conv.about = (payload.get("about") or "").strip()[:500]
+
+    changed, events = False, []
+
+    if "title" in payload:
+        title = (payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Нужно название")
+        title = title[:120]
+        if title != conv.title:
+            conv.title = title
+            changed = True
+            events.append(("title_changed", title))
+
+    if "about" in payload:
+        about = (payload.get("about") or "").strip()[:500]
+        if about != (conv.about or ""):
+            conv.about = about
+            changed = True          #системного сообщения НЕТ: описание читают в карточке
+                                    #беседы, и строка в ленте на каждую правку — шум
+
+    if "avatar" in payload:
+        #🔒 Проверяем ТОЙ ЖЕ функцией, что и аватарку профиля: картинка уедет в `<img src>`
+        #ко ВСЕМ участникам, и чужая ссылка означала бы, что один человек включил слежку
+        #за всей группой. Второй копии белого списка не заводим — она разошлась бы с
+        #первой молча и в опасную сторону.
+        from ..me import _sanitize_profile_media
+        box = {"avatar": payload.get("avatar")}
+        _sanitize_profile_media(box)
+        if box["avatar"] != (conv.avatar or ""):
+            conv.avatar = box["avatar"]
+            changed = True
+            #Событие БЕЗ самой картинки: тело системного сообщения хранится строкой и
+            #уезжает в предпросмотр списка чатов — data:URL на сотню килобайт там не
+            #место. Клиент возьмёт свежую картинку из карточки беседы.
+            events.append(("avatar_changed", "1" if conv.avatar else ""))
+
+    if changed:
         db.commit()
-        _system(db, conv_id, "title_changed", title)   #§D6
+        for event, arg in events:
+            _system(db, conv_id, event, arg)   #§D6
         _broadcast(db, conv_id)
-    return {"ok": True, "title": conv.title, "about": conv.about}
+    return {"ok": True, "title": conv.title, "about": conv.about, "avatar": conv.avatar or ""}

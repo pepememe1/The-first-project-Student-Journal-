@@ -844,6 +844,23 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch { return false }
   }
 
+  /**
+   * Аватарка активной группы/канала (02.09.2026, просьба Влада).
+   *
+   * ⚠️ Перечитываем И карточку беседы, И список чатов: картинка видна в обоих местах, и
+   * обновив одно, мы получили бы старую аватарку в списке рядом с новой в карточке —
+   * человек решил бы, что смена не сохранилась, и нажал ещё раз.
+   */
+  async function setActiveAvatar(dataUrl) {
+    if (!activeId.value) return false
+    try {
+      await messengerApi.setChatAvatar(activeId.value, dataUrl || '')
+      await loadConvInfo()
+      await loadChats()
+      return true
+    } catch { return false }
+  }
+
   // §ролей: выгнать/выдать роль/игнор — действуют на АКТИВНУЮ беседу, перегружают
   // activeInfo (там же лежат my_permissions/participants[].custom_role_id).
   /**
@@ -1144,6 +1161,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     toggleReaction, messageHistory,
     enterSelection, toggleSelect, clearSelection,
     createGroup, createChannel, loadChannels, joinChannel, leaveActive, renameActive,
+    setActiveAvatar,
     sendFile, addMembers, kickMember, setMemberRole, toggleIgnore,
     openAnnouncementsChannel, openPracticeChannel, ensureReportsChannel, createReport,
     myStatus, loadMyStatus, setMyStatus, startIdleWatch, stopIdleWatch,

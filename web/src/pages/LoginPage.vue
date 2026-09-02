@@ -383,7 +383,7 @@ const showRecover = ref(false)
              ⚠️ Роутером, а не обычной ссылкой: страница — часть SPA, и переход по href
              перезагрузил бы всё приложение ради одного экрана. -->
         <p class="mt-5 text-center">
-          <RouterLink to="/public/schedule"
+          <RouterLink to="/schedule"
                       class="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow">
             <CalendarDays class="size-4" />
             {{ loc.t('login.publicSchedule', 'Расписание без входа') }}

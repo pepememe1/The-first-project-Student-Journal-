@@ -44,7 +44,6 @@ const MessengerPage = () => import('@/pages/MessengerPage.vue')
 const SchedulePage = () => import('@/pages/SchedulePage.vue')
 const CoursesPage = () => import('@/pages/CoursesPage.vue')
 const CourseDetailPage = () => import('@/pages/CourseDetailPage.vue')
-const Profile = () => import('@/pages/Profile.vue')
 const Settings = () => import('@/pages/Settings.vue')
 const StudentDashboard = () => import('@/pages/student/StudentDashboard.vue')
 const StudentJournal = () => import('@/pages/student/StudentJournal.vue')
@@ -101,6 +100,21 @@ const page = (path, component, title, i18nTitle) =>
 const noted = (route, note, i18nNote) =>
   ({ ...route, meta: { ...route.meta, note, i18nNote } })
 
+// 🔥 «ПРОФИЛЬ» — ЭТО НЕ СТРАНИЦА, А ВКЛАДКА НАСТРОЕК (02.09.2026, баг Влада: «открываем
+// профиль через меню в левом нижнем углу — открывается как страница, а не как вкладка в
+// оверлее настроек»). Профиль переехал внутрь настроек ещё 31.08, но МАРШРУТ остался
+// рабочим и продолжал рисовать ту же страницу отдельно — то есть у одного содержимого
+// стало два разных вида, и какой человек увидит, зависело от того, откуда он нажал.
+// Маршрут не удаляем: на него ведут старые закладки и ссылки из чужих карточек, и 404
+// там сломал бы работающее. Теперь он ПЕРЕАДРЕСУЕТ в настройки, где профиль открыт
+// первым — то есть старая ссылка приводит ровно туда же, куда новая кнопка.
+// ⚠️ Переадресация функцией, а не строкой: у каждой роли свой префикс (`/student`,
+// `/teacher`, `/admin`, `/parent`), и строковый путь пришлось бы писать четыре раза.
+const profileToSettings = {
+  path: 'profile',
+  redirect: (to) => to.path.replace(/\/profile\/?$/, '/settings'),
+}
+
 //Экспортируем таблицу: по ней `utils/routePrefetch.js` находит ленивые загрузчики
 //страниц роли, а тест проверяет, что нарезка вообще состоялась.
 export const routes = [
@@ -110,7 +124,16 @@ export const routes = [
   //человек терял и расписание — хотя оно общедоступно и лежит на портале ВСГУТУ открыто.
   //Ленивый импорт: страницу открывают редко, а её вес иначе поехал бы в первый кадр
   //всем, включая тех, кто просто входит.
-  { path: '/public/schedule', component: () => import('@/pages/PublicSchedule.vue'),
+  //🔥 АДРЕС «/schedule», А НЕ «/public/schedule» (02.09.2026). Заведённая накануне
+  //страница жила по адресу, который на сервере уже занят JSON-ручкой виджета
+  //(`routers/publicschedule.py`). Роутер Vue об этом не знает: переход ПО ССЫЛКЕ внутри
+  //сайта работал, а прямой заход, обновление страницы и пересланная ссылка отдавали
+  //голый JSON — то есть страница была недостижима ровно тогда, когда нужна (человека
+  //выбросило из аккаунта, он открывает адрес заново). Освободить занят адрес нельзя:
+  //по нему ходит виджет из УЖЕ ОПУБЛИКОВАННОГО в RuStore APK, и сменить его там нечем.
+  //Правило: страница и ручка API не делят один URL — у них разные ответы на один
+  //запрос, и кто выиграет, решает порядок подключения, а не замысел.
+  { path: '/schedule', component: () => import('@/pages/PublicSchedule.vue'),
     meta: { public: true } },
   // Публичная намеренно: человек приходит сюда именно потому, что войти не может.
   { path: '/reset-password', component: ResetPassword, meta: { public: true } },
@@ -141,7 +164,7 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
-      page('profile', Profile, 'Профиль', 'nav.profile'),
+      profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },
@@ -162,7 +185,7 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
-      page('profile', Profile, 'Профиль', 'nav.profile'),
+      profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },
@@ -199,7 +222,7 @@ export const routes = [
       // Раньше отсутствовал: SidebarUserOverlay/HeaderBar ссылаются на `/${role}/profile`
       // безусловно для ВСЕХ ролей — у админа маршрута не было, и переход падал в
       // catch-all редирект на "/". Найдено при разведке под Discord-style профиль (3.6).
-      page('profile', Profile, 'Профиль', 'nav.profile'),
+      profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
       { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', i18nTitle: 'nav.monitor', } },
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
@@ -221,7 +244,7 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
-      page('profile', Profile, 'Профиль', 'nav.profile'),
+      profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
   },

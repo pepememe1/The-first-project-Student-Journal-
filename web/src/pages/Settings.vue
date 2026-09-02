@@ -21,7 +21,7 @@ import ToggleRow from '@/components/ui/ToggleRow.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import { useLocaleStore } from '@/stores/locale'
-import { catsForRole } from '@/config/settingsSections'
+import { catsForRole, RAILLESS_VIEWS } from '@/config/settingsSections'
 import haptics from '@/utils/haptics'
 // Профиль переехал ВНУТРЬ настроек отдельной категорией (просьба Влада): страницы
 // `/…/profile` больше нет в меню, редактор открывается отсюда и из карточки себя.
@@ -363,16 +363,26 @@ onMounted(() => easter.roll('gman_observer'))
 // рельс категорий на ПК, двухуровневый список на телефоне и выпадающие подкатегории.
 // Держать его здесь означало бы три копии, обязанные разойтись.
 const cats = computed(() => catsForRole(auth.role))
+// Профиль открыт первым: на него ведут карточка себя сверху, кнопка в шапке и
+// переадресация со старого `/…/profile`. Пунктом рельса он больше не значится
+// (просьба Влада, 02.09.2026 — см. пояснение в `settingsSections.js`).
 const cat = ref('profile')
 // Телефон: сперва список категорий (как в Discord), потом содержимое с кнопкой «назад».
 // На ПК не используется вовсе — там рельс и содержимое видны одновременно.
 const showList = ref(true)
 // Какая категория раскрыта в рельсе (выпадающий список подкатегорий).
-const openSub = ref('profile')
+// ⚠️ Пусто на старте: раскрывать нечего — профиль из рельса убран, а раскрытый список
+// чужой категории обещал бы, что открыта именно она.
+const openSub = ref('')
 
 // ⚠️ Выбранная категория может пропасть у роли: тогда правая часть оказалась бы пустой
 // без объяснения. Возвращаемся к первой доступной.
-watch(cats, (list) => { if (!list.some((c) => c.id === cat.value)) cat.value = list[0]?.id || 'profile' })
+// ⚠️ Разделы БЕЗ пункта в рельсе (профиль) под это правило не попадают: их в списке нет
+// по замыслу, и сброс выбрасывал бы человека из профиля при каждом пересчёте ролей.
+watch(cats, (list) => {
+  if (RAILLESS_VIEWS.includes(cat.value)) return
+  if (!list.some((c) => c.id === cat.value)) cat.value = list[0]?.id || 'appearance'
+})
 
 /**
  * Классы секции: показываем только выбранную категорию.
@@ -381,6 +391,15 @@ watch(cats, (list) => { if (!list.some((c) => c.id === cat.value)) cat.value = l
  * подряд под заголовком одного — то есть заголовок врал бы о содержимом.
  */
 function sec(id) { return cat.value === id ? '' : 'hidden' }
+
+// Заголовок правой части. ⚠️ У профиля пункта в рельсе нет, поэтому `cats.find` его не
+// найдёт — без этой ветки открытый профиль был бы подписан словом «Настройки», то есть
+// заголовок врал бы о содержимом (ровно то, из-за чего `sec()` вообще завели).
+const headTitle = computed(() => {
+  if (cat.value === 'profile') return loc.t('nav.profile', 'Профиль')
+  const c = cats.value.find((x) => x.id === cat.value)
+  return loc.t(c?.i18n || 'nav.settings', c?.label || 'Настройки')
+})
 
 // Профиль монтируем при первом открытии его категории и больше не снимаем — см.
 // пояснение у <ProfilePage> в разметке (пасхалки бросаются в onMounted).
@@ -441,11 +460,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
                     lg:border-r lg:border-border lg:bg-bg2 lg:p-3"
              :class="showList ? 'flex' : 'hidden lg:flex'">
 
-        <!-- Шапка с профилем. Нажатие открывает редактор профиля — он же категория
-             «Профиль», переехавшая сюда из отдельной вкладки меню. -->
+        <!-- Шапка с профилем — ЕДИНСТВЕННЫЙ вход в редактор профиля (02.09.2026).
+             Пункт «Профиль» из списка ниже убран: он вёл ровно сюда же, а два пункта в
+             одно место читаются как два разных раздела. Подсветка обязательна — без неё
+             открытый профиль выглядит как «ни одна категория не выбрана». -->
         <button type="button" @click="pickCat('profile')"
-                class="mb-2 flex items-center gap-2.5 rounded-lg border border-border2 bg-card px-2.5 py-2
+                class="mb-2 flex items-center gap-2.5 rounded-lg border bg-card px-2.5 py-2
                        text-left transition-colors hover:border-accent lg:bg-card"
+                :class="cat === 'profile' ? 'border-accent' : 'border-border2'"
                 :aria-label="loc.t('profile.openEditor', 'Открыть редактор профиля')">
           <Avatar :src="profileStore.avatar" :name="auth.user?.name || ''" :role="auth.role"
                   :color="profilePlate(profileStore.color)" :size="36" />
@@ -503,8 +525,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             <ChevronLeft class="size-5" />
           </button>
           <h2 class="min-w-0 flex-1 truncate font-title text-xl font-extrabold text-text">
-            {{ loc.t(cats.find((c) => c.id === cat)?.i18n || 'nav.settings',
-                     cats.find((c) => c.id === cat)?.label || 'Настройки') }}
+            {{ headTitle }}
           </h2>
           <button type="button" @click="closeSettings()"
                   :aria-label="loc.t('common.close', 'Закрыть')"

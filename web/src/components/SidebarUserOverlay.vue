@@ -80,7 +80,7 @@ async function saveStatusText() {
 
     <div class="px-3 pb-3">
       <!-- Аватар заходит на полосу, как в Discord. Карандаш по наведению — в «Профиль». -->
-      <RouterLink :to="`/${auth.role}/profile`" @click="emit('close')"
+      <RouterLink :to="`/${auth.role}/settings`" @click="emit('close')"
                   class="group relative -mt-8 block w-fit rounded-full ring-4 ring-card"
                   :title="locale.t('userOverlay.editProfile', 'Редактировать профиль')">
         <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="plate" :size="64" />
@@ -133,7 +133,7 @@ async function saveStatusText() {
         </div>
       </div>
 
-      <RouterLink :to="`/${auth.role}/profile`" @click="emit('close')"
+      <RouterLink :to="`/${auth.role}/settings`" @click="emit('close')"
                   class="mt-2 flex items-center gap-2 rounded-md border border-border2 px-2.5 py-1.5 text-sm text-text2 transition-colors hover:border-accent hover:text-accent">
         <Pencil class="size-3.5 shrink-0" />
         {{ locale.t('userOverlay.editProfile', 'Редактировать профиль') }}

@@ -33,8 +33,10 @@ import time
 from collections import deque
 from datetime import date
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from .. import schedule_web, throttle
@@ -42,6 +44,33 @@ from ..db import get_db
 from ..models import Group
 
 router = APIRouter(prefix="/public", tags=["public"])
+
+#Адрес СТРАНИЦЫ расписания без входа. Держим строкой рядом с ручкой: разъедется —
+#человек снова получит JSON вместо страницы, а заметить это можно только глазами.
+PAGE_URL = "/schedule"
+
+
+def _browser_navigation(request: Request) -> bool:
+    """Человек ОТКРЫЛ адрес в браузере, а не программа сходила за данными.
+
+    🔥 Зачем это вообще нужно (02.09.2026). Страница расписания без входа сутки жила по
+    адресу `/public/schedule`, который на сервере уже занят этой ручкой. Внутри сайта
+    переход работал (роутинг клиентский), а прямой заход, F5 и пересланная ссылка
+    отдавали голый JSON. Освободить адрес нельзя — по нему ходит виджет из
+    опубликованного APK. Значит развести надо не адреса, а НАМЕРЕНИЯ.
+
+    ⚠️ Смотрим `Sec-Fetch-Mode: navigate`, а НЕ `Accept`. Заголовок `Accept` у
+    Java-клиента (`HttpURLConnection`, наш виджет) по умолчанию начинается с
+    `text/html` — по нему виджет неотличим от браузера, и «умная» проверка увела бы
+    его на страницу, то есть сломала бы то, что работает. `Sec-Fetch-Mode` браузер
+    ставит САМ и только при настоящем переходе: у fetch/XHR там `cors`/`same-origin`,
+    у программы заголовка нет вовсе.
+    ⚠️ Направление отказа безопасное: заголовка нет → считаем программой → JSON. Старый
+    браузер без `Sec-Fetch-*` получит JSON, как и раньше; ссылка на странице входа ведёт
+    прямо на `/schedule`, поэтому этот путь — только спасение старых и набранных руками
+    адресов, а не основной вход.
+    """
+    return request.headers.get("sec-fetch-mode", "").lower() == "navigate"
 
 #Мягкий предел частоты. Эндпоинт открытый, и без него один скрипт гоняет парсер
 #портала в цикле. Числа щедрые: виджет обновляется раз в несколько часов, человек с
@@ -98,9 +127,16 @@ def public_schedule(request: Request, group: str = Query(""), category: str = Qu
     Категорию, как и в кабинете, берём из базы, если клиент её не передал: у групп
     вне колледжа пустая категория резолвилась бы в колледж и не находила группу.
     """
+    g = (group or "").strip()
+    #Человек в браузере — уводим на страницу, а не показываем ему JSON. Стоит ДО предела
+    #частоты намеренно: переадресация не трогает ни базу, ни парсер портала, и сжигать
+    #на ней бюджет запросов не за что. Группу переносим в адрес — иначе присланная
+    #ссылка «вот расписание К74/1» открывала бы страницу с чужой группой из памяти.
+    if _browser_navigation(request):
+        return RedirectResponse(url=(PAGE_URL + "?group=" + quote(g)) if g else PAGE_URL,
+                                status_code=302)
     if _too_many(request):
         return _limited()
-    g = (group or "").strip()
     if not g:
         return {"group": "", "category": schedule_web.default_category(),
                 "week": schedule_web.current_week_parity(), "schedule": None,

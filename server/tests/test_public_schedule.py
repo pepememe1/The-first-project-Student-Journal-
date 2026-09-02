@@ -113,3 +113,86 @@ def test_rate_limit_answers_429_not_403(client, monkeypatch):
     monkeypatch.setattr(publicschedule, "_too_many", lambda request: True)
     r = client.get("/public/schedule", params={"group": "К74/1"})
     assert r.status_code == 429
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Страница и ручка по одному адресу (02.09.2026)
+#
+# 🔥 Дефект: страница «расписание без входа» была заведена на `/public/schedule` —
+# адресе, который на сервере уже занят ЭТОЙ ручкой. Переход по ссылке внутри сайта
+# работал (роутинг клиентский, до сервера не идёт), а прямой заход, F5 и присланная
+# ссылка отдавали голый JSON. То есть страница была недостижима ровно в том случае,
+# ради которого её и завели: человека выбросило из аккаунта, он открывает адрес.
+# Освободить адрес нельзя — по нему ходит виджет из ОПУБЛИКОВАННОГО APK.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NAV = {"Sec-Fetch-Mode": "navigate"}
+
+
+def test_person_opening_the_address_in_a_browser_gets_the_page_not_json(client):
+    """Главное свойство задачи: человек, открывший адрес, попадает на страницу."""
+    r = client.get("/public/schedule", headers=_NAV, follow_redirects=False)
+    assert r.status_code == 302, r.text
+    assert r.headers["location"] == "/schedule"
+
+
+def test_a_shared_link_keeps_the_group_it_was_shared_with(client):
+    """Ссылку присылают со СВОЕЙ группой («вот расписание К74/1»). Потеряв её при
+    переадресации, страница показала бы группу из памяти открывшего — то есть уверенно
+    ответила бы не на тот вопрос."""
+    r = client.get("/public/schedule", params={"group": "К74/1"},
+                   headers=_NAV, follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/schedule?group=%D0%9A74/1"
+
+
+def test_the_android_widget_still_gets_json(client, monkeypatch):
+    """ОБРАТНЫЙ ХОД, и он здесь важнее прямого: виджет живёт в уже опубликованном APK,
+    и увести его на страницу значит сломать то, что работает, без возможности починить
+    иначе как перезаливом в RuStore.
+
+    ⚠️ Заголовки взяты НАСТОЯЩИЕ, как их шлёт `ScheduleWidgetRefresh.java`, вместе с
+    дефолтным `Accept` Java-клиента — он начинается с `text/html`, и проверка «по
+    Accept» приняла бы виджет за браузер. Ровно поэтому смотрим `Sec-Fetch-Mode`.
+    """
+    monkeypatch.setattr(schedule_web, "get_group", lambda g, c="": _SNAP)
+    r = client.get("/public/schedule", params={"group": "К74/1"}, headers={
+        "Accept": "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2",
+        "X-Client": "android-widget",
+    }, follow_redirects=False)
+    assert r.status_code == 200, r.text
+    assert r.json()["available"] is True
+
+
+def test_the_spa_fetching_data_is_not_redirected(client, monkeypatch):
+    """У fetch/XHR из самой страницы `Sec-Fetch-Mode` равен `cors`/`same-origin`.
+    Переадресуй мы и его — страница получила бы HTML вместо данных и показала бы
+    «не удалось получить расписание» на исправном сервере."""
+    monkeypatch.setattr(schedule_web, "get_group", lambda g, c="": _SNAP)
+    for mode in ("cors", "same-origin", "no-cors"):
+        r = client.get("/public/schedule", params={"group": "К74/1"},
+                       headers={"Sec-Fetch-Mode": mode}, follow_redirects=False)
+        assert r.status_code == 200, mode
+        assert r.json()["available"] is True, mode
+
+
+def test_an_unknown_public_address_is_an_honest_404_not_a_page(client):
+    """Пока «public» не стоял в списке API-префиксов, ЛЮБОЙ неизвестный `/public/*`
+    отвечал страницей с кодом 200. Цена такой дыры не в вежливости ответа: тест,
+    стучащийся в опечатанный адрес, зеленеет НЕ ДОЙДЯ до кода — этим уже дважды
+    ловились проверки второго фактора (см. CLAUDE.md, 29.08.2026)."""
+    r = client.get("/public/net-takogo-adresa")
+    assert r.status_code == 404, r.text
+    assert "text/html" not in r.headers.get("content-type", "")
+
+
+def test_the_page_address_is_not_taken_by_any_api_route():
+    """Страница и ручка не имеют права делить URL — кто выиграет, решает порядок
+    подключения роутеров, а не замысел. Сторож смотрит на ПРОДУКТ: если однажды
+    заведут `GET /schedule` на сервере, страница расписания молча исчезнет снова."""
+    from app.main import app as real_app
+    from app.routers.publicschedule import PAGE_URL
+
+    from test_spa_fallback import _all_paths
+
+    assert PAGE_URL not in set(_all_paths(real_app))

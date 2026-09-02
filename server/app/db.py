@@ -190,7 +190,31 @@ def init_db():
     _ensure_quiz_time_limit_column()
     _ensure_quiz_kind_column()
     _ensure_audit_chain_columns()
+    _ensure_conversation_avatar_column()
     _migrate_slash_in_ids()
+
+
+def _ensure_conversation_avatar_column():
+    """Идемпотентная мини-миграция: conversations.avatar (аватарка группы/канала).
+
+    Таблица `conversations` на бою существует с самого мессенджера и полна бесед, а
+    `create_all` новые СТОЛБЦЫ в существующую таблицу не добавляет никогда. В свежей
+    тестовой базе ветка «колонки не было» не срабатывает вовсе — то есть зелёные тесты
+    сами по себе здесь ничего не значат; регрессия живёт в `test_db_migrations.py`.
+
+    ⚠️ Существующие беседы получают пустую строку, и это правильный исход: пустая
+    аватарка означает «рисуй как раньше» (буква названия на цветной плашке), а не
+    битую картинку."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("conversations")}
+    except Exception:
+        return
+    if "avatar" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE conversations ADD COLUMN avatar VARCHAR DEFAULT ''"))
 
 
 def _ensure_audit_chain_columns():

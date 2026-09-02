@@ -55,7 +55,7 @@ const fullName = computed(() => (auth.user?.name || '').trim())
     <!-- Версия для слабовидящих — на телефоне полоса всегда видна, здесь ей и место. -->
     <AccessibilityMenu placement="down" class="shrink-0" />
 
-    <RouterLink :to="`/${auth.role}/profile`" class="shrink-0"
+    <RouterLink :to="`/${auth.role}/settings`" class="shrink-0"
                 :aria-label="locale.t('nav.profile', 'Профиль')">
       <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="30" />
     </RouterLink>

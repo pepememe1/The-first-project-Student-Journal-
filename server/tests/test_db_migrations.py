@@ -16,7 +16,8 @@ from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
                     _ensure_notify_event_columns, _ensure_group_category_column,
                     _ensure_user_password_set_at_column, _ensure_user_birthday_column,
-                    _ensure_message_report_target_column, _ensure_audit_chain_columns)
+                    _ensure_message_report_target_column, _ensure_audit_chain_columns,
+                    _ensure_conversation_avatar_column)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -310,3 +311,37 @@ def test_audit_writes_into_a_migrated_old_table(client):
         assert report["legacy"] == 1 and report["checked"] == 1
     finally:
         db.close()
+
+
+def test_ensure_conversation_avatar_column_adds_to_old_schema(client):
+    """Беседы БЕЗ колонки `avatar` (схема ДО аватарок групп, 02.09.2026).
+
+    На бою `conversations` существует с самого мессенджера и полна бесед — то есть это
+    ровно та ситуация, в которой `create_all` не делает НИЧЕГО. Без колонки список чатов
+    падал бы на первом же запросе: `list_chats` читает `conv.avatar` у каждой строки.
+
+    ⚠️ В свежей тестовой базе ветка «колонки не было» не срабатывает вовсе, поэтому
+    зелёные тесты мессенджера сами по себе здесь не значат ничего.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE conversations"))
+        conn.execute(text("""CREATE TABLE conversations (
+            id VARCHAR PRIMARY KEY, kind VARCHAR DEFAULT 'direct', title VARCHAR DEFAULT '',
+            about VARCHAR DEFAULT '', owner_id VARCHAR DEFAULT '',
+            is_public BOOLEAN DEFAULT 0, created_at VARCHAR DEFAULT '',
+            is_system BOOLEAN DEFAULT 0, system_kind VARCHAR DEFAULT ''
+        )"""))
+        #Живая беседа «из прошлого»: она обязана уцелеть и получить ПУСТУЮ аватарку.
+        #Пусто значит «рисуй как раньше» (буква названия на плашке), а не битая картинка.
+        conn.execute(text("INSERT INTO conversations (id, kind, title) "
+                          "VALUES ('conv:old', 'group', 'Старая группа')"))
+    engine.dispose()
+    _ensure_conversation_avatar_column()
+    cols = {c["name"] for c in inspect(engine).get_columns("conversations")}
+    assert "avatar" in cols
+    _ensure_conversation_avatar_column()   # идемпотентность — второй вызов не падает
+
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT title, avatar FROM conversations")).fetchone()
+    assert row[0] == "Старая группа"
+    assert not (row[1] or ""), "старой беседе подставили какую-то картинку"

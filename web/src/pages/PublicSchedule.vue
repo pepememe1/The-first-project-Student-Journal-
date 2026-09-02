@@ -20,7 +20,7 @@
  * она нужна быстро.
  */
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { publicScheduleApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import HexBackground from '@/components/HexBackground.vue'
@@ -28,6 +28,7 @@ import { ArrowLeft, CalendarDays, Search } from '@lucide/vue'
 
 const locale = useLocaleStore()
 const router = useRouter()
+const route = useRoute()
 
 const LS_GROUP = 'gb.public.group'
 
@@ -38,10 +39,14 @@ const week = ref(null)
 const loading = ref(false)
 const error = ref('')
 
+//Группа из АДРЕСА важнее запомненной: по такой ссылке приходят, когда её прислали
+//(«вот расписание К74/1»), и показать вместо неё свою из памяти значит ответить не на
+//тот вопрос. Сюда же приземляется переадресация со старого `/public/schedule?group=…`.
 try {
-  group.value = localStorage.getItem(LS_GROUP) || ''
+  group.value = String(route.query.group || '').trim() || localStorage.getItem(LS_GROUP) || ''
 } catch {
   //Приватный режим — просто попросим ввести группу.
+  group.value = String(route.query.group || '').trim()
 }
 
 const days = computed(() => {

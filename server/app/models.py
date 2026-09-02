@@ -719,6 +719,13 @@ class Conversation(Base):
     kind = Column(String, default="direct")            #direct | group | channel | moderation
     title = Column(String, default="")                 #для групп/каналов (у direct имя = собеседник)
     about = Column(String, default="")
+    #Аватарка группы/канала (02.09.2026, просьба Влада «в группах всё ещё нельзя ставить
+    #аватарки»). У direct её нет и быть не может: там лицо беседы — сам собеседник, и своя
+    #картинка поверх его аватарки означала бы, что человек выглядит по-разному у разных
+    #собеседников. Хранится ТЕМ ЖЕ форматом, что аватарка профиля (`data:image/…` либо
+    #ссылка на CDN Klipy), и проверяется ТОЙ ЖЕ функцией — второй копии правила нет.
+    #⚠️ Колонка НОВАЯ в СУЩЕСТВУЮЩЕЙ таблице → идемпотентный ALTER в db.py.
+    avatar = Column(String, default="")
     owner_id = Column(String, index=True, default="")  #создатель (у direct/moderation пусто)
     is_public = Column(Boolean, default=False)         #канал виден в каталоге и свободно вступаем
     created_at = Column(String, default="", index=True)

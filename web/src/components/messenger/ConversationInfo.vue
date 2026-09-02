@@ -6,8 +6,9 @@
 // Здесь же — выход из группы/канала и удаление переписки у себя.
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, Radio, ShieldCheck, Pencil, Check, MoreVertical,
-         UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText } from '@lucide/vue'
+import { X, Crown, Trash2, LogOut, Users, ShieldCheck, Pencil, Check, MoreVertical,
+         UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText, Camera } from '@lucide/vue'
+import AvatarCropper from '@/components/AvatarCropper.vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -224,6 +225,19 @@ async function saveEdit() {
   if (await m.renameActive(t, aboutDraft.value.trim())) editing.value = false
 }
 
+// ── Аватарка группы/канала (02.09.2026, просьба Влада) ─────────────────────────────
+// Право то же, что у переименования: и то и другое меняет ЛИЦО беседы для всех
+// участников. Заводить для картинки отдельное право значило бы объяснять человеку
+// разницу, которой нет.
+// ⚠️ Редактор — ТОТ ЖЕ `AvatarCropper`, что у профиля: он уже умеет обрезку, сжатие в
+// data:URL и удаление (пустая строка). Своя копия здесь означала бы второй формат
+// картинки, а проверку на сервере проходит ровно один.
+const avatarEditor = ref(false)
+async function saveAvatar(dataUrl) {
+  await m.setActiveAvatar(dataUrl)
+  avatarEditor.value = false
+}
+
 async function leave() {
   const what = kind.value === 'channel' ? locale.t('messenger.channelWord', 'канала').toLowerCase() : locale.t('messenger.groupLabel', 'группы').toLowerCase()
   if (!window.confirm(locale.t('conversationInfo.confirmLeave', { what }))) return
@@ -254,7 +268,22 @@ async function clearHistory() {
          :class="wide ? 'max-w-3xl' : 'max-w-md'">
       <!-- Шапка -->
       <div class="flex items-center gap-2 border-b border-border p-4">
-        <component :is="kind === 'channel' ? Radio : (isModeration ? ShieldCheck : Users)"
+        <!-- Лицо беседы. У группы/канала это АВАТАРКА (её ставит owner/admin), у личного
+             чата и модерации — значок типа: там лицо задаёт собеседник, и своя картинка
+             поверх означала бы, что человек выглядит по-разному у разных собеседников. -->
+        <button v-if="isGroupOrChannel" type="button" :disabled="!canRename"
+                @click="avatarEditor = true"
+                class="group relative grid size-10 shrink-0 place-items-center rounded-full"
+                :class="canRename ? 'cursor-pointer' : 'cursor-default'"
+                :title="canRename ? locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы') : ''"
+                :aria-label="locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы')">
+          <Avatar :src="activeInfo?.avatar || ''" :name="title" :size="40" />
+          <span v-if="canRename"
+                class="absolute inset-0 grid place-items-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+            <Camera class="size-4 text-white" />
+          </span>
+        </button>
+        <component v-else :is="isModeration ? ShieldCheck : Users"
                    class="size-5 shrink-0 text-accent" />
         <div class="min-w-0 flex-1">
           <h3 class="truncate font-title text-base font-bold text-text">{{ title }}</h3>
@@ -564,6 +593,12 @@ async function clearHistory() {
           <Trash2 class="size-4" />{{ locale.t('conversationInfo.deleteConversation', 'Удалить переписку') }}
         </button>
       </div>
+
+      <!-- Редактор аватарки беседы. ТОТ ЖЕ компонент, что у профиля: обрезка, сжатие в
+           data:URL и удаление (пустая строка) уже реализованы там, а второй формат
+           картинки не прошёл бы проверку на сервере — она одна на обе стороны. -->
+      <AvatarCropper v-if="avatarEditor" :current="activeInfo?.avatar || ''"
+                     @save="saveAvatar" @close="avatarEditor = false" />
     </div>
   </div>
 </template>

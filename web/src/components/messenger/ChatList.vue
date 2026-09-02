@@ -312,6 +312,13 @@ onMounted(() => { m.loadChats() })
             <img v-else-if="c.kind === 'saved' || c.is_system" src="/mascot/vector-avatar.webp"
                  alt="" width="40" height="40" loading="lazy" decoding="async"
                  class="size-10 shrink-0 rounded-full bg-bg2 object-cover" />
+            <!-- Группа/канал: своя аватарка, если её поставили (02.09.2026, просьба
+                 Влада). Не поставили — прежний цветной кружок с инициалами.
+                 ⚠️ Порядок именно такой: системные каналы выше по списку ветвлений, и их
+                 лицо задаём МЫ (Вектор) — своя картинка там не предусмотрена вовсе. -->
+            <img v-else-if="c.avatar" :src="c.avatar" alt="" width="40" height="40"
+                 loading="lazy" decoding="async"
+                 class="size-10 shrink-0 rounded-full bg-bg2 object-cover" />
             <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
                  :class="c.kind === 'channel' ? 'bg-accent2' : 'bg-blue'">
               {{ initials(c.title) }}

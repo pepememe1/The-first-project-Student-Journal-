@@ -99,7 +99,12 @@ def test_no_api_route_lives_outside_the_prefix_list():
         p = path.lstrip("/")
         if not p or p.startswith("{") or p.startswith("assets") or p.startswith("downloads"):
             continue          # катч-олл, статика и раздача файлов — не API
-        if p.startswith("desktop-info") or p.startswith("public/") or p.startswith("favicon"):
+        #⚠️ «public/» ЗДЕСЬ БОЛЬШЕ НЕ ИСКЛЮЧЕНИЕ (02.09.2026). Он стоял без объяснения
+        #причины, и ровно поэтому дыра прожила незамеченной: неизвестный `/public/*`
+        #отвечал СТРАНИЦЕЙ с кодом 200. Исключение снято, префикс добавлен в продукт.
+        #Правило общее: исключение без записанной причины — это не исключение, а забытый
+        #случай, и снимать его надо при первом же прочтении.
+        if p.startswith("desktop-info") or p.startswith("favicon"):
             continue
         if not _is_api_path(p):
             skipped.append(path)
