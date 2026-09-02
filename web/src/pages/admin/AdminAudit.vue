@@ -13,7 +13,7 @@
 // ⚠️ ТОЛЬКО ЧТЕНИЕ. Записи неизменяемы по смыслу: журнал, который можно поправить,
 // не журнал. Кнопок удаления и правки здесь нет и быть не должно.
 import { ref, computed, onMounted } from 'vue'
-import { RefreshCw, Search, ShieldAlert } from '@lucide/vue'
+import { RefreshCw, Search, ShieldAlert, ShieldCheck } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import Card from '@/components/ui/Card.vue'
@@ -59,6 +59,33 @@ function when(ts) {
 }
 
 const empty = computed(() => !loading.value && !error.value && !rows.value.length)
+
+// ── Целостность журнала ────────────────────────────────────────────────────────────
+//
+// Каждая запись несёт хеш предыдущей, поэтому правка, удаление из середины, вставка и
+// перестановка перестают сходиться при пересчёте. Кнопка здесь заведена не для полноты:
+// проверка, которую невозможно запустить из интерфейса, живёт только в голове того, кто
+// её писал, — а это и есть наш класс «обещание без вызывающего».
+//
+// ⚠️ НЕ на onMounted. Пересчёт — работа, а список журнала открывают часто; на
+// одноядерном бою автоматическая проверка при каждом заходе стоила бы дороже, чем
+// приносит. Жмут её редко и осознанно.
+const integrity = ref(null)
+const checking = ref(false)
+const integrityError = ref('')
+
+async function checkIntegrity() {
+  checking.value = true
+  integrityError.value = ''
+  integrity.value = null
+  try {
+    const { data } = await adminApi.auditIntegrity({ limit: 2000 })
+    integrity.value = data
+  } catch (e) {
+    integrityError.value = e?.response?.data?.detail
+      || locale.t('audit.integrityFailed', 'Не удалось проверить целостность журнала')
+  } finally { checking.value = false }
+}
 </script>
 
 <template>
@@ -91,6 +118,55 @@ const empty = computed(() => !loading.value && !error.value && !rows.value.lengt
           <RefreshCw :size="14" :class="loading ? 'animate-spin' : ''" />
           {{ locale.t('common.refresh', 'Обновить') }}
         </button>
+        <button type="button" @click="checkIntegrity" :disabled="checking"
+                class="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-50">
+          <ShieldCheck :size="14" :class="checking ? 'animate-pulse' : ''" />
+          {{ locale.t('audit.checkIntegrity', 'Проверить целостность') }}
+        </button>
+      </div>
+
+      <!-- ⚠️ Результат проверки показываем ТРЕМЯ разными состояниями, а не «ок/не ок».
+           «Унаследованные» записи (сделанные до появления цепочки) — это отсутствие
+           гарантии, а не подделка; покрасить их красным значило бы выдать постоянную
+           ложную тревогу, а сигнал, который всегда красный, перестают читать. -->
+      <div v-if="integrityError"
+           class="mb-3 flex items-center gap-2 rounded-lg border border-red/40 px-3 py-2 text-sm text-red">
+        <ShieldAlert :size="15" />{{ integrityError }}
+      </div>
+      <div v-else-if="integrity" class="mb-3 rounded-lg border px-3 py-2 text-sm"
+           :class="integrity.status === 'broken' ? 'border-red/50 text-red' : 'border-border text-text2'">
+        <p class="flex items-center gap-2 font-semibold">
+          <ShieldAlert v-if="integrity.status === 'broken'" :size="15" />
+          <ShieldCheck v-else :size="15" />
+          <span v-if="integrity.status === 'broken'">
+            {{ locale.t('audit.broken', 'Цепочка не сходится — журнал правили') }}
+            ({{ integrity.problem_count }})
+          </span>
+          <span v-else>{{ locale.t('audit.intact', 'Цепочка сходится') }}</span>
+        </p>
+        <p class="mt-1 text-xs text-text3">
+          {{ locale.t('audit.checkedScope', 'Проверено') }}: {{ integrity.checked }}
+          <span v-if="integrity.scope">({{ integrity.scope }})</span>
+          <span v-if="integrity.legacy">
+            · {{ locale.t('audit.legacyRows', 'без подписи (сделаны до включения цепочки)') }}:
+            {{ integrity.legacy }}
+          </span>
+        </p>
+        <!-- Контрольная точка — короткая строка, которую переписывают рукой и хранят ВНЕ
+             сервера. Без неё сходящаяся цепочка не отличается от заново пересчитанной
+             после компрометации, и об этом сказано прямо, а не мелким шрифтом. -->
+        <p v-if="integrity.checkpoint" class="mt-2 break-all font-mono text-xs text-text3">
+          {{ integrity.checkpoint.short }}
+        </p>
+        <p class="mt-1 text-xs text-text3">
+          {{ locale.t('audit.anchorHint', 'Сохраните эту строку вне сервера: сходящаяся цепочка означает «журнал не правили неаккуратно», а не «журнал подлинный» — тот, кто владеет базой, мог пересчитать её целиком.') }}
+        </p>
+        <ul v-if="integrity.problems && integrity.problems.length"
+            class="mt-2 space-y-1 text-xs">
+          <li v-for="p in integrity.problems" :key="p.id">
+            #{{ p.id }} · {{ when(p.ts) }} · {{ p.actor || '—' }} · {{ p.action }} — {{ p.why }}
+          </li>
+        </ul>
       </div>
 
       <p v-if="error" class="flex items-center gap-2 rounded-lg border border-red/40 px-3 py-2 text-sm text-red">

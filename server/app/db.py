@@ -189,7 +189,38 @@ def init_db():
     _ensure_auth_session_client_column()
     _ensure_quiz_time_limit_column()
     _ensure_quiz_kind_column()
+    _ensure_audit_chain_columns()
     _migrate_slash_in_ids()
+
+
+def _ensure_audit_chain_columns():
+    """Идемпотентная мини-миграция: audit_events.prev_hash / entry_hash (цепочка целостности).
+
+    Таблица `audit_events` на бою существует давно и полна записей, а `create_all` новые
+    СТОЛБЦЫ в существующую таблицу не добавляет никогда — в свежей тестовой базе ветка
+    «колонки не было» не срабатывает вовсе, поэтому зелёные тесты сами по себе ничего
+    здесь не значат (регрессия — `server/tests/test_db_migrations.py`).
+
+    ⚠️ Существующие записи остаются БЕЗ хешей, и задним числом мы их не подписываем.
+    Это принципиально: подписать сейчас значит заверить своей же подписью данные, за
+    которые никто не может поручиться, — цепочка стала бы выглядеть целой ровно там, где
+    гарантий нет. Проверка честно называет такие записи унаследованными и начинает
+    цепочку с первой подписанной (см. `audit.verify_chain`).
+    """
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("audit_events")}
+    except Exception:
+        return
+    wanted = (("prev_hash", "VARCHAR DEFAULT ''"),
+              ("entry_hash", "VARCHAR DEFAULT ''"))
+    missing = [(n, t) for n, t in wanted if n not in columns]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for name, coltype in missing:
+            conn.execute(text(f"ALTER TABLE audit_events ADD COLUMN {name} {coltype}"))
 
 
 def _ensure_quiz_kind_column():

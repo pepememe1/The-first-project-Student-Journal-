@@ -30,9 +30,18 @@ from app import translate_service
 def fake_engine(monkeypatch):
     """Подменяем сам вызов модели: возвращает пометку и запоминает параметры.
 
-    ⚠️ `engine_available` подменяем ТОЖЕ. Без этого все случаи ниже упирались бы в
-    честный отказ «переводчик не установлен» — на машине прогона моделей Argos нет и
-    быть не должно."""
+    ⚠️ ДОСТУПНОСТЬ ПОДМЕНЯЕМ ЦЕЛИКОМ — через `status`, а не через `engine_available`.
+
+    🔥 Здесь была мина, и она сработала 02.09.2026. Фикстура патчила `engine_available`,
+    но `translate()` с того же дня спрашивает не её, а `status()` (одна точка правды на
+    текст причины — иначе подпись в диалоге и ответ на нажатие говорили бы разное). В
+    результате прогон стал ЗАВИСЕТЬ ОТ МАШИНЫ: у кого Argos с моделями установлен —
+    пять тестов зелёные, у кого нет (машина Влада, CI) — красные. Замерено: с пустым
+    `ARGOS_PACKAGES_DIR` падало ровно 5.
+
+    Это тот же класс, что уже стоил нам разбора 29.08.2026, когда `config.py` дочитывал
+    `server/.env` и «1146 зелёных» у разных людей означали РАЗНЫЕ прогоны. Правило то
+    же: тест обязан задавать окружение САМ, а не наследовать его у машины."""
     calls = []
 
     def fake(text, src, dst):
@@ -40,6 +49,12 @@ def fake_engine(monkeypatch):
         return "[перевод] " + text
 
     monkeypatch.setattr(translate_service, "_argos_translate", fake)
+    #Полный вердикт «всё на месте»: тесты ниже проверяют перевод, а не установку.
+    monkeypatch.setattr(translate_service, "status", lambda: {
+        "available": True, "installed": True, "models": True,
+        "pairs": ["ru->en", "en->ru"], "source": "fake", "reason": ""})
+    #Оставляем и старую подмену: часть кода зовёт её напрямую, и рассинхрон между двумя
+    #ответами внутри одного теста запутал бы сильнее, чем помог.
     monkeypatch.setattr(translate_service, "engine_available", lambda: True)
     translate_service._CACHE.clear()
     return calls
@@ -75,6 +90,12 @@ def test_unavailable_translator_is_an_honest_refusal(monkeypatch):
     """Молчаливый возврат оригинала хуже отказа: человек решит, что перевод сделан."""
     #Предпосылка: пакет ЕСТЬ, но перевод не удался. Без этой подмены случай упёрся бы
     #в более ранний отказ «переводчик не установлен» и проверял бы не то.
+    #⚠️ Патчим `status`, а не `engine_available`: с 02.09.2026 доступность переводчика
+    #решает именно она, и тест, подменявший прежнюю функцию, начинал зависеть от того,
+    #установлен ли Argos на машине прогона.
+    monkeypatch.setattr(translate_service, "status", lambda: {
+        "available": True, "installed": True, "models": True,
+        "pairs": ["ru->en"], "source": "fake", "reason": ""})
     monkeypatch.setattr(translate_service, "engine_available", lambda: True)
     monkeypatch.setattr(translate_service, "_argos_translate", lambda *a, **k: "")
     translate_service._CACHE.clear()
@@ -96,15 +117,26 @@ def test_engine_exception_does_not_break_the_chat(monkeypatch):
 
 
 def test_hung_request_is_cut_by_the_hard_timeout(monkeypatch):
-    """У deep_translator НЕТ своего таймаута — голый зависший HTTP-запрос иначе держал
-    бы поток вечно. Подменяем предел на мгновенный, а сам вызов — на «спящий дольше
-    предела»: обёртка обязана вернуть честный отказ, а не подвиснуть вместе с ним."""
+    """Жёсткий предел ожидания остаётся, хотя сети в переводе больше нет.
+
+    ⚠️ Здесь был устаревший докстринг: «у deep_translator нет своего таймаута, голый
+    зависший HTTP-запрос держал бы поток вечно». Пакет удалён ЦЕЛИКОМ 29.08.2026 вместе
+    с походом в Google, и причина давно другая — Argos считает СИНХРОННО и на процессоре,
+    а на боевой машине одно ядро: затянувшийся перевод держит поток пула, а не сокет.
+    Предел нужен по-прежнему, но объяснять его несуществующей библиотекой значит увести
+    следующего читателя в сторону."""
     import time as _time
 
     def slow(*a, **k):
         _time.sleep(0.3)
         return "не должно долететь"
 
+    #⚠️ Патчим `status`, а не `engine_available`: с 02.09.2026 доступность переводчика
+    #решает именно она, и тест, подменявший прежнюю функцию, начинал зависеть от того,
+    #установлен ли Argos на машине прогона.
+    monkeypatch.setattr(translate_service, "status", lambda: {
+        "available": True, "installed": True, "models": True,
+        "pairs": ["ru->en"], "source": "fake", "reason": ""})
     monkeypatch.setattr(translate_service, "engine_available", lambda: True)
     monkeypatch.setattr(translate_service, "_argos_translate", slow)
     monkeypatch.setattr(translate_service, "_REQUEST_TIMEOUT_S", 0.05)
@@ -282,8 +314,130 @@ def test_engine_not_installed_is_reported_by_reason(monkeypatch):
 
     Администратор должен прочитать «не установлен», а не гадать про сеть, которой
     здесь больше нет вовсе."""
-    monkeypatch.setattr(translate_service, "engine_available", lambda: False)
+    #⚠️ Патчим `status`, а не `engine_available`: с 02.09.2026 текст причины берётся у
+    #`status()` одной точкой (иначе подпись в диалоге и ответ на нажатие говорили бы
+    #разное). Тест, патчивший прежнюю функцию, после этого проверял не тот путь.
+    monkeypatch.setattr(translate_service, "status", lambda: {
+        "available": False, "installed": False, "models": False, "pairs": [],
+        "source": "disk", "reason": "Переводчик не установлен на этом сервере."})
     translate_service._CACHE.clear()
     r = translate_service.translate("Hello", "ru")
     assert r["ok"] is False
     assert "не установлен" in r["reason"].lower()
+
+
+# ── Ручка состояния переводчика (02.09.2026) ─────────────────────────────────────────
+#
+# 🔥 ПОВОД. Диалог перевода про доступность движка не знал ВООБЩЕ: человек открывал 🌐,
+# выбирал языки, включал автоперевод — и сообщения уходили непереведёнными. Настройка,
+# которую можно включить и которая заведомо не сработает, опаснее отсутствующей: человек
+# отправит сообщение, будучи уверен, что собеседник получит его на своём языке.
+#
+# ⚠️ Тесты патчат `translate_service.status`, а не его внутренности: ручка обязана
+# ОТДАВАТЬ то, что сказал сервис, и не заводить второго мнения. Расхождение между
+# подписью в диалоге и ответом на нажатие — ровно тот дефект, от которого одна общая
+# точка правды и защищает.
+
+def test_status_requires_login(client):
+    """Состояние переводчика — за входом, как и сам перевод."""
+    assert client.get("/web/messenger/translate/status").status_code == 401
+
+
+def test_status_endpoint_returns_what_the_service_says(client, monkeypatch):
+    """Ручка — тонкая: отдаёт вердикт сервиса как есть, без своей логики."""
+    verdict = {"available": False, "installed": True, "models": False,
+               "pairs": [], "source": "disk", "reason": "модели не скачаны"}
+    monkeypatch.setattr(translate_service, "status", lambda: verdict)
+    h = make_admin(client)
+    assert client.get("/web/messenger/translate/status", headers=h).json() == verdict
+
+
+def test_status_says_unavailable_when_the_package_is_missing(client, monkeypatch):
+    """Пакета нет → available=False и причина НАЗЫВАЕТ действие.
+
+    «Недоступно» без объяснения отправляет администратора проверять сеть, которой в этом
+    модуле нет вовсе с тех пор, как Google убрали целиком.
+    """
+    monkeypatch.setattr(translate_service.importlib.util, "find_spec", lambda name: None)
+    h = make_admin(client)
+    body = client.get("/web/messenger/translate/status", headers=h).json()
+    assert body["available"] is False and body["installed"] is False
+    assert "не установлен" in body["reason"].lower()
+
+
+def test_status_distinguishes_missing_models_from_missing_package(client, monkeypatch):
+    """Пакет есть, моделей нет — ОТДЕЛЬНЫЙ диагноз.
+
+    Лечится он не установкой пакета, а `tools/install_argos_models.py`. Один текст на два
+    разных случая отправил бы администратора чинить не то.
+    """
+    monkeypatch.setattr(translate_service, "_pairs_on_disk", lambda: [])
+    monkeypatch.setattr(translate_service, "installed_pairs", lambda: [])
+    h = make_admin(client)
+    body = client.get("/web/messenger/translate/status", headers=h).json()
+    if body["installed"]:                    # на машине без пакета случай недостижим
+        assert body["available"] is False
+        assert "модели" in body["reason"].lower()
+
+
+def test_status_never_claims_more_than_is_installed(client, monkeypatch):
+    """Пары берутся с диска/у библиотеки, а не из нашего списка НАМЕРЕНИЙ.
+
+    `LANGUAGES` — то, что мы хотим поддерживать; установлено может быть другое. Отдать
+    намерение вместо факта значит показать администратору благополучие там, где половины
+    моделей нет.
+    """
+    monkeypatch.setattr(translate_service, "_pairs_on_disk", lambda: ["ru->en"])
+    monkeypatch.setattr(translate_service, "installed_pairs", lambda: ["ru->en"])
+    h = make_admin(client)
+    body = client.get("/web/messenger/translate/status", headers=h).json()
+    assert body["pairs"] == ["ru->en"]
+
+
+def test_status_is_cheap_and_never_loads_a_model(client, monkeypatch):
+    """Ответ не имеет права тянуть модель в память.
+
+    Ручка зовётся при открытии мессенджера. Импорт argostranslate стоит 252.7 МБ (замер
+    tools/measure_argos_memory.py), а на боевой машине свободно около 350 — запрос,
+    грузящий модель, положил бы журнал колледжа ради серой плашки в диалоге.
+    """
+    called = []
+    monkeypatch.setattr(translate_service, "_direct",
+                        lambda src, dst: called.append((src, dst)))
+    h = make_admin(client)
+    client.get("/web/messenger/translate/status", headers=h)
+    assert not called, "status() полез за моделью — ответ обязан быть дешёвым"
+
+
+def test_no_test_here_depends_on_a_real_argos_install():
+    """🔒 СТОРОЖ: прогон этого файла не имеет права зависеть от машины.
+
+    02.09.2026 пять тестов были зелёными у того, у кого установлен Argos с моделями, и
+    красными у остальных — фикстура подменяла `engine_available`, а продукт с того же дня
+    спрашивает `status()`. Обнаружилось это случайно; молчаливая половина той же болезни
+    хуже — «25 зелёных» у двух людей означали бы разные прогоны, и никто бы не знал.
+
+    Проверяем СВОЙСТВО текста тестов: кто подменяет доступность переводчика, обязан
+    подменить `status` — единственную функцию, которую спрашивает `translate()`. Патч
+    одной лишь `engine_available` означает, что тест унаследует состояние машины.
+
+    ⚠️ Сторож нарочно текстовый: поведение «тест зависит от машины» изнутри одного
+    прогона не измерить — на машине, где Argos не установлен, обе ветки совпадают.
+    """
+    import os
+    import re
+    here = os.path.dirname(os.path.abspath(__file__))
+    body = open(os.path.join(here, "test_translate.py"), encoding="utf-8").read()
+
+    #Режем по функциям: патч в одной не оправдывает его отсутствие в соседней.
+    blocks = re.split(r"^def ", body, flags=re.M)
+    guilty = []
+    for block in blocks:
+        if 'monkeypatch.setattr(translate_service, "engine_available"' not in block:
+            continue
+        if 'monkeypatch.setattr(translate_service, "status"' in block:
+            continue
+        guilty.append(block.split("(")[0].strip()[:60])
+    assert not guilty, (
+        "эти тесты подменяют engine_available, но не status — они унаследуют состояние "
+        "машины и будут зелёными только там, где установлен Argos: %s" % ", ".join(guilty))

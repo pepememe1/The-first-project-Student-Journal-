@@ -16,7 +16,7 @@ from app.db import (engine, _ensure_participant_state_columns,
                     _ensure_subject_hours_teacher_column, _ensure_subject_hours_zet_column,
                     _ensure_notify_event_columns, _ensure_group_category_column,
                     _ensure_user_password_set_at_column, _ensure_user_birthday_column,
-                    _ensure_message_report_target_column)
+                    _ensure_message_report_target_column, _ensure_audit_chain_columns)
 
 
 def test_ensure_participant_state_columns_adds_role_columns_to_old_schema(client):
@@ -237,3 +237,76 @@ def test_quiz_time_limit_column_is_added_to_an_old_schema():
 
     #Повторный вызов не должен падать: миграция обязана быть идемпотентной.
     _ensure_quiz_time_limit_column()
+
+
+def test_ensure_audit_chain_columns_adds_to_old_schema(client):
+    """Журнал БЕЗ prev_hash/entry_hash (схема ДО цепочки целостности, 01.09.2026).
+
+    На бою `audit_events` существует давно и полна записей — то есть это ровно та
+    ситуация, в которой `create_all` не делает НИЧЕГО, а без колонок `audit.log` упал бы
+    на первой же записи. Причём упал бы ТИХО: запись журнала обёрнута в except по
+    инварианту «аудит не роняет бизнес-операцию», и продукт продолжил бы работать вообще
+    без следа — до тех пор, пока след не понадобится.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE audit_events"))
+        conn.execute(text("""CREATE TABLE audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_ts INTEGER DEFAULT 0,
+            ts VARCHAR DEFAULT '', actor VARCHAR DEFAULT '', role VARCHAR DEFAULT '',
+            ip VARCHAR DEFAULT '', device VARCHAR DEFAULT '', action VARCHAR DEFAULT '',
+            target VARCHAR DEFAULT '', detail VARCHAR DEFAULT '', level VARCHAR DEFAULT 'info'
+        )"""))
+        #Живая запись «из прошлого»: она обязана уцелеть и остаться унаследованной,
+        #а не быть подписанной задним числом — заверять своей подписью данные, за
+        #которые никто не ручается, значит выдать отсутствие гарантии за гарантию.
+        conn.execute(text("INSERT INTO audit_events (created_ts, ts, actor, action) "
+                          "VALUES (1, '2026-01-01T00:00:00+00:00', 'old', 'login.ok')"))
+    engine.dispose()
+    _ensure_audit_chain_columns()
+    cols = {c["name"] for c in inspect(engine).get_columns("audit_events")}
+    assert "prev_hash" in cols and "entry_hash" in cols
+    _ensure_audit_chain_columns()   # идемпотентность — второй вызов не падает
+
+    #Старая запись на месте и БЕЗ подписи.
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT actor, entry_hash FROM audit_events")).fetchone()
+    assert row[0] == "old"
+    assert not (row[1] or ""), "унаследованную запись подписали задним числом"
+
+
+def test_audit_writes_into_a_migrated_old_table(client):
+    """После миграции журнал реально ПИШЕТСЯ, а не только обзаводится колонками.
+
+    Проверка отдельная, потому что наличие колонки и работающая запись — разные факты, а
+    отказ записи здесь тихий по построению.
+    """
+    from app import audit
+    from app.db import SessionLocal
+    from app.models import AuditEvent
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE audit_events"))
+        conn.execute(text("""CREATE TABLE audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, created_ts INTEGER DEFAULT 0,
+            ts VARCHAR DEFAULT '', actor VARCHAR DEFAULT '', role VARCHAR DEFAULT '',
+            ip VARCHAR DEFAULT '', device VARCHAR DEFAULT '', action VARCHAR DEFAULT '',
+            target VARCHAR DEFAULT '', detail VARCHAR DEFAULT '', level VARCHAR DEFAULT 'info'
+        )"""))
+        conn.execute(text("INSERT INTO audit_events (created_ts, ts, actor, action) "
+                          "VALUES (1, '2026-01-01T00:00:00+00:00', 'old', 'login.ok')"))
+    engine.dispose()
+    _ensure_audit_chain_columns()
+
+    db = SessionLocal()
+    try:
+        audit.log(db, actor="admin", role="admin", action="mfa.reset", target="teacher1")
+        rows = db.query(AuditEvent).order_by(AuditEvent.id.asc()).all()
+        assert len(rows) == 2, "событие не записалось в мигрированную таблицу"
+        assert rows[1].entry_hash, "новая запись легла без подписи"
+        #Унаследованная запись не подписывает следующую — связь начинается с новой.
+        assert rows[1].prev_hash == ""
+        report = audit.verify_chain(db)
+        assert report["status"] == "ok", report
+        assert report["legacy"] == 1 and report["checked"] == 1
+    finally:
+        db.close()

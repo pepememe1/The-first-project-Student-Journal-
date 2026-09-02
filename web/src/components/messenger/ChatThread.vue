@@ -360,7 +360,7 @@ async function onBodyClick(e) {
   // участнику в ConversationInfo). Проверяем ДО ссылок: разметка не пересекается, но
   // порядок проверки не имеет значения — просто первым делом.
   const mention = e.target.closest('.mention[data-mention-uid]')
-  if (mention) { mentionProfileId.value = mention.dataset.mentionUid; return }
+  if (mention) { peerProfileId.value = mention.dataset.mentionUid; return }
 
   const a = e.target.closest('a[data-external-link]')
   if (!a) return
@@ -373,7 +373,27 @@ async function onBodyClick(e) {
   })
   if (ok) window.open(url, '_blank', 'noopener,noreferrer')
 }
-const mentionProfileId = ref('')
+// Чей профиль показать в модалке. Имя общее, а не `mentionProfileId`, как было: открыть
+// профиль можно тремя путями — по отметке в тексте, по аватарке автора и по его имени, —
+// и название, говорящее только про отметки, соврало бы читателю уже на второй.
+const peerProfileId = ref('')
+
+// Профиль автора сообщения — по клику на аватарку или на его имя над пузырём (просьба
+// Влада, 02.09.2026). Механизм был готов давно (PeerProfileModal), а в ЛЕНТЕ его не звал
+// никто: в докстринге модалки при этом написано «открывается кликом по аватарке/имени
+// человека где угодно в мессенджере». Наш обычный класс — обещание без вызывающего,
+// только замеченное со стороны документации.
+//
+// ⚠️ У Вектора и системных сообщений отправитель — строка 'system', человека за ней нет.
+// Открывать «профиль системы» нечем, поэтому и кликабельными они не становятся: мёртвая
+// кнопка хуже её отсутствия, человек жмёт и решает, что подвисло.
+function canOpenSenderProfile(msg) {
+  return !!msg && !msg.mine && !isVector(msg) && !!msg.sender_id
+}
+function openSenderProfile(msg) {
+  if (!canOpenSenderProfile(msg)) return
+  peerProfileId.value = msg.sender_id
+}
 
 // Видео из белого списка (YouTube/VK/Rutube) — отдельная карточка ПОД текстом сообщения
 // (v-html статичен и не даёт повесить Vue-обработчик внутрь), плеер виден сразу.
@@ -1486,7 +1506,18 @@ function openActivities() {
                    @change="m.toggleSelect(msg.id)" class="order-first accent-[var(--gb-accent)]" />
             <!-- Аватарка собеседника — только у верхнего сообщения пачки; ниже держим отступ. -->
             <div v-if="!msg.mine" class="w-8 shrink-0">
-              <Avatar v-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
+              <!-- Аватарка ведёт в профиль автора. Кнопкой она становится ТОЛЬКО когда
+                   профиль есть кому открыть (не Вектор, не системное) — иначе получилась
+                   бы кнопка, которая ничего не делает. -->
+              <button v-if="runStarts.has(msg.id) && canOpenSenderProfile(msg)" type="button"
+                      @click="openSenderProfile(msg)"
+                      class="rounded-full outline-none ring-accent transition-opacity hover:opacity-80 focus-visible:ring-2"
+                      :title="locale.t('chatThread.openSenderProfile', 'Открыть профиль')"
+                      :aria-label="locale.t('chatThread.openSenderProfile', 'Открыть профиль')">
+                <Avatar :src="senderAvatar(msg)" :name="senderName(msg)" :role="senderRole(msg)"
+                        :color="senderColor(msg)" :size="32" position="center" />
+              </button>
+              <Avatar v-else-if="runStarts.has(msg.id)" :src="senderAvatar(msg)"
                       :name="senderName(msg)" :role="senderRole(msg)" :color="senderColor(msg)" :size="32"
                       :position="isVector(msg) ? 'top' : 'center'" />
             </div>
@@ -1509,7 +1540,17 @@ function openActivities() {
                           enteringIds.has(msg.id) ? 'gb-msg-in' : '']"
                  :style="swipe.id === msg.id ? `transform: translateX(${swipe.dx}px)` : ''">
               <!-- ФИО автора — у верхнего сообщения пачки (в своих не нужно). -->
-              <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
+              <!-- ⚠️ .stop обязателен: имя лежит ВНУТРИ пузыря, а у пузыря свой @click,
+                   открывающий меню сообщения. Без остановки всплытия клик по имени
+                   открыл бы и профиль, и меню разом. -->
+              <button v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg) && canOpenSenderProfile(msg)"
+                      type="button" @click.stop="openSenderProfile(msg)"
+                      class="mb-0.5 block text-left text-[11px] font-semibold text-accent underline-offset-2 outline-none hover:underline focus-visible:underline"
+                      v-bind="senderDecor(msg)"
+                      :title="locale.t('chatThread.openSenderProfile', 'Открыть профиль')">
+                {{ senderName(msg) }}
+              </button>
+              <div v-else-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
                    class="mb-0.5 text-[11px] font-semibold text-accent" v-bind="senderDecor(msg)">
                 {{ senderName(msg) }}
               </div>
@@ -2041,7 +2082,7 @@ function openActivities() {
                       @summary="showInfo = false; openSummary()"
                       @open-file="showInfo = false; previewAtt = $event" />
     <!-- Клик по отметке "@Фамилия"/"/@Фамилия"/"/@!Фамилия" в теле сообщения (см. onBodyClick) -->
-    <PeerProfileModal v-if="mentionProfileId" :user-id="mentionProfileId" @close="mentionProfileId = ''" />
+    <PeerProfileModal v-if="peerProfileId" :user-id="peerProfileId" @close="peerProfileId = ''" />
 
     <ReportDialog v-if="reportMsg" :message="reportMsg" @submit="onReportSubmit" @close="reportMsg = null" />
     <!-- §12: оверлей отчёта куратора (круговая + плоские по предметам + дрилл-даун). -->
