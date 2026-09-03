@@ -113,9 +113,22 @@ def test_overview_does_not_blend_a_recurring_subject_across_past_courses(client)
     old_lesson = {"id": "PhysOld", "group_name": "ИС-99", "subject": "Физическая культура",
                   "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2022",
                   "year": "2022/2023", "semester": 1}
+    #🔥 ТЕРМИН БЕРЁМ У ПРОДУКТА, А НЕ ЗАШИВАЕМ. Здесь стояло «2025/2026, семестр 2» как
+    #«сегодняшний», и 01.09.2026 тест покраснел сам собой: наступил новый учебный год,
+    #занятие выпало из текущего периода, средний стал 0.0. Виноват был календарь, а не
+    #код — то есть проверка ежегодно ломалась бы в первый учебный день, ровно тогда,
+    #когда прогон нужнее всего. Свойство («прошлый курс не подмешивается к текущему»)
+    #от конкретного года не зависит, поэтому и тест не должен.
+    from app.webdata import current_term, load_config
+    from app.db import SessionLocal
+    _db = SessionLocal()
+    try:
+        cur_year, cur_sem = current_term(load_config(_db))
+    finally:
+        _db.close()
     new_lesson = {"id": "PhysNew", "group_name": "ИС-99", "subject": "Физическая культура",
                   "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2025",
-                  "year": "2025/2026", "semester": 2}
+                  "year": cur_year, "semester": cur_sem}
     r = client.post("/sync/push", json={"changes": {
         "groups": [{"id": "g:ИС-99", "name": "ИС-99", "subjects": ["Физическая культура"]}],
         "users": [student], "lessons": [old_lesson, new_lesson],
