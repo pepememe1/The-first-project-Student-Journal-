@@ -24,7 +24,7 @@ import {
   BookOpen, Users, GraduationCap, Boxes, Library, Server,
   MonitorSmartphone, Activity, LayoutDashboard, UserPlus,
   AlertTriangle, MessagesSquare, ShieldAlert, UsersRound, Database,
-  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox } from '@lucide/vue'
+  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -83,6 +83,10 @@ export const NAV = {
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/admin/courses' },
+    // ⚠️ Иконка НЕ `Boxes` (она у «Групп») и не `Archive` (у архива предметов): три
+    // соседних пункта с одинаковым значком читаются как один и тот же раздел — та же
+    // претензия, что была к двум шестерёнкам у настроек и модерации.
+    { key: 'groupArchive', label: 'Архив групп', i18n: 'nav.groupArchive', icon: PackageOpen, to: '/admin/group-archive' },
     { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
     // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.

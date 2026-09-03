@@ -253,6 +253,14 @@ export const adminApi = {
   // Архив предметов группы по семестрам — текущий термин показывает и активный план, и
   // то, что только что вытеснил реимпорт (active:false), прошлые — что велось тогда.
   groupSubjectArchive: (group) => api.get('/web/admin/group-subject-archive', { params: { group } }),
+  // Архив ГРУПП (03.09.2026): выпустившиеся и не перешедшие на следующий курс.
+  // ⚠️ Имя группы — параметром запроса и телом, НИКОГДА не сегментом пути: Starlette
+  // раскодирует `%2F` до роутинга, и «К74/1» разваливает маршрут на лишний сегмент.
+  groupArchive: () => api.get('/web/admin/group-archive'),
+  groupArchiveDetail: (group) => api.get('/web/admin/group-archive/detail', { params: { group } }),
+  setGroupArchived: (group, archived, reason = '') =>
+    api.post('/web/admin/groups/archive', { group, archived, reason }),
+  groupArchiveWitness: () => api.post('/web/admin/groups/archive-witness'),
   // teachers — §ролей: {предмет: teacher_id | ''} — назначение препода на (группа,предмет);
   // teachers2 — второй преподаватель раздельного обучения (§ролей, 3.6.1; принимается,
   // только если куратор уже поставил split на предмете, см. curatorApi.setSubjectSplit);

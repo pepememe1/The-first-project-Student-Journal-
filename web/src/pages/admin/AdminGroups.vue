@@ -24,8 +24,22 @@ const allTeachers = ref([])   // §ролей: [{id, name, subjects}] — для
 // ── Категории расписания (schedule/parser.py::CATEGORIES) — та же идея, что в
 // «Расписании»: кнопки-фильтр сверху таблицы + выбор при создании группы. «Все
 // категории» по умолчанию — 100% прежнее поведение (видно всё).
+// Выпадающий список кнопки «+». Держим ЗДЕСЬ, а не в компоненте-обёртке: пунктов
+// четыре и они разные по природе, общий «дропдаун на всё» пришлось бы параметризовать
+// сильнее, чем стоит эта экономия.
+const addMenu = ref(false)
+function runAddAction(fn) {
+  // Закрываем ДО действия: часть пунктов открывает модалку, и меню осталось бы висеть
+  // поверх неё — на телефоне это перекрывает половину диалога.
+  addMenu.value = false
+  fn()
+}
+
 const categories = ref([])
 const categoryFilter = ref('')
+// Основная категория — та, где живут группы с журналом. Остальные заводятся как
+// каталожные записи для просмотра расписания (см. Group.category в моделях).
+const DEFAULT_CATEGORY = 'college'
 // ── Курс (3.5.5) — сужает список ВНУТРИ выбранной категории. Курс НЕ хранится на
 // Group: это живой, разведанный с портала признак (столбец таблицы индекса, см.
 // schedule_web.groups_by_course), сверяем группы АДМИНА с этим списком по имени —
@@ -34,8 +48,13 @@ const courseFilter = ref('')
 const byCourse = ref({})   // {курс: [имена с портала]} — для ТЕКУЩЕЙ categoryFilter
 async function loadByCourse() {
   courseFilter.value = ''
-  if (!categoryFilter.value) { byCourse.value = {}; return }
-  try { byCourse.value = (await scheduleApi.groups(categoryFilter.value)).data.by_course || {} }
+  // 🔥 Пустая категория — это НЕ «курсы не нужны» (жалоба Влада 03.09.2026: «у админа
+  // нет сортировки по курсу»). Список курсов грузился только ПОСЛЕ выбора категории, а
+  // по умолчанию она не выбрана — то есть сортировки не было вовсе, пока человек не
+  // догадается нажать «Колледж». Без категории берём основную: в ней и живут группы с
+  // журналом, остальные заводятся как каталожные записи.
+  const cat = categoryFilter.value || DEFAULT_CATEGORY
+  try { byCourse.value = (await scheduleApi.groups(cat)).data.by_course || {} }
   catch { byCourse.value = {} }
 }
 watch(categoryFilter, loadByCourse)
@@ -86,6 +105,9 @@ onMounted(async () => {
   await reload()
   await loadTerm()
   await loadCategories()
+  // Курсы грузим СРАЗУ, не дожидаясь выбора категории: иначе сортировка появляется
+  // только у того, кто наугад нажал «Колледж», — а для остальных её как бы нет.
+  await loadByCourse()
   try { allSubjects.value = (await adminApi.subjects()).data.subjects?.map((s) => s.name) || [] } catch { /* */ }
   try { parsedGroups.value = (await scheduleApi.groups()).data.groups || [] } catch { /* */ }
   try { allTeachers.value = (await adminApi.teachers()).data.teachers || [] } catch { /* */ }
@@ -394,15 +416,44 @@ async function importParsed() {
         <span class="text-text3">{{ locale.t('adminGroups.currentTermLabel', 'Учебный период:') }}</span>
         <Badge variant="green">{{ termLabel(currentTerm) }}</Badge>
       </div>
-      <AppButton variant="ghost" size="sm" :disabled="importing" @click="importParsed">
-        {{ importing ? locale.t('adminGroups.updatingBtn', 'Обновление…') : locale.t('adminGroups.updateGroupsBtn', 'Обновить группы') }}
-      </AppButton>
-      <AppButton variant="ghost" size="sm" @click="openScheduleImport">{{ locale.t('adminGroups.importByCategoryBtn', '🌐 Импорт по категории') }}</AppButton>
-      <!-- Расписание знает, КТО ведёт пару, а у нас эта связь велась руками: смена
-           расписания меняла предметы группы и оставляла преподавателя без журнала. -->
-      <AppButton variant="ghost" size="sm" @click="showTeacherSuggest = true">{{ locale.t('adminGroups.teacherSuggestBtn', '👤 Кто ведёт предметы') }}</AppButton>
-      <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminGroups.addBtn', '+ Добавить') }}</AppButton>
+      <!-- ОДНА кнопка «+» вместо четырёх в ряд (просьба Влада 03.09.2026). Панель из
+           четырёх подписей читается как четыре равнозначных действия, хотя обычное из
+           них ровно одно — завести группу. Остальные три редкие и связаны с порталом.
+           ⚠️ Список закрывается по клику мимо и по Esc: без этого на телефоне он
+           остаётся висеть, потому что «мимо» там некуда нажать пальцем случайно. -->
+      <div class="relative">
+        <AppButton variant="green" size="sm" @click="addMenu = !addMenu">
+          {{ locale.t('adminGroups.addBtn', '+ Добавить') }}
+        </AppButton>
+        <div v-if="addMenu"
+             class="absolute right-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border shadow-lg"
+             style="background: var(--gb-surface); border-color: var(--gb-border)">
+          <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
+                  style="color: var(--gb-text)" @click="runAddAction(openCreate)">
+            {{ locale.t('adminGroups.addOne', 'Новая группа') }}
+          </button>
+          <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
+                  style="color: var(--gb-text)" :disabled="importing"
+                  @click="runAddAction(importParsed)">
+            {{ importing ? locale.t('adminGroups.updatingBtn', 'Обновление…')
+                         : locale.t('adminGroups.updateGroupsBtn', 'Обновить группы') }}
+          </button>
+          <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
+                  style="color: var(--gb-text)" @click="runAddAction(openScheduleImport)">
+            {{ locale.t('adminGroups.importByCategoryBtn', '🌐 Импорт по категории') }}
+          </button>
+          <!-- Расписание знает, КТО ведёт пару, а у нас эта связь велась руками: смена
+               расписания меняла предметы группы и оставляла преподавателя без журнала. -->
+          <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
+                  style="color: var(--gb-text)"
+                  @click="runAddAction(() => { showTeacherSuggest = true })">
+            {{ locale.t('adminGroups.teacherSuggestBtn', '👤 Кто ведёт предметы') }}
+          </button>
+        </div>
+      </div>
     </div>
+    <!-- Заслонка клика мимо. Прозрачная и БЕЗ затемнения: это меню, а не модалка. -->
+    <div v-if="addMenu" class="fixed inset-0 z-10" @click="addMenu = false"></div>
 
     <!-- Кнопки-категории (та же идея, что в «Расписании») — фильтр таблицы ниже. -->
     <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
@@ -417,7 +468,7 @@ async function importParsed() {
 
     <!-- Кнопки-курсы — ВНУТРИ выбранной категории (3.5.5). Число курсов не
          фиксировано (на живых данных бакалавриата/заочного бывает 5-6). -->
-    <div v-if="categoryFilter && courseKeys.length > 1" class="flex flex-wrap gap-2">
+    <div v-if="courseKeys.length > 1" class="flex flex-wrap gap-2">
       <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="!courseFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
               @click="courseFilter = ''">{{ locale.t('adminGroups.allCourses', 'Все курсы') }}</button>
