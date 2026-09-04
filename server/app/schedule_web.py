@@ -190,10 +190,49 @@ def groups_by_course_cached(category: str = "") -> dict:
 
 
 def _href_for(name: str, category: str) -> str:
-    for n, href, _course in _load_index(category):
+    """Ссылка на страницу расписания группы, включая СОСТАВНЫЕ записи индекса.
+
+    🔥 Куплено жалобой Ярослава (04.09.2026). Портал кладёт ДВЕ группы с общим
+    расписанием в ОДНУ строку — «К74/3,75.0», причём вторая часть записана без префикса
+    «К». Здесь искалось ТОЧНОЕ совпадение имени, поэтому группа К75.0 не находилась
+    вовсе: у её студентов расписания не было ни на сайте, ни в приложении, хотя на
+    портале оно есть. Таких записей 18 из 89 — каждая пятая группа колледжа.
+
+    ⚠️ Порядок значим: точное совпадение выигрывает ВСЕГДА. Иначе группа, чьё имя стоит
+    в составной записи второй, могла бы перехватить ссылку у той, что значится
+    отдельной строкой."""
+    index = _load_index(category)
+    for n, href, _course in index:
         if n == name:
             return href
+    p = _parser()
+    for n, href, _course in index:
+        if "," not in n:
+            continue                      # обычные записи уже проверены выше
+        if name in p.expand_composite_group(n, category):
+            return href
     return ""
+
+
+def shared_schedule_with(name: str, category: str = "") -> list:
+    """С какими группами у этой общее расписание (пусто, если своё).
+
+    Нужно, чтобы подписать расписание честно. Без подписи студент К75.0 видит в
+    заголовке «К74/3,75.0» и решает, что ему показали чужое, — ровно та жалоба, с
+    которой всё началось."""
+    category = category or default_category()
+    try:
+        index = _load_index(category)
+    except Exception:
+        return []
+    p = _parser()
+    for n, _href, _course in index:
+        if "," not in n:
+            continue
+        names = p.expand_composite_group(n, category)
+        if name in names and name != n:
+            return [x for x in names[1:] if x != name]
+    return []
 
 
 #Расписание ПРЕПОДАВАТЕЛЯ: нужен ПОЛНЫЙ снимок (teacher_index строится инверсией всех

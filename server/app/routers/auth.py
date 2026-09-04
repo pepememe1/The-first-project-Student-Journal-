@@ -68,7 +68,13 @@ def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
     чтобы потолок на /auth/refresh считался от того же значения, а не от заголовка
     очередного запроса."""
     client = client_kind(request)
-    ttl = issue_ttl_min(client)
+    #🔑 Срок сессии зависит от того, есть ли у человека второй фактор: с ним неделя на
+    #сайте и месяц в приложении, без него — прежние пять часов и «до понедельника».
+    #Спрашиваем ЗДЕСЬ, а не у вызывающих: пар токенов выдаётся из четырёх мест (первый
+    #админ, обычный вход, второй шаг входа, вход по биометрии), и забытое место молча
+    #выдало бы короткую сессию человеку, который её уже заслужил.
+    from . import mfa as _mfa
+    ttl = issue_ttl_min(client, mfa=_mfa.is_active(db, user.id))
     access, a_jti, a_exp = create_token_full(user.login, user.role, "access", ttl_min=ttl)
     refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh", ttl_min=ttl)
     _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti, client)
@@ -178,6 +184,12 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         #адресу двигают только попытки против НЕсуществующих логинов. Иначе группа
         #студентов за одним VPN/NAT запирала бы вход сама себе (см. throttle.IP_MAX_FAILS).
         throttle.register_failure(ip, login_str, login_exists=u is not None)
+        #След по ЛОГИНУ живёт час и не зависит от адреса — из него собирается признак
+        #«к этому аккаунту подбирали пароль» (throttle.suspicion). Замок пары (IP,
+        #логин) для этого не годится: он снимается через пять минут и всё забывает,
+        #то есть подобравший пароль входит через шесть минут в полной тишине.
+        if u is not None:
+            throttle.register_login_attack(login_str, ip)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
         audit.log(db, request, actor=login_str, action="login.fail", level="warn")
         #Пасхалка Far Cry: седьмая неудача подряд у СТУДЕНТА. Решение принимает сервер и
@@ -199,6 +211,23 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     throttle.register_success(ip, login_str)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
     audit.log(db, request, actor=login_str, role=u.role, action="login.ok")
+
+    #🔒 УДАЧНЫЙ ВХОД СРАЗУ ПОСЛЕ СЕРИИ НЕУДАЧ — это и есть картина подобранного пароля.
+    #Записываем ОТДЕЛЬНОЙ строкой с цифрами: обычный `login.ok` в общем потоке ничем не
+    #выделяется, и при разборе инцидента такой вход не найти. Сам вход НЕ отменяем —
+    #это лишь признак, а не доказательство, и запирать по нему живого человека, который
+    #просто забыл раскладку, нельзя.
+    #⚠️ Второй фактор здесь не «включается по признаку»: у кого он есть, тот и так его
+    #сейчас пройдёт (ниже), а у кого нет — требовать нечего. Признак работает там, где
+    #фактор МОЖНО спросить: продление сессии (см. /auth/refresh) и смена пароля по
+    #ссылке (см. /auth/recover/confirm).
+    sus = throttle.suspicion(login_str)
+    if sus["suspicious"]:
+        detail = (f"вход после {sus['fails']} неудачных попыток "
+                  f"с {sus['ips']} адрес(ов) за последний час")
+        events.record("warn", "login_after_attack", detail, login_str, ip)
+        audit.log(db, request, actor=login_str, role=u.role,
+                  action="login.ok.suspicious", level="warn", detail=detail)
 
     #Преподаватель вошёл — СРАЗУ запускаем сборку снимка расписания в фоне. Полный
     #снимок это ~68 запросов к порталу (десятки секунд), и раньше эта сборка стартовала
@@ -226,7 +255,14 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         #и он молча выбросил бы поля mfa_required/challenge — клиент получил бы пустой
         #ответ и решил, что вход сломался. Возврат готового Response отключает
         #фильтрацию по модели; это документированный способ, а не обход.
-        return JSONResponse({"mfa_required": True, "challenge": _mfa.make_challenge(u)})
+        #`expires_in` нужен КЛИЕНТУ, чтобы показать обратный отсчёт. Без него
+        #окончание срока выглядит как внезапный выброс на форму входа: человек не
+        #знал, что у него было время, и не понимает, что произошло.
+        #⚠️ Отдаём СЕКУНДЫ, а не метку времени: часы браузера расходятся с серверными,
+        #и по абсолютной метке отсчёт врал бы ровно на эту разницу.
+        return JSONResponse({"mfa_required": True,
+                             "challenge": _mfa.make_challenge(u),
+                             "expires_in": _mfa.CHALLENGE_TTL_MIN * 60})
     return _issue_token_pair(db, u, request)
 
 
@@ -245,6 +281,20 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     if sess is None or sess.revoked:
         #refresh отозван (logout/блокировка админом) или неизвестен — обновлять нечего
         raise HTTPException(status_code=401, detail="Сессия завершена или отозвана")
+
+    #Пользователя ищем ДО проверок срока: от того, включён ли у него второй фактор,
+    #зависит сам потолок сессии (неделя/месяц против пяти часов).
+    #⚠️ Признак берём ЗАНОВО, а не из записи сессии. Отключил второй фактор — его
+    #сессии немедленно судятся по короткой политике и умирают досрочно; иначе
+    #«включу на минуту, получу месяц, выключу» было бы штатным обходом потолка.
+    login_str = payload.get("sub", "")
+    u = db.query(User).filter(
+        User.login == login_str, User.deleted == False  # noqa: E712
+    ).first()
+    if not u:
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    from . import mfa as _mfa
+    mfa_on = _mfa.is_active(db, u.id)
     #⚠️ АБСОЛЮТНЫЙ потолок сессии — от РЕАЛЬНОГО момента входа (sess.issued_at, дата в
     #БД, а не exp из JWT). Без этой проверки «жёсткие 5 часов» держались ТОЛЬКО тем,
     #что refresh не ротируется и его exp считался как iat+JWT_REFRESH_TTL_MIN — то есть
@@ -265,7 +315,7 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     #прежние 5 часов. Читать «мобильный ли клиент» из ЗАГОЛОВКА прямо здесь нельзя: тогда
     #браузер, приславший X-Client: android, растянул бы уже выданную веб-сессию до недели,
     #то есть заголовок стал бы способом обойти потолок.
-    if session_age_min > session_ttl_min(sess.client or ""):
+    if session_age_min > session_ttl_min(sess.client or "", mfa=mfa_on):
         sess.revoked = True
         db.commit()
         raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
@@ -281,16 +331,43 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         sess.revoked = True
         db.commit()
         raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
-    login_str = payload.get("sub", "")
-    u = db.query(User).filter(
-        User.login == login_str, User.deleted == False  # noqa: E712
-    ).first()
-    if not u:
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
     #Барьер устройства применяем по той же политике, что и на входе: персонал и
     #десктоп — обязательно; веб-студенту не нужен (роль знаем из его же токена).
     if device_barrier_applies(request, u.role):
         ensure_device_allowed(request, db)
+
+    #🔒 ПОДОЗРИТЕЛЬНАЯ АКТИВНОСТЬ ОТМЕНЯЕТ ТИХОЕ ПРОДЛЕНИЕ (03.09.2026, требование
+    #Ярослава «код должен проситься при подозрительной активности»).
+    #
+    #Продление сессии — единственное действие, которое сейчас происходит БЕЗ участия
+    #человека: клиент меняет refresh на новый access в фоне, и укравший refresh-токен
+    #живёт на нём ровно столько же, сколько владелец. Если по этому логину только что
+    #подбирали пароль, тихо продлевать нельзя — просим подтвердить, что это владелец.
+    #
+    #⚠️ ТОЛЬКО ТЕМ, У КОГО ФАКТОР ЕСТЬ. У остальных отказ не даёт НИЧЕГО: они просто
+    #введут тот самый пароль, который и подбирают. Зато даёт постороннему готовый
+    #способ выбивать человека из журнала — поспамил неверным паролем, и жертву каждые
+    #пять часов выкидывает на форму входа. Признак поднимает кто угодно, поэтому
+    #реакция обязана быть проходимой владельцем и бесполезной для атакующего.
+    if throttle.is_suspicious(login_str) and mfa_on:
+        sus = throttle.suspicion(login_str)
+        detail = (f"продление сессии остановлено: {sus['fails']} неудачных попыток "
+                  f"с {sus['ips']} адрес(ов) за час")
+        events.record("warn", "refresh_step_up", detail, login_str,
+                      throttle.client_ip(request))
+        audit.log(db, request, actor=login_str, role=u.role,
+                  action="session.step_up", level="warn", detail=detail)
+        #401 — тот же код, что у истёкшей сессии, и клиент уже умеет его обрабатывать:
+        #показывает форму входа. Заводить здесь свой поток «подтвердите код прямо
+        #поверх страницы» значило бы новый экран ради редкого случая; повторный вход с
+        #паролем И кодом даёт ту же гарантию и уже написан.
+        #⚠️ Признак в заголовке — чтобы человек увидел ПРИЧИНУ. «Сессия истекла» в
+        #середине рабочего дня выглядит как сбой продукта, а не как защита.
+        raise HTTPException(
+            status_code=401,
+            detail=("К вашему аккаунту подбирали пароль. Войдите заново и подтвердите "
+                    "вход кодом из приложения."),
+            headers={"X-Gb-Reason": "reauth_required"})
     #Новый access, привязанный к ТОМУ ЖЕ refresh (refresh не ротируем — он живёт до
     #своего exp или явного отзыва). Прежний access этой пары гасим.
     if sess.pair_jti:
@@ -305,7 +382,7 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     #бы неделю — то есть пережил бы понедельничный рубеж: проверки выше срабатывают
     #только когда клиент придёт ЗА ОБНОВЛЕНИЕМ, а с ещё действующим access он не придёт
     #вовсе. Рубеж, который держится лишь при добровольном визите клиента, — не рубеж.
-    ttl = session_ttl_min(sess.client or "")
+    ttl = session_ttl_min(sess.client or "", mfa=mfa_on)
     if sess.expires_at:
         ttl = max(1, min(ttl, int((int(sess.expires_at) - now_ts) // 60)))
     access, a_jti, a_exp = create_token_full(u.login, u.role, "access", ttl_min=ttl)
@@ -687,6 +764,22 @@ def recover_confirm(body: dict = Body(...), request: Request = None,
         db.commit()
         raise HTTPException(status_code=400, detail="Аккаунт недоступен.")
 
+    #🔒 ВТОРОЙ ФАКТОР НА ВОССТАНОВЛЕНИИ ПАРОЛЯ (03.09.2026, требование Ярослава).
+    #
+    #До этой правки ссылка из письма была ЕДИНСТВЕННЫМ, что отделяло постороннего от
+    #чужого аккаунта: получил доступ к почтовому ящику — сменил пароль — вошёл, и
+    #второй фактор при этом не спрашивался НИ РАЗУ. То есть включённый второй фактор
+    #обходился целиком через восстановление, а человек был уверен, что защищён.
+    #
+    #⚠️ Проверка ОДНА на весь продукт (`mfa.guard_action`), а не своя копия здесь: свой
+    #ограничитель попыток и своё гашение использованного шага в каждом месте — это и
+    #есть тот случай, когда однажды забудут погасить код.
+    #⚠️ У кого фактора нет — проходит молча. Иначе восстановление пароля, то есть
+    #последняя дверь для потерявшего доступ, потребовало бы того, чего у него нет.
+    from . import mfa as _mfa
+    _mfa.guard_action(db, u, str(body.get("code") or ""), request,
+                      what="восстановление пароля")
+
     with throttle.hash_slot() as got_slot:
         #Тот же лимит одновременных хешей, что и на входе: смена пароля считает такой же
         #дорогой гибридный хеш, и без слота этот эндпоинт стал бы обходной дорогой к тому
@@ -711,4 +804,8 @@ def recover_confirm(body: dict = Body(...), request: Request = None,
     _kick_sockets(u.id)
     audit.log(db, request, actor=row.login, action="password.reset.ok",
               detail="пароль изменён по ссылке из письма")
+    #Пароль сменился — старые неудачные попытки по нему больше ничего не означают,
+    #и держать признак «подбирают» значило бы требовать код при каждом продлении
+    #сессии ещё час после того, как человек уже всё починил.
+    throttle.clear_suspicion(row.login)
     return {"ok": True, "login": row.login}

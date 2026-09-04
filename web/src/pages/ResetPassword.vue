@@ -26,13 +26,22 @@ const pw2 = ref('')
 const busy = ref(false)
 const error = ref('')
 const done = ref(false)
+//Второй фактор. Поле появляется ТОЛЬКО после того, как сервер его потребовал: у кого
+//фактор не включён, тот про него здесь и не узнает. Спрашивать заранее нельзя ещё и
+//потому, что это раскрывало бы наличие второго фактора у чужого аккаунта — а сюда
+//приходят по ссылке из письма, то есть иногда не владельцы.
+const needCode = ref(false)
+const code = ref('')
 
 onMounted(() => { token.value = String(route.query.token || '') })
 
 // Проверка ровно та же, что на сервере (восемь символов). Второе, более строгое правило
 // на клиенте отправило бы человека по кругу: сервер бы такой пароль принял.
 const canSubmit = computed(() =>
-  !busy.value && token.value && pw.value.length >= 8 && pw.value === pw2.value)
+  !busy.value && token.value && pw.value.length >= 8 && pw.value === pw2.value
+  //Код либо не нужен, либо введён: шесть цифр из приложения или код восстановления
+  //(он длиннее и с дефисом). Точную длину не проверяем — различает их сервер.
+  && (!needCode.value || code.value.trim().length >= 6))
 
 async function submit() {
   error.value = ''
@@ -42,14 +51,25 @@ async function submit() {
   }
   busy.value = true
   try {
-    await authApi.recoverConfirm(token.value, pw.value)
+    await authApi.recoverConfirm(token.value, pw.value, code.value.trim())
     done.value = true
     // Небольшая пауза, чтобы человек успел прочитать, что всё получилось.
     setTimeout(() => router.replace('/login'), 2200)
   } catch (e) {
-    // Причину показываем как есть: она приходит с сервера уже человеческой («ссылка
-    // недействительна или истекла»), и подменять её общим «ошибка» значит оставить
-    // человека без единственной подсказки, что делать дальше.
+    // 🔒 Сервер сказал, что нужен код из приложения. Это НЕ «ссылка не подошла»:
+    // ссылка в порядке, у человека просто включён второй фактор. Показываем поле и
+    // оставляем всё введённое на месте — заставлять набирать пароль заново значит
+    // получить второй, отличающийся от первого, набранный второпях.
+    if (e?.response?.headers?.['x-gb-reason'] === 'mfa_required') {
+      needCode.value = true
+      code.value = ''
+      error.value = e?.response?.data?.detail
+        || t('resetPassword.codeNeeded', 'Введите код из приложения-аутентификатора')
+      return
+    }
+    // Остальные причины показываем как есть: они приходят с сервера уже человеческими
+    // («ссылка недействительна или истекла»), и подменять их общим «ошибка» значит
+    // оставить человека без единственной подсказки, что делать дальше.
     error.value = e?.response?.data?.detail
       || t('resetPassword.failed', 'Не удалось сменить пароль. Запросите восстановление заново.')
   } finally {
@@ -86,6 +106,19 @@ async function submit() {
           <span class="text-xs text-muted">{{ t('resetPassword.repeat', 'Повторите пароль') }}</span>
           <input v-model="pw2" type="password" autocomplete="new-password" minlength="8"
                  class="w-full rounded-xl border border-line bg-bg px-3 py-2.5 text-text" />
+        </label>
+
+        <!-- Второй фактор: появляется, только когда сервер его потребовал. -->
+        <label v-if="needCode" class="flex flex-col gap-1.5">
+          <span class="text-xs text-muted">
+            {{ t('resetPassword.code', 'Код из приложения-аутентификатора') }}
+          </span>
+          <input v-model="code" inputmode="text" autocomplete="one-time-code"
+                 placeholder="000000"
+                 class="w-full rounded-xl border border-line bg-bg px-3 py-2.5 text-text" />
+          <span class="text-xs text-muted">
+            {{ t('resetPassword.codeHint', 'Или один из кодов восстановления, если телефона нет под рукой.') }}
+          </span>
         </label>
 
         <p class="text-xs text-muted">

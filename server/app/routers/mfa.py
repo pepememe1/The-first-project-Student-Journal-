@@ -38,14 +38,25 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from .. import audit, config, throttle, totp
+from .. import audit, config, qr, throttle, totp
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import User, UserMFA
 
 router = APIRouter(prefix="/auth/mfa", tags=["mfa"])
 
-CHALLENGE_TTL_MIN = 5
+#🔥 БЫЛО ПЯТЬ МИНУТ, И ЭТОГО НЕ ХВАТАЛО (03.09.2026, воспроизведено на бою).
+#Человек вводит пароль, открывает телефон — и попадает в список записей, где рядом
+#лежат «GradeBookAI», рабочая почта и десяток чужих сервисов. Пока он ищет нужную и
+#пробует не ту, пять минут выходят. Дальше сервер отвечает 401, окно кода ПРОПАДАЕТ,
+#и человек видит форму входа — со стороны это читается как «журнал меня выкинул».
+#Ровно эта жалоба и пришла от Ярослава.
+#
+#⚠️ Десять минут — это НЕ ослабление: challenge не даёт доступа ни к чему, он лишь
+#позволяет предъявить код. Всё, что он ускоряет для атакующего, — возможность вводить
+#шестизначные коды, а их ограничивает `throttle` (восемь попыток и замок), а не срок
+#этого токена. Настоящая защита здесь — ограничитель попыток, и он не тронут.
+CHALLENGE_TTL_MIN = 10
 CHALLENGE_TYPE = "mfa"
 
 
@@ -169,11 +180,19 @@ def mfa_setup(user: User = Depends(get_current_user), db: Session = Depends(get_
     row.recovery_hashes = []
     row.recovery_used = 0
     db.commit()
+    uri = totp.provisioning_uri(secret, user.login)
+    #QR рисуем ЗДЕСЬ, а не отдельной ручкой: отдельная ручка означала бы второй адрес,
+    #по которому отдаётся секрет второго фактора, и её пришлось бы отдельно закрывать
+    #ролью и сроком. Здесь секрет и так уже в ответе — новой поверхности не появляется.
+    size, path = qr.svg_path(uri)
     return {
         "secret": secret,
-        "uri": totp.provisioning_uri(secret, user.login),
+        "uri": uri,
         "digits": totp.DIGITS,
         "period": totp.STEP_SECONDS,
+        #Матрица уходит как `d` для одного <path>: строкой разметки её не сделать, и
+        #вставлять ответ сервера через v-html не приходится (см. qr.py).
+        "qr": {"size": size, "path": path},
     }
 
 
@@ -258,6 +277,55 @@ def mfa_regenerate(body: dict = Body(...), request: Request = None,
 
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# Второй фактор ЗА ПРЕДЕЛАМИ входа
+#
+# 🔑 Одна дверь на всех. Ниже — единственная функция, которой пользуются ЧУЖИЕ
+# подсистемы (сейчас — восстановление пароля в auth.py). Своя проверка кода в каждой
+# из них означала бы свой ограничитель попыток, своё гашение использованного шага и
+# свой набор кодов восстановления — то есть три места, где однажды забудут погасить
+# код, и подсмотренные шесть цифр будут работать все тридцать секунд.
+# ─────────────────────────────────────────────────────────────────────────────────
+
+def guard_action(db: Session, user: User, code: str, request: Request,
+                 what: str) -> None:
+    """Пропустить действие только с верным кодом. У кого фактора нет — пропускать молча.
+
+    ⚠️ ПОЧЕМУ «НЕТ ФАКТОРА — ПРОХОДИ». Требовать код у того, кто его не заводил, значит
+    запереть человека навсегда: взять код неоткуда, а восстановление пароля — это как
+    раз та дверь, за которой он оказывается, потеряв доступ. Второй фактор здесь
+    УСИЛИВАЕТ защиту тех, кто его включил, а не создаёт новый способ потерять аккаунт.
+
+    ⚠️ Отказ несёт `X-Gb-Reason: mfa_required` — по нему страница понимает, что надо
+    показать поле кода, а не «пароль не подошёл». Без признака человек видел бы отказ
+    и не догадывался, чего от него хотят.
+
+    :param what: что именно защищаем — уходит в журнал аудита, без него запись
+                 «код не подошёл» не даёт понять, где это случилось.
+    """
+    row = row_for(db, user.id)
+    if not row or not row.confirmed_at:
+        return
+    code = (code or "").strip()
+    if not code:
+        raise HTTPException(status_code=401,
+                            detail="Введите код из приложения-аутентификатора",
+                            headers={"X-Gb-Reason": "mfa_required"})
+    ok = _consume(db, row, code, request, user.login)
+    db.commit()
+    if not ok:
+        audit.log(db, request, actor=user.login, role=user.role,
+                  action="mfa.failed", level="warn",
+                  detail=f"неверный код второго фактора ({what})")
+        raise HTTPException(status_code=401, detail="Код не подошёл",
+                            headers={"X-Gb-Reason": "mfa_required"})
+    audit.log(db, request, actor=user.login, role=user.role, action="mfa.passed",
+              detail=what)
+    #Подтверждённый код снимает признак подозрительной активности: владелец второго
+    #фактора только что доказал, что это он.
+    throttle.clear_suspicion(user.login)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # Вход
 # ─────────────────────────────────────────────────────────────────────────────────
 
@@ -282,6 +350,9 @@ def mfa_verify(body: dict = Body(...), request: Request = None,
 
     left = sum(1 for h in (row.recovery_hashes or []) if h)
     audit.log(db, request, actor=user.login, role=user.role, action="mfa.passed")
+    #Код подтверждён — след «к аккаунту подбирали пароль» гасим: дальше требовать
+    #подтверждения на каждое продление сессии значило бы наказывать жертву за атаку.
+    throttle.clear_suspicion(user.login)
     out = _issue_token_pair(db, user, request)
     #Предупреждаем, когда запасных ключей почти не осталось. Молча закончившиеся
     #коды означают, что при потере телефона человек узнает об этом в худший момент.

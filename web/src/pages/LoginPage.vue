@@ -203,7 +203,13 @@ async function submitPasskey() {
 function onApproved() { needApproval.value = false; submit() }
 
 //Второй шаг входа завершён — дальше как при обычном входе.
+//⚠️ Незавершённый вход гасим ЗДЕСЬ, а не в сторе: пока `auth.mfaChallenge` не пуст,
+//на экране висит окно кода, и обнулять его должен тот, кто уже получил управление.
+//Если сделать это раньше (в `verifyMfa`), Vue снимет окно с экрана прежде, чем оно
+//успеет сообщить об успехе, — и переход не запросит НИКТО. Ровно этот дефект и был
+//пойман 03.09.2026; см. подробный разбор в `stores/auth.js::verifyMfa`.
 async function onMfaDone(user) {
+  auth.cancelMfa()
   await saveCredential(login.value, password.value)
   router.push(HOME_BY_ROLE[user.role] || '/')
 }

@@ -46,6 +46,11 @@ export const useAuthStore = defineStore('auth', () => {
   //перезагрузку она не должна.
   const mfaChallenge = ref('')
   const mfaLogin = ref('')
+  //Когда окно подтверждения закроется — метка времени БРАУЗЕРА, посчитанная от
+  //присланного сервером срока в секундах. Нужна ради обратного отсчёта на экране:
+  //без него истечение выглядит как внезапный выброс на форму входа (жалоба Ярослава
+  //03.09.2026, воспроизведена на бою).
+  const mfaExpiresAt = ref(0)
 
   const isAuthenticated = computed(() => !!user.value && !!getAccess())
   const role = computed(() => user.value?.role || null)
@@ -103,6 +108,9 @@ export const useAuthStore = defineStore('auth', () => {
       if (data?.mfa_required) {
         mfaChallenge.value = data.challenge || ''
         mfaLogin.value = login.trim()
+        //Срок берём у сервера, а не зашиваем: разъехались бы при первой же правке, и
+        //отсчёт на экране показывал бы не то время, что действует на самом деле.
+        mfaExpiresAt.value = Date.now() + (Number(data.expires_in) || 300) * 1000
         return { mfaRequired: true }
       }
       return _afterLogin(data, login.trim())
@@ -151,16 +159,33 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     try {
       const { data } = await authApi.mfaVerify(mfaChallenge.value, String(code || '').trim())
-      const u = _afterLogin(data, mfaLogin.value)
-      mfaChallenge.value = ''
-      mfaLogin.value = ''
-      return u
+      //🔥 ЗДЕСЬ НЕЛЬЗЯ ГАСИТЬ `mfaChallenge`, И ЭТО СТОИЛО НАСТОЯЩЕГО ДЕФЕКТА
+      //(03.09.2026, жалоба Ярослава «ввожу код — в аккаунт не входит, а после
+      //перезагрузки всё нормально»; воспроизведено на стенде).
+      //
+      //Окно ввода кода показывается по `v-if="auth.mfaChallenge"`. Обнуляя его ЗДЕСЬ,
+      //мы приказывали Vue размонтировать компонент — а размонтирование успевает
+      //случиться РАНЬШЕ, чем продолжится `await` у вызывающего: и то и другое живёт в
+      //очереди микрозадач, и очередь перерисовки встаёт в неё первой. Дальше
+      //`emit('done')` уходит от УЖЕ УДАЛЁННОГО компонента и не доходит ни до кого.
+      //
+      //Наружу это выглядело так: токены выданы (они кладутся строкой ниже), окно кода
+      //исчезло, на экране снова форма входа — то есть «журнал меня выкинул». А после
+      //F5 страж роутера видел живую сессию и открывал кабинет, из-за чего дефект
+      //казался мистическим. Ни ошибки, ни следа в консоли при этом нет.
+      //
+      //Правило шире этого места: КОМПОНЕНТ НЕ ИМЕЕТ ПРАВА СНИМАТЬ САМ СЕБЯ С ЭКРАНА
+      //до того, как сообщил о результате. Гасит незавершённый вход теперь вызывающий
+      //(`LoginPage.onMfaDone` → `cancelMfa`), и делает это ПОСЛЕ того, как получил
+      //управление.
+      return _afterLogin(data, mfaLogin.value)
     } catch (e) {
       const status = e.response?.status
       if (status === 401) {
         //Срок challenge вышел — возвращаем человека к паролю ЯВНО. Иначе он будет
         //вводить коды в поле, которое уже ничего не значит.
         mfaChallenge.value = ''
+        mfaExpiresAt.value = 0
         error.value = 'Время подтверждения истекло — войдите заново'
       } else if (status === 429) {
         error.value = e.response?.data?.detail || 'Слишком много попыток. Подождите.'
@@ -176,6 +201,7 @@ export const useAuthStore = defineStore('auth', () => {
   function cancelMfa() {
     mfaChallenge.value = ''
     mfaLogin.value = ''
+    mfaExpiresAt.value = 0
     error.value = ''
   }
 
@@ -243,5 +269,5 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey,
-           mfaChallenge, verifyMfa, cancelMfa, logout, clearSession }
+           mfaChallenge, mfaExpiresAt, verifyMfa, cancelMfa, logout, clearSession }
 })

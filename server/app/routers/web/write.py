@@ -610,6 +610,56 @@ def admin_create_group(payload: dict = Body(...),
     return {"ok": True, "name": name, "category": row.category or "college"}
 
 
+# ── 🔒 ЗАЩИТА ОТ ПОРЧИ ДАННЫХ ПОРТАЛОМ (04.09.2026, требование Ярослава) ────────────
+# «Расписание починили на портале ВСГУТУ, но надо чтобы потом, если они сломают, у нас
+# не сломалось.»
+#
+# Что именно ломается у нас. `admin_bind_subjects` ЗАМЕНЯЕТ предметы каждой группы на
+# портальные, а `_archive_dropped_subjects` при этом гасит `SubjectHours` выпавших
+# предметов и ОТКРЕПЛЯЕТ обоих преподавателей. То есть один заход с испорченным
+# снимком стирает работу за семестр: часы, назначения, привязки — и делает это молча,
+# отдав в ответе бодрое «ok: true, bound: 89».
+#
+# ⚠️ ПОЧЕМУ НЕЛЬЗЯ ПРОСТО ЗАПРЕТИТЬ «СИЛЬНОЕ ИЗМЕНЕНИЕ». В начале семестра предметы
+# группы меняются почти целиком — это норма, а не сбой. Признак порчи не в том, что
+# набор изменился, а в том, что он изменился У ВСЕХ СРАЗУ и внезапно.
+#
+# ⚠️ И ПОЧЕМУ НЕ ЗАПРЕТ, А ПОДТВЕРЖДЕНИЕ. Запрет остановил бы законный сентябрьский
+# импорт, и админ пошёл бы искать обходной путь — правку базы руками. Подтверждение
+# оставляет решение человеку, но лишает его возможности не заметить: он видит, сколько
+# групп и какие предметы теряются, ДО того как это случится.
+#
+# Тот же приём, что у опасных команд в разделе «Сервер» (§16): не запрещаем, а не даём
+# сделать вслепую.
+
+#Доля общих предметов, ниже которой замена считается подозрительной. 0.3 — то есть от
+#старого набора уцелела меньше трети. Взято с запасом: у настоящей смены семестра
+#пересечение обычно нулевое, поэтому одна такая группа ни о чём не говорит — значение
+#имеет ТОЛЬКО их количество (см. ниже).
+_SUSPICIOUS_OVERLAP = 0.3
+
+#Сколько подозрительных групп в одном заходе уже требует подтверждения. Три — потому
+#что одна-две меняются штатно (перевели на другой план, объединили с соседями), а
+#массовая подмена задевает сразу десятки.
+_SUSPICIOUS_LIMIT = 3
+
+
+def _replacement_report(old_subjects, new_subjects) -> dict:
+    """Что теряется при замене набора предметов. Сравнение — по НОРМАЛИЗОВАННЫМ именам
+    (`strip_subgroup_tag`), тем же, что использует `_archive_dropped_subjects`: иначе
+    «Информатика» и «Информатика- 1 п/г» считались бы разными предметами и любая замена
+    выглядела бы полной."""
+    def _norm(names):
+        return {W.strip_subgroup_tag(s) for s in (names or []) if s and W.strip_subgroup_tag(s)}
+
+    old, new = _norm(old_subjects), _norm(new_subjects)
+    kept = old & new
+    overlap = (len(kept) / len(old)) if old else 1.0
+    return {"old": len(old), "new": len(new), "kept": len(kept),
+            "lost": sorted(old - new), "overlap": overlap,
+            "suspicious": bool(old) and overlap < _SUSPICIOUS_OVERLAP}
+
+
 def _archive_dropped_subjects(db, group: str, old_subjects, new_subjects, now: str):
     """Предмет ушёл из плана группы (Group.subjects ЗАМЕНИЛИ — ручная правка или реимпорт
     учебного плана) — строка `SubjectHours` за ТЕКУЩИЙ термин гасится (`deleted=True`),
@@ -1030,7 +1080,9 @@ def admin_apply_teachers(payload: dict = Body(...),
 
 
 @router.post("/admin/groups/bind-subjects")
-def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def admin_bind_subjects(payload: dict = Body(default={}),
+                        _admin: User = Depends(require_admin),
+                        db: Session = Depends(get_db)):
     """Привязывает к КАЖДОЙ группе колледжа предметы ИЗ ЕЁ расписания (портал ВСГУТУ) и
     пополняет каталог предметов. Использует полный снимок расписания (schedule_web —
     строится лениво в фоне, ~минута). Пока снимок готовится — {building: true}, клиент
@@ -1073,6 +1125,40 @@ def admin_bind_subjects(_admin: User = Depends(require_admin), db: Session = Dep
     now = _now_iso()
     bound = 0
     all_subjects = set()
+
+    # ── 🔒 СУХОЙ ПРОГОН: что этот заход СОТРЁТ, если его применить ──────────────────
+    # Считаем ДО единой правки. Смысл в том, чтобы испорченный снимок портала нельзя
+    # было применить НЕ ЗАМЕТИВ: замена предметов гасит часы и открепляет
+    # преподавателей, а ответ при этом выглядит успешным («bound: 89»).
+    #
+    # ⚠️ Порог — по КОЛИЧЕСТВУ подозрительных групп, а не по силе изменения у одной.
+    # В начале семестра набор предметов меняется целиком, и это норма; ненормально,
+    # когда так меняется у десятков групп разом и вне сентября.
+    suspicious = []
+    for name, gsched in snap.groups.items():
+        subs = sorted({s for s in gsched.subjects() if s})
+        if not subs:
+            continue
+        row = db.get(Group, f"grp:{name}")
+        if row is None or row.deleted:
+            continue                       # новая группа — терять нечего
+        rep = _replacement_report(row.subjects, subs)
+        if rep["suspicious"]:
+            suspicious.append({"group": name, "had": rep["old"], "keeps": rep["kept"],
+                               "loses": rep["lost"][:8]})
+    if len(suspicious) >= _SUSPICIOUS_LIMIT and not bool(payload.get("confirm")):
+        suspicious.sort(key=lambda x: -len(x["loses"]))
+        return {"ok": False, "needs_confirm": True, "building": building,
+                "suspicious_count": len(suspicious), "suspicious": suspicious[:20],
+                "reason": (
+                    f"Снимок расписания заменил бы предметы почти целиком у "
+                    f"{len(suspicious)} групп. Так бывает в начале семестра — и так же "
+                    f"выглядит сбой портала, когда он отдаёт чужое расписание. "
+                    f"Разница в том, что во втором случае вместе с предметами гаснут "
+                    f"часы и открепляются преподаватели, а вернуть их можно только "
+                    f"руками. Проверьте список ниже: если это ожидаемо, повторите с "
+                    f"confirm=true.")}
+
     for name, gsched in snap.groups.items():
         subs = sorted({s for s in gsched.subjects() if s})
         if not subs:

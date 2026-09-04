@@ -28,8 +28,13 @@ export const authApi = {
   registerByInvite: (payload) => api.post('/auth/register-invite', payload),
   // Смена пароля по одноразовой ссылке из письма — ЕДИНСТВЕННОЕ место, где
   // пароль реально меняется (сам /auth/recover его больше не трогает).
-  recoverConfirm: (token, password) =>
-    api.post('/auth/recover/confirm', { token, password }),
+  //`code` — второй фактор, если он у человека включён. Поле НЕОБЯЗАТЕЛЬНОЕ и
+  //появляется на странице только после того, как сервер сам его потребовал
+  //(401 + X-Gb-Reason: mfa_required): спрашивать код у того, кто его не заводил,
+  //значит пугать человека на последней двери, за которой он и так оказался
+  //потому, что не может войти.
+  recoverConfirm: (token, password, code = '') =>
+    api.post('/auth/recover/confirm', { token, password, code }),
   // Passkeys (вход по Face ID / отпечатку). begin выдаёт опции с challenge, complete
   // проверяет ответ устройства. register — под токеном (включить), login — публичный.
   // ── Второй фактор входа (TOTP) ──

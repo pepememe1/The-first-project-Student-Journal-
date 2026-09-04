@@ -100,3 +100,77 @@ test('вибрация переживает заблокированное хр�
   assert.ok(reads.length > 0, 'настройка перестала сохраняться')
   assert.ok(guards.length >= reads.length, 'обращение к localStorage без try — упадёт в приватном режиме')
 })
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// ГДЕ РАЗДЕЛ «ВИБРАЦИЯ» ВООБЩЕ ПОКАЗЫВАЕТСЯ (правка 02.09.2026, жалоба Ярослава)
+//
+// 🔥 Дефект, ради которого заведены проверки ниже, был не в вибрации, а в ПРИЗНАКЕ её
+// наличия: `typeof navigator.vibrate === 'function'` истинно на настольном Chrome и
+// Firefox — метод объявлен, вызывается без ошибки, возвращает true и не делает ничего.
+// То есть признак описывал поддержку API браузером, а не наличие вибромотора, и раздел
+// с РАБОЧИМ тумблером показывался в десктопной программе и в браузере на компьютере.
+// Настройка, которую можно включить и которая заведомо не сработает, — тот же класс,
+// что переводчик без установленных моделей: продукт притворяется, что умеет.
+//
+// ⚠️ Проверяем ПОВЕДЕНИЕ функции на подставленном окружении, а не текст файла: текстовая
+// проверка зеленела бы от одного присутствия слова `pointer: coarse` в комментарии.
+// ─────────────────────────────────────────────────────────────────────────────────
+import { supported } from '../src/utils/haptics.js'
+
+/** Подставить окружение «устройство такое-то» и вернуть вердикт supported(). */
+function verdict({ vibrate = true, touch = 1, coarse = true }) {
+  const saved = { nav: globalThis.navigator, win: globalThis.window }
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { maxTouchPoints: touch, ...(vibrate ? { vibrate: () => true } : {}) },
+    configurable: true, writable: true,
+  })
+  globalThis.window = { matchMedia: (q) => ({ matches: q.includes('coarse') ? coarse : false }) }
+  try {
+    return supported()
+  } finally {
+    Object.defineProperty(globalThis, 'navigator', { value: saved.nav, configurable: true, writable: true })
+    globalThis.window = saved.win
+  }
+}
+
+test('телефон: раздел вибрации показывается', () => {
+  assert.equal(verdict({ vibrate: true, touch: 5, coarse: true }), true,
+    'на телефоне вибрация есть, а раздел спрятался — человек не сможет её выключить')
+})
+
+test('обратный ход: настольный браузер с объявленным navigator.vibrate НЕ считается умеющим', () => {
+  // Дословно то состояние, в котором дефект и жил: метод есть, сенсора нет, указатель точный.
+  assert.equal(verdict({ vibrate: true, touch: 0, coarse: false }), false,
+    'настольный Chrome снова сочтён вибрирующим — вернулся тумблер несуществующей функции ' +
+    'на компьютере (жалоба Ярослава 02.09.2026)')
+})
+
+test('ноутбук с сенсорным экраном тоже не показывает раздел', () => {
+  // maxTouchPoints > 0, но основной указатель — мышь. Одного сенсора мало.
+  assert.equal(verdict({ vibrate: true, touch: 10, coarse: false }), false,
+    'сенсорный ноутбук сочтён телефоном — признак снова опирается на один сигнал из трёх')
+})
+
+test('без самого метода вибрации раздела нет никогда', () => {
+  assert.equal(verdict({ vibrate: false, touch: 5, coarse: true }), false)
+})
+
+test('карточка и пункт рельса гаснут по ОДНОМУ условию', () => {
+  /*
+   * 🔥 Наш обычный тихий отказ: спрятали карточку, а пункт в списке слева оставили —
+   * человек нажимает «Вибрация» и попадает в пустую категорию. Ни ошибки, ни следа.
+   * Поэтому условие должно быть одно и то же в обоих местах.
+   */
+  const settings = readFileSync(new URL('../src/pages/Settings.vue', import.meta.url), 'utf8')
+  assert.match(settings, /<Card v-if="hapticsSupported"\s*\n\s*id="set-haptics"/,
+    'карточка вибрации показывается безусловно — на компьютере вернулся раздел-пустышка')
+  assert.match(settings, /catsForRole\(auth\.role,\s*\{\s*haptics:\s*hapticsSupported\s*\}\)/,
+    'рельс настроек больше не знает про способности устройства — пункт «Вибрация» ' +
+    'останется на компьютере и откроет пустую категорию')
+
+  const cfg = readFileSync(new URL('../src/config/settingsSections.js', import.meta.url), 'utf8')
+  assert.match(cfg, /\{ id: 'haptics',[^}]*device: 'haptics'[^}]*\}/,
+    'у подкатегории вибрации пропал признак device — отбор по устройству перестал её видеть')
+  assert.match(cfg, /caps\[s\.device\] === true/,
+    'отбор подкатегорий по способностям устройства исчез из catsForRole')
+})

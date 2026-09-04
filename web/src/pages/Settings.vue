@@ -362,7 +362,9 @@ onMounted(() => easter.roll('gman_observer'))
 // Состав живёт в `@/config/settingsSections.js` — один список на ТРИ потребителя:
 // рельс категорий на ПК, двухуровневый список на телефоне и выпадающие подкатегории.
 // Держать его здесь означало бы три копии, обязанные разойтись.
-const cats = computed(() => catsForRole(auth.role))
+//⚠️ Способности УСТРОЙСТВА передаём сюда же: пункт «Вибрация» обязан появляться и
+//пропадать вместе со своей карточкой, иначе человек нажмёт его и увидит пустоту.
+const cats = computed(() => catsForRole(auth.role, { haptics: hapticsSupported }))
 // Профиль открыт первым: на него ведут карточка себя сверху, кнопка в шапке и
 // переадресация со старого `/…/profile`. Пунктом рельса он больше не значится
 // (просьба Влада, 02.09.2026 — см. пояснение в `settingsSections.js`).
@@ -764,46 +766,51 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     </Card>
 
     <!-- Вибрация (тактильная отдача). Настройка УСТРОЙСТВА, как микрофон и озвучка:
-         вибромотор — свойство телефона, а не человека, и на компьютере его нет вовсе. -->
-    <Card id="set-haptics" :class="sec('voice')" :title="loc.t('settings.haptics', 'Вибрация')"
+         вибромотор — свойство телефона, а не человека.
+
+         🔥 КАРТОЧКИ ЗДЕСЬ НЕТ ВОВСЕ ТАМ, ГДЕ ВИБРИРОВАТЬ НЕЧЕМ (правка 02.09.2026 по
+         жалобе Ярослава). Раньше на компьютере она показывалась с подписью «это
+         устройство не умеет вибрировать» — то есть занимала место и пункт в рельсе
+         ради сообщения «здесь ничего нет». Хуже того, `haptics.supported()` до той же
+         правки возвращал ПРАВДУ на настольном Chrome (`navigator.vibrate` там объявлен
+         и молча ничего не делает), поэтому в десктопной программе и в браузере на ПК
+         рисовался РАБОЧИЙ тумблер несуществующей функции.
+
+         ⚠️ Условие одно и то же и для карточки, и для пункта рельса
+         (`catsForRole(role, { haptics })`): разойдутся — человек нажмёт «Вибрация» в
+         списке слева и увидит пустую категорию. -->
+    <Card v-if="hapticsSupported"
+          id="set-haptics" :class="sec('voice')" :title="loc.t('settings.haptics', 'Вибрация')"
           :subtitle="loc.t('settings.hapticsHint', 'Короткий отклик на нажатие, подтверждение и ошибку')">
-      <div v-if="!hapticsSupported"
-           class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
-        <VibrateOff class="mt-0.5 size-4 shrink-0" />
-        <p>{{ loc.t('settings.hapticsUnsupported', 'Это устройство не умеет вибрировать — на компьютере отдачи не бывает.') }}</p>
-      </div>
+      <button type="button" @click="toggleHaptics"
+              class="flex w-full items-center gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-left transition-colors hover:border-accent">
+        <span class="grid size-10 shrink-0 place-items-center rounded-md"
+              :class="hapticsOn ? 'bg-accent-glow text-accent' : 'bg-card2 text-text3'">
+          <Vibrate v-if="hapticsOn" class="size-5" />
+          <VibrateOff v-else class="size-5" />
+        </span>
+        <span class="flex-1">
+          <span class="block text-sm font-semibold text-text">
+            {{ hapticsOn ? loc.t('settings.on', 'Включена') : loc.t('settings.off', 'Выключена') }}
+          </span>
+          <span class="block text-xs text-text3">
+            {{ hapticsOn
+               ? loc.t('settings.hapticsOnDesc', 'Телефон коротко откликается на действия')
+               : loc.t('settings.hapticsOffDesc', 'Отдача выключена — телефон молчит') }}
+          </span>
+        </span>
+        <span class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+              :class="hapticsOn ? 'bg-accent' : 'bg-border2'">
+          <span class="absolute top-0.5 size-5 rounded-full bg-white transition-all"
+                :class="hapticsOn ? 'left-[22px]' : 'left-0.5'" />
+        </span>
+      </button>
 
-      <template v-else>
-        <button type="button" @click="toggleHaptics"
-                class="flex w-full items-center gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-left transition-colors hover:border-accent">
-          <span class="grid size-10 shrink-0 place-items-center rounded-md"
-                :class="hapticsOn ? 'bg-accent-glow text-accent' : 'bg-card2 text-text3'">
-            <Vibrate v-if="hapticsOn" class="size-5" />
-            <VibrateOff v-else class="size-5" />
-          </span>
-          <span class="flex-1">
-            <span class="block text-sm font-semibold text-text">
-              {{ hapticsOn ? loc.t('settings.on', 'Включена') : loc.t('settings.off', 'Выключена') }}
-            </span>
-            <span class="block text-xs text-text3">
-              {{ hapticsOn
-                 ? loc.t('settings.hapticsOnDesc', 'Телефон коротко откликается на действия')
-                 : loc.t('settings.hapticsOffDesc', 'Отдача выключена — телефон молчит') }}
-            </span>
-          </span>
-          <span class="relative h-6 w-11 shrink-0 rounded-full transition-colors"
-                :class="hapticsOn ? 'bg-accent' : 'bg-border2'">
-            <span class="absolute top-0.5 size-5 rounded-full bg-white transition-all"
-                  :class="hapticsOn ? 'left-[22px]' : 'left-0.5'" />
-          </span>
-        </button>
-
-        <!-- ⚠️ Системная настройка сильнее нашей, и об этом надо сказать прямо: иначе
-             человек включает тумблер, ничего не чувствует и считает функцию сломанной. -->
-        <p v-if="hapticsOn && reducedMotion" class="mt-3 text-xs text-text3">
-          {{ loc.t('settings.hapticsReduced', 'В системе включено «уменьшить движение» — отдача не срабатывает, пока это так.') }}
-        </p>
-      </template>
+      <!-- ⚠️ Системная настройка сильнее нашей, и об этом надо сказать прямо: иначе
+           человек включает тумблер, ничего не чувствует и считает функцию сломанной. -->
+      <p v-if="hapticsOn && reducedMotion" class="mt-3 text-xs text-text3">
+        {{ loc.t('settings.hapticsReduced', 'В системе включено «уменьшить движение» — отдача не срабатывает, пока это так.') }}
+      </p>
     </Card>
 
     <!-- Шкала оценивания — только преподаватель. -->
