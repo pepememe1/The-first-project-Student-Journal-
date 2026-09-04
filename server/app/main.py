@@ -11,7 +11,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
@@ -25,7 +25,7 @@ from .routers import appupdate
 from .routers import desktopupdate
 from .routers import publicschedule
 from .routers import serverinfo
-from . import events, throttle
+from . import canary, events, throttle
 
 
 @asynccontextmanager
@@ -84,6 +84,41 @@ async def _security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     return response
+
+
+@app.middleware("http")
+async def _canary(request: Request, call_next):
+    """Приманки: пути, к которым никогда не обращается никто законный.
+
+    Разбор и требования — `docs/PLAN-HONEYPOT.md`, список путей — `app/canary.py`.
+
+    ⚠️ Именно MIDDLEWARE, а не маршруты. Маршруты пришлось бы согласовывать с
+    `_is_api_path` и SPA-фолбэком (`/.env` иначе уехал бы в отдачу страницы), а проверка
+    вхождения в множество стоит O(1) и от порядка регистрации маршрутов не зависит —
+    а порядок в FastAPI значим и уже стоил нам дефекта.
+
+    ⚠️ Ответ уходит МГНОВЕННО. Ни `sleep`, ни похода в сеть здесь нет и быть не может:
+    боевая машина — одно ядро и один процесс, задержка в middleware останавливает журнал
+    всему колледжу. «Загрузку» рисует CSS в браузере атакующего.
+    """
+    ip = throttle.client_ip(request)
+
+    left = throttle.seconds_until_unbanned(ip)
+    if left:
+        #Забаненному — сухой отказ без объяснений: подсказывать, за что именно и на
+        #сколько, значит помогать подобрать поведение, которое не банится.
+        return JSONResponse(status_code=429, content={"detail": "Too many requests"})
+
+    if canary.is_canary(request.url.path):
+        if throttle.ban_ip(ip, canary.BAN_SECONDS):
+            try:
+                events.record("security", "canary_hit",
+                              f"{request.method} {request.url.path}", ip=ip)
+            except Exception:
+                pass          #сигнал — удобство; уронить из-за него запрос нельзя
+        return HTMLResponse(canary.DECOY_HTML, status_code=200)
+
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
