@@ -559,7 +559,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `docs/PLAN-PACKAGING.md` | **Уход от плоских импортов, `uv`, и куда двигаться вебу и десктопу** (3.6) |
 | `docs/PLAN-ZET.md`, `docs/PLAN-3.1.md`, `docs/PLAN-2.10.md` | Планы реализованных релизов |
 | `docs/MESSENGER-*.md` | Планы мессенджера и его надстроек |
-| `docs/TTS-PLAN.md`, `docs/MOBILE-OFFLINE-PLAN.md`, `docs/TECH-DEBT-PLAN.md` | Озвучка, офлайн на мобилке, техдолг |
+| `docs/TTS-PLAN.md`, `docs/PLAN-MOBILE-OFFLINE.md`, `docs/TECH-DEBT-PLAN.md` | Озвучка, офлайн на мобилке, техдолг |
 | `docs/contracts/` | Контрактные наборы данных, по которым сверяются Python, JS и Java-код виджета (оценки, эмоции маскота, чётность недели) |
 
 ## Архитектурные правила, которые нельзя нарушать

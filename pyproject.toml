@@ -90,8 +90,14 @@ server = [
     "python-multipart>=0.0.9",
     "webauthn>=2.0",
     "httpx>=0.27",
-    "psycopg2-binary>=2.9",
     "gigachat>=0.1",
+    # 🔒 ЗДЕСЬ БЫЛ `psycopg2-binary` — драйвер PostgreSQL. Убран 04.09.2026 вместе со
+    # всей поддержкой PostgreSQL (решение Ярослава). База у продукта одна: SQLite, на
+    # бою под SQLCipher. Причина не в идеологии: второй СУБД у нас никогда и не было
+    # по-настоящему — на бою всё время работал SQLite (проверено 02.09.2026), а ветка
+    # `is_pg` не покрывалась НИ ОДНИМ тестом. Непроверенная ветка не даёт возможности,
+    # она даёт ложную уверенность и требует оглядки при каждой миграции.
+    # Держит `server/tests/test_requirements_complete.py::test_banned_packages...`.
     # Шифрование файла БД (SQLCipher, AES-256) — ПДн at rest. Только Linux: под Windows
     # готового wheel нет, там разработка идёт без шифрования файла.
     "sqlcipher3-binary>=0.5; sys_platform == 'linux'",

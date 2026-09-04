@@ -2057,6 +2057,67 @@ def test_attachments_refuse_everything_that_should_be_refused(client, monkeypatc
     assert client.get(f"/web/messenger/attachments/{att}/url", headers=b).status_code in (403, 404)
 
 
+def test_one_account_cannot_take_the_whole_storage_in_one_evening(client, monkeypatch):
+    """🔒 СУТОЧНЫЙ ПОТОЛОК НА ЧЕЛОВЕКА (находка пентеста 3.7.8, п. 2).
+
+    Потолок на ОДИН файл был всегда, а на пользователя за сутки — нет. Значит один
+    аккаунт клал сорок файлов по 25 МБ за вечер и занимал хранилище целиком, а остальные
+    получали «места нет» — отказ, который читается как поломка сервера, а не как чьё-то
+    злоупотребление.
+
+    ⚠️ В отчёте пункт был отложен с пометкой «модуль ещё не подключён». Это перестало
+    быть правдой 25.08.2026, когда вложения заработали: `uploads.py` исчез, а дыра
+    переехала в `storage.py`. Отложенная находка не отменяется тем, что код переписали.
+
+    Обратный ход: убери проверку `used + size > storage.MAX_USER_DAY_BYTES` в
+    `sign_upload` — и этот тест краснеет на четвёртой подписи.
+    """
+    from app import storage
+    admin, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = client.post("/web/messenger/chats/group",
+                       json={"title": "Файлы"}, headers=a).json()["conversation_id"]
+    for k, v in (("MODE", "s3"), ("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
+                 ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
+        monkeypatch.setattr(storage, k, v)
+    #Потолок опускаем до трёх файлов по 10 МБ — проверяем ПРАВИЛО, а не конкретное число.
+    #Держать в тесте боевые 200 МБ значило бы гонять двадцать подписей ради того же вывода.
+    monkeypatch.setattr(storage, "MAX_SIZE", 10 * 1024 * 1024)
+    monkeypatch.setattr(storage, "MAX_USER_DAY_BYTES", 30 * 1024 * 1024)
+
+    #У каждого своя беседа: потолок персональный, и проверять его надо там, где отказ
+    #может прийти ТОЛЬКО из-за него. Пусти второго в чужую беседу — и 403 «не участник»
+    #прочитался бы как сработавший лимит, то есть тест доказывал бы не то.
+    conv_b = client.post("/web/messenger/chats/group",
+                         json={"title": "Файлы Б"}, headers=b).json()["conversation_id"]
+
+    def _sign(headers, mb=10, where=None):
+        return client.post("/web/messenger/uploads/sign", headers=headers,
+                           json={"conversation_id": where or conv, "name": "лекция.pdf",
+                                 "size": mb * 1024 * 1024, "mime": "application/pdf"})
+
+    for i in range(3):
+        assert _sign(a).status_code == 200, "законная загрузка №%d отклонена" % (i + 1)
+
+    over = _sign(a)
+    assert over.status_code == 429, (
+        "четвёртая загрузка прошла — суточного потолка нет, один аккаунт займёт "
+        "хранилище целиком")
+    #Отказ обязан НАЗЫВАТЬ причину: «попробуйте позже» без цифр отправит человека к
+    #администратору выяснять, что сломалось.
+    assert "МБ" in over.json()["detail"]
+
+    #⚠️ Потолок ПЕРСОНАЛЬНЫЙ. Общий на всех превратил бы одного шумного пользователя в
+    #отказ для всего колледжа — ровно то, от чего защищаемся.
+    assert _sign(b, where=conv_b).status_code == 200, \
+        "лимит одного человека закрыл загрузку другому"
+
+    #Файл, который ВЛЕЗАЕТ в остаток, принимается: потолок ограничивает объём, а не
+    #число попыток. Иначе человек с одним недогруженным файлом остался бы без вложений
+    #на сутки.
+    monkeypatch.setattr(storage, "MAX_USER_DAY_BYTES", 35 * 1024 * 1024)
+    assert _sign(a, mb=4).status_code == 200, "мелкий файл не пустили в оставшийся объём"
+
+
 def test_someone_elses_attachment_cannot_be_signed_onto_a_message(client, monkeypatch):
     """Чужим вложением подписаться нельзя.
 

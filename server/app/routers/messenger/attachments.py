@@ -18,7 +18,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import os
@@ -40,6 +40,30 @@ _VIDEO_HOSTS = ("youtube.com", "youtu.be", "vk.com", "vkvideo.ru", "rutube.ru")
 
 def _iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _uploaded_last_day(db: Session, user_id: str) -> int:
+    """Сколько байт этот человек занял вложениями за последние сутки.
+
+    ⚠️ СЧИТАЕМ ВСЕ ЗАПИСИ, включая неподтверждённые (`ready=False`), и это осознанный
+    размен. Подтверждение приходит от КЛИЕНТА: подписав загрузку и не подтвердив её,
+    можно было бы залить сколько угодно, и ни один байт не попал бы в счёт. Считать надо
+    то, что ограничивает диск в ХУДШЕМ случае, а не то, о чём клиент отчитался.
+    Цена честная: несколько оборванных загрузок съедают часть суточного лимита до конца
+    суток. При потолке в 200 МБ это заметно только тому, кто и так близок к границе.
+
+    ⚠️ Окно скользящее (24 часа назад от «сейчас»), а не «с полуночи». С полуночью лимит
+    обнуляется разом у всех, и в 00:01 можно занять двойную норму за пару минут.
+
+    ⚠️ Метка `created_at` — строка ISO в UTC (так её пишет весь мессенджер), поэтому
+    сравнение строковое и это корректно: ISO-8601 в UTC сортируется как текст.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    rows = (db.query(Attachment.size)
+            .filter(Attachment.uploader_id == user_id,
+                    Attachment.created_at >= since)
+            .all())
+    return sum(int(r[0] or 0) for r in rows)
 
 
 def _att_out(a: Attachment) -> dict:
@@ -73,6 +97,21 @@ def sign_upload(payload: dict = Body(...), user: User = Depends(get_current_user
                             detail=f"Файл больше {storage.MAX_SIZE // (1024 * 1024)} МБ")
     if not storage.mime_ok(mime):
         raise HTTPException(status_code=415, detail="Такой тип файла не поддерживается")
+
+    #━━ СУТОЧНЫЙ ПОТОЛОК НА ЧЕЛОВЕКА ━━
+    #Находка пентеста 3.7.8 (п. 2): потолок на ОДИН файл был, а на пользователя за сутки —
+    #нет. Один аккаунт занимал хранилище целиком за вечер, и остальные получали «места
+    #нет» — отказ, который выглядит как поломка сервера, а не как чьё-то злоупотребление.
+    used = _uploaded_last_day(db, user.id)
+    if used + size > storage.MAX_USER_DAY_BYTES:
+        left = max(0, storage.MAX_USER_DAY_BYTES - used)
+        raise HTTPException(
+            status_code=429,
+            detail=("Сегодня уже загружено %d МБ из %d. Осталось %d МБ — "
+                    "попробуйте завтра или отправьте файл меньше."
+                    % (used // (1024 * 1024),
+                       storage.MAX_USER_DAY_BYTES // (1024 * 1024),
+                       left // (1024 * 1024))))
 
     att_id = f"att:{uuid4().hex}"
     key = storage.object_key(conv_id, att_id)

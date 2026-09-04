@@ -760,19 +760,38 @@ def migrate_step(step_id: str, source: dict, target: dict) -> dict:
 
 #Разложено отдельной строкой, чтобы шаг читался: создаём окружение, ставим зависимости
 #и прописываем ровно ту же службу, что работает сейчас.
+#
+#🔥 ЗДЕСЬ БЫЛ НАСТОЯЩИЙ ДЕФЕКТ, И СРАБОТАЛ БЫ ОН РОВНО В ДЕНЬ ПЕРЕЕЗДА (найдено
+#04.09.2026). Пакеты ставились РУКОПИСНЫМ СПИСКОМ из пяти штук:
+#    fastapi uvicorn sqlalchemy python-multipart httpx
+#В нём не было НИЧЕГО из того, что добавлялось после его написания: `gostcrypto` и
+#`cryptography` (хеш пароля и шифрование ПДн), `sqlcipher3-binary` (шифрование файла
+#базы — то есть перенесённый сервер держал бы ПДн студентов открытым текстом),
+#`python-jose` (JWT — вход не работал бы вовсе), `openpyxl`/`python-docx` (выгрузки),
+#`webauthn`, `gigachat`, `pdfplumber`, `requests`, `pydantic`, `starlette`.
+#Часть отказов была бы ГРОМКОЙ (сервер не поднялся), а часть — ТИХОЙ, и это хуже:
+#шифрование базы просто не включилось бы, и узнали бы об этом на проверке.
+#
+#Правило то же, что уже записано для сборки .exe и для деплоя: **список зависимостей,
+#перечисленный руками, верен ровно в день, когда его написали.** Ставим из файла.
 _INSTALL_SERVICE = r"""
 set -e
 cd /root/gb-deploy
 python3 -m venv venv 2>/dev/null || true
 ./venv/bin/pip install --quiet --upgrade pip
-./venv/bin/pip install --quiet fastapi uvicorn sqlalchemy python-multipart httpx
+if [ -f server/requirements.txt ]; then
+  ./venv/bin/pip install --quiet -r server/requirements.txt
+else
+  echo "НЕТ server/requirements.txt — ставить нечего, шаг провален" >&2
+  exit 1
+fi
 cat > /etc/systemd/system/gradebook.service <<'UNIT'
 [Unit]
 Description=GradeBookAI API + site
 After=network.target
 [Service]
 WorkingDirectory=/root/gb-deploy/server
-ExecStart=/root/gb-deploy/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/root/gb-deploy/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop uvloop --http httptools
 Restart=always
 User=root
 [Install]

@@ -58,7 +58,10 @@ def admin_server_info(request: Request = None,
         "version": desktop_update.APP_VERSION,
         "status": "работает",
         "uptime_sec": int(_time.time() - _SERVER_START_TS),
-        "db_kind": "PostgreSQL" if not is_sqlite else "SQLite",
+        #База у продукта одна (SQLite), поэтому здесь больше нечего выбирать. Прежняя
+        #запись «PostgreSQL, если не SQLite» была не просто лишней веткой: на бою она
+        #никогда не срабатывала, но обещала администратору, что вторая СУБД возможна.
+        "db_kind": "SQLite",
         "db_file_encrypted": sqlcipher,          # файл БД шифруется целиком (SQLCipher AES-256)
         "pdn_field_encrypted": gost.enabled(),   # поля ПДн (телефон) шифруются «Кузнечик»
         "crypto_backend": bi.get("backend", ""),

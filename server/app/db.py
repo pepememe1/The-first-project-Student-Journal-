@@ -1,8 +1,23 @@
 """
 db.py — Подключение к базе (SQLAlchemy).
 
-Один и тот же код работает и с SQLite (разработка), и с PostgreSQL (боевой
-сервер ВСГУТУ) — отличается только строка подключения GRADEBOOK_DB_URL.
+━━ БАЗА У ПРОДУКТА ОДНА: SQLite (+ SQLCipher на бою) ━━
+Решение 04.09.2026, Ярослав: PostgreSQL из проекта убран ЦЕЛИКОМ. Причина не в
+идеологии, а в том, что двух баз у нас никогда и не было по-настоящему: на бою
+всё время работал SQLite под SQLCipher (проверено 02.09.2026 — `systemctl is-active
+postgresql` отвечал inactive), а ветка PostgreSQL не проверялась НИ РАЗУ ни одним
+прогоном. То есть в коде жил второй, непроверенный путь, про который документация
+уверенно писала «на бою он и работает», и по этой неправде уже строились планы.
+
+⚠️ **Непроверенная ветка хуже отсутствующей.** Она даёт ложную уверенность («у нас
+поддержаны обе СУБД»), требует оглядки при каждой миграции и при этом не защищена
+ни одним тестом. Убрать её — не потеря возможности, а приведение кода к тому, что
+есть на самом деле.
+
+⚠️ Что это НЕ значит: масштаб мы не потеряли. Узкое место SQLite — одновременная
+ЗАПИСЬ, и она закрыта режимом WAL плюс `busy_timeout` (см. `_sqlite_pragmas`), а
+объёмы колледжа — тысячи строк, а не миллионы. На машине ВСГУТУ (Ryzen 9, 32 ГБ)
+запас только вырастет.
 """
 import re
 
@@ -113,7 +128,8 @@ def _sqlite_pragmas(dbapi_conn, _rec):
     этих PRAGMA SQLite сериализует запись и при конфликте СРАЗУ падает «database is
     locked». С WAL читатели не блокируют писателя, а busy_timeout заставляет
     писателей ЖДАТЬ освобождения блокировки, а не падать. (Как в десктопном core.py.)
-    Для настоящего масштаба всё равно PostgreSQL — но SQLite так держится дольше.
+    Именно эти PRAGMA, а не другая СУБД, и держат нагрузку колледжа: узкое место
+    SQLite — одновременная ЗАПИСЬ, и WAL с ожиданием блокировки закрывают ровно её.
 
     ⚠️ Обычная функция, а не @event.listens_for: тот же хук нужно навесить и на НОВЫЙ
     движок после `rebind()` — декоратор привязал бы его только к первому."""
@@ -122,17 +138,22 @@ def _sqlite_pragmas(dbapi_conn, _rec):
     cur.execute("PRAGMA busy_timeout=5000")    #ждать блокировку до 5 c, а не падать
     cur.execute("PRAGMA synchronous=NORMAL")   #безопасно и быстрее при WAL
 
-    # ━━ ПАМЯТЬ: НАСТРОЙКА ПОД БОЕВУЮ МАШИНУ, А НЕ «ПОБОЛЬШЕ» ━━━━━━━━━━━━━━━━━━━━━━━━
-    # На бою одно ядро и 960 МБ, из которых Python с Caddy уже занимают около 450.
-    # Раздать SQLite «сколько не жалко» здесь — прямой путь в swap, где база станет
-    # медленнее, чем была: своп на дешёвом диске VPS дороже любого промаха кеша.
+    # ━━ ПАМЯТЬ: РАЗМЕР КЕША СПРАШИВАЕМ У МАШИНЫ, А НЕ ПИШЕМ ЧИСЛОМ ━━━━━━━━━━━━━━━━━━
+    # Здесь стояло жёсткое `-4000` (4 МБ), и для нынешнего боя это ПРАВИЛЬНОЕ число:
+    # одно ядро и 960 МБ, из которых Python с Caddy уже занимают около 450; боевой файл
+    # базы — около 3 МБ, то есть 4 МБ вмещают его целиком вместе с индексами, а всё
+    # лишнее ушло бы в своп и сделало базу МЕДЛЕННЕЕ, чем она была.
     #
-    # ⚠️ Числа выбраны ПО РАЗМЕРУ БАЗЫ, а не по вкусу: боевой файл — 2.7 МБ, то есть
-    # 4 МБ кеша вмещают его ЦЕЛИКОМ вместе с индексами. Больше давать бессмысленно:
-    # кешировать нечего. Минус означает килобайты (-4000 = 4 МБ), а не число страниц —
-    # запись через число страниц зависела бы от page_size и молча поехала бы при его
-    # смене.
-    cur.execute("PRAGMA cache_size=-4000")
+    # ⚠️ Но это снимок ОДНОЙ машины, а сервер переезжает на компьютер ВСГУТУ (32 ГБ).
+    # Там те же 4 МБ — не бережливость, а забытая настройка: её пришлось бы ВСПОМНИТЬ и
+    # поправить руками, а забывают такое ровно в день переезда. Поэтому число приходит
+    # из `hostcaps.sqlite_cache_kib()`: на слабой машине оно то же самое, что и было
+    # (проверенное на бою поведение переезд менять не имеет права), на мощной — больше.
+    #
+    # ⚠️ Минус означает килобайты (-4000 = 4 МБ), а не число страниц: запись через
+    # страницы зависела бы от page_size и молча поехала бы при его смене.
+    from . import hostcaps
+    cur.execute("PRAGMA cache_size=-%d" % hostcaps.sqlite_cache_kib())
     # Временные таблицы (сортировки отчётов куратора, поиск по переписке) — в памяти.
     # Они небольшие и живут доли секунды, а на диске это лишняя запись на том же SSD,
     # куда одновременно идёт WAL.
@@ -295,7 +316,6 @@ def _ensure_message_addon_columns():
         columns = {c["name"] for c in insp.get_columns("messages")}
     except Exception:
         return          #таблицы ещё нет — create_all создал её сразу со столбцами
-    is_pg = engine.url.get_backend_name().startswith("postgres")
     #⚠️ Новая колонка в СУЩЕСТВУЮЩЕЙ таблице заводится только здесь: `create_all`
     #досоздаёт лишь отсутствующие ТАБЛИЦЫ. В свежей тестовой БД ветка «колонки не было»
     #не срабатывает никогда, поэтому зелёные тесты про эту миграцию ничего не говорят —
@@ -304,7 +324,7 @@ def _ensure_message_addon_columns():
               ("body_format", "VARCHAR DEFAULT 'markdown'"),
               ("client_nonce", "VARCHAR DEFAULT ''"),
               ("attachment_id", "VARCHAR DEFAULT ''"),
-              ("mentions", "JSONB" if is_pg else "JSON"))
+              ("mentions", "JSON"))
     with engine.begin() as conn:
         for name, coltype in wanted:
             if name not in columns:
@@ -516,12 +536,11 @@ def _ensure_user_prefs_column():
         return  #таблицы ещё нет — её только что создал create_all со столбцом
     if "prefs" in columns:
         return
-    #Тип столбца для JSON: в SQLite это TEXT, в PostgreSQL — JSON/JSONB. Берём
-    #нейтральный JSON — SQLAlchemy/драйвер отобразит его в подходящий тип СУБД.
-    is_pg = engine.url.get_backend_name().startswith("postgres")
-    coltype = "JSONB" if is_pg else "JSON"
+    #Тип столбца — JSON: в SQLite он хранится как TEXT, а SQLAlchemy сам сериализует
+    #и разбирает значение. База у продукта одна (см. шапку модуля), поэтому выбирать
+    #тип по СУБД больше не нужно.
     with engine.begin() as conn:
-        conn.execute(text(f"ALTER TABLE users ADD COLUMN prefs {coltype}"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN prefs JSON"))
 
 
 def _ensure_user_patronymic_column():
@@ -776,10 +795,8 @@ def _ensure_user_curated_groups_column():
         return
     if "curated_groups" in columns:
         return
-    is_pg = engine.url.get_backend_name().startswith("postgres")
-    coltype = "JSONB" if is_pg else "JSON"
     with engine.begin() as conn:
-        conn.execute(text(f"ALTER TABLE users ADD COLUMN curated_groups {coltype}"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN curated_groups JSON"))
 
 
 def _ensure_notify_event_columns():
@@ -796,12 +813,11 @@ def _ensure_notify_event_columns():
         columns = {c["name"] for c in insp.get_columns("notify_events")}
     except Exception:
         return          #таблицы ещё нет — create_all создал её сразу со столбцами
-    is_pg = engine.url.get_backend_name().startswith("postgres")
     #Столбцы добавляем по одному: часть могла появиться в прошлый запуск, а СУБД
     #откажет на попытке добавить уже существующий.
     wanted = (("title", "VARCHAR DEFAULT ''"),
               ("body", "VARCHAR DEFAULT ''"),
-              ("payload", "JSONB" if is_pg else "JSON"),
+              ("payload", "JSON"),
               #Автор и метка партии — для вкладки «Отправленные». У писем, накопленных
               #до этой правки, останутся пустыми: кто их отправил, задним числом не
               #восстановить, и придумывать автора нельзя.

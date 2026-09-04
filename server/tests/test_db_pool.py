@@ -28,7 +28,7 @@ def test_sqlcipher_engine_uses_queuepool_not_singletonthread(monkeypatch):
 
 def test_app_engine_pool_is_safe():
     """У боевого движка приложения пул не должен быть SingletonThreadPool ни при каких
-    настройках (ни SQLite-файл, ни SQLCipher, ни PostgreSQL)."""
+    настройках — ни обычный SQLite-файл, ни SQLCipher."""
     from sqlalchemy.pool import SingletonThreadPool
     from app.db import engine
     assert not isinstance(engine.pool, SingletonThreadPool), \

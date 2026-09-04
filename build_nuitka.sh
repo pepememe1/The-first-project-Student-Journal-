@@ -354,7 +354,6 @@ echo "== Nuitka старт $(date +%T) (Python: $PYEXE) =="
   --nofollow-import-to=sounddevice \
   --nofollow-import-to=scipy \
   --nofollow-import-to=pyttsx3 \
-  --nofollow-import-to=psycopg2 \
   --remove-output
 echo "== Nuitka конец $(date +%T), код $? =="
 ls -la nuitka_out/GradeBookAI.exe 2>&1
