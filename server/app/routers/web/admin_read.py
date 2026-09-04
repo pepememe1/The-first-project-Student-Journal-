@@ -81,14 +81,25 @@ def admin_students(group: str = Query(""),
 
 
 @router.get("/admin/groups")
-def admin_groups(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    rows = db.query(Group).filter(Group.deleted == False).order_by(Group.name).all()  # noqa: E712
+def admin_groups(include_archived: bool = Query(False),
+                 _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Список групп. Архивные по умолчанию НЕ показываются.
+
+    ⚠️ Флаг именно на ВКЛЮЧЕНИЕ, а не на исключение: иначе архив не значил бы ничего —
+    выпустившиеся группы продолжали бы висеть в каждом выпадающем списке, ради чего его
+    и заводили. Кому нужен полный перечень (перенос студента в живую группу из
+    архивной), тот просит явно."""
+    q = db.query(Group).filter(Group.deleted == False)  # noqa: E712
+    if not include_archived:
+        q = q.filter(Group.archived == False)  # noqa: E712
+    rows = q.order_by(Group.name).all()
     out = []
     for g in rows:
         n = db.query(User).filter(User.role == "student", User.group_name == g.name,
                                   User.deleted == False).count()  # noqa: E712
         out.append({"name": g.name, "subjects": list(g.subjects or []), "students": n,
-                    "category": g.category or "college"})
+                    "category": g.category or "college",
+                    "archived": bool(g.archived)})
     return {"groups": out}
 
 
@@ -136,6 +147,32 @@ def admin_group_hours(group: str = Query(...), year: str = Query(""), semester: 
                     "split": bool(row and row.split),
                     "teacher_id_2": tid2, "teacher_name_2": tnames.get(tid2, "")})
     return {"group": group, "term": {"year": ty, "semester": ts}, "subjects": out}
+
+
+@router.get("/admin/group-archive")
+def admin_group_archive(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Архив групп: уже убранные + кандидаты на уборку.
+
+    Кандидаты — ПРЕДЛОЖЕНИЕ, а не свершившийся факт (см. `group_archive`): группа
+    пропадает из расписания и при сбое портала, а за ней живые студенты и оценки.
+    Ручка ничего не меняет — её можно открывать сколько угодно раз."""
+    from ... import group_archive as GA
+    return {"archived": GA.archived_list(db), "candidates": GA.candidates(db)}
+
+
+@router.get("/admin/group-archive/detail")
+def admin_group_archive_detail(group: str = Query(...),
+                               _admin: User = Depends(require_admin),
+                               db: Session = Depends(get_db)):
+    """Карточка архивной группы: предметы, студенты, преподаватели, кураторы.
+
+    ⚠️ Имя группы приходит ПАРАМЕТРОМ ЗАПРОСА, а не сегментом пути: Starlette
+    раскодирует `%2F` ДО роутинга, и «К74/1» разваливает путь на лишний сегмент."""
+    from ... import group_archive as GA
+    data = GA.detail(db, group)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    return data
 
 
 @router.get("/admin/group-subject-archive")

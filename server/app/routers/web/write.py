@@ -586,6 +586,52 @@ def _norm_category(value) -> str:
 
 
 # --- Группы (CRUD) --- id=grp:name (как в sync_engine); удаление мягкое (надгробие).
+@router.post("/admin/groups/archive")
+def admin_archive_group(payload: dict = Body(...),
+                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Убрать группу в архив или вернуть обратно (`{"group": "К74/1", "archived": true}`).
+
+    ⚠️ Имя группы — В ТЕЛЕ, а не в пути: Starlette раскодирует `%2F` до роутинга, и
+    «К74/1» разваливает маршрут на лишний сегмент.
+
+    ⚠️ Дверь наружу обязательна и живёт в этой же ручке. Архив по ошибке без неё
+    исправлялся бы только правкой базы руками."""
+    from ... import group_archive as GA
+    name = (payload.get("group") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Нужно название группы")
+    to_archive = bool(payload.get("archived", True))
+    row = (GA.archive(db, name, (payload.get("reason") or "").strip())
+           if to_archive else GA.unarchive(db, name))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin",
+              action="group.archive" if to_archive else "group.unarchive", target=name)
+    return {"ok": True, "group": name, "archived": bool(row.archived),
+            "archived_reason": row.archived_reason or ""}
+
+
+@router.post("/admin/groups/archive-witness")
+def admin_group_archive_witness(_admin: User = Depends(require_admin),
+                                db: Session = Depends(get_db)):
+    """Пересчитать свидетельства о курсах — «запомнить, где группы стоят сейчас».
+
+    Отдельная ручка, потому что запись НЕ ДОЛЖНА происходить при чтении списка: иначе
+    первый же показ кандидатов стирал бы основание, по которому они туда попали, и
+    второй показ выдавал бы пустоту — отказ, выглядящий как «само починилось»."""
+    from ... import group_archive as GA
+    changed = 0
+    for row in db.query(Group).filter(Group.deleted == False,  # noqa: E712
+                                      Group.archived == False).all():  # noqa: E712
+        if GA.witness(db, row, W.group_course(db, row.name)):
+            changed += 1
+    db.commit()
+    audit.log(db, actor=_admin.login, role="admin", action="group.archive_witness",
+              target=str(changed))
+    return {"ok": True, "updated": changed}
+
+
 @router.post("/admin/groups")
 def admin_create_group(payload: dict = Body(...),
                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):

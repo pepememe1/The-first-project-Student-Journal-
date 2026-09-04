@@ -116,8 +116,15 @@ def test_overview_does_not_blend_a_recurring_subject_across_past_courses(client)
     #текущим, средний стал 0.0 вместо 5.0. Это не дефект продукта, а сторож со снимком
     #значения — тот самый класс, от которого мы отучаемся: проверять надо СВОЙСТВО
     #(«прошлый курс не подмешивается к нынешнему»), а не конкретный учебный год.
-    from app.db import default_term
-    cur_year, cur_sem = default_term()
+    #Термин берём тем же способом, каким его определяет ПРОДУКТ: `current_term`
+    #учитывает оверрайд администратора, а `default_term` знает только календарь.
+    from app.webdata import current_term, load_config
+    from app.db import SessionLocal
+    _db = SessionLocal()
+    try:
+        cur_year, cur_sem = current_term(load_config(_db))
+    finally:
+        _db.close()
     old_year = f"{int(cur_year.split('/')[0]) - 3}/{int(cur_year.split('/')[1]) - 3}"
     old_lesson = {"id": "PhysOld", "group_name": "ИС-99", "subject": "Физическая культура",
                   "type": "Практика", "number": 1, "topic": "т", "date": "01.09.2022",

@@ -18,7 +18,7 @@ from ..models import User, AuthSession, set_user_password
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import verify_password, create_token_full, decode_token
 from ..config import issue_ttl_min, session_ttl_min
-from .. import throttle, events, audit
+from .. import throttle, events, audit, canary
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -123,6 +123,23 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     login_str = body.login.strip()
     ip = throttle.client_ip(request)
     web = is_web_client(request)
+
+    #🍯 HONEYTOKEN. Этот логин может утечь ТОЛЬКО вместе с дампом базы или файлом
+    #окружения: угадать его нельзя, а законный человек его не знает. Поэтому попытка
+    #входа под ним — не подозрение, а ДОКАЗАТЕЛЬСТВО утечки (`app/canary.py`).
+    #⚠️ Проверка стоит ДО поиска пользователя и до сверки пароля: строки в `users` для
+    #него нет и быть не должно (приманка в таблице попала бы в списки, выгрузки и
+    #средние баллы — см. запрет в шапке canary.py).
+    #⚠️ Ответ ТОТ ЖЕ, что при обычной неудаче: сказать «это приманка» значит объяснить
+    #атакующему, какие данные у него помечены.
+    if canary.is_honeytoken(login_str):
+        throttle.ban_ip(ip, canary.BAN_SECONDS)
+        try:
+            events.record("security", "honeytoken_used",
+                          "попытка входа под учёткой-приманкой", ip=ip)
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     #Барьер устройства ДО сверки пароля: неодобренный ПК не должен входить (даже зная
     #верные креды), и не нужно дёргать дорогой PBKDF2 ради него. ДЕСКТОП (и любой не-веб

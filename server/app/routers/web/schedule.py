@@ -76,13 +76,28 @@ def _apply_overrides(db: Session, group: str, data) -> dict:
              for wk, dd in (base.get("weeks") or {}).items()}
     for ov in ovs:
         wk, day = str(ov.week), ov.day
+        sub = int(ov.subgroup or 0)
         daylist = weeks.setdefault(wk, {}).setdefault(day, [])
-        daylist[:] = [x for x in daylist if x.get("pair_no") != ov.pair_no]   # убрать старую
+        # 🔥 Вытесняем ТОЛЬКО свою подгруппу, а не весь номер пары. Раньше здесь стояло
+        # «убрать всё с этим pair_no», и вторая пара в том же слоте стирала первую — то
+        # есть у разных подгрупп физически не могло быть разных предметов в первой паре,
+        # хотя у преподавателя и студента такое расписание уже показывалось.
+        # ⚠️ Пара «Совместно» (0) вытесняет ВСЁ в слоте, и это правильно: она объявлена
+        # для всей группы, и оставить под ней чью-то половинную пару значило бы показать
+        # человеку два занятия в одно время.
+        if sub:
+            daylist[:] = [x for x in daylist
+                          if x.get("pair_no") != ov.pair_no or int(x.get("subgroup") or 0) not in (0, sub)]
+        else:
+            daylist[:] = [x for x in daylist if x.get("pair_no") != ov.pair_no]
         if ov.action == "set":
             daylist.append({"pair_no": ov.pair_no, "time": ov.time, "kind": ov.kind,
                             "subject": ov.subject, "teacher": ov.teacher, "room": ov.room,
+                            "subgroup": sub,
                             "raw": ov.subject, "extra": "", "_override": True})
-        daylist.sort(key=lambda x: x.get("pair_no") or 0)
+        # Внутри одного номера пары порядок задаёт подгруппа — иначе две половины
+        # прыгали бы местами между загрузками, и это читалось бы как «расписание меняется».
+        daylist.sort(key=lambda x: (x.get("pair_no") or 0, int(x.get("subgroup") or 0)))
     base["weeks"] = weeks
     return base
 
@@ -189,7 +204,8 @@ def admin_schedule_get(group: str = Query(...), category: str = Query(""),
         "days": _OV_DAYS,
         "overrides": [{"id": o.id, "week": o.week, "day": o.day, "pair_no": o.pair_no,
                        "action": o.action, "subject": o.subject, "time": o.time,
-                       "room": o.room, "teacher": o.teacher, "kind": o.kind} for o in ovs],
+                       "room": o.room, "teacher": o.teacher, "kind": o.kind,
+                       "subgroup": int(o.subgroup or 0)} for o in ovs],
     }
 
 
@@ -203,25 +219,33 @@ def _apply_override_row(db: Session, payload: dict) -> ScheduleOverride:
     try:
         week = int(payload.get("week") or 1)
         pair_no = int(payload.get("pair_no") or 0)
+        subgroup = int(payload.get("subgroup") or 0)
     except (TypeError, ValueError):
-        raise HTTPException(400, "week и pair_no должны быть числами")
+        raise HTTPException(400, "week, pair_no и subgroup должны быть числами")
     if not g or day not in _OV_DAYS or week not in (1, 2) or pair_no < 1:
         raise HTTPException(400, "Проверьте группу, неделю (1/2), день и номер пары")
+    if subgroup not in (0, 1, 2):
+        raise HTTPException(400, "subgroup: 0 (вся группа), 1 или 2")
     if action not in ("set", "remove"):
         raise HTTPException(400, "action: set | remove")
     #Детерминированный id ячейки — один и тот же на вебе и десктопе (ключ синка): повторная
-    #правка той же ячейки ЗАМЕНЯЕТ прежнюю на обеих платформах.
-    oid = schedule_override_id(g, week, day, pair_no)
+    #правка ТОЙ ЖЕ ячейки И ТОЙ ЖЕ подгруппы заменяет прежнюю на обеих платформах.
+    #⚠️ Подгруппа входит в ключ (см. `schedule_override_id`) — без неё вторая пара с тем
+    #же номером затирала первую вместе с чужой работой.
+    oid = schedule_override_id(g, week, day, pair_no, subgroup)
     row = db.get(ScheduleOverride, oid)
     #Снимок ДО правки. Нужен, чтобы НЕ двигать updated_at, когда ничего не изменилось:
     #админ часто открывает ячейку и сохраняет её не тронув, а лишний бамп метки отправил
     #бы строку в дельту синка на все ПК без единой реальной правки.
     #(Уведомления здесь ни при чём — они уходят одной пачкой по кнопке «Опубликовать».)
     before = None if row is None else (row.action, row.subject, row.time, row.room,
-                                       row.teacher, row.kind, bool(row.deleted))
+                                       row.teacher, row.kind, int(row.subgroup or 0),
+                                       bool(row.deleted))
     if row is None:
-        row = ScheduleOverride(id=oid, group_name=g, week=week, day=day, pair_no=pair_no)
+        row = ScheduleOverride(id=oid, group_name=g, week=week, day=day, pair_no=pair_no,
+                               subgroup=subgroup)
         db.add(row)
+    row.subgroup = subgroup
     row.action = action
     row.subject = (payload.get("subject") or "").strip()
     row.time = (payload.get("time") or "").strip()
@@ -229,7 +253,8 @@ def _apply_override_row(db: Session, payload: dict) -> ScheduleOverride:
     row.teacher = (payload.get("teacher") or "").strip()
     row.kind = (payload.get("kind") or "").strip()
     row.deleted = False
-    after = (row.action, row.subject, row.time, row.room, row.teacher, row.kind, False)
+    after = (row.action, row.subject, row.time, row.room, row.teacher, row.kind,
+             subgroup, False)
     if before != after:
         row.updated_at = _now_iso()
     return row

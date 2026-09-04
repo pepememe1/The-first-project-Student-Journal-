@@ -151,7 +151,15 @@ const conflicts = reactive(new Set())
 const dirty = computed(() => Object.keys(pending).length > 0)
 const pairTimes = computed(() => base.value?.pair_times?.length ? base.value.pair_times : DEFAULT_TIMES)
 
-function key(day, slot) { return `${week.value}|${day}|${slot}` }
+// 🔥 ПОДГРУППА ВХОДИТ В КЛЮЧ ЧЕРНОВИКА (жалоба Влада 03.09.2026: «если выставить тот
+// номер пары, который уже есть, новая пара заменяет полностью старую»). Ключ без неё
+// означал ровно одну пару в ячейке, и вторая затирала первую молча — здесь, в
+// черновике, так же как и на сервере.
+// ⚠️ У «Совместно» (0) хвоста НЕТ — иначе ключи всех уже существующих правок сменились
+// бы, и сохранённые пары перестали бы узнаваться (`savedKeys`, `conflicts`).
+function key(day, slot, subgroup = 0) {
+  return `${week.value}|${day}|${slot}` + (Number(subgroup) ? `|${Number(subgroup)}` : '')
+}
 function timeForSlot(slot) { return pairTimes.value[slot - 1] || '' }
 
 // Сколько строк-слотов рисовать: минимум 6, но если где-то есть пара с бо́льшим номером —
@@ -183,6 +191,32 @@ function cell(day, slot) {
   }
   const found = basePairs(day).find((p) => Number(p.pair_no) === slot)
   return found ? { ...found, _pending: false } : null
+}
+
+/** Вторая пара слота — та, что у другой подгруппы. null, если её нет.
+ *
+ * ⚠️ Без этого сетка админки показывала бы ОДНУ пару из двух: данные сохранены верно и
+ * студенту с преподавателем видны обе, а администратор, который их и завёл, видит одну
+ * — то есть выглядит как потеря, хотя ничего не потеряно. Ровно та жалоба, с которой
+ * всё началось, только в другом месте.
+ */
+function cellSecond(day, slot) {
+  const first = cell(day, slot)
+  if (!first) return null
+  const mine = Number(first.subgroup || 0)
+  for (const sub of [1, 2]) {
+    if (sub === mine) continue
+    const k = key(day, slot, sub)
+    if (k in pending) {
+      const op = pending[k]
+      if (op.action !== 'remove') return { pair_no: slot, ...op, _pending: true }
+      continue
+    }
+    const found = basePairs(day).find(
+      (p) => Number(p.pair_no) === slot && Number(p.subgroup || 0) === sub)
+    if (found && found !== first) return { ...found, _pending: false }
+  }
+  return null
 }
 
 function isPending(day, slot) { return key(day, slot) in pending }
@@ -227,8 +261,12 @@ async function saveDraft() {
   saving.value = true
   try {
     const overrides = Object.entries(pending).map(([k, op]) => {
-      const [w, day, slot] = k.split('|')
-      return { group: group.value, week: Number(w), day, pair_no: Number(slot), ...op }
+      // Хвост ключа — подгруппа; у «Совместно» его нет (см. `key`). Берём из операции,
+      // а к ключу обращаемся лишь как к запасному источнику: одна правда, второй
+      // разбор строки разошёлся бы с ней при первой же правке формы.
+      const [w, day, slot, sub] = k.split('|')
+      return { group: group.value, week: Number(w), day, pair_no: Number(slot),
+               subgroup: Number(op.subgroup ?? sub ?? 0), ...op }
     })
     await adminApi.saveScheduleOverrides(overrides)
     toast.success(locale.t('adminSchedule.saved', 'Расписание сохранено'))
@@ -288,7 +326,10 @@ async function checkSlot(day, slot, op) {
 
 // ── Форма пары (добавить / изменить / скрыть) ──────────────────────────────────────
 const showForm = ref(false)
-const form = reactive({ day: 'Пнд', slot: 1, subject: '', room: '', teacher: '', origin: null })
+// `subgroup`: 0 — пара всей группе, 1/2 — только своей половине. `time` правится вручную,
+// но по умолчанию подставляется по номеру пары.
+const form = reactive({ day: 'Пнд', slot: 1, subject: '', room: '', teacher: '',
+                        origin: null, subgroup: 0, time: '' })
 
 // Предмет выбран/сменился → преподаватель подставляется автоматом из назначения.
 // Не найдено назначения — поле остаётся пустым (не блокирует сохранение: расписание
@@ -297,8 +338,22 @@ function onFormSubjectChange() {
   form.teacher = teacherBySubject.value[form.subject]?.name || ''
 }
 function openAdd(day, slot) {
-  Object.assign(form, { day, slot, subject: '', room: '', teacher: '', origin: null })
+  // Номер и время продолжают предыдущую пару дня (просьба Влада: «время и номер
+  // становятся по порядку от предыдущей, но можно выставить вручную»). Клик по
+  // конкретной ячейке остаётся главнее подсказки — человек указал слот пальцем.
+  const proposed = slot || nextFreeSlot(day)
+  Object.assign(form, {
+    day, slot: proposed, subject: '', room: '', teacher: '', origin: null,
+    subgroup: 0, time: timeForSlot(proposed),
+  })
   showForm.value = true
+}
+
+/** Первый свободный номер пары в дне — «по порядку от предыдущей». */
+function nextFreeSlot(day) {
+  let last = 0
+  for (const s of slots.value) if (cell(day, s)) last = s
+  return Math.min(last + 1, slots.value.length ? slots.value[slots.value.length - 1] + 1 : 1)
 }
 function openEdit(day, slot) {
   const c = cell(day, slot)
@@ -317,13 +372,36 @@ async function submitForm() {
     pending[key(form.origin.day, form.origin.slot)] = { action: 'remove' }
     conflicts.delete(key(form.origin.day, form.origin.slot))
   }
+  // ⚠️ СЛОТ ЗАНЯТ — СПРАШИВАЕМ, А НЕ ЗАТИРАЕМ. Раньше вторая пара с тем же номером
+  // молча заменяла первую, и человек узнавал об этом, уже потеряв её. Предлагаем ровно
+  // тот исход, ради которого так делают: две подгруппы в одной паре.
+  let subgroup = Number(form.subgroup || 0)
+  const occupied = cell(form.day, form.slot)
+  if (occupied && !subgroup && !form.origin) {
+    const both = await confirm({
+      title: locale.t('adminSchedule.slotTakenTitle', 'В этой паре уже есть занятие'),
+      text: locale.t('adminSchedule.slotTakenText',
+        'Поставить оба — по одному на подгруппу? «Отмена» оставит как было.'),
+      okText: locale.t('adminSchedule.slotTakenOk', 'Две подгруппы'),
+    })
+    if (!both) return
+    // Занятое остаётся первой подгруппой, новое становится второй. Иначе пришлось бы
+    // переписывать чужую строку, а её автор об этом не просил.
+    subgroup = 2
+    const prev = pending[key(form.day, form.slot)] || { ...occupied, action: 'set' }
+    delete pending[key(form.day, form.slot)]
+    pending[key(form.day, form.slot, 1)] = { ...prev, subgroup: 1 }
+  }
+
   const op = {
     action: 'set', subject: form.subject.trim(), room: form.room.trim(),
     //Преподаватель — ставится автоматом из назначения (не ручной ввод, см. onFormSubjectChange).
     teacher: (teacherBySubject.value[form.subject]?.name || '').trim(), kind: '',
-    time: timeForSlot(form.slot),
+    //Время берётся из формы: оно подставляется по номеру пары, но правится вручную.
+    time: (form.time || '').trim() || timeForSlot(form.slot),
+    subgroup,
   }
-  pending[key(form.day, form.slot)] = op
+  pending[key(form.day, form.slot, subgroup)] = op
   showForm.value = false
   await checkSlot(form.day, form.slot, op)
 }
@@ -598,6 +676,17 @@ function isHover(day, slot) {
                     <p v-if="cell(day, slot).room || cell(day, slot).teacher" class="truncate text-tiny text-text3">
                       {{ [cell(day, slot).teacher, cell(day, slot).room ? locale.t('adminSchedule.roomLabel', { room: cell(day, slot).room }) : ''].filter(Boolean).join(' · ') }}
                     </p>
+                    <!-- Вторая подгруппа того же слота. Отделена чертой: без неё две
+                         строки читаются как одно занятие с длинным названием. -->
+                    <template v-if="cellSecond(day, slot)">
+                      <p class="mt-1 truncate border-t border-border2 pt-1 text-xs font-semibold text-text">
+                        {{ cellSecond(day, slot).subject || cellSecond(day, slot).raw }}
+                      </p>
+                      <p class="truncate text-tiny text-text3">
+                        {{ locale.t('adminSchedule.subgroupShort', { n: cellSecond(day, slot).subgroup }) }}
+                        <template v-if="cellSecond(day, slot).teacher"> · {{ cellSecond(day, slot).teacher }}</template>
+                      </p>
+                    </template>
                     <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')">⚠</span>
                     <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')">●</span>
                     <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')">✎</span>
@@ -658,6 +747,21 @@ function isHover(day, slot) {
             <p v-if="!groupSubjects.length" class="mt-1 text-tiny text-text3">
               {{ locale.t('adminSchedule.noSubjectsHint', 'У группы нет предметов — задайте их во вкладке «Группы».') }}
             </p>
+          </label>
+          <!-- Время подставляется по номеру пары, но правится руками: у замен и
+               консультаций оно регулярно не совпадает с сеткой звонков. -->
+          <label class="text-sm">{{ locale.t('adminSchedule.formTime', 'Время') }}
+            <input v-model="form.time" :placeholder="timeForSlot(form.slot)"
+                   class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+          </label>
+          <!-- Подгруппа: та же нумерация, что у занятий журнала (0 — вся группа). -->
+          <label class="text-sm">{{ locale.t('adminSchedule.formSubgroup', 'Подгруппа') }}
+            <select v-model.number="form.subgroup"
+                    class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+              <option :value="0">{{ locale.t('adminSchedule.subgroupJoint', 'Вся группа') }}</option>
+              <option :value="1">{{ locale.t('adminSchedule.subgroup1', '1 подгруппа') }}</option>
+              <option :value="2">{{ locale.t('adminSchedule.subgroup2', '2 подгруппа') }}</option>
+            </select>
           </label>
           <label class="text-sm">{{ locale.t('adminSchedule.formRoom', 'Аудитория') }}
             <input v-model="form.room" placeholder="101" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />

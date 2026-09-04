@@ -58,6 +58,7 @@ const AdminStudents = () => import('@/pages/admin/AdminStudents.vue')
 const AdminRegistrations = () => import('@/pages/admin/AdminRegistrations.vue')
 const AdminGroups = () => import('@/pages/admin/AdminGroups.vue')
 const AdminSubjectArchive = () => import('@/pages/admin/AdminSubjectArchive.vue')
+const AdminGroupArchive = () => import('@/pages/admin/AdminGroupArchive.vue')
 const AdminSubjects = () => import('@/pages/admin/AdminSubjects.vue')
 const AdminSchedule = () => import('@/pages/admin/AdminSchedule.vue')
 const AdminScheduleIssues = () => import('@/pages/admin/AdminScheduleIssues.vue')
@@ -200,6 +201,7 @@ export const routes = [
       page('parents', AdminParents, 'Родители', 'nav.parents'),
       page('registrations', AdminRegistrations, 'Заявки на регистрацию', 'nav.registrations'),
       page('groups', AdminGroups, 'Группы', 'nav.groups'),
+      page('group-archive', AdminGroupArchive, 'Архив групп', 'nav.groupArchive'),
       page('subject-archive', AdminSubjectArchive, 'Архив предметов', 'nav.subjectArchive'),
       page('subjects', AdminSubjects, 'Предметы', 'nav.subjects'),
       page('courses', CoursesPage, 'Курсы', 'nav.courses'),

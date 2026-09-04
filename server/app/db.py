@@ -186,6 +186,8 @@ def init_db():
     _ensure_lesson_subgroup_column()
     _ensure_group_specialty_columns()
     _ensure_group_category_column()
+    _ensure_group_archive_columns()
+    _ensure_schedule_override_subgroup_column()
     _ensure_auth_session_client_column()
     _ensure_quiz_time_limit_column()
     _ensure_quiz_kind_column()
@@ -446,6 +448,59 @@ def _ensure_group_category_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE groups ADD COLUMN category VARCHAR"))
+
+
+def _ensure_schedule_override_subgroup_column():
+    """Идемпотентная мини-миграция: schedule_overrides.subgroup (03.09.2026).
+
+    Позволяет двум разным предметам стоять в ОДНОЙ паре — по одному на подгруппу. До
+    этого вторая пара с тем же номером затирала первую, потому что номер входил в
+    первичный ключ.
+
+    ⚠️ Тот же паттерн, что у соседних миграций: `create_all` колонку в существующую
+    таблицу не добавляет никогда, а в свежей тестовой базе таблица создаётся сразу с
+    ней — ветка «колонки не было» там не исполняется, и зелёные тесты про эту миграцию
+    не значат ничего. Держит регрессия в `test_db_migrations.py`."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("schedule_overrides")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу с колонкой
+    if "subgroup" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE schedule_overrides ADD COLUMN subgroup INTEGER DEFAULT 0"))
+
+
+def _ensure_group_archive_columns():
+    """Идемпотентная мини-миграция: архив групп (03.09.2026).
+
+    `groups.archived/archived_at/archived_reason/last_course/last_course_year` — группа,
+    не перешедшая на следующий курс в новом учебном году, уходит в архив вместо удаления.
+
+    ⚠️ Тот же паттерн ALTER-по-одной, что и у четырёх миграций выше: `create_all`
+    досоздаёт только ОТСУТСТВУЮЩИЕ таблицы и НЕ добавляет колонки в существующие. В
+    свежей тестовой базе таблица создаётся сразу со всеми полями, поэтому ветка «колонки
+    не было» там не исполняется НИКОГДА — зелёные тесты про эту миграцию не значат
+    ничего, её держит отдельная регрессия в `test_db_migrations.py`."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("groups")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу со всеми колонками
+    adds = [
+        ("archived", "BOOLEAN DEFAULT 0"),
+        ("archived_at", "VARCHAR DEFAULT ''"),
+        ("archived_reason", "VARCHAR DEFAULT ''"),
+        ("last_course", "INTEGER"),
+        ("last_course_year", "VARCHAR DEFAULT ''"),
+    ]
+    with engine.begin() as conn:
+        for name, coltype in adds:
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE groups ADD COLUMN {name} {coltype}"))
 
 
 def _ensure_user_prefs_column():

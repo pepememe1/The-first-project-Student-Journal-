@@ -85,5 +85,17 @@ def admin_term_rollover(payload: dict = Body(default={}), request: Request = Non
         db.commit()
     except Exception as e:
         print(f"[curator_reports] не удалось архивировать отчёты term {cy}·{cs}: {e}")
+    #Свидетельство о курсе снимаем ДО того, как год сменится в глазах остальных: без
+    #«где группа стояла раньше» вычислить «не перешла на следующий курс» не из чего
+    #(см. `group_archive`). Сбой этой пометки не должен ронять сам перевод периода —
+    #то же правило, что у отчётов куратора выше.
+    try:
+        from ... import group_archive as GA
+        for grp in db.query(Group).filter(Group.deleted == False,  # noqa: E712
+                                          Group.archived == False).all():  # noqa: E712
+            GA.witness(db, grp, W.group_course(db, grp.name))
+        db.commit()
+    except Exception as e:
+        print(f"[group_archive] не удалось запомнить курсы групп: {e}")
     return {"ok": True, "previous": {"year": cy, "semester": cs},
             "current": {"year": new_year, "semester": new_sem}}

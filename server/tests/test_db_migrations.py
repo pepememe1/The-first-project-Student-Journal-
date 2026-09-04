@@ -345,3 +345,67 @@ def test_ensure_conversation_avatar_column_adds_to_old_schema(client):
         row = conn.execute(text("SELECT title, avatar FROM conversations")).fetchone()
     assert row[0] == "Старая группа"
     assert not (row[1] or ""), "старой беседе подставили какую-то картинку"
+def test_group_archive_columns_are_added_to_an_old_schema():
+    """groups.archived/… на СТАРОЙ схеме (архив групп, 03.09.2026).
+
+    ⚠️ Та же грабля, что у пяти миграций выше: `create_all` досоздаёт только отсутствующие
+    ТАБЛИЦЫ, а колонку в существующую — никогда. В свежей тестовой базе таблица
+    создаётся сразу со всеми полями, поэтому ветка «колонки не было» там не исполняется
+    и зелёные тесты про неё не значат ничего. Эмулируем старую схему явным DROP+CREATE.
+
+    Обратный ход проверен откатом: убери вызов `_ensure_group_archive_columns()` из
+    `db.init_db()` — этот тест продолжит проходить (он зовёт функцию сам), а вот
+    `test_group_archive.py` целиком ляжет на боевой схеме. Поэтому здесь проверяется
+    САМА миграция, а её ВЫЗОВ — тем, что продукт работает."""
+    from sqlalchemy import text, inspect
+    from app.db import engine, _ensure_group_archive_columns
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS groups"))
+        conn.execute(text(
+            "CREATE TABLE groups (id VARCHAR PRIMARY KEY, name VARCHAR, subjects JSON, "
+            "specialty_code VARCHAR, enrollment_year INTEGER, category VARCHAR, "
+            "updated_at VARCHAR, deleted BOOLEAN)"))
+    #Пул прогрет предыдущими тестами — без dispose инспектор увидит снимок ДО DDL.
+    engine.dispose()
+    before = {c["name"] for c in inspect(engine).get_columns("groups")}
+    assert "archived" not in before and "last_course" not in before
+
+    _ensure_group_archive_columns()
+    engine.dispose()
+    after = {c["name"] for c in inspect(engine).get_columns("groups")}
+    for col in ("archived", "archived_at", "archived_reason",
+                "last_course", "last_course_year"):
+        assert col in after, f"миграция не добавила {col}"
+
+    #Идемпотентность: второй прогон на уже мигрированной таблице не должен падать.
+    _ensure_group_archive_columns()
+
+
+def test_schedule_override_subgroup_column_is_added_to_an_old_schema():
+    """schedule_overrides.subgroup на СТАРОЙ схеме (подгруппы в паре, 03.09.2026).
+
+    ⚠️ Та же грабля, что у соседних миграций: `create_all` колонку в существующую
+    таблицу не добавляет никогда, а в свежей тестовой базе таблица создаётся сразу с
+    ней. Без этой регрессии на боевой базе не было бы поля, и КАЖДАЯ правка расписания
+    падала бы на «no such column» — то есть починка расписания сломала бы расписание."""
+    from sqlalchemy import text, inspect
+    from app.db import engine, _ensure_schedule_override_subgroup_column
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS schedule_overrides"))
+        conn.execute(text(
+            "CREATE TABLE schedule_overrides (id VARCHAR PRIMARY KEY, group_name VARCHAR, "
+            "week INTEGER, day VARCHAR, pair_no INTEGER, action VARCHAR, subject VARCHAR, "
+            "time VARCHAR, room VARCHAR, teacher VARCHAR, kind VARCHAR, "
+            "updated_at VARCHAR, deleted BOOLEAN)"))
+    #Пул прогрет предыдущими тестами — без dispose инспектор увидит снимок ДО DDL.
+    engine.dispose()
+    assert "subgroup" not in {c["name"] for c in inspect(engine).get_columns("schedule_overrides")}
+
+    _ensure_schedule_override_subgroup_column()
+    engine.dispose()
+    assert "subgroup" in {c["name"] for c in inspect(engine).get_columns("schedule_overrides")}
+
+    #Идемпотентность: повтор на уже мигрированной таблице не должен падать.
+    _ensure_schedule_override_subgroup_column()
