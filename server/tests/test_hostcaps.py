@@ -23,6 +23,25 @@ from app import hostcaps
 GB = 1024 ** 3
 
 
+@pytest.fixture(autouse=True)
+def _no_hardware_cache():
+    """Сбрасываем кэш ответов о железе перед КАЖДЫМ тестом.
+
+    ⚠️ Кэш глобален на процесс (иначе `nvidia-smi` запускался бы на каждое соединение с
+    базой — см. `test_hardware_is_probed_once...`). Значит порядок тестов начал бы
+    влиять на их результат: тест, подменяющий `subprocess`, получал бы ответ,
+    посчитанный предыдущим. Такой тест зелен или красен в зависимости от того, что
+    гоняли до него, — то есть проверяет не то, что написано.
+    """
+    hostcaps._gpu_cache = None
+    hostcaps._cpu_cache = None
+    hostcaps._tier_cache = None
+    yield
+    hostcaps._gpu_cache = None
+    hostcaps._cpu_cache = None
+    hostcaps._tier_cache = None
+
+
 @pytest.fixture
 def machine(monkeypatch):
     """Подменяет железо: memory/cpu_count/видеокарту и переменную окружения."""
@@ -174,3 +193,92 @@ def test_gpu_is_parsed_from_real_output(monkeypatch):
     assert card["present"] is True
     assert card["name"] == "NVIDIA GeForce RTX 4080"
     assert card["vram_mb"] == 16376
+
+
+def test_hardware_is_probed_once_not_on_every_database_connection(monkeypatch):
+    """🔥 ОПРОС ЖЕЛЕЗА НЕ ИМЕЕТ ПРАВА СТОЯТЬ НА ПУТИ ОТКРЫТИЯ СОЕДИНЕНИЯ.
+
+    Дефект, пойманный самопроверкой 05.09.2026 ДО выкладки. `sqlite_cache_kib()`
+    вызывается из `db._sqlite_pragmas`, то есть НА КАЖДОЕ НОВОЕ СОЕДИНЕНИЕ С БАЗОЙ.
+    Через `profile()` он доходил до `gpu()`, а тот ЗАПУСКАЕТ ПОДПРОЦЕСС `nvidia-smi`
+    с таймаутом 5 секунд.
+
+    Цена на боевой машине: порождение процесса на каждое соединение — десятки
+    миллисекунд в лучшем случае и пять секунд при зависшем драйвере, причём ровно
+    тогда, когда пул поднимает соединение под живым запросом человека.
+
+    ⚠️ Тесты класса машины были бы ЗЕЛЁНЫМИ рядом с этим дефектом: они проверяют,
+    ЧТО отвечает `hostcaps`, а не СКОЛЬКО РАЗ он для этого лезет в систему.
+
+    Обратный ход: убери кэш из `gpu()` (пусть каждый раз зовёт `_gpu_probe`) —
+    тест краснеет на втором вызове.
+    """
+    from app import hostcaps
+    calls = []
+
+    def _fake_probe():
+        calls.append(1)
+        return {"present": True, "name": "NVIDIA Fake", "vram_mb": 8192}
+
+    monkeypatch.setattr(hostcaps, "_gpu_cache", None)
+    monkeypatch.setattr(hostcaps, "_gpu_probe", _fake_probe)
+
+    #Столько раз, сколько соединений поднимет пул за рабочий день.
+    for _ in range(20):
+        hostcaps.sqlite_cache_kib()
+
+    assert len(calls) == 1, (
+        "железо опрашивается %d раз вместо одного — значит подпроцесс nvidia-smi "
+        "запускается на каждое соединение с базой" % len(calls))
+
+
+def test_cpu_model_is_also_probed_once(monkeypatch):
+    """Та же проверка для модели процессора: она читает /proc на каждом обращении.
+
+    Дешевле, чем подпроцесс, но `describe()` зовётся и в установщике, и в логах, а
+    файловое чтение в цикле по соединениям — тот же класс ошибки."""
+    from app import hostcaps
+    calls = []
+    monkeypatch.setattr(hostcaps, "_cpu_cache", None)
+    monkeypatch.setattr(hostcaps, "_cpu_probe", lambda: calls.append(1) or "Fake CPU")
+
+    for _ in range(10):
+        hostcaps.cpu_model()
+
+    assert len(calls) == 1, "модель процессора перечитывается на каждом обращении"
+
+
+def test_nothing_touches_the_system_on_every_database_connection(monkeypatch):
+    """🔥 НА ПУТИ ОТКРЫТИЯ СОЕДИНЕНИЯ НЕ ДОЛЖНО БЫТЬ НИ ОДНОГО СИСТЕМНОГО ВЫЗОВА.
+
+    Второй заход по тому же дефекту (нашёл Полковник, 05.09.2026). Подпроцесс
+    `nvidia-smi` я убрал, но `sqlite_cache_kib()` продолжал строить ПОЛНЫЙ профиль:
+    чтение `/proc/meminfo`, `statvfs` по корню, сборка словаря — на КАЖДОЕ новое
+    соединение с базой, ради выбора между двумя константами.
+
+    ⚠️ Прежний сторож этого не видел: он считал вызовы только `_gpu_probe`. Проверка,
+    считающая ОДИН источник расхода, молча пропускает все остальные — поэтому здесь
+    считаются ВСЕ обращения к системе, а не одно.
+
+    Обратный ход: убери кэш из `is_workstation()` — счётчик станет 20 вместо 1.
+    """
+    from app import hostcaps, hostinfo
+    calls = []
+    monkeypatch.setattr(hostcaps, "_gpu_cache", None)
+    monkeypatch.setattr(hostcaps, "_cpu_cache", None)
+    monkeypatch.setattr(hostcaps, "_tier_cache", None)
+    monkeypatch.setattr(hostcaps, "_gpu_probe",
+                        lambda: {"present": False, "name": "", "vram_mb": 0})
+    monkeypatch.setattr(hostinfo, "memory",
+                        lambda: calls.append("mem") or {"total": 16 * GB,
+                                                        "available": 8 * GB})
+    monkeypatch.setattr(hostinfo, "disk",
+                        lambda p="/": calls.append("disk") or {"total": 1, "used": 0,
+                                                               "free": 1})
+
+    for _ in range(20):
+        hostcaps.sqlite_cache_kib()
+
+    assert len(calls) <= 2, (
+        "на каждое соединение с базой уходит %d обращений к системе (%s) — профиль "
+        "железа считается заново вместо кэша" % (len(calls), calls[:6]))

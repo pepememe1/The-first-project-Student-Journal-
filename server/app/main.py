@@ -10,9 +10,16 @@ main.py — Точка входа бэкенда GradeBookAI (FastAPI).
 import os
 from contextlib import asynccontextmanager
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
+
+#Логгер для того, что нельзя проглотить молча. Отказ записи сигнала безопасности —
+#именно такой случай: он выглядит как «всё тихо», а значит «детектор не сработал».
+log = logging.getLogger("gradebook.main")
 
 from .db import init_db
 from .config import ALLOWED_ORIGINS, assert_production_secrets
@@ -110,12 +117,25 @@ async def _canary(request: Request, call_next):
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
 
     if canary.is_canary(request.url.path):
-        if throttle.ban_ip(ip, canary.BAN_SECONDS):
+        #🔑 БАНИТЬ И ЗАМЕЧАТЬ — РАЗНЫЕ РЕШЕНИЯ, И ПРИНИМАЮТСЯ ОНИ ОТДЕЛЬНО.
+        #Раньше запись стояла ВНУТРИ `if ban_ip(...)`, и это делало детектор слепым к
+        #самому вероятному нарушителю: доверенный адрес (а в белом списке у нас сеть
+        #колледжа, один NAT) не банится — и не записывался вовсе. Студент со сканером в
+        #аудитории проходил приманки, а журнал безопасности молчал. Нашёл Полковник.
+        throttle.ban_ip(ip, canary.BAN_SECONDS)   #щадит доверенных — так и задумано
+        if canary.should_record(ip):              #а вот запись не щадит никого
+            #⚠️ ЧЕРЕЗ ПУЛ ПОТОКОВ. Запись в SQLite блокирующая, а обработчик объявлен
+            #`async def` (иначе не получить `await call_next`): прямой вызов остановил
+            #бы весь сервер, включая журнал и /health. Инвариант куплен дефектом в
+            #`vector_stt` и держится `test_event_loop_not_blocked.py`.
             try:
-                events.record("security", "canary_hit",
-                              f"{request.method} {request.url.path}", ip=ip)
+                await run_in_threadpool(canary.record_hit, request.method,
+                                        request.url.path, ip)
             except Exception:
-                pass          #сигнал — удобство; уронить из-за него запрос нельзя
+                #Сигнал не должен ронять ответ. Но молчать нельзя: приманка — ДЕТЕКТОР,
+                #и её незаписанное срабатывание это не «мелкая неудача», а отсутствие
+                #того единственного, ради чего она заведена.
+                log.exception("[canary] не удалось записать срабатывание приманки")
         return HTMLResponse(canary.DECOY_HTML, status_code=200)
 
     return await call_next(request)

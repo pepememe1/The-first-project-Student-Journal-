@@ -26,6 +26,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import QueuePool
 
 from .config import DATABASE_URL, DB_KEY
+#⚠️ Импорт НА УРОВНЕ МОДУЛЯ, а не внутри `_sqlite_pragmas`. Ленивый импорт там выглядел
+#осторожнее, но исполнялся бы на КАЖДОЕ новое соединение с базой — и однажды поймал бы
+#файл в момент записи. Цикла зависимостей нет: `hostcaps` знает только про `hostinfo`,
+#а тот — про стандартную библиотеку.
+from . import hostcaps
 
 _IS_SQLITE = DATABASE_URL.startswith("sqlite")
 #Для SQLite нужен check_same_thread=False (FastAPI работает в нескольких потоках).
@@ -152,7 +157,6 @@ def _sqlite_pragmas(dbapi_conn, _rec):
     #
     # ⚠️ Минус означает килобайты (-4000 = 4 МБ), а не число страниц: запись через
     # страницы зависела бы от page_size и молча поехала бы при его смене.
-    from . import hostcaps
     cur.execute("PRAGMA cache_size=-%d" % hostcaps.sqlite_cache_kib())
     # Временные таблицы (сортировки отчётов куратора, поиск по переписке) — в памяти.
     # Они небольшие и живут доли секунды, а на диске это лишняя запись на том же SSD,

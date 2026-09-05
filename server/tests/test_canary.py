@@ -23,9 +23,116 @@ from conftest import make_admin
 
 def _reset():
     throttle.reset()
+    #⚠️ Дедупликация записей живёт в памяти модуля и переживает тесты: без сброса
+    #второй тест в файле не увидел бы своей записи и был бы зелёным по чужой причине.
+    canary.reset_seen()
 
 
 # ── приманки ────────────────────────────────────────────────────────────────────────
+
+def test_the_hit_lands_in_the_persistent_audit_log(client, monkeypatch):
+    """🔥 СИГНАЛ ОБЯЗАН ПЕРЕЖИТЬ ПЕРЕЗАПУСК СЛУЖБЫ.
+
+    Дефект, найденный 05.09.2026 сверкой плана с кодом: срабатывание писалось в
+    `events.record` — кольцевой буфер на 500 записей В ПАМЯТИ ПРОЦЕССА. Фаза 5
+    `docs/PLAN-HONEYPOT.md` требует `audit_events`, и требует не из аккуратности:
+
+      • буфер очищается РЕСТАРТОМ, а рестарт — первое, что делают, когда «сервер
+        странно себя ведёт», то есть ровно в момент инцидента;
+      • буфер ВЫТЕСНЯЕТСЯ: туда же идут все действия и ошибки, и сканер, прошедший
+        пятьсот путей, вытолкнул бы собственные первые попадания;
+      • `verify_audit.py` его не видит — доказать факт сканирования было нечем.
+
+    ⚠️ Соседние тесты этого файла были ЗЕЛЁНЫМИ рядом с этим дефектом: они проверяли
+    бан и плашку, то есть поведение, а не то, доехал ли сигнал. Зелёный тест рядом с
+    дефектом означает «случай не покрыт», а не «исправно».
+
+    Обратный ход: верни в `main._canary` запись через `events.record` вместо
+    `run_in_threadpool(canary.record_hit, ...)` — тест краснеет.
+    """
+    from app import audit
+    from app.db import SessionLocal
+    _reset()
+    monkeypatch.setattr(throttle, "is_trusted", lambda ip: False)
+
+    db = SessionLocal()
+    try:
+        before = len([r for r in audit.recent(db, limit=200)
+                      if r.get("action") == "canary.hit"])
+    finally:
+        db.close()
+
+    assert client.get("/.env").status_code == 200
+
+    db = SessionLocal()
+    try:
+        rows = [r for r in audit.recent(db, limit=200)
+                if r.get("action") == "canary.hit"]
+    finally:
+        db.close()
+
+    assert len(rows) == before + 1, (
+        "срабатывание приманки не попало в персистентный журнал — значит оно исчезнет "
+        "при первом же рестарте, а именно рестартом начинают разбор инцидента")
+
+    row = rows[0]
+    assert "/.env" in (row.get("target") or ""), "в записи нет пути, по которому пришли"
+    assert not (row.get("actor") or ""), (
+        "в записи о приманке появился актор — к приманке не обращается никто законный, "
+        "и приписывать обращение человеку нельзя")
+
+
+def test_the_raw_address_never_reaches_the_permanent_log(client, monkeypatch):
+    """🔒 СЫРОЙ АДРЕС В ЖУРНАЛ НЕ ПИШЕТСЯ — только солёный отпечаток.
+
+    Требование Ярослава 05.09.2026: «не делай пункт в honeypot нарушающий ПДн». Оно
+    попало в точку: IP — персональные данные, когда связывается с человеком, а
+    `audit_events` НЕ ЧИСТИТСЯ НИКОГДА (осознанно, см. `retention.py`). То есть сырой
+    адрес лёг бы туда бессрочно — ровно то, что запрещает раздел 4
+    `docs/PLAN-HONEYPOT.md`: «срок хранения записей — иначе бессрочное накопление ПДн
+    без основания». Код нарушал собственный план.
+
+    ⚠️ Детектор при этом ничего не теряет: одинаковый источник даёт одинаковый отпечаток,
+    то есть планомерное сканирование по-прежнему отличимо от одиночного касания. А
+    настоящий адрес остаётся в журнале доступа Caddy, у которого есть ротация и конечный
+    срок — он исчезает сам, как и должен.
+
+    Обратный ход: верни `ip=ip` в вызов `audit.log` — тест краснеет.
+    """
+    from app import audit, canary as canary_mod
+    from app.db import SessionLocal
+    _reset()
+    monkeypatch.setattr(throttle, "is_trusted", lambda ip: False)
+    monkeypatch.setattr(throttle, "client_ip", lambda request: "203.0.113.77")
+
+    assert client.get("/wp-login.php").status_code == 200
+
+    db = SessionLocal()
+    try:
+        rows = [r for r in audit.recent(db, limit=200)
+                if r.get("action") == "canary.hit"]
+    finally:
+        db.close()
+    assert rows, "срабатывание не записалось вовсе"
+
+    blob = " ".join(str(v) for r in rows for v in r.values())
+    assert "203.0.113.77" not in blob, (
+        "сырой IP попал в постоянный журнал: он не удаляется никогда, то есть это "
+        "бессрочное хранение персональных данных")
+
+    #Отпечаток при этом ЕСТЬ — иначе сторож был бы зелёным и при полностью потерянном
+    #источнике, то есть проверял бы отсутствие данных вместо их обезличивания.
+    assert canary_mod.ip_fingerprint("203.0.113.77") in blob, (
+        "отпечатка источника нет — повторные обращения одного сканера станут "
+        "неотличимы друг от друга, и детектор потеряет смысл")
+
+    #Отпечаток УСТОЙЧИВ между вызовами: иначе связать два обращения было бы нечем.
+    assert (canary_mod.ip_fingerprint("203.0.113.77")
+            == canary_mod.ip_fingerprint("203.0.113.77"))
+    #И РАЗЛИЧАЕТ источники — иначе он не отпечаток, а константа.
+    assert (canary_mod.ip_fingerprint("203.0.113.77")
+            != canary_mod.ip_fingerprint("198.51.100.4"))
+
 
 def test_canary_path_bans_the_source(client, monkeypatch):
     """Обращение к приманке банит адрес и отдаёт плашку, а не 404."""
@@ -167,3 +274,101 @@ def test_canary_module_has_no_sleep_or_network():
     body = ast.unparse(tree)
     for bad in ("sleep", "requests.", "httpx.", "urlopen"):
         assert bad not in body, f"в приманке появился {bad} — это tarpit"
+
+
+def test_a_trusted_address_is_not_banned_but_IS_recorded(client, monkeypatch):
+    """🔥 ДЕТЕКТОР НЕ ИМЕЕТ ПРАВА БЫТЬ СЛЕПЫМ К ИНСАЙДЕРУ (нашёл Полковник, 05.09.2026).
+
+    Запись стояла ВНУТРИ `if throttle.ban_ip(...)`, а `ban_ip` возвращает False для
+    доверенного адреса. В белом списке у нас сеть колледжа — один NAT (иначе первый же
+    студент со сканером отрезал бы всё здание). Значит студент с ноутбука в аудитории
+    проходил `/.env`, `/wp-login.php`, `/.git/config`, получал плашку — и журнал
+    безопасности молчал. Приманка была слепа ровно к самому вероятному нарушителю.
+
+    🔑 Разделение принципиальное: **банить и замечать — разные решения.** Бан щадит
+    доверенных осознанно; запись не щадит никого, потому что она и есть смысл приманки.
+
+    ⚠️ Это же обещано публично: `web/public/privacy.html` §9.1 говорит, что факт
+    обращения фиксируется в журнале, а `docs/INCIDENT-RESPONSE.md` велит администратору
+    искать там `canary.hit`. Документ, обещающий запись, которой нет, — хуже отсутствия
+    документа.
+
+    Обратный ход: верни запись внутрь `if throttle.ban_ip(...)` — тест краснеет.
+    """
+    from app import audit
+    from app.db import SessionLocal
+    _reset()
+    #Адрес ДОВЕРЕННЫЙ — как компьютер внутри колледжа.
+    monkeypatch.setattr(throttle, "is_trusted", lambda ip: True)
+    monkeypatch.setattr(throttle, "client_ip", lambda request: "10.0.0.5")
+
+    assert client.get("/.git/config").status_code == 200
+
+    #Бана нет — и это правильно: иначе один сканер отрезал бы весь колледж.
+    assert throttle.seconds_until_unbanned("10.0.0.5") == 0,         "доверенный адрес забанен — так один студент положит доступ всему зданию"
+
+    db = SessionLocal()
+    try:
+        rows = [r for r in audit.recent(db, limit=200)
+                if r.get("action") == "canary.hit"]
+    finally:
+        db.close()
+    assert rows, (
+        "обращение к приманке с доверенного адреса не записано — детектор слеп к "
+        "инсайдеру, а именно он и есть самый вероятный нарушитель")
+
+
+def test_a_scanner_does_not_flood_the_security_log(client, monkeypatch):
+    """Сканер шлёт сотни запросов — записей должно остаться немного.
+
+    Строка на каждый запрос превратила бы журнал безопасности в лог доступа, где нужную
+    запись уже не найти. Раньше дедупликацию давал побочный эффект (ранний 429 выше по
+    потоку), то есть её не было там, где бана нет, — см. тест выше.
+    """
+    from app import audit
+    from app.db import SessionLocal
+    _reset()
+    monkeypatch.setattr(throttle, "is_trusted", lambda ip: True)   #бана нет вовсе
+    monkeypatch.setattr(throttle, "client_ip", lambda request: "10.0.0.9")
+
+    for path in ("/.env", "/wp-login.php", "/phpmyadmin", "/backup.sql", "/.git/config"):
+        client.get(path)
+
+    db = SessionLocal()
+    try:
+        rows = [r for r in audit.recent(db, limit=200)
+                if r.get("action") == "canary.hit"]
+    finally:
+        db.close()
+    assert len(rows) == 1, (
+        "пять обращений подряд дали %d записей — журнал безопасности заполняется "
+        "шумом одного сканера" % len(rows))
+
+
+def test_the_live_console_still_shows_where_it_came_from(client, monkeypatch):
+    """Живой мониторинг администратора обязан показывать источник.
+
+    Нашёл Полковник: «починив» ПДн, я передал в `audit.log` пустой `ip`, а тот дублирует
+    запись в живую консоль (`events.record(..., ip=ip)`). Админ видел «canary.hit /.env»
+    без единого признака источника и не мог сказать, один это сканер или десять. До
+    правки там был настоящий адрес — то есть починка ПДн молча отняла полезное.
+
+    Решение: в поле `ip` кладём ОТПЕЧАТОК с префиксом `h:` — спутать с адресом нельзя,
+    а отличить один источник от другого можно.
+    """
+    from app import events
+    _reset()
+    monkeypatch.setattr(throttle, "is_trusted", lambda ip: False)
+    monkeypatch.setattr(throttle, "client_ip", lambda request: "198.51.100.9")
+
+    client.get("/.env")
+
+    live = [e for e in events.recent(0)["events"] if e.get("kind") == "canary.hit"]
+    assert live, (
+        "в живой консоли администратора записи о приманке нет вовсе — а именно её он "
+        "видит первой, ещё до того, как откроет журнал аудита")
+    src = " ".join(str(v) for e in live for v in e.values())
+    assert "h:" in src, (
+        "в живой консоли нет признака источника: админ видит «canary.hit /.env» и не "
+        "может сказать, один это сканер или десять")
+    assert "198.51.100.9" not in src, "в живую консоль утёк сырой адрес"
