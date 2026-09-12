@@ -9,7 +9,26 @@ test_throttle_gc.py — анти-брутфорс не течёт по памя�
 """
 import time
 
+from app import shared_state
 from app import throttle
+
+
+def _age(prefix: str, seconds: float) -> None:
+    """Состарить все записи под префиксом — «как будто прошло N секунд».
+
+    ⚠️ Раньше тесты правили словари `throttle._pairs`/`_ips` напрямую. После переноса
+    состояния в общее хранилище (10.09.2026) таких словарей нет, и это к лучшему:
+    проверка, лазающая во внутренности, ломается на каждой перестановке и потому
+    подталкивает «просто поправить ожидание». Здесь трогается ровно то поле, ради
+    которого тест написан, — метка последней активности.
+    """
+    old = time.time() - seconds
+    for key in shared_state.keys(prefix):
+        rec = shared_state.get(key)
+        if not rec:
+            continue
+        rec["last"] = old
+        shared_state.set(key, rec, ttl=throttle.IDLE_TTL + throttle.LOCK_SECONDS)
 
 
 def setup_function():
@@ -23,9 +42,8 @@ def test_stale_entries_are_evicted():
     assert throttle.sizes()[0] == 50
 
     #«состарим» записи вручную (эквивалент простоя дольше IDLE_TTL)
-    old = time.time() - throttle.IDLE_TTL - 1
-    for rec in list(throttle._pairs.values()) + list(throttle._ips.values()):
-        rec["last"] = old
+    _age(throttle._K_PAIR, throttle.IDLE_TTL + 1)
+    _age(throttle._K_IP, throttle.IDLE_TTL + 1)
     pairs, ips, _ = throttle.gc_now()
     assert pairs == 0 and ips == 0, "протухшие записи должны быть вытеснены"
 
@@ -34,11 +52,11 @@ def test_entries_with_fails_are_also_evicted():
     """Мусор с fails>0 (бот сделал пару попыток и ушёл) тоже вычищается — иначе утечка
     осталась бы почти нетронутой (типовой ботнет-паттерн)."""
     throttle.register_failure("203.0.113.7", "admin")      #1 неудача, блокировки нет
-    rec = throttle._pairs[throttle._pair_key("203.0.113.7", "admin")]
+    rec = shared_state.get(
+        throttle._K_PAIR + throttle._pair_key("203.0.113.7", "admin"))
     assert rec["fails"] > 0
-    rec["last"] = time.time() - throttle.IDLE_TTL - 1
-    for r in throttle._ips.values():
-        r["last"] = time.time() - throttle.IDLE_TTL - 1
+    _age(throttle._K_PAIR, throttle.IDLE_TTL + 1)
+    _age(throttle._K_IP, throttle.IDLE_TTL + 1)
     assert throttle.gc_now()[0] == 0
 
 
@@ -48,8 +66,7 @@ def test_locked_entries_survive_gc():
         throttle.register_failure("198.51.100.5", "victim")
     assert throttle.seconds_until_unlocked("198.51.100.5", "victim") > 0
     #даже «состаренные» по last, но заблокированные — остаются
-    for rec in throttle._pairs.values():
-        rec["last"] = time.time() - throttle.IDLE_TTL - 1
+    _age(throttle._K_PAIR, throttle.IDLE_TTL + 1)
     throttle.gc_now()
     assert throttle.seconds_until_unlocked("198.51.100.5", "victim") > 0
 
@@ -62,12 +79,12 @@ def test_old_failures_do_not_accumulate_into_lockout():
     assert throttle.seconds_until_unlocked(ip, login) == 0
 
     #прошло больше окна — серия должна начаться заново
-    key = throttle._pair_key(ip, login)
-    throttle._pairs[key]["last"] = time.time() - throttle.FAIL_WINDOW - 1
+    key = throttle._K_PAIR + throttle._pair_key(ip, login)
+    _age(throttle._K_PAIR, throttle.FAIL_WINDOW + 1)
     throttle.register_failure(ip, login)
     assert throttle.seconds_until_unlocked(ip, login) == 0, \
         "старые неудачи не должны докидывать до блокировки"
-    assert throttle._pairs[key]["fails"] == 1, "счётчик начинается заново"
+    assert shared_state.get(key)["fails"] == 1, "счётчик начинается заново"
 
 
 def test_fast_series_still_locks():

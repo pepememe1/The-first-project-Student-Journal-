@@ -134,10 +134,66 @@ def sign_manifest(manifest_path: str, key_path: str) -> int:
     return 0
 
 
+def verify_manifest(manifest_path: str) -> int:
+    """Проверить манифест ТЕМ ЖЕ кодом, которым его будет проверять программа.
+
+    🔑 Почему не «есть ли поле sig»: подпись ЧУЖИМ ключом — это тоже поле. Проверка,
+    разбирающая данные иначе, чем настоящий потребитель, не проверяет ничего, а лишь
+    создаёт уверенность (урок `.claude/validate-agents.py`, оплаченный тремя неделями
+    мёртвой сети граней). Поэтому зовём `desktop_update.release_signature_ok` — ровно
+    ту функцию, что стоит в клиенте на обоих гейтах.
+
+    ⚠️ Ворота нужны потому, что отказ здесь ТИХИЙ. Неподписанный манифест выкладывается
+    совершенно успешно, сервер отдаёт его с кодом 200, проверка «версия обновилась»
+    проходит — и только программа у человека молча перестаёт обновляться. Узнать об
+    этом можно было бы при следующем выпуске, то есть через недели.
+    """
+    with io.open(manifest_path, encoding="utf-8") as f:
+        man = json.load(f)
+    version = DU.normalize(man.get("version") or "")
+    if not version:
+        print("В манифесте нет версии", file=sys.stderr)
+        return 1
+
+    if not DU.signature_required():
+        #Ключ не заведён — проверять нечего, и это законное состояние (см. шапку
+        #desktop_update.py). Но молчать нельзя: человек, зовущий --verify, ждёт ответа
+        #про защиту, а получил бы «ок» от выключенной защиты.
+        print("Ключ не заведён (UPDATE_PUBLIC_KEYS пуст) — подпись НЕ проверяется, "
+              "поведение прежнее (только хеш).")
+        return 0
+
+    bad = []
+    checked = 0
+    entries = [("full", man.get("full") or {}, "sha256")]
+    for i, p in enumerate(man.get("patches") or []):
+        entries.append(("patches[%d]" % i, p, "target_sha256"))
+
+    for name, entry, hash_field in entries:
+        digest = entry.get(hash_field)
+        if not digest:
+            continue                      #записи нет — нечего и проверять
+        checked += 1
+        if not DU.release_signature_ok(version, digest, entry.get("sig") or ""):
+            bad.append(name)
+
+    if not checked:
+        print("В манифесте нет ни одной записи с хешем", file=sys.stderr)
+        return 1
+    if bad:
+        print("ПОДПИСЬ НЕ СХОДИТСЯ: %s" % ", ".join(bad), file=sys.stderr)
+        print("Выкладывать НЕЛЬЗЯ: программы с заведённым ключом отвергнут это "
+              "обновление, и парк молча останется на старой версии.", file=sys.stderr)
+        return 1
+    print("Подпись сходится у всех записей: %d (версия %s)" % (checked, version))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Подпись выпуска десктопа (Ed25519)")
     ap.add_argument("--gen-key", action="store_true", help="завести закрытый ключ")
     ap.add_argument("--manifest", help="подписать записи манифеста")
+    ap.add_argument("--verify", help="проверить подписи манифеста (ворота выкладки)")
     ap.add_argument("--key", default=DEFAULT_KEY_PATH, help="путь к закрытому ключу")
     args = ap.parse_args()
 
@@ -145,6 +201,8 @@ def main() -> int:
         return gen_key(args.key)
     if args.manifest:
         return sign_manifest(args.manifest, args.key)
+    if args.verify:
+        return verify_manifest(args.verify)
     ap.print_help()
     return 2
 

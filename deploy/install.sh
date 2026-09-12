@@ -26,7 +26,15 @@
 set -euo pipefail
 
 DOMAIN=""
-APP_DIR="/root/gb-deploy"
+# 🔴 КАТАЛОГ ПО УМОЛЧАНИЮ СМЕНЁН С /root/gb-deploy НА /opt/gradebook (10.09.2026),
+# и это не вкусовщина, а ТРЕБОВАНИЕ ужесточения юнита. `ProtectHome=yes` делает /root,
+# /home и /run/user НЕДОСТУПНЫМИ процессу службы — с кодом в /root/gb-deploy служба не
+# прочитала бы собственный `serve.py` и не поднялась бы вовсе. То есть «применить
+# hardening вслепую» здесь означало бы мёртвый сервер на первом же старте.
+# /opt — штатное место для стороннего приложения по FHS, и оно вне защищаемых домашних.
+# ⚠️ Живого VPS это не касается: там служба уже стоит, а этот скрипт разворачивает
+# НОВУЮ машину. Перенос существующей — отдельная осознанная операция.
+APP_DIR="/opt/gradebook"
 PORT="8000"
 STATIC_DIR="/var/www/gradebook"
 RESTORE_DB=""
@@ -193,7 +201,133 @@ if [ -n "$RESTORE_DB" ]; then
   cp "$RESTORE_DB" "$APP_DIR/server/gradebook_server.db"
 fi
 
+# ── Redis: общее состояние между процессами ────────────────────────────────────────
+# ⚠️ СТАВИТСЯ ПО КЛАССУ МАШИНЫ, а не всегда — тот же принцип, что у тяжёлого набора ИИ
+# (hostcaps). На слабой машине несколько процессов бессмысленны (там одно ядро), а
+# лишняя служба ест память, которой и так мало.
+# 🔴 И ставится ЛОКАЛЬНО, только на петлю. Redis по сети добавил бы сетевой отказ на
+# путь КАЖДОГО входа: анти-брутфорс спрашивает его до сверки пароля. Это была бы наша
+# собственная новая точка отказа, причём в самом чувствительном месте.
+if [ "$(cd "$APP_DIR/server" 2>/dev/null && "$APP_DIR/venv/bin/python" -c \
+        'from app import hostcaps; print(hostcaps.describe().get("tier",""))' 2>/dev/null)" \
+     = "workstation" ]; then
+  echo "== Redis (машина класса workstation — есть смысл в нескольких процессах) =="
+  apt-get install -y -qq redis-server >/dev/null 2>&1 || true
+  if systemctl list-unit-files 2>/dev/null | grep -q '^redis-server\.service'; then
+    # Только петля: наружу эту дверь открывать незачем и опасно.
+    sed -i 's/^# *bind .*/bind 127.0.0.1 ::1/' /etc/redis/redis.conf 2>/dev/null || true
+    systemctl enable --now redis-server >/dev/null 2>&1 || true
+    if redis-cli ping 2>/dev/null | grep -q PONG; then
+      # ⚠️ Ключ ДОПИСЫВАЕТСЯ, только если его там нет: перезапись затёрла бы правку,
+      # сделанную руками (например другой номер базы).
+      grep -q '^GRADEBOOK_REDIS_URL=' "$APP_DIR/server/.env" 2>/dev/null \
+        || echo 'GRADEBOOK_REDIS_URL=redis://127.0.0.1:6379/0' >> "$APP_DIR/server/.env"
+      echo "   Redis отвечает; общее состояние включено."
+      # ⚠️ ВОРКЕРОВ НЕ ПРОПИСЫВАЕМ. Даже когда всё готово, умолчание — один процесс:
+      # молча занять восемь ядер значит переделать прод без спроса. Включает человек,
+      # добавив GRADEBOOK_WORKERS, и только когда перенос состояния завершён целиком
+      # (server/app/shared_state.py::PENDING_MIGRATION).
+    else
+      echo "   ⚠️ Redis не отвечает — сервер будет работать в ОДИН процесс (как раньше)."
+    fi
+  else
+    echo "   ⚠️ redis-server не установился — сервер работает в ОДИН процесс (как раньше)."
+  fi
+else
+  echo "== Redis не ставим: класс машины не workstation, несколько процессов не нужны =="
+fi
+
 echo "== [9/$TOTAL] systemd-служба gradebook =="
+
+# ── Учётная запись службы ──────────────────────────────────────────────────────
+# 🔴 ПОЧЕМУ НЕ root. Прежний юнит стоял с `User=root`, и это давало серверу, смотрящему
+# в интернет, полные права на машину: любая ошибка в разборе запроса становилась бы не
+# «утечкой данных журнала», а «машина целиком». Отдельный системный пользователь без
+# оболочки и без домашнего каталога — граница, которая держится сама, без нашей
+# аккуратности.
+# ⚠️ `--no-create-home` намеренно: домашнего каталога у службы быть не должно, он всё
+# равно недоступен из-за ProtectHome. Состояние живёт в StateDirectory (см. ниже).
+if ! id -u gradebook >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin gradebook
+  echo "   заведён системный пользователь gradebook"
+else
+  echo "   пользователь gradebook уже есть"
+fi
+
+# ── Каталог состояния ──────────────────────────────────────────────────────────
+# 🔑 БАЗА ПЕРЕЕЗЖАЕТ ИЗ КАТАЛОГА КОДА В /var/lib/gradebook. Причина в требовании «код и
+# release-каталог — только для чтения»: при `ProtectSystem=strict` весь диск для службы
+# доступен на чтение, а писать можно лишь туда, что названо явно. База, лежащая среди
+# кода, требовала бы открыть на запись сам каталог развёртывания — то есть отменить
+# ровно то, ради чего ужесточение и делается (подменивший .py получает исполнение кода).
+# ⚠️ Каталог создаёт и сам systemd (StateDirectory=), но нам он нужен РАНЬШЕ: сюда
+# кладётся восстановленная база ещё до первого старта службы.
+STATE_DIR="/var/lib/gradebook"
+install -d -o gradebook -g gradebook -m 0700 "$STATE_DIR"
+install -d -o gradebook -g gradebook -m 0700 "$STATE_DIR/attachments"
+
+# Перенос базы, если она приехала в старое место (бандл со сборки или --restore-db).
+for old in "$APP_DIR/server/gradebook_server.db"; do
+  if [ -f "$old" ] && [ ! -f "$STATE_DIR/gradebook_server.db" ]; then
+    echo "   переношу базу в $STATE_DIR (код становится только-для-чтения)"
+    mv "$old" "$STATE_DIR/gradebook_server.db"
+    for tail in -wal -shm; do
+      [ -f "$old$tail" ] && mv "$old$tail" "$STATE_DIR/gradebook_server.db$tail"
+    done
+  fi
+done
+chown -R gradebook:gradebook "$STATE_DIR"
+
+# ── Код — только для чтения ────────────────────────────────────────────────────
+# Владелец root, службе только чтение и вход в каталоги. Так подмена кода требует root,
+# а не компрометации самого сервера.
+chown -R root:root "$APP_DIR"
+chmod -R go-w "$APP_DIR"
+# .env служба обязана ЧИТАТЬ (config.py дочитывает его при старте), но не более того.
+# 0640 root:gradebook — читает служба и root, остальные не видят вовсе.
+if [ -f "$APP_DIR/server/.env" ]; then
+  chown root:gradebook "$APP_DIR/server/.env"
+  chmod 640 "$APP_DIR/server/.env"
+fi
+
+# ── Секреты: из .env в учётные данные systemd ──────────────────────────────────
+# `secrets_source.py` ищет секрет в трёх местах и первым — в $CREDENTIALS_DIRECTORY.
+# Здесь мы этот первый источник и создаём. Смысл в том, что переменные окружения
+# процесса видны в /proc/<pid>/environ и в `systemctl show`, то есть ключ от базы с ПДн
+# читает любой, кто получил root, — включая администратора вуза, которому мы отдадим
+# машину. Зашифрованные учётные данные видны ТОЛЬКО процессу службы, а на TPM-хосте ещё
+# и привязаны к машине: снимок диска сам по себе их не открывает.
+CRED_DIR="/etc/gradebook/credentials"
+CRED_LINES=""
+if command -v systemd-creds >/dev/null 2>&1 && [ -f "$APP_DIR/server/.env" ]; then
+  install -d -o root -g root -m 0700 /etc/gradebook "$CRED_DIR"
+  bash "$APP_DIR/tools/migrate_secrets_to_credentials.sh" \
+       --env "$APP_DIR/server/.env" --out "$CRED_DIR" --strip || {
+    echo "   ⛔ ОСТАНОВ: перенос секретов в учётные данные не удался." >&2
+    echo "      Ставить службу с секретами в .env, объявив их перенесёнными, нельзя." >&2
+    exit 7
+  }
+  for f in "$CRED_DIR"/*.cred; do
+    [ -e "$f" ] || continue
+    CRED_LINES="${CRED_LINES}LoadCredentialEncrypted=$(basename "$f" .cred):$f"$'\n'
+  done
+else
+  echo "   ⚠️ systemd-creds недоступен (нужен systemd >= 250) — секреты остаются в .env."
+  echo "      Это РАБОТАЕТ, но слабее: ключ виден в /proc/<pid>/environ любому root."
+fi
+# ProtectHome=yes отрезает /root, /home и /run/user. Если каталог развёртывания всё же
+# оказался внутри них (оператор передал --dir), включать `yes` НЕЛЬЗЯ — служба не
+# прочитает свой код. Понижаем до read-only и ГРОМКО об этом говорим: молча ослабленная
+# защита хуже отсутствующей, потому что о ней потом отчитываются как о сделанной.
+case "$APP_DIR" in
+  /root/*|/home/*)
+    PROTECT_HOME="read-only"
+    echo "   ⚠️ ВНИМАНИЕ: код лежит в $APP_DIR, то есть внутри домашнего каталога."
+    echo "      ProtectHome понижен с yes до read-only — иначе служба не видит свой код."
+    echo "      Правильное лечение: развернуть в /opt/gradebook (умолчание)." ;;
+  *) PROTECT_HOME="yes" ;;
+esac
+
 cat > /etc/systemd/system/gradebook.service <<UNIT
 [Unit]
 Description=GradeBookAI API server
@@ -210,15 +344,83 @@ WorkingDirectory=$APP_DIR/server
 # systemd получал его как ОТДЕЛЬНЫЙ аргумент uvicorn, и служба падала на старте с
 # «unrecognized arguments». То есть самый первый запуск на новой машине не удался бы, а
 # причина выглядела бы как поломка приложения. Команда пишется ОДНОЙ строкой.
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $PORT --loop uvloop --http httptools
+#
+# 🔑 С 10.09.2026 запуск идёт через server/serve.py, а не прямым вызовом uvicorn.
+# Причина одна: число процессов нельзя писать в юните числом. Записанное здесь
+# `--workers 4` описывало бы НАМЕРЕНИЕ и осталось бы прежним, когда Redis выключат или
+# перенос состояния окажется незавершённым, — а это ослабляет анти-брутфорс ровно в N
+# раз и совершенно молча. serve.py выводит число из готовности и печатает основание.
+# ⚠️ Без GRADEBOOK_REDIS_URL поведение БУКВАЛЬНО прежнее: один процесс, uvloop, httptools.
+Environment=GRADEBOOK_PORT=$PORT
+# База и вложения — в каталоге состояния, а не среди кода (см. пояснение выше).
+Environment=GRADEBOOK_DB_URL=sqlite:////var/lib/gradebook/gradebook_server.db
+Environment=GRADEBOOK_FILES_DIR=/var/lib/gradebook/attachments
+# Библиотеки, которые лезут в ~/.cache (huggingface, argos), должны попадать в свой
+# каталог, а не падать об отсутствующий домашний.
+Environment=XDG_CACHE_HOME=/var/cache/gradebook
+Environment=HOME=/var/lib/gradebook
+ExecStart=$APP_DIR/venv/bin/python $APP_DIR/server/serve.py
 Restart=always
-User=root
+
+# ━━ ГРАНИЦА ПРИВИЛЕГИЙ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+User=gradebook
+Group=gradebook
+UMask=0077
+StateDirectory=gradebook
+StateDirectoryMode=0700
+CacheDirectory=gradebook
+CacheDirectoryMode=0700
+$CRED_LINES
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=$PROTECT_HOME
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# Пустой набор — служба не сохраняет НИ ОДНОЙ привилегии. Это возможно только потому,
+# что слушаем порт $PORT (>1024): для 80/443 понадобился бы CAP_NET_BIND_SERVICE, и
+# именно поэтому наружу смотрит Caddy, а не мы.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# AF_UNIX нужен для локального Redis по петле и для журнала, AF_INET/AF_INET6 — сам
+# HTTP. Всё остальное (AF_NETLINK, AF_PACKET) серверу журнала незачем.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+ProtectHostname=yes
+ProtectClock=yes
+# ⚠️ MemoryDenyWriteExecute НАМЕРЕННО НЕ ВКЛЮЧЁН, хотя `systemd-analyze security` за него
+# снимает баллы. Пояснение важнее балла: `cryptography` работает через cffi, а libffi
+# создаёт исполняемые замыкания в памяти — с этим запретом падает подпись JWT и
+# шифрование полей, то есть вход в журнал. Балл ради неработающего входа — плохой размен.
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now gradebook
+
+# ── Проверка, а не надежда ─────────────────────────────────────────────────────
+# Требование плана дословно: «нельзя применять вслепую: сначала staging, затем
+# systemd-analyze security». Staging делает tools/staging_unit_check.sh ДО выкладки;
+# здесь — обязательная проверка уже применённого.
+sleep 3
+if ! systemctl is-active --quiet gradebook; then
+  echo "   ⛔ Служба НЕ поднялась после ужесточения. Журнал:" >&2
+  journalctl -u gradebook -n 40 --no-pager >&2 || true
+  echo "   Откат: systemctl edit gradebook (снять спорную директиву) и разобраться." >&2
+  exit 8
+fi
+echo "   служба поднялась; оценка ужесточения:"
+systemd-analyze security gradebook.service 2>/dev/null | tail -3 || \
+  echo "   (systemd-analyze security недоступен на этой версии systemd)"
 
 echo "== [10/$TOTAL] Caddy: боевой конфиг =="
 # 🔑 БЕРЁМ НАСТОЯЩИЙ КОНФИГ ИЗ РЕПОЗИТОРИЯ, А НЕ ПИШЕМ СВОЙ.

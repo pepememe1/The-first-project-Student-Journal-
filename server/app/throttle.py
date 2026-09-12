@@ -25,6 +25,8 @@ throttle.py — Защита серверного входа от перебор
 """
 import os
 import threading
+
+from . import shared_state
 import time
 from contextlib import contextmanager
 
@@ -77,20 +79,42 @@ FAIL_WINDOW = 300
 #память VPS. Держим только «живые» записи: заблокированные + недавно активные.
 IDLE_TTL = 900           #сколько храним запись без активности (не заблокированную)
 GC_EVERY = 200           #как часто (по числу регистраций неудач) запускать уборку
-MAX_ENTRIES = 20000      #жёсткий предохранитель на случай взрывного всплеска
+#⚠️ `MAX_ENTRIES` переехал в `shared_state.MAX_KEYS`: предохранитель от взрывного роста
+#нужен ХРАНИЛИЩУ, а не одному его потребителю. Оставленный здесь, он не использовался
+#ничем и создавал впечатление действующей защиты.
 
-_lock = threading.Lock()
-#login-ключ "ip|login" -> {"fails": int, "locked_until": float, "last": float}
-_pairs: dict = {}
-#ip-ключ "ip" -> {"fails": int, "locked_until": float, "last": float}
-_ips: dict = {}
-#ip-ключ регистрации "ip" -> {...}
-_reg: dict = {}
-#ip -> до какого времени забанен (приманки, см. app/canary.py). Отдельно от `_ips`:
-#там счётчик неудачных попыток входа с порогом, здесь — приговор с одного обращения.
-#Смешать их значило бы либо банить за восемь опечаток, либо не банить сканер сразу.
-_bans: dict = {}
+#⚠️ `_lock` убран вместе с переносом: замок процесса не защищает от соседнего
+#процесса, а атомарность теперь даёт `shared_state.update`. Оставленный замок означал бы
+#ложное чувство защищённости ровно там, где её больше нет.
+
+#━━ ГДЕ ЖИВУТ СЧЁТЧИКИ (перенесено 10.09.2026) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#Раньше здесь стояли четыре словаря в памяти ПРОЦЕССА. Пока uvicorn один, разницы нет;
+#при нескольких воркерах это ломало защиту молча и в самую опасную сторону: пять
+#попыток превращались в 5×N, и заметить это можно было только подбором пароля.
+#
+#Теперь состояние живёт за `shared_state`. ⚠️ Без настройки `GRADEBOOK_REDIS_URL` оно
+#по-прежнему в памяти процесса — то есть поведение БУКВАЛЬНО прежнее, а не «почти
+#прежнее». Это важно: десктопный локальный сервер и однопроцессная установка не должны
+#были ничего заметить от этой правки.
+#
+#⚠️ СРОК ХРАНЕНИЯ ЗАМЕНИЛ РУЧНУЮ УБОРКУ. Прежний `_gc` выбрасывал протухшие записи, и
+#существовал он ровно потому, что словарь в памяти не умеет забывать сам. У значения со
+#сроком забывание встроено, поэтому уборка стала страховкой, а не механизмом.
+_K_PAIR = "thr:pair:"    #"ip|login" -> {"fails", "locked_until", "last"}
+_K_IP = "thr:ip:"        #"ip"       -> то же
+_K_REG = "thr:reg:"      #"ip"       -> то же, но про регистрации
+#Бан по приманке лежит ОТДЕЛЬНО от счётчика неудач: там порог из нескольких попыток,
+#здесь приговор с одного обращения. Смешать значило бы либо банить за восемь опечаток,
+#либо не банить сканер сразу.
+_K_BAN = "thr:ban:"      #"ip"       -> до какого времени забанен
 _since_gc = 0            #счётчик обращений до следующей уборки
+
+
+#⚠️ ЗДЕСЬ БЫЛА ФУНКЦИЯ `_rec_ttl` — И ЕЁ НЕ ЗВАЛ НИКТО. Наш самый частый класс дефекта,
+#и я допустил его в том же заходе, где о нём писал: докстринг подробно объяснял политику
+#«дольше из двух», которая нигде не действовала. Убрана. Срок записи считается на месте
+#(`IDLE_TTL + lock_seconds`) — это ВЕРХНЯЯ ГРАНИЦА той же политики, и она честнее
+#функции, которая красиво описывает несуществующее поведение.
 
 
 def _trusted_ips() -> set:
@@ -117,8 +141,16 @@ def ban_ip(ip: str, seconds: int) -> bool:
     """Забанить адрес на срок. False — адрес доверенный, бана не будет."""
     if not ip or is_trusted(ip):
         return False
-    with _lock:
-        _bans[ip] = max(_bans.get(ip, 0.0), time.time() + max(1, int(seconds)))
+    seconds = max(1, int(seconds))
+    until = time.time() + seconds
+    #🔑 ПРОДЛЕВАЕМ, НО НЕ УКОРАЧИВАЕМ, и делаем это ОДНИМ неделимым действием.
+    #Первая версия переноса читала и писала двумя вызовами — и это было ХУЖЕ прежнего
+    #кода, который брал `max` под замком. Отказ настоящий: `canary` наращивает срок по
+    #мере того, как сканер идёт по приманкам, поэтому два обращения в один тик назначают
+    #разные сроки; оба прочитали бы старое значение, и последним лёг бы КОРОТКИЙ — бан с
+    #суток схлопнулся бы до часа. При нескольких процессах, ради которых всё и делается,
+    #такое совпадение перестаёт быть редкостью.
+    shared_state.update(_K_BAN + ip, lambda cur: max(cur or 0.0, until), ttl=seconds)
     return True
 
 
@@ -126,22 +158,19 @@ def seconds_until_unbanned(ip: str) -> int:
     """Сколько осталось бана. 0 — не забанен."""
     if not ip:
         return 0
-    with _lock:
-        until = _bans.get(ip, 0.0)
-        if until <= time.time():
-            #Истёкшую запись убираем сразу: словарь не должен расти адресами навсегда.
-            _bans.pop(ip, None)
-            return 0
-        return int(until - time.time()) + 1
+    #Срок снимает саму запись, поэтому «убрать протухшее» отдельным действием не надо.
+    until = shared_state.get(_K_BAN + ip) or 0
+    left = until - time.time()
+    return int(left) + 1 if left > 0 else 0
 
 
 def _pair_key(ip: str, login: str) -> str:
     return f"{(ip or '').strip()}|{(login or '').strip().lower()}"
 
 
-def _check(store: dict, key: str) -> int:
+def _check(prefix: str, key: str) -> int:
     """Возвращает остаток блокировки в секундах (0 — не заблокирован)."""
-    rec = store.get(key)
+    rec = shared_state.get(prefix + key)
     if not rec:
         return 0
     left = int(rec.get("locked_until", 0) - time.time())
@@ -151,53 +180,74 @@ def _check(store: dict, key: str) -> int:
 def seconds_until_unlocked(ip: str, login: str) -> int:
     """Сколько секунд осталось до разблокировки (0 — вход разрешён).
     Берём максимум из блокировки по паре (IP, логин) и по самому IP."""
-    with _lock:
-        return max(_check(_pairs, _pair_key(ip, login)), _check(_ips, (ip or "").strip()))
+    return max(_check(_K_PAIR, _pair_key(ip, login)), _check(_K_IP, (ip or "").strip()))
 
 
 def _gc(force: bool = False):
-    """Выбрасывает протухшие записи. Вызывается изредка (см. GC_EVERY) — без фонового
-    потока. Держим: заблокированные (наказание не должно теряться) и недавно активные.
+    """Выбросить протухшие записи.
 
-    ВАЖНО: чистим и записи с fails>0 — именно они составляют основную массу мусора
-    (бот сделал 2-3 попытки с одного IP и ушёл). Условие «удалять только при fails==0»
-    оставило бы утечку почти нетронутой."""
+    ⚠️ С переносом в общее состояние это СТРАХОВКА, а не механизм: у каждой записи есть
+    срок, и она исчезает сама. Функция осталась по двум причинам — её зовут тесты
+    (`gc_now`) и диагностика, и на движке «память» срок проверяется только при чтении,
+    то есть неопрошенный ключ занимал бы место до конца жизни процесса.
+
+    ⚠️ Предохранителя «не больше MAX_ENTRIES» здесь больше НЕТ, и это осознанно: он
+    существовал против безграничного роста словаря, а срок хранения закрывает ту же
+    задачу надёжнее — по времени, а не по счастливому попаданию в момент уборки.
+    """
     global _since_gc
     _since_gc += 0 if force else 1
     if not force and _since_gc < GC_EVERY:
         return
     _since_gc = 0
+    #🔥 СНАЧАЛА ХРАНИЛИЩЕ. На движке «память» срок проверяется только при ЧТЕНИИ, а
+    #`keys()` протухшее прячет — значит запись, которую больше никто не спросит (а
+    #выдуманный логин из перебора никто и не спросит), не удалял бы НИКТО до перезапуска
+    #процесса. Прежний `_gc` шёл по своему словарю и такие записи выбрасывал; при
+    #переносе эта страховка исчезла, и утечка вернулась в том же виде, в каком её когда-то
+    #и чинили. На бою движок именно «память» — значит утечка была бы боевой.
+    shared_state.purge()
     now = time.time()
-    for store in (_pairs, _ips, _reg):
-        stale = [k for k, v in store.items()
-                 if v.get("locked_until", 0) <= now and now - v.get("last", 0) > IDLE_TTL]
-        for k in stale:
-            store.pop(k, None)
-        #предохранитель: при взрывном всплеске (быстрее уборки) режем самые старые
-        if len(store) > MAX_ENTRIES:
-            for k, _v in sorted(store.items(), key=lambda kv: kv[1].get("last", 0))[
-                    :len(store) - MAX_ENTRIES]:
-                if store.get(k, {}).get("locked_until", 0) <= now:
-                    store.pop(k, None)
+    for prefix in (_K_PAIR, _K_IP, _K_REG):
+        for key in shared_state.keys(prefix):
+            rec = shared_state.get(key)
+            if not rec:
+                continue
+            if rec.get("locked_until", 0) <= now and now - rec.get("last", 0) > IDLE_TTL:
+                shared_state.delete(key)
 
 
-def _register_failure(store: dict, key: str, threshold: int, lock_seconds: int):
+def _register_failure(prefix: str, key: str, threshold: int, lock_seconds: int):
+    """Засчитать неудачу. Логика прежняя до строчки, изменилось только хранилище.
+
+    🔑 ОБНОВЛЕНИЕ ОБЯЗАНО БЫТЬ АТОМАРНЫМ, и это не педантизм. Две одновременные попытки
+    прочитали бы `fails=4` обе и записали `5` обе — одна потерялась бы, и порог
+    сдвинулся вверх. При нескольких процессах такие гонки перестают быть редкостью,
+    потому что параллелизм и есть цель перехода. Отсюда `shared_state.update`, а не
+    «прочитать, изменить, записать» тремя вызовами.
+    """
     now = time.time()
-    rec = store.get(key, {"fails": 0, "locked_until": 0, "last": now})
-    #истёкшая блокировка обнуляет счётчик — новая серия считается с нуля
-    if rec.get("locked_until", 0) and rec["locked_until"] < now:
-        rec = {"fails": 0, "locked_until": 0, "last": now}
-    #СКОЛЬЗЯЩЕЕ ОКНО: давние неудачи не копятся (иначе редкие опечатки за месяцы
-    #складывались бы в блокировку живого пользователя).
-    elif now - rec.get("last", now) > FAIL_WINDOW:
-        rec = {"fails": 0, "locked_until": rec.get("locked_until", 0), "last": now}
-    rec["fails"] = rec.get("fails", 0) + 1
-    rec["last"] = now
-    if rec["fails"] >= threshold:
-        rec["locked_until"] = now + lock_seconds
-        rec["fails"] = 0
-    store[key] = rec
+
+    def _bump(rec):
+        rec = dict(rec or {"fails": 0, "locked_until": 0, "last": now})
+        #истёкшая блокировка обнуляет счётчик — новая серия считается с нуля
+        if rec.get("locked_until", 0) and rec["locked_until"] < now:
+            rec = {"fails": 0, "locked_until": 0, "last": now}
+        #СКОЛЬЗЯЩЕЕ ОКНО: давние неудачи не копятся (иначе редкие опечатки за месяцы
+        #складывались бы в блокировку живого пользователя).
+        elif now - rec.get("last", now) > FAIL_WINDOW:
+            rec = {"fails": 0, "locked_until": rec.get("locked_until", 0), "last": now}
+        rec["fails"] = rec.get("fails", 0) + 1
+        rec["last"] = now
+        if rec["fails"] >= threshold:
+            rec["locked_until"] = now + lock_seconds
+            rec["fails"] = 0
+        return rec
+
+    #Срок считаем ПОСЛЕ обновления: только там известно, назначена ли блокировка.
+    rec = shared_state.update(prefix + key, _bump, ttl=IDLE_TTL + lock_seconds)
     _gc()
+    return rec
 
 
 def register_failure(ip: str, login: str, login_exists: bool = True):
@@ -215,68 +265,60 @@ def register_failure(ip: str, login: str, login_exists: bool = True):
     аргумент у нового вызывающего даёт мягкое поведение (не заперли лишнего), а не
     жёсткое (заперли группу студентов). Ошибаться безопаснее в эту сторону.
     """
-    with _lock:
-        _register_failure(_pairs, _pair_key(ip, login), MAX_FAILS, LOCK_SECONDS)
-        if not login_exists:
-            _register_failure(_ips, (ip or "").strip(), IP_MAX_FAILS, IP_LOCK_SECONDS)
+    _register_failure(_K_PAIR, _pair_key(ip, login), MAX_FAILS, LOCK_SECONDS)
+    if not login_exists:
+        _register_failure(_K_IP, (ip or "").strip(), IP_MAX_FAILS, IP_LOCK_SECONDS)
 
 
 def register_success(ip: str, login: str):
     """Удачный вход сбрасывает счётчик по паре (IP, логин). Счётчик IP не трогаем —
     иначе один верный вход обнулял бы наказание за «распыление» по чужим логинам."""
-    with _lock:
-        _pairs.pop(_pair_key(ip, login), None)
+    shared_state.delete(_K_PAIR + _pair_key(ip, login))
 
 
 def seconds_until_reg_unlocked(ip: str) -> int:
     """Сколько секунд до разблокировки регистрации с этого IP (0 — можно)."""
-    with _lock:
-        return _check(_reg, (ip or "").strip())
+    return _check(_K_REG, (ip or "").strip())
 
 
 def register_reg_failure(ip: str):
     """Фиксирует неудачную (невалидную) попытку регистрации с IP."""
-    with _lock:
-        _register_failure(_reg, (ip or "").strip(), REG_MAX_FAILS, REG_LOCK_SECONDS)
+    _register_failure(_K_REG, (ip or "").strip(), REG_MAX_FAILS, REG_LOCK_SECONDS)
 
 
 def register_reg_success(ip: str):
     """Успешная заявка сбрасывает счётчик регистраций этого IP."""
-    with _lock:
-        _reg.pop((ip or "").strip(), None)
+    shared_state.delete(_K_REG + (ip or "").strip())
 
 
 def reset():
-    """Полный сброс состояния — нужен тестам, чтобы прогоны не влияли друг на друга."""
+    """Полный сброс состояния — нужен тестам, чтобы прогоны не влияли друг на друга.
+
+    ⚠️ Прежде здесь перечислялись словари поимённо, и дважды это подводило: остуду
+    восстановления и след подозрительной активности забывали дописать, а живут они ЧАС
+    и ключуются почтой и логином — то есть переживали пересоздание базы между тестами и
+    роняли соседний тест, который в одиночку проходил. Теперь перечисляются ПРЕФИКСЫ, и
+    новый вид записи попадает под сброс, если получил свой префикс: забыть можно, но
+    цена ошибки меньше, а список короче.
+    """
     global _since_gc
-    with _lock:
-        _pairs.clear()
-        _ips.clear()
-        _reg.clear()
-        #⚠️ Остуду восстановления забыл добавить сюда сразу — и это не мелочь: она живёт
-        #ЧАС и ключуется почтой, то есть переживала бы пересоздание базы между тестами и
-        #роняла бы соседний тест, прошедший в одиночку. Любой НОВЫЙ словарь состояния
-        #обязан попадать в этот список, иначе тесты становятся зависимыми от порядка.
-        _recover.clear()
-        #След подозрительной активности живёт ЧАС и ключуется логином — то есть без
-        #этой строки он пережил бы пересоздание базы между тестами (ровно та грабля,
-        #что описана выше про остуду восстановления).
-        _logins.clear()
-        _bans.clear()
-        _since_gc = 0
+    for prefix in (_K_PAIR, _K_IP, _K_REG, _K_BAN, _K_RECOVER, _K_LOGIN):
+        for key in shared_state.keys(prefix):
+            shared_state.delete(key)
+    _since_gc = 0
 
 
 def gc_now() -> tuple:
-    """Принудительная уборка (тесты/диагностика). Возвращает размеры словарей после неё."""
-    with _lock:
-        _gc(force=True)
-        return len(_pairs), len(_ips), len(_reg)
+    """Принудительная уборка (тесты/диагностика). Возвращает размеры после неё."""
+    _gc(force=True)
+    return sizes()
 
 
 def sizes() -> tuple:
     """Текущие размеры счётчиков — для мониторинга роста памяти."""
-    with _lock:
-        return len(_pairs), len(_ips), len(_reg)
+    return (len(shared_state.keys(_K_PAIR)),
+            len(shared_state.keys(_K_IP)),
+            len(shared_state.keys(_K_REG)))
 
 
 #━━ ВОССТАНОВЛЕНИЕ ПАРОЛЯ: ОСТУДА ПО САМОЙ ПОЧТЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -298,7 +340,7 @@ def sizes() -> tuple:
 #пароль только по переходу (см. docs/MARKET-ANALOGUES-2026.md, §8.1). Здесь снят СТИМУЛ
 #и повторяемость атаки, но сама дыра «сброс без подтверждения» остаётся.
 RECOVER_COOLDOWN_S = 3600
-_recover: dict = {}
+_K_RECOVER = "thr:recover:"   #почта -> до какого времени сброс запрещён
 
 
 def seconds_until_recover_allowed(email: str) -> int:
@@ -306,9 +348,8 @@ def seconds_until_recover_allowed(email: str) -> int:
     key = (email or "").strip().lower()
     if not key:
         return 0
-    with _lock:
-        left = int(_recover.get(key, 0) - time.time())
-        return left if left > 0 else 0
+    left = int((shared_state.get(_K_RECOVER + key) or 0) - time.time())
+    return left if left > 0 else 0
 
 
 def register_recover(email: str) -> None:
@@ -316,14 +357,10 @@ def register_recover(email: str) -> None:
     key = (email or "").strip().lower()
     if not key:
         return
-    with _lock:
-        _recover[key] = time.time() + RECOVER_COOLDOWN_S
-        #Тот же приём, что у остальных словарей: без уборки запись на каждую
-        #перебираемую почту оставалась бы навсегда и съедала память.
-        if len(_recover) > MAX_ENTRIES:
-            now = time.time()
-            for k in [k for k, v in _recover.items() if v <= now]:
-                _recover.pop(k, None)
+    #Уборка встроена в срок: запись живёт ровно час, поэтому перебор чужих почт больше
+    #не оставляет за собой мусор, который надо подметать отдельно.
+    shared_state.set(_K_RECOVER + key, time.time() + RECOVER_COOLDOWN_S,
+                     ttl=RECOVER_COOLDOWN_S)
 
 
 #━━ ПОДОЗРИТЕЛЬНАЯ АКТИВНОСТЬ ПО АККАУНТУ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -350,8 +387,12 @@ SUSPICION_WINDOW = 3600      #сколько помним неудачи по л
 SUSPICION_FAILS = 5          #столько неудач за окно — уже не опечатка
 SUSPICION_IPS = 2            #или неудачи с двух разных адресов: это точно не один человек
 
-#login -> {"fails": int, "ips": set, "first": ts, "last": ts}
-_logins: dict = {}
+#login -> {"fails": int, "ips": [...], "first": ts, "last": ts}
+#⚠️ Адреса ХРАНЯТСЯ СПИСКОМ, а не множеством, и это вынужденно: значение уезжает в общее
+#хранилище через JSON, а множества в JSON нет. Уникальность поддерживаем сами при
+#записи — потерять её значит превратить «неудачи с двух РАЗНЫХ адресов» в «две неудачи»,
+#то есть уронить порог вдвое для обычной опечатки одного человека.
+_K_LOGIN = "thr:login:"
 
 
 def register_login_attack(login: str, ip: str) -> None:
@@ -360,20 +401,23 @@ def register_login_attack(login: str, ip: str) -> None:
     if not key:
         return
     now = time.time()
-    with _lock:
-        rec = _logins.get(key)
+    addr = (ip or "").strip()
+
+    def _bump(rec):
         if rec is None or now - rec.get("last", now) > SUSPICION_WINDOW:
-            rec = {"fails": 0, "ips": set(), "first": now, "last": now}
-        rec["fails"] += 1
-        rec["ips"].add((ip or "").strip())
+            rec = {"fails": 0, "ips": [], "first": now, "last": now}
+        else:
+            rec = dict(rec)
+            rec["ips"] = list(rec.get("ips") or [])
+        rec["fails"] = rec.get("fails", 0) + 1
+        if addr not in rec["ips"]:
+            rec["ips"].append(addr)
         rec["last"] = now
-        _logins[key] = rec
-        #Та же уборка, что у остальных словарей: сервер торчит в интернете, и боты
-        #перебирают тысячи выдуманных логинов. Без неё словарь растёт безгранично.
-        if len(_logins) > MAX_ENTRIES:
-            for k in [k for k, v in _logins.items()
-                      if now - v.get("last", 0) > SUSPICION_WINDOW]:
-                _logins.pop(k, None)
+        return rec
+
+    #Срок хранения — то самое окно, за которое мы помним неудачи. Отдельная уборка
+    #против ботов, перебирающих тысячи выдуманных логинов, больше не нужна.
+    shared_state.update(_K_LOGIN + key, _bump, ttl=SUSPICION_WINDOW)
 
 
 def suspicion(login: str) -> dict:
@@ -386,11 +430,10 @@ def suspicion(login: str) -> dict:
     empty = {"suspicious": False, "fails": 0, "ips": 0}
     if not key:
         return empty
-    with _lock:
-        rec = _logins.get(key)
-        if not rec or time.time() - rec.get("last", 0) > SUSPICION_WINDOW:
-            return empty
-        fails, ips = int(rec.get("fails", 0)), len(rec.get("ips") or ())
+    rec = shared_state.get(_K_LOGIN + key)
+    if not rec or time.time() - rec.get("last", 0) > SUSPICION_WINDOW:
+        return empty
+    fails, ips = int(rec.get("fails", 0)), len(rec.get("ips") or ())
     return {"suspicious": fails >= SUSPICION_FAILS or ips >= SUSPICION_IPS,
             "fails": fails, "ips": ips}
 
@@ -408,8 +451,7 @@ def clear_suspicion(login: str) -> None:
     """
     key = (login or "").strip().lower()
     if key:
-        with _lock:
-            _logins.pop(key, None)
+        shared_state.delete(_K_LOGIN + key)
 
 
 #━━ ЗАЩИТА ПРОЦЕССОРА ОТ УСИЛЕНИЯ ЧЕРЕЗ ВХОД ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

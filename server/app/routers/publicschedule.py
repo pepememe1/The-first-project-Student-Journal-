@@ -28,9 +28,6 @@ JWT в проекте живёт жёстко 5 часов (§6), и видже�
 клиент (и нативный виджет, и веб-слой) разбирает их одним и тем же кодом, второй
 формат разошёлся бы с первым при первой же правке.
 """
-import threading
-import time
-from collections import deque
 from datetime import date
 
 from urllib.parse import quote
@@ -39,7 +36,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from .. import schedule_web, throttle
+from .. import schedule_web, shared_state, throttle
 from ..db import get_db
 from ..models import Group
 
@@ -76,14 +73,19 @@ def _browser_navigation(request: Request) -> bool:
 #портала в цикле. Числа щедрые: виджет обновляется раз в несколько часов, человек с
 #телефона жмёт «обновить» единицы раз — а вот перебор всех групп подряд упрётся сразу.
 #
-#⚠️ Своя реализация, а не `throttle`: тот считает НЕУДАЧНЫЕ попытки входа и блокирует
+#⚠️ Свои ПРЕДЕЛЫ, а не `throttle`: тот считает НЕУДАЧНЫЕ попытки входа и блокирует
 #пару (IP, логин) — здесь нет ни логина, ни понятия «неудача». `msg_limit` ближе по
-#приёму (скользящее окно на deque), но его пределы зашиты под сообщения. Пятнадцать
-#строк своего окна честнее, чем натягивание чужой семантики.
+#смыслу, но его пределы зашиты под сообщения. Натягивать чужую семантику ради экономии
+#пятнадцати строк не стоит.
+#
+#🔥 А вот ХРАНИЛИЩЕ теперь общее (перенесено 10.09.2026). Своё окно в памяти процесса
+#превращало предел в 60×N для НЕАВТОРИЗОВАННОГО посетителя — то есть ограничитель,
+#заведённый против скрипта, гоняющего наш парсер портала в цикле, слабел ровно во
+#столько раз, во сколько мы добавляли процессов. Скользящее окно — общий примитив
+#(`shared_state.window_*`), пределы остались свои.
 _RATE_MAX = 60
 _RATE_WINDOW_S = 60
-_hits: dict = {}
-_hits_lock = threading.Lock()
+_K_HITS = "pub:sched:"
 
 
 def _too_many(request: Request) -> bool:
@@ -93,22 +95,18 @@ def _too_many(request: Request) -> bool:
         ip = throttle.client_ip(request)
     except Exception:
         return False
-    now = time.time()
-    with _hits_lock:
-        dq = _hits.get(ip)
-        if dq is None:
-            dq = _hits[ip] = deque()
-        while dq and now - dq[0] > _RATE_WINDOW_S:
-            dq.popleft()
-        #Уборка: без неё словарь растёт на каждый новый IP и не уменьшается никогда.
-        #На одноядерном VPS это единственный способ не отрастить утечку памяти.
-        if len(_hits) > 5000:
-            for k in [k for k, v in _hits.items() if not v or now - v[-1] > _RATE_WINDOW_S]:
-                _hits.pop(k, None)
-        if len(dq) >= _RATE_MAX:
-            return True
-        dq.append(now)
-        return False
+    #Уборка больше не нужна: у окна есть срок, и запись по каждому новому адресу
+    #исчезает сама. Прежний обход словаря при 5000 ключей был единственным способом не
+    #отрастить утечку на одноядерной машине — теперь этим занимается хранилище.
+    #
+    #⚠️ Порядок важен: СЧИТАЕМ, потом решаем, и только потом отмечаем. Если отметить до
+    #проверки, отказанный запрос расходовал бы окно сам на себя, и предел из «шестьдесят
+    #в минуту» превратился бы в «шестьдесят, а дальше никогда» — заперев обычного
+    #посетителя за чужой скрипт.
+    if shared_state.window_count(_K_HITS + ip, _RATE_WINDOW_S) >= _RATE_MAX:
+        return True
+    shared_state.window_add(_K_HITS + ip, _RATE_WINDOW_S)
+    return False
 
 
 def _limited() -> JSONResponse:

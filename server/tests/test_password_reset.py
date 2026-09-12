@@ -119,8 +119,11 @@ def test_new_request_invalidates_the_previous_link(client):
     client.post("/auth/recover", json={"email": STUDENT})
     first = _last_token()
     #Остуда по почте — час; для второго запроса её надо снять, иначе он тихо не сработает.
-    from app import throttle
-    throttle._recover.clear()
+    from app import shared_state, throttle
+    #⚠️ Раньше строка чистила словарь `throttle._recover` напрямую. После переноса
+    #состояния в общее хранилище (10.09.2026) такого словаря нет: счётчики живут за
+    #`shared_state` — иначе при нескольких процессах час остуды стал бы часом/N.
+    shared_state.delete(throttle._K_RECOVER + STUDENT.strip().lower())
     client.post("/auth/recover", json={"email": STUDENT})
     second = _last_token()
 

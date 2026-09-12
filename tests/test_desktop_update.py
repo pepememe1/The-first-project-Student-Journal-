@@ -89,9 +89,29 @@ def test_no_patch_when_already_latest():
 
 
 # ── Клиент: подмена .exe ──────────────────────────────────────────────────────────
+def _test_release_key():
+    """Пара ключей стенда. Один раз на прогон — генерация Ed25519 не бесплатна."""
+    global _TEST_KEYPAIR
+    if _TEST_KEYPAIR is None:
+        _TEST_KEYPAIR = _keypair()
+    return _TEST_KEYPAIR
+
+
+_TEST_KEYPAIR = None
+
+
 @pytest.fixture()
 def updater_env(tmp_path, monkeypatch):
-    """Изолированная «установка»: свой каталог программы и свои данные."""
+    """Изолированная «установка»: свой каталог программы и свои данные.
+
+    ⚠️ С 10.09.2026 стенд ещё и ПОДПИСЫВАЕТ обновление ключом опыта. Это не украшение:
+    ключ выпуска заведён, значит `apply_pending` отвергает неподписанное — и без подписи
+    тесты механики подмены не доходили бы до самой механики. Чинить это ослаблением
+    проверки было бы ровно тем, от чего в проекте заведено правило про зелёного сторожа
+    рядом с дефектом: проверка перестала бы существовать, а тесты остались бы зелёными.
+    """
+    _, pub = _test_release_key()
+    monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", (pub,))
     monkeypatch.setenv("GRADEBOOK_APP_DIR", str(tmp_path))
     monkeypatch.setenv("GRADEBOOK_DATA_DIR", str(tmp_path / "data"))
     (tmp_path / "data").mkdir(exist_ok=True)
@@ -110,7 +130,10 @@ def _stage(updater, tmp_path, payload=b"NEW-EXE", version="3.5.6"):
     """Кладёт «скачанное обновление» рядом с .exe, как это делает check_and_fetch."""
     new = tmp_path / (updater.EXE_NAME + updater.NEW_SUFFIX)
     new.write_bytes(payload)
-    info = {"version": version, "path": str(new), "sha256": DU.sha256_bytes(payload)}
+    sha = DU.sha256_bytes(payload)
+    priv, _ = _test_release_key()
+    info = {"version": version, "path": str(new), "sha256": sha,
+            "sig": priv.sign(DU.signing_payload(version, sha)).hex()}
     (tmp_path / "data" / updater.PENDING_NAME).write_text(json.dumps(info), encoding="utf-8")
     return new
 
@@ -126,6 +149,39 @@ def test_apply_pending_replaces_exe_by_rename(updater_env):
     #Старый файл сохранён рядом (пока процесс жив, удалить его нельзя).
     assert (tmp_path / (updater.EXE_NAME + updater.OLD_SUFFIX)).read_bytes() == b"OLD-EXE"
     assert not (tmp_path / "data" / updater.PENDING_NAME).exists()
+
+
+def test_apply_pending_refuses_an_unsigned_update(updater_env):
+    """🔴 Второй гейт подписи — перед самой подменой файла, зеркально хешу.
+
+    Проверка при скачивании закрывает канал. Эта закрывает ДИСК: между закачкой и
+    следующим запуском программы метка и .exe лежат обычными файлами рядом с программой,
+    и подложить туда своё может всякий, кто имеет доступ к папке. Одной проверки на
+    входе тут мало ровно по той же причине, по которой хеш сверяется дважды.
+    """
+    updater, tmp_path, exe = updater_env
+    _stage(updater, tmp_path)
+    meta = tmp_path / "data" / updater.PENDING_NAME
+    info = json.loads(meta.read_text(encoding="utf-8"))
+    info.pop("sig")
+    meta.write_text(json.dumps(info), encoding="utf-8")
+
+    assert updater.apply_pending("3.5.5") is False
+    assert exe.read_bytes() == b"OLD-EXE", "неподписанное обновление всё-таки встало"
+
+
+def test_apply_pending_refuses_a_signature_from_another_version(updater_env):
+    """Откат парка через подмену метки: подпись настоящая, но от другого выпуска."""
+    updater, tmp_path, exe = updater_env
+    _stage(updater, tmp_path)
+    meta = tmp_path / "data" / updater.PENDING_NAME
+    info = json.loads(meta.read_text(encoding="utf-8"))
+    priv, _ = _test_release_key()
+    info["sig"] = priv.sign(DU.signing_payload("3.4.0", info["sha256"])).hex()
+    meta.write_text(json.dumps(info), encoding="utf-8")
+
+    assert updater.apply_pending("3.5.5") is False
+    assert exe.read_bytes() == b"OLD-EXE"
 
 
 def test_apply_pending_rejects_corrupted_download(updater_env):
@@ -546,3 +602,155 @@ def test_the_payload_is_computed_in_one_place():
     assert "_SIG_DOMAIN" not in text, (
         "приставка области продублирована в инструменте вместо использования общей")
     assert inspect.isfunction(DU.signing_payload)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# ВОРОТА ВЫКЛАДКИ (10.09.2026)
+# Ключ заведён, и с этого момента появился НОВЫЙ способ сломать всё молча: выложить
+# неподписанный манифест. Он зальётся успешно, сервер отдаст его с кодом 200, проверка
+# «версия обновилась» пройдёт — а парк перестанет обновляться, и узнаем мы об этом
+# через недели, при следующем выпуске.
+# ─────────────────────────────────────────────────────────────────────────────────
+
+def _tool():
+    """Загрузить tools/sign_release.py как модуль (в пакет он не оформлен)."""
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[1] / "tools" / "sign_release.py"
+    spec = importlib.util.spec_from_file_location("gb_sign_release", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _manifest_file(tmp_path, version="3.9.4", full_sha="a" * 64, target_sha="c" * 64):
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps({
+        "version": version,
+        "full": {"url": "u", "sha256": full_sha, "size": 1},
+        "patches": [{"from": "3.9.3", "url": "p", "sha256": "b" * 64,
+                     "target_sha256": target_sha}],
+    }), encoding="utf-8")
+    return p
+
+
+def test_the_configured_public_key_is_well_formed():
+    """🔑 Опечатка при вставке ключа отключает обновления МОЛЧА и у всех сразу.
+
+    Ключ вписывается руками один раз, из вывода `--gen-key`. Потерянный символ даёт
+    строку, которая выглядит правдоподобно и не проходит ни одной подписи: программа
+    будет исправно скачивать манифест и исправно его отвергать. Ни ошибки, ни
+    предупреждения — ровно тот отказ, который ловится сторожем, а не глазами.
+    """
+    import re
+
+    for key in DU.UPDATE_PUBLIC_KEYS:
+        assert re.fullmatch(r"[0-9a-f]{64}", key), (
+            "открытый ключ выпуска не 64 hex-символа: %r" % (key,))
+    #Дубль в списке — не ошибка формата, но означает, что ротацию считали сделанной,
+    #а второго ключа на деле нет.
+    assert len(set(DU.UPDATE_PUBLIC_KEYS)) == len(DU.UPDATE_PUBLIC_KEYS)
+
+
+def test_the_configured_key_matches_the_private_half_on_this_machine():
+    """Вписанный открытый ключ обязан быть ОТ ТОГО закрытого, которым подписывают.
+
+    ⚠️ Пропуск здесь по отсутствию ПРЕДМЕТА, а не инструмента: закрытого ключа нет ни в
+    CI, ни на машине второго разработчика — и это норма, подписывает одна машина. Но
+    когда ключ ЕСТЬ, половинам расходиться нельзя: подписанный манифест не прошёл бы
+    собственную проверку, и выкладка встала бы в самый неподходящий момент.
+    """
+    import io
+    import os
+
+    key_path = os.path.join(os.path.expanduser("~"), ".gradebook",
+                            "release_signing_key.hex")
+    if not os.path.isfile(key_path):
+        pytest.skip("закрытого ключа на этой машине нет — подписывает не она")
+    if not DU.UPDATE_PUBLIC_KEYS:
+        pytest.skip("открытый ключ ещё не заведён")
+
+    ed = pytest.importorskip(
+        "cryptography.hazmat.primitives.asymmetric.ed25519",
+        reason="cryptography объявлен обязательной зависимостью (§6)")
+    from cryptography.hazmat.primitives import serialization
+
+    raw = bytes.fromhex(io.open(key_path, encoding="utf-8").read().strip())
+    pub = ed.Ed25519PrivateKey.from_private_bytes(raw).public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw).hex()
+    assert pub in DU.UPDATE_PUBLIC_KEYS, (
+        "закрытый ключ этой машины не соответствует ни одному вписанному открытому — "
+        "выкладка подпишет то, что программа отвергнет")
+
+
+def test_an_unsigned_manifest_is_refused_by_the_gate(tmp_path, monkeypatch):
+    """Главный случай: манифест собран, а подписать забыли."""
+    tool = _tool()
+    _, pub = _keypair()
+    monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", (pub,))
+    assert tool.verify_manifest(str(_manifest_file(tmp_path))) == 1
+
+
+def test_a_signed_manifest_passes_the_gate(tmp_path, monkeypatch):
+    tool = _tool()
+    priv, pub = _keypair()
+    monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", (pub,))
+    p = _manifest_file(tmp_path)
+    man = json.loads(p.read_text(encoding="utf-8"))
+    man["full"]["sig"] = _sign(priv, "3.9.4", man["full"]["sha256"])
+    man["patches"][0]["sig"] = _sign(priv, "3.9.4",
+                                     man["patches"][0]["target_sha256"])
+    p.write_text(json.dumps(man), encoding="utf-8")
+    assert tool.verify_manifest(str(p)) == 0
+
+
+def test_the_gate_catches_a_swapped_file_after_signing(tmp_path, monkeypatch):
+    """Подписали одно, залили другое — ворота обязаны это увидеть."""
+    tool = _tool()
+    priv, pub = _keypair()
+    monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", (pub,))
+    p = _manifest_file(tmp_path)
+    man = json.loads(p.read_text(encoding="utf-8"))
+    man["full"]["sig"] = _sign(priv, "3.9.4", man["full"]["sha256"])
+    man["patches"][0]["sig"] = _sign(priv, "3.9.4",
+                                     man["patches"][0]["target_sha256"])
+    man["full"]["sha256"] = "d" * 64                 #файл подменили ПОСЛЕ подписи
+    p.write_text(json.dumps(man), encoding="utf-8")
+    assert tool.verify_manifest(str(p)) == 1
+
+
+def test_the_gate_does_not_pretend_to_check_when_no_key_is_configured(
+        tmp_path, monkeypatch, capsys):
+    """Без ключа ворота обязаны СКАЗАТЬ, что не проверяют, а не молча ответить «ок».
+
+    Тихое «ок» от выключенной защиты — ровно та форма отказа, из-за которой в проекте
+    появилось правило про зелёного сторожа рядом с дефектом.
+    """
+    tool = _tool()
+    monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", ())
+    assert tool.verify_manifest(str(_manifest_file(tmp_path))) == 0
+    assert "не заведён" in capsys.readouterr().out
+
+
+def test_publishing_actually_calls_the_signing_step():
+    """🔥 ОБЕЩАНИЕ БЕЗ ВЫЗЫВАЮЩЕГО — наш самый частый класс дефекта, и здесь он был.
+
+    `tools/sign_release.py` был написан 10.09.2026 и не вызывался НИКЕМ: механизм
+    существовал и не действовал. Проверяем именно ВЫЗОВ, а не наличие функции, — сторож
+    обязан краснеть, если строку из выкладки удалить.
+    """
+    import pathlib
+
+    sh = (pathlib.Path(__file__).resolve().parents[1]
+          / "tools" / "publish_desktop_update.sh").read_text(encoding="utf-8")
+    assert "sign_release.py" in sh, "выкладка не зовёт инструмент подписи"
+    assert "--manifest" in sh, "выкладка не подписывает манифест"
+    assert "--verify" in sh, (
+        "выкладка подписывает, но не проверяет результат — подпись повреждённым или "
+        "чужим ключом уехала бы на сервер незамеченной")
+    #Ворота обязаны ОСТАНАВЛИВАТЬ выкладку, а не печатать предупреждение: неподписанный
+    #манифест заливается успешно и ломает обновления молча.
+    assert "exit 5" in sh, "проверка подписи не останавливает выкладку"
+

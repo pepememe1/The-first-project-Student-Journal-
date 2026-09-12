@@ -16,7 +16,6 @@ Challenge держим В ПАМЯТИ процесса с TTL (как throttle/
 колледжа достаточно; challenge одноразовый и живёт минуты.
 """
 import json
-import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -37,28 +36,38 @@ from webauthn.helpers.structs import (PublicKeyCredentialDescriptor,
                                        UserVerificationRequirement)
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from .. import shared_state
+
 router = APIRouter(prefix="/auth/webauthn", tags=["webauthn"])
 
-#Одноразовые challenge в памяти: ключ → (challenge_bytes, expires_ts). TTL 5 минут.
+#━━ ОДНОРАЗОВЫЕ ЗАДАЧИ-ВЫЗОВЫ (перенесено 10.09.2026) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#🔥 ЭТО МЕСТО ЛОМАЛО ВХОД, а не удобство. Задача-вызов лежала в памяти ПРОЦЕССА, а
+#ответ браузера прилетает в ЛЮБОЙ из них — при N воркерах вход по ключу переставал
+#работать в (N−1)/N случаев, и выглядело бы это как «passkey иногда не срабатывает».
+#Ни один внешний разбор этого места не назвал.
+#
+#⚠️ Ключ хранится СТРОКОЙ (base64url), а не байтами: значение уезжает в общее
+#хранилище через JSON, где байтов нет. Кодировщик берём тот же, которым пользуется
+#сама библиотека webauthn, — своя вторая кодировка разошлась бы молча.
 _CHALLENGE_TTL = 300
-_reg_challenges: dict = {}
-_auth_challenges: dict = {}
+_K_REG = "wa:reg:"
+_K_AUTH = "wa:auth:"
 
 
-def _put(store: dict, key: str, challenge: bytes):
-    #Заодно подчищаем протухшие, чтобы словарь не рос.
-    now = time.time()
-    for k in [k for k, (_, exp) in store.items() if exp < now]:
-        store.pop(k, None)
-    store[key] = (challenge, now + _CHALLENGE_TTL)
+def _put(prefix: str, key: str, challenge: bytes):
+    #Протухшие подчищать больше не надо: у значения есть срок, и оно исчезает само.
+    shared_state.set(prefix + key, bytes_to_base64url(challenge), ttl=_CHALLENGE_TTL)
 
 
-def _pop(store: dict, key: str):
-    v = store.pop(key, None)
-    if not v:
-        return None
-    challenge, exp = v
-    return challenge if time.time() <= exp else None
+def _pop(prefix: str, key: str):
+    """Забрать задачу-вызов. ОДИН раз — второй попытке уже нечего забирать.
+
+    ⚠️ Именно `take`, а не «прочитать и удалить»: пара действий оставляет окно, в
+    которое второй запрос успевает прочитать то же значение. Для одноразовой величины
+    это готовый повтор, и чем больше процессов, тем он вероятнее.
+    """
+    raw = shared_state.take(prefix + key)
+    return base64url_to_bytes(raw) if raw else None
 
 
 def _now() -> str:
@@ -86,7 +95,7 @@ def register_begin(user: User = Depends(get_current_user), db: Session = Depends
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
     )
-    _put(_reg_challenges, user.login, opts.challenge)
+    _put(_K_REG, user.login, opts.challenge)
     return json.loads(options_to_json(opts))
 
 
@@ -94,7 +103,7 @@ def register_begin(user: User = Depends(get_current_user), db: Session = Depends
 def register_complete(body: dict = Body(...), request: Request = None,
                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Проверяем созданный ключ и сохраняем публичную часть."""
-    challenge = _pop(_reg_challenges, user.login)
+    challenge = _pop(_K_REG, user.login)
     if challenge is None:
         raise HTTPException(status_code=400, detail="Регистрация ключа истекла — начните заново")
     credential = body.get("credential") or body
@@ -138,7 +147,7 @@ def login_begin(body: dict = Body(default={}), db: Session = Depends(get_db)):
         user_verification=UserVerificationRequirement.PREFERRED,
     )
     #Discoverable-вход логина не знает — храним challenge под общим ключом "".
-    _put(_auth_challenges, login or "", opts.challenge)
+    _put(_K_AUTH, login or "", opts.challenge)
     return json.loads(options_to_json(opts))
 
 
@@ -152,9 +161,9 @@ def login_complete(body: dict = Body(...), request: Request = None, db: Session 
         raise HTTPException(status_code=400,
                             detail="Ключ не найден. Войдите паролем и включите вход по биометрии.")
     #challenge мог быть сохранён под логином (если он передавался) или под "" (discoverable).
-    challenge = _pop(_auth_challenges, body.get("login", "") or "")
+    challenge = _pop(_K_AUTH, body.get("login", "") or "")
     if challenge is None:
-        challenge = _pop(_auth_challenges, row.login)
+        challenge = _pop(_K_AUTH, row.login)
     if challenge is None:
         raise HTTPException(status_code=400, detail="Сессия входа истекла — попробуйте снова")
     try:
