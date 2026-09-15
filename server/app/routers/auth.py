@@ -18,7 +18,7 @@ from ..models import User, AuthSession, set_user_password
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import MIN_PASSWORD_LEN, verify_password, create_token_full, decode_token
 from ..config import issue_ttl_min, session_ttl_min
-from .. import throttle, events, audit, canary
+from .. import throttle, events, audit, canary, config
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -147,7 +147,13 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     #верные креды), и не нужно дёргать дорогой PBKDF2 ради него. ДЕСКТОП (и любой не-веб
     #клиент) — жёсткий барьер, как прежде. Для ВЕБА барьер откладываем: студенту он не
     #нужен, а роль мы узнаем после поиска пользователя (ниже).
-    if not web:
+    #
+    #⚠️ В РЕЖИМЕ АВТООДОБРЕНИЯ ПРОВЕРКА ПЕРЕЕЗЖАЕТ ЗА ПАРОЛЬ, и иначе быть не может:
+    #здесь пользователь ещё НЕ подтверждён, а одобрять машину по анонимному запросу
+    #нельзя (любой желающий вписал бы себя в одобренные). Значит в `auto` барьер стоит
+    #ПОСЛЕ сверки (см. ниже, рядом с `register_success`), а здесь остаётся только
+    #строгий режим — тот, ради которого предпроверка и заводилась.
+    if not web and not config.DEVICE_AUTO_APPROVE:
         ensure_device_allowed(request, db)
 
     left = throttle.seconds_until_unlocked(ip, login_str)
@@ -228,6 +234,11 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
                             headers=headers)
 
     throttle.register_success(ip, login_str)
+    #Барьер устройства в режиме автоодобрения — ЗДЕСЬ, когда пароль уже сошёлся: машина
+    #заносится в одобренные сама и со следом в журнале (см. deps.ensure_device_allowed).
+    #В строгом режиме проверка уже прошла выше, до PBKDF2, и повтор ей не нужен.
+    if config.DEVICE_AUTO_APPROVE and device_barrier_applies(request, u.role):
+        ensure_device_allowed(request, db, user=u)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
     audit.log(db, request, actor=login_str, role=u.role, action="login.ok")
 
@@ -353,7 +364,9 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     #Барьер устройства применяем по той же политике, что и на входе: персонал и
     #десктоп — обязательно; веб-студенту не нужен (роль знаем из его же токена).
     if device_barrier_applies(request, u.role):
-        ensure_device_allowed(request, db)
+        #Токен валиден — человек подтверждён, поэтому в режиме `auto` машина одобряется
+        #сама (иначе продление сессии в программе отваливалось бы там же, где вход).
+        ensure_device_allowed(request, db, user=u)
 
     #🔒 ПОДОЗРИТЕЛЬНАЯ АКТИВНОСТЬ ОТМЕНЯЕТ ТИХОЕ ПРОДЛЕНИЕ (03.09.2026, требование
     #Ярослава «код должен проситься при подозрительной активности»).

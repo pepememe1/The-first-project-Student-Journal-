@@ -61,8 +61,15 @@ const pwError = ref('')
 const canSave = computed(() =>
   fLogin.value.trim().length > 0 && fPassword.value.length >= MIN_PASSWORD)
 
-async function reload() {
-  loading.value = true
+/**
+ * @param {{silent?: boolean}} opts silent — перечитать список, НЕ убирая его с экрана.
+ *
+ * ⚠️ Без `silent` каждое перечитывание после действия гасило таблицу под «Загрузка…» и
+ * рисовало её заново. На глаз это неотличимо от «ничего не произошло, список не
+ * обновился» — а именно так дефект и выглядел.
+ */
+async function reload({ silent = false } = {}) {
+  if (!silent) loading.value = true
   loadError.value = ''
   try {
     rows.value = (await adminApi.moderators()).data.moderators || []
@@ -90,17 +97,32 @@ async function save() {
   if (!canSave.value) return
   saving.value = true
   formError.value = ''
+  const newLogin = fLogin.value.trim()
+  const newName = fName.value.trim()
   try {
     await adminApi.createModerator({
-      login: fLogin.value.trim(),
-      full_name: fName.value.trim(),
+      login: newLogin,
+      full_name: newName,
       password: fPassword.value,
     })
     showForm.value = false
+    //🔥 СТРОКА ПОЯВЛЯЕТСЯ СРАЗУ, А НЕ ПОСЛЕ ПЕРЕЧИТЫВАНИЯ (15.09.2026, живая жалоба
+    //«модератора не видно, пока не перезагрузишь страницу»). Сервер подтвердил
+    //создание кодом ответа — значит человек ЗАВЕДЁН, и список обязан это показать в
+    //тот же миг. Перечитывание идёт следом и тихо (`silent`): оно уточняет номер и
+    //метку пароля, но больше не решает, увидит ли администратор результат своего
+    //нажатия. Порядок тот же, что у сервера — по логину.
+    rows.value = [...rows.value.filter((r) => r.login !== newLogin), {
+      login: newLogin,
+      full_name: newName,
+      mod_number: 0,
+      has_password: true,
+      password_set_at: '',
+    }].sort((x, y) => x.login.localeCompare(y.login))
     //Пароль в памяти страницы не держим ни секунды дольше нужного.
     fPassword.value = ''
     toast.show(locale.t('adminModerators.created', 'Модератор заведён'))
-    await reload()
+    await reload({ silent: true })
   } catch (e) {
     formError.value = e?.response?.data?.detail
       || locale.t('adminModerators.saveFailed', 'Не удалось сохранить')
@@ -125,7 +147,7 @@ async function savePassword() {
     pwFor.value = ''
     pwValue.value = ''
     toast.show(locale.t('adminModerators.passwordChanged', 'Пароль изменён'))
-    await reload()
+    await reload({ silent: true })
   } catch (e) {
     pwError.value = e?.response?.data?.detail
       || locale.t('adminModerators.saveFailed', 'Не удалось сохранить')
@@ -141,7 +163,9 @@ async function remove(row) {
   if (!ok) return
   try {
     await adminApi.deleteModerator(row.login)
-    await reload()
+    //Убранного убираем сразу по той же причине, что и заводим: подтверждение уже есть.
+    rows.value = rows.value.filter((r) => r.login !== row.login)
+    await reload({ silent: true })
   } catch (e) {
     toast.show(e?.response?.data?.detail
       || locale.t('adminModerators.saveFailed', 'Не удалось сохранить'))

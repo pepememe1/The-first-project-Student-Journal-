@@ -11,8 +11,16 @@ from conftest import HOST_DEVICE_ID
 NEW_DEV = {"X-Device-Id": "new-pc-001"}
 
 
-def test_unapproved_device_cannot_login(client):
-    """Неодобренный ПК получает 403 даже с верными кредами."""
+def test_unapproved_device_cannot_login(client, monkeypatch):
+    """Неодобренный ПК получает 403 даже с верными кредами — В СТРОГОМ РЕЖИМЕ.
+
+    ⚠️ Режим задаётся ЯВНО (`config.DEVICE_AUTO_APPROVE = False`), потому что с
+    15.09.2026 умолчание другое: машина, с которой пришёл верный пароль, одобряется
+    сама (см. config.DEVICE_APPROVAL_MODE и test_device_policy.py). Этот файл проверяет
+    сам МЕХАНИЗМ подтверждения — запрос, код, отказ, — и ему нужен режим, в котором
+    механизм вообще применяется."""
+    from app import config
+    monkeypatch.setattr(config, "DEVICE_AUTO_APPROVE", False)
     admin = make_admin_headers(client)      #админ заведён (запрос от хоста — проходит)
     make_teacher_via_admin(client, admin, "t1", "passw0rd1")
     #Тот же логин/пароль, но с ЧУЖОГО устройства — барьер закрыт.
