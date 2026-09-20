@@ -1,0 +1,488 @@
+<title>Колесо активностей</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --page:   #0f1015;
+    --panel:  #171922;
+    --line:   #262a36;
+    --text:   #e9eaf0;
+    --text2:  #a7abbb;
+    --text3:  #6f748a;
+    --accent: #35c9c0;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font-family: "Golos Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* ── Мокап страницы ПОД оверлеем ───────────────────────────────────────────
+     Нужен ровно затем, чтобы было видно: подложки у колеса нет и содержимое
+     страницы просвечивает. Это не часть фичи. */
+  .page-mock { position: fixed; inset: 0; padding: 28px 32px; display: flex; flex-direction: column; gap: 18px; }
+  .mock-bar { height: 44px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+  .mock-grid { flex: 1; display: grid; grid-template-columns: 240px 1fr; gap: 18px; min-height: 0; }
+  .mock-side, .mock-main { border-radius: 12px; background: var(--panel); border: 1px solid var(--line); padding: 16px; }
+  .mock-row { height: 12px; border-radius: 6px; background: #212430; margin-bottom: 10px; }
+  .mock-row.s { width: 55%; } .mock-row.m { width: 78%; } .mock-row.l { width: 92%; }
+
+  /* ── Оверлей ───────────────────────────────────────────────────────────────
+     🔥 ФОНА ЗДЕСЬ НЕТ НАМЕРЕННО. Оверлеем является ТОЛЬКО само колесо: ни
+     затемняющей подложки, ни карточки под ним.
+     ⚠️ `pointer-events: none` на контейнере и `auto` на колесе — иначе невидимый
+     прямоугольник во весь экран перехватывал бы клики по странице, и «фон убрали»
+     получилось бы только на вид. */
+  .overlay { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
+  .wheel-wrap { pointer-events: auto; width: min(78vmin, 620px); aspect-ratio: 1; position: relative; }
+  svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+  .sector { cursor: pointer; }
+  .sector .plate { transition: fill .18s ease; }
+
+  .lbl { font-size: 15px; font-weight: 600; fill: #fff; pointer-events: none; }
+  .lbl-sm { font-size: 12.5px; font-weight: 500; fill: var(--text2); pointer-events: none; }
+  .emoji { font-size: 30px; pointer-events: none; }
+
+  .hub-plate { fill: #14161e; stroke: var(--line); stroke-width: 1.5; cursor: pointer; }
+  .hub-plate:hover { fill: #191c26; stroke: var(--accent); }
+
+  /* ── Панель прототипа (не часть фичи) ─────────────────────────────────── */
+  .devbar {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 13px; flex-wrap: wrap; justify-content: center;
+    max-width: 94vw; padding: 8px 14px; border-radius: 14px;
+    background: rgba(20, 22, 30, .94); border: 1px solid var(--line);
+    font-size: 12.5px; color: var(--text2); z-index: 10;
+  }
+  .devbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .devbar select { background: #11131a; color: var(--text2); border: 1px solid var(--line);
+                   border-radius: 7px; padding: 3px 6px; font: inherit; }
+  .devbar code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--text3); }
+  .devbar input[type=checkbox] { accent-color: var(--accent); }
+  .devbar .sep { width: 1px; height: 16px; background: var(--line); }
+</style>
+
+<div class="page-mock" aria-hidden="true">
+  <div class="mock-bar"></div>
+  <div class="mock-grid">
+    <div class="mock-side">
+      <div class="mock-row l"></div><div class="mock-row m"></div><div class="mock-row s"></div>
+      <div class="mock-row m"></div><div class="mock-row l"></div><div class="mock-row s"></div>
+    </div>
+    <div class="mock-main">
+      <div class="mock-row m"></div><div class="mock-row l"></div><div class="mock-row s"></div>
+      <div class="mock-row l"></div><div class="mock-row m"></div><div class="mock-row l"></div>
+      <div class="mock-row s"></div><div class="mock-row m"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay">
+  <div class="wheel-wrap">
+    <svg id="wheel" viewBox="0 0 400 400" role="menu" aria-label="Выбор активности"></svg>
+  </div>
+</div>
+
+<div class="devbar">
+  <label><input type="checkbox" id="t-img" checked> картинка</label>
+  <label><input type="checkbox" id="t-shade" checked> затемнение под подпись</label>
+  <label><input type="checkbox" id="t-dim"> подложка</label>
+  <label><input type="checkbox" id="t-bbox"> границы клипа</label>
+  <span class="sep"></span>
+  <label>картинка
+    <select id="t-fit">
+      <option value="blur">целиком + размытый фон</option>
+      <option value="cover">во весь клин (обрежется)</option>
+    </select>
+  </label>
+  <label>видимая часть
+    <select id="t-align">
+      <option value="xMidYMid">центр</option>
+      <option value="xMidYMin">верх</option>
+      <option value="xMidYMax">низ</option>
+      <option value="xMinYMid">лево</option>
+      <option value="xMaxYMid">право</option>
+    </select>
+  </label>
+  <label>масштаб <input type="range" id="t-zoom" min="40" max="100" value="100" style="width:90px"></label>
+  <code id="stat">картинок с диска: —</code>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  КОЛЕСО АКТИВНОСТЕЙ — прототип
+//
+//  Требования (Влад, 25.08.2026):
+//   1. при наведении вместо эмодзи видно ИЗОБРАЖЕНИЕ;
+//   2. изображение НЕ ВЫХОДИТ за край своего куска пирога;
+//   3. изображение ВСЕГДА в том же положении, что и оригинал — не крутится
+//      вместе с сектором и не зеркалится;
+//   4. изображение закрывает кусок ЦЕЛИКОМ, пустых мест не остаётся;
+//   5. подложки под колесом нет: оверлей — только само колесо.
+//
+//  Геометрия взята из боевого `web/src/components/activity/ActivityWheel.vue`,
+//  чтобы прототип и продукт не разъехались.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CONF = {
+  // ⚠️ НАСТОЯЩИЕ КАРТИНКИ КЛАДУТСЯ В `docs/prototypes/img/` ПОД ЭТИМИ ИМЕНАМИ.
+  // Файл есть — берём его; файла нет — рисуем схему, повторяющую тот же экран.
+  // Больше ничего менять не нужно: размер и обрезка считаются от формы сектора.
+  slices: [
+    // ⚠️ Подписи — ТЕ ЖЕ, что на сайте (`activity.kind.*` в словаре): «Тест» и «Пульс»
+    // в продукте не существуют, и прототип с другими словами обсуждать бесполезно.
+    { id: 'board',   label: 'Доска',          emoji: '🖊️', hue: 172, file: 'board.png',   align: 'xMidYMid' },
+    { id: 'quiz',    label: 'Викторина',      emoji: '📝', hue: 214, file: 'quiz.png',    align: 'xMidYMid' },
+    { id: 'contest', label: 'Соревнование',   emoji: '🏆', hue: 42,  file: 'contest.png', align: 'xMidYMid' },
+    { id: 'poll',    label: 'Опрос',          emoji: '📊', hue: 268, file: 'poll.png',    align: 'xMidYMid' },
+    { id: 'pulse',   label: 'Срез понимания', emoji: '🌡️', hue: 8,   file: 'pulse.png',   align: 'xMidYMid' },
+    // У тайм-бокса снимка нет — сектор рисует схему. Появится файл `timer.png` —
+    // подхватится сам, правок не потребуется.
+    { id: 'timer',   label: 'Тайм-бокс',      emoji: '⏱️', hue: 130, file: 'timer.png',   align: 'xMidYMid' },
+  ],
+  IMG_DIR: 'img/',
+  R_IN: 0.30, R_OUT: 0.94, R_OUT_HOVER: 1.0, SPREAD: 96, GAP: 1.1,
+}
+
+const C = 200, HALF = 200
+const NS = 'http://www.w3.org/2000/svg'
+const svg = document.getElementById('wheel')
+let openId = ''
+
+const rad = (d) => ((d - 90) * Math.PI) / 180
+const pt = (r, d) => [C + r * Math.cos(rad(d)), C + r * Math.sin(rad(d))]
+const el = (n, a = {}) => { const e = document.createElementNS(NS, n)
+  for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e }
+
+// ── Схемы вместо снимков ──────────────────────────────────────────────────
+// Повторяют СВОИ экраны продукта: доска с конспектом, вопрос с плитками, карточка
+// опроса, шкала пульса, таймер. Пропорция 4:3 — как у окна активности.
+// ⚠️ Схема, а не поддельный «скриншот»: поддельный обещал бы человеку не то, что он
+// увидит, и устаревал бы при каждой правке вёрстки. Настоящий файл её вытесняет.
+function schema(id, hue) {
+  const bg = '#171922', line = 'rgba(255,255,255,.16)'
+  const box = (x, y, w, h, f, r = 6) => `<rect x='${x}' y='${y}' width='${w}' height='${h}' rx='${r}' fill='${f}'/>`
+  let inner = ''
+
+  if (id === 'board') {
+    inner = box(24, 22, 200, 12, 'rgba(255,255,255,.85)', 6)
+      + [0, 1, 2, 3, 4, 5].map((i) => box(24, 52 + i * 22, 150 - i * 8, 9, line)).join('')
+      + `<g stroke='rgba(255,255,255,.75)' stroke-width='3' fill='none'>`
+      + `<path d='M250 60 L300 60 L300 170 L250 170 Z'/><path d='M250 60 L262 48 L312 48 L300 60'/>`
+      + `<path d='M312 48 L312 158 L300 170'/></g>`
+      + box(258, 76, 34, 8, 'rgba(255,255,255,.6)', 3)
+  } else if (id === 'quiz' || id === 'contest') {
+    const tiles = [['#d31f3c', 16, 60], ['#1160c4', 172, 60], ['#d99000', 16, 118], ['#1d8a3c', 172, 118]]
+    inner = box(16, 20, 90, 10, line) + box(16, 38, 210, 12, 'rgba(255,255,255,.8)')
+      + tiles.map(([c, x, y]) => box(x, y, 140, 44, c, 8)).join('')
+      + (id === 'quiz' ? box(16, 176, 140, 44, '#d31f3c', 8) : box(280, 18, 36, 18, 'rgba(255,255,255,.14)', 9))
+  } else if (id === 'poll') {
+    inner = box(20, 24, 200, 12, 'rgba(255,255,255,.8)') + box(20, 44, 120, 9, line)
+      + box(20, 70, 296, 34, 'rgba(53,201,192,.30)', 8) + box(20, 112, 296, 34, 'rgba(255,255,255,.08)', 8)
+      + box(30, 82, 60, 10, 'rgba(255,255,255,.75)') + box(30, 124, 76, 10, line)
+      + box(20, 162, 150, 9, line)
+  } else if (id === 'pulse') {
+    const seg = 10, cx = 168, cy = 176, r0 = 66, r1 = 116
+    let arcs = ''
+    for (let i = 0; i < seg; i++) {
+      const a0 = 180 + (i * 180) / seg + 1.6, a1 = 180 + ((i + 1) * 180) / seg - 1.6
+      const p = (r, a) => [cx + r * Math.cos((a * Math.PI) / 180), cy + r * Math.sin((a * Math.PI) / 180)]
+      const [x0, y0] = p(r0, a0), [x1, y1] = p(r1, a0), [x2, y2] = p(r1, a1), [x3, y3] = p(r0, a1)
+      arcs += `<path d='M${x0} ${y0} L${x1} ${y1} A${r1} ${r1} 0 0 1 ${x2} ${y2} L${x3} ${y3} A${r0} ${r0} 0 0 0 ${x0} ${y0} Z' fill='hsl(${(i * 12)} 72% 46%)'/>`
+    }
+    inner = box(96, 26, 148, 12, 'rgba(255,255,255,.8)') + arcs
+      + `<circle cx='${cx}' cy='${cy}' r='11' fill='#fff'/>`
+  } else {
+    inner = box(110, 26, 116, 11, line)
+      + `<circle cx='168' cy='140' r='70' fill='none' stroke='rgba(255,255,255,.14)' stroke-width='14'/>`
+      + `<path d='M168 70 A70 70 0 1 1 98 140' fill='none' stroke='hsl(${hue} 65% 50%)' stroke-width='14' stroke-linecap='round'/>`
+      + box(126, 128, 84, 22, 'rgba(255,255,255,.85)', 5)
+  }
+
+  const s = `<svg xmlns='http://www.w3.org/2000/svg' width='336' height='252' viewBox='0 0 336 252'>`
+    + `<rect width='336' height='252' fill='${bg}'/>`
+    + `<rect x='.5' y='.5' width='335' height='251' fill='none' stroke='hsl(${hue} 50% 40%)' stroke-opacity='.5'/>`
+    + inner + `</svg>`
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(s)
+}
+
+// ── Есть ли настоящий файл ────────────────────────────────────────────────
+// ⚠️ Проверяем ЗАГРУЗКОЙ, а не наличием строки в настройках: битый путь иначе дал бы
+// пустой сектор, и выглядело бы это как поломка колеса, а не как отсутствующий файл.
+const real = {}          // id -> { src, aspect } у реально загруженных
+function probeImages() {
+  return Promise.all(CONF.slices.map((s) => new Promise((done) => {
+    const src = CONF.IMG_DIR + s.file
+    const im = new Image()
+    //⚠️ Запоминаем ПРОПОРЦИЮ, а не только путь: без неё «вписать снимок целиком»
+    //посчитать нечем, а брать её из вёрстки поздно — картинка уже отрисована.
+    im.onload = () => { real[s.id] = { src, aspect: im.naturalWidth / im.naturalHeight }; done() }
+    im.onerror = () => done()
+    im.src = src
+  })))
+}
+
+// ── Геометрия ─────────────────────────────────────────────────────────────
+function layout() {
+  const n = CONF.slices.length, step = 360 / n
+  const openIdx = CONF.slices.findIndex((s) => s.id === openId)
+  const out = []
+  if (openIdx < 0) {
+    for (let i = 0; i < n; i++) out.push({ from: i * step, to: (i + 1) * step })
+  } else {
+    const mid = openIdx * step + step / 2, rest = (360 - CONF.SPREAD) / (n - 1)
+    out[openIdx] = { from: mid - CONF.SPREAD / 2, to: mid + CONF.SPREAD / 2 }
+    let cur = mid + CONF.SPREAD / 2
+    for (let j = 1; j < n; j++) { out[(openIdx + j) % n] = { from: cur, to: cur + rest }; cur += rest }
+  }
+  return CONF.slices.map((s, i) => {
+    const open = i === openIdx
+    const a0 = out[i].from + CONF.GAP / 2, a1 = out[i].to - CONF.GAP / 2
+    const rOut = (open ? CONF.R_OUT_HOVER : CONF.R_OUT) * HALF, rIn = CONF.R_IN * HALF
+    return { ...s, open, a0, a1, rIn, rOut, mid: (a0 + a1) / 2, d: sectorPath(a0, a1, rIn, rOut) }
+  })
+}
+
+function sectorPath(a0, a1, rIn, rOut) {
+  const [x0, y0] = pt(rIn, a0), [x1, y1] = pt(rOut, a0)
+  const [x2, y2] = pt(rOut, a1), [x3, y3] = pt(rIn, a1)
+  const big = a1 - a0 > 180 ? 1 : 0
+  return `M ${x0} ${y0} L ${x1} ${y1} A ${rOut} ${rOut} 0 ${big} 1 ${x2} ${y2} `
+       + `L ${x3} ${y3} A ${rIn} ${rIn} 0 ${big} 0 ${x0} ${y0} Z`
+}
+
+/**
+ * Габарит куска пирога — прямоугольник, в который он ровно вписан.
+ *
+ * ⚠️ Считать по четырём углам НЕЛЬЗЯ: дуга выпирает за хорду, и картинка, рассчитанная
+ * по углам, не достала бы до внешнего края — по краю осталась бы пустая полоса. К углам
+ * добавляем точки касания дуги с осями: именно они дают настоящие крайние значения.
+ */
+function sectorBBox(a0, a1, rIn, rOut) {
+  const pts = [pt(rIn, a0), pt(rOut, a0), pt(rIn, a1), pt(rOut, a1)]
+  for (let a = -720; a <= 1080; a += 90) {
+    if (a > a0 && a < a1) { pts.push(pt(rOut, a)); pts.push(pt(rIn, a)) }
+  }
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1])
+  const x = Math.min(...xs), y = Math.min(...ys)
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
+}
+
+/** Лежит ли точка внутри куска пирога (кольцевого сектора). */
+function inSector(x, y, a0, a1, rIn, rOut) {
+  const dx = x - C, dy = y - C
+  const r = Math.hypot(dx, dy)
+  if (r < rIn || r > rOut) return false
+  let a = (Math.atan2(dy, dx) * 180) / Math.PI + 90
+  while (a < a0) a += 360
+  while (a >= a0 + 360) a -= 360
+  return a <= a1
+}
+
+/**
+ * Наибольший прямоугольник ЗАДАННОЙ ПРОПОРЦИИ, целиком помещающийся в кусок пирога.
+ *
+ * Зачем: снимок широкий, клин узкий и высокий. Если вписывать в ГАБАРИТ клина —
+ * картинка выходит крошечной (габарит намного больше самого клина), а если растягивать
+ * на габарит — от экрана остаются две случайные плитки. Нужен третий вариант: найти
+ * самый большой прямоугольник, который реально влезает ВНУТРЬ клина.
+ *
+ * ⚠️ Проверяем не только четыре угла, но и точки по периметру: внутренняя дуга вогнутая,
+ * и прямоугольник может углами быть внутри, а серединой стороны залезать во втулку.
+ * На углах такая проверка была бы зелёной, а картинка — надрезанной.
+ *
+ * Ищем перебором по радиусу центра и двоичным поиском по масштабу: считается один раз
+ * на раскрытие сектора, точность важнее пары сотен арифметических операций.
+ */
+function fitRectInSector(aspect, a0, a1, rIn, rOut) {
+  const fits = (cx, cy, w, h) => {
+    const xs = [0, .25, .5, .75, 1], ys = [0, .25, .5, .75, 1]
+    for (const u of xs) for (const v of ys) {
+      const onEdge = u === 0 || u === 1 || v === 0 || v === 1
+      if (!onEdge) continue
+      if (!inSector(cx - w / 2 + u * w, cy - h / 2 + v * h, a0, a1, rIn, rOut)) return false
+    }
+    return true
+  }
+  let best = null
+  for (let t = 0; t <= 20; t++) {
+    const rc = rIn + ((rOut - rIn) * t) / 20
+    const [cx, cy] = pt(rc, (a0 + a1) / 2)
+    let lo = 0, hi = 2 * rOut
+    for (let i = 0; i < 22; i++) {
+      const w = (lo + hi) / 2, h = w / aspect
+      if (fits(cx, cy, w, h)) lo = w; else hi = w
+    }
+    if (!best || lo > best.w) best = { cx, cy, w: lo, h: lo / aspect }
+  }
+  return best
+}
+
+
+// ── Отрисовка ─────────────────────────────────────────────────────────────
+function render() {
+  const showImg = document.getElementById('t-img').checked
+  const showBox = document.getElementById('t-bbox').checked
+  const shade = document.getElementById('t-shade').checked
+  const alignOverride = document.getElementById('t-align').value
+  const fit = document.getElementById('t-fit').value
+  const zoom = Number(document.getElementById('t-zoom').value) / 100
+
+  svg.textContent = ''
+  const defs = el('defs'); svg.appendChild(defs)
+  // Размытие для фоновой копии. `stdDeviation` в единицах viewBox, а не пикселей —
+  // поэтому оно одинаково на любом размере колеса.
+  const f = el('filter', { id: 'soft', x: '-20%', y: '-20%', width: '140%', height: '140%' })
+  f.appendChild(el('feGaussianBlur', { stdDeviation: '7' }))
+  defs.appendChild(f)
+
+  layout().forEach((s) => {
+    const g = el('g', { class: 'sector', role: 'menuitem', tabindex: '0', 'aria-label': s.label })
+
+    g.appendChild(el('path', { class: 'plate', d: s.d,
+      fill: s.open ? `hsl(${s.hue} 40% 20%)` : `hsl(${s.hue} 24% 14%)` }))
+
+    if (s.open && showImg) {
+      const clipId = `clip-${s.id}`
+      const cp = el('clipPath', { id: clipId })
+      cp.appendChild(el('path', { d: s.d }))
+      defs.appendChild(cp)
+
+      const b = sectorBBox(s.a0, s.a1, s.rIn, s.rOut)
+
+      // 🔥 ТРИ ТРЕБОВАНИЯ ЗАКРЫВАЮТСЯ ЗДЕСЬ, КАЖДОЕ СВОИМ ПРИЁМОМ:
+      //  • не выходит за край → `clip-path` по ТОМУ ЖЕ пути, что и подложка;
+      //  • ТО ЖЕ ПОЛОЖЕНИЕ, ЧТО У ОРИГИНАЛА → у картинки НЕТ `transform` вообще:
+      //    она живёт в обычных координатах, вращается только форма обрезки. Ни
+      //    поворота, ни зеркала, ни наклона — что на файле, то и на экране;
+      //  • нет пустых мест → `slice` заставляет закрыть прямоугольник целиком, а
+      //    прямоугольник — это габарит сектора с учётом выпуклости дуги.
+      // ⚠️ `slice` неизбежно ОБРЕЗАЕТ: клин уже, чем кадр 4:3. Какую часть оставить,
+      //  задаёт вторая половина `preserveAspectRatio` (центр/верх/низ/бок) — она же
+      //  в панели внизу и в поле `align` у каждой активности.
+      const got = real[s.id]
+      const src = got ? got.src : schema(s.id, s.hue)
+      const aspect = got ? got.aspect : 336 / 252
+
+      if (fit === 'blur') {
+        // 🔥 РАЗМЫТАЯ КОПИЯ ЗАПОЛНЯЕТ КЛИН, ЧЁТКАЯ ПОКАЗЫВАЕТ СНИМОК ЦЕЛИКОМ.
+        //
+        // Почему не «просто растянуть на весь клин»: снимок широкий (например
+        // 1063×548), а клин — узкий и высокий. Чтобы закрыть его целиком, картинку
+        // приходится увеличить в разы, и от экрана остаются две случайные плитки —
+        // узнать активность по такому невозможно, а ради узнавания всё и делалось.
+        //
+        // Приём закрывает оба требования разом: пустых мест нет (их закрывает фон), а
+        // снимок виден В РОДНЫХ ПРОПОРЦИЯХ и в том же положении, что оригинал.
+        g.appendChild(el('image', {
+          href: src, x: b.x, y: b.y, width: b.w, height: b.h,
+          preserveAspectRatio: `${alignOverride || s.align} slice`,
+          filter: 'url(#soft)', opacity: .55,
+          'clip-path': `url(#${clipId})`,
+        }))
+        g.appendChild(el('path', { d: s.d, fill: `hsl(${s.hue} 40% 10%)`, opacity: .45,
+                                   'clip-path': `url(#${clipId})` }))
+
+        // Чёткая копия — в НАИБОЛЬШИЙ прямоугольник, который влезает В САМ КЛИН
+        // (не в его габарит: габарит намного больше клина, и картинка выходила мелкой).
+        // ⚠️ Всё равно под тем же `clip-path` — страховка на случай, если ползунок
+        // масштаба выкрутят выше расчётного: за край куска пирога не выйдет всё равно.
+        const fitr = fitRectInSector(aspect, s.a0, s.a1, s.rIn, s.rOut)
+        const w = fitr.w * zoom, h = fitr.h * zoom
+        g.appendChild(el('image', {
+          href: src, x: fitr.cx - w / 2, y: fitr.cy - h / 2, width: w, height: h,
+          preserveAspectRatio: 'xMidYMid meet',      // meet — снимок целиком, без обрезки
+          'clip-path': `url(#${clipId})`,
+        }))
+        // Рамка снимка: без неё тёмный экран сливается с размытым фоном того же экрана.
+        g.appendChild(el('rect', { x: fitr.cx - w / 2, y: fitr.cy - h / 2, width: w, height: h,
+          rx: 4, fill: 'none', stroke: 'rgba(255,255,255,.28)', 'stroke-width': 1,
+          'clip-path': `url(#${clipId})` }))
+        s._fit = { cx: fitr.cx, cy: fitr.cy, h }
+      } else {
+        g.appendChild(el('image', {
+          href: src, x: b.x, y: b.y, width: b.w, height: b.h,
+          preserveAspectRatio: `${alignOverride || s.align} slice`,
+          'clip-path': `url(#${clipId})`,
+        }))
+      }
+
+      if (shade) {
+        g.appendChild(el('path', { d: s.d, fill: '#05070c', opacity: .34, 'clip-path': `url(#${clipId})` }))
+      }
+      if (showBox) {
+        g.appendChild(el('rect', { x: b.x, y: b.y, width: b.w, height: b.h, fill: 'none',
+          stroke: '#ff5c7a', 'stroke-width': 1, 'stroke-dasharray': '4 3', opacity: .85 }))
+      }
+    }
+
+    // Обводка поверх картинки: без неё край сектора теряется на светлом снимке.
+    g.appendChild(el('path', { d: s.d, fill: 'none', stroke: `hsl(${s.hue} 60% 58%)`,
+      'stroke-width': s.open ? 1.8 : 1, 'stroke-opacity': s.open ? .95 : .3 }))
+
+    const [lx, ly] = pt(s.open ? s.rOut - 24 : (s.rIn + s.rOut) / 2, s.mid)
+    if (s.open) {
+      // ⚠️ Подпись ПОД снимком и БЕЗ обрезки. У внешнего края её резала дуга («Виктори…»),
+      // у основания она налезала на втулку «Журнал». Место под снимком свободно всегда:
+      // снимок вписан в клин, значит между ним и краем зазор есть по построению.
+      const fx = s._fit ? s._fit.cx : lx
+      const fy = s._fit ? s._fit.cy + s._fit.h / 2 + 16 : ly
+      const wLbl = s.label.length * 7.9 + 20
+      g.appendChild(el('rect', { x: fx - wLbl / 2, y: fy - 13, width: wLbl, height: 24,
+                                 rx: 12, fill: '#0b0d13', opacity: .86 }))
+      const t = el('text', { x: fx, y: fy + 4, class: 'lbl', 'text-anchor': 'middle' })
+      t.textContent = s.label; g.appendChild(t)
+    } else {
+      const e = el('text', { x: lx, y: ly, class: 'emoji', 'text-anchor': 'middle' })
+      e.textContent = s.emoji; g.appendChild(e)
+      const t = el('text', { x: lx, y: ly + 22, class: 'lbl-sm', 'text-anchor': 'middle' })
+      t.textContent = s.label; g.appendChild(t)
+    }
+
+    // ⚠️ Реагируем только мышью и пером: в Chromium `pointerenter` прилетает и от
+    // пальца, и тогда первое касание раскрывало бы сектор и тут же выбирало его —
+    // предпросмотра на телефоне не существовало бы вовсе.
+    g.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { openId = s.id; render() } })
+    g.addEventListener('focus', () => { openId = s.id; render() })
+    g.addEventListener('click', () => {
+      document.getElementById('stat').textContent = `выбрано: ${s.id}`
+    })
+    svg.appendChild(g)
+  })
+
+  const hub = el('g')
+  hub.appendChild(el('circle', { class: 'hub-plate', cx: C, cy: C, r: CONF.R_IN * HALF - 6 }))
+  const ht = el('text', { x: C, y: C + 5, class: 'lbl', 'text-anchor': 'middle' })
+  ht.textContent = 'Журнал'; hub.appendChild(ht)
+  svg.appendChild(hub)
+}
+
+// Уходя с колеса — закрываем. Слушаем на обёртке, а не на каждом секторе: иначе
+// переход между соседями читался бы как уход и колесо мигало.
+document.querySelector('.wheel-wrap').addEventListener('pointerleave', () => { openId = ''; render() })
+
+for (const id of ['t-img', 't-bbox', 't-shade', 't-align', 't-fit', 't-zoom']) {
+  document.getElementById(id).addEventListener('input', render)
+}
+document.getElementById('t-dim').addEventListener('change', (e) => {
+  document.querySelector('.overlay').style.background = e.target.checked ? 'rgba(6,7,11,.72)' : 'transparent'
+})
+
+probeImages().then(() => {
+  const n = Object.keys(real).length
+  document.getElementById('stat').textContent =
+    n ? `картинок с диска: ${n} из ${CONF.slices.length}` : 'файлов в img/ нет — показаны схемы'
+  render()
+})
+render()
+</script>

@@ -24,7 +24,8 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
         db, user.group_name, W.current_subject_lessons(
             db, user.group_name, W.group_lessons(db, user.group_name)), cfg), user.id)
     by_id = {l.id: l for l in lessons}
-    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg)
+    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg,
+                                        student_id=user.id)
     scale_map = W.lesson_scale_map(db, lessons)
 
     #Свежие оценки — по серверной метке времени, только реальные занятия СВОЕЙ группы.
@@ -134,7 +135,8 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
     lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, user.group_name,
         W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive), user.id)
-    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg)
+    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg,
+                                        student_id=user.id)
     scale_map = W.lesson_scale_map(db, lessons)
 
     from collections import OrderedDict
@@ -196,7 +198,8 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, user.group_name,
         W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive), user.id)
-    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg)
+    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg,
+                                        student_id=user.id)
     #Долги и пропуски в ДЕФОЛТНОМ виде считаем по занятиям БЕЗ штампа термина ТОЖЕ (как
     #overview): иначе легаси-занятия без year/semester (десктоп до штампа) выпадают из
     #фильтра текущего термина, и реальные долги/пропуски «исчезают». Занятия с ЧУЖИМ, но
@@ -234,7 +237,8 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
     lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
         db, user.group_name, W.current_subject_lessons(
             db, user.group_name, W.group_lessons(db, user.group_name)), cfg), user.id)
-    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg)
+    records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg,
+                                        student_id=user.id)
     scale_map = W.lesson_scale_map(db, lessons)
     avg = W.average(lessons, records, cfg, scale=scale_map)
     cards = []
@@ -311,7 +315,8 @@ def student_zet(year: str = Query(""), semester: int = Query(0),
     threshold = db.get(ZetThreshold, zet_threshold_id(user.group_name, ty, ts))
     min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
     return {"term": {"year": ty, "semester": ts}, "min_zet": min_zet,
-            **W.zet_summary_for_student(db, user.surname, user.name, user.group_name, ty, ts)}
+            **W.zet_summary_for_student(db, user.surname, user.name, user.group_name, ty, ts,
+                                        student_id=user.id)}
 
 
 @router.get("/teacher/insights")
@@ -336,7 +341,7 @@ def teacher_insights(group: str = Query(...),
         #не-студент: это ручка ПРЕПОДАВАТЕЛЯ (`/teacher/insights`), просто живёт в
         #этом файле. Ему нужна полная картина по группе — политика показа оценок
         #студенту к нему не относится (см. grade_policy).
-        recs = W.student_records(db, s.surname, s.name, group)
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         a = W.average(lessons, recs, cfg, scale=tscale)
         if a > 0:
             vals.append(a)

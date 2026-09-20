@@ -114,6 +114,52 @@ def _group_schedule(db: Session, group: str, category: str = ""):
     return _apply_overrides(db, group, data)
 
 
+def today_digest(db: Session, user: User, today=None) -> tuple:
+    """(сколько пар сегодня, во сколько первая) для сводки «Пары на сегодня».
+
+    Заведено по просьбе тестеров (20.09.2026). Живёт ЗДЕСЬ, рядом с `_group_schedule`,
+    а не в `webdata`, ровно по одной причине: расписание студента — это портал ПЛЮС
+    админские правки (`_apply_overrides`), и вторая сборка этой пары разошлась бы с
+    первой. Человек увидел бы в сводке снятую пару или не увидел добавленную, а понять,
+    почему сводка расходится с расписанием на экране, было бы нечем.
+
+    ⚠️ Чётность недели и день берём у продукта (`schedule_web.current_week_parity`,
+    `schedule.model.WEEKDAYS`), а не считаем заново: у нас уже был дефект, где «завтра»
+    в другой чётности определялось своей формулой.
+
+    ⚠️ Воскресенья в расписании колледжа нет вовсе — в этот день сводка честно пустая.
+    """
+    from schedule.model import WEEKDAYS
+
+    group = (user.group_name or "").strip()
+    if not group:
+        return 0, ""
+    cat = ""
+    grp = db.query(Group).filter(Group.name == group, Group.deleted == False).first()  # noqa: E712
+    if grp is not None:
+        cat = (grp.category or "") or ""
+    data = _group_schedule(db, group, cat)
+    weeks = (data or {}).get("weeks") or {}
+    #⚠️ День ПАРАМЕТРОМ, а не только «сейчас»: иначе тест этой функции можно написать
+    #ровно в те шесть дней недели, когда пары есть, — а в воскресенье он будет зелёным
+    #по совершенно другой причине (в расписании колледжа воскресенья нет вовсе). Это наш
+    #записанный класс «тест, привязанный к календарю»: он не краснеет, он молча меняет
+    #проверяемый сценарий.
+    idx = (today or datetime.now(timezone.utc)).weekday()   #0 — понедельник
+    if idx >= len(WEEKDAYS):
+        return 0, ""
+    day_key = WEEKDAYS[idx]
+    week = schedule_web.current_week_parity()
+    #Ключ недели в разобранном расписании приходит и числом, и строкой (после JSON) —
+    #смотрим оба, иначе сводка молча пустая ровно у половины групп.
+    day = (weeks.get(week) or weeks.get(str(week)) or {}).get(day_key) or []
+    lessons = [ls for ls in day if (ls or {}).get("raw", "").strip() not in ("", "_")]
+    if not lessons:
+        return 0, ""
+    times = sorted((ls.get("time") or "") for ls in lessons if (ls.get("time") or ""))
+    return len(lessons), (times[0].split("-")[0] if times else "")
+
+
 @router.get("/schedule")
 def schedule_get(group: str = Query(""), category: str = Query(""),
                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):

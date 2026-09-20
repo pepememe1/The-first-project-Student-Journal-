@@ -52,12 +52,12 @@ def teacher_set_grade(payload: dict = Body(...),
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_assignment(db, user, lesson.group_name, lesson.subject,
                               lesson.year, lesson.semester)   #только своё назначение
+    _teacher_check_subgroup(db, user, lesson)   #и только СВОЯ подгруппа (J07)
     _ensure_current_term(W.load_config(db), lesson)   #архив прошлых семестров — read-only
-    stud = db.query(User).filter(
-        User.role == "student", User.surname == surname, User.name == name,
-        User.group_name == lesson.group_name, User.deleted == False).first()  # noqa: E712
-    if not stud:
-        raise HTTPException(status_code=400, detail="Студент не найден в группе занятия")
+    #🔑 Адресат — по неизменяемому id, когда клиент его знает; по ФИО — только если
+    #он один в группе (J08). Прежний `.first()` при полных тёзках ставил оценку первому
+    #найденному, молча и без следа.
+    stud = _resolve_student(db, lesson.group_name, surname, name, payload)
     #🔒 Зачётка закрыта — текущие оценки по этому предмету больше не пишутся (см.
     #_ensure_term_open). Проверяем ПОСЛЕ поиска студента: замок персональный, у соседа
     #по группе итоговой может ещё не быть.
@@ -139,7 +139,13 @@ def teacher_create_lesson(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Нужны group, subject и type")
     #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр) — тем же
     #термином и проверяем назначение.
-    ty, ts = W.current_term(W.load_config(db))
+    #⚠️ Но «текущий» считается в момент ИСПОЛНЕНИЯ, а офлайн-очередь доставляет запись
+    #через произвольный срок (J10). Занятие, созданное без сети в декабре и уехавшее в
+    #январе, штамповалось бы новым семестром и появлялось бы не в том журнале. Клиент
+    #теперь везёт период своим полем — сверяем и отказываем, если он уже закрыт.
+    cfg = W.load_config(db)
+    _require_intended_term(cfg, payload)
+    ty, ts = W.current_term(cfg)
     _teacher_check_assignment(db, user, group, subject, ty, ts)
 
     sh_row = W.subject_hours_row(db, group, subject, ty, ts)
@@ -314,6 +320,7 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
+    _teacher_check_subgroup(db, user, row)   #и только СВОЯ подгруппа (J07)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
     for field in ("topic", "date", "retake_date"):
         if field in payload:
@@ -346,6 +353,7 @@ def teacher_delete_lesson(lesson_id: str,
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
+    _teacher_check_subgroup(db, user, row)   #и только СВОЯ подгруппа (J07)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
     row.deleted = True
     row.updated_at = _now_iso()
@@ -368,7 +376,7 @@ def teacher_journal_export(group: str = Query(...), subject: str = Query(...),
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     rows = []
     for s in W.students_in_group(db, group):
-        recs = W.student_records(db, s.surname, s.name, group)
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         rows.append({"surname": s.surname, "name": s.name, "records": recs,
                      "average": W.average(lessons, recs, cfg, scale=tscale)})
     if fmt == "docx":

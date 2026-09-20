@@ -87,6 +87,40 @@ def _teacher_check_assignment(db, user: User, group: str, subject: str, year: st
         raise HTTPException(status_code=403, detail="Эта группа/предмет вам не назначены")
 
 
+def _teacher_check_subgroup(db, user: User, lesson):
+    """Преподаватель одной подгруппы не трогает объекты ЧУЖОЙ подгруппы (находка J07).
+
+    🔥 ЗАЧЕМ ОТДЕЛЬНАЯ ПРОВЕРКА, если назначение уже проверено. `_teacher_check_assignment`
+    отвечает на вопрос «твоя ли это пара (группа, предмет)», и при РАЗДЕЛЬНОМ обучении
+    ответ «да» у обоих преподавателей сразу — они ведут одну пару, но разные половины
+    группы. Чтение это учитывало с самого начала (`teacher.py` фильтрует занятия по
+    `teacher_owned_subgroups`), а запись — нет: зная id занятия соседней подгруппы,
+    преподаватель менял его тему, ставил оценки и удалял колонку. То есть ограничение
+    существовало ровно до тех пор, пока человек пользовался интерфейсом.
+
+    ⚠️ Занятие «Совместно» (`subgroup == 0`) НЕ ограничиваем. Создать такое может только
+    ведущий обе подгруппы, но существующие общие занятия есть и у тех, кто ведёт одну:
+    они заведены до разделения либо администратором. Запретить их правку значило бы
+    отнять у преподавателя его же журнал ради защиты, которой в этом месте не требуется.
+
+    ⚠️ Нет строки `SubjectHours` или разделения нет — ограничивать нечего: подгрупп в
+    этой паре не существует, и выдумывать их по полю занятия нельзя.
+    """
+    if lesson is None:
+        return
+    sub = int(getattr(lesson, "subgroup", 0) or 0)
+    if sub not in (1, 2):
+        return
+    sh_row = W.subject_hours_row(db, lesson.group_name, lesson.subject,
+                                 lesson.year, lesson.semester)
+    if not sh_row or not getattr(sh_row, "split", False):
+        return
+    owned = W.teacher_owned_subgroups(sh_row, user.id)
+    if sub not in owned:
+        raise HTTPException(status_code=403,
+                            detail=f"Подгруппа {sub} вам не назначена")
+
+
 def _curator_check(user: User, group: str):
     """Row-level: куратор видит только свои курируемые группы, иначе 403."""
     if group not in (user.curated_groups or []):
@@ -145,6 +179,80 @@ def _ensure_current_term(cfg: dict, lesson):
             status_code=409,
             detail="Этот семестр уже в архиве (только чтение). Правки возможны только "
                    "в текущем учебном периоде.")
+
+
+def _resolve_student(db, group: str, surname: str, name: str, payload: dict):
+    """Студент, которому адресована запись, — точно или с честным отказом (J08).
+
+    🔥 ЗАЧЕМ (20.09.2026). Оба места записи (текущая оценка и итоговая) искали студента
+    `.first()` по паре (фамилия, имя) в группе. При ПОЛНЫХ ТЁЗКАХ балл доставался
+    первому найденному, и заметить это было нечем: в журнале две одинаковые строки,
+    оценка появлялась не в той. Полные тёзки в одной группе — редкость, но не выдумка, а
+    цена ошибки — оценка не тому человеку, вплоть до отчисления по чужим долгам.
+
+    Порядок: пришёл `student_id` — адрес известен точно (сверяем роль, группу и что
+    студент жив). Не пришёл (старый клиент, десктоп, запись из офлайн-очереди прежней
+    сборки) — ищем по ФИО, и если таких ДВОЕ, честно отказываемся.
+
+    ⚠️ Отказ, а не «возьмём первого». Это то же правило, по которому однофамильцы при
+    сопоставлении преподавателя из расписания остаются `ambiguous`: лучше не записать,
+    чем записать не тому. Текст отказа называет, что делать — обновить страницу: журнал
+    с этого захода отдаёт `student_id` в каждой строке.
+    """
+    student_id = (payload.get("student_id") or "").strip()
+    if student_id:
+        stud = db.get(User, student_id)
+        if (stud is None or stud.deleted or stud.role != "student"
+                or (stud.group_name or "") != group):
+            raise HTTPException(status_code=400, detail="Студент не найден в группе")
+        return stud
+    found = W.students_by_name(db, group, surname, name)
+    if not found:
+        raise HTTPException(status_code=400, detail="Студент не найден в группе")
+    if len(found) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"В группе {group} двое студентов с именем {surname} {name}. "
+                    f"Обновите страницу — журнал подставит, кому именно ставится оценка."))
+    return found[0]
+
+
+def _require_intended_term(cfg: dict, payload: dict) -> None:
+    """Операция исполняется в ТОМ периоде, для которого её задумали, или не исполняется
+    вовсе (20.09.2026, находка ревью J10).
+
+    🔥 ЗАЧЕМ. Итоговая оценка и новое занятие штампуются `current_term` В МОМЕНТ
+    ИСПОЛНЕНИЯ. Онлайн это одно и то же мгновение, а у офлайн-очереди между нажатием и
+    доставкой лежит произвольный срок — ночь, каникулы, выходные. Преподаватель
+    закрывает первый семестр без сети 30 декабря, очередь уходит 12 января: сервер
+    записывает итоговую во ВТОРОЙ семестр и запирает им не тот период (наличие итоговой
+    закрывает текущие оценки по предмету). Ни ошибки, ни следа — оценка есть, просто не
+    там, где её поставили.
+
+    ⚠️ Отказ, а не «перенесём в текущий». Куда девать работу, сделанную для закрытого
+    периода, решает человек: открыть семестр обратно (это законное действие админа) или
+    отказаться от записи. Молчаливый перенос — это решение за него, причём невидимое.
+    Отказ виден: очередь кладёт такие записи в `rejected`, и плашка их показывает.
+
+    ⚠️ Период НЕОБЯЗАТЕЛЕН, и это не дыра. Его не шлют онлайн-веб, десктоп и старые
+    сборки мобильного приложения; требовать его — значит сломать их все ради случая,
+    который у них не возникает (у онлайна постановка и доставка — одно мгновение).
+    Прислал — сверяем; не прислал — прежнее поведение.
+    """
+    year = (payload.get("year") or "").strip()
+    try:
+        semester = int(payload.get("semester") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="semester должен быть числом 1 или 2")
+    if not year or semester not in (1, 2):
+        return
+    cy, cs = W.current_term(cfg)
+    if year != cy or semester != cs:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Запись сделана для периода {year}·{semester}, а сейчас идёт "
+                    f"{cy}·{cs}. Прошлый семестр в архиве — перенести её туда автоматически "
+                    f"нельзя: откройте период или откажитесь от записи."))
 
 
 def _final_grade_row(db, student_id: str, subject: str, year: str, semester: int):
@@ -219,7 +327,8 @@ __all__ = [
     "W", "schedule_web", "reg_utils", "mailer", "gost", "audit", "vector_llm",
     "translate_service", "esstu_parser", "vector_nlu", "teacher_match", "schedule_parser",
     # роутер и общие хелперы
-    "router", "_now_iso", "_contact_info", "_require", "_teacher_check_assignment",
+    "router", "_now_iso", "_contact_info", "_require", "_teacher_check_assignment", "_teacher_check_subgroup",
     "_curator_check", "_admin_or_curator_check", "_mood_by_avg", "_resolve_term",
-    "_ensure_current_term", "_XLSX_MEDIA", "_DOCX_MEDIA", "_file_response",
+    "_ensure_current_term", "_require_intended_term", "_resolve_student",
+    "_XLSX_MEDIA", "_DOCX_MEDIA", "_file_response",
 ]

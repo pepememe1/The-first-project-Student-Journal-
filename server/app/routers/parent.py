@@ -137,7 +137,8 @@ def parent_journal(student_id: str = Query(""), year: str = Query(""), semester:
     lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, child.group_name,
         W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive), child.id)
-    records = W.student_visible_records(db, child.surname, child.name, child.group_name)
+    records = W.student_visible_records(db, child.surname, child.name, child.group_name,
+                                       student_id=child.id)
     scale_map = W.lesson_scale_map(db, lessons)
 
     from collections import OrderedDict
@@ -181,7 +182,8 @@ def parent_zet(student_id: str = Query(""), year: str = Query(""), semester: int
     from .web import _resolve_term
     ty, ts = _resolve_term(cfg, year, semester)
     return {"term": {"year": ty, "semester": ts},
-            **W.zet_summary_for_student(db, child.surname, child.name, child.group_name, ty, ts)}
+            **W.zet_summary_for_student(db, child.surname, child.name, child.group_name, ty, ts,
+                                        student_id=child.id)}
 
 
 @router.get("/parent/stats")
@@ -208,7 +210,8 @@ def parent_stats(student_id: str = Query(""), year: str = Query(""), semester: i
     lessons = W.filter_lessons_by_student_subgroup(db, W.current_subject_lessons(
         db, child.group_name,
         W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive), child.id)
-    records = W.student_visible_records(db, child.surname, child.name, child.group_name)
+    records = W.student_visible_records(db, child.surname, child.name, child.group_name,
+                                       student_id=child.id)
     #Долги/пропуски — как у студента: занятия без штампа термина остаются (иначе реальные
     #долги «исчезают»), а занятия с ЧУЖИМ заданным термином (прошлый курс) — отсекаются
     #(current_term_lessons), иначе повторяющийся предмет тянул бы долги за все курсы.

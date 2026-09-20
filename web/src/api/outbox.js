@@ -108,9 +108,38 @@ function currentLogin() {
   }
 }
 
+/**
+ * Хранилище отказало в записи (переполнена квота, приватный режим, запрет сайту).
+ *
+ * 🔥 ЗАЧЕМ ФЛАГ, А НЕ ТИХИЙ `catch` (находка ревью O01). Здесь стояло
+ * `catch { /* квота переполнена — очередь короткая, терять нечего *\/ }`, и «терять
+ * нечего» было неправдой: очередь и есть та самая работа преподавателя, которую он
+ * сделал без сети. Отказ выглядел как успех целиком — журнал писал «оценка сохранена и
+ * уйдёт, когда появится связь», а на диск не легло ничего. Следующая же перезагрузка
+ * очереди (её делает КАЖДАЯ выгрузка, первой строкой) читала пустой диск и затирала
+ * память: оценка исчезала, не дождавшись даже перезапуска вкладки.
+ *
+ * Флаг делает две вещи: показывает человеку правду и запрещает затирать память
+ * неподтверждённым содержимым диска.
+ */
+export const storageFailed = ref(false)
+
+/**
+ * Чей список сейчас лежит в памяти. Нужен ровно для одного различения: «перечитываем
+ * своё» (при сломанном диске память свежее) против «сменился человек» (читать обязаны,
+ * иначе чужие оценки окажутся на чужом экране — см. O02 ниже).
+ */
+let loadedFor = ''
+
 function load(key, target) {
   const login = currentLogin()
   if (!login) { target.value = []; return }
+  //Диск не подтверждён, и это ТОТ ЖЕ человек — в памяти правда свежее. Перечитать
+  //значило бы своими руками стереть его работу пустотой.
+  //⚠️ При СМЕНЕ владельца перечитываем всё равно, и работа прежнего в этот момент
+  //теряется. Цена названа честно: показать её новому человеку нельзя, а держать
+  //невидимой в памяти — значит однажды отправить чужую оценку от его имени.
+  if (storageFailed.value && login === loadedFor && target.value.length) return
   try {
     target.value = JSON.parse(localStorage.getItem(key + login) || '[]')
   } catch {
@@ -118,24 +147,47 @@ function load(key, target) {
   }
 }
 
+/**
+ * Владелец, которому принадлежит ИДУЩАЯ выгрузка. Пусто — выгрузки нет.
+ *
+ * 🔥 ЗАЧЕМ ОТДЕЛЬНАЯ ПЕРЕМЕННАЯ, А НЕ `currentLogin()` (находка ревью O02). Ответ
+ * сервера приходит ПОЗЖЕ отправки, и между этими моментами человек успевает выйти, а
+ * на общем компьютере колледжа — войти под другим. `save()` спрашивал логин В МОМЕНТ
+ * ЗАПИСИ, то есть поздний отказ по запросу A дописывал ФИО и оценку A в очередь
+ * отклонённых у B: чужая фамилия с чужим баллом появлялась на экране человека, который
+ * этого не делал. Пока выгрузка идёт, все записи адресуются ТОМУ, чьи это данные.
+ */
+let flushOwner = ''
+
 function save(key, source) {
-  const login = currentLogin()
-  if (!login) return
+  const login = flushOwner || currentLogin()
+  if (!login) return false
   try {
     localStorage.setItem(key + login, JSON.stringify(source.value))
-  } catch { /* квота переполнена — очередь короткая, терять нечего */ }
+    //Запись прошла — прежняя беда позади, и плашку пора убрать. Гасим только на
+    //удачной записи: «кажется, стало лучше» тут неотличимо от «стало хуже молча».
+    storageFailed.value = false
+    return true
+  } catch {
+    storageFailed.value = true
+    return false
+  }
 }
 
 /** Перечитать очередь текущего пользователя (после входа/смены аккаунта). */
 export function reloadOutbox() {
+  const login = currentLogin()
+  //Сменился человек — прежний флаг к нему не относится: у него своя запись и свой диск.
+  if (login !== loadedFor) storageFailed.value = false
   load(LS_PREFIX, pending)
   load(LS_REJECTED, rejected)
+  loadedFor = login
 }
 reloadOutbox()
 
 function persist() {
   pending.value = [...pending.value].sort((a, b) => a.seq - b.seq)
-  save(LS_PREFIX, pending)
+  return save(LS_PREFIX, pending)
 }
 
 /**
@@ -163,16 +215,26 @@ function enqueue(kind, key, payload) {
     lastError: '',
   })
   pending.value = rest
+  //Ключ возвращаем как прежде: на него смотрят вызывающие. Правду о том, легло ли на
+  //диск, несёт `storageFailed` — иначе пришлось бы менять контракт у пяти постановщиков
+  //ради одного редкого случая, и первый забывший проверить вернул бы дефект обратно.
   persist()
   return key
 }
 
 // ───────────────────────── постановка операций ─────────────────────────
 
-/** Оценка ИЛИ отметка посещаемости (Н/Б/О) — на сервере это одно и то же. */
-export function enqueueGrade({ surname, name, lesson_id, grade }) {
-  return enqueue('grade', `grade|${lesson_id}|${surname}|${name}`,
-    { surname, name, lesson_id, grade: grade ?? '' })
+/**
+ * Оценка ИЛИ отметка посещаемости (Н/Б/О) — на сервере это одно и то же.
+ *
+ * ⚠️ `student_id` едет вместе с ФИО (J08): у двух полных тёзок в группе имя не
+ * различает адресата, и сервер выбирал первого найденного. Он же входит в КЛЮЧ — иначе
+ * оценки тёзок схлопывались бы в очереди в одну запись, и вторая пропадала бы молча.
+ * Пусто у старых записей и клиентов — тогда сервер решает по ФИО, как раньше.
+ */
+export function enqueueGrade({ surname, name, lesson_id, grade, student_id = '' }) {
+  return enqueue('grade', `grade|${lesson_id}|${student_id || `${surname}|${name}`}`,
+    { surname, name, lesson_id, grade: grade ?? '', student_id })
 }
 
 /**
@@ -226,10 +288,26 @@ export function enqueueLessonDelete(id) {
   return enqueue('lesson.delete', `lesson.delete|${id}`, { id })
 }
 
-/** Итоговая оценка за семестр (аттестация). */
+/**
+ * Итоговая оценка за семестр (аттестация).
+ *
+ * ⚠️ ПЕРИОД ВХОДИТ И В КЛЮЧ, И В ПОЛЕЗНУЮ НАГРУЗКУ (находка ревью J10). Ключ — чтобы
+ * ведомости за РАЗНЫЕ семестры не схлопывались в одну запись: без периода итоговая,
+ * поставленная в декабре и не успевшая уехать, замещалась бы январской по тому же
+ * ключу, и первая исчезала бы молча. Нагрузка — чтобы сервер записал её туда, куда
+ * человек ставил: `current_term` считается в момент ИСПОЛНЕНИЯ, а между нажатием и
+ * доставкой у очереди лежат каникулы.
+ *
+ * ⚠️ Период необязателен: у записей, уже лежащих в очереди со старой сборки, его нет, и
+ * они обязаны доехать по-прежнему. Сервер сверяет его, только если он пришёл.
+ */
 export function enqueueTermGrade(payload) {
-  const { group, subject, surname, name } = payload
-  return enqueue('term', `term|${group}|${subject}|${surname}|${name}`, payload)
+  const { group, subject, surname, name, student_id, year, semester } = payload
+  const term = year && semester ? `|${year}|${semester}` : ''
+  //Адресат в ключе — по id, когда он известен (J08): у полных тёзок ключ по ФИО один на
+  //двоих, и итоговая одного вытесняла бы итоговую другого прямо в очереди.
+  const who = student_id || `${surname}|${name}`
+  return enqueue('term', `term|${group}|${subject}|${who}${term}`, payload)
 }
 
 // ───────────────────────── чтение очереди интерфейсом ─────────────────────────
@@ -352,12 +430,22 @@ export async function flushOutbox() {
   reloadOutbox()
   if (!pending.value.length) return { sent: 0, failed: 0, rejected: 0 }
 
+  //🔒 Владельца закрепляем ДО первой отправки и держим до конца цикла: дальше все
+  //записи в хранилище идут именно ему, а смена аккаунта останавливает выгрузку.
+  const owner = currentLogin()
+  if (!owner) return { sent: 0, failed: 0, rejected: 0 }
+  flushOwner = owner
+
   flushing.value = true
   const stats = { sent: 0, failed: 0, rejected: 0 }
   try {
     for (const entry of [...pending.value].sort((a, b) => a.seq - b.seq)) {
       // Запись могли переписать или удалить, пока шёл предыдущий запрос.
       if (!pending.value.includes(entry)) continue
+      //🔒 Аккаунт сменился, пока мы ждали предыдущий ответ — останавливаемся. Очередь
+      //A не имеет права уезжать под токеном B: это была бы запись данных A от имени
+      //другого человека, и на сервере она выглядела бы совершенно законной.
+      if (currentLogin() !== owner) break
       const sentRev = entry.rev ?? 0
       inFlight = { key: entry.key, rev: sentRev }
       try {
@@ -447,6 +535,10 @@ export async function flushOutbox() {
   } finally {
     inFlight = null
     flushing.value = false
+    flushOwner = ''
+    //Если за время выгрузки вошёл другой человек, в памяти модуля лежит очередь
+    //ПРЕДЫДУЩЕГО: перечитываем под нового, иначе его экран покажет чужие записи.
+    if (currentLogin() !== owner) reloadOutbox()
   }
   return stats
 }

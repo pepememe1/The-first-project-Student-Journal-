@@ -73,7 +73,7 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict,
 
     rows = []
     for s in students:
-        recs = W.student_records(db, s.surname, s.name, group)
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         per_subj = {d["subject"]: d["average"] for d in
                     W.per_subject_averages(lessons, recs, cfg, scale=scale_map)}
         absc = W.absences(lessons, recs)

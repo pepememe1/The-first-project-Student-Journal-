@@ -153,6 +153,10 @@ async function onLogout() {
 // Ключи обязаны совпадать с rustore_push.ALL_CATEGORIES: сервер знает только их.
 const NOTIFY_KINDS = computed(() => [
   { key: 'grades', label: loc.t('settings.notify.grades.label', 'Оценки'), hint: loc.t('settings.notify.grades.hint', 'Новая оценка и исправление уже выставленной') },
+  // Просьба тестеров (20.09.2026): «пары на сегодня» отдельным тумблером. Своя
+  // категория, а не «Расписание»: то приходит редко и про замены, а это — каждый
+  // учебный день, и выключать их одной кнопкой значило бы потерять замены пар.
+  { key: 'lessons', label: loc.t('settings.notify.lessons.label', 'Пары на сегодня'), hint: loc.t('settings.notify.lessons.hint', 'Утренняя сводка: сколько пар и во сколько первая'), roles: ['student'] },
   { key: 'homework', label: loc.t('settings.notify.homework.label', 'Домашние задания'), hint: loc.t('settings.notify.homework.hint', 'Преподаватель задал работу на дом') },
   { key: 'schedule', label: loc.t('settings.notify.schedule.label', 'Расписание'), hint: loc.t('settings.notify.schedule.hint', 'Замены и правки в расписании вашей группы') },
   { key: 'messages', label: loc.t('settings.notify.messages.label', 'Сообщения'), hint: loc.t('settings.notify.messages.hint', 'Личные чаты, группы и каналы') },
@@ -161,7 +165,12 @@ const NOTIFY_KINDS = computed(() => [
   // Приходит ТОЛЬКО куратору (о студентах его группы) — остальным ролям строку не
   // показываем: у студента переключатель «риск отчисления» читался бы как предложение
   // отключить сам риск, а не уведомление о нём.
-  { key: 'risk', label: loc.t('settings.notify.risk.label', 'Риск отчисления'), hint: loc.t('settings.notify.risk.hint', 'Куратору — о студентах его группы в зоне риска'), roles: ['teacher', 'admin'] },
+  { key: 'risk', label: loc.t('settings.notify.risk.label', 'Предупреждения об успеваемости'), hint: loc.t('settings.notify.risk.hint', 'Куратору — о студентах его группы в зоне риска'), roles: ['teacher', 'admin'] },
+  // «Уведомления системы» — о работе самого продукта, а не об учёбе. Сейчас такое одно
+  // (жалоба закрылась сама, потому что модерация не успела), и до 20.09.2026 у него не
+  // было выключателя вовсе: категория не назначалась, то есть сервер считал его
+  // «разрешено всегда», и человек, отключивший всё, продолжал его получать.
+  { key: 'system', label: loc.t('settings.notify.system.label', 'Уведомления системы'), hint: loc.t('settings.notify.system.hint', 'Сообщения о работе журнала: например, жалоба закрылась по сроку') },
 ])
 // Что реально показываем этой роли. Ключ без ограничения виден всем.
 const visibleNotifyKinds = computed(() =>

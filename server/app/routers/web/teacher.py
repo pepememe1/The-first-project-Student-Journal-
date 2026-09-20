@@ -78,10 +78,15 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
                     retake_keys.append(f"{l.id}_retake_{n}")
     rows = []
     for s in studs:
-        recs = W.student_records(db, s.surname, s.name, group)
+        #`student_id` разводит полных тёзок (J08): без него у двух «Ивановых Иванов» в
+        #одной группе выборка по ФИО отдавала обоим оценки обоих.
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         grades.update({k: recs.get(k, "") for k in retake_keys})
-        rows.append({"surname": s.surname, "name": s.name, "grades": grades,
+        rows.append({"surname": s.surname, "name": s.name,
+                     #Неизменяемый адрес строки: клиент везёт его при записи оценки,
+                     #иначе сервер вынужден угадывать по ФИО (J08).
+                     "student_id": s.id, "grades": grades,
                      "average": W.average(lessons, recs, cfg, scale=tscale),
                      #Своя подгруппа (§ролей, 3.6.1) — None у обычного предмета/студента,
                      #которого куратор ещё не расставил. Клиент по ней гасит ячейки чужой
@@ -142,7 +147,7 @@ def teacher_students(group: str = Query(...),
     tscale = W.teacher_scale(user)
     out = []
     for s in W.students_in_group(db, group):
-        recs = W.student_records(db, s.surname, s.name, group)
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         risk = W.dropout_risk_for_student(db, s.surname, s.name, group,
                                           cfg=cfg, lessons=lessons, records=recs)
         out.append({"surname": s.surname, "name": s.name,
@@ -165,7 +170,7 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
     lessons = W.group_lessons(db, group, subject, year=ty, semester=ts)
     studs = W.students_in_group(db, group)
     tscale = W.teacher_scale(user)
-    vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group), cfg, scale=tscale)
+    vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group, student_id=s.id), cfg, scale=tscale)
             for s in studs]
     vals = [v for v in vals if v > 0]
     group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
@@ -224,7 +229,7 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
         lessons = W.current_term_lessons(
             db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
         studs = W.students_in_group(db, group)
-        recs = {s.id: W.student_records(db, s.surname, s.name, group) for s in studs}
+        recs = {s.id: W.student_records(db, s.surname, s.name, group, student_id=s.id) for s in studs}
 
         subj_rows = []
         for subject in sorted(subjects):

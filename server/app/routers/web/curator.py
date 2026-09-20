@@ -138,7 +138,7 @@ def curator_group_subject(group: str = Query(...), subject: str = Query(...),
     studs = W.students_in_group(db, group)
     rows = []
     for s in studs:
-        recs = W.student_records(db, s.surname, s.name, group)
+        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
         grades = {l.id: recs.get(l.id, "") for l in lessons}
         rows.append({"surname": s.surname, "name": s.name,
                      "first_name": W.first_name(s), "patronymic": W.patronymic_of(s),

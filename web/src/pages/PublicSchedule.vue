@@ -45,6 +45,7 @@ import HexBackground from '@/components/HexBackground.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { dayLabels, kindMap } from '@/config/scheduleView'
 import { filterGroups } from '@/utils/groupSearch'
+import { makeRequestGeneration } from '@/utils/requestGeneration'
 import { ArrowLeft, CalendarDays, Search, RotateCw } from '@lucide/vue'
 
 const locale = useLocaleStore()
@@ -100,8 +101,23 @@ function remember(key, value) {
 // переключение категорий (клик-клик-клик) запускает несколько запросов разом, и более
 // медленный ответ мог бы прилететь последним и подменить список чужими группами — при
 // уже подсвеченной другой кнопке. Тот же приём и по той же причине, что в `SchedulePage`.
-let reqSeq = 0
-const nextReq = () => ++reqSeq
+//
+// 🔥 СЧЁТЧИКОВ ДВА, И ЭТО ПОЧИНКА, А НЕ УКРАШЕНИЕ (20.09.2026, находка ревью U01).
+// Счётчик был ОДИН на две НЕЗАВИСИМЫЕ операции — расписание группы и список групп, — а
+// при открытии страницы они стартуют подряд. Список забирал следующий номер, ответ
+// расписания приходил с прежним и объявлялся устаревшим: данные выбрасывались, а
+// `loading` не снимался (в `finally` та же сверка). Страница ВЕЧНО крутила загрузку —
+// ровно у тех, кто пришёл по прямой ссылке с группой или с запомненным выбором, то есть
+// у большинства.
+//
+// ⚠️ Общий счётчик защищает от чужого ОТВЕТА В ТОЙ ЖЕ операции; здесь он отменял ответы
+// ЧУЖОЙ операции. Правило: у каждой независимой загрузки свой счётчик и свой `loading`.
+//
+// ⚠️ Счётчик вынесен в `utils/requestGeneration.js` НЕ ради красоты: внутри `<script
+// setup>` его не проверить без браузера, а ошибка здесь невидима глазами — страница
+// выглядит «просто медленной». Теперь у правила есть сторож.
+const schedReq = makeRequestGeneration()
+const groupsReq = makeRequestGeneration()
 
 const courseKeys = computed(() =>
   Object.keys(byCourse.value).map(Number).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b))
@@ -132,25 +148,25 @@ async function loadCategories() {
 }
 
 async function loadGroupsList() {
-  const my = nextReq()
+  const my = groupsReq.next()
   const forCategory = category.value
   groupsLoading.value = true
   groupsFailed.value = false
   try {
     const r = (await publicScheduleApi.groups(forCategory)).data
-    if (my !== reqSeq) return
+    if (!groupsReq.isCurrent(my)) return
     groups.value = r.groups || []
     byCourse.value = r.by_course || {}
     //Пустой список — это НЕ «групп нет», это «портал не ответил». Сказать «групп нет»
     //значило бы уверенно соврать: на портале они есть, и человек это знает.
     groupsFailed.value = !groups.value.length
   } catch {
-    if (my !== reqSeq) return
+    if (!groupsReq.isCurrent(my)) return
     groups.value = []
     byCourse.value = {}
     groupsFailed.value = true
   } finally {
-    if (my === reqSeq) groupsLoading.value = false
+    if (groupsReq.isCurrent(my)) groupsLoading.value = false
   }
 }
 
@@ -179,12 +195,12 @@ async function load(name, cat) {
   const g = String(name || group.value || '').trim()
   if (!g) return
   const forCategory = cat === undefined ? category.value : cat
-  const my = nextReq()
+  const my = schedReq.next()
   loading.value = true
   error.value = ''
   try {
     const { data: resp } = await publicScheduleApi.group(g, forCategory)
-    if (my !== reqSeq) return
+    if (!schedReq.isCurrent(my)) return
     if (!resp?.available) {
       //«Группы не нашли» и «сервер недоступен» — разные события, и человеку важно
       //различать: в первом случае он поправит название, во втором подождёт.
@@ -205,11 +221,11 @@ async function load(name, cat) {
     const wk = Object.keys(resp.schedule?.weeks || {}).map(Number).sort((a, b) => a - b)
     week.value = categoryDated.value ? (wk[0] || 1) : (resp.week || 1)
   } catch {
-    if (my !== reqSeq) return
+    if (!schedReq.isCurrent(my)) return
     error.value = locale.t('publicSchedule.offline',
       'Не удалось получить расписание. Проверьте связь.')
   } finally {
-    if (my === reqSeq) loading.value = false
+    if (schedReq.isCurrent(my)) loading.value = false
   }
 }
 

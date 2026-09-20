@@ -21,6 +21,7 @@ import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
 import SyncIssuesBadge from '@/components/ui/SyncIssuesBadge.vue'
 import RejectedWritesBadge from '@/components/ui/RejectedWritesBadge.vue'
+import StorageFailedBadge from '@/components/ui/StorageFailedBadge.vue'
 import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 import ReportProblemButton from '@/components/ReportProblemButton.vue'
 import SidebarResizer from '@/components/SidebarResizer.vue'
@@ -222,6 +223,7 @@ function highlighted(to) {
          desktopSync.js). Узкий столбец переживёт: содержимое переносится по словам. -->
     <div class="shrink-0 px-3 pb-1">
       <RejectedWritesBadge />
+        <StorageFailedBadge />
     </div>
 
     <!-- «Сообщить о проблеме» — встроенный канал обратной связи (ClassDojo, §9 №3).

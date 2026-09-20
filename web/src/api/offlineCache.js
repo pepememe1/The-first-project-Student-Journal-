@@ -68,8 +68,14 @@ export function isCacheable(url = '') {
 export function writeCache(config, data) {
   // Блобы (xlsx-экспорт) и не-объекты не кэшируем — только JSON-данные экранов.
   if (config.responseType === 'blob' || data == null || typeof data !== 'object') return
+  //🔥 ВЛАДЕЛЕЦ БЕРЁТСЯ ИЗ ЗАПРОСА, А НЕ ИЗ ТЕКУЩЕГО СОСТОЯНИЯ (находка ревью O03).
+  //Ответ приходит позже отправки, и на общем компьютере за это время успевает войти
+  //другой человек. Пока логин спрашивался В МОМЕНТ ЗАПИСИ, поздний ответ на запрос A
+  //ложился в кэш B — и B в офлайне видел чужие оценки как свои. Кому принадлежит
+  //ответ, знает только сам запрос, поэтому метку ставит отправитель (`client.js`).
+  const owner = config.__owner || currentLogin()
   try {
-    localStorage.setItem(`${PREFIX}${currentLogin()}|${reqKey(config)}`,
+    localStorage.setItem(`${PREFIX}${owner}|${reqKey(config)}`,
       JSON.stringify({ t: Date.now(), data }))
     cacheVersion.value += 1
   } catch { /* переполнена квота — не критично */ }
@@ -87,7 +93,12 @@ export function cachedAt(config) {
 
 export function readCache(config) {
   try {
-    const raw = localStorage.getItem(`${PREFIX}${currentLogin()}|${reqKey(config)}`)
+    //Тот же владелец, что и при записи: иначе поздний ответ лёг бы владельцу, а
+    //прочитать его никто бы не смог — «починка», превращающая кэш в мусор.
+    //`findCached` намеренно остаётся на текущем логине: он отвечает на вопрос
+    //«что вообще известно ЭТОМУ человеку», а не «чей это ответ».
+    const owner = config.__owner || currentLogin()
+    const raw = localStorage.getItem(`${PREFIX}${owner}|${reqKey(config)}`)
     return raw ? JSON.parse(raw) : null   // { t, data } | null
   } catch {
     return null

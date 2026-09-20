@@ -52,7 +52,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
-from app import throttle, events, connect, msg_limit, activity_state
+from app import throttle, events, connect, msg_limit, activity_state, shared_state
 
 
 @pytest.fixture()
@@ -69,6 +69,13 @@ def client():
     #таблиц его не трогает: активность из прошлого теста ловилась бы в следующем как
     #«уже идёт» (409). Та же грабля, что была с `throttle.reset()` и словарём остуды.
     activity_state.reset()
+    #Общее состояние процесса (`app/shared_state.py`) тоже переживает пересоздание
+    #таблиц. С 20.09.2026 в нём живёт ТИХОЕ ОКНО пушей: после первого уведомления об
+    #оценке следующие десять минут телефон молчит. Без сброса второй тест в наборе
+    #получал пустой список отправленных пушей и падал `IndexError` — причём падал бы
+    #ТОЛЬКО в наборе, а поодиночке зеленел: ровно тот случай, который мы уже разбирали
+    #с троттлингом и ходом активностей.
+    shared_state.reset_for_tests()
     with TestClient(app) as c:
         c.headers.update({"X-Device-Id": HOST_DEVICE_ID})
         yield c

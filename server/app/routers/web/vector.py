@@ -585,12 +585,13 @@ def _grade_breakdown(lessons, records, scale=None) -> dict:
     return counts
 
 
-def _zet_facts(db, surname: str, name: str, group: str, cfg: dict) -> dict:
+def _zet_facts(db, surname: str, name: str, group: str, cfg: dict,
+               student_id: str | None = None) -> dict:
     """Вектор: «Сколько у меня ЗЕТ / хватит ли для перевода» (docs/done/PLAN-ZET.md §6).
     Факты — из того же расчёта, что и /web/student/zet; LLM (если подключена) только
     переформулирует, порог и цифры не выдумывает."""
     ty, ts = W.current_term(cfg)
-    summ = W.zet_summary_for_student(db, surname, name, group, ty, ts)
+    summ = W.zet_summary_for_student(db, surname, name, group, ty, ts, student_id=student_id)
     if not summ["subjects"]:
         return {"text": "ЗЕТ по твоим предметам пока не заданы администрацией.",
                 "mood": "neutral", "intent": "zet", "facts": {}}
@@ -862,7 +863,7 @@ def _admin_risk_facts(db: Session, cfg: dict, intent: str) -> dict:
             #культура») тянул бы долги/средний из прошлых курсов этой же группы.
             lessons_by_group[group] = W.current_term_lessons(db, group, W.group_lessons(db, group), cfg)
         lessons = lessons_by_group[group]
-        records = W.student_records(db, stud.surname, stud.name, group)
+        records = W.student_records(db, stud.surname, stud.name, group, student_id=stud.id)
         if intent == "debtors":
             if W.debts(lessons, records, scale=W.lesson_scale_map(db, lessons)):
                 debtors.append(f"{W.display_name(stud)} ({group})")
@@ -938,7 +939,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                 db, group, W.group_lessons(db, group)), cfg), user.id)
         #Вектор отвечает СТУДЕНТУ о нём самом — значит теми же правилами, что и его журнал:
         #иначе один и тот же вопрос давал бы разные ответы на двух экранах.
-        records = W.student_visible_records(db, user.surname, user.name, group)
+        records = W.student_visible_records(db, user.surname, user.name, group, student_id=user.id)
         scale_map = W.lesson_scale_map(db, lessons)
 
         if intent == "schedule":
@@ -1018,7 +1019,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
             return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
                     "intent": "grades", "facts": {"subjects": len(graded)}}
         if intent == "zet":
-            return _zet_facts(db, user.surname, user.name, group, cfg)
+            return _zet_facts(db, user.surname, user.name, group, cfg, student_id=user.id)
         # average и всё остальное (at_risk/roster/teachers/group_stats недоступны студенту)
         avg = W.average(lessons, records, cfg, scale=scale_map)
         if intent == "server_state":
@@ -1098,7 +1099,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                         gl = W.current_term_lessons(db, g, [
                             l for l in W.group_lessons(db, g)
                             if l.subject in subjects_by_group.get(g, set())], cfg)
-                        rec = W.student_records(db, s.surname, s.name, g)
+                        rec = W.student_records(db, s.surname, s.name, g, student_id=s.id)
                         if intent == "absences":
                             a = W.absences(gl, rec)
                             return {"text": f"{W.display_name(s)}: пропусков {a['всего']} "
@@ -1131,7 +1132,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                         gl = W.current_term_lessons(
                             db, g, [l for l in W.group_lessons(db, g)
                                     if l.subject == subject], cfg)
-                        rec = W.student_records(db, st.surname, st.name, g)
+                        rec = W.student_records(db, st.surname, st.name, g, student_id=st.id)
                         a = W.average(gl, rec, cfg, scale=tscale)
                         ab = W.absences(gl, rec)
                         return {"text": f"{W.display_name(st)} ({g}) по предмету "
@@ -1150,7 +1151,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                     db, g, [l for l in W.group_lessons(db, g) if l.subject == subject], cfg)
                 vals = []
                 for st in W.students_in_group(db, g):
-                    a = W.average(gl, W.student_records(db, st.surname, st.name, g),
+                    a = W.average(gl, W.student_records(db, st.surname, st.name, g, student_id=st.id),
                                   cfg, scale=tscale)
                     if a > 0:
                         vals.append(a)
@@ -1189,7 +1190,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
                 if l.subject in subjects_by_group.get(g, set())], cfg)
             vals = []
             for s in W.students_in_group(db, g):
-                rec = W.student_records(db, s.surname, s.name, g)
+                rec = W.student_records(db, s.surname, s.name, g, student_id=s.id)
                 a = W.average(gl, rec, cfg, scale=tscale)
                 dbts = W.debts(gl, rec, scale=tscale)
                 if dbts or (0 < a < 3):

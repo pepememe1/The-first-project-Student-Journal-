@@ -78,6 +78,10 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`
   config.headers['X-Device-Id'] = getDeviceId()
   config.headers['X-Client'] = clientKind()
+  //🔒 Кому принадлежит запрос — решается ЗДЕСЬ, на отправке, и едет вместе с ним
+  //(находка O03). На ответе это уже не узнать: пока он шёл, человек мог смениться.
+  config.__owner = currentOwner()
+  config.__gen = sessionGen
   return config
 })
 
@@ -117,6 +121,34 @@ export function bumpSessionGeneration() {
 /** Только для тестов: текущее поколение. */
 export function _sessionGeneration() { return sessionGen }
 
+/**
+ * Кому принадлежит запрос: логин из `gb.user` в момент ОТПРАВКИ.
+ *
+ * 🔥 ЗАЧЕМ (находка ревью O03). Ответ приходит позже, и на общем компьютере колледжа
+ * за это время успевает войти другой человек. Кэш при этом писался под ТЕКУЩЕГО, то
+ * есть поздний ответ по запросу A ложился в пространство B — и B видел офлайн чужие
+ * оценки как свои. Спросить «чей это ответ» на приёме уже нельзя: состояние сменилось.
+ * Поэтому метка ставится на отправке и едет вместе с запросом.
+ */
+function currentOwner() {
+  try {
+    return JSON.parse(localStorage.getItem('gb.user') || 'null')?.login || ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Принадлежит ли пришедший ответ той же сессии, что его отправляла.
+ *
+ * ⚠️ Проверяем ДВЕ вещи, и обе нужны: логин ловит смену человека, поколение —
+ * выход-вход того же самого (логин тот же, сессия другая, токены новые).
+ */
+function ownsResponse(config = {}) {
+  if (config.__owner === undefined) return true   //не наш интерцептор — не судим
+  return config.__owner === currentOwner() && config.__gen === sessionGen
+}
+
 async function doRefresh() {
   const refresh = getRefresh()
   if (!refresh) throw new Error('no refresh token')
@@ -154,7 +186,7 @@ api.interceptors.response.use(
     // Сервер ответил — значит связь есть, и отсчёт суточного окна офлайна
     // начинается заново (см. offlineSession.js).
     noteOnline()
-    if (isGet(config) && isCacheable(config.url)) {
+    if (isGet(config) && isCacheable(config.url) && ownsResponse(config)) {
       writeCache(config, resp.data)
       servingStale.value = false     // пришли свежие данные — мы онлайн
     }
@@ -168,7 +200,8 @@ api.interceptors.response.use(
     if (!response) noteOffline()
     // Для кэшируемых GET отдаём СОХРАНЁННОЕ — экран показывает данные, а не пустоту.
     // Обновятся, как только вернётся сеть.
-    if (!response && config && isGet(config) && isCacheable(config.url)) {
+    if (!response && config && isGet(config) && isCacheable(config.url)
+        && ownsResponse(config)) {
       const hit = readCache(config)
       if (hit) {
         servingStale.value = true

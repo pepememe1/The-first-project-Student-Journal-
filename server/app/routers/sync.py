@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+import re as _re
+
 from ..db import get_db
 from ..deps import get_current_user, is_web_client
 from ..models import (SYNC_MODELS, User, Lesson, grade_id, term_grade_id,
@@ -138,6 +140,115 @@ def _build_lesson_pair_map(db: Session, changes: dict, allowed_pairs: set,
     return m
 
 
+def _domain_refusal(db, name: str, item: dict, cfg: dict) -> str:
+    """Причина, по которой доменные правила журнала НЕ пускают эту запись («» — пускают).
+
+    🔥 ЗАЧЕМ (20.09.2026, находка ревью J06). Веб-ручка `/web/teacher/grade` проверяет
+    ЧЕТЫРЕ вещи: значение по шкале, назначение на пару, архив прошлых семестров и замок
+    зачётки (выставлена итоговая — текущие оценки по предмету закрыты). Через
+    `/sync/push` не проверялось НИ ОДНО, кроме назначения: одна и та же операция
+    получала разное решение в зависимости от ТРАНСПОРТА. Офлайн-копия обходила и замок
+    зачётки, и запрет правки архива, и проверку значения — молча, с успешным ответом.
+
+    ⚠️ Отказ НЕ выдаётся за сохранение: он попадает в `rejected`, клиент его читает
+    (`sync_engine`: предупреждение в лог + `last_rejected` для индикатора), а сверка
+    «сервер = истина» при непустом `rejected` не стирает локальный кэш — то есть работа
+    остаётся у человека, а не исчезает вместе с отказом.
+
+    ⚠️ Правила НЕ ПЕРЕПИСАНЫ здесь второй копией — зовутся те же функции, что у веба
+    (`grading.is_allowed_value`, `_ensure_term_open`). Вторая копия разошлась бы с
+    первой на первой же правке, и разошлась бы молча.
+
+    ⚠️ Проверяется ТОЛЬКО то, что реально МЕНЯЕТСЯ (см. вызывающий): полный снимок
+    десктопа раз в N циклов везёт и архивные оценки, совпадающие с серверными. Отвергать
+    их значило бы держать `rejected` вечно ненулевым — а заодно навсегда отключить
+    сверку, которая при отказах кэш не трогает.
+
+    ⚠️ И только для ПРЕПОДАВАТЕЛЯ, ровно как проверка области рядом. У администратора в
+    вебе другие двери и другие права (он и итоговую снимает, и архив правит), а его push
+    несёт весь справочник колледжа — применить к нему учительские замки значило бы
+    сломать синхронизацию хост-ПК ради симметрии, которой в продукте и нет.
+    """
+    from .web._common import _ensure_term_open        # то же правило, что у веб-ручки
+    from ..webdata import grading, current_term
+
+    if name == "term_grades":
+        if not grading.is_allowed_value((item.get("grade") or "").strip()):
+            return "недопустимое значение итоговой оценки"
+        return ""
+    if name != "grades":
+        return ""
+    if not grading.is_allowed_value((item.get("grade") or "").strip()):
+        return "недопустимое значение оценки"
+
+    #Пересдачи ключуются с суффиксом (<id>_retake[_N]) — период и замок смотрим по
+    #БАЗОВОМУ занятию, ровно как это делает веб-ручка.
+    lid = _re.sub(r"_retake(_\d+)?$", "", (item.get("lesson_id") or "").strip())
+    if not lid:
+        return ""
+    lesson = db.get(Lesson, lid)
+    if lesson is None or lesson.deleted:
+        return ""        #занятия нет — не наш случай, LWW разберётся сам
+    ly = (lesson.year or "").strip()
+    if ly:
+        cy, cs = current_term(cfg)
+        if ly != cy or int(lesson.semester or 0) != cs:
+            return f"семестр {ly}·{lesson.semester} в архиве (только чтение)"
+
+    #Замок зачётки персональный, значит нужен ИМЕННО ЭТОТ студент. Старый ФИО-ключ
+    #сюда доезжает без `student_id`; угадывать по фамилии нельзя — у тёзок это был бы
+    #чужой замок (см. J08), а промах в эту сторону отнимает у человека его работу.
+    student_id = (item.get("student_id") or "").strip()
+    if not student_id:
+        return ""
+    try:
+        _ensure_term_open(db, student_id, lesson.subject, lesson.year, lesson.semester)
+    except HTTPException:
+        return "по предмету уже выставлена итоговая — семестр закрыт"
+    return ""
+
+
+def _row_scope(name: str, row) -> dict:
+    """Область СУЩЕСТВУЮЩЕЙ строки в том же виде, в каком её ждёт `_teacher_may_write`.
+
+    Нужна затем, чтобы право спрашивалось не только про то, КУДА кладут, но и про то,
+    ГДЕ запись лежит сейчас (см. вызывающего)."""
+    if name == "lessons":
+        return {"group_name": getattr(row, "group_name", "") or "",
+                "subject": getattr(row, "subject", "") or ""}
+    if name == "grades":
+        return {"lesson_id": getattr(row, "lesson_id", "") or ""}
+    if name == "term_grades":
+        return {"student_f": getattr(row, "student_f", "") or "",
+                "student_n": getattr(row, "student_n", "") or "",
+                "subject": getattr(row, "subject", "") or ""}
+    return {}
+
+
+def _learn_scope_of_existing(db: Session, name: str, row, lesson_pairs: dict,
+                             student_group: dict) -> None:
+    """Дочитать в карты то, что нужно для суждения о СУЩЕСТВУЮЩЕЙ строке.
+
+    ⚠️ Без этого проверка существующей записи давала бы ЛОЖНЫЕ отказы, а не защиту:
+    `lesson_pairs` и `student_group` строятся по ПРИСЛАННЫМ данным, и занятия, на
+    которое ссылается лежащая в базе оценка, там может не быть вовсе. Отказ по
+    незнанию неотличим для человека от «сервер съел мою оценку», поэтому недостающее
+    добираем точечно — по одному ключу и только когда он действительно понадобился."""
+    if name == "grades":
+        lid = getattr(row, "lesson_id", "") or ""
+        if lid and lid not in lesson_pairs:
+            got = (db.query(Lesson.group_name, Lesson.subject)
+                     .filter(Lesson.id == lid).first())
+            lesson_pairs[lid] = (got[0] or "", got[1] or "") if got else None
+    elif name == "term_grades":
+        fio = (getattr(row, "student_f", "") or "", getattr(row, "student_n", "") or "")
+        if fio[0] and fio not in student_group:
+            got = (db.query(User.group_name)
+                     .filter(User.role == "student", User.surname == fio[0],
+                             User.name == fio[1]).first())
+            student_group[fio] = (got[0] or "") if got else ""
+
+
 def _teacher_may_write(name: str, item: dict, allowed_pairs, allowed_subjects: set,
                        lesson_pairs: dict, student_group: dict) -> bool:
     """Построчная авторизация преподавателя: он вправе менять только СВОИ (группа, предмет).
@@ -212,6 +323,32 @@ def _is_secret_config_key(key: str) -> bool:
 #подменить существующий — нет: смена пароля идёт своими эндпоинтами
 #(`models.set_user_password`), и у синка нет способа доказать, что его копия свежее.
 _NEVER_BLANK = {"password_hash"}
+
+#🔒 ПУСТОЕ ЗНАЧЕНИЕ ПОЛЯ, КОТОРОГО КЛИЕНТ НЕ ЗНАЕТ, НЕ ЗАТИРАЕТ НЕПУСТОЕ НА СЕРВЕРЕ
+#(20.09.2026, находка ревью J03). Родня `_NEVER_BLANK`, но случай другой и мягче: там
+#секрет нельзя ТРОГАТЬ вовсе, здесь непустое значение применяется как обычно — нельзя
+#только СТЕРЕТЬ его пустотой.
+#
+#🔥 Дефект был настоящий и терял данные людей. Даты пересдач 2–5 живут в `Lesson.extra`
+#(их пишет веб — `routers/web/write.py`, читает `teacher.py`), а десктопная таблица
+#`lessons` такой колонки не имеет вовсе. Сборщик синхронизации честно подставлял
+#`"extra": {}` — и полный снимок с любого ПК преподавателя затирал заполненные в вебе
+#даты пустым словарём. Ни ошибки, ни отказа: обычная успешная синхронизация.
+#
+#⚠️ Почему это чинится И ЗДЕСЬ, хотя сам сборщик тоже исправлен (`sync_engine.py`
+#больше не шлёт `extra`): правка клиента доедет до людей ТОЛЬКО новой сборкой .exe, а
+#парк сидит на прежней и продолжит слать пустоту. Серверная половина закрывает уже
+#установленные версии одним деплоем.
+#
+#⚠️ Список ЯВНЫЙ, по паре «таблица + поле», и это не перестраховка. Правило «пустой
+#JSON не затирает» по ТИПУ колонки было бы шире дефекта и запретило бы законное:
+#`users.subjects`, `groups.subjects`, `curated_groups` — тоже JSON, и их очистка
+#(сняли предметы, сняли кураторство) — обычное действие администратора.
+#⚠️ Соседний случай — `lessons.subgroup`: десктоп его не шлёт ВООБЩЕ, а отсутствующий
+#ключ и так не применяется (см. `changed` ниже), поэтому защита ему сейчас не нужна.
+#Начнёт слать — сюда его и добавлять: ноль там значит «Совместно», и от «я не знаю
+#этого поля» он неотличим.
+_KEEP_WHEN_BLANK = {("lessons", "extra")}
 
 
 def _strip_other_hashes(users: list, own_login: str) -> None:
@@ -438,12 +575,23 @@ def push(payload: dict = Body(...), request: Request = None,
     server_ts = _now()
     applied = {}
     rejected = {}
+    #🔥 ПРИЧИНЫ ОТКАЗА, А НЕ ТОЛЬКО ИХ ЧИСЛО. «Отклонено: 3» человеку не говорит ничего и
+    #читается как сбой синхронизации; «семестр в архиве» и «уже выставлена итоговая» —
+    #это два РАЗНЫХ действия с его стороны. Множество (а не список) — одна и та же
+    #причина на сотне строк не должна превращаться в сотню строк в логе.
+    refusals: dict = {}
     new_homework = []    #ДЗ, впервые приехавшие с клиента — разослать после commit
 
     #Построчная авторизация преподавателя — по его НАЗНАЧЕНИЯМ (группа, предмет), тем же
     #источником, что и на сайте. Для admin проверки нет (он вправе писать всё). Карты
     #строим по одному разу на запрос.
     is_teacher = user.role == "teacher"
+    #Конфиг читаем ОДИН раз на запрос: доменные правила ниже спрашивают у него текущий
+    #термин, а push бывает на тысячу строк.
+    domain_cfg = None
+    if is_teacher:
+        from ..webdata import load_config as _load_config
+        domain_cfg = _load_config(db)
     teacher_pairs = None          #None = назначений нет вовсе → прежнее правило по предмету
     teacher_subjects = set()
     lesson_pairs = {}
@@ -525,13 +673,43 @@ def push(payload: dict = Body(...), request: Request = None,
                 item = dict(item, id=key)
             if not key:
                 continue
-            #Преподаватель не вправе трогать чужую пару (группа, предмет) — отбрасываем.
-            if is_teacher and not _teacher_may_write(
-                    name, item, teacher_pairs, teacher_subjects, lesson_pairs, student_group):
-                rej += 1
-                continue
             existing = db.get(model, key)
+            #Преподаватель не вправе трогать чужую пару (группа, предмет) — отбрасываем.
+            #
+            #🔥 ПРАВО СПРАШИВАЕТСЯ ПРО ДВЕ ОБЛАСТИ, А НЕ ПРО ОДНУ (20.09.2026, находка
+            #ревью J05). Раньше проверялись ТОЛЬКО присланные поля, и этого хватало
+            #ровно до тех пор, пока запись создаётся. Для СУЩЕСТВУЮЩЕЙ строки правило
+            #читалось наоборот: преподаватель, знающий id чужого занятия, слал этот id
+            #со СВОЕЙ разрешённой парой (группа, предмет) — проверка смотрела на
+            #присланное, соглашалась, а дальше те же поля записывались в чужую строку.
+            #То есть занятие «переезжало» к отправителю вместе с оценками, и никакой
+            #отдельной защиты на этом пути не было.
+            #
+            #Теперь: можно менять запись, если она УЖЕ твоя, и класть её можно только
+            #туда, где ты тоже вправе писать. Первая половина закрывает угон чужого,
+            #вторая — вынос своего в чужую группу.
+            if is_teacher:
+                if not _teacher_may_write(name, item, teacher_pairs, teacher_subjects,
+                                          lesson_pairs, student_group):
+                    rej += 1
+                    continue
+                if existing is not None:
+                    _learn_scope_of_existing(db, name, existing, lesson_pairs, student_group)
+                    if not _teacher_may_write(name, _row_scope(name, existing),
+                                              teacher_pairs, teacher_subjects,
+                                              lesson_pairs, student_group):
+                        rej += 1
+                        continue
             if existing is None:
+                #🔒 Доменные правила журнала — те же, что у веб-ручки (J06): значение по
+                #шкале, архив прошлых семестров, замок зачётки. До 20.09.2026 через этот
+                #путь не проверялось ничего из перечисленного.
+                if is_teacher:
+                    why = _domain_refusal(db, name, item, domain_cfg)
+                    if why:
+                        rej += 1
+                        refusals.setdefault(name, set()).add(why)
+                        continue
                 data = {k: v for k, v in item.items() if k in cols}
                 data[pk] = key
                 data["updated_at"] = server_ts   #метка — серверная
@@ -559,8 +737,25 @@ def push(payload: dict = Body(...), request: Request = None,
             #своими эндпоинтами, а не попутно синхронизацией (см. _NEVER_BLANK).
             item = {k: v for k, v in item.items()
                     if not (k in _NEVER_BLANK and getattr(existing, k, ""))}
+            #Поле, присланное пустым, при непустом серверном — это «клиент его не
+            #знает», а не «человек его очистил» (см. _KEEP_WHEN_BLANK выше).
+            for _blank in [k for k, v in item.items()
+                           if (name, k) in _KEEP_WHEN_BLANK and not v
+                           and getattr(existing, k, None)]:
+                item.pop(_blank)
             changed = any(k in item and getattr(existing, k) != item[k]
                           for k in compare_cols)
+            #⚠️ Правила спрашиваем ТОЛЬКО у того, что реально меняется. Полный снимок
+            #десктопа раз в N циклов везёт и архивные оценки, совпадающие с серверными:
+            #отвергать их значило бы держать `rejected` вечно ненулевым — и заодно
+            #навсегда выключить сверку «сервер = истина», которая при отказах кэш не
+            #стирает (см. `sync_engine.reconcile`).
+            if changed and is_teacher:
+                why = _domain_refusal(db, name, item, domain_cfg)
+                if why:
+                    rej += 1
+                    refusals.setdefault(name, set()).add(why)
+                    continue
             if changed:
                 for k, v in item.items():
                     if k in compare_cols:
@@ -577,11 +772,17 @@ def push(payload: dict = Body(...), request: Request = None,
     #Преподаватель попытался записать НЕ свой предмет — это нарушение прав, поэтому
     #видно в админской консоли (а не молча игнорируется).
     if rejected:
+        _why = "; ".join(f"{t}: {', '.join(sorted(v))}" for t, v in sorted(refusals.items()))
         events.record("warn", "push_rejected",
-                      f"отклонены чужие записи: {rejected}", user.login)
+                      f"отклонены записи: {rejected}" + (f" ({_why})" if _why else ""),
+                      user.login)
     result = {"server_time": server_ts, "applied": applied}
     #rejected включаем, только если что-то отвергли — клиенту видно, что часть
     #правок не его (не молчим, но и не шумим в обычном случае).
     if rejected:
         result["rejected"] = rejected
+        if refusals:
+            #Клиент показывает это человеку (`sync_runner.status`) — без причины он
+            #увидел бы «часть правок не уехала» и пошёл бы искать поломку связи.
+            result["rejected_reasons"] = {t: sorted(v) for t, v in refusals.items()}
     return result

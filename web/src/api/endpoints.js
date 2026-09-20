@@ -143,8 +143,11 @@ export const teacherApi = {
   // Разбор голосовой команды (только предложение — записывает setGrade ниже).
   voiceCommand: (text, group, subject) =>
     api.post('/web/vector/voice/command', { text, group, subject }),
-  setGrade: (surname, name, lesson_id, grade) =>
-    api.post('/web/teacher/grade', { surname, name, lesson_id, grade }),
+  //⚠️ `student_id` НЕОБЯЗАТЕЛЕН и передаётся, когда журнал его знает (J08): у двух
+  //полных тёзок в группе сервер иначе выбирает первого попавшегося. Не знаем — сервер
+  //ищет по ФИО и при неоднозначности честно отказывает, а не гадает.
+  setGrade: (surname, name, lesson_id, grade, student_id = '') =>
+    api.post('/web/teacher/grade', { surname, name, lesson_id, grade, student_id }),
   // Занятия/пары (Phase B): наполнение журнала. id = uuid на сервере.
   createLesson: (payload) => api.post('/web/teacher/lesson', payload),
   updateLesson: (id, payload) => api.put(`/web/teacher/lesson/${encodeURIComponent(id)}`, payload),

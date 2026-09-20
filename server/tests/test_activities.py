@@ -693,8 +693,17 @@ def test_pinned_and_search_resolve_the_card_too(client):
     pinned = client.get(f"/web/messenger/chats/{conv}/pinned", headers=t).json()["pinned"]
     got = [m for m in pinned if m["kind"] == "activity"]
     assert got and got[0]["activity"]["title"] == "Пятиминутка"
-    #И модерация читает ту же ленту, что участники.
-    mod = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()
+    #И модерация читает ту же ленту, что участники — НО ТОЛЬКО ПО ОСНОВАНИЮ (M01,
+    #20.09.2026). Раньше чужую переписку открывал любой, кто знает id беседы; теперь
+    #нужен действующий тикет, указывающий на ЭТУ беседу. Проверяемое свойство здесь
+    #другое — что карточка активности доезжает до модерации разобранной, а не сырым
+    #`act:…`, — поэтому заводим законное основание, а не ослабляем дверь.
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": card["id"], "reason_code": "other"},
+                      headers=b).json()["report_id"]
+    mod = client.get(
+        f"/web/admin/messenger/conversations/{conv}/messages?report_id={rid}",
+        headers=admin).json()
     got2 = [m for m in mod["messages"] if m["kind"] == "activity"]
     assert got2 and got2[0]["activity"]["title"] == "Пятиминутка"
 

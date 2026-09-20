@@ -315,10 +315,18 @@ def test_moderation_requires_admin(client):
 
 
 def test_moderation_view_writes_audit(client):
+    #⚠️ Читаем ПО ЖИВОМУ ТИКЕТУ, а не «просто так»: с 20.09.2026 чужая переписка без
+    #основания не открывается вовсе (находка ревью M01). Проверяемое свойство прежнее —
+    #каждый просмотр обязан оставить след в аудите.
     admin, (a_id, a), (b_id, b), _ = _setup(client)
     conv = _conv(client, a, b_id)
-    client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "x"}, headers=a)
-    client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "x"}, headers=a).json()["id"]
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": mid, "reason_code": "spam"},
+                      headers=b).json()["report_id"]
+    client.get(f"/web/admin/messenger/conversations/{conv}/messages",
+               params={"report_id": rid}, headers=admin)
     from app.db import SessionLocal
     from app.models import AuditEvent
     db = SessionLocal()
@@ -347,10 +355,16 @@ def test_mod_conversation_messages_blocked_after_report_closed(client):
     r2 = client.get(f"/web/admin/messenger/conversations/{conv}/messages",
                     params={"report_id": rid}, headers=admin)
     assert r2.status_code == 403, r2.text
-    #Обходной путь: та же беседа БЕЗ report_id (как открывает вкладка «Обращения») —
-    #сознательно НЕ блокируется тикетом другой вкладки, это разные потоки доступа.
+    #🔥 РАНЬШЕ ЗДЕСЬ ОЖИДАЛСЯ 200, и рядом стояло пояснение «обходной путь сознательно
+    #не блокируется: это разные потоки доступа». Ревью 18.09.2026 (M01) показало, чем
+    #этот «поток» был на самом деле: `report_id` необязателен, значит замок открывался
+    #тем, что его не трогают — убрал параметр и читаешь ЛЮБУЮ личную переписку
+    #колледжа, включая удалённые сообщения и все прежние редакции. Решение изменено:
+    #основание обязательно, а вкладка «Обращения» работает с беседами `kind=moderation`,
+    #которые проходят по своему, названному основанию (см.
+    #`test_moderation_read_needs_grounds.py`).
     r3 = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin)
-    assert r3.status_code == 200, r3.text
+    assert r3.status_code == 403, r3.text
 
 
 def test_mod_conversation_messages_report_id_must_match_conversation(client):
@@ -376,7 +390,12 @@ def test_mod_conversation_messages_shows_deleted_body_and_edit_chain(client):
     deleted = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "секрет"}, headers=a).json()["id"]
     client.delete(f"/web/messenger/messages/{deleted}", params={"scope": "all"}, headers=a)
 
-    msgs = client.get(f"/web/admin/messenger/conversations/{conv}/messages", headers=admin).json()["messages"]
+    #Основание — жалоба на сообщение этой беседы (см. комментарий про M01 выше).
+    rid = client.post("/web/messenger/reports",
+                      json={"message_id": edited, "reason_code": "spam"},
+                      headers=b).json()["report_id"]
+    msgs = client.get(f"/web/admin/messenger/conversations/{conv}/messages",
+                      params={"report_id": rid}, headers=admin).json()["messages"]
     by_id = {m["id"]: m for m in msgs}
     assert by_id[edited]["edit_versions"] == [
         {"body": "опечтка", "at": by_id[edited]["edit_versions"][0]["at"]},

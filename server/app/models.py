@@ -1525,6 +1525,48 @@ class UserAchievement(Base):
     showcase = Column(Boolean, default=False)
 
 
+class EventOutbox(Base):
+    """Очередь серверных событий (transactional outbox) — таблица под `app/event_outbox.py`.
+
+    🔥 ЗАВЕДЕНА 20.09.2026, ПОТОМУ ЧТО МОДУЛЬ ПРИЕХАЛ БЕЗ НЕЁ. Слияние 3.9.5.1 принесло
+    `server/app/event_outbox.py` (310 строк) и `tests/test_event_outbox.py`, а модели —
+    нет. Следствие было хуже неработающей функции: `pytest` в `server/` падал НА СБОРЕ
+    (`ImportError: cannot import name 'EventOutbox'`) и не запускал НИ ОДНОГО теста из
+    полутора тысяч. То есть весь серверный прогон на этой ветке был недоступен, и
+    выглядело это не как «красный тест», а как мгновенная остановка.
+
+    ⚠️ Смысл очереди — не «спасти сообщение» (потери и так нет: `_broadcast` шлёт сигнал,
+    а не текст, и опрос его страхует), а СНЯТЬ ЭТОТ ОПРОС: живой сокет разрежает его
+    вдевятеро, и его потеря стоит нам почти целого ядра (docs/PERF-SCALE-2026.md).
+
+    ⚠️ НЕ в `SYNC_MODELS` и не будет: это служебная серверная очередь, как и весь
+    мессенджер. Десктопу она не нужна, а попав в синк, она возила бы по сети события,
+    смысл которых живёт ровно в одном процессе.
+
+    ⚠️ Таблица НОВАЯ, поэтому `create_all` заводит её сам — ручной `ALTER` нужен только
+    новым КОЛОНКАМ в существующих таблицах (инвариант проекта).
+
+    ⚠️ Времена — целые секунды epoch, а не ISO-строки: по ним идут сравнения «пора ли
+    публиковать» и «истёк ли лизинг», и в этом единственном месте продукта числовой
+    порядок важнее читаемости. Payload — JSON с белым списком ключей, ПДн в него не
+    попадают по построению (проверка в самом модуле).
+    """
+    __tablename__ = "event_outbox"
+    id = Column(String, primary_key=True)                  #uuid4 или свой event_id
+    event_type = Column(String, index=True, default="")
+    schema_version = Column(Integer, default=1)
+    aggregate_type = Column(String, index=True, default="")
+    aggregate_id = Column(String, index=True, default="")
+    payload = Column(JSON, default=dict)
+    created_ts = Column(Integer, index=True, default=0)
+    available_ts = Column(Integer, index=True, default=0)  #когда можно публиковать
+    attempts = Column(Integer, default=0)
+    locked_until = Column(Integer, index=True, default=0)  #лизинг обработчика
+    published_ts = Column(Integer, index=True, default=0)  #0 — ещё не опубликовано
+    dead_lettered = Column(Boolean, index=True, default=False)
+    last_error = Column(String, default="")
+
+
 class EasterEggLog(Base):
     """След срабатывания пасхалки — против того, чтобы одна и та же лезла каждый день.
 

@@ -66,8 +66,23 @@ def group_lesson_ids(db, group: str) -> set:
     return {r[0] for r in rows}
 
 
+def students_by_name(db, group: str, surname: str, name: str) -> list:
+    """ВСЕ живые студенты группы с таким ФИО. Обычно один; двое — полные тёзки.
+
+    🔥 Заведена ради J08 (20.09.2026). Запись оценки искала студента `.first()` по паре
+    (фамилия, имя) в группе — то есть при полных тёзках оценка доставалась ПЕРВОМУ
+    найденному, и узнать об этом было неоткуда: в журнале две одинаковые строки, балл
+    появлялся не в той. Полные тёзки в одной группе — редкость, но не выдумка, и цена
+    ошибки здесь — оценка не тому человеку.
+    """
+    return db.query(User).filter(
+        User.role == "student", User.surname == surname, User.name == name,
+        User.group_name == group, User.deleted == False).all()  # noqa: E712
+
+
 def student_records(db, surname: str, name: str, group: str | None = None,
-                    allowed_lesson_ids: set | None = None) -> dict:
+                    allowed_lesson_ids: set | None = None,
+                    student_id: str | None = None) -> dict:
     """{lesson_id → оценка} для студента. Ключи пересдач (`<lid>_retake[_N]`) тоже
     приходят как отдельные строки grades — grading их учитывает по последней попытке.
 
@@ -76,17 +91,26 @@ def student_records(db, surname: str, name: str, group: str | None = None,
     никогда не видит оценок однофамильца из ДРУГОЙ группы. Легитимные оценки студента
     всегда стоят на занятиях его группы, поэтому фильтр ничего своего не теряет.
     Без параметров — прежнее поведение (полная выборка по имени)."""
-    rows = db.query(Grade.lesson_id, Grade.grade).filter(
+    #🔒 РАЗВОД ПОЛНЫХ ТЁЗОК В ОДНОЙ ГРУППЕ (J08, 20.09.2026). Фильтр по ФИО у них
+    #одинаковый, поэтому каждый видел оценки обоих — и в среднем балле, и в журнале.
+    #Ключ оценки с этапа 3 строится по неизменяемому `student_id`, и само поле лежит
+    #рядом со строкой: если оно заполнено, адресат известен точно.
+    #⚠️ Пустой `student_id` в строке — это СТАРАЯ запись (миграция не завершена), и
+    #выбрасывать её нельзя: человек потерял бы свою историю. Такие строки остаются
+    #общими для тёзок, как и были, — улучшение без потери.
+    rows = db.query(Grade.lesson_id, Grade.grade, Grade.student_id).filter(
         Grade.student_f == surname, Grade.student_n == name,
         Grade.deleted == False).all()  # noqa: E712
+    if student_id:
+        rows = [r for r in rows if not (r[2] or "") or (r[2] or "") == student_id]
     if group is None and allowed_lesson_ids is None:
-        return {lid: g for lid, g in rows}
+        return {lid: g for lid, g, _sid in rows}
     allowed = allowed_lesson_ids if allowed_lesson_ids is not None else group_lesson_ids(db, group)
-    return {lid: g for lid, g in rows if base_lesson_id(lid) in allowed}
+    return {lid: g for lid, g, _sid in rows if base_lesson_id(lid) in allowed}
 
 
 def student_visible_records(db, surname: str, name: str, group: str | None = None,
-                            cfg=None, today=None) -> dict:
+                            cfg=None, today=None, student_id: str | None = None) -> dict:
     """Оценки студента ГЛАЗАМИ СТУДЕНТА — с учётом фазы учебного года.
 
     🔥 ЕДИНСТВЕННАЯ дверь для студенческих и родительских экранов (06.09.2026). Правило
@@ -104,7 +128,8 @@ def student_visible_records(db, surname: str, name: str, group: str | None = Non
     cfg = cfg if cfg is not None else load_config(db)
     _ty, ts = current_term(cfg)
     ph = grade_policy.phase(today or date.today(), ts, cfg.get("grades_freeze_date"))
-    return grade_policy.visible_records(student_records(db, surname, name, group), ph)
+    return grade_policy.visible_records(
+        student_records(db, surname, name, group, student_id=student_id), ph)
 
 
 def grades_phase(db, cfg=None, today=None) -> str:
@@ -810,7 +835,9 @@ def dropout_risk_for_student(db, surname: str, name: str, group: str,
     if sid:
         lessons = filter_lessons_by_student_subgroup(db, lessons, sid)
     if records is None:
-        records = student_records(db, surname, name, group)
+        #`sid` уже вычислен выше (он же разводит подгруппы) — используем его и здесь,
+        #иначе у полных тёзок в группе выборка по ФИО смешала бы их оценки (J08).
+        records = student_records(db, surname, name, group, student_id=sid or None)
     scale_map = lesson_scale_map(db, lessons)
     missed, total, unexcused = attendance_hours(lessons, records)
     per_subj = {r["subject"]: r["average"]
@@ -844,7 +871,7 @@ def group_risk_report(db, group: str, cfg=None, subjects=None) -> list:
         lessons = [l for l in lessons if l.subject in subjects]
     out = []
     for s in students_in_group(db, group):
-        recs = student_records(db, s.surname, s.name, group)
+        recs = student_records(db, s.surname, s.name, group, student_id=s.id)
         risk = dropout_risk_for_student(db, s.surname, s.name, group,
                                         cfg=cfg, lessons=lessons, records=recs)
         out.append({"surname": s.surname, "name": s.name,
@@ -852,12 +879,13 @@ def group_risk_report(db, group: str, cfg=None, subjects=None) -> list:
     return out
 
 
-def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, semester) -> dict:
+def zet_summary_for_student(db, surname: str, name: str, group: str, year: str, semester,
+                            student_id: str | None = None) -> dict:
     """Сводка ЗЕТ студента за термин (docs/done/PLAN-ZET.md) — {earned,total,pct,subjects[]}.
     Собирает занятия/оценки/шкалы преподавателей и сводит через ЧИСТЫЕ функции
     study_hours (та же логика для студента/куратора/родителя, один расчёт)."""
     lessons = group_lessons(db, group, year=year, semester=semester)
-    records = student_records(db, surname, name, group)
+    records = student_records(db, surname, name, group, student_id=student_id)
     scale_map = lesson_scale_map(db, lessons)
     hrows = {r.subject: r for r in db.query(SubjectHours).filter(
         SubjectHours.group_name == group, SubjectHours.year == (year or ""),
@@ -900,7 +928,8 @@ def group_zet_report(db, group: str, year: str, semester, min_zet) -> list:
     for s in students_in_group(db, group):
         students.append({"student_id": s.id, "display_name": display_name(s),
                          "summary": zet_summary_for_student(db, s.surname, s.name, group,
-                                                            year, semester)})
+                                                            year, semester,
+                                                            student_id=s.id)})
     return study_hours.group_zet_report(students, min_zet)
 
 
@@ -1089,7 +1118,7 @@ def _teacher_subject_rows(db, teacher, ty: str, ts, cfg,
             continue
         rows = []
         for s in students_in_group(db, group):
-            recs = student_records(db, s.surname, s.name, group)
+            recs = student_records(db, s.surname, s.name, group, student_id=s.id)
             rows.append({"average": average(lessons, recs, cfg, scale=scale)})
         out.append((group, subject, rows))
     return out
@@ -1153,7 +1182,7 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
             continue
         lessons = current_subject_lessons(db, group, group_lessons(db, group, year=ty, semester=ts), False)
         studs = students_in_group(db, group)
-        recs = {s.id: student_records(db, s.surname, s.name, group) for s in studs}
+        recs = {s.id: student_records(db, s.surname, s.name, group, student_id=s.id) for s in studs}
         #Куратор видит ЧУЖИЕ предметы — своей единой шкалы у него нет, лукап по каждому
         #занятию (как у отчёта/Вектора), а не teacher_scale одного человека.
         scale_map = lesson_scale_map(db, lessons)

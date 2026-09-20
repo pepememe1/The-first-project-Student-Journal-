@@ -167,6 +167,12 @@ def test_categories_match_the_settings_page():
     import re
     page = (pathlib.Path(__file__).resolve().parents[2]
             / "web" / "src" / "pages" / "Settings.vue").read_text(encoding="utf-8")
-    block = page.split("const NOTIFY_KINDS = computed(() => [", 1)[1].split("]", 1)[0]
+    #🔥 Границу блока ищем по «])», а не по первой «]» (20.09.2026). Раньше разбор
+    #обрывался на первом же закрывающем символе — а у записи бывает `roles: ['student']`,
+    #то есть своя скобка внутри. Пока такая запись стояла ПОСЛЕДНЕЙ, сторож работал
+    #случайно; первая же строка с ролями в середине списка обрезала блок, и он сравнивал
+    #две категории из девяти, объявляя расхождение. Классический «сторож, который
+    #краснеет не на том»: сам код страницы при этом был верен.
+    block = page.split("const NOTIFY_KINDS = computed(() => [", 1)[1].split("])", 1)[0]
     from app import rustore_push
     assert set(re.findall(r"key:\s*'([a-z]+)'", block)) == set(rustore_push.ALL_CATEGORIES)

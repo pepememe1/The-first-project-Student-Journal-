@@ -26,6 +26,7 @@ from fastapi import (
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ... import audit, events, msg_limit
+from ... import shared_state
 from ...db import get_db, SessionLocal
 from ...deps import (get_current_user, require_admin, require_moderation,
                     MODERATION_ROLES)
@@ -65,6 +66,12 @@ class _WSManager:
     def __init__(self):
         self._by_user: dict[str, set] = {}
         self._loop = None
+        #🔑 КТО ИМЕННО ЭТОТ ПРОЦЕСС. Сигнал, опубликованный в общий поток, вернётся и
+        #нам самим — своим его доставлять второй раз не надо (у них он уже ушёл живым
+        #сокетом). Идентификатор случайный на запуск: имя хоста или pid совпали бы у
+        #двух контейнеров одного образа.
+        self._process_id = uuid4().hex
+        self._shared_cursor = 0
 
     def bind_loop(self):
         try:
@@ -103,6 +110,54 @@ class _WSManager:
             asyncio.run_coroutine_threadsafe(self.send_users(list(uids), data), loop)
         except Exception:
             pass
+
+    def _participant_ids_for_broadcast(self, conv_id: str):
+        """Получатели чужого сигнала. Своя сессия БД: потребитель живёт в фоне, и брать
+        сессию запроса ему неоткуда — запроса нет."""
+        from ...db import SessionLocal
+        db = SessionLocal()
+        try:
+            return _participant_ids(db, conv_id)
+        finally:
+            db.close()
+
+    async def _consume_shared(self):
+        """Забирать сигналы ДРУГИХ процессов и доставлять их своим сокетам.
+
+        🔥 ЗАЧЕМ ЭТО ВООБЩЕ (20.09.2026). Реестр сокетов живёт в памяти процесса — это и
+        есть причина инварианта «один uvicorn». Пока сигнал не выходит за процесс,
+        второй воркер означает: сообщение в группе доходит живым каналом только своим, а
+        остальные ждут опроса, разреженного до 30 с ИМЕННО потому, что сокет считается
+        живым. То есть переход на несколько процессов молча ухудшил бы мессенджер.
+
+        ⚠️ Тело сигнала НЕПРОЗРАЧНО: беседа, вид события, отправитель-процесс и
+        случайный идентификатор. Ни текста, ни ФИО, ни логина — через общий поток они
+        уехали бы в Redis, а это хранилище мы ПДн не поручали.
+
+        ⚠️ Свои же события пропускаем по `origin`: у своих сокетов сигнал уже был.
+        """
+        while True:
+            try:
+                rows = shared_state.stream_read("messenger:broadcast", self._shared_cursor)
+            except Exception:
+                rows = []
+            for row in rows or []:
+                try:
+                    self._shared_cursor = max(self._shared_cursor, int(row.get("_seq") or 0))
+                    if (row.get("origin") or "") == self._process_id:
+                        continue
+                    conv_id = str(row.get("conversation_id") or "")
+                    if not conv_id:
+                        continue
+                    kind = str(row.get("kind") or "changed")
+                    uids = self._participant_ids_for_broadcast(conv_id)
+                    await self.send_users(uids, {"type": kind, "conversation_id": conv_id})
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    continue
+            if not rows:
+                await asyncio.sleep(0.5)
 
     async def close_user(self, uid: str, code: int = 4001):
         """Разорвать ВСЕ живые сокеты пользователя."""
@@ -145,10 +200,30 @@ def _participant_ids(db: Session, conv_id: str) -> list:
 
 
 def _broadcast(db: Session, conv_id: str, kind: str = "changed"):
-    """Лёгкий сигнал участникам беседы: «подтяни свежее». Никогда не роняет запрос."""
+    """Лёгкий сигнал участникам беседы: «подтяни свежее». Никогда не роняет запрос.
+
+    ⚠️ Публикуем ЕЩЁ и в общий поток — но только когда общее состояние действительно
+    поднято (`GRADEBOOK_REDIS_URL` задан и Redis жив). Не задано — поведение БУКВАЛЬНО
+    прежнее, ни одного лишнего вызова: «поставил библиотеку — молча сменился режим» это
+    ровно тот отказ, из-за которого у нас запрещено объявлять зависимость комментарием.
+
+    ⚠️ В поток уходит СИГНАЛ, а не содержимое: беседа, вид события, процесс-источник и
+    случайный идентификатор. Тело сообщения, ФИО и логины через общее хранилище не
+    едут — Redis обработку ПДн мы не поручали.
+    """
     try:
         ws_manager.emit_users(_participant_ids(db, conv_id),
                               {"type": kind, "conversation_id": conv_id})
+    except Exception:
+        pass
+    try:
+        if shared_state.available():
+            shared_state.stream_append("messenger:broadcast", {
+                "conversation_id": conv_id,
+                "kind": kind,
+                "origin": ws_manager._process_id,
+                "event_id": uuid4().hex,
+            }, maxlen=500)
     except Exception:
         pass
 

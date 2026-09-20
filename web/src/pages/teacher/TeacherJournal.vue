@@ -19,11 +19,13 @@ import { useRoute } from 'vue-router'
 import { teacherApi, termsApi } from '@/api/endpoints'
 import {
   enqueueGrade, enqueueLessonCreate, enqueueLessonDelete, enqueueLessonUpdate,
-  enqueueTermGrade, isTempId, pendingGrade, pendingLessons,
+  enqueueTermGrade, isTempId, pendingGrade, pendingLessons, storageFailed,
 } from '@/api/outbox'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
+import { BUFFER_TIMEOUT_MS, resolveKey } from '@/utils/gradeKeys'
+import { isHandheld } from '@/utils/device'
 import { practiceAverage, scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -231,6 +233,73 @@ function cellOptions(l) {
   return OPTIONS.default
 }
 function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено)» → «5» в селекте
+
+// ── Ввод оценки С КЛАВИАТУРЫ (просьба тестеров, 20.09.2026) ──────────────────────────
+//
+// Выпадающий список остаётся как был — клавиатура его не заменяет, а дополняет: мышью
+// ставят одну оценку, клавиатурой — тридцать подряд, и ради второго случая всё и делалось.
+//
+// ⚠️ ЧТО ИМЕННО ЗНАЧИТ КЛАВИША, решает `utils/gradeKeys.js`, а не этот файл: правило
+// зависит от ШКАЛЫ (в сотенной «8» это начало «85», а в пятибалльной — ничто) и от
+// РАСКЛАДКИ, и проверить его внутри компонента нечем.
+//
+// ⚠️ Собственная клавиатурная навигация `<select>` нам мешает: она ищет ПОДПИСЬ пункта,
+// то есть латинская «j» у неё не значит ничего, а цифра выбирает первый попавшийся
+// пункт, начинающийся с неё. Поэтому у распознанных нажатий отменяем стандартное
+// поведение, а всё остальное (Tab, стрелки, Home/End) отдаём браузеру нетронутым.
+const keyBuffer = ref('')          //набранное в многозначной шкале («8» → ждём «5»)
+const keyBufferCell = ref('')      //чья это ячейка: уход в соседнюю обнуляет набор
+let keyBufferTimer = null
+
+function flushKeyBuffer(s, col) {
+  if (keyBufferTimer) { clearTimeout(keyBufferTimer); keyBufferTimer = null }
+  const pending = keyBuffer.value
+  keyBuffer.value = ''
+  keyBufferCell.value = ''
+  if (!pending) return
+  //Применяем накопленное, только если оно допустимо ЗДЕСЬ: за время паузы человек мог
+  //уйти в ячейку другого занятия, где своя шкала.
+  if (cellOptions(col.l).map(String).includes(pending)) onCell(s, col, pending)
+}
+
+// ⚠️ ТОЛЬКО КОМПЬЮТЕР (уточнение тестеров, 20.09.2026). На телефоне ввода с клавиатуры
+// нет: экранная клавиатура поверх журнала занимает половину экрана, а `<select>` там
+// открывается системным барабаном — перехват нажатий отнял бы у человека привычный
+// способ и не дал бы взамен ничего. Признак берём общий (`utils/device.js`), тот же,
+// что у вибрации и QR: второй ответ на вопрос «телефон или компьютер» разошёлся бы с
+// первым молча.
+const keyboardInput = isHandheld() ? false : true
+
+function onCellKey(s, col, e) {
+  if (!keyboardInput) return                           //телефон — клавиатурного ввода нет
+  if (e.ctrlKey || e.altKey || e.metaKey) return       //сочетания — не наш ввод
+  const cellId = `${s.student_id || s.surname}|${col.key}`
+  if (keyBufferCell.value && keyBufferCell.value !== cellId) {
+    keyBuffer.value = ''                               //перешли в другую ячейку — набор не наследуется
+    keyBufferCell.value = ''
+  }
+  const decision = resolveKey(e.key, {
+    allowed: cellOptions(col.l).map(String),
+    buffer: keyBuffer.value,
+  })
+  if (decision.kind === 'ignore') return
+  e.preventDefault()
+  if (keyBufferTimer) { clearTimeout(keyBufferTimer); keyBufferTimer = null }
+
+  if (decision.kind === 'buffer') {
+    keyBuffer.value = decision.buffer
+    keyBufferCell.value = decision.buffer ? cellId : ''
+    if (decision.buffer) keyBufferTimer = setTimeout(() => flushKeyBuffer(s, col), BUFFER_TIMEOUT_MS)
+    return
+  }
+  keyBuffer.value = ''
+  keyBufferCell.value = ''
+  //«clear» — это пустая строка, то есть СНЯТИЕ оценки: тот же путь, что выбор «·» в
+  //списке, включая офлайн-очередь и откат при отказе сервера.
+  onCell(s, col, decision.kind === 'clear' ? '' : decision.value)
+}
+
+onBeforeUnmount(() => { if (keyBufferTimer) clearTimeout(keyBufferTimer) })
 function needsRetake(s, col) { return needsRetakeShared(s.grades, col.l.id, col.ri) }
 
 // Короткое ФИО для мобилки: «Иванчиков Егор Андреевич» → «Иванчиков Е.А.». Полная
@@ -376,7 +445,9 @@ async function setGrade(s, key, value) {
   s.grades[key] = value
   saving.value = true
   try {
-    await teacherApi.setGrade(s.surname, s.name, key, value)
+    //`s.student_id` приходит из журнала (J08): у полных тёзок в группе ФИО не
+    //различает адресата, и сервер выбирал первого найденного.
+    await teacherApi.setGrade(s.surname, s.name, key, value, s.student_id || '')
     //Оценка ЗАПИСАНА. Второй случай из haptics.js — «действие значимо»: преподаватель в
     //этот момент смотрит на студента и на журнал, а не на всплывающие подтверждения, и
     //«получилось» должен узнать рукой. Отдача ПОСЛЕ ответа сервера, а не по нажатию:
@@ -391,11 +462,22 @@ async function setGrade(s, key, value) {
     // преподавателя пропала бы ровно в тот момент, когда он физически не может её
     // повторить. Такую оценку кладём в очередь — она уедет сама (см. api/outbox.js).
     if (!e?.response) {
-      enqueueGrade({ surname: s.surname, name: s.name, lesson_id: key, grade: value })
+      enqueueGrade({ surname: s.surname, name: s.name, lesson_id: key, grade: value,
+        student_id: s.student_id || '' })
       //Оценка не потеряна, но и не уехала — это НЕ успех и не отказ. Отдельного узора
       //заводить не стали: важнее, что ощущение отличается от «записано», а подробность
       //человек прочитает в подсказке.
       haptics.tap()
+      //🔒 «Сохранено» говорим, только если оно ПРАВДА сохранено (находка ревью O01).
+      //localStorage отказывает молча — переполнена квота, приватный режим, запрет
+      //сайту, — и прежний текст подтверждал сохранение, которого не было: правка жила
+      //до первой же перезагрузки очереди. Обещание, которое нельзя выполнить, здесь
+      //хуже отказа: человек уходит с урока спокойным.
+      if (storageFailed.value) {
+        toast.error(locale.t('teacherJournal.queuedNotStored',
+          'Нет сети, и сохранить на устройстве не удалось — не закрывайте вкладку'))
+        return
+      }
       toast.info(locale.t('teacherJournal.queuedOffline',
         'Нет сети — оценка сохранена и уйдёт, когда появится связь'))
       return
@@ -549,6 +631,9 @@ async function saveLesson() {
       } else {
         enqueueLessonCreate({
           group: group.value, subject: subject.value, subgroup: activeSubgroup.value, ...f,
+          //Тот же J10: занятие, созданное без сети в конце семестра, иначе появится в
+          //журнале СЛЕДУЮЩЕГО — там, где его никто не создавал.
+          year: currentTerm.value?.year || '', semester: currentTerm.value?.semester || 0,
         })
       }
       showLesson.value = false
@@ -658,13 +743,19 @@ function examMark(s) {
 
 async function openAtt() {
   try {
-    const tg = (await teacherApi.termGrades(group.value, subject.value)).data.grades || {}
+    const resp = (await teacherApi.termGrades(group.value, subject.value)).data
+    const tg = resp.grades || {}
+    //Ключ по ФИО у полных тёзок в группе ОДИН НА ДВОИХ — сервер отдаёт ещё и по
+    //неизменяемому id, его и предпочитаем (J08). Старый ключ остаётся запасным: у
+    //записей, заведённых до миграции, id пуст.
+    const byId = resp.grades_by_id || {}
+    const cell = (s) => byId[s.student_id] || tg[`${s.surname}|${s.name}`]
     attRows.value = (data.value?.students || []).map((s) => ({
-      surname: s.surname, name: s.name,
-      grade: tg[`${s.surname}|${s.name}`]?.grade || '',
+      surname: s.surname, name: s.name, student_id: s.student_id || '',
+      grade: cell(s)?.grade || '',
       //Снимок исходного значения: по нему видно, у кого семестр УЖЕ закрыт (и, значит,
       //текущие оценки заперты), а кому итоговую только предстоит выставить.
-      was: tg[`${s.surname}|${s.name}`]?.grade || '',
+      was: cell(s)?.grade || '',
       average: s.average,
       marks: studentMarks(s),
       exam: examMark(s),
@@ -679,6 +770,7 @@ async function saveAtt() {
       const row = {
         group: group.value, subject: subject.value,
         surname: r.surname, name: r.name, grade: r.grade, form: attForm.value,
+        student_id: r.student_id || '',      //адресат по id, а не по ФИО (J08)
       }
       try {
         await teacherApi.setTermGrade(row)
@@ -688,9 +780,16 @@ async function saveAtt() {
         // половина группы уехала бы, а половина потерялась, и разобраться, где
         // остановились, было бы нельзя.
         if (!e?.response) {
+          //Период кладём В ЗАПИСЬ (J10): доставка может случиться после rollover, и
+          //без него сервер закроет итоговой НЕ ТОТ семестр — тот, который идёт в день
+          //доставки. Что делать с записью для уже закрытого периода, решает человек:
+          //сервер её отклонит, и она попадёт в список отклонённых на виду.
           attRows.value.slice(attRows.value.indexOf(r)).forEach((rest) => enqueueTermGrade({
             group: group.value, subject: subject.value,
             surname: rest.surname, name: rest.name, grade: rest.grade, form: attForm.value,
+            student_id: rest.student_id || '',
+
+            year: currentTerm.value?.year || '', semester: currentTerm.value?.semester || 0,
           }))
           showAtt.value = false
           toast.info(locale.t('teacherJournal.queuedOffline',
@@ -847,7 +946,8 @@ async function downloadVedomost(fmt) {
                         ? locale.t('teacherJournal.cellPending', 'Ещё не отправлено на сервер')
                         : (s.grades[col.key] || '')"
                       class="h-9 w-14 cursor-pointer rounded-sm border bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
-                      @change="onCell(s, col, $event.target.value)">
+                      @change="onCell(s, col, $event.target.value)"
+                      @keydown="onCellKey(s, col, $event)">
                 <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
               </select>
             </td>

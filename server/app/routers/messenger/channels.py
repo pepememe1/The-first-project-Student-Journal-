@@ -307,7 +307,7 @@ def report_subject_journal(report_id: str, subject: str = Query(...),
     scale_map = W.lesson_scale_map(db, lessons)
     rows = []
     for s in students:
-        recs = W.student_records(db, s.surname, s.name, rep.group_name)
+        recs = W.student_records(db, s.surname, s.name, rep.group_name, student_id=s.id)
         grades = [{"lesson_id": l.id, "type": l.type, "number": l.number,
                   "topic": l.topic, "date": l.date, "value": recs.get(l.id, "")}
                  for l in lessons]

@@ -7,6 +7,7 @@ main.py — Точка входа бэкенда GradeBookAI (FastAPI).
 
 Документация API после запуска: http://localhost:8000/docs
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 log = logging.getLogger("gradebook.main")
 
 from .db import init_db
+from .request_metrics import RequestMetricsMiddleware
 from .config import ALLOWED_ORIGINS, assert_production_secrets
 from .routers import auth, sync, me, admin, web, vector, messenger, parent
 from .routers import activities as activities_router
@@ -76,7 +78,33 @@ async def lifespan(app: FastAPI):
         schedule_web.warm()
     except Exception:
         pass
-    yield
+
+    #📡 ПОТРЕБИТЕЛЬ МЕЖПРОЦЕССНЫХ СИГНАЛОВ WebSocket — запускается ТОЛЬКО когда общее
+    #состояние действительно поднято. Без `GRADEBOOK_REDIS_URL` не создаётся даже задача:
+    #один процесс доставляет свои сигналы сам, и фоновый цикл был бы чистым расходом
+    #единственного ядра.
+    #
+    #⚠️ Заведено вместе с публикацией в `messenger/_common._broadcast` (20.09.2026).
+    #Писать в поток и НЕ читать его значило бы получить наш обычный дефект «обещание без
+    #вызывающего»: сигналы копятся, второй воркер их не видит, и переход на несколько
+    #процессов молча ухудшает мессенджер — сокет считается живым, а опрос разрежен до
+    #30 с именно поэтому.
+    _shared_ws_task = None
+    try:
+        from . import shared_state as _shared
+        if _shared.available():
+            from .routers.messenger._common import ws_manager as _wsm
+            _shared_ws_task = asyncio.create_task(_wsm._consume_shared())
+            events.record("info", "server_start",
+                          "межпроцессные сигналы мессенджера: слушаю общий поток")
+    except Exception as e:                                          # noqa: BLE001
+        events.record("warn", "server_start",
+                      f"потребитель общих сигналов не запущен: {e}")
+    try:
+        yield
+    finally:
+        if _shared_ws_task is not None:
+            _shared_ws_task.cancel()
 
 
 #На бою прячем интерактивную документацию и схему API (/docs, /redoc, /openapi.json):
@@ -88,6 +116,22 @@ _DOCS_ON = os.environ.get("GRADEBOOK_ENABLE_DOCS", "").strip() == "1"
 _docs_kw = ({} if (_DOCS_ON or not _PROD)
             else dict(docs_url=None, redoc_url=None, openapi_url=None))
 app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan, **_docs_kw)
+
+#📊 СЧЁТЧИК HTTP-ПУТЕЙ (`app/request_metrics.py`) — подключается ПЕРВЫМ, то есть
+#оборачивает всё остальное: иначе время, съеденное соседними middleware, в замер не
+#попадёт, а мерить мы хотим именно то, что чувствует человек.
+#
+#🔥 ЗАВЕДЕНО ЗДЕСЬ 20.09.2026, И ЭТО ПОЧИНКА ПОЛОВИНЧАТОЙ ПОСТАВКИ. Модуль, его тесты и
+#ручка `/web/admin/server/metrics` приехали слиянием 3.9.5.1, а САМОЙ ПРОВОДКИ не было:
+#`x-request-id` не ставился никем, снимок оставался пустым навсегда. При этом запись в
+#CLAUDE.md утверждала, что сборщик «подключён к ручке», — то есть документ описывал
+#намерение как факт, наш самый частый класс неправды. Держит
+#`tests/test_request_metrics.py::test_product_wires_collector_and_protects_snapshot`.
+#
+#⚠️ ПДн сюда не попадают по построению: собираются ШАБЛОН маршрута, метод, группа
+#статуса, размер и длительность. Идентификатор запроса генерирует сервер — присланный
+#клиентом отбрасывается, потому что в нём может оказаться что угодно.
+app.add_middleware(RequestMetricsMiddleware)
 
 #CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
 app.add_middleware(

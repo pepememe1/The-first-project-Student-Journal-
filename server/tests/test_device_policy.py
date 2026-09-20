@@ -200,3 +200,58 @@ def test_web_unknown_user_gets_401_not_403(client):
     r = client.post("/auth/login", json={"login": "nobody", "password": "whatever12"},
                     headers=WEB_DEV)
     assert r.status_code == 401, r.text
+
+
+def test_unknown_approval_mode_refuses_to_start_instead_of_weakening(client):
+    """ОПЕЧАТКА В НАСТРОЙКЕ НЕ ИМЕЕТ ПРАВА МОЛЧА ВКЛЮЧИТЬ АВТООДОБРЕНИЕ (находка T04).
+
+    Прежнее `DEVICE_APPROVAL_MODE != "strict"` асимметрично: `strcit`, `srict`, `Strict `
+    — всё это «не strict», то есть автоодобрение. Администратор при этом уверен, что
+    запер барьер: он его именно запирал и просто промахнулся по клавише. Отказ запуска
+    виден сразу, тихо ослабленная защита не видна никогда.
+
+    ⚠️ Проверяем разбор настройки НАПРЯМУЮ, а не через подъём приложения: `config`
+    импортируется один раз на процесс, и перезапустить его внутри прогона нельзя без
+    вычищения половины `sys.modules` — такой тест ломал бы соседние.
+    Обратный ход: вернуть сравнение с одним «strict» — тест покраснеет.
+    """
+    import os
+    import importlib
+    from app import config as cfg
+
+    assert cfg.DEVICE_APPROVAL_MODES == ("auto", "strict")
+    #Живой разбор: тот же код, что на старте, но в отдельном пространстве имён.
+    src = open(cfg.__file__, encoding="utf-8").read()
+    start = src.index("DEVICE_APPROVAL_MODES")
+    end = src.index("DEVICE_AUTO_APPROVE =", start)
+    block = src[start:end] + "DEVICE_AUTO_APPROVE = DEVICE_APPROVAL_MODE != 'strict'"
+
+    for bad in ("strcit", "srict", "STRICT_", "off"):
+        ns = {"os": os}
+        os.environ["GRADEBOOK_DEVICE_APPROVAL"] = bad
+        try:
+            raised = False
+            try:
+                exec(compile(block, "<config-block>", "exec"), ns)
+            except RuntimeError as e:
+                raised = True
+                #Значение приводится к нижнему регистру ДО сверки — в сообщении оно
+                #тоже нижнее, и сравнивать надо с нормализованным.
+                assert bad.lower() in str(e) and "auto, strict" in str(e),                     f"отказ обязан называть значение и допустимые: {e}"
+            assert raised, f"опечатка {bad!r} принята и включила режим {ns.get('DEVICE_APPROVAL_MODE')!r}"
+        finally:
+            os.environ.pop("GRADEBOOK_DEVICE_APPROVAL", None)
+
+    #А законные значения по-прежнему разбираются и дают ожидаемое поведение.
+    for good, auto in (("auto", True), ("strict", False), ("", True)):
+        ns = {"os": os}
+        if good:
+            os.environ["GRADEBOOK_DEVICE_APPROVAL"] = good
+        else:
+            os.environ.pop("GRADEBOOK_DEVICE_APPROVAL", None)
+        try:
+            exec(compile(block, "<config-block>", "exec"), ns)
+            assert ns["DEVICE_AUTO_APPROVE"] is auto, f"{good!r} дал не тот режим"
+        finally:
+            os.environ.pop("GRADEBOOK_DEVICE_APPROVAL", None)
+    importlib.reload  # noqa: B018 — импорт оставлен для читателя: reload здесь НЕ делаем

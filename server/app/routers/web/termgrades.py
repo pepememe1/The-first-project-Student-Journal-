@@ -31,13 +31,27 @@ def teacher_set_term_grade(payload: dict = Body(...),
     form = (payload.get("form") or "").strip()
     if not (surname and name and subject and group):
         raise HTTPException(status_code=400, detail="Нужны surname, name, subject, group")
-    ty, ts = W.current_term(W.load_config(db))
+    #🔒 ИТОГОВАЯ ПРОВЕРЯЕТСЯ ТЕМ ЖЕ ПРАВИЛОМ, ЧТО И ОБЫЧНАЯ ОЦЕНКА (находка J09).
+    #Здесь стоял только `strip()`, то есть прямой запрос записывал в зачётку любую
+    #непустую строку — и она не просто отображалась: наличие итоговой ЗАПИРАЕТ текущие
+    #оценки по предмету (`_ensure_term_open`). Строкой-мусором закрывался семестр.
+    #Выпадающий список на экране проверкой не является: тот же запрос уходит из
+    #десктопа, из офлайн-очереди и голосом. Правило одно на продукт — `grading.py`.
+    #⚠️ Пустая строка допустима намеренно: это СНЯТИЕ итоговой, то есть та самая дверь
+    #наружу, без которой опечатка в оценке стала бы неисправимой.
+    if not W.grading.is_allowed_value(grade):
+        raise HTTPException(status_code=400, detail="Недопустимое значение итоговой оценки")
+    #⚠️ Тот же J10, и здесь цена выше, чем у занятия: итоговая ЗАПИРАЕТ текущие оценки
+    #по предмету. Уехав из первого семестра во второй, она закрывает период, который
+    #человек и не думал закрывать, — а снять замок сможет только тот, кто догадается,
+    #что дело в итоговой.
+    cfg = W.load_config(db)
+    _require_intended_term(cfg, payload)
+    ty, ts = W.current_term(cfg)
     _teacher_check_assignment(db, user, group, subject, ty, ts)
-    stud = db.query(User).filter(
-        User.role == "student", User.surname == surname, User.name == name,
-        User.group_name == group, User.deleted == False).first()  # noqa: E712
-    if not stud:
-        raise HTTPException(status_code=400, detail="Студент не найден в группе")
+    #Тот же адресат, что у текущей оценки (J08): по id, а при полных тёзках без id —
+    #честный отказ вместо «первого найденного».
+    stud = _resolve_student(db, group, surname, name, payload)
     gid = _term_grade_id(stud.id, subject, ty, ts)
     now = _now_iso()
     row = db.get(TermGrade, gid)
@@ -69,8 +83,14 @@ def teacher_term_grades(group: str = Query(...), subject: str = Query(...),
         TermGrade.subject == subject, TermGrade.year == ty,
         TermGrade.semester == ts, TermGrade.deleted == False).all()  # noqa: E712
     out = {f"{r.student_f}|{r.student_n}": {"grade": r.grade, "form": r.form} for r in rows}
+    #🔑 ВТОРОЙ ключ — по неизменяемому id (J08). Ключ по ФИО у полных тёзок в группе
+    #один на двоих: в ведомости обоим показывалась итоговая одного из них. Старый ключ
+    #ОСТАВЛЕН намеренно — по нему читают прежние сборки, и молча сменить форму ответа
+    #значило бы сломать их ради правки, которая их не касается.
+    by_id = {(r.student_id or ""): {"grade": r.grade, "form": r.form}
+             for r in rows if (r.student_id or "")}
     return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
-            "grades": out}
+            "grades": out, "grades_by_id": by_id}
 
 
 #Единый ответ-файл для xlsx/docx (Content-Disposition + правильный media-type).

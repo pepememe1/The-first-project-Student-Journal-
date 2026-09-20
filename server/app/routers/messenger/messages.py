@@ -649,6 +649,21 @@ def forward_messages(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Нужны message_ids и to_conversation_ids")
     _guard_can_write(db, user)               #пересылка — тоже создание сообщений
     made = 0
+    #🔥 РАССЫЛКА И ХУК — ТОЛЬКО ТУДА, КУДА РЕАЛЬНО ЛЕГЛО СООБЩЕНИЕ (20.09.2026, находка
+    #ревью M05). Ниже стоял второй проход ПО ИСХОДНОМУ СПИСКУ `targets`, то есть по
+    #тому, что прислал клиент, — а первый проход часть адресатов пропускает: чужая
+    #беседа (не участник), карточка активности, отчёт не от преподавателя, удалённый
+    #источник. Для пропущенных всё равно звался `_broadcast` и `_hook_moderation`.
+    #
+    #Цена была настоящей и обходила границу доступа: достаточно подставить id ЧУЖОГО
+    #чата поддержки, и пересылка «не удалась» (`forwarded: 0`), а тикет в нём завёлся
+    #или обновился — с системной репликой автоответчика и сдвинутой меткой «человек
+    #написал». То есть посторонний двигал чужое обращение в очереди модерации, ничего
+    #в него не отправив.
+    #
+    #⚠️ Дубли из списка тоже схлопываем: один и тот же адресат, присланный дважды, давал
+    #две рассылки и два прохода хука по одной беседе.
+    delivered: list[str] = []
     for conv_id in targets:
         if _participant(db, conv_id, user.id) is None:
             continue                       #в чужую беседу переслать нельзя
@@ -656,6 +671,7 @@ def forward_messages(payload: dict = Body(...),
         #беседе у заблокированного осталось, и «переслать» клало в ту же личку что угодно.
         #Отказ ОБЩИЙ, как и при отправке, — он не имеет права раскрывать блокировку.
         _guard_direct_write(db, _conversation(db, conv_id), user)
+        made_here = 0
         for mid in mids:
             src = db.query(Message).filter(Message.id == mid).first()
             if src is None or src.deleted_at:
@@ -686,9 +702,14 @@ def forward_messages(payload: dict = Body(...),
                 fwd_from_created_at=(src.fwd_from_created_at or src.created_at),
                 fwd_sender_name=(src.fwd_sender_name or (sender.full_name if sender else "")),
             ))
-            made += 1
+            made_here += 1
+        #Ни одно сообщение не прошло отбор — для этой беседы не случилось НИЧЕГО, и
+        #сообщать о ней некому.
+        if made_here and conv_id not in delivered:
+            delivered.append(conv_id)
+        made += made_here
     db.commit()
-    for conv_id in targets:
+    for conv_id in delivered:
         _broadcast(db, conv_id)
         #🔥 ПЕРЕСЫЛКА В ЧАТ МОДЕРАЦИИ — ТОЖЕ ОБРАЩЕНИЕ (нашёл Полковник 12.09.2026).
         #Студент видит оскорбление, открывает ⚙ «Модерация», пересылает туда сообщение
