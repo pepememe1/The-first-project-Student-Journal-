@@ -9,6 +9,42 @@ messages.py — Сами сообщения: чтение ленты, ветка
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
 
 
+def _hook_moderation(db: Session, conv_or_id, user: User, body: str) -> None:
+    """Очередь обращений: автоответчик с темами и заведение тикета.
+
+    🔑 ОДНА ДВЕРЬ НА ВСЕ ТОЧКИ, КОТОРЫЕ КЛАДУТ СООБЩЕНИЕ ЧЕЛОВЕКА В ЧАТ МОДЕРАЦИИ.
+    Хук стоял прямо в `send_message`, и пересылка (`forward_messages`) проходила мимо:
+    студент пересылал в ⚙ оскорбление и не писал ни слова — сообщение в чате есть, тикета
+    НЕТ, очередь про обращение не знает. Это тот же класс, что `_guard_direct_write`:
+    правило живёт в одной функции, и новая точка обязана позвать ЕЁ, а не повторить
+    условие рядом.
+
+    ⚠️ Best-effort ПОСЛЕ commit: сбой очереди модерации не имеет права уронить уже
+    отправленное человеком сообщение (то же правило, что у системных каналов оценок и
+    расписания).
+    ⚠️ **`rollback` в `except` обязателен.** Внутри хука есть свои `commit`, и упавший
+    коммит оставляет сессию в состоянии «нужен откат» — следующее же обращение к объекту
+    сообщения в этой же ручке упало бы `PendingRollbackError`, то есть человек получил бы
+    500 на сообщение, которое НА САМОМ ДЕЛЕ сохранено и разослано. Тихо проглотить
+    исключение мало: сессию надо ещё и вернуть в рабочее состояние.
+
+    ⚠️ Принимает и УЖЕ ЗАГРУЖЕННУЮ беседу, и её id. Отправка сообщения — самый горячий
+    путь продукта, и лишний SELECT на каждое сообщение ради проверки `kind` здесь не
+    нужен: вызывающий беседу уже держит.
+    """
+    conv = conv_or_id if not isinstance(conv_or_id, str) else _conversation(db, conv_or_id)
+    if conv is None or getattr(conv, "kind", "") != "moderation":
+        return
+    try:
+        from .moderation import on_moderation_message
+        on_moderation_message(db, conv, user, body)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 # ── История и новые сообщения ────────────────────────────────────────────────────────
 @router.get("/chats/{conv_id}/messages")
 def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
@@ -265,7 +301,13 @@ def send_message(conv_id: str, payload: dict = Body(...),
         raise HTTPException(status_code=403, detail="В канал могут писать только авторы")
     if part.silenced:                        #«/mute»-заглушка модератора — не глобальный мьют
         raise HTTPException(status_code=403, detail="Вы заглушены в этой беседе")
-    _guard_can_write(db, user)               #глобальный мьют (403) + анти-флуд (429)
+    #Блокировка проверяется и ЗДЕСЬ, а не только при открытии лички: беседа могла быть
+    #создана ДО блокировки и остаётся открытой у обоих. Проверка на входе в чат защитила
+    #бы только новые пары — то есть не защитила бы никого из тех, кто уже переписывался.
+    _guard_direct_write(db, conv, user)
+    #`conv` передаётся НЕ для удобства: по виду беседы барьер решает, идёт ли речь
+    #о чате с модерацией — единственном, который остаётся открытым под мьютом.
+    _guard_can_write(db, user, conv)          #глобальный мьют (403) + анти-флуд (429)
     body = (payload.get("body") or "").strip()
     #⚠️ ФАЙЛ САМ ПО СЕБЕ — ЗАКОННОЕ СООБЩЕНИЕ. Гейт пустого текста стоял РАНЬШЕ разбора
     #вложения, поэтому «выбрал файл, ничего не написал, отправил» отвечало 400 — но уже
@@ -386,6 +428,8 @@ def send_message(conv_id: str, payload: dict = Body(...),
         gif_service.mark_shared((payload.get("gif_slug") or "").strip())
     else:
         _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
+    #Очередь обращений: автоответчик с темами и заведение тикета.
+    _hook_moderation(db, conv, user, body)
     #Вложение отдаём сразу: клиент рисует сообщение до ответа сервера, и без
     #метаданных карточка файла мигнула бы пустой.
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "",
@@ -466,6 +510,10 @@ def add_reaction(mid: int, payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Недопустимая реакция")
     m = _message_in_conv(db, mid)
     _require_participant(db, m.conversation_id, user)
+    #Реакция — не сообщение, но у собеседника она появляется под его же строкой, то есть
+    #это способ дотянуться до человека, который этого не хочет. Блокировка обязана её
+    #закрывать, иначе она дырява ровно в ту сторону, ради которой её ставят.
+    _guard_direct_write(db, _conversation(db, m.conversation_id), user)
     if m.deleted_at:
         raise HTTPException(status_code=400, detail="Сообщение удалено")
     exists = (db.query(MessageReaction)
@@ -540,6 +588,9 @@ def pin_message(mid: int, user: User = Depends(get_current_user), db: Session = 
     conv = _conversation(db, m.conversation_id)
     if not _can_pin(part, conv):
         raise HTTPException(status_code=403, detail="Недостаточно прав для закрепления")
+    #Закрепление меняет ОБЩЕЕ состояние беседы и добавляет системную строку — у
+    #заблокировавшего это появляется на экране так же, как сообщение.
+    _guard_direct_write(db, conv, user)
     if m.deleted_at:
         raise HTTPException(status_code=400, detail="Сообщение удалено")
     m.pinned = True
@@ -601,6 +652,10 @@ def forward_messages(payload: dict = Body(...),
     for conv_id in targets:
         if _participant(db, conv_id, user.id) is None:
             continue                       #в чужую беседу переслать нельзя
+        #🔒 Блокировку проверяем и здесь. Без этого запрет обходился пересылкой: участие в
+        #беседе у заблокированного осталось, и «переслать» клало в ту же личку что угодно.
+        #Отказ ОБЩИЙ, как и при отправке, — он не имеет права раскрывать блокировку.
+        _guard_direct_write(db, _conversation(db, conv_id), user)
         for mid in mids:
             src = db.query(Message).filter(Message.id == mid).first()
             if src is None or src.deleted_at:
@@ -635,6 +690,13 @@ def forward_messages(payload: dict = Body(...),
     db.commit()
     for conv_id in targets:
         _broadcast(db, conv_id)
+        #🔥 ПЕРЕСЫЛКА В ЧАТ МОДЕРАЦИИ — ТОЖЕ ОБРАЩЕНИЕ (нашёл Полковник 12.09.2026).
+        #Студент видит оскорбление, открывает ⚙ «Модерация», пересылает туда сообщение
+        #(«вот, разберитесь») и НЕ пишет ни слова. Пока хук стоял только в `send_message`,
+        #тикета не заводилось: сообщение в чате есть, в очереди обращения нет, метка
+        #«человек написал» не двигается — ровно тот тихий отказ, против которого очередь
+        #и заведена.
+        _hook_moderation(db, conv_id, user, "")
     return {"forwarded": made}
 
 

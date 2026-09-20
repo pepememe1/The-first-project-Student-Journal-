@@ -1,0 +1,11 @@
+.toolchains/
+.android-sdk/
+node_modules/
+test-artifacts/
+*.local.json
+*.apk
+*.aab
+local.properties
+keystore.properties
+*.jks
+*.keystore

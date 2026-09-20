@@ -7,21 +7,52 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .security import decode_token
 from .models import User, AuthSession
-from . import events, throttle, connect
+from . import audit, config, events, throttle, connect
 
 
-def ensure_device_allowed(request: Request, db: Session):
+def ensure_device_allowed(request: Request, db: Session, user: User = None):
     """Барьер подтверждения устройства: пускаем только одобренные ПК и сам хост.
 
     Применяется ко ВСЕМ защищённым эндпоинтам (через get_current_user) и ко входу
     (см. routers/auth.py). Неодобренное устройство получает 403 — оно сначала должно
     пройти подтверждение через /connect/* (вкладка «Запросы на подключение» у админа).
-    Сам барьер реализован в connect.device_allowed (хост опознаётся по device_id)."""
-    if not connect.device_allowed(request, db):
-        raise HTTPException(
-            status_code=403,
-            detail="Устройство не подтверждено администратором. Запросите подключение "
-                   "и введите код, который выдаст администратор.")
+    Сам барьер реализован в connect.device_allowed (хост опознаётся по device_id).
+
+    🔑 `user` — КТО уже доказал, что он это он (проверенный пароль или валидный токен).
+    В режиме `config.DEVICE_AUTO_APPROVE` (умолчание, см. config.DEVICE_APPROVAL_MODE)
+    такое устройство заносится в одобренные САМО, один раз и со следом в журнале.
+    Без него человек с верным паролем упирался в «введите код, который выдаст
+    администратор» — при том, что администратор в колледже это он же (15.09.2026,
+    жалоба Влада «сломался вход на десктопе, запрашивает какой-то код»).
+
+    ⚠️ `user=None` (вход ДО сверки пароля, `bootstrap-admin`) автоодобрения НЕ даёт
+    никогда, и это не мелочь: иначе первое же анонимное обращение с выдуманным
+    device_id записывало бы чужую машину в одобренные, а `bootstrap-admin` отдал бы ей
+    создание первого администратора.
+    """
+    if connect.device_allowed(request, db):
+        return
+    dev = (request.headers.get("x-device-id", "") if request is not None else "").strip()
+    if config.DEVICE_AUTO_APPROVE and user is not None and dev:
+        ip = throttle.client_ip(request) if request is not None else ""
+        connect.add_approved(db, dev, ip=ip,
+                             hostname=(request.headers.get("user-agent", "")[:60]
+                                       if request is not None else ""),
+                             approved_by="auto")
+        #След обязателен: «устройство добавилось само» должно быть ВИДНО потом, иначе
+        #список одобренных машин однажды окажется длиннее, чем помнит администратор,
+        #и объяснить это будет нечем.
+        try:
+            audit.log(db, request, actor=user.login, role=user.role,
+                      action="device.auto_approved", target=dev,
+                      detail="устройство одобрено автоматически (GRADEBOOK_DEVICE_APPROVAL=auto)")
+        except Exception:
+            pass
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Устройство не подтверждено администратором. Запросите подключение "
+               "и введите код, который выдаст администратор.")
 
 
 def is_web_client(request: Request) -> bool:
@@ -129,7 +160,10 @@ def get_current_user(authorization: str = Header(None),
     #быть выдан до отзыва доступа или скопирован на чужой ПК. Для веб-студента барьер
     #не применяется (открытый веб-доступ), для персонала и десктопа — применяется.
     if device_barrier_applies(request, user.role):
-        ensure_device_allowed(request, db)
+        #Пользователь здесь УЖЕ подтверждён валидным токеном — передаём его, чтобы в
+        #режиме `auto` машина одобрилась сама (иначе синхронизация десктопа упиралась
+        #бы в 403 сразу после удачного входа, см. ensure_device_allowed).
+        ensure_device_allowed(request, db, user=user)
     #Отмечаем активность для админского «кто онлайн». Это единая точка — через
     #get_current_user проходит КАЖДЫЙ авторизованный запрос (pull/push/admin).
     #Не критично для запроса, поэтому под try: мониторинг не должен ронять API.
@@ -237,3 +271,43 @@ def require_admin(user: User = Depends(get_current_user),
     #только на неё было бы МЕНЬШЕ, чем нужно, — административные ветки внутри
     #обычных ручек через `require_admin` не проходят вовсе.
     return user
+
+
+#Роли, которым открыта МОДЕРАЦИЯ мессенджера. Список, а не сравнение по месту: он
+#спрашивается ещё и при выдаче наказаний («модератор не глушит модератора»), и две копии
+#разошлись бы молча — ровно наш класс дефекта.
+MODERATION_ROLES = ("admin", "moderator")
+
+
+def require_moderation(user: User = Depends(get_current_user)) -> User:
+    """Права МОДЕРАЦИИ мессенджера: администратор или выделенный модератор.
+
+    ━━ ПОЧЕМУ ОТДЕЛЬНАЯ ДВЕРЬ, А НЕ «ДОБАВИТЬ РОЛЬ В `require_admin`» ━━━━━━━━━━━━
+    Через `require_admin` проходит ВЕСЬ административный доступ — девяносто семь
+    точек: оценки, группы, расписание, выгрузка данных, раздел «Сервер», настройки
+    ИИ. Допиши туда `moderator`, и человек, заведённый разбирать жалобы, получил бы
+    управление журналом всего колледжа. Причём молча и сразу: ни одна ручка об этом
+    не спросит, потому что каждая уже считает, что проверка сделана до неё.
+
+    Поэтому модерация — СВОЯ дверь, и открыта она ровно в `mod_router`. Правило то
+    же, что у §16 («граница проходит по наличию кода, а не по проверке роли»), в
+    уменьшенном виде: у модератора нет административного маршрута не потому, что
+    ему отказывают, а потому, что его роль не значится ни в одной админской двери.
+
+    ⚠️ Второй фактор здесь не проверяется отдельно — он уже проверен в
+    `get_current_user` (`_require_second_factor_setup`), общий для всех ролей.
+    ⚠️ Обратная сторона названа честно: модератор видит ЧУЖУЮ ПЕРЕПИСКУ, то есть
+    ПДн. Каждое такое чтение пишется в аудит тем же `audit.log`, что и у админа, и
+    ровно поэтому доступ к переписке привязан к живому тикету, а не выдаётся
+    просто по роли (см. `mod_conversation_messages`).
+    """
+    if user.role not in MODERATION_ROLES:
+        raise HTTPException(status_code=403, detail="Требуются права модерации")
+    return user
+
+
+#ВСЕ роли, которые продукт знает. Список нужен не для проверки прав (их проверяют двери
+#выше), а против ОПЕЧАТКИ: `User.role` — обычная строка, база её не ограничивает, и
+#заведённый с ролью «moderaor» человек войдёт, не увидит ничего и не получит ни одного
+#внятного отказа. Держит `server/tests/test_roles.py`.
+KNOWN_ROLES = ("admin", "moderator", "teacher", "student", "parent")

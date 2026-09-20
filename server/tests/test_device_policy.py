@@ -68,14 +68,65 @@ def test_web_staff_open_without_approval(client):
     assert r.json()["role"] == "teacher"
 
 
-def test_desktop_student_still_barred(client):
-    """ДЕСКТОП-клиент (без X-Client) с неодобренного устройства заблокирован даже для
-    студента — жёсткий барьер §6 для десктопа не ослаблен."""
+def test_desktop_device_approves_itself_after_a_correct_password(client):
+    """РЕЖИМ ПО УМОЛЧАНИЮ (`GRADEBOOK_DEVICE_APPROVAL=auto`, 15.09.2026): десктоп с
+    неодобренной машины входит сам, и машина заносится в одобренные.
+
+    ⚠️ Раньше здесь ожидался 403, и это было верно для прежней политики. Менять
+    ожидание «чтобы позеленело» нельзя — но здесь поменялась САМА политика, по прямому
+    требованию Влада («нужно чтобы exe был подключен к бд автоматически»): вход в
+    программе упирался в код подтверждения, выдать который должен был тот же человек,
+    который его и вводит. Прежнее поведение проверяет тест строгого режима ниже.
+    """
     admin = make_admin(client)
     _add_student(client, admin)
     r = client.post("/auth/login", json={"login": "stud1", "password": "studpass1"},
                     headers=DESKTOP_DEV)
+    assert r.status_code == 200, r.text
+    #Одобрение записано — значит следующий запрос (в том числе /sync/*) пройдёт барьер.
+    from app import connect
+    from app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        assert connect.is_approved(db, DESKTOP_DEV["X-Device-Id"])
+    finally:
+        db.close()
+
+
+def test_desktop_stays_barred_in_strict_mode(client, monkeypatch):
+    """ОБРАТНЫЙ ХОД: `GRADEBOOK_DEVICE_APPROVAL=strict` возвращает прежний барьер.
+
+    Без этого теста «автоодобрение можно выключить» осталось бы обещанием в
+    комментарии: выключатель, который никто не проверял, — это выключатель, которого
+    может и не быть."""
+    from app import config
+    monkeypatch.setattr(config, "DEVICE_AUTO_APPROVE", False)
+    admin = make_admin(client)
+    _add_student(client, admin)
+    r = client.post("/auth/login", json={"login": "stud1", "password": "studpass1"},
+                    headers={"X-Device-Id": "desktop-strict-mode"})
     assert r.status_code == 403, r.text
+
+
+def test_a_wrong_password_never_approves_the_device(client):
+    """Машину одобряет ПОДТВЕРЖДЁННЫЙ человек, а не сам факт обращения.
+
+    Иначе барьер отменялся бы даже для подбирающего пароль: он не вошёл бы, но его ПК
+    остался бы в списке одобренных навсегда — и первый же угаданный пароль дал бы
+    доступ уже без всякого барьера."""
+    admin = make_admin(client)
+    _add_student(client, admin)
+    dev = "desktop-guesser"
+    r = client.post("/auth/login", json={"login": "stud1", "password": "ne-tot-parol"},
+                    headers={"X-Device-Id": dev})
+    assert r.status_code == 401, r.text
+    from app import connect
+    from app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        assert not connect.is_approved(db, dev)
+    finally:
+        db.close()
 
 
 def test_web_staff_ok_after_web_approval(client):
@@ -122,13 +173,19 @@ def test_android_admin_logs_in_and_works_without_approval(client):
     assert me.status_code == 200, me.text
 
 
-def test_android_without_client_header_is_still_barred(client):
+def test_android_without_client_header_is_still_barred(client, monkeypatch):
     """Обратная сторона той же политики: снимает барьер именно ЗАГОЛОВОК, а не телефон.
     Тот же запрос без X-Client — это уже «десктоп», и он упирается в барьер §6.
 
     Сторож нужен, чтобы `is_web_client` не расширили молча (например, начав опознавать
     клиента по User-Agent): тогда под открытый доступ попал бы и десктопный клиент, а
-    вместе с ним `/sync/*` с полным дампом базы."""
+    вместе с ним `/sync/*` с полным дампом базы.
+
+    ⚠️ Режим СТРОГИЙ и задан явно: в умолчании (`auto`) барьер для десктопа проходится
+    автоодобрением, и разницу между «веб» и «не веб» стало бы не видно — то есть сторож
+    молча перестал бы стеречь ровно то, ради чего написан."""
+    from app import config
+    monkeypatch.setattr(config, "DEVICE_AUTO_APPROVE", False)
     admin = make_admin(client)
     _add_teacher(client, admin)
     r = client.post("/auth/login", json={"login": "teacher1", "password": "teacherpass1"},

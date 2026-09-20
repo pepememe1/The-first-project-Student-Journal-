@@ -83,6 +83,27 @@ export const useVectorStore = defineStore('vector', () => {
   // «поспевать за бубнежом»); нет длительности (TTS выключен/фолбэк) — запасной темп по
   // числу символов, чтобы анимация всё равно была, просто не идеально в такт звуку.
   const _FALLBACK_MS_PER_CHAR = 45
+  /**
+   * 🔥 ПУЗЫРЬ ОБЪЯВЛЯЕМ ПЕЧАТАЮЩИМСЯ В ТОТ ЖЕ ТИК, ЧТО И ДОБАВЛЯЕМ СООБЩЕНИЕ
+   * (15.09.2026, живая жалоба: «сначала показывается полностью, потом пропадает и
+   * печатается побуквенно»).
+   *
+   * Причина была ровно в разрыве между двумя событиями: ответ клали в `messages`
+   * сразу, а печать начиналась позже — со СТАРТА ОЗВУЧКИ (`onStart`) или по
+   * запасному таймеру через 1.8 с. Всё это время `typingReveal` указывал на
+   * ПРЕДЫДУЩЕЕ сообщение с `done: true`, поэтому `displayText(i)` честно отдавал
+   * полный текст нового. Потом печать стартовала, обрезала его до нуля — и это
+   * читается как «моргнуло».
+   *
+   * Поэтому `_armTyping` ставит метку «этот пузырь пуст и ещё печатается» БЕЗ
+   * таймера, а `_startTyping` только задаёт темп. Ждать `durationMs` в самом
+   * `_armTyping` нельзя: длительность приходит вместе со звуком, а пузырь должен
+   * быть пуст с первого кадра.
+   */
+  function _armTyping(index) {
+    _stopTypingTimer()
+    typingReveal.value = { index, text: '', done: false }
+  }
   function _startTyping(index, fullText, durationMs) {
     _stopTypingTimer()
     const total = fullText.length
@@ -185,6 +206,9 @@ export const useVectorStore = defineStore('vector', () => {
       answer = data.text || locale.t('vectorPage.done', 'Готово.')
       msgIndex = messages.value.length
       messages.value.push({ role: 'vector', text: answer })
+      //Метку ставим В ТОМ ЖЕ тике, что и сообщение, иначе пузырь успеет показать текст
+      //целиком до старта печати (см. _armTyping).
+      _armTyping(msgIndex)
     } catch (e) {
       // ⚠️ Ответа нет ВООБЩЕ — значит связи нет, и это не ошибка, а рабочий режим:
       // отвечает офлайн-помощник по сохранённым данным (см. utils/vectorOffline.js).
@@ -197,6 +221,7 @@ export const useVectorStore = defineStore('vector', () => {
         answer = `${locale.t('vectorPage.offlineMode', 'Работаю без интернета, по сохранённым данным.')}\n\n${local.text}`
         msgIndex = messages.value.length
         messages.value.push({ role: 'vector', text: answer, offline: true })
+        _armTyping(msgIndex)
       } else {
         const notReady = e.response?.status === 404
         messages.value.push({

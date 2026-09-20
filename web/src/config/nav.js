@@ -23,7 +23,7 @@ import {
   Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot,
   BookOpen, Users, GraduationCap, Boxes, Library, Server,
   MonitorSmartphone, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, MessagesSquare, ShieldAlert, UsersRound, Database,
+  AlertTriangle, MessagesSquare, ShieldAlert, ShieldCheck, UsersRound, Database,
   Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen } from '@lucide/vue'
 
 export const NAV = {
@@ -79,6 +79,7 @@ export const NAV = {
     { key: 'teachers', label: 'Преподаватели', i18n: 'nav.teachers', icon: GraduationCap, to: '/admin/teachers' },
     { key: 'students', label: 'Студенты', i18n: 'nav.students', icon: Users, to: '/admin/students' },
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/admin/parents' },
+    { key: 'moderators', label: 'Модераторы', i18n: 'nav.moderators', icon: ShieldCheck, to: '/admin/moderators' },
     { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
@@ -109,7 +110,25 @@ export const NAV = {
     // ради которой заведён, — разобрать «кто изменил оценку».
     { key: 'audit', label: 'Журнал действий', i18n: 'nav.audit', icon: ScrollText, to: '/admin/audit' },
   ],
+  // МОДЕРАТОР — четыре пункта и ни одного больше.
+  //
+  // 🔒 Список короткий НЕ из скромности. Модератор заведён разбирать конфликты, и всё,
+  // что ему показано, он видит по долгу службы — включая чужую переписку. Каждый лишний
+  // пункт здесь это ещё один раздел с ПДн студентов, открытый человеку, которому он для
+  // работы не нужен. Журнала, оценок, групп и расписания у него нет вовсе — и не потому,
+  // что скрыты: серверные ручки этих разделов требуют своих ролей и отвечают 403.
+  //
+  // ⚠️ «Сообщения» оставлены намеренно: отвечать на обращение — его прямая работа, а
+  // писать он должен из обычного мессенджера, а не из окна модерации. Иначе появился бы
+  // второй композер со своим набором возможностей, и они разошлись бы.
+  moderator: [
+    { section: 'Модерация', i18n: 'nav.sectionModeration' },
+    { key: 'moderation', label: 'Модерация', i18n: 'nav.moderation', icon: ShieldAlert, to: '/moderator', badge: 'moderationOpen' },
+    { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/moderator/messages', badge: 'messagesUnread' },
+    { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/moderator/notifications', badge: 'notifyUnread' },
+    { key: 'settings', label: 'Настройки', i18n: 'nav.settings', icon: Server, to: '/moderator/settings', phoneOnly: true },
+  ],
 }
 
 export const HOME_BY_ROLE = { student: '/student', teacher: '/teacher', admin: '/admin',
-  parent: '/parent' }
+  parent: '/parent', moderator: '/moderator' }

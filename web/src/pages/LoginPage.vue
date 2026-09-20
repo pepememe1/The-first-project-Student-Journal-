@@ -217,6 +217,78 @@ async function onMfaDone(user) {
 // Регистрация студента / восстановление пароля — модалки под кнопкой «Войти».
 const showRegister = ref(false)
 const showRecover = ref(false)
+
+// ━━━ САМООБСЛУЖИВАНИЕ ВЫКЛЮЧЕНО (12.09.2026, требование Влада) ━━━━━━━━━━━━━━━━━━━━━
+//
+// 🔑 ПОЧЕМУ. Дословно: «на сайте ВСГУТУ нет кнопки регистрации и подобного, только вход
+// по выданному логину и паролю». Наш экран входа предлагал завести аккаунт самому и
+// восстановить пароль по почте — то есть обещал порядок, которого у заказчика нет.
+// Обещание, которого продукт не выполняет, хуже отсутствующей кнопки: студент нажимает,
+// подаёт заявку и ЖДЁТ, а ждать нечего — учётные данные выдаёт колледж.
+//
+// ⚠️ КОД НЕ УДАЛЁН НАМЕРЕННО (прямое условие Влада: «не удаляй»). Оба диалога и обе
+// серверные ручки живы и работоспособны: политика приёма студентов — решение заказчика,
+// и оно может смениться обратно. Снимается запрет ОДНОЙ строкой здесь.
+//
+// 🔒 ЗАМКОВ ТРИ, И ОДНОГО БЫЛО БЫ МАЛО. Спрятать кнопку — не защита: ref остаётся
+// доступным, и любая будущая строка `showRegister = true` (горячая клавиша, переход по
+// адресу, чужая правка) снова покажет окно, причём молча. Поэтому:
+//   1) кнопок нет в разметке вовсе (`v-if`) — их не видно, не нажать и не поймать Tab'ом;
+//   2) сами окна тоже под `v-if` с этим флагом — подняли ref обходным путём, а показывать
+//      нечего;
+//   3) открывают их только эти две функции, и они отказывают первой же строкой.
+// Это тот же приём, которым в проекте проведена граница у раздела «Сервер»: надёжен не
+// спрятанный элемент, а ОТСУТСТВУЮЩИЙ путь.
+const SELF_SERVICE_ENABLED = false
+
+/**
+ * Кнопка «⚙ Сервер синхронизации» — ВЫКЛЮЧЕНА (15.09.2026, требование Влада
+ * «убери, но не удаляй»).
+ *
+ * 🔑 Выключателем, а не удалением разметки: адрес сервера задаётся вручную при
+ * переезде на железо ВСГУТУ, и восстановить кнопку тогда надо одной строкой, а не
+ * новым заходом. Тот же приём и та же причина, что у `SELF_SERVICE_ENABLED`.
+ *
+ * ⚠️ `v-if`, а НЕ `class="hidden"` и не `pointer-events: none`: спрятанная кнопка
+ * остаётся в документе, её находит Tab и нажимает Enter — то есть «невидимая» она
+ * только для глаз. Требование было «невидимая И некликабельная», а это даёт ровно
+ * отсутствие элемента. Сам маршрут `/connect` НЕ ТРОНУТ: он открывается по прямому
+ * адресу, и это единственный способ задать сервер, если адрес по умолчанию не
+ * подошёл.
+ */
+const SYNC_SERVER_BUTTON_ENABLED = false
+
+/**
+ * Пояснения к входу переехали из-под формы в кнопку «i» (15.09.2026, требование
+ * Влада: «они просто занимают место»).
+ *
+ * ⚠️ Открывается и по НАВЕДЕНИЮ, и по НАЖАТИЮ. Только наведение годится для мыши и
+ * не существует на телефоне — там подсказка была бы недостижима, то есть текст,
+ * обязательный для того, кто не знает, где взять логин, пропал бы у половины людей.
+ */
+const showLoginHelp = ref(false)
+let helpHideTimer = null
+function openLoginHelp() {
+  clearTimeout(helpHideTimer)
+  showLoginHelp.value = true
+}
+function closeLoginHelp(delay = 0) {
+  clearTimeout(helpHideTimer)
+  if (!delay) { showLoginHelp.value = false; return }
+  //Небольшая задержка — курсор проходит через зазор между кнопкой и подсказкой, и
+  //без неё она гаснет ровно в тот момент, когда её собрались прочитать.
+  helpHideTimer = setTimeout(() => { showLoginHelp.value = false }, 120)
+}
+onBeforeUnmount(() => clearTimeout(helpHideTimer))
+
+function openRegister() {
+  if (!SELF_SERVICE_ENABLED) return
+  showRegister.value = true
+}
+function openRecover() {
+  if (!SELF_SERVICE_ENABLED) return
+  showRecover.value = true
+}
 </script>
 
 <template>
@@ -263,8 +335,43 @@ const showRecover = ref(false)
         <!-- Глобус выбора языка. Стоит НА ЭКРАНЕ ВХОДА, до аккаунта: человек, который не
              читает по-русски, должен переключить язык раньше, чем начнёт разбираться
              в форме. Выбор переживает вход (см. stores/locale.js). -->
-        <div class="mb-1 flex justify-end">
+        <!-- Слева «i» с пояснениями, справа выбор языка. Обе кнопки — служебные, и
+             стоят они в одном ряду НАД формой: под формой пояснения занимали место,
+             из-за которого карточка не помещалась на телефон целиком. -->
+        <div class="relative mb-1 flex items-center justify-between">
+          <button type="button"
+                  class="flex size-8 items-center justify-center rounded-full border border-border2 text-sm font-semibold text-text3 transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
+                  :aria-expanded="showLoginHelp"
+                  :aria-label="loc.t('login.helpAria', 'Как войти')"
+                  @mouseenter="openLoginHelp" @mouseleave="closeLoginHelp(120)"
+                  @focus="openLoginHelp" @blur="closeLoginHelp()"
+                  @click="showLoginHelp ? closeLoginHelp() : openLoginHelp()">i</button>
           <LanguagePicker />
+
+          <!-- Подсказка ПОВЕРХ содержимого (absolute): в общем потоке она раздвигала бы
+               карточку при каждом наведении — то самое «занимает место», от которого и
+               уходили. -->
+          <transition name="fade">
+            <div v-if="showLoginHelp"
+                 class="absolute left-0 top-9 z-20 w-64 rounded-lg border border-border2 bg-card p-3 text-left shadow-card"
+                 role="tooltip"
+                 @mouseenter="openLoginHelp" @mouseleave="closeLoginHelp(120)">
+              <p class="text-xs font-semibold text-text2">{{ loc.t('login.audience') }}</p>
+              <!-- ⚠️ «Для обучающихся:» гаснет ВМЕСТЕ с кнопками регистрации. Это подпись
+                   К НИМ, и без них она указывает в пустоту. -->
+              <p v-if="SELF_SERVICE_ENABLED" class="mt-1 text-xs text-text3">{{ loc.t('login.forStudents') }}</p>
+              <p class="mt-1.5 text-tiny leading-relaxed text-text3">
+                {{ SELF_SERVICE_ENABLED
+                  ? loc.t('login.accountHelp')
+                  : loc.t('login.accountHelpIssued', 'Логин и пароль выдаёт колледж. Нет учётных данных — обратитесь к администратору.') }}
+              </p>
+              <!-- Про вход по ключу — только тому, у кого он вообще возможен: на машине
+                   без биометрии эта строка объясняет кнопку, которой нет. -->
+              <p v-if="canBiometric" class="mt-1.5 text-tiny leading-relaxed text-text3">
+                {{ loc.t('login.passkeyHint', 'Вход по ключу (Face ID, отпечаток, Windows Hello) настраивается в настройках профиля — после обычного входа.') }}
+              </p>
+            </div>
+          </transition>
         </div>
         <div class="mb-3 flex flex-col items-center text-center sm:mb-5">
           <!-- Знак над названием журнала: цвет из темы (кольца — акцентным цветом,
@@ -342,7 +449,9 @@ const showRecover = ref(false)
             <Fingerprint class="size-4" />
             {{ isDesktop ? loc.t('login.passkey') : loc.t('login.biometry') }}
           </button>
-          <p class="mt-1.5 hidden text-center text-tiny text-text3 sm:block">Функция настраивается в настройках профиля</p>
+          <!-- ⚠️ Подпись «настраивается в настройках профиля» УБРАНА отсюда 15.09.2026 и
+               живёт в подсказке «i» над формой: это пояснение, а не часть кнопки, и
+               читают его один раз — а место под формой оно занимало всегда. -->
         </div>
 
         <!-- Вход общий для трёх ролей. Раньше первым и единственным явным ориентиром
@@ -350,16 +459,26 @@ const showRecover = ref(false)
              родитель вообще не видел, что эта форма ему подходит. Регистрация остаётся
              только студенческой, но принадлежность самой формы теперь названа до выбора
              действия — человеку не приходится угадывать свой маршрут. -->
-        <div class="mt-3 border-t border-border pt-2.5 text-center sm:mt-4 sm:pt-3">
-          <p class="text-xs font-semibold text-text2">{{ loc.t('login.audience') }}</p>
+        <!-- ⚠️ ПОЯСНЕНИЯ ОТСЮДА УБРАНЫ (15.09.2026) и живут в кнопке «i» над формой —
+             см. `showLoginHelp`. Здесь они занимали место, из-за которого карточка не
+             помещалась на телефон целиком, а прочитать их нужно ровно один раз.
+             Блок остаётся ради кнопок самообслуживания: вернут регистрацию — вернётся
+             и он, вместе с рамкой сверху. -->
+        <div v-if="SELF_SERVICE_ENABLED" class="mt-3 border-t border-border pt-2.5 text-center sm:mt-4 sm:pt-3">
           <p class="text-xs text-text3">{{ loc.t('login.forStudents') }}</p>
-          <div class="mt-1.5 flex flex-wrap items-center justify-center gap-2">
+          <!-- ⚠️ Условие повторено НА САМОМ РЯДУ кнопок, хотя внешний блок уже под ним:
+               так замок переживает перекройку разметки вокруг. Его же проверяет сторож
+               `web/tests/loginSelfServiceOff.test.mjs`. -->
+          <div v-if="SELF_SERVICE_ENABLED" class="mt-1.5 flex flex-wrap items-center justify-center gap-2">
             <button type="button" class="rounded-sm border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent-glow"
-                    @click="showRegister = true">{{ loc.t('login.register') }}</button>
+                    @click="openRegister">{{ loc.t('login.register') }}</button>
             <button type="button" class="rounded-sm border border-border2 px-3 py-1.5 text-xs font-medium text-text3 transition-colors hover:border-accent hover:text-accent"
-                    @click="showRecover = true">{{ loc.t('login.recover') }}</button>
+                    @click="openRecover">{{ loc.t('login.recover') }}</button>
           </div>
-          <p class="mt-2 text-tiny leading-relaxed text-text3">{{ loc.t('login.accountHelp') }}</p>
+          <!-- ⚠️ Подсказка «где взять логин» ОТСЮДА УБРАНА (15.09.2026) — она в кнопке
+               «i» над формой, вместе с остальными пояснениями, и там же меняется по
+               `SELF_SERVICE_ENABLED`. Вторая копия здесь означала бы, что при возврате
+               регистрации один и тот же текст стоит на экране дважды. -->
         </div>
 
         <!-- ⚠️ Кнопка одностраничника для приёмной комиссии здесь БЫЛА и убрана
@@ -369,8 +488,9 @@ const showRecover = ref(false)
              входить. Ссылка одна и та же: /offer.html, обычная навигация, не роутер.
              Не возвращать сюда, не сверившись с правой панелью. -->
 
-        <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную. -->
-        <div class="mt-3 text-center">
+        <!-- Адрес сервера (как «⚙ Сервер синхронизации» в десктопе): сменить/задать вручную.
+             ⚠️ ВЫКЛЮЧЕНА, см. `SYNC_SERVER_BUTTON_ENABLED` — код оставлен намеренно. -->
+        <div v-if="SYNC_SERVER_BUTTON_ENABLED" class="mt-3 text-center">
           <button type="button" class="text-tiny text-text3 transition-colors hover:text-accent" @click="router.push('/connect')">
             ⚙ Сервер синхронизации
           </button>
@@ -477,8 +597,11 @@ const showRecover = ref(false)
       </div>
     </div>
 
-    <RegisterDialog v-if="showRegister" @close="showRegister = false" />
-    <RecoverDialog v-if="showRecover" @close="showRecover = false" />
+    <!-- 🔒 Второй замок: даже если `showRegister`/`showRecover` кто-то поднимет в обход
+         (горячая клавиша, чужая правка, отладка), показывать будет нечего. Компоненты
+         НЕ удалены — запрет снимается одной строкой `SELF_SERVICE_ENABLED`. -->
+    <RegisterDialog v-if="SELF_SERVICE_ENABLED && showRegister" @close="showRegister = false" />
+    <RecoverDialog v-if="SELF_SERVICE_ENABLED && showRecover" @close="showRecover = false" />
 
     <!-- Футер — заполняет низ, даёт «завершённость» экрану. -->
     <p class="absolute bottom-3 left-1/2 z-10 hidden w-full max-w-[94vw] -translate-x-1/2 px-4 text-center text-tiny leading-relaxed text-text3 sm:block">
@@ -491,4 +614,12 @@ const showRecover = ref(false)
 <style scoped>
 .pop-enter-active, .pop-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
 .pop-enter-from, .pop-leave-to { opacity: 0; transform: translate(-50%, 6px); }
+/* Подсказка «i». Классы перехода ОБЪЯВЛЕНЫ ЗДЕСЬ, а не взяты «откуда-то»: стили
+   компонентов scoped, и `name="fade"` без своих правил означал бы анимацию, которой
+   нет, — переход отработал бы мгновенно и молча. */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.14s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active, .fade-leave-active { transition: none; }
+}
 </style>

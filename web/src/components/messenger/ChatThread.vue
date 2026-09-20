@@ -1163,6 +1163,10 @@ async function submit() {
   m.clearDraft(activeId.value)
   const ok = await m.send(t)
   if (!ok) { draft.value = t; m.saveDraft(activeId.value, t) }   //отклонили — вернуть текст и черновик
+  //В чате модерации отправка МЕНЯЕТ состояние обращения: первое сообщение заводит тикет,
+  //а просьба позвать человека сразу проставляет тему. Не перечитав, мы показывали бы
+  //кнопки выбора темы тому, у кого она уже выбрана его же словами.
+  else if (isModeration.value) await loadSupportState()
 }
 //Ответ Вектора относится к ТОЙ беседе, где его спросили: при переходе в другую он
 //обязан исчезнуть, иначе выглядит ответом на здешний разговор.
@@ -1388,6 +1392,83 @@ const VECTOR_SENDER = 'system'
 //крупно), с прозрачным фоном — иначе белый угол светил бы бельмом на тёмной теме.
 //Набор эмоций не трогаем: он живёт своей жизнью и используется дашбордом.
 const VECTOR_AVATAR = '/mascot/vector-avatar.webp'
+
+// ── Своё ограничение (мьют модерацией) ───────────────────────────────────────────────
+//
+// Состояние живёт в СТОРЕ: его читает и эта плашка, и разбор отказа при отправке (когда
+// ограничение выдали уже после открытия чата). Две копии разошлись бы молча.
+const { restriction } = storeToRefs(m)
+onMounted(() => m.loadRestriction())
+
+// Остаток словами. Пересчитывается на каждую перерисовку — секундного таймера здесь нет
+// намеренно: точность до секунды никому не нужна, а таймер держал бы компонент живым.
+const restrictionLeft = computed(() => {
+  const until = restriction.value?.muted_until
+  if (!until) return ''
+  const ms = new Date(until).getTime() - Date.now()
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  // ⚠️ `locale.t(key, x)` принимает ЛИБО подстановки, ЛИБО запасной текст — но не то и
+  // другое сразу (см. stores/locale.js::t). Третий аргумент молча игнорируется, поэтому
+  // число подставляем сами, а через словарь берём только единицу измерения.
+  const left = locale.t('restriction.left', 'осталось')
+  const mins = Math.ceil(ms / 60000)
+  if (mins < 60) return `${left} ${mins} ${locale.t('restriction.min', 'мин')}`
+  const hours = Math.ceil(mins / 60)
+  if (hours < 24) return `${left} ${hours} ${locale.t('restriction.hour', 'ч')}`
+  return `${left} ${Math.ceil(hours / 24)} ${locale.t('restriction.day', 'д')}`
+})
+// ── Обращение в модерацию: выбор темы ────────────────────────────────────────────────
+//
+// 🔴 КНОПКИ, А НЕ «НАПИШИТЕ НОМЕР ПУНКТА». Автоответчик перечисляет темы текстом, и без
+// кнопок единственный способ ответить ему — набрать тему словами, то есть ровно тот
+// лишний круг переписки, ради снятия которого он и заведён.
+//
+// ⚠️ Состояние («выбрана ли тема») приходит С СЕРВЕРА, а не помнится вкладкой: обращение
+// у человека ОДНО, а заходит он и с телефона, и с компьютера — вкладочная память показала
+// бы кнопки заново тому, кто всё уже выбрал.
+const support = ref({ categories: [], current: null, loading: false, busy: '' })
+
+async function loadSupportState() {
+  if (!isModeration.value) { support.value.current = null; return }
+  support.value.loading = true
+  try {
+    const d = (await messengerApi.supportCategories()).data || {}
+    support.value.categories = d.categories || []
+    support.value.current = d.current || null
+  } catch {
+    // Молчим намеренно: не загрузились кнопки — человек всё равно может написать текстом,
+    // и плашка об ошибке рядом с рабочим полем ввода только пугала бы.
+    support.value.categories = []
+    support.value.current = null
+  } finally { support.value.loading = false }
+}
+watch([activeId, isModeration], loadSupportState, { immediate: true })
+
+// Кнопки показываем, пока тема НЕ выбрана. Выбравшему они не нужны: тема у обращения одна,
+// а переключать её туда-сюда значит дёргать очередь, которую уже кто-то разбирает.
+const showSupportPicker = computed(() =>
+  isModeration.value && support.value.categories.length > 0 &&
+  !(support.value.current && support.value.current.category))
+
+async function pickSupportCategory(code) {
+  if (support.value.busy) return
+  support.value.busy = code
+  try {
+    const d = (await messengerApi.pickSupportCategory(code)).data || {}
+    support.value.current = {
+      id: d.ticket_id, category: d.category || code,
+      category_label: d.category_label || code, urgent: !!d.urgent, status: 'open',
+    }
+    // Подтверждение пишет СЕРВЕР системной репликой в ту же беседу — отдельного «спасибо»
+    // от клиента не рисуем: два подтверждения на одно действие читаются как сбой. Дельту
+    // тянем сразу, а не ждём тика опроса: при живом сокете он редкий (30 с), и человек
+    // успел бы решить, что нажатие не сработало.
+    await m.pollOnce()
+  } catch (e) {
+    m.setNotice(e?.response?.data?.detail || locale.t('common.error', 'Не получилось'))
+  } finally { support.value.busy = '' }
+}
+
 function isVector(msg) { return msg.sender_id === VECTOR_SENDER }
 //Отвечаем на реплику Вектора → это продолжение разговора с ним, а не обычная цитата.
 const replyingToVector = computed(() => isSaved.value && !!replyTo.value && isVector(replyTo.value))
@@ -2061,7 +2142,63 @@ function openActivities() {
       </div>
       <MascotCooldown v-if="mascotCooldown.active" :cooldown="mascotCooldown" />
 
-      <!-- Плашка анти-флуда/мьюта: «не отправляйте так часто» / «вы ограничены модерацией» -->
+      <!-- 🔥 ОГРАНИЧЕНИЕ МОДЕРАЦИИ: СРОК И ПРИЧИНА, А НЕ «вы ограничены».
+           Раньше человек узнавал о мьюте единственным способом — написав сообщение и
+           получив глухой отказ. Он не знал ни за что, ни насколько, и единственным
+           осмысленным следующим действием было обращение в поддержку, которое разбирает
+           та же модерация: наказание само себе создавало работу. Плашка висит ДО первой
+           попытки, называет срок и прямо говорит, что обжаловать можно (чат с модерацией
+           под мьютом остаётся открытым — см. _guard_can_write).
+           ⚠️ В самом чате с модерацией она не показывается: человек уже там, куда его
+           отправляют, и повторять «обжалуйте в этом чате» внутри этого чата — шум. -->
+      <div v-if="restriction.muted && !isModeration"
+           class="shrink-0 border-t border-border bg-red/10 px-3 py-2 text-xs text-red">
+        <div class="font-semibold">
+          {{ locale.t('restriction.title', 'Переписка ограничена модерацией') }}
+          <span v-if="restrictionLeft"> · {{ restrictionLeft }}</span>
+        </div>
+        <div v-if="restriction.reason" class="mt-0.5 opacity-90">
+          {{ locale.t('restriction.reason', 'Причина') }}: {{ restriction.reason }}
+        </div>
+        <button type="button" @click="m.openModeration()"
+                class="mt-1 underline underline-offset-2 hover:no-underline">
+          {{ locale.t('restriction.appeal', 'Обжаловать у модерации') }}
+        </button>
+      </div>
+
+      <!-- ВЫБОР ТЕМЫ ОБРАЩЕНИЯ. Автоответчик перечисляет темы текстом, и без кнопок
+           единственный способ ответить ему — набрать тему словами, то есть ровно тот
+           лишний круг переписки, ради снятия которого он и заведён.
+           ⚠️ Поле ввода остаётся рабочим: список тем это подсказка, а не анкета, из
+           которой нельзя выйти. Робот, из которого нет выхода к человеку, превращает
+           поддержку в тупик — поэтому «Другое» и «Позвать человека» стоят тут же. -->
+      <div v-if="showSupportPicker" class="shrink-0 border-t border-border bg-card2/60 px-3 py-2">
+        <div class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-text3">
+          {{ locale.t('support.pickTheme', 'Тема обращения') }}
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button v-for="c in support.categories" :key="c.code" type="button"
+                  :disabled="!!support.busy" @click="pickSupportCategory(c.code)"
+                  class="rounded-full border px-3 py-1 text-xs font-semibold transition-colors disabled:opacity-50"
+                  :class="c.code === 'human'
+                    ? 'border-accent/50 bg-accent/10 text-accent hover:bg-accent/20'
+                    : 'border-border2 text-text2 hover:bg-bg2'">
+            {{ c.label }}
+          </button>
+        </div>
+      </div>
+      <!-- Тема выбрана — показываем её и срочность: человек должен видеть, что робот его
+           понял именно так, иначе он повторяет обращение другими словами. -->
+      <div v-else-if="isModeration && support.current && support.current.category"
+           class="shrink-0 border-t border-border bg-card2/60 px-3 py-1.5 text-xs text-text3">
+        {{ locale.t('support.themeIs', 'Тема обращения') }}:
+        <span class="font-semibold text-text2">{{ support.current.category_label }}</span>
+        <span v-if="support.current.urgent" class="ml-1.5 rounded-full bg-red/15 px-1.5 py-0.5 font-semibold text-red">
+          {{ locale.t('support.urgent', 'срочно') }}
+        </span>
+      </div>
+
+      <!-- Плашка анти-флуда: «не отправляйте так часто» -->
       <div v-if="notice" class="shrink-0 border-t border-border bg-red/10 px-3 py-2 text-center text-xs font-semibold text-red">
         {{ notice }}
       </div>

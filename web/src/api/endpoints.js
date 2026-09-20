@@ -306,6 +306,18 @@ export const adminApi = {
   createTeacher: (payload) => api.post('/web/admin/teachers', payload),
   updateTeacher: (login, payload) => api.put(`/web/admin/teachers/${encodeURIComponent(login)}`, payload),
   deleteTeacher: (login) => api.delete(`/web/admin/teachers/${encodeURIComponent(login)}`),
+
+  // МОДЕРАТОРЫ. Дверь админская (`require_admin`): модератор не заводит модераторов и не
+  // перевыдаёт пароли — иначе роль, созданная разбирать жалобы, сама выписывает себе
+  // подкрепление. Сервер это и проверяет, клиент лишь не показывает пункт.
+  // ⚠️ Пароль передаём ТОЛЬКО когда его меняют: пустое поле значит «не менять», а не
+  // «стереть» (страница пароль не показывает и показать не может).
+  moderators: () => api.get('/web/admin/moderators'),
+  createModerator: (payload) => api.post('/web/admin/moderators', payload),
+  updateModerator: (login, payload) =>
+    api.put(`/web/admin/moderators/${encodeURIComponent(login)}`, payload),
+  deleteModerator: (login) =>
+    api.delete(`/web/admin/moderators/${encodeURIComponent(login)}`),
   // Перевод на курс (rollover): продвинуть текущий учебный период. Прошлые — в архив.
   rolloverTerm: (payload = {}) => api.post('/web/admin/term/rollover', payload),
   // Дата «ДД.ММ», после которой студент видит только итоговые оценки (пусто — выключено).
@@ -397,6 +409,12 @@ export const adminApi = {
 export const publicScheduleApi = {
   group: (group, category = '') =>
     rawApi.get('/public/schedule', { params: { group, category } }),
+  //Категории и список групп — теми же путями и в той же форме, что в кабинете
+  //(`scheduleApi.categories/groups`), только без токена. Страница разбирает оба ответа
+  //ОДНИМ кодом; второй формат разошёлся бы с первым на первой же правке реестра.
+  categories: () => rawApi.get('/public/schedule/categories'),
+  groups: (category = '') =>
+    rawApi.get('/public/schedule/groups', { params: { category } }),
   teacher: (name, category = '') =>
     rawApi.get('/public/schedule/teacher', { params: { name, category } }),
   week: () => rawApi.get('/public/week'),
@@ -564,6 +582,27 @@ export const messengerApi = {
       { message_id: messageId, reason_code: reasonCode, description }),
   // Чат с модерацией (кнопка ⚙).
   moderation: () => api.get('/web/messenger/moderation'),
+  // Темы обращения для автоответчика + СОСТОЯНИЕ моего обращения (`current`). Состояние
+  // приходит с сервера, а не хранится во вкладке: обращение у человека одно, а заходит
+  // он и с телефона, и с компьютера.
+  supportCategories: () => api.get('/web/messenger/moderation/categories'),
+  pickSupportCategory: (code) => api.post('/web/messenger/moderation/category', { code }),
+  // Жалоба на ПРОФИЛЬ (не на сообщение) — отдельная очередь у модерации. Снимок полей
+  // делает сервер: присланный клиентом снимок это текст, который пишет жалующийся.
+  reportUser: (userId, reasonCode, description = '', field = 'profile') =>
+    api.post('/web/messenger/user-reports',
+      { user_id: userId, reason_code: reasonCode, description, field }),
+  // Блокировка человек↔человек. Односторонняя и МОЛЧАЛИВАЯ: заблокированному не сообщают
+  // (иначе это способ объявить «ты мне неприятен», а не защита) — см. safety.py.
+  blocks: () => api.get('/web/messenger/blocks'),
+  blockUser: (uid, blocked = true) =>
+    api.post(`/web/messenger/users/${encodeURIComponent(uid)}/block`, { blocked }),
+  // Моё ограничение: до каких пор и за что. Без него человек узнавал о мьюте только по
+  // отказу при отправке — то есть написав сообщение и потеряв его.
+  myRestriction: () => api.get('/web/messenger/my-restriction'),
+  // Пометить беседу непрочитанной (личное состояние, на собеседника не влияет).
+  markUnread: (convId) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/unread`),
   // Группы и каналы (Фазы 5–6).
   // classGroups (§12, режим куратора) — названия учебных групп, чьи студенты добавятся
   // автоматически; сервер сам ограничит их курируемыми группами звонящего.
@@ -786,11 +825,41 @@ export const messengerModApi = {
             { params: reportId ? { report_id: reportId } : {} }),
   reply: (id, body) =>
     api.post(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/reply`, { body }),
-  // Глобальный мьют/размьют пользователя модерацией (не может писать никому).
-  muteUser: (uid, muted = true) =>
-    api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/mute`, { muted }),
+  // Глобальный мьют пользователя модерацией — ТОЛЬКО СО СРОКОМ (дни/часы/минуты
+  // складываются). Бессрочный мьют сервер не принимает: наказание «пока не снимут»
+  // снимать некому — см. mod_mute_user.
+  // reportId — когда мьют выдаётся ИЗ жалобы: сервер проверит, что тикет ещё живой.
+  muteUser: (uid, { hours = 0, minutes = 0, days = 0, reason = '', reportId = 0 } = {}) =>
+    api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/mute`,
+      { muted: true, hours, minutes, days, reason, report_id: reportId }),
+  unmuteUser: (uid) =>
+    api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/mute`, { muted: false }),
+  // История наказаний и жалоб: первый это раз или пятый. Читается из журнала аудита —
+  // строка мьюта живёт только до истечения срока и помнить прошлое не может.
+  userHistory: (uid) =>
+    api.get(`/web/admin/messenger/users/${encodeURIComponent(uid)}/history`),
+  // Очередь жалоб на ПРОФИЛИ — отдельная от жалоб на сообщения (разные действия).
+  userReports: (status = 'open') =>
+    api.get('/web/admin/messenger/user-reports', { params: { status } }),
+  resolveUserReport: (id, status, note = '') =>
+    api.post(`/web/admin/messenger/user-reports/${id}/resolve`, { status, resolution_note: note }),
+  // Люди, НА КОТОРЫХ ЕСТЬ ЖАЛОБА (не каталог колледжа — см. mod_users).
+  users: (q = '') => api.get('/web/admin/messenger/users', { params: { q } }),
+  // Почистить публичные поля профиля — сервер разрешит только при открытой жалобе.
+  clearProfile: (uid, fields) =>
+    api.post(`/web/admin/messenger/users/${encodeURIComponent(uid)}/profile`, { clear: fields }),
   // Удалить любое сообщение у всех (модерация; пишется в аудит).
   deleteMessage: (mid) => api.delete(`/web/admin/messenger/messages/${mid}`),
+  // ── Очередь обращений (тикеты) ──────────────────────────────────────────────────
+  // ⚠️ Порядок задаёт СЕРВЕР (срочные наверху, дальше кто дольше ждёт) и клиент его НЕ
+  // пересортировывает: очередь читают разные экраны, и «срочное наверху» обязано
+  // означать на всех одно и то же.
+  support: (status = 'open') =>
+    api.get('/web/admin/messenger/support', { params: { status } }),
+  // Взять обращение: модератор подключается к чату и представляется своим НОМЕРОМ.
+  claimSupport: (id) => api.post(`/web/admin/messenger/support/${id}/claim`),
+  resolveSupport: (id, note = '') =>
+    api.post(`/web/admin/messenger/support/${id}/resolve`, { note }),
 }
 
 // Мероприятия/события (олимпиады, конкурсы и т.п.) — заводит преподаватель/админ,
