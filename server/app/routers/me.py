@@ -495,6 +495,11 @@ def _fire_due_reminders(db: Session, user: User) -> int:
 _REPORT_EXPIRY_HOURS = 10
 
 
+#Через сколько повторить попытку, если сводка вышла пустой: расписание могло быть ещё
+#не прогрето в кэше, а держать «сегодня пусто» сутки значит потерять день у всей группы.
+_DIGEST_RETRY_S = 15 * 60
+
+
 def _notify_today_lessons(db: Session, user: User) -> int:
     """Сводка «пары на сегодня» — ОДИН раз в сутки на человека (просьба тестеров).
 
@@ -521,16 +526,25 @@ def _notify_today_lessons(db: Session, user: User) -> int:
         #правки) — вторая сборка разошлась бы с первой, и сводка показывала бы снятую
         #пару. См. `routers/web/schedule.today_digest`.
         from .web.schedule import today_digest
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        #Тот же календарь, что у самой сводки (`today_digest`) и у чётности недели:
+        #по UTC «сутки» переключались бы в 03:00 МСК, то есть человек, открывший
+        #приложение в полночь, получал бы сводку ВЧЕРАШНЕГО дня и терял сегодняшнюю.
+        day = datetime.now().strftime("%Y-%m-%d")
         key = f"digest:lessons:{day}:{user.login or ''}"
         if shared_state.get(key):
             return 0
         count, first_at = today_digest(db, user)
-        #Метку ставим В ЛЮБОМ случае, даже когда пар нет: иначе каждый следующий запрос
-        #за день снова считал бы расписание — а это поход в кэш портала.
-        shared_state.set(key, 1, ttl=24 * 3600)
         if count <= 0:
+            #⚠️ МЕТКА КОРОТКАЯ, А НЕ СУТОЧНАЯ, и это не мелочь. Ноль значит две РАЗНЫЕ
+            #вещи: «сегодня пар нет» (воскресенье, каникулы) и «расписания ещё нет в
+            #кэше». Суточная метка потеряла бы сводку у всей группы из-за одного
+            #неудачного момента, а отсутствие метки заставляло бы КАЖДЫЙ фоновый опрос
+            #приложения заново делать два запроса к базе — весь выходной, у каждого
+            #студента (замечание Полковника: комментарий обещал «одно чтение кэша», а
+            #это неправда). Пятнадцать минут закрывают оба случая.
+            shared_state.set(key, 1, ttl=_DIGEST_RETRY_S)
             return 0
+        shared_state.set(key, 1, ttl=24 * 3600)
         from .. import rustore_push
         rustore_push.notify_today_lessons(db, user.login or "", count=count,
                                           first_at=first_at,

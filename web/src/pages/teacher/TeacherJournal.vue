@@ -248,18 +248,30 @@ function rawValue(v) { return (v || '').split(' ')[0] }   // «5 (Зачтено
 // пункт, начинающийся с неё. Поэтому у распознанных нажатий отменяем стандартное
 // поведение, а всё остальное (Tab, стрелки, Home/End) отдаём браузеру нетронутым.
 const keyBuffer = ref('')          //набранное в многозначной шкале («8» → ждём «5»)
-const keyBufferCell = ref('')      //чья это ячейка: уход в соседнюю обнуляет набор
-let keyBufferTimer = null
+//🔥 ВЛАДЕЛЕЦ НАБОРА — ССЫЛКА НА СТУДЕНТА, А НЕ СТРОКА С ЕГО ФАМИЛИЕЙ (починено
+//21.09.2026). Здесь стоял ключ `${s.student_id || s.surname}|${col.key}`, и у ДВУХ
+//ПОЛНЫХ ТЁЗОК без `student_id` (записи до миграции, ревью J08) он совпадал: переход
+//между их строками в одном занятии набор не сбрасывал, и цифра, начатая у первого,
+//доклеивалась к цифре второго — «85» уезжало НЕ ТОМУ человеку. Ссылка на объект
+//различает их всегда, а занятие сверяем по паре (key, ri): пересоздание колонок при
+//перерисовке не должно считаться сменой ячейки.
+let keyBufferOwner = null          //{ s, col, key, ri } — кто начал набор
+let keyBufferTimer = null          //пауза, после которой набранное применяется само
 
-function flushKeyBuffer(s, col) {
+function sameCell(owner, s, col) {
+  return !!owner && owner.s === s && owner.key === col.key && owner.ri === col.ri
+}
+
+function flushKeyBuffer() {
   if (keyBufferTimer) { clearTimeout(keyBufferTimer); keyBufferTimer = null }
   const pending = keyBuffer.value
+  const owner = keyBufferOwner
   keyBuffer.value = ''
-  keyBufferCell.value = ''
-  if (!pending) return
+  keyBufferOwner = null
+  if (!pending || !owner) return
   //Применяем накопленное, только если оно допустимо ЗДЕСЬ: за время паузы человек мог
   //уйти в ячейку другого занятия, где своя шкала.
-  if (cellOptions(col.l).map(String).includes(pending)) onCell(s, col, pending)
+  if (cellOptions(owner.col.l).map(String).includes(pending)) onCell(owner.s, owner.col, pending)
 }
 
 // ⚠️ ТОЛЬКО КОМПЬЮТЕР (уточнение тестеров, 20.09.2026). На телефоне ввода с клавиатуры
@@ -273,11 +285,12 @@ const keyboardInput = isHandheld() ? false : true
 function onCellKey(s, col, e) {
   if (!keyboardInput) return                           //телефон — клавиатурного ввода нет
   if (e.ctrlKey || e.altKey || e.metaKey) return       //сочетания — не наш ввод
-  const cellId = `${s.student_id || s.surname}|${col.key}`
-  if (keyBufferCell.value && keyBufferCell.value !== cellId) {
-    keyBuffer.value = ''                               //перешли в другую ячейку — набор не наследуется
-    keyBufferCell.value = ''
-  }
+  //🔥 ПЕРЕХОД В ДРУГУЮ ЯЧЕЙКУ ПРИМЕНЯЕТ НАБРАННОЕ, А НЕ ВЫБРАСЫВАЕТ ЕГО (починено
+  //21.09.2026). Раньше буфер здесь просто обнулялся, а таймер оставался жить — то есть
+  //набранная «8» пропадала МОЛЧА, стоило нажать клавишу в соседней строке. Для
+  //преподавателя, который идёт по списку группы сверху вниз, это рабочий темп: оценка
+  //просто не появлялась, и понять почему было нечем.
+  if (keyBufferOwner && !sameCell(keyBufferOwner, s, col)) flushKeyBuffer()
   const decision = resolveKey(e.key, {
     allowed: cellOptions(col.l).map(String),
     buffer: keyBuffer.value,
@@ -288,12 +301,12 @@ function onCellKey(s, col, e) {
 
   if (decision.kind === 'buffer') {
     keyBuffer.value = decision.buffer
-    keyBufferCell.value = decision.buffer ? cellId : ''
-    if (decision.buffer) keyBufferTimer = setTimeout(() => flushKeyBuffer(s, col), BUFFER_TIMEOUT_MS)
+    keyBufferOwner = decision.buffer ? { s, col, key: col.key, ri: col.ri } : null
+    if (decision.buffer) keyBufferTimer = setTimeout(flushKeyBuffer, BUFFER_TIMEOUT_MS)
     return
   }
   keyBuffer.value = ''
-  keyBufferCell.value = ''
+  keyBufferOwner = null
   //«clear» — это пустая строка, то есть СНЯТИЕ оценки: тот же путь, что выбор «·» в
   //списке, включая офлайн-очередь и откат при отказе сервера.
   onCell(s, col, decision.kind === 'clear' ? '' : decision.value)

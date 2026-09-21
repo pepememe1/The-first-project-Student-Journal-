@@ -423,7 +423,8 @@ def invalidate_all() -> None:
         _full.clear()
 
 
-def get_group(name: str, category: str = "", force: bool = False) -> dict | None:
+def get_group(name: str, category: str = "", force: bool = False,
+              cached_only: bool = False) -> dict | None:
     """Снимок расписания одной группы категории (dict как GroupSchedule.to_dict) или None.
 
     force=True — игнорировать кэш и сходить на портал заново (кнопка «Взять с ВСГУТУ»
@@ -438,6 +439,13 @@ def get_group(name: str, category: str = "", force: bool = False) -> dict | None
             c = _groups.get(category, {}).get(name)
             if c and time.time() - c["ts"] < _TTL:
                 return c["data"]
+    #⚠️ `cached_only` — для ГОРЯЧИХ путей, которые не имеют права ждать чужой сайт.
+    #Ниже идёт `fetch_text` с таймаутом 20 с, и на пути, который опрашивает приложение,
+    #это означает занятый поток на каждого первого студента каждой группы после того,
+    #как кэш протух (TTL 3 ч) — то есть массово утром. Тот же довод, по которому курс
+    #студента на главной читается через `groups_by_course_cached`, а не напрямую.
+    if cached_only:
+        return None
     try:
         if force:
             _load_index(category, force=True)   #индекс групп мог устареть — обновляем и его
