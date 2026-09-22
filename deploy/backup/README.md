@@ -23,6 +23,12 @@
 
 ## Установка на VPS
 
+⚠️ **`deploy/install.sh` этот таймер НЕ ставит** (проверено 22.09.2026: ни `gb_backup`, ни
+`gb-backup` в установщике нет). Новая машина без этого шага работает без резервных
+копий молча. Пути ниже — для ТЕКУЩЕГО VPS (`/root/gb-deploy`); на машине от
+`install.sh` код в `/opt/gradebook`, база в `/var/lib/gradebook` — поправьте
+`ExecStart` в юните и путь к базе в скрипте.
+
 ```bash
 install -m 700 deploy/backup/gb_backup.sh /root/gb-deploy/tools/gb_backup.sh
 install -m 644 deploy/backup/gb-backup.service /etc/systemd/system/gb-backup.service

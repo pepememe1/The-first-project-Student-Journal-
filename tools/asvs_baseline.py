@@ -69,7 +69,7 @@ def _read_json(path: str) -> Any:
     try:
         return json.loads(raw.decode("utf-8"))
     except Exception as exc:                                   # pragma: no cover - редкий путь
-        raise BaselineError("не разбирается %s: %s" % (path, exc))
+        raise BaselineError("не разбирается %s: %s" % (path, exc)) from exc
 
 
 def standard_sha256(path: str = STANDARD_PATH) -> str:

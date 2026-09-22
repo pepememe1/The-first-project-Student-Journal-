@@ -2,7 +2,7 @@
 """
 freeze_requirements.py — зафиксировать ТОЧНЫЕ версии зависимостей для поставки.
 
-━━ ЗАЧЕМ (п. 2.5 docs/PLAN-HARDENING.txt) ━━
+━━ ЗАЧЕМ (п. 2.5 docs/plans/PLAN-HARDENING.txt) ━━
 В `requirements.txt` везде `>=`. Для разработки это правильно — иначе мы застрянем на
 версиях позапрошлого года. Для ПОСТАВКИ это дыра: покупатель ставит по тому же файлу
 через полгода и получает ДРУГУЮ комбинацию версий, которую никто никогда не проверял. А
@@ -79,7 +79,7 @@ def _declared() -> set:
                         continue
                 except Exception:
                     pass
-            name = re.split(r"[><=!~;\[\s]", spec, 1)[0].strip().lower()
+            name = re.split(r"[><=!~;\[\s]", spec, maxsplit=1)[0].strip().lower()
             if name:
                 out.add(name)
     return out

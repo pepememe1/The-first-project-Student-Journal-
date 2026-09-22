@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ============================================================
 # server/requirements.txt — Бэкенд GradeBookAI (Фаза 1)
 # Python 3.10+

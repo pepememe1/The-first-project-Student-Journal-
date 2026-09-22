@@ -1187,7 +1187,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     catch { return [] }
   }
 
-  // ── Организация списка чатов: закреп/архив/избранное (docs/MESSENGER-ADDON-PLAN-GPT*.md) ─
+  // ── Организация списка чатов: закреп/архив/избранное (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md и docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md) ─
   async function togglePinChat(convId, on) {
     try {
       if (on) await messengerApi.pinChat(convId); else await messengerApi.unpinChat(convId)
@@ -1215,7 +1215,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch { return false }
   }
 
-  // ── Черновики (клиент-только, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики») ────────────
+  // ── Черновики (клиент-только, docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md «Черновики») ────────────
   // Мессенджер и так не синкует состояние между устройствами (см. §5.4 CLAUDE.md) —
   // серверное хранилище черновика было бы лишней сущностью ради того же эффекта.
   // ⚠️ Сама механика хранения переехала в utils/drafts.js: карта ключуется ЛОГИНОМ и
@@ -1242,7 +1242,7 @@ export const useMessengerStore = defineStore('messenger', () => {
   }
 
   // ── Треды: просмотр ответов на сообщение (переиспользует reply_to_id, без нового
-  // «тредового» состояния на сервере — см. docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ────
+  // «тредового» состояния на сервере — см. docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ────
   const activeThread = ref(null)   // { parentId, messages: [] } | null
   async function openThread(messageId) {
     if (!activeId.value) return

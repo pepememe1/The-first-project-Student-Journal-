@@ -65,7 +65,7 @@ def _declared(path: str) -> set:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        name = re.split(r"[><=!~;\[\s]", line, 1)[0].strip().lower()
+        name = re.split(r"[><=!~;\[\s]", line, maxsplit=1)[0].strip().lower()
         if name:
             out.add(name)
     return out

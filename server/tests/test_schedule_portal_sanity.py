@@ -48,7 +48,7 @@ def _snapshot(monkeypatch, groups: dict):
     index_html = f"<table>{rows}</table>"
 
     pages = {}
-    for i, (name, subjects) in enumerate(groups.items(), start=1):
+    for i, (_name, subjects) in enumerate(groups.items(), start=1):
         cells = "".join(
             f"<tr><td>{day}</td><td>лек.{subjects[k % len(subjects)]} ИВАНОВ И.И. а.100</td>"
             f"<td>_</td></tr>"

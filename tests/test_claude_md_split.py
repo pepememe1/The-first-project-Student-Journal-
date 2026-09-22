@@ -60,7 +60,16 @@ def _split_files() -> list:
 
 
 def _referenced_in_claude() -> set:
-    """Имена файлов docs/CLAUDE-*.md, на которые CLAUDE.md ссылается."""
+    """Имена файлов docs/CLAUDE-*.md, на которые CLAUDE.md ссылается.
+
+    🔥 Зовётся и из `parametrize`, то есть при СБОРКЕ тестов, — раньше, чем `skipif`
+    успевает что-либо пропустить. Пока здесь стоял голый `_claude_text()` с `assert`,
+    отсутствие CLAUDE.md роняло не этот файл, а ВЕСЬ клиентский прогон: pytest
+    прерывается на ошибке сборки («Interrupted: 1 error during collection»), и в CI не
+    выполнялся ни один клиентский тест (нашлось 21.09.2026 при разборе красного CI).
+    Нет файла — нет и указателей; тела тестов пропустит `pytestmark`."""
+    if not CLAUDE_MD.exists():
+        return set()
     return set(re.findall(r"docs/(CLAUDE-[\w.-]+\.md)", _claude_text()))
 
 

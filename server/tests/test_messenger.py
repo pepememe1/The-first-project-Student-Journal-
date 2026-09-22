@@ -1352,7 +1352,7 @@ def test_d12_schedule_channel_addressable_for_group_with_slash(client):
     assert resp.json()["messages"], "канал пуст: публикация не доехала до адресуемой беседы"
 
 
-# ── Команда /vector — docs/MESSENGER-ADDON-PLAN-GPT.md (заметка в конце файла): «AI-поиск
+# ── Команда /vector — docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md (заметка в конце файла): «AI-поиск
 # по смыслу» реализован переиспользованием УЖЕ существующего анти-галлюцинационного Вектора
 # (/web/vector/ask), а не отдельной embedding-инфраструктурой — как и предложено в заметке.
 def test_vector_command_answers_in_saved(client):
@@ -1537,7 +1537,7 @@ def test_vector_command_does_not_trigger_on_normal_message(client):
     assert len(msgs) == 1
 
 
-# ── Организация списка чатов: закреп/архив/избранное (docs/MESSENGER-ADDON-PLAN-GPT*.md) ─
+# ── Организация списка чатов: закреп/архив/избранное (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md и docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md) ─
 def test_pin_and_unpin_chat(client):
     _, (a_id, a), (b_id, b), _ = _setup(client)
     conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]
@@ -1603,7 +1603,7 @@ def test_saved_messages_is_personal_and_pinned(client):
     assert client.get(f"/web/messenger/chats/{conv}/messages", headers=a).status_code == 403
 
 
-# ── Треды: ответы на сообщение (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ─────────────
+# ── Треды: ответы на сообщение (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) ─────────────
 def test_thread_reply_count_and_view(client):
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
     conv = client.post(f"/web/messenger/chats/direct/{a_id}", headers=b).json()["conversation_id"]

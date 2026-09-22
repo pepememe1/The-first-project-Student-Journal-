@@ -303,7 +303,7 @@ def paired(profile: str, repeat: int, label: str, change) -> None:
     print(f"{'путь':<30}{'A хол.':>9}{'A2 тёпл.':>10}{'B':>8}"
           f"{'разогрев':>10}{'эффект':>9}")
     print("-" * 76)
-    for a, w, b in zip(cold, warm, after):
+    for a, w, b in zip(cold, warm, after, strict=True):
         print(f"{a['name']:<30}{a['ms_p50']:>9}{w['ms_p50']:>10}{b['ms_p50']:>8}"
               f"{w['ms_p50'] - a['ms_p50']:>+10.1f}{b['ms_p50'] - w['ms_p50']:>+9.1f}")
     print("\n⚠️ Значим только столбец «эффект» (B − A2), и только если он заметно больше\n"

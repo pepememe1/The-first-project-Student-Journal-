@@ -292,7 +292,7 @@ def test_a_trusted_address_is_not_banned_but_IS_recorded(client, monkeypatch):
     доверенных осознанно; запись не щадит никого, потому что она и есть смысл приманки.
 
     ⚠️ Это же обещано публично: `web/public/privacy.html` §9.1 говорит, что факт
-    обращения фиксируется в журнале, а `docs/INCIDENT-RESPONSE.md` велит администратору
+    обращения фиксируется в журнале, а `docs/security/INCIDENT-RESPONSE.md` велит администратору
     искать там `canary.hit`. Документ, обещающий запись, которой нет, — хуже отсутствия
     документа.
 

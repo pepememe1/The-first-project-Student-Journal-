@@ -353,7 +353,7 @@ class _Canvas:
     def penalty(self) -> int:
         """Штраф раскладки. Чем меньше, тем легче камере отличить код от фона."""
         size, m = self.size, self.m
-        lines = [list(r) for r in m] + [list(c) for c in zip(*m)]
+        lines = [list(r) for r in m] + [list(c) for c in zip(*m, strict=True)]
         score = 0
         # Правило 1: длинные одноцветные полосы.
         for line in lines:

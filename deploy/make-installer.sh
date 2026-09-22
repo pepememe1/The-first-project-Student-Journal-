@@ -19,7 +19,10 @@ cp -r server/app server/requirements.txt server/run.py "$STAGE/server/" 2>/dev/n
 rm -rf "$STAGE"/server/**/__pycache__ "$STAGE"/server/app/tests 2>/dev/null || true
 cp -r web/dist/* "$STAGE/web/dist/"
 cp deploy/install.sh "$STAGE/deploy/install.sh"
-cp DEPLOY-VSGUTU-SECURE.md "$STAGE/" 2>/dev/null || true
+#Инструкция ВСГУТУ по сертифицированному контуру. Была `2>/dev/null || true` — при переезде
+#файла из корня в docs/security/ (22.09.2026) установщик молча остался бы без неё. Теперь
+#пропажа роняет сборку: поставка без инструкции хуже, чем несобранная поставка.
+cp docs/security/DEPLOY-VSGUTU-SECURE.md "$STAGE/DEPLOY-VSGUTU-SECURE.md"
 
 OUT="$ROOT/gradebook-installer.run"
 # --notemp: распаковка во временную папку; при запуске вызывается deploy/install.sh с

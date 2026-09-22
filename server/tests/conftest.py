@@ -47,12 +47,39 @@ os.environ["GRADEBOOK_DATA_KEY"] = ""
 os.environ["GRADEBOOK_INDEX_KEY"] = ""
 os.environ["GRADEBOOK_DOMAIN"] = ""
 
+# 🔥 СОБРАННЫЙ САЙТ — ТОЖЕ ОКРУЖЕНИЕ, И ЗАДАВАТЬ ЕГО ОБЯЗАН ТЕСТ, А НЕ МАШИНА (21.09.2026).
+# `main._find_web_dist` ищет `web/dist` рядом с репозиторием, а появляется он только после
+# `npm run build`. У разработчика папка есть, в серверной задаче CI её нет — и сервер
+# честно отвечал «интерфейс не собран» (503) на любой адрес. Двадцать проверок
+# test_spa_fallback и test_public_schedule краснели в CI с 04.09.2026 и зеленели у нас.
+# Проверяют они МАРШРУТИЗАЦИЮ (адрес API → 404, адрес страницы → страница), а не сборку,
+# поэтому им хватает минимальной оболочки. Режим «сайта нет» стережёт
+# test_no_dist_notice.py — он переопределяет эту переменную сам.
+_TEST_DIST = os.path.join(tempfile.gettempdir(), "gradebook_test_dist")
+os.makedirs(_TEST_DIST, exist_ok=True)
+with open(os.path.join(_TEST_DIST, "index.html"), "w", encoding="utf-8") as _fh:
+    _fh.write('<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+              '<title>GradeBookAI</title></head><body><div id="app"></div></body></html>')
+os.environ["GRADEBOOK_WEB_DIST"] = _TEST_DIST
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
 from app import throttle, events, connect, msg_limit, activity_state, shared_state
+
+# 🔥 СХЕМА НУЖНА УЖЕ ПРИ СБОРКЕ ТЕСТОВ, А НЕ ТОЛЬКО В ФИКСТУРЕ `client` (21.09.2026).
+# Часть модулей читает базу при импорте: берёт текущий термин из продукта
+# (`YEAR, SEM = _current_term()`). Таблицы же заводила только фикстура — то есть ПОСЛЕ
+# сборки. У разработчика это проходило, потому что `gradebook_test.db` во временной папке
+# переживает прогоны вместе с таблицами — и с ДАННЫМИ последнего теста прошлого прогона.
+# В CI файла нет: четыре модуля 3.9.8 падали «no such table: config», а ошибка сборки
+# обрывает ВЕСЬ серверный прогон (воспроизведено: 1820 собрано, 4 ошибки, 0 выполнено).
+# Опаснее второе: локально термин вычислялся из остатков прошлого прогона и мог проверять
+# не тот сценарий. Пустая схема на старте делает сборку одинаковой на любой машине.
+Base.metadata.drop_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 
 @pytest.fixture()

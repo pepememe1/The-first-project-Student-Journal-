@@ -281,3 +281,57 @@ def test_banned_packages_stay_out_of_every_declaration():
                 if pkg in stripped or pkg.replace("-", "_") in stripped:
                     problems.append(f"{where}: {stripped[:80]}  ←  {why}")
     assert not problems, "запрещённый пакет вернулся в объявления:\n  " + "\n  ".join(problems)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# 🔥 REQUIREMENTS ОБЯЗАНЫ ЧИТАТЬСЯ И НА РУССКОЙ WINDOWS (21.09.2026)
+# ─────────────────────────────────────────────────────────────────────────────────
+# pip читает файл требований НЕ как UTF-8, а так: метка BOM → строка `coding: …` в
+# первых ДВУХ строках → кодировка системы. У русской Windows она cp1251, а в наших
+# комментариях кириллица: буква «И» в UTF-8 — это байты D0 98, и байта 0x98 в cp1251
+# нет вовсе. Итог — `pip install -r requirements.txt` падал с UnicodeDecodeError на
+# КАЖДОМ из четырёх файлов, то есть у Влада и на любой машине колледжа установка по
+# нашей же инструкции не проходила. В CI (Linux, UTF-8) этого не видно никогда.
+# ⚠️ Проверено тем же разбором, каким пользуется потребитель: pip 24.0 под cp1251 до
+# правки — UnicodeDecodeError на всех четырёх, после — файлы дочитываются.
+# Здесь проверяется ПРАВИЛО pip, а не он сам: внутренности pip (`pip._internal`) не
+# обещают стабильности, и сторож, падающий от обновления pip, начали бы пропускать.
+
+_ALL_REQUIREMENTS = ("requirements.txt", "requirements-dev.txt",
+                     "server/requirements.txt", "server/requirements-ai.txt")
+#То же выражение, которым pip ищет объявление кодировки в первых двух строках.
+_PIP_CODING = re.compile(rb"coding[:=]\s*([-\w.]+)")
+
+
+def _undecodable_on_russian_windows(raw: bytes) -> str:
+    """Причина, по которой pip на cp1251 не прочтёт файл, либо пустая строка."""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return ""                                     #BOM: pip возьмёт UTF-8 сам
+    for line in raw.splitlines()[:2]:
+        m = _PIP_CODING.search(line)
+        if m:
+            return "" if m.group(1).lower() in (b"utf-8", b"utf8") else (
+                "объявлена кодировка %s, а файл в UTF-8" % m.group(1).decode())
+    try:
+        raw.decode("cp1251")
+    except UnicodeDecodeError:
+        return ("в первых двух строках нет `# -*- coding: utf-8 -*-`, а без неё pip "
+                "на русской Windows читает файл как cp1251 и падает")
+    return ""
+
+
+@pytest.mark.parametrize("rel", _ALL_REQUIREMENTS)
+def test_requirements_are_readable_by_pip_on_russian_windows(rel):
+    with open(os.path.join(ROOT, rel), "rb") as fh:
+        why = _undecodable_on_russian_windows(fh.read())
+    assert not why, "%s: %s" % (rel, why)
+
+
+def test_the_russian_windows_guard_actually_catches_the_defect():
+    """🔒 ОБРАТНЫЙ ХОД: дословная форма дефекта обязана краснеть, починка — нет."""
+    broken = "# ====\n# Инструменты разработки\npytest>=8\n".encode("utf-8")
+    assert _undecodable_on_russian_windows(broken), "проверка не видит сам дефект"
+    fixed = b"# -*- coding: utf-8 -*-\n" + broken
+    assert not _undecodable_on_russian_windows(fixed)
+    #Чисто латинский файл без объявления читается и в cp1251 — придираться незачем.
+    assert not _undecodable_on_russian_windows(b"pytest>=8\n")

@@ -289,7 +289,7 @@ const dateBreaks = computed(() => {
 })
 
 watch(activeId, async (newId, oldId) => {
-  // Черновики (клиент-only, docs/MESSENGER-ADDON-PLAN-GPT.md «Черновики»): сохраняем
+  // Черновики (клиент-only, docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md «Черновики»): сохраняем
   // недописанное перед уходом из чата и восстанавливаем при возврате в него.
   if (oldId) m.saveDraft(oldId, draft.value)
   draft.value = newId ? m.draftFor(newId) : ''
@@ -1174,7 +1174,7 @@ watch(activeId, () => { vectorReply.value = null })
 
 function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
 
-// ── Быстрые ответы и шаблоны преподавателя (docs/MESSENGER-ADDON-PLAN-GPT.md) ───────────
+// ── Быстрые ответы и шаблоны преподавателя (docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md) ───────────
 // Фиксированный универсальный набор — клиент-only, без AI: короткая типовая реплика одним
 // кликом, отправляется СРАЗУ (как бот-команды в Slack/Teams), а не просто вставляется.
 const FIXED_QUICK_REPLIES = computed(() => [
@@ -2075,7 +2075,7 @@ function openActivities() {
               </div>
 
               <!-- Треды: «N ответов» — открывает панель с ответами (reply_to_id), не
-                   загромождая основную ленту (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3). -->
+                   загромождая основную ленту (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3). -->
               <button v-if="msg.reply_count" type="button" @click.stop="m.openThread(msg.id)"
                       class="mt-1 flex items-center gap-1 text-xs font-semibold hover:underline"
                       :class="msg.mine ? 'text-white/90' : 'text-accent'">
@@ -2371,7 +2371,7 @@ function openActivities() {
     <FilePreview v-if="previewFile || previewAtt" :file="previewFile" :attachment="previewAtt"
                  @close="previewFile = null; previewAtt = null" />
 
-    <!-- Треды: ответы на сообщение (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
+    <!-- Треды: ответы на сообщение (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
     <div v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="m.closeThread()">
       <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">

@@ -114,7 +114,6 @@ class _WSManager:
     def _participant_ids_for_broadcast(self, conv_id: str):
         """Получатели чужого сигнала. Своя сессия БД: потребитель живёт в фоне, и брать
         сессию запроса ему неоткуда — запроса нет."""
-        from ...db import SessionLocal
         db = SessionLocal()
         try:
             return _participant_ids(db, conv_id)
@@ -922,7 +921,7 @@ def _attach_reactions(db: Session, msgs: list, me_id: str) -> None:
 
 
 def _attach_reply_counts(db: Session, msgs: list) -> None:
-    """Треды (docs/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3): число ответов на сообщение —
+    """Треды (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3): число ответов на сообщение —
     для бейджа «N ответов». Своей сущности треда не заводим: ветка = сообщения этой же
     беседы с reply_to_id == id родителя (переиспользуем уже существующее поле)."""
     ids = [m["id"] for m in msgs]
@@ -1153,7 +1152,7 @@ def _may_list_parent(db: Session, viewer: User, parent: User) -> bool:
 
 
 # ── Шаблоны быстрых ответов преподавателя ────────────────────────────────────────────
-# docs/MESSENGER-ADDON-PLAN-GPT.md «Шаблоны сообщений преподавателя»: часто используемые
+# docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md «Шаблоны сообщений преподавателя»: часто используемые
 # фразы одним кликом («Работа принята», «Исправьте ошибки»). Личный набор, НЕ AI —
 # преподаватель сам пишет текст один раз и переиспользует. Лимит — защита от «простыней».
 _MAX_TEMPLATES = 20
@@ -1294,7 +1293,7 @@ def _is_vector_message(db: Session, conv_id: str, message_id: int) -> bool:
 
 def _handle_vector_command(db: Session, conv_id: str, body: str, user: User,
                            reply_to: int = 0) -> None:
-    """`docs/MESSENGER-ADDON-PLAN-GPT.md`: «AI-поиск по смыслу» — реализован не как отдельная
+    """`docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md`: «AI-поиск по смыслу» — реализован не как отдельная
     embedding-инфраструктура (её негде держать на 1-ядерном VPS), а как переиспользование УЖЕ
     существующего анти-галлюцинационного Вектора (`web.py::answer_vector_question`, тот же
     код, что у `/web/vector/ask`). try/except: сбой ИИ-ответа не должен мешать самой

@@ -1,4 +1,4 @@
-// Конфиг markdownlint для документации репозитория (README.md, docs/*.md) и
+// Конфиг markdownlint для документации репозитория (README.md, docs/**/*.md) и
 // локальных заметок команды.
 //
 // Принцип тот же, что у ESLint в web/ и у allowlist mypy в pyproject.toml: ловим то,

@@ -77,7 +77,7 @@ OAuth 2.0 / OIDC в продукте нет вовсе: сессия держи�
 
 ### V17 WebRTC
 
-WebRTC не используется. Голосовых и видеозвонков в мессенджере нет и они отклонены осознанно (docs/MESSENGER-ADDON-PLAN-GPT.md — не потянет одноядерный VPS). Голосовой ввод идёт обычной загрузкой файла на /web/vector/stt, peer-соединений не создаётся.
+WebRTC не используется. Голосовых и видеозвонков в мессенджере нет и они отклонены осознанно (docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md — не потянет одноядерный VPS). Голосовой ввод идёт обычной загрузкой файла на /web/vector/stt, peer-соединений не создаётся.
 
 ## Открытые требования в охвате
 
@@ -85,7 +85,7 @@ WebRTC не используется. Голосовых и видеозвонк
 честно названный пробел дешевле обнаруженного проверяющим.
 
 - **V6.3.3** (L2) [~] — Verify that either a multi-factor authentication mechanism or a combination of single-factor authentication mechanisms, must be used in order to acces
-  - Второй фактор (TOTP, RFC 6238) реализован и ОБЯЗАТЕЛЕН для роли admin на боевом сервере — одной точкой deps.require_admin. Для student/teacher/parent он недоступен вовсе, то есть по букве L2 требование закрыто лишь для административного доступа. Осознанный размен: обязать весь колледж носить телефон с приложением-аутентификатором нельзя, а добровольный второй фактор для остальных ролей — отдельная работа (не сделана).
+  - Поправка 22.09.2026: второй фактор (TOTP, RFC 6238) реализован, но НЕ обязателен ни для кого — с 05.09.2026 у admin он выключен совсем (решение Влада: аутентификатор нельзя завести на нескольких устройствах; mfa.required_for и is_active для admin всегда ложь), студент, преподаватель и родитель включают его добровольно. До поправки здесь стояло «ОБЯЗАТЕЛЕН для admin», а доказательством служило наличие вызова _require_second_factor_setup — вызов есть, поведения нет. Осознанный размен: обязать весь колледж носить телефон с приложением-аутентификатором нельзя, а добровольный второй фактор для остальных ролей — отдельная работа (не сделана).
 - **V7.5.2** (L2) [~] — Verify that users are able to view and (having authenticated again with at least one factor) terminate any or all currently active sessions.
   - Свои сессии видит и отзывает АДМИНИСТРАТОР — за любого. Сам пользователь список своих устройств не видит и чужую сессию завершить не может. Для общих компьютеров колледжа это заметный пробел: студент, забывший выйти в аудитории, сейчас может только сменить пароль. Не сделано.
 - **V8.2.2** (L1) [~] — Verify that the application ensures that data-specific access is restricted to consumers with explicit permissions to specific data items to mitigate 
@@ -213,7 +213,7 @@ WebRTC не используется. Голосовых и видеозвонк
 | V6.1.1 | 1 | [ ] | Verify that application documentation defines how controls such as rate limiting, anti-automation, and adaptive response, are used to defend against attacks such as credential stuffing and password brute force. The documentation must make clear how these co… | — |
 | V6.1.2 | 2 | [ ] | Verify that a list of context-specific words is documented in order to prevent their use in passwords. The list could include permutations of organization names, product names, system identifiers, project codenames, department or role names, and similar. | — |
 | V6.1.3 | 2 | [ ] | Verify that, if the application includes multiple authentication pathways, these are all documented together with the security controls and authentication strength which must be consistently enforced across them. | — |
-| V6.2.1 | 1 | [x] | Verify that user set passwords are at least 8 characters in length although a minimum of 15 characters is strongly recommended. | `server/app/routers/auth.py` → `len(body.password) < 8`<br>`server/app/reg_utils.py` → `минимум 1 заглавная`<br>тест `server/tests/test_auth.py` |
+| V6.2.1 | 1 | [x] | Verify that user set passwords are at least 8 characters in length although a minimum of 15 characters is strongly recommended. | `server/app/security.py` → `MIN_PASSWORD_LEN = 8`<br>`server/app/routers/auth.py` → `len(body.password) < MIN_PASSWORD_LEN`<br>`server/app/reg_utils.py` → `минимум 1 заглавная`<br>тест `server/tests/test_auth.py` |
 | V6.2.2 | 1 | [ ] | Verify that users can change their password. | — |
 | V6.2.3 | 1 | [ ] | Verify that password change functionality requires the user's current and new password. | — |
 | V6.2.4 | 1 | [ ] | Verify that passwords submitted during account registration or password change are checked against an available set of, at least, the top 3000 passwords which match the application's password policy, e.g. minimum length. | — |
@@ -227,7 +227,7 @@ WebRTC не используется. Голосовых и видеозвонк
 | V6.2.12 | 2 | [ ] | Verify that passwords submitted during account registration or password changes are checked against a set of breached passwords. | — |
 | V6.3.1 | 1 | [x] | Verify that controls to prevent attacks such as credential stuffing and password brute force are implemented according to the application's security documentation. | `server/app/throttle.py` → `def register_failure`, `LOCK_SECONDS`<br>тест `server/tests/test_throttle.py`<br>тест `server/tests/test_shared_ip_login.py` |
 | V6.3.2 | 1 | [x] | Verify that default user accounts (e.g., "root", "admin", or "sa") are not present in the application or are disabled. | `server/app/routers/auth.py` → `bootstrap`<br>тест `server/tests/test_auth.py` |
-| V6.3.3 | 2 | [~] | Verify that either a multi-factor authentication mechanism or a combination of single-factor authentication mechanisms, must be used in order to access the application. For L3, one of the factors must be a hardware-based authentication mechanism which provi… | `server/app/totp.py` → `def verify`<br>`server/app/deps.py` → `_require_second_factor_setup`<br>тест `server/tests/test_mfa.py` |
+| V6.3.3 | 2 | [~] | Verify that either a multi-factor authentication mechanism or a combination of single-factor authentication mechanisms, must be used in order to access the application. For L3, one of the factors must be a hardware-based authentication mechanism which provi… | `server/app/totp.py` → `def verify`<br>`server/app/routers/mfa.py` → `def mfa_setup`<br>тест `server/tests/test_mfa.py` |
 | V6.3.4 | 2 | [ ] | Verify that, if the application includes multiple authentication pathways, there are no undocumented pathways and that security controls and authentication strength are enforced consistently. | — |
 | V6.3.5 | 3 | [ ] | Verify that users are notified of suspicious authentication attempts (successful or unsuccessful). This may include authentication attempts from an unusual location or client, partially successful authentication (only one of multiple factors), an authentica… | — |
 | V6.3.6 | 3 | [ ] | Verify that email is not used as either a single-factor or multi-factor authentication mechanism. | — |

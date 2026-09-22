@@ -127,7 +127,7 @@ def categories() -> list:
 def is_allowed_url(url: str) -> bool:
     """Ссылка, которую сохраняем в Message.body, обязана вести на CDN Klipy.
 
-    ⚠️ ПРЕЖДЕ ЧЕМ ДОПИСАТЬ СЮДА ХОСТ — прочитай docs/PLAN-EXTERNAL-GIFS.md §2.
+    ⚠️ ПРЕЖДЕ ЧЕМ ДОПИСАТЬ СЮДА ХОСТ — прочитай docs/plans/PLAN-EXTERNAL-GIFS.md §2.
     Эту функцию зовут ТРИ разных места, и у них разная цена ошибки: тело GIF-сообщения,
     избранное (`me._sanitize_gif_favorites`) и АВАТАРКА С БАННЕРОМ
     (`me._sanitize_profile_media`). Аватарка — публичное поле, его подставляет в

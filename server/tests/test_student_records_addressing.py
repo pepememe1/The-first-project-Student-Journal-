@@ -43,7 +43,9 @@ def _calls_without_address():
             if len(args) < 2:
                 continue
             owners = []
-            for a, want in zip(args, ("surname", "name")):
+            # strict=False НАМЕРЕННО: сверяем только ПЕРВЫЕ два аргумента вызова,
+            # у самого вызова их может быть больше или меньше.
+            for a, want in zip(args, ("surname", "name"), strict=False):
                 if (isinstance(a, ast.Attribute) and a.attr == want
                         and isinstance(a.value, ast.Name)):
                     owners.append(a.value.id)

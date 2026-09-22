@@ -187,7 +187,7 @@ async function onCreate(payload) {
 
 // Меню строки чата. Открывается «⋮» И ПРАВОЙ КНОПКОЙ по самой строке — как в Telegram и
 // Discord, откуда пришёл присланный образец. Все пункты ЛИЧНЫЕ: собеседник о них не
-// узнаёт (см. docs/MESSENGER-ADDON-PLAN-GPT*.md).
+// узнаёт (см. docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md и docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md).
 //
 // ⚠️ «Открыть в отдельном окне» из образца НЕ реализовано, и это осознанно: у нас одна
 // SPA на сайт, телефон и окно программы. В браузере это было бы `window.open`, в

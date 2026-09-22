@@ -754,7 +754,7 @@ def _mute_minutes(payload: dict) -> int:
         hours = int(payload.get("hours") or 0)
         minutes = int(payload.get("minutes") or 0)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Срок мьюта задан не числом")
+        raise HTTPException(status_code=400, detail="Срок мьюта задан не числом") from None
     total = days * 24 * 60 + hours * 60 + minutes
     if total <= 0:
         raise HTTPException(status_code=400, detail="Укажите срок мьюта")

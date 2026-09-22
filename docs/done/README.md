@@ -45,21 +45,21 @@
 
 | документ | почему остаётся |
 |---|---|
-| `PLAN-EXTERNAL-GIFS.md` | в шапке прямо: «ОТЛОЖЕНО, не начато». Он про Tenor/Giphy, а НЕ про Klipy — Klipy сделан, но это другой план |
-| `PLAN-MOBILE-OFFLINE.md` | предмета в коде нет |
-| `PLAN-TG-MINIAPP.md` | мини-приложения Telegram в продукте нет вовсе |
+| `docs/plans/PLAN-EXTERNAL-GIFS.md` | в шапке прямо: «ОТЛОЖЕНО, не начато». Он про Tenor/Giphy, а НЕ про Klipy — Klipy сделан, но это другой план |
+| `docs/plans/PLAN-MOBILE-OFFLINE.md` | предмета в коде нет |
+| `docs/plans/PLAN-TG-MINIAPP.md` | мини-приложения Telegram в продукте нет вовсе |
 | `PLAN-AI-SERVER.md` | ждёт железа ВСГУТУ, не кода |
-| `PLAN-PROD-2026-09.md`, `PLAN-YAROSLAV-2026-09.md`, `PLAN-SALE-AND-MIGRATION.txt`, `PLAN-HARDENING.txt` | живые бэклоги |
+| `PLAN-PROD-2026-09.md`, `docs/plans/PLAN-YAROSLAV-2026-09.md`, `docs/plans/PLAN-SALE-AND-MIGRATION.txt`, `docs/plans/PLAN-HARDENING.txt` | живые бэклоги |
 | `security/PLAN-SECURITY-2.0.md` | часть пунктов невыполнима без offline-ключа и WORM-хранилища |
-| `TECH-DEBT-PLAN.md`, `NOT-DONE-3.8.6.md`, `QUEUE.md`, `PERF-SCALE-2026.md` | по построению списки незакрытого |
-| `MESSENGER-ADDON-PLAN-GPT.md`, `MESSENGER-ADDON-PLAN-GPT-SMART.md` | отбор сделан частично и осознанно (см. §5.4 CLAUDE.md) |
-| `ULYANA-CAMPUS-BROWSER-SPEC.md` | работа идёт прямо сейчас |
+| `TECH-DEBT-PLAN.md`, `NOT-DONE-3.8.6.md`, `docs/plans/QUEUE.md`, `docs/research/PERF-SCALE-2026.md` | по построению списки незакрытого |
+| `docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md`, `docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md` | отбор сделан частично и осознанно (см. §5.4 CLAUDE.md) |
+| `docs/plans/ULYANA-CAMPUS-BROWSER-SPEC.md` | работа идёт прямо сейчас |
 
 **2. Живые документы, у которых нет состояния «сделано».** Их закрывать нечем:
-`INCIDENT-RESPONSE.md`, `DATA-RETENTION.md`, `SUBPROCESSORS.md`,
-`security/ASVS-BASELINE.md`, `SECURITY-ARCHITECTURE.md`. Регламент реагирования не
+`docs/security/INCIDENT-RESPONSE.md`, `docs/security/DATA-RETENTION.md`, `docs/security/SUBPROCESSORS.md`,
+`security/ASVS-BASELINE.md`, `docs/security/SECURITY-ARCHITECTURE.md`. Регламент реагирования не
 бывает «выполнен» — он бывает актуальным или устаревшим.
 
 **3. Исследования и материалы для продажи** — они описывают мир, а не нашу работу:
-`COMPETITOR-MMIS.md`, `MARKET-ANALOGUES-2026.md`, `SYNC-RESEARCH-2026.md`,
-`PRICING-AND-PITCH.md`, `CHRONOLOGY-EVIDENCE.md`.
+`docs/business/COMPETITOR-MMIS.md`, `docs/business/MARKET-ANALOGUES-2026.md`, `docs/research/SYNC-RESEARCH-2026.md`,
+`docs/business/PRICING-AND-PITCH.md`, `docs/business/CHRONOLOGY-EVIDENCE.md`.

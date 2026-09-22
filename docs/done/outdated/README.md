@@ -17,7 +17,7 @@
 
 ⚠️ **Открытые пункты отсюда не потеряны.** Перед переносом (16.09.2026) каждый документ
 сверен с живыми планами; то, что нигде больше не было записано, перенесено в
-`docs/QUEUE.md`, раздел «Перенесено из устаревших планов».
+`docs/plans/QUEUE.md`, раздел «Перенесено из устаревших планов».
 
 Ссылки на прежние пути держит `server/tests/test_done_docs.py`: файл лежит здесь — значит,
 ни одной ссылки на его старое место остаться не должно, и каждый файл обязан быть назван
@@ -25,11 +25,14 @@
 
 | документ | снимок | почему устарел | что вместо |
 |---|---|---|---|
-| `NOT-DONE-3.8.6.md` | 31.08.2026, Release 3.8.6 (правки до 05.09) | половина пунктов закрыта; «`data/exports.py` не тронут» (удалён), «`.exe` с 3.8.1» (на бою 3.9.7 с подписью выпуска) | открытое — `docs/QUEUE.md`, правовое — `docs/PLAN-SALE-AND-MIGRATION.txt` |
-| `PLAN-PROD-2026-09.md` | 19.08.2026 | блокеры описывают PostgreSQL на бою (его не было никогда), отсутствие ротации ключа (есть `server/rotate_db_key.py`), Google Translate (удалён 29.08), MFA опцией (обязателен для `admin`), `.exe` 3.7.3 | `docs/PLAN-YAROSLAV-2026-09.md`, `docs/PERF-SCALE-2026.md`, `docs/QUEUE.md` |
-| `PLAN-AI-SERVER.md` | август 2026 (план Влада с правками) | архитектура до 04.09: PostgreSQL, пакет `vector/`, `privacy.anonymize()` (такого шага нет — ответы с фамилиями в модель не идут вовсе, флаг `no_voice`) | переезд: `deploy/install.sh`, `server/app/hostcaps.py`, `tools/provision_ai_host.py`, `docs/PLAN-SALE-AND-MIGRATION.txt`; ИИ — `server/app/vector_llm.py`, `stt_service.py` |
+| `NOT-DONE-3.8.6.md` | 31.08.2026, Release 3.8.6 (правки до 05.09) | половина пунктов закрыта; «`data/exports.py` не тронут» (удалён), «`.exe` с 3.8.1» (на бою 3.9.7 с подписью выпуска) | открытое — `docs/plans/QUEUE.md`, правовое — `docs/plans/PLAN-SALE-AND-MIGRATION.txt` |
+| `PLAN-PROD-2026-09.md` | 19.08.2026 | блокеры описывают PostgreSQL на бою (его не было никогда), отсутствие ротации ключа (есть `server/rotate_db_key.py`), Google Translate (удалён 29.08), MFA опцией (обязателен для `admin`), `.exe` 3.7.3 | `docs/plans/PLAN-YAROSLAV-2026-09.md`, `docs/research/PERF-SCALE-2026.md`, `docs/plans/QUEUE.md` |
+| `PLAN-AI-SERVER.md` | август 2026 (план Влада с правками) | архитектура до 04.09: PostgreSQL, пакет `vector/`, `privacy.anonymize()` (такого шага нет — ответы с фамилиями в модель не идут вовсе, флаг `no_voice`) | переезд: `deploy/install.sh`, `server/app/hostcaps.py`, `tools/provision_ai_host.py`, `docs/plans/PLAN-SALE-AND-MIGRATION.txt`; ИИ — `server/app/vector_llm.py`, `stt_service.py` |
 | `TECH-DEBT-PLAN.md` | июль 2026 | закрыт, кроме §4 (перенос в пакет `gradebook/`); описывает удалённые `ui/`, `vector/`, `data/exports.py` | запись в `CHANGELOG.md` «Техдолг: план закрыт» |
 | `AUTO-UPDATE-PLAN.md` (был в `web/`) | 12.07.2026 | реализовано иначе: манифест `/app/updates` и бандлы `/app/bundles/<версия>` вместо `/app/latest.json`; десктоп обновляется через `desktop_update.py` + `/desktop/updates` с подписью Ed25519 | `server/app/routers/appupdate.py`, `desktop_update.py`, `web/deploy/release-ota.ps1` |
-| `MOBILE-APK-PLAN.md` (был в `web/`) | 17.07.2026 | APK опубликован в RuStore; «голосового ввода на фронте нет» — есть (`web/src/utils/voiceInput.js`, `VoiceCommandDialog.vue`) | офлайн на телефоне — `docs/PLAN-MOBILE-OFFLINE.md` |
+| `MOBILE-APK-PLAN.md` (был в `web/`) | 17.07.2026 | APK опубликован в RuStore; «голосового ввода на фронте нет» — есть (`web/src/utils/voiceInput.js`, `VoiceCommandDialog.vue`) | офлайн на телефоне — `docs/plans/PLAN-MOBILE-OFFLINE.md` |
 | `ROADMAP-1TO1.md` (был в `web/`) | 04.07.2026, Alpha-1 | паритет сайта с десктопом закрыт; Qt-оболочки, с которой сверялся паритет, нет с 13.08.2026 | — |
+| `QUICKSTART_TEST.md` (был в `server/`) | 25.06.2026, Pre-Release 2.6 | описывает вкладку «Сервер» с выбором «Serveo.net · SQLite3» и кнопкой «Запустить сервер» — такого интерфейса нет (раздел «Сервер» — SSH к уже работающей машине, `desktop/server_admin.py`); сборка .exe «со синхронизацией» как новинка | локальный запуск — `server/README.md`; развёртывание — `server/DEPLOY.md`, `deploy/install.sh` |
+| `SECURITY-AUDIT-2026-07.md` (был `SECURITY-AUDIT.md` в корне) | 07.07.2026, Pre-Release-2.8 | «нет security-заголовков», «`/auth/recover` без ограничителя», нет ГОСТ-шифрования полей — всё это давно есть; сам себе противоречит (§2 «заголовков нет», §7 «заголовки live»). ⚠️ Пункт «нет 2FA у администратора» был закрыт 29.08 и с 05.09.2026 СНОВА верен — обязательность снята, у admin фактор выключен | `docs/security/SECURITY-ARCHITECTURE.md`, `docs/security/PLAN-SECURITY-2.0.md`, `docs/security/ASVS-BASELINE.md` |
+| `MESSENGER-ADDON-PLAN-GPT.md` (был в `docs/`) | 10.09.2026 | исходный список допфункций мессенджера; поглощён расширенной версией `docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md` (список папок чатов повторён дословно), а закреп и архив чатов, «Избранное», черновики, история правок уже в продукте. Ссылки из кода на него — история решений, а не инструкция | `docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md` |
 | `WEB-README-2026-07.md` (был `web/README.md`) | июль 2026, эпоха отдельного репозитория | десктоп на PySide6, «распознавания речи в вебе нет», барьер устройства для персонала в браузере, чужой домен в схеме, «сервер ещё надо написать» — ничего из этого не верно | новый короткий `web/README.md` |

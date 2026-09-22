@@ -138,7 +138,7 @@ def decode(m) -> str:
             pos += 1
     assert pos == len(words), "перемешивание блоков не сошлось по длине"
 
-    for i, (block, ecc) in enumerate(zip(blocks, eccs)):
+    for i, (block, ecc) in enumerate(zip(blocks, eccs, strict=True)):
         for k in range(ec_count):
             syndrome = 0
             for coef in block + ecc:

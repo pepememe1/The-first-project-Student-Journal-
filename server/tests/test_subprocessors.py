@@ -1,5 +1,5 @@
 """
-Сторож реестра субобработчиков (`docs/SUBPROCESSORS.md`).
+Сторож реестра субобработчиков (`docs/security/SUBPROCESSORS.md`).
 
 На приёмке первый вопрос — не «как вы шифруете», а «КОМУ вы передаёте»: утечка
 PowerSchool пришла через подрядчика. Плюс п. 5.6.1 политики ВСГУТУ прямо запрещает
@@ -22,7 +22,7 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-REGISTRY = os.path.join(ROOT, "docs", "SUBPROCESSORS.md")
+REGISTRY = os.path.join(ROOT, "docs", "security", "SUBPROCESSORS.md")
 
 #Каталоги продукта, которые реально ходят в сеть от имени сервера ИЛИ КЛИЕНТА.
 #🔥 `web/src` и `web/public` ДОБАВЛЕНЫ 05.09.2026 после разбора Полковника. Их тут не
@@ -99,7 +99,7 @@ def _hosts_in_code() -> dict:
 @pytest.fixture(scope="module")
 def registry_text():
     if not os.path.isfile(REGISTRY):
-        pytest.fail("docs/SUBPROCESSORS.md отсутствует — реестра субобработчиков нет")
+        pytest.fail("docs/security/SUBPROCESSORS.md отсутствует — реестра субобработчиков нет")
     with open(REGISTRY, encoding="utf-8") as fh:
         return fh.read().lower()
 
@@ -108,7 +108,7 @@ def test_every_outbound_host_is_registered(registry_text):
     """🔑 ГЛАВНОЕ СВОЙСТВО: сервис, появившийся в коде, обязан появиться в реестре."""
     unknown = {h: f for h, f in _hosts_in_code().items() if h not in registry_text}
     assert not unknown, (
-        "продукт ходит на адреса, которых нет в docs/SUBPROCESSORS.md:\n" +
+        "продукт ходит на адреса, которых нет в docs/security/SUBPROCESSORS.md:\n" +
         "\n".join("  %s  <- %s" % (h, ", ".join(sorted(set(f))))
                   for h, f in sorted(unknown.items())) +
         "\nЛибо опиши сервис в реестре, либо убери обращение. Молча передавать "

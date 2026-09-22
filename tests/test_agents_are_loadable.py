@@ -150,7 +150,11 @@ def test_model_is_declared_and_cheap_by_default(path):
     который целиком грузится CLAUDE.md — а он у нас на 120 000 токенов. Три грани на
     opus, запущенные разом, стоят больше трети миллиона токенов ДО первой полезной
     строки; именно так 01–02.09.2026 три запущенные грани разом вернули 429.
-    Без явного `model` грань наследует модель родителя, то есть самую дорогую."""
+    Без явного `model` грань наследует модель родителя, то есть самую дорогую.
+
+    ⚠️ С 21.09.2026 CLAUDE.md в грани не грузится (`omitClaudeMd: true`, держит
+    `test_agent_starts_without_claude_md`). Правило про модель от этого не ослабло: она
+    остаётся множителем цены всего, что грань читает и пишет."""
     fm = yaml.safe_load(_frontmatter(path))
     model = fm.get("model")
     assert model, (
@@ -175,9 +179,9 @@ def test_expensive_agents_stay_a_minority():
     expensive = sorted(n for n, m in models.items() if m == "opus")
     total = len(models)
     assert len(expensive) * 3 <= total, (
-        "на opus сидят %d граней из %d (%s). Субагент грузит CLAUDE.md целиком, поэтому "
-        "цена параллельного запуска складывается из самых дорогих: держите opus на "
-        "проверяющих гранях, разведку и сверки переводите на haiku."
+        "на opus сидят %d граней из %d (%s). Цена параллельного запуска складывается из "
+        "самых дорогих граней: держите opus на проверяющих гранях, разведку и сверки "
+        "переводите на haiku."
         % (len(expensive), total, expensive))
 
 
@@ -247,7 +251,11 @@ def test_cheap_work_is_not_paid_at_the_top_rate():
     Грань стартует холодной и целиком оплачивает вход (CLAUDE.md ~108 000 токенов).
     Если и модель, и усилие у большинства верхние — сеть граней перестаёт экономить и
     начинает стоить дороже, чем сделать работу самому. Именно это и произошло
-    01–02.09.2026, когда три грани разом вернули 429."""
+    01–02.09.2026, когда три грани разом вернули 429.
+
+    ⚠️ Вход подешевел 21.09.2026: CLAUDE.md в грань больше не грузится (`omitClaudeMd`).
+    Свойство от этого не устарело — усилие множит цену всей работы грани, а не только
+    входа."""
     top = []
     for path in _agent_files():
         fm = yaml.safe_load(_frontmatter(path))
@@ -257,3 +265,93 @@ def test_cheap_work_is_not_paid_at_the_top_rate():
     assert len(top) * 2 <= total, (
         "на верхнем усилии %d граней из %d (%s) — сеть перестала быть дешевле, чем "
         "сделать работу самому" % (len(top), total, sorted(top)))
+
+
+# ━━ 21.09.2026: ГРАНИ СТАРТУЮТ БЕЗ CLAUDE.md ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Грани, которым CLAUDE.md ОСОЗНАННО нужен целиком. Сейчас таких нет: промпты всех граней
+# написаны самодостаточными — в каждом стоит «CLAUDE.md — ЗАПРЕЩЕНО, всё нужное перенесено
+# в этот промпт». Запись сюда — только С ПРИЧИНОЙ: исключение без записанной причины — это
+# не исключение, а забытый случай (урок 02.09.2026 с «public/»).
+_NEEDS_CLAUDE_MD: dict = {}
+
+
+def _omits_claude_md(fm: dict) -> bool:
+    """Грань стартует без CLAUDE.md, только если поле — НАСТОЯЩИЙ булев `true`.
+
+    Решение вынесено в функцию ради собственного обратного хода: тест, повторяющий
+    условие у себя, сверял бы копию с копией (урок 24.08.2026). Буквальное написание
+    (`true`, а не `yes`/`on`) проверяет валидатор — см. обратный ход ниже."""
+    return fm.get("omitClaudeMd") is True
+
+
+@pytest.mark.parametrize("path", _agent_files(), ids=lambda p: p.name)
+def test_agent_starts_without_claude_md(path):
+    """💰 Каждая грань стартует БЕЗ CLAUDE.md, если не внесена в исключения с причиной.
+
+    Замер 21.09.2026 встроенным в расширение VS Code `claude.exe` 2.1.278, два одинаковых
+    haiku-зонда и кусок настоящего CLAUDE.md (36.7 КБ): без поля — 12 845 входных токенов
+    и ответ «вижу CLAUDE.md», с полем — 2 531 и «не вижу». В пересчёте на весь файл
+    (530 КБ) это около 150 000 токенов на КАЖДЫЙ вызов грани, а у haiku окно 200 000:
+    три четверти окна уходили на правила, которые промпт грани и так запрещает читать.
+
+    ⚠️ Поле действует с Claude Code v2.1.271. Более старый `claude` молча его игнорирует
+    (в терминале этой машины на 21.09.2026 стоял 2.1.237). Тест этого не видит: он
+    проверяет определения, а не версию программы, которая их исполняет."""
+    fm = yaml.safe_load(_frontmatter(path))
+    expected = path.stem not in _NEEDS_CLAUDE_MD
+    if expected:
+        assert _omits_claude_md(fm), (
+            "%s: нет `omitClaudeMd: true` — грань загрузит CLAUDE.md целиком (около "
+            "150 000 токенов, у haiku это три четверти окна) ДО первой строки работы. "
+            "Добавь поле во frontmatter или внеси грань в _NEEDS_CLAUDE_MD с причиной."
+            % path.name)
+    else:
+        assert not _omits_claude_md(fm), (
+            "%s: внесена в _NEEDS_CLAUDE_MD, но сама ставит omitClaudeMd: true — "
+            "исключение мёртвое, убери одно из двух." % path.name)
+
+
+def test_claude_md_exceptions_are_alive_and_explained():
+    """В списке исключений нет мёртвых записей, и у каждой названа причина."""
+    names = {p.stem for p in _agent_files()}
+    for name, reason in _NEEDS_CLAUDE_MD.items():
+        assert name in names, "в _NEEDS_CLAUDE_MD грань '%s', которой нет" % name
+        assert isinstance(reason, str) and reason.strip(), (
+            "у исключения '%s' не записана причина" % name)
+
+
+def test_the_omit_check_rejects_look_alikes():
+    """Обратный ход к `_omits_claude_md`: похожее, но не то, обязано НЕ проходить.
+    Иначе проверка выше зеленела бы при поле, которое Claude Code не поймёт."""
+    assert _omits_claude_md({"omitClaudeMd": True})
+    for fm in ({}, {"omitClaudeMd": False}, {"omitClaudeMd": "true"},
+               {"omitClaudeMd": 1}, {"omitClaudeMD": True}, {"omitclaudemd": True}):
+        assert not _omits_claude_md(fm), fm
+
+
+def test_the_validator_rejects_a_look_alike_boolean(tmp_path):
+    """Обратный ход к проверке формата булевых полей в `validate-agents.py`.
+
+    PyYAML (YAML 1.1) читает `yes`/`on` как истину, а в YAML 1.2 это строки; каким
+    разбором читает Claude Code, не документировано — поэтому валидатор требует буквально
+    `true`/`false`. Контрольная грань с `true` обязана пройти: иначе красное могло бы
+    означать поломку синтетики, а не сработавшую проверку."""
+    if not VALIDATOR.exists():
+        pytest.skip("validate-agents.py отсутствует")
+    body = "\n".join(["Синтетическая грань для обратного хода валидатора."] * 20)
+
+    def run(value):
+        (tmp_path / "gb-synthetic.md").write_text(
+            "---\nname: gb-synthetic\ndescription: \"[ТЕСТ] синтетика\"\ntools: Read\n"
+            "model: haiku\neffort: low\nomitClaudeMd: %s\n---\n\n%s\n" % (value, body),
+            encoding="utf-8")
+        return subprocess.run([sys.executable, "-X", "utf8", str(VALIDATOR), str(tmp_path)],
+                              cwd=str(REPO), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+
+    control = run("true")
+    assert control.returncode == 0, control.stdout + control.stderr
+    for bad in ("yes", "on", '"true"'):
+        res = run(bad)
+        assert res.returncode == 1 and "omitClaudeMd" in res.stdout, (bad, res.stdout)

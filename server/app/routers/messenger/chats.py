@@ -231,7 +231,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
 
 
 # ── Организация списка чатов: закреп/архив/избранное ─────────────────────────────────
-# Дополнения из docs/MESSENGER-ADDON-PLAN-GPT*.md, отобранные как «действительно полезное
+# Дополнения из docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md и docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md, отобранные как «действительно полезное
 # и удобное» (без ИИ-упрощений учёбы — см. §5.4 CLAUDE.md). Личное состояние участника,
 # как mute — на собеседника не влияет.
 @router.post("/chats/{conv_id}/pin")

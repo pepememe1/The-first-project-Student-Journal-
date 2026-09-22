@@ -477,5 +477,10 @@ p{color:#9fb3bd}</style></head><body><div class="b">
     @app.get("/{full_path:path}", include_in_schema=False)
     def no_dist_notice(full_path: str):
         from fastapi.responses import HTMLResponse
+        #Неизвестный адрес API и без сайта остаётся опечаткой API: то же правило, что у
+        #заглушки выше. До 21.09.2026 здесь 503 и HTML получал ЛЮБОЙ адрес — клиент ждал
+        #JSON и получал страницу «интерфейс не собран» (так краснел test_spa_fallback в CI).
+        if _is_api_path(full_path):
+            raise HTTPException(status_code=404, detail="Неизвестный адрес API")
         #503, а не 404: сервер поднят и исправен, отсутствует лишь собранный интерфейс.
         return HTMLResponse(_NO_DIST_HTML, status_code=503)

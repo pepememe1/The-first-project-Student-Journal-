@@ -714,7 +714,7 @@ export const messengerApi = {
   createReport: (group, toUserIds = [], toConversationIds = []) =>
     api.post('/web/messenger/curator-reports',
       { group, to_user_ids: toUserIds, to_conversation_ids: toConversationIds }),
-  // Организация списка чатов (docs/MESSENGER-ADDON-PLAN-GPT*.md): закреп/архив/избранное.
+  // Организация списка чатов (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md и docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md): закреп/архив/избранное.
   pinChat: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
   unpinChat: (convId) => api.delete(`/web/messenger/chats/${encodeURIComponent(convId)}/pin`),
   archiveChat: (convId) => api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/archive`),
