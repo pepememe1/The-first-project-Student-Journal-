@@ -489,8 +489,23 @@ def _dead_docs_globs(root=ROOT):
     return bad
 
 
+def _git_ignored(root, rel_paths):
+    """Какие из путей git игнорирует. 🔥 Ссылка на `CLAUDE.md` (он в .gitignore) была зелёной
+    у разработчика и красной в CI — у клонировавшего репозиторий файла нет, ссылка мертва.
+    Без этой проверки сторож зависел от машины. Копия без .git — предмета нет, пропуск честен;
+    а вот упавший git при живом репозитории — отказ, и он громкий."""
+    if not rel_paths or not os.path.exists(os.path.join(root, ".git")):
+        return set()
+    import subprocess
+    r = subprocess.run(["git", "-C", root, "check-ignore", "-z", "--stdin"],
+                       input="\0".join(rel_paths).encode("utf-8"), capture_output=True)
+    assert r.returncode in (0, 1), "git check-ignore упал: %r" % r.stderr[:300]
+    return {p for p in r.stdout.decode("utf-8").split("\0") if p}
+
+
 def _broken_links_in_sorted_docs(root=ROOT):
     bad = []
+    existing = []
     for rel_dir in _SORTED_DOC_DIRS:
         d = os.path.join(root, rel_dir)
         if not os.path.isdir(d):
@@ -506,6 +521,11 @@ def _broken_links_in_sorted_docs(root=ROOT):
                     continue
                 if not os.path.exists(os.path.join(d, tg)):
                     bad.append("%s/%s -> %s" % (rel_dir, fn, tg))
+                else:
+                    target = os.path.normpath(os.path.join(rel_dir, tg)).replace("\\", "/")
+                    existing.append(("%s/%s -> %s" % (rel_dir, fn, tg), target))
+    ignored = _git_ignored(root, sorted({t for _, t in existing}))
+    bad += ["%s (файл вне git)" % where for where, t in existing if t in ignored]
     return bad
 
 
@@ -537,3 +557,24 @@ def test_the_glob_and_link_guards_catch_their_defects(tmp_path):
     with open(os.path.join(root, "docs", "plans", "A-SMART.md"), "w", encoding="utf-8") as f:
         f.write("# план\n\nсм. [код](../../src/x.py)\n")
     assert _dead_docs_globs(root) == [] and _broken_links_in_sorted_docs(root) == []
+
+
+def test_link_to_a_git_ignored_file_is_broken(tmp_path):
+    """🔒 ОБРАТНЫЙ ХОД на дословной форме дефекта CI 22.09.2026: файл на диске ЕСТЬ, но git
+    его игнорирует — у клонировавшего репозиторий ссылка мертва."""
+    import subprocess
+    root = str(tmp_path)
+    subprocess.run(["git", "init", "-q", root], check=True)
+    os.makedirs(os.path.join(root, "docs", "plans"))
+    with open(os.path.join(root, ".gitignore"), "w", encoding="utf-8") as f:
+        f.write("CLAUDE.md\n")
+    with open(os.path.join(root, "CLAUDE.md"), "w", encoding="utf-8") as f:
+        f.write("# локальный\n")
+    with open(os.path.join(root, "docs", "plans", "R.md"), "w", encoding="utf-8") as f:
+        f.write("см. [CLAUDE.md](../../CLAUDE.md)\n")
+    assert _broken_links_in_sorted_docs(root) == [
+        "docs/plans/R.md -> ../../CLAUDE.md (файл вне git)"]
+    #Файл перестал быть игнорируемым — сигнал гаснет, то есть ловится именно «вне git».
+    with open(os.path.join(root, ".gitignore"), "w", encoding="utf-8") as f:
+        f.write("")
+    assert _broken_links_in_sorted_docs(root) == []
