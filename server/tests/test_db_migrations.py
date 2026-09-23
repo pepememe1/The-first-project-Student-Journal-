@@ -562,3 +562,28 @@ def test_planner_stats_really_appear_on_this_machine():
     assert have == 1, (
         "после обновления статистики таблицы sqlite_stat1 нет — значит вызов оказался "
         "холостым, а узнать об этом в бою было бы неоткуда")
+
+
+def test_auth_session_device_columns_are_added_to_an_old_schema(client):
+    """auth_sessions без user_agent/last_seen_at/trusted_device_id (схема ДО 4.0).
+
+    Таблица живёт на бою с первого дня, и create_all колонки в неё не добавит. Без
+    ALTER-а первый же вход после выкладки упал бы на записи сессии — не вошёл бы
+    НИКТО. Здесь же — что вход на МИГРИРОВАННОЙ старой таблице действительно проходит."""
+    from app.db import _ensure_auth_session_device_columns
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE auth_sessions"))
+        conn.execute(text("""CREATE TABLE auth_sessions (
+            jti VARCHAR PRIMARY KEY, login VARCHAR, role VARCHAR, kind VARCHAR,
+            client VARCHAR DEFAULT '', device_id VARCHAR, ip VARCHAR, issued_at VARCHAR,
+            expires_at INTEGER DEFAULT 0, revoked BOOLEAN DEFAULT 0,
+            pair_jti VARCHAR DEFAULT ''
+        )"""))
+    engine.dispose()
+    _ensure_auth_session_device_columns()
+    cols = {c["name"] for c in inspect(engine).get_columns("auth_sessions")}
+    assert {"user_agent", "last_seen_at", "trusted_device_id"} <= cols
+    _ensure_auth_session_device_columns()      # идемпотентность — второй вызов не падает
+    from conftest import make_admin
+    headers = make_admin(client)
+    assert client.get("/me/sessions", headers=headers).status_code == 200

@@ -321,6 +321,17 @@ class AuthSession(Base):
     expires_at = Column(Integer, default=0, index=True)  #unix ts (быстрый фильтр/чистка)
     revoked = Column(Boolean, default=False)
     pair_jti = Column(String, default="")              #связанный токен (access↔refresh)
+    #── 4.0: раздел «Сессии» у самого человека ──
+    #⚠️ Три колонки НОВЫЕ в СУЩЕСТВУЮЩЕЙ таблице → идемпотентный ALTER
+    #(`db._ensure_auth_session_device_columns`), иначе на бою их не будет и вход упадёт
+    #на первой же записи сессии.
+    user_agent = Column(String, default="")            #браузер/программа при выдаче
+    #Последний запрос по этой сессии. Пишется НЕ на каждый запрос, а не чаще раза в
+    #несколько минут (`sessions.touch`): узкое место SQLite — запись.
+    last_seen_at = Column(String, default="")
+    #Сессия выдана доверенному устройству (`TrustedDevice.id`) — у неё нет потолка по
+    #возрасту, пока устройство доверенное. Пусто — обычная сессия.
+    trusted_device_id = Column(String, default="")
 
 
 class RegistrationRequest(Base):
@@ -1272,6 +1283,94 @@ class UserMFA(Base):
     #Кто и когда сбрасывал — для журнала аудита и разбора «почему у меня не просит».
     reset_by = Column(String, default="")
     reset_at = Column(String, default="")
+
+
+class UserIssuedCredential(Base):
+    """Стартовый пароль, выданный человеку колледжем (4.0, «Выкатить данные групп»).
+
+    🔑 ОТДЕЛЬНАЯ ТАБЛИЦА, А НЕ КОЛОНКА В `users`. `users` входит в SYNC_MODELS, и синк
+    отдаёт строку ЦЕЛИКОМ: колонка там уехала бы шифротекстом пароля на каждый
+    компьютер, где открывали программу, и в каждую резервную копию справочников. Здесь
+    её нет ни в синке, ни в `data_transfer` — выгрузка справочников о таблице не знает.
+
+    ⚠️ ГРАНИЦА: здесь лежит ТОЛЬКО пароль, который выдал колледж (сгенерированный или
+    набранный администратором). Пароль, придуманный самим человеком, не виден никому
+    никогда. Держится это не обещанием, а сверкой: `hash_digest` — отпечаток хеша,
+    действовавшего в момент выдачи. Хеш стал другим (человек сменил пароль сам, по ссылке
+    из письма, любым путём — даже тем, о котором эта таблица не знает) — `secret`
+    стирается при первом же обращении (`issued_credentials.state`).
+
+    ⚠️ Строку при стирании НЕ удаляем: пустой `secret` + `changed_at` значит «студент
+    сменил пароль», а отсутствие строки — «стартовый пароль не выдавался». Это разные
+    ответы администратору, и склеивать их нельзя.
+    """
+    __tablename__ = "user_issued_credentials"
+    user_id = Column(String, primary_key=True)
+    #Шифротекст «Кузнечика» (`gost.encrypt`) — тот же механизм, что у телефонов в
+    #заявках. Пусто — пароль больше не выданный (сменён человеком).
+    secret = Column(String, default="")
+    #sha256 от `users.password_hash` в момент выдачи. Сам хеш сюда не копируем: второй
+    #экземпляр хеша пароля — ещё одно место, откуда его можно унести.
+    hash_digest = Column(String, default="")
+    issued_at = Column(String, default="")
+    issued_by = Column(String, default="")
+    changed_at = Column(String, default="")
+
+
+class UserContact(Base):
+    """Почта и телефон для защиты входа (4.0). СЕРВЕРНАЯ таблица, НЕ в SYNC_MODELS.
+
+    Две пары полей, и путать их нельзя:
+      • `admin_*` — то, что человек сообщил колледжу лично (вписывает администратор);
+      • `self_*` — то, что человек указал сам в своём профиле.
+    Сверка двух пар — повод спросить студента, не угнали ли аккаунт: угнавший меняет
+    СВОЮ пару, а до записи в деканате он не дотянется.
+
+    ⚠️ Почему не колонки в `users`: синк разослал бы контакты всех студентов на каждый
+    компьютер программы (строка `users` уходит целиком), а это ПДн, которым на чужом ПК
+    делать нечего. Поэтому же всё, кроме меток времени, лежит «Кузнечиком».
+    ⚠️ Подтверждённой считается только СВОЯ почта, и только кодом из письма: на
+    неподтверждённую код входа не пошлёшь — он уйдёт тому, кто её вписал.
+    """
+    __tablename__ = "user_contacts"
+    user_id = Column(String, primary_key=True)
+    self_email = Column(String, default="")
+    self_email_verified_at = Column(String, default="")
+    self_phone = Column(String, default="")
+    admin_email = Column(String, default="")
+    admin_phone = Column(String, default="")
+    #Незавершённое подтверждение почты: адрес, HMAC кода и срок. Код в открытом виде
+    #не храним — база ходит в резервные копии.
+    pending_email = Column(String, default="")
+    pending_mac = Column(String, default="")
+    pending_expires_at = Column(String, default="")
+    updated_at = Column(String, default="")
+
+
+class TrustedDevice(Base):
+    """Устройство, которому человек разрешил «доверять» (галочка на форме входа, 4.0).
+
+    Что это даёт: вход с него не требует кода из письма, а сессия живёт без срока, пока
+    человек не вышел. Вышел — устройство остаётся доверенным ещё 15 дней
+    (`logged_out_at`), и вход в этот срок снова без кода; не вернулся за 15 дней —
+    доверие снимается.
+
+    ⚠️ Опознание — по СЕКРЕТУ, выданному устройству, а не по `X-Device-Id`: тот
+    приходит в каждом запросе открытым текстом и подделывается одной строкой. Здесь
+    лежит только sha256 секрета — утёкшая база не даёт притвориться чужим устройством.
+    Серверная деталь доступа — НЕ в SYNC_MODELS.
+    """
+    __tablename__ = "trusted_devices"
+    id = Column(String, primary_key=True)                #случайный публичный id
+    login = Column(String, index=True, default="")
+    token_hash = Column(String, default="")
+    created_at = Column(String, default="")
+    last_login_at = Column(String, default="")
+    #Когда человек ВЫШЕЛ с этого устройства. Пусто — сейчас вошёл (или не выходил).
+    logged_out_at = Column(String, default="")
+    revoked = Column(Boolean, default=False)
+    user_agent = Column(String, default="")
+    ip = Column(String, default="")
 
 
 class UserNote(Base):

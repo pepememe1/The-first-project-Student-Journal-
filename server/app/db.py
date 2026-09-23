@@ -221,6 +221,7 @@ def init_db():
     _ensure_group_archive_columns()
     _ensure_schedule_override_subgroup_column()
     _ensure_auth_session_client_column()
+    _ensure_auth_session_device_columns()
     _ensure_quiz_time_limit_column()
     _ensure_quiz_kind_column()
     _ensure_audit_chain_columns()
@@ -580,6 +581,32 @@ def _ensure_auth_session_client_column():
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE auth_sessions ADD COLUMN client VARCHAR DEFAULT ''"))
+
+
+def _ensure_auth_session_device_columns():
+    """Идемпотентная мини-миграция (4.0): auth_sessions.user_agent / last_seen_at /
+    trusted_device_id — раздел «Сессии» у самого человека и доверенные устройства.
+
+    `auth_sessions` живёт на бою с первого дня, а `create_all` новые СТОЛБЦЫ в
+    существующую таблицу не добавляет НИКОГДА. Без этой функции первый же вход после
+    выкладки упал бы на записи сессии «no such column» — то есть не вошёл бы НИКТО.
+    В свежей тестовой базе ветка «колонки не было» не исполняется вовсе, поэтому
+    регрессия на СТАРОЙ схеме живёт в `server/tests/test_db_migrations.py`.
+
+    ⚠️ Умолчания пустые, и это верно для всех уже выданных сессий: браузер у них
+    неизвестен, последняя активность — момент выдачи, доверенного устройства нет
+    (значит и потолок у них прежний, пятичасовой)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        columns = {c["name"] for c in insp.get_columns("auth_sessions")}
+    except Exception:
+        return  #таблицы ещё нет — create_all создаст её сразу со всеми столбцами
+    with engine.begin() as conn:
+        for col in ("user_agent", "last_seen_at", "trusted_device_id"):
+            if col not in columns:
+                conn.execute(text(f"ALTER TABLE auth_sessions ADD COLUMN {col} VARCHAR DEFAULT ''"))
+                print(f"[db] auth_sessions: добавлена колонка {col}")
 
 
 def _ensure_subject_hours_teacher_column():

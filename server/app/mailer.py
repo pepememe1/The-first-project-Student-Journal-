@@ -24,6 +24,19 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
 
 
+def configured() -> bool:
+    """Настроена ли отправка вообще (без попытки соединиться).
+
+    Нужна там, где от почты зависит ДОСТУП (4.0: код подтверждения входа и почты). Без
+    неё «SMTP не настроен» было бы неотличимо от «письмо не ушло»: в первом случае
+    подтверждение по почте не включается вовсе, во втором вход честно просит повторить.
+    """
+    from . import secrets_source
+    return bool(os.environ.get("GRADEBOOK_SMTP_HOST", "").strip()
+                and os.environ.get("GRADEBOOK_SMTP_USER", "").strip()
+                and secrets_source.get("GRADEBOOK_SMTP_PASS"))
+
+
 def send_email(to: str, subject: str, body: str, html: str = "") -> bool:
     """Отправляет письмо. True — ушло, False — не настроено/ошибка (не роняем поток)."""
     host = os.environ.get("GRADEBOOK_SMTP_HOST", "").strip()
