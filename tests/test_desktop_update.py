@@ -41,6 +41,11 @@ def test_is_newer_treats_missing_parts_as_zero():
     assert not DU.is_newer("3.6", "3.6.0")
     assert not DU.is_newer("3.6.0", "3.6")
     assert DU.is_newer("3.6.1", "3.6")
+    #Выпуск 4.0: частей МЕНЬШЕ, чем у предыдущего. Сравнение кортежей без дополнения
+    #нулями здесь тоже дало бы верный ответ, но «4.0» против «4.0.0» — уже нет.
+    assert DU.is_newer("Release 4.0", "Release 3.9.9")
+    assert not DU.is_newer("Release 3.9.9", "Release 4.0")
+    assert not DU.is_newer("4.0", "4.0.0")
 
 
 def test_unparseable_version_is_never_newer():
