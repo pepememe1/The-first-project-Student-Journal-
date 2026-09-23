@@ -122,6 +122,9 @@ export const SETTINGS_CATS = [
       //⚠️ Остальным ролям фактор оставлен: у них он работает по-настоящему.
       { id: 'mfa', i18n: 'settings.mfa', label: 'Второй фактор входа', notRole: 'admin' },
       { id: 'biometric', i18n: 'settings.biometric', label: 'Вход по биометрии' },
+      //4.0: свой пароль и контакты для защиты входа — у ЛЮБОЙ роли.
+      { id: 'password', i18n: 'account.changePassword', label: 'Сменить пароль' },
+      { id: 'contacts', i18n: 'account.contactsTitle', label: 'Почта и телефон для входа' },
     ],
   },
   {
@@ -130,6 +133,9 @@ export const SETTINGS_CATS = [
     i18n: 'settings.account',
     label: 'Аккаунт',
     subs: [
+      //4.0: «Сессии» — где открыт аккаунт, закрыть лишнее. Рядом с выходом: это тот же
+      //вопрос «кто сейчас в моём аккаунте», только про все устройства сразу.
+      { id: 'sessions', i18n: 'sessions.title', label: 'Сессии' },
       { id: 'logout', i18n: 'nav.logout', label: 'Выход' },
     ],
   },

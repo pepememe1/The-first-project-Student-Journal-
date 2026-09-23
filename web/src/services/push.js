@@ -162,6 +162,10 @@ export function routeForEvent(data, role) {
       return { path: `${base}/messages`, query: conv ? { chat: conv } : {} }
     case 'event':
       return { path: base }
+    //4.0: «пароль изменён» ведёт прямо к «Сессиям» — если менял не владелец, у него
+    //ровно одно срочное действие: выйти из всех сессий.
+    case 'password_changed':
+      return { path: `${base}/settings`, query: { section: 'sessions' } }
     default:
       return null
   }

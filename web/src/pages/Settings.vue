@@ -4,13 +4,16 @@
 // озвучка Вектора. В «Профиле» остаются только сведения об аккаунте и уведомления.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil, Vibrate, VibrateOff } from '@lucide/vue'
 import { adminApi, authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import MfaCard from '@/components/settings/MfaCard.vue'
+import PasswordCard from '@/components/settings/PasswordCard.vue'
+import ContactsCard from '@/components/settings/ContactsCard.vue'
+import SessionsDialog from '@/components/settings/SessionsDialog.vue'
 import { useTtsStore } from '@/stores/tts'
 import { useVoiceStore } from '@/stores/voice'
 import { useAuthStore } from '@/stores/auth'
@@ -53,6 +56,7 @@ function toggleHaptics() {
   haptics.setEnabled(hapticsOn.value)
 }
 const router = useRouter()
+const route = useRoute()
 const profileStore = useProfileStore()
 //Роль решает, показывать ли второй фактор: у администратора его нет вовсе (см. карточку).
 const isAdminRole = computed(() => auth.role === 'admin')
@@ -156,7 +160,7 @@ const NOTIFY_KINDS = computed(() => [
   // Просьба тестеров (20.09.2026): «пары на сегодня» отдельным тумблером. Своя
   // категория, а не «Расписание»: то приходит редко и про замены, а это — каждый
   // учебный день, и выключать их одной кнопкой значило бы потерять замены пар.
-  { key: 'lessons', label: loc.t('settings.notify.lessons.label', 'Пары на сегодня'), hint: loc.t('settings.notify.lessons.hint', 'Утренняя сводка: сколько пар и во сколько первая'), roles: ['student'] },
+  { key: 'lessons', label: loc.t('settings.notify.lessons.label', 'Пары на сегодня'), hint: loc.t('settings.notify.lessons.hint', 'Утренняя сводка: сколько пар и во сколько первая') },
   { key: 'homework', label: loc.t('settings.notify.homework.label', 'Домашние задания'), hint: loc.t('settings.notify.homework.hint', 'Преподаватель задал работу на дом') },
   { key: 'schedule', label: loc.t('settings.notify.schedule.label', 'Расписание'), hint: loc.t('settings.notify.schedule.hint', 'Замены и правки в расписании вашей группы') },
   { key: 'messages', label: loc.t('settings.notify.messages.label', 'Сообщения'), hint: loc.t('settings.notify.messages.hint', 'Личные чаты, группы и каналы') },
@@ -165,16 +169,22 @@ const NOTIFY_KINDS = computed(() => [
   // Приходит ТОЛЬКО куратору (о студентах его группы) — остальным ролям строку не
   // показываем: у студента переключатель «риск отчисления» читался бы как предложение
   // отключить сам риск, а не уведомление о нём.
-  { key: 'risk', label: loc.t('settings.notify.risk.label', 'Предупреждения об успеваемости'), hint: loc.t('settings.notify.risk.hint', 'Куратору — о студентах его группы в зоне риска'), roles: ['teacher', 'admin'] },
+  { key: 'risk', label: loc.t('settings.notify.risk.label', 'Предупреждения об успеваемости'), hint: loc.t('settings.notify.risk.hint', 'Куратору — о студентах его группы в зоне риска') },
   // «Уведомления системы» — о работе самого продукта, а не об учёбе. Сейчас такое одно
   // (жалоба закрылась сама, потому что модерация не успела), и до 20.09.2026 у него не
   // было выключателя вовсе: категория не назначалась, то есть сервер считал его
   // «разрешено всегда», и человек, отключивший всё, продолжал его получать.
   { key: 'system', label: loc.t('settings.notify.system.label', 'Уведомления системы'), hint: loc.t('settings.notify.system.hint', 'Сообщения о работе журнала: например, жалоба закрылась по сроку') },
 ])
-// Что реально показываем этой роли. Ключ без ограничения виден всем.
+// 🔑 Что показываем ЭТОМУ человеку — решает СЕРВЕР (4.0, `notify_categories` в ответе
+// `/me/prefs`, источник — `rustore_push.categories_for`). По тому же списку сервер решает,
+// слать ли пуш. Свой список по ролям здесь означал бы вторую правду: переключатель
+// «Оценки» у преподавателя, который ничего не решает, или куратор без «успеваемости».
+// Пока ответа нет (или сервер старый и списка не прислал) — показываем всё: пропавший
+// переключатель хуже лишнего.
+const notifyAllowed = ref(null)
 const visibleNotifyKinds = computed(() =>
-  NOTIFY_KINDS.value.filter((k) => !k.roles || k.roles.includes(auth.role)))
+  NOTIFY_KINDS.value.filter((k) => !notifyAllowed.value || notifyAllowed.value.includes(k.key)))
 const notify = ref(Object.fromEntries(NOTIFY_KINDS.value.map((k) => [k.key, true])))
 const notifySaving = ref('')
 const notifyError = ref('')
@@ -182,6 +192,7 @@ const notifyError = ref('')
 async function loadNotify() {
   try {
     const { data } = await meApi.getPrefs()
+    if (Array.isArray(data?.notify_categories)) notifyAllowed.value = data.notify_categories
     const box = data?.prefs?.notify || {}
     // ОТСУТСТВИЕ ключа значит «включено» — ровно как трактует его сервер. Иначе первый
     // же заход в настройки показал бы всё выключенным, хотя уведомления приходят.
@@ -413,6 +424,17 @@ const cat = ref('profile')
 // Телефон: сперва список категорий (как в Discord), потом содержимое с кнопкой «назад».
 // На ПК не используется вовсе — там рельс и содержимое видны одновременно.
 const showList = ref(true)
+// «Сессии» (4.0). Уведомление «пароль изменён» ведёт сюда с `?section=sessions` — сразу
+// к кнопке «Выйти из всех сессий», без поиска по настройкам. Объявлено ПОСЛЕ `cat` и
+// `showList`: правило «не читать ref, объявленный ниже» в проекте уже стоило пустой страницы.
+const showSessions = ref(false)
+onMounted(() => {
+  if (route.query.section === 'sessions') {
+    cat.value = 'account'
+    showList.value = false
+    showSessions.value = true
+  }
+})
 // Какая категория раскрыта в рельсе (выпадающий список подкатегорий).
 // ⚠️ Пусто на старте: раскрывать нечего — профиль из рельса убран, а раскрытый список
 // чужой категории обещал бы, что открыта именно она.
@@ -933,6 +955,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         <p v-if="pkMsg" class="text-sm font-medium text-accent">{{ pkMsg }}</p>
       </div>
     </Card>
+
+    <!-- 4.0: свой пароль и контакты для защиты входа. -->
+    <Card id="set-password" :class="sec('security')" :title="loc.t('account.changePassword', 'Сменить пароль')"
+          :subtitle="loc.t('account.changePasswordHint', 'Выданный колледжем пароль лучше заменить своим')">
+      <PasswordCard />
+    </Card>
+    <Card id="set-contacts" :class="sec('security')" :title="loc.t('account.contactsTitle', 'Почта и телефон для входа')"
+          :subtitle="loc.t('account.contactsHint', 'Код с нового устройства и уведомление о смене пароля')">
+      <ContactsCard />
+    </Card>
+
+    <!-- «Сессии» (4.0): где открыт аккаунт. Внизу настроек аккаунта, над выходом. -->
+    <Card id="set-sessions" :class="sec('account')" :title="loc.t('sessions.title', 'Сессии')"
+          :subtitle="loc.t('sessions.hint', 'Устройства, на которых открыт ваш аккаунт')">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-text3">{{ loc.t('sessions.explain', 'Незнакомое устройство — закройте его сессию и смените пароль.') }}</p>
+        <AppButton variant="ghost" @click="showSessions = true">{{ loc.t('sessions.title', 'Сессии') }}</AppButton>
+      </div>
+    </Card>
+    <SessionsDialog v-if="showSessions" @close="showSessions = false" />
 
     <!-- ВЫХОД — в самом низу страницы, последним блоком. Раньше жил в шапке рядом с
          темой и статусом; здесь до него надо осознанно долистать. -->
