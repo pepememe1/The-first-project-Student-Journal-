@@ -22,6 +22,7 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
 import RegisterDialog from '@/components/RegisterDialog.vue'
 import RecoverDialog from '@/components/RecoverDialog.vue'
+import { getTrustToken } from '@/utils/trustToken'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -136,6 +137,24 @@ const loginAnim = computed(() => {
 
 const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
 
+// ━━ «ДОВЕРЯТЬ ЭТОМУ УСТРОЙСТВУ?» (4.0) ━━
+// Галочка появляется, когда человек заполнил одно поле и перешёл к другому: раньше она
+// отвлекала бы от самого входа, а позже её уже не заметят — кнопка «Войти» нажата.
+// Доверенное устройство входит без кода из письма, и сессия на нём живёт без срока,
+// пока человек не вышел; после выхода — ещё 15 дней без кода.
+// ⚠️ Внутри программы галочки нет вовсе: там вход идёт через мост локального сервера,
+// а десктоп и так проходит барьер устройства — галочка ничего бы не решала.
+// ⚠️ По умолчанию она отмечена, если это устройство УЖЕ доверенное для набранного
+// логина: иначе обычный вход молча снимал бы доверие, выданное вчера.
+const trustDevice = ref(false)
+const showTrust = ref(false)
+watch(login, (v) => { trustDevice.value = !!getTrustToken(v.trim()) }, { immediate: true })
+function onFieldFocus(field) {
+  if (insideApp) return
+  const other = field === 'password' ? login.value.trim() : password.value
+  if (other) showTrust.value = true
+}
+
 // Предложить браузеру/менеджеру паролей сохранить вход. Для SPA/AJAX-входа одних
 // autocomplete-атрибутов мало — надёжно срабатывает Credential Management API
 // (navigator.credentials.store). Побочный бонус: когда пароль сохранён в системном
@@ -175,7 +194,8 @@ const lockLabel = computed(() => {
 async function submit() {
   needApproval.value = false
   try {
-    const user = await auth.login(login.value, password.value)
+    const user = await auth.login(login.value, password.value,
+      { trustDevice: !insideApp && trustDevice.value })
     //Пароль верен, но нужен второй фактор: токенов ещё нет, и переходить некуда.
     //⚠️ Пароль в связку НЕ сохраняем до конца входа — иначе браузер запомнил бы
     //его как рабочий, а вход мог и не состояться.
@@ -400,6 +420,7 @@ function openRecover() {
           <div>
             <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.login') }}</label>
             <input v-model="login" id="login" name="username" autocomplete="username"
+                   @focus="onFieldFocus('login')"
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                    :placeholder="loc.t('login.loginPlaceholder')" />
           </div>
@@ -407,6 +428,7 @@ function openRecover() {
             <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.password') }}</label>
             <div class="relative">
               <input v-model="password" id="password" name="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
+                     @focus="onFieldFocus('password')"
                      class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-11 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                      placeholder="••••••••" />
               <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
@@ -433,6 +455,16 @@ function openRecover() {
             </span>
           </div>
           <p v-else-if="auth.error" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ auth.error }}</p>
+
+          <Transition enter-active-class="transition duration-200" enter-from-class="opacity-0 -translate-y-1">
+            <label v-if="showTrust && !insideApp" class="flex cursor-pointer select-none items-start gap-2 text-sm text-text2">
+              <input v-model="trustDevice" type="checkbox" class="mt-0.5 size-4 shrink-0 accent-[var(--gb-accent)]" />
+              <span>
+                {{ loc.t('loginTrust.label', 'Доверять этому устройству?') }}
+                <span class="block text-tiny text-text3">{{ loc.t('loginTrust.hint', 'Вход без кода из письма; после выхода — ещё 15 дней. Не отмечайте на общем компьютере.') }}</span>
+              </span>
+            </label>
+          </Transition>
 
           <AppButton type="submit" class="w-full" :disabled="!canSubmit">
             {{ auth.loading ? loc.t('login.submitting') : loc.t('login.submit') }}

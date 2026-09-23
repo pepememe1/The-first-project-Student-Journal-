@@ -11,9 +11,15 @@
  */
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 
 const emit = defineEmits(['done', 'cancel'])
 const auth = useAuthStore()
+const loc = useLocaleStore()
+//4.0: второй шаг бывает и кодом ИЗ ПИСЬМА (вход с нового устройства при подтверждённой
+//почте). Ручка та же, различаются только подсказки: у письма нет кодов восстановления,
+//и ссылка «потерян телефон» там только запутала бы.
+const byEmail = computed(() => auth.mfaMethod === 'email')
 
 const code = ref('')
 const field = ref(null)
@@ -78,7 +84,10 @@ function onInput(e) {
   <form class="gb-mfa" @submit.prevent="submit">
     <h2 class="gb-mfa__title">Подтверждение входа</h2>
     <p class="gb-mfa__hint">
-      <template v-if="!useRecovery">
+      <template v-if="byEmail">
+        {{ loc.t('mfaEmail.hint', { to: auth.mfaChannel || loc.t('mfaEmail.yourMail', 'вашу почту') }) }}
+      </template>
+      <template v-else-if="!useRecovery">
         Откройте приложение-аутентификатор и введите шестизначный код для GradeBookAI.
       </template>
       <template v-else>
@@ -118,7 +127,7 @@ function onInput(e) {
     </button>
 
     <div class="gb-mfa__links">
-      <button type="button" class="gb-mfa__link" @click="useRecovery = !useRecovery; code = ''">
+      <button v-if="!byEmail" type="button" class="gb-mfa__link" @click="useRecovery = !useRecovery; code = ''">
         {{ useRecovery ? 'Ввести код из приложения' : 'Потерян телефон — код восстановления' }}
       </button>
       <button type="button" class="gb-mfa__link" @click="auth.cancelMfa(); emit('cancel')">

@@ -16,7 +16,9 @@ import { peekCached } from './offlineCache'
 
 // АВТОРИЗАЦИЯ ──────────────────────────────────────────────────────────────────
 export const authApi = {
-  login: (login, password) => api.post('/auth/login', { login, password }),
+  // `extra` (4.0) — { trust_token, trust_device }: секрет доверенного устройства и
+  // галочка «Доверять этому устройству?». Старый вызов с двумя аргументами работает.
+  login: (login, password, extra = {}) => api.post('/auth/login', { login, password, ...extra }),
   refresh: (refresh_token) => api.post('/auth/refresh', { refresh_token }),
   logout: () => api.post('/auth/logout'),
   // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
@@ -956,4 +958,35 @@ export const coursesApi = {
   addAssignment: (id, { title, dueDate = '', description = '', url = '' }) =>
     api.post(`/web/courses/${id}/assignments`, { title, due_date: dueDate, description, url }),
   delAssignment: (id, assignmentId) => api.delete(`/web/courses/${id}/assignments/${assignmentId}`),
+}
+
+// УЧЁТНАЯ ЗАПИСЬ (4.0) ──────────────────────────────────────────────────────────
+// Свой пароль, свои сессии и контакты — `/me/*` (личность из токена). О ДРУГИХ —
+// `/web/accounts/*`: администратор о любом, куратор о студентах своих групп. Роль
+// проверяет СЕРВЕР; спрятанная у преподавателя кнопка — не защита.
+export const accountApi = {
+  changePassword: (current, next, code = '') =>
+    api.post('/me/password', { current, new: next, code }),
+  sessions: () => api.get('/me/sessions'),
+  revokeSession: (id) => api.delete(`/me/sessions/${encodeURIComponent(id)}`),
+  revokeOthers: () => api.post('/me/sessions/revoke-others'),
+  contacts: () => api.get('/me/contacts'),
+  setPhone: (phone) => api.post('/me/contacts/phone', { phone }),
+  emailStart: (email) => api.post('/me/contacts/email/start', { email }),
+  emailConfirm: (code) => api.post('/me/contacts/email/confirm', { code }),
+  emailRemove: () => api.delete('/me/contacts/email'),
+  // Логин — в QUERY, а не в пути: так же, как имя группы, он может содержать символы,
+  // которые путь портят (см. §«Имя группы не идёт в путь URL» в CLAUDE.md).
+  extra: (login) => api.get('/web/accounts/extra', { params: { login } }),
+  saveExtra: (login, adminEmail, adminPhone) =>
+    api.post('/web/accounts/extra', { login, admin_email: adminEmail, admin_phone: adminPhone }),
+  resetCredential: (login) => api.post('/web/accounts/credential/reset', { login }),
+  rolloutGroups: () => api.get('/web/accounts/rollout/groups'),
+  rolloutStudents: (group) => api.get('/web/accounts/rollout/students', { params: { group } }),
+  // Документ .xlsx. POST, а не GET: список отмеченных студентов длинный, и в адрес
+  // (а значит в журнал прокси) ему не место.
+  rolloutExport: (group, studentIds, resetExisting = false) =>
+    api.post('/web/accounts/rollout/export',
+      { group, student_ids: studentIds, reset_existing: resetExisting },
+      { responseType: 'blob' }),
 }

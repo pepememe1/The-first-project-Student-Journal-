@@ -21,6 +21,7 @@ import { registerToken, unregisterToken } from '@/services/push'
 import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedule,
   saveEndpoint as saveWidgetEndpoint } from '@/services/scheduleWidget'
 import { loginWithPasskey } from '@/api/webauthn'
+import { getTrustToken, setTrustToken, dropTrustToken } from '@/utils/trustToken'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
@@ -55,6 +56,16 @@ export const useAuthStore = defineStore('auth', () => {
   //без него истечение выглядит как внезапный выброс на форму входа (жалоба Ярослава
   //03.09.2026, воспроизведена на бою).
   const mfaExpiresAt = ref(0)
+  //Вид второго шага (4.0): 'totp' — код из приложения, 'email' — код из письма (вход с
+  //нового устройства при подтверждённой почте). От него зависят только подсказки на
+  //экране кода: ручка у обоих одна.
+  const mfaMethod = ref('totp')
+  //Маска адреса, куда ушёл код («i*****a@yandex.ru»). Без неё «проверьте почту» не
+  //говорит, КАКУЮ.
+  const mfaChannel = ref('')
+  //Галочка «Доверять этому устройству?», с которой начали вход. Нужна после второго
+  //шага: там решается, хранить ли выданный секрет устройства.
+  const pendingTrust = ref(false)
 
   const isAuthenticated = computed(() => !!user.value && !!getAccess())
   const role = computed(() => user.value?.role || null)
@@ -68,10 +79,17 @@ export const useAuthStore = defineStore('auth', () => {
    * стоял). Со вторым фактором появилась бы ТРЕТЬЯ копия — то есть третье место,
    * где однажды забудут строку. Поэтому одна функция.
    */
-  function _afterLogin(data, loginStr) {
+  function _afterLogin(data, loginStr, { trustFlow = false } = {}) {
     //ПЕРВОЙ строкой, до записи токенов: всё, что улетело в сеть от прежнего человека,
     //с этого момента чужое и не имеет права ни дописать токены, ни стереть их.
     bumpSessionGeneration()
+    //Доверенное устройство (4.0): сервер выдал новый секрет — храним; галочку сняли —
+    //сервер доверие снял, и старый секрет предъявлять больше незачем.
+    //⚠️ Только для входа ПАРОЛЕМ (`trustFlow`): вход по биометрии галочки не видит, и
+    //стирать по нему секрет устройства значило бы снимать доверие молча.
+    const who = loginStr || data.login || ''
+    if (trustFlow && data.trust_token) setTrustToken(who, data.trust_token)
+    else if (trustFlow && !pendingTrust.value) dropTrustToken(who)
     setTokens({ access: data.access_token, refresh: data.refresh_token })
     user.value = {
       login: loginStr || data.login || '',
@@ -102,12 +120,15 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value
   }
 
-  async function login(login, password) {
+  async function login(login, password, { trustDevice = false } = {}) {
     loading.value = true
     error.value = ''
     lockedFor.value = 0
+    pendingTrust.value = !!trustDevice
     try {
-      const { data } = await authApi.login(login.trim(), password)
+      const trust = getTrustToken(login.trim())
+      const { data } = await authApi.login(login.trim(), password,
+        { trust_token: trust, trust_device: !!trustDevice })
       // ── Второй фактор ────────────────────────────────────────────────────────
       // Сервер ответил 200, но токенов НЕ ПРИСЛАЛ: пароль верен, нужен код.
       // Возвращаем это ВЫЗЫВАЮЩЕМУ, а не бросаем ошибку: для человека второй шаг
@@ -118,9 +139,11 @@ export const useAuthStore = defineStore('auth', () => {
         //Срок берём у сервера, а не зашиваем: разъехались бы при первой же правке, и
         //отсчёт на экране показывал бы не то время, что действует на самом деле.
         mfaExpiresAt.value = Date.now() + (Number(data.expires_in) || 300) * 1000
+        mfaMethod.value = data.method === 'email' ? 'email' : 'totp'
+        mfaChannel.value = data.channel || ''
         return { mfaRequired: true }
       }
-      return _afterLogin(data, login.trim())
+      return _afterLogin(data, login.trim(), { trustFlow: true })
     } catch (e) {
       const status = e.response?.status
       //Секунды до разблокировки держим отдельно: по ним рисуется обратный отсчёт, и
@@ -185,7 +208,7 @@ export const useAuthStore = defineStore('auth', () => {
       //до того, как сообщил о результате. Гасит незавершённый вход теперь вызывающий
       //(`LoginPage.onMfaDone` → `cancelMfa`), и делает это ПОСЛЕ того, как получил
       //управление.
-      return _afterLogin(data, mfaLogin.value)
+      return _afterLogin(data, mfaLogin.value, { trustFlow: true })
     } catch (e) {
       const status = e.response?.status
       if (status === 401) {
@@ -209,6 +232,8 @@ export const useAuthStore = defineStore('auth', () => {
     mfaChallenge.value = ''
     mfaLogin.value = ''
     mfaExpiresAt.value = 0
+    mfaMethod.value = 'totp'
+    mfaChannel.value = ''
     error.value = ''
   }
 
@@ -280,5 +305,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey,
-           mfaChallenge, mfaExpiresAt, verifyMfa, cancelMfa, logout, clearSession }
+           mfaChallenge, mfaExpiresAt, mfaMethod, mfaChannel, verifyMfa, cancelMfa,
+           logout, clearSession }
 })
