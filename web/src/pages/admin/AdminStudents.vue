@@ -3,7 +3,7 @@
 // выбором группы из списка (синкнутые группы БД + спарсенные из расписания). id
 // студента на сервере — stud:login (как в синке десктопа); удаление мягкое (надгробие),
 // поэтому изменения доезжают до десктопа обычным pull.
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { RotateCw, Copy } from '@lucide/vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
@@ -13,6 +13,8 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import RolloutDialog from '@/components/account/RolloutDialog.vue'
+import AccountExtraPanel from '@/components/account/AccountExtraPanel.vue'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -153,6 +155,24 @@ const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', 
 const saving = ref(false)
 const formError = ref('')
 
+// ── «Выкатить данные групп» и «доп. данные» (4.0) ────────────────────────────────
+const showRollout = ref(false)
+// «Доп. данные» раскрываются ВНУТРИ окна: окно не растёт, у формы появляется прокрутка
+// (просьба Ярослава). Поэтому в момент раскрытия запоминаем высоту формы и держим её —
+// иначе на телефоне окно уехало бы за экран вместе с кнопкой «Сохранить».
+const showExtra = ref(false)
+const formBox = ref(null)
+const extraRef = ref(null)
+const extraAnchor = ref(null)
+const lockedHeight = ref(0)
+async function toggleExtra() {
+  if (!showExtra.value) lockedHeight.value = formBox.value?.offsetHeight || 0
+  showExtra.value = !showExtra.value
+  if (!showExtra.value) { lockedHeight.value = 0; return }
+  await nextTick()
+  extraAnchor.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 // Дата последней выдачи пароля. Показываем ТОЛЬКО дату: сам пароль показать нельзя,
 // в базе лежит необратимый хеш. Пусто — пароль не менялся с тех пор, как появилось
 // это поле; выдумывать дату задним числом нельзя, «—» честнее.
@@ -214,12 +234,16 @@ function formGroupLabel(g) {
 }
 
 function openCreate() {
+  showExtra.value = false
+  lockedHeight.value = 0
   editing.value = null
   form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' }
   formError.value = ''
   showForm.value = true
 }
 function openEdit(r) {
+  showExtra.value = false
+  lockedHeight.value = 0
   editing.value = r.login
   //Имя и отчество — раздельно: сервер отдаёт first_name/patronymic (name — полная форма-ключ).
   form.value = {
@@ -243,6 +267,9 @@ async function save() {
     } else {
       await adminApi.createStudent({ surname: f.surname, name: f.name, patronymic: f.patronymic, login: f.login, group: f.group, password: f.password, birthday: f.birthday })
     }
+    // Запись колледжа о контактах — после основного сохранения: при создании логина до
+    // этого момента на сервере ещё нет. Отказ показывает сама панель, окно не закрываем.
+    if (extraRef.value && !(await extraRef.value.save(editing.value || f.login.trim()))) return
     showForm.value = false
     await reload()
   } catch (e) {
@@ -294,7 +321,9 @@ async function del(r) {
         <option v-for="g in groupFilterChoices" :key="g" :value="g">{{ g }}</option>
       </select>
       <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminStudents.addAction', '+ Добавить') }}</AppButton>
+      <AppButton variant="ghost" size="sm" @click="showRollout = true">{{ locale.t('rollout.title', 'Выкатить данные групп') }}</AppButton>
     </div>
+    <RolloutDialog v-if="showRollout" @close="showRollout = false" />
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
       <table class="w-full text-sm">
@@ -334,7 +363,8 @@ async function del(r) {
     <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
-        <div class="space-y-3">
+        <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
+             :style="lockedHeight ? { height: lockedHeight + 'px' } : null">
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.surname', 'Фамилия') }}</span>
               <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
@@ -400,8 +430,17 @@ async function del(r) {
             <span class="mt-1 block text-tiny text-text3">{{ editing
               ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
               : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
+          <!-- «Доп. данные» (4.0): стартовый пароль и сверка контактов. Раскрываются
+               ВНУТРИ этой же прокрутки — окно не растёт. -->
+          <div v-if="showExtra" ref="extraAnchor" class="border-t border-border pt-3">
+            <AccountExtraPanel ref="extraRef" :login="editing || ''" :is-admin="true" />
+          </div>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
+        <!-- Еле заметная кнопка: данные нужны редко, а видеть их на каждом открытии
+             редактора — шум поверх ФИО и группы. -->
+        <button type="button" class="mt-3 text-xs text-text3 opacity-50 transition-opacity hover:opacity-100"
+                @click="toggleExtra">{{ showExtra ? locale.t('extra.hide', 'скрыть доп. данные') : locale.t('extra.show', 'доп. данные') }}</button>
         <div class="mt-5 flex justify-end gap-2">
           <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="saving" @click="save">

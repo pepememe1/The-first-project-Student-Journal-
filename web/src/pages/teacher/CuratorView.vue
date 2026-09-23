@@ -13,6 +13,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 import InviteDialog from '@/components/admin/InviteDialog.vue'
+import RolloutDialog from '@/components/account/RolloutDialog.vue'
 
 const { confirm } = useConfirm()
 const toast = useToast()
@@ -24,6 +25,9 @@ const group = ref('')
 //идёт у него, и гонять администратора за каждой ссылкой незачем. Права всё
 //равно проверит сервер (группа обязана быть в curated_groups).
 const showInvite = ref(false)
+//«Выкатить данные групп» (4.0): лист с логинами и паролями для своих групп. Какие группы
+//доступны — решает сервер по curated_groups, диалог показывает только их.
+const showRollout = ref(false)
 const subjects = ref([])
 const subject = ref('')
 const data = ref(null)
@@ -266,7 +270,12 @@ async function exportReport(fmt) {
                 @click="openExport">
           📊 {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
         </button>
+        <button class="flex h-10 items-center gap-1.5 rounded-sm border border-border2 bg-card2 px-3 text-sm font-medium text-text2 hover:border-accent hover:text-accent"
+                @click="showRollout = true">
+          🔑 {{ locale.t('rollout.title', 'Выкатить данные групп') }}
+        </button>
       </div>
+      <RolloutDialog v-if="showRollout" @close="showRollout = false" />
 
       <!-- Раздельное обучение (§ролей, 3.6.1): куратор включает здесь, второй преподаватель
            занимается в редакторе часов группы (админка), подгруппы — кнопкой ниже. -->
