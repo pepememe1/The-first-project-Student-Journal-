@@ -104,12 +104,51 @@ CATEGORY_BY_TYPE = {
     #не имел выключателя вовсе (`category_of` отдавал пустую строку, то есть «разрешено
     #всегда»), и человек, отключивший всё, продолжал бы его получать.
     "report_expired": "system",
+    #Смена пароля (4.0). «Система», а не отдельная категория: это сообщение о работе
+    #аккаунта, а не об учёбе, и отдельный выключатель ради события раз в полгода только
+    #удлинил бы список. Письмо во вкладке «Уведомления» при этом остаётся всегда.
+    "password_changed": "system",
 }
 
 #Все категории, которыми можно управлять из настроек. Клиент рисует свои подписи —
 #здесь только ключи, чтобы не держать тексты в двух местах.
 ALL_CATEGORIES = ("grades", "homework", "schedule", "messages", "events", "reminders",
                   "risk", "lessons", "system")
+
+#🔑 КАТЕГОРИИ ПО РОЛЯМ (4.0) — ЕДИНСТВЕННЫЙ источник правды. По нему страница настроек
+#решает, какие переключатели показать (приходит в `GET /me/prefs`), и по нему же
+#`notify_login` решает, слать ли пуш. Два списка — на странице и на сервере — разъехались
+#бы молча: человек видел бы переключатель, который ничего не решает, или не видел бы
+#того, что ему приходит.
+#⚠️ Отступления от ориентира задачи — с причиной:
+#  • «lessons» (сводка «пары на сегодня») у студента: она приходит только ему;
+#  • «reminders» у родителя: напоминание человек ставит САМ, в том числе в мессенджере,
+#    и заглушить его ролью значило бы потерять то, что он планировал;
+#  • «risk» у преподавателя — только у куратора (см. `categories_for`), приходит только
+#    ему и только о студентах его групп.
+ROLE_CATEGORIES = {
+    "student": ("grades", "lessons", "homework", "schedule", "messages", "events",
+                "reminders", "system"),
+    "teacher": ("schedule", "messages", "events", "reminders", "system"),
+    "parent": ("grades", "homework", "schedule", "messages", "events", "reminders",
+               "system"),
+    "admin": ("messages", "events", "reminders", "system"),
+    "moderator": ("messages", "events", "reminders", "system"),
+}
+#Роль, которой в таблице нет (опечатка синка, новая роль до правки этого файла), —
+#получает ВСЕ категории. Ошибка в пользу тишины опаснее: уведомления у такого человека
+#пропадали бы молча, и заметить это было бы нечем.
+
+
+def categories_for(user) -> tuple:
+    """Какие категории уведомлений существуют для ЭТОГО человека."""
+    role = (getattr(user, "role", "") or "").strip().lower()
+    base = ROLE_CATEGORIES.get(role)
+    if base is None:
+        return ALL_CATEGORIES
+    if role == "teacher" and (getattr(user, "curated_groups", None) or []):
+        return base + ("risk",)
+    return base
 
 
 #──────────────────────────────────────────────────────────────────────────────────────
@@ -142,6 +181,8 @@ _PUSH_TEXT = {
     #⚠️ Ни номера жалобы, ни беседы: по ним посредник восстанавливает, кто на кого
     #жаловался, — то же правило, что у сообщений.
     "report_expired":   ("Жалоба закрыта", "Откройте приложение, чтобы посмотреть."),
+    #⚠️ Никаких подробностей и тем более самого пароля: только факт.
+    "password_changed": ("Пароль изменён", "Если это были не вы — откройте приложение."),
 }
 _PUSH_TEXT_DEFAULT = ("Электронный журнал", "Откройте приложение.")
 
@@ -263,16 +304,18 @@ def category_enabled(prefs: dict | None, category: str) -> bool:
 
 
 def _muted_categories(db, login: str) -> set:
-    """Категории, отключённые этим пользователем. Сбой чтения — считаем, что не отключал
-    ничего: потерять уведомление хуже, чем прислать лишнее."""
+    """Категории, которые этому человеку НЕ слать: отключённые им самим и не
+    существующие для его роли (`categories_for`). Сбой чтения — считаем, что не
+    отключено ничего: потерять уведомление хуже, чем прислать лишнее."""
     try:
         from .models import User
         row = db.query(User).filter(User.login == login).first()
         prefs = (row.prefs if row is not None else None) or {}
+        allowed = set(categories_for(row)) if row is not None else set(ALL_CATEGORIES)
     except Exception as e:      # noqa: BLE001
         log.warning("не удалось прочитать настройки уведомлений: %s", e)
         return set()
-    return {c for c in ALL_CATEGORIES if not category_enabled(prefs, c)}
+    return {c for c in ALL_CATEGORIES if not category_enabled(prefs, c) or c not in allowed}
 
 
 def notify_login(db, login: str, title: str, body: str, data: dict | None = None) -> int:
@@ -508,12 +551,75 @@ def notify_new_grade(db, login: str, subject: str = "", lesson_id: str = "",
     event_id = _create_event(db, login, "grade", title, body,
                              subject=subject, lesson_id=lesson_id,
                              payload={"value": value} if value else {})
-    return notify_login(
+    sent = notify_login(
         db, login,
         title="Новая оценка",
         body="У вас новая оценка. Откройте журнал, чтобы посмотреть.",
         data={"type": "grade", "event_id": event_id},
     )
+    _notify_parents(db, login, "grade", "Новая оценка",
+                    lambda child: _child_grade_phrase(child, value, subject),
+                    subject=subject, lesson_id=lesson_id,
+                    payload={"value": value} if value else {})
+    return sent
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# РОДИТЕЛЮ — об оценках и ДЗ ребёнка (4.0)
+#
+# 🔑 Рассылка родителям живёт ЗДЕСЬ, в функциях уведомления студента, а не у вызывающих:
+# оценку ставят из веба, ДЗ заводят из веба и из синка десктопа — три места, и забытое
+# оставило бы родителя без половины уведомлений. Здесь забыть негде.
+# ⚠️ Только АКТИВНЫЕ связи: доступ родителя открывает согласие студента (инвариант §4.13),
+# и уведомление о его оценках до согласия — тот же доступ к журналу в обход.
+# ⚠️ Никогда не бросает: родительская рассылка не имеет права мешать студенческой, а тем
+# более простановке балла.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+def _parents_of(db, student_login: str):
+    """(имя ребёнка, [логины родителей с активной связью])."""
+    try:
+        from .models import ParentLink, User
+        stud = db.query(User).filter(User.login == student_login, User.role == "student",
+                                     User.deleted == False).first()  # noqa: E712
+        if stud is None:
+            return "", []
+        ids = [ln.parent_id for ln in db.query(ParentLink).filter(
+            ParentLink.student_id == stud.id, ParentLink.status == "active").all()]
+        if not ids:
+            return "", []
+        parents = db.query(User).filter(User.id.in_(ids), User.role == "parent",
+                                        User.deleted == False).all()  # noqa: E712
+        child = stud.full_name or f"{stud.surname or ''} {stud.name or ''}".strip()
+        return child, [p.login for p in parents if p.login]
+    except Exception as e:      # noqa: BLE001
+        log.warning("не удалось найти родителей студента: %s", e)
+        return "", []
+
+
+def _notify_parents(db, student_login: str, kind: str, title: str, body_for_child,
+                    subject: str = "", lesson_id: str = "", payload: dict | None = None):
+    child, parents = _parents_of(db, student_login)
+    for plogin in parents:
+        try:
+            body = body_for_child(child)
+            event_id = _create_event(db, plogin, kind,
+                                     f"{title} · {child}" if child else title,
+                                     body, subject=subject, lesson_id=lesson_id,
+                                     payload=payload or {})
+            notify_login(db, plogin, title=title, body=body,
+                         data={"type": kind, "event_id": event_id})
+        except Exception as e:      # noqa: BLE001
+            log.warning("уведомление родителю не отправлено: %s", e)
+
+
+def _child_grade_phrase(child: str, value: str, subject: str) -> str:
+    v = (value or "").strip()
+    who = child or "Ваш ребёнок"
+    where = _subject_phrase(subject)
+    if v in _ATTENDANCE:
+        return f"{who}: преподаватель отметил{where} — {_ATTENDANCE[v]} ({v})."
+    return f"{who} получил(а) оценку {v}{where}." if v else f"{who}: новая оценка{where}."
 
 
 def notify_grade_changed(db, login: str, subject: str = "", lesson_id: str = "",
@@ -524,12 +630,18 @@ def notify_grade_changed(db, login: str, subject: str = "", lesson_id: str = "",
     event_id = _create_event(db, login, "grade_changed", title, body,
                              subject=subject, lesson_id=lesson_id,
                              payload={"old": old, "new": new})
-    return notify_login(
+    sent = notify_login(
         db, login,
         title="Оценка изменена",
         body="Одну из ваших оценок изменили. Откройте журнал, чтобы посмотреть.",
         data={"type": "grade_changed", "event_id": event_id},
     )
+    _notify_parents(db, login, "grade_changed", "Оценка изменена",
+                    lambda child: (f"{child or 'Вашему ребёнку'}: оценка {old} изменена "
+                                   f"на {new}{_subject_phrase(subject)}."),
+                    subject=subject, lesson_id=lesson_id,
+                    payload={"old": old, "new": new})
+    return sent
 
 
 def notify_schedule_changed(db, login: str, role: str = "student",
@@ -566,12 +678,19 @@ def notify_homework(db, login: str, subject: str = "", lesson_id: str = "",
                              subject=subject, lesson_id=lesson_id,
                              payload={"task": task, "number": number},
                              author_login=author_login, batch_id=batch_id)
-    return notify_login(
+    sent = notify_login(
         db, login,
         title="Новое домашнее задание",
         body="Вам задали домашнее задание. Откройте приложение, чтобы посмотреть.",
         data={"type": "homework", "event_id": event_id},
     )
+    #⚠️ `author_login`/`batch_id` родительскому письму НЕ передаём: иначе во вкладке
+    #«Отправленные» у преподавателя рассылка на группу посчиталась бы вместе с родителями.
+    _notify_parents(db, login, "homework", title,
+                    lambda child: f"{child or 'Вашему ребёнку'} задали: {body}",
+                    subject=subject, lesson_id=lesson_id,
+                    payload={"task": task, "number": number})
+    return sent
 
 
 def _homework_words(subject: str, task: str, number: int = 0) -> tuple:
@@ -666,6 +785,30 @@ def notify_event(db, login: str, title: str, body: str,
         body="Появилось новое объявление о мероприятии. Откройте приложение, чтобы посмотреть.",
         data={"type": "event", "event_id": event_id},
     )
+
+
+def notify_password_changed(db, login: str, by_admin: bool = False) -> int:
+    """Пароль от аккаунта изменён (4.0) — письмо во вкладку «Уведомления» + пуш на все
+    устройства, где установлено приложение.
+
+    🔒 САМ ПАРОЛЬ НЕ УХОДИТ НИКУДА — ни в письмо, ни в пуш, ни в почту. Решение принято
+    осознанно: и лента уведомлений, и почтовый ящик — хранилища, и пароль там только
+    вредит (переживает смену, лежит в резервных копиях чужого сервиса).
+    Смысл уведомления — дать владельцу шанс заметить чужую смену и выбить захватчика:
+    «Выйти из всех сессий» оставляет ему только текущую сессию."""
+    title = "Пароль изменён"
+    if by_admin:
+        body = ("Администратор выдал вам новый пароль. Если вы об этом не просили — "
+                "выйдите из всех сессий (Настройки → Аккаунт → Сессии → «Выйти из всех "
+                "сессий») и сообщите администратору.")
+    else:
+        body = ("Пароль от вашего аккаунта изменён. Если это были не вы — выйдите из всех "
+                "сессий: Настройки → Аккаунт → Сессии → «Выйти из всех сессий», и сообщите "
+                "администратору.")
+    event_id = _create_event(db, login, "password_changed", title, body,
+                             payload={"section": "sessions"})
+    return notify_login(db, login, title=title, body=body,
+                        data={"type": "password_changed", "event_id": event_id})
 
 
 def prune_stale(db) -> int:

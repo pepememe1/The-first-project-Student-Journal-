@@ -279,9 +279,14 @@ def get_prefs(user: User = Depends(get_current_user)):
     #День рождения («ДД.ММ») отдаём ЗДЕСЬ, а не в prefs: его задаёт АДМИН, а prefs —
     #это то, что человек настраивает сам. Клиенту он нужен на своей же карточке, а
     #страница профиля и так дёргает этот запрос при открытии.
+    #`notify_categories` (4.0) — какие переключатели уведомлений есть у ЭТОГО человека.
+    #Список живёт ОДИН, на сервере (`rustore_push.categories_for`), и по нему же
+    #`notify_login` решает, слать ли пуш: страница, которая держала бы свой список по
+    #ролям, однажды показала бы переключатель, ничего не решающий.
     return {"prefs": user.prefs or {}, "user_id": user.id,
             "birthday": user.birthday or "",
-            "offline_grace_min": OFFLINE_GRACE_MIN}
+            "offline_grace_min": OFFLINE_GRACE_MIN,
+            "notify_categories": list(rustore_push.categories_for(user))}
 
 
 @router.post("/prefs")
