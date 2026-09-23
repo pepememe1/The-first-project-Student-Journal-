@@ -225,8 +225,10 @@ const styleSummary = computed(() => {
              написанная им же — раньше тут был свёрнутый список из семи шрифтов, а с
              девятнадцатью шрифтами и восемью эффектами он занял бы всю колонку. -->
         <!-- Достижения за пасхалки. Кнопкой, а не списком прямо здесь: закрытых
-             больше, чем открытых, и в колонке редактора они заняли бы весь экран. -->
-        <Card id="set-achievements" :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
+             больше, чем открытых, и в колонке редактора они заняли бы весь экран.
+             ⚠️ 4.0: ТОЛЬКО СТУДЕНТУ. У преподавателя, администратора, модератора и
+             родителя раздела нет вовсе — пасхалки там остаются, а «коллекция» нет. -->
+        <Card v-if="auth.role === 'student'" id="set-achievements" :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
           <button type="button" @click="achievementsOpen = true"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
             <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-lg">🏆</span>

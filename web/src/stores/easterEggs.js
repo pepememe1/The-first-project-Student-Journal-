@@ -485,6 +485,10 @@ export const useEasterStore = defineStore('easterEggs', () => {
   async function claim(egg) {
     const achievement = EGG_ACHIEVEMENT[egg]
     if (!achievement) return false
+    //4.0: достижения есть ТОЛЬКО у студента. Остальным сцена показывается, но ачивка не
+    //закрывается и тост «достижение открыто» не всплывает — иначе он звал бы в раздел,
+    //которого у этой роли нет.
+    if (useAuthStore().role !== 'student') return false
     try {
       const { data } = await easterApi.claim({ egg, achievement })
       //Пополняем копию в любом случае: `unlocked=false` означает «уже была», а не отказ.
