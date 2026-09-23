@@ -145,11 +145,22 @@ def get_current_user(authorization: str = Header(None),
     #Так logout и админская блокировка мгновенно аннулируют украденный/устаревший токен,
     #даже если по подписи и exp он ещё «живой». Токены БЕЗ jti (старого формата) пускаем
     #по подписи+exp до их естественного истечения — обратная совместимость.
+    #🔑 ЭТО ЕДИНСТВЕННАЯ ТОЧКА ОТЗЫВА (4.0, раздел «Сессии»). Крестик у сессии, «Выйти из
+    #всех сессий», выход, отзыв администратором и снятие доверия с устройства — все они
+    #лишь ставят `revoked` в `auth_sessions`, а действует отзыв ЗДЕСЬ, на следующем же
+    #запросе. Разложить проверку по ручкам значило бы двести мест, где однажды забудут.
     jti = payload.get("jti")
     if jti:
         sess = db.query(AuthSession).filter(AuthSession.jti == jti).first()
         if sess is None or sess.revoked:
             raise HTTPException(status_code=401, detail="Сессия завершена или отозвана")
+        #«Последняя активность» для раздела «Сессии». Не чаще раза в пять минут (запись —
+        #узкое место SQLite) и никогда не роняя запрос: это мониторинг, а не доступ.
+        try:
+            from . import account_sessions
+            account_sessions.touch(db, sess)
+        except Exception:      # noqa: BLE001
+            db.rollback()
     user = db.query(User).filter(
         User.login == payload.get("sub"), User.deleted == False  #noqa: E712
     ).first()

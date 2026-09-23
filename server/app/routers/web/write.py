@@ -486,7 +486,11 @@ def admin_create_student(payload: dict = Body(...),
     row.subjects = []
     row.group_assignments = {}
     if password:
-        set_user_password(row, password)
+        #4.0: пароль, набранный администратором, — это пароль КОЛЛЕДЖА, и его можно
+        #будет увидеть в «доп. данных» и в документе группы, пока студент не сменит его
+        #сам (см. issued_credentials). `issue` зовёт `set_user_password` внутри.
+        from ... import issued_credentials
+        issued_credentials.issue(db, row, password, by=_admin.login)
     row.updated_at = _now_iso()
     row.deleted = False
     db.commit()
@@ -565,10 +569,19 @@ def admin_update_student(login: str, payload: dict = Body(...),
     if "birthday" in payload:
         row.birthday = _clean_birthday(payload.get("birthday"))
     password = payload.get("password") or ""
+    had_password = bool(row.password_hash)
     if password:
-        set_user_password(row, password)
+        #4.0: см. `admin_create_student` — пароль администратора становится стартовым.
+        from ... import issued_credentials
+        issued_credentials.issue(db, row, password, by=_admin.login)
     row.updated_at = _now_iso()
     db.commit()
+    if password:
+        audit.log(db, actor=_admin.login, role="admin", action="credentials.set",
+                  target=login, detail="администратор задал новый пароль")
+        if had_password:
+            from ..account import _after_password_change
+            _after_password_change(db, row, by_admin=True)
     return {"ok": True, "login": login}
 
 

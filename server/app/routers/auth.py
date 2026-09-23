@@ -42,21 +42,29 @@ def client_kind(request: Request) -> str:
 
 
 def _record_session(db: Session, jti: str, login: str, role: str, kind: str,
-                    exp: int, request: Request, pair_jti: str = "", client: str = ""):
-    """Сохраняет выданный токен в AuthSession (для отзыва/refresh/видимости сессий)."""
-    dev = ip = ""
+                    exp: int, request: Request, pair_jti: str = "", client: str = "",
+                    trusted_device_id: str = ""):
+    """Сохраняет выданный токен в AuthSession (для отзыва/refresh/видимости сессий).
+
+    `user_agent` и `trusted_device_id` (4.0) — для раздела «Сессии» у самого человека:
+    по первому он узнаёт своё устройство, по второму сессия живёт без потолка по
+    возрасту, пока устройство доверенное."""
+    dev = ip = ua = ""
     try:
         if request is not None:
             dev = request.headers.get("X-Device-Id", "") or ""
             ip = throttle.client_ip(request)
+            ua = (request.headers.get("user-agent", "") or "")[:300]
     except Exception:
         pass
     db.add(AuthSession(jti=jti, login=login, role=role, kind=kind, device_id=dev,
                        ip=ip, issued_at=_now(), expires_at=int(exp), revoked=False,
-                       pair_jti=pair_jti, client=client))
+                       pair_jti=pair_jti, client=client, user_agent=ua,
+                       last_seen_at=_now(), trusted_device_id=trusted_device_id or ""))
 
 
-def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
+def _issue_token_pair(db: Session, user: User, request: Request,
+                      trusted=None, want_trust: bool = False) -> TokenOut:
     """Выдаёт пару (access + refresh), записывает обе сессии и коммитит.
 
     access — короткий (для запросов), refresh — длинный (тихое обновление). Связаны
@@ -75,13 +83,35 @@ def _issue_token_pair(db: Session, user: User, request: Request) -> TokenOut:
     #выдало бы короткую сессию человеку, который её уже заслужил.
     from . import mfa as _mfa
     ttl = issue_ttl_min(client, mfa=_mfa.is_active(db, user.id))
+    #🔐 ДОВЕРЕННОЕ УСТРОЙСТВО (4.0). Уже доверенное (`trusted` — проверено вызывающим
+    #по секрету устройства) или только что доверенное галочкой — сессия получает долгий
+    #refresh без потолка по возрасту (см. config.TRUSTED_SESSION_TTL_MIN и /auth/refresh).
+    #⚠️ Access при этом ПРЕЖНИЙ, короткий: долгим становится только refresh.
+    #⚠️ Галочку снял на уже доверенном устройстве — доверие снимается: человек прямо
+    #сказал «не доверять», и оставить устройство доверенным значило бы не услышать его.
+    new_trust_token = ""
+    if trusted is not None and not want_trust:
+        from .. import login_guard
+        login_guard.revoke_device(db, trusted.id)
+        trusted = None
+    elif trusted is None and want_trust:
+        from .. import login_guard
+        trusted, new_trust_token = login_guard.issue_trust(db, user, request)
+    if trusted is not None:
+        from .. import login_guard
+        login_guard.mark_login(trusted, request)
+    dev_id = trusted.id if trusted is not None else ""
+    r_ttl = config.TRUSTED_SESSION_TTL_MIN if trusted is not None else ttl
     access, a_jti, a_exp = create_token_full(user.login, user.role, "access", ttl_min=ttl)
-    refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh", ttl_min=ttl)
-    _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti, client)
-    _record_session(db, r_jti, user.login, user.role, "refresh", r_exp, request, a_jti, client)
+    refresh, r_jti, r_exp = create_token_full(user.login, user.role, "refresh", ttl_min=r_ttl)
+    _record_session(db, a_jti, user.login, user.role, "access", a_exp, request, r_jti, client,
+                    trusted_device_id=dev_id)
+    _record_session(db, r_jti, user.login, user.role, "refresh", r_exp, request, a_jti, client,
+                    trusted_device_id=dev_id)
     db.commit()
     name = user.full_name or f"{user.surname} {user.name}".strip()
-    return TokenOut(access_token=access, refresh_token=refresh, role=user.role, name=name)
+    return TokenOut(access_token=access, refresh_token=refresh, role=user.role, name=name,
+                    trust_token=new_trust_token)
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
@@ -279,6 +309,13 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     #из двух с лишним сотен ручек; первая забытая — это доступ к журналу по одному
     #паролю, причём молча. Здесь забыть негде: токена просто нет.
     from . import mfa as _mfa
+    from .. import login_guard
+    #Доверенное ли устройство — по секрету, выданному ему при прошлом входе (4.0).
+    #Проверяем ДО второго фактора: от этого зависит, спрашивать ли код из письма, а
+    #сам TOTP доверенное устройство НЕ отменяет — он сильнее и был включён человеком.
+    trusted = login_guard.check_trust(db, u, body.trust_token) if body.trust_token else None
+    if body.trust_token and trusted is None:
+        db.commit()        #просроченное доверие снято в check_trust — фиксируем
     if _mfa.is_active(db, u.id):
         events.record("info", "mfa_challenge", "запрошен второй фактор", login_str, ip)
         #JSONResponse, а НЕ обычный dict: у этой ручки объявлен response_model=TokenOut,
@@ -290,10 +327,28 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         #знал, что у него было время, и не понимает, что произошло.
         #⚠️ Отдаём СЕКУНДЫ, а не метку времени: часы браузера расходятся с серверными,
         #и по абсолютной метке отсчёт врал бы ровно на эту разницу.
-        return JSONResponse({"mfa_required": True,
-                             "challenge": _mfa.make_challenge(u),
+        return JSONResponse({"mfa_required": True, "method": "totp",
+                             "challenge": _mfa.make_challenge(
+                                 u, trust=body.trust_device and is_web_client(request),
+                                 device=trusted.id if trusted is not None else ""),
                              "expires_in": _mfa.CHALLENGE_TTL_MIN * 60})
-    return _issue_token_pair(db, u, request)
+
+    #── ПОДТВЕРЖДЕНИЕ ВХОДА КОДОМ ИЗ ПИСЬМА (4.0) ─────────────────────────────────
+    #У аккаунта есть подтверждённая почта, а устройство не доверенное — токенов НЕТ,
+    #есть challenge и письмо с кодом. Тот же приём, что у второго фактора выше, и по
+    #той же причине: пометку «ещё не подтвердил» пришлось бы проверять в каждой ручке.
+    #⚠️ Только для веба и приложения: десктоп проходит жёсткий барьер устройства, а мост
+    #входа программы кода из письма показать не умеет (см. шапку login_guard.py).
+    if trusted is None and is_web_client(request):
+        email = login_guard.confirm_email(db, u)
+        if email:
+            events.record("info", "login_confirm", "запрошен код из письма", login_str, ip)
+            return JSONResponse(login_guard.start_login_confirmation(
+                db, u, email, body.trust_device, request))
+    #Доверие выдаём только вебу и приложению: у десктопа своё «доверенное устройство» —
+    #барьер одобрения (§4.11), и сессия без потолка ему ни к чему.
+    return _issue_token_pair(db, u, request, trusted=trusted,
+                             want_trust=body.trust_device and is_web_client(request))
 
 
 @router.post("/refresh", response_model=TokenOut)
@@ -345,7 +400,13 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
     #прежние 5 часов. Читать «мобильный ли клиент» из ЗАГОЛОВКА прямо здесь нельзя: тогда
     #браузер, приславший X-Client: android, растянул бы уже выданную веб-сессию до недели,
     #то есть заголовок стал бы способом обойти потолок.
-    if session_age_min > session_ttl_min(sess.client or "", mfa=mfa_on):
+    #🔐 Сессия ДОВЕРЕННОГО устройства (4.0) потолка по возрасту не имеет — это и есть
+    #«пока вошёл с доверенного устройства — без срока». Держит её только само доверие:
+    #сняли его (крестик в «Сессиях», «выйти из всех», отзыв администратором) — сессия
+    #тут же судится по обычной политике и умирает, потому что старше пяти часов.
+    from .. import login_guard
+    trusted_now = login_guard.device_alive(db, sess.trusted_device_id or "")
+    if not trusted_now and session_age_min > session_ttl_min(sess.client or "", mfa=mfa_on):
         sess.revoked = True
         db.commit()
         raise HTTPException(status_code=401, detail="Сессия истекла, нужен повторный вход")
@@ -419,7 +480,8 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         ttl = max(1, min(ttl, int((int(sess.expires_at) - now_ts) // 60)))
     access, a_jti, a_exp = create_token_full(u.login, u.role, "access", ttl_min=ttl)
     _record_session(db, a_jti, u.login, u.role, "access", a_exp, request, jti,
-                    sess.client or "")
+                    sess.client or "",
+                    trusted_device_id=(sess.trusted_device_id or "") if trusted_now else "")
     sess.pair_jti = a_jti
     db.commit()
     name = u.full_name or f"{u.surname} {u.name}".strip()
@@ -449,6 +511,11 @@ def logout(request: Request, authorization: str = Header(None),
                 if pair is not None and not pair.revoked:
                     pair.revoked = True
                     revoked += 1
+            #🔐 Выход с доверенного устройства НЕ снимает доверие сразу (4.0): запускается
+            #15-дневный срок, в который вход отсюда снова без кода из письма.
+            if sess.trusted_device_id:
+                from .. import login_guard
+                login_guard.on_logout(db, sess.trusted_device_id)
         db.commit()
         #🔒 И РВЁМ ЖИВОЙ СОКЕТ. Без этого «Выйти» закрывало только новые подключения, а
         #уже открытое продолжало получать сигналы о переписке часами. Подробности —
@@ -832,12 +899,22 @@ def recover_confirm(body: dict = Body(...), request: Request = None,
     #Отзываем ВСЕ сессии: смена пароля — это в том числе реакция на «кажется, меня
     #взломали», и старый токен обязан перестать работать вместе со старым паролем.
     db.query(AuthSession).filter(AuthSession.login == row.login).update({"revoked": True})
+    #4.0: и доверие со всех устройств — иначе с доверенного устройства захватчика вход
+    #снова шёл бы без кода из письма. И стартовый пароль колледжа больше не показывается:
+    #пароль теперь придуман самим человеком.
+    from .. import issued_credentials, login_guard
+    login_guard.revoke_all_devices(db, row.login)
+    issued_credentials.forget(db, u)
     db.commit()
     #Смена пароля — типичная реакция на «кажется, меня взломали»: живой сокет чужой
     #вкладки обязан оборваться вместе с токеном, а не дожить до конца срока.
     _kick_sockets(u.id)
     audit.log(db, request, actor=row.login, action="password.reset.ok",
               detail="пароль изменён по ссылке из письма")
+    #Уведомление «пароль изменён» (4.0): пуш, письмо во вкладке и на почту. Сам пароль
+    #не уходит никуда. Ленивый импорт: `account` импортирует этот модуль.
+    from .account import _after_password_change
+    _after_password_change(db, u, by_admin=False)
     #Пароль сменился — старые неудачные попытки по нему больше ничего не означают,
     #и держать признак «подбирают» значило бы требовать код при каждом продлении
     #сессии ещё час после того, как человек уже всё починил.

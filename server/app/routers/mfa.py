@@ -134,13 +134,29 @@ def is_active(db: Session, user_id: str, role: str = "") -> bool:
     return True
 
 
-def make_challenge(user: User) -> str:
+def make_challenge(user: User, trust: bool = False, device: str = "") -> str:
+    """Короткий challenge второго шага входа.
+
+    `trust`/`device` (4.0) — галочка «Доверять этому устройству?» и уже доверенное
+    устройство, с которого пришли. Живут В САМОМ challenge, а не в сторе клиента: второй
+    шаг входа не должен уметь «передумать» и назначить себе доверие, которого не
+    просили на первом."""
     payload = {
         "sub": user.login,
         "typ": CHALLENGE_TYPE,
+        "trust": bool(trust),
+        "dev": device or "",
         "exp": datetime.now(timezone.utc) + timedelta(minutes=CHALLENGE_TTL_MIN),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALG)
+
+
+def _challenge_claims(token: str) -> dict:
+    """Поля challenge без повторной проверки пользователя (подпись проверяется)."""
+    try:
+        return jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALG])
+    except JWTError:
+        return {}
 
 
 def _user_from_challenge(db: Session, token: str) -> User:
@@ -399,10 +415,33 @@ def guard_action(db: Session, user: User, code: str, request: Request,
 @router.post("/verify")
 def mfa_verify(body: dict = Body(...), request: Request = None,
                db: Session = Depends(get_db)):
-    """Второй шаг входа: challenge + код → обычная пара токенов."""
-    from .auth import _issue_token_pair      # ленивый: иначе кольцо импортов
+    """Второй шаг входа: challenge + код → обычная пара токенов.
 
-    user = _user_from_challenge(db, str(body.get("challenge", "")))
+    Шагов второго вида ДВА, и дверь у них одна: код из приложения (TOTP) и код из
+    письма (4.0, подтверждение входа с нового устройства). Одна ручка — потому что
+    клиенту второй шаг безразличен: он показывает поле кода и отправляет его сюда.
+    Различает вид сам challenge (`typ`), подделать его нельзя — он подписан."""
+    from .auth import _issue_token_pair      # ленивый: иначе кольцо импортов
+    from .. import login_guard
+
+    challenge = str(body.get("challenge", ""))
+    if login_guard.is_confirm_challenge(challenge):
+        user, want_trust = login_guard.check_confirmation(
+            db, challenge, str(body.get("code", "")), request)
+        throttle.clear_suspicion(user.login)
+        return _issue_token_pair(db, user, request, want_trust=want_trust)
+
+    user = _user_from_challenge(db, challenge)
+    claims = _challenge_claims(challenge)
+    want_trust = bool(claims.get("trust"))
+    #Устройство, с которого пришли, могло быть уже доверенным: берём его, а не заводим
+    #второе — иначе каждый вход с TOTP оставлял бы в базе осиротевшую запись.
+    trusted = None
+    dev_id = str(claims.get("dev") or "")
+    if dev_id and login_guard.device_alive(db, dev_id):
+        from ..models import TrustedDevice
+        dev = db.get(TrustedDevice, dev_id)
+        trusted = dev if dev is not None and dev.login == user.login else None
     row = row_for(db, user.id)
     if not row or not row.confirmed_at:
         raise HTTPException(status_code=400, detail="Второй фактор не настроен")
@@ -420,7 +459,7 @@ def mfa_verify(body: dict = Body(...), request: Request = None,
     #Код подтверждён — след «к аккаунту подбирали пароль» гасим: дальше требовать
     #подтверждения на каждое продление сессии значило бы наказывать жертву за атаку.
     throttle.clear_suspicion(user.login)
-    out = _issue_token_pair(db, user, request)
+    out = _issue_token_pair(db, user, request, trusted=trusted, want_trust=want_trust)
     #Предупреждаем, когда запасных ключей почти не осталось. Молча закончившиеся
     #коды означают, что при потере телефона человек узнает об этом в худший момент.
     if left <= 2:

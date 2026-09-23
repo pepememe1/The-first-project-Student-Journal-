@@ -283,3 +283,60 @@ def build_schedule_xlsx(group: str, weeks: dict, pair_times=None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_credentials_xlsx(group: str, rows) -> bytes:
+    """Данные для входа студентов группы (4.0, «Выкатить данные групп»).
+
+    rows — [{n, name, login, password, note}]. Колонки ровно те, что раздают в начале
+    года: №, ФИО, логин, пароль. Там, где пароля нет (человек сменил его сам или он
+    задан раньше), вместо пароля — пометка ОБЫЧНЫМ текстом, а не пустая клетка: пустоту
+    в распечатке читают как «пароля нет, входите без него».
+
+    ⚠️ Внизу — напоминание о хранении. Это не формальность: лист с паролями группы —
+    самый ценный документ в кабинете куратора, и лежать ему на столе нельзя."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = re.sub(r'[\[\]:*?/\\]', '_', f"Вход {group}")[:31]
+    headers = ["№", "ФИО", "Логин", "Пароль"]
+    ncols = len(headers)
+    last_col = get_column_letter(ncols)
+    _title(ws, 1, last_col, "Данные для входа в электронный журнал", 16, bold=True)
+    _title(ws, 2, last_col, f"Группа {group}", SZ, bold=True)
+    _title(ws, 3, last_col, f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
+                            f"Технологический колледж ВСГУТУ", 12, italic=True)
+    HDR = 5
+    ws.append([])
+    ws.append(headers)
+    for cell in ws[HDR]:
+        cell.font = Font(name=FNT, size=SZ, bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = BORDER
+    for i, r in enumerate(rows):
+        pw = r.get("password") or ""
+        ws.append([r.get("n", i + 1), r.get("name", ""), r.get("login", ""),
+                   pw or f"({r.get('note') or '—'})"])
+        row_no = HDR + 1 + i
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=row_no, column=c)
+            cell.border = BORDER
+            #Пароль — моноширинным: «l» и «1» здесь и так исключены генератором, но
+            #пароли, заданные администратором вручную, бывают любыми.
+            cell.font = Font(name="Consolas" if (c == 4 and pw) else FNT,
+                             size=SZ, italic=(c == 4 and not pw))
+            cell.alignment = Alignment(horizontal="center" if c == 1 else "left",
+                                       vertical="center")
+            #Пароль и логин — ТЕКСТОМ: иначе Excel превратит пароль из одних цифр в
+            #число и съест ведущие нули.
+            if c in (3, 4):
+                cell.number_format = "@"
+    last = HDR + len(rows)
+    note_row = last + 2
+    _title(ws, note_row, last_col,
+           "Смените пароль при первом входе: Настройки → Безопасность → «Сменить пароль». "
+           "Храните лист в недоступном для посторонних месте.", 11, italic=True)
+    _autofit(ws, ncols, [HDR] + list(range(HDR + 1, last + 1)), min_w=6, max_w=48)
+    ws.freeze_panes = f"A{HDR + 1}"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

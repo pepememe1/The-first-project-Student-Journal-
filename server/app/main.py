@@ -30,6 +30,7 @@ from .routers import activities as activities_router
 from .routers import connect as connect_router
 from .routers import webauthn_router
 from .routers import mfa as mfa_router
+from .routers import account as account_router
 from .routers import appupdate
 from .routers import desktopupdate
 from .routers import publicschedule
@@ -298,6 +299,9 @@ app.include_router(webauthn_router.router)
 #Второй фактор входа. ⚠️ Идёт МИМО require_admin намеренно: иначе
 #администратор без фактора не смог бы его завести — замок без двери.
 app.include_router(mfa_router.router)
+#Учётная запись (4.0): свой пароль, сессии, контакты; выдача стартовых паролей.
+#ДО `web.router`: пути `/web/accounts/*` не должны встретить на пути чужой шаблон.
+app.include_router(account_router.router)
 app.include_router(web.router)
 app.include_router(parent.router)          # кабинет родителя + согласие студента (/web/parent/*)
 app.include_router(messenger.router)       # мессенджер (/web/messenger/*) — до SPA-катч-олла

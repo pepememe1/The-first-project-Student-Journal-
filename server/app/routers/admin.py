@@ -86,6 +86,15 @@ def revoke_session(body: RevokeIn,
         if not s.revoked:
             s.revoked = True
             revoked += 1
+    #4.0: экстренная блокировка снимает и доверие с устройств. Без этого отозванный
+    #человек вошёл бы снова с «доверенного» устройства БЕЗ кода из письма — то есть
+    #блокировка держалась бы ровно до следующего ввода пароля.
+    from .. import login_guard
+    if body.login:
+        login_guard.revoke_all_devices(db, body.login.strip())
+    for s in targets:
+        if s.trusted_device_id:
+            login_guard.revoke_device(db, s.trusted_device_id)
     db.commit()
     if revoked:
         #🔒 Экстренная блокировка обязана РВАТЬ живые сокеты, а не только закрывать вход:
