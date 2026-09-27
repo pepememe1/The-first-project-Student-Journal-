@@ -370,3 +370,162 @@ def test_sync_status_says_unknown_instead_of_inventing_zero(api, monkeypatch):
     data = _json.loads(body)
     assert data["available"] is False
     assert "conflicts" not in data, "нельзя выдавать ноль за известное значение"
+
+
+# ── Раздел «Сервер» пускает только администратора (аудит 22.09.2026, F-01, P0) ──────
+def _seed_role(login: str, role: str) -> None:
+    from app.db import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    try:
+        db.merge(User(id=f"u:{login}", login=login, role=role, surname="Тестов",
+                      name="Тест", deleted=False,
+                      updated_at="2026-09-25T00:00:00+00:00"))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_local_caller_reports_the_role_from_the_local_copy(api, monkeypatch):
+    """Роль берётся из ЛОКАЛЬНОЙ копии базы, а не из утверждения токена: иначе
+    разжалованный на бою администратор сохранял бы права до конца жизни токена."""
+    _seed_role("f01_teacher", "teacher")
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f01_teacher")
+    #Токен нарочно выписан с ролью admin: локальная копия говорит «teacher» — верим ей.
+    access, _ = local_api.issue_local_session("f01_teacher", "admin")
+    assert access, "тесту нужен настоящий подписанный токен"
+    who = local_api._local_caller(f"Bearer {access}")
+    assert who == {"login": "f01_teacher", "role": "teacher"}, who
+
+
+def test_refresh_token_is_not_a_pass(api, monkeypatch):
+    """Пропуском служит только access: refresh живёт дольше, и пускать по нему значило
+    бы продлить права мимо срока (на бою это закрыто проверкой типа в get_current_user)."""
+    _seed_role("f01_refresh", "admin")
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f01_refresh")
+    access, refresh = local_api.issue_local_session("f01_refresh", "admin")
+    assert local_api._local_caller(f"Bearer {access}")
+    assert local_api._local_caller(f"Bearer {refresh}") == {}
+
+
+def test_server_section_refuses_a_teacher_over_http(api, monkeypatch):
+    """Сквозная проверка на НАСТОЯЩЕМ локальном сервере: преподаватель, вошедший в
+    программу, получает 403 на строку команд к боевой машине, администратор — проходит."""
+    from desktop import server_admin
+    monkeypatch.setattr(server_admin, "_load", lambda: [])
+    monkeypatch.setattr(server_admin, "_save", lambda items: True)
+    monkeypatch.setattr(server_admin, "suggested_host", lambda: "")
+    monkeypatch.setattr(server_admin, "_audit", lambda *a, **k: None)
+
+    _seed_role("f01_t", "teacher")
+    _seed_role("f01_a", "admin")
+    body = b'{"command": "id"}'
+    json_h = {"Content-Type": "application/json"}
+
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f01_t")
+    teacher, _ = local_api.issue_local_session("f01_t", "teacher")
+    code, _ = _get(api.url("/desk/servers/any/exec"), data=body,
+                   headers={**json_h, "Authorization": f"Bearer {teacher}"})
+    assert code == 403, f"преподаватель получил доступ к строке команд: {code}"
+
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f01_a")
+    admin, _ = local_api.issue_local_session("f01_a", "admin")
+    code, _ = _get(api.url("/desk/servers"), headers={"Authorization": f"Bearer {admin}"})
+    assert code == 200, f"администратора охранник не пустил: {code}"
+
+
+# ── Очередь правок в состоянии синка; передача сессии (аудит 22.09.2026, F-02/F-04/N-05)
+def test_sync_status_reports_the_outbox(api, monkeypatch):
+    """Проводка «очередь → /desk/sync/status → значок»: без неё человек не узнал бы, что
+    его оценки ещё не дошли до сервера (сам цикл синка про очередь не рассказывает)."""
+    import json as _json
+    from desktop import desk_outbox
+    _seed_role("f02_st", "teacher")
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f02_st")
+    seq = desk_outbox.enqueue("f02_st", "POST", "/web/teacher/grade", "", b"{}",
+                              "application/json")
+    desk_outbox.mark_ready(seq, {"id": "G-status", "base_updated_at": "", "updated_at": "L"})
+    token, _ = local_api.issue_local_session("f02_st", "teacher")
+    code, body = _get(api.url("/desk/sync/status"),
+                      headers={"Authorization": f"Bearer {token}"})
+    assert code == 200
+    data = _json.loads(body)
+    assert data["outbox"]["pending"] >= 1, "очередь не доехала до статуса"
+    #W-11: выход спрашивает именно этот признак. Без него `has_unsent` снова осталась
+    #бы функцией без вызывающего, а человек — без вопроса «точно уходите?».
+    assert data.get("unsent") is True, "признак неотправленного не доехал до статуса"
+
+
+def test_bootstrap_gives_no_session_when_the_personal_copy_did_not_open(api, monkeypatch):
+    """🔒 F-04: копия не открылась — сессии нет. Раньше она выдавалась на ПРЕЖНЕЙ базе:
+    человек работал в чужом файле, и его правки ложились туда же."""
+    issued = []
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f04_boot")
+    monkeypatch.setattr(local_api, "_saved_session_alive", lambda: True)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda login, authenticated=False: False)
+    monkeypatch.setattr(local_api, "issue_local_session",
+                        lambda login, role: issued.append(login) or ("tok-x", "ref-x"))
+    code, body = _get(api.url("/desktop/bootstrap?route=/"))
+    assert code == 200
+    assert not issued and b"tok-x" not in body, "сессия выдана на чужой базе"
+
+
+def test_bootstrap_resumes_sync_for_a_restored_session(api, monkeypatch):
+    """🔥 N-05: по сохранённой сессии синк не запускался вовсе — копия не обновлялась до
+    повторного входа, а очередь правок не уходила. Уже работающий синк этого же человека
+    не перезапускается: `start(login, "")` затёр бы пароль, которым он продлевает вход."""
+    from sync import sync_runner
+    started = []
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f05_boot")
+    monkeypatch.setattr(local_api, "_saved_session_alive", lambda: True)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda login, authenticated=False: True)
+    monkeypatch.setattr(local_api, "issue_local_session", lambda login, role: ("tok", "ref"))
+    monkeypatch.setattr(sync_runner, "start",
+                        lambda login, password, role: started.append((login, password)))
+    monkeypatch.setattr(sync_runner, "current_login", lambda: "")
+    assert _get(api.url("/desktop/bootstrap?route=/"))[0] == 200
+    assert started == [("f05_boot", "")], started
+
+    started.clear()
+    monkeypatch.setattr(sync_runner, "current_login", lambda: "f05_boot")
+    assert _get(api.url("/desktop/bootstrap?route=/"))[0] == 200
+    assert started == [], "живой синк того же человека перезапущен без пароля"
+
+
+# ── Озвучка Вектора через бой (26.09.2026: ключ ИИ в копию больше не приезжает) ──────
+def test_local_server_voices_the_vector_through_prod(api):
+    """Проводка: локальный сервер ставит в `vector_llm` боевую озвучку. Без неё, после
+    того как ключ GigaChat перестал утекать в копию, Вектор в программе молча перестал бы
+    переформулировать ответы — ни ошибки, ни предупреждения."""
+    from app import vector_llm
+    assert vector_llm._remote is local_api._remote_vector, \
+        "локальный сервер не подключил озвучку Вектора через сервер"
+
+
+def test_remote_vector_asks_prod_as_the_signed_in_person(monkeypatch):
+    import httpx
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"text": "переформулировано"}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, json=json, headers=headers)
+        return _Resp()
+    monkeypatch.setattr(local_api, "_remote_auth", lambda: ("https://prod.example", "TOK", ""))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    out = local_api._remote_vector("voice", {"facts": "ф", "locale": "en"})
+    assert out == "переформулировано"
+    assert sent["url"] == "https://prod.example/vector/voice"
+    assert sent["json"] == {"facts": "ф", "locale": "en", "mode": "voice"}
+    assert sent["headers"]["Authorization"] == "Bearer TOK"
+
+
+def test_remote_vector_without_a_session_answers_nothing(monkeypatch):
+    """Нет входа или сети — пустой ответ: Вектор отдаст факты без переформулировки."""
+    monkeypatch.setattr(local_api, "_remote_auth", lambda: ("https://prod.example", "", "expired"))
+    assert local_api._remote_vector("voice", {"facts": "ф"}) == ""

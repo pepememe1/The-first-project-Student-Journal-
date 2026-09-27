@@ -39,15 +39,62 @@ let timer = null
 let disabled = false
 let mounted = 0
 
-function issuesOf(st) {
-  if (!st || !st.available) return []
+/**
+ * Беды синка, о которых человек обязан узнать (аудит 22.09.2026, находка F-08).
+ *
+ * Раньше учитывались три состояния из шести: вход, конфликты, отказы. Молчали:
+ *   • `mirror_error` — копия, из которой рисуется журнал, не обновилась: человек смотрел
+ *     на устаревшие оценки, и ни один признак на экране об этом не говорил;
+ *   • `error` при ждущих правках — «нет связи с сервером» само по себе забота значка
+ *     связи, но «ваши 5 оценок ещё не ушли» — забота ЭТОГО значка.
+ * Конфликты и отказы теперь приходят из очереди правок программы (`outbox`), а не из
+ * старой базы: её слияние считало «конфликтом» любую свежую серверную оценку.
+ *
+ * ⚠️ Ждущие правки показываем, ТОЛЬКО когда им что-то мешает (нет связи, остановка
+ * досылки). В обычной работе очередь пуста через секунду после правки, и значок,
+ * мигающий на каждой оценке, перестали бы замечать.
+ */
+export function issuesOf(st) {
+  if (!st || st.available === false && !st.outbox) return []
   const out = []
+  const ob = st.outbox && st.outbox.available !== false ? st.outbox : {}
   if (st.auth_error) out.push({ kind: 'auth', detail: String(st.auth_error) })
-  if (st.conflicts > 0) out.push({ kind: 'conflicts', count: st.conflicts })
-  const rejected = st.rejected && typeof st.rejected === 'object' ? st.rejected : {}
-  const rejectedTotal = Object.values(rejected).reduce((a, b) => a + (Number(b) || 0), 0)
-  if (rejectedTotal > 0) out.push({ kind: 'rejected', count: rejectedTotal })
+  if (ob.conflicts > 0) out.push({ kind: 'conflicts', count: ob.conflicts })
+  if (ob.rejected > 0) out.push({ kind: 'rejected', count: ob.rejected })
+  const stuck = st.online === false || Boolean(st.error) || Boolean(st.outbox_stopped)
+  if (ob.pending > 0 && stuck) {
+    out.push({ kind: 'pending', count: ob.pending, detail: String(st.error || st.outbox_stopped || '') })
+  }
+  if (st.mirror_error) {
+    out.push({ kind: 'mirror', detail: String(st.mirror_error), since: st.mirror_ok_at || '' })
+  }
+  //«Сверщик» (`sync/verifier.py`) нашёл расхождение копии с сервером. Копия уже
+  //пересобирается сама — но человек, смотревший на неё, должен знать, что видел не то.
+  const v = st.verify || {}
+  if (Array.isArray(v.mismatch) && v.mismatch.length) {
+    out.push({ kind: 'verify', count: v.mismatch.length })
+  }
   return out
+}
+
+/**
+ * Когда копия в последний раз СОШЛАСЬ с сервером («сверено»), или '' — если сверки не было,
+ * она не прошла или слишком давняя (идея Ярослава: значок «сверено», 25.09.2026).
+ *
+ * ⚠️ Показываем только свежую сверку (моложе `maxAgeMs`): «сверено вчера» при сегодняшних
+ * правках — это уже не правда о копии, а воспоминание о ней.
+ */
+export function verifiedAt(st, now = Date.now(), maxAgeMs = 3 * 3600_000) {
+  const v = (st && st.verify) || {}
+  if (!v.ok || !v.at) return ''
+  const t = Date.parse(v.at)
+  if (!Number.isFinite(t) || now - t > maxAgeMs) return ''
+  return v.at
+}
+
+/** Перечитать состояние сейчас (после решения по конфликту — не ждать минуту). */
+export function refresh() {
+  return poll()
 }
 
 /** Список проблем; пустой — либо всё хорошо, либо мы не в программе. */

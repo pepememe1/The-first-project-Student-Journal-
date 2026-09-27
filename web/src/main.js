@@ -71,9 +71,10 @@ document.addEventListener('contextmenu', (e) => {
 app.mount('#app')
 
 // OTA-обновления (Capgo, только в приложении): подтверждаем, что новый бандл успешно
-// загрузился — иначе плагин откатится на предыдущий (защита от «кирпича»). Сама
-// проверка/скачивание/применение обновления идёт автоматически (autoUpdate в конфиге,
-// updateUrl → https://esstu-gradebook.ru/app/updates).
+// загрузился — иначе плагин откатится на предыдущий (защита от «кирпича»).
+// 🔒 С APK сборки 14 (4.1) автообновление плагина ВЫКЛЮЧЕНО, и обновление ведёт этот код:
+// подпись манифеста проверяется ключом, вшитым в приложение (`utils/otaVerify.js`, аудит
+// F-24). Старые APK обновляются сами, как раньше, — их нативный конфиг не поменять.
 if (Capacitor.isNativePlatform()) {
   import('@capgo/capacitor-updater')
     .then(async ({ CapacitorUpdater }) => {
@@ -96,6 +97,28 @@ if (Capacitor.isNativePlatform()) {
                           'updateFailed', 'noNeedUpdate', 'majorAvailable']) {
         CapacitorUpdater.addListener(kind, (state) => remember(kind, state))
           .catch(() => { /* событие не поддержано этой версией плагина */ })
+      }
+
+      const [{ App: CapApp }, ota, { publicSiteOrigin }, keysFile] = await Promise.all([
+        import('@capacitor/app'), import('./utils/otaVerify.js'), import('./api/server.js'),
+        import('./config/ota-public-keys.json')])
+      const info = await CapApp.getInfo().catch(() => null)
+      if (Number(info && info.build) >= ota.SIGNED_OTA_FROM_BUILD) {
+        //Версию бандла сборка знает сама (`VITE_OTA_VERSION`, ставит release-ota.ps1): с
+        //ней сравнивается манифест, и старый — пусть и подписанный — бандл не встанет.
+        const current = import.meta.env.VITE_OTA_VERSION || '0'
+        const run = () => ota.checkSignedUpdate({
+          fetchImpl: (u, o) => fetch(u, o), updateUrl: `${publicSiteOrigin()}/app/updates`,
+          keys: (keysFile.default || keysFile).keys || [], currentVersion: current,
+          updater: CapacitorUpdater,
+        }).then((res) => remember('signedCheck', res))
+          .catch((e) => remember('signedCheckFailed', String(e && e.message || e)))
+        run()
+        //Как у плагина: проверяем и при возвращении в приложение, но не чаще раза в 10 минут.
+        let last = Date.now()
+        CapApp.addListener('resume', () => {
+          if (Date.now() - last > 10 * 60_000) { last = Date.now(); run() }
+        }).catch(() => {})
       }
     })
     .catch(() => { /* плагин недоступен — не критично */ })

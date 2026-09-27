@@ -584,19 +584,19 @@ def test_garbage_in_the_signature_field_is_rejected(monkeypatch):
         assert not DU.release_signature_ok("3.9.4", "f" * 64, junk), junk
 
 
-def test_while_no_key_is_configured_behaviour_is_exactly_as_before(monkeypatch):
-    """🔴 НАЗВАННАЯ ГРАНИЦА, а не забытый случай.
+def test_without_any_key_no_update_is_installed(monkeypatch):
+    """🔒 F-28 (аудит 22.09.2026). До 26.09.2026 тест назывался
+    `test_while_no_key_is_configured_behaviour_is_exactly_as_before` и требовал ОБРАТНОГО:
+    ключей нет — ставим без подписи. Режим заводился на время, пока ключа не было вовсе;
+    ключи заведены 10.09, а режим остался дырой: одна правка кортежа или сборка форка
+    молча выключала подпись у всего парка.
 
-    Пока открытый ключ не заведён, продукт НЕ ЗАЩИЩЁН от подмены обновления — и этот
-    тест существует, чтобы факт нельзя было потерять из виду. Строгая проверка при
-    пустом списке означала бы, что первая же собранная сборка перестала обновляться у
-    всех разом; вписать ключ может только тот, у кого есть закрытая половина.
-    """
+    ⚠️ ОБРАТНЫЙ ХОД ПРОВЕРЕН: вернуть `return True` при пустом списке — краснеет."""
     monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", ())
-    assert not DU.signature_required()
-    assert DU.release_signature_ok("3.9.4", "a" * 64, "")          #ставим как раньше
-    #Но САМА проверка при этом честно отвечает «не проверено», а не «проверено и ок»:
-    #иначе пустой список выглядел бы как успешная проверка.
+    assert DU.signature_required()
+    assert not DU.release_signature_ok("3.9.4", "a" * 64, ""), "без ключа поставили без подписи"
+    assert not DU.release_signature_ok("3.9.4", "a" * 64, "0" * 128)
+    #И сама проверка отвечает «не проверено», а не «проверено и ок».
     assert not DU.verify_release_signature("3.9.4", "a" * 64, "0" * 128)
 
 
@@ -842,17 +842,18 @@ def test_the_gate_catches_a_swapped_file_after_signing(tmp_path, monkeypatch):
     assert tool.verify_manifest(str(p)) == 1
 
 
-def test_the_gate_does_not_pretend_to_check_when_no_key_is_configured(
-        tmp_path, monkeypatch, capsys):
-    """Без ключа ворота обязаны СКАЗАТЬ, что не проверяют, а не молча ответить «ок».
+def test_the_gate_closes_when_no_key_is_configured(tmp_path, monkeypatch, capsys):
+    """Без ключа ворота выкладки ЗАКРЫТЫ и говорят почему (F-28, 26.09.2026).
 
-    Тихое «ок» от выключенной защиты — ровно та форма отказа, из-за которой в проекте
-    появилось правило про зелёного сторожа рядом с дефектом.
+    До 26.09.2026 они говорили «не проверяю» и пропускали. Но сборка с пустым списком
+    выложила бы неподписанный манифест, а парк, у которого ключи вшиты, молча перестал
+    бы обновляться. Тихое «ок» от выключенной защиты — та же форма отказа, из-за которой
+    в проекте есть правило про зелёного сторожа рядом с дефектом.
     """
     tool = _tool()
     monkeypatch.setattr(DU, "UPDATE_PUBLIC_KEYS", ())
-    assert tool.verify_manifest(str(_manifest_file(tmp_path))) == 0
-    assert "не заведён" in capsys.readouterr().out
+    assert tool.verify_manifest(str(_manifest_file(tmp_path))) == 1
+    assert "не заведён" in capsys.readouterr().err
 
 
 def test_publishing_actually_calls_the_signing_step():

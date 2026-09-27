@@ -44,7 +44,7 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
     chunk = rows[page * _PAGE_USERS:(page + 1) * _PAGE_USERS]
     onl = _online_logins()
     sm = _status_map(db, [u.id for u in chunk])
-    out = [_safe_user(u, onl, status=sm.get(u.id)) for u in chunk]
+    out = [_safe_user(u, onl, status=sm.get(u.id), viewer=user) for u in chunk]
     if role == "parent":
         #§12: подпись «род. <группа>» в каталоге — куратор видит родителя, но не всегда
         #знает, чей он, пока не откроет карточку. Только АКТИВНЫЕ/подтверждённые дети
@@ -55,24 +55,43 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
     return {"users": out, "total": total, "page": page, "page_size": _PAGE_USERS}
 
 
+def _user_by_public_id(db: Session, user_id: str):
+    """Пользователь по id ИЛИ по псевдониму модератора («moderator:N»).
+
+    Клиент видит модератора только псевдонимом (F-10) и по нему же открывает карточку —
+    поэтому псевдоним разрешается здесь, а наружу карточка уходит снова замаскированной."""
+    if (user_id or "").startswith("moderator:"):
+        try:
+            number = int(user_id.split(":", 1)[1])
+        except ValueError:
+            return None
+        return (db.query(User).filter(User.role == "moderator", User.mod_number == number,
+                                      User.deleted == False).first())  # noqa: E712
+    return db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
+
+
 @router.get("/users/{user_id}/profile")
 def user_profile(user_id: str, _user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     """Публичная карточка (портфолио) — только безопасные поля."""
-    u = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
+    u = _user_by_public_id(db, user_id)
     if u is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    #🔒 F-10: модератора лично видят только администратор и модераторы. Карточку
+    #маскирует сама `_safe_user` (одна дверь на весь мессенджер); здесь — только витрина
+    #ачивок: по набору наград человека узнают так же уверенно, как по фамилии.
+    masked = _masked_for(u, _user)
     #Родитель невидим и здесь. Иначе скрытие в каталоге обходилось бы прямым запросом по
     #id: карточка отдаёт ФИО и «О себе», то есть ровно то, что мы прячем.
     if u.role == "parent" and u.id != _user.id and not _may_list_parent(db, _user, u):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    sm = _status_map(db, [user_id])
+    sm = _status_map(db, [u.id])
     #⚠️ Отдаём ТОЛЬКО витрину — то, что человек сам отметил галочкой, — а не весь его
     #список. Полный список показывает, чего у него НЕТ, а это уже про его поведение в
     #продукте: сколько он ищет, что нашёл, чего не нашёл. Наружу это не наше дело.
     from ... import easter_eggs
-    return {"profile": _safe_user(u, _online_logins(), status=sm.get(user_id)),
-            "achievements": easter_eggs.showcase_ids(u.id, db)}
+    return {"profile": _safe_user(u, _online_logins(), status=sm.get(u.id), viewer=_user),
+            "achievements": [] if masked else easter_eggs.showcase_ids(u.id, db)}
 
 
 @router.get("/users/{user_id}/shared")
@@ -84,6 +103,12 @@ def user_shared(user_id: str, user: User = Depends(get_current_user),
     те группы/каналы, в которых вызывающий и так уже состоит, ничего нового о чужом
     членстве не утекает. `saved`/личные ЛС/модерация в пересечение не входят намеренно —
     «общее» здесь означает ровно то, что показывает Discord (сервера), а не любую беседу."""
+    target = _user_by_public_id(db, user_id)
+    #Общие беседы с модератором тоже о нём рассказывают — тем, кому личность не положена,
+    #не отдаём (F-10).
+    if target is not None and _masked_for(target, user):
+        return {"groups": [], "channels": []}
+    user_id = target.id if target is not None else user_id
     mine = {r[0] for r in db.query(ConversationParticipant.conversation_id)
             .filter(ConversationParticipant.user_id == user.id).all()}
     theirs = {r[0] for r in db.query(ConversationParticipant.conversation_id)

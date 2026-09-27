@@ -25,11 +25,12 @@ def open_direct(user_id: str, user: User = Depends(get_current_user),
     conv_id = _ensure_direct(db, user, peer)
     sm = _status_map(db, [peer.id])
     return {"conversation_id": conv_id, "kind": "direct",
-            "peer": _safe_user(peer, _online_logins(), status=sm.get(peer.id))}
+            "peer": _safe_user(peer, _online_logins(), status=sm.get(peer.id), viewer=user)}
 
 
 # ── Список бесед ─────────────────────────────────────────────────────────────────────
-def _preview_out(msg, me_id: str, sender_name: str, att: dict = None) -> dict:
+def _preview_out(msg, me_id: str, sender_name: str, att: dict = None,
+                 sender_alias: str = "") -> dict:
     """Сообщение для ПРЕВЬЮ в списке чатов — то же самое, но без цитаты.
 
     🔒 Цитату здесь убираем НАМЕРЕННО (нашёл Полковник 06.09.2026). Список чатов рисует
@@ -39,7 +40,7 @@ def _preview_out(msg, me_id: str, sender_name: str, att: dict = None) -> dict:
     процитированный кусок сообщения, удалённого «у всех», уезжал бы в ответ ручки.
     Убрать лишнее поле дешевле и надёжнее, чем не забыть подчистить его в третьем месте.
     """
-    out = _msg_out(msg, me_id, sender_name, att)
+    out = _msg_out(msg, me_id, sender_name, att, sender_alias=sender_alias)
     out["reply_quote"] = ""
     return out
 
@@ -188,8 +189,11 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         sender_name = ""
         if last is not None and conv.kind in ("group", "channel") and last.sender_id != user.id:
             su = senders.get(last.sender_id)
+            #🔒 Через `moderator_display_name`, а не `su.full_name` (25.09.2026): список
+            #чатов подписывал последнее сообщение мимо общей двери, и фамилия модератора,
+            #написавшего в группе, была видна прямо в списке — всем участникам.
             sender_name = (SYSTEM_SENDER_NAME if last.sender_id == "system"
-                           else ((su.full_name or su.name or "") if su else ""))
+                           else (moderator_display_name(su, allow_login=False) if su else ""))
         mention_id, mention_loud = mention_by_conv.get(conv.id, (0, False))
         item = {
             "conversation_id": conv.id,
@@ -201,7 +205,11 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             "mention_message_id": mention_id,     #0 — меня не отмечали
             "mention_loud": mention_loud,
             "last_message": (_preview_out(last, user.id, sender_name,
-                                          amap.get(getattr(last, "attachment_id", "") or ""))
+                                          amap.get(getattr(last, "attachment_id", "") or ""),
+                                          sender_alias=(moderator_alias(senders[last.sender_id])
+                                                        if last.sender_id in senders
+                                                        and _masked_for(senders[last.sender_id], user)
+                                                        else ""))
                              if last else None),
             "last_at": (last.created_at if last else conv.created_at) or "",
             #Системный канал («Мои оценки», «Расписание · Группа», «Объявления») ведёт

@@ -213,6 +213,11 @@ def blank_deleted_bodies(db: Session, days: int = DELETED_BODY_DAYS) -> int:
     return len(rows)
 
 
+def _purge_sync_deletes(db: Session) -> int:
+    from . import sync_clock
+    return sync_clock.purge_deletes(db)
+
+
 def run_all(db: Session) -> dict:
     """Один полный проход политики хранения. Ничего не бросает наружу.
 
@@ -228,6 +233,10 @@ def run_all(db: Session) -> dict:
         ("message_edits", lambda: purge_message_edits(db)),
         ("egg_log", lambda: purge_egg_log(db)),
         ("deleted_bodies", lambda: blank_deleted_bodies(db)),
+        #Журнал жёстких удалений синка (его пишут триггеры `sync_clock`, в том числе на
+        #уборку надгробий выше) — ПОСЛЕ неё и со сдвигом горизонта: копия с курсором
+        #ниже горизонта пересоберётся целиком, а не останется с удалёнными строками (W-16).
+        ("sync_deletes", lambda: _purge_sync_deletes(db)),
     )
     for name, fn in steps:
         try:

@@ -825,9 +825,11 @@ export const messengerModApi = {
     api.get('/web/admin/messenger/conversations', { params: { q, kind } }),
   // reportId — только из вкладки «Жалобы»: сервер проверяет, что ЭТОТ тикет ещё
   // открыт, и отвечает 403, когда его закрыли (см. mod_conversation_messages).
-  conversationMessages: (id, reportId = 0) =>
+  //`before` — окно истории раньше этого id (F-12: сервер отдаёт историю окнами).
+  conversationMessages: (id, reportId = 0, before = 0) =>
     api.get(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/messages`,
-            { params: reportId ? { report_id: reportId } : {} }),
+            { params: { ...(reportId ? { report_id: reportId } : {}),
+                        ...(before ? { before } : {}) } }),
   reply: (id, body) =>
     api.post(`/web/admin/messenger/conversations/${encodeURIComponent(id)}/reply`, { body }),
   // Глобальный мьют пользователя модерацией — ТОЛЬКО СО СРОКОМ (дни/часы/минуты
@@ -952,8 +954,14 @@ export const coursesApi = {
   addSection: (id, title, position = 0) =>
     api.post(`/web/courses/${id}/sections`, { title, position }),
   delSection: (id, sectionId) => api.delete(`/web/courses/${id}/sections/${sectionId}`),
-  addMaterial: (id, { title, url = '', kind = 'link', sectionId = 0 }) =>
-    api.post(`/web/courses/${id}/materials`, { title, url, kind, section_id: sectionId }),
+  addMaterial: (id, { title, url = '', kind = 'link', sectionId = 0, attachmentId = '' }) =>
+    api.post(`/web/courses/${id}/materials`,
+      { title, url, kind, section_id: sectionId, attachment_id: attachmentId }),
+  //Файл материала (F-26): подпись загрузки — у курса, подтверждение — общее с вложениями
+  //мессенджера (`messengerApi.confirmUpload`), ссылка на скачивание — снова у курса.
+  signFile: (id, { name, size, mime }) =>
+    api.post(`/web/courses/${id}/files/sign`, { name, size, mime }),
+  fileUrl: (id, materialId) => api.get(`/web/courses/${id}/materials/${materialId}/file`),
   delMaterial: (id, materialId) => api.delete(`/web/courses/${id}/materials/${materialId}`),
   addAssignment: (id, { title, dueDate = '', description = '', url = '' }) =>
     api.post(`/web/courses/${id}/assignments`, { title, due_date: dueDate, description, url }),

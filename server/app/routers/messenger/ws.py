@@ -64,9 +64,12 @@ async def messenger_ws(ws: WebSocket):
                 finally:
                     db2.close()
                 if ids:
+                    #Модератор «печатает» — псевдонимом (F-10): получатели разные, а
+                    #событие одно, и сырой id ушёл бы тем, кому личность не положена.
+                    who = moderator_alias(user) if _masked_for(user) else user.id
                     await ws_manager.send_users(
                         ids, {"type": "typing", "conversation_id": data["conversation_id"],
-                              "user_id": user.id})
+                              "user_id": who})
     except WebSocketDisconnect:
         ws_manager.disconnect(user.id, ws)
     except Exception:

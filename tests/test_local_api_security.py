@@ -129,10 +129,17 @@ def test_the_proxy_checks_the_origin_itself(api):
     есть с открытым отказом и одной строкой WARNING в логе. Прокси подставляет к запросу
     БОЕВОЙ токен, поэтому здесь проверяем дважды и не полагаемся на порядок установки."""
     import inspect
-    src = inspect.getsource(local_api.install_remote_proxy)
-    assert "_is_loopback_origin" in src, (
-        "прокси перестал проверять origin сам — теперь всё держится на том, что общая "
-        "заслонка успела встать")
+    #С 25.09.2026 пересылка на бой — ОДНА дверь `_forward_to_prod`: через неё идут и
+    #разделы `_PROXY_PREFIXES`, и записи, которые живут только на бою (`route_policy`).
+    #Проверка origin стоит в ней, поэтому сторож спрашивает две вещи: дверь проверяет
+    #origin сама, и обе установки ведут именно в неё (а не в обход).
+    door = inspect.getsource(local_api._forward_to_prod)
+    assert "_is_loopback_origin" in door, (
+        "пересылка на бой перестала проверять origin сама — теперь всё держится на том, "
+        "что общая заслонка успела встать")
+    for install in (local_api.install_remote_proxy, local_api.install_write_policy):
+        assert "_forward_to_prod(" in inspect.getsource(install), (
+            f"{install.__name__} шлёт на бой в обход двери с проверкой origin")
 
 
 def test_a_lookalike_host_is_not_mistaken_for_the_loopback(api):

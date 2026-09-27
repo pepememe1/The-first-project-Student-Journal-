@@ -97,6 +97,22 @@ def _find(server_id: str) -> dict:
     return {}
 
 
+def _audit(event: str, who: dict, detail: str = "") -> None:
+    """След действия в журнале аудита ЭТОЙ машины: кто, что и на каком сервере.
+
+    Раньше команды к боевой машине оседали только строкой в gradebook.log — файле,
+    который перезаписывается и который никто не читает при разборе инцидента. Журнал
+    аудита живёт в зашифрованной базе и переживает смену пользователя (`MACHINE_KEYS`).
+    Текст команды режем так же, как в обычном логе: пароль в команде не должен лечь в
+    журнал целиком, а по началу строки видно, что делали."""
+    try:
+        from data import audit
+        actor = f"{who.get('login', '')}/{who.get('role', '')}" if who else ""
+        audit.log_event(event, actor, (detail or "")[:160])
+    except Exception as e:      # noqa: BLE001 — след не должен ронять действие
+        _LOG.warning(f"[server-admin] аудит не записан: {e}")
+
+
 def ensure_seeded() -> list:
     """Завести боевой сервер в списке САМИМ, если список пуст.
 
@@ -876,20 +892,44 @@ def _scp(server: dict, remote: str, local: str, pull: bool, latest: str = "") ->
 
 
 # ── Маршруты локального сервера ──────────────────────────────────────────────────────
-def install(app, caller_ok) -> None:
+#Кому открыт раздел. Ровно одна роль: здесь строка команд к боевой машине, резервные
+#копии базы вместе с ключом и перенос сервера — модератору и куратору это не нужно, а
+#расширять список «на всякий случай» значит раздать оболочку на машине с ПДн колледжа.
+ADMIN_ROLES = frozenset({"admin"})
+
+
+def install(app, caller) -> None:
     """Подключить раздел к ЛОКАЛЬНОМУ серверу программы.
 
-    `caller_ok` — та же проверка «свой токен», что у остальных локальных маршрутов
-    (см. `local_api._local_caller_ok`). Сервер слушает петлю, но петля доступна любому
-    процессу и любой открытой в браузере странице, поэтому голого «мы на localhost»
-    для выполнения команд на боевом сервере категорически мало."""
+    `caller(authorization) -> {"login", "role"} | {}` — кто прислал запрос (см.
+    `local_api._local_caller`). Сервер слушает петлю, но петля доступна любому процессу
+    и любой открытой в браузере странице, поэтому голого «мы на localhost» для
+    выполнения команд на боевом сервере категорически мало.
+
+    🔥 РОЛЬ ПРОВЕРЯЕТСЯ ЗДЕСЬ, В МОДУЛЕ С ОПАСНЫМ КОДОМ (аудит 22.09.2026, F-01, P0).
+    Раньше охранник спрашивал только «вошёл ли человек в программу»: студент или
+    преподаватель, открыв DevTools, выполнял произвольную команду на боевом сервере
+    сохранёнными реквизитами администратора этой машины. Меню админа ему не показывалось,
+    но скрытое меню — не граница. Вызывающему здесь не доверяем: даже если кто-то
+    подключит раздел с охранником «просто вошёл», роль всё равно будет спрошена."""
     from fastapi import Body, Query, Request
     from fastapi.responses import JSONResponse
 
     def _guard(request: Request):
-        if not caller_ok(request.headers.get("authorization", "")):
+        who = caller(request.headers.get("authorization", "")) or {}
+        if not who:
             return JSONResponse({"detail": "Требуется авторизация"}, status_code=401)
+        if (who.get("role") or "") not in ADMIN_ROLES:
+            _LOG.warning(f"[server-admin] отказ: «{who.get('login', '')}» "
+                         f"(роль {who.get('role') or '—'}) не администратор")
+            _audit("server_admin.denied", who, request.url.path)
+            return JSONResponse({"detail": "Раздел «Сервер» доступен только администратору"},
+                                status_code=403)
+        request.state.gb_admin = who
         return None
+
+    def _who(request: Request) -> dict:
+        return getattr(request.state, "gb_admin", {}) or {}
 
     @app.get("/desk/servers")
     def _list(request: Request):
@@ -931,6 +971,8 @@ def install(app, caller_ok) -> None:
             return JSONResponse({"detail": "Укажите адрес сервера"}, status_code=400)
         items = [i for i in items if i.get("id") != sid] + [row]
         _save(items)
+        _audit("server_admin.save", _who(request),
+               f"{row['user']}@{row['host']}:{row['port']} ({'новый' if not previous else 'правка'})")
         return {"ok": True, "item": _public(row), "items": [_public(i) for i in items]}
 
     @app.get("/desk/servers/{server_id}/backups")
@@ -953,6 +995,8 @@ def install(app, caller_ok) -> None:
             return JSONResponse({"detail": "Сервер не найден"}, status_code=404)
         out = make_backup(server)
         _LOG.info(f"[backup] {server.get('host')}: {'ok ' + out['name'] if out['ok'] else 'СБОЙ'}")
+        _audit("server_admin.backup", _who(request),
+               f"{server.get('host')}: {out.get('name') if out.get('ok') else 'сбой'}")
         return out
 
     @app.post("/desk/servers/{server_id}/backups/download")
@@ -963,7 +1007,11 @@ def install(app, caller_ok) -> None:
         server = _find(server_id)
         if not server:
             return JSONResponse({"detail": "Сервер не найден"}, status_code=404)
-        return download_backup(server, (payload.get("name") or "").strip())
+        name = (payload.get("name") or "").strip()
+        #Архив равносилен самой базе вместе с ключом — кто и когда его унёс на эту
+        #машину, обязано остаться в журнале.
+        _audit("server_admin.backup_download", _who(request), f"{server.get('host')}: {name}")
+        return download_backup(server, name)
 
     @app.post("/desk/servers/{server_id}/service")
     def _service(request: Request, server_id: str, payload: dict = Body(...)):
@@ -982,6 +1030,8 @@ def install(app, caller_ok) -> None:
                                  "action": action}, status_code=409)
         out = service_action(server, name, action)
         _LOG.info(f"[service] {server.get('host')}: {action} {name} → {out['state']}")
+        _audit("server_admin.service", _who(request),
+               f"{server.get('host')}: {action} {name} → {out.get('state')}")
         return out
 
     @app.post("/desk/servers/{server_id}/install-key")
@@ -992,6 +1042,7 @@ def install(app, caller_ok) -> None:
         server = _find(server_id)
         if not server:
             return JSONResponse({"detail": "Сервер не найден"}, status_code=404)
+        _audit("server_admin.install_key", _who(request), str(server.get("host")))
         return install_key(server)
 
     @app.delete("/desk/servers/{server_id}")
@@ -999,8 +1050,11 @@ def install(app, caller_ok) -> None:
         bad = _guard(request)
         if bad:
             return bad
+        gone = _find(server_id)
         items = [i for i in _load() if i.get("id") != server_id]
         _save(items)
+        if gone:
+            _audit("server_admin.delete", _who(request), str(gone.get("host")))
         return {"ok": True, "items": [_public(i) for i in items]}
 
     @app.get("/desk/servers/{server_id}/metrics")
@@ -1044,6 +1098,8 @@ def install(app, caller_ok) -> None:
         long_run = bool(payload.get("long"))
         res = run(server, command, timeout=_TIMEOUT_LONG if long_run else _TIMEOUT_QUICK)
         _LOG.info(f"[server-admin] {server.get('host')}: {command[:120]} → {res['code']}")
+        _audit("server_admin.exec", _who(request),
+               f"{server.get('host')} [{res.get('code')}]: {command[:120]}")
         return res
 
     @app.post("/desk/servers/migrate/plan")
@@ -1069,6 +1125,9 @@ def install(app, caller_ok) -> None:
             return JSONResponse({"detail": "Выберите оба сервера"}, status_code=400)
         out = migrate_step(step_id, source, target)
         _LOG.info(f"[migrate] {step_id}: {'ok' if out['ok'] else 'СБОЙ'}")
+        _audit("server_admin.migrate", _who(request),
+               f"{step_id}: {source.get('host')} → {target.get('host')} "
+               f"{'ok' if out.get('ok') else 'сбой'}")
         return out
 
     #Маршруты локального сервера обязаны стоять ВЫШЕ заглушки SPA, иначе «всё

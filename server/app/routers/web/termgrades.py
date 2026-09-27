@@ -55,6 +55,15 @@ def teacher_set_term_grade(payload: dict = Body(...),
     gid = _term_grade_id(stud.id, subject, ty, ts)
     now = _now_iso()
     row = db.get(TermGrade, gid)
+    base_version = "" if row is None else (row.updated_at or "")
+    base_seq = _seq_of(row)
+    row = _ensure_base_version(
+        db, payload, TermGrade, gid, row,
+        differs=lambda r: ((r.grade or "") != grade or bool(r.deleted) != (grade == "")
+                           or (bool(form) and (r.form or "") != form)),
+        kind="term_grade",
+        server_view=lambda r: {"grade": "" if r.deleted else (r.grade or ""),
+                               "form": r.form or "", "deleted": bool(r.deleted)})
     if row is None:
         row = TermGrade(id=gid, student_f=surname, student_n=name, subject=subject,
                         year=ty, semester=ts)
@@ -66,9 +75,14 @@ def teacher_set_term_grade(payload: dict = Body(...),
     row.deleted = (grade == "")
     row.student_id = stud.id        #этап 1 миграции — см. /web/teacher/grade
     db.commit()
+    new_seq = int(row.change_seq or 0)
     audit.log(db, actor=user.login, role=user.role, action="term_grade.set",
               target=f"{surname} {name}", detail=f"{subject} · {ty}·{ts} = {grade}")
-    return {"ok": True, "id": gid, "grade": grade}
+    #Период — в ответе (W-08, как у создания занятия): очередь программы досылает его
+    #на бой, и `_require_intended_term` там отличит «поставлено в декабре» от «сейчас».
+    return {"ok": True, "id": gid, "grade": grade, "updated_at": now,
+            "year": ty, "semester": ts, "base_updated_at": base_version,
+            "change_seq": new_seq, "base_seq": base_seq}
 
 
 @router.get("/teacher/term-grades")

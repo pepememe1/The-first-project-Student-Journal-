@@ -115,3 +115,41 @@ def test_the_artifact_carries_no_state():
            if arc.endswith((".env", ".db", ".key", ".pem", ".keystore"))
            or "/downloads/" in arc or "/ota_bundles/" in arc or "/gb-backups/" in arc]
     assert not bad, f"в артефакт попало состояние: {bad}"
+
+
+def test_the_build_refuses_state_that_slipped_into_the_tree(monkeypatch, tmp_path):
+    """🔒 F-25 (аудит 22.09.2026): ворота стоят В САМОЙ СБОРКЕ, а не только здесь.
+
+    Тест выше проверяет сегодняшнее дерево, но сборка до 26.09.2026 сама не отказывала:
+    база, оставшаяся в `server/app` после запуска из исходников, уехала бы в архив.
+    ⚠️ ОБРАТНЫЙ ХОД ПРОВЕРЕН: убрать проверку из `gather` — краснеет."""
+    db = tmp_path / "gradebook_server.db"
+    db.write_bytes(b"SQLite format 3\x00")
+    real = BR._gather
+    monkeypatch.setattr(BR, "_gather", lambda include_web=True:
+                        real(include_web=False) + [(str(db), "app/gradebook_server.db")])
+    with pytest.raises(SystemExit):
+        BR.gather(include_web=False)
+
+
+def test_forbidden_names_and_private_keys_are_recognised(tmp_path):
+    key = tmp_path / "notes.txt"
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n", encoding="utf-8")
+    plain = tmp_path / "ok.py"
+    plain.write_text("KEY_NAME = 'token'  # слова key/token в коде — не секрет\n", encoding="utf-8")
+    bad = BR.forbidden_entries([
+        (str(key), "app/notes.txt"), (str(plain), "app/ok.py"),
+        (str(plain), "root/PILOT.md"), (str(plain), "root/.env.bak-2026-09-05"),
+        (str(plain), "webdist/GB_DB_KEY.txt"), (str(plain), "app/x.sqlite3"),
+        #Имена, которые люди дают копиям, — их пропускала первая версия ворот (второй
+        #заход Полковника, 26.09.2026): проверялось только окончание имени.
+        (str(plain), "app/gradebook_server.db.bak"), (str(plain), "app/gradebook_server.db-journal"),
+        (str(plain), "app/prod.env.bak"), (str(plain), "app/backup_2026.zip"),
+        (str(plain), "app/dump.sql"), (str(plain), "app/gradebook_server.db.20260926"),
+        (str(plain), "app/secrets.json"),
+        #А это — законный код поставки, ловить его нельзя.
+        (str(plain), "app/secrets_source.py"), (str(plain), "root/log.py"),
+    ])
+    assert "app/ok.py" not in bad, "обычный код с словом key — ложная тревога"
+    assert "app/secrets_source.py" not in bad and "root/log.py" not in bad, bad
+    assert len(bad) == 12, bad

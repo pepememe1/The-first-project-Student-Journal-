@@ -100,13 +100,19 @@ def _load_index(category: str = "", force: bool = False):
     with _lock:
         entry = _index.get(category, {"ts": 0.0, "pairs": []})
         fresh = entry["pairs"] and (time.time() - entry["ts"] < _TTL)
+        stale_ok = _restored_ok(entry)
     if fresh and not force:
+        return entry["pairs"]
+    if stale_ok and not force:
+        #Индекс с диска (только программа): отдаём сразу, свежий — в фоне.
+        _warm_index_async(category)
         return entry["pairs"]
     p = _parser()
     html = p.fetch_text(p.category_index_url(category))
     pairs = p.list_category_groups_with_course(html, category)
     with _lock:
         _index[category] = {"ts": time.time(), "pairs": pairs}
+    _persist(category, "index")
     return pairs
 
 
@@ -223,7 +229,9 @@ def _warm_index_async(category: str) -> None:
 
     def _run():
         try:
-            _load_index(category)
+            #force: прогрев зовут только когда кэш не свежий, и снимок с диска здесь
+            #обязан ОБНОВИТЬСЯ, а не вернуться самим собой.
+            _load_index(category, force=True)
         except Exception:
             pass                     # оффлайн — обычное состояние, а не сбой
         finally:
@@ -250,9 +258,13 @@ def groups_by_course_cached(category: str = "") -> dict:
     with _lock:
         entry = _index.get(category, {"ts": 0.0, "pairs": []})
         fresh = entry["pairs"] and (time.time() - entry["ts"] < _TTL)
-        pairs = list(entry["pairs"]) if fresh else []
+        #Снимок с диска годится сразу (курс группы за неделю не меняется), но свежий
+        #всё равно собирается в фоне. На бою таких снимков нет — там всё как было.
+        usable = fresh or _restored_ok(entry)
+        pairs = list(entry["pairs"]) if usable else []
     if not fresh:
         _warm_index_async(category)
+    if not usable:
         return {}
     out: dict[int, list] = {}
     for name, _href, course in pairs:
@@ -326,6 +338,8 @@ def _build_full_bg(category: str):
             e = _full_entry(category)
             e["snap"] = snap
             e["ts"] = time.time()
+            e.pop("restored", None)
+        _persist(category, "full")
     except Exception as e:
         print(f"[schedule_web] полный снимок ({category}) не собрался: {e}")
     finally:
@@ -421,6 +435,9 @@ def invalidate_all() -> None:
         _index.clear()
         _groups.clear()
         _full.clear()
+    #Снимки на диске — туда же: иначе перезапуск программы вернул бы то, что админ
+    #только что велел выбросить.
+    _drop_disk()
 
 
 def get_group(name: str, category: str = "", force: bool = False,
@@ -439,6 +456,11 @@ def get_group(name: str, category: str = "", force: bool = False,
             c = _groups.get(category, {}).get(name)
             if c and time.time() - c["ts"] < _TTL:
                 return c["data"]
+            stale = c["data"] if c and _restored_ok(c) else None
+        if stale is not None:
+            #Снимок группы с диска (программа, в том числе офлайн): сразу, свежий — в фоне.
+            _refresh_group_async(name, category)
+            return stale
     #⚠️ `cached_only` — для ГОРЯЧИХ путей, которые не имеют права ждать чужой сайт.
     #Ниже идёт `fetch_text` с таймаутом 20 с, и на пути, который опрашивает приложение,
     #это означает занятый поток на каждого первого студента каждой группы после того,
@@ -446,6 +468,11 @@ def get_group(name: str, category: str = "", force: bool = False,
     #студента на главной читается через `groups_by_course_cached`, а не напрямую.
     if cached_only:
         return None
+    return _fetch_group(name, category, force)
+
+
+def _fetch_group(name: str, category: str, force: bool) -> dict | None:
+    """Сходить на портал за одной группой и положить в кэш (и на диск, если подключён)."""
     try:
         if force:
             _load_index(category, force=True)   #индекс групп мог устареть — обновляем и его
@@ -459,6 +486,146 @@ def get_group(name: str, category: str = "", force: bool = False,
         data = page_parser(html, name=name, href=href).to_dict()
         with _lock:
             _groups.setdefault(category, {})[name] = {"ts": time.time(), "data": data}
+        _persist(category, "groups")
         return data
     except Exception:
         return None
+
+
+def _refresh_group_async(name: str, category: str) -> None:
+    """Обновить снимок одной группы в фоне — не чаще одного потока на группу."""
+    key = (category, name)
+    with _lock:
+        if key in _group_refreshing:
+            return
+        _group_refreshing.add(key)
+
+    def _run():
+        try:
+            _fetch_group(name, category, False)
+        finally:
+            with _lock:
+                _group_refreshing.discard(key)
+
+    threading.Thread(target=_run, name="gb-refresh-group", daemon=True).start()
+
+
+#── СНИМКИ НА ДИСКЕ — только в программе (27.09.2026) ──────────────────────────────────
+#🔥 Замер: полный снимок колледжа собирается 149 с (89 запросов к порталу, CPU 2.3 с), и
+#после КАЖДОГО запуска программы расписание преподавателя столько же отвечало
+#«собирается», а портал получал сотни запросов с каждого ПК. На бою процесс живёт
+#неделями и этого не замечает, поэтому хранилище ПОДКЛЮЧАЕТ ТОЛЬКО программа
+#(`desktop/local_api.install_schedule_cache`, файлы — `desktop/temp_cache.py`, под
+#ключом устройства): без вызова `use_disk_cache` модуль ведёт себя буквально как раньше.
+#⚠️ Снимок с диска помечен `restored`: им пользуются до недели, НО свежий всегда
+#собирается в фоне. Выдать недельное расписание за свежее и не обновить — хуже, чем
+#честное «собирается».
+_disk = None                         # (load(name), save(name, obj), drop(name))
+DISK_MAX_AGE_S = 7 * 24 * 3600
+_PARTS = ("index", "groups", "full")
+_group_refreshing: set = set()
+
+
+def _disk_name(category: str, part: str) -> str:
+    return f"schedule-{category}-{part}"
+
+
+def _restored_ok(entry) -> bool:
+    """Снимок поднят с диска и не старше недели — им можно пользоваться, пока свежий
+    собирается в фоне. У снимков, собранных в этом процессе, признака нет вовсе."""
+    return bool(entry) and bool(entry.get("restored")) \
+        and time.time() - float(entry.get("ts") or 0) < DISK_MAX_AGE_S
+
+
+def _persist(category: str, part: str) -> None:
+    """Положить часть кэша категории на диск. Сбой диска кэш не роняет."""
+    if _disk is None:
+        return
+    try:
+        with _lock:
+            if part == "index":
+                e = _index.get(category)
+                obj = {"ts": e["ts"], "pairs": [list(x) for x in e["pairs"]]} if e else None
+                snap = None
+            elif part == "groups":
+                obj = {n: {"ts": g["ts"], "data": g["data"]}
+                       for n, g in _groups.get(category, {}).items()}
+                snap = None
+            else:
+                e = _full.get(category) or {}
+                snap, ts = e.get("snap"), e.get("ts")
+                obj = None
+        if part == "full":
+            if snap is None:
+                return
+            #to_dict — вне замка: снимок после сборки не меняется, а сериализация двух
+            #мегабайт под общим замком задержала бы всех, кто читает расписание.
+            obj = {"ts": ts, "snap": snap.to_dict()}
+        if obj is not None:
+            _disk[1](_disk_name(category, part), {"v": 1, "data": obj})
+    except Exception as e:                                          # noqa: BLE001
+        print(f"[schedule_web] снимок {category}/{part} на диск не лёг: {e}")
+
+
+def _drop_disk() -> None:
+    if _disk is None:
+        return
+    try:
+        for cat in _parser().CATEGORIES:
+            for part in _PARTS:
+                _disk[2](_disk_name(cat, part))
+    except Exception:                                               # noqa: BLE001
+        pass
+
+
+def use_disk_cache(load, save, drop) -> int:
+    """Подключить хранилище снимков и поднять из него то, что не старше недели.
+
+    Зовётся ОДИН раз, до старта сервера (прогрев в `lifespan` уже увидит снимки и
+    соберёт свежие в фоне). Возвращает, сколько частей поднято. Чужое, битое и
+    устаревшее пропускается молча: кэш — не источник правды."""
+    global _disk
+    _disk = (load, save, drop)
+    now = time.time()
+    restored = 0
+    for cat in _parser().CATEGORIES:
+        for part in _PARTS:
+            try:
+                d = load(_disk_name(cat, part))
+                if not isinstance(d, dict) or d.get("v") != 1:
+                    continue
+                obj = d.get("data")
+                if part == "groups":
+                    items = {n: g for n, g in (obj or {}).items()
+                             if now - float(g.get("ts") or 0) < DISK_MAX_AGE_S}
+                    if not items:
+                        continue
+                    with _lock:
+                        bucket = _groups.setdefault(cat, {})
+                        for n, g in items.items():
+                            if n not in bucket:
+                                bucket[n] = {"ts": float(g["ts"]), "data": g["data"],
+                                             "restored": True}
+                    restored += 1
+                    continue
+                ts = float((obj or {}).get("ts") or 0)
+                if now - ts >= DISK_MAX_AGE_S:
+                    continue
+                if part == "index":
+                    pairs = [tuple(x) for x in obj.get("pairs") or []]
+                    if not pairs:
+                        continue
+                    with _lock:
+                        if not _index.get(cat, {}).get("pairs"):
+                            _index[cat] = {"ts": ts, "pairs": pairs, "restored": True}
+                else:
+                    from schedule.model import Snapshot
+                    snap = Snapshot.from_dict(obj["snap"])
+                    with _lock:
+                        e = _full_entry(cat)
+                        if e["snap"] is None:
+                            e.update(snap=snap, ts=ts, restored=True)
+                restored += 1
+            except Exception as e:                                  # noqa: BLE001
+                print(f"[schedule_web] снимок {cat}/{part} с диска не поднят: {e}")
+    return restored

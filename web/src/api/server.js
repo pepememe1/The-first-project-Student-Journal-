@@ -24,7 +24,8 @@ export const apiBase = ref(localStorage.getItem(LS_KEY) || '')
 /** Приоритет: сохранённый адрес → сборочный VITE_API_BASE → дефолт (в приложении).
  *  В браузере-сайте по умолчанию '' — тот же origin (для dev-прокси и прод-домена). */
 export function getApiBase() {
-  return localStorage.getItem(LS_KEY) || import.meta.env.VITE_API_BASE
+  //`?.` — вне сборщика (`node --test`) `import.meta.env` нет; в сборке Vite подставляет объект.
+  return localStorage.getItem(LS_KEY) || import.meta.env?.VITE_API_BASE
     || (isNativeApp() ? DEFAULT_API_BASE : '')
 }
 
@@ -49,6 +50,21 @@ export function clearApiBase() {
 }
 
 /** Запущены ли мы как нативное приложение (Capacitor его помечает в window). */
+/**
+ * Публичный адрес сайта — для ссылок, которые человек ОТПРАВЛЯЕТ другому (F-18).
+ *
+ * ⚠️ `location.origin` здесь годится только на сайте. В программе это 127.0.0.1 со
+ * случайным портом, в телефоне — https://localhost: у получателя такая ссылка не
+ * открывается и вдобавок выдаёт внутренний адрес чужой машины. Там берём адрес сервера:
+ * сохранённый, иначе боевой по умолчанию — ровно тот, на котором ссылка и откроется.
+ */
+export function publicSiteOrigin() {
+  const here = (typeof location !== 'undefined' && location.origin) || ''
+  const local = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(here)
+  if (!here || local || isNativeApp()) return normalizeUrl(getApiBase() || DEFAULT_API_BASE)
+  return here
+}
+
 export function isNativeApp() {
   try {
     return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())

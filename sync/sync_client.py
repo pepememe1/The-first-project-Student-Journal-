@@ -285,6 +285,39 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
+    def pull_page(self, cursor: int = 0, limit: int = 2000, scope: str = "",
+                  epoch: str = "") -> dict:
+        """Страница изменений по НОМЕРУ (боевой сервер 4.1+, `/sync/pull?cursor=`).
+
+        Ответ — {cursor, more, head, scope, epoch, changes, removed} или {reset: причина}.
+        Сервер до 4.1 параметр `cursor` не знает и отвечает прежним {server_time,
+        changes}: по отсутствию `cursor` в ответе зеркало и узнаёт, что говорит со старым
+        боем, и идёт прежним путём (`desktop/local_mirror.py`)."""
+        params = {"cursor": int(cursor or 0), "limit": int(limit or 2000)}
+        if scope:
+            params["scope"] = scope
+        if epoch:
+            params["epoch"] = epoch
+        r = self._req("GET", "/sync/pull", params=params, timeout=SYNC_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    def head(self, after: int = -1, wait: int = 0) -> dict:
+        """Номер головы потока боя; с `wait` — долгий опрос до правки (W-20).
+
+        Таймаут чтения — ожидание плюс запас: иначе клиент сам обрывал бы ответ, который
+        сервер честно держит до `wait` секунд."""
+        r = self._req("GET", "/sync/head", params={"after": int(after), "wait": int(wait)},
+                      timeout=(8, int(wait or 0) + 15))
+        r.raise_for_status()
+        return r.json()
+
+    def digest(self) -> dict:
+        """Отпечаток того, что копия обязана содержать (`/sync/digest`, «Сверщик»)."""
+        r = self._req("GET", "/sync/digest", timeout=SYNC_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
     def push(self, changes: dict) -> dict:
         """Отправляет изменения. changes = {users:[...], grades:[...], ...}.
         Долгий read-таймаут: первый пуш накопленного офлайн бывает объёмным."""

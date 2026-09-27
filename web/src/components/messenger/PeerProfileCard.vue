@@ -23,6 +23,7 @@ import { resetDraft, syncDraft } from '@/utils/draftSync'
 import { Camera, Send, Pencil, ImageIcon, Film, Trash2,
          MoreHorizontal, UserPlus, Share2, Ban, Flag, Eraser } from '@lucide/vue'
 import { useRouter } from 'vue-router'
+import { publicSiteOrigin } from '@/api/server'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore, BIO_LIMIT } from '@/stores/profile'
 import { useMessengerStore } from '@/stores/messenger'
@@ -64,12 +65,20 @@ const toast = useToast()
 
 // ── Данные карточки ──────────────────────────────────────────────────────────────────
 const fetched = ref(null)
+// 🔒 F-17 (аудит 22.09.2026): ПОКОЛЕНИЕ ЗАПРОСА. Открыл A, тут же B — ответ по A, пришедший
+// ПОЗЖЕ ответа по B, раньше ложился в карточку B: на экране чужие ФИО, статус и кнопки.
+// Принимаем ответ только того запроса, который был последним, и гасим прежние данные
+// сразу при смене человека — иначе до ответа карточка показывает предыдущего.
+let peerGen = 0
 async function loadPeer() {
-  if (props.editable || props.peerData || !props.userId) return
+  const gen = ++peerGen
+  const id = props.userId
+  fetched.value = null
+  if (props.editable || props.peerData || !id) return
   try {
-    const { data } = await messengerApi.profile(props.userId)
-    fetched.value = data.profile
-  } catch { fetched.value = null }
+    const { data } = await messengerApi.profile(id)
+    if (gen === peerGen) fetched.value = data.profile
+  } catch { if (gen === peerGen) fetched.value = null }
 }
 onMounted(loadPeer)
 watch(() => props.userId, loadPeer)
@@ -289,14 +298,22 @@ const blocked = ref(false)
 
 // Кого я заблокировал — спрашиваем при открытии карточки: без этого пункт всегда
 // предлагал бы «Заблокировать», и человек не понимал бы, сработало ли прошлое нажатие.
+// ⚠️ Тем же поколением, что и профиль (F-17), и ПЕРЕЧИТЫВАЕТСЯ при смене человека: раньше
+// статус спрашивался только при монтировании, и карточка следующего собеседника
+// показывала «Разблокировать» для того, кого никто не блокировал.
+let blockGen = 0
 async function loadBlocked() {
-  if (isSelf.value) return
+  const gen = ++blockGen
+  const id = props.userId || shown.value.id
+  blocked.value = false
+  if (isSelf.value || !id) return
   try {
     const { data } = await messengerApi.blocks()
-    blocked.value = (data?.blocked_ids || []).includes(shown.value.id)
+    if (gen === blockGen) blocked.value = (data?.blocked_ids || []).includes(id)
   } catch { /* список блокировок не критичен для карточки */ }
 }
 onMounted(loadBlocked)
+watch(() => props.userId, loadBlocked)
 
 async function toggleBlock() {
   menuOpen.value = false
@@ -317,7 +334,13 @@ async function toggleBlock() {
 // полей устарела бы в тот же день, когда человек сменит аватарку.
 async function shareContact() {
   menuOpen.value = false
-  const link = `${location.origin}/${auth.role}/messages?peer=${encodeURIComponent(shown.value.id)}`
+  // 🔒 F-18 (аудит 22.09.2026). Раньше: `location.origin/{своя роль}/messages?peer=…`.
+  // Три поломки сразу: в программе origin — это 127.0.0.1 со случайным портом, у
+  // получателя он никуда не ведёт (и выдаёт внутренний адрес); путь нёс РОЛЬ отправителя,
+  // а у получателя она другая; `?peer=` не читал никто. Теперь адрес сайта публичный
+  // (`publicSiteOrigin`), путь нейтральный к роли (`/messages` → своя роль), а страница
+  // сообщений открывает по `peer` личный чат — права проверит сервер (`openDirect`).
+  const link = `${publicSiteOrigin()}/messages?peer=${encodeURIComponent(shown.value.id)}`
   try {
     await navigator.clipboard.writeText(`@${shown.value.full_name} ${link}`)
     toast.show(locale.t('peerProfile.shareCopied', 'Ссылка на профиль скопирована — вставьте в любой чат'))

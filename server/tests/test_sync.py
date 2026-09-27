@@ -1,7 +1,6 @@
 """
 test_sync.py — Синхронизация: push/pull, права ролей, серверные метки, идемпотентность.
 """
-import time
 
 from conftest import make_admin, make_teacher, assign_teacher
 
@@ -146,17 +145,24 @@ def test_pull_student_row_scope(client):
         "только свои оценки, не Петрова"
 
 
-def test_pull_admin_gets_everything(client):
-    """Админ получает полный дамп (хеши всех + секреты) — нужно для правки юзеров и ИИ."""
+def test_pull_admin_gets_every_row_but_only_his_own_hash(client):
+    """Админ получает все строки, но хеш пароля — только свой, а секретов — ни одного.
+
+    ⚠️ До 26.09.2026 тест назывался `test_pull_admin_gets_everything` и требовал ОБРАТНОЕ:
+    хеши всех и ключ ИИ «для правки юзеров и настроек». С 25.09 все записи админа из
+    программы идут на бой, а страницы модераторов и настроек ИИ пересылаются, — в копии
+    эти поля не нужны никому, а украденный ноутбук отдавал их разом (W-06)."""
     admin = make_admin(client)
     make_teacher(client, admin, login="teacher1")
     _seed_config(gigachat_credentials="SECRET_TOKEN")
 
     ch = client.get("/sync/pull", headers=admin).json()["changes"]
-    hashes = [u["password_hash"] for u in ch["users"] if u.get("login")]
-    assert all(hashes), "у админа все хеши на месте"
+    users = {u["login"]: u for u in ch["users"] if u.get("login")}
+    assert "teacher1" in users, "админ обязан получать все строки пользователей"
+    assert users["admin"]["password_hash"], "свой хеш нужен для офлайн-входа"
+    assert users["teacher1"]["password_hash"] == "", "чужой хеш уехал на ПК админа"
     cfg = {c["key"]: c.get("value") for c in ch["config"]}
-    assert cfg.get("gigachat_credentials") == "SECRET_TOKEN", "админ видит секреты ИИ"
+    assert "gigachat_credentials" not in cfg, "ключ ИИ уехал на ПК админа"
 
 
 def test_pull_student_subgroups_scope(client):
@@ -277,14 +283,6 @@ def test_teacher_term_grade_scoped_by_subject(client):
     assert r.json().get("rejected", {}).get("term_grades") == 1
 
 
-def _tick():
-    """Пауза, гарантирующая СМЕНУ метки времени сервера. На Windows часы дискретны
-    (до ~16 мс), поэтому push и следующий за ним pull могут попасть в ОДИН тик. Тесты
-    ниже проверяют семантику дельты, а не поведение на стыке тиков (для стыка есть
-    отдельный тест test_delta_pull_does_not_lose_boundary_record)."""
-    time.sleep(0.03)
-
-
 def test_schedule_override_syncs_roundtrip(client):
     """Правки расписания (ScheduleOverride) синхронизируются как обычная сущность — так
     админ-редактор общий для веб и десктопа (правка на одном ПК доезжает на другой)."""
@@ -303,14 +301,31 @@ def test_schedule_override_syncs_roundtrip(client):
     assert g2 and g2[0]["deleted"] is True
 
 
+def _backdate_all(minutes: int = 60):
+    """Состарить ВСЕ строки синка на `minutes` — «давно изменённое». С нахлёстом водяного
+    знака (W-02) свежие строки законно приходят в дельте повторно, поэтому «старое не
+    приходит» проверяется на действительно старом, а не на изменённом только что."""
+    from datetime import datetime, timedelta, timezone
+    from app.db import SessionLocal
+    from app.models import SYNC_MODELS
+    old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    db = SessionLocal()
+    try:
+        for model in SYNC_MODELS.values():
+            db.query(model).update({model.updated_at: old}, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_delta_pull_returns_only_newer(client):
-    """pull?since=<метка> отдаёт только записи, изменённые позже метки — основа
-    дельта-синхронизации (не качать всю базу каждый раз)."""
+    """pull?since=<метка> отдаёт только записи, изменённые позже метки (с нахлёстом) —
+    основа дельта-синхронизации (не качать всю базу каждый раз)."""
     h = make_admin(client)
     _push(client, h, lessons=[_LESSON])
-    _tick()
+    _backdate_all()
     server_time = client.get("/sync/pull", headers=h).json()["server_time"]
-    #с момента server_time изменений не было — дельта пуста
+    #давно изменённое за метку не выходит — дельта пуста
     later = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
     assert all(not v for v in later["changes"].values()), "после метки изменений быть не должно"
 
@@ -320,13 +335,44 @@ def test_delta_pull_brings_new_changes_after_watermark(client):
     дельта-pull по метке приносит ТОЛЬКО новое занятие, без старых."""
     h = make_admin(client)
     _push(client, h, lessons=[_LESSON])
-    _tick()
+    _backdate_all()
     server_time = client.get("/sync/pull", headers=h).json()["server_time"]
     #появилось новое занятие уже ПОСЛЕ взятой метки
     _push(client, h, lessons=[dict(_LESSON, id="L2", topic="Новое")])
     delta = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
     ids = [l["id"] for l in delta["changes"]["lessons"]]
     assert ids == ["L2"], f"дельта должна вернуть только новое занятие, а не {ids}"
+
+
+def test_delta_does_not_lose_a_row_committed_after_the_pull_began(client):
+    """ВРЕМЯ КАК КУРСОР — ЛОВУШКА (исследование синка 25.09.2026, W-02).
+
+    Метку `updated_at` писатель ставит ДО коммита, а pull видит только закоммиченное.
+    Строка, помеченная за мгновение до начала pull и закоммиченная после, в его ответ не
+    попадала — а следующий pull с его меткой её уже не просил: метка строки меньше.
+    Теперь водяной знак отдаётся с нахлёстом, и такая строка приходит следующей дельтой.
+
+    Обратный ход (проверен): `PULL_LOOKBACK_S = 0` — тест краснеет."""
+    from datetime import datetime, timedelta, timezone
+    from app.db import SessionLocal
+    from app.models import Lesson
+    h = make_admin(client)
+    stamped = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    server_time = client.get("/sync/pull", headers=h).json()["server_time"]
+    #Писатель, поставивший метку ДО этого pull, коммитит только теперь.
+    db = SessionLocal()
+    try:
+        db.add(Lesson(id="L-late", group_name="ИС-21", subject="Математика", type="Практика",
+                      number=9, topic="поздний коммит", date="", retake_date="", hour=0,
+                      extra={}, year="", semester=0, subgroup=0, updated_at=stamped,
+                      deleted=False))
+        db.commit()
+    finally:
+        db.close()
+    delta = client.get("/sync/pull", params={"since": server_time}, headers=h).json()
+    ids = [x["id"] for x in delta["changes"]["lessons"]]
+    assert "L-late" in ids, (
+        "строка, закоммиченная после начала pull, потеряна дельтой навсегда (W-02)")
 
 
 def test_delta_pull_does_not_lose_boundary_record(client):

@@ -1,0 +1,7 @@
+{
+  "_comment": "Образец подписи OTA, сделанный tools/sign_ota.py одноразовым ключом (закрытая половина выброшена). Его проверяют ОБЕ стороны: tests/test_ota_signing.py и web/tests/otaVerify.test.mjs — так формула подписи в питоне и в приложении не разойдётся молча.",
+  "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnidNo7DxKKEQBMfyI7zSyI46PKUeobMzJOSGoeHRukhhPPKDbRH5NVo0vdn7guB6afcFiXPIZXBCIyM3q1HXEQ==",
+  "version": "1.260927.1200",
+  "checksum": "abababababababababababababababababababababababababababababababab",
+  "sig": "iXyADkujH98Ud9FSXZxtXEgPC6bX9ESdninWzdDM6I+tLP3gq5ys12D9Do2kPkWd8JfiYGFEy7mwDkeVZsEtUQ=="
+}

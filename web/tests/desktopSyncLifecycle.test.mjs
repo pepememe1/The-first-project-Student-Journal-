@@ -29,7 +29,10 @@ globalThis.localStorage = {
 
 let calls = 0
 let nextStatus = 200
-let nextBody = { available: true, conflicts: 2, rejected: {}, auth_error: '' }
+//Форма ответа — с 25.09.2026 (аудит F-08/F-09): конфликты приходят из очереди правок
+//программы (`outbox`), а не верхним полем от старой базы.
+let nextBody = { available: true, auth_error: '',
+  outbox: { available: true, pending: 0, conflicts: 2, rejected: 0 } }
 globalThis.fetch = async () => {
   calls += 1
   return {

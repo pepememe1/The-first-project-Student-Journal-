@@ -6,9 +6,11 @@ import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, BookOpen, Paperclip, Link2, ClipboardList, Plus, Trash2, Archive,
-  Loader2, X, Users,
+  Loader2, X, Users, FileText, Upload,
 } from '@lucide/vue'
-import { coursesApi } from '@/api/endpoints'
+import { coursesApi, messengerApi } from '@/api/endpoints'
+import { putSigned } from '@/utils/signedUpload'
+import { humanSize } from '@/utils/docPreview'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 
@@ -64,6 +66,58 @@ async function addMaterial(sectionId) {
 async function delMaterial(mid) {
   await coursesApi.delMaterial(id.value, mid); await load()
 }
+
+// ── Файл-материал (аудит F-26) ─────────────────────────────────────────────────
+// Файл идёт мимо нашего сервера по подписанной ссылке, как вложение в беседе. Ошибку
+// показываем словами: «хранилище не настроено» (на машине с малым диском файлы честно
+// выключены) — это не сбой сети, и «попробуйте ещё раз» здесь было бы неправдой.
+const fileInput = ref(null)
+const fileTarget = ref(0)
+const uploading = ref(false)
+const fileError = ref('')
+
+function pickFile(sectionId) {
+  fileTarget.value = sectionId > 0 ? sectionId : 0
+  fileError.value = ''
+  fileInput.value?.click()
+}
+function uploadErrorText(e) {
+  const st = e?.response?.status
+  if (st === 503) return t('courses.fileNoStorage', 'Хранилище файлов на этом сервере не настроено')
+  if (st === 413) return t('courses.fileTooBig', 'Файл слишком большой')
+  if (st === 415) return t('courses.fileBadType', 'Такой тип файла не поддерживается')
+  if (st === 429) return t('courses.fileDailyLimit', 'Суточный лимит загрузок исчерпан')
+  return t('courses.fileFailed', 'Не удалось загрузить файл')
+}
+async function onFilePicked(ev) {
+  const file = ev.target.files?.[0]
+  ev.target.value = ''
+  if (!file || uploading.value) return
+  uploading.value = true
+  fileError.value = ''
+  try {
+    const { data: sign } = await coursesApi.signFile(id.value, {
+      name: file.name, size: file.size, mime: file.type || 'application/octet-stream',
+    })
+    await putSigned(sign, file)
+    await messengerApi.confirmUpload(sign.attachment_id)
+    await coursesApi.addMaterial(id.value, {
+      title: matDraft.value.title.trim() || file.name, kind: 'file',
+      sectionId: fileTarget.value, attachmentId: sign.attachment_id,
+    })
+    matDraft.value = { open: 0, title: '', url: '' }
+    await load()
+  } catch (e) {
+    fileError.value = uploadErrorText(e)
+  } finally { uploading.value = false }
+}
+async function openFile(m) {
+  fileError.value = ''
+  try {
+    const { data } = await coursesApi.fileUrl(id.value, m.id)
+    window.open(data.url, '_blank', 'noopener')
+  } catch { fileError.value = t('courses.fileOpenFailed', 'Не удалось открыть файл') }
+}
 async function addAssignment() {
   const title = asgDraft.value.title.trim()
   if (!title) return
@@ -96,6 +150,8 @@ async function archive() {
     </div>
 
     <template v-else>
+      <input ref="fileInput" type="file" class="hidden" @change="onFilePicked" />
+      <p v-if="fileError" role="alert" class="mb-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ fileError }}</p>
       <!-- Шапка курса -->
       <div class="mb-4 rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="flex items-start gap-3">
@@ -132,7 +188,12 @@ async function archive() {
               <!-- Материалы раздела -->
               <div v-if="s.materials.length || canEdit" class="ml-8 mt-1.5 flex flex-col gap-1">
                 <div v-for="m in s.materials" :key="m.id" class="flex items-center gap-2">
-                  <a :href="m.url" target="_blank" rel="noopener noreferrer"
+                  <button v-if="m.kind === 'file'" type="button" @click="openFile(m)"
+                          class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm text-blue hover:underline">
+                    <FileText class="size-3.5 shrink-0" /><span class="truncate">{{ m.title }}</span>
+                    <span v-if="m.file" class="shrink-0 text-[11px] text-text3">{{ humanSize(m.file.size) }}</span>
+                  </button>
+                  <a v-else :href="m.url" target="_blank" rel="noopener noreferrer"
                      class="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-blue hover:underline">
                     <Link2 class="size-3.5 shrink-0" /><span class="truncate">{{ m.title }}</span>
                   </a>
@@ -147,6 +208,10 @@ async function archive() {
                     <input v-model="matDraft.url" placeholder="https://…" @keydown.enter="addMaterial(s.id)"
                            class="h-8 min-w-0 flex-[2] rounded border border-border2 bg-card2 px-2 text-xs text-text outline-none focus:border-accent" />
                     <button type="button" @click="addMaterial(s.id)" class="h-8 rounded bg-accent px-2 text-xs font-semibold text-white hover:bg-accent2">{{ t('common.add', 'Добавить') }}</button>
+                    <button type="button" :disabled="uploading" @click="pickFile(s.id)"
+                            class="flex h-8 items-center gap-1 rounded border border-border2 px-2 text-xs text-text2 hover:border-accent hover:text-accent disabled:opacity-50">
+                      <Loader2 v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
+                    </button>
                     <button type="button" @click="matDraft.open = 0" class="grid size-8 place-items-center rounded text-text3 hover:text-text"><X class="size-4" /></button>
                   </div>
                   <button v-else type="button" @click="matDraft = { open: s.id, title: '', url: '' }"
@@ -175,7 +240,11 @@ async function archive() {
           <div class="flex flex-wrap gap-2">
             <div v-for="m in course.materials" :key="m.id"
                  class="flex items-center gap-1.5 rounded-lg border border-border2 bg-card2 px-2.5 py-1.5">
-              <a :href="m.url" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-sm text-blue hover:underline">
+              <button v-if="m.kind === 'file'" type="button" @click="openFile(m)" class="flex items-center gap-1.5 text-sm text-blue hover:underline">
+                <FileText class="size-3.5 shrink-0" /><span class="min-w-0 max-w-[220px] truncate">{{ m.title }}</span>
+                <span v-if="m.file" class="shrink-0 text-[11px] text-text3">{{ humanSize(m.file.size) }}</span>
+              </button>
+              <a v-else :href="m.url" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-sm text-blue hover:underline">
                 <Link2 class="size-3.5 shrink-0" /><span class="min-w-0 max-w-[220px] truncate">{{ m.title }}</span>
               </a>
               <button v-if="canEdit" type="button" @click="delMaterial(m.id)" class="text-text3 hover:text-red"><Trash2 class="size-3.5" /></button>
@@ -188,6 +257,10 @@ async function archive() {
             <input v-model="matDraft.url" placeholder="https://…" @keydown.enter="addMaterial(-1)"
                    class="h-8 min-w-0 flex-[2] rounded border border-border2 bg-card2 px-2 text-xs text-text outline-none focus:border-accent" />
             <button type="button" @click="addMaterial(-1)" class="h-8 rounded bg-accent px-2.5 text-xs font-semibold text-white hover:bg-accent2">{{ t('common.add', 'Добавить') }}</button>
+            <button type="button" :disabled="uploading" @click="pickFile(-1)"
+                    class="flex h-8 items-center gap-1 rounded border border-border2 px-2.5 text-xs text-text2 hover:border-accent hover:text-accent disabled:opacity-50">
+              <Loader2 v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
+            </button>
           </div>
         </div>
       </section>

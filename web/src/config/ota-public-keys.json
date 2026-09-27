@@ -1,0 +1,6 @@
+{
+  "_comment": "Открытые ключи подписи OTA-бандлов (ECDSA P-256, SPKI в base64). Закрытая половина — ~/.gradebook/ota_signing_key.pem на машине выкладки, ВНЕ репозитория. Ключей СПИСОК: при смене ключа новый добавляется сюда раньше, чем им начнут подписывать, иначе телефоны на старой сборке остались бы без обновлений. Проверка — web/src/utils/otaVerify.js, подпись — tools/sign_ota.py.",
+  "keys": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuBC3kTf5dABhUrShPn8JQkt19ZZ9AQapF8lVHh8Ac8XuWjhBPWmuBrtXa70FtFnuU72XShnpN1aEbuKctkNQtw=="
+  ]
+}

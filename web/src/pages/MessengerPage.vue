@@ -4,10 +4,11 @@
 //   B — карточка собеседника СЛЕВА от чата (портфолио)       [ProfilePanel]  (виден с xl)
 //   C — переписка СПРАВА (лента + композер)                  [ChatThread]
 // Транспорт Фазы 2 — опрос (store.startPolling); WebSocket добавим отдельной фазой.
-import { onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useMessengerStore } from '@/stores/messenger'
+import { linkAction } from '@/utils/deepLinks'
 import ChatList from '@/components/messenger/ChatList.vue'
 import ProfilePanel from '@/components/messenger/ProfilePanel.vue'
 import ChatThread from '@/components/messenger/ChatThread.vue'
@@ -34,12 +35,20 @@ const embed = (() => {
 // ⚠️ Сначала СПИСОК чатов, потом переход: `openById` берёт из него заголовок, чтобы шапка
 // не мигнула пустой. Отказ загрузки списка переходу не мешает.
 const route = useRoute()
+// Ссылка на ЧЕЛОВЕКА (`?peer=<id>`, «Поделиться контактом», F-18) — открыть или завести
+// личный чат с ним. Права проверяет сервер (`openDirect`): ссылка — навигация, а не пропуск.
+function openFromQuery() {
+  const act = linkAction(route.query)
+  if (act?.kind === 'chat') return m.openById(act.id, act.msg)
+  if (act?.kind === 'peer') return m.openWith({ id: act.id })
+}
 onMounted(async () => {
   await m.loadChats().catch(() => {})
   m.startPolling()
-  const conv = String(route.query.chat || '')
-  if (conv) m.openById(conv, Number(route.query.msg || 0))
+  openFromQuery()
 })
+//Ссылку открыли, уже находясь в сообщениях: страница не пересоздаётся, меняется запрос.
+watch(() => [route.query.chat, route.query.peer], () => { openFromQuery() })
 onBeforeUnmount(() => { m.stopPolling() })
 // Hotline Miami при входе во вкладку «Сообщения». Бросок серверный, как и везде.
 const easter = useEasterStore()

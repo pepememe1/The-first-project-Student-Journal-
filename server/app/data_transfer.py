@@ -58,6 +58,10 @@ _ROLE_OF = {"teachers": "teacher", "students": "student", "parents": "parent"}
 #Поля, которые НИКОГДА не покидают сервер (см. шапку). Проверяется на выгрузке И на приёме:
 #подсунутый в архив хеш не должен попасть в базу этим путём.
 _SECRET_FIELDS = {"password_hash"}
+#Номер изменения — внутренняя версия строки на ЭТОМ сервере (`sync_clock`). В архив его
+#не пишем, а из архива не берём: восстановленная строка обязана получить свежий номер,
+#иначе копии программ, уже видевшие этот номер, её бы не скачали.
+_SERVER_ONLY = {"change_seq"}
 
 FORMAT_VERSION = 1
 
@@ -66,7 +70,7 @@ def _row_to_dict(row, model) -> dict:
     """Строка ORM → словарь, без секретов и без служебных полей SQLAlchemy."""
     out = {}
     for col in model.__table__.columns:
-        if col.name in _SECRET_FIELDS:
+        if col.name in _SECRET_FIELDS or col.name in _SERVER_ONLY:
             continue
         out[col.name] = getattr(row, col.name, None)
     return out
@@ -184,7 +188,7 @@ def import_zip(db, blob: bytes, picked, now_iso: str) -> dict:
             if not isinstance(raw, dict) or not raw.get("id"):
                 continue        #без первичного ключа сливать некуда
             data = {k: v for k, v in raw.items()
-                    if k in cols and k not in _SECRET_FIELDS}
+                    if k in cols and k not in _SECRET_FIELDS and k not in _SERVER_ONLY}
             #Роль набора важнее того, что написано в файле: иначе подменённый файл
             #«студентов» мог бы завести администратора.
             role = _ROLE_OF.get(name)

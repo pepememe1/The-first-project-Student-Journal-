@@ -11,6 +11,39 @@ VPS в РФ → GigaChat отсюда работает (в отличие от �
 """
 import os
 
+#🔒 КЛЮЧА ПРОВАЙДЕРА НА ЭТОМ ХОСТЕ МОЖЕТ НЕ БЫТЬ — И ВНУТРИ ПРОГРАММЫ ЕГО НЕТ (26.09.2026).
+#Тот же пакет поднимается локальным сервером программы на 127.0.0.1, а токен GigaChat в
+#копию больше не приезжает (`sync._config_without_secrets`). Раньше приезжал — утечкой — и
+#локальный Вектор звонил во внешний сервис прямо с ПК преподавателя. Теперь программа
+#при старте ставит сюда «удалённого озвучивателя» (`desktop/local_api.py`), и переформули-
+#ровку делает боевой сервер своим ключом (`POST /vector/voice`).
+#⚠️ На бою хук пуст, и поведение там БУКВАЛЬНО прежнее. Хук вызывается, только когда
+#выбран GigaChat, а ключа здесь нет: Ollama живёт на той же машине и ключа не требует.
+_remote = None
+
+
+def set_remote(fn) -> None:
+    """Поставить удалённого озвучивателя: fn(mode, payload) -> str | None."""
+    global _remote
+    _remote = fn
+
+
+def _remote_needed(cfg: dict) -> bool:
+    return (_remote is not None
+            and (cfg.get("vector_llm") or "").strip() == "gigachat"
+            and not (cfg.get("gigachat_credentials") or "").strip())
+
+
+def _ask_remote(mode: str, payload: dict) -> str:
+    """Ответ удалённого озвучивателя; '' — не вышло (нет связи, истёк вход): вызывающий
+    откатывается на факты, как при любом сбое провайдера."""
+    try:
+        return (_remote(mode, payload) or "").strip()
+    except Exception as e:      # noqa: BLE001 — озвучка не ломает ответ
+        print(f"[vector_llm] удалённая озвучка не удалась ({mode}): {e}")
+        return ""
+
+
 VECTOR_PERSONA = """\
 Ты — Вектор, тигр-маскот Технологического колледжа ВСГУТУ и голос его цифрового \
 журнала. Ты дружелюбный, спокойный и точный помощник: говоришь тепло, но по делу, \
@@ -118,6 +151,9 @@ def voice(cfg: dict, facts_text: str, role: str = "student", question: str = "",
     if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
         return facts_text
     kind = (cfg.get("vector_llm") or "offline").strip()
+    if _remote_needed(cfg):
+        return _ask_remote("voice", {"facts": facts_text, "role": role,
+                                     "question": question, "locale": locale}) or facts_text
     try:
         if kind == "gigachat":
             return _voice_gigachat(cfg, facts_text, role, question, locale) or facts_text
@@ -236,6 +272,11 @@ def free_chat(cfg: dict, question: str, role: str = "student", context: str = ""
     if os.environ.get("GRADEBOOK_VECTOR_LLM", "").strip().lower() == "off":
         return _free_offline(role, locale)
     kind = (cfg.get("vector_llm") or "offline").strip()
+    if _remote_needed(cfg):
+        #Контекст «Избранного» наружу не передаём: мессенджер в программе и так идёт на
+        #бой целиком, а сюда из программы приходит только вопрос Вектору.
+        return _ask_remote("chat", {"question": question, "role": role,
+                                    "locale": locale}) or _free_offline(role, locale)
     try:
         if kind == "gigachat":
             return _chat_gigachat(cfg, _freechat_messages(question, role, context, locale)) or _free_offline(role, locale)

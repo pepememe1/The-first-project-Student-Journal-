@@ -10,6 +10,7 @@ import { adminApi, authApi, meApi } from '@/api/endpoints'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
+import { isDesktopApp } from '@/utils/platform'
 import MfaCard from '@/components/settings/MfaCard.vue'
 import PasswordCard from '@/components/settings/PasswordCard.vue'
 import ContactsCard from '@/components/settings/ContactsCard.vue'
@@ -26,6 +27,8 @@ import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { catsForRole, RAILLESS_VIEWS } from '@/config/settingsSections'
 import haptics from '@/utils/haptics'
+import { collectUnsent, shouldAskBeforeLogout, unsentMessageParts } from '@/utils/unsentWork'
+import { useConfirm } from '@/composables/useConfirm'
 // Профиль переехал ВНУТРЬ настроек отдельной категорией (просьба Влада): страницы
 // `/…/profile` больше нет в меню, редактор открывается отсюда и из карточки себя.
 import ProfilePage from '@/pages/Profile.vue'
@@ -105,7 +108,34 @@ const farewell = ref(false)
 // Прощание Dark Souls. Местное состояние, а не стор — см. onLogout ниже.
 const darkSouls = ref(false)
 const farewellName = computed(() => (auth.user?.name || '').trim())
+const { confirm } = useConfirm()
+// 🔥 НЕОТПРАВЛЕННОЕ ПЕРЕД ВЫХОДОМ (W-11, 26.09.2026). Выход на общем компьютере — смена
+// владельца, а правки, не дошедшие до сервера, уйдут только когда человек снова войдёт
+// ЗДЕСЬ ЖЕ. Раньше об этом не спрашивал никто: подробности — `utils/unsentWork.js`.
+// ⚠️ Вопрос задаётся ДО пасхалки и до `auth.logout()`: после них отступать уже некуда.
+const checkingUnsent = ref(false)
+async function unsentAllowsLogout() {
+  // ⚠️ Сбой самой проверки — «не знаем», а не «нельзя»: проверка, которая падает,
+  // не имеет права запереть человека в аккаунте на общем компьютере.
+  let summary
+  try { summary = await collectUnsent() } catch {
+    summary = { waiting: 0, problems: 0, unknown: true, total: 0 }
+  }
+  if (!shouldAskBeforeLogout(summary)) return true
+  return confirm({
+    title: loc.t('logout.unsent.title'),
+    message: unsentMessageParts(summary).map(([k, p]) => loc.t(k, p)).join('\n\n'),
+    okText: loc.t('logout.unsent.leave'),
+    cancelText: loc.t('logout.unsent.stay'),
+    danger: true,
+  })
+}
 async function onLogout() {
+  if (checkingUnsent.value) return      //второе нажатие, пока идёт проверка
+  checkingUnsent.value = true
+  let allowed = false
+  try { allowed = await unsentAllowsLogout() } finally { checkingUnsent.value = false }
+  if (!allowed) return
   // ⚠️ Dark Souls ЗАМЕНЯЕТ обычное прощание Вектора: две прощальные заставки подряд
   // читались бы как сбой, поэтому либо одна, либо другая.
   const egg = await easter.roll('dark_souls_logout')
@@ -366,6 +396,11 @@ function previewMumble() {
 
 // ── Вход по биометрии (passkeys / 2FA) ───────────────────────────────────────────
 const canBiometric = ref(false)
+//🔒 N-04 (аудит 22.09.2026): внутри программы ключ НЕ заводится — он привязан к адресу
+//сайта, а программа открыта с 127.0.0.1, и заведённый здесь ключ не подошёл бы нигде.
+//Список ключей аккаунта при этом остаётся (он приходит с боя): удалить потерянный
+//ключ — полезное действие с любого устройства.
+const insideApp = isDesktopApp()
 const passkeys = ref([])
 const pkBusy = ref(false)
 const pkMsg = ref('')
@@ -383,12 +418,15 @@ onMounted(async () => {
   loadPushInfo()
   await loadBundle()
   loadApkInfo()          //строго ПОСЛЕ loadBundle: вне приложения проверять нечего
-  try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
-  if (canBiometric.value) await loadPasskeys()
+  if (!insideApp) {
+    try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
+  }
+  if (canBiometric.value || insideApp) await loadPasskeys()
   if (auth.role === 'teacher') await loadGradingScale()
 })
 
 async function addPasskey() {
+  if (insideApp) return
   pkBusy.value = true; pkMsg.value = ''
   try {
     const name = navigator.platform || loc.t('settings.thisDevice', 'Это устройство')
@@ -925,7 +963,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     </Card>
 
     <!-- Вход по биометрии / 2FA — виден только на устройствах с Face ID/отпечатком. -->
-    <Card id="set-biometric" :class="sec('security')" v-if="canBiometric" :title="loc.t('settings.biometric', 'Вход по биометрии')"
+    <Card id="set-biometric" :class="sec('security')" v-if="canBiometric || insideApp" :title="loc.t('settings.biometric', 'Вход по биометрии')"
           :subtitle="loc.t('settings.biometricHint', 'Быстрый вход по Face ID, отпечатку или ключу доступа — без пароля')">
       <div class="flex items-start gap-3 rounded-lg border border-border bg-card2 px-3 py-2.5 text-sm text-text3">
         <ShieldCheck class="mt-0.5 size-4 shrink-0 text-accent" />
@@ -948,7 +986,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
       </ul>
       <p v-else class="mt-4 text-sm text-text3">{{ loc.t('settings.noKeys', 'Пока нет ни одного ключа на этом аккаунте.') }}</p>
 
-      <div class="mt-4 flex flex-wrap items-center gap-3">
+      <p v-if="insideApp" class="mt-4 text-sm text-text3">{{ loc.t('settings.passkeyOnSite', 'Ключ доступа привязан к адресу сайта, поэтому добавить его можно только в браузере на сайте журнала. Здесь — ключи, уже заведённые на аккаунте, и их удаление.') }}</p>
+      <div v-else class="mt-4 flex flex-wrap items-center gap-3">
         <AppButton variant="green" :disabled="pkBusy" @click="addPasskey">
           <Fingerprint class="mr-2 inline size-4" />{{ pkBusy ? loc.t('settings.settingUp', 'Настраиваем…') : loc.t('settings.addThisDevice', 'Добавить это устройство') }}
         </AppButton>
@@ -984,7 +1023,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         <p class="text-sm text-text3">
           {{ loc.t('settings.logoutExplain', 'После выхода понадобится снова ввести логин и пароль — сохранённая сессия будет удалена с этого устройства.') }}
         </p>
-        <AppButton variant="red" @click="onLogout">
+        <AppButton variant="red" :disabled="checkingUnsent" @click="onLogout">
           <LogOut class="mr-2 inline size-4" />{{ loc.t('nav.logout', 'Выйти') }}
         </AppButton>
       </div>

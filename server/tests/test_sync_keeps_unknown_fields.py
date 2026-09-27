@@ -72,12 +72,25 @@ def _extra_of(lid):
         db.close()
 
 
+def _edited_now() -> str:
+    """Метка НАСТОЯЩЕЙ правки: позже версии, которую клиент получил с сервера.
+
+    ⚠️ До 26.09.2026 здесь стояла дата 02.09 — раньше, чем сервер создаёт занятие в
+    `_setup`. Пока push решал только по содержимому, это было безразлично. С отсечкой
+    устаревшего снимка (F-03, `versioning.based_on_older_version`) такая строка — эхо
+    старой версии, и сервер её честно не применяет. Живой клиент ставит правке метку в
+    момент правки, значит и тест обязан так делать: иначе он проверяет отсечку, а не
+    защиту поля."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+
+
 def _desktop_snapshot(lid, **over):
     """РОВНО то, что шлёт установленная у людей сборка: снимок занятия целиком."""
     item = {"id": lid, "group_name": GROUP, "subject": SUBJ, "type": "Практика",
             "number": 1, "topic": "Кинематика", "date": "01.09.2026",
             "retake_date": "", "hour": 0, "extra": {},
-            "updated_at": "2026-09-02T00:00:00Z", "deleted": False,
+            "updated_at": _edited_now(), "deleted": False,
             "year": YEAR, "semester": SEM}
     item.update(over)
     return {"changes": {"lessons": [item]}}
@@ -130,7 +143,7 @@ def test_blank_extra_is_fine_when_the_server_has_nothing_to_lose(client):
         {"id": lid2, "group_name": GROUP, "subject": SUBJ, "type": "Практика",
          "number": 2, "topic": "Динамика и статика", "date": "08.09.2026",
          "retake_date": "", "hour": 0, "extra": {},
-         "updated_at": "2026-09-02T00:00:00Z", "deleted": False,
+         "updated_at": _edited_now(), "deleted": False,
          "year": YEAR, "semester": SEM}]}}, headers=teacher)
     assert r.status_code == 200, r.text
     assert _extra_of(lid2) == {}

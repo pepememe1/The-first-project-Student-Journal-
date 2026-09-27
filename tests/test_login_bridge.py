@@ -65,7 +65,11 @@ def _no_real_session():
     original_switch = local_api.switch_user_db
     #Сигнатура зеркалит продукт: у `switch_user_db` появился `authenticated` —
     #заглушка без него роняла вход 500-й ошибкой, а не краснела внятно.
-    local_api.switch_user_db = lambda login, authenticated=False: False
+    #⚠️ Заглушка отвечает «переключились» (True), а не False. С 25.09.2026 (аудит F-04)
+    #False означает «личная копия не открылась», и вход честно ОСТАНАВЛИВАЕТСЯ — раньше
+    #он молча шёл дальше на чужой базе. Здесь переключение не предмет проверки, а
+    #настоящее увело бы сервер с подготовленной фикстурой базы.
+    local_api.switch_user_db = lambda login, authenticated=False: True
     original = local_api._remember_session
     local_api._remember_session = lambda login, password, role: _remembered.append(
         (login, role))
@@ -275,3 +279,59 @@ def test_switch_without_login_does_nothing(api):
     local_api.switch_user_db = _ORIGINAL_SWITCH
     """Пустой логин — не повод трогать привязку базы."""
     assert local_api.switch_user_db("") is False
+
+
+# ── Второй фактор на бою — не «вход», а вызов (25.09.2026, N-01) ────────────────────
+def test_second_factor_challenge_goes_to_the_page_not_into_a_session(api, monkeypatch):
+    """Бой ответил 200, но токенов нет — есть вызов. Раньше мост принимал такой ответ за
+    успешный вход: роль «student» по умолчанию, а страница получала вызов и токены разом."""
+    #Тесты выше возвращают настоящий `switch_user_db` присваиванием — без подмены здесь
+    #вход увёл бы сервер на пустую копию и испортил соседей.
+    monkeypatch.setattr(local_api, "switch_user_db", lambda login, authenticated=False: True)
+    _remote_answer[0] = ({"mfa_required": True, "method": "totp", "challenge": "CH-1",
+                          "expires_in": 300}, "")
+    try:
+        code, body = _post(api, "/auth/login", {"login": "mfa-away", "password": "pw12345678"})
+    finally:
+        _remote_answer[0] = (None, "unauthorized")
+    assert code == 200 and body.get("mfa_required") is True, body
+    assert body.get("challenge") == "CH-1"
+    assert "access_token" not in body, "вызов второго фактора выдан как вход"
+
+
+def test_second_step_completes_the_desktop_login(api, monkeypatch):
+    """Код проверяет бой, а сессию выдаёт локальный сервер; боевые токены сохраняются
+    для синка (со вторым фактором вход по паролю снова упёрся бы в вызов)."""
+    monkeypatch.setattr(local_api, "switch_user_db", lambda login, authenticated=False: True)
+    _add_user(login="mfa-home", password="local-old-pass", role="teacher")
+    adopted = []
+    monkeypatch.setattr(local_api, "_adopt_remote_tokens",
+                        lambda login, a, r: adopted.append((login, a, r)))
+    monkeypatch.setattr(local_api, "_wait_for_mirror", lambda login, seconds=12: (True, ""))
+    _remote_answer[0] = ({"mfa_required": True, "method": "totp", "challenge": "CH-2"}, "")
+    try:
+        code, body = _post(api, "/auth/login", {"login": "mfa-home", "password": "new-pass-99"})
+    finally:
+        _remote_answer[0] = (None, "unauthorized")
+    assert code == 200 and body.get("challenge") == "CH-2", body
+
+    monkeypatch.setattr(local_api, "_forward_to_server",
+                        lambda m, p, payload=None, params=None: (401, {"detail": "Неверный код"}))
+    code, body = _post(api, "/auth/mfa/verify", {"challenge": "CH-2", "code": "000000"})
+    assert code == 401, "неверный код обязан оставаться отказом"
+
+    monkeypatch.setattr(local_api, "_forward_to_server",
+                        lambda m, p, payload=None, params=None: (200, {
+                            "access_token": "prod-a", "refresh_token": "prod-r",
+                            "role": "teacher", "name": "Тестов Т."}))
+    code, body = _post(api, "/auth/mfa/verify", {"challenge": "CH-2", "code": "123456"})
+    assert code == 200, body
+    assert body["access_token"] and body["access_token"] != "prod-a", (
+        "странице ушёл БОЕВОЙ токен — локальный сервер его не примет")
+    assert _get(api, "/web/teacher/overview", body["access_token"]) != 401
+    assert adopted == [("mfa-home", "prod-a", "prod-r")]
+
+
+def test_second_step_without_a_live_challenge_is_refused(api):
+    code, body = _post(api, "/auth/mfa/verify", {"challenge": "нет-такого", "code": "1"})
+    assert code == 401 and "истекло" in body.get("detail", "")

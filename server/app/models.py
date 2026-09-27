@@ -698,6 +698,29 @@ def is_new_style_key(key: str) -> bool:
     return (key or "").startswith("stud:")
 
 
+def row_student_id(student_id: str, key: str) -> str:
+    """Чья строка оценки — по НЕИЗМЕНЯЕМОМУ id студента, '' — если из строки не понять.
+
+    🔥 ЗАЧЕМ (W-04, 26.09.2026). Миграция §12 свела в одно место СБОРКУ ключа, но не
+    СРАВНЕНИЕ человека: выдача `/sync/pull` и проверка прав старого push по-прежнему
+    узнавали «своё» по фамилии и имени. Полный тёзка из другой группы выкачивал чужие
+    оценки, а у итоговых карта «ФИО → группа» при тёзках молча брала последнего.
+
+    ⚠️ Колонки МАЛО, нужен и ключ. Старый клиент колонку не шлёт; push переводит его
+    ключ на новый формат (`_normalize_grade_key`), а колонку оставляет пустой — и
+    правильно: простановка ради порядка бампнула бы `updated_at` у каждой такой строки
+    (§10 запрещает). Значит id такой строки живёт только в префиксе ключа.
+    ⚠️ Id студента разделителя «|» не содержит (`stud:{login}`, `stud:u:{uuid}`); если
+    однажды содержит — ошибка уйдёт в безопасную сторону: строку не узнает никто, а не
+    узнает чужой."""
+    sid = (student_id or "").strip()
+    if sid:
+        return sid
+    if is_new_style_key(key):
+        return (key or "").split("|", 1)[0]
+    return ""
+
+
 #Карта «имя сущности → модель» для обобщённого синка push/pull.
 #term_grades включены: десктоп теперь ведёт итоговые оценки/ведомости (аттестацию)
 #наравне с вебом — данные общие через синк (ключ f|n|subject|year|semester).
@@ -1574,9 +1597,10 @@ class CourseSection(Base):
 
 
 class CourseMaterial(Base):
-    """Материал курса. MVP — `kind='link'` (url) и `kind='text'` (пояснение в title/url);
-    `kind='file'` зарезервирован под загрузку файлов (следующий шаг — через уже готовую
-    инфраструктуру вложений `app/storage.py`, ту же, что у мессенджера)."""
+    """Материал курса: `kind='link'` (url), `kind='text'` (пояснение в title/url) и
+    `kind='file'` — файл через инфраструктуру вложений мессенджера (`app/storage.py`);
+    в `file_path` тогда лежит id вложения (`att:<hex>`), владелец которого — `course:<id>`
+    (аудит F-26, `routers/web/courses.py`)."""
     __tablename__ = "course_materials"
     id = Column(Integer, primary_key=True, autoincrement=True)
     course_id = Column(Integer, index=True)
@@ -1584,7 +1608,7 @@ class CourseMaterial(Base):
     kind = Column(String, default="link")                #link | file | text
     title = Column(String, default="")
     url = Column(String, default="")                     #для link
-    file_path = Column(String, default="")               #для file (пока не используется)
+    file_path = Column(String, default="")               #для file: id вложения att:<hex>
     position = Column(Integer, default=0)
     created_at = Column(String, default="")
 
@@ -1693,3 +1717,56 @@ SYNC_MODELS = {
     "zet_thresholds": ZetThreshold,           #порог перевода — без него «ограничений нет»
     "config": ConfigKV,
 }
+
+
+#━━ НОМЕР ИЗМЕНЕНИЯ (`change_seq`) — ПОЗИЦИЯ СТРОКИ В ПОТОКЕ СИНКА (26.09.2026) ━━━━━━━━━
+#🔥 «Время — не курсор» (инвариант §4.16, W-02 исследования синка). `updated_at` ставится
+#ДО коммита, а читатель видит только закоммиченное, поэтому дельта по времени теряла
+#строки. Номер выдаёт БАЗА внутри транзакции записи (триггеры — `app/sync_clock.py`),
+#писатель в SQLite один, значит порядок номеров совпадает с порядком коммитов.
+#⚠️ Колонка заводится ЦИКЛОМ ровно на `SYNC_MODELS`, а не вписывается в каждый класс:
+#одиннадцать ручных копий разошлись бы на первой же новой таблице синка, а здесь новая
+#таблица получит номер сама. Индекс и триггеры ставит `sync_clock.ensure` — и на свежей
+#базе, и на боевой (`create_all` у существующей таблицы колонку не добавит).
+#⚠️ Значение ставит ТОЛЬКО база на бою. Клиент его не пишет: на приёме номер вырезается
+#(`SERVER_ONLY_COLUMNS`), а в локальной копии программы триггеров нет вовсе — там номер
+#означает «последняя увиденная боевая версия строки» и служит базой правки.
+for _model in SYNC_MODELS.values():
+    _model.change_seq = Column(Integer, nullable=False, default=0, server_default="0")
+del _model
+
+#Поля, которые клиент не вправе задавать: номер ставит сервер (как и метку времени, §4.3).
+SERVER_ONLY_COLUMNS = frozenset({"change_seq"})
+
+
+class SyncClock(Base):
+    """Счётчик номеров изменений — ОДНА строка (id=1).
+
+    seq     — последний выданный номер (он же «голова» потока для `/sync/head`);
+    horizon — номер, до которого журнал удалений уже вычищен: клиент с курсором ниже
+              мог пропустить удаление и обязан пересобрать копию целиком (W-16);
+    epoch   — случайная метка ЭТОЙ базы. Меняется при восстановлении из резервной копии
+              (`python -m app.sync_clock --new-epoch`): номера после отката пойдут заново,
+              и курсор, сохранённый до отката, указывал бы на ЧУЖИЕ изменения."""
+    __tablename__ = "sync_clock"
+    id = Column(Integer, primary_key=True)
+    seq = Column(Integer, nullable=False, default=0)
+    horizon = Column(Integer, nullable=False, default=0)
+    epoch = Column(String, nullable=False, default="")
+
+
+class SyncDelete(Base):
+    """Журнал ЖЁСТКИХ удалений строк синка (пишет триггер, `app/sync_clock.py`).
+
+    Надгробие (`deleted=True`) едет обычной строкой; физически строку удаляет уборка
+    через полгода (`retention.purge_tombstones`) и редкие чистки дублей. Без журнала
+    копия программы об этом не узнала бы никогда — строка висела бы до полной сверки.
+    `scope` — поля области видимости удалённой строки (разделитель \\x1f, порядок —
+    `sync_clock.SCOPE_FIELDS`): по ним сервер решает, кому вообще можно сообщить ключ.
+    Ключ оценки содержит id студента, и рассылать его всем было бы утечкой."""
+    __tablename__ = "sync_deletes"
+    seq = Column(Integer, primary_key=True)
+    tbl = Column(String, nullable=False, default="")
+    pk = Column(String, nullable=False, default="")
+    scope = Column(String, nullable=False, default="")
+    at = Column(String, nullable=False, default="", index=True)

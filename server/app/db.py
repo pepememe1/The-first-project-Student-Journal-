@@ -142,6 +142,10 @@ def _sqlite_pragmas(dbapi_conn, _rec):
     cur.execute("PRAGMA journal_mode=WAL")     #параллельные читатели + один писатель
     cur.execute("PRAGMA busy_timeout=5000")    #ждать блокировку до 5 c, а не падать
     cur.execute("PRAGMA synchronous=NORMAL")   #безопасно и быстрее при WAL
+    #Триггеры номера изменения (`sync_clock`) правят свою же строку. Рекурсия триггеров
+    #в SQLite и так выключена по умолчанию; фиксируем это явно, чтобы поведение не
+    #зависело от сборки драйвера (условие в самом триггере страхует и без этого).
+    cur.execute("PRAGMA recursive_triggers=OFF")
 
     # ━━ ПАМЯТЬ: РАЗМЕР КЕША СПРАШИВАЕМ У МАШИНЫ, А НЕ ПИШЕМ ЧИСЛОМ ━━━━━━━━━━━━━━━━━━
     # Здесь стояло жёсткое `-4000` (4 МБ), и для нынешнего боя это ПРАВИЛЬНОЕ число:
@@ -230,6 +234,10 @@ def init_db():
     _ensure_user_mod_number_column()
     _ensure_hot_path_indexes()
     _migrate_slash_in_ids()
+    #Номер изменения — курсор синка (`app/sync_clock.py`). ПОСЛЕ остальных миграций:
+    #нумерует строки по `updated_at`, а часть мини-миграций выше эти метки дописывает.
+    from . import sync_clock
+    sync_clock.ensure(engine)
     _refresh_query_planner_stats()
 
 

@@ -203,7 +203,62 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
+#🔒 ВОРОТА ЧИСТОТЫ ПОСТАВКИ (аудит 22.09.2026, F-25). Свойство «состояния внутри нет»
+#держал только тест — сборка сама не отказывала: окажись в `server/app` база или `.env`
+#после запуска из исходников, архив собрался бы с ними и ушёл по почте. Теперь это отказ.
+#⚠️ Список — ИМЕНА, а не содержимое, плюс один признак содержимого: заголовок закрытого
+#ключа. Проверять «похоже ли на секрет» по тексту бессмысленно — у нас сотни строк со
+#словами key/token в комментариях, и ворота, красные на каждой сборке, перестают читать.
+#⚠️ Проверяются СЕГМЕНТЫ имени, а не только окончание (второй заход Полковника,
+#26.09.2026): по окончанию проходили `gradebook_server.db.bak`, `.db-journal`,
+#`prod.env.bak`, `.db.20260926` — ровно те имена, которые люди дают копиям.
+_FORBIDDEN_SEGMENTS = {"env", "db", "sqlite", "sqlite3", "key", "pem", "keystore", "jks",
+                       "p12", "pfx", "log", "sql", "dump", "bak", "backup",
+                       "db-wal", "db-shm", "db-journal", "sqlite-journal"}
+#Архивов в поставке нет и быть не должно (сайт и код лежат файлами), а архив с базой
+#внутри по имени не распознать.
+_FORBIDDEN_SUFFIXES = (".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz")
+_FORBIDDEN_NAME_PARTS = ("pilot", "claude", "gb_db_key", "id_rsa", "id_ed25519",
+                         "release_signing_key", "keystore.properties")
+#`secret`/`credential`/`backup` — только у ДАННЫХ, не у кода: `secrets_source.py` — законный
+#модуль поставки, а `secrets.json` или `backup.txt` — нет.
+_FORBIDDEN_DATA_NAME = re.compile(
+    r"(secret|credential|backup|dump)[^/]*\.(json|ya?ml|txt|ini|cfg|toml|csv|bak)$")
+
+
+def forbidden_entries(entries: list[tuple[str, str]]) -> list[str]:
+    """Что из собранного НЕ имеет права уехать в поставку (пусто — всё чисто)."""
+    bad = []
+    for src, arc in entries:
+        name = arc.rsplit("/", 1)[-1].lower()
+        segments = set(name.split(".")[1:])
+        if (name.endswith(_FORBIDDEN_SUFFIXES) or name.startswith(".env")
+                or segments & _FORBIDDEN_SEGMENTS
+                or _FORBIDDEN_DATA_NAME.search(name)
+                or any(p in name for p in _FORBIDDEN_NAME_PARTS)
+                or any(f"/{d}/" in f"/{arc}/" for d in ("downloads", "ota_bundles", "gb-backups"))):
+            bad.append(arc)
+            continue
+        try:
+            with open(src, "rb") as fh:
+                head = fh.read(1 << 20)
+        except OSError:
+            continue
+        if b"-----BEGIN" in head and b"PRIVATE KEY-----" in head:
+            bad.append(f"{arc} (закрытый ключ внутри)")
+    return bad
+
+
 def gather(include_web: bool = True) -> list[tuple[str, str]]:
+    entries = _gather(include_web)
+    bad = forbidden_entries(entries)
+    if bad:
+        raise SystemExit("в поставку попало то, чему там не место — сборка остановлена:\n  "
+                         + "\n  ".join(bad))
+    return entries
+
+
+def _gather(include_web: bool = True) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     entries += _collect(SERVER_APP, "app")
 

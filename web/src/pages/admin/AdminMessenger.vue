@@ -43,12 +43,23 @@ const REASON_LABELS = computed(() => ({
   other: locale.t('adminMessenger.reasonOther', 'Другое'),
 }))
 
-const view = ref('reports')          // reports | inbox — активная вкладка
+const view = ref('reports')          // reports | profiles | inbox | people — активная вкладка
 const statusFilter = ref('open')
+// 🔒 F-20 (аудит 22.09.2026): у профилей СВОЙ фильтр. Раньше вкладка «Профили»
+// переиспользовала фильтр жалоб на сообщения, а на ней самой переключателя не было:
+// выбрал «Решённые» в жалобах — и открытые жалобы на профили молча пропадали из списка.
+const profileStatusFilter = ref('open')
 const reports = ref([])
 const loading = ref(false)
+// Сколько всего в очереди и все ли показаны (сервер режет список, F-11). Без этого
+// модератор, разобрав видимые 300, считал бы очередь пустой.
+const reportsMeta = ref({ total: 0, truncated: false })
+const userReportsMeta = ref({ total: 0, truncated: false })
+const inboxMeta = ref({ total: 0, truncated: false })
 // mode='report' — просмотр только для чтения (из тикета); mode='inbox' — с ответом модерации.
-const viewer = ref({ open: false, conv: '', mode: 'report', messages: [], loading: false })
+// `hasMore`/`nextBefore` — история отдаётся окном (F-12), раньше загружается по кнопке.
+const viewer = ref({ open: false, conv: '', mode: 'report', messages: [], loading: false,
+  reportId: 0, hasMore: false, nextBefore: 0, loadingMore: false })
 const replyDraft = ref('')
 
 // ── Обращения (чаты поддержки) ──────────────────────────────────────────────────────
@@ -75,17 +86,38 @@ const muteFor = ref({ open: false, user: null, reportId: 0, closed: false })
 const muteBusy = ref(false)
 const historyFor = ref({ open: false, user: null, data: null, loading: false })
 
-async function load() {
-  loading.value = true
-  try { reports.value = (await messengerModApi.reports(statusFilter.value)).data.reports || [] }
-  catch { reports.value = [] }
-  finally { loading.value = false }
-}
-
 // ⚠️ «Не удалось загрузить» и «ничего нет» — РАЗНЫЕ сообщения. Показав пустоту при сбое
 // сети, мы говорим модератору «всё чисто»: он закроет вкладку, а жалобы останутся
 // неразобранными. Отказ, выглядящий как хорошая новость, — худший вид тихого отказа.
-const loadError = ref('')
+// 🔥 F-15 (аудит 22.09.2026): ровно так и было у САМОЙ ГЛАВНОЙ очереди — жалоб на
+// сообщения. Её загрузка при ошибке очищала список и ничего не сообщала, и экран честно
+// показывал «Жалоб нет». Правило выше было записано и соблюдалось везде, кроме неё.
+// ⚠️ Ошибка СВОЯ У КАЖДОЙ ВКЛАДКИ. Одна общая строка значила бы, что сбой «Людей» висит
+// красным на «Профилях», а успешная загрузка одной вкладки стирает ошибку другой.
+const loadErrors = ref({ reports: '', inbox: '', profiles: '', people: '' })
+function failText(e) {
+  const code = e?.response?.status
+  const base = locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')
+  return code ? `${base} (HTTP ${code})` : base
+}
+
+function metaOf(data, shown) {
+  return { total: Number(data?.total ?? shown) || 0, truncated: Boolean(data?.truncated) }
+}
+
+async function load() {
+  loading.value = true
+  loadErrors.value.reports = ''
+  try {
+    const data = (await messengerModApi.reports(statusFilter.value)).data
+    reports.value = data.reports || []
+    reportsMeta.value = metaOf(data, reports.value.length)
+  } catch (e) {
+    reports.value = []
+    reportsMeta.value = { total: 0, truncated: false }
+    loadErrors.value.reports = failText(e)
+  } finally { loading.value = false }
+}
 
 // ── Очередь обращений: ТИКЕТЫ, а поверх них — чаты ──────────────────────────────────
 //
@@ -102,7 +134,7 @@ const ticketBusy = ref(0)
 
 async function loadInbox() {
   loadingConvs.value = true
-  loadError.value = ''
+  loadErrors.value.inbox = ''
   try {
     const [t, c] = await Promise.all([
       messengerModApi.support('open'),
@@ -110,10 +142,16 @@ async function loadInbox() {
     ])
     tickets.value = t.data.tickets || []
     convs.value = c.data.conversations || []
-  } catch {
+    //Обрезана хотя бы одна из двух очередей — строк на экране меньше, чем обращений.
+    inboxMeta.value = {
+      total: (Number(t.data.total ?? tickets.value.length) || 0),
+      truncated: Boolean(t.data.truncated || c.data.truncated),
+    }
+  } catch (e) {
     tickets.value = []
     convs.value = []
-    loadError.value = locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')
+    inboxMeta.value = { total: 0, truncated: false }
+    loadErrors.value.inbox = failText(e)
   } finally { loadingConvs.value = false }
 }
 
@@ -164,22 +202,26 @@ async function resolveTicket(t) {
 
 async function loadUserReports() {
   loadingUserReports.value = true
-  loadError.value = ''
-  try { userReports.value = (await messengerModApi.userReports(statusFilter.value)).data.reports || [] }
-  catch {
+  loadErrors.value.profiles = ''
+  try {
+    const data = (await messengerModApi.userReports(profileStatusFilter.value)).data
+    userReports.value = data.reports || []
+    userReportsMeta.value = metaOf(data, userReports.value.length)
+  } catch (e) {
     userReports.value = []
-    loadError.value = locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')
+    userReportsMeta.value = { total: 0, truncated: false }
+    loadErrors.value.profiles = failText(e)
   }
   finally { loadingUserReports.value = false }
 }
 
 async function loadPeople() {
   loadingPeople.value = true
-  loadError.value = ''
+  loadErrors.value.people = ''
   try { people.value = (await messengerModApi.users(peopleQuery.value)).data.users || [] }
-  catch {
+  catch (e) {
     people.value = []
-    loadError.value = locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')
+    loadErrors.value.people = failText(e)
   }
   finally { loadingPeople.value = false }
 }
@@ -239,9 +281,16 @@ async function deleteMessage(mm) {
   if (!window.confirm(locale.t('adminMessenger.confirmDeleteMessage', 'Удалить это сообщение у всех? Текст будет стёрт безвозвратно.'))) return
   try {
     await messengerModApi.deleteMessage(mm.id)
-    const conv = viewer.value.conv
-    viewer.value.messages = (await messengerModApi.conversationMessages(conv)).data.messages || []
-  } catch { /* noop */ }
+  } catch (e) {
+    viewer.value.error = failText(e)
+    return
+  }
+  //🔥 Помечаем удалённым НА МЕСТЕ, а не перечитываем (второй заход Полковника, 26.09.2026).
+  //Перечитывание шло без `reportId` — во вкладке «Жалобы» сервер отвечал 403, `catch`
+  //его глотал, и удалённое оставалось на экране неудалённым; и мимо окна истории — после
+  //«Загрузить раньше» лента сбрасывалась на последнее окно, а метка следующей подгрузки
+  //оставалась глубокой, и одно окно пропадало целиком.
+  mm.deleted = true
 }
 
 // Ограничение переписки. Выдача — через диалог со СРОКОМ (бессрочных мьютов больше нет,
@@ -293,10 +342,17 @@ function muteLeft(iso) {
 // а просто честная подсказка «сюда уже нельзя».
 function isReportOpen(r) { return r.status === 'open' || r.status === 'in_review' }
 
+function takeWindow(data) {
+  viewer.value.hasMore = Boolean(data?.has_more)
+  viewer.value.nextBefore = Number(data?.next_before || 0)
+  return data?.messages || []
+}
+
 async function openConversation(convId, mode = 'report', reportId = 0) {
-  viewer.value = { open: true, conv: convId, mode, messages: [], loading: true, error: '' }
+  viewer.value = { open: true, conv: convId, mode, messages: [], loading: true, error: '',
+    reportId, hasMore: false, nextBefore: 0, loadingMore: false }
   replyDraft.value = ''
-  try { viewer.value.messages = (await messengerModApi.conversationMessages(convId, reportId)).data.messages || [] }
+  try { viewer.value.messages = takeWindow((await messengerModApi.conversationMessages(convId, reportId)).data) }
   catch (e) {
     viewer.value.messages = []
     viewer.value.error = e?.response?.status === 403
@@ -306,6 +362,21 @@ async function openConversation(convId, mode = 'report', reportId = 0) {
   finally { viewer.value.loading = false }
 }
 
+// Раньше загруженного — следующее окно истории (F-12). Сервер отдаёт последние сообщения,
+// и без этой кнопки разбор жалобы на давнюю переписку упирался в «её нет».
+async function loadEarlier() {
+  const v = viewer.value
+  if (!v.hasMore || !v.nextBefore || v.loadingMore) return
+  v.loadingMore = true
+  try {
+    const older = takeWindow((await messengerModApi.conversationMessages(v.conv, v.reportId,
+      v.nextBefore)).data)
+    v.messages = [...older, ...v.messages]
+  } catch (e) {
+    v.error = failText(e)
+  } finally { v.loadingMore = false }
+}
+
 // Ответ модерации в чат поддержки (эндпоинт mod_reply, пишется в аудит).
 async function sendReply() {
   const body = replyDraft.value.trim()
@@ -313,7 +384,7 @@ async function sendReply() {
   try {
     await messengerModApi.reply(viewer.value.conv, body)
     replyDraft.value = ''
-    viewer.value.messages = (await messengerModApi.conversationMessages(viewer.value.conv)).data.messages || []
+    viewer.value.messages = takeWindow((await messengerModApi.conversationMessages(viewer.value.conv)).data)
   } catch { /* noop */ }
 }
 
@@ -384,8 +455,16 @@ function fmt(iso) {
       </div>
 
       <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+      <p v-else-if="loadErrors.reports" role="alert"
+         class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
+        {{ loadErrors.reports }}
+        <button type="button" @click="load" class="ml-2 underline">{{ locale.t('common.refresh') }}</button>
+      </p>
       <p v-else-if="!reports.length" class="rounded-lg border border-dashed border-border2 bg-card2/50 px-6 py-12 text-center text-sm text-text3">
         {{ locale.t('adminMessenger.noReports', 'Жалоб нет.') }}
+      </p>
+      <p v-if="!loading && reportsMeta.truncated" class="mb-3 rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
+        {{ locale.t('adminMessenger.truncated', { shown: reports.length, total: reportsMeta.total }) }}
       </p>
 
       <div class="space-y-3">
@@ -460,13 +539,18 @@ function fmt(iso) {
     </template>
 
     <!-- ── Обращения (чаты поддержки) ───────────────────────────────────────────────── -->
-    <template v-else>
+    <!-- 🔒 F-16: ЯВНАЯ ветка. Здесь стоял общий `v-else`, и «Профили» с «Людьми»
+         попадали в него: под их собственным содержимым рисовалась очередь обращений. -->
+    <template v-else-if="view === 'inbox'">
       <div class="mb-4 flex items-center gap-2">
         <button type="button" @click="loadInbox" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.refresh') }}</button>
       </div>
       <p v-if="loadingConvs" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
-      <p v-else-if="loadError" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
-        {{ loadError }}
+      <p v-else-if="loadErrors.inbox" role="alert" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
+        {{ loadErrors.inbox }}
+      </p>
+      <p v-if="!loadingConvs && inboxMeta.truncated" class="mb-3 rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
+        {{ locale.t('adminMessenger.truncated', { shown: inboxRows.length, total: inboxMeta.total }) }}
       </p>
       <p v-else-if="!inboxRows.length" class="rounded-lg border border-dashed border-border2 bg-card2/50 px-6 py-12 text-center text-sm text-text3">
         {{ locale.t('adminMessenger.noInbox', 'Обращений в поддержку нет.') }}
@@ -544,6 +628,11 @@ function fmt(iso) {
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
           <p v-if="viewer.loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
           <p v-else-if="viewer.error" class="text-sm text-red">{{ viewer.error }}</p>
+          <button v-if="!viewer.loading && !viewer.error && viewer.hasMore" type="button"
+                  :disabled="viewer.loadingMore" @click="loadEarlier"
+                  class="mb-2 w-full rounded-md border border-border2 px-3 py-1.5 text-xs text-text2 hover:bg-bg2 disabled:opacity-50">
+            {{ viewer.loadingMore ? locale.t('common.loading') : locale.t('adminMessenger.loadEarlier', 'Загрузить раньше') }}
+          </button>
           <!-- Режим тикета: плоский список для чтения -->
           <template v-else-if="viewer.mode !== 'inbox'">
             <div v-for="mm in viewer.messages" :key="mm.id" class="group flex items-start gap-2 text-sm">
@@ -559,7 +648,8 @@ function fmt(iso) {
               <!-- Удалить нарушающее сообщение у всех (модерация). -->
               <button v-if="!mm.deleted" type="button" @click="deleteMessage(mm)"
                       :title="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
-                      class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100">
+                      :aria-label="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
+                      class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red [@media(hover:none)]:opacity-100 pointer-coarse:opacity-100">
                 {{ locale.t('common.delete') }}
               </button>
             </div>
@@ -570,7 +660,8 @@ function fmt(iso) {
                  :class="isModReply(mm) ? 'justify-end' : 'justify-start'">
               <button v-if="!mm.deleted && !isModReply(mm)" type="button" @click="deleteMessage(mm)"
                       :title="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
-                      class="order-last shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100">
+                      :aria-label="locale.t('adminMessenger.deleteForAllTitle', 'Удалить у всех')"
+                      class="order-last shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold text-red opacity-0 transition-opacity hover:bg-red/10 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red [@media(hover:none)]:opacity-100 pointer-coarse:opacity-100">
                 {{ locale.t('common.delete') }}
               </button>
               <div class="max-w-[80%] rounded-2xl px-3 py-1.5 text-sm"
@@ -607,9 +698,24 @@ function fmt(iso) {
 
     <!-- ── Жалобы на ПРОФИЛИ ─────────────────────────────────────────────────────── -->
     <template v-if="view === 'profiles'">
+      <div class="mb-4 flex items-center gap-2">
+        <label class="text-sm text-text2" for="profile-status">{{ locale.t('adminMessenger.statusLabel', 'Статус:') }}</label>
+        <select id="profile-status" v-model="profileStatusFilter" @change="loadUserReports"
+                class="rounded-md border border-border2 bg-card2 px-3 py-1.5 text-sm text-text outline-none focus:border-accent">
+          <option value="open">{{ locale.t('adminMessenger.statusOpen', 'Новые') }}</option>
+          <option value="in_review">{{ locale.t('adminMessenger.statusInReview', 'В работе') }}</option>
+          <option value="resolved">{{ locale.t('adminMessenger.statusResolved', 'Решённые') }}</option>
+          <option value="dismissed">{{ locale.t('adminMessenger.statusDismissed', 'Отклонённые') }}</option>
+          <option value="">{{ locale.t('adminMessenger.statusAll', 'Все') }}</option>
+        </select>
+        <button type="button" @click="loadUserReports" class="rounded-md border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.refresh') }}</button>
+      </div>
       <p v-if="loadingUserReports" class="p-4 text-center text-sm text-text3">{{ locale.t('common.loading', 'Загрузка') }}…</p>
-      <p v-else-if="loadError" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
-        {{ loadError }}
+      <p v-else-if="loadErrors.profiles" role="alert" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
+        {{ loadErrors.profiles }}
+      </p>
+      <p v-if="!loadingUserReports && userReportsMeta.truncated" class="mb-3 rounded-lg border border-orange/40 bg-orange/10 px-4 py-2 text-sm text-orange">
+        {{ locale.t('adminMessenger.truncated', { shown: userReports.length, total: userReportsMeta.total }) }}
       </p>
       <p v-else-if="!userReports.length" class="rounded-xl border border-border2 bg-card p-6 text-center text-sm text-text3">
         {{ locale.t('adminMessenger.noProfileReports', 'Жалоб на профили нет.') }}
@@ -690,8 +796,8 @@ function fmt(iso) {
         {{ locale.t('adminMessenger.peopleHint', 'Только те, на кого поступала жалоба или у кого действует ограничение.') }}
       </p>
       <p v-if="loadingPeople" class="p-4 text-center text-sm text-text3">{{ locale.t('common.loading', 'Загрузка') }}…</p>
-      <p v-else-if="loadError" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
-        {{ loadError }}
+      <p v-else-if="loadErrors.people" role="alert" class="rounded-xl border border-red/40 bg-red/10 p-6 text-center text-sm text-red">
+        {{ loadErrors.people }}
       </p>
       <p v-else-if="!people.length" class="rounded-xl border border-border2 bg-card p-6 text-center text-sm text-text3">
         {{ locale.t('adminMessenger.noPeople', 'Никого нет — жалоб не поступало.') }}

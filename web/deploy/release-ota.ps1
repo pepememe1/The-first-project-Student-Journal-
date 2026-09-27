@@ -41,9 +41,13 @@ if (-not $Version) {
 }
 
 Write-Host "== Building web ==" -ForegroundColor Cyan
+# The bundle must know its own version (F-24): the app compares the manifest against it
+# and refuses anything not newer, so an old - even correctly signed - bundle cannot be
+# pushed back onto phones.
+$env:VITE_OTA_VERSION = $Version
 Push-Location $web
 try { & npm run build; if ($LASTEXITCODE -ne 0) { throw "npm run build failed" } }
-finally { Pop-Location }
+finally { Pop-Location; Remove-Item Env:VITE_OTA_VERSION -ErrorAction SilentlyContinue }
 
 New-Item -ItemType Directory -Force $otaDir | Out-Null
 $zip = Join-Path $otaDir "$Version.zip"
@@ -87,6 +91,16 @@ $manifestPath = Join-Path $otaDir "latest.json"
 $manifest = [ordered]@{ version = $Version; file = "$Version.zip"; checksum = $sha } | ConvertTo-Json
 Set-Content -Path $manifestPath -Value $manifest -Encoding utf8
 
+# ---- SIGNATURE (audit 22.09.2026, F-24) ----
+# APKs from build 14 install ONLY a manifest signed with the key baked into the app. An
+# unsigned manifest uploads fine and returns 200, and phones silently stop updating -
+# so signing is a release STEP and the gate below checks it with the SAME key list the
+# app ships (web/src/config/ota-public-keys.json), not "is there a sig field".
+& python -X utf8 (Join-Path $root "tools\sign_ota.py") sign $manifestPath
+if ($LASTEXITCODE -ne 0) { throw "signing the OTA manifest failed" }
+& python -X utf8 (Join-Path $root "tools\sign_ota.py") verify $manifestPath
+if ($LASTEXITCODE -ne 0) { throw "the OTA manifest signature does not verify" }
+
 Write-Host ""
 Write-Host "OTA release ready:" -ForegroundColor Green
 Write-Host "  version : $Version"
@@ -108,8 +122,10 @@ if ($Deploy) {
     $live = Invoke-RestMethod -Uri "https://esstu-gradebook.ru/app/updates" -Method Post `
         -ContentType "application/json" -Body '{"platform":"android"}'
     Write-Host ""
-    if ($live.version -eq $Version) {
-        Write-Host "LIVE: /app/updates now serves $($live.version)" -ForegroundColor Green
+    if ($live.version -eq $Version -and $live.sig) {
+        Write-Host "LIVE: /app/updates now serves $($live.version) (signed)" -ForegroundColor Green
+    } elseif ($live.version -eq $Version) {
+        Write-Host "WARNING: /app/updates serves $($live.version) WITHOUT a signature - new APKs will not install it" -ForegroundColor Red
     } else {
         Write-Host "WARNING: /app/updates serves $($live.version), expected $Version" -ForegroundColor Red
     }

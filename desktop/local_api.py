@@ -184,6 +184,22 @@ def purge_other_user_copies(login: str) -> int:
         #на машину. Её не убирала ни одна уборка: `_drop_plaintext_copy` целится в имя
         #С хешем, и файл лежал годами. На рабочей машине это были 659 КБ с семью
         #пользователями и сорока четырьмя оценками открытым текстом.
+        #🔥 КОПИЯ С НЕОТПРАВЛЕННЫМИ ПРАВКАМИ ОСТАЁТСЯ (аудит 22.09.2026, F-02). С очередью
+        #досылки копия перестала быть чисто производной: в ней могут лежать оценки,
+        #которых бой ещё не видел. Снести её при входе другого человека значило бы
+        #потерять работу преподавателя молча. Файл зашифрован ключом устройства и дождётся
+        #своего владельца: при его входе очередь уйдёт на бой, а при следующей смене
+        #аккаунта уборка снесёт уже пустую копию. Отказ — громкий, со следом в журнале.
+        unsent = _copy_unsent_count(path)
+        if unsent:
+            _LOG.warning(f"[local-api] копию {name} НЕ убираю: в ней {unsent} правок, "
+                         "не дошедших до сервера")
+            try:
+                from data import audit
+                audit.log_event("local_copy.kept_unsent", "", f"{name}: правок {unsent}")
+            except Exception:      # noqa: BLE001
+                pass
+            continue
         removed = True
         for suffix in ("", "-wal", "-shm"):
             try:
@@ -404,6 +420,12 @@ def prepare_env() -> None:
     Заодно делаем пакет `app` импортируемым: без этого те же вызовы падали бы на
     ImportError и — из-за мягкой обработки ошибок — отвечали бы «человека нет»."""
     ensure_server_path()
+    #🔑 ЭТО КОПИЯ, А НЕ БОЙ (26.09.2026). По этому признаку серверный пакет НЕ ставит в
+    #базу триггеры номера изменения (`app/sync_clock.py`: в копии номер — последняя
+    #увиденная боевая версия строки, ею правка сверяется на бою) и не шлёт пушей
+    #(`config.push_enabled`: правка журнала исполняется здесь, а потом ещё раз на бою).
+    #Присваивание, а не setdefault: копия не может оказаться «боем» ни при каком окружении.
+    os.environ["GRADEBOOK_LOCAL_COPY"] = "1"
     #Логин — из живой сессии, а если её ещё нет, из СОХРАНЁННОЙ (см. `_session_login`).
     #setdefault, а не присваивание: если сервер уже поднят на чьей-то базе, менять адрес
     #на ходу нельзя — SQLAlchemy держит движок с прежним файлом.
@@ -492,6 +514,41 @@ def _ensure_copy_openable(login: str, encrypted: bool) -> None:
                  f"(старая сохранена как *.unreadable-{stamp}): {', '.join(moved)}")
 
 
+def _copy_unsent_count(path: str) -> int:
+    """Сколько правок из очереди досылки лежит в копии (0 — нет, пусто или не открылась).
+
+    Открываем тем же способом, что `_copy_opens`: копии всех пользователей машины
+    зашифрованы ОДНИМ ключом устройства. Не открылась — считать нечего: такой файл и
+    сервер не откроет, а «не знаю» здесь не повод держать мусор с ПДн вечно."""
+    if path.endswith(("-wal", "-shm")):
+        return 0
+    key = os.environ.get("GRADEBOOK_DB_KEY", "") if path.endswith(".enc.db") else ""
+    try:
+        if key:
+            try:
+                import sqlcipher3 as _sq
+            except Exception:      # noqa: BLE001
+                return 0
+        else:
+            import sqlite3 as _sq
+        con = _sq.connect(path)
+        try:
+            cur = con.cursor()
+            if key:
+                cur.execute(f"PRAGMA key=\"x'{key}'\"")
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name='desk_outbox'")
+            if cur.fetchone() is None:
+                return 0
+            cur.execute("SELECT COUNT(*) FROM desk_outbox")
+            return int(cur.fetchone()[0] or 0)
+        finally:
+            con.close()
+    except Exception as e:      # noqa: BLE001
+        _LOG.info(f"[local-api] очередь в копии {os.path.basename(path)} не прочиталась: {e}")
+        return 0
+
+
 def _copy_opens(path: str, encrypted: bool) -> bool:
     """Открывается ли файл тем же способом, каким его откроет серверный пакет."""
     key = os.environ.get("GRADEBOOK_DB_KEY", "") if encrypted else ""
@@ -519,6 +576,110 @@ def _copy_opens(path: str, encrypted: bool) -> bool:
         return False
 
 
+#Сколько снимков личной копии держим на пользователя. Снимок снимается на КАЖДОМ
+#выходе, а смысл у него один — пережить порчу рабочего файла; десятка хватает с запасом.
+PERSONAL_BACKUP_KEEP = 10
+
+
+def personal_backup_dir() -> str:
+    """Папка снимков ЛИЧНЫХ копий — отдельная от копий `vsgutu_grades.db`.
+
+    ⚠️ Отдельная НАМЕРЕННО. `DBManager.list_backups`/`restore` берут ЛЮБОЙ `.db` из своей
+    папки и кладут выбранный на место базы синхронизации: личная копия, оказавшись там,
+    «восстановилась» бы не в тот файл. А уборка сверх 48 штук сортирует по имени, и
+    `local_app_*` уходили бы первыми, раньше любой копии `vsgutu_grades_*`."""
+    import app_paths
+    return os.path.join(app_paths.data_dir(), "backups", "personal")
+
+
+def backup_personal_copy(login: str, reason: str = "on_exit") -> str:
+    """Снять снимок ЛИЧНОЙ копии пользователя (W-12). Путь к снимку, '' — не снимали.
+
+    🔥 ЗАЧЕМ (исследование синка, 26.09.2026). Копия при выходе снималась с
+    `vsgutu_grades.db` — старой базы синхронизации, из которой интерфейс давно не читает.
+    А очередь досылки (оценки, которых бой ещё не видел) живёт в ЛИЧНОЙ копии
+    `local_app_*.enc.db`, и её не копировал никто: испортись файл — неотправленная работа
+    пропадала целиком, при исправно «снятой» резервной копии рядом.
+
+    ⚠️ ТОЛЬКО зашифрованная копия и ТОЛЬКО зашифрованный снимок. Нет ключа устройства —
+    не снимаем вовсе: открытый снимок с ФИО и оценками — ровно то, что
+    `purge_plaintext_backups` вычищает с диска. Снимок проверяется по заголовку файла, и
+    открытый удаляется сразу, а не «потом».
+    ⚠️ `VACUUM INTO` на соединении С КЛЮЧОМ, а не копирование файла: так в снимок попадает и
+    то, что ещё лежит в `-wal`, и снимок наследует шифрование (так же снимает боевой
+    `gb_backup.sh`, проверено восстановлением 02.09.2026).
+    ⚠️ Выход не ждёт и не ломается: любая беда — строка в журнале и пустой ответ."""
+    key = os.environ.get("GRADEBOOK_DB_KEY", "")
+    if not key:
+        _LOG.info("[local-api] снимок личной копии не снят: шифровать нечем, а открытый "
+                  "снимок с персональными данными класть на диск нельзя")
+        return ""
+    src = local_db_file(login, encrypted=True)
+    if not os.path.exists(src):
+        return ""
+    try:
+        import sqlcipher3 as _sq
+    except Exception:      # noqa: BLE001
+        _LOG.info("[local-api] снимок личной копии не снят: нет драйвера SQLCipher")
+        return ""
+    import hashlib
+    from datetime import datetime
+    who = hashlib.sha256((login or "anon").encode("utf-8")).hexdigest()[:16]
+    folder = personal_backup_dir()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    tag = "".join(ch for ch in reason if ch.isalnum())[:16]
+    base = os.path.join(folder, f"local_app_{who}_{ts}_{tag}")
+    dst = base + ".enc.db"
+    try:
+        os.makedirs(folder, exist_ok=True)
+        #Часы Windows идут шагами ~15 мс: два снимка подряд получают одно имя, а
+        #`VACUUM INTO` в существующий файл падает (та же грабля, что у `DBManager.backup`).
+        n = 1
+        while os.path.exists(dst):
+            dst = f"{base}_{n}.enc.db"
+            n += 1
+        con = _sq.connect(src)
+        try:
+            con.execute(f"PRAGMA key=\"x'{key}'\"")
+            #Путь — параметром, а не подстановкой в текст запроса: в пути бывает апостроф.
+            con.execute("VACUUM INTO ?", (dst,))
+        finally:
+            con.close()
+        with open(dst, "rb") as f:
+            if f.read(16).startswith(b"SQLite format 3"):
+                raise RuntimeError("снимок получился ОТКРЫТЫМ — удалён")
+    except Exception as e:      # noqa: BLE001
+        _LOG.warning(f"[local-api] снимок личной копии не снят: {e}")
+        try:
+            if os.path.exists(dst):
+                os.remove(dst)
+        except OSError:
+            pass
+        return ""
+    _prune_personal_backups(who)
+    return dst
+
+
+def _prune_personal_backups(who: str) -> None:
+    """Оставить свежие PERSONAL_BACKUP_KEEP снимков ЭТОГО пользователя, чужие не трогать."""
+    import glob
+    mine = sorted(glob.glob(os.path.join(personal_backup_dir(), f"local_app_{who}_*.enc.db")),
+                  reverse=True)
+    for old in mine[PERSONAL_BACKUP_KEEP:]:
+        try:
+            os.remove(old)
+        except OSError as e:
+            _LOG.info(f"[local-api] старый снимок {os.path.basename(old)} не удалён: {e}")
+
+
+def backup_personal_copy_on_exit() -> str:
+    """Снимок копии того, кто работает в программе, — для закрытия окна (W-12)."""
+    login = _session_login()
+    if not login:
+        return ""
+    return backup_personal_copy(login, reason="on_exit")
+
+
 class LocalAPI:
     """Серверное приложение, поднятое на этом компьютере. start() идемпотентен."""
 
@@ -544,6 +705,7 @@ class LocalAPI:
         """Переменные окружения ДО импорта серверного приложения: config читает их на
         импорте, позже менять поздно."""
         prepare_env()
+        _fast_mimetypes()
 
     def start(self) -> bool:
         """Поднять локальный сервер. False — если серверный пакет недоступен.
@@ -566,6 +728,9 @@ class LocalAPI:
             #копии нет по замыслу, и без этого чаты в программе открывались пустыми.
             try:
                 install_desktop_bootstrap(app)
+                #Политика записи — РАНЬШЕ прокси, то есть внутри него: разделы
+                #`_PROXY_PREFIXES` уходят на бой целиком, до неё (см. её докстринг).
+                install_write_policy(app)
                 install_remote_proxy(app)
                 #Мост входа нужен ЛЮБОЙ оболочке, а не только новой: как только форма
                 #входа становится веб-овой, локальная копия обязана уметь пускать
@@ -577,10 +742,12 @@ class LocalAPI:
                 #Раздел «Сервер»: управление боевой машиной по SSH. Живёт ТОЛЬКО здесь,
                 #в локальном сервере программы. На бою этого кода нет вовсе — там
                 #работает `routers/serverinfo.py`, который умеет только смотреть.
-                #Граница проходит по наличию кода, а не по проверке роли: роль можно
-                #обойти, отсутствующий код — нельзя (см. шапку desktop/server_admin.py).
+                #Граница с БОЕМ проходит по наличию кода, а не по проверке роли: роль
+                #можно обойти, отсутствующий код — нельзя (см. шапку server_admin.py).
+                #А ВНУТРИ программы код есть, и здесь роль обязательна: раздел получает
+                #не «вошёл ли», а «кто и с какой ролью» (находка F-01 аудита 22.09).
                 from desktop import server_admin
-                server_admin.install(app, _local_caller_ok)
+                server_admin.install(app, _local_caller)
                 #Состояние синка наружу, в интерфейс. Без него `sync_runner.status()`
                 #оставался обещанием без вызывающего: конфликты и отвергнутые правки
                 #уходили ТОЛЬКО в gradebook.log, который никто не открывает.
@@ -592,6 +759,18 @@ class LocalAPI:
                 install_origin_guard(app)
             except Exception as e:
                 _LOG.warning(f"[local-api] надстройки локального сервера не встали: {e}")
+            #Озвучка Вектора через бой — ОТДЕЛЬНО от общего блока: её сбой не имеет права
+            #оставить сервер без заслонки origin, стоящей там последней.
+            try:
+                install_remote_vector()
+            except Exception as e:      # noqa: BLE001
+                _LOG.warning(f"[local-api] озвучка Вектора через сервер не подключилась: {e}")
+            #Быстрый старт (замер 27.09.2026, см. шапку `desktop/temp_cache.py`): снимки
+            #расписания — ДО старта сервера, иначе прогрев в `lifespan` их не увидит.
+            try:
+                install_schedule_cache()
+            except Exception as e:      # noqa: BLE001
+                _LOG.info(f"[local-api] кэш расписания не подключён: {e}")
 
             import uvicorn
             self.port = _free_loopback_port()
@@ -611,7 +790,34 @@ class LocalAPI:
                 self.stop()
                 return False
             _LOG.info(f"[local-api] приложение доступно на 127.0.0.1:{self.port}")
+            self._warm_routes()
             return True
+
+    def _warm_routes(self) -> None:
+        """Прогреть маршруты сервера фоновым запросом сразу после готовности.
+
+        🔥 Замер 27.09.2026: первый запрос мимо `/health` стоил ~270 мс при следующих в
+        единицы миллисекунд. FastAPI строит состояние маршрутов подключённых роутеров
+        ЛЕНИВО, при первом сопоставлении (`_IncludedRouter._build_effective_context` →
+        `get_dependant` у каждого маршрута), а запрос страницы проходит через ВСЕ роутеры
+        до SPA-заглушки. Этот первый запрос делало окно — то есть ждал человек.
+
+        Фоновый запрос сдвигает эту работу на время, пока WebView2 поднимает окно
+        (полсекунды и больше): страница приходит к уже прогретому серверу. Ждать его
+        здесь нельзя — тогда цена просто переехала бы в `start()`. Сбой прогрева не
+        значит ничего: первый настоящий запрос сделает то же самое сам."""
+        url = self.url("/login")
+
+        def _run():
+            import urllib.request
+            try:
+                #SAST B310: адрес — наша же петля 127.0.0.1.
+                with urllib.request.urlopen(url, timeout=10) as r:  # nosec B310
+                    r.read()
+            except Exception:      # noqa: BLE001
+                pass
+
+        threading.Thread(target=_run, name="gb-warm-routes", daemon=True).start()
 
     def _load_app(self):
         """Импорт серверного приложения (пакет `app` лежит внутри `server/`)."""
@@ -822,7 +1028,10 @@ def instance() -> LocalAPI:
 #`/web/admin/zet-thresholds` — РЕДАКТОР порогов перевода. Сами пороги теперь синкаются
 #(ZetThreshold в SYNC_MODELS), но ЗАПИСЬ обязана идти на бой по той же причине: у Phase
 #B-правок нет обратного моста из локального зеркала, и сохранённый порог потерялся бы.
-_PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
+#⚠️ Голого «/messenger» здесь больше нет (25.09.2026): мессенджер целиком живёт под
+#`/web/messenger` (и сокет — `/web/messenger/ws`), маршрутов на «/messenger» у сервера
+#нет вовсе. Мёртвую запись нашёл сторож `tests/test_route_policy.py`.
+_PROXY_PREFIXES = ("/web/messenger", "/web/admin/server",
                    "/me/prefs", "/me/events",
                    #Одобрение чужих машин админом: список ожидающих живёт на БОЕВОМ
                    #сервере, а в локальной копии его нет и быть не может — без пересылки
@@ -869,7 +1078,20 @@ _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
                    #SYNC_MODELS). Без пересылки раздел «Сессии» в программе показал бы
                    #сессии ЛОКАЛЬНОГО сервера — правдоподобную ложь, а сменённый пароль
                    #и выданный стартовый не существовали бы нигде, кроме этой машины.
-                   "/me/sessions", "/me/contacts", "/me/password", "/web/accounts")
+                   "/me/sessions", "/me/contacts", "/me/password", "/web/accounts",
+                   #🔥 РАЗДЕЛЫ БЕЗ ЗЕРКАЛА (аудит 22.09.2026, F-02 и сверка платформ). Их
+                   #таблиц нет в SYNC_MODELS, значит в копии их нет и не будет: курсы в
+                   #программе открывались пустыми, выданное согласие на доступ родителя
+                   #оставалось на этой машине, рассылка «Мероприятия» не доходила ни до
+                   #кого, а ачивки открывались в пустоту. Пересылаются ЦЕЛИКОМ — и
+                   #чтение, и запись: читать из копии нечего.
+                   #⚠️ Только пути API: префикс, совпавший со страницей SPA (`/admin/...`),
+                   #пересылал бы на бой перезагрузку страницы — отсюда точечные
+                   #`/admin/online|events|sessions` вместо `/admin`.
+                   "/web/courses", "/web/achievements", "/web/easter-eggs", "/web/events",
+                   "/web/student/parent-links", "/web/parent",
+                   "/admin/online", "/admin/events", "/admin/sessions",
+                   "/auth/mfa/status", "/auth/webauthn/credentials", "/auth/invite")
 
 
 #Что именно недоступно — зависит и от пути, и от ПРИЧИНЫ. Два прежних текста врали в
@@ -879,11 +1101,32 @@ _PROXY_PREFIXES = ("/web/messenger", "/messenger", "/web/admin/server",
 #Подставляется в винительном падеже («показать состояние», «показать сообщения») —
 #так одна формулировка годится и для среднего рода, и для множественного числа.
 _WHAT = {"/web/admin/server": "состояние", "/web/messenger": "сообщения",
-         "/messenger": "сообщения", "/me/prefs": "профиль", "/me/events": "уведомления",
+         "/me/prefs": "профиль", "/me/events": "уведомления",
          "/web/staff/parents": "родителей", "/web/staff/parent-links": "родителей",
          "/web/admin/parents": "родителей",
          "/web/admin/registrations": "заявки на регистрацию",
-         "/web/admin/zet-thresholds": "пороги перевода"}
+         "/web/admin/zet-thresholds": "пороги перевода",
+         "/web/courses": "курсы", "/web/achievements": "достижения",
+         "/web/easter-eggs": "достижения", "/web/events": "рассылки",
+         "/web/student/parent-links": "доступ родителей", "/web/parent": "данные ребёнка",
+         "/admin/sessions": "сессии", "/admin/online": "активность",
+         "/admin/events": "события сервера", "/auth/mfa/status": "второй фактор",
+         "/auth/webauthn/credentials": "ключи входа"}
+
+
+def _offline_write_reason(why: str = "offline") -> str:
+    """Почему НЕ сохранилось изменение, которое хранится только на бою.
+
+    Отдельный текст, а не `_offline_reason`: тот говорит «показать … не можем», а здесь
+    человек нажал «Сохранить», и главное, что он обязан узнать, — что изменения НЕТ.
+    Прежде такие записи молча оседали в локальной копии и получали «сохранено»."""
+    if why == "expired":
+        return ("Изменение НЕ сохранено: сессия на сервере истекла. Выйдите и войдите "
+                "заново — журнал оценок работает и без связи.")
+    if why == "no-url":
+        return ("Изменение НЕ сохранено: адрес сервера не задан в настройках программы.")
+    return ("Изменение НЕ сохранено: эти данные хранятся только на сервере, а связи с "
+            "ним сейчас нет. Оценки и занятия можно вести и без связи — они уйдут сами.")
 
 
 def _offline_reason(path: str, why: str = "offline") -> str:
@@ -958,25 +1201,63 @@ def _remote_auth():
         return base, "", ("expired" if expired else "offline")
 
 
-def _local_caller_ok(authorization: str) -> bool:
-    """Пришёл ли запрос от вошедшего человека (проверка ЛОКАЛЬНОГО токена).
+def _local_role(login: str) -> str:
+    """Роль человека по ЛОКАЛЬНОЙ копии базы ('' — если его там нет).
 
-    Прокси уходит на бой с чужими правами, поэтому пускать в него можно только того, кто
-    уже прошёл вход в программе. Логин из токена обязан совпасть с логином сессии: иначе
-    старый токен от прошлого пользователя открывал бы переписку нового."""
+    Берём из базы, а не из утверждения в токене: роль могли сменить на бою, и зеркало
+    привезёт новую, а старый токен помнил бы прежнюю до конца своей жизни."""
+    if not login:
+        return ""
+    try:
+        prepare_env()
+        from app.db import SessionLocal
+        from app.models import User
+    except Exception:      # noqa: BLE001
+        return ""
+    db = SessionLocal()
+    try:
+        row = db.query(User).filter(User.login == login).first()
+        if row is None or getattr(row, "deleted", False):
+            return ""
+        return (row.role or "").strip()
+    except Exception:      # noqa: BLE001
+        return ""
+    finally:
+        db.close()
+
+
+def _local_caller(authorization: str) -> dict:
+    """Кто прислал запрос: {"login", "role"} вошедшего человека, либо {} — никто.
+
+    Проверяется ЛОКАЛЬНЫЙ токен. Прокси уходит на бой с чужими правами, поэтому пускать в
+    него можно только того, кто уже прошёл вход в программе. Логин из токена обязан
+    совпасть с логином сессии: иначе старый токен от прошлого пользователя открывал бы
+    переписку нового.
+
+    🔥 РОЛЬ ВОЗВРАЩАЕТСЯ НЕ ДЛЯ КРАСОТЫ (аудит 22.09.2026, находка F-01, P0). До этого
+    была только проверка «вошёл ли», и её же получал раздел «Сервер» — то есть студент,
+    вошедший в программу, мог обратиться к `/desk/servers/*/exec` напрямую (DevTools,
+    curl на 127.0.0.1) и выполнить команду на БОЕВОЙ машине сохранёнными реквизитами.
+    Меню админа он не видел, но меню — не граница: граница проходит там, где лежит
+    опасный код, и спросить у вызывающего роль там обязаны."""
     prefix = "bearer "
     if not authorization or not authorization.lower().startswith(prefix):
-        return False
+        return {}
     token = authorization[len(prefix):].strip()
     try:
         prepare_env()
         from app.security import decode_token
         data = decode_token(token) or {}
     except Exception:
-        return False
+        return {}
+    #Пропуском служит ТОЛЬКО access-токен: refresh живёт дольше и лежит в хранилище
+    #страницы — пускать по нему значило бы продлить права мимо срока (тот же дефект,
+    #что закрыт на бою в `get_current_user` проверкой типа).
+    if (data.get("typ") or "access") != "access":
+        return {}
     login = (data.get("sub") or "").strip()
     if not login:
-        return False
+        return {}
     #Сверяем с ТЕМ ЖЕ источником, что и всё остальное (`_session_login`): живая сессия,
     #иначе сохранённая. Раньше здесь стояла ТОЛЬКО живая, и получалось несогласованно —
     #страница-передатчик выпускала токен для сохранённого пользователя, а прокси этот же
@@ -985,7 +1266,14 @@ def _local_caller_ok(authorization: str) -> bool:
     #Строгость при этом не падает: чужой логин по-прежнему не проходит, а сохранённая
     #сессия появляется только после успешного входа на этой машине.
     expected = _session_login()
-    return bool(expected) and login == expected
+    if not expected or login != expected:
+        return {}
+    return {"login": login, "role": _local_role(login)}
+
+
+def _local_caller_ok(authorization: str) -> bool:
+    """Пришёл ли запрос от вошедшего человека — без требований к роли (прокси, синк)."""
+    return bool(_local_caller(authorization))
 
 
 #⚠️ (живой отзыв Влада: «программа медленнее сайта») Реальная причина — ЗДЕСЬ, не в
@@ -1040,20 +1328,79 @@ def install_sync_status(app) -> None:
 
     @app.get("/desk/sync/status")
     def _desk_sync_status(request: Request):
-        if not _local_caller_ok(request.headers.get("authorization", "")):
+        who = _local_caller(request.headers.get("authorization", ""))
+        if not who:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
+        #Очередь правок — ГЛАВНОЕ, что человек должен видеть: сколько его оценок ещё не
+        #дошло до боя. Она живёт в копии и известна даже тогда, когда цикл синка не
+        #запущен вовсе.
+        #`unsent` — ответ на вопрос «можно ли уходить», его задаёт выход из аккаунта (W-11,
+        #`web/src/utils/unsentWork.js`). Правило «что считается неотправленным» живёт в
+        #`desk_outbox.has_unsent` ОДНО: до 26.09.2026 функция существовала и не звалась
+        #никем, и человек выходил с оценками, ждущими его на чужом компьютере.
+        #Очередь не прочиталась — признака нет вовсе, а не `False`: «не знаем» и «всё
+        #ушло» для человека разные ответы.
+        extra = {}
+        try:
+            from desktop import desk_outbox
+            outbox = desk_outbox.counts(who["login"])
+            extra["unsent"] = desk_outbox.has_unsent(who["login"])
+        except Exception as e:                   # noqa: BLE001
+            _LOG.warning(f"[local-api] очередь правок не прочиталась: {e}")
+            outbox = {"available": False}
         try:
             from sync import sync_runner
             st = sync_runner.status()
         except Exception as e:                   # noqa: BLE001
-            #Синк мог не запуститься вовсе (вход по сохранённой сессии без пароля).
-            #Это не авария: честно говорим «состояние неизвестно», а не выдумываем ноль —
-            #ноль конфликтов на экране значил бы «всё сошлось», чего мы не знаем.
+            #Синк мог не запуститься вовсе. Это не авария: честно говорим «состояние
+            #неизвестно», а не выдумываем ноль — ноль на экране значил бы «всё сошлось».
             _LOG.info(f"[local-api] состояние синка недоступно: {e}")
-            return JSONResponse({"available": False}, status_code=200)
-        return JSONResponse({"available": True, **st}, status_code=200)
+            return JSONResponse({"available": False, "outbox": outbox, **extra},
+                                status_code=200)
+        return JSONResponse({"available": True, **st, "outbox": outbox, **extra},
+                            status_code=200)
 
-    app.router.routes.insert(0, app.router.routes.pop())
+    @app.get("/desk/sync/problems")
+    def _desk_sync_problems(request: Request):
+        """Конфликты и отказы очереди — экран «Что не ушло на сервер» (F-09)."""
+        who = _local_caller(request.headers.get("authorization", ""))
+        if not who:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        from desktop import desk_outbox
+        return {"items": desk_outbox.problems(who["login"])}
+
+    @app.post("/desk/sync/problems/{seq}")
+    async def _desk_sync_resolve(seq: int, request: Request):
+        """Решение человека: keep_mine | keep_server | dismiss."""
+        from starlette.concurrency import run_in_threadpool
+        from desktop import desk_outbox
+        who = _local_caller(request.headers.get("authorization", ""))
+        if not who:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:      # noqa: BLE001
+            body = {}
+        action = str((body or {}).get("action") or "")
+        out = await run_in_threadpool(desk_outbox.resolve, seq, who["login"], action)
+        if not out.get("ok"):
+            return JSONResponse({"detail": out.get("detail") or "не удалось"},
+                                status_code=400)
+        if out.get("flush"):
+            desk_outbox.kick()
+        if out.get("rebuild"):
+            #Копия вернётся к серверному состоянию полной сверкой — в цикле синка, где
+            #уже есть живой токен (`sync_runner._mirror_for_vue`). Будим его сейчас.
+            try:
+                from sync import sync_runner
+                sync_runner.trigger()
+            except Exception:      # noqa: BLE001
+                pass
+        return {"ok": True}
+
+    #Все три — в НАЧАЛО списка: заглушка SPA зарегистрирована раньше и перехватила бы их.
+    for _ in range(3):
+        app.router.routes.insert(0, app.router.routes.pop())
 
 
 def install_origin_guard(app) -> None:
@@ -1132,67 +1479,244 @@ def _is_loopback_origin(origin: str) -> bool:
     return host in ("127.0.0.1", "localhost", "::1")
 
 
+async def _forward_to_prod(request, path: str, *, write: bool = False):
+    """Переслать запрос на бой от имени вошедшего человека. Ошибку НЕ прячем.
+
+    Общая часть для разделов `_PROXY_PREFIXES` и для записей, которые живут только на
+    бою (`route_policy`: всё, что не журнал и не явно локальное)."""
+    from fastapi import Response
+    from starlette.concurrency import run_in_threadpool
+    #🔒 ВТОРАЯ, независимая проверка origin — ровно здесь, а не только в общей заслонке
+    #(`install_origin_guard`). Причина названа адверсариальным ревью: заслонка ставится
+    #в общем `try/except` с четырьмя другими надстройками, и исключение в ЛЮБОЙ из них
+    #оставило бы сервер работающим БЕЗ неё — при уже установленном прокси. Отказ
+    #получался бы открытым, и единственным следом была бы строка WARNING в логе.
+    #Прокси — самое дорогое место в программе (он подставляет БОЕВОЙ токен), поэтому
+    #здесь дешевле проверить дважды, чем один раз положиться на порядок установки.
+    origin = (request.headers.get("origin") or "").strip()
+    if origin and not _is_loopback_origin(origin):
+        _LOG.warning(f"[proxy] отклонён запрос со стороннего origin: {origin}")
+        return Response(content='{"detail":"forbidden"}'.encode(),
+                        status_code=403, media_type="application/json")
+    #🔒 СНАЧАЛА проверяем, КТО спрашивает, и только потом подставляем боевой токен.
+    #Без этой проверки прокси был дырой: он подменял Authorization токеном вошедшего,
+    #не глядя на присланный, — значит переписку мог прочитать (и писать от лица
+    #человека) ЛЮБОЙ процесс на этом компьютере, а с браузерной страницы это ещё и
+    #обычный CSRF: адрес петли доступен любому сайту, открытому у пользователя.
+    #Барьер тот же, что у остальных эндпоинтов локального сервера, — свой токен.
+    if not _local_caller_ok(request.headers.get("authorization", "")):
+        return Response(content='{"detail":"Требуется авторизация"}'.encode(),
+                        status_code=401, media_type="application/json")
+    #🔥 В ПУЛЕ ПОТОКОВ (аудит 22.09.2026, F-07). `_remote_auth` при протухшем токене
+    #СИНХРОННО ходит на бой за новым (httpx, таймаут до 20 с). Прямо здесь, в `async def`,
+    #это вставало поперёк единственного цикла событий: пока шло обновление токена, не
+    #отвечал никто — ни журнал, ни `/health`, ни сама страница. Тем больнее, чем хуже
+    #связь: медленный бой замораживал всю программу, а не один запрос.
+    base, token, why = await run_in_threadpool(_remote_auth)
+    if not base or not token:
+        text = _offline_write_reason(why) if write else _offline_reason(path, why)
+        body = json.dumps({"detail": text}, ensure_ascii=False)
+        #503, а НЕ 401: 401 страница трактует как «сессия истекла» и выкидывает из
+        #аккаунта — а локальная сессия жива, и журнал с расписанием работают.
+        return Response(content=body.encode(), status_code=503,
+                        media_type="application/json")
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in ("host", "authorization", "content-length",
+                                    "accept-encoding")}
+    headers["Authorization"] = f"Bearer {token}"
+    headers["X-Client"] = "web"
+    try:
+        cli = await _get_proxy_client()
+        r = await cli.request(request.method, f"{base}{path}",
+                              params=dict(request.query_params),
+                              content=await request.body(), headers=headers)
+        #Заголовки ответа фильтруем: hop-by-hop и кодирование относятся к ТОМУ
+        #соединению, а не к нашему — иначе браузер получит битое тело.
+        skip = ("content-encoding", "transfer-encoding", "content-length",
+                "connection")
+        out = {k: v for k, v in r.headers.items() if k.lower() not in skip}
+        return Response(content=r.content, status_code=r.status_code, headers=out)
+    except Exception as e:
+        _LOG.warning(f"[proxy] {path}: {e}")
+        #Сюда попадаем, когда запрос УЖЕ ушёл и оборвался, — это именно сеть.
+        text = _offline_write_reason("offline") if write else _offline_reason(path, "offline")
+        body = json.dumps({"detail": text}, ensure_ascii=False)
+        return Response(content=body.encode(), status_code=502,
+                        media_type="application/json")
+
+
+def _remote_vector(mode: str, payload: dict) -> str:
+    """Переформулировка Вектора на БОЮ, его ключом ('' — не вышло).
+
+    🔒 Ключ GigaChat в копию больше не приезжает (26.09.2026, `sync._config_without_secrets`):
+    раньше он утекал в `/sync/pull` каждому ПК, и локальный Вектор звонил во внешний
+    сервис прямо с компьютера преподавателя. Теперь просим бой — так, как и было задумано
+    (`routers/vector.py`). Уходят те же факты, что ушли бы в модель, и ничего сверх них.
+    ⚠️ Зовётся из обычного `def` (пул потоков), поэтому блокирующий запрос здесь законен.
+    Нет связи или истёк вход — пустой ответ, и Вектор отвечает фактами без переформулировки,
+    как при любом сбое провайдера."""
+    base, token, _why = _remote_auth()
+    if not base or not token:
+        return ""
+    import httpx
+    r = httpx.post(f"{base}/vector/voice", json=dict(payload, mode=mode),
+                   headers={"Authorization": f"Bearer {token}", "X-Client": "web"},
+                   timeout=20.0)
+    if r.status_code != 200:
+        _LOG.info(f"[local-api] озвучка Вектора на сервере: HTTP {r.status_code}")
+        return ""
+    return str((r.json() or {}).get("text") or "")
+
+
+def install_remote_vector() -> None:
+    """Поставить боевую озвучку в `vector_llm` локального сервера (см. `_remote_vector`)."""
+    from app import vector_llm
+    vector_llm.set_remote(_remote_vector)
+
+
 def install_remote_proxy(app) -> None:
     """Переслать онлайн-подсистемы на боевой сервер. Ошибку НЕ прячем: пустой чат без
     объяснения читается как «сообщения пропали»."""
-    from fastapi import Request, Response
+    from fastapi import Request
 
     @app.middleware("http")
     async def _proxy_online_subsystems(request: Request, call_next):
         path = request.url.path
         if not path.startswith(_PROXY_PREFIXES):
             return await call_next(request)
-        #🔒 ВТОРАЯ, независимая проверка origin — ровно здесь, а не только в общей заслонке
-        #(`install_origin_guard`). Причина названа адверсариальным ревью: заслонка ставится
-        #в общем `try/except` с четырьмя другими надстройками, и исключение в ЛЮБОЙ из них
-        #оставило бы сервер работающим БЕЗ неё — при уже установленном прокси. Отказ
-        #получался бы открытым, и единственным следом была бы строка WARNING в логе.
-        #Прокси — самое дорогое место в программе (он подставляет БОЕВОЙ токен), поэтому
-        #здесь дешевле проверить дважды, чем один раз положиться на порядок установки.
-        origin = (request.headers.get("origin") or "").strip()
-        if origin and not _is_loopback_origin(origin):
-            _LOG.warning(f"[proxy] отклонён запрос со стороннего origin: {origin}")
-            return Response(content='{"detail":"forbidden"}'.encode(),
-                            status_code=403, media_type="application/json")
-        #🔒 СНАЧАЛА проверяем, КТО спрашивает, и только потом подставляем боевой токен.
-        #Без этой проверки прокси был дырой: он подменял Authorization токеном вошедшего,
-        #не глядя на присланный, — значит переписку мог прочитать (и писать от лица
-        #человека) ЛЮБОЙ процесс на этом компьютере, а с браузерной страницы это ещё и
-        #обычный CSRF: адрес петли доступен любому сайту, открытому у пользователя.
-        #Барьер тот же, что у остальных эндпоинтов локального сервера, — свой токен.
-        if not _local_caller_ok(request.headers.get("authorization", "")):
-            return Response(content='{"detail":"Требуется авторизация"}'.encode(),
-                            status_code=401, media_type="application/json")
-        base, token, why = _remote_auth()
-        if not base or not token:
-            body = json.dumps({"detail": _offline_reason(path, why)}, ensure_ascii=False)
-            #503, а НЕ 401: 401 страница трактует как «сессия истекла» и выкидывает из
-            #аккаунта — а локальная сессия жива, и журнал с расписанием работают.
-            return Response(content=body.encode(), status_code=503,
-                            media_type="application/json")
-        headers = {k: v for k, v in request.headers.items()
-                   if k.lower() not in ("host", "authorization", "content-length",
-                                        "accept-encoding")}
-        headers["Authorization"] = f"Bearer {token}"
-        headers["X-Client"] = "web"
+        return await _forward_to_prod(
+            request, path, write=request.method.upper() not in ("GET", "HEAD", "OPTIONS"))
+
+
+#Сколько ждём зеркало после записи, пересланной на бой. Дольше нельзя: человек нажал
+#«Сохранить» и ждёт; не успели — ответ всё равно уходит, зеркало догонит в фоне.
+_MIRROR_AFTER_WRITE_S = 8.0
+
+
+def install_write_policy(app) -> None:
+    """Каждый запрос ЗАПИСИ — по своей политике (`desktop/route_policy.py`, аудит 22.09.2026,
+    F-02): журнал — в копию и в очередь досылки, явно локальное — в копию, всё
+    остальное — на бой. Раньше запись по умолчанию оседала в копии и получала «сохранено»,
+    а на бой не уходила никогда.
+
+    ⚠️ Ставится РАНЬШЕ `install_remote_proxy` — то есть оказывается ВНУТРИ него (в FastAPI
+    добавленный последним видит запрос первым). Разделы `_PROXY_PREFIXES` уходят на бой
+    целиком до этой политики, сюда доходит всё остальное."""
+    from fastapi import Request
+    from desktop import route_policy
+
+    @app.middleware("http")
+    async def _write_policy(request: Request, call_next):
+        kind = route_policy.classify(request.method, request.url.path)
+        if kind in ("read", "local"):
+            return await call_next(request)
+        if kind == "replay":
+            return await _replay_locally(request, call_next)
+        resp = await _forward_to_prod(request, request.url.path, write=True)
+        if 200 <= resp.status_code < 300:
+            await _refresh_mirror_after_write()
+        return resp
+
+
+async def _replay_locally(request, call_next):
+    """Правка журнала: в копию сразу (офлайн работает), в очередь досылки — тут же."""
+    from fastapi import Response
+    from starlette.concurrency import run_in_threadpool
+    from desktop import desk_outbox
+    who = _local_caller(request.headers.get("authorization", ""))
+    if not who:
+        return await call_next(request)          #обработчик сам ответит 401
+    body = await request.body()
+    try:
+        seq = await run_in_threadpool(
+            desk_outbox.enqueue, who["login"], request.method, request.url.path,
+            request.url.query, body, request.headers.get("content-type", ""))
+    except Exception as e:      # noqa: BLE001
+        #Очередь недоступна — писать в копию НЕЛЬЗЯ: правка получила бы «сохранено» и
+        #не дошла бы до боя никогда. Ровно этот исход и был дефектом F-02.
+        _LOG.error(f"[outbox] правку не удалось поставить в очередь: {e}")
+        text = ("Правка НЕ сохранена: не удалось поставить её в очередь отправки на "
+                "сервер. Перезапустите программу; если повторится — сообщите администратору.")
+        return Response(content=json.dumps({"detail": text}, ensure_ascii=False).encode(),
+                        status_code=503, media_type="application/json")
+    try:
+        resp = await call_next(request)
+    except Exception:
+        await run_in_threadpool(desk_outbox.drop, seq)
+        raise
+    if not (200 <= resp.status_code < 300):
+        await run_in_threadpool(desk_outbox.drop, seq)
+        return resp
+    raw = b"".join([chunk async for chunk in resp.body_iterator])
+    try:
+        data = json.loads(raw or b"{}")
+    except ValueError:
+        data = {}
+    await run_in_threadpool(desk_outbox.mark_ready, seq, data)
+    desk_outbox.kick()
+    return Response(content=raw, status_code=resp.status_code, headers=dict(resp.headers),
+                    media_type=resp.media_type)
+
+
+#Один фоновый поток «зеркало после записи» на процесс: запись, пришедшая, пока он идёт,
+#не заводит второй, а просит его пройти ещё раз (её могло не быть в уже снятом снимке).
+_REFRESH_LOCK = threading.Lock()
+_refresh = {"asked": 0, "done": 0, "thread": None}
+
+
+def _refresh_worker() -> None:
+    from desktop import local_mirror
+    while True:
+        with _REFRESH_LOCK:
+            target = _refresh["asked"]
+            if _refresh["done"] >= target:
+                _refresh["thread"] = None
+                return
         try:
-            cli = await _get_proxy_client()
-            r = await cli.request(request.method, f"{base}{path}",
-                                  params=dict(request.query_params),
-                                  content=await request.body(), headers=headers)
-            #Заголовки ответа фильтруем: hop-by-hop и кодирование относятся к ТОМУ
-            #соединению, а не к нашему — иначе браузер получит битое тело.
-            skip = ("content-encoding", "transfer-encoding", "content-length",
-                    "connection")
-            out = {k: v for k, v in r.headers.items() if k.lower() not in skip}
-            return Response(content=r.content, status_code=r.status_code, headers=out)
-        except Exception as e:
-            _LOG.warning(f"[proxy] {path}: {e}")
-            #Сюда попадаем, когда запрос УЖЕ ушёл и оборвался, — это именно сеть.
-            body = json.dumps({"detail": _offline_reason(path, "offline")},
-                              ensure_ascii=False)
-            return Response(content=body.encode(), status_code=502,
-                            media_type="application/json")
+            local_mirror.mirror_once()
+        except Exception as e:      # noqa: BLE001 — фон не роняет программу
+            _LOG.info(f"[mirror] после записи копия не обновилась: {e}")
+        with _REFRESH_LOCK:
+            _refresh["done"] = max(_refresh["done"], target)
+
+
+def _ask_refresh() -> int:
+    """Попросить проход зеркала, НАЧАТЫЙ после этой записи. Возвращает номер просьбы."""
+    with _REFRESH_LOCK:
+        _refresh["asked"] += 1
+        ticket = _refresh["asked"]
+        t = _refresh["thread"]
+        if t is None or not t.is_alive():
+            t = threading.Thread(target=_refresh_worker, name="mirror-after-write",
+                                 daemon=True)
+            _refresh["thread"] = t
+            t.start()
+    return ticket
+
+
+async def _refresh_mirror_after_write() -> None:
+    """После записи, пересланной на бой, подтянуть её в копию — иначе следующий же GET
+    (он читает копию) показал бы старое, и «Сохранить» выглядело бы как «не сработало».
+
+    🔥 ОДИН ФОНОВЫЙ ПРОХОД НА ВСЕ СОХРАНЕНИЯ (исследование синка 25.09.2026, W-07).
+    Раньше стояло `asyncio.wait_for(run_in_threadpool(...))`: ответ через 8 с уходил, а
+    поток зеркала — нет, он докачивал снимок (до 45 с) уже без присмотра. Каждое следующее
+    «Сохранить» заводило ещё один такой поток, на медленной сети они накладывались, и
+    более старый снимок мог лечь в копию последним. Теперь проход один: сохранение,
+    пришедшее во время прохода, просит следующий, а не заводит параллельный.
+    ⚠️ Срок ожидания держит наш цикл, а не отмена потока: как библиотека потоков
+    обходится с отменой, зависит от её версии (на anyio 4.13 замерено — отпускает сразу),
+    и опираться на это незачем."""
+    import asyncio
+    ticket = _ask_refresh()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _MIRROR_AFTER_WRITE_S
+    while loop.time() < deadline:
+        with _REFRESH_LOCK:
+            if _refresh["done"] >= ticket:
+                return
+        await asyncio.sleep(0.05)
+    _LOG.info("[mirror] после записи копия не успела обновиться — догонит в фоне")
 
 
 #━━ ПЕРЕДАЧА СЕССИИ ЛЮБОЙ ОБОЛОЧКЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1258,8 +1782,16 @@ def install_desktop_bootstrap(app) -> None:
             #новая оболочка, открывшая /desktop/bootstrap, наступит на неё снова. Поэтому
             #гарантия перенесена сюда — теперь она выполняется по построению, для всех.
             #Сессия уже выписана и восстанавливается — вход подтверждён, уборка уместна.
-            switch_user_db(login, authenticated=True)
-            access, refresh = issue_local_session(login, role or "student")
+            #🔒 НЕ ПЕРЕКЛЮЧИЛИСЬ — СЕССИИ НЕТ (аудит 22.09.2026, F-04). Раньше результат
+            #не проверялся: копия не открылась — и сессия выдавалась на ПРЕЖНЕЙ базе, то
+            #есть человек работал в чужом файле, а его правки ложились туда же.
+            if switch_user_db(login, authenticated=True):
+                access, refresh = issue_local_session(login, role or "student")
+                if access:
+                    _resume_sync(login, role or "student")
+            else:
+                _LOG.error("[local-api] личная копия не открылась — сессию не выдаю, "
+                           "человек увидит форму входа")
         #Тему В ОКНО НЕ ПЕРЕДАЁМ. Раньше здесь читался `themes.active_spec()` — состояние
         #НАТИВНОЙ Qt-оболочки, которую заполнял только Qt-путь. В окне на движке Edge
         #`apply_spec()` не зовётся никогда, то есть спек всегда пуст и ветка была тихим
@@ -1301,6 +1833,25 @@ def install_desktop_bootstrap(app) -> None:
     app.router.routes.insert(0, app.router.routes.pop())
 
 
+def _resume_sync(login: str, role: str) -> None:
+    """Запустить синхронизацию для восстановленной сессии (без пароля).
+
+    🔥 НАЙДЕНО 25.09.2026 (N-05). Синк стартовал ТОЛЬКО из моста входа, а при запуске
+    программы по сохранённой сессии пароля нет — и цикл не запускался вовсе: копия не
+    обновлялась с боя до повторного входа, а правки из очереди не уходили. Без пароля
+    цикл работает сохранённым токеном и тихо продлевает его по refresh — ровно так
+    задумано в `sync_runner._ensure_auth` («восстановленная сессия»), не хватало вызова.
+    ⚠️ Уже работающий цикл ЭТОГО человека не трогаем: `start(login, "")` затёр бы
+    пароль, которым он продлевает вход, и через пять часов синк встал бы."""
+    try:
+        from sync import sync_runner
+        if sync_runner.current_login() == login:
+            return
+        sync_runner.start(login, "", role)
+    except Exception as e:      # noqa: BLE001 — окно важнее синка; причина — в лог
+        _LOG.warning(f"[local-api] синхронизация восстановленной сессии не запустилась: {e}")
+
+
 def bootstrap_url(route: str = "/", embed: str = "0") -> str:
     """Адрес страницы-передатчика сессии для оболочки ('' — сервер не поднят)."""
     from urllib.parse import urlencode
@@ -1333,62 +1884,71 @@ def install_login_bridge(app) -> None:
     #зависла». Тело вынесено в обычную функцию и запускается через `run_in_threadpool`.
     def _login_flow(login: str, password: str) -> tuple:
         """(код ответа, тело). Никакого `async` — намеренно, см. комментарий выше."""
-        local = _try_local_login(login, password)
-        if local is not None:
-            _remember_session(login, password, local.get("role", ""))
-            #Пароль сошёлся — только теперь можно убирать чужое. База уже наша (иначе
-            #человека в ней бы не нашли), поэтому вызов уйдёт в ранний выход и сделает
-            #ровно уборку.
-            switch_user_db(login, authenticated=True)
-            return 200, local
-
-        #Человека в текущей копии нет — возможно, она ещё «анонимная» (сервер поднялся
-        #до входа). Переключаемся на ЕГО базу и пробуем ещё раз: вдруг он уже заходил на
-        #этой машине и его копия лежит готовая — тогда вход останется офлайновым.
-        if switch_user_db(login):
+        #1. Сервер уже на ЛИЧНОЙ копии этого человека — проверяем пароль по ней: так
+        #   вход работает без сети (offline-first).
+        #   🔒 Раньше шаг шёл по ЛЮБОЙ текущей копии с пояснением «база уже наша, иначе
+        #   человека в ней бы не нашли». Держалось это на свойстве ДРУГОЙ стороны (бой
+        #   вырезает чужие хеши при выдаче) — теперь условие проверяется здесь прямо.
+        if _bound_to(login):
             local = _try_local_login(login, password)
             if local is not None:
-                _remember_session(login, password, local.get("role", ""))
-                switch_user_db(login, authenticated=True)   #теперь вход подтверждён
-                return 200, local
+                return _finish_local_login(login, password, local)
+        #2. Иначе переходим на ЕГО копию (без уборки: пароль ещё не проверен) и пробуем
+        #   там — вдруг он уже входил на этой машине и копия лежит готовая.
+        elif switch_user_db(login):
+            local = _try_local_login(login, password)
+            if local is not None:
+                return _finish_local_login(login, password, local)
 
         remote, why = _try_remote_login(login, password)
         if remote is None:
             #Причина различается только там, где это безопасно (см. login_failure_response).
             code, detail = login_failure_response(remote, why)
             return code, {"detail": detail}
+        if remote.get("mfa_required"):
+            #🔥 ВТОРОЙ ФАКТОР — ЭТО НЕ ВХОД (25.09.2026, N-01). Бой ответил 200, но
+            #токенов в ответе нет — есть вызов. Раньше мост принимал такой ответ за
+            #успешный вход: роль бралась «student» по умолчанию, а страница получала и
+            #вызов, и локальные токены разом. Теперь вызов уходит странице (она покажет
+            #окно кода, тот же путь, что на сайте), а ответ примет `_mfa_verify` ниже.
+            _remember_challenge(remote.get("challenge"), login, password)
+            return 200, {k: remote[k] for k in ("mfa_required", "method", "channel",
+                                                 "challenge", "expires_in") if k in remote}
+        return _finish_remote_login(login, password, remote)
 
-        role = remote.get("role") or "student"
-        _remember_session(login, password, role)
-        #🔒 ГЛАВНОЕ: до синхронизации переключаем базу на ЛИЧНУЮ копию этого человека.
-        #Без этого его данные легли бы в общий «анонимный» файл, и следующий вошедший на
-        #этом компьютере увидел бы чужие оценки — ровно та утечка, ради которой копии и
-        #сделаны раздельными (см. local_db_file).
-        switch_user_db(login, authenticated=True)
-        #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
-        #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
-        #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
-        ok, why_mirror = _wait_for_mirror(login, seconds=12)
-        if not ok:
-            #⚠️ ЗДЕСЬ РАНЬШЕ ОТДАВАЛИ БОЕВЫЕ ТОКЕНЫ «до докачки, через прокси». Это было
-            #неправдой дважды: пересылаются всего несколько онлайн-префиксов
-            #(`_PROXY_PREFIXES`), а весь журнал читается локально — и боевой токен
-            #локальный сервер отвергает, потому что подписан ЧУЖИМ секретом. Итог был
-            #ровно тот, что описан в tests/test_desktop_first_login.py: кабинет мелькал
-            #и выбрасывал. Лучше честный отказ с названной причиной, чем сессия,
-            #разваливающаяся через секунду.
-            code, detail = mirror_failure_response(why_mirror)
-            return code, {"detail": detail}
-        access, refresh = issue_local_session(login, role)
-        if not access:
-            #⚠️ Сюда попадаем, когда зеркало отчиталось об успехе, а человека в копии всё
-            #равно нет. Отдать здесь боевые токены нельзя (локальный сервер их не
-            #принимает — подписаны чужим секретом), поэтому тот же разбор причины.
-            code, detail = mirror_failure_response(why_mirror or "локальная сессия не выписана")
-            return code, {"detail": detail}
-        out = dict(remote)
-        out["access_token"], out["refresh_token"] = access, refresh
-        return 200, out
+    @app.post("/auth/mfa/verify")
+    async def _mfa_verify(request: Request):
+        """Второй шаг входа со вторым фактором — через бой, а сессия — локальная.
+
+        Бой проверяет код и выдаёт СВОИ токены; их локальный сервер не принимает
+        (подписаны чужим секретом), поэтому дальше вход завершается так же, как
+        обычный вход по сети: личная копия, зеркало, локальная сессия. Боевые токены
+        сохраняются для синхронизации: со вторым фактором вход по паролю снова упёрся
+        бы в вызов, а продление по refresh работает."""
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:      # noqa: BLE001
+            pass
+        challenge = str((body or {}).get("challenge") or "")
+        code = str((body or {}).get("code") or "").strip()[:16]
+        pending = _take_challenge(challenge)
+        if pending is None:
+            return JSONResponse({"detail": "Время на ввод кода истекло — войдите заново."},
+                                status_code=401)
+        login, password = pending
+        status, data = await run_in_threadpool(
+            _forward_to_server, "POST", "/auth/mfa/verify",
+            {"challenge": challenge, "code": code})
+        if status != 200 or not (data or {}).get("access_token"):
+            if status in (400, 401, 429):
+                #Неверный код — вызов ещё жив: вернём его, чтобы можно было ввести снова.
+                _remember_challenge(challenge, login, password)
+            return JSONResponse(data or {"detail": "Код не принят."}, status_code=status or 503)
+        code_, out = await run_in_threadpool(
+            _finish_remote_login, login, password, data,
+            (data.get("access_token"), data.get("refresh_token") or ""))
+        return JSONResponse(out, status_code=code_)
 
     @app.post("/auth/login")
     async def _login(request: Request):
@@ -1404,9 +1964,126 @@ def install_login_bridge(app) -> None:
         code, data = await run_in_threadpool(_login_flow, login, password)
         return JSONResponse(data, status_code=code)
 
-    #В НАЧАЛО: иначе сработает штатный /auth/login серверного приложения (см. тот же
-    #приём и ту же причину у bootstrap-маршрута выше).
-    app.router.routes.insert(0, app.router.routes.pop())
+    #В НАЧАЛО (оба — вход и второй шаг): иначе сработали бы штатные маршруты серверного
+    #приложения (см. тот же приём и ту же причину у bootstrap-маршрута выше).
+    for _ in range(2):
+        app.router.routes.insert(0, app.router.routes.pop())
+
+
+def _bound_to(login: str) -> bool:
+    """Привязан ли локальный сервер уже к ЛИЧНОЙ копии этого человека."""
+    if not login:
+        return False
+    try:
+        prepare_env()
+        from app import db as _db
+        return getattr(_db, "DATABASE_URL", "") == local_db_url(login)
+    except Exception:      # noqa: BLE001
+        return False
+
+
+def _copy_unavailable() -> tuple:
+    """Отказ, когда личная копия не открылась (аудит 22.09.2026, F-04).
+
+    Раньше вход продолжался «на прежней базе» — то есть в копии ДРУГОГО человека: его
+    данные видели бы в кабинете, а правки ложились бы в чужой файл. Лучше не пустить,
+    чем пустить не туда."""
+    _LOG.error("[login] личная копия не открылась — вход остановлен")
+    return 503, {"detail": "Не удалось открыть данные этого пользователя на компьютере — "
+                           "вход остановлен, чтобы не работать в чужом файле. Перезапустите "
+                           "программу; если повторится — сообщите администратору."}
+
+
+def _finish_local_login(login: str, password: str, local: dict) -> tuple:
+    """Вход по локальной копии удался: уборка чужого, синхронизация, ответ."""
+    #Пароль сошёлся — только теперь можно убирать чужое. База уже наша (см. `_bound_to`),
+    #поэтому вызов уйдёт в ранний выход и сделает ровно уборку.
+    if not switch_user_db(login, authenticated=True):
+        return _copy_unavailable()
+    _remember_session(login, password, local.get("role", ""))
+    return 200, local
+
+
+def _finish_remote_login(login: str, password: str, remote: dict, tokens=None) -> tuple:
+    """Вход по сети удался (или прошёл второй фактор): копия, зеркало, локальная сессия."""
+    role = remote.get("role") or "student"
+    #🔒 ГЛАВНОЕ: до синхронизации переключаем базу на ЛИЧНУЮ копию этого человека. Без
+    #этого его данные легли бы в общий «анонимный» файл, и следующий вошедший на этом
+    #компьютере увидел бы чужие оценки — ровно та утечка, ради которой копии и сделаны
+    #раздельными (см. local_db_file). И переключение ОБЯЗАНО удаться (F-04): раньше
+    #его результат не проверялся, и вход шёл дальше на чужой копии.
+    if not switch_user_db(login, authenticated=True):
+        return _copy_unavailable()
+    if tokens:
+        _adopt_remote_tokens(login, *tokens)
+    _remember_session(login, password, role)
+    #Зеркало могло ещё не докачать человека — тогда `/web/*` ответит «нет доступа», и
+    #в кабинете будет пусто. Ждём ОДИН короткий цикл, но не блокируем вход навсегда:
+    #лучше пустоватый кабинет, который наполнится, чем висящая форма входа.
+    ok, why_mirror = _wait_for_mirror(login, seconds=12)
+    if not ok:
+        #⚠️ ЗДЕСЬ РАНЬШЕ ОТДАВАЛИ БОЕВЫЕ ТОКЕНЫ «до докачки, через прокси». Это было
+        #неправдой дважды: пересылаются всего несколько онлайн-префиксов
+        #(`_PROXY_PREFIXES`), а весь журнал читается локально — и боевой токен
+        #локальный сервер отвергает, потому что подписан ЧУЖИМ секретом. Итог был
+        #ровно тот, что описан в tests/test_desktop_first_login.py: кабинет мелькал
+        #и выбрасывал. Лучше честный отказ с названной причиной, чем сессия,
+        #разваливающаяся через секунду.
+        code, detail = mirror_failure_response(why_mirror)
+        return code, {"detail": detail}
+    access, refresh = issue_local_session(login, role)
+    if not access:
+        #⚠️ Сюда попадаем, когда зеркало отчиталось об успехе, а человека в копии всё
+        #равно нет. Отдать здесь боевые токены нельзя (локальный сервер их не
+        #принимает — подписаны чужим секретом), поэтому тот же разбор причины.
+        code, detail = mirror_failure_response(why_mirror or "локальная сессия не выписана")
+        return code, {"detail": detail}
+    out = {k: v for k, v in dict(remote).items()
+           if k not in ("trust_token", "mfa_required", "challenge")}
+    out["access_token"], out["refresh_token"] = access, refresh
+    return 200, out
+
+
+#Вызовы второго фактора, ожидающие кода: challenge → (логин, пароль, когда).
+#Пароль держим В ПАМЯТИ и минуты (инвариант §4.7: на диск он не пишется) — он нужен
+#синхронизации ровно так же, как после обычного входа по сети.
+_CHALLENGES: dict = {}
+_CHALLENGE_TTL_S = 10 * 60
+_CHALLENGE_CAP = 20
+_CHALLENGE_LOCK = threading.Lock()
+
+
+def _remember_challenge(challenge, login: str, password: str) -> None:
+    if not challenge:
+        return
+    with _CHALLENGE_LOCK:
+        now = time.monotonic()
+        for k in [k for k, v in _CHALLENGES.items() if now - v[2] > _CHALLENGE_TTL_S]:
+            _CHALLENGES.pop(k, None)
+        while len(_CHALLENGES) >= _CHALLENGE_CAP:
+            _CHALLENGES.pop(next(iter(_CHALLENGES)), None)
+        _CHALLENGES[str(challenge)] = (login, password, now)
+
+
+def _take_challenge(challenge: str):
+    """(логин, пароль) по вызову и забыть его; None — не было или истёк."""
+    with _CHALLENGE_LOCK:
+        got = _CHALLENGES.pop(str(challenge or ""), None)
+    if got is None or time.monotonic() - got[2] > _CHALLENGE_TTL_S:
+        return None
+    return got[0], got[1]
+
+
+def _adopt_remote_tokens(login: str, access: str, refresh: str) -> None:
+    """Сохранить боевые токены после второго фактора — ими синк и ходит на бой."""
+    try:
+        from data import app_settings
+        if access:
+            app_settings.set_saved_token(login, access)
+        if refresh:
+            app_settings.set_saved_refresh_token(login, refresh)
+    except Exception as e:      # noqa: BLE001
+        _LOG.warning(f"[login] боевые токены не сохранены: {e}")
 
 
 def _try_local_login(login: str, password: str):
@@ -1579,13 +2256,31 @@ def _try_remote_login(login: str, password: str):
         #Отдельная ветка не для красоты: без httpx вход по сети невозможен ФИЗИЧЕСКИ, и
         #на чистой машине это первый подозреваемый. Сообщение обязано называть пакет.
         return None, f"offline: нет пакета httpx ({e}) — установите зависимости"
+    #🔥 ПРЕДСТАВЛЯЕМСЯ ПРОГРАММОЙ, А НЕ САЙТОМ (25.09.2026, N-01). Здесь стояло
+    #`X-Client: web` — ради того, чтобы барьер устройства не мешал входу. С 4.0 это стало
+    #вредным: сайту и приложению бой на НЕдоверенном устройстве вместо токенов присылает
+    #вызов «код из письма», а мост кода из письма не показывает и принимал вызов за
+    #успешный вход. Программа же проходит свой барьер (одобрение машины) — и бой так и
+    #задуман: «десктоп не затронут» (`routers/auth.py`). Барьер при этом не мешает: по
+    #умолчанию верный пароль одобряет машину автоматически и со следом в журнале
+    #(`GRADEBOOK_DEVICE_APPROVAL`), а в строгом режиме отказ приходит 403 и превращается
+    #в экран подтверждения устройства (см. `login_failure_response`).
     try:
         r = httpx.post(f"{base}/auth/login", json={"login": login, "password": password},
-                       headers={"X-Client": "web"}, timeout=20.0)
+                       headers={"X-Device-Id": machine_device_id()}, timeout=20.0)
     except Exception as e:
         return None, f"offline: {type(e).__name__}: {e}"
     if r.status_code == 200:
-        return r.json(), ""
+        try:
+            data = r.json()
+        except ValueError:
+            return None, "offline: сервер ответил не JSON"
+        if not isinstance(data, dict) or not (data.get("access_token")
+                                              or data.get("mfa_required")):
+            return None, "offline: сервер ответил без токенов"
+        return data, ""
+    if r.status_code == 403 and "устройств" in (r.text or "").lower():
+        return None, "device"
     if r.status_code in (400, 401, 403):
         return None, "unauthorized"
     return None, f"offline: сервер ответил {r.status_code}"
@@ -1600,6 +2295,11 @@ def login_failure_response(data, reason: str):
     отправляет человека менять пароль вместо того, чтобы проверить связь."""
     if data is not None:
         return 200, ""
+    if reason == "device":
+        #Строгий режим одобрения машин: тот же ответ, что у зеркала (см.
+        #mirror_failure_response), — SPA на 403 сама покажет экран подтверждения.
+        return 403, ("Устройство не подтверждено администратором. Нажмите «Запросить "
+                     "доступ» и введите код, который выдаст администратор.")
     if reason and reason.startswith("offline"):
         #В лог — ПОДРОБНО (на чужой машине это единственный след), человеку — коротко.
         _LOG.warning(f"[login] вход по сети не состоялся: {reason}")
@@ -1765,3 +2465,50 @@ def _purge_previous_user(login: str) -> None:
             _LOG.info("[local-api] база синхронизации заведена заново под нового владельца")
     except Exception as e:                          # noqa: BLE001
         _LOG.warning(f"[local-api] владельца базы синхронизации сменить не удалось: {e}")
+
+
+#── Быстрый старт (27.09.2026) ───────────────────────────────────────────────────────
+#Типы файлов, которых нет во встроенной таблице Python, а в сборке сайта они есть.
+_EXTRA_MIME = {".webp": "image/webp", ".woff2": "font/woff2", ".woff": "font/woff",
+               ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".mjs": "text/javascript",
+               ".js": "text/javascript"}
+
+
+def _fast_mimetypes() -> None:
+    """Таблица типов файлов БЕЗ чтения реестра Windows.
+
+    🔥 Замер 27.09.2026: первый `mimetypes.guess_type` в процессе зовёт `init()`, а тот на
+    Windows перечисляет типы из реестра — **0.42–0.59 с** на КАЖДОМ запуске программы,
+    ровно в момент отдачи первого файла страницы (`FileResponse`). Второе основание не
+    слабее первого: реестр у каждой машины свой, и кривая запись (`.js` как `text/plain`
+    — известная болезнь Windows) молча ломает загрузку модулей страницы на одном ПК из
+    сотни. Встроенная таблица Python плюс наши типы — одинаковые везде и мгновенные.
+
+    ⚠️ Только в программе: на бою Linux читает `/etc/mime.types` быстро, и чужую раздачу
+    мы там не трогаем. Идемпотентна."""
+    import mimetypes
+    if getattr(mimetypes, "_gb_fast", False):
+        return
+    mimetypes.inited = True          #MimeTypes() без этого сам позовёт init() — с реестром
+    db = mimetypes.MimeTypes()
+    for ext, typ in _EXTRA_MIME.items():
+        db.add_type(typ, ext)
+    mimetypes._db = db
+    mimetypes.encodings_map = db.encodings_map
+    mimetypes.suffix_map = db.suffix_map
+    mimetypes.types_map = db.types_map[True]
+    mimetypes.common_types = db.types_map[False]
+    mimetypes._gb_fast = True
+
+
+def install_schedule_cache() -> int:
+    """Снимки расписания портала — в зашифрованный кэш %TEMP% (см. `desktop/temp_cache.py`).
+
+    Без него после каждого запуска расписание преподавателя ~2.5 минуты «собиралось»
+    (замер: 149 с сети на снимок колледжа). Возвращает, сколько частей поднято с диска."""
+    from app import schedule_web
+    from desktop import temp_cache
+    n = schedule_web.use_disk_cache(temp_cache.load, temp_cache.save, temp_cache.drop)
+    if n:
+        _LOG.info(f"[local-api] расписание с диска: частей {n}")
+    return n

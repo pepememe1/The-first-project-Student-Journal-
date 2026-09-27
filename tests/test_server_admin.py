@@ -347,3 +347,107 @@ def test_suggested_host_comes_from_the_configured_server():
     это ровно та машина, состояние которой человек и пришёл смотреть."""
     host = server_admin.suggested_host()
     assert "://" not in host and "/" not in host, host
+
+
+# ── Кому открыт раздел (аудит 22.09.2026, находка F-01, P0) ─────────────────────────
+#Раньше охранник раздела спрашивал только «вошёл ли человек в программу». Студент,
+#вошедший на компьютере администратора, выполнял команду на БОЕВОЙ машине одним
+#запросом к 127.0.0.1 — меню ему не показывали, но меню не граница.
+#Проверяется СВОЙСТВО по всем маршрутам раздела, собранным из самого приложения:
+#перечисли их руками — и первый новый маршрут окажется открытым, а тест зелёным.
+
+def _app_with_section(monkeypatch, audited=None):
+    from fastapi import FastAPI
+
+    tokens = {"Bearer admin-token": {"login": "boss", "role": "admin"},
+              "Bearer teacher-token": {"login": "t1", "role": "teacher"},
+              "Bearer student-token": {"login": "s1", "role": "student"},
+              "Bearer moderator-token": {"login": "m1", "role": "moderator"},
+              "Bearer ghost-token": {"login": "g1", "role": ""}}
+    #Ни одного настоящего SSH и ни одной записи на диск: проверяется охранник, а не ssh.
+    monkeypatch.setattr(server_admin, "_load", lambda: [])
+    monkeypatch.setattr(server_admin, "_save", lambda items: True)
+    monkeypatch.setattr(server_admin, "suggested_host", lambda: "")
+    monkeypatch.setattr(server_admin, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("ssh вызван")))
+    monkeypatch.setattr(server_admin, "_audit",
+                        lambda event, who, detail="": (audited if audited is not None
+                                                       else []).append((event, who)))
+    app = FastAPI()
+    server_admin.install(app, lambda auth: dict(tokens.get(auth, {})))
+    return app
+
+
+def _section_calls(app):
+    """(метод, путь) каждого маршрута раздела — прямо из приложения."""
+    out = []
+    for r in app.router.routes:
+        path = getattr(r, "path", "")
+        if not path.startswith("/desk/servers"):
+            continue
+        for m in sorted(getattr(r, "methods", ()) or ()):
+            if m == "HEAD":
+                continue
+            out.append((m, path.replace("{server_id}", "srv1")))
+    return out
+
+
+def test_section_has_the_dangerous_routes_under_guard(monkeypatch):
+    """Страховка самого теста: если разбор маршрутов сломается и вернёт пустоту,
+    проверка ниже станет зелёной ни о чём. Строка команд обязана найтись."""
+    calls = _section_calls(_app_with_section(monkeypatch))
+    assert ("POST", "/desk/servers/srv1/exec") in calls, calls
+    assert len(calls) >= 10, f"маршрутов раздела подозрительно мало: {calls}"
+
+
+def test_every_section_route_refuses_everyone_but_admin(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    audited = []
+    app = _app_with_section(monkeypatch, audited)
+    client = TestClient(app)
+    for method, path in _section_calls(app):
+        body = {"command": "id", "confirm": True, "name": "gradebook", "action": "status",
+                "host": "h", "source": "a", "target": "b", "step": "backup"}
+        r = client.request(method, path, json=body)
+        assert r.status_code == 401, f"{method} {path} без токена: {r.status_code}"
+        for role_token in ("teacher-token", "student-token", "moderator-token",
+                           "ghost-token"):
+            r = client.request(method, path, json=body,
+                               headers={"Authorization": f"Bearer {role_token}"})
+            assert r.status_code == 403, (
+                f"{method} {path} открыт для «{role_token}»: {r.status_code} — "
+                "не-админ получил доступ к управлению боевым сервером")
+    assert any(ev == "server_admin.denied" for ev, _ in audited), \
+        "отказ не оставил следа в журнале аудита"
+
+
+def test_admin_passes_the_guard(monkeypatch):
+    """Обратная сторона: охранник не имеет права запереть и самого администратора
+    (иначе «починка» вида «всегда 403» прошла бы тест выше)."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(_app_with_section(monkeypatch))
+    h = {"Authorization": "Bearer admin-token"}
+    assert client.get("/desk/servers", headers=h).status_code == 200
+    #Неизвестный сервер — 404, а не 401/403: охранник пропустил, дальше ответил сам маршрут.
+    r = client.post("/desk/servers/srv1/exec", json={"command": "id"}, headers=h)
+    assert r.status_code == 404, r.status_code
+
+
+def test_admin_command_leaves_an_audit_trail(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    audited = []
+    app = _app_with_section(monkeypatch, audited)
+    monkeypatch.setattr(server_admin, "_find",
+                        lambda sid: {"id": sid, "host": "vps", "user": "root"})
+    monkeypatch.setattr(server_admin, "run",
+                        lambda server, command, timeout=0: {"ok": True, "code": 0,
+                                                            "out": "", "err": ""})
+    client = TestClient(app)
+    r = client.post("/desk/servers/srv1/exec", json={"command": "uptime"},
+                    headers={"Authorization": "Bearer admin-token"})
+    assert r.status_code == 200
+    events = [(ev, who.get("login")) for ev, who in audited]
+    assert ("server_admin.exec", "boss") in events, events

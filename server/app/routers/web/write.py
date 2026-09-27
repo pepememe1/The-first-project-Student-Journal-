@@ -67,9 +67,21 @@ def teacher_set_grade(payload: dict = Body(...),
     now = _now_iso()
     cleared = (value == "")
     row = db.get(Grade, gid)
+    #Версия, которую ЭТА правка затирает ('' / 0 — записи не было). Отдаём в ответе:
+    #очередь программы досылает правку на бой вместе с ней (`_ensure_base_version`).
+    #В копии программы номер — последняя увиденная боевая версия (триггеров там нет).
+    base_version = "" if row is None else (row.updated_at or "")
+    base_seq = _seq_of(row)
+    row = _ensure_base_version(
+        db, payload, Grade, gid, row,
+        differs=lambda r: (r.grade or "") != value or bool(r.deleted) != cleared,
+        kind="grade",
+        server_view=lambda r: {"grade": "" if r.deleted else (r.grade or ""),
+                               "deleted": bool(r.deleted), "device": r.device or ""})
     #Прежнее значение запоминаем ДО перезаписи — по нему отличаем «поставили впервые»
     #от «исправили». Ранее СНЯТАЯ оценка (надгробие) прежним значением не считается:
-    #иначе простановка балла после снятия выглядела бы как исправление.
+    #иначе простановка балла после снятия выглядела бы как исправление. Берём ПОСЛЕ
+    #перечитывания под замком: судить надо по актуальной строке, а не по снимку до него.
     previous = "" if (row is None or row.deleted) else (row.grade or "")
     if row is None:
         row = Grade(id=gid, student_f=surname, student_n=name, lesson_id=lesson_id)
@@ -82,6 +94,7 @@ def teacher_set_grade(payload: dict = Body(...),
     #найден выше (проверка «состоит в группе занятия»), так что это бесплатно.
     row.student_id = stud.id
     db.commit()
+    new_seq = int(row.change_seq or 0)
     #Пуш студенту. СНЯТИЕ оценки не уведомляем: «у вас новая оценка» при её удалении —
     #прямая дезинформация. Ошибки внутри не всплывают: сбой доставки не должен мешать
     #преподавателю поставить балл.
@@ -115,7 +128,8 @@ def teacher_set_grade(payload: dict = Body(...),
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",
               detail=f"{lesson.subject} · {lesson_id}" + ("" if cleared else f" = {value}"))
-    return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now}
+    return {"ok": True, "id": gid, "grade": value, "deleted": cleared, "updated_at": now,
+            "base_updated_at": base_version, "change_seq": new_seq, "base_seq": base_seq}
 
 
 # --- Занятия (CRUD) --- id = str(uuid4), тот же формат, что уезжает в синк →
@@ -164,24 +178,63 @@ def teacher_create_lesson(payload: dict = Body(...),
         if subgroup in (1, 2) and subgroup not in owned:
             raise HTTPException(status_code=403, detail=f"Подгруппа {subgroup} вам не назначена")
 
+    #🔑 ID ОТ КЛИЕНТА — КЛЮЧ ИДЕМПОТЕНТНОСТИ (аудит 22.09.2026, F-05 и F-02). Раньше id
+    #генерировал сервер на КАЖДЫЙ вызов, и повтор запроса, чей ответ потерялся в сети
+    #(офлайн-очередь сайта, очередь программы), создавал ВТОРОЕ занятие — со своими
+    #уведомлениями о ДЗ и своей колонкой в журнале. Теперь клиент может прислать свой
+    #UUID: такое занятие уже есть в ТОМ ЖЕ журнале — это повтор, отдаём его, ничего не
+    #создавая и никого не уведомляя повторно. Программе это нужно ещё и затем, чтобы
+    #занятие получило ОДИН id и в её копии, и на бою: иначе оценки, выставленные к нему
+    #офлайн, досылались бы к несуществующему на бою занятию.
+    client_id = (payload.get("id") or "").strip()
+    if client_id:
+        import uuid as _uuid
+        try:
+            if str(_uuid.UUID(client_id)) != client_id.lower():
+                raise ValueError(client_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="id занятия должен быть UUID")
+        client_id = client_id.lower()
+        existing = db.get(Lesson, client_id)
+        if existing is not None:
+            same = (not existing.deleted and existing.group_name == group
+                    and existing.subject == subject and existing.type == ltype)
+            if not same:
+                raise HTTPException(status_code=409,
+                                    detail="Занятие с таким id уже существует в другом журнале")
+            return {"ok": True, "id": existing.id, "number": int(existing.number or 0),
+                    "subgroup": int(existing.subgroup or 0), "replayed": True,
+                    "year": existing.year or "", "semester": int(existing.semester or 0),
+                    "updated_at": existing.updated_at or "", "base_updated_at": "",
+                    "change_seq": int(existing.change_seq or 0), "base_seq": 0}
     number = payload.get("number")
     if not number:
         number = W.next_lesson_number(db, group, subject, ltype, subgroup)
     import uuid as _uuid
-    lid = str(_uuid.uuid4())
+    lid = client_id or str(_uuid.uuid4())
     topic = (payload.get("topic") or "").strip()
-    db.add(Lesson(id=lid, group_name=group, subject=subject, type=ltype,
-                  number=int(number), topic=topic,
-                  date=(payload.get("date") or "").strip(),
-                  retake_date=(payload.get("retake_date") or "").strip(),
-                  hour=int(payload.get("hour") or 0), extra={},
-                  year=ty, semester=ts, subgroup=subgroup,
-                  updated_at=_now_iso(), deleted=False))
+    created_at = _now_iso()
+    created = Lesson(id=lid, group_name=group, subject=subject, type=ltype,
+                     number=int(number), topic=topic,
+                     date=(payload.get("date") or "").strip(),
+                     retake_date=(payload.get("retake_date") or "").strip(),
+                     hour=int(payload.get("hour") or 0), extra={},
+                     year=ty, semester=ts, subgroup=subgroup,
+                     updated_at=created_at, deleted=False)
+    db.add(created)
     db.commit()
+    new_seq = int(created.change_seq or 0)
     if ltype == "ДЗ":
         _notify_homework(db, group, subject, lid, topic, int(number),
                          author_login=user.login)
-    return {"ok": True, "id": lid, "number": int(number), "subgroup": subgroup}
+    #Период, которым занятие проштамповано, — в ответе (исследование синка 25.09.2026,
+    #W-08). Очередь программы досылает его на бой вместе с правкой: иначе занятие,
+    #созданное офлайн 30 декабря и досланное 12 января, легло бы на бою во ВТОРОЙ
+    #семестр, а в копии осталось бы в первом — и оценки к нему разъехались бы молча.
+    return {"ok": True, "id": lid, "number": int(number), "subgroup": subgroup,
+            "year": ty, "semester": ts,
+            "updated_at": created_at, "base_updated_at": "",
+            "change_seq": new_seq, "base_seq": 0}
 
 
 @router.post("/events")
@@ -322,6 +375,17 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
     _teacher_check_subgroup(db, user, row)   #и только СВОЯ подгруппа (J07)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
+    base_version = row.updated_at or ""
+    base_seq = _seq_of(row)
+    row = _ensure_base_version(
+        db, payload, Lesson, lesson_id, row,
+        differs=lambda r: _lesson_update_differs(r, payload), kind="lesson",
+        server_view=lambda r: {"topic": r.topic or "", "date": r.date or "",
+                               "retake_date": r.retake_date or "",
+                               "number": int(r.number or 0), "extra": dict(r.extra or {})})
+    if row is None or row.deleted:
+        #Пока правка ждала замка, занятие удалили — править нечего.
+        raise HTTPException(status_code=404, detail="Занятие не найдено")
     for field in ("topic", "date", "retake_date"):
         if field in payload:
             setattr(row, field, (payload.get(field) or "").strip())
@@ -341,7 +405,29 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
         row.hour = int(payload.get("hour") or 0)
     row.updated_at = _now_iso()
     db.commit()
-    return {"ok": True, "id": lesson_id}
+    return {"ok": True, "id": lesson_id, "updated_at": row.updated_at,
+            "base_updated_at": base_version, "change_seq": int(row.change_seq or 0),
+            "base_seq": base_seq}
+
+
+def _lesson_update_differs(row, payload: dict) -> bool:
+    """Меняет ли правка хоть одно поле занятия (для проверки базовой версии).
+
+    Совпадающая правка конфликтом не считается — спорить не о чем. Разбор полей тот же,
+    что у самой правки выше: разойдись они, конфликт находился бы не там, где запись."""
+    for field in ("topic", "date", "retake_date"):
+        if field in payload and (payload.get(field) or "").strip() != (getattr(row, field) or ""):
+            return True
+    extra = dict(row.extra or {})
+    for n in range(2, 6):
+        k = f"retake_date_{n}"
+        if k in payload and (payload.get(k) or "").strip() != (extra.get(k) or ""):
+            return True
+    if "number" in payload and payload["number"] and int(payload["number"]) != int(row.number or 0):
+        return True
+    if "hour" in payload and int(payload.get("hour") or 0) != int(row.hour or 0):
+        return True
+    return False
 
 
 @router.delete("/teacher/lesson/{lesson_id}")
@@ -350,15 +436,33 @@ def teacher_delete_lesson(lesson_id: str,
     """Мягкое удаление занятия (надгробие) — доедет до десктопа и скроет колонку."""
     _require("teacher", user)
     row = db.get(Lesson, lesson_id)
-    if row is None or row.deleted:
+    if row is None:
         raise HTTPException(status_code=404, detail="Занятие не найдено")
     _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
     _teacher_check_subgroup(db, user, row)   #и только СВОЯ подгруппа (J07)
+    if row.deleted:
+        #🔑 ПОВТОР УДАЛЕНИЯ — УСПЕХ, А НЕ 404 (исследование синка 25.09.2026, W-09).
+        #Запрос дошёл, ответ потерялся в сети — очередь (программы или телефона) шлёт его
+        #снова. Раньше повтор получал 404 и уходил в «не принято сервером»: человек видел
+        #тревогу «удаление не прошло» при удалённом занятии, а «Понятно, убрать» запускало
+        #лишнюю полную сверку. Намерение «этого занятия быть не должно» исполнено — это и
+        #отвечаем. Права проверены ВЫШЕ: чужому ответ «уже удалено» не рассказывает, что
+        #занятие существовало. Архивный замок не нужен — ничего не меняется.
+        return {"ok": True, "id": lesson_id, "already": True,
+                "updated_at": row.updated_at or "", "base_updated_at": row.updated_at or "",
+                "change_seq": int(row.change_seq or 0), "base_seq": int(row.change_seq or 0)}
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
+    #Базовую версию при удалении НЕ сверяем: занятие правит только тот, кто его ведёт, а
+    #«удалить, но не удаляй, если тему поправили» — не тот вопрос, который стоит задавать
+    #человеку. Удаление на бою обратимо (надгробие), затёртая правка темы — нет.
+    base_version = row.updated_at or ""
+    base_seq = _seq_of(row)
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()
-    return {"ok": True, "id": lesson_id}
+    return {"ok": True, "id": lesson_id, "updated_at": row.updated_at,
+            "base_updated_at": base_version, "change_seq": int(row.change_seq or 0),
+            "base_seq": base_seq}
 
 
 @router.get("/teacher/journal-export")

@@ -8,14 +8,29 @@ offline-first сохраняется, прога продолжает работ
 
 Авторизация к API — теми же логином/паролем, что ввёл пользователь. Токен живёт
 в памяти на время сессии; при сбое — перелогин на следующем цикле.
+
+━━ ЧТО ДЕЛАЕТ ЦИКЛ (с 25.09.2026, аудит 22.09.2026, F-02/F-03) ━━
+  1. досылает очередь правок журнала, сделанных в программе (`desktop/desk_outbox`);
+  2. подтягивает копию, из которой читает интерфейс (`desktop/local_mirror`): дельтой по
+     номеру изменения, полной сверкой «сервер = истина» (§4.5) — когда её просит бой,
+     очередь или неделя без неё (с боем до 4.1 — как раньше, раз за сессию входа);
+  3. раз в час — «Сверщик» (`sync/verifier.py`): сходится ли копия с боем.
+Параллельно живёт сторож «головы» (`_watch_head`): долгий опрос `/sync/head` будит цикл,
+как только на бою закоммитили правку (исследование синка W-20), — изменение приезжает за
+секунды, а не через полминуты, и без полного pull в тишине.
+Обмена со старой базой `vsgutu_grades.db` (`sync_engine`) в цикле больше НЕТ: интерфейс
+в неё не пишет с удаления Qt, её push был чистым эхом, а эхо устаревшего снимка
+откатывало правки, сделанные на сайте и в телефоне.
 """
 import threading
 import time
 from typing import TYPE_CHECKING
 
 import log
-from data import student_link
 from data.app_settings import get_api_url
+
+#Сколько секунд бой держит долгий опрос головы (его потолок — `HEAD_WAIT_MAX` на бою).
+HEAD_WAIT_S = 20
 
 if TYPE_CHECKING:                      #только для проверки типов
     #Настоящий импорт СОЗНАТЕЛЬНО ленивый (внутри методов): sync_client тянет requests,
@@ -81,7 +96,16 @@ class SyncManager:
         #«осиротевшие» локальные записи (удалённые на сервере, пока этот ПК был офлайн)
         #перестали исчезать вовсе. Теперь крючок здесь: это единственное место, которое
         #переживает любую оболочку окна и уже знает, что сеть и токен в порядке.
+        #⚠️ С 25.09.2026 сверяется КОПИЯ ИНТЕРФЕЙСА (`local_mirror.rebuild` в
+        #`_mirror_for_vue`), а не старая база: её интерфейс не читает, и убирать
+        #«сирот» там значило убирать их не там, где их видит человек.
         self._need_reconcile = False
+        #Итог последней досылки очереди правок (для диагностики, см. `status`).
+        self._outbox_last: dict = {}
+        #«Сверщик» (sync/verifier.py): когда сверяли и что вышло.
+        from sync.verifier import Schedule
+        self._verify = Schedule()
+        self._watch_thread: threading.Thread | None = None
 
     def trigger(self):
         """Разбудить синкер прямо сейчас (например, после сохранения данных),
@@ -114,16 +138,19 @@ class SyncManager:
                       число здесь единственное, что отличает «всё сошлось» от «две
                       разные правды живут рядом».
         Свести их в одну строку значило бы показать «нет связи» там, где связь есть."""
-        from sync.sync_engine import last_rejected
-        from data.core import DBManager
+        #⚠️ `rejected`/`conflicts` СТАРОЙ базы здесь больше нет (25.09.2026): она выведена
+        #из цикла, и её счётчики показывали бы вечные «конфликты» по данным, которых
+        #никто не читает. Правки журнала, не дошедшие до боя, и конфликты по ним живут
+        #в очереди (`desk_outbox.counts`), её отдаёт `/desk/sync/status` полем `outbox`.
         return {"online": self._online, "fails": self._fail_count,
                 "error": self._last_error, "auth_error": self._auth_error,
-                "rejected": last_rejected(),
-                "conflicts": DBManager.count_unresolved_conflicts(),
                 #ПЯТОЕ состояние, и оно тоже отдельное: обмен может идти прекрасно, а
                 #копия, из которой рисуется журнал, — стоять. Пустая строка = бед нет.
                 "mirror_error": self._mirror_error,
-                "mirror_ok_at": self._mirror_ok_at}
+                "mirror_ok_at": self._mirror_ok_at,
+                "outbox_stopped": (self._outbox_last or {}).get("stopped", ""),
+                #Итог последней сверки копии с боем (значок «сверено»): {ok, at, mismatch…}.
+                "verify": dict(self._verify.last or {})}
 
     def _set_online(self, online: bool, error: str = ""):
         """Обновить онлайн-состояние; колбэк дёргаем только при РЕАЛЬНОЙ смене."""
@@ -201,8 +228,11 @@ class SyncManager:
         #Новый вход — снова разрешаем попытку по сохранённому токену именно этого
         #пользователя (на одном ПК мог входить другой).
         self._saved_token_tried = False
-        #Новая сессия входа — снова нужна сверка с сервером (см. поле в __init__).
-        self._need_reconcile = True
+        #Полная сверка на старте — только если она ещё нужна: с боем 4.1 курсор и сброс по
+        #области видимости держат копию честной сами, а первый вход и недельная страховка
+        #решаются внутри зеркала (`local_mirror.needs_full`). Раньше полный pull шёл на
+        #КАЖДОМ запуске — и при первом входе дважды (исследование синка W-03).
+        self._need_reconcile = self._full_at_start()
         if self._running:
             return
         #Предыдущий поток мог ещё не выйти (stop() его не ждёт — см. ниже, почему).
@@ -216,6 +246,61 @@ class SyncManager:
         self._thread = threading.Thread(target=self._loop, args=(self._stop_evt,),
                                         daemon=True)
         self._thread.start()
+        self._watch_thread = threading.Thread(target=self._watch_head,
+                                              args=(self._stop_evt,), name="sync-head",
+                                              daemon=True)
+        self._watch_thread.start()
+
+    @staticmethod
+    def _full_at_start() -> bool:
+        try:
+            from desktop import local_mirror
+            return local_mirror.full_at_start()
+        except Exception:      # noqa: BLE001 — зеркала нет в этой сборке
+            return True
+
+    def _watch_head(self, stop_evt):
+        """Долгий опрос головы потока боя: разбудить цикл, как только там правка (W-20).
+
+        Свой поток, а не шаг цикла: цикл занят досылкой и зеркалом и должен просыпаться
+        по `trigger()` мгновенно, а ответ долгого опроса прервать нельзя. Бой до 4.1
+        маршрута не знает (404) — тогда сторож молча выключается до следующего входа,
+        а цикл работает как раньше, по таймеру."""
+        fails = 0
+        while self._running and not stop_evt.is_set():
+            client = self._client
+            cursor = 0
+            try:
+                from desktop import local_mirror
+                cursor = int(local_mirror.state().get("cursor") or 0)
+            except Exception:      # noqa: BLE001 — копии нет или она занята: позже
+                cursor = 0
+            if client is None or not getattr(client, "token", None) or not cursor:
+                stop_evt.wait(5)
+                continue
+            try:
+                head = int((client.head(after=cursor, wait=HEAD_WAIT_S) or {}).get("head") or 0)
+                fails = 0
+            except Exception as e:      # noqa: BLE001
+                status = getattr(getattr(e, "response", None), "status_code", 0)
+                if status == 404:
+                    _log.info("[sync] бой не знает /sync/head (до 4.1) — сторож головы выключен")
+                    return
+                fails += 1
+                stop_evt.wait(min(60, 5 * 2 ** min(fails, 4)))
+                continue
+            if head > cursor:
+                self._wake.set()
+                #Дать циклу забрать правку: иначе, пока он тянет страницу, сторож видел бы
+                #прежний курсор и будил бы его снова и снова.
+                edge = time.monotonic() + 15
+                while time.monotonic() < edge and not stop_evt.is_set():
+                    stop_evt.wait(1)
+                    try:
+                        if int(local_mirror.state().get("cursor") or 0) != cursor:
+                            break
+                    except Exception:      # noqa: BLE001
+                        break
 
     def _join_previous(self, timeout: float = 5.0):
         """Дождаться завершения прежнего фонового потока (если он ещё жив).
@@ -385,7 +470,6 @@ class SyncManager:
             app_settings.set_saved_refresh_token(self._login, self._client.refresh_token)
 
     def _loop(self, stop_evt=None):
-        from sync import sync_engine
         #Условие двойное и оба нужны: `_running` гасит цикл штатно, `stop_evt` —
         #персонально этот поток, даже если поле уже вернули в True новым запуском.
         while self._running and not (stop_evt is not None and stop_evt.is_set()):
@@ -427,23 +511,21 @@ class SyncManager:
                     self._sleep_cycle()
                     continue
                 self._auth_error = ""
-                #Сверка уже заканчивается полным циклом обмена (см. `reconcile`), поэтому
-                #обычный `sync_once` следом не нужен — он был бы вторым кругом подряд.
-                if not self._reconcile_once():
-                    sync_engine.sync_once(self._client)
+                #🔥 ОБМЕН СО СТАРОЙ БАЗОЙ ВЫВЕДЕН ИЗ ЦИКЛА (аудит 22.09.2026, F-02/F-03).
+                #Здесь шёл pull+push `vsgutu_grades.db` (`sync_engine`). Интерфейс в эту
+                #базу не пишет с удаления Qt, поэтому push был ЭХОМ того, что пришло с боя,
+                #и эхо было опасным: слияние не принимало свежие серверные оценки (писало
+                #«конфликт»), а полный снимок возвращал прежние поверх правок с сайта.
+                #1. Очередь правок журнала — ПЕРВОЙ, до зеркала: иначе зеркало подтянуло бы
+                #   серверное значение поверх ещё не отправленной правки.
+                self._flush_outbox()
                 self._flush_pending_prefs()   #до-отправляем тему, если зависла
-                #Доклеиваем оценкам неизменяемый id студента. Именно ЗДЕСЬ, после
-                #pull: справочник студентов уже свежий, есть с чем сопоставлять.
-                #Идемпотентно и дёшево (берутся только строки с пустым id), поэтому
-                #флаг «уже сделано» не нужен — он соврал бы на свежей установке,
-                #где справочник ещё не приехал и клеить было не с чем.
-                student_link.backfill_quietly()
-                #Зеркало для ОБЩЕГО Vue-интерфейса: тем же успешным циклом обновляем
-                #локальную копию серверной базы (desktop/local_mirror.py). Именно здесь, а
-                #не отдельным таймером: раз сеть только что была доступна и токен свеж,
-                #второй раз это выяснять незачем. Сбой внутри проглатывается там же и
-                #цикл не роняет; модуль опционален (server-пакета может не быть рядом).
+                #2. Копия для интерфейса (desktop/local_mirror.py): тем же успешным циклом,
+                #   раз сеть только что была доступна и токен свеж. Сбой внутри
+                #   проглатывается там же и цикл не роняет; модуль опционален.
                 self._mirror_for_vue()
+                #3. «Сверщик» — раз в час, когда копия свежая и очередь пуста.
+                self._maybe_verify()
                 #Успех: сбрасываем бэкофф и помечаем «онлайн».
                 self._fail_count = 0
                 self._set_online(True)
@@ -471,51 +553,25 @@ class SyncManager:
                                  "Данные в безопасности локально, синк возобновится сам.")
             self._sleep_cycle()
 
-    def _reconcile_once(self) -> bool:
-        """Сверка «сервер = истина» — ОДИН раз за сессию входа, здесь и только здесь.
+    def _flush_outbox(self, wait: float = 30.0):
+        """Дослать на бой правки журнала, сделанные в программе (`desk_outbox`).
 
-        Возвращает True, если сверка РЕАЛЬНО прошла (а значит полный цикл обмена уже
-        сделан внутри неё и повторять его не надо).
-
-        Зачем вообще: обычный дельта-pull приносит изменённые строки, но НЕ убирает
-        локальные записи, которых на сервере уже нет. Пока ПК был офлайн, админ мог
-        удалить студента или группу — и на этом ПК они остались бы навсегда, потому что
-        удаление приходит надгробием, а надгробие приходит только тем, кто был на связи.
-        Реконсиляция стирает синхронизируемый кэш и наливает его полным снимком.
-
-        ⚠️ ХОСТ ОСВОБОЖДЁН. На хост-ПК локальные данные и есть источник правды (сервер
-        поднят из этой же программы) — стереть их и «налить с сервера» значило бы стереть
-        их и налить обратно, а при первом же сбое сети — просто стереть.
-
-        ⚠️ Порядок обязателен и обеспечен самой `reconcile`: сначала push офлайн-правок,
-        и лишь при его успехе — очистка. Провал пуша поднимает исключение, флаг НЕ
-        снимаем — повторим следующим циклом. Флаг снимается только после удачи, иначе
-        сверка шла бы каждые 30 c: это полный снимок базы, самый дорогой обмен из всех.
-        """
-        if not self._need_reconcile or not self._client:
-            return False
+        Токен — живой токен ЭТОГО цикла: вход только что прошёл, второй раз выяснять
+        незачем. Модуль опционален (в сборке без серверного пакета рядом его нет)."""
         try:
-            from data.app_settings import is_host
-            if is_host():
-                self._need_reconcile = False
-                return False
+            from desktop import desk_outbox
         except Exception as e:      # noqa: BLE001
-            #Не смогли выяснить, хост мы или клиент. Стирать кэш вслепую нельзя: на хосте
-            #это уничтожило бы единственную копию. Пропускаем сверку — она не срочная.
-            _log.warning("роль ПК (хост/клиент) не определилась (%s) — сверку с сервером "
-                         "в этот раз пропускаю", e)
-            self._need_reconcile = False
-            return False
-        from sync import sync_engine
+            _log.debug(f"[outbox] модуль недоступен: {e}")
+            return
+        url = self._url
+        token = self._client.token if self._client else ""
         try:
-            sync_engine.reconcile(self._client)
-        except Exception as e:      # noqa: BLE001
-            #Кэш при этом ЦЕЛ (reconcile стирает его только после удачного пуша).
-            _log.warning("сверка с сервером не удалась (%s) — повторю следующим циклом", e)
-            raise
-        self._need_reconcile = False
-        _log.info("сверка с сервером выполнена: локальный кэш соответствует серверу")
-        return True
+            self._outbox_last = desk_outbox.flush(
+                login=self._login, auth=lambda: (url, token, "" if token else "expired"),
+                wait=wait) or {}
+        except Exception as e:      # noqa: BLE001 — очередь цела, повторим следующим циклом
+            self._outbox_last = {"stopped": str(e)}
+            _log.warning(f"[outbox] досылка правок сорвалась: {e}")
 
     def _sleep_cycle(self):
         """Ждём до следующего цикла ИЛИ «будильник» (trigger при изменении данных/запуске
@@ -597,12 +653,29 @@ class SyncManager:
             #вечную жалобу там, где всё работает как задумано.
             _log.debug(f"[mirror] модуль недоступен: {e}")
             return
+        #🔑 СВЕРКА «СЕРВЕР = ИСТИНА» (§4.5) — теперь для ТОЙ копии, которую читает
+        #интерфейс. Раньше она шла по старой базе (`sync_engine.reconcile`), в которую
+        #интерфейс не смотрит, — то есть «осиротевшие» строки убирались не там, где их
+        #видит человек. Полная сверка — раз за сессию входа и по просьбе очереди (человек
+        #отказался от своей правки — копия обязана вернуться к серверному состоянию).
+        rebuild = self._need_reconcile or self._rebuild_requested()
         try:
-            res = local_mirror.mirror_once(client=self._client) or {}
+            if rebuild:
+                res = local_mirror.rebuild(client=self._client) or {}
+                if res.get("ok"):
+                    self._need_reconcile = False
+                else:
+                    self._request_rebuild()     #не удалась — попробуем следующим циклом
+            else:
+                res = local_mirror.mirror_once(client=self._client) or {}
         except Exception as e:
             #Исключение — тоже отказ зеркала, и молчать о нём нельзя ровно так же.
             self._mirror_error = str(e)
             _log.warning(f"[mirror] сорвалось: {e}")
+            return
+        #Отложено (правка в полёте) или вытеснено более свежим проходом — это не сбой и не
+        #успех этого цикла: состояние копии не меняем, повторим следующим (W-07).
+        if res.get("deferred") or res.get("superseded"):
             return
         #🔑 РЕЗУЛЬТАТ ЧИТАЕМ. Прежде он выбрасывался, и это был не недосмотр в одну
         #строку, а целый невидимый режим отказа: `mirror_once` про неудачу СООБЩАЕТ
@@ -613,6 +686,39 @@ class SyncManager:
         else:
             self._mirror_error = str(res.get("error") or "копия не обновилась")
             _log.warning(f"[mirror] копия не обновилась: {self._mirror_error}")
+
+    def _maybe_verify(self):
+        """Сверить копию с боем, если пора (раз в час) и есть чем (очередь пуста).
+
+        Пока правки ждут отправки, копия законно отличается от боя — сверять её в этот
+        момент значило бы поднимать тревогу на пустом месте."""
+        if self._client is None or self._mirror_error or not self._verify.due():
+            return
+        try:
+            from desktop import desk_outbox
+            if desk_outbox.has_unsent(self._login):
+                return
+        except Exception:      # noqa: BLE001 — очереди нет в этой сборке
+            return
+        res = self._verify.run(self._client)
+        if res.get("mismatch"):
+            self._wake.set()      #полная сверка уже попрошена — не ждать полминуты
+
+    @staticmethod
+    def _rebuild_requested() -> bool:
+        try:
+            from desktop import desk_outbox
+            return desk_outbox.take_rebuild_request()
+        except Exception:      # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _request_rebuild() -> None:
+        try:
+            from desktop import desk_outbox
+            desk_outbox.request_rebuild()
+        except Exception:      # noqa: BLE001
+            pass
 
     def flush_now(self):
         """Синхронный один цикл синхронизации ПРЯМО СЕЙЧАС — для выхода из аккаунта и
@@ -631,12 +737,10 @@ class SyncManager:
                 #в локальной БД (offline-first) и уедут при следующем запуске.
                 if not self._client.health():
                     return
-                from sync import sync_engine
-                #wait=8: если фоновый цикл прямо сейчас в середине push (read-таймаут 45 c),
-                #ждать его при закрытии программы нельзя — окно «зависло бы» на глазах.
-                #Пропуск безопасен: тот цикл собирает дельту по водяному знаку, а не «свои»
-                #правки, поэтому наши изменения уедут вместе с его пушем.
-                sync_engine.sync_once(self._client, wait=8)
+                #wait=8: если фоновая досылка прямо сейчас идёт, ждать её при закрытии
+                #программы долго нельзя — окно «зависло бы» на глазах. Пропуск безопасен:
+                #очередь лежит в копии и уйдёт при следующем запуске.
+                self._flush_outbox(wait=8)
                 self._flush_pending_prefs()
         except Exception as e:
             _log.warning("flush перед выходом не удался: %s", e)

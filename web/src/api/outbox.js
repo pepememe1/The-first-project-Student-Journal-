@@ -39,12 +39,23 @@
  * и оценки обязаны знать его настоящий id — иначе они вечно бились бы о 404.
  *
  * ━━ ЧТО С КОНФЛИКТАМИ ━━
- * Пока преподаватель был офлайн, ту же клетку мог поправить кто-то ещё. Разрешает это
- * сервер по LWW, и наша запись приходит позже — значит побеждает она. Это осознанно:
- * человек видел клетку своими глазами, а «свежесть» чужой правки ничего не говорит о
- * её правоте. А вот отказ по СУЩЕСТВУ (предмет больше не ваш, занятие удалено) повторять
- * бессмысленно — такие записи уходят в список `rejected` и показываются человеку. Молча
- * выбрасывать их нельзя: для преподавателя это потерянная работа, о которой он не узнает.
+ * Пока преподаватель был офлайн, ту же клетку мог поправить кто-то ещё — в том числе он
+ * сам с ПК. До 4.1 побеждала запись, пришедшая позже, то есть ранняя офлайн-правка с
+ * телефона молча затирала более позднюю (исследование синка W-13б). Теперь оценка едет с
+ * номером изменения клетки, который человек ВИДЕЛ (`base_seq` из журнала), и если клетку
+ * за это время поменяли, сервер отвечает 409: запись уходит в «не принято» с пометкой
+ * конфликта, и человек сам выбирает — оставить своё или серверное. Тот же порядок, что у
+ * очереди программы (F-09): конфликт решает человек, а не порядок доставки.
+ * Отказ по СУЩЕСТВУ (предмет больше не ваш, занятие удалено) повторять бессмысленно —
+ * такие записи тоже уходят в `rejected` и показываются человеку. Молча выбрасывать их
+ * нельзя: для преподавателя это потерянная работа, о которой он не узнает.
+ *
+ * ━━ ГДЕ ЛЕЖИТ ━━
+ * Главная копия — localStorage. В приложении очередь ещё и зеркалится в надёжное
+ * хранилище (`@capacitor/preferences`, `setDurableStore`): по документации Capacitor
+ * localStorage «временный», ОС вправе освободить его при нехватке места (W-13в), и
+ * неотправленные оценки пропали бы вместе с ним. На старте пустая локальная копия
+ * восстанавливается из зеркала (`restoreFromDurable`).
  */
 import { computed, ref, watch } from 'vue'
 
@@ -56,6 +67,19 @@ const LS_PREFIX = 'gb.outbox.'          // НЕ 'gb.cache.' — пережива
 const LS_REJECTED = 'gb.outbox.rejected.'
 const MAX_TRIES = 5
 const TMP = 'tmp:'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Временные сбои, после которых повтор ОСМЫСЛЕН (аудит 22.09.2026, находка F-06).
+ * Раньше любой 4xx считался отказом по существу, и 408 (таймаут) и 429 (ограничитель)
+ * выбрасывали запись из очереди в «отклонённые» — оценка, которую сервер просто не
+ * успел принять, считалась отвергнутой навсегда.
+ */
+const TRANSIENT_4XX = new Set([408, 425, 429])
+//Повтор по таймеру: 5 c, 10 c, 20 c … до 5 мин, плюс случайная добавка до 30 % —
+//чтобы сотня телефонов, потерявших связь разом, не пришла на сервер одной волной.
+const RETRY_BASE_MS = 5000
+const RETRY_MAX_MS = 5 * 60 * 1000
 
 /** Очередь текущего автора (реактивная копия того, что лежит в localStorage). */
 export const pending = ref([])
@@ -98,6 +122,21 @@ export function isTempId(id) {
 function newTempId() {
   const rnd = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`)
   return `${TMP}${rnd}`
+}
+
+/** Новый UUID для занятия ('' — генератора нет, id выдаст сервер). */
+export function newLessonId() {
+  const id = globalThis.crypto?.randomUUID?.() || ''
+  return UUID_RE.test(id) ? id.toLowerCase() : ''
+}
+
+/**
+ * UUID внутри временного id — его и получает сервер как id занятия (F-05).
+ * Временный id без UUID (старая очередь, нет генератора) — '' : id выдаст сервер.
+ */
+export function uuidFromTempId(tempId) {
+  const raw = isTempId(tempId) ? tempId.slice(TMP.length) : ''
+  return UUID_RE.test(raw) ? raw.toLowerCase() : ''
 }
 
 function currentLogin() {
@@ -159,9 +198,49 @@ function load(key, target) {
  */
 let flushOwner = ''
 
+// Надёжное зеркало очереди (W-13в). Пусто — зеркала нет (сайт, старый APK без плагина).
+let durable = null
+export function setDurableStore(store) { durable = store || null }
+
+function mirrorDurable(key, json) {
+  if (!durable) return
+  try {
+    Promise.resolve(durable.set(key, json)).catch(() => {})
+  } catch { /* плагина нет в этой сборке — зеркало просто не работает */ }
+}
+
+/**
+ * Вернуть очередь из надёжного зеркала, если локальная копия пуста (ОС освободила
+ * localStorage). Локальная копия — главная: она пишется первой и синхронно, поэтому при
+ * живой локальной копии зеркалу не верим. Возвращает, было ли что восстановить.
+ */
+export async function restoreFromDurable() {
+  const login = currentLogin()
+  if (!durable || !login) return false
+  let restored = false
+  for (const prefix of [LS_PREFIX, LS_REJECTED]) {
+    let local = null
+    try { local = localStorage.getItem(prefix + login) } catch { local = null }
+    if (local && local !== '[]') continue
+    let saved = null
+    try { saved = await durable.get(prefix + login) } catch { saved = null }
+    if (!saved || saved === '[]') continue
+    try {
+      JSON.parse(saved)
+      localStorage.setItem(prefix + login, saved)
+      restored = true
+    } catch { /* битое зеркало или полный диск — оставляем как есть */ }
+  }
+  if (restored) reloadOutbox()
+  return restored
+}
+
 function save(key, source) {
   const login = flushOwner || currentLogin()
   if (!login) return false
+  //Зеркало — до основной записи и независимо от неё: если локальное хранилище
+  //отказало, работа преподавателя переживёт перезапуск хотя бы в зеркале.
+  mirrorDurable(key + login, JSON.stringify(source.value))
   try {
     localStorage.setItem(key + login, JSON.stringify(source.value))
     //Запись прошла — прежняя беда позади, и плашку пора убрать. Гасим только на
@@ -232,18 +311,71 @@ function enqueue(kind, key, payload) {
  * оценки тёзок схлопывались бы в очереди в одну запись, и вторая пропадала бы молча.
  * Пусто у старых записей и клиентов — тогда сервер решает по ФИО, как раньше.
  */
-export function enqueueGrade({ surname, name, lesson_id, grade, student_id = '' }) {
-  return enqueue('grade', `grade|${lesson_id}|${student_id || `${surname}|${name}`}`,
-    { surname, name, lesson_id, grade: grade ?? '', student_id })
+export function enqueueGrade({ surname, name, lesson_id, grade, student_id = '', base_seq }) {
+  const key = gradeKey(lesson_id, { student_id, surname, name })
+  //База — номер клетки, который человек видел ДО своей первой правки. Повторные правки
+  //той же клетки без сети основаны на его же первой, поэтому база не переписывается:
+  //иначе вторая правка сравнивалась бы с тем, чего сервер ещё не видел.
+  const prev = pending.value.find((e) => e.key === key)
+  const payload = { surname, name, lesson_id, grade: grade ?? '', student_id }
+  const base = prev ? prev.payload.base_seq : base_seq
+  if (Number.isInteger(base) && base >= 0) payload.base_seq = base
+  return enqueue('grade', key, payload)
+}
+
+/**
+ * Решение человека по КОНФЛИКТУ: «оставить моё» — дослать ту же правку БЕЗ сверки базы
+ * (осознанно затереть серверное); «оставить серверное» — просто убрать запись.
+ *
+ * ⚠️ Только для конфликта. Отказ по существу (предмет не ваш, занятие удалено) повтором
+ * не лечится, и «оставить моё» для него было бы той самой кнопкой, которая заведомо не
+ * поможет (сторож `rejectedWritesVisible.test.mjs`). Для такой записи — ничего не делаем.
+ * Возвращает, была ли правка поставлена заново.
+ */
+export function resolveConflict(key, keepMine) {
+  const e = rejected.value.find((x) => x.key === key)
+  if (!e || !e.conflict) return false
+  dismissRejected(key)
+  if (!keepMine) return false
+  const payload = { ...e.payload }
+  delete payload.base_seq
+  enqueue(e.kind, e.key, payload)
+  flushOutbox().catch(() => {})
+  return true
+}
+
+/**
+ * Ключ оценки в очереди — ОДНА функция на все места (исследование синка 25.09.2026,
+ * W-13а). Их было три, и форматов тоже три: постановка ключевала по `student_id`,
+ * поиск ждущей оценки — по ФИО, перепривязка к настоящему id занятия — снова по ФИО.
+ * Поиск не находил ни одной современной записи: пунктир «не отправлено» не рисовался,
+ * а средний балл без сети не учитывал выставленное — ровно то, ради чего он заведён.
+ */
+function gradeKey(lessonId, { student_id = '', surname = '', name = '' }) {
+  return `grade|${lessonId}|${student_id || `${surname}|${name}`}`
+}
+
+/** Та же ли это клетка: по id, если он есть у обеих сторон, иначе по ФИО (J08). */
+function sameStudent(p, studentId, surname, name) {
+  if (p.student_id && studentId) return p.student_id === studentId
+  return p.surname === surname && p.name === name
 }
 
 /**
  * Новое занятие (в том числе ДЗ). Возвращает ВРЕМЕННЫЙ id — на него уже можно
  * ставить оценки, очередь сама перепривяжет их к настоящему после отправки.
  */
-export function enqueueLessonCreate(payload) {
-  const tempId = newTempId()
-  enqueue('lesson.create', `lesson.create|${tempId}`, { ...payload, __tempId: tempId })
+/**
+ * Создание занятия. `lessonId` — UUID, который интерфейс уже пытался отправить онлайн
+ * (см. TeacherJournal.saveLesson): если тот запрос дошёл до сервера, а ответ потерялся,
+ * повтор с ТЕМ ЖЕ id сервер узнаёт и второго занятия не заводит (аудит F-05). Раньше
+ * здесь всегда рождался новый временный id — и потерянный ответ давал дубль.
+ */
+export function enqueueLessonCreate(payload, lessonId = '') {
+  const tempId = UUID_RE.test(lessonId || '') ? `${TMP}${lessonId.toLowerCase()}` : newTempId()
+  const body = { ...payload }
+  delete body.id
+  enqueue('lesson.create', `lesson.create|${tempId}`, { ...body, __tempId: tempId })
   return tempId
 }
 
@@ -313,9 +445,11 @@ export function enqueueTermGrade(payload) {
 // ───────────────────────── чтение очереди интерфейсом ─────────────────────────
 
 /** Значение, ожидающее отправки для этой клетки, или undefined. */
-export function pendingGrade(lesson_id, surname, name) {
-  return pending.value.find((e) => e.key === `grade|${lesson_id}|${surname}|${name}`)
-    ?.payload.grade
+export function pendingGrade(lesson_id, surname, name, student_id = '') {
+  //По содержимому, а не по ключу: в очереди телефона могут лежать записи прежних
+  //сборок, ключ которых собран по ФИО, — их тоже надо увидеть.
+  return pending.value.find((e) => e.kind === 'grade' && e.payload.lesson_id === lesson_id
+    && sameStudent(e.payload, student_id, surname, name))?.payload.grade
 }
 
 /**
@@ -356,8 +490,10 @@ export function clearOutbox() {
   save(LS_REJECTED, rejected)
 }
 
-function reject(entry, reason) {
-  rejected.value = [...rejected.value, { ...entry, reason, rejectedAt: Date.now() }]
+function reject(entry, reason, conflict = null) {
+  const item = { ...entry, reason, rejectedAt: Date.now() }
+  if (conflict) item.conflict = conflict
+  rejected.value = [...rejected.value, item]
   save(LS_REJECTED, rejected)
 }
 
@@ -380,11 +516,8 @@ async function send(entry) {
   switch (entry.kind) {
     case 'grade':
       return api.post('/web/teacher/grade', p)
-    case 'lesson.create': {
-      const body = { ...p }
-      delete body.__tempId
-      return api.post('/web/teacher/lesson', body)
-    }
+    case 'lesson.create':
+      return api.post('/web/teacher/lesson', lessonCreateBody(p))
     case 'lesson.update': {
       const body = { ...p }
       delete body.id
@@ -408,7 +541,7 @@ function remapTempId(tempId, realId) {
   for (const e of pending.value) {
     if (e.kind === 'grade' && e.payload.lesson_id === tempId) {
       e.payload.lesson_id = realId
-      e.key = `grade|${realId}|${e.payload.surname}|${e.payload.name}`
+      e.key = gradeKey(realId, e.payload)
     } else if ((e.kind === 'lesson.update' || e.kind === 'lesson.delete')
                && e.payload.id === tempId) {
       e.payload.id = realId
@@ -493,6 +626,7 @@ export async function flushOutbox() {
           // Ответа нет — связь опять пропала. Прекращаем: остальное ждёт следующего
           // раза. Ошибкой записи это не считается, она не отвергнута.
           stats.failed += 1
+          stats.transient = true
           break
         }
         if (status === 401 || (status === 403 && !entry.tries)) {
@@ -504,11 +638,17 @@ export async function flushOutbox() {
           persist()
           break
         }
-        if (status >= 400 && status < 500) {
+        if (status >= 400 && status < 500 && !TRANSIENT_4XX.has(status)) {
           // Отказ по существу: занятие удалено, предмет больше не ваш, студента нет в
           // группе. Повторять нечего — сколько ни шли, ответ будет тот же.
+          // 409 с кодом `conflict` — отдельный случай: клетку поменяли, пока правка ждала.
+          // Причину показываем словами, а серверное значение — рядом, чтобы выбрать.
           pending.value = pending.value.filter((e) => e !== entry)
-          reject(entry, err?.response?.data?.detail || `HTTP ${status}`)
+          const detail = err?.response?.data?.detail
+          const conflict = status === 409 && detail && typeof detail === 'object'
+            && detail.code === 'conflict' ? { server: detail.server || {} } : null
+          reject(entry, conflict ? (detail.message || 'конфликт') : (detail || `HTTP ${status}`),
+            conflict)
           stats.rejected += 1
           if (entry.kind === 'lesson.create') {
             stats.rejected += dropDependents(entry.payload.__tempId,
@@ -517,8 +657,8 @@ export async function flushOutbox() {
           persist()
           continue
         }
-        // 5xx — сервер жив, но ему сейчас плохо. Пробуем ещё, но не бесконечно: запись,
-        // которую сервер стабильно не принимает, обязана стать видимой.
+        // 5xx, 408, 425, 429 — сервер жив, но сейчас не может. Пробуем ещё, но не
+        // бесконечно: запись, которую сервер стабильно не принимает, обязана стать видимой.
         entry.tries += 1
         entry.lastError = `HTTP ${status}`
         if (entry.tries >= MAX_TRIES) {
@@ -527,6 +667,7 @@ export async function flushOutbox() {
           stats.rejected += 1
         } else {
           stats.failed += 1
+          stats.transient = true
         }
         persist()
         break
@@ -540,7 +681,56 @@ export async function flushOutbox() {
     //ПРЕДЫДУЩЕГО: перечитываем под нового, иначе его экран покажет чужие записи.
     if (currentLogin() !== owner) reloadOutbox()
   }
+  if (stats.transient && pending.value.length) scheduleRetry()
+  else if (!stats.failed) retryAttempt = 0
+  delete stats.transient
   return stats
+}
+
+// ───────────────────────── повтор по таймеру (F-06) ─────────────────────────
+//🔥 Раньше повтор ждал ТОЛЬКО перехода «офлайн → онлайн». Сервер ответил 503 при живой
+//сети — перехода не будет, и очередь лежала до перезапуска приложения или следующей
+//потери связи. Человек видел «ждёт отправки» часами при работающем интернете.
+let retryTimer = null
+let retryAttempt = 0
+
+function scheduleRetry() {
+  if (retryTimer) return
+  //Без сети таймер не нужен: сработает переход «онлайн» (startOutboxWatch).
+  if (online && online.value === false) return
+  const base = Math.min(RETRY_BASE_MS * 2 ** Math.min(retryAttempt, 10), RETRY_MAX_MS)
+  const delay = Math.round(base + Math.random() * base * 0.3)
+  retryAttempt += 1
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    flushOutbox().catch(() => {})
+  }, delay)
+}
+
+/**
+ * Тело запроса создания занятия из записи очереди. Отдельной функцией — чтобы проверять
+ * её напрямую: подменная отправка в тестах обходит `send`, и проверка id внутри него не
+ * покраснела бы никогда.
+ *
+ * Тот же id при каждом повторе: ответ потерялся — сервер вернёт уже созданное занятие,
+ * а не заведёт второе (аудит 22.09.2026, F-05).
+ */
+export function lessonCreateBody(payload) {
+  const body = { ...payload }
+  delete body.__tempId
+  const uid = uuidFromTempId(payload.__tempId)
+  if (uid) body.id = uid
+  return body
+}
+
+/** Только для тестов: состояние повтора; `reset` — остановить таймер. */
+export function _retryState(reset = false) {
+  if (reset) {
+    if (retryTimer) clearTimeout(retryTimer)
+    retryTimer = null
+    retryAttempt = 0
+  }
+  return { scheduled: Boolean(retryTimer), attempt: retryAttempt }
 }
 
 /** Снять с очереди всё, что ссылалось на несостоявшееся занятие. */

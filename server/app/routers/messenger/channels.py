@@ -234,7 +234,7 @@ def report_recipients(group: str = Query(...), user: User = Depends(get_current_
         raise HTTPException(status_code=403, detail="Эта группа вами не курируется")
     parent_ids = _active_parent_ids_for_group(db, group)
     onl = _online_logins()
-    parents = [_safe_user(p, onl) for p in db.query(User)
+    parents = [_safe_user(p, onl, viewer=user) for p in db.query(User)
                .filter(User.id.in_(parent_ids)).order_by(User.surname, User.name).all()] \
         if parent_ids else []
     #Беседы, которые уместно предложить: системные каналы этой группы + групповые чаты,

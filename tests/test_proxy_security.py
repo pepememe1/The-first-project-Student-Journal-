@@ -122,7 +122,11 @@ def test_saved_session_passes_on_cold_start(monkeypatch):
 #убивает offline-first молча: в сети всё работает, а без сети журнал становится пустым —
 #и заметят это в аудитории, а не на разработке.
 _MUST_STAY_LOCAL = (
-    "/web/student", "/web/teacher", "/web/parent", "/web/curator", "/web/admin/students",
+    #⚠️ `/web/parent` здесь стоял — и это было неправдой (25.09.2026, аудит F-02): бой
+    #отдаёт роли parent ПУСТУЮ выгрузку (`routers/sync.py::_scope_pull_for_role`,
+    #«родителю офлайн-синк не нужен по построению»), а `ParentLink` не в SYNC_MODELS.
+    #Офлайн-данных у кабинета родителя нет, локально он был пуст всегда — пересылается.
+    "/web/student", "/web/teacher", "/web/curator", "/web/admin/students",
     "/web/admin/groups", "/web/admin/teachers", "/web/schedule", "/web/terms",
     #⚠️ «Вектор» обязан отвечать ОФЛАЙН — это его главное обещание. Внутри программы он
     #работает через ЛОКАЛЬНЫЙ сервер (тот же server/app, та же функция
@@ -139,7 +143,10 @@ _MUST_STAY_LOCAL = (
     #Офлайн-способных данных под `/me` не осталось, поэтому запись убрана целиком, а не
     #обвешана исключениями: список исключений к сторожу быстро становится сторожем в
     #никуда. Противоречие поймал `test_proxied_and_local_paths_never_overlap` ниже.
-    "/sync", "/auth",
+    #⚠️ `/auth` целиком здесь тоже стоял — слишком широко (25.09.2026). Локальны ВХОД,
+    #продление, выход и второй шаг входа (их обслуживает мост программы); статус второго
+    #фактора, ключи passkey и приглашения живут только на бою и пересылаются.
+    "/sync", "/auth/login", "/auth/refresh", "/auth/logout", "/auth/mfa/verify",
 )
 
 
@@ -160,7 +167,6 @@ def test_proxy_never_covers_offline_capable_data():
 #значение — почему она онлайновая (причина проверяется человеком на ревью, не машиной).
 _ONLINE_ONLY_SUBSYSTEMS = {
     "/web/messenger": "переписка сознательно вне SYNC_MODELS (§5.4) — локально её нет",
-    "/messenger": "тот же мессенджер, короткий префикс WS/служебных путей",
     "/web/admin/server": "раздел «Сервер» рассказывает про БОЕВУЮ машину; без пересылки "
                          "показывал бы диск и базу компьютера администратора вместо VPS",
     "/me/prefs": "User.prefs не синкается, а PUSH_SCOPE у teacher/student не включает "
@@ -205,6 +211,26 @@ _ONLINE_ONLY_SUBSYSTEMS = {
     "/web/accounts": "UserIssuedCredential и UserContact не в SYNC_MODELS — выданный "
                      "в программе стартовый пароль не существовал бы нигде, кроме "
                      "этого компьютера",
+    #25.09.2026, аудит F-02 и сторож `tests/test_route_policy.py`: разделы, читающие
+    #таблицы без зеркала, открывались в программе пустыми, а запись в них оседала в копии.
+    "/web/courses": "Course/CourseSection/CourseMaterial/CourseAssignment не в SYNC_MODELS",
+    "/web/achievements": "UserAchievement не в SYNC_MODELS — открытая в программе ачивка "
+                         "не существовала бы на сайте",
+    "/web/easter-eggs": "EasterEggLog не в SYNC_MODELS, а `claim` сверяет след на бою",
+    "/web/events": "NotifyEvent не в SYNC_MODELS — рассылка «Мероприятия» из программы "
+                   "не доходила ни до кого",
+    "/web/student/parent-links": "ParentLink не в SYNC_MODELS — согласие студента на "
+                                 "доступ родителя оставалось бы на этой машине",
+    "/web/parent": "родителю бой отдаёт ПУСТУЮ выгрузку по построению "
+                   "(`_scope_pull_for_role`), ParentLink не синкается — кабинет родителя "
+                   "существует только онлайн",
+    "/admin/online": "живая активность — состояние процесса БОЕВОГО сервера",
+    "/admin/events": "живая консоль — кольцевой буфер процесса БОЕВОГО сервера",
+    "/admin/sessions": "AuthSession не синкается: локально показались бы сессии "
+                       "локального сервера вместо боевых",
+    "/auth/mfa/status": "UserMFA вне SYNC_MODELS — второй фактор существует только на бою",
+    "/auth/webauthn/credentials": "WebAuthnCredential вне SYNC_MODELS",
+    "/auth/invite": "StudentInvite вне SYNC_MODELS — приглашение проверяется на бою",
 }
 
 
@@ -239,5 +265,11 @@ def test_proxied_and_local_paths_never_overlap():
         for local_path in _MUST_STAY_LOCAL:
             assert not local_path.startswith(prefix), \
                 f"{local_path} обязан читаться локально, но попал под пересылку {prefix}"
-            assert not prefix.startswith(local_path), \
-                f"пересылаемый {prefix} лежит внутри офлайн-пути {local_path}"
+            #Подраздел ВНУТРИ офлайн-пути может быть онлайновым по существу (25.09.2026):
+            #`/web/student` читается офлайн, а его `/parent-links` — нет, `ParentLink` не
+            #синкается. Это не лазейка: такой подраздел обязан стоять в реестре
+            #онлайн-подсистем ПОИМЁННО и с причиной — корнем его не прикрыть.
+            if prefix.startswith(local_path):
+                assert prefix != local_path and prefix in _ONLINE_ONLY_SUBSYSTEMS, \
+                    (f"пересылаемый {prefix} лежит внутри офлайн-пути {local_path} без "
+                     f"собственной записи и причины в _ONLINE_ONLY_SUBSYSTEMS")

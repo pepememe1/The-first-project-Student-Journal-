@@ -148,3 +148,16 @@ def test_broken_archive_degrades_to_full_download(client, tmp_path, monkeypatch)
     assert body["version"] == version
     assert "manifest" not in body
     assert body["url"].endswith(f"/app/bundles/{version}.zip")
+
+
+def test_signature_from_the_manifest_reaches_the_phone(client, tmp_path, monkeypatch):
+    """F-24: подпись пары «версия + сумма» (`tools/sign_ota.py`) обязана доехать в ответ —
+    APK с 4.1 без неё бандл не поставит, а старые APK поле просто не читают. Без проброса
+    выкладка «проходила» бы, а новые телефоны молча перестали бы обновляться."""
+    monkeypatch.setattr(appupdate, "OTA_DIR", tmp_path)
+    version = _make_bundle(tmp_path)
+    data = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    data["sig"] = "U0lH"
+    (tmp_path / "latest.json").write_text(json.dumps(data), encoding="utf-8")
+    body = client.get("/app/updates").json()
+    assert body["version"] == version and body["sig"] == "U0lH"

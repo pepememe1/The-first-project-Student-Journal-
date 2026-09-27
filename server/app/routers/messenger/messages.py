@@ -9,7 +9,18 @@ messages.py — Сами сообщения: чтение ленты, ветка
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
 
 
-def _hook_moderation(db: Session, conv_or_id, user: User, body: str) -> None:
+def _route_moderation(db: Session, conv_or_id, user: User, body: str) -> str:
+    """Маршрут обращения ДО коммита сообщения (F-14): тикет и сообщение — одним коммитом.
+    Ошибка НЕ глотается: пусть упадёт вся отправка, человек повторит. Возвращает текст
+    системного ответа для `_hook_moderation` после коммита."""
+    conv = conv_or_id if not isinstance(conv_or_id, str) else _conversation(db, conv_or_id)
+    if conv is None or getattr(conv, "kind", "") != "moderation":
+        return ""
+    from .moderation import route_moderation_message
+    return route_moderation_message(db, conv, user, body)
+
+
+def _hook_moderation(db: Session, conv_or_id, reply: str) -> None:
     """Очередь обращений: автоответчик с темами и заведение тикета.
 
     🔑 ОДНА ДВЕРЬ НА ВСЕ ТОЧКИ, КОТОРЫЕ КЛАДУТ СООБЩЕНИЕ ЧЕЛОВЕКА В ЧАТ МОДЕРАЦИИ.
@@ -32,12 +43,16 @@ def _hook_moderation(db: Session, conv_or_id, user: User, body: str) -> None:
     путь продукта, и лишний SELECT на каждое сообщение ради проверки `kind` здесь не
     нужен: вызывающий беседу уже держит.
     """
-    conv = conv_or_id if not isinstance(conv_or_id, str) else _conversation(db, conv_or_id)
-    if conv is None or getattr(conv, "kind", "") != "moderation":
+    #🔥 С 26.09.2026 (F-14) здесь ТОЛЬКО системный ответ после коммита — автоответ с
+    #темами или «зову человека». Сам тикет и срочность заводит `_route_moderation` ДО
+    #коммита, в одной транзакции с сообщением: раньше они жили здесь и молча пропадали
+    #при сбое, а сообщение при этом считалось отправленным.
+    if not reply:
         return
+    conv_id = conv_or_id if isinstance(conv_or_id, str) else conv_or_id.id
     try:
-        from .moderation import on_moderation_message
-        on_moderation_message(db, conv, user, body)
+        from .moderation import _post_system
+        _post_system(db, conv_id, reply)
     except Exception:
         try:
             db.rollback()
@@ -242,7 +257,7 @@ def message_read_by(mid: int, user: User = Depends(get_current_user), db: Sessio
     read_at_by_id = {r.user_id: (r.last_read_at or "") for r in rows}
     onl = _online_logins()
     users = db.query(User).filter(User.id.in_(ids)).all()
-    return {"users": [dict(_safe_user(u, onl), last_read_at=read_at_by_id.get(u.id, ""))
+    return {"users": [dict(_safe_user(u, onl, viewer=user), last_read_at=read_at_by_id.get(u.id, ""))
                       for u in users]}
 
 
@@ -409,6 +424,8 @@ def send_message(conv_id: str, payload: dict = Body(...),
                 kind=kind, attachment_id=att_id,
                 body_format="plain" if is_gif else "markdown", client_nonce=nonce)
     db.add(m)
+    #Маршрут обращения — в ЭТОЙ ЖЕ транзакции (F-14), см. `_route_moderation`.
+    mod_reply = _route_moderation(db, conv, user, body)
     db.commit()
     db.refresh(m)
     #Отправитель прочитал свою же беседу вплоть до этого сообщения.
@@ -428,8 +445,8 @@ def send_message(conv_id: str, payload: dict = Body(...),
         gif_service.mark_shared((payload.get("gif_slug") or "").strip())
     else:
         _handle_vector_command(db, conv_id, body, user, reply_to=reply_to)
-    #Очередь обращений: автоответчик с темами и заведение тикета.
-    _hook_moderation(db, conv, user, body)
+    #Очередь обращений: тикет уже заведён вместе с сообщением, здесь — ответ с темами.
+    _hook_moderation(db, conv, mod_reply)
     #Вложение отдаём сразу: клиент рисует сообщение до ответа сервера, и без
     #метаданных карточка файла мигнула бы пустой.
     return _msg_out(m, user.id, user.full_name or user.name or user.login or "",
@@ -708,6 +725,8 @@ def forward_messages(payload: dict = Body(...),
         if made_here and conv_id not in delivered:
             delivered.append(conv_id)
         made += made_here
+    #Пересылка в ⚙ — тоже обращение, и маршрут у неё тот же: в одной транзакции (F-14).
+    mod_replies = {cid: _route_moderation(db, cid, user, "") for cid in delivered}
     db.commit()
     for conv_id in delivered:
         _broadcast(db, conv_id)
@@ -717,7 +736,7 @@ def forward_messages(payload: dict = Body(...),
         #тикета не заводилось: сообщение в чате есть, в очереди обращения нет, метка
         #«человек написал» не двигается — ровно тот тихий отказ, против которого очередь
         #и заведена.
-        _hook_moderation(db, conv_id, user, "")
+        _hook_moderation(db, conv_id, mod_replies.get(conv_id, ""))
     return {"forwarded": made}
 
 
@@ -731,6 +750,13 @@ def report_message(payload: dict = Body(...),
     _require_participant(db, m.conversation_id, user)   #жаловаться может только участник
     if m.sender_id == user.id:
         raise HTTPException(status_code=400, detail="Нельзя пожаловаться на своё сообщение")
+    #Повтор открытой жалобы на то же сообщение — прежний тикет, не новый (F-13).
+    same = (db.query(MessageReport)
+            .filter(MessageReport.reporter_id == user.id, MessageReport.message_id == mid,
+                    MessageReport.status.in_(("open", "in_review"))).first())
+    if same is not None:
+        return {"ok": True, "report_id": same.id, "duplicate": True}
+    _require_report_quota(db, user.id)
     reason = payload.get("reason_code")
     reason = reason if reason in _REASONS else "other"
     desc = (payload.get("description") or "").strip()[:2000]

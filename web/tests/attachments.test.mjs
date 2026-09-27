@@ -20,6 +20,9 @@ const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/<!--[\s\S]*?-->/g, '')
 
 const store = code(read('src/stores/messenger.js'))
+// Способ загрузки (PUT в хранилище или форма к нам) — одна дверь для беседы и курса.
+const upload = code(read('src/utils/signedUpload.js'))
+const course = code(read('src/pages/CourseDetailPage.vue'))
 const thread = code(read('src/components/messenger/ChatThread.vue'))
 const panel = code(read('src/components/messenger/ConversationInfo.vue'))
 const preview = code(read('src/components/messenger/FilePreview.vue'))
@@ -30,7 +33,8 @@ test('файл не проходит через наш сервер: подпи�
   // него файлы — лягут оценки и расписание (замеры в MESSENGER-ATTACHMENTS-PLAN.md).
   const send = store.split('async function sendFile(')[1].split('\n  }')[0]
   assert.match(send, /signUpload\(/, 'нет шага подписи — файл поедет через наш сервер')
-  assert.match(send, /fetch\(sign\.url/, 'файл не кладётся напрямую в хранилище')
+  assert.match(send, /putSigned\(sign, file\)/, 'файл не кладётся напрямую в хранилище')
+  assert.match(upload, /fetchImpl\(sign\.url/, 'общая загрузка шлёт файл не по подписанной ссылке')
   assert.match(send, /confirmUpload\(/, 'нет подтверждения загрузки')
   // ⚠️ Подтверждение обязано идти ДО отправки сообщения: иначе в ленте появится
   // карточка файла, которого в хранилище может не быть.
@@ -41,9 +45,20 @@ test('файл не проходит через наш сервер: подпи�
 test('к хранилищу не прикладывается наш заголовок авторизации', () => {
   // Подпись уже в ссылке; лишний заголовок ломает её проверку, и загрузка падает с
   // невнятной ошибкой на стороне провайдера.
-  const send = store.split('async function sendFile(')[1].split('\n  }')[0]
-  const put = send.split('fetch(sign.url')[1].split('})')[0]
+  const put = upload.split('fetchImpl(sign.url')[1].split('})')[0]
   assert.ok(!/Authorization/i.test(put), 'к запросу в хранилище добавлен наш токен')
+})
+
+test('файл курса идёт той же дверью, и материал заводится только после подтверждения', () => {
+  // F-26: вторая копия способа загрузки у курсов разошлась бы с мессенджером на первой
+  // же правке хранилища. И материал до подтверждения — это ссылка на файл, которого в
+  // хранилище может не быть.
+  const up = course.split('async function onFilePicked(')[1].split('\n}')[0]
+  assert.match(up, /coursesApi\.signFile\(/, 'нет шага подписи у курса')
+  assert.match(up, /putSigned\(sign, file\)/, 'курс грузит файл своей копией, а не общей дверью')
+  assert.ok(up.indexOf('confirmUpload(') >= 0 && up.indexOf('confirmUpload(') < up.indexOf('addMaterial('),
+    'материал заводится раньше подтверждения загрузки')
+  assert.ok(!/fetch\(/.test(course), 'страница курса шлёт файл сама, мимо общей двери')
 })
 
 test('кнопка прикрепления стоит СЛЕВА от поля ввода', () => {

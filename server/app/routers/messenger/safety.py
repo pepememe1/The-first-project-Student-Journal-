@@ -32,7 +32,7 @@ def my_blocks(user: User = Depends(get_current_user), db: Session = Depends(get_
     onl = _online_logins()
     people = []
     for u in (db.query(User).filter(User.id.in_(ids)).all() if ids else []):
-        people.append(_safe_user(u, onl))
+        people.append(_safe_user(u, onl, viewer=user))
     return {"blocked_ids": ids, "people": people}
 
 
@@ -98,6 +98,15 @@ def report_user(payload: dict = Body(...),
     reason = reason if reason in _REASONS else "other"
     field = payload.get("field")
     field = field if field in _REPORT_FIELDS else "profile"
+    #Та же жалоба ещё открыта — это повтор, а не новая: отдаём прежний тикет (F-13).
+    #Второе нажатие — обычный жест «а дошло ли?», и отвечать на него нужно «да, вот она».
+    same = (db.query(UserReport)
+            .filter(UserReport.reporter_id == user.id, UserReport.reported_user_id == uid,
+                    UserReport.field == field,
+                    UserReport.status.in_(("open", "in_review"))).first())
+    if same is not None:
+        return {"ok": True, "report_id": same.id, "duplicate": True}
+    _require_report_quota(db, user.id)
     desc = (payload.get("description") or "").strip()[:2000]
     prefs = target.prefs if isinstance(target.prefs, dict) else {}
     #Снимок — ровно то поле, на которое жалуются. Для аватарки и баннера это ссылка или

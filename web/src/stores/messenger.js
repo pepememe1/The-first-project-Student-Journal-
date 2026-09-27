@@ -7,6 +7,7 @@
  * стора менять не придётся. `mine` (своё ли сообщение) считает сервер — клиент своего id
  * не знает (в JWT/сторе только логин+роль).
  */
+import { putSigned } from '@/utils/signedUpload'
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { messengerApi } from '@/api/endpoints'
@@ -504,24 +505,8 @@ export const useMessengerStore = defineStore('messenger', () => {
         name: file.name, size: file.size, mime: file.type || 'application/octet-stream',
       })
       onProgress?.(5)
-
-      // ⚠️ ДВА СПОСОБА, ОДИН КОД. Куда класть файл, решает сервер: в объектное
-      // хранилище — сырым PUT (иначе подпись не сойдётся), к нам на диск — обычной
-      // формой (чтобы обработчик остался синхронным и не встал поперёк цикла событий).
-      // Клиент про это знать не должен: он делает то, что сказано в ответе на подпись.
-      // Благодаря этому переезд на большую машину не требует правок в браузере.
-      let body = file
-      if (sign.form_field) {
-        body = new FormData()
-        body.append(sign.form_field, file, file.name)
-      }
-      const put = await fetch(sign.url, {
-        method: sign.method || 'PUT',
-        //У формы заголовок ставит браузер сам (там граница multipart) — свой сломал бы.
-        headers: sign.form_field ? undefined : (sign.headers || {}),
-        body,
-      })
-      if (!put.ok) throw new Error(`хранилище отказало: ${put.status}`)
+      //Способ (PUT в хранилище или форма к нам) выбирает сервер — см. utils/signedUpload.js.
+      await putSigned(sign, file)
       onProgress?.(85)
 
       await messengerApi.confirmUpload(sign.attachment_id)

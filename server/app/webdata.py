@@ -98,11 +98,16 @@ def student_records(db, surname: str, name: str, group: str | None = None,
     #⚠️ Пустой `student_id` в строке — это СТАРАЯ запись (миграция не завершена), и
     #выбрасывать её нельзя: человек потерял бы свою историю. Такие строки остаются
     #общими для тёзок, как и были, — улучшение без потери.
-    rows = db.query(Grade.lesson_id, Grade.grade, Grade.student_id).filter(
+    #⚠️ «Чья строка» — `models.row_student_id`, а не голая колонка (W-04): у строки от
+    #старого клиента колонка пуста, но id уже стоит в ключе, и она ничья лишь с виду.
+    #Та же функция решает и в `/sync/pull` — сайт и копия программы видят одно и то же.
+    from .models import row_student_id
+    rows = db.query(Grade.lesson_id, Grade.grade, Grade.student_id, Grade.id).filter(
         Grade.student_f == surname, Grade.student_n == name,
         Grade.deleted == False).all()  # noqa: E712
+    rows = [(lid, g, row_student_id(sid, key)) for lid, g, sid, key in rows]
     if student_id:
-        rows = [r for r in rows if not (r[2] or "") or (r[2] or "") == student_id]
+        rows = [r for r in rows if not r[2] or r[2] == student_id]
     if group is None and allowed_lesson_ids is None:
         return {lid: g for lid, g, _sid in rows}
     allowed = allowed_lesson_ids if allowed_lesson_ids is not None else group_lesson_ids(db, group)

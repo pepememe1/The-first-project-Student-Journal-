@@ -12,13 +12,24 @@ courses.py — учебные курсы (аналог «Курсы» порта
   • админ — все, полный доступ;
   • родитель — курсы группы(групп) своих АКТИВНЫХ детей, ЧТЕНИЕ.
 
-MVP: материалы — ссылки (`kind='link'`) и текст. Загрузка файлов-материалов — следующий
-шаг через уже готовую инфраструктуру вложений `app/storage.py` (та же, что у мессенджера:
-режим выбирает машина по свободному месту/ключам S3, файл идёт мимо нашего сервера).
+Материалы — ссылки (`kind='link'`), текст и ФАЙЛЫ (`kind='file'`, аудит 22.09.2026, F-26).
+Файл идёт через ту же инфраструктуру вложений, что у мессенджера (`app/storage.py`):
+режим выбирает машина по свободному месту/ключам S3, файл мимо нашего сервера, тип — по
+белому списку, размер и суточный потолок — та же дверь (`start_signed_upload`). Владелец
+вложения — `course:<id>`, поэтому ссылку на скачивание выдаёт ТОЛЬКО курс и только тем,
+кто курс видит (`_can_view`); через мессенджер её не получить — такой беседы нет.
+⚠️ Антивирусной проверки нет: защита — белый список типов (исполняемых в нём нет) и то,
+что файл открывает браузер человека, а не наш сервер. На приёмке это называть прямо.
 """
 from ._common import *  # noqa: F401,F403  (router, get_current_user, get_db, User, W, _now_iso, ...)
 from ...models import (Course, CourseAuthor, CourseSection, CourseMaterial,
-                       CourseAssignment, ParentLink)
+                       CourseAssignment, ParentLink, Attachment)
+from ..messenger.attachments import signed_download, start_signed_upload
+
+
+def _course_scope(cid: int) -> str:
+    """Владелец файлов курса в таблице вложений (см. шапку)."""
+    return f"course:{int(cid)}"
 
 
 # ── Вспомогательное ───────────────────────────────────────────────────────────────────
@@ -90,9 +101,15 @@ def _require_edit(db: Session, user: User, c: Course) -> None:
     raise HTTPException(status_code=403, detail="Править курс может только его автор или админ")
 
 
-def _material_out(m: CourseMaterial) -> dict:
-    return {"id": m.id, "section_id": m.section_id or 0, "kind": m.kind or "link",
-            "title": m.title or "", "url": m.url or "", "position": m.position or 0}
+def _material_out(m: CourseMaterial, files: dict = None) -> dict:
+    out = {"id": m.id, "section_id": m.section_id or 0, "kind": m.kind or "link",
+           "title": m.title or "", "url": m.url or "", "position": m.position or 0}
+    if (m.kind or "") == "file":
+        a = (files or {}).get(m.file_path or "")
+        out["url"] = ""
+        out["file"] = ({"name": a.name or "", "size": int(a.size or 0), "mime": a.mime or ""}
+                       if a is not None else None)
+    return out
 
 
 def _course_brief(db: Session, c: Course) -> dict:
@@ -156,10 +173,14 @@ def course_detail(course_id: int, user: User = Depends(get_current_user),
     can_edit = (user.role == "admin") or (user.role == "teacher" and user.id in _author_ids(db, c.id))
 
     mats = db.query(CourseMaterial).filter(CourseMaterial.course_id == c.id).all()
+    att_ids = [m.file_path for m in mats if (m.kind or "") == "file" and m.file_path]
+    files = ({a.id: a for a in db.query(Attachment).filter(Attachment.id.in_(att_ids)).all()}
+             if att_ids else {})
     by_section = {}
     orphan = []
     for m in sorted(mats, key=lambda x: (x.position or 0, x.id)):
-        (by_section.setdefault(m.section_id, []) if m.section_id else orphan).append(_material_out(m))
+        (by_section.setdefault(m.section_id, []) if m.section_id else orphan).append(
+            _material_out(m, files))
 
     sections = []
     for s in (db.query(CourseSection).filter(CourseSection.course_id == c.id)
@@ -225,20 +246,41 @@ def add_section(course_id: int, user: User = Depends(get_current_user), db: Sess
     return {"id": s.id}
 
 
+@router.post("/courses/{course_id}/files/sign")
+def sign_course_file(course_id: int, payload: dict = Body(...),
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Подписать загрузку файла материала. Права — как на правку курса (автор или админ)."""
+    c = _course_or_404(db, course_id)
+    _require_edit(db, user, c)
+    return start_signed_upload(db, user, _course_scope(c.id), payload)
+
+
 @router.post("/courses/{course_id}/materials")
 def add_material(course_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db),
                  title: str = Body(..., embed=True), url: str = Body("", embed=True),
-                 kind: str = Body("link", embed=True), section_id: int = Body(0, embed=True)):
-    """Добавить материал-ссылку/текст. kind='file' пока не поддержан (загрузка файлов — отдельно)."""
+                 kind: str = Body("link", embed=True), section_id: int = Body(0, embed=True),
+                 attachment_id: str = Body("", embed=True)):
+    """Добавить материал: ссылку, текст или загруженный файл (`attachment_id`, F-26)."""
     c = _course_or_404(db, course_id)
     _require_edit(db, user, c)
     kind = (kind or "link").strip()
-    if kind not in ("link", "text"):
-        raise HTTPException(status_code=400, detail="Пока поддержаны материалы-ссылки и текст")
+    if kind not in ("link", "text", "file"):
+        raise HTTPException(status_code=400, detail="Материал — ссылка, текст или файл")
     title = (title or "").strip()
     url = (url or "").strip()
     if kind == "link" and not url:
         raise HTTPException(status_code=400, detail="Нужна ссылка на материал")
+    att = None
+    if kind == "file":
+        #Три проверки, и все обязательны (как у отправки файла в беседе): файл загружен
+        #ДЛЯ ЭТОГО курса, загрузка ПОДТВЕРЖДЕНА, и загружал его тот, кто сейчас добавляет
+        #(или админ). Иначе чужой файл другого курса «переезжал» бы сюда по id.
+        att = db.query(Attachment).filter(Attachment.id == (attachment_id or "")).first()
+        if (att is None or att.conversation_id != _course_scope(c.id) or not att.ready
+                or (att.uploader_id != user.id and user.role != "admin")):
+            raise HTTPException(status_code=400, detail="Файл не загружен для этого курса")
+        url = ""
+        title = title or att.name or "Файл"
     if not title:
         title = url or "Материал"
     # section_id должен принадлежать этому курсу (иначе материал уедет в чужой раздел)
@@ -247,9 +289,29 @@ def add_material(course_id: int, user: User = Depends(get_current_user), db: Ses
                                                   CourseSection.course_id == c.id).first():
         raise HTTPException(status_code=400, detail="Раздел не принадлежит этому курсу")
     m = CourseMaterial(course_id=c.id, section_id=sid, kind=kind, title=title, url=url,
+                       file_path=att.id if att is not None else "",
                        position=0, created_at=_now_iso())
     db.add(m); c.updated_at = _now_iso(); db.commit()
+    if att is not None:
+        audit.log(db, actor=user.login, role=user.role, action="course.file",
+                  target=f"курс #{c.id}", detail=f"{att.name} ({int(att.size or 0)} байт)")
     return {"id": m.id}
+
+
+@router.get("/courses/{course_id}/materials/{material_id}/file")
+def course_file_url(course_id: int, material_id: int, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Ссылка на скачивание файла материала — тем, кто видит курс, и на минуты."""
+    c = _course_or_404(db, course_id)
+    if not _can_view(db, user, c):
+        raise HTTPException(status_code=403, detail="Курс вам недоступен")
+    m = db.query(CourseMaterial).filter(CourseMaterial.id == material_id,
+                                        CourseMaterial.course_id == c.id).first()
+    a = (db.query(Attachment).filter(Attachment.id == (m.file_path or "")).first()
+         if m is not None and (m.kind or "") == "file" else None)
+    if a is None or not a.ready or a.conversation_id != _course_scope(c.id):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return {"url": signed_download(a), "name": a.name or "", "mime": a.mime or ""}
 
 
 @router.post("/courses/{course_id}/assignments")
@@ -276,8 +338,33 @@ def delete_material(course_id: int, material_id: int, user: User = Depends(get_c
     m = db.query(CourseMaterial).filter(CourseMaterial.id == material_id,
                                         CourseMaterial.course_id == c.id).first()
     if m:
+        att_id = m.file_path if (m.kind or "") == "file" else ""
         db.delete(m); c.updated_at = _now_iso(); db.commit()
+        _drop_course_file(db, c.id, att_id)
     return {"ok": True}
+
+
+def _drop_course_file(db: Session, cid: int, att_id: str) -> None:
+    """Удалить файл материала, если на него не ссылается больше ни один материал курса.
+
+    ⚠️ В отличие от беседы, файл курса хранить после удаления незачем: у сообщения его
+    держит модерация (жалоба обязана показать оригинал), у материала такой причины нет,
+    а сирота в хранилище — чужие байты, за которые платит колледж."""
+    if not att_id:
+        return
+    if db.query(CourseMaterial).filter(CourseMaterial.file_path == att_id).count():
+        return
+    a = db.query(Attachment).filter(Attachment.id == att_id,
+                                    Attachment.conversation_id == _course_scope(cid)).first()
+    if a is None:
+        return
+    try:
+        from ... import storage
+        storage.remove(a.id, a.storage_key)
+    except Exception as e:      # noqa: BLE001 — не удалился объект: запись всё равно уберём
+        print(f"[courses] файл {a.id} не удалён из хранилища: {e}")
+    db.delete(a)
+    db.commit()
 
 
 @router.delete("/courses/{course_id}/sections/{section_id}")

@@ -7,8 +7,8 @@
       "enabled": true
     },
     "CapacitorUpdater": {
-      "autoUpdate": true,
-      "directUpdate": true,
+      "autoUpdate": false,
+      "directUpdate": false,
       "updateUrl": "https://esstu-gradebook.ru/app/updates"
     }
   }

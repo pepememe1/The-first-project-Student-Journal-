@@ -11,6 +11,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
 import { needsServer } from '@/api/server'
 import { HOME_BY_ROLE } from '@/config/nav'
+import { messagesRedirect } from '@/utils/deepLinks'
 
 // 🔥 СТРАНИЦЫ ГРУЖУТСЯ ПО ТРЕБОВАНИЮ, А НЕ ВСЕ СРАЗУ (28.08.2026, просьба Ярослава
 // «убери мусор, который замедляет веб»).
@@ -148,6 +149,16 @@ export const routes = [
     redirect: () => {
       const auth = useAuthStore()
       return auth.isAuthenticated ? HOME_BY_ROLE[auth.role] || '/login' : '/login'
+    },
+  },
+  // Нейтральный к роли адрес сообщений — для ссылок, которые люди пересылают друг другу
+  // (F-18: «поделиться контактом»). У получателя роль своя, а путь `/{роль}/messages`
+  // вёл бы в чужой кабинет. Запрос (`?peer=`, `?chat=`) переезжает вместе с переходом.
+  {
+    path: '/messages',
+    redirect: (to) => {
+      const auth = useAuthStore()
+      return messagesRedirect(auth.isAuthenticated, auth.role, to.fullPath, to.query)
     },
   },
 

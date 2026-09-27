@@ -292,6 +292,88 @@ def _ensure_term_open(db, student_id: str, subject: str, year: str, semester: in
                    f"сначала снимите итоговую.")
 
 
+def _seq_of(row):
+    """Номер изменения строки как база правки: 0 — строки нет, None — номер неизвестен.
+
+    Неизвестен он бывает только в копии программы, собранной до 4.1: строку привезло
+    зеркало по времени, и номера у неё ещё нет. Отдать такой 0 за «строки не было»
+    нельзя — бой счёл бы правку конфликтом с самой собой. На бою номер есть всегда."""
+    if row is None:
+        return 0
+    return int(getattr(row, "change_seq", 0) or 0) or None
+
+
+def _lock_for_write(db: Session) -> None:
+    """Взять блокировку записи базы СЕЙЧАС, а не на первом изменении (W-15).
+
+    Проверка «строку не меняли после версии автора» и сама запись шли в разных
+    транзакциях: pysqlite открывает транзакцию лишь перед изменением, поэтому чтение
+    строки и сверка шли без неё, и параллельная запись той же клетки между ними
+    проскакивала без конфликта. Пустое изменение счётчика открывает транзакцию записи и
+    берёт замок SQLite (писатель один): дальше строку перечитываем уже под ним, и до
+    нашего коммита её не поменяет никто. Это `BEGIN IMMEDIATE` без ручного управления
+    транзакциями драйвера (с ним pysqlite ругается «транзакция уже открыта»)."""
+    from sqlalchemy import text
+    db.execute(text("UPDATE sync_clock SET seq = seq WHERE id = 1"))
+
+
+def _ensure_base_version(db: Session, payload: dict, model, key: str, row, differs,
+                         kind: str, server_view):
+    """🔒 ПРАВКА, СНЯТАЯ СО СТАРОЙ ВЕРСИИ, НЕ ЗАТИРАЕТ ЧУЖУЮ (аудит 22.09.2026, F-03/F-09).
+
+    Возвращает АКТУАЛЬНУЮ строку (перечитанную под замком) — дальше писать в неё.
+
+    Программа выставляет оценку офлайн мгновенно в своей копии, а на бой досылает её
+    очередью — через минуты или дни. За это время запись могли поменять на сайте. Без
+    этой проверки досланная правка молча затирала чужую (побеждал тот, кто позже дошёл),
+    и никто об этом не узнавал.
+
+    Проверка включается ТОЛЬКО когда клиент прислал `base_updated_at` — версию записи,
+    которую он видел, когда правил ('' — записи у него не было). Так делает очередь
+    программы. Сайт поля не шлёт: у него правка уходит сразу, и правило для него прежнее —
+    «последняя дошедшая побеждает» (§4.3). Совпадающее значение конфликтом не считается:
+    два человека поставили одно и то же — спорить не о чем.
+
+    Отказ — 409 с кодом `conflict` и ТЕКУЩИМ состоянием записи: программа покажет
+    человеку обе версии и спросит, какую оставить (экран конфликтов), а не выберет сама.
+
+    🔑 ВЕРСИЯ — НОМЕР ИЗМЕНЕНИЯ, КОГДА ОН ИЗВЕСТЕН (26.09.2026, W-14). `base_seq` — номер
+    строки, который видел автор (0 — строки у него не было). Номер ставит только база
+    боя, поэтому сверка перестаёт зависеть от часов ПК: прежде база правки иногда
+    оказывалась меткой, поставленной часами самой программы. `base_updated_at` остаётся
+    для очередей, собранных до 4.1.
+    🔒 Проверка и запись — под ОДНИМ замком (`_lock_for_write`, W-15).
+    `differs(row)` и `server_view(row)` — функции, а не готовые значения: строку
+    перечитываем под замком, и судить надо по ней, а не по снимку до замка."""
+    if not isinstance(payload, dict) or not ("base_updated_at" in payload
+                                              or "base_seq" in payload):
+        return row
+    _lock_for_write(db)
+    if row is not None:
+        db.refresh(row)
+    else:
+        row = db.get(model, key, populate_existing=True)
+    if row is None or not differs(row):
+        return row
+    if payload.get("base_seq") is not None:
+        try:
+            base = int(payload.get("base_seq") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="base_seq должен быть числом")
+        changed = int(getattr(row, "change_seq", 0) or 0) != base
+    else:
+        from ...versioning import changed_since
+        changed = changed_since(getattr(row, "updated_at", "") or "",
+                                payload.get("base_updated_at") or "")
+    if not changed:
+        return row
+    raise HTTPException(status_code=409, detail={
+        "code": "conflict", "kind": kind, "id": key,
+        "message": "Пока правка ждала отправки, эту запись изменили на сервере.",
+        "server": server_view(row), "server_updated_at": getattr(row, "updated_at", "") or "",
+        "server_seq": int(getattr(row, "change_seq", 0) or 0)})
+
+
 # ── Выгрузка файлов (xlsx/docx) — общая для ведомостей, журналов и отчётов ──────────
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -320,7 +402,7 @@ __all__ = [
     "User", "Group", "Subject", "Lesson", "Grade", "RegistrationRequest",
     "StudentInvite",
     "AuthSession", "ConfigKV", "TermGrade", "ScheduleOverride", "ScheduleJointMark",
-    "_final_grade_row", "_ensure_term_open",
+    "_final_grade_row", "_ensure_term_open", "_ensure_base_version", "_lock_for_write", "_seq_of",
     "schedule_override_id", "joint_mark_id", "SubjectHours", "subject_hours_id",
     "ZetThreshold", "zet_threshold_id", "NotifyEvent",
     "StudentSubgroup", "student_subgroup_id", "set_user_password", "UserAchievement",

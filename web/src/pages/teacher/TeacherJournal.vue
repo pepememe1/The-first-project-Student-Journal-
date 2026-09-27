@@ -18,7 +18,7 @@ import { menuMaxHeight, placeMenu } from '@/utils/menuPlacement'
 import { useRoute } from 'vue-router'
 import { teacherApi, termsApi } from '@/api/endpoints'
 import {
-  enqueueGrade, enqueueLessonCreate, enqueueLessonDelete, enqueueLessonUpdate,
+  enqueueGrade, enqueueLessonCreate, enqueueLessonDelete, enqueueLessonUpdate, newLessonId,
   enqueueTermGrade, isTempId, pendingGrade, pendingLessons, storageFailed,
 } from '@/api/outbox'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -421,7 +421,7 @@ async function writeVoiceItems(items) {
 
 /** Стоит ли в этой клетке значение, которое ещё НЕ доехало до сервера. */
 function isPending(s, col) {
-  return pendingGrade(col.key, s.surname, s.name) !== undefined
+  return pendingGrade(col.key, s.surname, s.name, s.student_id || '') !== undefined
 }
 
 /**
@@ -441,7 +441,7 @@ function isPending(s, col) {
 function averageOf(s) {
   const overrides = {}
   for (const l of allLessons.value) {
-    const p = pendingGrade(l.id, s.surname, s.name)
+    const p = pendingGrade(l.id, s.surname, s.name, s.student_id || '')
     if (p !== undefined) overrides[l.id] = p
   }
   if (!Object.keys(overrides).length) return s.average
@@ -475,8 +475,10 @@ async function setGrade(s, key, value) {
     // преподавателя пропала бы ровно в тот момент, когда он физически не может её
     // повторить. Такую оценку кладём в очередь — она уедет сама (см. api/outbox.js).
     if (!e?.response) {
+      //Номер клетки, который человек ВИДЕЛ (W-13б): сервер по нему отличит правку на
+      //свежей версии от затирания чужой — и отдаст конфликт на выбор человеку.
       enqueueGrade({ surname: s.surname, name: s.name, lesson_id: key, grade: value,
-        student_id: s.student_id || '' })
+        student_id: s.student_id || '', base_seq: s.seqs ? s.seqs[key] : undefined })
       //Оценка не потеряна, но и не уехала — это НЕ успех и не отказ. Отдельного узора
       //заводить не стали: важнее, что ощущение отличается от «записано», а подробность
       //человек прочитает в подсказке.
@@ -618,6 +620,10 @@ async function saveLesson() {
   if (!group.value || !subject.value) { lessonError.value = locale.t('teacherJournal.selectGroupSubject', 'Выберите группу и предмет'); return }
   savingLesson.value = true
   lessonError.value = ''
+  //🔑 id занятия — ДО попытки онлайн (аудит F-05). Запрос мог дойти до сервера, а ответ
+  //потеряться; тогда очередь ниже повторит создание С ТЕМ ЖЕ id, и сервер вернёт уже
+  //созданное занятие вместо второго.
+  const lessonId = editingLesson.value ? '' : newLessonId()
   try {
     if (editingLesson.value) {
       const f = lessonForm.value
@@ -627,6 +633,7 @@ async function saveLesson() {
     } else {
       await teacherApi.createLesson({
         group: group.value, subject: subject.value, subgroup: activeSubgroup.value, ...lessonForm.value,
+        ...(lessonId ? { id: lessonId } : {}),
       })
     }
     showLesson.value = false
@@ -647,7 +654,7 @@ async function saveLesson() {
           //Тот же J10: занятие, созданное без сети в конце семестра, иначе появится в
           //журнале СЛЕДУЮЩЕГО — там, где его никто не создавал.
           year: currentTerm.value?.year || '', semester: currentTerm.value?.semester || 0,
-        })
+        }, lessonId)
       }
       showLesson.value = false
       toast.info(locale.t('teacherJournal.queuedOffline',

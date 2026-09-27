@@ -72,7 +72,7 @@ def test_bridge_never_hands_out_a_token_its_own_cabinet_rejects(api, monkeypatch
     `/web/*` того же сервера. Проверяем именно связку, потому что порознь обе половины
     выглядят исправными: вход отвечает 200, кабинет отвечает 401, и каждый по-своему прав."""
     monkeypatch.setattr(local_api, "_try_local_login", lambda *a, **k: None)
-    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: False)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: True)
     monkeypatch.setattr(local_api, "_try_remote_login",
                         lambda *a, **k: ({"access_token": "prod-a", "refresh_token": "prod-r",
                                           "role": "teacher", "name": "Тестов Т."}, ""))
@@ -146,7 +146,7 @@ def test_unapproved_device_is_named_as_the_reason(api, monkeypatch):
     `if (e.response?.status === 403) needApproval.value = true`). Ответ 401/«неверный
     пароль» отправил бы человека менять пароль, которого он не терял."""
     monkeypatch.setattr(local_api, "_try_local_login", lambda *a, **k: None)
-    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: False)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: True)
     monkeypatch.setattr(local_api, "_try_remote_login",
                         lambda *a, **k: ({"access_token": "prod-a", "role": "teacher"}, ""))
     monkeypatch.setattr(local_api, "_wait_for_mirror",
@@ -162,7 +162,7 @@ def test_network_failure_is_not_called_a_device_problem(api, monkeypatch):
     """Обратная половина: зеркало не доехало из-за сети — это 503, а не 403. Иначе
     человек пошёл бы искать администратора там, где надо было проверить интернет."""
     monkeypatch.setattr(local_api, "_try_local_login", lambda *a, **k: None)
-    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: False)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda *a, **k: True)
     monkeypatch.setattr(local_api, "_try_remote_login",
                         lambda *a, **k: ({"access_token": "prod-a", "role": "teacher"}, ""))
     monkeypatch.setattr(local_api, "_wait_for_mirror",
@@ -180,8 +180,14 @@ def test_mirror_failure_is_not_swallowed(api):
     import inspect
     src = inspect.getsource(local_api._wait_for_mirror)
     assert "error" in src, "результат mirror_once обязан читаться, а не выбрасываться"
+    #Цепочка, а не одна функция: с 25.09.2026 (F-04, N-01) хвост входа по сети вынесен в
+    #`_finish_remote_login` — его зовут и обычный вход, и второй шаг со вторым фактором.
+    #Проверяем, что мост ЗОВЁТ хвост, а хвост разбирает причину неудачи зеркала.
     bridge = inspect.getsource(local_api.install_login_bridge)
-    assert "_wait_for_mirror" in bridge and "mirror_failure_response" in bridge, \
+    finish = inspect.getsource(local_api._finish_remote_login)
+    assert bridge.count("_finish_remote_login") >= 2, \
+        "и вход, и второй шаг обязаны завершаться общим хвостом с разбором причины"
+    assert "_wait_for_mirror" in finish and "mirror_failure_response" in finish, \
         "мост обязан разбирать причину неудачи зеркала, а не игнорировать её"
 
 

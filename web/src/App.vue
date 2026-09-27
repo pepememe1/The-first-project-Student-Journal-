@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import { setAuthExpiredHandler, setMfaSetupHandler } from '@/api/client'
 import { setOfflineExpiredHandler, startOfflineWatch } from '@/api/offlineSession'
 import { flushOutbox, startOutboxWatch } from '@/api/outbox'
+import { initDurableOutbox } from '@/services/durableOutbox'
 import { useAuthStore } from '@/stores/auth'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
@@ -56,7 +57,11 @@ onMounted(() => {
   startOutboxWatch()
   // И одна попытка на старте: приложение могли закрыть офлайн, а открыть уже в сети,
   // и перехода «офлайн -> онлайн» в этом запуске не случится вовсе.
-  if (auth.isAuthenticated) flushOutbox().catch(() => {})
+  // ⚠️ Сначала — надёжное зеркало очереди (W-13в): если ОС освободила localStorage,
+  // неотправленные оценки вернутся из него раньше, чем выгрузка решит, что слать нечего.
+  initDurableOutbox()
+    .catch(() => {})
+    .finally(() => { if (auth.isAuthenticated) flushOutbox().catch(() => {}) })
 })
 </script>
 

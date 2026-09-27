@@ -327,75 +327,63 @@ def test_parsed_comparison_survives_mixed_formats():
 
 # ── 5. Сверка «сервер = истина» ОБЯЗАНА иметь вызывающего ──────────────────────────
 def test_reconcile_has_a_caller_in_the_product():
-    """Инвариант §4.5 живёт только пока `reconcile` кто-то ЗОВЁТ.
+    """Инвариант §4.5 живёт только пока сверку «сервер = истина» кто-то ЗОВЁТ.
 
-    🔥 Он и не жил. Единственный вызывающий (`main_window._restore_client_bg`) исчез
-    вместе с `main_window.py` при удалении Qt-оболочки: функция осталась, тесты на неё
-    остались зелёными, а выполняться перестала совсем. Последствие тихое и накопительное —
-    удалённые на сервере студенты и группы оставались на ПК преподавателя навсегда,
-    потому что удаление приходит надгробием, а надгробие видит только тот, кто был на
-    связи в тот момент.
+    🔥 Он уже однажды не жил. Единственный вызывающий (`main_window._restore_client_bg`)
+    исчез вместе с `main_window.py` при удалении Qt-оболочки: функция осталась, тесты на
+    неё остались зелёными, а выполняться перестала совсем.
 
-    Тест намеренно проверяет ФАКТ вызова из рабочего кода, а не поведение самой
-    `reconcile` (её поведение покрыто отдельно и было покрыто всё это время — именно
-    поэтому дефект и не заметили).
+    ⚠️ С 25.09.2026 (аудит F-02/F-03) сверяется КОПИЯ ИНТЕРФЕЙСА — `local_mirror.rebuild`,
+    а не старая база (`sync_engine.reconcile`): её интерфейс не читает, и убирать «сирот»
+    там значило убирать их не там, где их видит человек. Тест по-прежнему проверяет ФАКТ
+    вызова из рабочего цикла, а не поведение сверки (оно покрыто в test_desk_outbox.py).
     """
     import inspect
     from sync import sync_runner
-    src = inspect.getsource(sync_runner)
-    assert "sync_engine.reconcile(" in src, (
-        "в sync_runner нет вызова reconcile — сверка «сервер = истина» снова осиротела")
-    #И он должен стоять на пути ЦИКЛА, а не в мёртвой ветке: цикл обязан его звать.
-    assert "_reconcile_once()" in inspect.getsource(sync_runner.SyncManager._loop)
+    mirror = inspect.getsource(sync_runner.SyncManager._mirror_for_vue)
+    assert "local_mirror.rebuild(" in mirror, (
+        "цикл не зовёт сверку копии — «сервер = истина» снова осиротела")
+    #И она должна стоять на пути ЦИКЛА, а не в мёртвой ветке.
+    assert "self._mirror_for_vue()" in inspect.getsource(sync_runner.SyncManager._loop)
 
 
-def test_reconcile_runs_once_per_session_and_host_is_exempt(monkeypatch):
-    """Сверка идёт РОВНО один раз за сессию входа, и хост от неё освобождён.
+def test_reconcile_runs_once_per_session(monkeypatch):
+    """Полная сверка копии идёт РОВНО один раз за сессию входа, дальше — дельта.
 
-    Оба свойства обязательны и по разным причинам: повтор каждые 30 c означал бы полный
-    снимок базы в каждом цикле (самый дорогой обмен из всех), а сверка на ХОСТЕ стёрла бы
-    единственную авторитетную копию данных ради того, чтобы налить её же обратно.
-    """
+    Повтор каждые 30 c означал бы полный снимок в каждом цикле — самый дорогой обмен из
+    всех. ⚠️ Освобождения «хоста» больше нет: сверяется копия интерфейса, производные
+    данные, и авторитетную копию она не трогает ни на какой машине."""
+    import desktop.local_mirror as lm
     from sync import sync_runner
 
     calls = []
-    monkeypatch.setattr(sync_engine, "reconcile", lambda c: calls.append(c))
+    monkeypatch.setattr(lm, "rebuild", lambda client=None: calls.append("full") or {"ok": True})
+    monkeypatch.setattr(lm, "mirror_once", lambda client=None: calls.append("delta") or {"ok": True})
+    monkeypatch.setattr(sync_runner.SyncManager, "_rebuild_requested", staticmethod(lambda: False))
 
     r = sync_runner.SyncManager()
-    r._client = object()
     r._need_reconcile = True
-
-    monkeypatch.setattr("data.app_settings.is_host", lambda: False)
-    assert r._reconcile_once() is True
-    assert r._reconcile_once() is False, "сверка пошла по второму кругу в той же сессии"
-    assert len(calls) == 1
-
-    #Хост: сверки нет вовсе, флаг гасится.
-    r2 = sync_runner.SyncManager()
-    r2._client = object()
-    r2._need_reconcile = True
-    monkeypatch.setattr("data.app_settings.is_host", lambda: True)
-    assert r2._reconcile_once() is False
-    assert len(calls) == 1, "на хосте сверка не имеет права выполняться"
+    r._mirror_for_vue()
+    r._mirror_for_vue()
+    assert calls == ["full", "delta"], f"сверка не один раз за сессию: {calls}"
+    assert r._need_reconcile is False
 
 
 def test_failed_reconcile_is_retried_next_cycle(monkeypatch):
-    """Сверка упала — флаг НЕ снимаем: иначе один блип сети отменял бы её до следующего
-    входа, а именно ради накопившихся расхождений она и нужна."""
+    """Сверка не удалась — флаг НЕ снимаем: иначе один блип сети отменял бы её до
+    следующего входа, а именно ради накопившихся расхождений она и нужна."""
+    import desktop.local_mirror as lm
     from sync import sync_runner
 
-    def _boom(_c):
-        raise RuntimeError("сеть отвалилась на пуше")
-
-    monkeypatch.setattr(sync_engine, "reconcile", _boom)
-    monkeypatch.setattr("data.app_settings.is_host", lambda: False)
+    monkeypatch.setattr(lm, "rebuild", lambda client=None: {"ok": False, "error": "сеть"})
+    monkeypatch.setattr(sync_runner.SyncManager, "_rebuild_requested", staticmethod(lambda: False))
+    monkeypatch.setattr(sync_runner.SyncManager, "_request_rebuild", staticmethod(lambda: None))
 
     r = sync_runner.SyncManager()
-    r._client = object()
     r._need_reconcile = True
-    with pytest.raises(RuntimeError):
-        r._reconcile_once()
+    r._mirror_for_vue()
     assert r._need_reconcile is True, "провал сверки должен оставлять её в очереди"
+    assert r._mirror_error == "сеть", "провал сверки обязан быть виден в состоянии синка"
 
 
 # ── 9. Конфликт оценки перестал быть беззвучным ───────────────────────────────────
@@ -437,24 +425,18 @@ def test_grade_conflict_is_counted_not_only_written():
 
 
 def test_conflict_counter_reaches_the_sync_status():
-    """Счётчик обязан доезжать до `status()`. Тест на САМ ФАКТ проводки: сама по себе
-    `count_unresolved_conflicts` может быть исправна, а в статусе её не будет, и наружу
-    опять ничего не попадёт (ровно так конфликт и жил всё это время).
+    """Счётчик конфликтов обязан доезжать до состояния, которое видит интерфейс.
 
-    ⚠️ Прежний докстринг называл `status()` «единственным местом, куда смотрит индикатор»
-    — это было НЕПРАВДОЙ на момент написания: индикатор жил в Qt-оболочке и удалён вместе
-    с ней, а `status()` не звал никто, кроме этого самого теста. То есть тест был зелёным,
-    проверяя проводку до тупика. Настоящего потребителя добавили отдельно (см.
-    `test_sync_status_has_a_real_consumer` ниже); формулировку исправляем, чтобы
-    следующий читатель не сделал по ней тот же ложный вывод."""
+    ⚠️ С 25.09.2026 конфликты живут в очереди правок (`desk_outbox`), а не в старой базе:
+    её слияние считало «конфликтом» любую свежую серверную оценку, и значок показывал
+    расхождения, разрешить которые было негде. Проводка «очередь → /desk/sync/status →
+    значок» держится в `tests/test_local_api.py::test_sync_status_reports_the_outbox`;
+    здесь — что старые счётчики из статуса УБРАНЫ и не вводят человека в заблуждение."""
     from sync import sync_runner
-
-    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
-    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
-
     st = sync_runner.SyncManager().status()
-    assert "conflicts" in st, "в статусе синка нет поля conflicts"
-    assert st["conflicts"] == 1
+    assert "conflicts" not in st and "rejected" not in st, (
+        "счётчики старой базы вернулись в статус — они показывали бы вечные «конфликты»")
+    assert "mirror_error" in st and "mirror_ok_at" in st
 
 
 def _seed_local_tombstone(at: str, lid: str = "les-1"):

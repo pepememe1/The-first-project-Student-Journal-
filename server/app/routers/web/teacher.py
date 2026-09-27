@@ -76,6 +76,19 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
             for n in range(2, 6):
                 if (l.extra or {}).get(f"retake_date_{n}"):
                     retake_keys.append(f"{l.id}_retake_{n}")
+    #🔑 Номер изменения КАЖДОЙ клетки, включая снятые оценки (исследование синка
+    #W-13б). Телефон, поставивший оценку без сети, досылает её с номером, который видел:
+    #иначе ранняя офлайн-правка молча затирала более позднюю — в том числе исправление
+    #самого преподавателя с ПК. Снятые оценки тоже нужны: пустая клетка на экране — это
+    #и «строки нет» (0), и надгробие со своим номером, и спутать их значит выдать
+    #ложный конфликт при повторной простановке. Один запрос на весь журнал, а не на клетку.
+    cell_keys = [l.id for l in lessons] + retake_keys
+    from ...models import grade_id as _gk
+    wanted = [_gk(s.id, k) for s in studs for k in cell_keys]
+    seq_of = {}
+    for i in range(0, len(wanted), 500):
+        seq_of.update(dict(db.query(Grade.id, Grade.change_seq)
+                             .filter(Grade.id.in_(wanted[i:i + 500])).all()))
     rows = []
     for s in studs:
         #`student_id` разводит полных тёзок (J08): без него у двух «Ивановых Иванов» в
@@ -87,6 +100,7 @@ def teacher_journal(group: str = Query(...), subject: str = Query(...),
                      #Неизменяемый адрес строки: клиент везёт его при записи оценки,
                      #иначе сервер вынужден угадывать по ФИО (J08).
                      "student_id": s.id, "grades": grades,
+                     "seqs": {k: int(seq_of.get(_gk(s.id, k)) or 0) for k in cell_keys},
                      "average": W.average(lessons, recs, cfg, scale=tscale),
                      #Своя подгруппа (§ролей, 3.6.1) — None у обычного предмета/студента,
                      #которого куратор ещё не расставил. Клиент по ней гасит ячейки чужой

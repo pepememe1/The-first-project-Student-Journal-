@@ -132,3 +132,26 @@ def test_publish_pending_acks_success_and_retries_failure(client):
         assert backlog(db, now=111)["dead_lettered"] == 1
     finally:
         db.close()
+
+
+def test_the_docstring_tells_the_truth_about_wiring():
+    """Шапка модуля и код согласны в том, подключена ли очередь (F-21, 26.09.2026).
+
+    Модуль существовал с оговоркой «для следующего слоя», а аудит принял его за рабочий
+    механизм. Оговорка теперь прямая, и сторож держит её правдой в обе стороны: первый
+    вызывающий `enqueue` в продукте — и слова «НЕ ПОДКЛЮЧЁН» обязаны уйти; оговорку сняли,
+    а вызывающих нет — тоже красное."""
+    import pathlib
+    import re as _re
+    root = pathlib.Path(__file__).resolve().parents[1] / "app"
+    doc = (root / "event_outbox.py").read_text(encoding="utf-8").split('"""')[1]
+    callers = []
+    for f in root.rglob("*.py"):
+        if f.name == "event_outbox.py":
+            continue
+        text = f.read_text(encoding="utf-8")
+        if _re.search(r"event_outbox\.enqueue\(|from \.+event_outbox import[^\n]*\benqueue\b", text):
+            callers.append(str(f.relative_to(root)))
+    says_unwired = "НЕ ПОДКЛЮЧЁН" in doc
+    assert says_unwired == (not callers), (
+        f"шапка говорит «не подключён»={says_unwired}, а вызывающие: {callers or 'нет'}")

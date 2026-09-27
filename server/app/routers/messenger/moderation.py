@@ -128,7 +128,7 @@ def looks_like_human_request(body: str) -> bool:
 
 
 def open_support_ticket(db: Session, conv_id: str, user_id: str, category: str,
-                        urgent: bool = False):
+                        urgent: bool = False, commit: bool = True):
     """Завести обращение. Пустая тема — законное состояние «ещё не выбрана».
 
     ⚠️ Неизвестный код превращается в ПУСТУЮ тему, а не в «Другое»: «Другое» срочное по
@@ -140,9 +140,49 @@ def open_support_ticket(db: Session, conv_id: str, user_id: str, category: str,
                         urgent=bool(urgent or code in URGENT_CATEGORIES),
                         status="open", created_at=now, last_user_at=now)
     db.add(row)
+    if not commit:
+        #В ЧУЖОЙ транзакции (F-14): тикет и сообщение фиксируются одним коммитом.
+        db.flush()
+        return row
     db.commit()
     db.refresh(row)
     return row
+
+
+def route_moderation_message(db: Session, conv, user, body: str) -> str:
+    """МАРШРУТИЗАЦИЯ обращения — В ТОЙ ЖЕ ТРАНЗАКЦИИ, что и само сообщение. Ничего не
+    коммитит; возвращает текст системного ответа, который надо показать ПОСЛЕ коммита
+    ('' — ничего).
+
+    🔥 F-14 (аудит 22.09.2026). Раньше тикет заводился ПОСЛЕ коммита сообщения и молча
+    глотал свои сбои: сообщение «отправлено», а срочность («позовите человека») и тикет
+    не появлялись. Очередь «Обращения» такую беседу всё же показывала (чаты без тикета —
+    с 12.09), но последней и без пометки «срочно», то есть человек, звавший на помощь,
+    ждал в хвосте. Теперь сбой маршрутизации роняет ВСЮ отправку: человек видит ошибку и
+    повторяет, а не уходит уверенным, что его услышали.
+    ⚠️ Системный ответ (автоответ с темами, «зову человека») остаётся best-effort ПОСЛЕ
+    коммита: это вежливость, а не маршрут, и её сбой не должен отменять обращение."""
+    if getattr(conv, "kind", "") != "moderation":
+        return ""
+    wants_human = looks_like_human_request(body)
+    existing = _ticket_open(db, conv.id)
+    if existing is not None:
+        existing.last_user_at = _now()
+        escalated = wants_human and not existing.urgent
+        if escalated:
+            existing.urgent = True
+            if not existing.category:
+                existing.category = "human"
+        return _HUMAN_ACK if escalated else ""
+    if wants_human:
+        open_support_ticket(db, conv.id, user.id, "human", urgent=True, commit=False)
+        return _HUMAN_ACK
+    # Автоответчик показываем ОДИН раз на обращение — повтор на каждое сообщение
+    # превращает чат в переписку с роботом, из которой человек уходит, не дождавшись.
+    # Признак «уже здоровались» — САМ ТИКЕТ, а не разбор прошлых сообщений: удалённая или
+    # пересланная реплика сдвинула бы такой разбор, и робот поздоровался бы заново.
+    open_support_ticket(db, conv.id, user.id, "", commit=False)
+    return _autoresponder_text()
 
 
 def on_moderation_message(db: Session, conv, user, body: str) -> None:
@@ -165,31 +205,12 @@ def on_moderation_message(db: Session, conv, user, body: str) -> None:
     в тупик — это и есть случай, ради которого дверь заведена. Иначе выбравший тему
     оказывался бы заперт в ней до конца переписки.
     """
-    if getattr(conv, "kind", "") != "moderation":
-        return
-    wants_human = looks_like_human_request(body)
-    existing = _ticket_open(db, conv.id)
-    if existing is not None:
-        existing.last_user_at = _now()
-        escalated = wants_human and not existing.urgent
-        if escalated:
-            existing.urgent = True
-            if not existing.category:
-                existing.category = "human"
-        db.commit()
-        if escalated:
-            _post_system(db, conv.id, _HUMAN_ACK)
-        return
-    if wants_human:
-        open_support_ticket(db, conv.id, user.id, "human", urgent=True)
-        _post_system(db, conv.id, _HUMAN_ACK)
-        return
-    # Автоответчик показываем ОДИН раз на обращение — повтор на каждое сообщение
-    # превращает чат в переписку с роботом, из которой человек уходит, не дождавшись.
-    # Признак «уже здоровались» — САМ ТИКЕТ, а не разбор прошлых сообщений: удалённая или
-    # пересланная реплика сдвинула бы такой разбор, и робот поздоровался бы заново.
-    open_support_ticket(db, conv.id, user.id, "")
-    _post_system(db, conv.id, _autoresponder_text())
+    #Одним ходом: маршрут + коммит + ответ. Зовётся там, где сообщение УЖЕ зафиксировано
+    #отдельно; новые точки обязаны идти через `route_moderation_message` до коммита.
+    reply = route_moderation_message(db, conv, user, body)
+    db.commit()
+    if reply:
+        _post_system(db, conv.id, reply)
 
 
 @router.get("/moderation/categories")
@@ -338,6 +359,14 @@ def _ticket_out(db: Session, r) -> dict:
     }
 
 
+#Сколько строк очереди отдаём за раз. Больше экран всё равно не покажет разумно, а
+#каждая строка — несколько запросов к базе на одном ядре.
+_QUEUE_LIMIT = 500
+#История беседы для модерации — окном, а не целиком (F-12).
+_HISTORY_DEFAULT = 200
+_HISTORY_MAX = 500
+
+
 @mod_router.get("/support")
 def mod_support_queue(status: str = Query("open"), admin: User = Depends(require_moderation),
                       db: Session = Depends(get_db)):
@@ -354,13 +383,23 @@ def mod_support_queue(status: str = Query("open"), admin: User = Depends(require
         q = q.filter(SupportTicket.status.in_(("open", "in_review")))
     elif status:
         q = q.filter(SupportTicket.status == status)
-    rows = q.limit(500).all()
-    out = [_ticket_out(db, r) for r in rows]
+    total = q.count()
     # Срочные выше всех, дальше — кто дольше ждёт. `created_at` по возрастанию: обращение
     # недельной давности обязано быть выше сегодняшнего, иначе очередь обслуживает
     # последних пришедших, а первые не дожидаются вовсе.
+    #🔥 ПОРЯДОК — В ЗАПРОСЕ, ДО LIMIT (аудит 22.09.2026, F-11). Раньше база отдавала
+    #первые 500 строк В ПРОИЗВОЛЬНОМ порядке, и только потом они сортировались: при
+    #очереди больше 500 старое срочное обращение могло не попасть в выборку вовсе — и
+    #никакая сортировка его уже не поднимала. Экран при этом выглядел полным.
+    rows = (q.order_by(SupportTicket.urgent.desc(), SupportTicket.created_at.asc(),
+                       SupportTicket.id.asc())
+             .limit(_QUEUE_LIMIT).all())
+    out = [_ticket_out(db, r) for r in rows]
     out.sort(key=lambda x: (0 if x["urgent"] else 1, x["created_at"] or ""))
-    return {"tickets": out, "categories": SUPPORT_CATEGORIES}
+    #`total` — честное «показано N из M»: без него обрезанная очередь неотличима от
+    #полной, и модератор уходит со смены, думая, что разобрал всё.
+    return {"tickets": out, "categories": SUPPORT_CATEGORIES, "total": total,
+            "truncated": total > len(out)}
 
 
 @mod_router.post("/support/{tid}/claim")
@@ -439,8 +478,12 @@ def mod_reports(status: str = Query("open"), admin: User = Depends(require_moder
     q = db.query(MessageReport)
     if status:
         q = q.filter(MessageReport.status == status)
+    #`total`/`truncated` — тот же ответ, что у обращений (F-11): без них модератор,
+    #разобрав видимые 300, счёл бы очередь пустой.
+    total = q.count()
     rows = q.order_by(MessageReport.id.desc()).limit(300).all()
-    return {"reports": [_report_out(db, r) for r in rows]}
+    return {"reports": [_report_out(db, r) for r in rows], "total": total,
+            "truncated": total > len(rows)}
 
 
 @mod_router.post("/reports/{rid}/resolve")
@@ -491,8 +534,23 @@ def mod_conversations(q: str = Query(""), kind: str = Query(""),
     kind = (kind or "").strip() or "moderation"
     if kind not in _ALLOWED_KINDS:
         raise HTTPException(status_code=400, detail="Недопустимый тип беседы")
-    query = db.query(Conversation).filter(Conversation.kind == kind)
-    convs = query.order_by(Conversation.created_at.desc()).limit(300).all()
+    #🔥 ПОРЯДОК ПО ПОСЛЕДНЕЙ АКТИВНОСТИ — В ЗАПРОСЕ, ДО LIMIT (аудит 22.09.2026, F-11).
+    #Раньше выборка резалась по дате СОЗДАНИЯ беседы, а сортировалась по последнему
+    #сообщению уже после: обращение месячной давности, в которое сегодня написали, не
+    #попадало в первые 300 и исчезало из очереди — ровно то, от чего предостерегает
+    #комментарий о сортировке ниже.
+    from sqlalchemy import func as _func
+    last_sq = (db.query(Message.conversation_id.label("cid"),
+                        _func.max(Message.created_at).label("last_at"))
+               .join(Conversation, Conversation.id == Message.conversation_id)
+               .filter(Conversation.kind == kind)
+               .group_by(Message.conversation_id).subquery())
+    query = (db.query(Conversation)
+             .outerjoin(last_sq, last_sq.c.cid == Conversation.id)
+             .filter(Conversation.kind == kind))
+    total = query.count()
+    convs = (query.order_by(_func.coalesce(last_sq.c.last_at, Conversation.created_at).desc())
+             .limit(300).all())
     ql = (q or "").strip().lower()
     onl = _online_logins()
     out = []
@@ -506,7 +564,7 @@ def mod_conversations(q: str = Query(""), kind: str = Query(""),
             if u:
                 names.append(u.full_name or u.login)
                 #карточка: аватар, ФИО, роль, группа/предметы + состояние глобального мьюта
-                people.append(_safe_user(u, onl, u.id in mset))
+                people.append(_safe_user(u, onl, u.id in mset, viewer=_STAFF_VIEWER))
         if ql and not any(ql in n.lower() for n in names):
             continue
         item = {"conversation_id": c.id, "kind": c.kind,
@@ -518,7 +576,7 @@ def mod_conversations(q: str = Query(""), kind: str = Query(""),
     #осмысленный. `created_at` беседы отвечал на другой вопрос («когда её завели»), и
     #обращение месячной давности с новым сообщением уезжало в конец списка.
     out.sort(key=lambda x: x.get("last_at") or "", reverse=True)
-    return {"conversations": out}
+    return {"conversations": out, "total": total, "truncated": total > len(convs)}
 
 
 def _inbox_state(db: Session, conv) -> dict:
@@ -557,7 +615,9 @@ def _inbox_state(db: Session, conv) -> dict:
 
 
 @mod_router.get("/conversations/{conv_id}/messages")
-def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: Request = None,
+def mod_conversation_messages(conv_id: str, report_id: int = Query(0),
+                              before: int = Query(0), limit: int = Query(_HISTORY_DEFAULT),
+                              request: Request = None,
                               admin: User = Depends(require_moderation), db: Session = Depends(get_db)):
     """Прочитать ЛЮБУЮ беседу (модерация). Каждый вызов пишется в аудит (152-ФЗ).
 
@@ -592,8 +652,17 @@ def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: 
         raise HTTPException(
             status_code=403,
             detail="Чужая переписка открывается только по действующей жалобе")
-    rows = (db.query(Message).filter(Message.conversation_id == conv_id)
-            .order_by(Message.id.asc()).all())
+    #🔥 ОКНОМ, А НЕ ЦЕЛИКОМ (аудит 22.09.2026, F-12). Раньше `.all()` поднимал ВСЮ беседу
+    #вместе со всеми правками: длинная переписка (или нарочно раздутая) занимала память
+    #единственного процесса и вешала вкладку модератора. Последние `limit` сообщений,
+    #более ранние — по `before=<id>`; `has_more` говорит, есть ли что загружать.
+    limit = max(1, min(int(limit or _HISTORY_DEFAULT), _HISTORY_MAX))
+    hq = db.query(Message).filter(Message.conversation_id == conv_id)
+    if before:
+        hq = hq.filter(Message.id < int(before))
+    rows = hq.order_by(Message.id.desc()).limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = list(reversed(rows[:limit]))
     #ФИО автора — иначе в переписке с 2+ участниками (жалоба, групповой чат) не видно,
     #кто что написал (тот же _names_for, что уже используют обычные списки сообщений).
     names = _names_for(db, [m.sender_id for m in rows])
@@ -620,7 +689,8 @@ def mod_conversation_messages(conv_id: str, report_id: int = Query(0), request: 
     _attach_rich_meta(db, out, admin.id)               #админ читает ту же ленту, что и участники
     audit.log(db, request, actor=admin.login, role=admin.role,
               action="msg.moderation.view", target=conv_id)
-    return {"messages": out}
+    return {"messages": out, "has_more": has_more,
+            "next_before": rows[0].id if (has_more and rows) else None}
 
 
 @mod_router.post("/conversations/{conv_id}/reply")
@@ -835,6 +905,7 @@ def mod_user_reports(status: str = Query("open"),
     q = db.query(UserReport)
     if status:
         q = q.filter(UserReport.status == status)
+    total = q.count()
     rows = q.order_by(UserReport.id.desc()).limit(300).all()
     onl = _online_logins()
     out = []
@@ -850,7 +921,7 @@ def mod_user_reports(status: str = Query("open"),
             "reported": _safe_user(reported, onl, r.reported_user_id in mset) if reported else None,
             "reporter": _safe_user(reporter, onl) if reporter else None,
         })
-    return {"reports": out}
+    return {"reports": out, "total": total, "truncated": total > len(rows)}
 
 
 @mod_router.post("/user-reports/{rid}/resolve")
@@ -912,7 +983,7 @@ def mod_users(q: str = Query(""), admin: User = Depends(require_moderation),
         name = (u.full_name or u.login or "").lower()
         if ql and ql not in name:
             continue
-        d = _safe_user(u, onl, u.id in mset)
+        d = _safe_user(u, onl, u.id in mset, viewer=_STAFF_VIEWER)
         #Сколько жалоб — главный ответ на «первый раз или пятый». Считаем ОБЕ очереди:
         #человек, на профиль которого жаловались трижды, но на сообщения ни разу, для
         #модератора не «чистый».

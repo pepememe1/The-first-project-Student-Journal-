@@ -23,7 +23,7 @@
 import { computed, ref } from 'vue'
 import { OctagonAlert, X } from '@lucide/vue'
 
-import { dismissRejected, rejected } from '@/api/outbox'
+import { dismissRejected, rejected, resolveConflict } from '@/api/outbox'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -47,6 +47,13 @@ function describe(e) {
   }
   if (e?.kind === 'lesson.delete') return locale.t('rejected.lessonDelete', 'Удаление занятия')
   return locale.t('rejected.entry', 'Запись')
+}
+
+//Конфликт (W-13б): клетку поменяли, пока правка ждала. Выбор — за человеком, как в
+//программе (F-09): порядок доставки правоты не определяет. Досылает сама очередь, и
+//только для конфликта — отказ по существу так не переотправить (см. `resolveConflict`).
+function keep(e, mine) {
+  resolveConflict(e.key, mine)
 }
 
 function dismissAll() {
@@ -75,6 +82,13 @@ function dismissAll() {
           <span class="min-w-0 flex-1 break-words">
             <span class="block text-text">{{ describe(e) }}</span>
             <span class="block opacity-70">{{ e.reason }}</span>
+            <span v-if="e.conflict" class="mt-1 flex flex-wrap items-center gap-1.5">
+              <span class="opacity-80">{{ locale.t('rejected.onServer', { value: (e.conflict.server || {}).grade || '—' }) }}</span>
+              <button type="button" class="rounded border border-red/40 px-1.5 py-0.5 font-semibold hover:bg-red/15"
+                      @click="keep(e, true)">{{ locale.t('rejected.keepMine', 'Оставить моё') }}</button>
+              <button type="button" class="rounded border border-border2 px-1.5 py-0.5 hover:bg-bg2"
+                      @click="keep(e, false)">{{ locale.t('rejected.keepServer', 'Оставить серверное') }}</button>
+            </span>
           </span>
           <button type="button" class="shrink-0 rounded p-0.5 hover:bg-red/15"
                   :title="locale.t('rejected.dismiss', 'Понятно, убрать')"

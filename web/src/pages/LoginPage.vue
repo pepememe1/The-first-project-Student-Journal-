@@ -3,7 +3,7 @@
 // «Вектор» слева (наведение → поза «думает» + облачко-совет с ротацией), карточка
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { RouterLink } from 'vue-router'
@@ -11,6 +11,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { desktopApi, appApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
+import { afterLoginTarget } from '@/utils/deepLinks'
 import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
@@ -25,6 +26,9 @@ import RecoverDialog from '@/components/RecoverDialog.vue'
 import { getTrustToken } from '@/utils/trustToken'
 
 const router = useRouter()
+//Адрес возврата после входа (`?redirect=`): ссылка, присланная не вошедшему, обязана
+//открыться после входа, а не смениться главной роли.
+const route = useRoute()
 const auth = useAuthStore()
 import MfaPrompt from '@/components/auth/MfaPrompt.vue'
 const easter = useEasterStore()
@@ -62,6 +66,10 @@ onMounted(async () => {
       if (data?.url) apk.value = { url: data.url, version: data.versionName || '' }
     } catch { apk.value = { url: '', version: '' } }
   }
+  //🔒 N-04 (аудит 22.09.2026): внутри программы входа по ключу доступа нет. Ключ
+  //привязан к адресу САЙТА, а программа открыта с 127.0.0.1 — браузер не предложит ни
+  //одного ключа, и кнопка была бы заведомо нерабочей дверью.
+  if (insideApp) { canBiometric.value = false; return }
   try { canBiometric.value = await platformAuthenticatorAvailable() } catch { canBiometric.value = false }
 })
 
@@ -201,7 +209,7 @@ async function submit() {
     //его как рабочий, а вход мог и не состояться.
     if (user?.mfaRequired) return
     await saveCredential(login.value, password.value)
-    router.push(HOME_BY_ROLE[user.role] || '/')
+    router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
     // Far Cry: решение принял СЕРВЕР (седьмая неудача подряд + шанс) и сообщил
@@ -215,7 +223,7 @@ async function submitPasskey() {
   needApproval.value = false
   try {
     const user = await auth.loginPasskey()
-    router.push(HOME_BY_ROLE[user.role] || '/')
+    router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
   } catch {
     /* ошибка уже в auth.error (или отмена — молчим) */
   }
@@ -231,7 +239,7 @@ function onApproved() { needApproval.value = false; submit() }
 async function onMfaDone(user) {
   auth.cancelMfa()
   await saveCredential(login.value, password.value)
-  router.push(HOME_BY_ROLE[user.role] || '/')
+  router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
 }
 
 // Регистрация студента / восстановление пароля — модалки под кнопкой «Войти».
@@ -474,7 +482,7 @@ function openRecover() {
         <!-- Вход по passkey. На телефоне это Face ID/отпечаток, на ПК — «ключ доступа»
              (Windows Hello / PIN / аппаратный ключ), поэтому подпись зависит от устройства.
              Включается в настройках профиля после обычного входа. -->
-        <div v-if="canBiometric && !auth.mfaChallenge" class="mt-3">
+        <div v-if="canBiometric && !auth.mfaChallenge && !insideApp" class="mt-3">
           <button type="button" :disabled="auth.loading"
                   class="flex w-full items-center justify-center gap-2 rounded-sm border border-accent/50 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent-glow disabled:opacity-50"
                   @click="submitPasskey">

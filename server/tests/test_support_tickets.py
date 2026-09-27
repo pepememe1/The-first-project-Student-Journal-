@@ -9,8 +9,8 @@ test_support_tickets.py — обращения в модерацию: автоо
 🔴 И отдельно — дверь наружу из автоответчика. Робот, из которого нельзя выйти к человеку,
 превращает поддержку в тупик ровно для тех случаев, которые в список тем не попали.
 
-⚠️ ОБРАТНЫЙ ХОД ПРОВЕРЕН: убрать вызов `on_moderation_message` из отправки — краснеет
-первый тест; убрать «human» из URGENT_CATEGORIES — краснеет тест срочности; снять
+⚠️ ОБРАТНЫЙ ХОД ПРОВЕРЕН: убрать вызов `_route_moderation` из отправки (с 26.09.2026 —
+F-14: маршрут в одной транзакции с сообщением) — краснеет первый тест; убрать «human» из URGENT_CATEGORIES — краснеет тест срочности; снять
 подстановку номера в `moderator_display_name` — краснеет тест представления.
 """
 from datetime import datetime, timedelta, timezone
@@ -542,3 +542,32 @@ def test_a_closed_request_stops_being_the_current_one(client):
     client.post(f"/web/admin/messenger/support/{tid}/resolve", json={}, headers=mod)
     cur = client.get("/web/messenger/moderation/categories", headers=bob).json()["current"]
     assert cur is None, cur
+
+
+def test_a_failed_routing_fails_the_send_instead_of_losing_the_request(client, monkeypatch):
+    """🔥 F-14 (аудит 22.09.2026): тикет и сообщение фиксируются ОДНИМ коммитом.
+
+    Раньше тикет заводился после коммита и молча глотал свои сбои: сообщение «ушло», а
+    срочность и тикет не появлялись — звавший человека ждал в хвосте очереди, уверенный,
+    что его услышали. Теперь сбой маршрута роняет всю отправку, и человек повторяет.
+
+    ⚠️ ОБРАТНЫЙ ХОД ПРОВЕРЕН: вернуть маршрут в best-effort после коммита — краснеет."""
+    admin = make_admin(client)
+    _, bob = _student(client, admin)
+    conv = _open_chat(client, bob)
+    from app.routers.messenger import moderation
+
+    def boom(*a, **k):
+        raise RuntimeError("очередь обращений недоступна")
+    monkeypatch.setattr(moderation, "open_support_ticket", boom)
+    text = "помогите, позовите человека"
+    try:
+        r = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": text},
+                        headers=bob)
+        failed = r.status_code >= 500
+    except RuntimeError:
+        failed = True
+    assert failed, "маршрут обращения упал, а отправка прошла как успешная"
+    monkeypatch.undo()
+    bodies = [m["body"] for m in _messages(client, bob, conv)]
+    assert text not in bodies, "сообщение сохранилось без тикета — обращение потеряло маршрут"

@@ -27,13 +27,22 @@ def voice(payload: dict = Body(...),
           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Переформулировать готовый фактический текст провайдером сервера.
 
-    Тело: {facts, role?, question?}. Роль по умолчанию — роль пользователя. Токен
-    провайдера не раскрывается. Пустые факты → пустой ответ (нечего озвучивать)."""
+    Тело: {facts, role?, question?, locale?, mode?}. Роль по умолчанию — роль
+    пользователя. Токен провайдера не раскрывается. Пустые факты → пустой ответ.
+
+    `mode="chat"` — свободный разговор (вопрос не про журнал, `vector_llm.free_chat`):
+    локальный Вектор программы ключа не имеет (26.09.2026, см. `vector_llm.set_remote`)
+    и просит здесь и его. Данных журнала в таком запросе нет — только сам вопрос.
+    `locale` — язык интерфейса; без поля — русский, как у прежних сборок."""
+    role = (payload.get("role") or user.role or "student")
+    question = (payload.get("question") or "")
+    locale = (payload.get("locale") or "ru")
+    cfg = W.load_config(db)
+    if payload.get("mode") == "chat":
+        if not question.strip():
+            return {"text": ""}
+        return {"text": vector_llm.free_chat(cfg, question, role, "", locale)}
     facts = (payload.get("facts") or "").strip()
     if not facts:
         return {"text": ""}
-    role = (payload.get("role") or user.role or "student")
-    question = (payload.get("question") or "")
-    cfg = W.load_config(db)
-    text = vector_llm.voice(cfg, facts, role, question)
-    return {"text": text}
+    return {"text": vector_llm.voice(cfg, facts, role, question, locale)}

@@ -123,7 +123,7 @@ def main() -> int:
     cohesion = score_all(G, communities)
     gods = god_nodes(G)
     surprises = surprising_connections(G, communities)
-    labels = {cid: "Community " + str(cid) for cid in communities}
+    labels = _auto_labels(G, communities)
     questions = suggest_questions(G, communities, labels)
 
     # ⚠️ Защита от усадки существует не зря: испорченный прогон (пропали куски кэша,
@@ -153,9 +153,56 @@ def main() -> int:
         }, ensure_ascii=False),
         encoding="utf-8",
     )
+    _render_html(G, communities, labels)
     print(f"ГОТОВО: {G.number_of_nodes()} узлов, {G.number_of_edges()} рёбер, "
           f"{len(communities)} сообществ")
     return 0
+
+
+#Больше этого браузер картинку не тянет: graphify тогда сам строит сводный вид по
+#сообществам (узел = сообщество). Карта на 14 тысяч узлов целиком открывалась бы минуты.
+HTML_NODE_LIMIT = 5000
+
+
+def _auto_labels(G, communities) -> dict:
+    """Название сообщества из его СОДЕРЖИМОГО: самая частая папка + самый связанный узел.
+
+    Прежде здесь стояло «Community N»: осмысленные названия давала модель при полном
+    `/graphify`, а эта пересборка модель не зовёт. Номера при каждой пересборке
+    перетасовываются, поэтому подставить августовские подписи нельзя — это были бы ЧУЖИЕ
+    названия. Выводим из того, что в сообществе реально лежит."""
+    from collections import Counter
+    out = {}
+    for cid, members in communities.items():
+        folders = Counter()
+        best, best_deg = "", -1
+        for nid in members:
+            attrs = G.nodes.get(nid, {}) if hasattr(G, "nodes") else {}
+            src = (attrs.get("source_file") or "").replace("\\", "/")
+            if src:
+                folders["/".join(src.split("/")[:-1][:3]) or "(корень)"] += 1
+            deg = G.degree(nid) if nid in G else 0
+            if deg > best_deg:
+                best, best_deg = (attrs.get("label") or str(nid)), deg
+        folder = folders.most_common(1)[0][0] if folders else "?"
+        name = f"{folder} · {best}"
+        out[cid] = name if len(name) <= 60 else name[:57] + "…"
+    return out
+
+
+def _render_html(G, communities, labels) -> None:
+    """Перерисовать `graph.html` из только что собранного графа.
+
+    ⚠️ До 26.09.2026 этого шага не было: `graph.json` и отчёт обновлялись, а картинка
+    оставалась августовской, и открывший её человек справедливо считал карту старой
+    (замечание Ярослава). Сбой рисования карту не отменяет — данные уже записаны."""
+    try:
+        from graphify.export import to_html
+        to_html(G, communities, str(OUT / "graph.html"), community_labels=labels,
+                node_limit=HTML_NODE_LIMIT)
+        print("      graph.html перерисован", flush=True)
+    except Exception as e:      # noqa: BLE001
+        print(f"      graph.html НЕ перерисован: {e}", flush=True)
 
 
 if __name__ == "__main__":

@@ -335,14 +335,69 @@ def _online_logins() -> set:
         return set()
 
 
-def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: dict = None) -> dict:
+#🔒 КТО ВИДИТ МОДЕРАТОРА ЛИЧНО (аудит 22.09.2026, находка F-10, P1). Номер вместо
+#фамилии в подписи (`moderator_display_name`) не давал анонимности: в каждом сообщении
+#лежал сырой `sender_id`, а по нему карточка профиля отдавала ФИО, аватарку и «О себе»
+#— то есть «Модератор №3» раскрывался одним запросом. Решение принято такое: личность
+#модератора видят администратор и сами модераторы (им это нужно для работы), остальным —
+#только номер. Маска включена ПО УМОЛЧАНИЮ: вызов без указания зрителя маскирует, и
+#забытое место оказывается на безопасной стороне, а не утечкой.
+_REVEAL_MODERATORS_TO = frozenset({"admin", "moderator"})
+
+
+def moderator_alias(u) -> str:
+    """Псевдоним-идентификатор модератора: по нему не восстановить ни логин, ни ФИО."""
+    return "moderator:%d" % int(getattr(u, "mod_number", 0) or 0)
+
+
+def _masked_for(u, viewer=None) -> bool:
+    """Прятать ли личность `u` от `viewer` (None — зритель неизвестен: прятать)."""
+    if getattr(u, "role", "") != "moderator" or not getattr(u, "mod_number", 0):
+        return False
+    if viewer is not None and (getattr(viewer, "id", None) == getattr(u, "id", "")
+                               or getattr(viewer, "role", "") in _REVEAL_MODERATORS_TO):
+        return False
+    return True
+
+
+def _masked_moderator_card(u) -> dict:
+    """Карточка модератора для тех, кому личность не положена: номер и роль — всё.
+
+    Аватарка, «О себе», баннер и оформление имени тоже личные: по ним узнают человека
+    так же уверенно, как по фамилии. Форма ответа — та же, что у `_safe_user`: клиенту
+    не нужна отдельная ветка разбора."""
+    return {"id": moderator_alias(u), "full_name": moderator_display_name(u),
+            "role": "moderator", "group_name": "", "birthday": "", "online": False,
+            "avatar": "", "bio": "", "profile_color": "", "profile_banner": "",
+            "name_font": "", "name_effect": "", "name_color": "", "muted": False,
+            "status_kind": "", "status_text": "", "masked": True}
+
+
+def _sender_aliases(db: Session, sender_ids, viewer_id: str = "") -> dict:
+    """{id отправителя: псевдоним} для модераторов, которых зрителю видеть нельзя.
+
+    Считается пачкой на ленту — один запрос, а не по сообщению (N+1 на одном ядре)."""
+    ids = {s for s in sender_ids if s and s != "system"}
+    if not ids:
+        return {}
+    viewer = db.get(User, viewer_id) if viewer_id else None
+    rows = (db.query(User).filter(User.id.in_(ids), User.role == "moderator").all())
+    return {u.id: moderator_alias(u) for u in rows if _masked_for(u, viewer)}
+
+
+def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: dict = None,
+               viewer=None) -> dict:
     """Безопасные поля пользователя для карточки/каталога (НИЧЕГО, что помогает входу в
     чужой аккаунт — см. MESSENGER-PLAN.md §9: без логина, почты, телефона, хэша, device-id).
     У студента — группа; у преподавателя — предметы, которые ведёт. online — по presence.
     `muted` (глобальный мьют модерацией) заполняем ТОЛЬКО в админ-контексте — рядовым
     пользователям состояние мьюта чужого аккаунта в каталоге ни к чему.
     `status` — §D7: {kind, custom_text} НАКЛАДКА поверх presence (dnd/studying/away);
-    kind='' значит статуса нет — клиент показывает просто online/не в сети."""
+    kind='' значит статуса нет — клиент показывает просто online/не в сети.
+    `viewer` — кто смотрит: модератора лично видят только администратор и модераторы
+    (см. `_masked_for`); без зрителя — маска, это безопасная сторона."""
+    if _masked_for(u, viewer):
+        return _masked_moderator_card(u)
     prefs = u.prefs if isinstance(u.prefs, dict) else {}
     st = status or {}
     d = {
@@ -431,6 +486,34 @@ def _mute_expired(row) -> bool:
 def _is_muted(db: Session, user_id: str) -> bool:
     """Замьючен ли пользователь глобально (модерацией). Один индексный поиск по PK."""
     return _mute_row(db, user_id) is not None
+
+
+#🔒 ЖАЛОБЫ — С ДЕДУПЛИКАЦИЕЙ И СУТОЧНЫМ ПОТОЛКОМ (аудит 22.09.2026, находка F-13).
+#Каждый вызов заводил новый тикет — со снимком до 400 КБ (аватарка data:URL). Один
+#участник сотней одинаковых жалоб забивал очередь модерации и базу, а настоящие жалобы
+#тонули среди копий. Лимит считается ПО БАЗЕ, а не в памяти процесса: переживает
+#рестарт и не зависит от числа воркеров (урок `shared_state`: поворкерный счётчик
+#молча ослабляет защиту в N раз).
+REPORTS_PER_DAY = 20
+
+
+def _report_quota_left(db: Session, reporter_id: str) -> int:
+    """Сколько жалоб этот человек ещё может подать за скользящие сутки (обе очереди
+    считаются вместе — иначе лимит обходился бы чередованием)."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    edge = (_dt.now(_tz.utc) - _td(days=1)).isoformat()
+    used = 0
+    for m in (MessageReport, UserReport):
+        used += (db.query(m).filter(m.reporter_id == reporter_id, m.created_at >= edge)
+                 .count())
+    return max(0, REPORTS_PER_DAY - used)
+
+
+def _require_report_quota(db: Session, reporter_id: str) -> None:
+    if _report_quota_left(db, reporter_id) <= 0:
+        raise HTTPException(status_code=429,
+                            detail="Слишком много жалоб за сутки. Если случай срочный — "
+                                   "напишите в обращения модерации (⚙).")
 
 
 def _muted_set(db: Session, user_ids) -> set:
@@ -750,7 +833,7 @@ def _names_for(db: Session, sender_ids) -> dict:
     return out
 
 
-def moderator_display_name(u) -> str:
+def moderator_display_name(u, allow_login: bool = True) -> str:
     """Как человека подписывают в переписке.
 
     🔢 МОДЕРАТОР ВИДЕН НОМЕРОМ, А НЕ ФАМИЛИЕЙ (12.09.2026, требование Влада). Он
@@ -764,10 +847,17 @@ def moderator_display_name(u) -> str:
     и заметить это можно было бы только глазами, в чужой переписке.
     ⚠️ Номер пустой (0) — подписываем как обычно: человек мог получить роль синком со
     старой сборки, и «Модератор №0» выглядел бы поломкой.
+    ⚠️ `allow_login=False` — для превью списка чатов: там безымянного автора не
+    подписывают ВОВСЕ (`test_chat_list_preview_name.py`), логин человек о себе не писал.
+    Запасной вариант с логином превью получило 25.09.2026 вместе с переходом на эту
+    дверь (F-10), и полный прогон поймал это на следующий день.
     """
     if getattr(u, "role", "") == "moderator" and getattr(u, "mod_number", 0):
         return "Модератор №%d" % int(u.mod_number)
-    return u.full_name or u.name or u.login or u.id
+    name = u.full_name or u.name or ""
+    if name or not allow_login:
+        return name
+    return u.login or u.id
 
 
 #Номер живёт в `models.next_moderator_number`: его зовут админка, консольный скрипт и
@@ -842,12 +932,15 @@ def _att_map(db, messages) -> dict:
 def _msgs_out(db, rows, me_id: str, names: dict) -> list:
     """Сериализовать пачку сообщений вместе с вложениями."""
     amap = _att_map(db, rows)
+    aliases = _sender_aliases(db, [m.sender_id for m in rows], me_id)
     return [_msg_out(m, me_id, names.get(m.sender_id, ""),
-                     amap.get(getattr(m, "attachment_id", "") or ""))
+                     amap.get(getattr(m, "attachment_id", "") or ""),
+                     sender_alias=aliases.get(m.sender_id, ""))
             for m in rows]
 
 
-def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = None) -> dict:
+def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = None,
+             sender_alias: str = "") -> dict:
     """Сериализация сообщения для клиента. Удалённое-у-всех отдаём тумбстоуном (без текста).
     `mine` вычисляет сервер (клиент своего id не знает — в JWT/сторе только логин+роль).
     `sender_name` нужен в группах/каналах (в личном чате имя не показываем)."""
@@ -855,7 +948,9 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = Non
     return {
         "id": m.id,
         "conversation_id": m.conversation_id,
-        "sender_id": m.sender_id,
+        #Модератора зрителю без права на личность отдаём псевдонимом (F-10): по сырому
+        #id карточка профиля раскрывала «Модератора №N» одним запросом.
+        "sender_id": sender_alias or m.sender_id,
         "sender_name": sender_name,
         "mine": bool(me_id) and m.sender_id == me_id,
         "kind": getattr(m, "kind", "") or "text",          #§D6: text | system
@@ -1813,6 +1908,16 @@ def _iso_to_ddmmyyyy(iso: str) -> str:
 
 
 # ── Модерация (админ) — очередь тикетов, просмотр бесед (с аудитом), ответ ────────────
+class _StaffViewer:
+    """Зритель очереди модерации: её открывают только администратор и модераторы
+    (маршрут закрыт на входе), поэтому личность участников жалобы им положена."""
+    id = ""
+    role = "admin"
+
+
+_STAFF_VIEWER = _StaffViewer()
+
+
 def _report_out(db: Session, r: MessageReport) -> dict:
     reporter = db.query(User).filter(User.id == r.reporter_id).first()
     reported = db.query(User).filter(User.id == r.reported_user_id).first()
@@ -1832,8 +1937,10 @@ def _report_out(db: Session, r: MessageReport) -> dict:
         "reported_name": (reported.full_name if reported else r.reported_user_id),
         #Карточки участников (аватар, ФИО, роль, группа/предметы, состояние мьюта) — админ
         #в жалобе видит, КТО пожаловался и НА КОГО, с лицом, контекстом и кнопкой мьюта.
-        "reporter": _safe_user(reporter, onl, r.reporter_id in mset) if reporter else None,
-        "reported": _safe_user(reported, onl, r.reported_user_id in mset) if reported else None,
+        "reporter": (_safe_user(reporter, onl, r.reporter_id in mset, viewer=_STAFF_VIEWER)
+                     if reporter else None),
+        "reported": (_safe_user(reported, onl, r.reported_user_id in mset, viewer=_STAFF_VIEWER)
+                     if reported else None),
         "handled_by": r.handled_by, "resolution_note": r.resolution_note,
     }
 

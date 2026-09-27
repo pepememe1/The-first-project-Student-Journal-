@@ -86,7 +86,20 @@ def sign_upload(payload: dict = Body(...), user: User = Depends(get_current_user
 
     conv_id = str(payload.get("conversation_id") or "")
     _require_participant(db, conv_id, user)
+    return start_signed_upload(db, user, conv_id, payload)
 
+
+def start_signed_upload(db: Session, user: User, scope: str, payload: dict) -> dict:
+    """Проверки файла, суточный потолок, запись вложения и подписанная ссылка на ЗАГРУЗКУ.
+
+    ОДНА дверь для беседы и для курса (аудит F-26): размер, тип по белому списку и
+    суточный потолок проверяются здесь, и вторая копия этих проверок у курсов разошлась
+    бы с первой на первой же правке. `scope` — кому принадлежит файл: id беседы или
+    `course:<id>`. Права на `scope` проверяет ВЫЗЫВАЮЩИЙ до этого вызова.
+    ⚠️ Ссылка на скачивание по этому `scope` из мессенджера не выдаётся: там доступ —
+    участие в беседе, а беседы с id `course:<id>` не существует."""
+    if not storage.configured():
+        raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
     name = (str(payload.get("name") or "")).strip()[:200]
     size = int(payload.get("size") or 0)
     mime = (str(payload.get("mime") or "")).strip().lower()
@@ -114,8 +127,8 @@ def sign_upload(payload: dict = Body(...), user: User = Depends(get_current_user
                        left // (1024 * 1024))))
 
     att_id = f"att:{uuid4().hex}"
-    key = storage.object_key(conv_id, att_id)
-    db.add(Attachment(id=att_id, conversation_id=conv_id, uploader_id=user.id,
+    key = storage.object_key(scope, att_id)
+    db.add(Attachment(id=att_id, conversation_id=scope, uploader_id=user.id,
                       name=name, size=size, mime=mime, storage_key=key,
                       created_at=_iso(), ready=False))
     db.commit()
@@ -244,16 +257,19 @@ def attachment_url(att_id: str, user: User = Depends(get_current_user),
     if a is None or not a.ready:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
     _require_participant(db, a.conversation_id, user)
+    return {"url": signed_download(a), "attachment": _att_out(a)}
+
+
+def signed_download(a: Attachment) -> str:
+    """Ссылка на СКАЧИВАНИЕ, живущая минуты. Права проверяет вызывающий (беседа, курс)."""
     if not storage.configured():
         raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
     if storage.mode() == "local":
-        token = storage.local_token(att_id, "get", storage.DOWNLOAD_TTL_S)
-        return {"url": f"/web/messenger/uploads/local/{att_id}?t={token}",
-                "attachment": _att_out(a)}
+        token = storage.local_token(a.id, "get", storage.DOWNLOAD_TTL_S)
+        return f"/web/messenger/uploads/local/{a.id}?t={token}"
     #Имя и тип уходят в ссылку подписанными: браузер сохранит файл под настоящим
     #именем, а не под ключом `att:<hex>` без расширения.
-    return {"url": storage.download_url(a.storage_key, a.name, a.mime),
-            "attachment": _att_out(a)}
+    return storage.download_url(a.storage_key, a.name, a.mime)
 
 
 @router.get("/chats/{conv_id}/files")

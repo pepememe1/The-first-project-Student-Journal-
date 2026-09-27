@@ -40,16 +40,47 @@ def test_development_allows_default_jwt_secret():
     assert _run_assert(config, is_prod=False, secret=config.DEV_JWT_SECRET) == []
 
 
-def test_production_warns_about_unencrypted_db_and_short_secret():
-    """Остальное — ПРЕДУПРЕЖДЕНИЯ, а не отказ.
-
-    Без шифрования базы продукт нарушает 152-ФЗ, но работает; останавливать из-за этого
-    колледж на середине учебного дня — хуже, чем громко пожаловаться в лог и журнал
-    событий администратора."""
+def test_production_refuses_to_start_without_the_db_key():
+    """🔒 F-27 (аудит 22.09.2026). До 26.09.2026 это было предупреждением «чтобы не
+    останавливать колледж посреди дня». Но проверка идёт только на СТАРТЕ, а старт без
+    ключа даёт либо сервер, падающий на каждом запросе (база зашифрована), либо ПДн,
+    молча легшие на диск открытым текстом (база свежая). Отказ с причиной честнее обоих."""
     from app import config
 
-    warns = _run_assert(config, is_prod=True, secret="x" * 8, db_key="")
-    assert any("GRADEBOOK_DB_KEY" in w for w in warns)
+    with pytest.raises(RuntimeError, match="GRADEBOOK_DB_KEY"):
+        _run_assert(config, is_prod=True, secret="x" * 40, db_key="")
+
+
+def test_production_refuses_a_key_without_the_driver(monkeypatch):
+    """Ключ есть, драйвера нет — `db._build_engine` открыл бы файл БЕЗ шифрования."""
+    import importlib.util
+    from app import config
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "sqlcipher3" else real(name, *a))
+    with pytest.raises(RuntimeError, match="sqlcipher3"):
+        _run_assert(config, is_prod=True, secret="x" * 40, db_key="ab" * 32)
+
+
+def test_development_runs_without_the_db_key():
+    """В разработке ключа нет законно (Windows без драйвера, CI): там нет ПДн."""
+    from app import config
+
+    assert _run_assert(config, is_prod=False, secret="x" * 40, db_key="") == []
+
+
+def test_production_warns_about_a_short_secret(monkeypatch):
+    """Короткий ключ подписи — ПРЕДУПРЕЖДЕНИЕ, а не отказ: подпись слабее, но продукт
+    не дырявый, и останавливать из-за этого колледж незачем."""
+    import importlib.util
+    from app import config
+
+    #Драйвер «есть» — подменой, а не пропуском теста: в CI его может не быть, и пропуск
+    #по отсутствию ИНСТРУМЕНТА молча гасил бы проверку (`test_tests_are_not_blind.py`).
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: object() if name == "sqlcipher3" else real(name, *a))
+    warns = _run_assert(config, is_prod=True, secret="x" * 8, db_key="ab" * 32)
     assert any("32" in w for w in warns)
 
 

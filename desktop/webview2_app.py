@@ -353,3 +353,10 @@ def _flush_sync() -> None:
         DBManager.backup(reason="on_exit")
     except Exception as e:      # noqa: BLE001 — бэкап не имеет права мешать закрытию
         _LOG.info(f"[webview2] копия при выходе не сделана: {e}")
+    #🔥 W-12 (26.09.2026): копия выше — это `vsgutu_grades.db`, из которой интерфейс давно
+    #не читает. Очередь досылки (оценки, которых бой ещё не видел) живёт в ЛИЧНОЙ копии,
+    #и снимка её не снимал никто. Снимаем тем же ходом и после той же досылки.
+    try:
+        local_api.backup_personal_copy_on_exit()
+    except Exception as e:      # noqa: BLE001 — снимок не имеет права мешать закрытию
+        _LOG.info(f"[webview2] снимок личной копии при выходе не сделан: {e}")

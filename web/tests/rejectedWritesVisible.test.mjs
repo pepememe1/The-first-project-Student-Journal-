@@ -71,6 +71,15 @@ test('кнопки «повторить» у отказов нет — серв�
     'повтор заведомо получит тот же отказ; кнопка, которая не помогает, хуже её отсутствия')
 })
 
+test('«оставить моё» есть только у конфликта, отказ по существу так не переотправить', async () => {
+  //W-13б: у конфликта выбор за человеком, а отказ по существу повтором не лечится — и
+  //единственная дверь переотправки обязана это различать сама, а не надеяться на вёрстку.
+  const src = read(join(SRC, 'api', 'outbox.js'))
+  const body = src.slice(src.indexOf('export function resolveConflict('))
+  assert.match(body.slice(0, 600), /if \(!e \|\| !e\.conflict\) return false/,
+    'переотправка доступна и для отказа по существу')
+})
+
 test('все ключи перевода отказов есть во ВСЕХ трёх локалях', () => {
   const dict = read(join(SRC, 'i18n', 'dictionaries.js'))
   const badge = read(files.find((p) => p.endsWith('RejectedWritesBadge.vue')))
