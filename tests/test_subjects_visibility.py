@@ -10,9 +10,13 @@ test_subjects_visibility.py — Предмет с реальными занят�
 заходом). Занятие заводится ПРЯМОЙ записью в таблицу — тем же способом, каким её
 наполняет синхронизация, то есть ближе к живому пути, чем было. Проверяемые функции
 (`get_subjects_for_group`, `DBManager.group_subjects_with_lessons`) не менялись.
+
+⚠️ 30.09.2026 `data/utils.py` вместе с `get_subjects_for_group` перенесён в архив
+(`archive/data/utils.py`, мёртвый код: в продукте его не звал никто). Проверка, шедшая
+через него, уехала туда же (`archive/tests/test_subjects_visibility_utils.py`); здесь
+остался запрос `DBManager`, у которого своя судьба (слой журнала эпохи Qt).
 """
 from data.core import DBManager
-from data.utils import get_subjects_for_group
 
 TOURISM = "Информационно-коммуник. технологии в туризме и гостеприимстве"
 
@@ -33,12 +37,6 @@ def _add_lesson(group: str, subject: str, lid: str, deleted: int = 0):
         (lid, group, subject, deleted))
     conn.commit()
     conn.close()
-
-
-def test_subject_with_lessons_is_visible(fresh_db):
-    #Предмет, которого нет ни в портале, ни в списке предметов группы, но есть занятия.
-    _add_lesson("К74/1", TOURISM, "L1")
-    assert TOURISM in get_subjects_for_group("К74/1")
 
 
 def test_deleted_lesson_subject_not_forced(fresh_db):

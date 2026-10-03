@@ -436,6 +436,32 @@ async function resetAll() {
   catch { toast.error(locale.t('adminSchedule.resetFailed', 'Не удалось сбросить')) }
 }
 
+// ── Сообщить группе об изменении ────────────────────────────────────────────────────
+// Рассылка — ЯВНОЙ кнопкой, а не на каждую правку ячейки: админ правит десятки ячеек
+// подряд, и «правка = уведомление» дало бы студенту три десятка пушей за минуту (см.
+// server/app/routers/web/schedule.py::admin_schedule_publish). До 30.09.2026 кнопки не
+// было ВООБЩЕ: сервер умел, а уведомление «расписание изменилось» и канал «Расписание ·
+// Группа» не получали ничего.
+const publishing = ref(false)
+async function notifyGroup() {
+  if (dirty.value) {
+    toast.error(locale.t('adminSchedule.notifySaveFirst', 'Сначала сохраните правки — иначе группа получит уведомление о расписании, которого ещё нет'))
+    return
+  }
+  if (!(await confirm({
+    title: locale.t('adminSchedule.confirmNotifyTitle', { group: group.value }),
+    message: locale.t('adminSchedule.confirmNotifyMessage', 'Студенты группы и её преподаватели получат уведомление, а в канал «Расписание» группы придёт сообщение.'),
+    okText: locale.t('adminSchedule.confirmNotifyOk', 'Сообщить'),
+  }))) return
+  publishing.value = true
+  try {
+    const r = (await adminApi.publishSchedule(group.value)).data
+    toast.success(locale.t('adminSchedule.notifyDone', { n: r.notified ?? 0 }))
+  } catch (e) {
+    toast.error(e?.response?.data?.detail || locale.t('adminSchedule.notifyFailed', 'Не удалось разослать уведомление'))
+  } finally { publishing.value = false }
+}
+
 // ── Смена группы/недели с защитой от потери черновика ───────────────────────────────
 async function onGroupChange(e) {
   const next = e.target.value
@@ -622,6 +648,7 @@ function isHover(day, slot) {
             <AppButton variant="ghost" size="sm" @click="refreshAll">{{ locale.t('adminSchedule.pullAllGroups', '↻ Все группы') }}</AppButton>
             <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
             <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
+            <AppButton variant="ghost" size="sm" :disabled="publishing || !group" @click="notifyGroup">{{ locale.t('adminSchedule.notifyGroupBtn', 'Сообщить группе') }}</AppButton>
           </div>
           <AppButton v-else variant="ghost" size="sm" class="ml-auto" @click="load"><RotateCw class="size-3.5" /> {{ locale.t('schedulePage.refresh', 'Обновить') }}</AppButton>
         </div>
@@ -725,7 +752,7 @@ function isHover(day, slot) {
     </div>
 
     <!-- Форма пары -->
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminSchedule.pairFormTitle', { group, week: weekLabel(week) }) }}</h3>
         <div class="grid grid-cols-2 gap-3">

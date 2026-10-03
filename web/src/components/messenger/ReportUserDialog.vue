@@ -61,7 +61,7 @@ function submit() {
 </script>
 
 <template>
-  <div v-if="open" class="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+  <div v-dialog v-if="open" class="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
        @click.self="emit('close')">
     <div class="w-full max-w-md rounded-2xl border border-border2 bg-card p-5 shadow-xl">
       <div class="mb-4 flex items-start justify-between gap-3">
@@ -71,7 +71,7 @@ function submit() {
             {{ locale.t('reportUser.title', 'Пожаловаться на профиль') }}
           </h3>
         </div>
-        <button type="button" @click="emit('close')" class="text-text3 hover:text-text">
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="text-text3 hover:text-text">
           <X class="size-5" />
         </button>
       </div>

@@ -55,7 +55,7 @@ const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
 export const ART_VERSION = 3
 let _preloaded = false
 export function preloadMascots() {
-  if (_preloaded || typeof Image === 'undefined') return
+  if (_preloaded || typeof Image === 'undefined' || lowBandwidth()) return
   _preloaded = true
   for (const s of PRELOAD) { const img = new Image(); img.src = `/mascot/${s}.webp?v=${ART_VERSION}` }
 }
@@ -90,8 +90,20 @@ const ANIM_SCOPES = {
 }
 const _animsDone = new Set()
 
+// Человек сам попросил беречь трафик («Экономия трафика» в браузере) или сеть медленная.
+// Тогда заранее не тянем ничего: украшение не имеет права занимать канал раньше того, за
+// чем человек пришёл (вход, журнал). Показанный кадр при этом грузится как обычно.
+// ⚠️ Признак ловит только то, о чём сообщает сам браузер. Сеть, которую режет оператор,
+// он может видеть быстрой — поэтому на входе маскот к тому же не монтируется там, где
+// его не видно (LoginPage.vue, `wideScreen`), а не полагается на этот признак.
+export function lowBandwidth() {
+  const c = typeof navigator !== 'undefined' ? navigator.connection : null
+  if (!c) return false
+  return !!c.saveData || c.effectiveType === 'slow-2g' || c.effectiveType === '2g'
+}
+
 export function preloadAnims(scope = 'chat') {
-  if (typeof Image === 'undefined' || _animsDone.has(scope)) return
+  if (typeof Image === 'undefined' || _animsDone.has(scope) || lowBandwidth()) return
   _animsDone.add(scope)
   for (const a of ANIM_SCOPES[scope] || []) {
     const img = new Image(); img.src = `/mascot/anim/${a}.webp?v=${ART_VERSION}`

@@ -24,8 +24,8 @@ def test_post_is_not_retried_blindly():
     """POST по умолчанию НЕ повторяется — иначе блип сети даёт ДУБЛЬ записи.
 
     Повтор безопасен только там, где сервер делает upsert (`push`) или выдаёт токен
-    (`login`/`refresh`). А `create_event`/`approve_registration`/`create_parent` при
-    повторе создают вторую сущность, и оба запроса при этом «успешны» — заметить такое
+    (`login`/`refresh`). А `create_event`/`approve_registration`/`create_parent` (методы
+    нативной админки, с 30.09.2026 в архиве) при повторе создавали вторую сущность, и оба запроса при этом «успешны» — заметить такое
     можно только по лишней строке в базе."""
     c = SyncClient("https://example.test")
     assert "POST" not in _retries(c, retry_post=False).allowed_methods

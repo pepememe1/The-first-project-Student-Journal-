@@ -74,7 +74,7 @@ async function reject(r) {
           <tr v-for="r in rows" :key="r.id" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="px-4 py-2.5 font-medium text-text">{{ r.full_name }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.group }}</td>
-            <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone || '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.email }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
               <AppButton variant="green" size="sm" :disabled="busy === r.id" @click="approve(r)">
@@ -88,7 +88,7 @@ async function reject(r) {
     </StickyXScroll>
 
     <!-- Если письмо не ушло — показываем креды админу для ручной передачи -->
-    <div v-if="issued" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" @click.self="issued = null">
+    <div v-dialog v-if="issued" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" @click.self="issued = null">
       <div class="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-card">
         <h3 class="mb-2 font-title text-lg font-bold text-text">{{ locale.t('adminRegistrations.accountCreated', 'Аккаунт создан') }}</h3>
         <p class="text-xs text-text3">{{ locale.t('adminRegistrations.emailNotSent', 'Письмо не отправлено (почта на сервере не настроена). Передайте студенту эти данные лично:') }}</p>

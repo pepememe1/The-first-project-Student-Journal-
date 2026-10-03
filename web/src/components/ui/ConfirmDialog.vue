@@ -1,7 +1,7 @@
 <script setup>
 // ConfirmDialog — единая модалка подтверждения/ввода (замена confirm()/prompt()).
 // Управляется синглтоном useConfirm; монтируется один раз в App.vue.
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { dialogState, settleDialog } from '@/composables/useConfirm'
 import AppButton from '@/components/ui/AppButton.vue'
 
@@ -14,7 +14,7 @@ function onCancel() {
   settleDialog(dialogState.mode === 'prompt' ? null : false)
 }
 
-// Фокус в поле ввода при открытии prompt; Esc — отмена.
+// Фокус в поле ввода при открытии prompt.
 watch(
   () => dialogState.open,
   async (open) => {
@@ -25,15 +25,13 @@ watch(
     }
   }
 )
-function onKey(e) {
-  if (dialogState.open && e.key === 'Escape') onCancel()
-}
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+//Esc = щелчок мимо окна (`@click.self="onCancel"`) — его делает директива v-dialog
+//(02.10.2026). Свой обработчик здесь убран: он висел на window с запуска приложения,
+//срабатывал раньше директивы и давал ДВЕ отмены на одно нажатие.
 </script>
 
 <template>
-  <div
+  <div v-dialog
     v-if="dialogState.open"
     class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
     @click.self="onCancel"

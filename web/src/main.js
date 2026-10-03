@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { vDialog } from './directives/dialog'
 import { createPinia } from 'pinia'
 import { Capacitor } from '@capacitor/core'
 import './style.css'
@@ -9,6 +10,8 @@ import { useA11yStore } from './stores/a11y'
 
 const app = createApp(App)
 app.use(createPinia())
+//Окна: роль, удержание фокуса, возврат фокуса (доступность, см. directives/dialog.js).
+app.directive('dialog', vDialog)
 
 // Живой баг («вкладка иногда не загружается, помогает только F5» — повторился и после
 // фикса :duration в AppShell.vue): БЕЗ глобального обработчика необработанная ошибка

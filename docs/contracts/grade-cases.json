@@ -677,7 +677,53 @@
       },
       "cfg": null,
       "scale": "pass_fail",
-      "expected": 2.0
+      "expected": 0.0
+    },
+    {
+      "_case": "scale_dict_absence_on_pass_fail_not_counted",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "Н"
+      },
+      "cfg": null,
+      "scale": {
+        "L1": "5",
+        "L2": "pass_fail"
+      },
+      "expected": 4.0
+    },
+    {
+      "_case": "scale_dict_absence_on_five_still_counted",
+      "items": [
+        [
+          "L1",
+          "Практика"
+        ],
+        [
+          "L2",
+          "Практика"
+        ]
+      ],
+      "records": {
+        "L1": "4",
+        "L2": "Н"
+      },
+      "cfg": null,
+      "scale": {
+        "L1": "5",
+        "L2": "5"
+      },
+      "expected": 3.0
     },
     {
       "_case": "scale_dict_mixed",

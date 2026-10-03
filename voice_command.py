@@ -95,9 +95,6 @@ _QUESTION_MARKERS = (
     "когда", "где ", "нужно ли", "можно ли", "?",
 )
 
-#Действия, которые ПИШУТ данные (требуют подтверждения преподавателя).
-WRITE_ACTIONS = ("grade", "present", "absent_n", "absent_b", "absent_o")
-
 
 @dataclass
 class ParsedCommand:
@@ -662,9 +659,6 @@ def parse_batch(text: str, roster: list[tuple[str, str]],
     out_scale = [w for w in words if re.fullmatch(r"\d{1,2}", w) and w not in ("2", "3", "4", "5")]
     absence = _absence_kind(heard)
     present = _has_present(heard) and not absence and not grade_pos
-
-    def _val_for(action_val):
-        return action_val
 
     #── Цель: вся группа / первые N / поимённо ────────────────────────────────────────
     all_group = any(k in low for k in _ALL_GROUP)

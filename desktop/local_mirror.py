@@ -314,7 +314,7 @@ class _LegacyServer(Exception):
     """Бой до 4.1: курсора не знает — идём прежним путём по времени."""
 
 
-def _apply_page(page: dict, expect_cursor, sent_filter=None) -> dict:
+def _apply_page(page: dict, expect_cursor) -> dict:
     """Применить страницу под замком. {ok, rows, removed} | {deferred} | {superseded}."""
     from desktop import desk_outbox
     with desk_outbox.APPLY_LOCK:

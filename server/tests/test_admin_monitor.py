@@ -48,3 +48,28 @@ def test_events_delta_returns_only_new(client):
     assert new["events"], "должны прийти новые события после since"
     assert all(e["id"] > last_id for e in new["events"])
     assert any(e["kind"] == "login_failed" for e in new["events"])
+
+
+def test_one_login_is_one_line_in_the_monitor_and_still_in_the_audit(client):
+    """🔥 Живой прогон 01.10.2026: каждый вход в мониторе выглядел трижды — «вход
+    выполнен» и рядом сырой код «login.ok · login.ok» от журнала аудита. В монитор —
+    одна запись человеческими словами; в БД аудита запись остаётся (её читает разбор
+    инцидентов и пасхалки входа)."""
+    from app.db import SessionLocal
+    from app.models import AuditEvent
+    h = make_admin(client)
+    last_id = client.get("/admin/events", headers=h).json()["last_id"]
+    assert client.post("/auth/login", json={"login": "admin", "password": "adminpass1"}
+                       ).status_code == 200
+    client.post("/auth/login", json={"login": "admin", "password": "wrong"})
+    new = client.get("/admin/events", headers=h, params={"since": last_id}).json()["events"]
+    kinds = [e["kind"] for e in new]
+    assert kinds.count("login") == 1 and kinds.count("login_failed") == 1, kinds
+    assert not {"login.ok", "login.fail"} & set(kinds), f"дубль сырым кодом: {kinds}"
+    db = SessionLocal()
+    try:
+        actions = {a for (a,) in db.query(AuditEvent.action).filter(
+            AuditEvent.action.in_(("login.ok", "login.fail"))).all()}
+    finally:
+        db.close()
+    assert actions == {"login.ok", "login.fail"}, "вход перестал попадать в журнал аудита"

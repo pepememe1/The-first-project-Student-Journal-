@@ -294,25 +294,86 @@ def test_queued_edit_is_checked_by_number(client):
 
 
 def test_concurrent_write_between_read_and_check_is_caught(client, monkeypatch):
-    """W-15: строку прочитали, а до записи её поменял другой запрос. Проверка обязана
-    судить по строке, перечитанной ПОД ЗАМКОМ, а не по снимку до него."""
+    """W-15: строку прочитали, а до записи её поменял другой запрос. Правка, снятая со
+    старой версии, НЕ имеет права молча затереть чужую.
+
+    ⚠️ С 30.09.2026 замок писателя берётся ДО чтения строки (замок зачётки, находка
+    ревью), поэтому «чужая запись между чтением и проверкой» больше не может проскочить —
+    она ЖДЁТ нашего коммита. Прежняя имитация писала из ТОГО ЖЕ потока, держащего замок,
+    и упиралась в него сама; в жизни так не бывает. Теперь чужая запись идёт из другого
+    потока, как настоящий параллельный запрос, и проверяется сам инвариант: либо наш
+    ответ — конфликт (409), либо обе записи легли ПО ОЧЕРЕДИ и чужая — после нашей.
+    Недопустимо одно: 200 при том, что в базе осталась наша «5» поверх чужой «2»."""
+    import threading
     admin, t1, *_ = _world(client)
     base = _set_grade(client, t1, "4").json()["change_seq"]
     from app.routers.web import write as W
     from app.db import SessionLocal
     from app.models import Grade
     real = W._seq_of
+    done = threading.Event()
+    errors = []
+
+    def other_request():
+        try:
+            with SessionLocal() as other:      #чужой запрос в своём потоке
+                g = other.get(Grade, "stud:s1|L21")
+                g.grade = "2"
+                other.commit()
+        except Exception as e:      # noqa: BLE001 — отказ базы тоже результат
+            errors.append(e)
+        finally:
+            done.set()
+
+    worker = []
 
     def racing(row):
-        with SessionLocal() as other:          #чужой запрос успел между чтением и записью
-            g = other.get(Grade, "stud:s1|L21")
-            g.grade = "2"
-            other.commit()
+        if not worker:                          #стартует ровно между чтением и проверкой
+            t = threading.Thread(target=other_request)
+            worker.append(t)
+            t.start()
+            done.wait(0.5)                      #даём ему шанс вклиниться, если замка нет
         return real(row)
 
     monkeypatch.setattr(W, "_seq_of", racing)
     r = _set_grade(client, t1, "5", base_seq=base)
-    assert r.status_code == 409, "правка затёрла изменение, сделанное между чтением и записью"
+    worker[0].join(15)
+    assert not worker[0].is_alive(), "чужая запись так и не дождалась замка"
+    assert not errors, errors
+    with SessionLocal() as db:
+        final = db.get(Grade, "stud:s1|L21").grade
+    if r.status_code == 200:
+        assert final == "2", "правка затёрла изменение, сделанное между чтением и записью"
+    else:
+        assert r.status_code == 409, r.text
+
+
+def test_concurrent_lesson_edit_between_read_and_check_is_caught(client, monkeypatch):
+    """W-15 на пути БЕЗ раннего замка — правка занятия: строку прочитали, другой запрос
+    поменял её ДО замка, и проверка обязана судить по строке, перечитанной под ним.
+
+    ⚠️ Зачем отдельно (Полковник, 30.09.2026): с тех пор как запись оценки берёт замок до
+    чтения, тест выше держит перечитывание (`db.refresh` в `_ensure_base_version`) только
+    вместе с ранним замком. Здесь раннего замка нет, и удаление перечитывания краснеет само."""
+    admin, t1, *_ = _world(client)
+    from app.routers.web import write as W
+    from app.db import SessionLocal
+    from app.models import Lesson
+    with SessionLocal() as db:
+        base = int(db.get(Lesson, "L21").change_seq or 0)
+    real = W._seq_of
+
+    def racing(row):
+        with SessionLocal() as other:          #чужой запрос успел до нашего замка
+            lesson = other.get(Lesson, "L21")
+            lesson.topic = "Чужая тема"
+            other.commit()
+        return real(row)
+
+    monkeypatch.setattr(W, "_seq_of", racing)
+    r = client.put("/web/teacher/lesson/L21", json={"topic": "Моя тема", "base_seq": base},
+                   headers=t1)
+    assert r.status_code == 409, r.text
 
 
 def test_base_number_of_a_row_is_unknown_when_the_copy_has_none():

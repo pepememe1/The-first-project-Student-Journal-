@@ -221,3 +221,44 @@ def test_curator_group_subject_shows_hours_plan(client):
                    params={"group": "G5", "subject": "Физ"}, headers=th)
     assert v.status_code == 200, v.text
     assert v.json()["hours"] == {"done": 0, "total": 72}, v.json()
+
+
+def test_curator_copy_in_program_gets_the_whole_curated_group(client):
+    """🔥 Куратор, не ведущий в своей группе НИ ОДНОГО предмета, видел в программе пустое
+    «Курирование» (живой прогон 01.10.2026): /sync/pull вёз только НАЗНАЧЕННЫЕ пары.
+    Копия обязана получить то же, что сайт показывает куратору, — всю группу на чтение,
+    и ничего из чужих групп. Запись кураторство не открывает."""
+    admin = make_admin(client)
+    for g in ("G7", "G8"):
+        assert client.post("/web/admin/groups", json={"name": g, "subjects": ["Физ"]},
+                           headers=admin).status_code == 200
+    stud7 = {"id": "stud:s7", "role": "student", "login": "s7", "surname": "Седьмов",
+             "name": "Иван", "group_name": "G7", "password_hash": hash_password("p")}
+    stud8 = {"id": "stud:s8", "role": "student", "login": "s8", "surname": "Восьмов",
+             "name": "Пётр", "group_name": "G8", "password_hash": hash_password("p")}
+    L7 = {"id": "L7", "group_name": "G7", "subject": "Физ", "type": "Практика", "number": 1}
+    L8 = {"id": "L8", "group_name": "G8", "subject": "Физ", "type": "Практика", "number": 1}
+    g7 = {"id": "stud:s7|L7", "student_id": "stud:s7", "student_f": "Седьмов",
+          "student_n": "Иван", "lesson_id": "L7", "grade": "5"}
+    g8 = {"id": "stud:s8|L8", "student_id": "stud:s8", "student_f": "Восьмов",
+          "student_n": "Пётр", "lesson_id": "L8", "grade": "3"}
+    assert _push(client, admin, users=[stud7, stud8], lessons=[L7, L8],
+                 grades=[g7, g8]).status_code == 200
+    r = client.post("/web/admin/teachers", json={
+        "full_name": "Кур Атор", "login": "t7", "password": "pass1234",
+        "subjects": [], "curated_groups": ["G7"]}, headers=admin)
+    assert r.status_code == 200, r.text
+    th = _login(client, "t7", "pass1234")
+
+    ch = client.get("/sync/pull", headers=th).json()["changes"]
+    logins = {u.get("login") for u in ch.get("users") or []}
+    assert "s7" in logins and "s8" not in logins, logins
+    assert {g.get("name") for g in ch.get("groups") or []} == {"G7"}
+    assert {l.get("id") for l in ch.get("lessons") or []} == {"L7"}
+    assert {g.get("lesson_id") for g in ch.get("grades") or []} == {"L7"}
+    assert all(not u.get("password_hash") for u in ch.get("users") or []
+               if u.get("login") != "t7"), "чужие хеши уехали в копию куратора"
+
+    #Кураторство НЕ даёт права записи: занятие в курируемой группе синком не проходит.
+    r = _push(client, th, lessons=[dict(L7, id="L7new", number=2)])
+    assert r.json().get("applied", {}).get("lessons", 0) == 0, r.json()

@@ -11,7 +11,8 @@
 // `selectionMenuItems` — краснеют оба теста про своё/чужое сообщение.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { messageMenuItems, selectionMenuItems } from '../src/utils/messageMenu.js'
+import { messageMenuItems, selectionMenuItems, canEditMessage } from '../src/utils/messageMenu.js'
+import { readFileSync } from 'node:fs'
 
 const own = { id: 1, mine: true, body: 'текст', deleted: false, pinned: false }
 const foreign = { id: 2, mine: false, body: 'текст', deleted: false, pinned: false }
@@ -91,4 +92,32 @@ test('ссылки нет вовсе, если клиент её не умеет
 
 test('на удалённом сообщении меню по выделению пустое', () => {
   assert.deepEqual(selectionMenuItems({ ...foreign, deleted: true }, { kind: 'group' }), [])
+})
+
+// ── «Изменить» (02.10.2026): сервер правку умел с первого коммита, пункта не было ──────
+test('своё обычное сообщение — «Изменить» на первом уровне, шесть строк держим', () => {
+  const menu = messageMenuItems({ ...own, kind: 'text' })
+  assert.ok(menu.primary.includes('edit'), menu.primary)
+  assert.ok(menu.primary.length <= 6, menu.primary)
+  assert.ok(menu.more.includes('select'), '«Выделить» потерялось')
+})
+
+test('править нельзя чужое, GIF, пересланное, удалённое', () => {
+  assert.equal(canEditMessage({ ...own, kind: 'text' }), true)
+  assert.equal(canEditMessage({ ...own, kind: 'file', body: 'подпись' }), true)
+  assert.equal(canEditMessage(foreign), false)
+  assert.equal(canEditMessage({ ...own, kind: 'gif', body: 'https://static.klipy.com/x.gif' }), false)
+  assert.equal(canEditMessage({ ...own, forwarded_from: 'Боб' }), false)
+  //Пересланное с ПУСТЫМ именем автора сервер отдаёт как '' — и править его тоже нельзя.
+  assert.equal(canEditMessage({ ...own, forwarded_from: '' }), false)
+  assert.equal(canEditMessage({ ...own, forwarded_from: null }), true)
+  assert.equal(canEditMessage({ ...own, deleted: true }), false)
+  assert.ok(!messageMenuItems({ ...own, kind: 'gif' }).primary.includes('edit'))
+})
+
+test('лента выполняет «Изменить»: пункт ведёт в правку, отправка зовёт editMessage', () => {
+  const src = readFileSync(new URL('../src/components/messenger/ChatThread.vue', import.meta.url), 'utf8')
+  assert.match(src, /action === 'edit'\) startEdit\(msg\)/, 'пункт меню без обработчика')
+  const submit = src.slice(src.indexOf('async function submit()'))
+  assert.match(submit.slice(0, 600), /m\.editMessage\(msg\.id, t\)/, 'отправка не сохраняет правку')
 })

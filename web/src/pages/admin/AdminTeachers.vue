@@ -195,7 +195,7 @@ async function del(t) {
       </table>
     </StickyXScroll>
 
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminTeachers.editTitle', 'Изменить преподавателя') : locale.t('adminTeachers.addTitle', 'Добавить преподавателя') }}</h3>
         <div class="space-y-3">

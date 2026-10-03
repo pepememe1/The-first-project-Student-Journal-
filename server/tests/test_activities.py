@@ -283,6 +283,26 @@ def test_poll_results_stay_private_after_finish(client):
     assert client.get(f"{A}/{a}/poll-results", headers=b).status_code == 403
 
 
+def test_who_voted_how_never_leaks_through_the_activity_itself(client):
+    """Карта «кто как проголосовал» не уходит наружу НИКОМУ (ревью 30.09.2026).
+
+    При завершении она снимается в `params.final_votes` ради ленты, а `GET /activities/{id}`
+    отдавал `params` целиком любому участнику беседы: одноклассник видел голос каждого в
+    опросе, объявленном как «результаты видит только преподаватель». Своё и число
+    проголосовавших по-прежнему приходят в ленту — это проверяет соседний тест ленты."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _poll(client, t, conv)
+    client.post(f"{A}/{a}/vote", json={"choice": 1}, headers=b)
+    client.post(f"{A}/{a}/finish", json={}, headers=t)
+    for who in (c, b, t):
+        out = client.get(f"{A}/{a}", headers=who).json()
+        assert "final_votes" not in (out.get("params") or {}), out
+        assert b_id not in str(out.get("params")), out
+    #Итог (числа) при этом остаётся — без него завершённый опрос показывал бы «0 голосов».
+    assert client.get(f"{A}/{a}", headers=t).json()["params"].get("final_total") == 1
+
+
 def test_timer_control_does_not_report_success_when_state_is_gone(client, monkeypatch):
     """🔥 НАЙДЕНО ПОЛКОВНИКОМ, а не проверкой типов — и это важно: mypy это место НЕ
     подсвечивает, потому что снимок здесь не индексируется, а просто возвращается наружу.
@@ -331,6 +351,56 @@ def test_vote_survives_activity_finished_between_read_and_write(client, monkeypa
     monkeypatch.setattr(activity_state, "patch", lambda *args, **kwargs: None)
     r = client.post(f"{A}/{a}/vote", json={"choice": 0}, headers=b)
     assert r.status_code == 400, f"ожидали внятный отказ, получили {r.status_code}"
+
+
+def test_a_neighbours_vote_between_read_and_write_is_not_lost(client, monkeypatch):
+    """Голоса лежат ОДНИМ словарём, и прежний обработчик читал его (`get`) и клал целиком
+    (`patch`) двумя шагами (ревью 30.09.2026): голос соседа, записанный между ними,
+    молча стирался. Окно воспроизводим детерминированно — каждый `get` сразу после
+    снятия снимка «впускает» голос ещё одного соседа, как параллельный поток."""
+    from app import activity_state
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _poll(client, t, conv)
+    real_get = activity_state.get
+    neighbours = []
+
+    def get_while_others_vote(aid):
+        snap = real_get(aid)
+        if snap is not None and aid == a:
+            who = f"stud:neighbour{len(neighbours)}"
+            neighbours.append(who)
+            live = dict(real_get(aid)["payload"].get("votes") or {})
+            live[who] = 1
+            activity_state.patch(aid, {"votes": live})
+        return snap
+    monkeypatch.setattr(activity_state, "get", get_while_others_vote)
+    r = client.post(f"{A}/{a}/vote", json={"choice": 0}, headers=b)
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    votes = activity_state.get(a)["payload"]["votes"]
+    assert neighbours, "окно не открылось — проверка ничего не проверила"
+    missing = [n for n in neighbours if n not in votes]
+    assert not missing and votes.get(b_id) == 0, (missing, votes)
+
+
+def test_merge_is_atomic_under_threads():
+    """Сама операция: сотня параллельных «добавь свой голос» — ни один не теряется."""
+    import threading
+    from app import activity_state
+    activity_state.start("merge-probe", "poll", {"votes": {}})
+    try:
+        def add(i):
+            activity_state.merge("merge-probe",
+                                 lambda p: {"votes": {**(p.get("votes") or {}), f"u{i}": 0}})
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(100)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        assert len(activity_state.get("merge-probe")["payload"]["votes"]) == 100
+    finally:
+        activity_state.drop("merge-probe")
 
 
 def test_revote_replaces_and_students_see_only_the_counter(client):
@@ -533,6 +603,35 @@ def test_board_is_saved_only_when_asked(client):
     client.post(f"{A}/{a}/finish", json={"save": False}, headers=t)
     assert client.get(f"{A}/boards", params={"conversation_id": conv},
                       headers=t).json()["boards"] == []
+
+
+def test_strokes_of_the_second_drawer_are_not_lost(client, monkeypatch):
+    """Рисуют двое (ведущий и держатель пера): пакет, записанный между чтением доски и
+    записью другого пакета, раньше стирался (ревью 30.09.2026, нашёл Полковник). Окно —
+    тем же приёмом, что у голосов: каждый `get` «впускает» чужой штрих."""
+    from app import activity_state
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "board", {"sheet": "grid"}).json()["id"]
+    real_get = activity_state.get
+    injected = []
+
+    def get_while_other_draws(aid):
+        snap = real_get(aid)
+        if snap is not None and aid == a:
+            mark = {"p": [900 + len(injected), 0]}
+            injected.append(mark)
+            live = list(real_get(aid)["payload"].get("strokes") or [])
+            activity_state.patch(aid, {"strokes": live + [mark]})
+        return snap
+    monkeypatch.setattr(activity_state, "get", get_while_other_draws)
+    r = client.post(f"{A}/{a}/strokes", json={"strokes": [{"p": [1, 2]}]}, headers=t)
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    strokes = activity_state.get(a)["payload"]["strokes"]
+    assert injected, "окно не открылось — проверка ничего не проверила"
+    missing = [m for m in injected if m not in strokes]
+    assert not missing and {"p": [1, 2]} in strokes, (missing, strokes)
 
 
 def test_saved_board_can_be_continued_with_its_strokes(client):

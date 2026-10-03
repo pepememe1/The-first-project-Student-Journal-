@@ -133,7 +133,12 @@ async function enterCategory(fromUser = false) {
   }
   mode.value = 'group'
   group.value = ''
-  await loadGroupsList()
+  //Своё расписание студента НЕ ждёт списка групп: список нужен только для ручного выбора,
+  //а при недоступном портале каждый из двух запросов ждёт по 20 с — и человек 40 секунд
+  //смотрел на «Загрузка расписания…» (живой прогон 01.10.2026). Списку — свой счётчик
+  //запросов (`listSeq`), поэтому параллельный запуск ничего не перебивает.
+  const listLoaded = loadGroupsList()
+  if (!(isStudent.value && !fromUser)) await listLoaded
   //⚠️ 3.6: студент при ВХОДЕ на страницу всегда попадает на СВОЮ группу — независимо от
   //категории. Раньше условие требовало ещё и колледжа (isDefaultCategory), поэтому
   //студент бакалавриата/заочного открывал вкладку и упирался в «выберите группу», хотя
@@ -172,6 +177,11 @@ async function onCategoryChange(key) {
 // от данных, которые сама функция и меняет.
 let reqSeq = 0
 const nextReq = () => ++reqSeq
+//🔥 У СПИСКА ГРУПП — СВОЙ счётчик (02.10.2026). Общий с `load()` давал вечную крутилку:
+//`load()` студента группы НЕ колледжа получал от сервера другую категорию, звал
+//`loadGroupsList()`, тот сдвигал общий счётчик — и `finally` в `load()` уже не узнавал
+//свой запрос и не снимал «Загрузка расписания…» НИКОГДА, хотя расписание пришло.
+let listSeq = 0
 
 // ━━━ КОПИЯ НА ЭКРАН СРАЗУ, СВЕЖЕЕ — МОЛЧА ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
@@ -228,16 +238,16 @@ async function loadGroupsList() {
   //короче — придёт раньше) мог прилететь ПОСЛЕ более быстрого и молча подменить
   //список группами не той категории, хотя кнопка уже показывает другую — реальный
   //баг, со стороны выглядел как «всё перемешано».
-  const my = nextReq()
+  const my = ++listSeq
   const forCategory = category.value
   courseFilter.value = ''
   try {
     const r = (await scheduleApi.groups(forCategory)).data
-    if (my !== reqSeq) return
+    if (my !== listSeq) return
     groups.value = r.groups || []
     byCourse.value = r.by_course || {}
   } catch {
-    if (my === reqSeq) { groups.value = []; byCourse.value = {} }
+    if (my === listSeq) { groups.value = []; byCourse.value = {} }
   }
 }
 

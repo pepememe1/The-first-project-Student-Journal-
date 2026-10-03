@@ -105,10 +105,13 @@ _audit_write_failed = False
 
 
 def log(db, request=None, *, actor="", role="", action="", target="",
-        detail="", level="info", ip="", device=""):
+        detail="", level="info", ip="", device="", monitor=True):
     """Записать событие в персистентный журнал (и продублировать в live-мониторинг).
 
     `request` — опционален: если передан, ip/device берутся из него (можно и явно).
+    `monitor=False` — вызывающий УЖЕ написал это событие в живой монитор своими словами
+    (`events.record`): дубль сырым кодом («login.ok · login.ok») рядом с «вход выполнен»
+    читался как три записи на один вход (живой прогон 01.10.2026). В БД пишется всегда.
     Ничего не возвращает и не бросает — при сбое записи бизнес-логика не страдает."""
     if request is not None:
         rip, rdev = _ctx(request)
@@ -159,6 +162,8 @@ def log(db, request=None, *, actor="", role="", action="", target="",
         except Exception:
             pass
     #Живой мониторинг админки — best-effort, отдельно от БД.
+    if not monitor:
+        return
     try:
         msg = action + (f" · {target}" if target else "") + (f" · {detail}" if detail else "")
         events.record(level, action, msg, login=actor, ip=ip)

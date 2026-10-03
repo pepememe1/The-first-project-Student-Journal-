@@ -1,0 +1,8 @@
+Фрагменты, вырезанные из server/app/easter_eggs.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из server/app/easter_eggs.py: unlocked_ids (строки 304–306 до переноса), пункт 7 ──
+def unlocked_ids(user_id: str, db: Session) -> list[str]:
+    rows = db.query(UserAchievement).filter(UserAchievement.user_id == user_id).all()
+    return [r.achievement_id for r in rows]
+

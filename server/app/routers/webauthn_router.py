@@ -185,7 +185,7 @@ def login_complete(body: dict = Body(...), request: Request = None, db: Session 
     if not u:
         raise HTTPException(status_code=400, detail="Пользователь не найден")
     events.record("info", "login", f"вход по passkey (роль {u.role})", u.login)
-    audit.log(db, request, actor=u.login, role=u.role, action="login.passkey")
+    audit.log(db, request, actor=u.login, role=u.role, action="login.passkey", monitor=False)
     tok = _issue_token_pair(db, u, request)
     #Возвращаем и логин: при входе по passkey клиент не вводил его, а профилю он нужен.
     return {"access_token": tok.access_token, "refresh_token": tok.refresh_token,

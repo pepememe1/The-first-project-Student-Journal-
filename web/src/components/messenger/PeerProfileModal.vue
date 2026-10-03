@@ -53,7 +53,7 @@ async function requestClose() {
        Промежуточный вариант «во весь экран» был ошибкой в другую сторону: карточка
        растягивалась на весь монитор, а правая колонка оставалась узкой — две половины
        одного окна выглядели как два разных окна. -->
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="requestClose">
     <div class="flex max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-xl border border-border2
                 bg-card shadow-card">

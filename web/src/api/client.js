@@ -18,6 +18,7 @@ import { getAccess, getRefresh, setTokens, clearTokens, getDeviceId } from './to
 import { isCacheable, writeCache, readCache, servingStale } from './offlineCache'
 import { noteOffline, noteOnline } from './offlineSession'
 import { getApiBase, isNativeApp } from './server'
+import { isOwnResponse } from './responseOwner'
 
 /**
  * Чем мы представляемся серверу: 'android' в приложении, 'web' в браузере.
@@ -138,15 +139,9 @@ function currentOwner() {
   }
 }
 
-/**
- * Принадлежит ли пришедший ответ той же сессии, что его отправляла.
- *
- * ⚠️ Проверяем ДВЕ вещи, и обе нужны: логин ловит смену человека, поколение —
- * выход-вход того же самого (логин тот же, сессия другая, токены новые).
- */
+/** Принадлежит ли пришедший ответ той же сессии, что его отправляла (см. responseOwner.js). */
 function ownsResponse(config = {}) {
-  if (config.__owner === undefined) return true   //не наш интерцептор — не судим
-  return config.__owner === currentOwner() && config.__gen === sessionGen
+  return isOwnResponse(config, currentOwner(), sessionGen)
 }
 
 async function doRefresh() {
@@ -170,8 +165,8 @@ async function doRefresh() {
 
 /** Отличает «сессию сменили» от «сервер отказал»: реакции на них ПРОТИВОПОЛОЖНЫЕ. */
 class StaleSessionError extends Error {
-  constructor() {
-    super('session changed while refreshing')
+  constructor(message = 'session changed while refreshing') {
+    super(message)
     this.name = 'StaleSessionError'
     this.stale = true
   }
@@ -186,7 +181,17 @@ api.interceptors.response.use(
     // Сервер ответил — значит связь есть, и отсчёт суточного окна офлайна
     // начинается заново (см. offlineSession.js).
     noteOnline()
-    if (isGet(config) && isCacheable(config.url) && ownsResponse(config)) {
+    //🔥 ОТВЕТ ПРЕЖНЕЙ СЕССИИ ВЫЗЫВАЮЩЕМУ НЕ ОТДАЁМ (ревью 30.09.2026). Раньше метка
+    //владельца проверялась ТОЛЬКО перед записью в офлайн-кэш, а сам ответ доезжал до
+    //стора как ни в чём не бывало. Выход → вход идёт БЕЗ перезагрузки страницы, Pinia
+    //живёт дальше, и запоздавший `profile.load()` или опрос списка чатов человека A
+    //дописывал аватар, «о себе» и названия бесед A поверх экрана B — на общем
+    //компьютере колледжа это обычный день. Проверять в каждом сторе — это двадцать
+    //мест, где однажды забудут; здесь дверь одна. Отказ, а не «вечное ожидание»:
+    //у вызывающих в `finally` снимаются флаги загрузки, и повисший промис оставил бы
+    //их взведёнными уже у нового человека.
+    if (!ownsResponse(config)) return Promise.reject(new StaleSessionError('response of a previous session'))
+    if (isGet(config) && isCacheable(config.url)) {
       writeCache(config, resp.data)
       servingStale.value = false     // пришли свежие данные — мы онлайн
     }
@@ -198,6 +203,11 @@ api.interceptors.response.use(
     // даже 500, наоборот означает, что сервер на связи: различать обязательно, иначе
     // одна серверная ошибка запускала бы отсчёт окна офлайна на исправной сети.
     if (!response) noteOffline()
+    //Отказ по запросу ПРЕЖНЕЙ сессии — тоже не наш: ни ошибку ему на экран нового
+    //человека, ни 401 → refresh чужими токенами (см. выше).
+    if (config && !ownsResponse(config)) {
+      return Promise.reject(new StaleSessionError('error of a previous session'))
+    }
     // Для кэшируемых GET отдаём СОХРАНЁННОЕ — экран показывает данные, а не пустоту.
     // Обновятся, как только вернётся сеть.
     if (!response && config && isGet(config) && isCacheable(config.url)

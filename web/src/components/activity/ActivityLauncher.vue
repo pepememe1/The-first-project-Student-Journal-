@@ -11,6 +11,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { useAuthStore } from '@/stores/auth'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
+import { hasOpenDialog } from '@/directives/dialog'
 import QuizEditor from './quiz/QuizEditor.vue'
 import ActivityWheel from './ActivityWheel.vue'
 
@@ -45,7 +46,7 @@ const chosen = ref('')                 // '' — сетка категорий, 
  * с клавиатуры, оказался бы заперт в колесе.
  */
 function onKey(e) {
-  if (e.key !== 'Escape') return
+  if (e.key !== 'Escape' || e.defaultPrevented || hasOpenDialog()) return
   if (chosen.value) { chosen.value = '' } else { emit('close') }
 }
 onMounted(() => window.addEventListener('keydown', onKey))
@@ -170,12 +171,12 @@ async function confirm() {
        @click.self="emit('close')">
     <div class="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
-        <button type="button" @click="chosen = ''"
+        <button :aria-label="locale.t('common.back', 'Назад')" type="button" @click="chosen = ''"
                 class="rounded-lg p-1 text-text3 hover:text-accent">
           <ChevronLeft class="size-5" />
         </button>
         <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">{{ chosenLabel }}</h2>
-        <button type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
           <X class="size-5" />
         </button>
       </div>
@@ -234,7 +235,7 @@ async function confirm() {
                 <input v-model="options[i]" type="text" maxlength="500"
                        :placeholder="locale.t('poll.option', 'Вариант')"
                        class="min-w-0 flex-1 rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text" />
-                <button type="button" @click="removeOption(i)" :disabled="options.length <= 2"
+                <button :aria-label="locale.t('common.remove', 'Убрать')" type="button" @click="removeOption(i)" :disabled="options.length <= 2"
                         class="shrink-0 rounded-lg p-1.5 text-text3 hover:text-red disabled:opacity-40">
                   <X class="size-4" />
                 </button>

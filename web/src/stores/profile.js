@@ -16,6 +16,7 @@ import { ref } from 'vue'
 // одного, а карта связей репозитория просто не видит такой вызов — для неё эта
 // страница с сервером не разговаривает вовсе.
 import { meApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { setGraceMin } from '@/api/offlineSession'
 import { PRESETS } from '@/theme/palette'
 
@@ -100,6 +101,8 @@ export const useProfileStore = defineStore('profile', () => {
       await meApi.setPrefs({ avatar: avatar.value })
       return { ok: true }
     } catch (e) {
+      //Отказ прежней сессии: откат вернул бы аватар A в стор, где уже B.
+      if (isStaleSession(e)) return { ok: false, stale: true }
       avatar.value = prev      // не показываем как сохранённое то, что не сохранилось
       return { ok: false, offline: !e?.response, detail: e?.response?.data?.detail || '' }
     } finally { saving.value = false }
@@ -126,6 +129,7 @@ export const useProfileStore = defineStore('profile', () => {
       // Возвращаем результат, но НЕ откатываем поля: сюда приходят и палитра, и выбор
       // шрифта, где мгновенный откат под пальцем читался бы как «кнопка не нажалась».
       // Вызывающий сам решает, стоит ли ругаться (баннер — стоит, палитра — нет).
+      if (isStaleSession(e)) return { ok: false, stale: true }
       return { ok: false, offline: !e?.response, detail: e?.response?.data?.detail || '' }
     } finally { saving.value = false }
   }

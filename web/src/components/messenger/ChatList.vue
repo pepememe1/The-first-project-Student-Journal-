@@ -9,6 +9,7 @@ import { Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, MoreVe
          Bell, BellOff, MailOpen, Eraser, Trash2, Ban } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import { roleLabel } from '@/config/roles'
@@ -26,6 +27,22 @@ const m = useMessengerStore()
 const toast = useToast()
 const auth = useAuthStore()
 const locale = useLocaleStore()
+const { confirm } = useConfirm()
+
+//🔥 Строка канала в каталоге — одна кнопка, и щелчок по НАЗВАНИЮ подписывал (живой прогон
+//01.10.2026: «открыл посмотреть — 501 → 502, „Вы подписаны“»). Просмотра без подписки
+//сервер не даёт, поэтому подписка — только с явного согласия; свой канал открывается сразу.
+async function onCatalogChannel(ch) {
+  if (!ch.joined) {
+    const ok = await confirm({
+      title: ch.title,
+      message: locale.t('messenger.joinConfirm', 'Подписаться на канал? Его новые сообщения будут приходить вам.'),
+      okText: locale.t('messenger.join', 'Присоединиться'),
+    })
+    if (!ok) return
+  }
+  m.joinChannel(ch.conversation_id)
+}
 const { chats, invites, dir, channels, activeId, loadingChats } = storeToRefs(m)
 // ГРУППЫ студентам открыты (решение Ярослава 28.08.2026): «разрешить студентам делать
 // группы между собой». КАНАЛЫ — по-прежнему только преподавателям и админу: канал это
@@ -353,7 +370,7 @@ onMounted(() => { m.loadChats() })
         </div>
 
         <p v-if="!loadingChats && !shownChats.length && !invites.length" class="p-4 text-center text-sm text-text3">
-          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'"> {{ canCreateChannel ? locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') : locale.t('messenger.orCreateGroupHint', 'или соберите группу кнопкой «+»') }}</span>.
+          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'">{{ ' ' + (canCreateChannel ? locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') : locale.t('messenger.orCreateGroupHint', 'или соберите группу кнопкой «+»')) }}</span>.
         </p>
         <!-- ПКМ по строке открывает то же меню, что «⋮». Родное меню браузера здесь
              бесполезно («Назад», «Обновить»), а привычка нажимать правой на строку
@@ -482,7 +499,7 @@ onMounted(() => { m.loadChats() })
       <!-- Каталог каналов -->
       <template v-else>
         <p v-if="!channels.length" class="p-4 text-center text-sm text-text3">{{ locale.t('messenger.noPublicChannels', 'Публичных каналов пока нет.') }}</p>
-        <button v-for="ch in channels" :key="ch.conversation_id" type="button" @click="m.joinChannel(ch.conversation_id)"
+        <button v-for="ch in channels" :key="ch.conversation_id" type="button" @click="onCatalogChannel(ch)"
                 class="flex w-full items-center gap-3 border-b border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-bg2">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-accent2 text-sm font-bold text-white">{{ initials(ch.title) }}</div>
           <div class="min-w-0 flex-1">

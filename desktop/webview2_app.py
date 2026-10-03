@@ -39,6 +39,10 @@ _LOG = log.get("webview2app")
 _MIN_SIZE = (1024, 640)
 _START_SIZE = (1440, 900)
 
+#Что сейчас «на экране» у страницы, о чём стоит спросить перед закрытием окна (id
+#пасхалки или ''). Кладёт сама страница — см. `_DeskAPI.set_close_guard` и `_may_close`.
+_CLOSE_GUARD = ""
+
 
 class _DeskAPI:
     """То, чего у браузера нет в принципе. Доступно странице как `window.pywebview.api`.
@@ -47,22 +51,12 @@ class _DeskAPI:
     сайта и телефона, то есть расхождение платформ. Всё, что можно дать всем, даётся
     через обычный веб-интерфейс, а не через этот мост."""
 
-    def app_version(self):
-        try:
-            from data.core import APP_VERSION
-            return APP_VERSION
-        except Exception:
-            return ""
-
-    def quit(self):
-        """Закрыть программу из интерфейса (кнопка «Выйти» ведёт на экран входа, а не сюда)."""
-        try:
-            import webview
-            for w in webview.windows:
-                w.destroy()
-            return {"ok": True}
-        except Exception as e:      # noqa: BLE001
-            return {"ok": False, "error": str(e)}
+    def set_close_guard(self, pending=""):
+        """Страница сообщает: на экране пасхалка `pending` ('' — ничего). Хранит признак
+        для `_may_close` — см. там, почему спрашивать страницу при закрытии нельзя."""
+        global _CLOSE_GUARD
+        _CLOSE_GUARD = str(pending or "")[:100]
+        return {"ok": True}
 
 
 def available() -> bool:
@@ -86,13 +80,18 @@ def _may_close(window) -> bool:
     доходит. Отсюда этот мост: спрашиваем у страницы, есть ли что терять.
 
     ⚠️ Возврат True — «закрывать». При ЛЮБОМ сбое возвращаем True: пасхалка не повод
-    запереть человека в программе. Не сумели спросить страницу — просто закрываемся.
+    запереть человека в программе.
+
+    🔥 СТРАНИЦУ ЗДЕСЬ НЕ СПРАШИВАЕМ — НИКОГДА (28.09.2026, жалоба Ярослава «прога не
+    закрывается, а зависает»). Событие `closing` у pywebview объявлено с `should_lock`:
+    обработчик выполняется ПРЯМО на потоке окна, внутри FormClosing. Здесь стоял
+    `window.evaluate_js(...)`, а он ставит скрипт в очередь того же потока и ждёт
+    семафор — ответ приходит только через цикл сообщений, который как раз и стоит.
+    Взаимная блокировка на КАЖДОМ нажатии крестика. Теперь страница сама кладёт признак
+    через `_DeskAPI.set_close_guard`, а здесь читается готовое значение. Диалог ниже —
+    WinForms `MessageBox.Show`, модальный цикл, на потоке окна он безопасен.
     """
-    try:
-        pending = window.evaluate_js(
-            "(window.__gbEasterPending && window.__gbEasterPending()) || ''")
-    except Exception:
-        return True
+    pending = _CLOSE_GUARD
     if not pending:
         return True
     try:
@@ -121,6 +120,30 @@ def fail_reason(text: str = "") -> str:
     if text:
         _FAIL_REASON = text
     return _FAIL_REASON
+
+
+def _enable_downloads(webview_module) -> bool:
+    """Разрешить окну сохранять файлы (выгрузки Excel/Word, ведомости, коды восстановления).
+
+    🔥 pywebview по умолчанию ЗАПРЕЩАЕТ загрузки (`settings['ALLOW_DOWNLOADS'] = False`) и
+    молча отменяет каждую (`args.Cancel = True` в `on_download_starting`). Живой прогон
+    01.10.2026: кнопка «Экспорт → Excel» в программе отрабатывала без ошибки, сервер
+    отдавал файл, страница создавала его — и не появлялось НИЧЕГО. На сайте то же самое
+    работало, поэтому дефект не был виден никому, кто проверял в браузере.
+    С разрешением библиотека показывает обычный диалог «Сохранить как» с папкой
+    «Загрузки»: файл кладёт человек, а не программа — молча писать на диск она не начнёт.
+    Внешние ссылки по-прежнему открываются в браузере (`OPEN_EXTERNAL_LINKS_IN_BROWSER`)."""
+    #⚠️ `settings` — не dict, а `webview.util.ImmutableDict` (UserDict): проверка
+    #`isinstance(…, dict)` молча не срабатывала, и загрузки оставались запрещены — поймано
+    #живым окном, а не чтением. Поэтому пишем и ЧИТАЕМ ОБРАТНО.
+    try:
+        webview_module.settings["ALLOW_DOWNLOADS"] = True
+        ok = bool(webview_module.settings["ALLOW_DOWNLOADS"])
+    except Exception:      # noqa: BLE001 — окно важнее выгрузок
+        ok = False
+    if not ok:
+        _LOG.warning("[webview2] не удалось разрешить загрузки — выгрузки файлов будут отменяться")
+    return ok
 
 
 def run() -> bool:
@@ -159,6 +182,7 @@ def run() -> bool:
 
     shell.apply_privacy_env()        #телеметрия/SmartScreen/синхронизация — выключены
     _prepare_permissions()
+    _enable_downloads(webview)
 
     try:
         from data.core import APP_VERSION

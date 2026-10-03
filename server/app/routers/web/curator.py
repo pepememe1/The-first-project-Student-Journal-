@@ -7,6 +7,8 @@ curator.py — Куратор: все предметы курируемой гр
 регистрации маршрутов задаёт `__init__.py`.
 """
 from ._common import *      # noqa: F401,F403 — общий router, модели, хелперы
+import logging as _logging
+_hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 
 
 # КУРАТОР (только чтение по курируемым группам) ───────────────────────────────────
@@ -256,8 +258,8 @@ def admin_promote_group(payload: dict = Body(...), request: Request = None,
             _post_system_channel_message(
                 db, f"sys:announce:{_gtoken(group)}",
                 f"Студенты переведены на следующий курс: {names}.")
-        except Exception:
-            pass
+        except Exception as e:      # noqa: BLE001 — перевод уже записан
+            _hook_log.warning("объявление о переводе на курс не опубликовано: %s", e)
     return {"promoted": [{"student_id": r["student_id"], "display_name": r["display_name"]}
                          for r in promoted],
             "rejected": rejected}

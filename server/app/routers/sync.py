@@ -182,12 +182,6 @@ class _Students:
         return (db.query(User.id, User.surname, User.name, User.group_name)
                   .filter(User.role == "student"))
 
-    def load_all(self, db) -> "_Students":
-        if not self._everyone:
-            self._add(self._base(db).all())
-            self._everyone = True
-        return self
-
     def load(self, db, ids=(), surnames=()) -> "_Students":
         if self._everyone:
             return self
@@ -227,7 +221,7 @@ class _Students:
             surnames=[r.get("student_f") or "" for r in rows if isinstance(r, dict)])
 
 
-def _domain_refusal(db, name: str, item: dict, cfg: dict) -> str:
+def _domain_refusal(db, name: str, item: dict, cfg: dict, user=None, existing=None) -> str:
     """Причина, по которой доменные правила журнала НЕ пускают эту запись («» — пускают).
 
     🔥 ЗАЧЕМ (20.09.2026, находка ревью J06). Веб-ручка `/web/teacher/grade` проверяет
@@ -263,6 +257,8 @@ def _domain_refusal(db, name: str, item: dict, cfg: dict) -> str:
         if not grading.is_allowed_value((item.get("grade") or "").strip()):
             return "недопустимое значение итоговой оценки"
         return ""
+    if name == "lessons":
+        return _lesson_refusal(db, item, cfg, user, existing)
     if name != "grades":
         return ""
     if not grading.is_allowed_value((item.get("grade") or "").strip()):
@@ -281,6 +277,9 @@ def _domain_refusal(db, name: str, item: dict, cfg: dict) -> str:
         cy, cs = current_term(cfg)
         if ly != cy or int(lesson.semester or 0) != cs:
             return f"семестр {ly}·{lesson.semester} в архиве (только чтение)"
+    why = _subgroup_refusal(db, user, lesson)
+    if why:
+        return why
 
     #Замок зачётки персональный, значит нужен ИМЕННО ЭТОТ студент. Старый ФИО-ключ
     #сюда доезжает без `student_id`; угадывать по фамилии нельзя — у тёзок это был бы
@@ -295,6 +294,77 @@ def _domain_refusal(db, name: str, item: dict, cfg: dict) -> str:
         _ensure_term_open(db, student_id, lesson.subject, lesson.year, lesson.semester)
     except HTTPException:
         return "по предмету уже выставлена итоговая — семестр закрыт"
+    return ""
+
+
+def _subgroup_refusal(db, user, lesson) -> str:
+    """Чужая подгруппа при раздельном обучении — то же правило, что у веба (J07).
+
+    Зовётся ТА ЖЕ `_teacher_check_subgroup`, что у веб-ручек: вторая копия правила
+    разошлась бы с первой молча."""
+    if user is None or lesson is None:
+        return ""
+    from .web._common import _teacher_check_subgroup
+    try:
+        _teacher_check_subgroup(db, user, lesson)
+    except HTTPException as e:
+        return str(e.detail)
+    return ""
+
+
+def _lesson_refusal(db, item: dict, cfg: dict, user, existing) -> str:
+    """Доменные правила ЗАНЯТИЯ при push — те же, что у `POST/PUT/DELETE /web/teacher/lesson`.
+
+    🔥 ЗАЧЕМ (ревью 30.09.2026). `_domain_refusal` проверял только оценки: через
+    `/sync/push` преподаватель заводил занятие в АРХИВНОМ семестре, менял тему и дату
+    уже закрытого и правил колонку ЧУЖОЙ подгруппы при раздельном обучении — всё, что
+    сайт отвечает 409/403. Интерфейс программы push с 4.1 не зовёт, но ручка жива и
+    принимает токен преподавателя, то есть правило держалось на том, что человек
+    пользуется интерфейсом.
+
+    Проверяется и ЛЕЖАЩАЯ строка (её нельзя трогать, если она в архиве или в чужой
+    подгруппе), и ПРИСЛАННАЯ (её нельзя положить туда же)."""
+    from ..webdata import current_term, subject_hours_row, teacher_owned_subgroups
+
+    cy, cs = current_term(cfg)
+
+    def _archived(year, semester) -> bool:
+        y = (year or "").strip()
+        return bool(y) and (y != cy or int(semester or 0) != cs)
+
+    if existing is not None:
+        if _archived(getattr(existing, "year", ""), getattr(existing, "semester", 0)):
+            return (f"семестр {existing.year}·{existing.semester} в архиве "
+                    "(только чтение)")
+        why = _subgroup_refusal(db, user, existing)
+        if why:
+            return why
+    if _archived(item.get("year"), item.get("semester")):
+        return f"семестр {item.get('year')}·{item.get('semester')} в архиве (только чтение)"
+    if user is None:
+        return ""
+    try:
+        sub = int(item.get("subgroup") or 0)
+    except (TypeError, ValueError):
+        return "подгруппа должна быть 0, 1 или 2"
+    group = item.get("group_name") or getattr(existing, "group_name", "") or ""
+    subject = item.get("subject") or getattr(existing, "subject", "") or ""
+    year = (item.get("year") or getattr(existing, "year", "") or cy)
+    semester = item.get("semester") or getattr(existing, "semester", 0) or cs
+    sh_row = subject_hours_row(db, group, subject, year, semester)
+    if not sh_row or not getattr(sh_row, "split", False):
+        return ""
+    owned = teacher_owned_subgroups(sh_row, user.id)
+    #«Совместно» на разделённом предмете вправе ЗАВОДИТЬ только ведущий обе половины —
+    #ровно как на сайте. Уже существующие общие занятия (заведены до разделения или
+    #администратором) правке не закрываем: это сделал бы `_teacher_check_subgroup`,
+    #а он их намеренно пропускает.
+    if sub == 0:
+        if existing is None and owned != {1, 2}:
+            return "«Совместно» доступно только тому, кто ведёт ОБЕ подгруппы"
+        return ""
+    if sub not in owned:
+        return f"Подгруппа {sub} вам не назначена"
     return ""
 
 
@@ -549,24 +619,35 @@ def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
     занятия/оценки/итоги только НАЗНАЧЕННЫХ ему пар (группа,предмет) — не «любая группа,
     где просто числится его предмет» (баг 3.3.1, утекал и офлайн через этот самый пулл:
     десктоп-журнал показывал чужие группы с совпавшим названием предмета). Хеши студентов
-    вырезаем (нужны только имена/группы)."""
+    вырезаем (нужны только имена/группы).
+
+    🔥 КУРИРУЕМЫЕ ГРУППЫ — ЦЕЛИКОМ, ВСЕ ПРЕДМЕТЫ (живой прогон 01.10.2026). Куратор на
+    сайте видит всю свою группу на чтение (`routers/web/curator.py`), а копия программы
+    везла только НАЗНАЧЕННЫЕ пары: куратор, не ведущий в своей группе ни одного предмета,
+    открывал «Курирование» в программе и видел пустую группу без студентов. Копия не
+    видит больше, чем сайт, — ровно столько же. Запись это не открывает: журнал и
+    /sync/push по-прежнему проверяют НАЗНАЧЕНИЕ, а не кураторство."""
     from ..models import Lesson
     from .. import webdata as W
     login = user.login or ""
+    curated = {g for g in (user.curated_groups or []) if g}
     ty, ts = W.current_term(W.load_config(db))
     #⚠️ БЕЗ моста (allow_fallback=False), в отличие от журнала. Здесь скоуп не «что
     #показать», а «что отдать на чужой компьютер»: без назначения офлайн-копия не должна
     #привозить группы и занятия вовсе. Мост существует ради видимости журнала, и
     #распространять его на выгрузку данных нельзя.
     pairs = set(W.teacher_assignments(db, user.id, ty, ts, allow_fallback=False))
-    groups = {g for g, _s in pairs}
+    groups = {g for g, _s in pairs} | curated
+
+    def visible(group, subject) -> bool:
+        return group in curated or (group, subject) in pairs
     changes["users"] = [u for u in (changes.get("users") or [])
                         if u.get("login") == login
                         or (u.get("role") == "student" and u.get("group_name") in groups)]
     _strip_other_hashes(changes["users"], login)
     changes["groups"] = [g for g in (changes.get("groups") or []) if g.get("name") in groups]
     changes["lessons"] = [l for l in (changes.get("lessons") or [])
-                          if (l.get("group_name"), l.get("subject")) in pairs]
+                          if visible(l.get("group_name"), l.get("subject"))]
     #🔥 ТОЧЕЧНО, А НЕ ВСЯ ТАБЛИЦА (аудит 22.09.2026, F-22; исследование синка W-03).
     #Раньше на КАЖДЫЙ pull (раз в 30 с с каждой программы) читались ВСЕ занятия и ВСЕ
     #студенты колледжа — даже при пустой дельте. Нужны только занятия, на которые
@@ -583,18 +664,19 @@ def _scope_for_teacher(changes: dict, user: User, db: Session) -> None:
                           db.query(Lesson.id, Lesson.group_name, Lesson.subject)
                             .filter(Lesson.id.in_(chunk)).all()})
     changes["grades"] = [gr for gr in grades
-                         if lesson_gs.get(W.base_lesson_id(gr.get("lesson_id") or "")) in pairs]
+                         if visible(*lesson_gs.get(W.base_lesson_id(gr.get("lesson_id") or ""),
+                                                   (None, None)))]
     #TermGrade хранит только студента+предмет, без группы — группу студента достаёт
     #`_Students` (W-04): по id, по ФИО — только без тёзок. Прежняя карта «ФИО → группа»
     #у тёзок из разных групп оставляла одного, и итоговая уезжала чужому преподавателю.
     terms = changes.get("term_grades") or []
     students = _Students().load_for(db, terms)
     changes["term_grades"] = [
-        t for t in terms if (students.group_of(t), t.get("subject")) in pairs]
+        t for t in terms if visible(students.group_of(t), t.get("subject"))]
     #student_subgroups: только по НАЗНАЧЕННЫМ парам (как lessons/grades выше). Без фильтра
     #препод получал роспись подгрупп всех групп колледжа — чужая ростер-структура.
     changes["student_subgroups"] = [s for s in (changes.get("student_subgroups") or [])
-                                    if (s.get("group_name"), s.get("subject")) in pairs]
+                                    if visible(s.get("group_name"), s.get("subject"))]
 
 
 def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:
@@ -622,17 +704,26 @@ def _scope_pull_for_role(changes: dict, user: User, db: Session) -> None:
     elif user.role == "student":
         _scope_for_student(changes, user, db)
     else:
-        #🔒 Любая ОСТАЛЬНАЯ роль (сегодня это `parent`) не получает НИЧЕГО.
+        #🔒 Любая ОСТАЛЬНАЯ роль (`parent`, `moderator`) получает ТОЛЬКО СВОЮ строку
+        #`users` — и больше ничего.
         #Раньше сюда падал общий студенческий скоуп — и это была настоящая, пусть и
         #узкая, утечка: _scope_for_student отбирает оценки по совпадению ФАМИЛИИ И
         #ИМЕНИ владельца токена, а у родителя они свои. Родитель-однофамилец (в семье
         #это буквально норма: «Иванов Пётр» отец и «Иванов Пётр» сын, да и просто
         #совпадение ФИО с ЧУЖИМ студентом) выкачал бы чужие оценки целиком.
-        #Родителю офлайн-синк не нужен по построению: его кабинет — это веб (§14), а
-        #веб-клиенты сюда и так не допускаются (_deny_web). Пустая выдача — это не
-        #ограничение функции, а честное «этой роли здесь делать нечего».
+        #🔥 Но и «совсем ничего» оказалось ошибкой (живой прогон 01.10.2026): программа
+        #после входа ЖДЁТ человека в своей копии (`desktop/local_api._wait_for_mirror`),
+        #а его строка не приезжала никогда — родитель и модератор 12–15 с смотрели на
+        #«проверьте связь» и в программу не попадали ВООБЩЕ. Своя строка ПДн чужих
+        #людей не несёт; кабинет родителя и модерация пересылаются на бой
+        #(`_PROXY_PREFIXES`), поэтому больше копии ничего не нужно.
+        own = user.login or ""
         for name in list(changes.keys()):
-            changes[name] = []
+            if name == "users":
+                changes[name] = [u for u in (changes.get("users") or [])
+                                 if own and u.get("login") == own]
+            elif name != "config":
+                changes[name] = []
 
 
 #━━ PULL ПО НОМЕРУ ИЗМЕНЕНИЯ (26.09.2026, исследование синка П7/П9) ━━━━━━━━━━━━━━━━━━━
@@ -857,7 +948,7 @@ def digest(request: Request = None, user: User = Depends(get_current_user),
     for name, model in SYNC_MODELS.items():
         cols = _digest_columns(name, model)
         rows = db.query(*cols).filter(model.change_seq <= head_seq).all()
-        changes[name] = [dict(zip([c.name for c in cols], r)) for r in rows]
+        changes[name] = [dict(zip([c.name for c in cols], r, strict=True)) for r in rows]
     _scope_pull_for_role(changes, user, db)
     last_del = {r[0]: int(r[1] or 0) for r in db.execute(text(
         "SELECT tbl, MAX(seq) FROM sync_deletes WHERE seq <= :h GROUP BY tbl"),
@@ -880,7 +971,6 @@ def table_digest(items, pk: str) -> dict:
     return {"count": len(pairs),
             "hash": hashlib.sha256("\n".join(pairs).encode("utf-8")).hexdigest(),
             "last": last}
-
 
 
 def _student_id_by_name(db, f: str, n: str, group: str = "") -> str:
@@ -1093,7 +1183,7 @@ def push(payload: dict = Body(...), request: Request = None,
                 #шкале, архив прошлых семестров, замок зачётки. До 20.09.2026 через этот
                 #путь не проверялось ничего из перечисленного.
                 if is_teacher:
-                    why = _domain_refusal(db, name, item, domain_cfg)
+                    why = _domain_refusal(db, name, item, domain_cfg, user=user)
                     if why:
                         rej += 1
                         refusals.setdefault(name, set()).add(why)
@@ -1157,7 +1247,7 @@ def push(payload: dict = Body(...), request: Request = None,
             #навсегда выключить сверку «сервер = истина», которая при отказах кэш не
             #стирает (см. `sync_engine.reconcile`).
             if changed and is_teacher:
-                why = _domain_refusal(db, name, item, domain_cfg)
+                why = _domain_refusal(db, name, item, domain_cfg, user=user, existing=existing)
                 if why:
                     rej += 1
                     refusals.setdefault(name, set()).add(why)

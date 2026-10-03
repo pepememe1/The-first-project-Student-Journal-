@@ -256,7 +256,7 @@ async function deleteEdit() {
     </StickyXScroll>
 
     <!-- ── Новый родитель ──────────────────────────────────────────────────────── -->
-    <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showCreate = false">
+    <div v-dialog v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showCreate = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.newParentTitle', 'Новый родитель') }}</h3>
         <div class="space-y-3">
@@ -300,7 +300,7 @@ async function deleteEdit() {
     </div>
 
     <!-- ── Привязка ────────────────────────────────────────────────────────────── -->
-    <div v-if="showLink" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLink = false">
+    <div v-dialog v-if="showLink" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLink = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.linkModalTitle', 'Привязать родителя к студенту') }}</h3>
         <div class="space-y-3">
@@ -330,7 +330,7 @@ async function deleteEdit() {
     </div>
 
     <!-- ── Правка родителя ─────────────────────────────────────────────────────── -->
-    <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showEdit = false">
+    <div v-dialog v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showEdit = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-lg font-bold text-text">{{ editTarget?.full_name || locale.t('adminParents.parentFallback', 'Родитель') }}</h3>
         <p class="mb-4 text-xs text-text3">{{ locale.t('adminParents.loginPrefix', 'Логин:') }} {{ editTarget?.login }}</p>

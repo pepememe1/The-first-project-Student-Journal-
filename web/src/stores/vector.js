@@ -8,6 +8,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { vectorApi, parentApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { answerOffline } from '@/utils/vectorOffline'
 import { chatEmote } from '@/config/mascot'
 import { QUICK_COMMANDS } from '@/config/vectorCommands'
@@ -16,23 +17,30 @@ import { useTtsStore } from './tts'
 import { useEasterStore } from './easterEggs'
 import { useLocaleStore } from './locale'
 
-const GREETING_KEY = 'vectorPage.greeting'
-const GREETING_FALLBACK = 'Привет! Я Вектор. Спросите про средний балл, задолженности или пропуски — я беру цифры из ваших реальных данных.'
+import { greetingKey, greetingName, namePart } from '@/utils/vectorGreeting'
 
 export const useVectorStore = defineStore('vector', () => {
   const auth = useAuthStore()
   const tts = useTtsStore()
   const locale = useLocaleStore()
 
+  // Первое сообщение — по РОЛИ и по ИМЕНИ (28.09.2026): «Здравствуйте, Анна Петровна!»
+  // преподавателю, «Привет, Арюна!» студенту. Раньше строка была одна на всех, и
+  // администратору предлагались вопросы студента (см. utils/vectorGreeting.js).
+  function greetingText() {
+    const u = auth.user
+    return locale.t(greetingKey(u?.role), { name: namePart(greetingName(u), locale.active) })
+  }
   const messages = ref([
-    { role: 'vector', text: locale.t(GREETING_KEY, GREETING_FALLBACK) },
+    { role: 'vector', text: greetingText() },
   ])
   // Приветствие — заглушка ДО первого реального ответа сервера (тот уже приходит на
   // нужном языке через locale_on/prefs.locale). Пока пользователь ничего не спросил,
-  // переключение языка обязано перевести и её — иначе «выбрал English, а текст тот же».
-  watch(() => locale.active, () => {
+  // смена языка И смена вошедшего обязаны переписать и её: иначе «выбрал English, а
+  // текст тот же», а вошедший вторым видит имя первого.
+  watch(() => [locale.active, auth.user?.login, auth.user?.role], () => {
     if (messages.value.length === 1 && messages.value[0].role === 'vector') {
-      messages.value[0].text = locale.t(GREETING_KEY, GREETING_FALLBACK)
+      messages.value[0].text = greetingText()
     }
   })
   const input = ref('')
@@ -108,7 +116,13 @@ export const useVectorStore = defineStore('vector', () => {
     _stopTypingTimer()
     const total = fullText.length
     if (!total) { typingReveal.value = { index, text: '', done: true }; return }
-    const dur = Math.max(300, durationMs || total * _FALLBACK_MS_PER_CHAR)
+    //🔥 ПОТОЛОК ДЛИТЕЛЬНОСТИ ПЕЧАТИ (01.10.2026, живой прогон: карточка студента в 600
+    //символов печаталась 31 секунду — ровно столько, сколько её читает голос). Со стороны
+    //это «Вектор молчит», а цифры, ради которых спрашивали, видны через полминуты. Текст
+    //имеет право обогнать голос — читают быстрее, чем слушают; отставать на десятки
+    //секунд не имеет. Короткие ответы идут в прежнем темпе.
+    const dur = Math.min(Math.max(300, durationMs || total * _FALLBACK_MS_PER_CHAR),
+                         2500 + total * 4)
     const startedAt = performance.now()
     typingReveal.value = { index, text: '', done: false }
     typingTimer = setInterval(() => {
@@ -214,21 +228,35 @@ export const useVectorStore = defineStore('vector', () => {
       // отвечает офлайн-помощник по сохранённым данным (см. utils/vectorOffline.js).
       // Различать обязательно: ответ с кодом (даже 500) означает, что сервер на связи,
       // и подменять его локальным разбором нельзя — там ответ полнее и он авторитетнее.
+      if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
       if (!e.response) {
         const local = answerOffline(t)
         lastIntent.value = local.intent
         lastMood.value = local.mood
-        answer = `${locale.t('vectorPage.offlineMode', 'Работаю без интернета, по сохранённым данным.')}\n\n${local.text}`
+        //Тайм-аут при ЖИВОЙ сети — не «без интернета»: сервер на связи, но долго ждёт
+        //(например, портал расписания). Живой прогон 01.10.2026: «расписание на завтра» →
+        //20 с → «Работаю без интернета» у человека с исправным интернетом.
+        const slow = e?.code === 'ECONNABORTED'
+          && (typeof navigator === 'undefined' || navigator.onLine !== false)
+        const head = slow
+          ? locale.t('vectorPage.slowMode', 'Сервер долго не отвечает — отвечаю по сохранённым данным.')
+          : locale.t('vectorPage.offlineMode', 'Работаю без интернета, по сохранённым данным.')
+        answer = `${head}\n\n${local.text}`
         msgIndex = messages.value.length
         messages.value.push({ role: 'vector', text: answer, offline: true })
         _armTyping(msgIndex)
       } else {
         const notReady = e.response?.status === 404
+        //Отказ ПО ПРАВАМ (403) несёт причину от сервера — например, родителю «привязка ещё
+        //не подтверждена студентом». «Не удалось получить ответ, попробуйте снова» здесь
+        //неправда: повтор даст тот же отказ, и человек будет жать до бесконечности.
+        const detail = e.response?.status === 403 && typeof e.response?.data?.detail === 'string'
+          ? e.response.data.detail : ''
         messages.value.push({
           role: 'vector',
-          text: notReady
+          text: detail || (notReady
             ? locale.t('vectorPage.offline', 'Серверный «Вектор» ещё подключается.')
-            : locale.t('vectorPage.failed', 'Не удалось получить ответ. Попробуйте снова.'),
+            : locale.t('vectorPage.failed', 'Не удалось получить ответ. Попробуйте снова.')),
         })
         lastMood.value = 'neutral'
       }
@@ -291,7 +319,7 @@ export const useVectorStore = defineStore('vector', () => {
   // ⚠️ `collapsed` НЕ трогаем: это настройка устройства («я не хочу видеть шторку»),
   // а не данные пользователя, и сбрасывать её при каждом выходе было бы навязчиво.
   function reset() {
-    messages.value = [{ role: 'vector', text: locale.t(GREETING_KEY, GREETING_FALLBACK) }]
+    messages.value = [{ role: 'vector', text: greetingText() }]
     input.value = ''
     state.value = 'greeting'
     lastMood.value = 'neutral'

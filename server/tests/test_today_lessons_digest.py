@@ -126,7 +126,11 @@ def test_the_count_comes_from_the_same_schedule_the_screen_shows(monkeypatch):
     #бы совсем другое. Инвариант «тест не привязан к календарю» в действии.
     monday = datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)
     day_key = WEEKDAYS[monday.weekday()]
-    week = sched.schedule_web.current_week_parity()
+    #🔥 Чётность — ОТ ТОГО ЖЕ ДНЯ, что и понедельник (29.09.2026). Здесь стояло
+    #`current_week_parity()` «на сегодня»: тест был зелёным, пока сегодня лежало в одной
+    #неделе с 21.09, и покраснел 29.09 без единой правки кода — продукт честно брал
+    #чётность от переданного дня, а тест клал пары в неделю «сегодняшней» чётности.
+    week = sched.schedule_web.current_week_parity(monday.date())
 
     #Снимок ЕСТЬ в кэше (иначе сработает ранний выход «расписание не прогрето»), а
     #раскладку дня подменяем на уровне `_group_schedule` — там она уже с правками.

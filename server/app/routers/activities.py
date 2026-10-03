@@ -35,6 +35,8 @@ from ..models import (
     Conversation, ConversationParticipant, Message, MessageReport,
     QuizOption, QuizQuestion, QuizSet, User,
 )
+import logging as _logging
+_hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 
 router = APIRouter(prefix="/web/messenger/activities", tags=["activities"])
 
@@ -246,10 +248,23 @@ def _emit_state(db: Session, a: Activity, snapshot: dict | None) -> None:
 
 
 # ── Сериализация ─────────────────────────────────────────────────────────────────────
+#Поля `params`, которые не уходят наружу НИКОМУ. `final_votes` — карта «кто как
+#проголосовал», снятая при завершении опроса ради ленты (`_poll_cell` считает по ней
+#`my_choice` и распределение сам, на сервере). Живое состояние голосов режет
+#`_state_for`, а снимок в `params` отдавался целиком (ревью 30.09.2026): любой участник
+#беседы прямым `GET /activities/{id}` видел, как проголосовал каждый, — в опросе,
+#объявленном как «результаты видит только преподаватель».
+_PRIVATE_PARAMS = frozenset({"final_votes"})
+
+
+def _public_params(a: Activity) -> dict:
+    return {k: v for k, v in (a.params or {}).items() if k not in _PRIVATE_PARAMS}
+
+
 def _activity_out(a: Activity, me_id: str = "") -> dict:
     return {"id": a.id, "conversation_id": a.conversation_id, "kind": a.kind,
             "host_id": a.host_id, "is_host": bool(me_id) and a.host_id == me_id,
-            "title": a.title or "", "params": a.params or {}, "status": a.status,
+            "title": a.title or "", "params": _public_params(a), "status": a.status,
             "started_at": a.started_at or "", "finished_at": a.finished_at or "",
             "message_id": a.message_id or 0}
 
@@ -418,8 +433,8 @@ def _finish_activity_row(db: Session, a: Activity, save: bool = False,
     try:
         from .messenger import _broadcast
         _broadcast(db, a.conversation_id)
-    except Exception:
-        pass
+    except Exception as e:      # noqa: BLE001 — итог уже записан; участники доберут опросом
+        _hook_log.warning("сигнал о завершении активности не разослан: %s", e)
     return summary
 
 
@@ -1022,12 +1037,17 @@ def vote(activity_id: str, payload: dict = Body(...),
     choice = payload.get("choice")
     if not isinstance(choice, int) or not (0 <= choice < len(options)):
         raise HTTPException(status_code=400, detail="Нет такого варианта")
-    snap = activity_state.get(a.id)
-    if snap is None:
+    if activity_state.get(a.id) is None:
         raise HTTPException(status_code=400, detail="Опрос уже завершён")
-    votes = dict(snap["payload"].get("votes") or {})
-    votes[user.id] = choice
-    snap = _require_state(activity_state.patch(a.id, {"votes": votes}))
+
+    def _cast(p):
+        votes = dict(p.get("votes") or {})
+        votes[user.id] = choice
+        return {"votes": votes}
+    #Чтение и запись словаря голосов — одним шагом (`merge`): иначе одновременный голос
+    #соседа стирался бы (ревью 30.09.2026).
+    snap = _require_state(activity_state.merge(a.id, _cast))
+    votes = snap["payload"].get("votes") or {}
     #Итог участника пишем и в БД: журнал беседы (§9) обязан пережить перезапуск, а один
     #голос — это одна запись на человека, а не поток (профиль нагрузки тот же, что у
     #`submit` викторины, который план прямо разрешает).
@@ -1111,12 +1131,14 @@ def send_feedback(activity_id: str, payload: dict = Body(...),
     row.custom_text = profanity_filter.censor(text, mask=profanity_filter.MESSENGER_SAFE_MASK)
     row.created_at = _now()
     db.commit()
-    snap = activity_state.get(a.id)
-    if snap is not None:
-        answered = list(snap["payload"].get("answered") or [])
-        if user.id not in answered:
-            answered.append(user.id)
-        snap = _require_state(activity_state.patch(a.id, {"answered": answered}))
+    if activity_state.get(a.id) is not None:
+        def _mark(p):
+            done = list(p.get("answered") or [])
+            if user.id not in done:
+                done.append(user.id)
+            return {"answered": done}
+        snap = _require_state(activity_state.merge(a.id, _mark))
+        answered = snap["payload"].get("answered") or []
         #Наружу — только СЧЁТЧИК. Список ответивших сам по себе выдал бы автора отзыва
         #тому, кто следит за экраном: «ответил Петров — значит вот эта строка его».
         _emit(db, a.conversation_id,
@@ -1598,11 +1620,14 @@ def report_progress(activity_id: str, payload: dict = Body(...),
     if snap is None:
         raise HTTPException(status_code=400, detail="Активность уже завершена")
     done = max(0, int(payload.get("answered") or 0))
-    walk = dict(snap["payload"].get("walk") or {})
-    #Назад не двигаем: человек мог вернуться к предыдущему вопросу, но пройденного это
-    #не отменяет, а прыгающая назад шкала у ведущего читается как сбой.
-    walk[user.id] = max(done, int(walk.get(user.id) or 0))
-    snap = _require_state(activity_state.patch(a.id, {"walk": walk}))
+
+    def _step(p):
+        walk = dict(p.get("walk") or {})
+        #Назад не двигаем: человек мог вернуться к предыдущему вопросу, но пройденного это
+        #не отменяет, а прыгающая назад шкала у ведущего читается как сбой.
+        walk[user.id] = max(done, int(walk.get(user.id) or 0))
+        return {"walk": walk}
+    snap = _require_state(activity_state.merge(a.id, _step))
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -1723,9 +1748,7 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     if idx >= len(questions):
         raise HTTPException(status_code=400, detail="Вопрос ещё не показан")
     q = questions[idx]
-    answers = dict(snap["payload"].get("answers") or {})
-    slot = dict(answers.get(str(idx)) or {})
-    if user.id in slot:
+    if user.id in ((snap["payload"].get("answers") or {}).get(str(idx)) or {}):
         raise HTTPException(status_code=409, detail="Вы уже ответили на этот вопрос")
     opts = _options_by_question(db, [q.id]).get(q.id, [])
     ok = activity_grading.check_answer(q, opts, payload.get("answer"))
@@ -1733,11 +1756,24 @@ def contest_answer(activity_id: str, payload: dict = Body(...),
     elapsed = int(time.monotonic() * 1000) - int(snap["payload"].get("question_started_ms") or 0)
     limit_ms = int((a.params or {}).get("limit_ms") or 30000)
     gain = activity_grading.speed_score(q.points or 1, elapsed, limit_ms) if ok else 0.0
-    slot[user.id] = {"correct": ok, "gain": gain}
-    answers[str(idx)] = slot
-    scores = dict(snap["payload"].get("scores") or {})
-    scores[user.id] = round(float(scores.get(user.id, 0) or 0) + gain, 2)
-    snap = _require_state(activity_state.patch(a.id, {"answers": answers, "scores": scores}))
+
+    def _record(p):
+        #🔒 «Уже отвечал» — ПОВТОРНО и под замком (ревью 30.09.2026): проверка выше
+        #смотрела на снимок, и два одновременных запроса одного человека проходили её
+        #оба — а ведь повтор запрещён ровно затем, чтобы нельзя было ответить наугад и
+        #тут же исправиться.
+        answers = dict(p.get("answers") or {})
+        slot = dict(answers.get(str(idx)) or {})
+        if user.id in slot:
+            raise HTTPException(status_code=409, detail="Вы уже ответили на этот вопрос")
+        slot[user.id] = {"correct": ok, "gain": gain}
+        answers[str(idx)] = slot
+        scores = dict(p.get("scores") or {})
+        scores[user.id] = round(float(scores.get(user.id, 0) or 0) + gain, 2)
+        return {"answers": answers, "scores": scores}
+    snap = _require_state(activity_state.merge(a.id, _record))
+    slot = (snap["payload"].get("answers") or {}).get(str(idx)) or {}
+    scores = snap["payload"].get("scores") or {}
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -1879,15 +1915,26 @@ def add_strokes(activity_id: str, payload: dict = Body(...),
     if not isinstance(batch, list):
         raise HTTPException(status_code=400, detail="Ожидается список штрихов")
     batch = _clean_strokes(batch)
-    strokes = list(snap["payload"].get("strokes") or [])
-    if payload.get("clear"):
-        strokes = []
-    strokes.extend(batch)
-    #Потолок — защита от бесконечно растущего состояния в памяти на длинной паре.
-    #Режем СТАРЫЕ: свежее человеку нужнее, а «доска целиком» и так уезжает в артефакт.
-    if len(strokes) > MAX_STROKES_TOTAL:
-        strokes = strokes[-MAX_STROKES_TOTAL:]
-    snap = _require_state(activity_state.patch(a.id, {"strokes": strokes}))
+    clear = bool(payload.get("clear"))
+
+    def _draw(p):
+        #Штрихи дописываются к ТЕКУЩЕЙ доске под замком (`merge`, ревью 30.09.2026): рисуют
+        #двое (ведущий и держатель пера), плюс пакеты одного рисующего бывают в полёте
+        #одновременно — пара `get` → `patch` стирала штрихи того, кто записал первым.
+        #Право на перо — ПОВТОРНО по тому же состоянию: ведущий мог забрать перо между
+        #проверкой выше и записью, и запоздавшая пачка с «очистить» стёрла бы доску уже
+        #после того, как рисовать человеку запретили.
+        if not _may_draw(db, a, user, p):
+            raise HTTPException(status_code=403, detail="Сейчас рисует другой участник")
+        strokes = [] if clear else list(p.get("strokes") or [])
+        strokes.extend(batch)
+        #Потолок — защита от бесконечно растущего состояния в памяти на длинной паре.
+        #Режем СТАРЫЕ: свежее человеку нужнее, а «доска целиком» и так уезжает в артефакт.
+        if len(strokes) > MAX_STROKES_TOTAL:
+            strokes = strokes[-MAX_STROKES_TOTAL:]
+        return {"strokes": strokes}
+    snap = _require_state(activity_state.merge(a.id, _draw))
+    strokes = snap["payload"].get("strokes") or []
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],

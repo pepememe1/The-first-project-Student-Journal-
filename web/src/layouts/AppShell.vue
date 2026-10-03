@@ -28,6 +28,9 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
+//Переход «к содержимому»: фокус на <main>, а не только прокрутка — иначе следующий Tab
+//всё равно пошёл бы с начала страницы, то есть по боковой панели.
+function focusMain() { document.getElementById('gb-main')?.focus() }
 const theme = useThemeStore()
 const vector = useVectorStore()
 const activity = useActivityStore()
@@ -288,6 +291,12 @@ onMounted(askLoginEggs)
   <!-- Корень — ГОРИЗОНТАЛЬНЫЙ: сайдбар и контент рядом, полосы во всю ширину сверху
        больше нет (см. HeaderBar.vue — там осталась только мобильная версия). -->
   <div class="flex h-full overflow-hidden">
+    <!-- «К содержимому» — первая остановка Tab (ACCESSIBILITY.md, пробел №3): без неё
+         человек с клавиатуры проходил всю боковую панель на КАЖДОЙ странице. Видна только
+         в фокусе, мышью её не встретить. -->
+    <a href="#gb-main"
+       class="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[120] focus:rounded-sm focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:text-text focus:shadow-card"
+       @click.prevent="focusMain">{{ locale.t('common.skipToContent', 'К содержимому') }}</a>
     <!-- Десктоп: постоянный сайдбар.
          🔥 `v-if="isLg"`, а НЕ только класс `hidden lg:block` (07.09.2026). Класс прячет
          панель ГЛАЗАМИ, но оставляет её смонтированной: на телефоне она всё это время
@@ -315,7 +324,7 @@ onMounted(askLoginEggs)
       <HeaderBar v-if="!chromeless" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
       <!-- Контент: мягкий фон + сетка (как AnimatedBackground в десктопе) -->
-      <main class="app-canvas min-h-0 flex-1 overflow-y-auto" style="padding-bottom: env(safe-area-inset-bottom)">
+      <main id="gb-main" tabindex="-1" class="app-canvas min-h-0 flex-1 overflow-y-auto outline-none" style="padding-bottom: env(safe-area-inset-bottom)">
         <!-- Отступы ужаты (3.5.6): было p-4 / sm:px-7 sm:py-6 — «жирная рамка» вокруг
              активного окна съедала полосу по всему периметру, ничего в ней не показывая. -->
         <!-- Правый отступ добавляем ТОЛЬКО когда у края висит вкладка-возврат Вектора:

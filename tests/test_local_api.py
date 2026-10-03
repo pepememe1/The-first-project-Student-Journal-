@@ -492,6 +492,31 @@ def test_bootstrap_resumes_sync_for_a_restored_session(api, monkeypatch):
     assert started == [], "живой синк того же человека перезапущен без пароля"
 
 
+
+def test_local_user_names_come_from_the_local_copy(api):
+    """ФИО и обращение — из копии, тем же правилом, что вход на бою."""
+    _seed_role("f06_names", "teacher")
+    full, greet = local_api.local_user_names("f06_names")
+    assert full == "Тестов Тест", full
+    assert greet, "обращение пустое — Вектор поздоровается без имени"
+    assert local_api.local_user_names("nobody_here") == ("", "")
+
+
+def test_bootstrap_hands_the_full_name_not_the_login(api, monkeypatch):
+    """🔥 Живой прогон 01.10.2026: после перезапуска программы в меню стоял ЛОГИН вместо
+    ФИО, а Вектор здоровался без имени — оболочка клала логин в поле имени `gb.user`."""
+    monkeypatch.setattr(local_api, "_session_login", lambda: "f06_boot")
+    monkeypatch.setattr(local_api, "_saved_session_alive", lambda: True)
+    monkeypatch.setattr(local_api, "switch_user_db", lambda login, authenticated=False: True)
+    monkeypatch.setattr(local_api, "issue_local_session", lambda login, role: ("tok", "ref"))
+    monkeypatch.setattr(local_api, "_resume_sync", lambda login, role: None)
+    monkeypatch.setattr(local_api, "local_user_names",
+                        lambda login: ("Ivanov Ivan Petrovich", "Ivan Petrovich"))
+    code, body = _get(api.url("/desktop/bootstrap?route=/"))
+    assert code == 200
+    assert b"Ivanov Ivan Petrovich" in body, "в gb.user снова логин вместо ФИО"
+    assert b"Ivan Petrovich" in body.replace(b"Ivanov Ivan Petrovich", b"")
+
 # ── Озвучка Вектора через бой (26.09.2026: ключ ИИ в копию больше не приезжает) ──────
 def test_local_server_voices_the_vector_through_prod(api):
     """Проводка: локальный сервер ставит в `vector_llm` боевую озвучку. Без неё, после
@@ -523,6 +548,42 @@ def test_remote_vector_asks_prod_as_the_signed_in_person(monkeypatch):
     assert sent["url"] == "https://prod.example/vector/voice"
     assert sent["json"] == {"facts": "ф", "locale": "en", "mode": "voice"}
     assert sent["headers"]["Authorization"] == "Bearer TOK"
+
+
+def test_local_server_asks_prod_about_the_server_state(api):
+    """Проводка: без хука Вектор в программе снова описывал бы ноутбук админа."""
+    from app.routers.web import vector as web_vector
+    assert web_vector._remote_server_state is local_api._remote_server_state, \
+        "локальный сервер не подключил ответ о состоянии сервера с боя"
+
+
+def test_remote_server_state_asks_prod_vector_as_the_signed_in_person(monkeypatch):
+    import httpx
+    import vector_nlu
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"text": "Сервер: …", "intent": "server_state"}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, json=json, headers=headers)
+        return _Resp()
+    monkeypatch.setattr(local_api, "_remote_auth", lambda: ("https://prod.example", "TOK", ""))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    assert local_api._remote_server_state()["intent"] == "server_state"
+    assert sent["url"] == "https://prod.example/web/vector/ask"
+    assert sent["headers"]["Authorization"] == "Bearer TOK"
+    #Вопрос обязан разбираться боем как server_state — иначе бой ответит про другое.
+    assert vector_nlu.classify(sent["json"]["message"])["intent"] == "server_state"
+
+
+def test_remote_server_state_without_a_session_is_none(monkeypatch):
+    monkeypatch.setattr(local_api, "_remote_auth", lambda: ("https://prod.example", "", "expired"))
+    assert local_api._remote_server_state() is None
 
 
 def test_remote_vector_without_a_session_answers_nothing(monkeypatch):

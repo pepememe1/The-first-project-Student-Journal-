@@ -34,20 +34,38 @@ export function messageMenuItems(m) {
   const msg = m || {}
   if (msg.deleted) return { primary: ['select'], more: [] }
 
-  const primary = ['reply', 'copy', 'forward']
+  const edit = canEditMessage(msg)
+  const primary = edit ? ['reply', 'edit', 'copy', 'forward'] : ['reply', 'copy', 'forward']
   primary.push(msg.pinned ? 'unpin' : 'pin')
   primary.push('delete')
   // «Пожаловаться» — только на ЧУЖОЕ: жалоба на себя не имеет адресата, а место в
-  // коротком меню стоит дорого. У своего сообщения это место занимает «Выделить».
-  primary.push(msg.mine ? 'select' : 'report')
+  // коротком меню стоит дорого. У своего сообщения это место занимает «Выделить» —
+  // а у правимого своего «Изменить», и «Выделить» уезжает под «Ещё» (шесть строк держим).
+  if (!msg.mine) primary.push('report')
+  else if (!edit) primary.push('select')
 
   const more = []
   if (msg.body) more.push('speak')
   if (!msg.mine && msg.body) more.push('translate')
   more.push('remind')
   if (msg.mine) more.push('reactions-info')
-  else more.push('select')
+  if (!msg.mine || edit) more.push('select')
   return { primary, more }
+}
+
+/**
+ * Можно ли править сообщение (02.10.2026). Правило зеркалит сервер
+ * (`messenger/messages.py::edit_message`): своё, не удалённое, с текстом, обычное или
+ * подпись к файлу, НЕ пересланное. GIF — ссылка, а не текст; пересланное — чужие слова.
+ * Пункта правки в меню не было с первого коммита мессенджера, хотя сервер её умел.
+ */
+export function canEditMessage(m) {
+  const msg = m || {}
+  return !!msg.mine && !msg.deleted && !!(msg.body || '').trim()
+    //`forwarded_from` — имя автора оригинала; у НЕ пересланного сервер отдаёт null, а у
+    //пересланного с пустым именем — ''. Проверка «не пусто» показала бы «Изменить» там,
+    //где сервер ответит отказом (нашёл Полковник), — поэтому сравнение с null.
+    && ['text', 'file'].includes(msg.kind || 'text') && msg.forwarded_from == null
 }
 
 /**

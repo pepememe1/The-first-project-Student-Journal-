@@ -299,6 +299,26 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     incoming = payload.get("prefs") if isinstance(payload.get("prefs"), dict) else payload
     if not isinstance(incoming, dict):
         incoming = {}
+    #🔥 ШКАЛА ОЦЕНИВАНИЯ — НЕ ПРОСТО НАСТРОЙКА (01.10.2026). Оценки хранятся сырыми и
+    #читаются по текущей шкале: смена одной строкой превращала прежние «5/4/3» в
+    #«5 из 100» у всей группы. Поэтому и через эту дверь шкала меняется ТОЛЬКО с переводом
+    #оценок (server/app/scale_conversion.py): однозначные переводятся сами, а если есть
+    #спорные (73 → «3 или 4»), нужен выбор человека — его даёт окно в настройках
+    #(/web/teacher/grading-scale). Старый клиент получит понятный отказ, а не порчу журнала.
+    new_scale = incoming.get("grading_scale")
+    if user.role == "teacher" and isinstance(new_scale, str):
+        from .. import scale_conversion as SC
+        from .. import webdata as W
+        if new_scale not in W.grading.SCALES:
+            raise HTTPException(status_code=400, detail="Неизвестная шкала оценивания")
+        if new_scale != W.teacher_scale(user):
+            if SC.plan(db, user, new_scale)["disputed"]:
+                raise HTTPException(status_code=409, detail=(
+                    "Смена шкалы переводит уже поставленные оценки, и для части из них "
+                    "нужен ваш выбор. Обновите приложение и смените шкалу в настройках — "
+                    "там будет список спорных оценок."))
+            SC.apply(db, user, new_scale)
+            db.refresh(user)
     merged = dict(user.prefs or {})
     merged.update(incoming)
     _sanitize_public_profile(merged)     #«О себе» и цвет плашки видны другим — режем здесь

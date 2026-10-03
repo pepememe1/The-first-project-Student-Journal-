@@ -96,7 +96,7 @@ def _run_assert(config, is_prod: bool, secret: str, db_key: str = "") -> list:
 
 # ── 2. /sync/pull не отдаёт ничего роли, которой там не место ───────────────────────
 def test_sync_pull_gives_nothing_to_parent(client):
-    """🔒 Родитель через /sync/pull не получает НИЧЕГО.
+    """🔒 Родитель через /sync/pull не получает НИЧЕГО, кроме СВОЕЙ строки `users`.
 
     Раньше он попадал в общий студенческий скоуп, а тот отбирает оценки по совпадению
     ФАМИЛИИ И ИМЕНИ владельца токена. У родителя они свои — и родитель-однофамилец
@@ -121,8 +121,32 @@ def test_sync_pull_gives_nothing_to_parent(client):
     parent = {"Authorization": f"Bearer {tok.json()['access_token']}"}
 
     changes = client.get("/sync/pull", headers=parent).json()["changes"]
-    assert all(not rows for rows in changes.values()), \
-        f"родителю уехали данные: {[k for k, v in changes.items() if v]}"
+    leaked = [k for k, v in changes.items() if v and k not in ("users", "config")]
+    assert not leaked, f"родителю уехали данные: {leaked}"
+    assert [u.get("login") for u in changes.get("users") or []] == ["parent1"], \
+        "родителю уехали чужие строки users"
+
+
+def test_sync_pull_gives_parent_and_moderator_their_own_row(client):
+    """🔥 Без СВОЕЙ строки родитель и модератор не входят в программу ВООБЩЕ.
+
+    Программа после входа ждёт человека в локальной копии (`_wait_for_mirror`), и при
+    пустой выдаче через 12–15 с показывала «проверьте связь» — живой прогон 01.10.2026.
+    Своя строка нужна целиком, с СВОИМ хешем: по нему идёт офлайн-вход."""
+    admin = make_admin(client)
+    client.post("/web/admin/parents", json={
+        "login": "parent2", "surname": "Петров", "name": "Олег",
+        "password": "parentpass2"}, headers=admin)
+    client.post("/web/admin/moderators", json={
+        "login": "mod2", "full_name": "Сидоров Иван",
+        "password": "moderpass2"}, headers=admin)
+    for login, pwd in (("parent2", "parentpass2"), ("mod2", "moderpass2")):
+        tok = client.post("/auth/login", json={"login": login, "password": pwd}).json()
+        assert "access_token" in tok, (login, tok)
+        hdr = {"Authorization": f"Bearer {tok['access_token']}"}
+        users = client.get("/sync/pull", headers=hdr).json()["changes"].get("users") or []
+        assert [u.get("login") for u in users] == [login], (login, users)
+        assert users[0].get("password_hash"), "свой хеш нужен для офлайн-входа"
 
 
 # ── 3. Преподаватель не пишет синком в чужую группу ─────────────────────────────────

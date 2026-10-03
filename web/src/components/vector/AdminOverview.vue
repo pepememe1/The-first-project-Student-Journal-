@@ -18,6 +18,7 @@ import { ref, computed, onMounted } from 'vue'
 import { RotateCw } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
+import { humanSize } from '@/utils/docPreview'
 
 const locale = useLocaleStore()
 
@@ -45,6 +46,8 @@ async function load() {
 }
 onMounted(load)
 
+// Размер базы — в тех же единицах, что называет Вектор («1.4 МБ»), а не «0.0 ГБ»:
+// маленькая база в гигабайтах выглядела пустой (живой прогон 28.09.2026).
 function mb(bytes) { return Math.round((Number(bytes) || 0) / 1048576) }
 function gb(bytes) { return ((Number(bytes) || 0) / 1073741824).toFixed(1) }
 
@@ -173,7 +176,11 @@ function loadStatus(pct) {
             <p class="text-[11px] uppercase tracking-wide text-text3">
               {{ locale.t('adminOverview.groups', 'Групп') }}
             </p>
-            <p class="mt-1 font-title text-xl font-extrabold leading-none text-text">{{ counts.groups ?? '—' }}</p>
+            <!-- Крупно — группы со студентами, мелко — весь справочник (там каталог портала). -->
+            <p class="mt-1 font-title text-xl font-extrabold leading-none text-text">{{ counts.groups_active ?? counts.groups ?? '—' }}</p>
+            <p v-if="counts.groups_active != null && counts.groups > counts.groups_active" class="mt-1 text-[11px] text-text3">
+              {{ locale.t('adminOverview.groupsCatalog', { n: counts.groups }) }}
+            </p>
           </div>
           <div class="rounded-lg border border-border bg-bg2/50 p-3">
             <p class="text-[11px] uppercase tracking-wide text-text3">
@@ -198,7 +205,7 @@ function loadStatus(pct) {
         <!-- Шифрование базы — свойство, о котором админ обязан знать в лицо: без ключа
              резервная копия бесполезна, и путать эти два состояния нельзя. -->
         <p v-if="metrics?.database" class="text-[11px] text-text3">
-          {{ locale.t('adminOverview.database', 'База') }}: {{ gb(metrics.database.size) }} ГБ ·
+          {{ locale.t('adminOverview.database', 'База') }}: {{ humanSize(metrics.database.size) }} ·
           <span :class="metrics.database.encrypted ? 'text-accent' : 'text-yellow'">
             {{ metrics.database.encrypted
               ? locale.t('adminOverview.encrypted', 'зашифрована')

@@ -61,11 +61,25 @@ def test_python_matches_contract():
     """Питоновская сторона обязана давать РОВНО то, что записано в контракте, по всем
     четырём полям — не только intent."""
     for case in _cases():
-        got = vector_nlu.classify(case["q"], case["surnames"], case["subjects"])
-        for field in ("intent", "surname", "subject", "day"):
-            assert got[field] == case[field], (
+        got = vector_nlu.classify(case["q"], case["surnames"], case["subjects"], case.get("groups", []))
+        #`surnames` в случае — ВХОД (ростер), ожидаемые найденные — `surnames_found`.
+        for field, key in (("intent", "intent"), ("surname", "surname"),
+                           ("surnames", "surnames_found"), ("subject", "subject"),
+                           ("day", "day"), ("group", "group")):
+            assert got[field] == case[key], (
                 f"«{case['q']}»: поле {field} = {got[field]!r}, "
-                f"ожидалось {case[field]!r} (контракт устарел? см. tools/gen_vector_contract.py)")
+                f"ожидалось {case[key]!r} (контракт устарел? см. tools/gen_vector_contract.py)")
+
+
+def test_contract_feeds_the_roster_not_the_answer():
+    """Обратный ход на дефект генератора 01.10.2026: найденные фамилии затирали входной
+    ростер. Тогда в каждом случае вход совпадал бы с ответом, а случаи «женская фамилия
+    при мужском однофамильце» не различали бы НИЧЕГО. Хотя бы в одном случае ростер
+    обязан быть ШИРЕ найденного — иначе выбор из ростера не проверяется вовсе."""
+    cases = _cases()
+    assert all("surnames_found" in c for c in cases), "у случая нет ожидаемых найденных фамилий"
+    wider = [c for c in cases if len(c["surnames"]) > len(c["surnames_found"]) > 0]
+    assert len(wider) >= 5, "контракт не проверяет выбор фамилии из ростера"
 
 
 @pytest.fixture
@@ -91,7 +105,7 @@ def test_a_broken_lexicon_would_fail_the_contract(restore_intent_stems):
 
     mismatches = 0
     for case in _cases():
-        got = vector_nlu.classify(case["q"], case["surnames"], case["subjects"])
+        got = vector_nlu.classify(case["q"], case["surnames"], case["subjects"], case.get("groups", []))
         if got["intent"] != case["intent"]:
             mismatches += 1
     assert mismatches > 0, "испорченный лексикон прошёл бы контракт — сторож бесполезен"

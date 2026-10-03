@@ -155,6 +155,44 @@ def test_expired_token_stops_the_flush(outbox):
     assert outbox.counts("t1")["pending"] == 1
 
 
+def _jwt(sub: str) -> str:
+    """Токен формы JWT с полем sub (подпись не нужна: очередь её не проверяет)."""
+    import base64
+    body = base64.urlsafe_b64encode(json.dumps({"sub": sub}).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJIUzI1NiJ9.{body}.sig"
+
+
+def test_edit_is_never_sent_with_someone_elses_token(outbox):
+    """🔥 Живой прогон 28.09.2026: после смены учётки в программе правка преподавателя
+    ушла с токеном АДМИНИСТРАТОРА (синк ещё держал прежнего клиента), бой ответил
+    «доступно только для роли teacher», и правка легла в «отвергнутые». Чужим токеном
+    очередь не шлёт ничего и ничего не помечает — ждёт своего."""
+    _queue(outbox, "POST", "/web/teacher/grade", {"grade": "5"},
+           {"id": "G1", "base_updated_at": "T0", "updated_at": "L1"})
+    srv = _Server()
+    res = outbox.flush(login="t1", auth=lambda: ("https://x", _jwt("admin"), ""), send=srv)
+    assert res["stopped"] == "account-switch" and not srv.calls, res
+    assert outbox.counts("t1")["pending"] == 1 and outbox.counts("t1")["rejected"] == 0
+    #Свой токен (регистр логина не важен) — уходит.
+    res = outbox.flush(login="t1", auth=lambda: ("https://x", _jwt("T1"), ""), send=srv)
+    assert res["sent"] == 1 and len(srv.calls) == 1, res
+
+
+def test_sync_runner_drops_the_previous_users_client_on_a_new_login():
+    """Вторая страховка той же находки: `start()` при крутящемся цикле выходил рано и
+    оставлял клиента прежнего человека — `current_auth()` отдавал ЕГО токен."""
+    from sync import sync_runner
+    m = sync_runner.SyncManager()
+    m._running = True                      # цикл уже крутится — ранний выход в start()
+    m._login = "admin"
+    m._client = type("C", (), {"token": _jwt("admin")})()
+    m.start("t1", "", "teacher")
+    assert m._client is None, "клиент прежнего входа пережил смену человека"
+    m._client = type("C", (), {"token": _jwt("t1")})()
+    m.start("t1", "", "teacher")           # тот же человек — клиента не трогаем
+    assert m._client is not None
+
+
 def test_no_token_means_no_attempt(outbox):
     _queue(outbox, "POST", "/web/teacher/grade", {"grade": "5"},
            {"id": "G1", "base_updated_at": "T0", "updated_at": "L1"})

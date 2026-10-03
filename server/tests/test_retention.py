@@ -250,3 +250,19 @@ def test_retention_has_a_caller_in_the_product():
         "политика хранения осиротела: в продукте не осталось ни одного вызывающего")
     #И он обязан стоять на пути ЗАПРОСА, а не в неиспользуемой функции.
     assert "maybe_run(" in inspect.getsource(me_router.list_events)
+
+
+def test_run_all_prunes_silent_push_tokens(db_session):
+    """Токен телефона, молчащий дольше срока, уходит при обычной уборке (ревью 30.09.2026:
+    `prune_stale` существовала, но её не звал никто). Свежий токен — живой, его не трогаем."""
+    from app import config
+    from app.models import PushToken
+    db = _fresh(db_session)
+    ttl = config.PUSH_TOKEN_TTL_DAYS
+    db.add(PushToken(token="old", login="ivanov", last_seen=_ago(ttl + 5)))
+    db.add(PushToken(token="new", login="petrova", last_seen=_ago(1)))
+    db.commit()
+    report = retention.run_all(db)
+    left = {t for (t,) in db.query(PushToken.token).all()}
+    assert left == {"new"}, (left, report)
+    assert report.get("push_tokens") == 1, report

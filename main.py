@@ -56,12 +56,6 @@ sys.stderr = _safe_stream(sys.stderr)
 #сборщик ориентируется на реальные импорты, а не на намерения.
 
 
-def _get_app_dir() -> str:
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 def _apply_pending_update():
     """Установить обновление, оставшееся СО ВСЕХ ПРЕЖНИХ запусков (страховка на случай
     прерванного цикла — обычный путь теперь `_check_update_interactive`/`updater.
@@ -150,6 +144,21 @@ def main():
     if "--doctor" in sys.argv[1:]:
         import doctor
         return doctor.main()
+
+    #━━ ОДНА КОПИЯ НА ПАПКУ ДАННЫХ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #Второй запуск поднимает уже открытое окно и выходит (desktop/single_instance.py).
+    #Стоит ДО обновления: подменять .exe, пока работает вторая копия, тоже нельзя.
+    try:
+        import app_paths
+        from desktop import single_instance
+        #После обновления нас запустила прежняя копия, и её замок ещё не снят — ждём.
+        after_update = os.environ.pop("GRADEBOOK_AFTER_UPDATE", "") == "1"
+        if not single_instance.acquire(app_paths.data_dir(), wait=15.0 if after_update else 0.0):
+            single_instance.focus_existing()
+            log.get("main").info("[ui] программа уже открыта — поднимаю её окно")
+            return
+    except Exception:                   # noqa: BLE001 — страховка, а не условие запуска
+        pass
 
     #━━ АВТООБНОВЛЕНИЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     #Ставим скачанное в ПРОШЛЫЙ раз обновление — здесь и только здесь: файл программы

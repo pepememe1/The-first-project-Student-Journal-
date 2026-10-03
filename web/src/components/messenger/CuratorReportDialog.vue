@@ -84,12 +84,12 @@ const nothingPicked = computed(() =>
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
         <h3 class="font-title text-lg font-bold text-text">{{ locale.t('curatorReport.title', 'Отчёт для родителей') }}</h3>
-        <button type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">

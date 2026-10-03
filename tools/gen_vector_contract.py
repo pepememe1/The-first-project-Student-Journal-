@@ -125,6 +125,29 @@ SURNAME_CASES = [
     ("какие оценки у Иванова", MATRIX_SURNAMES, MATRIX_SUBJECTS),
 ]
 
+# Падежные формы (01.10.2026, жалоба «пишем фамилию — Вектор не отвечает»): мужская и
+# женская форма рядом, -ский/-ская, несклоняемые, отчество, которое НЕ фамилия.
+DECL_SURNAMES = ["Алексеев", "Алексеева", "Хандаков", "Николаев", "Ковальский",
+                 "Ковальская", "Шевченко", "Ковальчук", "Егоров", "Егорова", "Толстой",
+                 "Сорока", "Гоголь"]
+SURNAME_CASES += [
+    ("Алексеева", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("оценки Алексеевой", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Алексееву", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("оценки Хандакова Евгения Николаевича", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("пропуски Ковальского", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Ковальской", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Шевченко", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("оценки Ковальчука", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Егорову", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("пропуски у Егоровой", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Толстого", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Сороки", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("Гоголя", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("николаевича", DECL_SURNAMES, MATRIX_SUBJECTS),
+    ("как учится мой ребёнок", [], []),
+]
+
 # ═══ 5. Разговорные формы предмета (match_subject::COLLOQUIAL) + день недели ═══════
 SUBJECT_DAY_CASES = [
     ("когда физра", [], ["Физическая культура", "Математика"]),
@@ -217,6 +240,32 @@ LIVE_FIX_CASES = [
     ("что у Иванова", MATRIX_SURNAMES, MATRIX_SUBJECTS),
 ]
 
+# 28.09.2026: ГРУППА В ВОПРОСЕ (match_group). До этого «студенты к74/1» уходил в свободную
+# болтовню модели, «список группы К74/2» — в перечень групп, а «должники К74/1» отдавал
+# весь колледж. Случаи закрепляют: регистр и латиницу («k74/2»), разделители («к 74 1»),
+# границу («К74/1» не внутри «К74/10»), одиночные «студенты»/«группы» и то, что основы
+# «оценки студентов»/«средний балл студентов» НЕ перетянуты в состав группы.
+CONTRACT_GROUPS = ["К74/1", "К74/2", "К64/2", "К74/10", "К75.0"]
+GROUP_CASES = [
+    ("студенты", [], []),
+    ("студенты к74/1", [], []),
+    ("список группы К74/2", [], []),
+    ("кто в группе К64/2", [], []),
+    ("группы", [], []),
+    ("сводка по группе К74/1", [], []),
+    ("К74/1", [], []),
+    ("должники К74/1", [], []),
+    ("пропуски k74/2", [], []),
+    ("расписание к 74/1 на завтра", [], []),
+    ("студенты к74/10", [], []),
+    ("группа к75.0", [], []),
+    ("оценки студентов", [], []),
+    ("средний балл студентов", [], []),
+    ("урок741", [], []),
+    ("заявки", [], []),
+    ("как всё устроено", [], []),
+]
+
 
 def _build_cases():
     """Собирает все группы, сверяет PHRASINGS с реальным результатом (иначе список
@@ -227,20 +276,23 @@ def _build_cases():
         assert r["intent"] == expected, (
             f"«{q}»: PHRASINGS ждёт {expected}, vector_nlu вернул {r['intent']} — "
             "список формулировок разошёлся с test_vector_matrix.py, проверь вручную")
-        out.append((q, MATRIX_SURNAMES, MATRIX_SUBJECTS, r))
+        out.append((q, MATRIX_SURNAMES, MATRIX_SUBJECTS, [], r))
 
     for group in (SMART_CASES, NEW_INTENT_CASES, SURNAME_CASES, SUBJECT_DAY_CASES,
                   BOUNDARY_CASES, COVERAGE_TOPUP_CASES, UNKNOWN_CASES, LIVE_FIX_CASES):
         for q, surnames, subjects in group:
             r = vector_nlu.classify(q, surnames, subjects)
-            out.append((q, surnames, subjects, r))
+            out.append((q, surnames, subjects, [], r))
+    for q, surnames, subjects in GROUP_CASES:
+        r = vector_nlu.classify(q, surnames, subjects, CONTRACT_GROUPS)
+        out.append((q, surnames, subjects, CONTRACT_GROUPS, r))
 
     return out
 
 
 def main():
     cases = _build_cases()
-    covered = {c[3]["intent"] for c in cases}
+    covered = {c[4]["intent"] for c in cases}
     missing = set(vector_nlu.INTENT_STEMS) - covered
     assert not missing, f"интенты без единого случая в контракте: {sorted(missing)}"
 
@@ -257,12 +309,20 @@ def main():
                 "q": q,
                 "surnames": surnames,
                 "subjects": subjects,
+                "groups": groups,
                 "intent": r["intent"],
                 "surname": r["surname"],
+                #🔥 НАЙДЕННЫЕ фамилии — отдельным полем. 01.10.2026 они писались в тот же
+                #ключ "surnames", что и ВХОДНОЙ список ростера, и затирали его (повтор ключа
+                #в словаре, нашёл ruff F601): контракт кормил разбор найденными фамилиями
+                #вместо ростера и сравнивал результат с тем же списком — проверка падежей
+                #(«Алексеева» против «Алексеев») не проверяла НИЧЕГО.
+                "surnames_found": r["surnames"],
                 "subject": r["subject"],
                 "day": r["day"],
+                "group": r["group"],
             }
-            for q, surnames, subjects, r in cases
+            for q, surnames, subjects, groups, r in cases
         ],
     }
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)

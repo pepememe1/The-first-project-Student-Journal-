@@ -1,0 +1,4 @@
+Фрагменты, вырезанные из desktop/local_mirror.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+
+# ── пункт 7: параметр _apply_page(..., sent_filter=None) — не передавался и не читался ──
+def _apply_page(page: dict, expect_cursor, sent_filter=None) -> dict:

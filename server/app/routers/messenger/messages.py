@@ -304,14 +304,17 @@ def _clean_quote(raw, original: Message) -> str:
     return text
 
 
-# ── Отправка ─────────────────────────────────────────────────────────────────────────
-@router.post("/chats/{conv_id}/messages")
-def send_message(conv_id: str, payload: dict = Body(...),
-                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Отправить сообщение. Сервер ставит created_at (UTC). reply_to_id — необязательный
-    ответ на сообщение этой же беседы. В канал пишут только авторы (writer/admin/owner)."""
-    part = _require_participant(db, conv_id, user)
-    conv = _conversation(db, conv_id)
+def _ensure_may_write(db: Session, conv, part, user: User, *, new_message: bool = True) -> None:
+    """Вправе ли человек СЕЙЧАС писать в эту беседу. Одна дверь для отправки и правки.
+
+    `new_message=False` — правка: запреты те же, но счётчики флуда не трогаются (правка
+    опечатки — не второе сообщение, см. `_guard_not_muted`).
+
+    🔥 Правка — тоже запись (нашёл Полковник 02.10.2026). Запреты стояли только в
+    `send_message`, и с появлением пункта «Изменить» заглушённый модератором участник
+    (`/mute`), читатель, лишённый права писать в канал, заблокированный собеседник и
+    человек под глобальным мьютом переписывали свои СТАРЫЕ сообщения — правка сохранялась
+    и рассылалась всем. Две копии правила разошлись бы снова, поэтому функция одна."""
     if conv.kind == "channel" and part.role not in _WRITER_ROLES:
         raise HTTPException(status_code=403, detail="В канал могут писать только авторы")
     if part.silenced:                        #«/mute»-заглушка модератора — не глобальный мьют
@@ -322,7 +325,21 @@ def send_message(conv_id: str, payload: dict = Body(...),
     _guard_direct_write(db, conv, user)
     #`conv` передаётся НЕ для удобства: по виду беседы барьер решает, идёт ли речь
     #о чате с модерацией — единственном, который остаётся открытым под мьютом.
-    _guard_can_write(db, user, conv)          #глобальный мьют (403) + анти-флуд (429)
+    if new_message:
+        _guard_can_write(db, user, conv)      #глобальный мьют (403) + анти-флуд (429)
+    else:
+        _guard_not_muted(db, user, conv)      #только мьют: правка — не новое сообщение
+
+
+# ── Отправка ─────────────────────────────────────────────────────────────────────────
+@router.post("/chats/{conv_id}/messages")
+def send_message(conv_id: str, payload: dict = Body(...),
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Отправить сообщение. Сервер ставит created_at (UTC). reply_to_id — необязательный
+    ответ на сообщение этой же беседы. В канал пишут только авторы (writer/admin/owner)."""
+    part = _require_participant(db, conv_id, user)
+    conv = _conversation(db, conv_id)
+    _ensure_may_write(db, conv, part, user)
     body = (payload.get("body") or "").strip()
     #⚠️ ФАЙЛ САМ ПО СЕБЕ — ЗАКОННОЕ СООБЩЕНИЕ. Гейт пустого текста стоял РАНЬШЕ разбора
     #вложения, поэтому «выбрал файл, ничего не написал, отправил» отвечало 400 — но уже
@@ -477,11 +494,23 @@ def edit_message(mid: int, payload: dict = Body(...),
                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Редактировать СВОЁ сообщение (ставит edited_at)."""
     m = _message_in_conv(db, mid)
-    _require_participant(db, m.conversation_id, user)
+    part = _require_participant(db, m.conversation_id, user)
     if m.sender_id != user.id:
         raise HTTPException(status_code=403, detail="Можно править только свои сообщения")
     if m.deleted_at:
         raise HTTPException(status_code=400, detail="Сообщение удалено")
+    _ensure_may_write(db, _conversation(db, m.conversation_id), part, user, new_message=False)
+    #🔒 ПРАВИТСЯ ТОЛЬКО ТЕКСТ, НАБРАННЫЙ ЧЕЛОВЕКОМ (02.10.2026). Ручка жила без вызывающего
+    #в интерфейсе с первого коммита мессенджера, и две двери в ней стояли открытыми:
+    #  • GIF: тело — ссылка на CDN, и белый список (`gif_service.is_allowed_url`) сверяется
+    #    только при ОТПРАВКЕ. Правкой ссылка менялась на любую — картинка с чужого сервера
+    #    у всех участников беседы (тот же довод, что у аватарки: чужой `<img src>` — слежка);
+    #  • пересланное: тело — копия чужих слов под подписью «Переслано от …». Правка
+    #    вкладывала автору то, чего он не писал.
+    if (m.kind or "text") not in ("text", "file"):
+        raise HTTPException(status_code=400, detail="Такое сообщение не правится")
+    if m.fwd_from_sender_id:
+        raise HTTPException(status_code=400, detail="Пересланное сообщение не правится")
     body = (payload.get("body") or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")

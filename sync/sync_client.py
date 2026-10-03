@@ -141,8 +141,9 @@ class SyncClient:
                 #🔥 POST ЗДЕСЬ НЕ ПОВТОРЯЕМ. Раньше повторялся с оговоркой «наши POST
                 #идемпотентны» — это верно ровно для трёх из них (push сверяет содержимое,
                 #login/refresh безопасны), но НЕ для остальных: `create_event`,
-                #`approve_registration`, `create_parent`, `create_parent_link` при
-                #повторе создают ВТОРУЮ запись. Блип сети на такой отправке давал бы
+                #`approve_registration`, `create_parent`, `create_parent_link` (методы
+                #нативной админки, 30.09.2026 перенесены в archive/fragments) при
+                #повторе создавали ВТОРУЮ запись. Правило остаётся для любого нового POST. Блип сети на такой отправке давал бы
                 #дубль заявки или родителя — молча, потому что оба запроса «успешны».
                 #Идемпотентные вызовы просят повтор явно: `_req(..., retry_post=True)`.
                 allowed_methods=(frozenset(["GET", "PUT", "DELETE", "HEAD", "OPTIONS",
@@ -261,23 +262,6 @@ class SyncClient:
         self.refresh_token = data.get("refresh_token", "") or self.refresh_token
         return data
 
-    def logout(self) -> dict:
-        """Безопасный выход: просит сервер ОТОЗВАТЬ текущий токен (чёрный список), чтобы
-        украденный до выхода токен нельзя было использовать. Best-effort (ошибку глушим)."""
-        out = {"revoked": 0}
-        try:
-            r = self._req("POST", "/auth/logout", timeout=5)
-            if r.status_code == 200:
-                out = r.json()
-        except Exception as e:
-            _log.debug("отзыв токена на сервере не прошёл (выход всё равно выполняем): %s", e)
-        #🔥 ГАСИМ ТОКЕНЫ В ЛЮБОМ СЛУЧАЕ. Раньше они оставались в объекте, и если клиент
-        #переиспользовали (смена пользователя на общем ПК колледжа — обычное дело), он
-        #продолжал слать УЖЕ ОТОЗВАННЫЙ токен и получал 401 там, где вход был выполнен.
-        self.token = None
-        self.refresh_token = ""
-        return out
-
     def pull(self, since: str = "") -> dict:
         """Изменения позже метки since. Возвращает {server_time, changes}.
         Долгий read-таймаут: первый полный pull может быть большим на медленном канале."""
@@ -293,7 +277,7 @@ class SyncClient:
         Сервер до 4.1 параметр `cursor` не знает и отвечает прежним {server_time,
         changes}: по отсутствию `cursor` в ответе зеркало и узнаёт, что говорит со старым
         боем, и идёт прежним путём (`desktop/local_mirror.py`)."""
-        params = {"cursor": int(cursor or 0), "limit": int(limit or 2000)}
+        params: dict[str, object] = {"cursor": int(cursor or 0), "limit": int(limit or 2000)}
         if scope:
             params["scope"] = scope
         if epoch:
@@ -336,15 +320,6 @@ class SyncClient:
         r.raise_for_status()
         return (r.json().get("text") or facts_text).strip()
 
-    def tts(self, text: str, voice: str = "male") -> bytes:
-        """Синтез речи на СЕРВЕРЕ (Silero) → WAV-байты. Десктоп-онлайн отдаёт нагрузку
-        сюда (на боевом ПК ВСГУТУ — GPU). Оффлайн/ошибка → вызывающий синтезирует локально.
-        Заголовки (авторизация, X-Device-Id) ставит _req."""
-        r = self._req("POST", "/web/vector/tts",
-                      json={"text": text, "voice": voice}, timeout=30)
-        r.raise_for_status()
-        return r.content
-
     def set_my_prefs(self, prefs: dict) -> dict:
         """Сохранить личные настройки текущего пользователя (self-scope /me/prefs).
         Меняет ТОЛЬКО свою строку — личность берётся из JWT на сервере."""
@@ -352,300 +327,4 @@ class SyncClient:
         r.raise_for_status()
         return r.json()
 
-    #Барьер подтверждения подключения (см. server/app/connect.py)
-    #Эндпоинты /connect/{request,status,verify} — БЕЗ авторизации (новый ПК ещё не вошёл).
-    def connect_request(self, device_id: str, hostname: str = "") -> dict:
-        """Новый ПК просит доступ. Возвращает {status}."""
-        r = self._req("POST", "/connect/request",
-                      json={"device_id": device_id, "hostname": hostname}, timeout=8)
-        r.raise_for_status()
-        return r.json()
 
-    def connect_status(self, device_id: str) -> str:
-        """Опрос статуса запроса (pending|code_issued|approved|rejected|none)."""
-        r = self._req("GET", "/connect/status",
-                      params={"device_id": device_id}, timeout=8)
-        r.raise_for_status()
-        return (r.json() or {}).get("status", "none")
-
-    def connect_verify(self, device_id: str, code: str) -> dict:
-        """Ввод кода подтверждения. Бросает HTTPError при неверном/просроченном коде."""
-        r = self._req("POST", "/connect/verify",
-                      json={"device_id": device_id, "code": code}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    #Действия администратора над запросами (на сервере — require_admin)
-    def list_connect_requests(self) -> dict:
-        """Активные запросы на подключение. {requests:[...], count}."""
-        r = self._req("GET", "/connect/requests", timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    def approve_device(self, device_id: str) -> dict:
-        """Принять запрос — сервер вернёт 6-значный код для пользователя. {code}."""
-        r = self._req("POST", "/connect/approve", json={"device_id": device_id}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    def reject_device(self, device_id: str) -> dict:
-        """Отклонить запрос. {ok}."""
-        r = self._req("POST", "/connect/reject", json={"device_id": device_id}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    #Заявки студентов на самостоятельную регистрацию (на сервере — require_admin).
-    #Те же эндпоинты, что и веб-админка, — десктоп теперь видит и решает заявки 1:1.
-    def list_registrations(self) -> dict:
-        """Заявки на регистрацию, ждущие решения. {requests:[{id,full_name,group,phone,email,created_at}]}."""
-        r = self._req("GET", "/web/admin/registrations", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def approve_registration(self, req_id: str) -> dict:
-        """Одобрить заявку: сервер заведёт студента и вышлет пароль на почту. {ok,sent,login,password}."""
-        r = self._req("POST", "/web/admin/registrations/approve", json={"id": req_id}, timeout=15)
-        r.raise_for_status()
-        return r.json()
-
-    def reject_registration(self, req_id: str, note: str = "") -> dict:
-        """Отклонить заявку (с необязательной причиной). {ok}."""
-        r = self._req("POST", "/web/admin/registrations/reject",
-                      json={"id": req_id, "note": note or ""}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    #Контактные данные с сервера (телефон, IP, последний вход) — для карточек студентов
-    #и преподавателей в десктопе, как на сайте (require_admin).
-    def admin_students(self, group: str = "") -> dict:
-        """Студенты с сервера + контакты (login, phone, last_login, ip). {students:[...]}."""
-        r = self._req("GET", "/web/admin/students", params={"group": group or ""}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def admin_teachers(self) -> dict:
-        """Преподаватели с сервера + контакты (login, phone, last_login, ip). {teachers:[...]}."""
-        r = self._req("GET", "/web/admin/teachers", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    #Роль «родитель» (§12) — ParentLink НЕ в SYNC_MODELS (онлайн-only, как мессенджер),
-    #поэтому это прямые REST-вызовы, а не generic push. Управление доступно admin/куратору
-    #(сервер сам ограничивает куратора его curated_groups — см. server/app/routers/parent.py).
-    def create_parent(self, surname: str, name: str, login: str, password: str) -> dict:
-        """Завести аккаунт родителя (admin-only на сервере). {ok,id,login}."""
-        r = self._req("POST", "/web/admin/parents",
-                      json={"surname": surname, "name": name, "login": login, "password": password},
-                      timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-    def list_parents(self) -> dict:
-        """Справочник аккаунтов-родителей. {parents:[{id,login,full_name}]}."""
-        r = self._req("GET", "/web/staff/parents", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def update_parent(self, parent_id: str, surname: str = "", name: str = "",
-                      password: str = "") -> dict:
-        """Правка ФИО/пароля родителя (логин не редактируется — см. серверный docstring
-        admin_update_parent). Пустые строки — поле не меняем. {ok,id}."""
-        payload = {}
-        if surname:
-            payload["surname"] = surname
-        if name:
-            payload["name"] = name
-        if password:
-            payload["password"] = password
-        r = self._req("PUT", f"/web/admin/parents/{parent_id}", json=payload, timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-    def delete_parent(self, parent_id: str) -> dict:
-        """Мягкое удаление аккаунта родителя. {ok,id}."""
-        r = self._req("DELETE", f"/web/admin/parents/{parent_id}", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def list_parent_links(self, group: str = "") -> dict:
-        """Связи родитель↔студент (куратору — только его группы). {links:[...]}."""
-        r = self._req("GET", "/web/staff/parent-links", params={"group": group or ""}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def create_parent_link(self, parent_id: str, student_id: str) -> dict:
-        """Привязать родителя к студенту — создаётся в статусе pending, ждёт согласия
-        студента. {ok,id,status}."""
-        r = self._req("POST", "/web/staff/parent-links",
-                      json={"parent_id": parent_id, "student_id": student_id}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def revoke_parent_link(self, link_id: str) -> dict:
-        """Снять доступ родителя (мягкий отзыв, строка остаётся с status=revoked). {ok}."""
-        r = self._req("DELETE", f"/web/staff/parent-links/{link_id}", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def my_parent_links(self) -> dict:
-        """(студент) Заявки родителей на доступ к МОЕМУ журналу + уже выданные. {links:[...]}."""
-        r = self._req("GET", "/web/student/parent-links", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def decide_parent_link(self, link_id: str, approve: bool) -> dict:
-        """(студент) Подтвердить/отозвать доступ родителя к своему журналу. {ok,status}."""
-        r = self._req("POST", f"/web/student/parent-links/{link_id}/decide",
-                      json={"approve": bool(approve)}, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    #Учебные часы группы (план на семестр по предметам) — та же REST-пара, что уже
-    #использует веб-редактор («Группы» → 🕐, web/src/pages/admin/AdminGroups.vue).
-    #SubjectHours ХОДИТ в SYNC_MODELS (десктоп читает план локально после пулла), но
-    #«пройдено X ч» считается сервером по ВСЕМ занятиям группы у ВСЕХ преподавателей —
-    #у самого админа локально этих занятий нет, поэтому редактор идёт через REST, а не
-    #через локальный store, как «Группы»/«Предметы».
-    def group_hours(self, group: str, year: str = "", semester: int = 0) -> dict:
-        """Предметы группы с плановыми и уже пройденными часами за семестр.
-        {group, term:{year,semester}, subjects:[{subject,hours_total,hours_done}]}."""
-        r = self._req("GET", "/web/admin/group-hours",
-                      params={"group": group, "year": year or "", "semester": semester or 0},
-                      timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def save_group_hours(self, group: str, hours: dict, teachers: dict | None = None,
-                        zet: dict | None = None) -> dict:
-        """Сохранить часы + назначение препода + ЗЕТ пачкой: {предмет: часов},
-        {предмет: teacher_id|''} (§ролей препод↔предмет↔группа), {предмет: float|None}
-        (docs/done/PLAN-ZET.md). {ok, saved, term}."""
-        r = self._req("POST", "/web/admin/group-hours",
-                      json={"group": group, "hours": hours, "teachers": teachers or {},
-                            "zet": zet or {}},
-                      timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-    def esstu_specialties(self, group: str = "") -> dict:
-        """Справочник специальностей ВСГУТУ (parsers/esstu_parser.py) для диалога
-        импорта учебного плана. {specialties:[...], suggested_code}. Внешний сайт —
-        таймаут щедрее обычного."""
-        r = self._req("GET", "/web/admin/esstu/specialties", params={"group": group},
-                      timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def esstu_plan_years(self, specialty_code: str) -> dict:
-        """Годы набора с реально опубликованным планом для специальности —
-        {years: [...]}, наполняет выпадающий список вместо ручного ввода года."""
-        r = self._req("GET", "/web/admin/esstu/plan-years",
-                      params={"specialty_code": specialty_code}, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def import_esstu(self, group: str, specialty_code: str, enrollment_year: int) -> dict:
-        """Импорт специальности + учебного плана ВСГУТУ в группу — часы/ЗЕТ ИМЕННО
-        текущего курса/семестра (считается от года поступления на сервере,
-        study_hours.course_and_semester). {ok, course, semester, term, imported,
-        unmapped, saved_hours}. Тянет и парсит PDF на сервере — таймаут щедрый."""
-        r = self._req("POST", "/web/admin/groups/import-esstu",
-                      json={"group": group, "specialty_code": specialty_code,
-                            "enrollment_year": enrollment_year},
-                      timeout=40)
-        r.raise_for_status()
-        return r.json()
-
-    def schedule_groups(self, category: str = "") -> dict:
-        """Имена групп категории расписания портала (schedule/parser.py::CATEGORIES)
-        — {groups: [...]}. Для выпадающего списка «Импорт группы из категории»."""
-        r = self._req("GET", "/web/schedule/groups", params={"category": category}, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def import_schedule_category(self, category: str, group_name: str) -> dict:
-        """Заводит группу-каталожную запись из НЕколледжевой категории расписания
-        (Бакалавриат/Заочное 1/2) — {ok, name, category}. Сервер сверяет group_name с
-        реальным списком портала для этой категории."""
-        r = self._req("POST", "/web/admin/groups/import-schedule-category",
-                      json={"category": category, "group_name": group_name}, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def import_schedule_category_all(self, category: str) -> dict:
-        """«Все» — массовый импорт ВСЕХ групп категории — {ok, building, imported,
-        skipped, total}. Полный снимок строится на сервере лениво в фоне (десятки-сотни
-        страниц портала, ~минута): пока не готов — ok=false, building=true, вызывающий
-        подождёт и позовёт снова (тот же приём, что у остальных «полных снимков»)."""
-        r = self._req("POST", "/web/admin/groups/import-schedule-category-all",
-                      json={"category": category}, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    #Управление сессиями/токенами (на сервере — require_admin)
-    def list_sessions(self, active: bool = True) -> dict:
-        """Активные выданные токены (сессии): кто, роль, устройство, до когда. {sessions,count}."""
-        r = self._req("GET", "/admin/sessions",
-                      params={"active": "true" if active else "false"}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    def revoke_session(self, jti: str = "", login: str = "") -> dict:
-        """Отозвать сессию по jti (конкретный токен) ИЛИ по логину (все сессии юзера). {revoked}."""
-        r = self._req("POST", "/admin/sessions/revoke",
-                      json={"jti": jti or "", "login": login or ""}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    #Админский мониторинг (доступ на сервере ограничен ролью admin — см. /admin/*)
-    def get_online(self) -> dict:
-        """Кто сейчас подключён к серверу. {online:[...], count, window_sec}."""
-        r = self._req("GET", "/admin/online", timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    def get_events(self, since: int = 0) -> dict:
-        """Журнал событий сервера дельтой (since — последний полученный id).
-        {events:[...], last_id}."""
-        r = self._req("GET", "/admin/events", params={"since": since}, timeout=5)
-        r.raise_for_status()
-        return r.json()
-
-    #Уведомления пользователя (вкладка «Уведомления» в профиле).
-    #События серверные по своей природе (их порождает сервер при выставлении оценки и
-    #правке расписания), поэтому в синк они НЕ входят и читаются по HTTP. Это чтение,
-    #а не операция над журналом, так что offline-first (§1) не нарушается: нет связи —
-    #показываем то, что успели загрузить, и честно говорим об отсутствии сети.
-    def list_notifications(self, only_unread: bool = False, limit: int = 100) -> dict:
-        """Письма пользователя. {items:[{id,kind,title,body,created_at,read_at}], unread}.
-
-        По умолчанию просим ВСЕ: вкладка показывает и прочитанные, как почта. Сервер без
-        параметров отдаёт только непрочитанные (так исторически ждёт мобильное
-        приложение), поэтому filter передаём явно."""
-        params: dict = {"limit": limit}          #значения разнотипные (число + строка)
-        if not only_unread:
-            params["filter"] = "all"
-        r = self._req("GET", "/me/events", params=params, timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def mark_notification_read(self, event_id: str) -> dict:
-        """Отметить одно письмо прочитанным."""
-        r = self._req("POST", f"/me/events/{event_id}/read", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def mark_all_notifications_read(self) -> dict:
-        """«Прочитать все»."""
-        r = self._req("POST", "/me/events/read-all", timeout=8)
-        r.raise_for_status()
-        return r.json()
-
-    def create_event(self, title: str, body: str, groups: list | None = None) -> dict:
-        """§12: мероприятие/событие (олимпиада, конкурс и т.п.) — заводит препод/админ,
-        уходит уведомлением kind="event" выбранной аудитории. groups=[] — все группы
-        (доступно ТОЛЬКО админу; сервер сам проверяет роль и скоуп групп куратора)."""
-        r = self._req("POST", "/web/events",
-                      json={"title": title, "body": body, "groups": groups or []}, timeout=8)
-        r.raise_for_status()
-        return r.json()

@@ -1,39 +1,18 @@
 """
-test_schedule_future.py — тесты ЗАДЕЛОВ под будущее (specialty + reminders).
+test_schedule_future.py — тесты ЗАДЕЛА под будущее (reminders).
+
+⚠️ 30.09.2026 `schedule/specialty.py` перенесён в архив (мёртвый код, подтверждено
+Ярославом); его проверки — в `archive/tests/test_schedule_specialty.py`.
 
 Заделы в рантайме не вызываются, но это чистая логика — её тестируем, чтобы при
 будущем подключении она уже работала и не «сгнила». Без сети и без GUI.
 """
 from datetime import datetime
 
-from schedule.specialty import guess_specialty, specialty_label
 from schedule.reminders import (
     current_and_next, weekday_code, DEFAULT_LEAD_MIN,
 )
 from schedule.model import Lesson
-
-
-#  specialty
-def test_guess_specialty_it():
-    subs = ["Компьютерные сети ЭВМ", "Основы алгоритмизации и программирования",
-            "Физическая культура"]
-    assert guess_specialty(subs) == "it"
-    assert specialty_label("it")
-
-
-def test_guess_specialty_law():
-    subs = ["Гражданское право", "Трудовое право", "Административный процесс"]
-    assert guess_specialty(subs) == "law"
-
-
-def test_guess_specialty_power():
-    subs = ["Электротехника и электроника", "Основы эксплуатации электрооборудования"]
-    assert guess_specialty(subs) == "power"
-
-
-def test_guess_specialty_none():
-    assert guess_specialty([]) is None
-    assert guess_specialty(["Физическая культура", "Иностранный язык"]) is None
 
 
 #  reminders

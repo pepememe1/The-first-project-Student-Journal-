@@ -263,7 +263,7 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
         for s in studs:
             r = W.dropout_risk_for_student(db, s.surname, s.name, group,
                                            cfg=cfg, lessons=lessons, records=recs[s.id])
-            if r["visible"] and r["level"] in ("medium", "high", "critical"):
+            if W.counts_as_at_risk(r):
                 at_risk += 1
         groups.append({"group": group, "students": len(studs),
                        "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
@@ -277,3 +277,36 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
 
     return {"term": {"year": ty, "semester": ts}, "groups": groups,
             "subjects": sorted({s for _g, s in pairs}), "curator_groups": curator_groups}
+
+
+# ── Смена шкалы оценивания с переводом оценок (01.10.2026) ─────────────────────────
+# Правила перевода — grading.convert_scale_value, что именно переводится и почему —
+# шапка server/app/scale_conversion.py. Две ручки, а не одна: человек обязан увидеть, что
+# станет с его журналом, ДО того, как оно станет, — и выбрать в спорных случаях.
+
+def _scale_from(payload: dict) -> str:
+    scale = str((payload or {}).get("scale") or "").strip()
+    if scale not in W.grading.SCALES:
+        raise HTTPException(status_code=400, detail="Неизвестная шкала оценивания")
+    return scale
+
+
+@router.post("/teacher/grading-scale/preview")
+def teacher_grading_scale_preview(payload: dict = Body(...),
+                                  user: User = Depends(get_current_user),
+                                  db: Session = Depends(get_db)):
+    """Что станет с поставленными оценками при смене шкалы. Ничего не меняет."""
+    _require("teacher", user)
+    from ... import scale_conversion as SC
+    return SC.public(SC.plan(db, user, _scale_from(payload)))
+
+
+@router.post("/teacher/grading-scale")
+def teacher_grading_scale_apply(payload: dict = Body(...),
+                                user: User = Depends(get_current_user),
+                                db: Session = Depends(get_db)):
+    """Сменить шкалу и перевести оценки; `choices` — {id оценки: вариант} для спорных."""
+    _require("teacher", user)
+    from ... import scale_conversion as SC
+    choices = payload.get("choices") if isinstance(payload.get("choices"), dict) else {}
+    return SC.apply(db, user, _scale_from(payload), {str(k): str(v) for k, v in choices.items()})

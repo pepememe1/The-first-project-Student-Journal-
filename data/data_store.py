@@ -66,11 +66,10 @@ from data.security import hash_password, verify_password, encrypt_value, decrypt
 #раньше тут лежал захардкоженный "vsgutu_admin_online", который принимался при
 #первом входе — это был бэкдор.
 #⚠️ ЧЕСТНО ПРО «задаётся вручную при первом запуске»: экрана, который это делал
-#(`auth_pages` в Qt-оболочке), больше нет, и `setup_admin_password` ниже не зовёт НИКТО.
+#(`auth_pages` в Qt-оболочке), больше нет, а `setup_admin_password`/`authenticate` не звал
+#НИКТО — 30.09.2026 они перенесены в архив (`archive/fragments/data/data_store.py.txt`).
 #Сегодня первый администратор заводится НА СЕРВЕРЕ — `POST /auth/bootstrap-admin`
-#(на непустой базе он отвечает 403), а десктоп получает пользователей синком. Локальная
-#ветка осталась заготовкой на случай полностью автономного ПК; работоспособной её
-#считать нельзя, пока у неё нет вызывающего.
+#(на непустой базе он отвечает 403), а десктоп получает пользователей синком.
 DEFAULT_ADMIN_LOGIN = "admin"
 
 #Старый скомпрометированный дефолтный пароль. Его мог записать в базу старый код.
@@ -83,13 +82,6 @@ _LEGACY_DEFAULT_ADMIN_PASSWORD = "vsgutu_admin_online"
 def _is_legacy_default(stored_hash: str) -> bool:
     """True, если сохранённый хеш — это старый дефолтный пароль (его надо отвергнуть)."""
     return bool(stored_hash) and verify_password(_LEGACY_DEFAULT_ADMIN_PASSWORD, stored_hash)
-
-
-class AccountLocked(Exception):
-    """Логин временно заблокирован из-за серии неверных попыток (анти-брутфорс)."""
-    def __init__(self, seconds_left: int):
-        super().__init__(f"Вход заблокирован, осталось {seconds_left} с")
-        self.seconds = seconds_left
 
 
 #Низкоуровневый key-value доступ (SQLite + async PG)
@@ -586,10 +578,6 @@ class LocalStore:
         return [_server_to_student(u) for u in _users_table_read()
                 if u.get("role") == "student" and not u.get("deleted")]
 
-    def get_students_raw(self) -> list:
-        return [_server_to_student(u) for u in _users_table_read()
-                if u.get("role") == "student"]
-
     def set_students(self, students: list, stamp: bool = True, wake: bool = True) -> bool:
         all_users = _users_table_read()
         others = [u for u in all_users if u.get("role") != "student"]   #преподы не трогаем
@@ -609,10 +597,6 @@ class LocalStore:
         return {u["full_name"]: _server_to_teacher(u) for u in _users_table_read()
                 if u.get("role") == "teacher" and not u.get("deleted") and u.get("full_name")}
 
-    def get_teachers_raw(self) -> dict:
-        return {u["full_name"]: _server_to_teacher(u) for u in _users_table_read()
-                if u.get("role") == "teacher" and u.get("full_name")}
-
     def set_teachers(self, teachers: dict, stamp: bool = True, wake: bool = True) -> bool:
         all_users = _users_table_read()
         others = [u for u in all_users if u.get("role") != "teacher"]   #студентов не трогаем
@@ -631,92 +615,6 @@ class LocalStore:
         if wake:
             _wake_sync()
         return True
-
-    #Назначения препод↔предмет↔группа (§ролей, 3.3.1) — читает синкнутую subject_hours
-    #(sync/sync_engine.py::_merge_subject_hours уже пишет teacher_id в неё). Единственный
-    #источник правды «какие группы видит преподаватель» — зеркало серверного
-    #webdata.teacher_assignments, ЗАМЕНЯЕТ мёртвый group_assignments (никогда не
-    #заполнялся, форма «предмет→ОДНА группа» и не позволила бы двух групп на предмет).
-    def get_teacher_assignments(self, teacher_id: str, year: str = "", semester=None) -> list:
-        if not teacher_id:
-            return []
-        if not year or semester is None:
-            from data import terms
-            year, semester = terms.current_term()
-        conn = DBManager.get_conn(); cur = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT DISTINCT group_name, subject FROM subject_hours "
-                "WHERE teacher_id=? AND year=? AND semester=? AND COALESCE(deleted,0)=0 "
-                "AND group_name!='' AND subject!=''",
-                (teacher_id, year, int(semester or 0)))
-            rows = cur.fetchall()
-        except Exception as e:
-            #Пустой список читается как «у преподавателя нет групп» — сбой чтения
-            #неотличим от реальной пустоты. Значение оставляем, но след обязателен.
-            _report_once("teacher_assign",
-                         "[assign] назначения преподавателя не прочитаны (%s) — "
-                         "список групп будет пуст", e)
-            rows = []
-        finally:
-            conn.close()
-        return sorted({(r[0], r[1]) for r in rows})
-
-    def get_subject_teacher_id(self, group: str, subject: str, year: str = "", semester=None) -> str:
-        """Обратная сторона get_teacher_assignments: по (группа,предмет) — id назначенного
-        препода, '' если не назначен. Используется редактором расписания для автозаполнения
-        графы «Преподаватель» (§ролей)."""
-        if not group or not subject:
-            return ""
-        if not year or semester is None:
-            from data import terms
-            year, semester = terms.current_term()
-        conn = DBManager.get_conn(); cur = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT teacher_id FROM subject_hours WHERE group_name=? AND subject=? "
-                "AND year=? AND semester=? AND COALESCE(deleted,0)=0 AND COALESCE(teacher_id,'')!=''",
-                (group, subject, year, int(semester or 0)))
-            row = cur.fetchone()
-        except Exception as e:
-            #Сбой чтения → графа «Преподаватель» в редакторе расписания молча пустеет,
-            #как если бы никто не был назначен. Значение оставляем, но след обязателен.
-            _report_once("subject_teacher",
-                         "[assign] преподаватель предмета не прочитан (%s) — "
-                         "графа автозаполнения останется пустой", e)
-            row = None
-        finally:
-            conn.close()
-        return row[0] if row else ""
-
-    def get_group_zet(self, group: str, year: str = "", semester=None) -> dict:
-        """{предмет: ЗЕТ} для группы за термин (docs/done/PLAN-ZET.md) — только предметы, где
-        администратор явно задал значение (NULL пропускается). Порог перевода
-        (ZetThreshold) сюда НЕ приезжает синком — серверная политика, не офлайн-данные,
-        см. server/app/models.py::ZetThreshold."""
-        if not group:
-            return {}
-        if not year or semester is None:
-            from data import terms
-            year, semester = terms.current_term()
-        conn = DBManager.get_conn(); cur = conn.cursor()
-        try:
-            cur.execute(
-                "SELECT subject, zet FROM subject_hours WHERE group_name=? AND year=? "
-                "AND semester=? AND COALESCE(deleted,0)=0 AND zet IS NOT NULL",
-                (group, year, int(semester or 0)))
-            return {row[0]: row[1] for row in cur.fetchall()}
-        except Exception as e:      # noqa: BLE001
-            #Пустой словарь читается интерфейсом как «ЗЕТ по предметам не заданы» — то
-            #есть сбой чтения неотличим от незаполненного администратором плана, и
-            #баланс ЗЕТ студента молча считается от нуля. Значение по умолчанию
-            #оставляем (уронить журнал из-за одной таблицы нельзя), но след обязателен.
-            log.get("data_store").error(
-                "[zet] часы/ЗЕТ группы «%s» не прочитались (%s) — баланс будет "
-                "посчитан без них", group, e)
-            return {}
-        finally:
-            conn.close()
 
     #Группы (в таблице groups; форма API сохранена — UI не трогаем)
     def get_groups(self) -> list:
@@ -744,16 +642,6 @@ class LocalStore:
     def get_admin_login(self) -> str:
         return self._config().get("admin_login", DEFAULT_ADMIN_LOGIN)
 
-    def has_admin_password(self) -> bool:
-        """True, если задан ВАЛИДНЫЙ пароль администратора (хеш есть и это не старый
-        дефолт). На хост-ПК при первом запуске — False → нужен first-run диалог.
-        На остальных ПК конфиг приезжает синхронизацией с сервера уже с хешем → True.
-        Старый дефолтный пароль считаем «не заданным», чтобы заставить сменить его."""
-        h = self._config().get("admin_password_hash")
-        if not h or _is_legacy_default(h):
-            return False
-        return True
-
     def set_admin_password(self, pw: str) -> bool:
         #Не даём установить старый скомпрометированный дефолт — иначе бэкдор вернётся.
         if pw == _LEGACY_DEFAULT_ADMIN_PASSWORD:
@@ -766,120 +654,11 @@ class LocalStore:
         cfg["admin_updated_at"] = _now_iso()
         return _kv_set("config", cfg)
 
-    def setup_admin_password(self, pw: str) -> bool:
-        """Первичная установка пароля администратора (только если он ещё не задан).
-        Защищает от перезаписи уже настроенного пароля на клиентских ПК."""
-        if self.has_admin_password():
-            return False
-        return self.set_admin_password(pw)
-
     def check_admin_password(self, pw: str) -> bool:
         h = self._config().get("admin_password_hash")
         if not h or _is_legacy_default(h):
             return False  #пароль не задан или это старый дефолт — вход запрещён
         return verify_password(pw, h)
-
-    #Аутентификация (логин + пароль)
-    def authenticate(self, login: str, password: str) -> dict | None:
-        """
-        Единая точка входа. Возвращает:
-          {"role": "admin"}
-          {"role": "teacher", "name": <ФИО>, "data": {...}}
-          {"role": "student", "stud": {"f":..,"n":..,"g":..}}
-        или None, если логин/пароль неверны.
-        Бросает AccountLocked, если логин временно заблокирован за перебор.
-
-        Здесь же — журнал аудита и анти-брутфорс: фиксируем каждый вход и блокируем
-        логин после серии неверных попыток (152-ФЗ / приказ ФСТЭК №21).
-        """
-        from data.audit import (is_locked, register_failure, register_success,
-                            log_event)
-
-        login = (login or "").strip()
-        if not login:
-            return None
-
-        locked, left = is_locked(login)
-        if locked:
-            log_event("login_locked", login, f"осталось {left}s")
-            raise AccountLocked(left)
-
-        result = self._authenticate_inner(login, password)
-
-        if result is None:
-            register_failure(login)
-            log_event("login_failed", login)
-        else:
-            register_success(login)
-            log_event("login_success", login, result.get("role", ""))
-            #Запускается фоновая синхронизация с сервером (если задан адрес API).
-            #Офлайн / без сервера — внутри просто ничего не делает.
-            try:
-                from sync.sync_runner import start as _sync_start
-                _sync_start(login, password, result.get("role", ""))
-            except Exception as e:
-                log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
-        return result
-
-    def authenticate_trusted(self, login: str, password: str) -> dict | None:
-        """Собрать сессию для пользователя, ПАРОЛЬ КОТОРОГО УЖЕ ПРОВЕРЕН СЕРВЕРОМ.
-
-        Зачем: на десктопе (Windows, без OpenSSL GOST-провайдера) локальная проверка
-        серверных гибридных хешей идёт медленным pure-Python Стрибогом (2000 итераций) —
-        вход висел секунды. Когда есть сеть, пароль проверяет сервер (C-скорость), а здесь
-        мы лишь СОБИРАЕМ payload дашборда из локальных данных — БЕЗ повторного хеша.
-        Аудит успеха и фоновый синк — как в authenticate. None, если пользователя ещё нет
-        в локальной базе (первый вход на чистом ПК — сперва нужен pull)."""
-        login = (login or "").strip()
-        sess = self.lookup_session(login)
-        if sess is None:
-            return None
-        role, payload = sess
-        if role == "admin":
-            res = {"role": "admin"}
-        elif role == "teacher":
-            res = {"role": "teacher", "name": payload[0], "data": payload[1]}
-        elif role == "parent":
-            res = {"role": "parent", "parent": payload}
-        else:
-            res = {"role": "student", "stud": payload}
-        from data.audit import register_success, log_event
-        register_success(login)
-        log_event("login_success", login, role)
-        try:
-            from sync.sync_runner import start as _sync_start
-            _sync_start(login, password, role)
-        except Exception as e:
-            log.get("data_store").warning(f"[sync] не удалось запустить: {e}")
-        return res
-
-    def _authenticate_inner(self, login: str, password: str) -> dict | None:
-        """Сама проверка логина/пароля без аудита и блокировок."""
-        if login == self.get_admin_login() and self.check_admin_password(password):
-            return {"role": "admin"}
-
-        for name, data in self.get_teachers().items():
-            if (data.get("login") or "").strip() == login:
-                return {"role": "teacher", "name": name, "data": data} \
-                    if self._verify(data, password) else None
-
-        for s in self.get_students():
-            if (s.get("login") or "").strip() == login:
-                if self._verify(s, password):
-                    return {"role": "student", "stud": {
-                        "f": s.get("surname", ""),
-                        "n": s.get("name", ""),
-                        "g": s.get("group", ""),
-                    }}
-                return None
-
-        #Родитель. Его кабинет на десктопе — веб-представление (онлайн-раздел), но САМ
-        #ВХОД должен работать так же, как у остальных ролей: строка пользователя приезжает
-        #обычным синком в таблицу users, и хеш пароля тут тот же гибридный.
-        for p in self.get_parents():
-            if (p.get("login") or "").strip() == login:
-                return {"role": "parent", "parent": p} if self._verify(p, password) else None
-        return None
 
     def lookup_session(self, login: str):
         """Находит пользователя ПО ЛОГИНУ без проверки пароля и возвращает (role, payload)

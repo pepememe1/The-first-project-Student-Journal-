@@ -88,7 +88,11 @@ self.addEventListener('fetch', (event) => {
       caches.match(request).then((hit) =>
         hit ||
         fetch(request).then((resp) => {
-          if (resp.ok && resp.type === 'basic') {
+          // 🔥 ТОЛЬКО 200, а не любой `ok` (01.10.2026). Анимации маскота по 250–590 КБ
+          // браузер докачивает ЧАСТЯМИ (Range → 206), и Cache API такой ответ не берёт:
+          // `put` бросал, промис молча проваливался, копия не появлялась НИКОГДА — и
+          // каждый заход снова качал мегабайты, в мобильной сети ровно перед входом.
+          if (resp.status === 200 && resp.type === 'basic') {
             const copy = resp.clone()
             caches.open(ASSETS).then((c) => c.put(request, copy))
           }
@@ -106,7 +110,7 @@ self.addEventListener('fetch', (event) => {
     fetch(request)
       .then((resp) => {
         const ct = resp.headers.get('content-type') || ''
-        if (resp.ok && resp.type === 'basic' && !ct.includes('text/html')) {
+        if (resp.status === 200 && resp.type === 'basic' && !ct.includes('text/html')) {
           const copy = resp.clone()
           caches.open(ASSETS).then((c) => c.put(request, copy))
         }

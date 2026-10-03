@@ -69,7 +69,7 @@ async function closeOthers() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
+  <div v-dialog class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border px-5 py-3">
         <h3 class="font-title text-lg font-bold text-text">{{ loc.t('sessions.title', 'Сессии') }}</h3>

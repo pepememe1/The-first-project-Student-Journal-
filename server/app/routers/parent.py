@@ -254,7 +254,7 @@ def parent_vector_ask(payload: dict = Body(...),
     from .web import answer_vector_question, user_ui_locale
     #Язык — РОДИТЕЛЯ (того, кто спрашивает и читает ответ), а не ребёнка: у `child` своя
     #независимая настройка интерфейса, которую сам родитель никогда не выбирал.
-    result = answer_vector_question(question, child, db, voice_role="parent",
+    result = answer_vector_question(question, child, db, voice_role="parent", addressee=user,
                                     locale=user_ui_locale(user))
     result["student_id"] = child.id
     return result

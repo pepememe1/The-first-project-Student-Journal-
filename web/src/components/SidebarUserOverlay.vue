@@ -14,7 +14,7 @@
 // ⚠️ Открывается ВВЕРХ (`bottom-full`): панель прижата к нижнему краю окна, и обычное
 // раскрытие вниз ушло бы за экран.
 import { ref, computed, watch } from 'vue'
-import { Pencil, ChevronRight } from '@lucide/vue'
+import { Pencil, ChevronRight, LogOut } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useProfileStore } from '@/stores/profile'
@@ -137,6 +137,12 @@ async function saveStatusText() {
                   class="mt-2 flex items-center gap-2 rounded-md border border-border2 px-2.5 py-1.5 text-sm text-text2 transition-colors hover:border-accent hover:text-accent">
         <Pencil class="size-3.5 shrink-0" />
         {{ locale.t('userOverlay.editProfile', 'Редактировать профиль') }}
+      </RouterLink>
+      <!-- Дорога к выходу — к кнопке в настройках, не сам выход (см. Settings.vue). -->
+      <RouterLink :to="`/${auth.role}/settings?section=logout`" @click="emit('close')"
+                  class="mt-1 flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-text3 transition-colors hover:text-red">
+        <LogOut class="size-3.5 shrink-0" />
+        {{ locale.t('nav.logout', 'Выйти') }}
       </RouterLink>
     </div>
   </div>

@@ -164,7 +164,7 @@ def practice_average(items: Iterable[tuple[str, str]],
             if num is not None:
                 total += num
                 count += 1
-            elif v == "Н" and c["avg_count_absence"]:
+            elif v == "Н" and c["avg_count_absence"] and scale_counts_absence(lscale):
                 total += c["avg_absence_weight"]
                 count += 1
         elif ltype == "Экзамен" and c["avg_include_exam"]:
@@ -249,6 +249,17 @@ def _to_five_pass_fail(raw: str) -> float | None:
     return None
 
 
+def scale_counts_absence(scale: str) -> bool:
+    """Входит ли пропуск («Н») в средний балл на занятии этой шкалы.
+
+    🔥 У «зачёт/незачёт» — НЕТ (живой прогон 01.10.2026). Оценки этой шкалы в средний не
+    входят вовсе (`_to_five_pass_fail`: статус, а не балл), а пропуск входил весом 2.0 —
+    и студент со всеми «Зачтено» и одним «Н» получал средний 2.0 и «риск отчисления».
+    Пропуск при этом не теряется: его считают посещаемость и фактор пропусков риска.
+    Зеркало — `web/src/utils/grading.js::scaleCountsAbsence`, контракт — grade-cases.json."""
+    return scale != "pass_fail"
+
+
 def _is_failed_pass_fail(raw: str) -> bool:
     v = (raw or "").strip().lower()
     return v.startswith("не") or v.startswith("незач")
@@ -304,6 +315,90 @@ SCALES: dict[str, Scale] = {
 def scale_values(scale: str = DEFAULT_SCALE) -> tuple:
     """Допустимые сырые значения шкалы — для UI-селектора ввода оценки."""
     return SCALES.get(scale, SCALES[DEFAULT_SCALE])["values"]
+
+
+# ── Перевод УЖЕ ПОСТАВЛЕННЫХ оценок при смене шкалы (01.10.2026) ────────────────────
+# 🔥 Зачем. Шкала — настройка преподавателя, а оценка хранится сырой строкой и читается
+# ПО ТЕКУЩЕЙ шкале (`webdata.lesson_scale_map`). Сменил шкалу — и прежние «5/4/3» стали
+# «5 из 100»: у всей группы средний 2.0, долгов втрое больше, студент и родитель видят
+# двойки (живой прогон стенда). Поэтому смена шкалы обязана переводить значения.
+# Правила — решение Ярослава: 5-балльная ↔ буквы один к одному; в 100-балльную — ×20;
+# из 100-балльной — ÷20, целое переводится само, дробное (73 → 3,65) — СПОРНОЕ: варианты
+# «3» и «4», по умолчанию ближайшее, выбирает преподаватель.
+# ⚠️ Ничья (ровно x,5) решается ВНИЗ: перевод не имеет права сам завысить оценку.
+# ⚠️ D и F в буквенной шкале — обе «2», поэтому 2 → F: числом они не различаются, а
+# спорной каждую двойку журнала делать незачем.
+_FIVE_TO_LETTER = {5: "A", 4: "B", 3: "C", 2: "F"}
+
+
+def _scale_reading(raw: str, scale: str):
+    """Сырое значение в шкале → ('five', 2..5) | ('hundred', 0..100) | ('pass', bool) |
+    None (не оценка этой шкалы: посещаемость, пусто, мусор)."""
+    v = (raw or "").strip()
+    if not v:
+        return None
+    head = v.split()[0]
+    if scale == "5":
+        return ("five", int(head)) if head in PRACTICE_VALUES else None
+    if scale == "letter":
+        five = _LETTER_TO_FIVE.get(head.upper())
+        return ("five", int(five)) if five is not None else None
+    if scale == "100":
+        try:
+            n = float(head)
+        except ValueError:
+            return None
+        return ("hundred", n) if 0 <= n <= 100 else None
+    if scale == "pass_fail":
+        low = v.lower()
+        if low.startswith("не"):
+            return ("pass", False)
+        if low.startswith("зач"):
+            return ("pass", True)
+    return None
+
+
+def convert_scale_value(raw: str, from_scale: str, to_scale: str):
+    """Перевод ОДНОГО значения оценки из шкалы в шкалу.
+
+    → None — переводить нечего (та же шкала, посещаемость «Н»/«Б»/«О», пусто, значение
+      не из старой шкалы): строка остаётся как есть;
+    → (варианты, по умолчанию) — один вариант: перевод однозначный; несколько: СПОРНЫЙ,
+      выбирает преподаватель (по умолчанию — ближайший, ничья — вниз)."""
+    if from_scale == to_scale or to_scale not in SCALES:
+        return None
+    reading = _scale_reading(raw, from_scale)
+    if reading is None:
+        return None
+    kind, val = reading
+    if to_scale == "pass_fail":
+        #Зачёт решает ТЕКУЩЕЕ правило «провалено ли» старой шкалы — иначе перевод сам
+        #поменял бы, кто должник, а этого преподаватель не просил.
+        return (["Не зачтено"], "Не зачтено") if is_failed_scaled(raw, from_scale) \
+            else (["Зачтено"], "Зачтено")
+    if to_scale == "100":
+        if kind == "five":
+            return [str(val * 20)], str(val * 20)
+        if kind == "pass":
+            return (["60", "80", "100"], "60") if val else (["40"], "40")
+        return None
+    # → 5-балльная или буквы: через пятибалльный эквивалент.
+    if kind == "five":
+        cands, best = [val], val
+    elif kind == "hundred":
+        x = val / 20
+        if x <= 2:
+            cands, best = [2], 2
+        elif x == int(x):
+            cands, best = [int(x)], int(x)
+        else:
+            lo = int(x)
+            cands = [lo, lo + 1]
+            best = lo + 1 if x - lo > 0.5 else lo
+    else:   # зачёт/незачёт — баллов в нём нет, выбирает преподаватель
+        cands, best = ([3, 4, 5], 3) if val else ([2], 2)
+    fmt = str if to_scale == "5" else (lambda n: _FIVE_TO_LETTER[n])
+    return [fmt(c) for c in cands], fmt(best)
 
 
 #Метки посещаемости — они не часть шкалы, но живут в том же поле оценки.

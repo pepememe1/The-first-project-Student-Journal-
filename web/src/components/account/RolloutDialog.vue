@@ -113,10 +113,10 @@ async function download() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
+  <div v-dialog class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
     <div class="flex max-h-[88vh] w-full max-w-xl flex-col rounded-lg border border-border bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border px-5 py-3">
-        <h3 class="font-title text-lg font-bold text-text">{{ loc.t('rollout.title', 'Выкатить данные групп') }}</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ loc.t('rollout.title', 'Логины и пароли группы') }}</h3>
         <button type="button" class="text-text3 hover:text-text" :aria-label="loc.t('common.close', 'Закрыть')" @click="emit('close')">
           <X class="size-5" />
         </button>

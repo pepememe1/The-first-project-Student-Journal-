@@ -55,6 +55,7 @@ export const INTENT_STEMS = {
     ['что значит долг', 3], ['что значит н', 2], ['что значит б', 2], ['что значит о', 2],
     ['что означает н б о', 3], ['как пересдать', 3], ['как пересдача', 2],
     ['что такое пересдача', 3], ['как работает журнал', 3], ['как пользоваться', 2],
+    ['как все устроено', 4], ['как устроен', 3],
     ['как считаются оценки', 4], ['как выставляется средний', 5],
     ['как выставляются оценки', 2], ['как считаются пропуски', 3],
   ],
@@ -199,6 +200,7 @@ export const INTENT_STEMS = {
     ['сколько студентов', 2], ['сколько преподавател', 2], ['сколько препод', 2],
     ['сколько человек', 2], ['сколько всего', 1], ['сводка по коллед', 2],
     ['количество студентов', 2], ['общая сводка', 2],
+    ['заявк', 2],
   ],
   grades: [
     // «оценк» весила 1 — то есть НИЖЕ порога, и одно слово «оценки» уходило в unknown.
@@ -208,6 +210,8 @@ export const INTENT_STEMS = {
     ['что в журнале', 2], ['все мои оценки', 2], ['журнал', 2],
     // Живая речь: «че у меня по оценкам», «нормально ли я учусь», «че по учебе».
     ['учус', 2], ['че у меня', 1], ['по учебе', 2], ['с учебой', 2],
+    // «Как учится мой ребёнок», «как учится Иванов» — главный вопрос родителя.
+    ['учится', 2], ['учатся', 2],
   ],
   about_vsgutu: [
     ['всгуту', 2], ['что за вуз', 2], ['про вуз', 2], ['про университет', 2],
@@ -420,8 +424,60 @@ export function matchSubject(question, subjects) {
 }
 
 /**
+ * Падежные формы фамилии — зеркало vector_nlu.py::surname_forms (см. докстринг там:
+ * почему формы, а не подстрока — «Алексеева» находила только мужчину Алексеева, а
+ * отчество «Николаевича» — фамилию Николаев).
+ */
+export function surnameForms(surname) {
+  const s = normalize(surname)
+  if (!s) return new Set()
+  const forms = new Set([s])
+  const add = (base, ends) => { for (const e of ends) forms.add(base + e) }
+  const ends = (...xs) => xs.some((x) => s.endsWith(x))
+  if (s.includes(' ')) return forms
+  if (ends('ский', 'цкий', 'ской', 'цкой')) add(s.slice(0, -2), ['ого', 'ому', 'им', 'ом', 'ие', 'их', 'ими'])
+  else if (ends('ская', 'цкая')) add(s.slice(0, -2), ['ой', 'ую'])
+  else if (ends('ова', 'ева', 'ина', 'ына')) add(s.slice(0, -1), ['ой', 'у'])
+  else if (ends('ов', 'ев', 'ин', 'ын')) add(s, ['а', 'у', 'ым', 'е', 'ы', 'ых', 'ыми'])
+  else if (ends('ой', 'ый', 'ий')) add(s.slice(0, -2), ['ого', 'ому', 'ым', 'им', 'ом', 'ые', 'ие', 'ых', 'их'])
+  else if (ends('ая')) add(s.slice(0, -2), ['ой', 'ую'])
+  else if (ends('о', 'е', 'и', 'у', 'ю', 'ых', 'их')) { /* не склоняются */ }
+  else if (ends('а', 'я')) add(s.slice(0, -1), ['ы', 'и', 'е', 'у', 'ю', 'ой', 'ей'])
+  else if (ends('ь', 'й')) add(s.slice(0, -1), ['я', 'ю', 'ем', 'е'])
+  else add(s, ['а', 'у', 'ом', 'е'])
+  return forms
+}
+
+/**
+ * ВСЕ фамилии ростера, названные в вопросе в любом падеже, — в порядке появления
+ * (при равенстве — порядок ростера). Зеркало vector_nlu.py::find_surnames.
+ */
+export function findSurnames(question, surnames) {
+  const q = ' ' + normalize(question) + ' '
+  const words = q.trim() === '' ? [] : q.trim().split(' ')
+  const hits = []
+  ;(surnames || []).forEach((surname, order) => {
+    if (!surname) return
+    const forms = surnameForms(surname)
+    let pos = words.findIndex((w) => forms.has(w))
+    if (pos < 0) {
+      for (const f of forms) {
+        if (f.includes(' ') && q.includes(' ' + f + ' ')) { pos = q.indexOf(' ' + f + ' '); break }
+      }
+    }
+    if (pos >= 0) hits.push([pos, order, surname])
+  })
+  hits.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+  const out = []
+  for (const [, , surname] of hits) if (!out.includes(surname)) out.push(surname)
+  return out
+}
+
+/**
  * Находит упомянутую фамилию из известного ростера («оценки Иванова», «пропуски у
  * Петровой»). Учитывает склонения по основе. Возвращает канон. фамилию.
+ * ⚠️ Грубое сравнение (подстрока/основа) — для опознания студента classify берёт
+ * findSurnames; это оставлено ради совместимости и зеркальности с Python.
  */
 export function matchSurname(question, surnames) {
   const q = normalize(question)
@@ -434,6 +490,36 @@ export function matchSurname(question, surnames) {
   }
   return ''
 }
+
+// ── ГРУППА В ВОПРОСЕ — зеркало vector_nlu.py::match_group (см. докстринг там) ──
+// Латиница, похожая на кириллицу («k74/1» в английской раскладке), — та же группа.
+const GROUP_HOMOGLYPHS = { a: 'а', e: 'е', k: 'к', m: 'м', h: 'н', o: 'о', p: 'р', c: 'с', t: 'т', y: 'у', x: 'х', b: 'в' }
+const GROUP_SEP = '[\\s/.\\-_,]*'
+
+function groupFold(text) {
+  return String(text || '').toLowerCase().replaceAll('ё', 'е')
+    .replace(/[aekmhopctyxb]/g, (ch) => GROUP_HOMOGLYPHS[ch])
+}
+
+/**
+ * Находит группу, названную в вопросе, среди НАСТОЯЩИХ групп (канон. название или '').
+ * «К74/1» = «к74/1» = «к 74 1» = «k74/1»; «К74/1» не находится внутри «К74/10».
+ */
+export function matchGroup(question, groups) {
+  const q = groupFold(question)
+  let best = ''
+  for (const name of groups || []) {
+    const chunks = groupFold(name).match(/[а-яa-z]+|\d+/g) || []
+    if (!chunks.some((c) => /^\d+$/.test(c))) continue
+    const pattern = new RegExp('(?<![0-9а-яa-z])' + chunks.join(GROUP_SEP) + '(?![0-9а-яa-z])')
+    if (pattern.test(q) && name.length > best.length) best = name
+  }
+  return best
+}
+
+// «Студенты» и «группы» одним словом — правило, а не основа (см. vector_nlu.py).
+const STUDENT_WORDS = ['студент', 'ученик', 'учащ', 'обучающ']
+const GROUP_WORDS = ['группа', 'группы', 'групп']
 
 /**
  * Для расписания: какой день спрашивают. Возвращает 'today' | 'tomorrow' | 0..6 | ''.
@@ -473,7 +559,7 @@ function explicitDay(question) {
  * в subject_grades / grade_count по предмету; предмет + расписание — оставляем schedule.
  * surname — распознанная фамилия (для teacher/admin запросов про студента).
  */
-export function classify(question, surnames = [], subjects = []) {
+export function classify(question, surnames = [], subjects = [], groups = []) {
   const q = ' ' + normalize(question) + ' '
   let [intent, score] = scoreIntents(q)
   // Счётный вопрос («сколько …») разбирается по токенам и ПЕРЕБИВАЕТ подстрочный
@@ -484,7 +570,9 @@ export function classify(question, surnames = [], subjects = []) {
     score = COUNT_SCORE
   }
   const subject = matchSubject(question, [...subjects])
-  const surname = matchSurname(question, [...surnames])
+  // Фамилии — по падежным формам целых слов (см. findSurnames и vector_nlu.py::classify).
+  const surnamesFound = findSurnames(question, [...surnames])
+  const surname = surnamesFound[0] || ''
 
   // Уточнения по контексту предмета:
   if (subject) {
@@ -520,9 +608,29 @@ export function classify(question, surnames = [], subjects = []) {
     score = MIN_SCORE
   }
 
+  // Названа ГРУППА: «список группы К74/2» — это состав названной группы, а не перечень.
+  const group = matchGroup(question, [...groups])
+  if (group && intent === 'groups') {
+    intent = 'roster'
+    score = Math.max(score, MIN_SCORE)
+  }
+  if (score < MIN_SCORE) {
+    const words = tokens(question)
+    if (words.some((w) => STUDENT_WORDS.some((p) => w.startsWith(p)))) {
+      intent = 'roster'
+      score = MIN_SCORE
+    } else if (group) {
+      intent = 'group_stats'
+      score = MIN_SCORE
+    } else if (words.some((w) => GROUP_WORDS.includes(w))) {
+      intent = 'groups'
+      score = MIN_SCORE
+    }
+  }
+
   // День вычисляем ПОСЛЕ того, как интент окончательно определён.
   const day = intent === 'schedule' ? detectDay(question) : ''
 
   if (score < MIN_SCORE) intent = 'unknown'
-  return { intent, score, surname, subject, day }
+  return { intent, score, surname, surnames: surnamesFound, subject, day, group }
 }

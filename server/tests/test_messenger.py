@@ -270,6 +270,40 @@ def test_edit_own_message_only(client):
     assert client.patch(f"/web/messenger/messages/{mid}", json={"body": "взлом"}, headers=b).status_code == 403
 
 
+
+def test_edit_cannot_swap_a_gif_link_or_forwarded_words(client):
+    """🔒 Правка жила без кнопки с первого коммита (02.10.2026) и пропускала две вещи:
+    подмену ссылки GIF на любую (белый список Klipy сверяется только при отправке —
+    картинка с чужого сервера у всех участников) и правку ПЕРЕСЛАННОГО (чужие слова под
+    подписью «Переслано от …»). Обычное сообщение по-прежнему правится."""
+    _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
+    conv = _conv(client, a, b_id)
+    gif = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "https://static.klipy.com/x/full.gif", "kind": "gif"},
+                      headers=a).json()
+    assert gif["kind"] == "gif", gif
+    r = client.patch(f"/web/messenger/messages/{gif['id']}",
+                     json={"body": "https://evil.example/pixel.gif"}, headers=a)
+    assert r.status_code == 400, r.text
+    hist = client.get(f"/web/messenger/chats/{conv}/messages", headers=b).json()["messages"]
+    assert hist[-1]["body"] == "https://static.klipy.com/x/full.gif"
+
+    conv_ac = _conv(client, a, c_id)
+    mid = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "сказал Боб"},
+                      headers=b).json()["id"]
+    client.post("/web/messenger/messages/forward",
+                json={"message_ids": [mid], "to_conversation_ids": [conv_ac]}, headers=a)
+    fwd = client.get(f"/web/messenger/chats/{conv_ac}/messages", headers=a).json()["messages"][-1]
+    assert fwd["forwarded_from"], fwd
+    r = client.patch(f"/web/messenger/messages/{fwd['id']}", json={"body": "Боб не говорил"},
+                     headers=a)
+    assert r.status_code == 400, r.text
+
+    own = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": "опечтка"},
+                      headers=a).json()["id"]
+    assert client.patch(f"/web/messenger/messages/{own}", json={"body": "опечатка"},
+                        headers=a).status_code == 200
+
 # ── Фаза 4: модерация ────────────────────────────────────────────────────────────────
 def test_moderation_chat_user_and_admin_reply(client):
     admin, (a_id, a), (b_id, b), _ = _setup(client)

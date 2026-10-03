@@ -1203,7 +1203,7 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
         for s in studs:
             r = dropout_risk_for_student(db, s.surname, s.name, group,
                                          cfg=cfg, lessons=lessons, records=recs[s.id])
-            if r["visible"] and r["level"] in ("medium", "high", "critical"):
+            if counts_as_at_risk(r):
                 at_risk += 1
         out.append({"group": group, "students": len(studs),
                     "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
@@ -1232,3 +1232,37 @@ def patronymic_of(user) -> str:
         return p
     n = (getattr(user, "name", "") or "").strip()
     return n.split(" ", 1)[1].strip() if " " in n else ""
+
+
+def address_name(user) -> str:
+    """Как обращаться к человеку: студенту — по имени, всем остальным — по имени и
+    отчеству («Анна Петровна»). Пусто — имени нет, и обращаться по нему нечем.
+
+    Нужна приветствию Вектора (28.09.2026, требование Ярослава: «преподов в самом начале
+    приветствовать по имени и отчеству»). Одно место на сервер и ответ входа, чтобы
+    приветствие на экране и ответ на «привет» не называли человека по-разному.
+    ⚠️ Запасной путь — разбор `full_name` («Фамилия Имя Отчество»): у строк, пришедших
+    со старого десктопа, `name` бывает пуст, а полное имя есть."""
+    first, patr = first_name(user), patronymic_of(user)
+    if not first:
+        words = (getattr(user, "full_name", "") or "").split()
+        first = words[1] if len(words) > 1 else ""
+        patr = words[2] if len(words) > 2 else ""
+    if not first or getattr(user, "role", "") == "student":
+        return first
+    return f"{first} {patr}".strip() if patr and patr != first else first
+
+
+#Уровни риска отчисления, при которых студент считается «в зоне риска».
+AT_RISK_LEVELS = ("medium", "high", "critical")
+
+
+def counts_as_at_risk(risk: dict) -> bool:
+    """«В зоне риска» — ОДНО правило для дашбордов преподавателя и куратора и для Вектора.
+
+    🔥 До 28.09.2026 правил было ЧЕТЫРЕ: дашборды считали по индексу риска отчисления
+    (эта формула, продублированная в двух местах), Вектор преподавателя — «есть долг
+    или средний ниже 3», Вектор администратора — «средний ниже 2.5». На одном стенде
+    один и тот же колледж давал администратору трёх человек в зоне риска, а
+    преподавателю — семь, и оба ответа выглядели уверенными."""
+    return bool(risk and risk.get("visible") and risk.get("level") in AT_RISK_LEVELS)

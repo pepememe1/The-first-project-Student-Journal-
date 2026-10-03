@@ -930,6 +930,35 @@ def user_exists(login: str) -> bool:
         db.close()
 
 
+def local_user_names(login: str) -> tuple:
+    """(ФИО, обращение) человека из ЛОКАЛЬНОЙ копии — ровно как их отдаёт вход на бою
+    (`routers/auth.py`: `full_name` или «Фамилия Имя», обращение — `webdata.address_name`).
+
+    🔥 Живой прогон 01.10.2026: после перезапуска программы (сохранённый вход) в меню
+    стоял ЛОГИН («qa_t09») вместо ФИО, а Вектор здоровался без имени — оболочка клала в
+    `gb.user` логин в поле имени. При свежем входе всё было верно, потому что имя
+    приходило в ответе сервера. ('', '') — человека нет или копия не открылась."""
+    if not login:
+        return "", ""
+    try:
+        prepare_env()
+        from app.db import SessionLocal
+        from app.models import User
+        from app.webdata import address_name
+    except Exception:      # noqa: BLE001 — без имени вход всё равно состоится
+        return "", ""
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.login == login).first()
+        if u is None:
+            return "", ""
+        return (u.full_name or f"{u.surname or ''} {u.name or ''}".strip()), address_name(u)
+    except Exception:      # noqa: BLE001
+        return "", ""
+    finally:
+        db.close()
+
+
 def issue_local_session(login: str, role: str) -> tuple:
     """Выпустить пару токенов ДЛЯ ЛОКАЛЬНОГО сервера. Возвращает (access, refresh).
 
@@ -1568,10 +1597,40 @@ def _remote_vector(mode: str, payload: dict) -> str:
     return str((r.json() or {}).get("text") or "")
 
 
+#Вопрос, которым копия спрашивает бой о его состоянии. Фраза — из контракта разбора
+#(`docs/contracts/vector-intent-cases.json`): бой обязан понять её как server_state.
+_SERVER_STATE_QUESTION = "что с сервером"
+
+
+def _remote_server_state():
+    """Ответ БОЕВОГО Вектора о состоянии сервера (dict) или None — нет связи/входа.
+
+    🔥 В программе Вектор отвечает с локального сервера, и `hostinfo` там мерит компьютер
+    человека: админ слышал «база зашифрована, копий НЕ НАЙДЕНО» про свой ноутбук, а раздел
+    «Сервер» (он пересылается на бой) показывал настоящую машину. Просьба Ярослава
+    02.10.2026: «чтобы он давал данные по боевому серверу». Спрашиваем бой тем же входом,
+    что озвучку; права решает бой (`server_state` — только админ).
+    ⚠️ Зовётся из обычного `def` (пул потоков) — блокирующий запрос здесь законен."""
+    base, token, _why = _remote_auth()
+    if not base or not token:
+        return None
+    import httpx
+    r = httpx.post(f"{base}/web/vector/ask", json={"message": _SERVER_STATE_QUESTION},
+                   headers={"Authorization": f"Bearer {token}", "X-Client": "web"},
+                   timeout=20.0)
+    if r.status_code != 200:
+        _LOG.info(f"[local-api] состояние сервера у боя: HTTP {r.status_code}")
+        return None
+    return r.json()
+
+
 def install_remote_vector() -> None:
-    """Поставить боевую озвучку в `vector_llm` локального сервера (см. `_remote_vector`)."""
+    """Поставить боевую озвучку в `vector_llm` локального сервера (см. `_remote_vector`) и
+    ответ о состоянии сервера с боя (`_remote_server_state`)."""
     from app import vector_llm
     vector_llm.set_remote(_remote_vector)
+    from app.routers.web import vector as web_vector
+    web_vector.set_remote_server_state(_remote_server_state)
 
 
 def install_remote_proxy(app) -> None:
@@ -1797,7 +1856,8 @@ def install_desktop_bootstrap(app) -> None:
         #`apply_spec()` не зовётся никогда, то есть спек всегда пуст и ветка была тихим
         #no-op, зато держала живой код на Qt-модуле. Хозяин темы один — сама SPA
         #(`AppShell.vue`, chromeless), она берёт её из своих настроек.
-        user = _json.dumps({"login": login, "role": role, "name": login})
+        full, greet = local_user_names(login) if access else ("", "")
+        user = _json.dumps({"login": login, "role": role, "name": full or login, "greet": greet})
         #⚠️ dumps ДВАЖДЫ для gb.user: внутренний даёт JSON, внешний — строковый литерал JS.
         #С одним dumps браузер сохранял «[object Object]», разбор падал, и SPA показывала
         #форму входа человеку, который уже вошёл (ловили это в 3.4).

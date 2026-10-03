@@ -19,7 +19,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages,
-  Volume2, SmilePlus, MoreHorizontal, Quote, Link2,
+  Volume2, SmilePlus, MoreHorizontal, Quote, Link2, Pencil,
 } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { menuMaxHeight, placeMenu } from '@/utils/menuPlacement'
@@ -55,6 +55,7 @@ const hasSelection = computed(() => !!props.selection.trim())
 // и его вид не могут разъехаться: нет подписи — нет и пункта, это видно сразу.
 const LABELS = {
   reply: () => ({ label: locale.t('msgAction.reply', 'Ответить'), icon: Reply }),
+  edit: () => ({ label: locale.t('msgAction.edit', 'Изменить'), icon: Pencil }),
   'quote-reply': () => ({ label: locale.t('msgAction.quoteReply', 'Ответить с цитатой'), icon: Quote }),
   copy: () => ({ label: locale.t('msgAction.copy', 'Копировать текст'), icon: Copy }),
   'copy-selection': () => ({ label: locale.t('msgAction.copySelection', 'Копировать выделенное'), icon: Copy }),

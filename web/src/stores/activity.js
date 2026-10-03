@@ -11,6 +11,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { activitiesApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { acceptsFrame, mergeFrame } from '@/utils/frameOrder'
 
 
@@ -188,7 +189,7 @@ export const useActivityStore = defineStore('activity', () => {
     try {
       const { data } = await activitiesApi.running(conversationId)
       running.value = data.activities || []
-    } catch { running.value = [] }
+    } catch (e) { if (!isStaleSession(e)) running.value = [] }
   }
 
   async function adoptCurrent(conversationId) {
@@ -225,6 +226,13 @@ export const useActivityStore = defineStore('activity', () => {
     mode.value = 'hidden'
     launcherFor.value = ''
     error.value = ''
+    //⚠️ И всё остальное, что переживает смену пользователя в той же вкладке (ревью
+    //30.09.2026): окно «время вышло» (`TimerAlarm` смонтирован в оболочке для ВСЕХ
+    //страниц) всплывало у следующего вошедшего с названием активности прежнего.
+    expiredTimer.value = null
+    running.value = []
+    unseen.value = false
+    journalFor.value = ''
   }
 
   return {

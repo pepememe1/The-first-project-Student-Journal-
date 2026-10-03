@@ -110,8 +110,9 @@ def _issue_token_pair(db: Session, user: User, request: Request,
                     trusted_device_id=dev_id)
     db.commit()
     name = user.full_name or f"{user.surname} {user.name}".strip()
+    from ..webdata import address_name
     return TokenOut(access_token=access, refresh_token=refresh, role=user.role, name=name,
-                    trust_token=new_trust_token)
+                    greet_name=address_name(user), trust_token=new_trust_token)
 
 
 @router.post("/bootstrap-admin", response_model=TokenOut)
@@ -246,7 +247,8 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         if u is not None:
             throttle.register_login_attack(login_str, ip)
         events.record("warn", "login_failed", "неверный логин или пароль", login_str, ip)
-        audit.log(db, request, actor=login_str, action="login.fail", level="warn")
+        audit.log(db, request, actor=login_str, action="login.fail", level="warn",
+                  monitor=False)
         #Пасхалка Far Cry: седьмая неудача подряд у СТУДЕНТА. Решение принимает сервер и
         #сообщает заголовком — тела ответа не трогаем, чтобы не менять форму ошибки,
         #которую разбирает форма входа.
@@ -270,7 +272,7 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     if config.DEVICE_AUTO_APPROVE and device_barrier_applies(request, u.role):
         ensure_device_allowed(request, db, user=u)
     events.record("info", "login", f"вход выполнен (роль {u.role})", login_str, ip)
-    audit.log(db, request, actor=login_str, role=u.role, action="login.ok")
+    audit.log(db, request, actor=login_str, role=u.role, action="login.ok", monitor=False)
 
     #🔒 УДАЧНЫЙ ВХОД СРАЗУ ПОСЛЕ СЕРИИ НЕУДАЧ — это и есть картина подобранного пароля.
     #Записываем ОТДЕЛЬНОЙ строкой с цифрами: обычный `login.ok` в общем потоке ничем не
@@ -287,7 +289,7 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
                   f"с {sus['ips']} адрес(ов) за последний час")
         events.record("warn", "login_after_attack", detail, login_str, ip)
         audit.log(db, request, actor=login_str, role=u.role,
-                  action="login.ok.suspicious", level="warn", detail=detail)
+                  action="login.ok.suspicious", level="warn", detail=detail, monitor=False)
 
     #Преподаватель вошёл — СРАЗУ запускаем сборку снимка расписания в фоне. Полный
     #снимок это ~68 запросов к порталу (десятки секунд), и раньше эта сборка стартовала
@@ -449,7 +451,7 @@ def refresh(body: RefreshIn, request: Request, db: Session = Depends(get_db)):
         events.record("warn", "refresh_step_up", detail, login_str,
                       throttle.client_ip(request))
         audit.log(db, request, actor=login_str, role=u.role,
-                  action="session.step_up", level="warn", detail=detail)
+                  action="session.step_up", level="warn", detail=detail, monitor=False)
         #401 — тот же код, что у истёкшей сессии, и клиент уже умеет его обрабатывать:
         #показывает форму входа. Заводить здесь свой поток «подтвердите код прямо
         #поверх страницы» значило бы новый экран ради редкого случая; повторный вход с
@@ -524,7 +526,8 @@ def logout(request: Request, authorization: str = Header(None),
         _kick_sockets(user.id)
         events.record("info", "logout", "выход (токен отозван)", user.login,
                       throttle.client_ip(request))
-        audit.log(db, request, actor=user.login, role=user.role, action="logout")
+        audit.log(db, request, actor=user.login, role=user.role, action="logout",
+                  monitor=False)
     return {"revoked": revoked}
 
 
@@ -601,7 +604,7 @@ def register(body: dict = Body(...), request: Request = None, db: Session = Depe
         events.record("info", "registration_request", f"{full_name} · {group} · {email}")
     except Exception:
         pass
-    audit.log(db, request, actor=email, action="reg.request", target=group)
+    audit.log(db, request, actor=email, action="reg.request", target=group, monitor=False)
     return {"ok": True, "group": group}
 
 
@@ -674,8 +677,24 @@ def register_by_invite(body: dict = Body(...), request: Request = None,
     _row, pw = reg_utils.create_student_account(db, email, full_name, inv.group_name, _now())
     #Место расходуем ТОЛЬКО после успешного создания: отказ на дубликате почты не должен
     #съедать чужое место в приглашении.
-    inv.uses = int(inv.uses or 0) + 1
+    #🔒 И расходуем АТОМАРНО (ревью 30.09.2026): проверка «места есть» выше и прежнее
+    #`inv.uses += 1` шли двумя шагами, и одновременные регистрации по одной ссылке у
+    #последнего места обе проходили проверку — аккаунтов заводилось больше лимита. Один
+    #условный UPDATE считает место под замком писателя: кто не успел — получает тот же
+    #отказ, что и при исчерпанной ссылке, а его аккаунт не создаётся (откат).
+    from sqlalchemy import update as _update
+    taken = db.execute(
+        _update(StudentInvite)
+        .where(StudentInvite.id == inv.id,
+               (StudentInvite.max_uses == None) | (StudentInvite.max_uses == 0)  # noqa: E711
+               | (StudentInvite.uses < StudentInvite.max_uses))
+        .values(uses=StudentInvite.uses + 1)
+        .execution_options(synchronize_session=False)).rowcount
+    if not taken:
+        db.rollback()
+        _fail("Приглашение уже использовано максимальное число раз", 404)
     db.commit()
+    db.refresh(inv)
     throttle.register_reg_success(ip)
     audit.log(db, request, actor=email, action="reg.invite", target=inv.group_name)
 

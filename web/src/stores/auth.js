@@ -13,6 +13,8 @@ import { getAccess, setTokens, clearTokens } from '@/api/tokens'
 //см. подробный разбор в api/client.js. Двигать обязаны все три двери:
 //вход (_afterLogin), выход (logout) и локальный сброс (clearSession).
 import { bumpSessionGeneration } from '@/api/client'
+import { isStaleSession } from '@/api/responseOwner'
+import { isDesktopApp } from '@/utils/platform'
 import { clearCache } from '@/api/offlineCache'
 import { clearDrafts } from '@/utils/drafts'
 import { resetOfflineSession } from '@/api/offlineSession'
@@ -95,6 +97,8 @@ export const useAuthStore = defineStore('auth', () => {
       login: loginStr || data.login || '',
       role: data.role,
       name: data.name || loginStr || data.login || '',
+      // Обращение для приветствия Вектора (имя / имя и отчество) — считает сервер.
+      greet: data.greet_name || '',
     }
     localStorage.setItem(LS_USER, JSON.stringify(user.value))
     // Привязываем телефон к ЭТОМУ аккаунту: на одном устройстве могли входить
@@ -145,6 +149,15 @@ export const useAuthStore = defineStore('auth', () => {
       }
       return _afterLogin(data, login.trim(), { trustFlow: true })
     } catch (e) {
+      //Ответ ПРЕЖНЕЙ сессии (инвариант §4.23): человек уже вошёл заново, и ошибка
+      //чужого запроса не должна краснеть на его экране как «сервер не ответил».
+      if (isStaleSession(e)) throw e
+      //Ответа нет ВОВСЕ (сеть, таймаут) — это не то же самое, что «сервер ответил
+      //ошибкой». В мобильной сети ответ на вход часто приходит на сервер и уходит назад,
+      //а до телефона не доезжает (журнал боя 01.10.2026: вход отработал за 0.4 с, клиент
+      //ждал 20 с). Человеку нужен совет, что делать, а не «проверьте соединение» при
+      //живом интернете, с которым у него открываются все остальные сайты.
+      const noAnswer = !e.response
       const status = e.response?.status
       //Секунды до разблокировки держим отдельно: по ним рисуется обратный отсчёт, и
       //только он превращает «подождите» в понятное «осталось столько-то».
@@ -152,6 +165,12 @@ export const useAuthStore = defineStore('auth', () => {
       if (status === 401) error.value = 'Неверный логин или пароль'
       else if (status === 403) error.value = e.response?.data?.detail || 'Устройство не подтверждено администратором'
       else if (status === 429) error.value = e.response?.data?.detail || 'Слишком много попыток входа. Подождите.'
+      else if (noAnswer && isDesktopApp()) error.value = 'Вход не успел завершиться: первый вход скачивает данные на компьютер, на большой базе это до пары минут. Попробуйте войти ещё раз.'
+      else if (noAnswer) error.value = 'Сервер не ответил. Попробуйте ещё раз; в мобильной сети иногда помогает Wi-Fi или приложение GradeBookAI.'
+      //Причину 5xx показываем, когда сервер её НАЗВАЛ: программа отвечает 503 с точным
+      //текстом («данные не успели скачаться», «личная копия не открылась»), а общая фраза
+      //отправляла человека ждать «минуту», которая ничего не меняла.
+      else if (status >= 500) error.value = (typeof e.response?.data?.detail === 'string' && e.response.data.detail) || 'Сервер временно недоступен. Попробуйте через минуту.'
       else error.value = 'Не удалось войти. Проверьте соединение с сервером.'
       throw e
     } finally {

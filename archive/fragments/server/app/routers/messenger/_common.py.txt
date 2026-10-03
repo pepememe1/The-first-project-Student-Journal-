@@ -1,0 +1,14 @@
+Фрагменты, вырезанные из server/app/routers/messenger/_common.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из server/app/routers/messenger/_common.py: _peer_of_direct (строки 1224–1232 до переноса), пункт 7 ──
+def _peer_of_direct(db: Session, conv_id: str, me_id: str):
+    """Второй участник личного чата (для заголовка/карточки). None, если не найден."""
+    other = (db.query(ConversationParticipant)
+             .filter(ConversationParticipant.conversation_id == conv_id,
+                     ConversationParticipant.user_id != me_id)
+             .first())
+    if other is None:
+        return None
+    return db.query(User).filter(User.id == other.user_id).first()
+

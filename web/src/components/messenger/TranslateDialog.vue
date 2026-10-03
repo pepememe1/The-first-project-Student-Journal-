@@ -38,7 +38,7 @@ const FIELDS = computed(() => [
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
        @click.self="$emit('close')">
     <div class="w-full max-w-lg rounded-2xl border border-border bg-card p-5 shadow-xl">
       <div class="mb-4 flex items-center justify-between gap-3">

@@ -103,6 +103,28 @@ def test_mute_command_toggles_and_blocks_sending(client):
                        json={"body": "снова могу"}, headers=b).status_code == 200
 
 
+def test_silenced_member_cannot_rewrite_old_messages(client):
+    """🔒 Правка — тоже запись в беседу (нашёл Полковник 02.10.2026). Запреты стояли только
+    в отправке, и заглушённый модератором участник через «Изменить» переписывал свои
+    СТАРЫЕ сообщения — правка сохранялась и рассылалась всем. Проверка одна на обе двери
+    (`messages._ensure_may_write`); после снятия заглушки правка снова работает."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _group(client, a, [b_id])
+    mid = client.post(f"/web/messenger/chats/{conv}/messages",
+                      json={"body": "до заглушки"}, headers=b).json()["id"]
+    assert client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "/mute @Боб"}, headers=a).status_code == 200
+    r = client.patch(f"/web/messenger/messages/{mid}", json={"body": "а теперь вот так"},
+                     headers=b)
+    assert r.status_code == 403, r.text
+    hist = client.get(f"/web/messenger/chats/{conv}/messages", headers=a).json()["messages"]
+    assert [m["body"] for m in hist if m["id"] == mid] == ["до заглушки"]
+    assert client.post(f"/web/messenger/chats/{conv}/messages",
+                       json={"body": "/mute @Боб"}, headers=a).status_code == 200
+    assert client.patch(f"/web/messenger/messages/{mid}", json={"body": "исправил"},
+                        headers=b).status_code == 200
+
+
 def test_mute_cannot_target_owner(client):
     _, (a_id, a), (b_id, b), (c_id, c) = _setup(client)
     conv = _group(client, a, [b_id])

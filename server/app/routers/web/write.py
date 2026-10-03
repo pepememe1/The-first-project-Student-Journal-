@@ -13,6 +13,8 @@ from .curator import _maybe_notify_dropout_risk      # noqa: F401
 #Минимальная длина пароля живёт в ОДНОМ месте на весь продукт (см. её докстринг).
 from ...security import MIN_PASSWORD_LEN      # noqa: F401
 from ...models import next_moderator_number      # noqa: F401
+import logging as _logging
+_hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 
 
 # ЗАПИСЬ (Phase B) ─────────────────────────────────────────────────────────────────
@@ -61,6 +63,12 @@ def teacher_set_grade(payload: dict = Body(...),
     #🔒 Зачётка закрыта — текущие оценки по этому предмету больше не пишутся (см.
     #_ensure_term_open). Проверяем ПОСЛЕ поиска студента: замок персональный, у соседа
     #по группе итоговой может ещё не быть.
+    #⚠️ ПРОВЕРКА И ЗАПИСЬ — ПОД ОДНИМ ЗАМКОМ (ревью 30.09.2026). Раньше «итоговой нет»
+    #читалось вне транзакции записи, и итоговая, выставленная в тот же миг параллельным
+    #запросом, успевала закоммититься между проверкой и записью: в закрытом семестре
+    #появлялась текущая оценка. Замок писателя SQLite один на базу — дальше до нашего
+    #коммита итоговую не выставит никто, а выставленную раньше мы увидим.
+    _lock_for_write(db)
     _ensure_term_open(db, stud.id, lesson.subject, lesson.year, lesson.semester)
     from ...models import grade_id as _grade_key
     gid = _grade_key(stud.id, lesson_id)   #ЭТАП 3: ключ по неизменяемому id студента
@@ -115,8 +123,8 @@ def teacher_set_grade(payload: dict = Body(...),
             from ..messenger import notify_grade_posted
             notify_grade_posted(db, stud.id, user.full_name or user.name or user.login,
                                lesson.subject, value)
-        except Exception:
-            pass
+        except Exception as e:      # noqa: BLE001 — хук не роняет оценку, но и не молчит
+            _hook_log.warning("канал «Мои оценки» не обновлён: %s", e)
     #Риск отчисления (3.6): пересчитываем ПОСЛЕ любой правки оценки — в том числе при
     #снятии (снятая двойка риск снижает, и запомнить это надо, иначе следующий рост не
     #посчитается новостью). Как и хуки выше — best-effort, ошибка не роняет простановку.

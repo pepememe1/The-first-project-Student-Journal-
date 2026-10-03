@@ -128,6 +128,9 @@ test('разбор типов и размеров — общая функция,
     'для неизвестного типа предпросмотр обязан быть пустым')
   assert.equal(humanSize(0), '0 Б')
   assert.equal(humanSize(2 * 1024 * 1024), '2.0 МБ')
+  //Размер базы в панели Вектора админа идёт через ту же функцию (28.09.2026).
+  assert.equal(humanSize(1.4 * 1024 * 1024), '1.4 МБ')
+  assert.equal(humanSize(3 * 1024 * 1024 * 1024), '3.0 ГБ')
   // Один источник правды: в компонентах своей копии форматирования быть не должно.
   for (const [name, src] of [['ChatThread', thread], ['ConversationInfo', panel]]) {
     assert.ok(/humanSize/.test(src), `${name} не пользуется общей humanSize`)

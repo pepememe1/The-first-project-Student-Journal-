@@ -11,7 +11,7 @@
 // иначе редкость правится через инструменты разработчика за секунду, а телефон и ПК
 // давали бы человеку два независимых шанса на одно событие.
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { easterApi, meApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 
@@ -460,6 +460,15 @@ export const useEasterStore = defineStore('easterEggs', () => {
   })
   /** Спрашивать ли «уже было» вместо «не упустите» — для текущего `pending`. */
   const pendingOwned = computed(() => !!pending.value && alreadyOwned(pending.value))
+
+  // 🔥 ЗАКРЫТИЕ ОКНА ПРОГРАММЫ: признак КЛАДЁМ в оболочку сами, а не ждём, что она спросит
+  // (28.09.2026). Прежде оболочка спрашивала страницу через evaluate_js ИЗ обработчика
+  // закрытия, а он в pywebview выполняется на потоке окна — ответ скрипта ждал тот же
+  // поток, и программа вешалась на КАЖДОМ нажатии крестика (жалоба Ярослава).
+  // `window.pywebview.api` есть только внутри программы; на сайте и в телефоне — тишина.
+  watch(pending, (value) => {
+    try { window.pywebview?.api?.set_close_guard?.(value || '') } catch { /* не программа */ }
+  }, { immediate: true })
 
   /**
    * Человек подтвердил, что уходит. Снимаем пропускаемую пасхалку — иначе кубик или

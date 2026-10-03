@@ -70,11 +70,11 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     subjects = []
     grades_total = 0
     for subj, ls in subj_lessons.items():
-        cnt = 0
-        for l in ls:
-            v = (records.get(l.id) or "").strip()
-            if l.type in ("Практика", "Экзамен") and v:
-                cnt += 1
+        #🔥 ЗДЕСЬ БЫЛ ВТОРОЙ СЧЁТ ОЦЕНОК (убран 28.09.2026): свой цикл по литералу
+        #«Практика» не видел ДЗ, и главная студента показывала «оценок 25», а панель
+        #Вектора у того же студента — 30 (находка живого прогона). Счёт один —
+        #`W.graded_count`, тот же, что у панели.
+        cnt = W.graded_count(ls, records)
         grades_total += cnt
         subjects.append({"subject": subj, "grades": cnt})
     #⚠️ ЗДЕСЬ БЫЛ ВТОРОЙ РАСЧЁТ ПОСЕЩАЕМОСТИ (убран 31.08.2026). Он считал свой процент

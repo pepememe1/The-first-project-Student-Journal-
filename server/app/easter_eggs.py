@@ -301,11 +301,6 @@ def unlock(user_id: str, achievement_id: str, db: Session) -> bool:
     return True
 
 
-def unlocked_ids(user_id: str, db: Session) -> list[str]:
-    rows = db.query(UserAchievement).filter(UserAchievement.user_id == user_id).all()
-    return [r.achievement_id for r in rows]
-
-
 def showcase_ids(user_id: str, db: Session) -> list[str]:
     """Что человек сам решил показать в своём профиле другим."""
     rows = (db.query(UserAchievement)

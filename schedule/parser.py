@@ -644,16 +644,6 @@ def expand_composite_group(name: str, category: str = DEFAULT_CATEGORY) -> list[
     return out
 
 
-def composite_partners(name: str, category: str = DEFAULT_CATEGORY) -> list[str]:
-    """Соседи по общему расписанию, кроме самой группы.
-
-    Нужны, чтобы честно подписать расписание: «общее с К74/3». Без подписи человек
-    видит в расписании своей группы чужое имя в заголовке и считает это ошибкой.
-    """
-    names = expand_composite_group(name, category)
-    return [n for n in names[1:] if n != name]
-
-
 def list_category_groups(html: str, category: str = DEFAULT_CATEGORY) -> list[tuple[str, str]]:
     """Возвращает [(имя_группы, href)] из индекса категории — БЕЗ курса, для
     существующих потребителей (курс — см. list_category_groups_with_course)."""

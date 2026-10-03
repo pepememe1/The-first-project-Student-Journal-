@@ -64,7 +64,7 @@ def _world(client):
     assign_teacher(client, admin, "teach:t31", "ИС-33", "Химия")
     users, lessons = [], []
     for g, logins in STUDENTS.items():
-        for i, login in enumerate(logins):
+        for login in logins:
             users.append({"id": f"stud:{login}", "role": "student", "login": login,
                           "password_hash": hash_password("x"), "surname": f"Ф{login}",
                           "name": f"И{login}", "group_name": g})
@@ -189,7 +189,7 @@ def test_random_interleavings_converge_to_a_fresh_snapshot(client, monkeypatch):
     from app.models import Grade, Lesson
     from app import sync_clock
     progs = {name: Program(client, h, limit) for (name, h), limit
-             in zip(teachers.items(), (3, 5))}
+             in zip(teachers.items(), (3, 5), strict=True)}
     accepted = {}          #ключ клетки → (номер, значение) последней принятой правки
     owner = {"ИС-31": "t31", "ИС-32": "t32", "ИС-33": "t31"}      #кто сейчас ведёт группу
     buried = set()                                #занятия под надгробием

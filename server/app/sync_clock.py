@@ -144,7 +144,7 @@ def ensure(engine) -> dict:
         #Строки без номера (всё, что лежало до миграции) нумеруем ОДНИМ ходом по времени
         #правки: старое получает меньшие номера, поэтому курсор ведёт себя как дельта.
         todo = []
-        for order, (name, model) in enumerate(present.items()):
+        for order, (_name, model) in enumerate(present.items()):
             t = _ddl_ident(model.__tablename__)
             for rowid, ts in conn.exec_driver_sql(
                     f"SELECT rowid, updated_at FROM {t} "

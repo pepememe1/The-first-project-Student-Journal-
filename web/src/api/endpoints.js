@@ -13,12 +13,22 @@
  */
 import { api, rawApi } from './client'
 import { peekCached } from './offlineCache'
+import { isDesktopApp } from '@/utils/platform'
+
+//🔥 ВХОД В ПРОГРАММЕ ДОЛЬШЕ 20 СЕКУНД — НЕ ЗАВИСАНИЕ (живой прогон 01.10.2026). Первый
+//вход на компьютере скачивает копию данных, и ответ на /auth/login приходит только после
+//неё: у админа на большой базе 27–59 с. Общий предел запроса (20 с) обрывал такой вход
+//«ошибкой соединения», а вторая попытка проходила за 5 с. В браузере предел прежний —
+//там сервер отвечает сразу, и долгое ожидание означает только сеть.
+export const DESKTOP_LOGIN_TIMEOUT_MS = 120000
+const loginOpts = () => (isDesktopApp() ? { timeout: DESKTOP_LOGIN_TIMEOUT_MS } : undefined)
 
 // АВТОРИЗАЦИЯ ──────────────────────────────────────────────────────────────────
 export const authApi = {
   // `extra` (4.0) — { trust_token, trust_device }: секрет доверенного устройства и
   // галочка «Доверять этому устройству?». Старый вызов с двумя аргументами работает.
-  login: (login, password, extra = {}) => api.post('/auth/login', { login, password, ...extra }),
+  login: (login, password, extra = {}) =>
+    api.post('/auth/login', { login, password, ...extra }, loginOpts()),
   refresh: (refresh_token) => api.post('/auth/refresh', { refresh_token }),
   logout: () => api.post('/auth/logout'),
   // Самостоятельная регистрация студента (заявка админу) и восстановление пароля.
@@ -49,7 +59,7 @@ export const authApi = {
   mfaConfirm: (code) => api.post('/auth/mfa/confirm', { code }),
   mfaDisable: (code) => api.post('/auth/mfa/disable', { code }),
   mfaRegenerate: (code) => api.post('/auth/mfa/recovery/regenerate', { code }),
-  mfaVerify: (challenge, code) => api.post('/auth/mfa/verify', { challenge, code }),
+  mfaVerify: (challenge, code) => api.post('/auth/mfa/verify', { challenge, code }, loginOpts()),
 
   webauthnRegisterBegin: () => api.post('/auth/webauthn/register/begin'),
   webauthnRegisterComplete: (payload) => api.post('/auth/webauthn/register/complete', payload),
@@ -129,6 +139,10 @@ export const studentApi = {
 // ПРЕПОДАВАТЕЛЬ ───────────────────────────────────────────────────────────────────
 export const teacherApi = {
   overview: () => api.get('/web/teacher/overview'),
+  // Смена шкалы оценивания с переводом уже поставленных оценок (server/app/scale_conversion.py):
+  // сначала предпросмотр (что станет и какие оценки спорные), потом применение с выбором.
+  scalePreview: (scale) => api.post('/web/teacher/grading-scale/preview', { scale }),
+  setScale: (scale, choices = {}) => api.post('/web/teacher/grading-scale', { scale, choices }),
   // params: { year, semester } — архив прошлого семестра; без них — текущий.
   journal: (group, subject, params = {}) => api.get('/web/teacher/journal', { params: { group, subject, ...params } }),
   students: (group) => api.get('/web/teacher/students', { params: { group } }),

@@ -17,7 +17,8 @@ schedule/reminders.py — ЗАДЕЛ НА БУДУЩЕЕ: «сейчас/ско�
     заводить фоновый планировщик ради одной фичи на одноядерном VPS);
   • снимок расписания брать серверный (`schedule_web`), а не локальный кэш —
     он общий для сайта, программы и мобилки;
-  • вызвать upcoming_reminder(...) — если вернулась подсказка, отправить её обычным
+  • вызвать upcoming_reminder(...) (30.09.2026 перенесена в архив как мёртвая —
+    archive/fragments/schedule/reminders.py.txt) — если вернулась подсказка, отправить её обычным
     уведомлением (`NotifyEvent` + пуш). Чтобы не спамить, помнить последнюю показанную
     пару (см. поле reminder_key в результате).
 
@@ -109,32 +110,3 @@ def current_and_next(lessons_today: list, now: datetime,
                         reminder_key=key)
 
 
-def lessons_for_today(snapshot, kind: str, entity: str, now: datetime) -> list:
-    """Достаёт из снимка список пар сущности на СЕГОДНЯ (по дню недели и чётности).
-
-    kind: 'group' | 'teacher'. entity — имя группы или ФИО преподавателя.
-    ⚠️ ЗАДЕЛ: в рантайме пока не вызывается. Импорт store — лениво, чтобы модуль был
-    самодостаточным заделом.
-    """
-    from .store import current_week_parity
-    week = current_week_parity(now.date())
-    day = weekday_code(now)
-    if snapshot is None or not entity:
-        return []
-    if kind == "teacher":
-        weeks = snapshot.teacher_index.get(entity, {})
-        return [e["lesson"] for e in weeks.get(week, {}).get(day, [])]
-    gs = snapshot.groups.get(entity)
-    if not gs:
-        return []
-    return list(gs.weeks.get(week, {}).get(day, []))
-
-
-def upcoming_reminder(snapshot, kind: str, entity: str, now: datetime,
-                      lead_min: tuple[int, int] = DEFAULT_LEAD_MIN) -> ReminderInfo:
-    """Удобная обёртка: собрать пары на сегодня и вернуть ReminderInfo.
-
-    ⚠️ ЗАДЕЛ: точка, которую в будущем дёргает таймер Вектора.
-    """
-    today = lessons_for_today(snapshot, kind, entity, now)
-    return current_and_next(today, now, lead_min)

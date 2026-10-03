@@ -165,7 +165,7 @@ async function test() {
                    :placeholder="keyConfigured
                      ? locale.t('adminAiSettings.credentialsSet', 'ключ настроен — впишите новый, чтобы заменить')
                      : locale.t('adminAiSettings.credentialsPlaceholder', 'вставьте ключ авторизации GigaChat')" />
-            <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
+            <button :aria-label="showKey ? locale.t('common.hideSecret', 'Скрыть ключ') : locale.t('common.showSecret', 'Показать ключ')" type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
                     @click="showKey = !showKey"><EyeOff v-if="showKey" class="size-4" /><Eye v-else class="size-4" /></button>
           </div>
         </div>

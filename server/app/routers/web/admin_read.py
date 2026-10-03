@@ -23,6 +23,12 @@ def admin_overview(_admin: User = Depends(require_admin), db: Session = Depends(
         "students": count(User, role="student"),
         "admins": count(User, role="admin"),
         "groups": count(Group),
+        #Групп, где ЕСТЬ студенты. В справочнике на бою ~330 групп — импорт портала кладёт
+        #туда весь каталог колледжа, — и карточка «Групп 327» при 26 студентах читалась
+        #как ошибка подсчёта (живой прогон 28.09.2026).
+        "groups_active": db.query(User.group_name).filter(
+            User.role == "student", User.deleted == False,  # noqa: E712
+            User.group_name != "").distinct().count(),
         "subjects": count(Subject),
         "lessons": count(Lesson),
         "grades": count(Grade),

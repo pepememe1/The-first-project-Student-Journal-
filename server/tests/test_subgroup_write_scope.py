@@ -129,3 +129,72 @@ def test_own_subgroup_and_joint_lesson_stay_editable(client):
     r = client.put("/web/teacher/lesson/les-joint", json={"topic": "Общая, правка"},
                    headers=one)
     assert r.status_code == 200, f"«Совместно» не должно запираться: {r.text}"
+
+
+# ── Та же граница через /sync/push (ревью 30.09.2026) ─────────────────────────────────
+#Интерфейс программы push с 4.1 не зовёт, но ручка жива и принимает токен
+#преподавателя. До починки `_domain_refusal` проверял только оценки и без подгруппы:
+#правило держалось на том, что человек пользуется интерфейсом.
+def _db_lesson(lid):
+    from app.db import SessionLocal
+    from app.models import Lesson
+    db = SessionLocal()
+    try:
+        row = db.get(Lesson, lid)
+        return None if row is None else {"topic": row.topic, "deleted": row.deleted}
+    finally:
+        db.close()
+
+
+def _push_lessons(client, headers, *rows):
+    r = client.post("/sync/push", json={"changes": {"lessons": list(rows)}}, headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _row(lid, subgroup, *, topic="т", year=None, semester=None, number=5):
+    return {"id": lid, "group_name": "К-21", "subject": "Математика", "type": "Практика",
+            "number": number, "date": "03.09.2026", "topic": topic, "subgroup": subgroup,
+            "year": YEAR if year is None else year,
+            "semester": SEM if semester is None else semester}
+
+
+def test_push_cannot_grade_or_edit_the_other_subgroups_lesson(client):
+    admin, one, two = _setup(client)
+    _student(client, admin)
+    lid = _lesson(client, two, subgroup=2)
+
+    r = client.post("/sync/push", json={"changes": {"grades": [{
+        "id": f"stud:stud_sub|{lid}", "student_id": "stud:stud_sub",
+        "student_f": "Петров", "student_n": "Пётр", "lesson_id": lid, "grade": "5",
+    }]}}, headers=one)
+    assert r.status_code == 200, r.text
+    assert r.json().get("rejected", {}).get("grades") == 1, r.text
+
+    body = _push_lessons(client, one, _row(lid, 2, topic="Угон", number=1))
+    assert body.get("rejected", {}).get("lessons") == 1, body
+    assert _db_lesson(lid)["topic"] == "Было", "тему чужой подгруппы переписали синком"
+
+
+def test_push_creates_lessons_only_in_own_subgroup(client):
+    admin, one, two = _setup(client)
+    body = _push_lessons(client, one, _row("p-own", 1), _row("p-alien", 2, number=6),
+                         _row("p-joint", 0, number=7))
+    assert _db_lesson("p-own") is not None, f"своя подгруппа обязана приниматься: {body}"
+    assert _db_lesson("p-alien") is None, "занятие в чужой подгруппе заведено синком"
+    assert _db_lesson("p-joint") is None, "«Совместно» завёл ведущий одну подгруппу"
+    assert body.get("rejected", {}).get("lessons") == 2, body
+
+
+def test_push_cannot_create_or_edit_an_archived_lesson(client):
+    admin, one, two = _setup(client)
+    body = _push_lessons(client, one, _row("p-old", 1, year="2019/2020", semester=1))
+    assert _db_lesson("p-old") is None, f"занятие в архивном семестре заведено: {body}"
+
+    #Архивное занятие лежит в базе (завёл администратор) — преподаватель не правит его.
+    _push_lessons(client, admin, _row("p-arch", 1, year="2019/2020", semester=1,
+                                      topic="Архив"))
+    body = _push_lessons(client, one, _row("p-arch", 1, year="2019/2020", semester=1,
+                                           topic="Правка архива"))
+    assert body.get("rejected", {}).get("lessons") == 1, body
+    assert _db_lesson("p-arch")["topic"] == "Архив"

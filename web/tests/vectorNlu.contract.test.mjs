@@ -23,7 +23,7 @@ test('контракт не пуст и достаточно велик', () => 
 
 test('classify() совпадает с общим контрактом (Python↔JS) по ВСЕМ полям', () => {
   for (const c of cases) {
-    const got = classify(c.q, c.surnames, c.subjects)
+    const got = classify(c.q, c.surnames, c.subjects, c.groups || [])
     assert.equal(got.intent, c.intent, `«${c.q}»: intent = ${got.intent}, ожидалось ${c.intent}`)
     assert.equal(
       got.surname,
@@ -35,6 +35,12 @@ test('classify() совпадает с общим контрактом (Python�
       c.subject,
       `«${c.q}»: subject = ${JSON.stringify(got.subject)}, ожидалось ${JSON.stringify(c.subject)}`
     )
+    //Все кандидаты-фамилии, а не только первая: по ним обработчик роли выбирает студента,
+    //и расхождение в порядке или составе дало бы в офлайне ответ про другого человека.
+    //`c.surnames` — ВХОД (ростер), ожидаемые найденные — `c.surnames_found`.
+    assert.deepEqual(got.surnames, c.surnames_found || [],
+      `«${c.q}»: surnames = ${JSON.stringify(got.surnames)}, ожидалось ${JSON.stringify(c.surnames_found)}`)
+    assert.equal(got.group, c.group || '', `«${c.q}»: group = ${JSON.stringify(got.group)}, ожидалось ${JSON.stringify(c.group)}`)
     assert.equal(
       got.day,
       c.day,
@@ -64,7 +70,7 @@ test('намеренно сломанный лексикон провалива�
 
     let mismatches = 0
     for (const c of cases) {
-      const got = classify(c.q, c.surnames, c.subjects)
+      const got = classify(c.q, c.surnames, c.subjects, c.groups || [])
       if (got.intent !== c.intent) mismatches += 1
     }
     assert.ok(mismatches > 0, 'испорченный лексикон прошёл бы контракт — сторож бесполезен')

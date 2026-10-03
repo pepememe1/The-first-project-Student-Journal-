@@ -106,7 +106,7 @@ async function submitCreate() {
 
     <!-- Диалог создания -->
     <transition name="fade">
-      <div v-if="showCreate" class="fixed inset-0 z-[70] grid place-items-center p-4"
+      <div v-dialog v-if="showCreate" class="fixed inset-0 z-[70] grid place-items-center p-4"
            style="background: var(--gb-overlay)" @click.self="showCreate = false">
         <div class="w-full max-w-md rounded-xl border border-border2 bg-card p-4 shadow-card">
           <div class="mb-3 flex items-center gap-2">

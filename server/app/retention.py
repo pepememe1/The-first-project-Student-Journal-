@@ -218,6 +218,17 @@ def _purge_sync_deletes(db: Session) -> int:
     return sync_clock.purge_deletes(db)
 
 
+def _prune_push_tokens(db: Session) -> int:
+    """Токены телефонов, молчащие дольше `PUSH_TOKEN_TTL_DAYS`.
+
+    🔥 Функция уборки (`rustore_push.prune_stale`) была написана и не вызывалась НИКЕМ
+    (ревью 30.09.2026): приложение, удалённое с телефона, оставляло свой токен навсегда,
+    и каждое уведомление его бывшему владельцу уходило в пустоту — а на общем телефоне
+    колледжа ещё и держало запись «этот логин на этом устройстве»."""
+    from . import rustore_push
+    return rustore_push.prune_stale(db)
+
+
 def run_all(db: Session) -> dict:
     """Один полный проход политики хранения. Ничего не бросает наружу.
 
@@ -233,6 +244,7 @@ def run_all(db: Session) -> dict:
         ("message_edits", lambda: purge_message_edits(db)),
         ("egg_log", lambda: purge_egg_log(db)),
         ("deleted_bodies", lambda: blank_deleted_bodies(db)),
+        ("push_tokens", lambda: _prune_push_tokens(db)),
         #Журнал жёстких удалений синка (его пишут триггеры `sync_clock`, в том числе на
         #уборку надгробий выше) — ПОСЛЕ неё и со сдвигом горизонта: копия с курсором
         #ниже горизонта пересоберётся целиком, а не останется с удалёнными строками (W-16).

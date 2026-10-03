@@ -64,7 +64,7 @@ async function submit() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-4" @click.self="emit('close')">
+  <div v-dialog class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/45 p-4" @click.self="emit('close')">
     <div class="my-auto max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-card">
       <h3 class="mb-1 font-title text-xl font-extrabold text-text">Регистрация студента</h3>
 

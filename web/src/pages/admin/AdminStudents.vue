@@ -3,7 +3,7 @@
 // выбором группы из списка (синкнутые группы БД + спарсенные из расписания). id
 // студента на сервере — stud:login (как в синке десктопа); удаление мягкое (надгробие),
 // поэтому изменения доезжают до десктопа обычным pull.
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { RotateCw, Copy } from '@lucide/vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
@@ -25,6 +25,7 @@ const all = ref([])
 const loading = ref(true)
 const q = ref('')
 const groupChoices = ref([])
+const dbGroupNames = ref([])    // группы, заведённые в БАЗЕ (без портальных)
 const showPass = ref(false)     // показать вводимый пароль в модалке (по глазку)
 
 // ── Категория расписания + фильтр по группе (schedule/parser.py::CATEGORIES) —
@@ -84,6 +85,14 @@ function categoryOf(name) {
 function categoryLabel(key) {
   return categories.value.find((c) => c.key === key)?.label || key
 }
+//Кнопка категории — только если в ней есть кто-то НАШ (группа в базе или студент).
+//Список категорий приходит с портала вуза целиком, и «Бакалавриат, специалитет» в
+//журнале колледжа давал кнопку, за которой всегда «Студентов нет» (живой прогон 01.10.2026).
+const visibleCategories = computed(() => {
+  const used = new Set([...dbGroupNames.value, ...all.value.map((r) => r.group)]
+    .filter(Boolean).map(categoryOf))
+  return categories.value.filter((c) => used.has(c.key) || c.key === categoryFilter.value)
+})
 
 // Список групп в фильтре сужается под выбранную категорию, затем под курс — иначе
 // можно было бы выбрать «колледж» и группу заочки одновременно и увидеть пусто без
@@ -121,20 +130,30 @@ async function reload() {
   try { all.value = (await adminApi.students()).data.students || [] } catch { all.value = [] } finally { loading.value = false }
 }
 
+//Имена групп без дублей, по алфавиту: в выпадающем списке из сотни групп порядок
+//«как пришло с сервера» искать глазами невозможно.
+function mergeGroups(...lists) {
+  return [...new Set(lists.flat().filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
+}
+
 onMounted(async () => {
   await reload()
-  await loadCategories()
-  loadPortalMaps()   // фоном — таблица показывает «—», пока карта не готова, не блокируем список
-  // Список групп для выбора: синкнутые (БД) + спарсенные из расписания, без дублей —
-  // как _all_group_choices в десктопе.
+  //🔥 ГРУППЫ ИЗ БАЗЫ — СРАЗУ, ПОРТАЛ — ФОНОМ (живой прогон 01.10.2026). Раньше список
+  //собирался только ПОСЛЕ ответа портала (категории, затем группы — два похода по 20 с
+  //при недоступном портале), и всё это время в фильтре было одно «Все группы» при 23
+  //группах в базе. Портал дополняет список, но не держит его.
   try {
     const dbGroups = (await adminApi.groups()).data.groups || []
-    const dbG = dbGroups.map((g) => g.name)
+    dbGroupNames.value = dbGroups.map((g) => g.name)
     groupCategory.value = Object.fromEntries(dbGroups.map((g) => [g.name, g.category || 'college']))
-    let parsed = []
-    try { parsed = (await scheduleApi.groups()).data.groups || [] } catch { /* оффлайн — ок */ }
-    groupChoices.value = [...new Set([...dbG, ...parsed].filter(Boolean))]
-  } catch { /* */ }
+  } catch { /* список групп не пришёл — остаются группы из списка студентов */ }
+  groupChoices.value = mergeGroups(dbGroupNames.value, all.value.map((r) => r.group))
+  // Спарсенные из расписания — как _all_group_choices в десктопе: в них можно завести
+  // студента группы, которой в базе ещё нет.
+  scheduleApi.groups()
+    .then(({ data }) => { groupChoices.value = mergeGroups(groupChoices.value, data.groups || []) })
+    .catch(() => { /* оффлайн/портал недоступен — хватает групп из базы */ })
+  loadCategories().then(loadPortalMaps)   // фоном — таблица показывает «—», пока карты нет
 })
 
 const rows = computed(() => {
@@ -147,6 +166,15 @@ const rows = computed(() => {
     return true
   })
 })
+
+//Страницы по 50: 520 строк одной простынёй — это 21 500 px высоты и шесть тысяч узлов
+//DOM на каждый символ поиска (живой прогон 01.10.2026).
+const PAGE = 50
+const page = ref(0)
+const pages = computed(() => Math.max(1, Math.ceil(rows.value.length / PAGE)))
+const pageRows = computed(() => rows.value.slice(page.value * PAGE, (page.value + 1) * PAGE))
+watch([q, groupFilter, categoryFilter, courseFilter], () => { page.value = 0 })
+watch(pages, (n) => { if (page.value > n - 1) page.value = n - 1 })
 
 // Модалка создания/правки
 const showForm = ref(false)
@@ -290,11 +318,11 @@ async function del(r) {
   <div class="space-y-4">
     <!-- Кнопки-категории (та же идея, что в «Расписании»/«Группах») — сужают список
          групп в фильтре ниже. -->
-    <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+    <div v-if="visibleCategories.length > 1" class="flex flex-wrap gap-2">
       <button class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="!categoryFilter ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
               @click="setCategoryFilter('')">{{ locale.t('adminStudents.allCategories', 'Все категории') }}</button>
-      <button v-for="c in categories" :key="c.key"
+      <button v-for="c in visibleCategories" :key="c.key"
               class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
               :class="categoryFilter === c.key ? 'border-accent bg-accent text-white' : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
               @click="setCategoryFilter(c.key)">{{ c.label }}</button>
@@ -321,7 +349,7 @@ async function del(r) {
         <option v-for="g in groupFilterChoices" :key="g" :value="g">{{ g }}</option>
       </select>
       <AppButton variant="green" size="sm" @click="openCreate">{{ locale.t('adminStudents.addAction', '+ Добавить') }}</AppButton>
-      <AppButton variant="ghost" size="sm" @click="showRollout = true">{{ locale.t('rollout.title', 'Выкатить данные групп') }}</AppButton>
+      <AppButton variant="ghost" size="sm" @click="showRollout = true">{{ locale.t('rollout.title', 'Логины и пароли группы') }}</AppButton>
     </div>
     <RolloutDialog v-if="showRollout" @close="showRollout = false" />
 
@@ -342,9 +370,9 @@ async function del(r) {
         <tbody>
           <tr v-if="loading"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
           <tr v-else-if="!rows.length"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('adminStudents.noStudents', 'Студентов нет') }}</td></tr>
-          <tr v-for="(r, i) in rows" :key="i" class="border-b border-border last:border-0 hover:bg-bg2/60">
+          <tr v-for="(r, i) in pageRows" :key="r.login ? `l:${r.login}` : `i:${page * PAGE + i}`" class="border-b border-border last:border-0 hover:bg-bg2/60">
             <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ r.surname }} {{ r.name }}</td>
-            <td class="px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
+            <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ groupCourse[r.group] ?? '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.login || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.phone || '—' }}</td>
@@ -358,9 +386,16 @@ async function del(r) {
         </tbody>
       </table>
     </StickyXScroll>
+    <div v-if="pages > 1" class="flex items-center justify-center gap-3 text-sm text-text2">
+      <AppButton size="sm" variant="ghost" :disabled="page === 0"
+                 :aria-label="locale.t('adminStudents.prevPage', 'Предыдущая страница')" @click="page--">‹</AppButton>
+      <span>{{ locale.t('adminStudents.pageOf', { p: page + 1, n: pages, total: rows.length }) }}</span>
+      <AppButton size="sm" variant="ghost" :disabled="page >= pages - 1"
+                 :aria-label="locale.t('adminStudents.nextPage', 'Следующая страница')" @click="page++">›</AppButton>
+    </div>
 
     <!-- Модалка создания/правки -->
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
         <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
@@ -406,7 +441,10 @@ async function del(r) {
             </p>
             <div class="flex gap-2">
               <div class="relative flex-1">
-                <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
+                <!-- Подсказка СЛОВАМИ, а не «••••••••»: точки в пустом поле читались как уже
+                     заполненный пароль (живой прогон 01.10.2026). -->
+                <input v-model="form.password" :type="showPass ? 'text' : 'password'"
+                       :placeholder="editing ? locale.t('adminStudents.passwordKeepPlaceholder', 'не менять') : locale.t('adminStudents.passwordNewPlaceholder', 'введите или нажмите ↻')"
                        class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
                 <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
                   {{ showPass ? '🙈' : '👁' }}

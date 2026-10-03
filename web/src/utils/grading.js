@@ -151,6 +151,15 @@ export function latestExamValue(lessonId, records) {
  *   с разными шкалами (общий средний по всем предметам).
  * @returns {number} средний балл, округлённый до 2 знаков; 0, если считать нечего.
  */
+/**
+ * Входит ли пропуск («Н») в средний на занятии этой шкалы — зеркало
+ * `grading.scale_counts_absence`. У «зачёт/незачёт» нет: оценки там не балл, и одно «Н»
+ * давало средний 2.0 при всех «Зачтено» (живой прогон 01.10.2026).
+ */
+export function scaleCountsAbsence(scale) {
+  return scale !== 'pass_fail'
+}
+
 export function practiceAverage(items, records, cfg = null, scale = DEFAULT_SCALE) {
   const c = avgConfig(cfg)
   let total = 0
@@ -164,7 +173,7 @@ export function practiceAverage(items, records, cfg = null, scale = DEFAULT_SCAL
       if (num !== null && num !== undefined) {
         total += num
         count += 1
-      } else if (v === 'Н' && c.avg_count_absence) {
+      } else if (v === 'Н' && c.avg_count_absence && scaleCountsAbsence(lscale)) {
         total += c.avg_absence_weight
         count += 1
       }

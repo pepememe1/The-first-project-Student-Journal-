@@ -21,8 +21,9 @@ from starlette.concurrency import run_in_threadpool      # noqa: E402
 #дописывает шаблон с плейсхолдерами («Средний балл по группам: [укажите средние баллы]») —
 #ровно та выдумка, которую продукт обещает не делать (§5). LLM озвучивает ТОЛЬКО ответы с
 #РЕАЛЬНЫМИ числами.
-#ВАЖНО: набор ДОЛЖЕН совпадать с десктопным guard'ом в vector/engine.py::ask — при
-#портировании веба его забыли перенести, отсюда и был баг с плейсхолдерами на сайте.
+#Место ОДНО: внутри программы работает этот же серверный код на 127.0.0.1 (десктопный
+#`vector/engine.py`, с которым набор когда-то надо было сверять, удалён 15.08.2026). Когда
+#мест было два, на вебе набор забыли перенести — отсюда был баг с плейсхолдерами на сайте.
 #intent → LLM НЕ вызываем (нет цифр для переформулировки ИЛИ формат нельзя ломать):
 #  hello/thanks/help/unknown — текст-справка без чисел (иначе модель дописывает
 #    плейсхолдеры «[укажите средние баллы]» вместо фактов, см. §5);
@@ -40,6 +41,57 @@ _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
                      "homework", "server_state"}
 
 
+def _names_a_person(text: str, db: Session) -> bool:
+    """Есть ли в тексте фамилия ЛЮБОГО человека из справочника (студент, сотрудник,
+    родитель). Одна дверь для «можно ли отдать этот текст модели» — и для вопроса, и для
+    перевода готового ответа. Сравнение по основе фамилии (`vector_nlu.match_surname`):
+    ложное срабатывание стоит лишь озвучки, пропуск — ФИО у внешнего сервиса."""
+    if not text:
+        return False
+    try:
+        rows = db.query(User.surname).filter(User.deleted == False).distinct().all()  # noqa: E712
+    except Exception:      # noqa: BLE001 — не смогли проверить: считаем, что имя есть
+        return True
+    surnames = [r[0] for r in rows if r[0] and len(r[0].strip()) >= 3]
+    return bool(vector_nlu.match_surname(text, surnames))
+
+
+def _active_children(db: Session, parent: User) -> list:
+    """Дети, чья привязка к родителю ПОДТВЕРЖДЕНА студентом (инвариант §4.13)."""
+    from ...models import ParentLink
+    ids = [r.student_id for r in db.query(ParentLink).filter(
+        ParentLink.parent_id == parent.id, ParentLink.status == "active").all()]
+    if not ids:
+        return []
+    return (db.query(User).filter(User.id.in_(ids), User.role == "student",
+                                  User.deleted == False).all())  # noqa: E712
+
+
+#Ответы студенту написаны на «ты» о нём самом. Родитель читает их о РЕБЁНКЕ: «Твой
+#средний балл» взрослому человеку — это ошибка адресата, а не стиль (живой прогон
+#01.10.2026). Таблица явная, а не «замени все „твой“»: так видно, какие фразы покрыты, и
+#новая фраза без пары не испортит соседнюю. Держит test_vector_surnames.py.
+_PARENT_VOICE = (
+    ("Задолженностей нет — так держать! 🐯", "Задолженностей нет. 🐯"),
+    ("Всего у тебя оценок —", "Всего у ребёнка оценок —"),
+    ("у тебя пока нет занятий с оценками", "у ребёнка пока нет занятий с оценками"),
+    ("Предметы за твоей группой пока не закреплены", "Предметы за группой ребёнка пока не закреплены"),
+    ("Твои предметы (", "Предметы ребёнка ("),
+    ("Твой средний по предметам:", "Средний ребёнка по предметам:"),
+    ("Твой средний балл —", "Средний балл ребёнка —"),
+    ("Я могу показать твой средний балл", "Я могу показать средний балл ребёнка"),
+    ("Твоя группа —", "Группа ребёнка —"),
+    ("Группа за тобой не закреплена.", "Группа за ребёнком не закреплена."),
+    ("ЗЕТ по твоим предметам", "ЗЕТ по предметам ребёнка"),
+)
+
+
+def _to_parent_voice(text: str) -> str:
+    for old, new in _PARENT_VOICE:
+        text = text.replace(old, new)
+    return text
+
+
 def user_ui_locale(user: User) -> str:
     """Язык интерфейса ЭТОГО пользователя ('ru', если перевод выключен/не выбран).
 
@@ -51,7 +103,7 @@ def user_ui_locale(user: User) -> str:
 
 
 def answer_vector_question(question: str, user: User, db: Session, context: str = "",
-                           voice_role: str = "", locale: str = "ru") -> dict:
+                           voice_role: str = "", locale: str = "ru", addressee=None) -> dict:
     """Общая логика ответа Вектора (вынесена из `vector_ask`, чтобы её мог переиспользовать
     мессенджер — команда `/vector <вопрос>` в любом чате, см. `routers/messenger.py`).
     Тот же принцип, что в десктопе: цифры берутся из реальных данных (SQL) — модель их НЕ
@@ -62,8 +114,40 @@ def answer_vector_question(question: str, user: User, db: Session, context: str 
     `locale` — язык ИНТЕРФЕЙСА вызывающего (см. `user_ui_locale`), не факт данных: цифры
     и ФИО остаются теми же, меняется только язык вокруг них (§ролей, полный перевод)."""
     cfg = W.load_config(db)
-    result = _vector_facts(question.lower(), user, db, cfg)
+    #🔥 РОДИТЕЛЬ В ОБЩЕЙ ДВЕРИ (01.10.2026, живой прогон). Кабинет родителя спрашивает
+    #своей ручкой с номером ребёнка, а команда `/vector` в мессенджере и общая ручка
+    #приходили сюда с записью САМОГО родителя — и роль молча считалась студенческой:
+    #«Твой средний балл — 0.0», «Задолженностей нет — так держать!» родителю должника.
+    #Это не «нет данных», а ложь о ребёнке. Отвечаем данными ребёнка, если он один и
+    #согласие дано; иначе — объясняем, где спросить.
+    if user.role == "parent" and voice_role != "parent":
+        kids = _active_children(db, user)
+        if len(kids) == 1:
+            return answer_vector_question(question, kids[0], db, context, voice_role="parent",
+                                          locale=locale, addressee=user)
+        text = ("Доступ к журналу ребёнка откроется, когда студент подтвердит привязку в своём "
+                "кабинете. 🐯" if not kids else
+                "У вас несколько детей — откройте «ИИ Помощник» в разделе ребёнка, и я отвечу "
+                "по его журналу. 🐯")
+        return {"text": text, "mood": "neutral", "intent": "help", "facts": {}}
+    #`addressee` — кто ЧИТАЕТ ответ, если данные чужие: родитель спрашивает данными ребёнка,
+    #но «Здравствуйте, <имя>» и справка обязаны быть про родителя, а не про ребёнка.
+    result = _vector_facts(question.lower(), user, db, cfg, addressee=addressee)
     intent = result.get("intent")
+    if voice_role == "parent" and intent in ("hello", "help"):
+        result["text"] = (_hello_text(addressee, "parent") if intent == "hello"
+                          else _HELP_BY_ROLE["parent"])
+    elif voice_role == "parent":
+        result["text"] = _to_parent_voice(result.get("text", ""))
+    #🔒 ФАМИЛИЯ В САМОМ ВОПРОСЕ = В МОДЕЛЬ НЕ ИДЁТ НИЧЕГО (возражение Полковника
+    #29.09.2026). `vector_llm.voice` и `free_chat` кладут вопрос в промпт ДОСЛОВНО, и
+    #«ЗЕТ Иванова» отдавал фамилию наружу при совершенно чистом тексте ответа — у
+    #сотрудника, у студента и у родителя одинаково. Одна дверь для всех ролей и всех
+    #входов (сайт, программа, мессенджер, кабинет родителя), а не флаг в каждом
+    #обработчике. Держит `test_vector_never_voices_names.py`: шпион видит и вопрос.
+    named = _names_a_person(question, db)
+    if named:
+        result["no_voice"] = True
     #voice_role меняет ТОЛЬКО тон обращения, но не скоуп данных. Нужен кабинету родителя:
     #факты там собираются от лица РЕБЁНКА (иначе пришлось бы дублировать весь студенческий
     #скоуп и однажды разойтись с ним), а говорить «твой средний балл» родителю — странно.
@@ -73,7 +157,9 @@ def answer_vector_question(question: str, user: User, db: Session, context: str 
     if intent == "unknown":
         #context — обезличенные заметки из «Избранного» (пусто для обычного /web/vector/ask):
         #помогает понять «а это когда?», но цифры успеваемости из него брать запрещено.
-        result["text"] = vector_llm.free_chat(cfg, question, role, context, locale)
+        #Названо ФИО — болтать с моделью нельзя (вопрос уйдёт ей дословно): офлайн-ответ.
+        result["text"] = (vector_llm.offline_reply(role, locale) if named
+                          else vector_llm.free_chat(cfg, question, role, context, locale))
     #Озвучка: числа уже посчитаны и верны, LLM их не трогает — только стиль (и, если выбран
     #другой язык интерфейса, ЯЗЫК ответа — persona получает инструкцию, см. vector_llm).
     #Оффлайн или ошибка провайдера → вернётся исходный фактический текст (сайт не ломается).
@@ -87,10 +173,15 @@ def answer_vector_question(question: str, user: User, db: Session, context: str 
         #языке. Без данных (hello/thanks/help/about_*/howto) — готовый ручной перевод;
         #с реальными данными (расписание/погода/домашка/сервер/списки) — перевод ГОТОВОГО
         #русского текста постфактум, факты при этом не пересчитываются.
-        role_for_static = user.role if user.role in ("student", "teacher", "admin") else "student"
+        role_for_static = ("parent" if voice_role == "parent" else user.role
+                           if user.role in ("student", "teacher", "admin", "moderator")
+                           else "student")
         if intent in _STATIC_TEXT_INTENTS:
-            _localize_static(result, role_for_static, locale)
-        else:
+            _localize_static(result, role_for_static, locale, addressee or user)
+        elif not _names_a_person(result.get("text", ""), db):
+            #🔒 Перевод моделью — только текст БЕЗ ФИО (29.09.2026). Список группы или
+            #должников на английском интерфейсе иначе уезжал бы в LLM целиком «на перевод»:
+            #не озвучивается ≠ не уходит наружу. С фамилиями ответ остаётся русским.
             _localize_dynamic(result, locale, cfg)
     result.pop("no_voice", None)   #внутренний флаг наружу не отдаём
     return result
@@ -361,29 +452,54 @@ _ABOUT_COLLEGE = (
     "пересдачи и успеваемость по группам."
 )
 
-_HOWTO = (
-    "Как всё устроено в журнале:\n"
-    "• Средний балл считается по практикам и экзаменам (лекции в него не входят); "
-    "пересдача заменяет прежнюю попытку — учитывается последняя.\n"
-    "• Задолженность — несданная практика (2 или Н) либо незачтённый экзамен.\n"
-    "• Посещаемость: Н — неявка, Б — по болезни, О — опоздание (был на занятии, в пропуски не идёт).\n"
-    "• Зона риска — студенты со средним баллом ниже 3.\n"
-    "Спроси про свои цифры словами — я беру их из реальных данных, а не выдумываю.")
+def _howto_text(cfg: dict, role: str = "student") -> str:
+    """Справка «как устроено». Правило среднего — из НАСТРОЙКИ (`grading.methodology_text`).
+
+    ⚠️ До 28.09.2026 здесь было зашито «средний считается по практикам и экзаменам», а
+    ответ на «мой средний балл» тут же писал «экзамены НЕ входят в средний» — входят ли
+    экзамены, решает настройка администратора (`avg_include_exam`), и справка обязана
+    говорить то же, что расчёт. Там же «зона риска — средний ниже 3»: дашборды и Вектор
+    считают её по индексу риска отчисления (`W.counts_as_at_risk`)."""
+    ask = "Спроси" if role == "student" else "Спросите"
+    return ("Как всё устроено в журнале:\n"
+            "• " + W.grading.methodology_text(cfg) + " Пересдача заменяет прежнюю "
+            "попытку — учитывается последняя.\n"
+            "• Задолженность — несданная практика или ДЗ (2 или Н) либо незачтённый экзамен.\n"
+            "• Посещаемость: Н — неявка, Б — по болезни, О — опоздание (был на занятии, в "
+            "пропуски не идёт).\n"
+            "• Зона риска — студенты со средним или высоким риском отчисления: индекс "
+            "складывается из среднего балла, долгов и пропусков, тот же, что на дашбордах "
+            "преподавателя и куратора.\n"
+            f"{ask} про цифры словами — я беру их из реальных данных, а не выдумываю.")
 
 
+#⚠️ Обращение держим ОДНО на роль: студенту — «ты», остальным — «вы». До 28.09.2026 в
+#справке преподавателя было «Здравствуйте!» и тут же «твоих групп… Спрашивай» — два
+#регистра в одном сообщении (находка живого прогона). Примеры вопросов — только те, на
+#которые у роли ДЕЙСТВИТЕЛЬНО есть ответ: админская справка обещала «сводку по группе
+#<название>», которая отвечала общим счётчиком колледжа.
 _HELP_BY_ROLE = {
     "student": ("Я — Вектор 🐯, помогаю с учёбой по твоим РЕАЛЬНЫМ данным (цифры не выдумываю). "
                 "Спроси словами: «мой средний балл», «сколько у меня оценок», «оценки по "
                 "информатике», «есть ли долги», «сколько пропусков», «когда математика», "
                 "«что завтра». Или жми кнопки под чатом."),
-    "teacher": ("Я — Вектор 🐯 для преподавателя, считаю строго по журналу твоих групп. Умею: "
-                "«средний по группам», «кто в зоне риска», «у кого долги», «список студентов», "
-                "«пропуски у <фамилия>», «какие группы», «расписание группы». Спрашивай как удобно."),
-    "admin":   ("Я — Вектор 🐯 для администратора. Умею сводку по колледжу: «сколько студентов», "
-                "«сколько преподавателей», «какие группы», «список преподавателей», «сводка по "
-                "группе <название>». Спрашивай словами или жми кнопки."),
+    "teacher": ("Я — Вектор 🐯, считаю строго по журналу ваших групп — тех, где вы ведёте "
+                "предметы, и тех, что курируете. Умею: «сводка по группам», «кто в зоне "
+                "риска», «у кого долги», «студенты К74/1», «пропуски у <фамилия>», «что "
+                "задали», «расписание на завтра». Спрашивайте, как удобно."),
+    "admin":   ("Я — Вектор 🐯 для администратора, считаю по всему колледжу. Умею: "
+                "«сводка по колледжу», «сводка по группе К74/1», «студенты К74/1», «должники», "
+                "«зона риска», «пропуски К74/1», «<фамилия студента>», «преподаватели», "
+                "«расписание К74/1 на завтра», «что с сервером». Спрашивайте, как удобно."),
+    "moderator": ("Я — Вектор 🐯. Модератору покажу расписание любой группы («расписание "
+                  "К74/1 на завтра») и преподавателей по расписанию портала, расскажу о "
+                  "колледже. Оценки и пропуски видят преподаватели и администрация."),
+    "parent":  ("Я — Вектор 🐯. Расскажу об успеваемости вашего ребёнка по реальным данным "
+                "журнала: «средний балл», «оценки», «долги», «пропуски», «что задали», "
+                "«расписание на завтра»."),
 }
-_HELLO_PREFIX = {"student": "Привет!", "teacher": "Здравствуйте!", "admin": "Здравствуйте!"}
+_HELLO_PREFIX = {"student": "Привет", "teacher": "Здравствуйте", "admin": "Здравствуйте",
+                 "moderator": "Здравствуйте", "parent": "Здравствуйте"}
 _THANKS_TEXT = "Всегда рад помочь! 🐯"
 _SCHED_DAYS = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
 
@@ -419,12 +535,15 @@ _STATIC_TEXT = {
         ),
         "howto": (
             "How the gradebook works:\n"
-            "• The average is calculated from practicals and exams (lectures aren't "
-            "counted); a retake replaces the previous attempt — only the latest one "
-            "counts.\n"
+            "• The average is calculated from practicals and homework (lectures aren't "
+            "counted); whether exams count is set by the administration. A retake replaces "
+            "the previous attempt — only the latest one counts.\n"
             "• A debt is an unpassed practical (a 2 or an absence) or a failed exam.\n"
-            "• Attendance: Н — absent, Б — sick leave, О — excused absence.\n"
-            "• The risk zone is students with an average below 3.\n"
+            "• Attendance: Н — absent, Б — sick leave, О — late (the student was present; "
+            "not counted as an absence).\n"
+            "• The risk zone: students with a medium or high dropout-risk index, which "
+            "combines the average, debts and absences — the same index as on the "
+            "teacher and curator dashboards.\n"
             "Ask about your numbers in plain words — I pull them from real data, I don't "
             "make them up."
         ),
@@ -435,17 +554,26 @@ _STATIC_TEXT = {
                         "science”, “do I have any debts”, “how many "
                         "absences”, “when is math”, “what's "
                         "tomorrow”. Or use the buttons under the chat."),
-            "teacher": ("I'm Vector 🐯 for teachers — I count strictly from your groups' "
-                        "gradebook. I can: “average by group”, “who's at "
-                        "risk”, “who has debts”, “student list”, "
-                        "“absences for <surname>”, “which groups”, "
-                        "“group schedule”. Ask however's convenient."),
-            "admin": ("I'm Vector 🐯 for administrators. I can summarize the college: "
-                      "“how many students”, “how many teachers”, "
-                      "“which groups”, “teacher list”, “summary "
-                      "for group <name>”. Ask in words or use the buttons."),
+            "teacher": ("I'm Vector 🐯 — I count strictly from the gradebook of your groups: "
+                        "the ones you teach and the ones you supervise. Ask: “summary by "
+                        "group”, “who's at risk”, “who has debts”, “students "
+                        "К74/1”, “absences for <surname>”, “homework”, "
+                        "“tomorrow's schedule”."),
+            "admin": ("I'm Vector 🐯 for administrators — I count across the whole college. "
+                      "Ask: “college summary”, “summary for group К74/1”, “students "
+                      "К74/1”, “debtors”, “risk zone”, “absences К74/1”, "
+                      "“<student surname>”, “teachers”, “schedule К74/1 "
+                      "tomorrow”, “server status”."),
+            "moderator": ("I'm Vector 🐯. For moderators I can show any group's schedule "
+                          "(“schedule К74/1 tomorrow”) and teachers from the portal "
+                          "schedule, and tell you about the college. Grades and absences are "
+                          "visible to teachers and the administration."),
+            "parent": ("I'm Vector 🐯. I'll tell you how your child is doing using real "
+                       "gradebook data: “average”, “grades”, “debts”, “absences”, "
+                       "“homework”, “tomorrow's schedule”."),
         },
-        "hello_prefix": {"student": "Hi!", "teacher": "Hello!", "admin": "Hello!"},
+        "hello_prefix": {"student": "Hi", "teacher": "Hello", "admin": "Hello",
+                         "moderator": "Hello", "parent": "Hello"},
         "thanks": "Always happy to help! 🐯",
     },
     "zh": {
@@ -461,36 +589,43 @@ _STATIC_TEXT = {
         ),
         "howto": (
             "成绩册的工作原理：\n"
-            "• 平均分根据平时成绩和考试计算（不包括讲座）；补考会替换之前的成绩——只计最新一次。\n"
+            "• 平均分根据平时成绩和作业计算（不包括讲座）；考试是否计入由管理部门设定。补考会替换之前的成绩——只计最新一次。\n"
             "• 欠考是指未通过的平时作业（得2分或缺勤）或未通过的考试。\n"
-            "• 出勤情况：Н——缺勤，Б——病假，О——请假。\n"
-            "• 高危学生是指平均分低于3分的学生。\n"
+            "• 出勤情况：Н——缺勤，Б——病假，О——迟到（学生到过课，不计入缺勤）。\n"
+            "• 高危学生：退学风险指数为中或高的学生，指数综合平均分、欠考和缺勤，与教师和班主任面板相同。\n"
             "用你自己的话问我关于你的数据——我从真实数据中获取，不会编造。"
         ),
         "help_by_role": {
             "student": ("我是维克托🐯，会根据你的真实数据帮你学习（绝不编造数字）。用自己的话问我："
                         "「我的平均分」「我有多少个成绩」「计算机课的成绩」「我有欠考吗」"
                         "「我缺勤了几次」「数学课什么时候」「明天有什么课」。也可以点击聊天下方的按钮。"),
-            "teacher": ("我是维克托🐯，专为教师服务，严格按照你所带班级的成绩册计算。我可以回答："
-                        "「各班平均分」「谁处于高危」「谁有欠考」「学生名单」「<姓氏>的缺勤情况」"
-                        "「有哪些班级」「班级课表」。随意提问即可。"),
-            "admin": ("我是维克托🐯，为管理员服务。我可以汇总学院信息：「学生总数」「教师总数」"
-                      "「有哪些班级」「教师名单」「<班级名称>的汇总情况」。用文字提问或点击按钮均可。"),
+            "teacher": ("我是维克托🐯，严格按照您所带班级（授课和担任班主任的班级）的成绩册计算。"
+                        "可以问：「各班汇总」「谁处于高危」「谁有欠考」「К74/1的学生」"
+                        "「<姓氏>的缺勤」「布置了什么作业」「明天的课表」。"),
+            "admin": ("我是维克托🐯，为管理员服务，按全院数据计算。可以问：「全院汇总」"
+                      "「К74/1班汇总」「К74/1的学生」「欠考学生」「高危学生」「К74/1的缺勤」"
+                      "「<学生姓氏>」「教师名单」「К74/1明天的课表」「服务器状态」。"),
+            "moderator": ("我是维克托🐯。我可以为版主显示任何班级的课表（「К74/1明天的课表」）"
+                          "和门户课表中的教师，并介绍学院情况。成绩和缺勤只对教师和管理部门可见。"),
+            "parent": ("我是维克托🐯。我会根据成绩册的真实数据告诉您孩子的学习情况："
+                       "「平均分」「成绩」「欠考」「缺勤」「作业」「明天的课表」。"),
         },
-        "hello_prefix": {"student": "你好！", "teacher": "您好！", "admin": "您好！"},
+        "hello_prefix": {"student": "你好", "teacher": "您好", "admin": "您好",
+                         "moderator": "您好", "parent": "您好"},
         "thanks": "随时乐意帮忙！🐯",
     },
 }
 
 
-def _localize_static(result: dict, role_for_static: str, locale: str) -> None:
-    """Подставляет готовый перевод для интентов без данных (см. `_STATIC_TEXT_INTENTS`)."""
+def _localize_static(result: dict, role_for_static: str, locale: str, who=None) -> None:
+    """Подставляет готовый перевод для интентов без данных (см. `_STATIC_TEXT_INTENTS`).
+    `who` — к кому обращаться в приветствии (см. `_hello_text`)."""
     pack = _STATIC_TEXT.get(locale)
     if not pack:
         return
     intent = result.get("intent")
     if intent == "hello":
-        result["text"] = f"{pack['hello_prefix'][role_for_static]} {pack['help_by_role'][role_for_static]}"
+        result["text"] = _hello_text(who, role_for_static, locale)
     elif intent == "help":
         result["text"] = pack["help_by_role"][role_for_static]
     elif intent == "thanks":
@@ -540,7 +675,13 @@ def _known_subjects(user: User, db: Session) -> list:
             return W.group_subject_list(db, user.group_name or "")
         if user.role == "teacher":
             ty, ts = W.current_term(W.load_config(db))
-            return sorted({s for _g, s in W.teacher_assignments(db, user.id, ty, ts)})
+            out = {s for _g, s in W.teacher_assignments(db, user.id, ty, ts)}
+            #Курируемые группы — та же область видимости, что у `_teacher_facts`: куратор,
+            #не ведущий в своей группе ни одного предмета, спрашивает именно про её
+            #предметы, и без них «оценки Иванова по физике» не опознавали бы предмет.
+            for g in user.curated_groups or []:
+                out.update(W.group_subject_list(db, g))
+            return sorted(out)
         rows = db.query(Subject.name).filter(Subject.deleted == False).all()  # noqa: E712
         return sorted({r[0] for r in rows if r[0]})
     except Exception:
@@ -549,14 +690,25 @@ def _known_subjects(user: User, db: Session) -> list:
 
 def _known_surnames(user: User, db: Session) -> list:
     """Фамилии студентов в области видимости (для «пропуски у Иванова»). Студенту —
-    пусто (только о себе); преподавателю — студенты его групп; админу — все студенты."""
+    пусто (только о себе); преподавателю — студенты групп по нагрузке И курируемых;
+    админу — все студенты.
+
+    ⚠️ Область обязана совпадать с `_teacher_facts` (нагрузка ∪ кураторство). Здесь стояла
+    только нагрузка (ревью 30.09.2026): куратор без предметов в своей группе спрашивал
+    «пропуски у Иванова», фамилия не опознавалась, и вместо карточки студента приходил
+    общий ответ — при том что права на эти данные у него есть."""
     if user.role == "student":
-        return []
+        #Своя фамилия — чтобы «оценки Хандакова», спрошенное самим Хандаковым, было
+        #вопросом о себе, а не непонятой фразой (живой прогон 01.10.2026). Чужие фамилии
+        #студенту не нужны: вопрос о другом человеке опознаётся отдельно и получает отказ
+        #(см. `_outside_scope_answer`).
+        return [user.surname] if user.surname else []
     try:
         if user.role == "teacher":
             ty, ts = W.current_term(W.load_config(db))
             out = []
-            for g in W.teacher_group_names(db, user.id, ty, ts):
+            groups = set(W.teacher_group_names(db, user.id, ty, ts)) | set(user.curated_groups or [])
+            for g in sorted(groups):
                 out += [s.surname for s in W.students_in_group(db, g)]
             return sorted(set(out))
         rows = db.query(User.surname).filter(User.role == "student",
@@ -586,15 +738,19 @@ def _grade_breakdown(lessons, records, scale=None) -> dict:
 
 
 def _zet_facts(db, surname: str, name: str, group: str, cfg: dict,
-               student_id: str | None = None) -> dict:
+               student_id: str | None = None, who: str = "") -> dict:
     """Вектор: «Сколько у меня ЗЕТ / хватит ли для перевода» (docs/done/PLAN-ZET.md §6).
     Факты — из того же расчёта, что и /web/student/zet; LLM (если подключена) только
-    переформулирует, порог и цифры не выдумывает."""
+    переформулирует, порог и цифры не выдумывает.
+
+    `who` — сотрудник спрашивает о СТУДЕНТЕ («ЗЕТ Иванова»): тогда ответ называет его, а
+    не «у тебя», и не озвучивается (в нём ФИО)."""
     ty, ts = W.current_term(cfg)
     summ = W.zet_summary_for_student(db, surname, name, group, ty, ts, student_id=student_id)
     if not summ["subjects"]:
-        return {"text": "ЗЕТ по твоим предметам пока не заданы администрацией.",
-                "mood": "neutral", "intent": "zet", "facts": {}}
+        return {"text": (f"{who}: ЗЕТ по предметам пока не заданы администрацией." if who
+                         else "ЗЕТ по твоим предметам пока не заданы администрацией."),
+                "mood": "neutral", "intent": "zet", "facts": {}, "no_voice": bool(who)}
     threshold = db.get(ZetThreshold, zet_threshold_id(group, ty, ts))
     min_zet = threshold.min_zet if (threshold and not threshold.deleted) else None
     # «Не сдано» — только ПРОВАЛЕННЫЕ (failed). Идущие предметы (pending) — это «ожидается»,
@@ -602,7 +758,8 @@ def _zet_facts(db, surname: str, name: str, group: str, cfg: dict,
     # которого завели вариант C (ЗЕТ «в процессе» до рубежа семестра).
     unsatisfied = [s["subject"] for s in summ["subjects"] if s.get("state") == "failed"]
     pending_val = summ.get("pending", 0.0)
-    parts = [f"У тебя {summ['earned']} из {summ['total']} ЗЕТ за семестр ({summ['pct']}%)."]
+    head = f"{who}:" if who else "У тебя"
+    parts = [f"{head} {summ['earned']} из {summ['total']} ЗЕТ за семестр ({summ['pct']}%)."]
     if pending_val:
         parts.append(f"Ещё {pending_val} ЗЕТ в предметах, которые ещё идут, — они "
                      f"засчитаются, когда семестр по ним завершится.")
@@ -623,7 +780,8 @@ def _zet_facts(db, surname: str, name: str, group: str, cfg: dict,
         mood = "sad"
     return {"text": " ".join(parts), "mood": mood, "intent": "zet",
             "facts": {"earned": summ["earned"], "total": summ["total"], "pct": summ["pct"],
-                     "pending": pending_val, "min_zet": min_zet, "unsatisfied": unsatisfied}}
+                     "pending": pending_val, "min_zet": min_zet, "unsatisfied": unsatisfied},
+            "no_voice": bool(who)}
 
 
 def _subj_match(detected: str, lesson_subject: str) -> bool:
@@ -758,9 +916,14 @@ def _homework_answer(lessons, records: dict, subject: str = "") -> dict:
 
     hw.sort(key=_key, reverse=True)
     shown, lines = hw[:_HOMEWORK_LIMIT], []
+    #Задания из НЕСКОЛЬКИХ групп подписываем группой: у преподавателя «Базы данных №1»
+    #трёх групп выглядели тремя одинаковыми строками — как дубль (находка 28.09.2026).
+    many_groups = len({l.group_name for l in hw}) > 1
     for lesson in shown:
         task = (lesson.topic or "").strip() or "без описания"
         head = f"{lesson.subject} №{lesson.number}" if lesson.number else lesson.subject
+        if many_groups:
+            head += f" ({lesson.group_name})"
         when = f" от {lesson.date}" if lesson.date else ""
         mark = records.get(lesson.id) if records else None
         status = ""
@@ -786,6 +949,40 @@ def _human_bytes(n) -> str:
     return f"{round(value)} {units[i]}" if value >= 10 or i == 0 else f"{value:.1f} {units[i]}"
 
 
+#Хук «спросить о состоянии сервера сам бой» (02.10.2026). Ставит его программа
+#(`desktop/local_api.install_remote_vector`), на бою он пуст — и поведение там прежнее.
+#fn() -> dict ответа боевого `/web/vector/ask` | None (нет связи, истёк вход).
+_remote_server_state = None
+
+
+def set_remote_server_state(fn) -> None:
+    global _remote_server_state
+    _remote_server_state = fn
+
+
+def _server_state_from_prod() -> dict:
+    """Ответ о состоянии сервера в ПРОГРАММЕ — с боя, тем же расчётом, что на сайте.
+
+    Источник один: бой считает свои диск, память, базу и копии сам (ниже, `hostinfo`), а
+    программа лишь передаёт его ответ. Пересчитывать здесь было бы нечем — `hostinfo` в
+    программе мерит компьютер человека."""
+    remote = None
+    if _remote_server_state is not None:
+        try:
+            remote = _remote_server_state()
+        except Exception as e:      # noqa: BLE001 — сбой связи не роняет ответ Вектора
+            print(f"[vector] состояние сервера с боя не получено: {e}")
+    if isinstance(remote, dict) and remote.get("intent") == "server_state" and remote.get("text"):
+        return {"text": str(remote["text"]), "mood": remote.get("mood") or "neutral",
+                "intent": "server_state", "no_voice": True,
+                "facts": dict(remote.get("facts") or {}, source="server")}
+    return {"text": ("Не получилось спросить сервер: нет связи или истёк вход. Про этот "
+                     "компьютер отвечать не буду — вопрос был о сервере. Когда связь "
+                     "появится, спросите ещё раз или откройте раздел «Сервер»."),
+            "mood": "neutral", "intent": "server_state", "no_voice": True,
+            "facts": {"source": "unavailable"}}
+
+
 def _server_state_facts(db: Session) -> dict:
     """Состояние машины для администратора: диск, память, база, резервные копии.
 
@@ -795,7 +992,17 @@ def _server_state_facts(db: Session) -> dict:
 
     ⚠️ ОТВЕТ НЕ ОЗВУЧИВАЕТСЯ (`no_voice`). Здесь одни числа, а LLM их «оживляет» —
     округляет, меняет единицы, добавляет несуществующее. Для успеваемости это правило
-    у нас давно, и к состоянию сервера оно относится ровно так же."""
+    у нас давно, и к состоянию сервера оно относится ровно так же.
+
+    🔥 В ПРОГРАММЕ ЭТОТ ОТВЕТ БЫЛ ПРАВДОПОДОБНОЙ ЛОЖЬЮ (живой прогон 01.10.2026). Вектор
+    там отвечает с ЛОКАЛЬНОГО сервера, то есть `hostinfo` мерил компьютер администратора:
+    «база зашифрована» (это его локальная копия), «резервных копий НЕ НАЙДЕНО» (их нет на
+    ноутбуке), — тогда как раздел «Сервер» пересылается на бой и показывал настоящую
+    машину. Два разных ответа на один вопрос — ровно то, от чего предостерегает абзац
+    выше. В копии ответ берётся С БОЯ (`_server_state_from_prod`), как и у раздела.
+    ⚠️ Признак «копия» — тот же `GRADEBOOK_LOCAL_COPY`, что глушит пуши (`config.push_enabled`)."""
+    if os.environ.get("GRADEBOOK_LOCAL_COPY", "") == "1":
+        return _server_state_from_prod()
     from ... import hostinfo
     from ...routers.serverinfo import _db_file, _deploy_root
 
@@ -844,63 +1051,721 @@ def _server_state_facts(db: Session) -> dict:
                       "db_encrypted": encrypted, "latest_backup": latest}}
 
 
-def _admin_risk_facts(db: Session, cfg: dict, intent: str) -> dict:
-    """Кто в зоне риска / у кого долги — по ВСЕМУ колледжу.
+def _group_names(db: Session) -> list:
+    """Все группы справочника — чтобы узнать группу, названную в вопросе («студенты К74/1»)."""
+    try:
+        rows = db.query(Group.name).filter(Group.deleted == False).all()  # noqa: E712
+        return sorted({r[0] for r in rows if r[0]})
+    except Exception:      # noqa: BLE001 — без списка групп Вектор всё равно отвечает
+        return []
 
-    Считаем через те же `webdata`, что и кабинет преподавателя: своя формула здесь
-    означала бы, что у админа и у преподавателя разные списки должников по одному и тому
-    же студенту (инвариант §4.8 — расчёт живёт в одном месте)."""
-    rows = (db.query(User).filter(User.role == "student", User.deleted == False)  # noqa: E712
-            .all())
-    lessons_by_group: dict = {}
-    risky, debtors = [], []
-    for stud in rows:
-        group = stud.group_name or ""
-        if not group:
-            continue
-        if group not in lessons_by_group:
-            #Только ТЕКУЩИЙ термин — иначе повторяющийся предмет (напр. «Физическая
-            #культура») тянул бы долги/средний из прошлых курсов этой же группы.
-            lessons_by_group[group] = W.current_term_lessons(db, group, W.group_lessons(db, group), cfg)
-        lessons = lessons_by_group[group]
-        records = W.student_records(db, stud.surname, stud.name, group, student_id=stud.id)
-        if intent == "debtors":
-            if W.debts(lessons, records, scale=W.lesson_scale_map(db, lessons)):
-                debtors.append(f"{W.display_name(stud)} ({group})")
-            continue
-        avg = W.average(lessons, records, cfg, scale=W.lesson_scale_map(db, lessons))
-        #Порог тот же, что красит дашборды (2.5) — свой не придумываем.
-        if avg and avg < 2.5:
-            risky.append(f"{W.display_name(stud)} ({group}) — {avg}")
 
-    found = debtors if intent == "debtors" else risky
-    what = "с задолженностями" if intent == "debtors" else "в зоне риска"
+def _groups_with_students(db: Session) -> list:
+    """Группы, где есть хотя бы один студент. В справочнике на бою ~300 групп — весь
+    каталог портала, — а журнал ведётся у единиц: сводка по пустым была бы шумом."""
+    rows = (db.query(User.group_name)
+            .filter(User.role == "student", User.deleted == False)  # noqa: E712
+            .distinct().all())
+    return sorted({r[0] for r in rows if r[0]})
+
+
+def _plan_lessons(db: Session, cfg: dict, group: str) -> list:
+    """Занятия группы для сводок: текущий термин и только предметы действующего плана —
+    тот же отбор, что у кабинета студента, иначе Вектор и экран студента разойдутся."""
+    return W.current_term_lessons(db, group, W.current_subject_lessons(
+        db, group, W.group_lessons(db, group)), cfg)
+
+
+def _student_rows(db: Session, cfg: dict, group: str, lessons: list, scale=None) -> list:
+    """По студенту группы: средний, долги, пропуски и риск отчисления — ОДИН сбор на все
+    сводки Вектора (должники, зона риска, пропуски, «сводка по группе»).
+
+    Риск — тот же индекс `dropout_risk`, что на дашбордах, и тот же порог
+    (`W.counts_as_at_risk`): иначе Вектор и экран называли бы разное число людей."""
+    out = []
+    for s in W.students_in_group(db, group):
+        own = W.filter_lessons_by_student_subgroup(db, lessons, s.id)
+        rec = W.student_records(db, s.surname, s.name, group, student_id=s.id)
+        sc = scale if scale is not None else W.lesson_scale_map(db, own)
+        out.append({"student": s, "group": group, "lessons": own, "records": rec,
+                    "scale": sc, "average": W.average(own, rec, cfg, scale=sc),
+                    "debts": _debts_by_subject(own, rec, sc),
+                    "absences": W.absences(own, rec),
+                    "risk": W.dropout_risk_for_student(db, s.surname, s.name, group, cfg=cfg,
+                                                       lessons=own, records=rec,
+                                                       student_id=s.id)})
+    return out
+
+
+def _debts_by_subject(lessons: list, records: dict, scale) -> list:
+    """Долги С НАЗВАНИЕМ ПРЕДМЕТА: «Математика: практика №2 не сдана (2), …».
+
+    🔥 Без предмета список долгов выглядел сломанным (находка живого прогона 28.09.2026):
+    у студента с пятью предметами «практика №2 не сдана» повторялась пять раз подряд, и
+    это читалось как глюк, а не как пять разных долгов."""
+    out = []
+    for subject in sorted({l.subject for l in lessons if l.subject}):
+        d = W.debts([l for l in lessons if l.subject == subject], records, scale=scale)
+        if d:
+            out.append(f"{subject}: " + ", ".join(d))
+    return out
+
+
+def _group_avg(rows: list) -> float:
+    vals = [r["average"] for r in rows if r["average"] > 0]
+    return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+
+def _summary_line(group: str, rows: list) -> str:
+    """Одна строка сводки по группе: сколько студентов, средний, должники, риск, пропуски."""
+    avg = _group_avg(rows)
+    debtors = sum(1 for r in rows if r["debts"])
+    risky = sum(1 for r in rows if W.counts_as_at_risk(r["risk"]))
+    missed = sum(r["absences"]["всего"] for r in rows)
+    avg_txt = f"средний {avg}" if avg else "оценок пока нет"
+    return (f"{group}: студентов {len(rows)}, {avg_txt}, должников {debtors}, "
+            f"в зоне риска {risky}, пропущено {missed} ч")
+
+
+def _who(row: dict) -> str:
+    return f"{W.display_name(row['student'])} ({row['group']})"
+
+
+def _debtors_answer(rows: list, scope: str) -> dict:
+    """«Должники» — только те, у кого ЕСТЬ долг, с предметами. Зона риска — отдельный
+    вопрос и отдельный ответ (раньше у преподавателя они были склеены в один список под
+    заголовком «задолженности», куда попадали и люди без единого долга)."""
+    found = [r for r in rows if r["debts"]]
     if not found:
-        return {"text": f"Студентов {what} нет — по всему колледжу чисто. 🐯",
-                "mood": "happy", "intent": intent, "facts": {"count": 0}}
-    #Список фамилий LLM переписывать не должен — это факты о людях.
-    shown = found[:15]
-    tail = f" И ещё {len(found) - len(shown)}." if len(found) > len(shown) else ""
-    return {"text": f"Студентов {what}: {len(found)}. " + "; ".join(shown) + "." + tail,
-            "mood": "sad", "intent": intent, "no_voice": True,
-            "facts": {"count": len(found)}}
+        return {"text": f"Должников {scope} нет. 🐯", "mood": "happy", "intent": "debtors",
+                "facts": {"count": 0}, "no_voice": True}
+    lines = [f"• {_who(r)}: " + "; ".join(r["debts"]) for r in found[:25]]
+    tail = f"\n…и ещё {len(found) - 25}." if len(found) > 25 else ""
+    return {"text": f"Должники {scope} — {len(found)}:\n" + "\n".join(lines) + tail,
+            "mood": "sad", "intent": "debtors", "facts": {"count": len(found)},
+            "no_voice": True}
 
 
-def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
+def _risk_answer(rows: list, scope: str) -> dict:
+    found = [r for r in rows if W.counts_as_at_risk(r["risk"])]
+    if not found:
+        return {"text": f"В зоне риска {scope} никого нет. 🐯", "mood": "happy",
+                "intent": "at_risk", "facts": {"at_risk": 0}, "no_voice": True}
+    found.sort(key=lambda r: -int(r["risk"].get("score") or 0))
+    lines = [f"• {_who(r)}: " + (W.dropout_risk.summary_line(r["risk"]) or "риск отчисления")
+             + (f", средний {r['average']}" if r["average"] else "") for r in found[:25]]
+    tail = f"\n…и ещё {len(found) - 25}." if len(found) > 25 else ""
+    return {"text": f"В зоне риска {scope} — {len(found)} (индекс риска отчисления, тот же, "
+                    f"что на дашбордах):\n" + "\n".join(lines) + tail,
+            "mood": "sad", "intent": "at_risk", "facts": {"at_risk": len(found)},
+            "no_voice": True}
+
+
+def _absences_answer(rows: list, scope: str) -> dict:
+    found = sorted((r for r in rows if r["absences"]["всего"]),
+                   key=lambda r: -r["absences"]["всего"])
+    total = sum(r["absences"]["всего"] for r in rows)
+    if not found:
+        return {"text": f"Пропусков {scope} нет. 🐯", "mood": "happy", "intent": "absences",
+                "facts": {"hours": 0}, "no_voice": True}
+    lines = [f"• {_who(r)}: {r['absences']['всего']} ч (Н: {r['absences']['Н']}, "
+             f"Б: {r['absences']['Б']})" for r in found[:10]]
+    tail = f"\n…и ещё {len(found) - 10}." if len(found) > 10 else ""
+    return {"text": f"Пропущено {scope}: {total} ч. Больше всего:\n" + "\n".join(lines) + tail,
+            "mood": "neutral", "intent": "absences", "facts": {"hours": total},
+            "no_voice": True}
+
+
+def _roster_answer(db: Session, groups: list) -> dict:
+    parts, total = [], 0
+    for g in groups:
+        names = [W.display_name(s) for s in W.students_in_group(db, g)]
+        total += len(names)
+        parts.append(f"{g} ({len(names)}): " + (", ".join(names) if names else "список пуст"))
+    return {"text": "Студенты группы " + "\n".join(parts) if len(groups) == 1
+            else "Студенты ваших групп:\n" + "\n".join(parts),
+            "mood": "neutral", "intent": "roster",
+            "facts": {"groups": len(groups), "count": total}, "no_voice": True}
+
+
+def _find_students(db: Session, surnames, groups=None) -> list:
+    """Студенты с любой из фамилий-кандидатов (`vector_nlu.find_surnames`).
+
+    Кандидатов бывает несколько, и это не ошибка разбора: «Алексеева» — и родительный
+    падеж от Алексеев, и женская фамилия Алексеева. До 01.10.2026 искали ОДНУ фамилию
+    точным равенством, и женщина Алексеева не находилась вовсе, если в колледже был
+    мужчина Алексеев (живой прогон: админ видел двух Алексеевых из десяти)."""
+    if isinstance(surnames, str):
+        surnames = [surnames]
+    names = [x for x in (surnames or []) if x]
+    if not names:
+        return []
+    rows = (db.query(User).filter(User.role == "student", User.deleted == False,  # noqa: E712
+                                  User.surname.in_(names)).all())
+    if groups is not None:
+        rows = [s for s in rows if s.group_name in groups]
+    return sorted(rows, key=lambda s: (s.group_name or "", W.display_name(s)))
+
+
+def _name_token_matches(token: str, name: str) -> bool:
+    """Слово вопроса — это имя или отчество в каком-то падеже? «евгения» ↔ Евгений,
+    «кириллу» ↔ Кирилл, «эрдэмовича» ↔ Эрдэмович. Основа — имя без последней гласной
+    (у коротких — целиком), хвост не длиннее трёх букв: иначе «Бато» ловился бы внутри
+    отчества «Батоевич»."""
+    n = vector_nlu.normalize(name)
+    if not n or len(token) < 3:
+        return False
+    stem = n[:-1] if len(n) > 4 and n[-1] in "аяйьоеиуы" else n
+    return token.startswith(stem) and len(token) <= len(n) + 3
+
+
+def _narrow_by_name(rows: list, msg: str, surnames) -> list:
+    """Из однофамильцев оставить тех, чьё ИМЯ (и отчество) названо в вопросе.
+
+    🔥 Без этого «Борисов Кирилл» при двух Борисовых в ОДНОЙ группе было тупиком: Вектор
+    просил «уточните группу», а группа у обоих одна (живой прогон 01.10.2026). Слова,
+    которые и так совпали с фамилией, в счёт не идут — «Егорова» не должна сойти за имя
+    «Егор». Имя весит больше отчества; никто не подошёл — список прежний, не угадываем."""
+    if len(rows) <= 1:
+        return rows
+    surname_words = set()
+    for sn in surnames or []:
+        surname_words |= vector_nlu.surname_forms(sn)
+    toks = [t for t in vector_nlu.tokens(msg) if len(t) >= 3 and t not in surname_words]
+    if not toks:
+        return rows
+
+    def score(s) -> int:
+        parts = (s.name or "").split()
+        first = parts[0] if parts else ""
+        patr = s.patronymic or (parts[1] if len(parts) > 1 else "")
+        sc = 2 if first and any(_name_token_matches(t, first) for t in toks) else 0
+        if patr and any(_name_token_matches(t, patr) for t in toks):
+            sc += 1
+        return sc
+
+    scored = [(score(s), s) for s in rows]
+    best = max(sc for sc, _s in scored)
+    return rows if best == 0 else [s for sc, s in scored if sc == best]
+
+
+_NAMESAKES_SHOWN = 12
+
+
+def _namesakes_answer(surname: str, rows: list) -> dict:
+    """Тёзки — переспросить, а не выбрать первого: «оценка не тому студенту» хуже ответа
+    с уточнением (правило J08 синка, здесь то же). Подсказываем ОБА способа уточнить —
+    группу и имя: при двух тёзках в одной группе одна группа не помогает."""
+    shown = rows[:_NAMESAKES_SHOWN]
+    listed = "; ".join(f"{W.display_name(s)} ({s.group_name or 'без группы'})" for s in shown)
+    more = len(rows) - len(shown)
+    tail = f" …и ещё {more}" if more > 0 else ""
+    first = (rows[0].name or "").split()
+    example_name = f"{rows[0].surname} {first[0]}" if first else rows[0].surname
+    return {"text": f"Подходят несколько студентов ({len(rows)}): {listed}{tail}. Уточните "
+                    f"имя или группу — например «{example_name}» или "
+                    f"«{rows[0].surname} {rows[0].group_name}».",
+            "mood": "neutral", "intent": "help", "facts": {"count": len(rows)},
+            "no_voice": True}
+
+
+#Намерения, в которых фамилия означает «покажи данные ЭТОГО студента».
+_STUDENT_DATA_INTENTS = {"grades", "average", "absences", "debtors", "grade_count",
+                         "subject_grades", "zet", "at_risk", "homework", "unknown",
+                         "group_stats", "roster"}
+
+
+def _college_student_surnames(db: Session) -> list:
+    rows = (db.query(User.surname).filter(User.role == "student",
+                                          User.deleted == False).distinct().all())  # noqa: E712
+    return sorted({r[0] for r in rows if r[0] and len(r[0].strip()) >= 2})
+
+
+def _outside_scope_answer(msg: str, nlu: dict, user: User, db: Session,
+                          parent_view: bool) -> dict | None:
+    """Вопрос о студенте, которого спрашивающему видеть НЕЛЬЗЯ, — честный отказ.
+
+    🔥 Раньше такой вопрос не опознавался вовсе: фамилии ищутся только среди «своих», и
+    «пропуски у Егорова» у студента возвращало ЕГО СОБСТВЕННЫЕ пропуски так, будто это
+    ответ про Егорова; у преподавателя чужая фамилия давала сводку по его группам или
+    «с радостью бы поболтал» (живой прогон 01.10.2026). Человек не мог понять, что
+    случилось: Вектор не понял, сломался или прячет. Отказ называет причину и кто видит.
+    Схема доступа — docs/security/VECTOR-ACCESS.md."""
+    role = user.role
+    if role == "admin" or nlu["intent"] not in _STUDENT_DATA_INTENTS:
+        return None
+    if role == "moderator":
+        #Модератор — сотрудник БЕЗ доступа к успеваемости: любая фамилия студента в
+        #вопросе — отказ, а не справка «я умею…», из которой не понять, почему молчу.
+        named = nlu.get("surnames") or vector_nlu.find_surnames(
+            msg, _college_student_surnames(db))
+        if not named:
+            return None
+        return {"text": "Успеваемость студентов модератору не показываю — это данные "
+                        "преподавателей, куратора и администрации.",
+                "mood": "neutral", "intent": "help", "facts": {}, "no_voice": True}
+    if nlu.get("surnames"):
+        return None
+    outside = vector_nlu.find_surnames(msg, _college_student_surnames(db))
+    if role == "student":
+        own = vector_nlu.surname_forms(user.surname or "")
+        outside = [x for x in outside if vector_nlu.normalize(x) not in own]
+    if not outside:
+        return None
+    if parent_view:
+        text = ("Я рассказываю только об успеваемости вашего ребёнка — данные других "
+                "студентов закрыты. 🐯")
+    elif role == "student":
+        text = ("Я рассказываю только о твоей успеваемости — оценки и пропуски других "
+                "студентов закрыты. Спроси, например: «мои оценки», «мои пропуски». 🐯")
+    elif role == "teacher":
+        text = (f"Студент «{outside[0]}» не в ваших группах — его успеваемость видят его "
+                "преподаватели, куратор и администрация.")
+    else:
+        text = ("Успеваемость студентов модератору не показываю — это данные "
+                "преподавателей, куратора и администрации.")
+    return {"text": text, "mood": "neutral", "intent": "help", "facts": {},
+            "no_voice": True}
+
+
+def _student_card(db: Session, cfg: dict, stud, intent: str, lessons=None, scale=None,
+                  subject: str = "") -> dict:
+    """Ответ о КОНКРЕТНОМ студенте для сотрудника (админ, преподаватель): пропуски, долги,
+    счёт оценок или полная карточка. Занятия — те, что сотрудник вправе видеть:
+    преподаватель передаёт свои, админу — весь действующий план группы."""
+    group = stud.group_name or ""
+    base = lessons if lessons is not None else _plan_lessons(db, cfg, group)
+    own = W.filter_lessons_by_student_subgroup(db, base, stud.id)
+    if subject:
+        own = [l for l in own if l.subject == subject]
+    rec = W.student_records(db, stud.surname, stud.name, group, student_id=stud.id)
+    sc = scale if scale is not None else W.lesson_scale_map(db, own)
+    who = f"{W.display_name(stud)} ({group})"
+    where = f" по предмету «{subject}»" if subject else ""
+    facts = {"student": W.display_name(stud), "group": group}
+    if subject:
+        facts["subject"] = subject
+    if intent == "absences":
+        a = W.absences(own, rec)
+        return {"text": f"{who}{where}: пропусков {a['всего']} ч (Н: {a['Н']}, Б: {a['Б']}, "
+                        f"О: {a['О']}).", "mood": "neutral", "intent": "absences",
+                "facts": {**facts, **a}, "no_voice": True}
+    debts = _debts_by_subject(own, rec, sc)
+    if intent == "debtors":
+        text = (f"{who}: задолженностей{where} нет." if not debts
+                else f"{who}, долги: " + "; ".join(debts) + ".")
+        return {"text": text, "mood": "happy" if not debts else "sad", "intent": "debtors",
+                "facts": {**facts, "debts": len(debts)}, "no_voice": True}
+    if intent == "grade_count":
+        b = _grade_breakdown(own, rec, scale=sc)
+        return {"text": f"{who}{where}: оценок — {b['всего']} (5: {b['5']}, 4: {b['4']}, "
+                        f"3: {b['3']}, 2: {b['2']}).", "mood": "neutral",
+                "intent": "grade_count", "facts": {**facts, **b}, "no_voice": True}
+    avg = W.average(own, rec, cfg, scale=sc)
+    a = W.absences(own, rec)
+    parts = [f"{who}{where}: средний балл {avg if avg else '— (оценок пока нет)'}"]
+    if not subject:
+        per = [p for p in W.per_subject_averages(own, rec, cfg, scale=sc) if p["average"]]
+        if per:
+            parts.append("по предметам: " + ", ".join(f"{p['subject']} — {p['average']}"
+                                                      for p in per))
+    parts.append("долги: " + "; ".join(debts) if debts else "долгов нет")
+    parts.append(f"пропусков {a['всего']} ч")
+    risk = W.dropout_risk_for_student(db, stud.surname, stud.name, group, cfg=cfg,
+                                      lessons=own, records=rec, student_id=stud.id)
+    if W.counts_as_at_risk(risk):
+        line = W.dropout_risk.summary_line(risk)
+        parts.append(line[:1].lower() + line[1:])
+    return {"text": "; ".join(parts) + ".", "mood": _mood_by_avg(avg),
+            "intent": "grades" if intent != "subject_grades" else "subject_grades",
+            "facts": {**facts, "average": avg, "debts": len(debts), "absences": a["всего"]},
+            "no_voice": True}
+
+
+def _teachers_answer(db: Session, group: str = "") -> dict:
+    """Преподаватели: учётные записи журнала И те, кого называет расписание портала ВСГУТУ.
+
+    🔥 До 28.09.2026 Вектор знал только преподавателей с учётной записью — заведённых
+    администратором вручную. Остальные, кто ведёт пары по расписанию портала, для него не
+    существовали (жалоба Ярослава). Портал берём из того же снимка и тем же разбором, что
+    подсказки назначений в админке (`schedule_web.full_state`, `_portal_subject_teachers`,
+    `teacher_match`), — снимок из кэша, в сеть на пути ответа не ходим."""
+    from ... import schedule_web
+    from .write import _portal_subject_teachers
+    import teacher_match
+
+    accounts = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
+    snap, building = schedule_web.full_state()
+    portal = _portal_subject_teachers(snap) if snap is not None and snap.groups else {}
+    note = (" Расписание портала ещё загружается — преподавателей оттуда покажу чуть позже."
+            if building and not portal else "")
+    def clean(raw: str) -> str:
+        """«ПО ЮМАТОВА А.С.» → «ЮМАТОВА А.С.»: разбор ячейки портала склеивает хвост
+        названия предмета с фамилией. Без инициалов («Преподаватель») — не человек."""
+        sur, first, patr = teacher_match.parse_portal_name(raw)
+        initials = "".join(f"{x}." for x in (first, patr) if x)
+        return f"{sur} {initials}" if sur and initials else ""
+
+    if group:
+        by_teacher: dict = {}
+        for (g, subject), who in portal.items():
+            if g != group:
+                continue
+            for raw in who:
+                name = clean(raw)
+                if name:
+                    by_teacher.setdefault(name, set()).add(subject)
+        if not by_teacher:
+            return {"text": f"В расписании портала у группы {group} преподаватели не указаны."
+                            + note, "mood": "neutral", "intent": "teachers",
+                    "facts": {"count": 0}, "no_voice": True}
+
+        def subjects_of(names):
+            #«Технология разработки» и «Технология разработки ПО» — один предмет, у
+            #которого портал обрезал хвост в одной из ячеек: оставляем полное название.
+            return sorted(s for s in names if not any(o != s and o.startswith(s) for o in names))
+
+        body = "; ".join(f"{t} — {', '.join(subjects_of(s))}" for t, s in sorted(by_teacher.items()))
+        return {"text": f"Преподаватели группы {group} по расписанию портала: {body}.",
+                "mood": "neutral", "intent": "teachers",
+                "facts": {"count": len(by_teacher)}, "no_voice": True}
+    names = sorted(W.display_name(t) for t in accounts)
+    text = (f"Преподаватели с учётной записью в журнале ({len(names)}): "
+            + (", ".join(names) if names else "пока никого") + ".")
+    known = [{"id": u.id, "surname": u.surname or "", "name": u.name or "",
+              "patronymic": getattr(u, "patronymic", "") or "",
+              "full_name": u.full_name or ""} for u in accounts]
+    raw = sorted({clean(t) for who in portal.values() for t in who} - {""})
+    extra = [t for t in raw if teacher_match.match_teacher(t, known).get("status") != "matched"]
+    if extra:
+        shown = extra[:40]
+        text += (f" По расписанию портала ведут ещё {len(extra)} без учётной записи: "
+                 + ", ".join(shown) + (f" и ещё {len(extra) - len(shown)}"
+                                       if len(extra) > len(shown) else "") + ".")
+    return {"text": text + note, "mood": "neutral", "intent": "teachers",
+            "facts": {"count": len(names), "portal_only": len(extra)}, "no_voice": True}
+
+
+def _pending_registrations(db: Session) -> int:
+    try:
+        return db.query(RegistrationRequest).filter(
+            RegistrationRequest.status == "pending").count()
+    except Exception:      # noqa: BLE001 — сводка не повод ронять ответ
+        return 0
+
+
+def _admin_facts(msg: str, nlu: dict, db: Session, cfg: dict) -> dict:
+    """Вектор АДМИНИСТРАТОРА: весь колледж, любая группа, любой студент.
+
+    🔥 ПЕРЕПИСАНО 28.09.2026 (жалоба Ярослава). Здесь было шесть веток, а всё остальное —
+    «сводка группы», «средний балл», «пропуски», «расписание К74/1», «оценки <фамилия>» —
+    проваливалось в один и тот же счётчик «в системе студентов 26…». GigaChat
+    переписывал его как «в вашей группе 26 студентов», хотя группы у администратора нет.
+    Поэтому все ответы здесь — `no_voice`: модель искажала сам СМЫСЛ административной
+    сводки, а не только стиль."""
+    intent, group, surname = nlu["intent"], nlu["group"], nlu["surname"]
+    subject, day = nlu["subject"], nlu["day"]
+    if intent == "server_state":
+        return _server_state_facts(db)
+    if intent == "schedule":
+        if not group:
+            return {"text": "Назовите группу — например «расписание К74/1 на завтра».",
+                    "mood": "neutral", "intent": "schedule", "facts": {}, "no_voice": True}
+        text, facts = _schedule_answer(db, group, msg, day)
+        return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
+    if intent == "teachers":
+        return _teachers_answer(db, group)
+    if intent == "subjects":
+        if group:
+            names = W.group_subject_list(db, group)
+            return {"text": f"Предметы группы {group} ({len(names)}): "
+                            + (", ".join(names) if names else "не закреплены") + ".",
+                    "mood": "neutral", "intent": "subjects",
+                    "facts": {"count": len(names)}, "no_voice": True}
+        rows = db.query(Subject).filter(Subject.deleted == False).all()  # noqa: E712
+        names = sorted({s.name for s in rows if s.name})
+        return {"text": f"Предметы колледжа ({len(names)}): "
+                        + (", ".join(names) if names else "каталог пуст") + ".",
+                "mood": "neutral", "intent": "subjects", "facts": {"count": len(names)},
+                "no_voice": True}
+    active = _groups_with_students(db)
+    if intent == "groups":
+        names = _group_names(db)
+        n_all = len(names)
+        #Небольшой справочник называем целиком; на бою в нём ~300 групп — весь каталог
+        #портала, и перечень сотни пустых названий был бы шумом вместо ответа.
+        if n_all <= 40:
+            body = ", ".join(f"{g} ({len(W.students_in_group(db, g))} студ.)" if g in active
+                             else g for g in names)
+            text = f"Группы колледжа ({n_all}): {body}." if names else "Групп пока нет."
+        else:
+            body = ", ".join(f"{g} ({len(W.students_in_group(db, g))})" for g in active)
+            text = (f"Групп со студентами — {len(active)}: {body}." if active
+                    else "Групп со студентами пока нет.")
+            text += (f" Всего в справочнике {n_all}: остальные — группы из расписания "
+                     "портала без студентов в журнале.")
+        return {"text": text, "mood": "neutral", "intent": "groups",
+                "facts": {"groups": len(active), "catalog": n_all}, "no_voice": True}
+
+    # ── вопрос о конкретном студенте ───────────────────────────────────────────────
+    if surname:
+        candidates = nlu.get("surnames") or [surname]
+        found = _narrow_by_name(_find_students(db, candidates, [group] if group else None),
+                                msg, candidates)
+        if len(found) > 1:
+            return _namesakes_answer(surname, found)
+        if found:
+            if intent == "zet":
+                s = found[0]
+                return _zet_facts(db, s.surname, s.name, s.group_name or "", cfg,
+                                  student_id=s.id,
+                                  who=f"{W.display_name(s)} ({s.group_name or ''})")
+            return _student_card(db, cfg, found[0], intent, subject=subject)
+        return {"text": f"Студента «{surname}»" + (f" в группе {group}" if group else "")
+                        + " не нашёл.", "mood": "neutral", "intent": "help", "facts": {},
+                "no_voice": True}
+
+    if intent == "roster":
+        if group:
+            return _roster_answer(db, [group])
+        body = "; ".join(f"{g} — {len(W.students_in_group(db, g))}" for g in active)
+        total = sum(len(W.students_in_group(db, g)) for g in active)
+        return {"text": f"Студентов в колледже — {total}. По группам: {body or 'групп нет'}. "
+                        "Список покажу по группе: «студенты К74/1».",
+                "mood": "neutral", "intent": "roster", "facts": {"count": total},
+                "no_voice": True}
+    if intent == "homework":
+        if not group:
+            return {"text": "Домашние задания покажу по группе: «что задали К74/1».",
+                    "mood": "neutral", "intent": "homework", "facts": {}, "no_voice": True}
+        return _homework_answer(_plan_lessons(db, cfg, group), {}, subject)
+    if intent in ("zet", "grade_count"):
+        return {"text": "Это считается по студенту — спросите с фамилией: «оценки Иванова», "
+                        "«ЗЕТ Петровой».", "mood": "neutral", "intent": "help",
+                "facts": {}, "no_voice": True}
+
+    targets = [group] if group else active
+    scope = f"в группе {group}" if group else "по колледжу"
+    if intent == "subject_grades" and subject:
+        vals = []
+        for g in targets:
+            gl = [l for l in _plan_lessons(db, cfg, g) if l.subject == subject]
+            if gl:
+                vals.append((g, _group_avg(_student_rows(db, cfg, g, gl))))
+        if not vals:
+            return {"text": f"По предмету «{subject}» занятий {scope} нет.", "mood": "neutral",
+                    "intent": "subject_grades", "facts": {}, "no_voice": True}
+        return {"text": f"Средний по предмету «{subject}»: "
+                        + "; ".join(f"{g} — {a or 'оценок нет'}" for g, a in vals) + ".",
+                "mood": "neutral", "intent": "subject_grades",
+                "facts": {"subject": subject, "groups": len(vals)}, "no_voice": True}
+
+    rows = []
+    for g in targets:
+        rows += _student_rows(db, cfg, g, _plan_lessons(db, cfg, g))
+    if intent == "debtors":
+        return _debtors_answer(rows, scope)
+    if intent == "at_risk":
+        return _risk_answer(rows, scope)
+    if intent == "absences":
+        return _absences_answer(rows, scope)
+    # average / group_stats / grades и всё остальное — сводка по группам.
+    lines = [_summary_line(g, [r for r in rows if r["group"] == g]) for g in targets]
+    n_teachers = db.query(User).filter(User.role == "teacher",
+                                       User.deleted == False).count()  # noqa: E712
+    n_parents = db.query(User).filter(User.role == "parent",
+                                      User.deleted == False).count()  # noqa: E712
+    if group:
+        text = "Сводка — " + lines[0] + "."
+    else:
+        text = (f"Сводка по колледжу: студентов {len(rows)} в {len(targets)} группах, "
+                f"преподавателей с учётной записью {n_teachers}, родителей {n_parents}."
+                + ("\n• " + "\n• ".join(lines) if lines else ""))
+    pending = _pending_registrations(db)
+    if pending and not group:
+        text += f"\n⚠️ Ждут одобрения заявки на регистрацию: {pending}."
+    elif "заявк" in msg:
+        text += "\nЗаявок на регистрацию, ждущих одобрения, нет."
+    return {"text": text, "mood": "neutral" if not pending else "surprised",
+            "intent": "group_stats",
+            "facts": {"students": len(rows), "groups": len(targets), "teachers": n_teachers,
+                      "parents": n_parents, "pending_registrations": pending,
+                      "subjects": db.query(Subject).filter(
+                          Subject.deleted == False).count()},  # noqa: E712
+            "no_voice": True}
+
+
+def _teacher_facts(msg: str, nlu: dict, user: User, db: Session, cfg: dict,
+                   help_text: str) -> dict:
+    """Вектор ПРЕПОДАВАТЕЛЯ: только свои группы — по назначениям и по кураторству.
+
+    Курируемая группа видна ЦЕЛИКОМ (все предметы), как на странице «Курирование»; в
+    группе, где преподаватель только ведёт, — лишь его предметы. До 28.09.2026 куратор
+    без учебной нагрузки получал «за вами нет групп», хотя видел группу на экране."""
+    intent, group, surname = nlu["intent"], nlu["group"], nlu["surname"]
+    subject, day = nlu["subject"], nlu["day"]
+    ty0, ts0 = W.current_term(cfg)
+    pairs = W.teacher_assignments(db, user.id, ty0, ts0)
+    subjects_by_group: dict = {}
+    for g, s in pairs:
+        subjects_by_group.setdefault(g, set()).add(s)
+    curated = set(user.curated_groups or [])
+    groups = sorted(set(subjects_by_group) | curated)
+    if not groups:
+        return {"text": "За вами пока нет групп — ни нагрузки, ни кураторства. " + help_text,
+                "mood": "neutral", "intent": "help", "facts": {}}
+    tscale = W.teacher_scale(user)
+
+    def lessons_for(g):
+        if g in curated:
+            return _plan_lessons(db, cfg, g)
+        allowed = subjects_by_group.get(g, set())
+        return W.current_term_lessons(
+            db, g, [l for l in W.group_lessons(db, g) if l.subject in allowed], cfg)
+
+    def scale_for(g):
+        return None if g in curated else tscale
+
+    if intent == "schedule":
+        #Расписание публично (страница «Расписание без входа»), поэтому любая группа.
+        text, facts = _schedule_answer(db, group or groups[0], msg, day)
+        return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
+    if intent == "teachers":
+        return _teachers_answer(db, group)
+    if intent == "groups":
+        own = sorted(subjects_by_group)
+        parts = []
+        if own:
+            parts.append("ведёте: " + ", ".join(own))
+        if curated:
+            parts.append("курируете: " + ", ".join(sorted(curated)))
+        return {"text": "Ваши группы — " + "; ".join(parts) + ".", "mood": "neutral",
+                "intent": "groups", "facts": {"groups": len(groups)}, "no_voice": True}
+    if group and group not in groups:
+        return {"text": f"Группа {group} — не ваша: вы работаете с {', '.join(groups)}. Её "
+                        "данные видят её преподаватели, куратор и администрация.",
+                "mood": "neutral", "intent": "help", "facts": {}, "no_voice": True}
+    targets = [group] if group else groups
+    scope = f"в группе {group}" if group else "в ваших группах"
+    if intent == "subjects":
+        own = sorted({s for _g, s in pairs})
+        body = "; ".join(f"{g} — " + ", ".join(sorted(subjects_by_group.get(g, ())))
+                         for g in sorted(subjects_by_group))
+        text = (f"Ваши предметы ({len(own)}): " + ", ".join(own) + f". По группам: {body}."
+                if own else "Предметов в вашей нагрузке нет.")
+        if curated:
+            text += " Курируете: " + ", ".join(sorted(curated)) + "."
+        return {"text": text, "mood": "neutral", "intent": "subjects",
+                "facts": {"subjects": len(own), "groups": len(groups)}, "no_voice": True}
+    if intent == "roster":
+        return _roster_answer(db, targets)
+    if intent == "homework":
+        own = []
+        for g in targets:
+            own += lessons_for(g)
+        return _homework_answer(own, {}, subject)
+
+    # ── вопрос о конкретном студенте ───────────────────────────────────────────────
+    if surname and intent in ("absences", "debtors", "grade_count", "grades", "average",
+                              "subject_grades", "at_risk", "zet"):
+        candidates = nlu.get("surnames") or [surname]
+        found = _narrow_by_name(_find_students(db, candidates, targets), msg, candidates)
+        if len(found) > 1:
+            return _namesakes_answer(surname, found)
+        if not found:
+            return {"text": f"Студента «{surname}» {scope} не нашёл.", "mood": "neutral",
+                    "intent": "help", "facts": {}, "no_voice": True}
+        s = found[0]
+        if intent == "zet":
+            if s.group_name not in curated:
+                return {"text": "Зачётные единицы студента видит его куратор и администрация.",
+                        "mood": "neutral", "intent": "help", "facts": {}, "no_voice": True}
+            return _zet_facts(db, s.surname, s.name, s.group_name or "", cfg, student_id=s.id,
+                              who=f"{W.display_name(s)} ({s.group_name or ''})")
+        return _student_card(db, cfg, s, intent, lessons=lessons_for(s.group_name),
+                             scale=scale_for(s.group_name), subject=subject)
+
+    if intent == "subject_grades" and subject:
+        own_groups = [g for g in targets
+                      if g in curated or subject in subjects_by_group.get(g, set())]
+        if not own_groups:
+            return {"text": f"Предмет «{subject}» не в вашей нагрузке — по чужим "
+                            "предметам данных не покажу. 🐯",
+                    "mood": "neutral", "intent": "help", "facts": {}}
+        vals = []
+        for g in own_groups:
+            gl = [l for l in lessons_for(g) if l.subject == subject]
+            vals.append((g, _group_avg(_student_rows(db, cfg, g, gl, scale_for(g)))))
+        body = "; ".join(f"{g}: {a}" for g, a in vals)
+        return {"text": f"Средний по предмету «{subject}» — {body}.",
+                "mood": "neutral", "intent": "subject_grades",
+                "facts": {"subject": subject, "groups": len(vals)}}
+    if intent in ("grade_count", "zet"):
+        #Отвечаем ПРИЧИНОЙ, а не общей справкой: иначе преподаватель решит, что Вектор
+        #не понял вопрос, и будет переспрашивать теми же словами.
+        what = ("Счёт оценок" if intent == "grade_count" else "Зачётные единицы")
+        return {"text": f"{what} веду по студенту — спросите с фамилией, например "
+                        "«сколько оценок у Иванова».",
+                "mood": "neutral", "intent": "help", "facts": {}}
+    if intent == "server_state":
+        return {"text": "Состояние сервера — к администратору, это не учебные данные. "
+                        "Я могу показать ваши группы, оценки, долги, пропуски, "
+                        "домашние задания и расписание. 🐯",
+                "mood": "neutral", "intent": "help", "facts": {}}
+    if intent not in ("at_risk", "debtors", "absences", "average", "group_stats", "grades"):
+        return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
+
+    rows = []
+    for g in targets:
+        rows += _student_rows(db, cfg, g, lessons_for(g), scale_for(g))
+    if intent == "debtors":
+        return _debtors_answer(rows, scope)
+    if intent == "at_risk":
+        return _risk_answer(rows, scope)
+    if intent == "absences":
+        return _absences_answer(rows, scope)
+    lines = [_summary_line(g, [r for r in rows if r["group"] == g]) for g in targets]
+    return {"text": "Сводка по вашим группам:\n• " + "\n• ".join(lines) + ".",
+            "mood": "neutral", "intent": "group_stats",
+            "facts": {"groups": len(targets), "students": len(rows),
+                      "at_risk": sum(1 for r in rows if W.counts_as_at_risk(r["risk"]))}}
+
+
+def _hello_text(user, role: str, locale: str = "ru") -> str:
+    """Приветствие: по роли и по имени. Преподаватель, администратор, модератор и родитель —
+    «Здравствуйте, Анна Петровна!», студент — «Привет, Арюна!» (28.09.2026, требование
+    Ярослава). Имени нет — приветствие без него, а не «Здравствуйте, !»."""
+    pack = _STATIC_TEXT.get(locale) if locale != "ru" else None
+    prefix = (pack["hello_prefix"] if pack else _HELLO_PREFIX)[role]
+    help_text = (pack["help_by_role"] if pack else _HELP_BY_ROLE)[role]
+    name = W.address_name(user) if user is not None else ""
+    if locale == "zh":
+        return f"{prefix}，{name}！{help_text}" if name else f"{prefix}！{help_text}"
+    return f"{prefix}, {name}! {help_text}" if name else f"{prefix}! {help_text}"
+
+
+def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) -> dict:
     """Фактический ответ (text/mood/intent/facts) по роли из РЕАЛЬНЫХ данных.
 
     Единый разбор запроса — vector_nlu.classify (тот же лексикон, что у десктопа). intent
-    ВСЕГДА в ответе: по нему клиент выбирает эмоцию/анимацию маскота. Числа — только из SQL."""
-    role = user.role if user.role in ("student", "teacher", "admin") else "student"
+    ВСЕГДА в ответе: по нему клиент выбирает эмоцию/анимацию маскота. Числа — только из SQL.
+    `addressee` — к кому обращаться в приветствии (родитель спрашивает данными ребёнка)."""
+    role = user.role if user.role in ("student", "teacher", "admin", "moderator") else "student"
     subjects = _known_subjects(user, db)
     surnames = _known_surnames(user, db)
-    nlu = vector_nlu.classify(msg, surnames=surnames, subjects=subjects)
-    intent, subject, surname, day = nlu["intent"], nlu["subject"], nlu["surname"], nlu["day"]
+    nlu = vector_nlu.classify(msg, surnames=surnames, subjects=subjects,
+                              groups=_group_names(db))
+    intent, subject, day = nlu["intent"], nlu["subject"], nlu["day"]
     help_text = _HELP_BY_ROLE[role]
+    #Кабинет родителя спрашивает данными РЕБЁНКА (`user` — ребёнок), а читает родитель.
+    parent_view = addressee is not None and getattr(addressee, "id", None) != user.id
+    refusal = _outside_scope_answer(msg, nlu, user, db, parent_view)
+    if refusal:
+        return refusal
 
     # Общие для всех ролей: приветствие / помощь / благодарность / факты о заведении.
     if intent == "hello":
-        return {"text": f"{_HELLO_PREFIX[role]} {help_text}", "mood": "happy",
+        return {"text": _hello_text(addressee or user, role), "mood": "happy",
                 "intent": "hello", "facts": {}}
     if intent in ("help", "unknown"):
         return {"text": help_text, "mood": "happy" if intent == "help" else "neutral",
@@ -924,372 +1789,137 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict) -> dict:
     if intent == "about_college":
         return {"text": _ABOUT_COLLEGE, "mood": "neutral", "intent": "about_college", "facts": {}}
     if intent == "howto":
-        return {"text": _HOWTO, "mood": "happy", "intent": "howto", "facts": {}}
+        return {"text": _howto_text(cfg, role), "mood": "happy", "intent": "howto", "facts": {}}
 
-    # ── СТУДЕНТ: только свои данные (privacy-by-design) ──────────────────────────────
-    if role == "student":
-        group = user.group_name
-        #Занятия по предметам, убранным из плана группы, не должны попадать ни в долги,
-        #ни в средний, ни в «мои оценки» (current_subject_lessons) — и занятия за ПРОШЛЫЕ
-        #курсы по повторяющимся предметам вроде «Физической культуры» тоже не должны
-        #(current_term_lessons) — та же тройная фильтрация, что в student_overview, плюс
-        #раздельное обучение (§ролей, 3.6.1): чужая подгруппа студенту не видна.
-        lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
-            db, group, W.current_subject_lessons(
-                db, group, W.group_lessons(db, group)), cfg), user.id)
-        #Вектор отвечает СТУДЕНТУ о нём самом — значит теми же правилами, что и его журнал:
-        #иначе один и тот же вопрос давал бы разные ответы на двух экранах.
-        records = W.student_visible_records(db, user.surname, user.name, group, student_id=user.id)
-        scale_map = W.lesson_scale_map(db, lessons)
-
-        if intent == "schedule":
-            text, facts = _schedule_answer(db, group, msg, day)
+    if role in ("admin", "teacher"):
+        #⚠️ Фамилия в самом вопросе ловится не здесь, а в `answer_vector_question` — для
+        #ВСЕХ ролей одной дверью (см. `_names_a_person`).
+        return (_admin_facts(msg, nlu, db, cfg) if role == "admin"
+                else _teacher_facts(msg, nlu, user, db, cfg, help_text))
+    if role == "moderator":
+        #Модератор — сотрудник без доступа к успеваемости: раньше роль молча считалась
+        #студенческой, и на «сколько студентов» он получал «эти данные — для
+        #преподавателя, могу показать ТВОЙ средний балл» (находка живого прогона).
+        if intent == "schedule" and nlu["group"]:
+            text, facts = _schedule_answer(db, nlu["group"], msg, day)
             return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
-        if intent == "groups":
-            return {"text": f"Твоя группа — {group}." if group else "Группа за тобой не закреплена.",
-                    "mood": "neutral", "intent": "groups", "facts": {"group": group}}
-        if intent == "debtors":
-            d = W.debts(lessons, records, scale=scale_map)
-            text = "Задолженностей нет — так держать! 🐯" if not d else \
-                "Есть задолженности: " + "; ".join(d) + "."
-            return {"text": text, "mood": "happy" if not d else "sad",
-                    "intent": "debtors", "facts": {"debts": len(d)}}
-        if intent == "absences":
-            a = W.absences(lessons, records)
-            return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
-                    "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
-        if intent == "homework":
-            return _homework_answer(lessons, records, subject)
-        if intent == "grade_count":
-            b = _grade_breakdown(lessons, records, scale=scale_map)
-            if subject:
-                subj_lessons = [l for l in lessons if l.subject == subject]
-                bs = _grade_breakdown(subj_lessons, records, scale=scale_map)
-                return {"text": f"Оценок по предмету «{subject}» — {bs['всего']} "
-                                f"(5: {bs['5']}, 4: {bs['4']}, 3: {bs['3']}, 2: {bs['2']}).",
-                        "mood": "neutral", "intent": "grade_count", "facts": bs}
-            return {"text": f"Всего у тебя оценок — {b['всего']} "
-                            f"(пятёрок: {b['5']}, четвёрок: {b['4']}, троек: {b['3']}, двоек: {b['2']}).",
-                    "mood": "happy" if b["2"] == 0 else "neutral",
-                    "intent": "grade_count", "facts": b}
-        if intent == "subject_grades" and subject:
-            per = [p for p in W.per_subject_averages(lessons, records, cfg, scale=scale_map)
-                   if p["subject"] == subject]
-            if not per:
-                return {"text": f"По предмету «{subject}» у тебя пока нет занятий с оценками.",
-                        "mood": "neutral", "intent": "subject_grades", "facts": {}}
-            p = per[0]
-            marks = [records.get(l.id) for l in lessons
-                     if l.subject == subject and l.type == "Практика"
-                     and W.grading.to_five_point(records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None]
-            avg_txt = f"средний {p['average']}" if p["average"] else "оценок ещё нет"
-            body = (", ".join(marks)) if marks else "—"
-            return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
-                    "mood": _mood_by_avg(p["average"]), "intent": "subject_grades",
-                    "facts": {"subject": subject, "average": p["average"]}}
-        if intent == "subjects":
-            #Полный список предметов группы — из справочника И занятий (group_subject_list),
-            #а не только из занятий: предмет из импортированного учебного плана появляется
-            #раньше, чем по нему заводят первое занятие, и до этой ветки Вектор о нём молчал.
-            #no_voice — перечень НАЗВАНИЙ: LLM, «озвучивая данные», переставляет и выдумывает
-            #предметы, а это ровно то, что продукт обещает не делать.
-            names = W.group_subject_list(db, group)
-            if not names:
-                return {"text": "Предметы за твоей группой пока не закреплены — их заводит "
-                                "администратор. 🐯",
-                        "mood": "neutral", "intent": "subjects", "facts": {"subjects": 0},
-                        "no_voice": True}
-            graded = {p["subject"] for p in W.per_subject_averages(lessons, records, cfg,
-                                                                   scale=scale_map)
-                      if p["average"]}
-            text = f"Твои предметы ({len(names)}): " + ", ".join(names) + "."
-            no_marks = [n for n in names if n not in graded]
-            if no_marks:
-                text += " Пока без оценок: " + ", ".join(no_marks) + "."
-            return {"text": text, "mood": "neutral", "intent": "subjects",
-                    "facts": {"subjects": len(names), "without_grades": len(no_marks)},
-                    "no_voice": True}
-        if intent == "grades" or intent == "subject_grades":
-            per = W.per_subject_averages(lessons, records, cfg, scale=scale_map)
-            graded = [p for p in per if p["average"]]
-            if not graded:
-                return {"text": "Оценок по практикам пока нет — как появятся, покажу. 🐯",
-                        "mood": "neutral", "intent": "grades", "facts": {}}
-            body = "; ".join(f"{p['subject']} — {p['average']}" for p in graded)
-            return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
-                    "intent": "grades", "facts": {"subjects": len(graded)}}
-        if intent == "zet":
-            return _zet_facts(db, user.surname, user.name, group, cfg, student_id=user.id)
-        # average и всё остальное (at_risk/roster/teachers/group_stats недоступны студенту)
-        avg = W.average(lessons, records, cfg, scale=scale_map)
-        if intent == "server_state":
-            #Состояние сервера — не учебные данные, и студенту их знать незачем. Молчать
-            #нельзя: без явной ветки вопрос про диск проваливался бы в средний балл, то
-            #есть Вектор отвечал бы уверенно и не на тот вопрос.
-            return {"text": "Про сервер знает администратор — это не учебные данные. "
-                            "Я могу показать твой средний балл, оценки, пропуски, долги, "
-                            "домашние задания и расписание. 🐯",
-                    "mood": "neutral", "intent": "help", "facts": {}}
-        if intent in ("at_risk", "roster", "teachers", "group_stats"):
-            return {"text": "Эти данные — для преподавателя. Я могу показать твой средний балл, "
-                            "оценки, пропуски, долги, домашние задания и расписание. 🐯",
-                    "mood": "neutral", "intent": "help", "facts": {}}
-        return {"text": f"Твой средний балл — {avg}. " + W.grading.methodology_text(cfg),
-                "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}
-
-    # ── ПРЕПОДАВАТЕЛЬ: только свои группы/предметы ──────────────────────────────────
-    if role == "teacher":
-        ty0, ts0 = W.current_term(cfg)
-        pairs = W.teacher_assignments(db, user.id, ty0, ts0)
-        groups = sorted({g for g, _s in pairs})
-        #Предметы ЭТОГО препода В ЭТОЙ КОНКРЕТНОЙ группе — не весь его набор предметов
-        #(баг 3.3.1: раньше фильтровали занятия группы по ВСЕМ предметам препода, из-за
-        #чего в чужой группе с совпавшим названием предмета тоже что-то находилось).
-        subjects_by_group: dict = {}
-        for g, s in pairs:
-            subjects_by_group.setdefault(g, set()).add(s)
-        if not groups:
-            return {"text": "За вами пока нет групп с занятиями по вашим предметам. " + help_text,
-                    "mood": "neutral", "intent": "help", "facts": {}}
-        tscale = W.teacher_scale(user)
-
-        if intent == "schedule":
-            text, facts = _schedule_answer(db, groups[0], msg, day)
-            return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
-        if intent == "groups":
-            return {"text": "Ваши группы: " + ", ".join(groups) + ".", "mood": "neutral",
-                    "intent": "groups", "facts": {"groups": len(groups)}}
-        if intent == "subjects":
-            #Предметы ПРЕПОДАВАТЕЛЯ — из назначений (препод↔предмет↔группа), а не весь
-            #каталог группы: чужие предметы той же группы к его нагрузке отношения не имеют.
-            own = sorted({s for _g, s in pairs})
-            body = "; ".join(f"{g} — " + ", ".join(sorted(subjects_by_group.get(g, ())))
-                             for g in groups)
-            return {"text": f"Ваши предметы ({len(own)}): " + ", ".join(own) + f". По группам: {body}.",
-                    "mood": "neutral", "intent": "subjects",
-                    "facts": {"subjects": len(own), "groups": len(groups)}, "no_voice": True}
-        if intent == "roster":
-            g = groups[0]
-            names = [W.display_name(s) for s in W.students_in_group(db, g)]
-            body = ", ".join(names) if names else "список пуст"
-            #🔒 no_voice — ЗДЕСЬ ЕГО ЗАБЫЛИ, и это была настоящая утечка (найдено
-            #сторожем-свойством 01.09.2026, до того — ничем). Ответ целиком состоит из
-            #ФИО студентов группы, и без флага он уезжал в GigaChat вместе с ними. Ровно
-            #тот класс дефекта, ради которого заведён `test_vector_never_voices_names.py`:
-            #ничего не ломается, ответ выглядит правдоподобно, а имена людей уходят
-            #внешнему сервису — заметить это можно только чтением этой строки.
-            return {"text": f"Студенты группы {g} ({len(names)}): {body}.", "mood": "neutral",
-                    "intent": "roster", "facts": {"group": g, "count": len(names)},
-                    "no_voice": True}
-        if intent == "homework":
-            #Что ЗАДАЛ САМ преподаватель: занятия его групп по его же предметам.
-            #Статуса сдачи нет — вопрос про группу целиком, и «сдано» относилось бы
-            #непонятно к кому; за конкретным студентом идут в журнал.
-            own = []
-            for g in groups:
-                allowed = subjects_by_group.get(g, set())
-                own += W.current_term_lessons(
-                    db, g, [l for l in W.group_lessons(db, g) if l.subject in allowed], cfg)
-            return _homework_answer(own, {}, subject)
-        if intent in ("absences", "debtors") and surname:
-            # пропуски/долги конкретного студента (по фамилии) в группах преподавателя
-            for g in groups:
-                for s in W.students_in_group(db, g):
-                    if s.surname == surname:
-                        gl = W.current_term_lessons(db, g, [
-                            l for l in W.group_lessons(db, g)
-                            if l.subject in subjects_by_group.get(g, set())], cfg)
-                        rec = W.student_records(db, s.surname, s.name, g, student_id=s.id)
-                        if intent == "absences":
-                            a = W.absences(gl, rec)
-                            return {"text": f"{W.display_name(s)}: пропусков {a['всего']} "
-                                            f"(Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
-                                    "mood": "neutral", "intent": "absences", "facts": a}
-                        d = W.debts(gl, rec, scale=tscale)
-                        txt = (f"У {W.display_name(s)} задолженностей нет." if not d
-                               else f"{W.display_name(s)}: " + "; ".join(d) + ".")
-                        return {"text": txt, "mood": "happy" if not d else "sad",
-                                "intent": "debtors", "facts": {"debts": len(d)}}
-            return {"text": f"Студента «{surname}» в ваших группах не нашёл.", "mood": "neutral",
-                    "intent": "help", "facts": {}}
-
-        if intent == "subject_grades" and subject:
-            #«Что у Петровой по математике», «как группа по информатике». Обработчика у
-            #преподавателя не было ВОВСЕ: классификатор интент выдавал верно, а ветка
-            #заканчивалась общей справкой «я умею вот это» — наш обычный класс дефекта
-            #(интент есть, вызывающего нет), и со стороны он читается как «Вектор не
-            #видит базу».
-            own_groups = [g for g in groups if subject in subjects_by_group.get(g, set())]
-            if not own_groups:
-                return {"text": f"Предмет «{subject}» не в вашей нагрузке — по чужим "
-                                "предметам данных не покажу. 🐯",
-                        "mood": "neutral", "intent": "help", "facts": {}}
-            if surname:
-                for g in own_groups:
-                    for st in W.students_in_group(db, g):
-                        if st.surname != surname:
-                            continue
-                        gl = W.current_term_lessons(
-                            db, g, [l for l in W.group_lessons(db, g)
-                                    if l.subject == subject], cfg)
-                        rec = W.student_records(db, st.surname, st.name, g, student_id=st.id)
-                        a = W.average(gl, rec, cfg, scale=tscale)
-                        ab = W.absences(gl, rec)
-                        return {"text": f"{W.display_name(st)} ({g}) по предмету "
-                                        f"«{subject}»: средний балл {a}, "
-                                        f"пропусков {ab['всего']}.",
-                                "mood": _mood_by_avg(a), "intent": "subject_grades",
-                                "facts": {"student": W.display_name(st), "group": g,
-                                          "subject": subject, "average": a,
-                                          "absences": ab["всего"]}}
-                return {"text": f"Студента «{surname}» в ваших группах по предмету "
-                                f"«{subject}» не нашёл.",
-                        "mood": "neutral", "intent": "help", "facts": {}}
-            rows = []
-            for g in own_groups:
-                gl = W.current_term_lessons(
-                    db, g, [l for l in W.group_lessons(db, g) if l.subject == subject], cfg)
-                vals = []
-                for st in W.students_in_group(db, g):
-                    a = W.average(gl, W.student_records(db, st.surname, st.name, g, student_id=st.id),
-                                  cfg, scale=tscale)
-                    if a > 0:
-                        vals.append(a)
-                rows.append((g, round(sum(vals) / len(vals), 2) if vals else 0.0))
-            body = "; ".join(f"{g}: {a}" for g, a in rows)
-            return {"text": f"Средний по предмету «{subject}» — {body}.",
-                    "mood": "neutral", "intent": "subject_grades",
-                    "facts": {"subject": subject, "groups": len(rows)}}
         if intent == "teachers":
-            #Состав преподавателей — служебный справочник, он и так открыт коллеге в
-            #каталоге мессенджера. Раньше вопрос упирался в общую справку.
-            rows = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
-            names = [W.display_name(t) for t in rows]
-            body = ", ".join(names) if names else "список пуст"
-            return {"text": f"Преподаватели колледжа ({len(names)}): {body}.",
-                    "mood": "neutral", "intent": "teachers",
-                    "facts": {"count": len(names)}, "no_voice": True}
-        if intent in ("grade_count", "zet"):
-            #Отвечаем ПРИЧИНОЙ, а не общей справкой: иначе преподаватель решит, что
-            #Вектор не понял вопрос, и будет переспрашивать его же другими словами —
-            #ровно это и происходило.
-            what = ("Счёт оценок" if intent == "grade_count" else "Зачётные единицы")
-            return {"text": f"{what} веду по студенту, а не по преподавателю. "
-                            "Спросите с фамилией — например «сколько пропусков у Иванова». "
-                            "Я также покажу ваши группы, средние баллы, долги и расписание. 🐯",
-                    "mood": "neutral", "intent": "help", "facts": {}}
-
-        # Агрегаты по группам (средний + зона риска) + ПОИМЁННЫЙ список отстающих.
-        # Преподаватель видит своих студентов в журнале, поэтому назвать их долги — не
-        # раскрытие ПДн, а прямой ответ на «у кого долги». Раньше отдавался только счётчик,
-        # и Вектор честно не мог назвать фамилии.
-        per, risky = [], []
-        for g in groups:
-            gl = W.current_term_lessons(db, g, [
-                l for l in W.group_lessons(db, g)
-                if l.subject in subjects_by_group.get(g, set())], cfg)
-            vals = []
-            for s in W.students_in_group(db, g):
-                rec = W.student_records(db, s.surname, s.name, g, student_id=s.id)
-                a = W.average(gl, rec, cfg, scale=tscale)
-                dbts = W.debts(gl, rec, scale=tscale)
-                if dbts or (0 < a < 3):
-                    risky.append((W.display_name(s), g, a, dbts))
-                if a > 0:
-                    vals.append(a)
-            per.append((g, round(sum(vals) / len(vals), 2) if vals else 0.0))
-        if intent in ("at_risk", "debtors"):
-            if not risky:
-                return {"text": "Должников и отстающих сейчас нет — группы идут ровно.",
-                        "mood": "happy", "intent": "at_risk",
-                        "facts": {"at_risk": 0}, "no_voice": True}
-            #no_voice: имена и причины отдаём ДОСЛОВНО, мимо LLM — иначе он их исказит
-            #(серверная озвучка фамилии не обезличивает) или, как в жалобе, откажется
-            #называть. Это фактический список, переформулировать нечего.
-            lines = []
-            for nm, g, a, dbts in risky:
-                reason = "; ".join(dbts) if dbts else f"средний балл {a}"
-                lines.append(f"• {nm} ({g}): {reason}")
-            head = ("Задолженности есть у одного студента:" if len(risky) == 1
-                    else f"Задолженности есть у {len(risky)} студентов:")
-            return {"text": head + "\n" + "\n".join(lines),
-                    "mood": "sad", "intent": "at_risk",
-                    "facts": {"at_risk": len(risky)}, "no_voice": True}
-        if intent in ("average", "group_stats", "grades"):
-            body = "; ".join(f"{g}: {ga}" for g, ga in per)
-            #len(risky), а не «risk»: такой переменной здесь нет и никогда не было —
-            #вопрос преподавателя про средний балл/статистику падал с NameError в 500,
-            #и Вектор выглядел «не видящим базу». Держит test_vector_teacher_group_stats.
-            n_risky = len(risky)
-            #Сколько СТУДЕНТОВ в группах преподавателя — прямой ответ на «сколько
-            #студентов»: раньше на этот вопрос отдавались только средние по группам.
-            n_students = sum(len(W.students_in_group(db, g)) for g in groups)
-            return {"text": f"Средний по вашим группам — {body}. "
-                            f"Всего студентов: {n_students}. В зоне риска: {n_risky}.",
-                    "mood": "neutral", "intent": "group_stats",
-                    "facts": {"groups": len(per), "students": n_students, "at_risk": n_risky}}
-        if intent == "server_state":
-            #Сервером занимается администратор. Отвечаем прямо, а не общей справкой:
-            #иначе преподаватель решит, что Вектор просто не понял вопрос.
-            return {"text": "Состояние сервера — к администратору, это не учебные данные. "
-                            "Я могу показать ваши группы, оценки, долги, пропуски, "
-                            "домашние задания и расписание. 🐯",
-                    "mood": "neutral", "intent": "help", "facts": {}}
+            return _teachers_answer(db, nlu["group"])
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
-    # ── АДМИН: агрегаты по заведению, справочники и состояние сервера ──────────────
-    #Вопросы, на которые у администратора ответа нет по существу. Раньше они молча
-    #проваливались в счётчики: на «что задали» приходило «студентов — 47», то есть
-    #уверенный ответ не на тот вопрос.
-    if intent in ("homework", "zet", "subject_grades", "grade_count"):
-        return {"text": "Это данные учебного процесса — их видят студент и его "
-                        "преподаватель. Я могу показать справочники, сводку по колледжу "
-                        "и состояние сервера. 🐯",
-                "mood": "neutral", "intent": "help", "facts": {}}
-    if intent == "server_state":
-        return _server_state_facts(db)
-    if intent in ("at_risk", "debtors"):
-        #Общеколледжный срез: раньше эти вопросы у админа падали в счётчики, хотя
-        #«кто в зоне риска» — ровно тот вопрос, ради которого админ и заходит.
-        return _admin_risk_facts(db, cfg, intent)
-    if intent == "teachers":
-        rows = db.query(User).filter(User.role == "teacher", User.deleted == False).all()  # noqa: E712
-        names = [W.display_name(t) for t in rows]
-        body = ", ".join(names) if names else "список пуст"
-        return {"text": f"Преподаватели колледжа ({len(names)}): {body}.", "mood": "neutral",
-                "intent": "teachers", "facts": {"count": len(names)}}
+    # ── СТУДЕНТ: только свои данные (privacy-by-design) ──────────────────────────────
+    group = user.group_name
+    #Занятия по предметам, убранным из плана группы, не должны попадать ни в долги,
+    #ни в средний, ни в «мои оценки» (current_subject_lessons) — и занятия за ПРОШЛЫЕ
+    #курсы по повторяющимся предметам вроде «Физической культуры» тоже не должны
+    #(current_term_lessons) — та же тройная фильтрация, что в student_overview, плюс
+    #раздельное обучение (§ролей, 3.6.1): чужая подгруппа студенту не видна.
+    lessons = W.filter_lessons_by_student_subgroup(db, W.current_term_lessons(
+        db, group, W.current_subject_lessons(
+            db, group, W.group_lessons(db, group)), cfg), user.id)
+    #Вектор отвечает СТУДЕНТУ о нём самом — значит теми же правилами, что и его журнал:
+    #иначе один и тот же вопрос давал бы разные ответы на двух экранах.
+    records = W.student_visible_records(db, user.surname, user.name, group, student_id=user.id)
+    scale_map = W.lesson_scale_map(db, lessons)
+
+    if intent == "schedule":
+        #Расписание публично (страница «Расписание без входа») — названную группу можно.
+        text, facts = _schedule_answer(db, nlu["group"] or group, msg, day)
+        return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
     if intent == "groups":
-        rows = db.query(Group).filter(Group.deleted == False).all()  # noqa: E712
-        names = [g.name for g in rows]
-        body = ", ".join(names) if names else "групп нет"
-        return {"text": f"Группы колледжа ({len(names)}): {body}.", "mood": "neutral",
-                "intent": "groups", "facts": {"count": len(names)}}
+        return {"text": f"Твоя группа — {group}." if group else "Группа за тобой не закреплена.",
+                "mood": "neutral", "intent": "groups", "facts": {"group": group}}
+    if intent == "teachers":
+        #Кто ведёт пары своей группы — открытые данные расписания портала.
+        if not group:
+            return {"text": "Группа за тобой не закреплена.", "mood": "neutral",
+                    "intent": "help", "facts": {}}
+        return _teachers_answer(db, group)
+    if intent == "debtors":
+        d = _debts_by_subject(lessons, records, scale_map)
+        text = "Задолженностей нет — так держать! 🐯" if not d else \
+            "Есть задолженности: " + "; ".join(d) + "."
+        return {"text": text, "mood": "happy" if not d else "sad",
+                "intent": "debtors", "facts": {"debts": len(d)}}
+    if intent == "absences":
+        a = W.absences(lessons, records)
+        return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
+                "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
+    if intent == "homework":
+        return _homework_answer(lessons, records, subject)
+    if intent == "grade_count":
+        b = _grade_breakdown(lessons, records, scale=scale_map)
+        if subject:
+            subj_lessons = [l for l in lessons if l.subject == subject]
+            bs = _grade_breakdown(subj_lessons, records, scale=scale_map)
+            return {"text": f"Оценок по предмету «{subject}» — {bs['всего']} "
+                            f"(5: {bs['5']}, 4: {bs['4']}, 3: {bs['3']}, 2: {bs['2']}).",
+                    "mood": "neutral", "intent": "grade_count", "facts": bs}
+        return {"text": f"Всего у тебя оценок — {b['всего']} "
+                        f"(пятёрок: {b['5']}, четвёрок: {b['4']}, троек: {b['3']}, двоек: {b['2']}).",
+                "mood": "happy" if b["2"] == 0 else "neutral",
+                "intent": "grade_count", "facts": b}
+    if intent == "subject_grades" and subject:
+        per = [p for p in W.per_subject_averages(lessons, records, cfg, scale=scale_map)
+               if p["subject"] == subject]
+        if not per:
+            return {"text": f"По предмету «{subject}» у тебя пока нет занятий с оценками.",
+                    "mood": "neutral", "intent": "subject_grades", "facts": {}}
+        p = per[0]
+        marks = [records.get(l.id) for l in lessons
+                 if l.subject == subject and l.type == "Практика"
+                 and W.grading.to_five_point(records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None]
+        avg_txt = f"средний {p['average']}" if p["average"] else "оценок ещё нет"
+        body = (", ".join(marks)) if marks else "—"
+        return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
+                "mood": _mood_by_avg(p["average"]), "intent": "subject_grades",
+                "facts": {"subject": subject, "average": p["average"]}}
     if intent == "subjects":
-        #Админу — каталог предметов целиком (это его справочник, ровно как «Группы» выше).
-        rows = db.query(Subject).filter(Subject.deleted == False).all()  # noqa: E712
-        names = sorted({s.name for s in rows if s.name})
-        body = ", ".join(names) if names else "каталог пуст"
-        return {"text": f"Предметы колледжа ({len(names)}): {body}.", "mood": "neutral",
-                "intent": "subjects", "facts": {"count": len(names)}, "no_voice": True}
-    n_students = db.query(User).filter(User.role == "student", User.deleted == False).count()  # noqa: E712
-    n_teachers = db.query(User).filter(User.role == "teacher", User.deleted == False).count()  # noqa: E712
-    n_parents = db.query(User).filter(User.role == "parent", User.deleted == False).count()  # noqa: E712
-    n_groups = db.query(Group).filter(Group.deleted == False).count()  # noqa: E712
-    n_subjects = db.query(Subject).filter(Subject.deleted == False).count()  # noqa: E712
-    #Заявки на регистрацию — то, что ТРЕБУЕТ ДЕЙСТВИЯ, а не просто цифра в сводке.
-    #Раньше о них можно было узнать, только зайдя на страницу заявок и вспомнив о ней.
-    pending = 0
-    try:
-        pending = db.query(RegistrationRequest).filter(
-            RegistrationRequest.status == "pending").count()
-    except Exception:      # noqa: BLE001 — сводка не повод ронять ответ
-        pending = 0
-    text = (f"В системе: студентов — {n_students}, преподавателей — {n_teachers}, "
-            f"родителей — {n_parents}, групп — {n_groups}, предметов — {n_subjects}.")
-    if pending:
-        text += f" ⚠️ Ждут одобрения заявки на регистрацию: {pending}."
-    return {"text": text,
-            "mood": "neutral" if not pending else "surprised", "intent": "group_stats",
-            "facts": {"students": n_students, "teachers": n_teachers,
-                      "parents": n_parents, "groups": n_groups,
-                      "subjects": n_subjects, "pending_registrations": pending}}
+        #Полный список предметов группы — из справочника И занятий (group_subject_list),
+        #а не только из занятий: предмет из импортированного учебного плана появляется
+        #раньше, чем по нему заводят первое занятие, и до этой ветки Вектор о нём молчал.
+        #no_voice — перечень НАЗВАНИЙ: LLM, «озвучивая данные», переставляет и выдумывает
+        #предметы, а это ровно то, что продукт обещает не делать.
+        names = W.group_subject_list(db, group)
+        if not names:
+            return {"text": "Предметы за твоей группой пока не закреплены — их заводит "
+                            "администратор. 🐯",
+                    "mood": "neutral", "intent": "subjects", "facts": {"subjects": 0},
+                    "no_voice": True}
+        graded = {p["subject"] for p in W.per_subject_averages(lessons, records, cfg,
+                                                               scale=scale_map)
+                  if p["average"]}
+        text = f"Твои предметы ({len(names)}): " + ", ".join(names) + "."
+        no_marks = [n for n in names if n not in graded]
+        if no_marks:
+            text += " Пока без оценок: " + ", ".join(no_marks) + "."
+        return {"text": text, "mood": "neutral", "intent": "subjects",
+                "facts": {"subjects": len(names), "without_grades": len(no_marks)},
+                "no_voice": True}
+    if intent == "grades" or intent == "subject_grades":
+        per = W.per_subject_averages(lessons, records, cfg, scale=scale_map)
+        graded = [p for p in per if p["average"]]
+        if not graded:
+            return {"text": "Оценок по практикам пока нет — как появятся, покажу. 🐯",
+                    "mood": "neutral", "intent": "grades", "facts": {}}
+        body = "; ".join(f"{p['subject']} — {p['average']}" for p in graded)
+        return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
+                "intent": "grades", "facts": {"subjects": len(graded)}}
+    if intent == "zet":
+        return _zet_facts(db, user.surname, user.name, group, cfg, student_id=user.id)
+    # average и всё остальное (at_risk/roster/group_stats недоступны студенту)
+    avg = W.average(lessons, records, cfg, scale=scale_map)
+    if intent == "server_state":
+        #Состояние сервера — не учебные данные, и студенту их знать незачем. Молчать
+        #нельзя: без явной ветки вопрос про диск проваливался бы в средний балл, то
+        #есть Вектор отвечал бы уверенно и не на тот вопрос.
+        return {"text": "Про сервер знает администратор — это не учебные данные. "
+                        "Я могу показать твой средний балл, оценки, пропуски, долги, "
+                        "домашние задания и расписание. 🐯",
+                "mood": "neutral", "intent": "help", "facts": {}}
+    if intent in ("at_risk", "roster", "group_stats"):
+        return {"text": "Эти данные — для преподавателя. Я могу показать твой средний балл, "
+                        "оценки, пропуски, долги, домашние задания и расписание. 🐯",
+                "mood": "neutral", "intent": "help", "facts": {}}
+    return {"text": f"Твой средний балл — {avg}. " + W.grading.methodology_text(cfg),
+            "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}

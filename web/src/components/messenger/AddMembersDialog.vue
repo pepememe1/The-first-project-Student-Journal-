@@ -87,7 +87,7 @@ function submit() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
 

@@ -172,7 +172,9 @@ test('карта сайта и robots.txt описывают ОДИН И ТОТ 
   const loc = sitemap.match(/<loc>([^<]+)<\/loc>/g)
     .map((s) => s.replace(/<\/?loc>/g, ''))
     .map((u) => u.replace('https://esstu-gradebook.ru', ''))
-  const allowedPages = allows.filter((a) => a.endsWith('.html'))
+  //`/$` — сама главная (страница входа), открытая ровно она (01.10.2026): в карте это «/».
+  const allowedPages = allows.filter((a) => a.endsWith('.html') || a === '/$')
+    .map((a) => (a === '/$' ? '/' : a))
   assert.deepEqual([...loc].sort(), [...allowedPages].sort(),
     'карта сайта и robots.txt разошлись по составу публичных страниц')
   assert.ok(html.includes('<link rel="canonical" href="https://esstu-gradebook.ru/offer.html">'),
@@ -268,4 +270,17 @@ test('контактная точка не разошлась с контакт�
   const org = ld()['@graph'][0]
   assert.equal(org.contactPoint.email, org.email, 'почта в contactPoint и у организации разная')
   assert.equal(org.contactPoint.telephone, org.telephone, 'телефон в contactPoint и у организации разный')
+})
+
+// 🧭 ДОРОГА НАЗАД ОДНА (28.09.2026, жалоба Ярослава). Под общей полосой «← Вернуться в
+// журнал» стояла вторая кнопка «Назад ко входу» на /login. Две двери назад на одном
+// экране читаются как недоделка, а вторая ещё и вела не туда: вошедшего человека
+// «/login» выкидывал на форму входа, хотя «/» отдаёт ему его кабинет.
+// Проверяется СВОЙСТВО — ссылок в приложение ровно одна и она на «/», — а не отсутствие
+// конкретной подписи: переименованная кнопка прошла бы проверку по тексту.
+test('назад в приложение ведёт одна ссылка, и она на «/»', () => {
+  const body = html.slice(html.indexOf('<body'))
+  const hrefs = [...body.matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)].map((m) => m[1])
+  const intoApp = hrefs.filter((h) => h === '/' || /^\/(login|app|#)/.test(h))
+  assert.deepEqual(intoApp, ['/'], `ссылки в приложение: ${JSON.stringify(intoApp)}`)
 })

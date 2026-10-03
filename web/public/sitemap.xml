@@ -8,6 +8,9 @@
      либо адрес, который краулер не откроет. Держит web/tests/offerMeta.test.mjs. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
+    <loc>https://esstu-gradebook.ru/</loc>
+  </url>
+  <url>
     <loc>https://esstu-gradebook.ru/offer.html</loc>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>

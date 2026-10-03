@@ -70,9 +70,6 @@ def _kv_set(key: str, value) -> bool:
 #программе (вкладка «Сервер и сайт» → «Адрес сайта и онлайн-базы»).
 DEFAULT_API_URL = "https://esstu-gradebook.ru"
 
-#Телефон поддержки — показывается в окне подключения («за ссылкой и подробностями
-#обратитесь в поддержку»). Меняется здесь, в коде.
-SUPPORT_PHONE = "+7 (000) 000-00-00"
 
 #Адрес сайта журнала (тот же сервер, что и БД — в перспективе). Кнопка «Войти через
 #сайт» открывает его в браузере. Меняется здесь, в коде. Пусто — кнопку прячем.
@@ -191,11 +188,6 @@ def is_host() -> bool:
 #Флаг ставится при удачном запуске сервера из админки и снимается при ручной
 #остановке (явная остановка = «больше не поднимать автоматически»).
 _HOST_AUTOSTART_KEY = "host_autostart"
-
-
-def host_autostart_enabled() -> bool:
-    """True, если этот ПК-хост должен сам поднимать свой сервер при старте программы."""
-    return bool(_kv_get(_HOST_AUTOSTART_KEY, False))
 
 
 #Отложенная отправка личных настроек (темы оформления). Если в момент «Сохранить»
@@ -318,10 +310,6 @@ def saved_session_alive(ttl_hours: float = SAVED_SESSION_TTL_H) -> bool:
     except (ValueError, TypeError):
         return False
     return datetime.now(timezone.utc) - when < timedelta(hours=ttl_hours)
-
-
-def clear_saved_session() -> bool:
-    return _kv_set(_SESSION_KEY, {})
 
 
 #Идентификатор ЭТОГО устройства (ПК) для барьера подтверждения подключения. Сервер

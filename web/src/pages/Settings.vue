@@ -6,11 +6,13 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter, useRoute } from 'vue-router'
 import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil, Vibrate, VibrateOff } from '@lucide/vue'
-import { adminApi, authApi, meApi } from '@/api/endpoints'
+import { adminApi, authApi, meApi, teacherApi } from '@/api/endpoints'
+import ScaleConversionDialog from '@/components/settings/ScaleConversionDialog.vue'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { isDesktopApp } from '@/utils/platform'
+import { hasOpenDialog } from '@/directives/dialog'
 import MfaCard from '@/components/settings/MfaCard.vue'
 import PasswordCard from '@/components/settings/PasswordCard.vue'
 import ContactsCard from '@/components/settings/ContactsCard.vue'
@@ -369,13 +371,28 @@ async function loadGradingScale() {
     gradingScale.value = data?.prefs?.grading_scale || '5'
   } catch { /* дефолт "5" уже стоит */ }
 }
+//🔥 Смена шкалы ПЕРЕВОДИТ уже поставленные оценки (01.10.2026): раньше это была одна
+//строка настроек, и прежние «5/4/3» становились «5 из 100» у всей группы. Сначала
+//предпросмотр с сервера; есть что переводить — окно со спорными оценками и выбором.
+const scalePlan = ref(null)
 async function pickScale(id) {
   if (id === gradingScale.value || scaleSaving.value) return
   scaleSaving.value = true
   try {
-    await meApi.setPrefs({ grading_scale: id })
-    gradingScale.value = id
-  } finally { scaleSaving.value = false }
+    const { data } = await teacherApi.scalePreview(id)
+    if (!data.auto && !data.disputed?.length) {
+      await teacherApi.setScale(id, {})
+      gradingScale.value = id
+      return
+    }
+    scalePlan.value = { ...data, to: id }
+  } catch { /* шкала не сменилась — галочка остаётся на прежней */ } finally {
+    scaleSaving.value = false
+  }
+}
+function onScaleApplied(res) {
+  gradingScale.value = res?.to || scalePlan.value?.to || gradingScale.value
+  scalePlan.value = null
 }
 
 // ── Озвучка Вектора: 3 режима (Голос → Бубнеж → Выкл) + выбор голоса ──────────────
@@ -527,13 +544,25 @@ async function goSub(catId, subId) {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+// «Выйти» из карточки себя в сайдбаре ведёт СЮДА (`?section=logout`), к той же кнопке с
+// проверкой неотправленного, — а не выходит сразу (28.09.2026). Живой прогон: выход
+// нашли только в самом низу раздела «Аккаунт», тестировщик его не нашёл вовсе. Сам
+// выход остаётся здесь намеренно (см. карточку «Аккаунт»): один случайный клик в углу
+// экрана не должен выкидывать человека из журнала.
+watch(() => route.query.section, (s) => { if (s === 'logout') goSub('account', 'logout') },
+      { immediate: true })
+
 // Закрытие оверлея = уход со страницы настроек. `back()` возвращает туда, откуда
 // пришли; если истории нет (открыли по прямой ссылке) — на главную своей роли.
 function closeSettings() {
   if (window.history.length > 1) router.back()
   else router.push(`/${auth.role || 'student'}`)
 }
-function onEsc(e) { if (e.key === 'Escape') closeSettings() }
+//Esc закрывает Настройки, только когда поверх них НЕТ окна: иначе Esc в «Сеансах» или в
+//окне перевода шкалы уводил со страницы (см. `hasOpenDialog`).
+function onEsc(e) {
+  if (e.key === 'Escape' && !e.defaultPrevented && !hasOpenDialog()) closeSettings()
+}
 onMounted(() => window.addEventListener('keydown', onEsc))
 onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 </script>
@@ -927,6 +956,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           <Check v-if="gradingScale === s.id" class="size-4 shrink-0 text-accent" />
         </button>
       </div>
+      <ScaleConversionDialog v-if="scalePlan" :plan="scalePlan" @close="scalePlan = null"
+                             @applied="onScaleApplied" />
     </Card>
 
     <!-- 🎓 ЗАМОРОЗКА ОЦЕНОК (06.09.2026, требование Влада: «время доходит до лета —

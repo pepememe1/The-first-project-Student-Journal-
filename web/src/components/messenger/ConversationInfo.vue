@@ -307,8 +307,7 @@ function onChatAction(action) {
           <h3 class="truncate font-title text-base font-bold text-text">{{ title }}</h3>
           <p class="text-xs text-text3">
             {{ KIND_RU[kind] || locale.t('messenger.dialog', 'Беседа') }}
-            <span v-if="isGroupOrChannel"> · {{ activeInfo?.subscribers || 0 }}
-              {{ kind === 'channel' ? locale.t('conversationInfo.subscribersWord', 'подписчиков') : locale.t('conversationInfo.membersWord', 'участников') }}</span>
+            <span v-if="isGroupOrChannel">{{ ' · ' + locale.t(kind === 'channel' ? 'conversationInfo.subscribersCount' : 'conversationInfo.membersCount', { n: activeInfo?.subscribers || 0 }) }}</span>
           </p>
         </div>
         <!-- §D6: переименовать (owner/admin) -->

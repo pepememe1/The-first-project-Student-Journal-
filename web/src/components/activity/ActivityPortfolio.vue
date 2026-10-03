@@ -86,7 +86,7 @@ async function toggle(a) {
                 class="shrink-0 rounded-lg border border-border2 px-2 py-1 text-xs text-text2 hover:border-accent hover:text-accent">
           {{ locale.t('activity.journal.export', 'Выгрузить') }}
         </button>
-        <button type="button" @click="emit('close')" class="shrink-0 text-text3 hover:text-text">
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="shrink-0 text-text3 hover:text-text">
           <X class="size-5" />
         </button>
       </div>

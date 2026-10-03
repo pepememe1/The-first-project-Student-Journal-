@@ -182,7 +182,7 @@ async function archive() {
               <div class="flex items-center gap-2">
                 <span class="grid size-6 shrink-0 place-items-center rounded-full bg-accent-glow text-xs font-bold text-accent">{{ i + 1 }}</span>
                 <span class="min-w-0 flex-1 truncate text-sm font-medium text-text">{{ s.title }}</span>
-                <button v-if="canEdit" type="button" @click="delSection(s.id)"
+                <button :aria-label="loc.t('common.delete', 'Удалить')" v-if="canEdit" type="button" @click="delSection(s.id)"
                         class="grid size-6 shrink-0 place-items-center rounded text-text3 hover:bg-red/10 hover:text-red"><Trash2 class="size-3.5" /></button>
               </div>
               <!-- Материалы раздела -->
@@ -197,7 +197,7 @@ async function archive() {
                      class="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-blue hover:underline">
                     <Link2 class="size-3.5 shrink-0" /><span class="truncate">{{ m.title }}</span>
                   </a>
-                  <button v-if="canEdit" type="button" @click="delMaterial(m.id)"
+                  <button :aria-label="loc.t('common.delete', 'Удалить')" v-if="canEdit" type="button" @click="delMaterial(m.id)"
                           class="grid size-5 shrink-0 place-items-center rounded text-text3 hover:text-red"><Trash2 class="size-3" /></button>
                 </div>
                 <!-- добавить материал в раздел -->
@@ -212,7 +212,7 @@ async function archive() {
                             class="flex h-8 items-center gap-1 rounded border border-border2 px-2 text-xs text-text2 hover:border-accent hover:text-accent disabled:opacity-50">
                       <Loader2 v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
                     </button>
-                    <button type="button" @click="matDraft.open = 0" class="grid size-8 place-items-center rounded text-text3 hover:text-text"><X class="size-4" /></button>
+                    <button :aria-label="loc.t('common.cancel', 'Отмена')" type="button" @click="matDraft.open = 0" class="grid size-8 place-items-center rounded text-text3 hover:text-text"><X class="size-4" /></button>
                   </div>
                   <button v-else type="button" @click="matDraft = { open: s.id, title: '', url: '' }"
                           class="flex items-center gap-1 text-xs text-text3 hover:text-accent"><Plus class="size-3.5" />{{ t('courses.addMaterial', 'Материал') }}</button>
@@ -247,7 +247,7 @@ async function archive() {
               <a v-else :href="m.url" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-sm text-blue hover:underline">
                 <Link2 class="size-3.5 shrink-0" /><span class="min-w-0 max-w-[220px] truncate">{{ m.title }}</span>
               </a>
-              <button v-if="canEdit" type="button" @click="delMaterial(m.id)" class="text-text3 hover:text-red"><Trash2 class="size-3.5" /></button>
+              <button :aria-label="loc.t('common.delete', 'Удалить')" v-if="canEdit" type="button" @click="delMaterial(m.id)" class="text-text3 hover:text-red"><Trash2 class="size-3.5" /></button>
             </div>
             <p v-if="!course.materials.length && canEdit" class="text-sm text-text3">{{ t('courses.noMaterials', 'Материалов вне разделов нет') }}</p>
           </div>
@@ -291,7 +291,7 @@ async function archive() {
                 <td class="px-3 py-2 text-text2">{{ a.due_date || '—' }}</td>
                 <td class="px-3 py-2 text-text2">{{ a.teacher_name || '—' }}</td>
                 <td v-if="canEdit" class="px-3 py-2 text-right">
-                  <button type="button" @click="delAssignment(a.id)" class="text-text3 hover:text-red"><Trash2 class="size-3.5" /></button>
+                  <button :aria-label="loc.t('common.delete', 'Удалить')" type="button" @click="delAssignment(a.id)" class="text-text3 hover:text-red"><Trash2 class="size-3.5" /></button>
                 </td>
               </tr>
               <tr v-if="!course.assignments.length">

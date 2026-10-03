@@ -17,6 +17,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { LOCALES, DEFAULT_LOCALE, MESSAGES } from '../i18n/dictionaries.js'
+import { pickPlural } from '../utils/plural.js'
 
 const LS_LOCALE = 'gb.locale'
 const LS_ENABLED = 'gb.locale_on'
@@ -56,6 +57,11 @@ export const useLocaleStore = defineStore('locale', () => {
     const fallback = params ? '' : paramsOrFallback
     const dict = MESSAGES[active.value] || {}
     let s = dict[key] || MESSAGES[DEFAULT_LOCALE][key] || fallback || key
+    //Форма слова по числу «{n} подписчик|…|…» — по правилам ТОГО языка, из которого
+    //строка взята (нет перевода — русская строка и русские правила).
+    if (params && 'n' in params) {
+      s = pickPlural(s, params.n, dict[key] ? active.value : DEFAULT_LOCALE)
+    }
     if (params) {
       for (const [k, v] of Object.entries(params)) s = s.replaceAll(`{${k}}`, v)
     }

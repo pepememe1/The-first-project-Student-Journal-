@@ -431,8 +431,12 @@ def relaunch() -> None:
     if not app_paths.is_frozen():
         return
     try:
+        import os
         import subprocess
+        #GRADEBOOK_AFTER_UPDATE: новая копия подождёт, пока эта выйдет и отпустит замок
+        #одной копии (desktop/single_instance.py) — иначе упёрлась бы в него и закрылась.
         subprocess.Popen([_exe_path()], cwd=app_paths.app_dir(),
+                         env=dict(os.environ, GRADEBOOK_AFTER_UPDATE="1"),
                          creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     except Exception as e:                                     # noqa: BLE001
         _LOG.warning(f"[update] не удалось перезапустить программу: {e}")

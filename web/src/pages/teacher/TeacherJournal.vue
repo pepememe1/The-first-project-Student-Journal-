@@ -17,6 +17,7 @@ import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { menuMaxHeight, placeMenu } from '@/utils/menuPlacement'
 import { useRoute } from 'vue-router'
 import { teacherApi, termsApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import {
   enqueueGrade, enqueueLessonCreate, enqueueLessonDelete, enqueueLessonUpdate, newLessonId,
   enqueueTermGrade, isTempId, pendingGrade, pendingLessons, storageFailed,
@@ -83,18 +84,38 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 
+// 🔥 ПЕРЕЗАГРУЗКА ТОГО ЖЕ ЖУРНАЛА НЕ УБИРАЕТ ТАБЛИЦУ С ЭКРАНА (01.10.2026, жалоба
+// Ярослава: «ставим оценку — автосохранение, а потом отматывает в верх списка»). После
+// каждой оценки журнал перечитывается (средний считает сервер), а шаблон на время загрузки
+// показывал вместо ТАБЛИЦЫ строку «Загрузка…»: страница схлопывалась, прокрутка вставала
+// наверх, фокус уходил с ячейки, потом таблица рисовалась заново. Теперь надпись — только
+// когда на экране журнал ДРУГОЙ пары «группа|предмет» (первое открытие, смена выбора);
+// перечитывание того же журнала идёт под живой таблицей.
+// ⚠️ Номер запроса: две оценки подряд — два перечитывания, и ответ на ПЕРВЫЙ мог прийти
+// последним, откатив на экране вторую оценку; при смене группы — положить старый журнал
+// под заголовок новой. Применяется только ответ на последний запрос.
+const shownKey = ref('')
+const journalKey = computed(() => `${group.value}|${subject.value}`)
+let loadSeq = 0
 async function load() {
-  if (!group.value || !subject.value) { data.value = null; return }
+  if (!group.value || !subject.value) { data.value = null; shownKey.value = ''; return }
+  const key = journalKey.value
+  const seq = ++loadSeq
   loading.value = true
   try {
-    data.value = (await teacherApi.journal(group.value, subject.value)).data
+    const fresh = (await teacherApi.journal(group.value, subject.value)).data
+    if (seq !== loadSeq) return
+    data.value = fresh
+    shownKey.value = key
   } catch {
     // ⚠️ НЕ обнуляем то, что уже показано. Прежде здесь стояло `data.value = null`, и
     // один неудачный запрос стирал журнал целиком — а без сети он неудачен постоянно.
     // Пустой экран вместо последних известных данных это ровно то, чего офлайн-режим
-    // должен не допускать. Нет ни ответа, ни прежних данных — тогда честно пусто.
-    if (!data.value) data.value = null
-  } finally { loading.value = false }
+    // должен не допускать. Но журнал ДРУГОЙ группы под заголовком новой — это не
+    // «последние известные данные», а чужие: тогда честно пусто.
+    if (seq !== loadSeq) return
+    if (shownKey.value !== key) { data.value = null; shownKey.value = key }
+  } finally { if (seq === loadSeq) loading.value = false }
 }
 
 /**
@@ -474,6 +495,7 @@ async function setGrade(s, key, value) {
     // Отсутствие ответа означает лишь, что нет сети. Откатывать здесь нельзя: работа
     // преподавателя пропала бы ровно в тот момент, когда он физически не может её
     // повторить. Такую оценку кладём в очередь — она уедет сама (см. api/outbox.js).
+    if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
     if (!e?.response) {
       //Номер клетки, который человек ВИДЕЛ (W-13б): сервер по нему отличит правку на
       //свежей версии от затирания чужой — и отдаст конфликт на выбор человеку.
@@ -642,6 +664,7 @@ async function saveLesson() {
     // Нет ответа — нет сети. Занятие (в том числе домашку) кладём в очередь: она
     // выдаст ему временный id, журнал сразу покажет колонку, и по ней уже можно
     // ставить оценки — очередь перепривяжет их к настоящему id после отправки.
+    if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
     if (!e?.response) {
       const f = lessonForm.value
       if (editingLesson.value) {
@@ -678,6 +701,7 @@ async function delLesson(l) {
   if (isTempId(l.id)) { enqueueLessonDelete(l.id); await load(); return }
   try { await teacherApi.deleteLesson(l.id); await load() }
   catch (e) {
+    if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
     if (!e?.response) {
       enqueueLessonDelete(l.id)
       toast.info(locale.t('teacherJournal.queuedOffline',
@@ -799,6 +823,7 @@ async function saveAtt() {
         // студенту. Кладём В ОЧЕРЕДЬ ВСЮ ведомость, включая ещё не пройденных: иначе
         // половина группы уехала бы, а половина потерялась, и разобраться, где
         // остановились, было бы нельзя.
+        if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
         if (!e?.response) {
           //Период кладём В ЗАПИСЬ (J10): доставка может случиться после rollover, и
           //без него сервер закроет итоговой НЕ ТОТ семестр — тот, который идёт в день
@@ -901,7 +926,7 @@ async function downloadVedomost(fmt) {
 
     <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
                 :message="locale.t('teacherJournal.noWorkloadMessage', 'За вами не закреплены группы или предметы.')" />
-    <p v-else-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
+    <p v-else-if="loading && shownKey !== journalKey" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
     <EmptyState v-else-if="!data?.students?.length" :title="locale.t('teacherJournal.noStudentsTitle', 'Нет студентов')" :message="locale.t('teacherJournal.noStudentsMessage', { group })" />
     <EmptyState v-else-if="!visibleStudents.length" :title="locale.t('teacherJournal.emptySubgroupTitle', 'Подгруппа пуста')"
                 :message="locale.t('teacherJournal.emptySubgroupMessage', 'Куратор ещё не распределил сюда студентов.')" />
@@ -1009,7 +1034,7 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Модалка занятия: создание и правка (дата — сегодня по умолчанию) -->
-    <div v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLesson = false">
+    <div v-dialog v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLesson = false">
       <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">
           {{ editingLesson ? locale.t('teacherJournal.editLessonTitle', 'Изменить занятие') : locale.t('teacherJournal.newLessonTitle', 'Новое занятие') }} · {{ group }}
@@ -1051,7 +1076,7 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Модалка аттестации: итоговые оценки за семестр + форма контроля + ведомость -->
-    <div v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
+    <div v-dialog v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
       <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 {{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
         <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(currentTerm) }}</p>
@@ -1078,7 +1103,8 @@ async function downloadVedomost(fmt) {
                    заставить человека помнить число, пока он выбирает оценку. -->
               <span class="shrink-0 text-xs font-semibold"
                     :class="r.average >= 4.5 ? 'text-green' : r.average >= 3.5 ? 'text-accent' : 'text-text3'">
-                {{ locale.t('teacherJournal.attAvg', 'ср.') }} {{ Number(r.average || 0).toFixed(2) }}
+                <!-- 0 — «оценок нет» (practice_average), а не «средний ноль»: в журнале там «—». -->
+                {{ locale.t('teacherJournal.attAvg', 'ср.') }} {{ Number(r.average) > 0 ? Number(r.average).toFixed(2) : '—' }}
               </span>
               <select v-model="r.grade"
                       :disabled="subjectHasExam && !r.exam && !r.was"
@@ -1111,7 +1137,7 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Выбор формата экспорта: Excel или Word -->
-    <div v-if="fmtMenu.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="fmtMenu.show = false">
+    <div v-dialog v-if="fmtMenu.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="fmtMenu.show = false">
       <div class="w-full max-w-xs rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-base font-bold text-text">{{ locale.t('teacherJournal.formatTitle', 'В каком формате?') }}</h3>
         <p class="mb-4 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? locale.t('teacherJournal.journalWord', 'Журнал успеваемости') : locale.t('teacherJournal.vedomostButton', 'Ведомость') }} · {{ group }} · {{ subject }}</p>

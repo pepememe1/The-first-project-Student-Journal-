@@ -1,0 +1,22 @@
+Фрагменты, вырезанные из desktop/webview2_app.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из desktop/webview2_app.py: _DeskAPI.app_version (строки 54–59 до переноса), пункт 8 ──
+    def app_version(self):
+        try:
+            from data.core import APP_VERSION
+            return APP_VERSION
+        except Exception:
+            return ""
+
+# ── из desktop/webview2_app.py: _DeskAPI.quit (строки 68–76 до переноса), пункт 8 ──
+    def quit(self):
+        """Закрыть программу из интерфейса (кнопка «Выйти» ведёт на экран входа, а не сюда)."""
+        try:
+            import webview
+            for w in webview.windows:
+                w.destroy()
+            return {"ok": True}
+        except Exception as e:      # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+

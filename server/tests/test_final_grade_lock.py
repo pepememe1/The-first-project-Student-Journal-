@@ -159,3 +159,31 @@ def test_a_removed_final_grade_is_not_a_lock(client, cast):
     # Повторное снятие ничего не ломает, и запись по-прежнему открыта.
     assert _set_final(client, cast, "").status_code == 200
     assert _set_grade(client, cast, lid, "5").status_code == 200
+
+
+def test_the_lock_is_checked_under_the_write_lock(client, cast, monkeypatch):
+    """Проверка «итоговой нет» и запись оценки — в ОДНОЙ транзакции записи (ревью 30.09.2026).
+
+    Иначе итоговая, выставленная параллельным запросом, коммитится между проверкой и
+    записью, и в закрытом семестре появляется текущая оценка. Саму гонку в тесте не
+    поймать (нужен точный тайминг двух запросов), поэтому проверяем ПОРЯДОК: замок
+    писателя обязан быть взят ДО чтения итоговой."""
+    from app.routers.web import write as W_
+    order = []
+    real_lock, real_check = W_._lock_for_write, W_._ensure_term_open
+
+    def lock(db):
+        order.append("lock")
+        return real_lock(db)
+
+    def check(*a, **kw):
+        order.append("check")
+        return real_check(*a, **kw)
+
+    monkeypatch.setattr(W_, "_lock_for_write", lock)
+    monkeypatch.setattr(W_, "_ensure_term_open", check)
+    lid = _lesson(client, cast["teacher"])
+    r = _set_grade(client, cast, lid, "5")
+    assert r.status_code == 200, r.text
+    assert "check" in order, order
+    assert "lock" in order[:order.index("check")], f"итоговая читается вне замка: {order}"

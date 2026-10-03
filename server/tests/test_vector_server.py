@@ -40,11 +40,25 @@ def test_static_intents_are_not_voiced_by_llm(client, monkeypatch):
         r = client.post("/web/vector/ask", json={"message": msg}, headers=th).json()
         assert r["text"] != "LLM_ОЗВУЧИЛ", f"«{msg}» ({r['intent']}) не должен идти в LLM: {r}"
 
-    #А вот ответ С РЕАЛЬНЫМИ ЦИФРАМИ озвучивать можно и нужно (стиль Вектора).
+    #А вот ответ С РЕАЛЬНЫМИ ЦИФРАМИ озвучивать можно и нужно (стиль Вектора) —
+    #студенту о нём самом.
+    from app.security import hash_password
+    client.post("/sync/push", json={"changes": {"users": [{
+        "id": "stud:voice1", "role": "student", "login": "voice1", "surname": "Голосов",
+        "name": "Глеб", "group_name": "ИС-21", "password_hash": hash_password("voicepass1")}]}},
+        headers=admin)
+    tok = client.post("/auth/login", json={"login": "voice1", "password": "voicepass1"}).json()
+    sh = {"Authorization": f"Bearer {tok['access_token']}"}
+    r = client.post("/web/vector/ask", json={"message": "мой средний балл"}, headers=sh).json()
+    assert r["intent"] == "average"
+    assert r["text"] == "LLM_ОЗВУЧИЛ", f"ответ с цифрами должен озвучиваться LLM: {r}"
+
+    #🔥 Кроме АДМИНСКИХ сводок (28.09.2026): получив «в колледже 26 студентов» и вопрос
+    #«сводка группы», модель отвечала «в вашей группе 26» — искажала СМЫСЛ, а не стиль.
     r = client.post("/web/vector/ask", json={"message": "сколько студентов"},
                     headers=admin).json()
     assert r["intent"] == "group_stats"
-    assert r["text"] == "LLM_ОЗВУЧИЛ", f"ответ с цифрами должен озвучиваться LLM: {r}"
+    assert r["text"] != "LLM_ОЗВУЧИЛ", f"админская сводка ушла в модель: {r}"
 
 
 def test_offtopic_goes_to_free_chat_not_canned_help(client, monkeypatch):

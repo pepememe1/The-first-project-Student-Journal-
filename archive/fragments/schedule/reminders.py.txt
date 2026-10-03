@@ -1,0 +1,34 @@
+Фрагменты, вырезанные из schedule/reminders.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из schedule/reminders.py: upcoming_reminder (строки 133–140 до переноса), пункт 7 ──
+def upcoming_reminder(snapshot, kind: str, entity: str, now: datetime,
+                      lead_min: tuple[int, int] = DEFAULT_LEAD_MIN) -> ReminderInfo:
+    """Удобная обёртка: собрать пары на сегодня и вернуть ReminderInfo.
+
+    ⚠️ ЗАДЕЛ: точка, которую в будущем дёргает таймер Вектора.
+    """
+    today = lessons_for_today(snapshot, kind, entity, now)
+    return current_and_next(today, now, lead_min)
+
+# ── из schedule/reminders.py: lessons_for_today (строки 113–131 до переноса), пункт 7 (звала только upcoming_reminder) ──
+def lessons_for_today(snapshot, kind: str, entity: str, now: datetime) -> list:
+    """Достаёт из снимка список пар сущности на СЕГОДНЯ (по дню недели и чётности).
+
+    kind: 'group' | 'teacher'. entity — имя группы или ФИО преподавателя.
+    ⚠️ ЗАДЕЛ: в рантайме пока не вызывается. Импорт store — лениво, чтобы модуль был
+    самодостаточным заделом.
+    """
+    from .store import current_week_parity
+    week = current_week_parity(now.date())
+    day = weekday_code(now)
+    if snapshot is None or not entity:
+        return []
+    if kind == "teacher":
+        weeks = snapshot.teacher_index.get(entity, {})
+        return [e["lesson"] for e in weeks.get(week, {}).get(day, [])]
+    gs = snapshot.groups.get(entity)
+    if not gs:
+        return []
+    return list(gs.weeks.get(week, {}).get(day, []))
+

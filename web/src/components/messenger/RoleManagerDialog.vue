@@ -117,12 +117,12 @@ async function resetToDefault() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[60] grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-[60] grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
         <h3 class="font-title text-base font-bold text-text">{{ locale.t('roleManager.title', { name: userName || locale.t('roleManager.participant', 'участник') }) }}</h3>
-        <button type="button" @click="emit('close')" class="text-text3 hover:text-text"><X class="size-5" /></button>
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="text-text3 hover:text-text"><X class="size-5" /></button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">

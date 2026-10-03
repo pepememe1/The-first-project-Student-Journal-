@@ -43,6 +43,8 @@ from ...models import (
     NotifyEvent, ParentLink, SubjectHours,
     UserStatus, User, UserNote, direct_conversation_id,
 )
+import logging as _logging
+_hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 router = APIRouter(prefix="/web/messenger", tags=["messenger"])
 #Кэш сводок: {(беседа, id последнего сообщения) → текст}. В ПАМЯТИ и намеренно: сводка
 #дёшево пересоздаётся, переживать перезапуск ей незачем, а лишняя таблица на боевом VPS
@@ -575,6 +577,20 @@ def _mute_refusal(row) -> dict:
     }
 
 
+def _guard_not_muted(db: Session, user: User, conv=None) -> None:
+    """Глобальный мьют модерацией (403) — БЕЗ счётчиков флуда.
+
+    Отдельно от `_guard_can_write`, потому что правка сообщения обязана уважать мьют, но
+    не должна считаться новым сообщением: исправленная сразу после отправки опечатка
+    упиралась бы в «не отправляйте так часто», а три таких правки заводили бы тикет о
+    флуде (02.10.2026). Чат с модерацией из-под мьюта открыт — см. `_guard_can_write`."""
+    if conv is not None and getattr(conv, "kind", "") == "moderation":
+        return                               #обжалование — см. `_guard_can_write`
+    row = _mute_row(db, user.id)
+    if row is not None:
+        raise HTTPException(status_code=403, detail=_mute_refusal(row))
+
+
 def _guard_can_write(db: Session, user: User, conv=None) -> None:
     """Единый барьер записи в мессенджер: глобальный мьют модерацией (403) → маскот-кулдаун
     (429 с эскалацией, §D2) → жёсткий анти-флуд (429, задел на скрипт, игнорирующий UI).
@@ -590,12 +606,7 @@ def _guard_can_write(db: Session, user: User, conv=None) -> None:
     ⚠️ Проверяется ВИД беседы, а не её id: строка `mod:{id}` собирается в одном месте, но
     сверять здесь её формат значило бы завести второе место, знающее этот формат.
     """
-    if conv is not None and getattr(conv, "kind", "") == "moderation":
-        pass                                 #обжалование — см. объяснение выше
-    else:
-        row = _mute_row(db, user.id)
-        if row is not None:
-            raise HTTPException(status_code=403, detail=_mute_refusal(row))
+    _guard_not_muted(db, user, conv)
     mascot_wait, violations = msg_limit.mascot_check(user.id)
     if mascot_wait:
         if violations == 3:                    #ровно на переходе к «систематическому»
@@ -1219,17 +1230,6 @@ def _system(db: Session, conv_id: str, event: str, *args: str) -> Message:
     return m
 
 
-def _peer_of_direct(db: Session, conv_id: str, me_id: str):
-    """Второй участник личного чата (для заголовка/карточки). None, если не найден."""
-    other = (db.query(ConversationParticipant)
-             .filter(ConversationParticipant.conversation_id == conv_id,
-                     ConversationParticipant.user_id != me_id)
-             .first())
-    if other is None:
-        return None
-    return db.query(User).filter(User.id == other.user_id).first()
-
-
 # ── Каталог пользователей и поиск по ФИО ─────────────────────────────────────────────
 _PAGE_USERS = 30
 
@@ -1597,8 +1597,8 @@ def _post_system_channel_message(db: Session, conv_id: str, body: str) -> None:
                     rustore_push.notify_login(db, u.login, SYSTEM_SENDER_NAME,
                                               "Новое сообщение",
                                               {"type": "message", "conversation_id": conv_id})
-    except Exception:
-        pass
+    except Exception as e:      # noqa: BLE001 — сообщение уже в канале; пуш — дополнение
+        _hook_log.warning("пуш о системном сообщении не отправлен: %s", e)
 
 
 def notify_grade_posted(db: Session, student_id: str, teacher_name: str, subject: str, grade: str) -> None:

@@ -93,6 +93,12 @@ QUESTIONS = [
     "какие предметы у ИС-21",
     "успеваемость группы",
     "кто не сдал экзамен",
+    #🔥 Фамилия в САМОМ ВОПРОСЕ (возражение Полковника 29.09.2026): вопрос уходит в
+    #модель дословно вместе с фактами, и «ЗЕТ Цыдыпова» отдавал фамилию наружу, хотя
+    #текст ответа был чистым.
+    "ЗЕТ Цыдыпова",
+    "сводка Цыдыпов",
+    "сколько оценок у Цыдыпова",
 ]
 
 
@@ -102,7 +108,9 @@ def _sent_to_llm(monkeypatch):
     seen = []
 
     def _spy(cfg, facts_text, role="student", question="", locale="ru"):
+        #И факты, И вопрос: вопрос попадает в промпт модели дословно (vector_llm.voice).
         seen.append(facts_text)
+        seen.append(question)
         return facts_text
 
     monkeypatch.setattr(vector_llm, "voice", _spy)

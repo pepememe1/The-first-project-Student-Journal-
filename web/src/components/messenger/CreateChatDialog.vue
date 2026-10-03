@@ -83,12 +83,12 @@ function submit() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
         <h3 class="font-title text-lg font-bold text-text">{{ isChannel ? locale.t('messenger.newChannel', 'Новый канал') : locale.t('messenger.newGroup', 'Новая группа') }}</h3>
-        <button type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text"><X class="size-5" /></button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
@@ -119,7 +119,7 @@ function submit() {
         <div v-if="chosen.length" class="mb-2 flex flex-wrap gap-1">
           <span v-for="p in chosen" :key="p.id" class="inline-flex items-center gap-1 rounded-full bg-accent-glow px-2 py-0.5 text-xs text-accent">
             {{ p.full_name }}
-            <button type="button" @click="toggle({ id: p.id })" class="hover:text-red">✕</button>
+            <button :aria-label="locale.t('common.remove', 'Убрать')" type="button" @click="toggle({ id: p.id })" class="hover:text-red">✕</button>
           </span>
         </div>
         <div class="mb-2 flex gap-1">

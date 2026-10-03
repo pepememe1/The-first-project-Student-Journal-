@@ -1,0 +1,10 @@
+Фрагменты, вырезанные из server/app/routers/sync.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из server/app/routers/sync.py: _Students.load_all (строки 185–189 до переноса), пункт 7 ──
+    def load_all(self, db) -> "_Students":
+        if not self._everyone:
+            self._add(self._base(db).all())
+            self._everyone = True
+        return self
+

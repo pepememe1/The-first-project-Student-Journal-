@@ -11,6 +11,7 @@ import { putSigned } from '@/utils/signedUpload'
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { messengerApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { useActivityStore } from '@/stores/activity'
 import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
@@ -190,7 +191,10 @@ export const useMessengerStore = defineStore('messenger', () => {
       messages.value = data.messages || []
       // Пришло меньше страницы — значит вся переписка уже здесь, тянуть выше нечего.
       if (messages.value.length < PAGE) hasOlder.value = false
-    } catch { messages.value = []; hasOlder.value = false }
+    } catch (e) {
+      if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
+      messages.value = []; hasOlder.value = false
+    }
     finally { loadingMessages.value = false }
   }
 
@@ -319,7 +323,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     try {
       const { data } = await messengerApi.pinned(activeId.value)
       pinned.value = data.pinned || []
-    } catch { pinned.value = [] }
+    } catch (e) { if (!isStaleSession(e)) pinned.value = [] }
   }
 
   // Открыть чат с модерацией (кнопка ⚙). Слева покажем правила вместо карточки собеседника.
@@ -904,7 +908,7 @@ export const useMessengerStore = defineStore('messenger', () => {
   }
   async function loadChannels(q = '') {
     try { const { data } = await messengerApi.channels(q); channels.value = data.channels || [] }
-    catch { channels.value = [] }
+    catch (e) { if (!isStaleSession(e)) channels.value = [] }
   }
   async function joinChannel(convId) {
     try {
@@ -1107,10 +1111,20 @@ export const useMessengerStore = defineStore('messenger', () => {
     if (i >= 0) messages.value[i] = updated
   }
 
+  /** Правка своего сообщения. true — сервер принял. Отказ ПОКАЗЫВАЕМ: прежний пустой
+   *  catch молча оставлял старый текст, и человек думал, что исправил. */
   async function editMessage(id, body) {
     const t = (body || '').trim()
-    if (!t) return
-    try { const { data } = await messengerApi.edit(id, t); _replaceMsg(data) } catch { /* noop */ }
+    if (!t) return false
+    try {
+      const { data } = await messengerApi.edit(id, t)
+      _replaceMsg(data)
+      return true
+    } catch (e) {
+      if (isStaleSession(e)) return false
+      setNotice(e?.response?.data?.detail || 'Не удалось изменить сообщение.')
+      return false
+    }
   }
 
   async function setPinned(id, on) {
@@ -1234,7 +1248,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     try {
       const { data } = await messengerApi.thread(activeId.value, messageId)
       activeThread.value = { parentId: messageId, messages: data.messages || [] }
-    } catch { activeThread.value = { parentId: messageId, messages: [] } }
+    } catch (e) { if (!isStaleSession(e)) activeThread.value = { parentId: messageId, messages: [] } }
   }
   function closeThread() { activeThread.value = null }
 
@@ -1258,7 +1272,7 @@ export const useMessengerStore = defineStore('messenger', () => {
       // Умный поиск не ответил вовсе — откатываемся на обычный, а не показываем пустоту.
       searchExpanded.value = []
       try { const { data } = await messengerApi.searchInChat(activeId.value, q); searchResults.value = data.messages || [] }
-      catch { searchResults.value = [] }
+      catch (e) { if (!isStaleSession(e)) searchResults.value = [] }
     } finally { searching.value = false }
   }
   function clearSearch() { searchResults.value = null; searchExpanded.value = [] }

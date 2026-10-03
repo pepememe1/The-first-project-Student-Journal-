@@ -149,7 +149,8 @@ package = false
 line-length = 100
 target-version = "py310"
 # Не линтуем сгенерированное/чужое: сборки, веб-фронт (у него свой eslint), артефакты.
-extend-exclude = ["build", "dist", "nuitka_out", "web", "*.spec"]
+# archive/ — мёртвый код, вынесенный 30.09.2026 (не исполняется и не сопровождается).
+extend-exclude = ["build", "dist", "nuitka_out", "web", "*.spec", "archive"]
 
 [tool.ruff.lint]
 # Стартовый набор — только высокосигнальные правила (ловят настоящие ошибки, а не стиль):
@@ -187,7 +188,7 @@ ignore = ["B008"]
 [tool.black]
 line-length = 100
 target-version = ["py310"]
-extend-exclude = "(build|dist|nuitka_out|web)/"
+extend-exclude = "(build|dist|nuitka_out|web|archive)/"
 
 [tool.mypy]
 python_version = "3.10"
@@ -206,7 +207,9 @@ follow_imports = "silent"
 #⚠️ Модуль попадает сюда, только когда чист ЦЕЛИКОМ (иначе проверка уходит в красное
 #и её перестают читать). Синк добавлен 18.08.2026: три модуля разом стали зелёными
 #после снятия неявных Optional и аннотаций у полей, начинающихся с None.
-files = ["data/terms.py", "data/exports.py", "grading.py", "log.py", "app_paths.py",
+#⚠️ `data/exports.py` удалён 01.09.2026 и простоял здесь месяц: mypy падал на «Cannot read
+#file» ДО проверки, то есть типы не проверялись вообще (найдено 02.10.2026).
+files = ["data/terms.py", "grading.py", "log.py", "app_paths.py",
          "sync/sync_client.py", "sync/sync_runner.py", "sync/sync_engine.py"]
 
 [tool.bandit]
@@ -223,7 +226,7 @@ files = ["data/terms.py", "data/exports.py", "grading.py", "log.py", "app_paths.
 #остальные помечены `# nosec` С ПРИЧИНОЙ рядом со строкой. То есть ноль на этом
 #уровне — не настройка, а разобранное состояние, и любая НОВАЯ находка уронит сборку.
 exclude_dirs = ["tests", "server/tests", "web", "nuitka_out", "build", "dist",
-                "graphify-out", ".venv", "venv", "__pycache__"]
+                "graphify-out", ".venv", "venv", "__pycache__", "archive"]
 #B110/B112 — `except: pass` и `except: continue`. Долг известен и разбирается адресно:
 #часть таких мест намеренно тихие (офлайн, приватный режим, необязательный пакет), и
 #логировать их — сделать хуже. Списком это не чинится, поэтому и не гейтится.

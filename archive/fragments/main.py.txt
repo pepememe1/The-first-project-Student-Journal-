@@ -1,0 +1,9 @@
+Фрагменты, вырезанные из main.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из main.py: _get_app_dir (строки 59–62 до переноса), пункт 7 ──
+def _get_app_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+

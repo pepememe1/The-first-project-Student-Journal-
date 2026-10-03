@@ -272,7 +272,7 @@ async function exportReport(fmt) {
         </button>
         <button class="flex h-10 items-center gap-1.5 rounded-sm border border-border2 bg-card2 px-3 text-sm font-medium text-text2 hover:border-accent hover:text-accent"
                 @click="showRollout = true">
-          🔑 {{ locale.t('rollout.title', 'Выкатить данные групп') }}
+          🔑 {{ locale.t('rollout.title', 'Логины и пароли группы') }}
         </button>
       </div>
       <RolloutDialog v-if="showRollout" @close="showRollout = false" />
@@ -328,7 +328,7 @@ async function exportReport(fmt) {
       </div>
 
       <!-- Диалог экспорта: формат (Excel/Word) + выбор групп (галочки = одна/несколько/все) -->
-      <div v-if="showExport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      <div v-dialog v-if="showExport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
            @click.self="showExport = false">
         <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
           <h3 class="mb-3 font-title text-lg font-bold text-text">{{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}</h3>
@@ -456,13 +456,15 @@ async function exportReport(fmt) {
                     :message="locale.t('curatorView.zetEmptyMessage', 'Ни один предмет группы ещё не получил ЗЕТ от администратора.')" />
 
         <StickyXScroll v-else class="rounded-lg border border-border bg-card shadow-card">
-          <div class="flex items-center justify-between border-b border-border px-4 py-2">
-            <div class="flex gap-3 text-xs">
+          <!-- flex-wrap: на телефоне три элемента в строку не помещались и НАЕЗЖАЛИ друг на
+               друга — зелёная кнопка закрывала «снять» (живой прогон 28.09.2026). -->
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+            <div class="flex shrink-0 gap-3 text-xs">
               <button class="text-accent hover:underline" @click="toggleSelectAllEligible(true)">{{ locale.t('curatorView.selectEligible', 'выбрать готовых') }}</button>
               <button class="text-text3 hover:underline" @click="toggleSelectAllEligible(false)">{{ locale.t('curatorView.clearSelection', 'снять') }}</button>
             </div>
             <button type="button" :disabled="!selectedForPromote.length || promoting" @click="doPromote"
-                    class="rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+                    class="shrink-0 rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
               {{ promoting ? locale.t('curatorView.promoting', 'Перевод…') : `✅ ${locale.t('curatorView.promoteSelected', { n: selectedForPromote.length })}` }}
             </button>
           </div>
@@ -505,7 +507,7 @@ async function exportReport(fmt) {
       </template>
 
       <!-- Подгруппы (§ролей, 3.6.1): куратор отмечает, кто в 1-й, кто во 2-й. -->
-      <div v-if="showSubgroups" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      <div v-dialog v-if="showSubgroups" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
            @click.self="showSubgroups = false">
         <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-border bg-card p-5 shadow-card">
           <h3 class="mb-1 font-title text-lg font-bold text-text">👥 {{ locale.t('curatorView.subgroupsModalTitle', 'Подгруппы') }}</h3>

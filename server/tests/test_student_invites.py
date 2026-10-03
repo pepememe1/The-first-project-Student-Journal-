@@ -214,3 +214,25 @@ def test_the_list_says_whether_the_link_still_works(client, cast):
     client.post(f"/web/admin/invites/{token}/revoke", headers=cast["curator"])
     row = client.get("/web/admin/invites", headers=cast["curator"]).json()["invites"][0]
     assert row["alive"] is False and row["reason"]
+
+
+def test_last_seat_is_taken_atomically(client, cast, monkeypatch):
+    """Гонка у последнего места (ревью 30.09.2026): проверка «места есть» и расход места
+    шли двумя шагами, и одновременные регистрации обе проходили проверку. Моделируем
+    ровно это окно — проверка УЖЕ пропустила (устаревший взгляд), а место к моменту
+    записи занято: аккаунт заводиться не имеет права."""
+    from app import reg_utils
+    token = _make_invite(client, cast["curator"], max_uses=1).json()["invite"]["token"]
+    assert _register(client, token, email="first@yandex.ru").status_code == 200
+    monkeypatch.setattr(reg_utils, "invite_blocked_reason", lambda inv, now: "")
+    r = _register(client, token, email="second@yandex.ru")
+    assert r.status_code == 404, r.text
+    from app.db import SessionLocal
+    from app.models import StudentInvite, User
+    db = SessionLocal()
+    try:
+        assert db.query(User).filter(User.login == "second@yandex.ru").first() is None, \
+            "аккаунт сверх лимита приглашения заведён"
+        assert db.get(StudentInvite, token).uses == 1
+    finally:
+        db.close()

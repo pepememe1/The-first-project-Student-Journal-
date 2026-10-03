@@ -184,7 +184,9 @@ def test_student_never_sees_other_students(client):
     for question in ("кто в зоне риска", "список студентов", "сколько преподавателей",
                      "общая сводка по колледжу"):
         body = _ask(client, sh, question)
-        assert body["intent"] in ("help", "groups"), f"{question} → {body['intent']}"
+        #«teachers» студенту — это преподаватели ЕГО группы по открытому расписанию
+        #портала (28.09.2026), а не списки людей колледжа: студентов там нет.
+        assert body["intent"] in ("help", "groups", "teachers"), f"{question} → {body['intent']}"
         assert not body["facts"].get("students"), question
 
 
@@ -214,14 +216,49 @@ def test_admin_gets_server_state_with_real_numbers(client):
     assert "db_encrypted" in body["facts"]
 
 
+def test_admin_in_desktop_copy_gets_the_production_server_state(client, monkeypatch):
+    """🔥 В программе Вектор отвечает с локального сервера: прежде он описывал компьютер
+    админа («база зашифрована» — это локальная копия; «резервных копий НЕ НАЙДЕНО» — их
+    нет на ноутбуке), а раздел «Сервер» показывал бой. Теперь ответ берётся С БОЯ —
+    просьба Ярослава 02.10.2026 «чтобы он давал данные по боевому серверу»."""
+    from app.routers.web import vector as V
+    admin = make_admin(client)
+    monkeypatch.setenv("GRADEBOOK_LOCAL_COPY", "1")
+    prod = {"text": "Сервер: диск занят на 61% (3.1 ГБ свободно); база — 4 МБ, зашифрована.",
+            "mood": "neutral", "intent": "server_state",
+            "facts": {"db_encrypted": True, "latest_backup": "2026-10-02 00:01"}}
+    calls = []
+    monkeypatch.setattr(V, "_remote_server_state", lambda: calls.append(1) or prod)
+    body = _ask(client, admin, "сколько места на диске")
+    assert calls, "копия не спросила бой"
+    assert body["intent"] == "server_state" and body["text"] == prod["text"], body
+    assert body["facts"]["source"] == "server" and body["facts"]["db_encrypted"] is True
+
+
+def test_admin_in_desktop_copy_without_link_is_not_told_about_his_laptop(client, monkeypatch):
+    """Связи нет — честное «не получилось спросить сервер», а не цифры ноутбука."""
+    from app.routers.web import vector as V
+    admin = make_admin(client)
+    monkeypatch.setenv("GRADEBOOK_LOCAL_COPY", "1")
+    monkeypatch.setattr(V, "_remote_server_state", lambda: None)
+    body = _ask(client, admin, "что с сервером")
+    assert body["intent"] == "server_state", body
+    assert "не получилось спросить сервер" in body["text"].lower(), body
+    for lie in ("зашифрована", "НЕ НАЙДЕНО", "диск занят"):
+        assert lie not in body["text"], body
+    assert "disk" not in body["facts"], body
+
+
 def test_admin_asking_about_homework_is_not_given_counters(client):
     """Раньше любой неподходящий вопрос у админа проваливался в счётчики: на «что
     задали» приходило «студентов — 47». Уверенный ответ не на тот вопрос."""
     admin = make_admin(client)
     _seed(client, admin)
     body = _ask(client, admin, "что задали")
-    assert body["intent"] == "help", body
-    assert "студентов —" not in body["text"]
+    #С 28.09.2026 админ получает домашку по НАЗВАННОЙ группе; без группы — просьбу её
+    #назвать. Главное свойство теста прежнее: не счётчики вместо ответа.
+    assert body["intent"] in ("help", "homework"), body
+    assert "студентов —" not in body["text"] and "группе" in body["text"], body
 
 
 def test_admin_counts_include_what_requires_action(client):

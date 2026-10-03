@@ -75,41 +75,6 @@ def load_cached(category: str = "college") -> Snapshot | None:
         return None
 
 
-def refresh_group(app_group: str, category: str = "college") -> bool:
-    """Обновить с портала ОДНУ группу категории и вписать её в кэш (остальные не трогаем).
-
-    Кнопка «Взять с ВСГУТУ» для выбранной группы: быстрее полного снимка (1 GET вместо
-    десятков). Тоже сетевая — из фонового потока. teacher_index при этом не пересобирается
-    (он нужен расписаниям преподавателей, а не редактору группы)."""
-    from schedule import parser
-    from schedule.model import Snapshot
-    if not app_group:
-        return False
-    dated = parser.CATEGORIES[category]["dated"]
-    page_parser = parser.parse_group_page_dated if dated else parser.parse_group_page
-    pairs = parser.list_category_groups(
-        parser.fetch_text(parser.category_index_url(category)), category)
-    site_name, href = app_group, None
-    for name, h in pairs:
-        if name == app_group:
-            href = h
-            break
-    if href is None:                       #имя в журнале ≠ имя на портале — подбираем
-        site_name = guess_group(app_group, [n for n, _ in pairs]) or app_group
-        for name, h in pairs:
-            if name == site_name:
-                href = h
-                break
-    if href is None:
-        return False
-    page = parser.fetch_text(parser.category_group_url(category, href))
-    gs = page_parser(page, name=site_name, href=href)
-    snap = load_cached(category) or Snapshot()
-    snap.groups[site_name] = gs
-    save(snap, category=category)
-    return True
-
-
 def subjects_all(category: str = "college") -> list:
     """Все уникальные предметы из снимка расписания категории (СПАРСЕНЫ С САЙТА
     ВСГУТУ). По умолчанию — колледж: единственная категория, чьи предметы

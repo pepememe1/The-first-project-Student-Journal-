@@ -553,7 +553,7 @@ async function importParsed() {
     </StickyXScroll>
 
     <!-- ── Учебные часы группы ─────────────────────────────────────────────────── -->
-    <div v-if="showHours" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showHours = false">
+    <div v-dialog v-if="showHours" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showHours = false">
       <div class="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.hoursModalTitle', { group: hoursGroup }) }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
@@ -619,7 +619,7 @@ async function importParsed() {
     </div>
 
     <!-- ── Импорт специальности/учебного плана ВСГУТУ ─────────────────────────────── -->
-    <div v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showImport = false">
+    <div v-dialog v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showImport = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.importEsstuModalTitle', { group: importGroup }) }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
@@ -682,7 +682,7 @@ async function importParsed() {
     </div>
 
     <!-- ── Импорт группы по категории расписания ──────────────────────────────────── -->
-    <div v-if="showScheduleImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showScheduleImport = false">
+    <div v-dialog v-if="showScheduleImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showScheduleImport = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.scheduleImportModalTitle', 'Импорт группы по категории') }}</h3>
         <p class="mb-4 mt-1 text-xs text-text3">
@@ -748,7 +748,7 @@ async function importParsed() {
       </div>
     </div>
 
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminGroups.editGroupTitle', 'Изменить группу') : locale.t('adminGroups.addGroupTitle', 'Добавить группу') }}</h3>
         <div class="space-y-3">

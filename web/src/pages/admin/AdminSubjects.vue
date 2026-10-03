@@ -212,7 +212,7 @@ async function importPicked(all = false) {
       </table>
     </StickyXScroll>
 
-    <div v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
       <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminSubjects.addSubject', 'Добавить предмет') }}</h3>
         <input v-model="name" :placeholder="locale.t('adminSubjects.subjectNamePlaceholder', 'Название предмета')" @keyup.enter="save"

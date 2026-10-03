@@ -36,7 +36,7 @@ REGISTRY = os.path.join(ROOT, "docs", "security", "SUBPROCESSORS.md")
 #не так, как настоящий потребитель, и год отвечал «всё валидно».
 SCAN_DIRS = ("server/app", "schedule", "data", "sync", "desktop",
              "web/src", "web/public")
-SCAN_FILES = ("weather.py", "desktop_update.py", "vector_nlu.py", "support_kb.py")
+SCAN_FILES = ("weather.py", "desktop_update.py", "vector_nlu.py")
 #Расширения, в которых ищем. Клиент — это .js/.mjs/.vue/.html, а не только .py.
 SCAN_SUFFIXES = (".py", ".js", ".mjs", ".vue", ".html")
 

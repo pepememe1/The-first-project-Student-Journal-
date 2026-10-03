@@ -15,24 +15,29 @@ test_schedule_public_api.py — пакет schedule отдаёт всё, что 
 Тест оставлен и список НЕ урезан намеренно: он охраняет ре-экспорты пакета, а сузить его
 до двух имён значило бы разрешить остальным тихо отвалиться — и обнаружить это в тот
 момент, когда экран расписания начнут возвращать.
+
+⚠️ ПОПРАВКА 30.09.2026: «живых потребителей ДВА» было неправдой уже тогда. `data/utils.py`
+продукт не импортировал ни разу (он перенесён в архив как мёртвый код, `archive/data/`),
+а `subjects.py` удалён ещё 15.08.2026. То есть у клиентского слоя расписания
+(`schedule/store.py`, `overrides.py`) сегодня НЕТ ни одного вызывающего в продукте:
+программа берёт расписание у локального сервера (`server/app/schedule_web.py`), а кэш —
+`desktop/temp_cache.py`. Проверка «функции с живым вызывающим достижимы» убрана — она
+утверждала вызывающего, которого нет. Судьба самого слоя — решение Ярослава (список
+новых находок мёртвого кода от 30.09.2026).
 """
 import pytest
 
 import schedule as sched
 
 #Публичная поверхность пакета: имена, которые обязаны быть доступны как sched.<имя>.
-#Живые вызывающие есть у subjects_for_group / subjects_all (см. шапку); остальные —
-#рабочий, покрытый тестами задел, ре-экспорт которого мы не даём сломать молча.
+#Живых вызывающих в продукте нет (см. шапку): это ре-экспорт покрытого тестами слоя,
+#который мы не даём сломать молча, пока он существует.
 PUBLIC_API = [
     "build_snapshot", "load_cached", "save", "cache_age_minutes",
     "current_week_parity", "week_label",
     "get_identity", "set_identity", "guess_group", "guess_teacher",
     "group_schedule", "subjects_for_group", "subjects_all",
 ]
-
-#Те, у кого вызывающий в продукте есть ПРЯМО СЕЙЧАС. Отдельным списком, чтобы разница
-#между «работает у людей» и «лежит про запас» была видна в коде, а не в чьей-то памяти.
-HAS_LIVE_CALLER = ["subjects_for_group", "subjects_all"]
 
 
 @pytest.mark.parametrize("name", PUBLIC_API)
@@ -41,15 +46,6 @@ def test_public_api_exports(name):
         f"schedule.{name} не реэкспортирован в __init__.py — вызывающий упадёт "
         f"AttributeError в рантайме")
     assert callable(getattr(sched, name))
-
-
-@pytest.mark.parametrize("name", HAS_LIVE_CALLER)
-def test_functions_with_live_callers_are_reachable_through_the_package(name):
-    """Эти две зовут `data/utils.py` и `subjects.py` — ИМЕННО через пакет, лениво.
-
-    Проверка узкая намеренно: сломается ре-экспорт — и список предметов молча
-    откатится на встроенный дефолт вместо портального, без единой ошибки на экране."""
-    assert callable(getattr(sched, name, None))
 
 
 def test_all_matches_reality():

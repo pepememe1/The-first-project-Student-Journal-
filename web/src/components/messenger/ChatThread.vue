@@ -8,7 +8,7 @@ import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, LifeBuoy,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
-  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical,
+  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical, Pencil,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -671,6 +671,7 @@ function onComposerKeydown(e) {
   }
   if (mentionCandidates.value.length && e.key === 'Escape') { mentionQuery.value = null; return }
   if (slashCandidates.value.length && e.key === 'Escape') { slashQuery.value = null; return }
+  if (editing.value && e.key === 'Escape') { e.preventDefault(); cancelEdit(); return }
   onKey(e)
 }
 
@@ -974,11 +975,32 @@ function onTouchEnd() {
   }
 }
 
+//━━ Правка своего сообщения (02.10.2026) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//Сервер правку умел с первого коммита мессенджера, стор — тоже (`editMessage`), а пункта
+//в меню не было вовсе. Правим в ТОМ ЖЕ поле ввода (как в Telegram): текст сообщения
+//встаёт в поле, Enter сохраняет, Esc и крестик отменяют. Недописанный черновик на время
+//правки откладывается и возвращается после — правка не имеет права его съесть.
+const editing = ref(null)            // { msg, prevDraft } | null
+function startEdit(msg) {
+  m.clearReply()
+  editing.value = { msg, prevDraft: editing.value ? editing.value.prevDraft : draft.value }
+  draft.value = msg.body || ''
+  nextTick(() => composer.value?.focus())
+}
+function cancelEdit() {
+  if (!editing.value) return
+  draft.value = editing.value.prevDraft || ''
+  editing.value = null
+}
+//Правку начали в одной беседе — в другой она не продолжается.
+watch(activeId, () => { editing.value = null })
+
 async function onPick(action) {
   const msg = overlay.value.message
   const picked = (overlay.value.selection || '').trim()
   if (!msg) return
   if (action === 'reply') { m.setReply(msg); await nextTick(); composer.value?.focus() }
+  else if (action === 'edit') startEdit(msg)
   //«Ответить с цитатой»: в ответ уезжает ВЫДЕЛЕННЫЙ кусок, а не всё сообщение. Сервер
   //проверит, что кусок реально есть в оригинале (подделать чужие слова нельзя).
   else if (action === 'quote-reply') {
@@ -1141,6 +1163,15 @@ async function askVector(text) {
 async function submit() {
   let t = draft.value.trim()
   if (!t) return
+  if (editing.value) {
+    const { msg, prevDraft } = editing.value
+    if (t === (msg.body || '').trim()) { cancelEdit(); return }   //ничего не поменялось
+    if (await m.editMessage(msg.id, t)) {
+      editing.value = null
+      draft.value = prevDraft || ''
+    }
+    return
+  }
   //Перехват ДО автоперевода: вопрос помощнику переводить собеседнику незачем — он его
   //и не увидит.
   if (isVectorAsk(t)) {
@@ -2206,7 +2237,16 @@ function openActivities() {
       <!-- Композер с превью ответа (или плашка для читателя канала) -->
       <div class="shrink-0 border-t border-border bg-card">
         <template v-if="canPost">
-          <div v-if="replyTo" class="flex items-center gap-2 border-b border-border px-3 py-1.5">
+          <div v-if="editing" class="flex items-center gap-2 border-b border-border px-3 py-1.5">
+            <Pencil class="size-4 shrink-0 text-accent" />
+            <div class="min-w-0 flex-1">
+              <div class="text-[11px] font-semibold text-accent">{{ locale.t('chatThread.editingLabel', 'Редактирование') }}</div>
+              <div class="truncate text-xs text-text3">{{ editing.msg.body }}</div>
+            </div>
+            <button type="button" @click="cancelEdit" :aria-label="locale.t('chatThread.cancelEdit', 'Отменить правку')"
+                    class="grid size-6 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>
+          </div>
+          <div v-else-if="replyTo" class="flex items-center gap-2 border-b border-border px-3 py-1.5">
             <ReplyIcon class="size-4 shrink-0 text-accent" />
             <div class="min-w-0 flex-1">
               <!-- Ответ на реплику Вектора — это следующий вопрос ему же (сервер разберёт

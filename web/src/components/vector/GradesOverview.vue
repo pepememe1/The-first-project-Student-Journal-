@@ -26,6 +26,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { RotateCw } from '@lucide/vue'
 import { studentApi, parentApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useLocaleStore } from '@/stores/locale'
@@ -38,6 +39,10 @@ const MAX_SCORE = 5          //шкала journal'а всегда приводи
 
 const loading = ref(true)
 const failed = ref(false)
+//Причину отказа, названную сервером (403 «нет подтверждённого доступа» у родителя, чью
+//привязку студент ещё не подтвердил), показываем ЕЁ словами: «не удалось получить
+//статистику» звучит как поломка, хотя всё работает (живой прогон 01.10.2026).
+const failReason = ref('')
 const average = ref(0)
 const perSubject = ref([])
 const risk = ref(null)
@@ -68,6 +73,7 @@ const RISK_STYLE = {
 async function load() {
   loading.value = true
   failed.value = false
+  failReason.value = ''
   try {
     // Родитель смотрит журнал ребёнка — ответ /web/parent/stats намеренно повторяет
     // формат /web/student/stats, поэтому дальше код общий (см. parent.py::parent_stats).
@@ -80,8 +86,11 @@ async function load() {
     //полосой — иначе «нет оценок» и «двойка» выглядели бы одинаково.
     perSubject.value = data.per_subject || []
     risk.value = data.risk || null
-  } catch {
+  } catch (e) {
+    if (isStaleSession(e)) return
     failed.value = true
+    failReason.value = e?.response?.status === 403 && typeof e.response.data?.detail === 'string'
+      ? e.response.data.detail : ''
     average.value = 0
     perSubject.value = []
     risk.value = null
@@ -129,7 +138,7 @@ function barStyle(s, i) {
     <div class="min-h-0 flex-1 overflow-y-auto p-4">
       <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading', 'Загрузка…') }}</p>
       <p v-else-if="failed" class="text-sm text-text3">
-        {{ locale.t('gradesOverview.failed', 'Не удалось получить статистику.') }}
+        {{ failReason || locale.t('gradesOverview.failed', 'Не удалось получить статистику.') }}
       </p>
       <p v-else-if="!hasData" class="text-sm text-text3">
         {{ locale.t('gradesOverview.empty', 'Оценок пока нет — как появятся, покажу сводку.') }}

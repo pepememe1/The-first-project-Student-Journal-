@@ -13,6 +13,7 @@ import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
 import { afterLoginTarget } from '@/utils/deepLinks'
 import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
+import { isHandheld } from '@/utils/device'
 import AppButton from '@/components/ui/AppButton.vue'
 import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
@@ -44,6 +45,15 @@ const needApproval = ref(false)
 // это ошибка, а не реклама.
 const isDesktop = ref(false)
 const insideApp = isDesktopApp()
+//Первый вход в программе ждёт копию данных (до минуты на большой базе). Без подсказки
+//«Входим…» полминуты читается как зависание, и человек закрывает окно посреди закачки.
+const slowLogin = ref(false)
+let slowTimer = null
+watch(() => auth.loading, (busy) => {
+  clearTimeout(slowTimer)
+  slowLogin.value = false
+  if (busy && insideApp) slowTimer = setTimeout(() => { slowLogin.value = true }, 6000)
+})
 const desktop = ref({ available: false })
 // Мобильное приложение предлагаем скачать только в браузере на Android (см.
 // isAndroidBrowser) и только если сервер реально отдаёт файл: блок «скачать», за
@@ -110,6 +120,24 @@ function onEnter() { hovered.value = true; tipIndex.value = (tipIndex.value + 1)
 // мыши → «думает». Все три состояния — тот же анимированный WebP, что и в чате.
 const greetingDone = ref(false)
 
+// 🔥 МАСКОТ МОНТИРУЕТСЯ ТОЛЬКО ТАМ, ГДЕ ЕГО ВИДНО (01.10.2026, жалоба «с мобильного
+// интернета сайт долго грузится и падает „ошибкой соединения“, а приложение входит
+// мгновенно»). Колонка маскота скрыта классом `hidden lg:block`, но компонент внутри всё
+// равно монтировался: невидимый на телефоне Вектор качал приветствие, покой и оба жеста
+// с глазами — около 1.65 МБ анимаций, которых человек даже не видит. В журнале боевого
+// Caddy видно, чем это кончалось в мобильной сети: POST /auth/login отвечал за 0.4 с, а
+// ответ стоял в ОДНОМ соединении HTTP/2 за мегабайтами картинок, клиент через 20 с писал
+// «проверьте соединение», человек нажимал ещё раз — четыре входа подряд. Приложению это
+// не грозило: его картинки лежат в самом приложении, по сети идут только мелкие ответы.
+// ⚠️ Граница — та же, что у класса `lg:` (Tailwind, 1024 px): разойдись они, маскот
+// пропал бы на широком экране или снова качался бы невидимым на узком.
+const WIDE_QUERY = '(min-width: 1024px)'
+const wideMq = typeof window !== 'undefined' ? window.matchMedia?.(WIDE_QUERY) : null
+const wideScreen = ref(!!wideMq?.matches)
+function onWideChange(e) { wideScreen.value = !!e.matches }
+wideMq?.addEventListener?.('change', onWideChange)
+onBeforeUnmount(() => wideMq?.removeEventListener?.('change', onWideChange))
+
 // ── Вектор закрывает глаза, пока набран пароль ──────────────────────────────────────
 // Жест смысловой, а не декоративный: маскот показывает, что НЕ подсматривает. Поэтому
 // он привязан к наличию символов в поле, а не к наведению мыши — важно, что пароль
@@ -158,9 +186,22 @@ const trustDevice = ref(false)
 const showTrust = ref(false)
 watch(login, (v) => { trustDevice.value = !!getTrustToken(v.trim()) }, { immediate: true })
 function onFieldFocus(field) {
+  keepSubmitVisible()
   if (insideApp) return
   const other = field === 'password' ? login.value.trim() : password.value
   if (other) showTrust.value = true
+}
+
+// 📱 На телефоне клавиатура поднимается ПОСЛЕ фокуса и закрывала кнопку «Войти»: чтобы
+// нажать её, клавиатуру приходилось сначала убирать (живой прогон 28.09.2026 на S24).
+// Контейнер страницы прокручивается, поэтому докручиваем кнопку в видимую часть, когда
+// клавиатура уже встала. На ПК клавиатуры нет — там ничего не двигаем.
+function keepSubmitVisible() {
+  if (!isHandheld()) return
+  setTimeout(() => {
+    document.querySelector('.login-screen button[type="submit"]')
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, 350)
 }
 
 // Предложить браузеру/менеджеру паролей сохранить вход. Для SPA/AJAX-входа одних
@@ -335,7 +376,16 @@ function openRecover() {
        и под ней осталось полэкрана пустоты (живой скриншот). Правильно — обычное
        центрирование в ПРОКРУЧИВАЕМОМ контейнере: помещается — стоит по центру, не
        помещается — прокручивается. -->
-  <div class="relative flex min-h-full items-center justify-center overflow-x-hidden overflow-y-auto p-4"
+  <!-- 🖱️ ВЫДЕЛЕНИЕ ТЕКСТА ЗДЕСЬ ЗАПРЕЩЕНО, кроме полей ввода (28.09.2026, жалоба
+       Ярослава). Экран входа — это не документ, который читают и цитируют, а панель
+       приложения: мышь, промахнувшаяся мимо поля, закрашивала синим заголовок, подсказки
+       и подписи, и страница выглядела веб-страничкой, а не программой. Поля ввода
+       разрешены обратно правилом `.login-screen :deep(input…)` внизу файла — в том числе
+       поле кода второго фактора, которое живёт в дочернем компоненте.
+       ⚠️ «Расписание без входа» — ОТДЕЛЬНАЯ страница (`/schedule`), а не часть этой: там
+       выделение нужно (скопировать аудиторию, время, фамилию преподавателя), и запрет
+       отсюда её не касается. Держит `web/tests/loginSelection.test.mjs`. -->
+  <div class="login-screen relative flex min-h-full select-none items-center justify-center overflow-x-hidden overflow-y-auto p-4"
        style="padding-top: calc(1rem + env(safe-area-inset-top)); padding-bottom: calc(1rem + env(safe-area-inset-bottom))">
     <HexBackground />
 
@@ -355,7 +405,7 @@ function openRecover() {
             <div class="absolute -bottom-2 left-1/2 size-4 -translate-x-1/2 rotate-45 border-b border-r border-border2 bg-card" />
           </div>
         </transition>
-        <Mascot :anim="loginAnim" scope="login" class="h-[30rem] w-80 cursor-pointer" />
+        <Mascot v-if="wideScreen" :anim="loginAnim" scope="login" class="h-[30rem] w-80 cursor-pointer" />
       </div>
 
       <!-- Карточка входа (центр экрана) -->
@@ -477,6 +527,9 @@ function openRecover() {
           <AppButton type="submit" class="w-full" :disabled="!canSubmit">
             {{ auth.loading ? loc.t('login.submitting') : loc.t('login.submit') }}
           </AppButton>
+          <p v-if="slowLogin && auth.loading" class="text-center text-tiny text-text3" role="status">
+            {{ loc.t('login.firstSyncHint', 'Первый вход на этом компьютере: скачиваем данные, это может занять до минуты.') }}
+          </p>
         </form>
 
         <!-- Вход по passkey. На телефоне это Face ID/отпечаток, на ПК — «ключ доступа»
@@ -661,5 +714,16 @@ function openRecover() {
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .fade-enter-active, .fade-leave-active { transition: none; }
+}
+/* Поля ввода выделяются, хотя вся страница — нет (см. комментарий у корня шаблона).
+   ⚠️ Явное `text`, а не «само унаследуется»: в Safari на iOS `-webkit-user-select: none`
+   у предка делает поле непригодным — курсор не ставится, выделить набранное нельзя.
+   `:deep` — потому что стили scoped, а поле кода второго фактора и поля диалогов
+   живут в дочерних компонентах. */
+.login-screen :deep(input),
+.login-screen :deep(textarea),
+.login-screen :deep([contenteditable="true"]) {
+  -webkit-user-select: text;
+  user-select: text;
 }
 </style>

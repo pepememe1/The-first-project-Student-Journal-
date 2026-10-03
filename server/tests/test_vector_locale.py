@@ -72,11 +72,19 @@ def test_llm_voiced_intent_gets_locale_hint(client, monkeypatch):
         return "VOICED"
     monkeypatch.setattr(vector_llm, "voice", fake_voice)
 
+    #Спрашивает СТУДЕНТ о своём среднем: админские сводки с 28.09.2026 в модель не идут
+    #вовсе (она искажала их смысл — «в вашей группе 26 студентов»).
     admin = make_admin(client)
-    _set_locale(client, admin, "en")
-    r = client.post("/web/vector/ask", json={"message": "сколько студентов"},
-                    headers=admin).json()
-    assert r["intent"] == "group_stats"
+    r = client.post("/web/admin/students", json={
+        "login": "voiced", "surname": "Голосов", "name": "Глеб", "group": "ИС-21",
+        "password": "studpass1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    tok = client.post("/auth/login", json={"login": "voiced", "password": "studpass1"}).json()
+    sh = {"Authorization": f"Bearer {tok['access_token']}"}
+    _set_locale(client, sh, "en")
+    r = client.post("/web/vector/ask", json={"message": "мой средний балл"},
+                    headers=sh).json()
+    assert r["intent"] == "average"
     assert r["text"] == "VOICED"
     assert seen["locale"] == "en"
 
@@ -108,15 +116,24 @@ def test_dynamic_no_voice_intent_translated_postfactum(client, monkeypatch):
 
     def fake_complete(cfg, messages, temperature=0.3):
         seen["messages"] = messages
-        return "Debtors: Dvoykin"
+        return "Homework: solve the tasks"
     monkeypatch.setattr(vector_llm, "complete", fake_complete)
 
+    #🔒 29.09.2026: здесь было утверждение «модель получила готовый русский текст С
+    #ФАМИЛИЕЙ» — тест закреплял утечку ФИО во внешнюю модель «на перевод». Список
+    #должников с именами переводу моделью НЕ подлежит: остаётся русским, модель не зовём.
     r = client.post("/web/vector/ask", json={"message": "у кого долги"}, headers=th).json()
-    assert r["text"] == "Debtors: Dvoykin"
+    assert "Двойкин" in r["text"] and "messages" not in seen, (r, seen)
     assert "no_voice" not in r                          #внутренний флаг наружу не течёт
-    #Модель получила ГОТОВЫЙ русский текст (с фамилией), а не вопрос заново.
-    user_msg = seen["messages"][-1]["content"]
-    assert "Двойкин" in user_msg
+
+    #А ответ с данными БЕЗ имён (текст домашнего задания) переводится постфактум — ГОТОВЫЙ
+    #русский текст целиком, а не вторая генерация с нуля.
+    client.post("/sync/push", json={"changes": {"lessons": [{
+        "id": "HW1", "group_name": "G1", "subject": "Мат", "type": "ДЗ", "number": 1,
+        "topic": "Решить задачи 1-5", "date": "20.09.2026"}]}}, headers=admin)
+    r = client.post("/web/vector/ask", json={"message": "что задали"}, headers=th).json()
+    assert r["text"] == "Homework: solve the tasks", r
+    assert "Решить задачи" in seen["messages"][-1]["content"]
 
 
 def test_dynamic_no_voice_falls_back_to_russian_without_llm(client, monkeypatch):
@@ -176,4 +193,7 @@ def test_parent_vector_uses_parents_own_locale_not_childs(client):
     r = client.post("/web/parent/vector/ask", json={"message": "привет"},
                     headers=parent_headers).json()
     assert r["intent"] == "hello"
-    assert r["text"].startswith("Hi!"), r["text"]      #перевод для роли student (ребёнка)
+    #С 28.09.2026 родителю — СВОЁ приветствие (по его имени и со справкой для родителя), а
+    #не студенческое «Hi!», которое раньше уезжало ему как будто он сам учится.
+    assert r["text"].startswith("Hello, Иван!"), r["text"]
+    assert "your child" in r["text"], r["text"]

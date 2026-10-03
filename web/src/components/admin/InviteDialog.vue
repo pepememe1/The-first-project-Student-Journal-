@@ -82,7 +82,7 @@ function when(iso) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
+  <div v-dialog class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-card p-5 shadow-card">
       <div class="mb-1 flex items-start justify-between gap-3">
         <div>
@@ -93,7 +93,7 @@ function when(iso) {
             {{ t('invites.subtitle', 'По ссылке студент заводит аккаунт сам — одобрять заявку не нужно.') }}
           </p>
         </div>
-        <button type="button" class="text-text3 hover:text-text" @click="emit('close')"><X class="size-5" /></button>
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" class="text-text3 hover:text-text" @click="emit('close')"><X class="size-5" /></button>
       </div>
 
       <!-- Выдача -->

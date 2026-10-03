@@ -618,12 +618,12 @@ function fmt(iso) {
     </template>
 
     <!-- Просмотр переписки (аудируется на сервере). В режиме «Обращения» — с ответом модерации. -->
-    <div v-if="viewer.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-dialog v-if="viewer.open" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="viewer.open = false">
       <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border2 bg-card shadow-card">
         <div class="flex items-center justify-between border-b border-border p-4">
           <h3 class="font-title text-base font-bold text-text">{{ viewer.mode === 'inbox' ? locale.t('adminMessenger.supportRequestFallback', 'Обращение в поддержку') : locale.t('adminMessenger.conversationTitle', 'Переписка') }}</h3>
-          <button type="button" @click="viewer.open = false" class="text-text3 hover:text-text">✕</button>
+          <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="viewer.open = false" class="text-text3 hover:text-text">✕</button>
         </div>
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
           <p v-if="viewer.loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
@@ -841,7 +841,7 @@ function fmt(iso) {
                 @submit="submitMute" />
 
     <!-- История наказаний: первый это раз или пятый. -->
-    <div v-if="historyFor.open" class="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+    <div v-dialog v-if="historyFor.open" class="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
          @click.self="historyFor.open = false">
       <div class="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border2 bg-card p-5">
         <h3 class="mb-1 font-title text-base font-bold text-text">

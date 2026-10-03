@@ -83,10 +83,6 @@ class Lesson:
     #см. tests/test_schedule_subgroups.py.
     subgroup: int = 0
 
-    def is_empty(self) -> bool:
-        """Пустая клетка («окно»): на сайте это «_» или пробелы."""
-        return not self.raw.strip() or self.raw.strip() == "_"
-
     def to_dict(self) -> dict:
         return asdict(self)
 

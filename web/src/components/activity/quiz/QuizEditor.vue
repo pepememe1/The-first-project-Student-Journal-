@@ -125,7 +125,7 @@ async function copySelf() {
         <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">
           {{ quizId ? locale.t('quiz.edit', 'Правка викторины') : locale.t('quiz.create', 'Новая викторина') }}
         </h2>
-        <button type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
           <X class="size-5" />
         </button>
       </div>
@@ -186,7 +186,7 @@ async function copySelf() {
               <input v-model.number="q.points" type="number" min="1" max="100" :disabled="!canEdit"
                      class="w-16 shrink-0 rounded-lg border border-border2 bg-card px-2 py-1.5 text-xs text-text" />
               <span class="min-w-0 flex-1" />
-              <button type="button" @click="removeQuestion(qi)" :disabled="!canEdit"
+              <button :aria-label="locale.t('common.delete', 'Удалить')" type="button" @click="removeQuestion(qi)" :disabled="!canEdit"
                       class="shrink-0 rounded p-1 text-text3 hover:text-red">
                 <Trash2 class="size-4" />
               </button>
@@ -216,7 +216,7 @@ async function copySelf() {
               <input v-if="q.type === 'match'" v-model="o.match_key" type="text" :disabled="!canEdit"
                      :placeholder="locale.t('quiz.matchKey', 'Пара')"
                      class="w-28 shrink-0 rounded-lg border border-border2 bg-card px-2 py-1.5 text-sm text-text" />
-              <button type="button" @click="removeOption(q, oi)" :disabled="!canEdit || q.options.length <= 2"
+              <button :aria-label="locale.t('common.remove', 'Убрать')" type="button" @click="removeOption(q, oi)" :disabled="!canEdit || q.options.length <= 2"
                       class="shrink-0 rounded p-1 text-text3 hover:text-red disabled:opacity-40">
                 <X class="size-4" />
               </button>

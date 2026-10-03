@@ -379,7 +379,7 @@ onBeforeUnmount(() => {
       <div class="max-h-64 w-64 max-w-full overflow-y-auto rounded-xl border border-border2 bg-card p-2 shadow-xl">
         <div class="flex items-center justify-between px-1 pb-1">
           <span class="text-xs font-semibold text-text">{{ locale.t('board.callToBoard', 'Вызвать к доске') }}</span>
-          <button type="button" @click="callOpen = false" class="text-text3 hover:text-text"><X class="size-4" /></button>
+          <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="callOpen = false" class="text-text3 hover:text-text"><X class="size-4" /></button>
         </div>
         <button type="button" @click="givePen({ random: true })"
                 class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2">

@@ -14,10 +14,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "hello",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "здравствуйте",
@@ -32,10 +35,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "hello",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "добрый день",
@@ -50,10 +56,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "hello",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "спасибо",
@@ -68,10 +77,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "thanks",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "спс большое",
@@ -86,10 +98,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "thanks",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "благодарю",
@@ -104,10 +119,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "thanks",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что ты умеешь",
@@ -122,10 +140,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "help",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто ты",
@@ -140,10 +161,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "help",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "помоги",
@@ -158,10 +182,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "help",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какой у меня средний балл",
@@ -176,10 +203,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "мой средний",
@@ -194,10 +224,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "как я учусь в среднем",
@@ -212,10 +245,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "средняя оценка",
@@ -230,10 +266,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "как считается средний балл",
@@ -248,10 +287,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "howto",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "откуда берётся средний балл",
@@ -266,10 +308,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "howto",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что такое долг",
@@ -284,10 +329,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "howto",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "покажи мои оценки",
@@ -302,10 +350,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у меня в журнале",
@@ -320,10 +371,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "покажи журнал",
@@ -338,10 +392,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие у меня отметки",
@@ -356,10 +413,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие оценки по физике",
@@ -374,10 +434,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у меня по математике",
@@ -392,10 +455,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие у меня предметы",
@@ -410,10 +476,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "мои предметы",
@@ -428,10 +497,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "список предметов",
@@ -446,10 +518,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что я изучаю",
@@ -464,10 +539,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие дисциплины в этом семестре",
@@ -482,10 +560,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько у меня предметов",
@@ -500,10 +581,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько у меня оценок",
@@ -518,10 +602,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grade_count",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько двоек",
@@ -536,10 +623,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grade_count",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько всего оценок",
@@ -554,10 +644,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grade_count",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "количество оценок",
@@ -572,10 +665,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grade_count",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "есть ли у меня долги",
@@ -590,10 +686,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что мне пересдавать",
@@ -608,10 +707,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "у кого хвосты",
@@ -626,10 +728,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что не сдано",
@@ -644,10 +749,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько я пропустил",
@@ -662,10 +770,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "absences",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "мои пропуски",
@@ -680,10 +791,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "absences",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько прогулов",
@@ -698,10 +812,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "absences",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какое сегодня расписание",
@@ -716,10 +833,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": "today"
+      "day": "today",
+      "group": ""
     },
     {
       "q": "что завтра",
@@ -734,10 +854,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": "tomorrow"
+      "day": "tomorrow",
+      "group": ""
     },
     {
       "q": "когда физика",
@@ -752,10 +875,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "во сколько первая пара",
@@ -770,10 +896,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько пар сегодня",
@@ -788,10 +917,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": "today"
+      "day": "today",
+      "group": ""
     },
     {
       "q": "что задали",
@@ -806,10 +938,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что задали на дом",
@@ -824,10 +959,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какое домашнее задание",
@@ -842,10 +980,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "есть ли дз",
@@ -860,10 +1001,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что задали по физике",
@@ -878,10 +1022,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько дз",
@@ -896,10 +1043,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какая у меня группа",
@@ -914,10 +1064,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "groups",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие есть группы",
@@ -932,10 +1085,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "groups",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто в моей группе",
@@ -950,10 +1106,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "roster",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько студентов в группе",
@@ -968,10 +1127,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "roster",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто ведет математику",
@@ -986,10 +1148,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "teachers",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько преподавателей",
@@ -1004,10 +1169,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "teachers",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько у нас студентов",
@@ -1022,10 +1190,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "общая сводка",
@@ -1040,10 +1211,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто в зоне риска",
@@ -1058,10 +1232,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "at_risk",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кого могут отчислить",
@@ -1076,10 +1253,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "at_risk",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько у меня зет",
@@ -1094,10 +1274,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "zet",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "хватит ли зет для перевода",
@@ -1112,10 +1295,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "zet",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какая погода",
@@ -1130,10 +1316,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "weather",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько градусов на улице",
@@ -1148,10 +1337,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "weather",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "расскажи про колледж",
@@ -1166,10 +1358,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "about_college",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что такое всгуту",
@@ -1184,10 +1379,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "about_vsgutu",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько места на диске",
@@ -1202,10 +1400,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "server_state",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что с сервером",
@@ -1220,10 +1421,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "server_state",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда был последний бэкап",
@@ -1238,10 +1442,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "server_state",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "размер базы",
@@ -1256,10 +1463,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "server_state",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько оценок по математике",
@@ -1268,10 +1478,13 @@
         "Математика",
         "Физика"
       ],
+      "groups": [],
       "intent": "grade_count",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие у меня оценки по математике",
@@ -1280,10 +1493,13 @@
         "Математика",
         "Физика"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "оценки по информатике",
@@ -1292,10 +1508,13 @@
         "Информатика",
         "Математика"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Информатика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда математика",
@@ -1304,10 +1523,13 @@
         "Информатика",
         "Математика"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "у кого долги",
@@ -1316,46 +1538,61 @@
         "Информатика",
         "Математика"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько студентов",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько у нас студентов",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько всего студентов",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "количество студентов в колледже",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "group_stats",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "оценки по физике",
@@ -1366,10 +1603,13 @@
         "Математика",
         "Физика"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что завтра",
@@ -1377,19 +1617,25 @@
         "Иванов"
       ],
       "subjects": [],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": "tomorrow"
+      "day": "tomorrow",
+      "group": ""
     },
     {
       "q": "когда математика",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "оценки Ивановой",
@@ -1404,10 +1650,15 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "Иванова",
+      "surnames_found": [
+        "Иванова"
+      ],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "пропуски у Петрова",
@@ -1422,10 +1673,15 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "absences",
       "surname": "Петров",
+      "surnames_found": [
+        "Петров"
+      ],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "долги Дугарова",
@@ -1440,10 +1696,15 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "debtors",
       "surname": "Дугаров",
+      "surnames_found": [
+        "Дугаров"
+      ],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие оценки у Иванова",
@@ -1458,10 +1719,490 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "Иванова",
+      "surnames_found": [
+        "Иванова"
+      ],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Алексеева",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Алексеев",
+      "surnames_found": [
+        "Алексеев",
+        "Алексеева"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "оценки Алексеевой",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Алексеева",
+      "surnames_found": [
+        "Алексеева"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Алексееву",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Алексеев",
+      "surnames_found": [
+        "Алексеев",
+        "Алексеева"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "оценки Хандакова Евгения Николаевича",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Хандаков",
+      "surnames_found": [
+        "Хандаков"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "пропуски Ковальского",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "absences",
+      "surname": "Ковальский",
+      "surnames_found": [
+        "Ковальский"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Ковальской",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Ковальская",
+      "surnames_found": [
+        "Ковальская"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Шевченко",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Шевченко",
+      "surnames_found": [
+        "Шевченко"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "оценки Ковальчука",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Ковальчук",
+      "surnames_found": [
+        "Ковальчук"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Егорову",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Егоров",
+      "surnames_found": [
+        "Егоров",
+        "Егорова"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "пропуски у Егоровой",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "absences",
+      "surname": "Егорова",
+      "surnames_found": [
+        "Егорова"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Толстого",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Толстой",
+      "surnames_found": [
+        "Толстой"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Сороки",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Сорока",
+      "surnames_found": [
+        "Сорока"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "Гоголя",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "grades",
+      "surname": "Гоголь",
+      "surnames_found": [
+        "Гоголь"
+      ],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "николаевича",
+      "surnames": [
+        "Алексеев",
+        "Алексеева",
+        "Хандаков",
+        "Николаев",
+        "Ковальский",
+        "Ковальская",
+        "Шевченко",
+        "Ковальчук",
+        "Егоров",
+        "Егорова",
+        "Толстой",
+        "Сорока",
+        "Гоголь"
+      ],
+      "subjects": [
+        "Математика",
+        "Физика",
+        "Информатика",
+        "История"
+      ],
+      "groups": [],
+      "intent": "unknown",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "как учится мой ребёнок",
+      "surnames": [],
+      "subjects": [],
+      "groups": [],
+      "intent": "grades",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда физра",
@@ -1470,10 +2211,13 @@
         "Физическая культура",
         "Математика"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физическая культура",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда матан",
@@ -1482,10 +2226,13 @@
         "Математика",
         "Физика"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "Математика",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда бжд",
@@ -1494,10 +2241,13 @@
         "Безопасность жизнедеятельности",
         "Математика"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "Безопасность жизнедеятельности",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какие пары в среду",
@@ -1508,10 +2258,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": 2
+      "day": 2,
+      "group": ""
     },
     {
       "q": "занятия в пятницу",
@@ -1522,271 +2275,361 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": 4
+      "day": 4,
+      "group": ""
     },
     {
       "q": "надзор",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "подзаголовок",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "надзорный орган",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что за университет всгуту",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "about_vsgutu",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "история университета",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "about_vsgutu",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "история колледжа",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "about_college",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "расскажи про наш колледж",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "about_college",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "все группы колледжа",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "groups",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "перечень групп",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "groups",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "список учеников в группе",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "roster",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто со мной учится",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "roster",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто ведет предмет информатика",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "teachers",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "список преподавателей",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "teachers",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "кто может вылететь",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "at_risk",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "зона риска по группе",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "at_risk",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "хватает ли зет для перевода",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "zet",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "мои зет",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "zet",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "погода в улан-удэ",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "weather",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "как погода сегодня",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "weather",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "асдф зыва щшгн",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "бла бла бла непонятно",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "qwerty 12345",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "зеленый квадратный шум",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "тыдыщ бабах бум",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "абвгдейка",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "лорем ипсум долор",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "хххххх",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "ниодногословазнакомого",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "фывапролдж",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "unknown",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у меня по группам, средним баллам?",
@@ -1797,10 +2640,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "привет вектор, что у меня по группам, средним баллам?",
@@ -1811,10 +2657,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "покажи средние баллы по моим группам",
@@ -1825,10 +2674,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у меня по расписанию",
@@ -1839,10 +2691,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какой у меня средний балл",
@@ -1853,10 +2708,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "когда вторая пара",
@@ -1867,10 +2725,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у нас в среду",
@@ -1881,10 +2742,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": 2
+      "day": 2,
+      "group": ""
     },
     {
       "q": "что во вторник",
@@ -1895,10 +2759,13 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": 1
+      "day": 1,
+      "group": ""
     },
     {
       "q": "как у меня с физрой",
@@ -1907,10 +2774,13 @@
         "Физическая культура",
         "Математика"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Физическая культура",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что по бжд",
@@ -1919,136 +2789,181 @@
         "Безопасность жизнедеятельности",
         "Математика"
       ],
+      "groups": [],
       "intent": "subject_grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "Безопасность жизнедеятельности",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "оценки",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "пары",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "schedule",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "дз",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "долги",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "debtors",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "че у меня по оценкам",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "нормально ли я учусь",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "че по учебе",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "какая у меня успеваемость",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "average",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "ты кто",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "help",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "покажи успехи",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "grades",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "сколько раз я не был",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "absences",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "задания есть",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "homework",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "покажи ростер",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "roster",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "каталог предметов",
       "surnames": [],
       "subjects": [],
+      "groups": [],
       "intent": "subjects",
       "surname": "",
+      "surnames_found": [],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
     },
     {
       "q": "что у Иванова",
@@ -2063,10 +2978,321 @@
         "Информатика",
         "История"
       ],
+      "groups": [],
       "intent": "grades",
       "surname": "Иванова",
+      "surnames_found": [
+        "Иванова"
+      ],
       "subject": "",
-      "day": ""
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "студенты",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "roster",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "студенты к74/1",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "roster",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/1"
+    },
+    {
+      "q": "список группы К74/2",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "roster",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/2"
+    },
+    {
+      "q": "кто в группе К64/2",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "roster",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К64/2"
+    },
+    {
+      "q": "группы",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "groups",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "сводка по группе К74/1",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "group_stats",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/1"
+    },
+    {
+      "q": "К74/1",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "group_stats",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/1"
+    },
+    {
+      "q": "должники К74/1",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "debtors",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/1"
+    },
+    {
+      "q": "пропуски k74/2",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "absences",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/2"
+    },
+    {
+      "q": "расписание к 74/1 на завтра",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "schedule",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "tomorrow",
+      "group": "К74/1"
+    },
+    {
+      "q": "студенты к74/10",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "roster",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К74/10"
+    },
+    {
+      "q": "группа к75.0",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "group_stats",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": "К75.0"
+    },
+    {
+      "q": "оценки студентов",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "grades",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "средний балл студентов",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "average",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "урок741",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "unknown",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "заявки",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "group_stats",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
+    },
+    {
+      "q": "как всё устроено",
+      "surnames": [],
+      "subjects": [],
+      "groups": [
+        "К74/1",
+        "К74/2",
+        "К64/2",
+        "К74/10",
+        "К75.0"
+      ],
+      "intent": "howto",
+      "surname": "",
+      "surnames_found": [],
+      "subject": "",
+      "day": "",
+      "group": ""
     }
   ]
 }

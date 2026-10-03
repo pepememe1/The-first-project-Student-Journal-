@@ -7,6 +7,8 @@ schedule.py — Расписание портала ВСГУТУ, редакто
 регистрации маршрутов задаёт `__init__.py`.
 """
 from ._common import *      # noqa: F401,F403 — общий router, модели, хелперы
+import logging as _logging
+_hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 
 
 # РАСПИСАНИЕ ──────────────────────────────────────────────────────────────────────
@@ -622,8 +624,8 @@ def admin_schedule_publish(payload: dict = Body(...), user: User = Depends(requi
         channel_id = ensure_group_schedule_channel(db, group, [s.id for s in students])
         _post_system_channel_message(
             db, channel_id, f"⚠️ Расписание группы **{group}** изменилось — проверьте актуальные пары.")
-    except Exception:
-        pass
+    except Exception as e:      # noqa: BLE001 — пуши выше уже ушли; канал — дополнение
+        _hook_log.warning("канал «Расписание · %s» не получил сообщение: %s", group, e)
     audit.log(db, actor=user.login, role="admin", action="schedule.publish",
               target=group, detail=f"уведомлено: {sent}")
     #conversation_id отдаём наружу, чтобы клиент мог перейти в канал, а тест — адресовать

@@ -46,7 +46,8 @@
   th{background:var(--code);font-weight:600}
   tr:last-child td{border-bottom:none}
   .fill{background:var(--warn-bg);border:1px dashed var(--warn-line);border-radius:.4rem;
-        padding:.05rem .4rem;font-weight:600;white-space:nowrap}
+        padding:.05rem .4rem;font-weight:600;overflow-wrap:anywhere;
+        -webkit-box-decoration-break:clone;box-decoration-break:clone}
   .note{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
         border-radius:.5rem;padding:.85rem 1rem;margin:1.1rem 0}
   .warn{background:var(--warn-bg);border:1px solid var(--warn-line);border-left:4px solid var(--warn-line);

@@ -104,14 +104,14 @@ async function apply() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
+  <div v-dialog class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
        @click.self="emit('close')">
     <div class="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
         <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">
           {{ locale.t('teacherSuggest.title', 'Кто ведёт предметы — по расписанию') }}
         </h2>
-        <button type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
+        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
           <X class="size-5" />
         </button>
       </div>

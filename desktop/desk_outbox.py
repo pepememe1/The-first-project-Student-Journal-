@@ -498,6 +498,19 @@ def _promote_orphans(conn) -> None:
           edge=time.time() - ORPHAN_AFTER_S)
 
 
+def token_subject(token: str) -> str:
+    """Логин из поля `sub` токена ('' — разобрать не удалось). Подпись НЕ проверяется и не
+    должна: это сверка «чей токен у нас в руках», а не решение о доверии — его принимает
+    сервер. Непонятный токен не повод остановить досылку, поэтому '' пропускает проверку."""
+    try:
+        import base64
+        part = (token or "").split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return str(data.get("sub") or "")
+    except Exception:      # noqa: BLE001
+        return ""
+
+
 def flush(login: str = "", auth=None, send=None, wait: float = 0.0) -> dict:
     """Дослать очередь на бой. Возвращает {sent, conflicts, rejected, stopped}.
 
@@ -535,6 +548,16 @@ def _flush_locked(login, auth, send, out) -> dict:
     base_url, token, why = (auth or local_api._remote_auth)()
     if not base_url or not token:
         out["stopped"] = why or "offline"
+        return out
+    #🔥 ТОКЕН ОБЯЗАН БЫТЬ ТОГО, ЧЬЯ ОЧЕРЕДЬ (28.09.2026, находка живого прогона граней).
+    #После смены учётки в программе фоновый синк ещё держал клиента ПРЕЖНЕГО человека, и
+    #правки преподавателя уезжали с токеном администратора: сервер отвечал «доступно
+    #только для роли teacher», правка ложилась в «отвергнутые», а человек видел
+    #бессмысленную причину. Чужим токеном не шлём НИЧЕГО — ждём следующего круга, когда
+    #синк переключится (чинит его и `sync_runner.start`, это вторая страховка).
+    owner = token_subject(token)
+    if owner and owner.lower() != login.lower():
+        out["stopped"] = "account-switch"
         return out
     send = send or _http_send
     held = set()          #строки, по которым более ранняя правка ждёт решения человека

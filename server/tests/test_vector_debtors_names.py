@@ -35,7 +35,9 @@ def test_debtors_lists_student_names_for_teacher(client, monkeypatch):
     r = client.post("/web/vector/ask", json={"message": "у кого долги"}, headers=th).json()
     assert "Двойкин" in r["text"], r["text"]          #ФАМИЛИЯ названа
     assert "VOICED:" not in r["text"], "список имён НЕ должен идти через LLM"
-    assert r["facts"]["at_risk"] >= 1
+    #С 28.09.2026 «должники» и «зона риска» — РАЗНЫЕ ответы: раньше под заголовком
+    #«задолженности» стояли и люди без единого долга (низкий средний). Счётчик — `count`.
+    assert r["intent"] == "debtors" and r["facts"]["count"] >= 1, r
     assert "no_voice" not in r                          #внутренний флаг наружу не течёт
 
 
@@ -56,4 +58,4 @@ def test_no_debtors_message(client, monkeypatch):
     th = _login(client, "t1", "pass1234")
     r = client.post("/web/vector/ask", json={"message": "у кого долги"}, headers=th).json()
     assert "нет" in r["text"].lower()
-    assert r["facts"]["at_risk"] == 0
+    assert r["intent"] == "debtors" and r["facts"]["count"] == 0, r

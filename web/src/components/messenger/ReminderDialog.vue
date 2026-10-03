@@ -73,7 +73,7 @@ async function save() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-4 shadow-card">
       <div class="mb-3 flex items-center gap-2">

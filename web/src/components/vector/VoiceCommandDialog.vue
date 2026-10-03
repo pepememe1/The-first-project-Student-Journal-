@@ -56,7 +56,7 @@ function submit() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+  <div v-dialog class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
        @click.self="emit('cancel')">
     <div class="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-card">
       <div class="mb-3 flex items-start gap-2.5">

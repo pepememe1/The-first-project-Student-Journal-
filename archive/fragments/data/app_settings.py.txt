@@ -1,0 +1,17 @@
+Фрагменты, вырезанные из data/app_settings.py 30.09.2026 (мёртвый код, подтверждено Ярославом).
+Архив: не исполняется, не импортируется, не проверяется. Вернуть — вставить обратно в модуль.
+
+# ── из data/app_settings.py: SUPPORT_PHONE (строки 73–75 до переноса), пункт 3 ──
+#Телефон поддержки — показывается в окне подключения («за ссылкой и подробностями
+#обратитесь в поддержку»). Меняется здесь, в коде.
+SUPPORT_PHONE = "+7 (000) 000-00-00"
+
+# ── из data/app_settings.py: host_autostart_enabled (строки 196–198 до переноса), пункт 3 ──
+def host_autostart_enabled() -> bool:
+    """True, если этот ПК-хост должен сам поднимать свой сервер при старте программы."""
+    return bool(_kv_get(_HOST_AUTOSTART_KEY, False))
+
+# ── из data/app_settings.py: clear_saved_session (строки 323–324 до переноса), пункт 3 ──
+def clear_saved_session() -> bool:
+    return _kv_set(_SESSION_KEY, {})
+
