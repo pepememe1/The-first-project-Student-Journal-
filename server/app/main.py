@@ -35,7 +35,8 @@ from .routers import appupdate
 from .routers import desktopupdate
 from .routers import publicschedule
 from .routers import serverinfo
-from . import canary, events, throttle
+from .routers import honeypot as honeypot_router
+from . import canary, events, honeypot, throttle
 
 
 @asynccontextmanager
@@ -181,6 +182,9 @@ async def _canary(request: Request, call_next):
 
     left = throttle.seconds_until_unbanned(ip)
     if left:
+        #Что он пробовал ПОСЛЕ бана — в общее состояние со сроком бана, не в базу:
+        #сотни строк на один сканер превратили бы журнал в лог доступа (`honeypot`).
+        honeypot.note_blocked(ip, request.method, request.url.path)
         #Забаненному — сухой отказ без объяснений: подсказывать, за что именно и на
         #сколько, значит помогать подобрать поведение, которое не банится.
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
@@ -191,15 +195,18 @@ async def _canary(request: Request, call_next):
         #самому вероятному нарушителю: доверенный адрес (а в белом списке у нас сеть
         #колледжа, один NAT) не банится — и не записывался вовсе. Студент со сканером в
         #аудитории проходил приманки, а журнал безопасности молчал. Нашёл Полковник.
-        throttle.ban_ip(ip, canary.BAN_SECONDS)   #щадит доверенных — так и задумано
-        if canary.should_record(ip):              #а вот запись не щадит никого
+        banned = throttle.ban_ip(ip, canary.BAN_SECONDS)   #щадит доверенных — так и задумано
+        if canary.should_record(ip):                        #а вот запись не щадит никого
+            #Снимок запроса — здесь, в цикле событий: он только читает заголовки. Всё,
+            #что трогает диск (база, страна по `ipgeo`), — в `honeypot.record`.
+            snap = honeypot.snapshot(request, ip=ip, kind="path", banned=banned,
+                                     trusted=throttle.is_trusted(ip))
             #⚠️ ЧЕРЕЗ ПУЛ ПОТОКОВ. Запись в SQLite блокирующая, а обработчик объявлен
             #`async def` (иначе не получить `await call_next`): прямой вызов остановил
             #бы весь сервер, включая журнал и /health. Инвариант куплен дефектом в
             #`vector_stt` и держится `test_event_loop_not_blocked.py`.
             try:
-                await run_in_threadpool(canary.record_hit, request.method,
-                                        request.url.path, ip)
+                await run_in_threadpool(honeypot.record, snap)
             except Exception:
                 #Сигнал не должен ронять ответ. Но молчать нельзя: приманка — ДЕТЕКТОР,
                 #и её незаписанное срабатывание это не «мелкая неудача», а отсутствие
@@ -321,6 +328,8 @@ app.include_router(desktopupdate.router)   # автообновление дес
 #desktop/server_admin.py и подключается лишь к локальному серверу программы: на боевой
 #машине этого кода нет вовсе, поэтому дырка в веб-админке не даёт оболочку на VPS.
 app.include_router(serverinfo.router)
+#Раздел «Приманки» — только просмотр и только администратор (см. шапку роутера).
+app.include_router(honeypot_router.router)
 
 
 #Раздача файлов для скачивания (десктоп-клиент GradeBookAI.exe). Файлы кладём в папку

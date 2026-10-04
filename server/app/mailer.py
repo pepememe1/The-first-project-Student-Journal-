@@ -19,6 +19,7 @@ mailer.py — отправка писем (креды регистрации, в
 import os
 import ssl
 import smtplib
+from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr
@@ -37,8 +38,16 @@ def configured() -> bool:
                 and secrets_source.get("GRADEBOOK_SMTP_PASS"))
 
 
-def send_email(to: str, subject: str, body: str, html: str = "") -> bool:
-    """Отправляет письмо. True — ушло, False — не настроено/ошибка (не роняем поток)."""
+def send_email(to: str, subject: str, body: str, html: str = "",
+               inline: list | None = None) -> bool:
+    """Отправляет письмо. True — ушло, False — не настроено/ошибка (не роняем поток).
+
+    `inline` — картинки ВНУТРИ письма: `[(cid, байты, подтип), ...]`, в HTML на них
+    ссылаются как `src="cid:<cid>"` (вечерняя сводка, 04.10.2026). Вложенные, а не
+    по ссылке на сайт: почтовый клиент не ходит за ними на наш сервер, и картинки не
+    пропадают, когда клиент блокирует внешние изображения.
+    ⚠️ Без `inline` письмо собирается РОВНО как раньше — регистрация и восстановление
+    пароля не меняются."""
     host = os.environ.get("GRADEBOOK_SMTP_HOST", "").strip()
     user = os.environ.get("GRADEBOOK_SMTP_USER", "").strip()
     from . import secrets_source
@@ -55,7 +64,18 @@ def send_email(to: str, subject: str, body: str, html: str = "") -> bool:
     msg["Subject"] = subject
     msg["Reply-To"] = from_addr
     msg.attach(MIMEText(body, "plain", "utf-8"))
-    if html:
+    if html and inline:
+        #alternative( text, related( html, картинки ) ) — так клиент показывает HTML с
+        #картинками, а простой текст остаётся запасным вариантом.
+        related = MIMEMultipart("related")
+        related.attach(MIMEText(html, "html", "utf-8"))
+        for cid, data, subtype in inline:
+            img = MIMEImage(data, _subtype=subtype)
+            img.add_header("Content-ID", "<%s>" % cid)
+            img.add_header("Content-Disposition", "inline", filename="%s.%s" % (cid, subtype))
+            related.attach(img)
+        msg.attach(related)
+    elif html:
         msg.attach(MIMEText(html, "html", "utf-8"))
     try:
         ctx = ssl.create_default_context()

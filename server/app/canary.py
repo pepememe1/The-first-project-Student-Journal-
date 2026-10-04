@@ -38,10 +38,35 @@ PATHS = frozenset({
     "/admin.php", "/administrator", "/phpmyadmin", "/pma",
     "/backup.sql", "/dump.sql", "/database.sql", "/db.sql",
     "/config.json", "/credentials.json", "/id_rsa", "/.htpasswd",
+    #Добавлено 04.10.2026 по журналу Caddy: сканеры получали на эти пути главную
+    #страницу с кодом 200 и уходили НЕ забаненными и НЕ записанными.
+    "/.amplifyrc", "/.boto", "/.auth.json", "/.ds_store", "/.npmrc", "/.git-credentials",
+    "/.bash_history", "/server-status", "/v2/_catalog",
 })
 
 #Префиксы — для каталогов, куда лезут целыми деревьями.
-PREFIXES = ("/.git/", "/.svn/", "/.aws/", "/wp-content/", "/wp-includes/", "/vendor/")
+#⚠️ `/wp-admin/` отдельно от точного `/wp-admin`: до 04.10.2026 в списке был только
+#точный путь, и `/wp-admin/install.php` проходил мимо (11 обращений одного сканера).
+#🔴 Общего префикса «/.» здесь НЕТ И НЕ БУДЕТ: `/.well-known/` — законный путь
+#(подтверждение сертификата, привязка приложения к сайту), бан на нём отрезал бы живых.
+PREFIXES = ("/.git/", "/.svn/", "/.aws/", "/wp-content/", "/wp-includes/", "/vendor/",
+            "/wp-admin/", "/.docker/", "/.config/", "/.claude/", "/.anthropic/",
+            "/.ssh/", "/_profiler/", "/cgi-bin/", "/phpmyadmin/")
+
+#Сегменты, которые выдают поиск секретов В ЛЮБОМ каталоге: `/api/.env`, `/laravel/.env`,
+#`/app/.git/config`. Перечислять каталоги бессмысленно — сканеры перебирают сотни.
+_SECRET_SEGMENTS = (".git", ".svn", ".aws", ".ssh")
+
+
+def _segment_is_bait(seg: str) -> bool:
+    #`.env`, `.env.example`, `.env-example`, `.env_backup`, `.envrc` — у нас ни одного
+    #такого файла в раздаваемом нет, а законный человек их не набирает.
+    if seg.startswith(".env"):
+        return True
+    if seg in _SECRET_SEGMENTS:
+        return True
+    #PHP у продукта нет ни строчки: `*.php` — это перебор чужих CMS, а не опечатка.
+    return seg.endswith(".php")
 
 
 def is_canary(path: str) -> bool:
@@ -52,7 +77,9 @@ def is_canary(path: str) -> bool:
     if p in PATHS:
         return True
     low = path.lower()
-    return any(low.startswith(pref) for pref in PREFIXES)
+    if any(low.startswith(pref) for pref in PREFIXES):
+        return True
+    return any(_segment_is_bait(seg) for seg in low.split("/") if seg)
 
 
 #━━ ПЛАШКА «ЗАГРУЗКА» ━━
@@ -181,7 +208,8 @@ def ip_fingerprint(ip: str) -> str:
 #⚠️ Детектор, чей сигнал не переживает перезапуск, детектором не является. Пишем в ОБА
 #места: `audit.log` сам дублирует запись в живой мониторинг, поэтому консоль
 #администратора ничего не теряет.
-def record_hit(method: str, path: str, ip: str) -> None:
+def record_hit(method: str, path: str, ip: str, *, action: str = "canary.hit",
+               level: str = "warn") -> None:
     """Записать срабатывание приманки в ПЕРСИСТЕНТНЫЙ журнал безопасности.
 
     ⚠️ Функция СИНХРОННАЯ и обязана зваться через `run_in_threadpool`: middleware
@@ -228,9 +256,12 @@ def record_hit(method: str, path: str, ip: str) -> None:
         #и я его молча потерял, «починяя» ПДн.
         #Поле называется `ip`, а лежит в нём отпечаток — поэтому он несёт префикс `h:`,
         #и спутать его с адресом нельзя ни глазами, ни разбором.
-        audit.log(db, actor="", role="", action="canary.hit",
+        #`canary.honeytoken` — вход под учёткой-приманкой (04.10.2026, раньше он уходил
+        #только в кольцевой буфер `events` и пропадал при рестарте), уровень `error`:
+        #это не подозрение, а доказательство утечки дампа или файла окружения.
+        audit.log(db, actor="", role="", action=action,
                   target=path, detail=method,
-                  level="warn", ip=ip_fingerprint(ip))
+                  level=level, ip=ip_fingerprint(ip))
     finally:
         try:
             db.close()

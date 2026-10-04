@@ -24,7 +24,7 @@ import {
   BookOpen, Users, GraduationCap, Boxes, Library, Server,
   MonitorSmartphone, Activity, LayoutDashboard, UserPlus,
   AlertTriangle, MessagesSquare, ShieldAlert, ShieldCheck, UsersRound, Database,
-  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen } from '@lucide/vue'
+  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen, Radar } from '@lucide/vue'
 
 export const NAV = {
   student: [
@@ -109,6 +109,8 @@ export const NAV = {
     // а звать её было некому. Для продукта с ПДн аудит без доступа не решает задачу,
     // ради которой заведён, — разобрать «кто изменил оценку».
     { key: 'audit', label: 'Журнал действий', i18n: 'nav.audit', icon: ScrollText, to: '/admin/audit' },
+    // Приманки (honeypot) — только у администратора: тут сырые адреса атакующих.
+    { key: 'honeypot', label: 'Приманки', i18n: 'nav.honeypot', icon: Radar, to: '/admin/honeypot' },
   ],
   // МОДЕРАТОР — четыре пункта и ни одного больше.
   //

@@ -194,6 +194,21 @@ def purge_egg_log(db: Session, days: int = EGG_LOG_DAYS) -> int:
                           EasterEggLog.triggered_at < _cutoff(days))
 
 
+def purge_honeypot(db: Session, days: int | None = None) -> int:
+    """Подробности срабатываний приманок старше срока (`honeypot.HONEYPOT_DAYS`, 90 дней).
+
+    🔒 Здесь лежат СЫРЫЕ адреса — ради этой уборки подробности и вынесены из бессрочного
+    `audit_events` в отдельную таблицу. Пропусти её — и «хранится 90 дней» из политики
+    ПДн (`privacy.html` §9.1) станет неправдой. Факт срабатывания при этом остаётся в
+    журнале безопасности навсегда — с отпечатком вместо адреса."""
+    import time as _t
+    from .honeypot import HONEYPOT_DAYS
+    from .models import HoneypotHit
+    keep = HONEYPOT_DAYS if days is None else days
+    return _delete_capped(db, HoneypotHit,
+                          HoneypotHit.created_ts < int(_t.time()) - keep * 86400)
+
+
 def blank_deleted_bodies(db: Session, days: int = DELETED_BODY_DAYS) -> int:
     """Погасить ТЕКСТ давно удалённых сообщений, оставив саму строку-надгробие.
 
@@ -243,6 +258,7 @@ def run_all(db: Session) -> dict:
         ("reminders", lambda: purge_reminders(db)),
         ("message_edits", lambda: purge_message_edits(db)),
         ("egg_log", lambda: purge_egg_log(db)),
+        ("honeypot", lambda: purge_honeypot(db)),
         ("deleted_bodies", lambda: blank_deleted_bodies(db)),
         ("push_tokens", lambda: _prune_push_tokens(db)),
         #Журнал жёстких удалений синка (его пишут триггеры `sync_clock`, в том числе на

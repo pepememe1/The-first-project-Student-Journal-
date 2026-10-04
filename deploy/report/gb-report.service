@@ -1,0 +1,16 @@
+[Unit]
+Description=GradeBookAI — вечерняя сводка на почту (активность, приманки, состояние сервера)
+After=network-online.target gradebook.service
+Wants=network-online.target
+# Не зависим жёстко от gradebook: сводка нужнее всего как раз когда служба лежит —
+# она скажет об этом в письме («Службы: стоит gradebook»).
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/gb-deploy/server
+# Модуль сам дочитывает server/.env (SMTP и получателей GRADEBOOK_REPORT_EMAIL).
+ExecStart=/root/gb-deploy/venv/bin/python -m app.nightly_report
+# Низкий приоритет: сводка не должна мешать журналу на одноядерной машине.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=600

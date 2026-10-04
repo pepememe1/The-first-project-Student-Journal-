@@ -449,6 +449,46 @@ class AuditEvent(Base):
     entry_hash = Column(String, default="")               #sha256 полей этой записи + prev_hash
 
 
+class HoneypotHit(Base):
+    """Подробности срабатывания приманки: кто, откуда и чем стучался (04.10.2026).
+
+    🔑 ПОЧЕМУ ОТДЕЛЬНАЯ ТАБЛИЦА, А НЕ ПОЛЯ В `audit_events`. Журнал безопасности не
+    чистится НИКОГДА, и сырой IP лёг бы туда бессрочно — это запрещает раздел 4
+    `docs/done/PLAN-HONEYPOT.md` и требование Ярослава 05.09.2026. Поэтому в бессрочном
+    журнале остаётся только отпечаток (`h:…`), а адрес, заголовки, страна и провайдер
+    живут здесь СО СРОКОМ: `retention.purge_honeypot` удаляет строки старше
+    `HONEYPOT_DAYS` (90 дней). Связь двух таблиц — по отпечатку.
+
+    ⚠️ Пароль, cookie и `Authorization` сюда не попадают никогда (`honeypot.safe_headers`).
+    Серверная деталь — НЕ входит в SYNC_MODELS: на десктоп следы атак не нужны, раздел
+    «Приманки» в программе пересылается на бой."""
+    __tablename__ = "honeypot_hits"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_ts = Column(Integer, default=0, index=True)   #unix ts — срок хранения и период
+    ts = Column(String, default="")                       #ISO UTC — человекочитаемо
+    kind = Column(String, default="path")                 #path | honeytoken
+    ip = Column(String, index=True, default="")           #СЫРОЙ адрес — потому и срок
+    fingerprint = Column(String, index=True, default="")  #h:… — тот же, что в audit_events
+    client_fp = Column(String, default="")                #c:… — отпечаток инструмента
+    method = Column(String, default="")
+    path = Column(String, default="")
+    query = Column(String, default="")
+    host = Column(String, default="")                     #IP вместо домена = массовый обход
+    user_agent = Column(String, default="")
+    tool = Column(String, default="")                     #curl, sqlmap, браузер Chrome…
+    tool_kind = Column(String, default="")                #scanner|script|bot|browser|empty|other
+    browser = Column(String, default="")
+    os_name = Column(String, default="")
+    automated = Column(String, default="")                #причины «это не человек», через «; »
+    country = Column(String, default="")                  #ISO-код по локальной базе ipgeo
+    asn = Column(Integer, default=0)
+    as_name = Column(String, default="")                  #провайдер / облако
+    headers = Column(String, default="")                  #JSON безопасных заголовков
+    login = Column(String, default="")                    #только для honeytoken
+    banned = Column(Boolean, default=False)
+    trusted = Column(Boolean, default=False)              #белый список: записан, но не забанен
+
+
 class WebAuthnCredential(Base):
     """Passkey (WebAuthn) — публичный ключ пользователя для входа по биометрии (Face ID/
     отпечаток) БЕЗ пароля. Приватный ключ НИКОГДА не покидает устройство пользователя;

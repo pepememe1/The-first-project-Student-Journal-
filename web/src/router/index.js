@@ -74,6 +74,7 @@ const RulesPage = () => import('@/pages/RulesPage.vue')
 const ParentJournal = () => import('@/pages/parent/ParentJournal.vue')
 const AdminParents = () => import('@/pages/admin/AdminParents.vue')
 const AdminAudit = () => import('@/pages/admin/AdminAudit.vue')
+const AdminHoneypot = () => import('@/pages/admin/AdminHoneypot.vue')
 
 // i18nTitle — необязательный ключ словаря; без него заголовок остаётся русским
 // литералом title (обратная совместимость).
@@ -237,6 +238,8 @@ export const routes = [
       page('requests', AdminRequests, 'Запросы на подключение', 'nav.requests'),
       page('access', AdminSessions, 'Сессии и доступ', 'nav.sessions'),
       page('audit', AdminAudit, 'Журнал действий', 'nav.audit'),
+      // Только ветка /admin: сырые адреса атакующих не нужны ни модератору, ни кому-то ещё.
+      page('honeypot', AdminHoneypot, 'Приманки', 'nav.honeypot'),
       // Раньше отсутствовал: SidebarUserOverlay/HeaderBar ссылаются на `/${role}/profile`
       // безусловно для ВСЕХ ролей — у админа маршрута не было, и переход падал в
       // catch-all редирект на "/". Найдено при разведке под Discord-style профиль (3.6).

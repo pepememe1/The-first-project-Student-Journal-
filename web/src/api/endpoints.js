@@ -229,6 +229,11 @@ export const adminApi = {
   // каждое открытие страницы значит нагружать одноядерный бой ради строки, которую
   // смотрят раз в месяц.
   auditIntegrity: (params = {}) => api.get('/web/admin/audit/integrity', { params }),
+  // Раздел «Приманки» (server/app/routers/honeypot.py): только чтение, только admin.
+  // В программе префикс пересылается на бой (desktop/local_api._PROXY_PREFIXES).
+  honeypotSummary: (params = {}) => api.get('/web/admin/honeypot/summary', { params }),
+  honeypotHits: (params = {}) => api.get('/web/admin/honeypot/hits', { params }),
+  honeypotSource: (fp) => api.get('/web/admin/honeypot/source', { params: { fp } }),
   overview: () => api.get('/web/admin/overview'),
 
   // ── Данные и резервные копии (AdminData.vue) ─────────────────────────────────────

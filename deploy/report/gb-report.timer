@@ -1,0 +1,13 @@
+[Unit]
+Description=Вечерняя сводка GradeBookAI каждый день в 17:00 по Улан-Удэ (Asia/Irkutsk, UTC+8)
+
+[Timer]
+# 17:00 по Иркутску — просьба Ярослава 04.10.2026 («21:00 слишком поздно»). Таймзона
+# указана прямо в OnCalendar: не зависим от того, в какой зоне живёт сама машина.
+OnCalendar=*-*-* 17:00:00 Asia/Irkutsk
+# Выключенная в 17:00 машина пришлёт сводку при следующем старте, а не пропустит день.
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

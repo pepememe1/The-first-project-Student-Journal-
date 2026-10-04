@@ -4,6 +4,7 @@ auth.py — Авторизация: создание первого админи
 Offline-first: пользователей заводит админ в десктоп-проге, они синхронизируются
 на сервер уже хешами паролей. Логин через API/сайт работает с теми же паролями.
 """
+import logging
 import time
 from datetime import datetime, timezone
 
@@ -18,7 +19,7 @@ from ..models import User, AuthSession, set_user_password
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import MIN_PASSWORD_LEN, verify_password, create_token_full, decode_token
 from ..config import issue_ttl_min, session_ttl_min
-from .. import throttle, events, audit, canary, config
+from .. import throttle, events, audit, canary, config, honeypot
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -166,12 +167,20 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     #⚠️ Ответ ТОТ ЖЕ, что при обычной неудаче: сказать «это приманка» значит объяснить
     #атакующему, какие данные у него помечены.
     if canary.is_honeytoken(login_str):
-        throttle.ban_ip(ip, canary.BAN_SECONDS)
+        banned = throttle.ban_ip(ip, canary.BAN_SECONDS)
+        #🔥 ДО 04.10.2026 СИГНАЛ ШЁЛ ТОЛЬКО В `events.record` — кольцевой буфер В ПАМЯТИ,
+        #тот же дефект, что у приманок-путей чинили 05.09: рестарт стирал единственный
+        #след утечки, и узнать, пробовал ли кто-то `svc_backup`, было нельзя. Теперь —
+        #бессрочный журнал (`canary.honeytoken`, только отпечаток адреса) и подробности
+        #со сроком; живую консоль `audit.log` наполняет сам. Ручка обычная `def`, то есть
+        #уже в пуле потоков, — пишем прямо отсюда. Пароль не сохраняется НИГДЕ.
         try:
-            events.record("security", "honeytoken_used",
-                          "попытка входа под учёткой-приманкой", ip=ip)
-        except Exception:
-            pass
+            honeypot.record(honeypot.snapshot(
+                request, ip=ip, kind="honeytoken", banned=banned,
+                trusted=throttle.is_trusted(ip), login=canary.HONEY_LOGIN))
+        except Exception:      # noqa: BLE001 — сбой записи не меняет ответ атакующему
+            logging.getLogger("gradebook.auth").exception(
+                "[auth] срабатывание учётки-приманки не записалось")
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
     #Барьер устройства ДО сверки пароля: неодобренный ПК не должен входить (даже зная

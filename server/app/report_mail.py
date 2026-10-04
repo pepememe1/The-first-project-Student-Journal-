@@ -1,0 +1,822 @@
+"""Оформление вечерней сводки: HTML-письмо с анимациями и пояснениями (04.10.2026).
+
+Цифры собирает `nightly_report.collect`; здесь — только то, как их показать. Просьба
+Ярослава: «ВАУ, очень красивое и познавательное, и на телефонах и на компах».
+
+━━ КАК ЗДЕСЬ ДОСТИГАЕТСЯ АНИМАЦИЯ ━━
+Gmail вырезает `@keyframes`, SVG и скрипты, но проигрывает анимированный GIF. Поэтому:
+  • Вектор машет (всё хорошо) или думает (есть что посмотреть) — готовые GIF из
+    `report_assets/` (собирает `tools/build_report_assets.py` из роликов Арины);
+  • графики растут при открытии — GIF рисует `report_charts` (Pillow);
+  • радар приманок и пульсирующий индикатор статуса — тоже GIF;
+  • CSS-анимации (появление блоков, полоски стран, свечение) — надстройка для Apple
+    Mail, iOS и Thunderbird. Они стоят ОТДЕЛЬНЫМ блоком `<style>`: если клиент
+    выбросит его целиком, раскладка и адаптивность из соседнего блока останутся.
+  ⚠️ Ни один элемент не прячется в исходном состоянии (`opacity:0` только внутри
+  `@keyframes`): клиент, вырезавший анимацию, обязан показать всё.
+
+━━ КАК ЗДЕСЬ ДОСТИГАЕТСЯ «И НА ТЕЛЕФОНЕ, И НА КОМПЬЮТЕРЕ» ━━
+Колонки — блоки `inline-block` фиксированной ширины: на широком экране стоят рядом, на
+узком сами переносятся. Это работает и там, где media-запросы не поддерживаются.
+Шапка — приём `dir="rtl"`: в разметке Вектор идёт первым (на телефоне он сверху), а на
+компьютере стоит справа от текста.
+
+━━ ГРАНИЦА ПДн ━━
+🔒 Ни IP, ни логинов, ни ФИО (письмо хранится у Google) — см. шапку `nightly_report`.
+Всё, что прислал атакующий (путь, инструмент), экранируется: иначе путь вида
+`/<script>` стал бы разметкой в нашем же отчёте.
+"""
+from __future__ import annotations
+
+import html
+import os
+from datetime import datetime, timedelta, timezone
+
+_TZ = timezone(timedelta(minutes=480))
+ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_assets")
+
+#Цвет «окошка» Вектора — ОБЯЗАН совпадать с HERO_BG в tools/build_report_assets.py:
+#фон вшит в кадры GIF, и при расхождении вокруг тигра проступит прямоугольник.
+HERO_PANEL = "#E0F5F7"
+
+ACCENT, DEEP, BRIGHT = "#147C8B", "#0B4F59", "#22A6B3"
+OK, WARN, BAD = "#1F9D6B", "#D68910", "#C0392B"
+TEXT, MUTED, LINE, SOFT, PAGE = "#17262A", "#64777B", "#E1E9EB", "#F5F9FA", "#EAF1F3"
+_e = html.escape
+
+_COUNTRY_RU = {
+    "RU": "Россия", "US": "США", "CN": "Китай", "DE": "Германия", "NL": "Нидерланды",
+    "GB": "Великобритания", "FR": "Франция", "SG": "Сингапур", "HK": "Гонконг",
+    "JP": "Япония", "KR": "Южная Корея", "IN": "Индия", "BR": "Бразилия",
+    "CA": "Канада", "UA": "Украина", "BY": "Беларусь", "KZ": "Казахстан",
+    "TR": "Турция", "VN": "Вьетнам", "ID": "Индонезия", "IR": "Иран",
+    "PL": "Польша", "RO": "Румыния", "BG": "Болгария", "SE": "Швеция",
+    "FI": "Финляндия", "LT": "Литва", "LV": "Латвия", "EE": "Эстония",
+    "CZ": "Чехия", "IT": "Италия", "ES": "Испания", "AU": "Австралия",
+    "MN": "Монголия", "TW": "Тайвань", "TH": "Таиланд", "SC": "Сейшелы",
+    "BE": "Бельгия", "CH": "Швейцария", "AT": "Австрия", "IE": "Ирландия",
+    "ZA": "ЮАР", "MX": "Мексика", "AR": "Аргентина", "IL": "Израиль",
+    "PK": "Пакистан", "BD": "Бангладеш", "PH": "Филиппины", "MY": "Малайзия",
+}
+
+#━━ СПРАВОЧНИК: ЧТО ЭТО ЗА ИНСТРУМЕНТ ━━
+#Познавательная часть письма: голое «Go http-client» ничего не говорит, а «так выглядит
+#большинство облачных сканеров» объясняет, почему это шум, а не целевая атака.
+TOOL_HINTS = {
+    "Nuclei": "сканер уязвимостей по шаблонам: за минуту проверяет тысячи известных дыр",
+    "sqlmap": "ищет SQL-инъекции, чтобы вытащить содержимое базы",
+    "Nikto": "старый сканер веб-серверов на типовые ошибки настройки",
+    "WPScan": "сканер WordPress — у нас его нет, ищут чужую CMS",
+    "Nmap": "сканер портов и служб: составляет карту открытых дверей",
+    "masscan": "сверхбыстрый сканер портов всего интернета",
+    "ZGrab": "собирает «визитки» серверов для поисковиков вроде Censys",
+    "Gobuster": "перебирает пути по словарю в поисках забытых файлов",
+    "ffuf": "перебирает пути по словарю в поисках забытых файлов",
+    "feroxbuster": "перебирает пути по словарю в поисках забытых файлов",
+    "DirBuster": "перебирает пути по словарю в поисках забытых файлов",
+    "GitFinder": "ищет забытую папку .git, чтобы скачать исходный код сайта",
+    "LeakIX": "поисковик утечек: открытые .env, .git, базы без пароля",
+    "Censys": "поисковик по интернету: держит карту открытых серверов",
+    "Palo Alto Expanse": "коммерческий обходчик «поверхности атаки» компаний",
+    "InternetMeasurement": "исследовательский обходчик интернета",
+    "curl": "консольная утилита: кто-то проверял адрес руками или скриптом",
+    "Wget": "консольная утилита для скачивания — пробовали забрать файл",
+    "python-requests": "самописный скрипт на Python",
+    "python-httpx": "самописный скрипт на Python",
+    "Python urllib": "самописный скрипт на Python",
+    "Go http-client": "программа на Go — так выглядит большинство облачных сканеров",
+    "без User-Agent": "клиент даже не представился — почти всегда автомат",
+}
+#Короткая подпись типа — рядом с названием; пояснение — строкой ниже. Разные словари:
+#одна строка в обоих местах читалась бы как повтор.
+KIND_LABELS = {
+    "scanner": "сканер уязвимостей", "script": "скрипт или утилита",
+    "bot": "робот-обходчик", "empty": "без подписи", "browser": "строка браузера",
+    "other": "неизвестный клиент", "ours": "наше приложение",
+}
+KIND_HINTS = {
+    "scanner": "автоматический поиск известных уязвимостей",
+    "script": "кто-то запустил программу, а не открыл сайт в браузере",
+    "bot": "обходчик поисковика или сервиса — на приманку попал случайно",
+    "empty": "клиент даже не представился — почти всегда автомат",
+    "browser": "строку браузера подделать проще всего — признаки автоматики в разделе",
+    "other": "клиент с необычной подписью",
+    "ours": "наше приложение — на приманку оно ходить не должно",
+}
+KIND_COLOR = {"scanner": BAD, "script": WARN, "bot": ACCENT, "empty": BAD,
+              "browser": MUTED, "other": MUTED, "ours": OK}
+
+#Что искали: от узкого к широкому, первое совпадение выигрывает.
+PATH_HINTS = (
+    ("/auth/login", "вход учёткой-приманкой: её логин есть только в дампе базы"),
+    (".env", "файл с паролями и ключами приложения"),
+    (".git", "служебная папка git: по ней восстанавливают исходный код"),
+    ("xmlrpc", "WordPress XML-RPC: перебор паролей пачками"),
+    ("wp-", "WordPress — у нас его нет, ищут чужую CMS со слабым паролем"),
+    (".aws", "ключи облака Amazon"),
+    (".docker", "настройки Docker с токенами реестра"),
+    (".claude", "конфиг ИИ-ассистента: там ищут API-ключи"),
+    (".anthropic", "конфиг ИИ-ассистента: там ищут API-ключи"),
+    (".config", "конфиги облачных утилит с ключами доступа"),
+    (".ssh", "ключи SSH — доступ к серверу"),
+    ("id_rsa", "ключи SSH — доступ к серверу"),
+    ("phpmyadmin", "панель управления базой MySQL"),
+    (".sql", "дамп базы данных"),
+    ("config.json", "файл настроек — иногда с паролями"),
+    ("credentials", "файл с учётными данными"),
+    ("server-status", "страница состояния Apache"),
+    (".php", "PHP-скрипт — у нас PHP нет вовсе, это перебор чужих CMS"),
+)
+CLOUD_MARKS = ("GOOGLE", "AMAZON", "AWS", "MICROSOFT", "AZURE", "DIGITALOCEAN", "OVH",
+               "HETZNER", "LINODE", "AKAMAI", "VULTR", "CHOOPA", "ALIBABA", "TENCENT",
+               "ORACLE", "CONTABO", "M247", "LEASEWEB", "SCALEWAY", "CLOUDFLARE")
+
+#━━ ФАКТ ДНЯ — Вектор объясняет, как устроена защита ━━
+FACTS = (
+    ("Приманка — детектор, а не щит",
+     "Она не мешает войти — она делает попытку заметной. К этим путям не ходит никто "
+     "законный, поэтому любое обращение уже сигнал, без порогов и ложных тревог."),
+    ("Почему сканеры живут в облаках",
+     "Арендовать машину в Google Cloud или DigitalOcean на час дешевле, чем прятаться. "
+     "Поэтому в списке провайдеров так часто облака: это массовый обход, а не охота на нас."),
+    ("Пароль к SSH подобрать нельзя",
+     "Вход по паролю на сервер выключен — пускают только ключи. Тысячи попыток в день "
+     "бьются в закрытую дверь, а fail2ban ещё и выставляет самых упорных."),
+    ("Копия, из которой не восстанавливались, — надежда",
+     "Каждую ночь база снимается VACUUM INTO на зашифрованном соединении и проверяется "
+     "integrity_check. Копия без проверки восстановлением ничего не гарантирует."),
+    ("Журнал, который замечает правку",
+     "Каждая запись журнала безопасности хранит хеш предыдущей. Удалить или поменять "
+     "строку незаметно нельзя — цепочка перестанет сходиться."),
+    ("Почему в письме нет адресов",
+     "IP-адрес — персональные данные, если его можно связать с человеком. Письмо хранится "
+     "у Google, а политика ВСГУТУ запрещает трансграничную передачу. Адреса — в разделе."),
+    ("База зашифрована целиком",
+     "SQLCipher шифрует файл базы AES-256. Украденный файл без ключа — это шум: ни "
+     "оценок, ни ФИО из него не прочитать."),
+    ("Мина для взломщика",
+     "Ответ приманки отдаёт «случайно забытый» хеш служебной учётки. Он из случайных "
+     "байт — прообраза нет, и перебор на видеокарте не закончится никогда."),
+    ("Браузер без языка — не человек",
+     "Настоящий браузер всегда сообщает язык и шлёт заголовки Sec-Fetch. Сканер, "
+     "подделавший строку Chrome, обычно про них забывает — так его и отличают."),
+    ("Бан на сутки, а не навсегда",
+     "Вечный бан оборачивается разблокировкой руками. За сутки автоматический сканер "
+     "уходит и не возвращается, а живой человек не останется отрезанным навсегда."),
+    ("HTTPS продлевается сам",
+     "Сертификат Let's Encrypt живёт 90 дней, Caddy продлевает его за 30 дней до конца. "
+     "Если в сводке осталось меньше двух недель — продление где-то встало."),
+    ("Учётка-приманка",
+     "В пути входа спрятан логин, которого нет среди людей. Узнать его можно только из "
+     "дампа базы, поэтому попытка войти под ним — доказательство утечки."),
+)
+
+ROLE_RU = {"student": ("🎓", "студенты"), "teacher": ("👩‍🏫", "преподаватели"),
+           "parent": ("👪", "родители"), "admin": ("🛡", "администрация"),
+           "moderator": ("🧭", "модераторы")}
+
+
+# ── маленькие помощники ─────────────────────────────────────────────────────────────
+def _flag(cc: str) -> str:
+    cc = (cc or "").upper()
+    if len(cc) != 2 or not cc.isalpha():
+        return "🏳"
+    return "".join(chr(0x1F1E6 + ord(c) - 65) for c in cc)
+
+
+def country_name(cc: str) -> str:
+    return _COUNTRY_RU.get((cc or "").upper(), cc or "неизвестно")
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def path_hint(path: str) -> str:
+    low = (path or "").lower()
+    for needle, hint in PATH_HINTS:
+        if needle in low:
+            return hint
+    return "служебный путь, к которому не обращается никто законный"
+
+
+def tool_hint(tool: str, kind: str) -> str:
+    return TOOL_HINTS.get(tool) or KIND_HINTS.get(kind, "")
+
+
+def is_cloud(name: str) -> bool:
+    up = (name or "").upper()
+    return any(m in up for m in CLOUD_MARKS)
+
+
+def fact_of_the_day(ts: float) -> tuple:
+    day = datetime.fromtimestamp(ts, _TZ).timetuple().tm_yday
+    return FACTS[day % len(FACTS)]
+
+
+def _mb(n) -> str:
+    if not n:
+        return "—"
+    return "%.1f ГБ" % (n / 2 ** 30) if n >= 2 ** 30 else "%.0f МБ" % (n / 2 ** 20)
+
+
+def _dur(sec) -> str:
+    sec = int(sec or 0)
+    d, h = sec // 86400, (sec % 86400) // 3600
+    return ("%d дн %d ч" % (d, h)) if d else ("%d ч %d мин" % (h, (sec % 3600) // 60))
+
+
+def _delta(cur, prev, good_up: bool = True) -> str:
+    """Стрелка к вчерашним суткам. Цвет — по смыслу: рост входов хорош, рост атак плох."""
+    if prev is None:
+        return ""
+    cur, prev = int(cur or 0), int(prev or 0)
+    if cur == prev:
+        return ("<span style='display:inline-block;font-size:11px;color:%s;background:%s;"
+                "border-radius:999px;padding:2px 8px'>= как вчера</span>" % (MUTED, SOFT))
+    up = cur > prev
+    good = up == good_up
+    col, bg = (OK, "#E3F5EC") if good else (BAD, "#FBE7E4")
+    return ("<span style='display:inline-block;font-size:11px;font-weight:700;color:%s;"
+            "background:%s;border-radius:999px;padding:2px 8px'>%s %d к вчера</span>"
+            % (col, bg, "▲" if up else "▼", abs(cur - prev)))
+
+
+def _asset(name: str) -> bytes | None:
+    try:
+        with open(os.path.join(ASSETS, name), "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+# ── крупные блоки ───────────────────────────────────────────────────────────────────
+def _card(title: str, body: str, *, icon: str = "", sub: str = "", delay: int = 1) -> str:
+    head = ("<table role='presentation' cellspacing='0' cellpadding='0' style='margin-bottom:12px'>"
+            "<tr>%s<td style='vertical-align:middle'><div style='font-size:18px;font-weight:800;"
+            "color:%s;letter-spacing:-.01em'>%s</div>%s</td></tr></table>"
+            % (("<td style='vertical-align:middle;padding-right:12px'>%s</td>" % icon)
+               if icon else "", TEXT, _e(title),
+               ("<div style='font-size:12.5px;color:%s;margin-top:2px'>%s</div>"
+                % (MUTED, _e(sub))) if sub else ""))
+    return ("<div class='gb-up gb-d%d' style='background:#ffffff;border:1px solid %s;"
+            "border-radius:20px;padding:18px 18px 16px;margin:0 0 14px;"
+            "box-shadow:0 6px 24px rgba(11,79,89,.07)'>%s%s</div>"
+            % (delay, LINE, head, body))
+
+
+def _tile(emoji: str, label: str, value, note: str = "", delta: str = "",
+          color: str = TEXT) -> str:
+    """Карточка числа. Фиксированная ширина: 4 в ряд на компьютере, 2 — на телефоне.
+
+    ⚠️ Ширина считается С отступами и рамкой (104 + 2×12 + 2 + 2×4 = 138 на карточку):
+    `box-sizing` почтовые клиенты понимают через раз, и при «128 без учёта отступов» в
+    ряд вставало три карточки, а четвёртая сиротой уезжала вниз."""
+    return ("<div style='display:inline-block;vertical-align:top;width:104px;margin:4px;"
+            "background:%s;border:1px solid %s;border-radius:16px;padding:12px 12px 11px;"
+            "text-align:left'><div style='font-size:20px;line-height:1'>%s</div>"
+            "<div style='font-size:28px;font-weight:800;color:%s;margin:8px 0 2px;"
+            "letter-spacing:-.02em'>%s</div><div style='font-size:12px;color:%s'>%s</div>"
+            "%s%s</div>"
+            % (SOFT, LINE, emoji, color, _e(str(value)), MUTED, _e(label),
+               ("<div style='font-size:11px;color:%s;margin-top:2px'>%s</div>" % (MUTED, _e(note)))
+               if note else "",
+               ("<div style='margin-top:7px'>%s</div>" % delta) if delta else ""))
+
+
+def _chart(cid: str, alt: str, fallback: str, has_image: bool, height: int = 190) -> str:
+    if has_image:
+        return ("<img src='cid:%s' width='600' alt='%s' style='display:block;width:100%%;"
+                "max-width:600px;height:auto;border:0;border-radius:12px'>" % (cid, _e(alt)))
+    return fallback
+
+
+def _html_bars(week: list, color: str) -> str:
+    """Запасные столбики таблицей — если Pillow на машине нет (GIF не нарисован)."""
+    peak = max([w["n"] for w in week] or [0]) or 1
+    cols = []
+    for i, w in enumerate(week):
+        h = max(int(90 * w["n"] / peak), 3)
+        c = color if i == len(week) - 1 else color + "66"
+        cols.append("<td style='vertical-align:bottom;text-align:center;padding:0 4px'>"
+                    "<div style='font-size:12px;font-weight:700;color:%s'>%d</div>"
+                    "<div class='gb-rise' style='height:%dpx;background:%s;"
+                    "border-radius:8px 8px 3px 3px;margin-top:3px'></div>"
+                    "<div style='font-size:11px;color:%s;margin-top:5px'>%s</div></td>"
+                    % (TEXT, w["n"], h, c, MUTED, _e(w["date"][8:10] + "." + w["date"][5:7])))
+    return ("<table role='presentation' width='100%' cellspacing='0' cellpadding='0' "
+            "style='height:140px'><tr>" + "".join(cols) + "</tr></table>")
+
+
+def _meter(label_html: str, n: int, peak: int, color: str, tail: str = "") -> str:
+    pct = max(4, int(100 * n / (peak or 1)))
+    return ("<div style='margin:9px 0'><table role='presentation' width='100%%' "
+            "cellspacing='0' cellpadding='0'><tr><td style='font-size:13.5px;color:%s'>%s</td>"
+            "<td style='font-size:13.5px;font-weight:800;color:%s;text-align:right;"
+            "white-space:nowrap'>%d</td></tr></table><div style='background:%s;"
+            "border-radius:999px;height:8px;margin-top:5px;overflow:hidden'>"
+            "<div class='gb-bar' style='width:%d%%;height:8px;border-radius:999px;"
+            "background:%s;background-image:linear-gradient(90deg,%s,%s)'></div></div>%s</div>"
+            % (TEXT, label_html, TEXT, n, "#EEF3F4", pct, color, color, color + "AA",
+               ("<div style='font-size:11.5px;color:%s;margin-top:4px'>%s</div>" % (MUTED, tail))
+               if tail else ""))
+
+
+def _sub(title: str) -> str:
+    return ("<div style='font-size:11.5px;font-weight:700;color:%s;text-transform:uppercase;"
+            "letter-spacing:.08em;margin:14px 0 4px'>%s</div>" % (MUTED, _e(title)))
+
+
+def _vector_line(d: dict) -> str:
+    """Реплика Вектора в шапке: человеческим языком, что было за сутки."""
+    a, hp = d.get("activity") or {}, d.get("honeypot") or {}
+    al = d.get("alerts") or []
+    if hp.get("honeytoken"):
+        return ("Тревога! Кто-то пытался войти учёткой-приманкой. Её логин знает только "
+                "дамп базы — похоже на утечку. Разобрал всё ниже.")
+    if al:
+        return ("Я кое-что нашёл: %d %s %s внимания. Собрал сразу под этим сообщением, "
+                "с объяснением, что делать." % (len(al), _plural(len(al), "пункт", "пункта",
+                                                                  "пунктов"),
+                                                 _plural(len(al), "требует", "требуют",
+                                                         "требуют")))
+    hits = int(hp.get("audit_hits") or 0)
+    scans = ("Сканеры заглянули в приманки %d %s — все получили бан на сутки."
+             % (hits, _plural(hits, "раз", "раза", "раз"))) if hits else \
+        "В приманки сегодня никто не стучался — редкая тишина."
+    return ("Привет! Сутки прошли спокойно: %d %s, %d %s. %s Сервер в порядке."
+            % (a.get("logins_ok", 0), _plural(a.get("logins_ok", 0), "вход", "входа", "входов"),
+               a.get("grades", 0), _plural(a.get("grades", 0), "оценка", "оценки", "оценок"),
+               scans))
+
+
+def _hero(d: dict, ok: bool, has_mascot: bool) -> str:
+    when = datetime.fromtimestamp(d["now"], _TZ)
+    months = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
+              "сентября", "октября", "ноября", "декабря")
+    date = "%d %s, %s" % (when.day, months[when.month - 1], when.strftime("%H:%M"))
+    n = len(d.get("alerts") or [])
+    pill_col = OK if ok else (BAD if (d.get("honeypot") or {}).get("honeytoken") else WARN)
+    pill_txt = "Всё в порядке" if ok else "Требует внимания · %d" % n
+    pulse = "pulse_ok" if ok else ("pulse_bad" if pill_col == BAD else "pulse_warn")
+    mascot = ("<img src='cid:vector' width='144' height='137' alt='Вектор' "
+              "class='gb-float' style='display:block;width:144px;height:137px;border:0;"
+              "border-radius:22px'>") if has_mascot else \
+        "<div style='font-size:80px;line-height:137px;text-align:center'>🐯</div>"
+    return (
+        "<div style='background:%s;background-image:linear-gradient(135deg,%s 0%%,%s 55%%,%s 100%%);"
+        "border-radius:26px;padding:22px 20px 22px;margin:0 0 16px;"
+        "box-shadow:0 14px 40px rgba(11,79,89,.28)'>"
+        "<div dir='rtl' style='text-align:center;font-size:0'>"
+        #Вектор: первым в разметке (на телефоне — сверху), справа на компьютере.
+        "<div dir='ltr' style='display:inline-block;vertical-align:middle;width:160px;"
+        "margin:4px 0;text-align:center'><div style='display:inline-block;background:%s;"
+        "border-radius:24px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.18)'>%s</div></div>"
+        "<div dir='ltr' style='display:inline-block;vertical-align:middle;width:100%%;"
+        "max-width:380px;text-align:left;font-size:14px'>"
+        "<div style='font-size:11px;font-weight:800;letter-spacing:.22em;color:#BFEFF3'>"
+        "GRADEBOOKAI · ВСГУТУ</div>"
+        "<div class='gb-title' style='font-size:30px;font-weight:900;color:#ffffff;"
+        "letter-spacing:-.02em;margin:6px 0 2px;line-height:1.1'>Вечерняя сводка</div>"
+        "<div style='font-size:13px;color:#D4F2F5'>%s · Иркутск · за последние сутки</div>"
+        "<table role='presentation' cellspacing='0' cellpadding='0' style='margin:12px 0 14px'>"
+        "<tr><td class='gb-pill' style='background:#ffffff;border-radius:999px;"
+        "padding:4px 12px 4px 4px'><table role='presentation' cellspacing='0' cellpadding='0'>"
+        "<tr><td style='padding-right:6px'><img src='cid:%s' width='22' height='22' alt='' "
+        "style='display:block;border:0'></td><td style='font-size:13px;font-weight:800;"
+        "color:%s'>%s</td></tr></table></td></tr></table>"
+        #Пузырь реплики: хвостик — треугольник из рамок (так рисуют и в Gmail).
+        "<div style='position:relative;background:#ffffff;border-radius:18px;"
+        "padding:12px 14px;font-size:14px;line-height:1.5;color:%s;"
+        "box-shadow:0 6px 18px rgba(0,0,0,.12)'><b style='color:%s'>Вектор:</b> %s</div>"
+        "</div></div></div>"
+        % (ACCENT, DEEP, ACCENT, BRIGHT, HERO_PANEL, mascot, _e(date), pulse, pill_col,
+           _e(pill_txt), TEXT, ACCENT, _e(_vector_line(d))))
+
+
+def _alerts_block(alerts: list) -> str:
+    if not alerts:
+        return ""
+    items = "".join(
+        "<tr><td style='vertical-align:top;padding:6px 10px 6px 0;font-size:16px'>⚠️</td>"
+        "<td style='padding:6px 0;font-size:14px;line-height:1.45;color:%s'>%s</td></tr>"
+        % (TEXT, _e(x)) for x in alerts)
+    return ("<div class='gb-up gb-d1' style='background:#FFF7E8;border:1px solid #F3D49B;"
+            "border-radius:20px;padding:16px 18px;margin:0 0 16px'>"
+            "<table role='presentation' cellspacing='0' cellpadding='0'><tr>"
+            "<td style='padding-right:10px'><img src='cid:pulse_warn' width='22' height='22' "
+            "alt='' style='display:block;border:0'></td><td style='font-size:16px;"
+            "font-weight:800;color:%s'>Требует внимания</td></tr></table>"
+            "<table role='presentation' cellspacing='0' cellpadding='0' style='margin-top:6px'>"
+            "%s</table></div>" % (WARN, items))
+
+
+def _activity_block(a: dict, imgs: dict) -> str:
+    if a.get("error"):
+        return _card("Активность", "<div style='color:%s'>%s</div>" % (BAD, _e(a["error"])))
+    prev = a.get("prev") or {}
+    fails = int(a.get("logins_fail") or 0)
+    tiles = "".join((
+        _tile("🔑", "входов", a.get("logins_ok", 0),
+              "%s %s" % (a.get("logins_people", 0),
+                         _plural(a.get("logins_people", 0), "человек", "человека", "человек")),
+              _delta(a.get("logins_ok"), prev.get("logins_ok"))),
+        _tile("📝", "оценок", a.get("grades", 0), "занятий: %s" % a.get("lessons", 0),
+              _delta(a.get("grades"), prev.get("grades"))),
+        _tile("💬", "сообщений", a.get("messages", 0), "в мессенджере",
+              _delta(a.get("messages"), prev.get("messages"))),
+        _tile("🚫", "неудачных входов", fails,
+              "похоже на подбор" if fails >= 30 else "в норме",
+              _delta(fails, prev.get("logins_fail"), good_up=False),
+              BAD if fails >= 30 else TEXT),
+    ))
+    roles = a.get("roles") or {}
+    who = " · ".join("%s %s <b>%d</b>" % (ROLE_RU.get(r, ("👤", r))[0],
+                                          _e(ROLE_RU.get(r, ("👤", r))[1]), n)
+                     for r, n in sorted(roles.items(), key=lambda kv: -kv[1]))
+    peak = a.get("peak_hour")
+    peak_txt = (" · пик с %02d:00 до %02d:00" % (peak, (peak + 1) % 24)
+                if peak is not None else "")
+    body = ("<div style='text-align:center;font-size:0;margin:0 -4px'>%s</div>" % tiles
+            + _sub("Входы за неделю")
+            + _chart("chart_logins", "Входы за неделю",
+                     _html_bars(a.get("week") or [], ACCENT), "chart_logins" in imgs)
+            + "<div style='font-size:12.5px;line-height:1.6;color:%s;margin-top:8px'>%s%s"
+              "<br>В системе: <b>%s</b> студентов · <b>%s</b> преподавателей · <b>%s</b> "
+              "родителей · <b>%s</b> групп</div>"
+            % (MUTED, who or "Входов за сутки не было", _e(peak_txt), a.get("students", 0),
+               a.get("teachers", 0), a.get("parents", 0), a.get("groups", 0)))
+    return _card("Активность за сутки", body, icon="<div style='font-size:26px'>📈</div>",
+                 delay=2)
+
+
+def _line_item(left_html: str, n: int, hint: str = "", color: str = MUTED) -> str:
+    """Одна строка списка: слева название, справа счёт, ниже — пояснение мелко."""
+    return ("<div style='padding:7px 0;border-top:1px solid %s'><table role='presentation' "
+            "width='100%%' cellspacing='0' cellpadding='0'><tr><td style='font-size:13.5px;"
+            "color:%s'>%s</td><td style='font-size:13.5px;font-weight:800;color:%s;"
+            "text-align:right;white-space:nowrap;padding-left:8px'>×%d</td></tr></table>%s</div>"
+            % (LINE, TEXT, left_html, color, n,
+               ("<div style='font-size:12px;color:%s;margin-top:2px'>%s</div>" % (MUTED, _e(hint)))
+               if hint else ""))
+
+
+def _honeypot_block(hp: dict, imgs: dict, site: str) -> str:
+    radar = ("<img src='cid:radar' width='40' height='40' alt='' style='display:block;"
+             "border:0;border-radius:50%'>") if "radar" in imgs else \
+        "<div style='font-size:26px'>📡</div>"
+    if hp.get("error"):
+        return _card("Приманки", "<div style='color:%s'>%s</div>" % (BAD, _e(hp["error"])),
+                     icon=radar)
+    hits = int(hp.get("audit_hits") or 0)
+    tiles = "".join((
+        _tile("🎯", "срабатываний", hits, "за сутки",
+              _delta(hits, hp.get("prev_audit_hits"), good_up=False),
+              BAD if hits else OK),
+        _tile("🛰", "источников", hp.get("sources", 0), "разных адресов"),
+        _tile("🌍", "стран", hp.get("countries", 0), "по базе iptoasn"),
+        _tile("⛔", "в бане сейчас", hp.get("banned_now", 0),
+              "%d отказов после бана" % hp.get("after_ban", 0)),
+    ))
+    body = ["<div style='text-align:center;font-size:0;margin:0 -4px'>%s</div>" % tiles]
+    if hp.get("honeytoken"):
+        body.append("<div style='background:#FBE7E4;border:1px solid #F0B7AF;border-radius:14px;"
+                    "padding:12px 14px;margin-top:12px;font-size:13.5px;color:%s'><b>🍯 Вход "
+                    "учёткой-приманкой: %d.</b> Её логин есть только в дампе базы или файле "
+                    "окружения — проверьте, откуда могла утечь копия.</div>"
+                    % (BAD, hp["honeytoken"]))
+    body.append(_sub("Срабатывания за неделю"))
+    body.append(_chart("chart_honeypot", "Срабатывания приманок за неделю",
+                       _html_bars(hp.get("week") or [], BAD), "chart_honeypot" in imgs))
+    #«Откуда» — страна и провайдер одной строкой: два отдельных списка повторяли друг
+    #друга (облако Google — это и США, и Google) и удваивали длину письма.
+    providers = (hp.get("top_providers") or [])[:4]
+    if providers:
+        body.append(_sub("Откуда"))
+        for p in providers:
+            badge = (" <span style='background:#E6F3F5;color:%s;border-radius:6px;"
+                     "padding:1px 6px;font-size:10px;font-weight:800'>ОБЛАКО</span>" % ACCENT) \
+                if is_cloud(p["name"]) else ""
+            body.append(_meter("%s %s · <span style='color:%s'>%s</span>%s"
+                               % (_flag(p["country"]), _e(country_name(p["country"])), MUTED,
+                                  _e(p["name"][:38]), badge),
+                               p["n"], providers[0]["n"], ACCENT))
+    elif hp.get("top_countries"):
+        body.append(_sub("Откуда"))
+        peak = hp["top_countries"][0][1]
+        body.extend(_meter("%s %s" % (_flag(cc), _e(country_name(cc))), n, peak, ACCENT)
+                    for cc, n in hp["top_countries"][:4])
+    tools = (hp.get("top_tools") or [])[:3]
+    if tools:
+        body.append(_sub("Чем стучались"))
+        body.extend(_line_item("<b>%s</b> <span style='font-size:11px;color:%s'>· %s</span>"
+                               % (_e(t["tool"][:36]), KIND_COLOR.get(t["kind"], MUTED),
+                                  _e(KIND_LABELS.get(t["kind"], ""))),
+                               t["n"], tool_hint(t["tool"], t["kind"]),
+                               KIND_COLOR.get(t["kind"], MUTED)) for t in tools)
+    paths = (hp.get("top_paths") or [])[:4]
+    if paths:
+        body.append(_sub("Что искали"))
+        body.extend(_line_item("<span style='background:%s;color:#E9FBFD;font-family:Consolas,"
+                               "Menlo,monospace;font-size:12px;border-radius:7px;"
+                               "padding:2px 8px'>%s</span>" % (DEEP, _e(path[:60])),
+                               n, path_hint(path), TEXT) for path, n in paths)
+    sources = (hp.get("top_sources") or [])[:3]
+    if sources:
+        body.append(_sub("Самые настойчивые"))
+        body.extend(_line_item(
+            "<span style='font-family:Consolas,Menlo,monospace;font-size:12px;color:%s'>%s</span>"
+            " %s <span style='color:%s'>%s · %s</span>"
+            % (DEEP, _e(s["fp"]), _flag(s["country"]), MUTED,
+               _e((s.get("provider") or "провайдер неизвестен")[:30]), _e(s["tool"][:24])),
+            s["hits"], ("после бана ещё %d запросов получили отказ" % s["after_ban"])
+            if s.get("after_ban") else "", TEXT) for s in sources)
+    body.append(
+        "<div style='margin-top:14px'><a class='gb-btn' href='%s/admin/honeypot' "
+        "style='display:inline-block;background:%s;background-image:linear-gradient(135deg,%s,%s);"
+        "color:#ffffff;text-decoration:none;border-radius:12px;padding:10px 16px;"
+        "font-size:13.5px;font-weight:800'>Адреса и подробности — в разделе «Приманки» →</a>"
+        "</div>" % (_e(site), ACCENT, DEEP, BRIGHT))
+    return _card("Приманки", "".join(body), icon=radar,
+                 sub="Кто стучался туда, куда не ходит никто законный", delay=3)
+
+
+def _server_tile(emoji: str, label: str, value: str, hint: str, state: str = "ok") -> str:
+    col = {"ok": OK, "warn": WARN, "bad": BAD}.get(state, MUTED)
+    #236 + 2×14 + 2 + 2×4 = 274: две плитки в ряд на компьютере, одна — на телефоне.
+    return ("<div style='display:inline-block;vertical-align:top;width:236px;margin:4px;"
+            "background:%s;border:1px solid %s;border-radius:16px;padding:12px 14px;"
+            "text-align:left'><table role='presentation' width='100%%' cellspacing='0' "
+            "cellpadding='0'><tr><td style='font-size:13px;color:%s'>%s&nbsp; %s</td>"
+            "<td style='text-align:right'><span style='display:inline-block;width:9px;"
+            "height:9px;border-radius:50%%;background:%s'></span></td></tr></table>"
+            "<div style='font-size:15px;font-weight:800;color:%s;margin:6px 0 3px'>%s</div>"
+            "<div style='font-size:11.5px;line-height:1.4;color:%s'>%s</div></div>"
+            % (SOFT, LINE, MUTED, emoji, _e(label), col, TEXT, _e(value), MUTED, _e(hint)))
+
+
+def _server_block(s: dict, imgs: dict) -> str:
+    from .nightly_report import BACKUP_MAX_AGE_H, CERT_MIN_DAYS
+    if s.get("error"):
+        return _card("Сервер", "<div style='color:%s'>%s</div>" % (BAD, _e(s["error"])))
+    gauges = gauge_values(s)
+    labels = "".join(
+        "<td style='width:33%%;text-align:center;font-size:12px;color:%s'>"
+        "<b style='color:%s'>%s</b><br>%s</td>" % (MUTED, TEXT, _e(g["label"]), _e(g["note"]))
+        for g in gauges)
+    if "chart_gauges" in imgs:
+        rings = (_chart("chart_gauges", "Диск, память, нагрузка", "", True)
+                 + "<table role='presentation' width='100%%' cellspacing='0' cellpadding='0'>"
+                   "<tr>%s</tr></table>" % labels)
+    else:
+        rings = ("<table role='presentation' width='100%%' cellspacing='0' cellpadding='0'><tr>"
+                 "%s</tr></table>" % "".join(
+                     "<td style='width:33%%;text-align:center;padding:6px'><div style='"
+                     "font-size:24px;font-weight:900;color:%s'>%d%%</div><div style='"
+                     "font-size:12px;color:%s'><b style='color:%s'>%s</b><br>%s</div></td>"
+                     % (g["color"], g["pct"], MUTED, TEXT, _e(g["label"]), _e(g["note"]))
+                     for g in gauges))
+    site, b, ssh = s.get("site") or {}, s.get("backup") or {}, s.get("ssh") or {}
+    services = s.get("services") or {}
+    down = [k for k, v in services.items() if v not in ("active", "?")]
+    geo = s.get("ipgeo") or {}
+    chain = s.get("audit_chain")
+    #Шесть плиток — то, что надо увидеть каждый вечер. Остальное (аптайм, база стран,
+    #своп) — одной строкой ниже: отдельная плитка на каждую мелочь удлиняла письмо вдвое.
+    tiles = [
+        _server_tile("🌐", "Сайт", ("отвечает за %s мс" % site.get("ms"))
+                     if site.get("code") == 200 else "не отвечает (%s)" % (site.get("code") or
+                                                                           site.get("error")),
+                     "Проверка /health через интернет — как его видят люди.",
+                     "ok" if site.get("code") == 200 else "bad"),
+        _server_tile("⚙️", "Службы", "все работают" if not down else "стоит: " + ", ".join(down),
+                     "журнал, Caddy, fail2ban, таймер копий",
+                     "bad" if down else "ok"),
+        _server_tile("💾", "Резервная копия",
+                     ("%s ч назад · %s МБ" % (b.get("age_h"), b.get("size_mb")))
+                     if b.get("count") else ("копий нет" if b.get("known") else "не проверено"),
+                     "Снимок каждую ночь; хранится %s." % (b.get("count") or 0),
+                     "bad" if (b.get("age_h") or 0) > BACKUP_MAX_AGE_H or
+                     "FAIL" in (b.get("last_log") or "") else "ok"),
+        _server_tile("🔗", "Журнал безопасности",
+                     "цепочка сходится" if chain == "ok" else str(chain),
+                     "Каждая запись хранит хеш предыдущей.",
+                     "ok" if chain in ("ok", "legacy") else "bad"),
+        _server_tile("🔒", "HTTPS-сертификат",
+                     ("ещё %d дн." % s["cert_days"]) if s.get("cert_days") is not None
+                     else "не проверено",
+                     "Caddy продлевает его сам.",
+                     "bad" if s.get("cert_days") is not None and s["cert_days"] < CERT_MIN_DAYS
+                     else "ok"),
+        _server_tile("🧱", "SSH за сутки",
+                     ("%s попыток подбора" % ssh.get("failed", "?")) if ssh else "не проверено",
+                     "Пароли выключены — только ключ; fail2ban держит %s."
+                     % ssh.get("f2b_banned", "?"), "ok"),
+    ]
+    extras = "Аптайм %s · база %s, %s · своп %s · база стран %s%s" % (
+        _dur(s.get("uptime")),
+        ("%s МБ" % s["db_mb"]) if s.get("db_mb") is not None else "?",
+        "зашифрована" if s.get("db_encrypted") else "НЕ ЗАШИФРОВАНА",
+        _mb((s.get("memory") or {}).get("swap_used")),
+        ("от %s" % geo.get("updated")) if geo.get("available") else "не загружена",
+        " · ⚠️ просит перезагрузку" if s.get("reboot_required") else "")
+    body = (rings + "<div style='text-align:center;font-size:0;margin:10px -4px 0'>%s</div>"
+            % "".join(tiles)
+            + "<div style='font-size:12px;color:%s;margin-top:8px;text-align:center'>%s</div>"
+            % (MUTED, _e(extras)))
+    return _card("Состояние сервера", body, icon="<div style='font-size:26px'>🖥</div>",
+                 delay=4)
+
+
+def gauge_values(s: dict) -> list:
+    """Три кольца: диск, память, нагрузка. Цвет — по порогам, а не для красоты."""
+    from .nightly_report import DISK_MIN_FREE_PCT, MEM_MIN_AVAIL_MB
+    disk, mem = s.get("disk") or {}, s.get("memory") or {}
+    out = []
+    if disk.get("total"):
+        used = 100.0 * (disk["total"] - disk.get("free", 0)) / disk["total"]
+        state = "bad" if 100 - used < DISK_MIN_FREE_PCT else ("warn" if used > 75 else "ok")
+        out.append({"label": "Диск", "pct": round(used), "state": state,
+                    "note": "%s свободно" % _mb(disk.get("free"))})
+    else:
+        out.append({"label": "Диск", "pct": 0, "state": "?", "note": "не проверено"})
+    if mem.get("total"):
+        used = 100.0 * (mem["total"] - mem.get("available", 0)) / mem["total"]
+        low = mem.get("available", 0) / 2 ** 20 < MEM_MIN_AVAIL_MB
+        state = "bad" if low else ("warn" if used > 80 else "ok")
+        out.append({"label": "Память", "pct": round(used), "state": state,
+                    "note": "%s доступно" % _mb(mem.get("available"))})
+    else:
+        out.append({"label": "Память", "pct": 0, "state": "?", "note": "не проверено"})
+    load = (s.get("load") or [0])[0] if s.get("load") else 0
+    cpus = s.get("cpu_count") or 1
+    pct = min(100, round(100.0 * load / cpus))
+    out.append({"label": "Нагрузка", "pct": pct,
+                "state": "bad" if pct > 90 else ("warn" if pct > 60 else "ok"),
+                "note": "%.2f на %d %s" % (load, cpus, _plural(cpus, "ядро", "ядра", "ядер"))})
+    for g in out:
+        g["color"] = {"ok": OK, "warn": WARN, "bad": BAD}.get(g["state"], MUTED)
+    return out
+
+
+def _fact_block(now: float) -> str:
+    title, text = fact_of_the_day(now)
+    return ("<div class='gb-up gb-d5' style='background:%s;background-image:linear-gradient("
+            "135deg,#F0FAFB,#E3F4F6);border:1px solid #CBE9ED;border-radius:20px;"
+            "padding:18px 20px;margin:0 0 16px'><div style='font-size:11.5px;font-weight:800;"
+            "letter-spacing:.14em;color:%s'>💡 ВЕКТОР ОБЪЯСНЯЕТ</div><div style='font-size:17px;"
+            "font-weight:800;color:%s;margin:6px 0 6px'>%s</div><div style='font-size:14px;"
+            "line-height:1.55;color:%s'>%s</div></div>"
+            % ("#EEF8F9", ACCENT, TEXT, _e(title), TEXT, _e(text)))
+
+
+_STYLE_LAYOUT = """
+<style>
+  body,table,td,div{-webkit-text-size-adjust:100%;}
+  a{color:#147C8B;}
+  @media (max-width:520px){
+    .gb-wrap{padding:10px 8px !important;}
+    .gb-title{font-size:25px !important;}
+  }
+</style>"""
+
+#⚠️ ОТДЕЛЬНЫЙ блок: клиент, не понимающий `@keyframes`, может выбросить блок целиком —
+#пусть он выбросит только анимации, а не адаптивную раскладку.
+_STYLE_MOTION = """
+<style>
+  @keyframes gbUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes gbFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  @keyframes gbGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  @keyframes gbRise{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes gbGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,.55)}50%{box-shadow:0 0 0 7px rgba(255,255,255,0)}}
+  .gb-up{animation:gbUp .8s cubic-bezier(.2,.8,.2,1) both;}
+  .gb-d1{animation-delay:.05s}.gb-d2{animation-delay:.15s}.gb-d3{animation-delay:.25s}
+  .gb-d4{animation-delay:.35s}.gb-d5{animation-delay:.45s}
+  .gb-float{animation:gbFloat 3.4s ease-in-out infinite;}
+  .gb-bar{transform-origin:left center;animation:gbGrow 1.2s cubic-bezier(.2,.8,.2,1) both;}
+  .gb-rise{transform-origin:bottom center;animation:gbRise 1s cubic-bezier(.2,.8,.2,1) both;}
+  .gb-pill{animation:gbGlow 2.6s ease-in-out infinite;}
+  .gb-btn:hover{filter:brightness(1.1);}
+  @media (prefers-reduced-motion:reduce){
+    .gb-up,.gb-float,.gb-bar,.gb-rise,.gb-pill{animation:none !important;}
+  }
+</style>"""
+
+
+def _images(d: dict) -> dict:
+    """{cid: (байты, подтип)} — всё, что вкладывается в письмо."""
+    from . import report_charts
+    imgs: dict = {}
+    ok = not d.get("alerts")
+    for cid, name in (("vector", "vector_wave.gif" if ok else "vector_think.gif"),
+                      ("radar", "radar.gif"), ("pulse_ok", "pulse_ok.gif"),
+                      ("pulse_warn", "pulse_warn.gif"), ("pulse_bad", "pulse_bad.gif")):
+        data = _asset(name)
+        if data:
+            imgs[cid] = (data, "gif")
+    a, hp, s = d.get("activity") or {}, d.get("honeypot") or {}, d.get("server") or {}
+    try:
+        if a.get("week"):
+            g = report_charts.bars(a["week"], ACCENT)
+            if g:
+                imgs["chart_logins"] = (g, "gif")
+        if hp.get("week"):
+            g = report_charts.bars(hp["week"], BAD)
+            if g:
+                imgs["chart_honeypot"] = (g, "gif")
+        if not s.get("error"):
+            g = report_charts.gauges(gauge_values(s))
+            if g:
+                imgs["chart_gauges"] = (g, "gif")
+    except Exception as e:      # noqa: BLE001 — без графиков письмо всё равно уходит
+        print("[report] графики не нарисовались: %s" % e)
+    return imgs
+
+
+def render_html(d: dict) -> tuple:
+    """(html, inline) — страница письма и вложенные картинки `[(cid, байты, подтип)]`."""
+    from . import config
+    imgs = _images(d)
+    a, hp, s = d.get("activity") or {}, d.get("honeypot") or {}, d.get("server") or {}
+    ok = not d.get("alerts")
+    site = (config.SITE_URL or "https://esstu-gradebook.ru").rstrip("/")
+    preheader = ("%s · %s входов · приманки: %s · сайт %s" % (
+        "всё в порядке" if ok else "требует внимания: %d" % len(d.get("alerts") or []),
+        a.get("logins_ok", 0), hp.get("audit_hits", 0),
+        "отвечает" if (s.get("site") or {}).get("code") == 200 else "не отвечает"))
+    body = "".join((
+        _hero(d, ok, "vector" in imgs),
+        _alerts_block(d.get("alerts") or []),
+        _activity_block(a, imgs),
+        _honeypot_block(hp, imgs, site),
+        _server_block(s, imgs),
+        _fact_block(d["now"]),
+        "<div style='text-align:center;padding:6px 10px 2px'>"
+        "<a href='%s' style='color:%s;font-size:13px;font-weight:700;text-decoration:none;"
+        "margin:0 8px'>Сайт</a><a href='%s/admin/honeypot' style='color:%s;font-size:13px;"
+        "font-weight:700;text-decoration:none;margin:0 8px'>Приманки</a>"
+        "<a href='%s/admin/audit' style='color:%s;font-size:13px;font-weight:700;"
+        "text-decoration:none;margin:0 8px'>Журнал</a><a href='%s/admin/server' style='"
+        "color:%s;font-size:13px;font-weight:700;text-decoration:none;margin:0 8px'>Сервер</a>"
+        "<div style='font-size:11.5px;line-height:1.5;color:%s;margin:12px auto 0;"
+        "max-width:460px'>Только агрегированные числа: IP-адресов, логинов и ФИО в письме нет "
+        "— оно хранится у почтового сервиса. Сводку собирает сервер сам каждый вечер в 17:00 "
+        "по Иркутску.</div></div>"
+        % (_e(site), ACCENT, _e(site), ACCENT, _e(site), ACCENT, _e(site), ACCENT, MUTED),
+    ))
+    #⚠️ Стили приклеиваются СНАРУЖИ форматирования: в них полно `%` (`100%`, `0%,100%`),
+    #и оператор `%` принял бы их за подстановки.
+    head = ("<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<meta name='color-scheme' content='light'><meta name='supported-color-schemes' "
+            "content='light'><title>Вечерняя сводка GradeBookAI</title>"
+            + _STYLE_LAYOUT + _STYLE_MOTION + "</head>")
+    page = head + ("<body class='gb-page' style='margin:0;padding:0;background:%s'>"
+            #Прехедер: строка-превью в списке писем. Невидима в самом письме.
+            "<div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent'>"
+            "%s</div><div class='gb-page' style='background:%s'><div class='gb-wrap' "
+            "style='max-width:640px;margin:0 auto;padding:22px 14px;font-family:-apple-system,"
+            "Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:%s'>%s</div></div></body></html>"
+            % (PAGE, _e(preheader), PAGE, TEXT, body))
+    #Вкладываем только то, на что письмо ссылается: три пульса нужны по одному.
+    inline = [(cid, data, sub) for cid, (data, sub) in imgs.items() if "cid:" + cid in page]
+    return page, inline
+
+
+def render_text(d: dict) -> str:
+    a, hp, s = d.get("activity") or {}, d.get("honeypot") or {}, d.get("server") or {}
+    lines = ["GradeBookAI — вечерняя сводка (%s, Иркутск)"
+             % datetime.fromtimestamp(d["now"], _TZ).strftime("%d.%m.%Y %H:%M"), "",
+             "Вектор: " + _vector_line(d), ""]
+    if d.get("alerts"):
+        lines += ["ТРЕБУЕТ ВНИМАНИЯ:"] + ["  • " + x for x in d["alerts"]] + [""]
+    lines.append("Активность: входов %s (%s чел.), оценок %s, сообщений %s, неудачных входов %s"
+                 % (a.get("logins_ok"), a.get("logins_people"), a.get("grades"),
+                    a.get("messages"), a.get("logins_fail")))
+    lines.append("Приманки: срабатываний %s, источников %s, стран %s, забанено %s"
+                 % (hp.get("audit_hits"), hp.get("sources"), hp.get("countries"),
+                    hp.get("banned_now")))
+    for path, n in (hp.get("top_paths") or [])[:5]:
+        lines.append("  %s ×%d — %s" % (path, n, path_hint(path)))
+    disk = s.get("disk") or {}
+    lines.append("Сервер: диск свободно %s из %s, сайт %s, журнал %s"
+                 % (_mb(disk.get("free")), _mb(disk.get("total")),
+                    (s.get("site") or {}).get("code"), s.get("audit_chain")))
+    title, text = fact_of_the_day(d["now"])
+    lines += ["", "Вектор объясняет — %s: %s" % (title, text), "",
+              "Только агрегированные числа: персональных данных в письме нет."]
+    return "\n".join(lines)
+
+
+def subject(d: dict) -> str:
+    day = datetime.fromtimestamp(d["now"], _TZ).strftime("%d.%m")
+    n = len(d.get("alerts") or [])
+    if (d.get("honeypot") or {}).get("honeytoken"):
+        return "🍯 GradeBookAI · %s — вход учёткой-приманкой!" % day
+    tail = "✅ всё в порядке" if not n else "⚠️ требует внимания: %d" % n
+    return "GradeBookAI · сводка за %s — %s" % (day, tail)
