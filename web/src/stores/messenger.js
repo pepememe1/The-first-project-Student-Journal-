@@ -118,7 +118,11 @@ export const useMessengerStore = defineStore('messenger', () => {
   // стором при выходе (reset) — новому аккаунту чужие «уже звонили» не нужны.
   const _pinged = new Set()
 
-  async function loadChats() {
+  //`opts.invites === false` — без заявок: так зовёт значок непрочитанного в меню
+  //(`AppShell.vue`). Заявки показывает только сам раздел сообщений, а тик значка идёт на
+  //каждой странице у каждого вошедшего — второй запрос там был чистым расходом.
+  //⚠️ Аргумент читаем осторожно: функцию зовут и обработчиком события, и без аргументов.
+  async function loadChats(opts) {
     loadingChats.value = true
     try {
       const { data } = await messengerApi.chats()
@@ -127,7 +131,7 @@ export const useMessengerStore = defineStore('messenger', () => {
       _ringLoudMentions()
     } catch { /* сервер ещё не поднят / оффлайн — пустой список */ }
     finally { loadingChats.value = false }
-    loadInvites()
+    if (!opts || opts.invites !== false) loadInvites()
   }
 
   // ── Заявки в беседу ────────────────────────────────────────────────────────────────
@@ -842,6 +846,9 @@ export const useMessengerStore = defineStore('messenger', () => {
     pollOnce()                                       // и догоняем ленту
   }
 
+  /** Раздел сообщений открыт и опрашивает сам — оболочке дублировать незачем. */
+  function isPolling() { return !!pollTimer }
+
   function startPolling() {
     stopPolling()
     pollEvery = pollInterval({ wsAlive: false, hidden: false })
@@ -1311,7 +1318,7 @@ export const useMessengerStore = defineStore('messenger', () => {
     channels, dir,
     peerTyping, totalUnread, notice, activeChat, mascotCooldown,
     loadChats, loadInvites, answerInvite, loadMessages, loadOlder, selectChat, openWith, send, sendGif, markReadActive, loadPinned, setNotice,
-    openModeration, pollOnce, startPolling, stopPolling, searchUsers, sendTyping,
+    openModeration, pollOnce, startPolling, stopPolling, isPolling, searchUsers, sendTyping,
     setReply, clearReply, clearActive, reset, loadConvInfo, muteConversation,
     clearChatById, deleteChatById, muteChatById, markChatUnread,
     groupDraftPeer, askAddToGroup, clearGroupDraft,

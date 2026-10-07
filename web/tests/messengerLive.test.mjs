@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { pollInterval, reconnectDelay, POLL_MS_WS, POLL_MS_NO_WS, RECONNECT_MAX_MS } from '../src/utils/livePolling.js'
+import { pollInterval, reconnectDelay, shellBadgeTickDue, POLL_MS_WS, POLL_MS_NO_WS, RECONNECT_MAX_MS } from '../src/utils/livePolling.js'
 import { resolveIncoming } from '../src/utils/messageMerge.js'
 
 const WEB = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -170,6 +170,41 @@ test('счётчик непрочитанного молчит в свёрнут
   assert.match(shell, /_unreadTimer = setInterval\(\(\) => \{/,
     'таймер счётчика перестал быть проверяемым — вернулась однострочная форма без гварда')
   assert.match(shell, /visibilitychange', _onVisible/, 'при возврате на вкладку счётчик не обновляется')
+})
+
+// ── 07.10.2026: значок в меню дублировал опрос раздела и просил заявки, которые не показывает ──
+// Замер на стенде, вкладка в покое, 62 с: в разделе сообщений 10 запросов (6 — дубль
+// оболочки), на главной 6 (список бесед и заявки). После правки — 4 и 3.
+test('значок в меню не опрашивает, пока раздел сообщений опрашивает сам', () => {
+  assert.equal(shellBadgeTickDue({ hidden: false, storePolling: false }), true)
+  assert.equal(shellBadgeTickDue({ hidden: false, storePolling: true }), false,
+    'оболочка снова дублирует тик раздела сообщений')
+  assert.equal(shellBadgeTickDue({ hidden: true, storePolling: false }), false)
+})
+
+test('оболочка действительно спрашивает это правило и стор на него отвечает', () => {
+  //Правило без вызывающего — наш самый частый дефект: функция верна, а зовут не её.
+  assert.match(shell, /shellBadgeTickDue\(\{ hidden, storePolling: messenger\.isPolling\(\) \}\)/,
+    'оболочка решает о тике значка мимо shellBadgeTickDue')
+  assert.match(store, /function isPolling\(\) \{ return !!pollTimer \}/,
+    'стор не сообщает, что опрашивает сам, — оболочке не у кого спросить')
+  assert.match(store, /startPolling, stopPolling, isPolling,/, 'isPolling не отдан наружу из стора')
+  //Оба входа — таймер и возврат на вкладку — идут через одну функцию: забытый второй
+  //вход вернул бы дубль ровно в момент, когда человек переключился обратно.
+  assert.match(shell, /_onVisible = \(\) => \{ if \(!document\.hidden\) badgeTick\(\) \}/)
+  const bare = shell.split('\n').filter((l) => /messenger\.loadChats\(\)/.test(l) && !l.trim().startsWith('//'))
+  assert.equal(bare.length, 1, 'в оболочке должен остаться один полный loadChats() — при входе; '
+    + `сейчас их ${bare.length}`)
+})
+
+test('значок не запрашивает заявки, а раздел сообщений — запрашивает', () => {
+  assert.match(shell, /messenger\.loadChats\(\{ invites: false \}\)/, 'значок снова просит заявки')
+  assert.match(store, /if \(!opts \|\| opts\.invites !== false\) loadInvites\(\)/,
+    'loadChats перестал различать «без заявок»')
+  //Тик самого раздела — с заявками: их показывает он, и без них приглашение в беседу
+  //не появилось бы, пока человек не перезайдёт.
+  assert.match(store, /await loadConvInfo\(false\)\s*\}\s*await loadChats\(\)/,
+    'тик раздела сообщений зовёт loadChats с аргументом — заявки могли пропасть')
 })
 
 // ── Жалобы 25.08.2026: «пустое окно, потом сообщения» и «гифки грузятся после» ──────

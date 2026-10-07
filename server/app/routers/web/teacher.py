@@ -160,10 +160,14 @@ def teacher_students(group: str = Query(...),
         db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
     tscale = W.teacher_scale(user)
     out = []
+    #Общее для всех студентов группы — один раз на проход (см. `webdata.lesson_scale_map`).
+    allowed, scale_cache = W.group_lesson_ids(db, group), {}
     for s in W.students_in_group(db, group):
-        recs = W.student_records(db, s.surname, s.name, group, student_id=s.id)
+        recs = W.student_records(db, s.surname, s.name, group, allowed_lesson_ids=allowed,
+                                 student_id=s.id)
         risk = W.dropout_risk_for_student(db, s.surname, s.name, group,
-                                          cfg=cfg, lessons=lessons, records=recs)
+                                          cfg=cfg, lessons=lessons, records=recs,
+                                          student_id=s.id, scale_cache=scale_cache)
         out.append({"surname": s.surname, "name": s.name,
                     "average": W.average(lessons, recs, cfg, scale=tscale),
                     #Ниже порога видимости риска нет вовсе — отдаём null, чтобы клиент
@@ -236,6 +240,7 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
         by_group.setdefault(g, set()).add(s)
 
     groups = []
+    scale_cache: dict = {}             #назначения семестра — раз на все группы и студентов
     for group in sorted(by_group):
         subjects = by_group[group]
         #Только ТЕКУЩИЙ термин — иначе повторяющийся предмет (напр. «Физическая культура»)
@@ -243,7 +248,9 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
         lessons = W.current_term_lessons(
             db, group, [l for l in W.group_lessons(db, group) if l.subject in subjects], cfg)
         studs = W.students_in_group(db, group)
-        recs = {s.id: W.student_records(db, s.surname, s.name, group, student_id=s.id) for s in studs}
+        allowed = W.group_lesson_ids(db, group)
+        recs = {s.id: W.student_records(db, s.surname, s.name, group,
+                                        allowed_lesson_ids=allowed, student_id=s.id) for s in studs}
 
         subj_rows = []
         for subject in sorted(subjects):
@@ -262,7 +269,8 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
         at_risk = 0
         for s in studs:
             r = W.dropout_risk_for_student(db, s.surname, s.name, group,
-                                           cfg=cfg, lessons=lessons, records=recs[s.id])
+                                           cfg=cfg, lessons=lessons, records=recs[s.id],
+                                           student_id=s.id, scale_cache=scale_cache)
             if W.counts_as_at_risk(r):
                 at_risk += 1
         groups.append({"group": group, "students": len(studs),

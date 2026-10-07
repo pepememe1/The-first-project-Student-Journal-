@@ -267,6 +267,34 @@ GROUP_CASES = [
 ]
 
 
+#Банк вопросов КАРТЫ ОТВЕТОВ Вектора (`docs/contracts/vector-map.json`, 07.10.2026) — глазами
+#администратора: у него самый широкий разбор (все фамилии, каталог предметов, все группы).
+#Вопросы берутся ИЗ КАРТЫ, а не переписаны сюда второй копией, и результат сверяется с её
+#полем `understood`: приложение без сети обязано понять каждый вопрос банка ровно так же,
+#как сервер, по которому карта снята. Списки — колледж из `server/tests/vector_world.py`.
+MAP_PATH = ROOT / "docs" / "contracts" / "vector-map.json"
+MAP_SURNAMES = ["Дугаров", "Егоров", "Иванова", "Петров"]
+MAP_SUBJECTS = ["История", "Математика", "Физика"]
+MAP_GROUPS = ["К64/2", "К74/1", "К74/2"]
+
+
+def _map_bank_cases():
+    if not MAP_PATH.exists():
+        return []
+    answers = json.loads(MAP_PATH.read_text(encoding="utf-8"))["actors"]["admin"]["answers"]
+    out = []
+    for a in answers:
+        q = a["q"].lower()                       #сервер разбирает вопрос в нижнем регистре
+        r = vector_nlu.classify(q, MAP_SURNAMES, MAP_SUBJECTS, MAP_GROUPS)
+        for key, value in a["understood"].items():
+            assert r[key] == value, (
+                f"«{q}» · {key}: карта ответов говорит {value!r}, разбор вернул {r[key]!r} — "
+                "списки MAP_* разошлись с колледжем карты либо карта устарела "
+                "(py -3.11 -X utf8 tools/gen_vector_map.py)")
+        out.append((q, MAP_SURNAMES, MAP_SUBJECTS, MAP_GROUPS, r))
+    return out
+
+
 def _build_cases():
     """Собирает все группы, сверяет PHRASINGS с реальным результатом (иначе список
     выше рискует разойтись с исходником-тестом) и возвращает итоговый список."""
@@ -286,6 +314,7 @@ def _build_cases():
     for q, surnames, subjects in GROUP_CASES:
         r = vector_nlu.classify(q, surnames, subjects, CONTRACT_GROUPS)
         out.append((q, surnames, subjects, CONTRACT_GROUPS, r))
+    out += _map_bank_cases()
 
     return out
 

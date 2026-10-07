@@ -41,9 +41,89 @@ BLOCKING_CALLS = {
     "expand_query",              # расширение поискового запроса через LLM
     "complete", "voice", "free_chat",   # примитивы vector_llm
     "translate_text",            # переводчик (сеть, до 8 с)
+    "inspect_zip", "import_zip",  # архив импорта: распаковка и тысячи записей в базу
 }
 #Модули, любой вызов которых блокирует: сетевые клиенты и сон.
 BLOCKING_MODULES = {"requests", "httpx", "urllib", "subprocess"}
+
+
+def _own_nodes(fn):
+    """Узлы функции без вложенных def/lambda: чужой await к ней не относится."""
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+_ROUTE_METHODS = {"get", "post", "put", "patch", "delete", "api_route", "head", "options"}
+
+
+def _is_route(fn) -> bool:
+    for deco in fn.decorator_list:
+        target = deco.func if isinstance(deco, ast.Call) else deco
+        if isinstance(target, ast.Attribute) and target.attr in _ROUTE_METHODS:
+            return True
+    return False
+
+
+def _routes_without_await(source: str, name: str) -> list[str]:
+    """Ручки, объявленные `async def`, в теле которых нет ни одного await.
+
+    Такая ручка выполняется на цикле событий ЦЕЛИКОМ, со всем своим синхронным кодом, —
+    а объявленная обычным `def` ушла бы в пул потоков. `async` без `await` не даёт ничего
+    и отнимает главное. Список тяжёлых вызовов выше этого не видит: чтение файла и разбор
+    zip в нём не значатся, а перечислить весь файловый ввод-вывод по именам нельзя."""
+    out = []
+    for fn in [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.AsyncFunctionDef)]:
+        if not _is_route(fn):
+            continue
+        if not any(isinstance(n, (ast.Await, ast.AsyncFor, ast.AsyncWith)) for n in _own_nodes(fn)):
+            out.append(f"{name}:{fn.lineno} async def {fn.name}() — ни одного await")
+    return out
+
+
+def test_routes_without_await_are_plain_def():
+    """🔥 Нашёл разбор узких мест 07.10.2026: четыре ручки обновления приложения читали
+    файлы и zip на цикле событий — пока телефоны качали выпуск, сервер был глух."""
+    found = []
+    for path in sorted(APP.rglob("*.py")):
+        found += _routes_without_await(io.open(path, encoding="utf-8").read(),
+                                       str(path.relative_to(APP)))
+    assert not found, "Ручка `async def` без await — объяви обычным `def`:\n" + "\n".join(found)
+
+
+def test_the_await_check_sees_the_original_defect():
+    """Обратный ход на дословной форме дефекта — и на формах, которые трогать нельзя."""
+    bad = (
+        "@router.get('/files/{version}/{path:path}')\n"
+        "async def bundle_file(version: str, path: str):\n"
+        "    with zipfile.ZipFile(zip_path) as z:\n"
+        "        body = z.read(path)\n"
+        "    return Response(content=body)\n")
+    assert _routes_without_await(bad, "x.py") == ["x.py:2 async def bundle_file() — ни одного await"]
+    #Настоящая асинхронная ручка, обычная ручка и не-ручка (lifespan) — не нарушения.
+    fine = (
+        "@router.post('/stt')\n"
+        "async def stt(file: UploadFile):\n"
+        "    raw = await file.read()\n"
+        "    return raw\n"
+        "@router.get('/x')\n"
+        "def plain():\n"
+        "    return open('f').read()\n"
+        "@asynccontextmanager\n"
+        "async def lifespan(app):\n"
+        "    yield\n")
+    assert _routes_without_await(fine, "x.py") == []
+    #await во ВЛОЖЕННОЙ функции ручку не оправдывает: её собственное тело синхронное.
+    nested = (
+        "@router.get('/y')\n"
+        "async def outer():\n"
+        "    async def inner():\n"
+        "        await something()\n"
+        "    return open('f').read()\n")
+    assert len(_routes_without_await(nested, "x.py")) == 1
 
 
 def _offenders() -> list[str]:

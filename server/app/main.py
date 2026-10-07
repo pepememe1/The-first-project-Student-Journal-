@@ -155,11 +155,20 @@ app.add_middleware(
 #без `+` перезаписывает апстримовый) — двойного заголовка не будет. `setdefault` здесь
 #на случай, если конкретный ответ уже проставил своё (напр. раздача вложений может
 #ставить nosniff/attachment сама) — не перетираем осознанный выбор эндпоинта.
+#  • Cache-Control: no-store на ЛИЧНЫХ ответах API (OWASP ASVS V14.3.2, 07.10.2026) —
+#    оценки, переписка, сессии и токены не должны оседать в кэше браузера на ОБЩЕМ
+#    компьютере аудитории: следующий человек за ним достаёт их из кэша без всякого входа.
+#    До правки заголовок стоял на трёх ручках из трёхсот пятидесяти.
+#    ⚠️ Правило — «всё под API-префиксами, КРОМЕ перечисленного публичного», а не список
+#    личного: новый раздел получает запрет сам, а забытая строка в списке личного молча
+#    оставила бы его без защиты. Страницы и ассеты сайта не трогаем — у них свои правила.
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    if _is_private_api_path(request.url.path):
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 
@@ -431,6 +440,21 @@ def _is_api_path(path: str) -> bool:
     """
     p = path.strip("/")
     return any(p == pref or p.startswith(pref + "/") for pref in _API_PREFIXES)
+
+
+#Что под API-префиксами НЕ личное и может кэшироваться как отдаёт ручка: раздача сборок
+#(.exe, APK, бандлы приложения), манифесты обновлений, публичное расписание, проверка
+#здоровья и справка по API. У каждой строки причина — «это одинаково для всех и без входа».
+_PUBLIC_API_PREFIXES = ("downloads", "app", "desktop", "public", "health",
+                        "docs", "openapi.json", "redoc")
+
+
+def _is_private_api_path(path: str) -> bool:
+    """Ответ с этого адреса может нести личные данные — кэшировать его нельзя."""
+    p = path.strip("/")
+    if not _is_api_path(p):
+        return False
+    return not any(p == pref or p.startswith(pref + "/") for pref in _PUBLIC_API_PREFIXES)
 
 #САЙТ (SPA): отдаём собранный фронтенд с ТОГО ЖЕ адреса, что и API. Монтируем ПОСЛЕ
 #всех API-роутеров, поэтому /auth, /web, /docs и т.п. имеют приоритет. Неизвестные

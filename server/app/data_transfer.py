@@ -116,23 +116,65 @@ def export_zip(db, picked=None) -> bytes:
     return buf.getvalue()
 
 
-def inspect_zip(blob: bytes) -> dict:
-    """Что лежит в присланном архиве — БЕЗ записи в базу.
+#Пределы архива импорта (OWASP ASVS V5.2.3, 07.10.2026). Настоящая выгрузка — десяток
+#файлов и десятки мегабайт JSON; «zip-бомба» в сорок килобайт разворачивается в гигабайты
+#и кладёт сервер с 960 МБ памяти раньше, чем дойдёт до разбора. Проверяем ДО распаковки,
+#по оглавлению архива.
+#🔥 ОГЛАВЛЕНИЕ ПИШЕТ ПРИСЛАВШИЙ, И ОНО МОЖЕТ ЛГАТЬ (07.10.2026, найдено ручной проверкой
+#в день написания). Здесь стояло «читать больше объявленного `zipfile` не станет» — это
+#неправда: `ZipFile.read` разворачивает ВЕСЬ сжатый поток одним куском и только потом
+#обрезает до объявленного. Замер: в оглавлении 10 байт, в потоке 60 МБ, архив 61 КБ —
+#предел пройден, пик памяти 137 МБ. Поэтому файлы архива читает ТОЛЬКО `_read_member`:
+#он просит у распаковщика не больше объявленного, и объявленное становится правдой.
+MAX_ARCHIVE_FILES = 64
+MAX_ARCHIVE_UNPACKED = 256 * 1024 * 1024
 
-    Нужен отдельным шагом: администратор должен увидеть состав файла и отметить галочками,
-    что именно вливать. Импорт «сразу как открыли» — это молчаливая перезапись боевых
-    данных по одному клику."""
+
+def _open_archive(blob: bytes) -> zipfile.ZipFile:
+    """Открыть присланный архив, отказав слишком большому — одной дверью для просмотра и
+    для импорта (двух проверок не бывает: вторая однажды отстанет)."""
     try:
         z = zipfile.ZipFile(io.BytesIO(blob))
     except Exception:
         #from None — администратору нужна одна понятная строка, а не цепочка из
         #внутренностей zipfile поверх неё.
         raise ValueError("Это не ZIP-архив выгрузки.") from None
+    infos = z.infolist()
+    if len(infos) > MAX_ARCHIVE_FILES:
+        raise ValueError(f"В архиве {len(infos)} файлов — выгрузка журнала столько не "
+                         f"содержит (предел {MAX_ARCHIVE_FILES}).")
+    unpacked = sum(i.file_size for i in infos)
+    if unpacked > MAX_ARCHIVE_UNPACKED:
+        raise ValueError(f"Архив разворачивается в {unpacked // (1024 * 1024)} МБ — больше "
+                         f"предела {MAX_ARCHIVE_UNPACKED // (1024 * 1024)} МБ. "
+                         "Это не выгрузка журнала.")
+    return z
+
+
+def _read_member(z: zipfile.ZipFile, name: str) -> bytes:
+    """Прочитать файл архива, развернув НЕ БОЛЬШЕ объявленного в оглавлении.
+
+    `read(n)` с числом, в отличие от `ZipFile.read`, передаёт предел самому распаковщику:
+    лишние байты не появляются в памяти вовсе. Файл, в котором их больше объявленного,
+    придёт обрезанным и не сойдётся по контрольной сумме либо не разберётся как JSON —
+    вызывающий назовёт его повреждённым, как любой другой битый файл."""
+    info = z.getinfo(name)
+    with z.open(info) as f:
+        return f.read(info.file_size + 1)[:info.file_size]
+
+
+def inspect_zip(blob: bytes) -> dict:
+    """Что лежит в присланном архиве — БЕЗ записи в базу.
+
+    Нужен отдельным шагом: администратор должен увидеть состав файла и отметить галочками,
+    что именно вливать. Импорт «сразу как открыли» — это молчаливая перезапись боевых
+    данных по одному клику."""
+    z = _open_archive(blob)
     names = set(z.namelist())
     manifest = {}
     if "manifest.json" in names:
         try:
-            manifest = json.loads(z.read("manifest.json").decode("utf-8"))
+            manifest = json.loads(_read_member(z, "manifest.json").decode("utf-8"))
         except Exception:
             manifest = {}
     found = []
@@ -140,7 +182,7 @@ def inspect_zip(blob: bytes) -> dict:
         if fname not in names:
             continue
         try:
-            rows = json.loads(z.read(fname).decode("utf-8"))
+            rows = json.loads(_read_member(z, fname).decode("utf-8"))
         except Exception:
             #Битый файл внутри архива не должен прятать остальные наборы.
             found.append({"name": name, "label": label, "count": 0,
@@ -166,7 +208,7 @@ def import_zip(db, blob: bytes, picked, now_iso: str) -> dict:
     восстановление из старого архива приехало бы с давними метками, и LWW на десктопах
     счёл бы эти записи устаревшими: данные вернулись бы на сервер и тут же «проиграли» бы
     локальным копиям. Секреты (`password_hash`) не принимаются даже если лежат в файле."""
-    z = zipfile.ZipFile(io.BytesIO(blob))
+    z = _open_archive(blob)
     names = set(z.namelist())
     want = set(picked or ())
     written = {}
@@ -175,7 +217,7 @@ def import_zip(db, blob: bytes, picked, now_iso: str) -> dict:
         if name not in want or fname not in names:
             continue
         try:
-            rows = json.loads(z.read(fname).decode("utf-8"))
+            rows = json.loads(_read_member(z, fname).decode("utf-8"))
         except Exception:
             notes.append(f"{label}: файл повреждён, пропущен")
             continue

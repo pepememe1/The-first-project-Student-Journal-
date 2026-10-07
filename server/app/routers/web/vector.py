@@ -92,6 +92,25 @@ def _to_parent_voice(text: str) -> str:
     return text
 
 
+#Ответ о расписании написан студенту на «ты». Преподавателю, администратору, модератору
+#и родителю «попробуй чуть позже» — ошибка адресата (карта ответов, 07.10.2026). Таблица
+#явная по той же причине, что и у родителя: видно, какие фразы покрыты.
+_FORMAL_VOICE = (
+    ("попробуй чуть позже", "попробуйте чуть позже"),
+    ("посмотри вкладку", "посмотрите вкладку"),
+    ("назови точнее", "назовите точнее"),
+    ("или спроси «", "или спросите «"),
+    ("Не вижу твоей группы", "Не вижу вашей группы"),
+    ("Уточни у администратора", "Уточните у администратора"),
+)
+
+
+def _to_formal_voice(text: str) -> str:
+    for old, new in _FORMAL_VOICE:
+        text = text.replace(old, new)
+    return text
+
+
 def user_ui_locale(user: User) -> str:
     """Язык интерфейса ЭТОГО пользователя ('ru', если перевод выключен/не выбран).
 
@@ -134,11 +153,22 @@ def answer_vector_question(question: str, user: User, db: Session, context: str 
     #но «Здравствуйте, <имя>» и справка обязаны быть про родителя, а не про ребёнка.
     result = _vector_facts(question.lower(), user, db, cfg, addressee=addressee)
     intent = result.get("intent")
-    if voice_role == "parent" and intent in ("hello", "help"):
-        result["text"] = (_hello_text(addressee, "parent") if intent == "hello"
-                          else _HELP_BY_ROLE["parent"])
+    if voice_role == "parent" and intent == "hello":
+        result["text"] = _hello_text(addressee, "parent")
+    elif (voice_role == "parent" and intent == "help"
+          and result.get("text") == _HELP_BY_ROLE["student"]):
+        #Общая справка студента → справка родителя. Но ТОЛЬКО она: отказ с причиной
+        #(«данные других студентов закрыты», «про сервер знает администратор», «эти
+        #данные — для преподавателя») тоже несёт intent «help», и подмена справкой
+        #превращала «понял, но не покажу» в «не понял» — человек переспрашивал теми же
+        #словами и получал ту же стену. Нашла карта ответов (07.10.2026): отказ,
+        #написанный специально для родителя, до родителя не доходил ни разу.
+        result["text"] = _HELP_BY_ROLE["parent"]
     elif voice_role == "parent":
         result["text"] = _to_parent_voice(result.get("text", ""))
+    #Расписание отвечает студенту на «ты»; сотруднику и родителю — на «вы».
+    if intent == "schedule" and (voice_role == "parent" or user.role != "student"):
+        result["text"] = _to_formal_voice(result.get("text", ""))
     #🔒 ФАМИЛИЯ В САМОМ ВОПРОСЕ = В МОДЕЛЬ НЕ ИДЁТ НИЧЕГО (возражение Полковника
     #29.09.2026). `vector_llm.voice` и `free_chat` кладут вопрос в промпт ДОСЛОВНО, и
     #«ЗЕТ Иванова» отдавал фамилию наружу при совершенно чистом тексте ответа — у
@@ -502,6 +532,9 @@ _HELLO_PREFIX = {"student": "Привет", "teacher": "Здравствуйте
                  "moderator": "Здравствуйте", "parent": "Здравствуйте"}
 _THANKS_TEXT = "Всегда рад помочь! 🐯"
 _SCHED_DAYS = ["Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"]
+_SCHED_DAYS_FULL = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
+#Сколько групп преподавателя показываем разом на «что сегодня» без названной группы.
+_SCHEDULE_GROUPS_SHOWN = 4
 
 
 # ── Полный перевод интерфейса: локализация ответов Вектора ─────────────────────────
@@ -723,7 +756,11 @@ def _grade_breakdown(lessons, records, scale=None) -> dict:
     scale — {lesson_id: шкала}/строка/None (§ролей, 3.3.1): сырое значение переводится
     в 5-балльное ПЕРЕД подсчётом, поэтому «пятёрка» на 100-балльной (90+) тоже считается."""
     counts = {"5": 0, "4": 0, "3": 0, "2": 0}
-    ids = {l.id for l in lessons if l.type == "Практика"}
+    #Тот же набор занятий, что входит в средний балл (`grading.PRACTICE_TYPES` — практика
+    #И домашнее задание). Здесь стоял литерал «Практика»: оценка за ДЗ шла в средний, а в
+    #счёт не шла, и «оценок 4» расходилось с числом, из которого выведен средний (карта
+    #ответов, 07.10.2026).
+    ids = {l.id for l in lessons if W.grading.is_practice(l.type)}
     scale_map = scale if isinstance(scale, dict) else None
     for lid, v in (records or {}).items():
         if lid not in ids or not v:
@@ -806,6 +843,14 @@ def _subj_match(detected: str, lesson_subject: str) -> bool:
     return hits >= max(1, len(aw) // 2)
 
 
+def _today():
+    """«Сегодня» для ответа о расписании — одной дверью. Карта ответов Вектора
+    (`docs/contracts/vector-map.json`) подменяет её: иначе ответ на «что завтра» зависел
+    бы от дня, в который карту собирали, и карта расходилась бы сама с собой."""
+    import datetime as _dt
+    return _dt.date.today()
+
+
 def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
     """Ответ по расписанию группы (данные — серверный парсер портала schedule_web).
 
@@ -819,7 +864,7 @@ def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
     if not data or not data.get("weeks"):
         return (f"Расписание группы {group} пока не загрузилось с портала — попробуй чуть позже.", {})
     weeks = data["weeks"]
-    cur_week = str(schedule_web.current_week_parity() or 1)
+    cur_week = str(schedule_web.current_week_parity(_today()) or 1)
 
     def fmt(l):
         s = l.get("subject") or l.get("raw") or "занятие"
@@ -859,7 +904,7 @@ def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
     # ЕЁ, а не сегодняшнюю: спрошенный «понедельник» в субботу — это уже СЛЕДУЮЩАЯ неделя
     # (другая чётность). Раньше брали cur_week (сегодня) → выдавали пары не той недели.
     import datetime as _dt
-    today = _dt.date.today()
+    today = _today()
     today_idx = today.weekday()                # 0=Пн..6=Вс
     if day == "today":
         target = today
@@ -874,7 +919,9 @@ def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:
         return (f"В этот день у группы {group} занятий нет — выходной. 🐯", {})
     week = str(schedule_web.current_week_parity(target) or 1)         # чётность ЦЕЛЕВОГО дня
     dname = _SCHED_DAYS[idx]
-    label = {"today": "Сегодня", "tomorrow": "Завтра"}.get(day, dname)
+    #Назван день недели — подписываем его полным словом: с сокращением заголовок
+    #получался «Срд (Срд), II неделя».
+    label = {"today": "Сегодня", "tomorrow": "Завтра"}.get(day, _SCHED_DAYS_FULL[idx])
     lessons_day = weeks.get(week, {}).get(dname, [])
     if not lessons_day:
         return (f"{label} ({dname}, {'II' if week == '2' else 'I'} неделя) у группы {group} "
@@ -1076,24 +1123,32 @@ def _plan_lessons(db: Session, cfg: dict, group: str) -> list:
         db, group, W.group_lessons(db, group)), cfg)
 
 
-def _student_rows(db: Session, cfg: dict, group: str, lessons: list, scale=None) -> list:
+def _student_rows(db: Session, cfg: dict, group: str, lessons: list, scale=None,
+                  cache: dict | None = None) -> list:
     """По студенту группы: средний, долги, пропуски и риск отчисления — ОДИН сбор на все
     сводки Вектора (должники, зона риска, пропуски, «сводка по группе»).
 
     Риск — тот же индекс `dropout_risk`, что на дашбордах, и тот же порог
-    (`W.counts_as_at_risk`): иначе Вектор и экран называли бы разное число людей."""
+    (`W.counts_as_at_risk`): иначе Вектор и экран называли бы разное число людей.
+
+    `cache` — память прохода (см. `webdata.lesson_scale_map`): кто идёт по НЕСКОЛЬКИМ
+    группам, заводит словарь перед циклом, и назначения семестра читаются раз на весь
+    ответ, а не дважды на каждого студента (сводка по колледжу: 17.6 с → см. HISTORY 64)."""
     out = []
+    cache = {} if cache is None else cache
+    allowed = W.group_lesson_ids(db, group)        #занятия группы — раз на группу
     for s in W.students_in_group(db, group):
         own = W.filter_lessons_by_student_subgroup(db, lessons, s.id)
-        rec = W.student_records(db, s.surname, s.name, group, student_id=s.id)
-        sc = scale if scale is not None else W.lesson_scale_map(db, own)
+        rec = W.student_records(db, s.surname, s.name, group, allowed_lesson_ids=allowed,
+                                student_id=s.id)
+        sc = scale if scale is not None else W.lesson_scale_map(db, own, cache=cache)
         out.append({"student": s, "group": group, "lessons": own, "records": rec,
                     "scale": sc, "average": W.average(own, rec, cfg, scale=sc),
                     "debts": _debts_by_subject(own, rec, sc),
                     "absences": W.absences(own, rec),
                     "risk": W.dropout_risk_for_student(db, s.surname, s.name, group, cfg=cfg,
                                                        lessons=own, records=rec,
-                                                       student_id=s.id)})
+                                                       student_id=s.id, scale_cache=cache)})
     return out
 
 
@@ -1439,9 +1494,12 @@ def _teachers_answer(db: Session, group: str = "") -> dict:
     extra = [t for t in raw if teacher_match.match_teacher(t, known).get("status") != "matched"]
     if extra:
         shown = extra[:40]
+        tail = ", ".join(shown) + (f" и ещё {len(extra) - len(shown)}"
+                                   if len(extra) > len(shown) else "")
+        #Портал пишет преподавателя с инициалами («ПОРТАЛОВ П.П.»): своя точка в конце
+        #у строки уже есть, вторая давала «П.П..» (карта ответов, 07.10.2026).
         text += (f" По расписанию портала ведут ещё {len(extra)} без учётной записи: "
-                 + ", ".join(shown) + (f" и ещё {len(extra) - len(shown)}"
-                                       if len(extra) > len(shown) else "") + ".")
+                 + tail.rstrip(".") + ".")
     return {"text": text + note, "mood": "neutral", "intent": "teachers",
             "facts": {"count": len(names), "portal_only": len(extra)}, "no_voice": True}
 
@@ -1546,12 +1604,14 @@ def _admin_facts(msg: str, nlu: dict, db: Session, cfg: dict) -> dict:
 
     targets = [group] if group else active
     scope = f"в группе {group}" if group else "по колледжу"
-    if intent == "subject_grades" and subject:
-        vals = []
+    #«Средний балл по физике» — это вопрос о ПРЕДМЕТЕ: с названным предметом «average»
+    #идёт той же веткой, что «оценки по физике», а не общей сводкой (карта, 07.10.2026).
+    if intent in ("subject_grades", "average") and subject:
+        vals, cache = [], {}
         for g in targets:
             gl = [l for l in _plan_lessons(db, cfg, g) if l.subject == subject]
             if gl:
-                vals.append((g, _group_avg(_student_rows(db, cfg, g, gl))))
+                vals.append((g, _group_avg(_student_rows(db, cfg, g, gl, cache=cache))))
         if not vals:
             return {"text": f"По предмету «{subject}» занятий {scope} нет.", "mood": "neutral",
                     "intent": "subject_grades", "facts": {}, "no_voice": True}
@@ -1560,9 +1620,9 @@ def _admin_facts(msg: str, nlu: dict, db: Session, cfg: dict) -> dict:
                 "mood": "neutral", "intent": "subject_grades",
                 "facts": {"subject": subject, "groups": len(vals)}, "no_voice": True}
 
-    rows = []
+    rows, cache = [], {}
     for g in targets:
-        rows += _student_rows(db, cfg, g, _plan_lessons(db, cfg, g))
+        rows += _student_rows(db, cfg, g, _plan_lessons(db, cfg, g), cache=cache)
     if intent == "debtors":
         return _debtors_answer(rows, scope)
     if intent == "at_risk":
@@ -1628,8 +1688,22 @@ def _teacher_facts(msg: str, nlu: dict, user: User, db: Session, cfg: dict,
 
     if intent == "schedule":
         #Расписание публично (страница «Расписание без входа»), поэтому любая группа.
-        text, facts = _schedule_answer(db, group or groups[0], msg, day)
-        return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
+        if group or len(groups) == 1:
+            text, facts = _schedule_answer(db, group or groups[0], msg, day)
+            return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
+        #Групп несколько, а не названа ни одна. Раньше молча бралась ПЕРВАЯ ПО АЛФАВИТУ:
+        #на «что сегодня» преподаватель получал расписание одной группы и не узнавал,
+        #что про остальные ему не сказали (карта ответов, 07.10.2026). Отвечаем по
+        #каждой — у каждого куска в заголовке своя группа.
+        shown = groups[:_SCHEDULE_GROUPS_SHOWN]
+        parts = [_schedule_answer(db, g, msg, day) for g in shown]
+        text = "\n\n".join(t for t, _f in parts)
+        if len(groups) > len(shown):
+            text += (f"\n\nЕщё групп: {len(groups) - len(shown)} — назовите группу, например "
+                     f"«расписание {groups[len(shown)]} на завтра».")
+        return {"text": text, "mood": "neutral", "intent": "schedule",
+                "facts": {"groups": len(shown),
+                          "count": sum(int(f.get("count") or 0) for _t, f in parts)}}
     if intent == "teachers":
         return _teachers_answer(db, group)
     if intent == "groups":
@@ -1685,27 +1759,29 @@ def _teacher_facts(msg: str, nlu: dict, user: User, db: Session, cfg: dict,
         return _student_card(db, cfg, s, intent, lessons=lessons_for(s.group_name),
                              scale=scale_for(s.group_name), subject=subject)
 
-    if intent == "subject_grades" and subject:
+    if intent in ("subject_grades", "average") and subject:
         own_groups = [g for g in targets
                       if g in curated or subject in subjects_by_group.get(g, set())]
         if not own_groups:
             return {"text": f"Предмет «{subject}» не в вашей нагрузке — по чужим "
                             "предметам данных не покажу. 🐯",
                     "mood": "neutral", "intent": "help", "facts": {}}
-        vals = []
+        vals, cache = [], {}
         for g in own_groups:
             gl = [l for l in lessons_for(g) if l.subject == subject]
-            vals.append((g, _group_avg(_student_rows(db, cfg, g, gl, scale_for(g)))))
-        body = "; ".join(f"{g}: {a}" for g, a in vals)
-        return {"text": f"Средний по предмету «{subject}» — {body}.",
+            vals.append((g, _group_avg(_student_rows(db, cfg, g, gl, scale_for(g), cache))))
+        #Тот же вид строки, что у администратора: один вопрос — один ответ по форме, и
+        #«оценок нет» словами вместо «0.0» у группы без единой оценки.
+        body = "; ".join(f"{g} — {a or 'оценок нет'}" for g, a in vals)
+        return {"text": f"Средний по предмету «{subject}»: {body}.",
                 "mood": "neutral", "intent": "subject_grades",
                 "facts": {"subject": subject, "groups": len(vals)}}
     if intent in ("grade_count", "zet"):
         #Отвечаем ПРИЧИНОЙ, а не общей справкой: иначе преподаватель решит, что Вектор
         #не понял вопрос, и будет переспрашивать теми же словами.
-        what = ("Счёт оценок" if intent == "grade_count" else "Зачётные единицы")
-        return {"text": f"{what} веду по студенту — спросите с фамилией, например "
-                        "«сколько оценок у Иванова».",
+        what, example = (("Счёт оценок", "«сколько оценок у Иванова»")
+                         if intent == "grade_count" else ("Зачётные единицы", "«ЗЕТ Иванова»"))
+        return {"text": f"{what} веду по студенту — спросите с фамилией, например {example}.",
                 "mood": "neutral", "intent": "help", "facts": {}}
     if intent == "server_state":
         return {"text": "Состояние сервера — к администратору, это не учебные данные. "
@@ -1715,9 +1791,9 @@ def _teacher_facts(msg: str, nlu: dict, user: User, db: Session, cfg: dict,
     if intent not in ("at_risk", "debtors", "absences", "average", "group_stats", "grades"):
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
-    rows = []
+    rows, cache = [], {}
     for g in targets:
-        rows += _student_rows(db, cfg, g, lessons_for(g), scale_for(g))
+        rows += _student_rows(db, cfg, g, lessons_for(g), scale_for(g), cache)
     if intent == "debtors":
         return _debtors_answer(rows, scope)
     if intent == "at_risk":
@@ -1803,6 +1879,11 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
         if intent == "schedule" and nlu["group"]:
             text, facts = _schedule_answer(db, nlu["group"], msg, day)
             return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
+        if intent == "schedule":
+            #Вопрос ПОНЯТ, не хватает группы — просим её, а не отвечаем общей справкой:
+            #справка читается как «не понял», и человек переспрашивает теми же словами.
+            return {"text": "Назовите группу — например «расписание К74/1 на завтра».",
+                    "mood": "neutral", "intent": "schedule", "facts": {}, "no_voice": True}
         if intent == "teachers":
             return _teachers_answer(db, nlu["group"])
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
@@ -1843,7 +1924,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
                 "intent": "debtors", "facts": {"debts": len(d)}}
     if intent == "absences":
         a = W.absences(lessons, records)
-        return {"text": f"Пропусков всего: {a['всего']} (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
+        return {"text": f"Пропусков всего: {a['всего']} ч (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                 "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
     if intent == "homework":
         return _homework_answer(lessons, records, subject)
@@ -1859,16 +1940,21 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
                         f"(пятёрок: {b['5']}, четвёрок: {b['4']}, троек: {b['3']}, двоек: {b['2']}).",
                 "mood": "happy" if b["2"] == 0 else "neutral",
                 "intent": "grade_count", "facts": b}
-    if intent == "subject_grades" and subject:
+    if intent in ("subject_grades", "average") and subject:
         per = [p for p in W.per_subject_averages(lessons, records, cfg, scale=scale_map)
                if p["subject"] == subject]
         if not per:
             return {"text": f"По предмету «{subject}» у тебя пока нет занятий с оценками.",
                     "mood": "neutral", "intent": "subject_grades", "facts": {}}
         p = per[0]
+        #Перечисляем ВСЁ, из чего сложился средний: практики и домашние задания
+        #(`grading.PRACTICE_TYPES`), включая «Н» — она идёт в средний как 2.0. Раньше в
+        #списке были только практики с оценкой, и «средний 2.25. Оценки: 2, 3» выглядело
+        #арифметической ошибкой Вектора (карта ответов, 07.10.2026).
         marks = [records.get(l.id) for l in lessons
-                 if l.subject == subject and l.type == "Практика"
-                 and W.grading.to_five_point(records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None]
+                 if l.subject == subject and W.grading.is_practice(l.type)
+                 and (records.get(l.id) == "Н" or W.grading.to_five_point(
+                     records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None)]
         avg_txt = f"средний {p['average']}" if p["average"] else "оценок ещё нет"
         body = (", ".join(marks)) if marks else "—"
         return {"text": f"По предмету «{subject}»: {avg_txt}. Оценки: {body}.",
@@ -1921,5 +2007,10 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
         return {"text": "Эти данные — для преподавателя. Я могу показать твой средний балл, "
                         "оценки, пропуски, долги, домашние задания и расписание. 🐯",
                 "mood": "neutral", "intent": "help", "facts": {}}
+    if not avg:
+        #Оценок нет вовсе. «Твой средний балл — 0.0» читается как ноль за работу, хотя
+        #работы ещё не было (карта ответов, 07.10.2026).
+        return {"text": "Оценок пока нет — средний балл появится с первой оценкой. 🐯",
+                "mood": "neutral", "intent": "average", "facts": {"average": avg}}
     return {"text": f"Твой средний балл — {avg}. " + W.grading.methodology_text(cfg),
             "mood": _mood_by_avg(avg), "intent": "average", "facts": {"average": avg}}

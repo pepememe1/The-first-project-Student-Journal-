@@ -54,6 +54,26 @@ def online(window_sec: int = ONLINE_WINDOW_SEC) -> list:
     return rows
 
 
+#Управляющие символы, которыми в журнал подделывают строку: перевод строки и возврат
+#каретки, остальные C0/C1, «разделитель строк» и «разделитель абзацев» Юникода.
+_LINE_BREAKERS = {ord("\n"): "\\n", ord("\r"): "\\r", ord("\t"): " ",
+                  0x2028: "\\n", 0x2029: "\\n", 0x85: "\\n"}
+_LINE_BREAKERS.update({c: "" for c in list(range(0x00, 0x20)) + [0x7f] + list(range(0x80, 0xa0))
+                       if c not in _LINE_BREAKERS})
+
+
+def one_line(value) -> str:
+    """Значение для журнала — ОДНОЙ строкой (OWASP ASVS V16.4.1, 07.10.2026).
+
+    В журнал попадает то, что прислал человек: логин при неудачном входе, имя устройства,
+    причина действия. С переводом строки внутри одна запись читается как две, и вторая —
+    целиком сочинённая: «вход выполнен: admin» под чужим неудачным входом. Вечерняя
+    сводка приманок уходит ПИСЬМОМ, то есть текстом, где подделку не отличить от записи.
+    Перевод строки не выбрасываем, а показываем (`\\n`): след того, что его пытались
+    вставить, сам по себе сигнал. Одна дверь для живого монитора и постоянного журнала."""
+    return str(value or "").translate(_LINE_BREAKERS)
+
+
 def record(level: str, kind: str, message: str, login: str = "", ip: str = ""):
     """Записать событие в журнал. level: info|warn|error; kind — короткая метка типа."""
     global _seq
@@ -61,8 +81,8 @@ def record(level: str, kind: str, message: str, login: str = "", ip: str = ""):
         _seq += 1
         _events.append({
             "id": _seq, "ts": time.time(), "level": level or "info",
-            "kind": kind or "", "message": message or "",
-            "login": login or "", "ip": ip or "",
+            "kind": one_line(kind), "message": one_line(message),
+            "login": one_line(login), "ip": one_line(ip),
         })
 
 

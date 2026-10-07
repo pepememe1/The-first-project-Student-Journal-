@@ -38,7 +38,8 @@ test('директивы, ради которых мета и нужна, на �
   assert.match(p, /(^|;\s*)default-src 'self'/, 'потеряна default-src')
   assert.match(p, /(^|;\s*)script-src 'self'/, "script-src должен быть строго 'self'")
   assert.match(p, /(^|;\s*)object-src 'none'/, 'потеряна object-src')
-  assert.match(p, /(^|;\s*)base-uri 'self'/, 'потеряна base-uri')
+  //'none', а не 'self' (OWASP ASVS V3.4.3): тега <base> в продукте нет — см. тест ниже.
+  assert.match(p, /(^|;\s*)base-uri 'none'/, "base-uri должна быть 'none'")
 })
 
 test('в script-src нет послаблений, ради которых всё это теряет смысл', () => {

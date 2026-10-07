@@ -61,6 +61,8 @@ ENV/
 # ── OTA-бандлы приложения (артефакты релиза; apk-info.json коммитим, бандлы — нет) ──
 server/ota_bundles/*.zip
 server/ota_bundles/latest.json
+# кэш пофайлового манифеста: ручка /app/updates пишет его рядом с бандлом
+server/ota_bundles/*.manifest.json
 
 # ── ОС ──
 .DS_Store

@@ -122,9 +122,13 @@ def log(db, request=None, *, actor="", role="", action="", target="",
         values = {
             "created_ts": int(now),
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "actor": actor or "", "role": role or "", "ip": ip or "",
-            "device": device or "", "action": action or "", "target": target or "",
-            "detail": detail or "", "level": level or "info",
+            #Одной строкой КАЖДОЕ поле (`events.one_line`): логин, устройство и причину
+            #присылает человек, и перевод строки в них подделывал бы соседнюю запись.
+            #Чистим ДО расчёта хеша цепочки — хешируется ровно то, что лежит в базе.
+            "actor": events.one_line(actor), "role": events.one_line(role),
+            "ip": events.one_line(ip), "device": events.one_line(device),
+            "action": events.one_line(action), "target": events.one_line(target),
+            "detail": events.one_line(detail), "level": events.one_line(level) or "info",
         }
         #Голову читаем в СВОЁМ try: не прочиталась — запись всё равно обязана лечь.
         #Разрыв цепочки виден при проверке, а потерянное событие не видно никогда, и

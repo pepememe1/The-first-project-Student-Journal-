@@ -9,6 +9,12 @@
  * Телефон кодом не подтверждается и кодов не получает: сервиса SMS у колледжа нет (и
  * он был бы новым получателем персональных данных). Телефон нужен для сверки с тем,
  * что студент сообщил колледжу лично: не совпало — администратор видит красное поле.
+ *
+ * 🔒 Любая правка — с ТЕКУЩИМ ПАРОЛЕМ (07.10.2026, OWASP ASVS V7.5.1). На почту приходит
+ * код входа, по телефону администратор сверяет человека перед выдачей нового пароля: кто
+ * подменил их на свои — забрал аккаунт. Раньше для этого хватало открытой вкладки на
+ * общем компьютере. Проверяет СЕРВЕР; поле здесь — чтобы было куда ввести. Пароль
+ * стирается из поля после каждого удачного действия.
  */
 import { ref, onMounted } from 'vue'
 import { accountApi } from '@/api/endpoints'
@@ -27,6 +33,26 @@ const code = ref('')
 const sentTo = ref('')
 const busy = ref(false)
 const error = ref('')
+const current = ref('')          //текущий пароль — подтверждение личности для правки
+const mfaCode = ref('')
+const needMfa = ref(false)       //сервер сказал, что у человека включён второй фактор
+const currentInput = ref(null)
+
+/** Пароль введён? Нет — говорим об этом рядом с полем и ставим в него курсор. */
+function havePassword() {
+  if (current.value) return true
+  error.value = loc.t('account.passwordNeeded', 'Введите текущий пароль — он нужен, чтобы изменить почту или телефон')
+  currentInput.value?.focus()
+  return false
+}
+
+/** Отказ сервера → текст рядом с полем; «нужен код» открывает поле второго фактора. */
+function explain(e, fallback) {
+  if (e?.response?.headers?.['x-gb-reason'] === 'mfa_required') needMfa.value = true
+  error.value = e?.response?.data?.detail || fallback
+}
+
+function forgetPassword() { current.value = mfaCode.value = '' }
 
 async function load() {
   try {
@@ -37,12 +63,14 @@ async function load() {
 onMounted(load)
 
 async function sendCode() {
+  if (!havePassword()) return
   busy.value = true
   error.value = ''
   try {
-    sentTo.value = (await accountApi.emailStart(email.value.trim())).data.sent_to || ''
+    sentTo.value = (await accountApi.emailStart(email.value.trim(), current.value, mfaCode.value.trim())).data.sent_to || ''
+    forgetPassword()
   } catch (e) {
-    error.value = e?.response?.data?.detail || loc.t('account.codeSendFailed', 'Не удалось отправить код')
+    explain(e, loc.t('account.codeSendFailed', 'Не удалось отправить код'))
   } finally { busy.value = false }
 }
 
@@ -59,19 +87,29 @@ async function confirmCode() {
 }
 
 async function removeEmail() {
+  if (!havePassword()) return
   if (!(await confirm({ title: loc.t('account.removeEmailConfirm', 'Убрать почту? Вход с новых устройств перестанет спрашивать код.'), okText: loc.t('common.delete'), danger: true }))) return
-  try { info.value = (await accountApi.emailRemove()).data } catch { /* останется как было */ }
+  error.value = ''
+  try {
+    info.value = (await accountApi.emailRemove(current.value, mfaCode.value.trim())).data
+    forgetPassword()
+  } catch (e) {
+    //Молчать нельзя: почта осталась, а человек уверен, что убрал её.
+    explain(e, loc.t('account.emailRemoveFailed', 'Не удалось убрать почту'))
+  }
 }
 
 async function savePhone() {
+  if (!havePassword()) return
   busy.value = true
   error.value = ''
   try {
-    info.value = (await accountApi.setPhone(phone.value.trim())).data
+    info.value = (await accountApi.setPhone(phone.value.trim(), current.value, mfaCode.value.trim())).data
     phone.value = info.value.self_phone || ''
+    forgetPassword()
     toast.success(loc.t('account.phoneSaved', 'Телефон сохранён'))
   } catch (e) {
-    error.value = e?.response?.data?.detail || loc.t('account.phoneFailed', 'Не удалось сохранить телефон')
+    explain(e, loc.t('account.phoneFailed', 'Не удалось сохранить телефон'))
   } finally { busy.value = false }
 }
 </script>
@@ -81,6 +119,18 @@ async function savePhone() {
     <p v-if="info && !info.mail_configured" class="rounded-md border border-orange/40 bg-orange/10 px-3 py-2 text-sm text-text2">
       {{ loc.t('account.mailNotConfigured', 'Отправка почты на сервере не настроена — подтвердить адрес сейчас нельзя.') }}
     </p>
+
+    <div>
+      <label for="contacts-current-password" class="mb-1 block text-tiny uppercase text-text3">{{ loc.t('account.currentPassword', 'Текущий пароль') }}</label>
+      <p class="mb-2 text-tiny text-text3">{{ loc.t('account.contactsPasswordHint', 'Нужен, чтобы изменить почту или телефон: так посторонний за вашим открытым журналом не подменит их на свои.') }}</p>
+      <input id="contacts-current-password" ref="currentInput" v-model="current" type="password" autocomplete="current-password"
+             class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:max-w-xs" />
+      <div v-if="needMfa" class="mt-2">
+        <label for="contacts-mfa-code" class="mb-1 block text-tiny uppercase text-text3">{{ loc.t('account.mfaCode', 'Код из приложения-аутентификатора') }}</label>
+        <input id="contacts-mfa-code" v-model="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="11"
+               class="h-10 w-40 rounded-sm border border-border2 bg-card2 px-3 text-sm tracking-widest text-text outline-none focus:border-accent" />
+      </div>
+    </div>
 
     <div>
       <span class="mb-1 block text-tiny uppercase text-text3">{{ loc.t('account.email', 'Почта') }}</span>
@@ -116,6 +166,6 @@ async function savePhone() {
         <AppButton variant="ghost" size="sm" :disabled="busy" @click="savePhone">{{ loc.t('common.save') }}</AppButton>
       </div>
     </div>
-    <p v-if="error" class="text-sm text-red">{{ error }}</p>
+    <p v-if="error" class="text-sm text-red" role="alert">{{ error }}</p>
   </div>
 </template>

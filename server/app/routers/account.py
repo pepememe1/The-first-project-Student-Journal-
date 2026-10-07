@@ -71,6 +71,55 @@ def _after_password_change(db: Session, user: User, by_admin: bool) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────
+# ПОВТОРНАЯ ПРОВЕРКА ЛИЧНОСТИ — одна дверь для всего, на чём держится вход
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+def _confirm_identity(db: Session, request: Request, user: User, body: dict, *,
+                      what: str, reject_action: str) -> None:
+    """Пропустить действие только тому, кто заново назвал ТЕКУЩИЙ пароль (и код второго
+    фактора, если он включён). Живая сессия — не доказательство: это может быть чужой
+    человек за незакрытым журналом на общем компьютере аудитории или украденный токен.
+
+    Одна функция на смену пароля и на правку почты/телефона (OWASP ASVS V7.5.1, решение
+    Ярослава 07.10.2026). Свой счётчик попыток в каждом месте — это и есть «однажды
+    забудут»: без общего счётчика с ВХОДОМ любая из этих ручек стала бы обходной дорогой
+    к перебору пароля из украденной сессии.
+
+    ⚠️ Пустой пароль — тот же отказ, что неверный, но БЕЗ засчитанной попытки: так
+    приходит запрос от программы прежней версии, где поля для пароля ещё нет, и
+    штрафовать человека за устаревший интерфейс незачем."""
+    current = str((body or {}).get("current") or "")
+    if not current:
+        raise HTTPException(status_code=400,
+                            detail="Введите текущий пароль. Если поля для него нет — "
+                                   "обновите приложение.",
+                            headers={"X-Gb-Reason": "password_required"})
+    ip = throttle.client_ip(request)
+    left = throttle.seconds_until_unlocked(ip, user.login)
+    if left > 0:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много попыток. Повторите через {left} с.",
+                            headers={"Retry-After": str(left)})
+    with throttle.hash_slot() as got:
+        if not got:
+            raise HTTPException(status_code=503,
+                                detail="Сервер сейчас занят. Повторите через несколько секунд.",
+                                headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)})
+        ok = verify_password(current, user.password_hash or "")
+    if not ok:
+        #Тот же счётчик, что у входа (см. докстринг).
+        throttle.register_failure(ip, user.login, login_exists=True)
+        audit.log(db, request, actor=user.login, role=user.role,
+                  action=reject_action, level="warn",
+                  detail=f"{what}: неверный текущий пароль" if what != "смена пароля"
+                  else "неверный текущий пароль")
+        raise HTTPException(status_code=400, detail="Текущий пароль неверен")
+    from . import mfa as _mfa
+    _mfa.guard_action(db, user, str((body or {}).get("code") or ""), request, what=what)
+    throttle.register_success(ip, user.login)
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
 # СВОЙ ПАРОЛЬ
 # ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -97,28 +146,8 @@ def change_own_password(body: dict = Body(...), request: Request = None,
                             detail=f"Пароль не короче {MIN_PASSWORD_LEN} символов")
     if new == current:
         raise HTTPException(status_code=400, detail="Новый пароль совпадает с текущим")
-    ip = throttle.client_ip(request)
-    left = throttle.seconds_until_unlocked(ip, user.login)
-    if left > 0:
-        raise HTTPException(status_code=429,
-                            detail=f"Слишком много попыток. Повторите через {left} с.",
-                            headers={"Retry-After": str(left)})
-    with throttle.hash_slot() as got:
-        if not got:
-            raise HTTPException(status_code=503,
-                                detail="Сервер сейчас занят. Повторите через несколько секунд.",
-                                headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)})
-        ok = verify_password(current, user.password_hash or "")
-    if not ok:
-        #Тот же счётчик, что у входа: иначе смена пароля стала бы обходной дорогой к
-        #перебору текущего пароля из украденной сессии.
-        throttle.register_failure(ip, user.login, login_exists=True)
-        audit.log(db, request, actor=user.login, role=user.role,
-                  action="password.change.reject", level="warn",
-                  detail="неверный текущий пароль")
-        raise HTTPException(status_code=400, detail="Текущий пароль неверен")
-    from . import mfa as _mfa
-    _mfa.guard_action(db, user, str(body.get("code") or ""), request, what="смена пароля")
+    _confirm_identity(db, request, user, body, what="смена пароля",
+                      reject_action="password.change.reject")
     with throttle.hash_slot() as got:
         if not got:
             raise HTTPException(status_code=503,
@@ -128,7 +157,6 @@ def change_own_password(body: dict = Body(...), request: Request = None,
     user.updated_at = _now()
     issued_credentials.forget(db, user)
     db.commit()
-    throttle.register_success(ip, user.login)
     audit.log(db, request, actor=user.login, role=user.role, action="password.change",
               detail="пароль изменён самим пользователем")
     _after_password_change(db, user, by_admin=False)
@@ -179,17 +207,32 @@ def my_contacts(user: User = Depends(get_current_user), db: Session = Depends(ge
     return login_guard.contact_view(db, user)
 
 
+# 🔒 ПРАВКА КОНТАКТОВ — ТОЛЬКО С ТЕКУЩИМ ПАРОЛЕМ (OWASP ASVS V7.5.1, 07.10.2026).
+# На подтверждённую почту приходит код входа с нового устройства и письмо о смене пароля,
+# по телефону администратор сверяет человека, прежде чем выдать ему новый пароль. Кто
+# поменял их на свои — тот забрал аккаунт надолго, и для этого хватало открытой вкладки
+# на общем компьютере: ни одна из трёх ручек не спрашивала ничего. Закрыты три двери —
+# телефон, начало привязки почты и её удаление; подтверждение кодом из письма пароль не
+# спрашивает повторно (его спросили шагом раньше, а код знает только владелец ящика).
+# Держит `server/tests/test_contacts_reauth.py`.
+
 @router.post("/me/contacts/phone")
-def set_my_phone(body: dict = Body(...), user: User = Depends(get_current_user),
-                 db: Session = Depends(get_db)):
+def set_my_phone(body: dict = Body(...), request: Request = None,
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _confirm_identity(db, request, user, body, what="смена телефона",
+                      reject_action="contact.change.reject")
     login_guard.set_self_phone(db, user, str(body.get("phone") or ""))
     db.commit()
+    audit.log(db, request, actor=user.login, role=user.role, action="contact.phone_set",
+              detail="телефон для сверки изменён самим пользователем")
     return login_guard.contact_view(db, user)
 
 
 @router.post("/me/contacts/email/start")
 def start_my_email(body: dict = Body(...), request: Request = None,
                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _confirm_identity(db, request, user, body, what="смена почты",
+                      reject_action="contact.change.reject")
     masked = login_guard.start_email_verification(db, user, str(body.get("email") or ""),
                                                   request)
     return {"ok": True, "sent_to": masked}
@@ -204,9 +247,15 @@ def confirm_my_email(body: dict = Body(...), request: Request = None,
     return login_guard.contact_view(db, user)
 
 
+#Удаление — POST с телом: пароль едет в теле запроса, а тело у DELETE по дороге теряют
+#и прокси, и часть клиентов. Прежний DELETE оставлен тем же обработчиком: программа
+#прежней версии зовёт его без пароля и получает внятный отказ, а не 405.
+@router.post("/me/contacts/email/remove")
 @router.delete("/me/contacts/email")
-def remove_my_email(request: Request = None, user: User = Depends(get_current_user),
-                    db: Session = Depends(get_db)):
+def remove_my_email(body: dict = Body(None), request: Request = None,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _confirm_identity(db, request, user, body or {}, what="удаление почты",
+                      reject_action="contact.change.reject")
     login_guard.remove_self_email(db, user)
     db.commit()
     audit.log(db, request, actor=user.login, role=user.role, action="contact.email_removed",

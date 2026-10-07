@@ -6,6 +6,8 @@ datatransfer.py — Выгрузка/загрузка справочников �
 одновременной работе). Общий роутер и хелперы — в `_common.py`; порядок
 регистрации маршрутов задаёт `__init__.py`.
 """
+from starlette.concurrency import run_in_threadpool
+
 from ._common import *      # noqa: F401,F403 — общий router, модели, хелперы
 #Страница «Настройки ИИ» показывает, установлен ли движок распознавания на ХОСТЕ,
 #и правит тот же набор ключей конфигурации, что и обработчик записи.
@@ -59,8 +61,11 @@ async def admin_data_inspect(file: UploadFile = File(...),
     blob = await file.read()
     if not blob:
         raise HTTPException(status_code=400, detail="Пустой файл")
+    #🔥 Разбор архива — в пуле потоков (07.10.2026). Ручка `async def` (ей нужен
+    #`await file.read()`), а распаковка и разбор JSON шли прямо на цикле событий: пока
+    #администратор смотрел состав архива на десятки мегабайт, сервер не отвечал никому.
     try:
-        return DT.inspect_zip(blob)
+        return await run_in_threadpool(DT.inspect_zip, blob)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -81,14 +86,17 @@ async def admin_data_import(file: UploadFile = File(...), sets: str = Form(""),
     picked = [s.strip() for s in (sets or "").split(",") if s.strip()]
     if not picked:
         raise HTTPException(status_code=400, detail="Не выбрано ни одного набора данных")
+    #Импорт — тысячи записей в базу; на цикле событий это остановка сервера всему
+    #колледжу на время импорта (тот же дефект, что был у распознавания речи).
     try:
-        result = DT.import_zip(db, blob, picked, _now_iso())
+        result = await run_in_threadpool(DT.import_zip, db, blob, picked, _now_iso())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:      # noqa: BLE001 — битый архив не должен ронять сервер 500-кой
         raise HTTPException(status_code=400, detail=f"Не удалось прочитать архив: {e}")
-    audit.log(db, request, actor=_admin.login, role="admin", action="data.import",
-              detail=",".join(f"{k}={v}" for k, v in result["written"].items()))
+    await run_in_threadpool(
+        lambda: audit.log(db, request, actor=_admin.login, role="admin", action="data.import",
+                          detail=",".join(f"{k}={v}" for k, v in result["written"].items())))
     return {"ok": True, **result}
 
 

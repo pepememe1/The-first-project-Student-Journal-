@@ -576,7 +576,27 @@ def teacher_scale(user) -> str:
     return sc if sc in grading.SCALES else grading.DEFAULT_SCALE
 
 
-def lesson_scale_map(db, lessons) -> dict:
+def _term_scales(db, year: str, semester: int) -> tuple:
+    """Кто ведёт какую пару (группа, предмет) в семестре и какой шкалой ставит оценки:
+    ({(группа, предмет, год, семестр): id преподавателя}, {id преподавателя: шкала}).
+    Читает ВСЕ назначения семестра — по всему колледжу, а не по одной группе."""
+    teacher_by_pair = {}
+    for r in db.query(SubjectHours).filter(
+            SubjectHours.year == year, SubjectHours.semester == semester,
+            SubjectHours.deleted == False).all():  # noqa: E712
+        if r.teacher_id:
+            teacher_by_pair[(r.group_name, r.subject, r.year or "",
+                             int(r.semester or 0))] = r.teacher_id
+    scale_by_teacher = {}
+    teacher_ids = set(teacher_by_pair.values())
+    if teacher_ids:
+        for u in db.query(User).filter(User.id.in_(teacher_ids)).all():
+            sc = (u.prefs or {}).get("grading_scale") or grading.DEFAULT_SCALE
+            scale_by_teacher[u.id] = sc if sc in grading.SCALES else grading.DEFAULT_SCALE
+    return teacher_by_pair, scale_by_teacher
+
+
+def lesson_scale_map(db, lessons, cache: dict | None = None) -> dict:
     """{lesson_id: шкала} — какой шкалой (§ролей, 3.3.1) вводил оценку преподаватель,
     ведущий именно ЭТО занятие. Разрешение — через ТО ЖЕ назначение препод↔предмет↔
     группа, что и видимость групп (SubjectHours.teacher_id, см. teacher_assignments):
@@ -585,28 +605,35 @@ def lesson_scale_map(db, lessons) -> dict:
     то есть сегодняшнее поведение бит-в-бит. Нужен именно СЛОВАРЬ (не одна строка на
     все lessons), потому что список занятий часто смешивает НЕСКОЛЬКО предметов
     разом (общий средний студента/группы по всем предметам) — у каждого предмета
-    может быть свой преподаватель со своей шкалой."""
+    может быть свой преподаватель со своей шкалой.
+
+    ━━ `cache` — ПАМЯТЬ ОДНОГО ПРОХОДА ПО СТУДЕНТАМ (07.10.2026) ━━
+    Функция читает ВСЕ назначения семестра (весь колледж) и преподавателей к ним, а
+    звали её ДВАЖДЫ НА КАЖДОГО СТУДЕНТА — в цикле по группе и ещё раз внутри расчёта
+    риска. Цена росла как «студенты × назначения колледжа»: на колледже в 60 групп и
+    1500 студентов «сводка по группам» у администратора считалась 17.6 с и делала 9311
+    запросов, главная страница преподавателя с двенадцатью группами — 2 с и 1699
+    запросов. На бою этого не видно: там 29 человек.
+    Кто идёт циклом по студентам, заводит ОДИН словарь перед циклом и передаёт его сюда
+    (и в `dropout_risk_for_student(scale_cache=…)`): семестр читается один раз на проход.
+    ⚠️ Словарь — ЯВНЫЙ ПАРАМЕТР, а не память сессии или модуля, и это не вкус. Ручка,
+    которая меняет шкалу или назначение и тут же пересчитывает, обязана увидеть новое
+    (инвариант §4.29: загруженное раньше — снимок). Память, которую завели не глядя,
+    вернула бы ей прежнюю шкалу. Без параметра поведение прежнее бит-в-бит.
+    Держит `test_student_loops_scale.py`: число запросов не растёт со студентами."""
     if not lessons:
         return {}
     pair_terms = {(l.group_name, l.subject, l.year or "", int(l.semester or 0))
                   for l in lessons}
-    year_sem = {(y, s) for (_g, _sub, y, s) in pair_terms}
-    hours_rows = []
-    for y, s in year_sem:
-        hours_rows.extend(db.query(SubjectHours).filter(
-            SubjectHours.year == y, SubjectHours.semester == s,
-            SubjectHours.deleted == False).all())  # noqa: E712
-    teacher_by_pair = {}
-    for r in hours_rows:
-        if r.teacher_id:
-            teacher_by_pair[(r.group_name, r.subject, r.year or "",
-                             int(r.semester or 0))] = r.teacher_id
-    teacher_ids = set(teacher_by_pair.values())
-    scale_by_teacher = {}
-    if teacher_ids:
-        for u in db.query(User).filter(User.id.in_(teacher_ids)).all():
-            sc = (u.prefs or {}).get("grading_scale") or grading.DEFAULT_SCALE
-            scale_by_teacher[u.id] = sc if sc in grading.SCALES else grading.DEFAULT_SCALE
+    teacher_by_pair, scale_by_teacher = {}, {}
+    for term in {(y, s) for (_g, _sub, y, s) in pair_terms}:
+        got = cache.get(term) if cache is not None else None
+        if got is None:
+            got = _term_scales(db, *term)
+            if cache is not None:
+                cache[term] = got
+        teacher_by_pair.update(got[0])
+        scale_by_teacher.update(got[1])
     out = {}
     for l in lessons:
         key = (l.group_name, l.subject, l.year or "", int(l.semester or 0))
@@ -801,7 +828,7 @@ def attendance_percent(lessons, records) -> int:
 def dropout_risk_for_student(db, surname: str, name: str, group: str,
                              cfg=None, lessons=None, records=None,
                              zet_earned=None, zet_min=None,
-                             student_id: str = "") -> dict:
+                             student_id: str = "", scale_cache: dict | None = None) -> dict:
     """Индекс риска отчисления студента — сбор ФАКТОВ + общий модуль `dropout_risk`.
 
     Сами правила и веса живут в корневом `dropout_risk.py` (общем с десктопом); здесь
@@ -843,7 +870,9 @@ def dropout_risk_for_student(db, surname: str, name: str, group: str,
         #`sid` уже вычислен выше (он же разводит подгруппы) — используем его и здесь,
         #иначе у полных тёзок в группе выборка по ФИО смешала бы их оценки (J08).
         records = student_records(db, surname, name, group, student_id=sid or None)
-    scale_map = lesson_scale_map(db, lessons)
+    #`scale_cache` — память прохода по студентам (см. `lesson_scale_map`): вызывающий,
+    #идущий циклом по группе, передаёт один словарь на всех.
+    scale_map = lesson_scale_map(db, lessons, cache=scale_cache)
     missed, total, unexcused = attendance_hours(lessons, records)
     per_subj = {r["subject"]: r["average"]
                 for r in per_subject_averages(lessons, records, cfg, scale=scale_map)}
@@ -875,10 +904,17 @@ def group_risk_report(db, group: str, cfg=None, subjects=None) -> list:
     if subjects is not None:
         lessons = [l for l in lessons if l.subject in subjects]
     out = []
+    #Одинаковое для всех студентов группы читаем ОДИН раз (см. `lesson_scale_map`): набор
+    #занятий группы для отсева оценок тёзок и назначения семестра для шкал. `student_id`
+    #отдаём готовым — иначе расчёт риска искал бы студента по ФИО отдельным запросом (и
+    #у полных тёзок в одной группе находил бы первого).
+    allowed, scale_cache = group_lesson_ids(db, group), {}
     for s in students_in_group(db, group):
-        recs = student_records(db, s.surname, s.name, group, student_id=s.id)
+        recs = student_records(db, s.surname, s.name, group, allowed_lesson_ids=allowed,
+                               student_id=s.id)
         risk = dropout_risk_for_student(db, s.surname, s.name, group,
-                                        cfg=cfg, lessons=lessons, records=recs)
+                                        cfg=cfg, lessons=lessons, records=recs,
+                                        student_id=s.id, scale_cache=scale_cache)
         out.append({"surname": s.surname, "name": s.name,
                     "full_name": display_name(s), "student_id": s.id, "risk": risk})
     return out
@@ -1181,16 +1217,19 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
     только про explicit-назначенные преподавателю пары."""
     cfg = load_config(db)
     out = []
+    scale_cache: dict = {}             #назначения семестра — раз на все группы и студентов
     for group in sorted(set(user.curated_groups or [])):
         subjects = sorted(group_plan_subjects(db, group, cfg))
         if not subjects:
             continue
         lessons = current_subject_lessons(db, group, group_lessons(db, group, year=ty, semester=ts), False)
         studs = students_in_group(db, group)
-        recs = {s.id: student_records(db, s.surname, s.name, group, student_id=s.id) for s in studs}
+        allowed = group_lesson_ids(db, group)
+        recs = {s.id: student_records(db, s.surname, s.name, group,
+                                      allowed_lesson_ids=allowed, student_id=s.id) for s in studs}
         #Куратор видит ЧУЖИЕ предметы — своей единой шкалы у него нет, лукап по каждому
         #занятию (как у отчёта/Вектора), а не teacher_scale одного человека.
-        scale_map = lesson_scale_map(db, lessons)
+        scale_map = lesson_scale_map(db, lessons, cache=scale_cache)
         subj_rows = []
         for subject in subjects:
             sl = [l for l in lessons if l.subject == subject]
@@ -1202,7 +1241,8 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
         at_risk = 0
         for s in studs:
             r = dropout_risk_for_student(db, s.surname, s.name, group,
-                                         cfg=cfg, lessons=lessons, records=recs[s.id])
+                                         cfg=cfg, lessons=lessons, records=recs[s.id],
+                                         student_id=s.id, scale_cache=scale_cache)
             if counts_as_at_risk(r):
                 at_risk += 1
         out.append({"group": group, "students": len(studs),

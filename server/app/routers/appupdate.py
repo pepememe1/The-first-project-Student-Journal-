@@ -129,8 +129,19 @@ def _file_manifest(zip_path: Path, version: str, base: str) -> list | None:
              "download_url": f"{base}/app/files/{version}/{f['n']}"} for f in files]
 
 
+# ━━ ВСЕ ЧЕТЫРЕ РУЧКИ — ОБЫЧНЫЙ `def`, И ЭТО НЕ СТИЛЬ (07.10.2026) ━━
+# Они были `async def` без единого `await`: чтение latest.json, разбор zip и распаковка
+# файла шли ПРЯМО НА ЦИКЛЕ СОБЫТИЙ, а он на весь колледж один (один uvicorn, одно ядро).
+# Обычный `def` FastAPI сам уводит в пул потоков.
+# ⚠️ Величина замерена, и она МАЛЕНЬКАЯ — не выдавать правку за ускорение (HISTORY 64):
+# файл бандла держал цикл ~0.9 мс (0.6 — открыть архив из 236 файлов, 0.3 — распаковать),
+# манифест из кэша ~0.3 мс, холодный манифест нового выпуска — один раз 28–37 мс. На
+# стенде из восьми разом обновляющихся телефонов самая длинная пауза сервера сократилась
+# с 56–101 мс до 16–30 мс; до нуля она не падает — потоки делят с циклом один GIL.
+# Правка убирает КЛАСС («async без await»), а не секунды. Держит
+# `test_event_loop_not_blocked.py::test_routes_without_await_are_plain_def`.
 @router.api_route("/updates", methods=["GET", "POST"])
-async def updates(request: Request):
+def updates(request: Request):
     """Манифест последнего бандла для Capgo. Нет бандла → «нечего обновлять»."""
     data = _manifest()
     if not data or not data.get("version") or not data.get("file"):
@@ -155,7 +166,7 @@ async def updates(request: Request):
 
 
 @router.get("/files/{version}/{path:path}")
-async def bundle_file(version: str, path: str):
+def bundle_file(version: str, path: str):
     """Один файл из бандла — для пофайловой докачки по манифесту.
 
     Отдаём ПРЯМО ИЗ zip, без распаковки на диск. Имя файла сверяется со списком внутри
@@ -190,7 +201,7 @@ async def bundle_file(version: str, path: str):
 
 
 @router.api_route("/apk-info", methods=["GET", "POST"])
-async def apk_info(request: Request):
+def apk_info(request: Request):
     """Инфо о последнем НАТИВНОМ релизе (APK) для обновления самого приложения.
     Манифест apk-info.json: {"nativeVersion": <int>, "file": "GradeBookAI.apk"}.
     Файл .apk отдаётся через /downloads/<file> (см. main.py). Нет манифеста → «нет APK»."""
@@ -212,7 +223,7 @@ async def apk_info(request: Request):
 
 
 @router.get("/bundles/{name}")
-async def bundle(name: str):
+def bundle(name: str):
     """Отдаёт zip-бандл целиком. Только *.zip внутри OTA_DIR (см. _bundle_path)."""
     p = _bundle_path(name)
     if p is None:

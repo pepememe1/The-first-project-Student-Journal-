@@ -59,8 +59,10 @@ def _auth(tok):
     return {"Authorization": f"Bearer {tok['access_token']}", **WEB}
 
 
-def _verify_email(client, h, box, email="ivanova@yandex.ru"):
-    r = client.post("/me/contacts/email/start", json={"email": email}, headers=h)
+def _verify_email(client, h, box, email="ivanova@yandex.ru", password="studpass1"):
+    #Текущий пароль обязателен с 07.10.2026 (ASVS V7.5.1) — см. test_contacts_reauth.py.
+    r = client.post("/me/contacts/email/start", json={"email": email, "current": password},
+                    headers=h)
     assert r.status_code == 200, r.text
     r = client.post("/me/contacts/email/confirm", json={"code": _code(box)}, headers=h)
     assert r.status_code == 200, r.text

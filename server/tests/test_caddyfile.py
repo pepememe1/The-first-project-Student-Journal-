@@ -106,7 +106,10 @@ def test_csp_does_not_allow(conf, forbidden, why):
 def test_csp_locks_the_dangerous_directives(conf):
     """Три директивы, каждая из которых закрывает свой класс атак целиком."""
     csp = _csp(conf)
-    for directive in ("frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'"):
+    #`base-uri 'none'`, а не 'self' (07.10.2026, OWASP ASVS V3.4.3 требует именно 'none'):
+    #тега <base> у нас нет нигде, значит и разрешать его незачем — а внедрённый <base>
+    #перенаправил бы все относительные адреса страницы, включая скрипты, на чужой сервер.
+    for directive in ("frame-ancestors 'none'", "object-src 'none'", "base-uri 'none'"):
         assert directive in csp, f"CSP потеряла {directive}"
 
 

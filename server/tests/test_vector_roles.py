@@ -206,7 +206,9 @@ def test_admin_teachers_include_the_portal_ones(world, monkeypatch):
     text = _ask(world, "admin", "преподаватели")["text"]
     assert "Орлова Анна Петровна" in text and "ПОРТАЛОВ П.П." in text, text
     assert "ОРЛОВА А.П." not in text and "ПО ПОРТАЛОВ" not in text, text
-    assert "без учётной записи: ПОРТАЛОВ П.П.." in text, text     # один, без заглушки
+    #Один, без заглушки — список на нём и кончается. Здесь стояло «П.П..»: тест закреплял
+    #двойную точку после инициалов как признак конца списка (карта ответов, 07.10.2026).
+    assert text.endswith("ещё 1 без учётной записи: ПОРТАЛОВ П.П."), text
     by_group = _ask(world, "admin", "преподаватели К74/1")["text"]
     assert "ПОРТАЛОВ П.П. — Технология разработки ПО, Физика" in by_group, by_group
     assert "ПРЕПОДАВАТЕЛЬ" not in by_group.upper().replace("ПРЕПОДАВАТЕЛИ", ""), by_group

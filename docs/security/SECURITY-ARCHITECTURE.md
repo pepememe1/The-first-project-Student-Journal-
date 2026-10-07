@@ -46,7 +46,7 @@
 * `Content-Security-Policy: default-src 'self'; script-src 'self'; …` с точечными
   исключениями: `img-src` плюс `static.klipy.com` (GIF-пикер), `frame-src` для
   YouTube/VK/Rutube (видео в мессенджере). Плюс `frame-ancestors 'none'`,
-  `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`.
+  `object-src 'none'`, `base-uri 'none'`, `form-action 'self'`.
   ⚠️ Google Fonts убраны из `style-src`/`font-src`: шрифты свои, а разрешение для хоста,
   которым никто не пользуется, — это и лишний источник скриптов, и утечка IP студентов
   третьей стороне (152-ФЗ);

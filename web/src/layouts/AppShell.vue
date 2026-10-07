@@ -26,6 +26,7 @@ import { useVectorStore } from '@/stores/vector'
 import { useActivityStore } from '@/stores/activity'
 import { useTtsStore } from '@/stores/tts'
 import { useMessengerStore } from '@/stores/messenger'
+import { shellBadgeTickDue } from '@/utils/livePolling'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -200,11 +201,21 @@ onMounted(() => {
   // живёт здесь, а не в сторе — и `stopPolling()` его не гасит. В свёрнутой вкладке
   // ходить на сервер незачем: человек её не видит, а вернувшись, всё равно получит
   // свежие числа первым же тиком (обновляем сразу при возврате).
+  // ⚠️ И НЕ ДУБЛИРУЕМ раздел сообщений (07.10.2026): пока он открыт, стор сам
+  // перечитывает список бесед каждым своим тиком, и этот таймер приносил то же самое
+  // второй раз — 6 запросов в минуту из 10 в покое. Правило — `shellBadgeTickDue`.
+  // Заявки значку не нужны (`invites: false`): их показывает только сам раздел.
+  const badgeTick = () => {
+    const hidden = typeof document !== 'undefined' && document.hidden
+    if (shellBadgeTickDue({ hidden, storePolling: messenger.isPolling() })) {
+      messenger.loadChats({ invites: false })
+    }
+  }
   _unreadTimer = setInterval(() => {
     if (typeof document !== 'undefined' && document.hidden) return
-    messenger.loadChats()
+    badgeTick()
   }, 20000)
-  _onVisible = () => { if (!document.hidden) messenger.loadChats() }
+  _onVisible = () => { if (!document.hidden) badgeTick() }
   document.addEventListener('visibilitychange', _onVisible)
 })
 onBeforeUnmount(() => {

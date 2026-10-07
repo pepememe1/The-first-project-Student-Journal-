@@ -43,7 +43,7 @@
          мимо CSP. Он стоит не как ограничение, а как ЯВНОЕ РАЗРЕШЕНИЕ: без него
          действовал бы `default-src 'self'`, и сторонний сервер отвалился бы везде.
          Настоящую работу делают `script-src 'self'`, `object-src 'none'` и
-         `base-uri 'self'`: они закрывают исполнение постороннего кода, а не его связь
+         `base-uri 'none'`: они закрывают исполнение постороннего кода, а не его связь
          с сетью. Обещать большее было бы враньём.
 
          ⚠️ `img-src` тоже нарочно широк (https:/http:): картинки-вложения приезжают с
@@ -54,7 +54,7 @@
          На САЙТЕ эта мета ничего не ослабляет: браузер применяет ПЕРЕСЕЧЕНИЕ политик, а
          заголовок Caddy (server/Caddyfile) строже и по connect-src, и по img-src.
          Правишь одно — сверяй с другим. Держит web/tests/cspMeta.test.mjs. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; media-src 'self' data: blob: https: http:; connect-src 'self' https: http: wss: ws:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'self'; object-src 'none'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; media-src 'self' data: blob: https: http:; connect-src 'self' https: http: wss: ws:; frame-src https://www.youtube.com https://vk.com https://rutube.ru; base-uri 'none'; object-src 'none'; form-action 'self'" />
 
     <title>Электронный журнал — Технологический колледж ВСГУТУ</title>
     <meta name="description" content="GradeBookAI — электронный журнал успеваемости Технологического колледжа ВСГУТУ (Улан-Удэ): оценки, посещаемость, расписание и ИИ-помощник «Вектор» для студентов, преподавателей и родителей.">

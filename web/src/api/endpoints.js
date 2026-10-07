@@ -1010,10 +1010,16 @@ export const accountApi = {
   revokeSession: (id) => api.delete(`/me/sessions/${encodeURIComponent(id)}`),
   revokeOthers: () => api.post('/me/sessions/revoke-others'),
   contacts: () => api.get('/me/contacts'),
-  setPhone: (phone) => api.post('/me/contacts/phone', { phone }),
-  emailStart: (email) => api.post('/me/contacts/email/start', { email }),
+  // Правка контактов — только с текущим паролем (и кодом второго фактора, если он есть):
+  // на них держится вход, и одной открытой вкладки для их подмены быть не должно.
+  setPhone: (phone, current, code = '') =>
+    api.post('/me/contacts/phone', { phone, current, code }),
+  emailStart: (email, current, code = '') =>
+    api.post('/me/contacts/email/start', { email, current, code }),
   emailConfirm: (code) => api.post('/me/contacts/email/confirm', { code }),
-  emailRemove: () => api.delete('/me/contacts/email'),
+  // POST, а не DELETE: пароль едет в теле, а тело у DELETE теряют и прокси, и часть клиентов.
+  emailRemove: (current, code = '') =>
+    api.post('/me/contacts/email/remove', { current, code }),
   // Логин — в QUERY, а не в пути: так же, как имя группы, он может содержать символы,
   // которые путь портят (см. §«Имя группы не идёт в путь URL» в CLAUDE.md).
   extra: (login) => api.get('/web/accounts/extra', { params: { login } }),
