@@ -37,6 +37,7 @@ import LoginPage from '@/pages/LoginPage.vue'
 import NotFoundPage from '@/pages/NotFoundPage.vue'
 import { decideMiss } from '@/utils/missedRoute'
 const NotificationsPage = () => import('@/pages/NotificationsPage.vue')
+const NotificationDetailPage = () => import('@/pages/NotificationDetailPage.vue')
 const ConnectServer = () => import('@/pages/ConnectServer.vue')
 const ResetPassword = () => import('@/pages/ResetPassword.vue')
 const InviteRegister = () => import('@/pages/InviteRegister.vue')
@@ -178,6 +179,10 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
+      //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
+      //списку, пуш «Вам дали задание» открывает именно его. Заголовок тот же — человек
+      //остаётся в разделе «Уведомления».
+      { path: 'notifications/:id', component: NotificationDetailPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
@@ -199,6 +204,10 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
+      //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
+      //списку, пуш «Вам дали задание» открывает именно его. Заголовок тот же — человек
+      //остаётся в разделе «Уведомления».
+      { path: 'notifications/:id', component: NotificationDetailPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
@@ -249,6 +258,10 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
+      //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
+      //списку, пуш «Вам дали задание» открывает именно его. Заголовок тот же — человек
+      //остаётся в разделе «Уведомления».
+      { path: 'notifications/:id', component: NotificationDetailPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       page('moderation', AdminMessenger, 'Модерация чатов', 'nav.moderation'),
     ],
   },
@@ -265,6 +278,10 @@ export const routes = [
       { path: '', component: AdminMessenger, meta: { title: 'Модерация', i18nTitle: 'nav.moderation' } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
+      //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
+      //списку, пуш «Вам дали задание» открывает именно его. Заголовок тот же — человек
+      //остаётся в разделе «Уведомления».
+      { path: 'notifications/:id', component: NotificationDetailPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],
@@ -282,6 +299,10 @@ export const routes = [
       { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
+      //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
+      //списку, пуш «Вам дали задание» открывает именно его. Заголовок тот же — человек
+      //остаётся в разделе «Уведомления».
+      { path: 'notifications/:id', component: NotificationDetailPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
     ],

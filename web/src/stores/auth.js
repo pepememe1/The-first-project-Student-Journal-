@@ -29,6 +29,7 @@ import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useActivityStore } from '@/stores/activity'
+import { useTrackerStore } from '@/stores/tracker'
 
 const LS_USER = 'gb.user'
 
@@ -281,6 +282,7 @@ export const useAuthStore = defineStore('auth', () => {
     // пользователя в той же вкладке: без сброса следующий вошедший увидел бы чужую
     // викторину поверх своего кабинета.
     useActivityStore().reset()
+    useTrackerStore().reset()     // доска трекера и несохранённые правки — тоже чужие
     //И пасхалки: иначе тост «достижение открыто» от прошлого человека
     //всплывает на экране входа у следующего (см. easterEggs.js::reset).
     useEasterStore().reset()
@@ -309,6 +311,7 @@ export const useAuthStore = defineStore('auth', () => {
     useVectorStore().reset()
     useProfileStore().reset()
     useActivityStore().reset()
+    useTrackerStore().reset()     // доска трекера и несохранённые правки — тоже чужие
     //И пасхалки: иначе тост «достижение открыто» от прошлого человека
     //всплывает на экране входа у следующего (см. easterEggs.js::reset).
     useEasterStore().reset()

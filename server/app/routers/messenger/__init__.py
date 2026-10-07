@@ -19,6 +19,7 @@ from . import messages     # noqa: F401  — сообщения, поиск, р�
 from . import reminders    # noqa: F401  — напоминания о сообщении
 from . import extras       # noqa: F401  — перевод и GIF
 from . import attachments  # noqa: F401  — вложения, вкладки «Медиа»/«Файлы»/«Избранное»
+from . import tracker      # noqa: F401  — трекер задач беседы (/chats/{id}/tracker/*)
 from . import channels     # noqa: F401  — системные каналы и отчёты куратора
 from . import moderation   # noqa: F401  — mod_router
 from . import ws           # noqa: F401  — веб-сокет

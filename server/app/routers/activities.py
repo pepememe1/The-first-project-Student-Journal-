@@ -33,7 +33,7 @@ from ..deps import get_current_user
 from ..models import (
     Activity, ActivityFeedback, ActivityResult, BoardArtifact,
     Conversation, ConversationParticipant, Message, MessageReport,
-    QuizOption, QuizQuestion, QuizSet, User,
+    QuizOption, QuizQuestion, QuizSet, User, user_fio,
 )
 import logging as _logging
 _hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
@@ -901,7 +901,7 @@ def _host_progress(db: Session, a: Activity, payload: dict, answers: dict | None
     roster = [uid for uid in _participants_of(db, a.conversation_id) if uid != a.host_id]
     names = {}
     if roster:
-        names = {u.id: (u.full_name or u.name or u.login or u.id)
+        names = {u.id: (user_fio(u) or u.login or u.id)
                  for u in db.query(User).filter(User.id.in_(roster)).all()}
     total_q = int(payload.get("total_questions") or 0)
     rows = []
@@ -1792,7 +1792,7 @@ def _contest_board(db: Session, scores: dict) -> list:
     if not scores:
         return []
     rows = db.query(User).filter(User.id.in_(list(scores.keys()))).all()
-    names = {u.id: (u.full_name or u.name or u.login or u.id) for u in rows}
+    names = {u.id: (user_fio(u) or u.login or u.id) for u in rows}
     board = [{"user_id": uid, "name": names.get(uid, uid), "score": float(sc or 0)}
              for uid, sc in scores.items()]
     board.sort(key=lambda r: -r["score"])
@@ -1842,7 +1842,7 @@ def activity_results(activity_id: str, user: User = Depends(get_current_user),
     names = {}
     if rows:
         users = db.query(User).filter(User.id.in_([r.user_id for r in rows])).all()
-        names = {u.id: (u.full_name or u.name or u.login or u.id) for u in users}
+        names = {u.id: (user_fio(u) or u.login or u.id) for u in users}
     items = [{"user_id": r.user_id, "name": names.get(r.user_id, r.user_id),
               "score": float(r.score or 0), "correct_count": int(r.correct_count or 0),
               "total_count": int(r.total_count or 0),
@@ -1977,7 +1977,7 @@ def give_pen(activity_id: str, payload: dict = Body(default={}),
     name = ""
     if target:
         u = db.query(User).filter(User.id == target).first()
-        name = (u.full_name or u.name or u.login or "") if u else ""
+        name = (user_fio(u) or u.login or "") if u else ""
     _emit(db, a.conversation_id,
           {"type": "activity.state", "activity_id": a.id,
            "conversation_id": a.conversation_id, "seq": snap["seq"],
@@ -2039,7 +2039,7 @@ def journal(conversation_id: str = Query(...), user: User = Depends(get_current_
     hosts = {}
     if acts:
         rows = db.query(User).filter(User.id.in_([a.host_id for a in acts])).all()
-        hosts = {u.id: (u.full_name or u.name or u.login or u.id) for u in rows}
+        hosts = {u.id: (user_fio(u) or u.login or u.id) for u in rows}
     quiz_titles = _quiz_titles(db, acts)
     items = []
     for a in acts:

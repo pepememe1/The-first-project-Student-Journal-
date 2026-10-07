@@ -382,7 +382,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
                        Message.sender_id == user.id,
                        Message.client_nonce == nonce).first())
         if dup is not None:
-            out = _msg_out(dup, user.id, user.full_name or user.name or user.login or "")
+            out = _msg_out(dup, user.id, user_fio(user) or user.login or "")
             _attach_rich_meta(db, [out], user.id)
             return out
 
@@ -396,7 +396,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
         #сообщение-кнопку, поэтому ретрай находит её выше и возвращает как есть.
         rep_msg = _handle_report_command(db, conv_id, body, user, nonce)
         if rep_msg is not None:
-            out = _msg_out(rep_msg, user.id, user.full_name or user.name or user.login or "")
+            out = _msg_out(rep_msg, user.id, user_fio(user) or user.login or "")
             _attach_rich_meta(db, [out], user.id)     #иначе клиент получит сырой id вместо кнопки
             return out
 
@@ -466,7 +466,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
     _hook_moderation(db, conv, mod_reply)
     #Вложение отдаём сразу: клиент рисует сообщение до ответа сервера, и без
     #метаданных карточка файла мигнула бы пустой.
-    return _msg_out(m, user.id, user.full_name or user.name or user.login or "",
+    return _msg_out(m, user.id, user_fio(user) or user.login or "",
                     _att_map(db, [m]).get(att_id or ""))
 
 

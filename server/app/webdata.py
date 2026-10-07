@@ -1212,7 +1212,9 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
 
 
 def display_name(user) -> str:
-    return user.full_name or f"{user.surname} {user.name}".strip()
+    """ФИО для показа. Сборка живёт в `models.user_fio` — одна на весь сервер."""
+    from .models import user_fio
+    return user_fio(user)
 
 
 def first_name(user) -> str:

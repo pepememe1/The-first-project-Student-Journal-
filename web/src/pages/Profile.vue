@@ -176,9 +176,23 @@ const styleSummary = computed(() => {
 <template>
   <!-- relative — якорь для слоя пасхалок (штамп ложится в случайное место страницы) -->
   <div class="relative space-y-6">
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
-      <!-- Левая колонка: редактор -->
-      <div class="space-y-4 lg:order-1">
+    <!-- ⚠️ С `xl` карточки редактора идут В ДВА СТОЛБЦА (05.10.2026, жалоба Ярослава:
+         «мешают ячейки со сменой шрифта, баннера»). Шесть карточек одним столбцом — это
+         ~900 px высоты при 640 видимых на ноутбуке: живая карточка справа кончалась
+         раньше, чем настройки слева, и окно выглядело обрезанным. В два столбца они
+         занимают три ряда и помещаются на экран целиком. Ниже `xl` (окно уже 1280 px)
+         остаётся один столбец — двум там просто не хватает ширины.
+         🔥 Правый столбец — `minmax(0,1fr)`, а НЕ голое `1fr` (06.10.2026, снимок Ярослава
+         с окном 1160 px). `1fr` — это `minmax(auto,1fr)`: столбец не может стать уже самого
+         широкого неразрывного куска внутри, а им было ФИО (`truncate` = одна строка). У
+         «Семёновой Анны Петровны» всё помещалось, у «Овсянкиной Александры Иннокентьевны»
+         столбец распирало до 608 px, и карточка уезжала за край окна вместе с полосой
+         прокрутки внизу. Замер: 56 px лишних на 1160, 192 на 1024. На стенде с коротким
+         именем дефект не виден вовсе — проверять надо длинным ФИО. -->
+    <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[minmax(0,34rem)_minmax(0,1fr)]">
+      <!-- Левая колонка: редактор. `grid`, а не `space-y`: в Tailwind 4 `space-y`
+           разворачивается в правило с нулевой специфичностью (см. Settings.vue). -->
+      <div class="grid grid-cols-1 content-start gap-4 lg:order-1 xl:grid-cols-2">
         <Card id="set-avatar" class="hidden lg:block" :title="locale.t('profile.avatarSection', 'Аватарка')" :pad="true">
           <button type="button" @click="cardRef?.openAvatarEditor()"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
@@ -275,7 +289,9 @@ const styleSummary = computed(() => {
            настройками, то есть до единственной кнопки смены аватарки надо было
            прокрутить весь раздел. На ПК порядок прежний: там слева редактор,
            справа живой предпросмотр, и менять их местами незачем. -->
-      <div class="order-first lg:order-2">
+      <!-- Потолок ширины: на широком мониторе карточка иначе растягивалась бы на всё
+           оставшееся место и переставала быть похожей на ту, что видят другие. -->
+      <div class="order-first w-full lg:order-2 lg:max-w-[38rem]">
         <PeerProfileCard ref="cardRef" editable
                          :color-override="draftColor" :font-override="draftFont"
                          :effect-override="draftEffect" :name-color-override="draftNameColor" />

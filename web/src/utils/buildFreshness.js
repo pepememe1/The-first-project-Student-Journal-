@@ -41,3 +41,70 @@ export function isChunkLoadError(err) {
     || msg.includes('failed to fetch dynamically')
     || (msg.includes('loading chunk') && msg.includes('failed'))
 }
+
+/**
+ * Что делать с отказом загрузки чанка: `'reload'` — перезагрузить вкладку, `'tell'` —
+ * оставить как есть и сказать человеку.
+ *
+ * `locked` — в этой вкладке ради чанка уже перезагружались; `canLock` — замок удаётся
+ * записать (в приватном режиме хранилище бывает недоступно); `needLock` — без записанного
+ * замка не перезагружаться.
+ *
+ * ⚠️ `needLock` — для загрузок, которые случаются САМИ, без нажатия: окно, открываемое по
+ * ссылке (`?tracker=1`), после перезагрузки попросит тот же чанк снова, и без замка круг
+ * «не доехал → перезагрузка → не доехал» не кончился бы никогда. У перехода по меню такого
+ * круга нет — после перезагрузки человек остаётся на прежней странице, — поэтому там
+ * перезагрузка без замка допустима (прежнее поведение роутера, не меняем).
+ */
+export function chunkFailureAction(err, { locked = false, canLock = true, needLock = false } = {}) {
+  if (!isChunkLoadError(err)) return 'tell'     //не наш случай: перезагрузка его не вылечит
+  if (locked) return 'tell'                     //одна перезагрузка на вкладку
+  if (needLock && !canLock) return 'tell'
+  return 'reload'
+}
+
+/**
+ * 🔒 У ДВУХ ЗАМКОВ — ДВА КЛЮЧА (нашёл Полковник 07.10.2026).
+ *
+ * Замок «ради этой метки сборки уже перезагружались» и замок «ради недоехавшего чанка
+ * уже перезагружались» лежали в ОДНОМ ключе хранилища и стирали друг друга: метка
+ * затирала слово «chunk», слово «chunk» — метку. Пока сервер отдаёт старый index при
+ * новой `version.json` (кэш прокси, недокатившийся деплой), вкладка с окном, которое
+ * открывается само по ссылке, перезагружалась по кругу: проверка сборки → перезагрузка →
+ * чанка нет → перезагрузка → проверка сборки → … — по две на каждый круг, без конца.
+ * Раздельные ключи рвут круг на втором шаге: каждый замок помнит своё.
+ */
+export const STAMP_LOCK_KEY = 'gb.reloaded_for'
+export const CHUNK_LOCK_KEY = 'gb.reloaded_for_chunk'
+
+/**
+ * Перезагружаться ли ради новой сборки — вместе с записью замка. `storage` — хранилище
+ * вкладки или `null`, если оно недоступно (приватный режим): тогда решаем как прежде,
+ * без памяти.
+ */
+export function stampReloadDue(running, server, storage) {
+  let done = ''
+  try { done = storage?.getItem(STAMP_LOCK_KEY) || '' } catch { /* недоступно */ }
+  if (!shouldReload(running, server, done)) return false
+  try { storage?.setItem(STAMP_LOCK_KEY, server) } catch { /* приватный режим */ }
+  return true
+}
+
+/**
+ * Перезагружаться ли ради недоехавшего чанка — вместе с записью замка. Решение —
+ * `chunkFailureAction`; здесь только хранилище, и оно передаётся снаружи, чтобы правило
+ * проверялось без браузера.
+ */
+export function chunkReloadDue(err, storage, { needLock = false } = {}) {
+  let locked = false
+  let canLock = !!storage
+  try { locked = storage?.getItem(CHUNK_LOCK_KEY) === '1' } catch { canLock = false }
+  if (chunkFailureAction(err, { locked, canLock, needLock }) !== 'reload') return false
+  try {
+    if (!storage) throw new Error('нет хранилища')
+    storage.setItem(CHUNK_LOCK_KEY, '1')
+  } catch {
+    if (needLock) return false           //замок не записался — перезагрузка стала бы кругом
+  }
+  return true
+}

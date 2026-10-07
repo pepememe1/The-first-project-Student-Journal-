@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import User, ParentLink, parent_link_id, set_user_password
+from ..models import User, ParentLink, parent_link_id, set_user_password, user_fio
 from .. import webdata as W
 from .. import audit
 
@@ -61,7 +61,7 @@ def _link_view(db: Session, link: ParentLink) -> dict:
         "status": link.status,
         "created_at": link.created_at,
         "parent": {"id": link.parent_id,
-                   "full_name": (parent.full_name or parent.name or "") if parent else "",
+                   "full_name": (user_fio(parent) or "") if parent else "",
                    "login": parent.login if parent else ""},
         "student": {"id": link.student_id,
                     "full_name": (student.full_name or f"{student.surname} {student.name}").strip()
@@ -386,7 +386,7 @@ def staff_parents(user: User = Depends(get_current_user), db: Session = Depends(
             .filter(User.role == "parent", User.deleted == False)  # noqa: E712
             .order_by(User.surname, User.name).all())
     return {"parents": [{"id": p.id, "login": p.login,
-                         "full_name": (p.full_name or p.name or "").strip(),
+                         "full_name": (user_fio(p) or "").strip(),
                          #дата выдачи пароля — сам пароль показать нельзя (в базе хеш)
                          "password_set_at": p.password_set_at or ""} for p in rows]}
 

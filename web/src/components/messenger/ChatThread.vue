@@ -2,13 +2,13 @@
 // ChatThread — правая колонка: переписка активной беседы (пузыри в стиле Telegram) +
 // действия над сообщением (Фаза 3): оверлей по тапу, плашка закреплённого, режим
 // выделения, ответ/пересылка/удаление(у себя|у всех)/жалоба. ⚙-чат модерации — Фаза 4.
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, LifeBuoy,
   Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
   Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
-  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical, Pencil,
+  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical, Pencil, SquareKanban,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -46,6 +46,13 @@ import QuickReplyWheel from './QuickReplyWheel.vue'
 import FilePreview from './FilePreview.vue'
 import { humanSize } from '@/utils/docPreview'
 import Avatar from '@/components/ui/Avatar.vue'
+import GroupTag from '@/components/ui/GroupTag.vue'
+import { studentGroup } from '@/utils/people'
+import { composerKeyAction, scrollToRevealCaret, extensionAllowed } from '@/utils/composerKeys'
+import { canEditMessage } from '@/utils/messageMenu'
+import { isHandheld } from '@/utils/device'
+import { hasOpenDialog } from '@/directives/dialog'
+import { useTrackerStore } from '@/stores/tracker'
 import haptics from '@/utils/haptics'
 import { profilePlate } from '@/theme/palette'
 import { nameDecor } from '@/config/nameEffects'
@@ -94,16 +101,43 @@ function pickFile() {
   fileInput.value?.click()
 }
 
-function onFileChosen(e) {
-  const f = e.target.files?.[0]
-  e.target.value = ''            //чтобы выбор ТОГО ЖЕ файла второй раз снова сработал
-  if (!f) return
+// Приём файла — ОДНА функция на обе двери (кнопка «+» и вставка из буфера обмена).
+// Проверки размера и типа жили в обработчике кнопки; вторая дверь со своей копией
+// однажды пропустила бы то, что первая отклоняет.
+function acceptFile(f) {
+  if (!f) return false
   const cap = uploadLimits.value.max_size || 0
   if (cap && f.size > cap) {
     m.setNotice(locale.t('files.tooBig', { mb: Math.round(cap / 1048576) }))
-    return
+    return false
+  }
+  // У кнопки тип отсекает сам диалог выбора (`accept`), у вставки диалога нет — снимок
+  // экрана из буфера дошёл бы до сервера и вернулся отказом уже после нажатия «отправить».
+  if (!extensionAllowed(f.name, uploadLimits.value.ext)) {
+    m.setNotice(locale.t('files.typeNotAllowed', 'Такой тип файла отправить нельзя'))
+    return false
   }
   pendingFile.value = f
+  return true
+}
+
+function onFileChosen(e) {
+  const f = e.target.files?.[0]
+  e.target.value = ''            //чтобы выбор ТОГО ЖЕ файла второй раз снова сработал
+  acceptFile(f)
+}
+
+// Вставка из буфера (Ctrl+V): файл прикрепляется, как в Telegram и Discord. Обычный
+// текст сюда не попадает — у него `files` пуст, и вставляет его сам браузер.
+function onComposerPaste(e) {
+  const f = e.clipboardData?.files?.[0]
+  if (!f) return
+  e.preventDefault()
+  if (!uploadLimits.value.configured) {
+    m.setNotice(locale.t('files.notConfigured', 'Хранилище файлов пока не настроено'))
+    return
+  }
+  acceptFile(f)
 }
 
 async function sendPendingFile() {
@@ -180,6 +214,13 @@ const canPost = computed(() => {
   if (kind.value !== 'channel') return true
   return ['owner', 'admin', 'writer'].includes(activeInfo.value?.my_role)
 })
+// ━━ ТРЕКЕР ЗАДАЧ БЕСЕДЫ (05.10.2026) ━━
+// Кнопка в шапке есть у ВСЕХ участников, как только владелец включил трекер в настройках
+// беседы («у всех появится кнопка в левом верхнем углу» — требование Ярослава). Признак
+// приходит в сведениях о беседе (`tracker_enabled`); сами задачи грузит стор трекера.
+const trackerStore = useTrackerStore()
+const trackerOn = computed(() => isGroupOrChannel.value && !!activeInfo.value?.tracker_enabled)
+function openTracker() { if (activeId.value) trackerStore.openFor(activeId.value) }
 // §D1: заголовки # / ## разрешены только в каналах (в личных чатах/группах — просто текст).
 const isChannel = computed(() => kind.value === 'channel')
 //Активности бывают только в общих беседах (PLAN-ACTIVITIES §1): в личном чате один
@@ -189,6 +230,8 @@ const isGroupLike = computed(() => kind.value === 'group' || kind.value === 'cha
 const draft = ref('')
 const scroller = ref(null)
 const composer = ref(null)
+// Окно прокрутки поля ввода: в нём лежат и поле, и зеркало (см. «ПОЛЕ ВВОДА РАСТЁТ» ниже).
+const composerScroll = ref(null)
 
 // Оверлей действий, модалки.
 // `selection` — ВЫДЕЛЕННЫЙ внутри сообщения текст на момент открытия меню. Снимок, а не
@@ -209,7 +252,12 @@ async function scrollDown() {
   await nextTick()
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight })
   showScrollBtn.value = false
+  nearBottom = true
 }
+
+// Стоит ли лента «у самого низа». От этого зависит, тянуть ли её вниз, когда поле ввода
+// выросло на строку: читающему историю лента под руками прыгать не должна.
+let nearBottom = true
 
 // §D5: плавающая кнопка «↓ N новых» — видна, когда пользователь прокрутил вверх (читает
 // историю); новые сообщения тогда НЕ дёргают его вниз силой (кроме своих же исходящих).
@@ -218,6 +266,7 @@ function onScrollerScroll() {
   const el = scroller.value
   if (!el) return
   showScrollBtn.value = (el.scrollHeight - el.scrollTop - el.clientHeight) > 200
+  nearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 80
   // Подошли к началу видимой истории — тянем предыдущую страницу. Порог не нулевой:
   // ждать буквального упора в край значит показать человеку пустоту и рывок.
   if (el.scrollTop < 200) подтянутьИсторию()
@@ -658,22 +707,160 @@ function wrapSelection(marker) {
   })
 }
 
-// Зеркало прокручиваем вслед за полем — иначе при длинном черновике приглушённые символы
-// останутся на месте, а настоящие уедут.
-function syncMirrorScroll() {
-  if (mirror.value && composer.value) mirror.value.scrollTop = composer.value.scrollTop
+// ━━ ПОЛЕ ВВОДА РАСТЁТ ВМЕСТЕ С ТЕКСТОМ (05.10.2026, жалобы Ярослава с ПК) ━━━━━━━━━━━━
+//
+// 🔥 ЧТО БЫЛО. Поле — `<textarea rows="1">` высотой в одну строку, текст в нём
+// прозрачный, а видимый текст рисует зеркало под ним. Прокручивались они ПО ОТДЕЛЬНОСТИ:
+// поле — само (браузер держит курсор в виду), зеркало — обработчиком `scroll`, который
+// копировал `scrollTop`. Отсюда обе жалобы:
+//   1. «сообщение длиннее ячейки — идёт перенос, но вниз не пролистывается, ничего не
+//      видно». Событие `scroll` приходило РАНЬШЕ, чем Vue дорисовывал зеркало: зеркало
+//      ещё было высотой в одну строку, запись `scrollTop` упиралась в его прежний предел
+//      и молча не срабатывала. Курсор уходил на вторую строку, видимый текст оставался
+//      на первой;
+//   2. «выделяю кусок — выделяется до прошлой или следующей строки». У переполненного
+//      поля появлялась полоса прокрутки (на Windows 15–17 px), у зеркала её нет: строки
+//      в них переносились В РАЗНЫХ МЕСТАХ, и подсветка выделения (её рисует поле)
+//      ложилась не на те слова, что видны (их рисует зеркало). На телефоне полосы не
+//      занимают места — поэтому дефект жил только на ПК.
+//
+// ✅ КАК СТАЛО. Зеркало и поле лежат в ОДНОЙ ячейке сетки внутри ОДНОГО окна прокрутки
+// (`gb-composer-scroll`). Высоту задаёт зеркало (обычный блок с текстом), поле
+// растягивается на ту же ячейку и своей прокрутки не имеет вовсе. Значит:
+//   • ширина у них одна по построению — полоса прокрутки принадлежит окну и сужает
+//     обоих одинаково;
+//   • синхронизировать нечего: окно двигает оба слоя разом;
+//   • поле растёт с текстом до потолка (как в Telegram и Discord), дальше прокручивается
+//     окно, и курсор в нём держим в виду сами — `revealCaret`.
+// ⚠️ Проверить это можно только глазами: ни сборка, ни линтер, ни тесты вёрстку не
+// видят. Расчёт позиции прокрутки и разбор клавиш вынесены в `utils/composerKeys.js`
+// ровно затем, чтобы хоть ЭТУ часть держали числа.
+
+// Поле собственной прокрутки не имеет. Но браузер, показывая курсор, может сдвинуть его
+// содержимое на пиксель-другой (округление высоты строки) — возвращаем на место, иначе
+// курсор разойдётся с текстом зеркала.
+function pinFieldScroll() {
+  const el = composer.value
+  if (el && el.scrollTop) el.scrollTop = 0
 }
+
+// Окно прокрутили — облачко форматирования обязано ехать вместе с выделением.
+function onComposerScroll() {
+  if (fmtBubble.value.open) updateFmtBubble()
+}
+
+/**
+ * Держать курсор в видимой части поля.
+ *
+ * Курсор в конце текста — самый частый случай (человек печатает) и самый дешёвый: окно
+ * просто прижимается к низу. Иначе позицию курсора берём из зеркала — в нём тот же текст,
+ * разложенный по узлам (`mirrorPoint`), и у узла можно спросить экранные координаты.
+ */
+function revealCaret() {
+  const box = composerScroll.value
+  const el = composer.value
+  if (!box || !el) return
+  if (box.scrollHeight <= box.clientHeight) return        //всё помещается — крутить нечего
+  const pos = el.selectionEnd ?? draft.value.length
+  if (pos >= draft.value.length) { box.scrollTop = box.scrollHeight; return }
+  const pt = mirrorPoint(pos)
+  if (!pt) return
+  try {
+    const range = document.createRange()
+    range.setStart(pt.node, pt.offset)
+    range.collapse(true)
+    const caret = range.getClientRects()[0] || range.getBoundingClientRect()
+    const frame = box.getBoundingClientRect()
+    if (!caret || (!caret.height && !caret.top)) return   //узел не отрисован — не гадаем
+    const next = scrollToRevealCaret({
+      caretTop: caret.top, caretBottom: caret.bottom,
+      boxTop: frame.top, boxBottom: frame.bottom, scrollTop: box.scrollTop,
+    })
+    //У самого начала текста возвращаемся к нулю: иначе первая строка стояла бы вплотную
+    //к рамке, без своего верхнего поля, и поле выглядело обрезанным.
+    box.scrollTop = next < 12 ? 0 : next
+  } catch { /* диапазон не построился — оставляем прокрутку как есть */ }
+}
+
+// Любая смена текста — набор, вставка, подстановка отметки, начало правки, очистка после
+// отправки. Одно наблюдение вместо вызова в каждом из этих мест: шестое место о себе не
+// сообщило бы. `nextTick` обязателен — зеркало должно успеть перерисоваться, иначе мерить
+// будем прежнюю высоту (ровно та ошибка порядка, из-за которой текст и пропадал).
+watch(draft, () => nextTick(revealCaret))
+
+// Клавиши, которые двигают курсор без изменения текста.
+const CARET_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'])
+function onComposerKeyup(e) {
+  updateFmtBubble()
+  if (CARET_KEYS.has(e.key)) revealCaret()
+}
+
+// Поле выросло или сжалось — лента над ним изменила высоту. Если человек стоял у низа
+// переписки, оставляем его там: иначе вторая строка сообщения прятала бы под собой
+// последнюю реплику собеседника.
+let composerResize = null
+watch(composerScroll, (el, old) => {
+  if (typeof ResizeObserver === 'undefined') return
+  if (!composerResize) {
+    composerResize = new ResizeObserver(() => {
+      const list = scroller.value
+      if (list && nearBottom) list.scrollTop = list.scrollHeight
+    })
+  }
+  if (old) composerResize.unobserve(old)
+  if (el) composerResize.observe(el)
+}, { immediate: true })
+onBeforeUnmount(() => { composerResize?.disconnect() })
+
+// Что из подсказок сейчас открыто над полем (их закрывает первый Esc).
+function closeComposerPicker() {
+  mentionQuery.value = null
+  slashQuery.value = null
+}
+
 function onComposerKeydown(e) {
   if (e.ctrlKey || e.metaKey) {
     if (e.key === 'b') { e.preventDefault(); wrapSelection('**'); return }
     if (e.key === 'i') { e.preventDefault(); wrapSelection('*'); return }
     if (e.key === 'u') { e.preventDefault(); wrapSelection('__'); return }
   }
-  if (mentionCandidates.value.length && e.key === 'Escape') { mentionQuery.value = null; return }
-  if (slashCandidates.value.length && e.key === 'Escape') { slashQuery.value = null; return }
-  if (editing.value && e.key === 'Escape') { e.preventDefault(); cancelEdit(); return }
-  onKey(e)
+  // Решение — в `composerKeyAction` (чистая функция под тестом), здесь только исполнение.
+  const action = composerKeyAction(e, {
+    handheld: isHandheld(),
+    empty: !draft.value,
+    editing: !!editing.value,
+    replying: !!replyTo.value,
+    picker: mentionCandidates.value.length > 0 || slashCandidates.value.length > 0,
+  })
+  if (action === 'send') { e.preventDefault(); submit() }
+  else if (action === 'close-picker') { e.preventDefault(); closeComposerPicker() }
+  else if (action === 'cancel-edit') { e.preventDefault(); cancelEdit() }
+  else if (action === 'cancel-reply') { e.preventDefault(); m.clearReply() }
+  else if (action === 'edit-last') {
+    // Стрелка вверх в пустом поле — правка своего последнего сообщения (Telegram, Discord).
+    const last = [...messages.value].reverse().find((x) => !x.pending && canEditMessage(x))
+    if (last) { e.preventDefault(); startEdit(last) }
+  }
+  //'newline' и '' — ничего не делаем: перенос строки и обычный набор выполняет браузер.
 }
+
+// «Начал печатать — попал в поле» (как в Discord): буква, набранная при фокусе на самой
+// странице, не должна пропадать. Только на компьютере — на телефоне без нажатия на поле
+// клавиатуры нет вовсе.
+function onGlobalType(e) {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return
+  if (!e.key || e.key.length !== 1) return                //только печатные символы
+  if (document.activeElement && document.activeElement !== document.body) return
+  // Поверх ленты что-то открыто (профиль, пересылка, жалоба, окно на весь экран) —
+  // печатают туда или никуда, но точно не в сообщение под окном.
+  if (hasOpenDialog() || selectionMode.value || document.querySelector('.fixed.inset-0')) return
+  if (isHandheld()) return
+  const el = composer.value
+  if (!el || el.disabled) return
+  el.focus()      //сам символ вставит браузер: он уходит туда, где фокус к моменту ввода
+}
+onMounted(() => window.addEventListener('keydown', onGlobalType))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalType))
 
 // ── Автодополнение слэш-команд «/» (как в Telegram) ─────────────────────────────────────
 // Команда доступна только если это ВЕСЬ текст от начала сообщения до курсора (без
@@ -985,7 +1172,15 @@ function startEdit(msg) {
   m.clearReply()
   editing.value = { msg, prevDraft: editing.value ? editing.value.prevDraft : draft.value }
   draft.value = msg.body || ''
-  nextTick(() => composer.value?.focus())
+  nextTick(() => {
+    const el = composer.value
+    if (!el) return
+    el.focus()
+    //Курсор — в КОНЕЦ текста: правят обычно хвост сообщения, а после программной
+    //подстановки значения браузеры ставят курсор кто куда.
+    const end = el.value.length
+    el.setSelectionRange(end, end)
+  })
 }
 function cancelEdit() {
   if (!editing.value) return
@@ -1203,8 +1398,6 @@ async function submit() {
 //обязан исчезнуть, иначе выглядит ответом на здешний разговор.
 watch(activeId, () => { vectorReply.value = null })
 
-function onKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }
-
 // ── Быстрые ответы и шаблоны преподавателя (docs/done/outdated/MESSENGER-ADDON-PLAN-GPT.md) ───────────
 // Фиксированный универсальный набор — клиент-only, без AI: короткая типовая реплика одним
 // кликом, отправляется СРАЗУ (как бот-команды в Slack/Teams), а не просто вставляется.
@@ -1401,6 +1594,15 @@ const styleBySender = computed(() => {
   if (activePeer.value?.id) map[activePeer.value.id] = activePeer.value
   return map
 })
+// Группа автора сообщения — тегом рядом с именем (в общих беседах: по одному ФИО
+// однофамильцев не различить). Берётся из уже загруженного состава беседы, отдельного
+// поля в сообщении нет и не нужно.
+function senderGroup(msg) {
+  return studentGroup(styleBySender.value[msg.sender_id])
+}
+// Группа собеседника в ЛИЧНОМ чате — тегом в шапке.
+const peerGroup = computed(() =>
+  (kind.value === 'direct' && !isModeration.value) ? studentGroup(activePeer.value) : '')
 function senderDecor(msg) {
   // Как и senderName(msg) чуть ниже — вызывается ТОЛЬКО для чужих сообщений (шаблон
   // гейтит `v-if="!msg.mine"`), поэтому свой стиль здесь разбирать не нужно.
@@ -1626,14 +1828,28 @@ function openActivities() {
                 :class="headerTint ? 'text-white' : 'text-text2'">
           <ArrowLeft class="size-5" />
         </button>
+        <!-- Трекер задач — в ЛЕВОМ верхнем углу беседы, у каждого участника. На телефоне
+             стоит сразу за стрелкой «назад». Кнопки нет, пока владелец не включил трекер:
+             пустая дверь читалась бы как поломка. -->
+        <button v-if="trackerOn" type="button" @click="openTracker()"
+                :aria-label="locale.t('tracker.open', 'Трекер задач')"
+                :title="locale.t('tracker.open', 'Трекер задач')"
+                class="grid size-9 shrink-0 place-items-center rounded-lg border transition-colors"
+                :class="headerTint ? 'border-white/30 text-white hover:bg-white/15'
+                  : 'border-border2 text-accent hover:border-accent hover:bg-accent-glow'">
+          <SquareKanban class="size-5" />
+        </button>
         <!-- Клик по шапке — профиль собеседника / состав беседы (как в Telegram). -->
         <button type="button" @click="showInfo = true"
                 class="min-w-0 flex-1 rounded-md px-1 py-0.5 text-left transition-colors"
                 :class="headerTint ? 'hover:bg-white/10' : 'hover:bg-bg2'"
                 :title="locale.t('chatThread.openProfile', 'Открыть профиль')">
-          <div class="truncate font-title text-base font-bold"
-               :class="headerTint ? 'text-white' : 'text-text'"
-               v-bind="peerNameDecor">{{ peerName }}</div>
+          <div class="flex min-w-0 items-center gap-2">
+            <div class="min-w-0 truncate font-title text-base font-bold"
+                 :class="headerTint ? 'text-white' : 'text-text'"
+                 v-bind="peerNameDecor">{{ peerName }}</div>
+            <GroupTag :group="peerGroup" :on-tint="!!headerTint" />
+          </div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
         </button>
 
@@ -1930,16 +2146,21 @@ function openActivities() {
               <!-- ⚠️ .stop обязателен: имя лежит ВНУТРИ пузыря, а у пузыря свой @click,
                    открывающий меню сообщения. Без остановки всплытия клик по имени
                    открыл бы и профиль, и меню разом. -->
-              <button v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg) && canOpenSenderProfile(msg)"
-                      type="button" @click.stop="openSenderProfile(msg)"
-                      class="mb-0.5 block text-left text-[11px] font-semibold text-accent underline-offset-2 outline-none hover:underline focus-visible:underline"
-                      v-bind="senderDecor(msg)"
-                      :title="locale.t('chatThread.openSenderProfile', 'Открыть профиль')">
-                {{ senderName(msg) }}
-              </button>
-              <div v-else-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
-                   class="mb-0.5 text-[11px] font-semibold text-accent" v-bind="senderDecor(msg)">
-                {{ senderName(msg) }}
+              <!-- Тег группы — СОСЕДОМ имени, а не внутри него: у имени свой шрифт, эффект
+                   и цвет (`senderDecor`), и тег внутри унаследовал бы их все. -->
+              <div v-if="!msg.mine && runStarts.has(msg.id) && senderName(msg)"
+                   class="mb-0.5 flex min-w-0 items-center gap-1.5">
+                <button v-if="canOpenSenderProfile(msg)"
+                        type="button" @click.stop="openSenderProfile(msg)"
+                        class="min-w-0 truncate text-left text-[11px] font-semibold text-accent underline-offset-2 outline-none hover:underline focus-visible:underline"
+                        v-bind="senderDecor(msg)"
+                        :title="locale.t('chatThread.openSenderProfile', 'Открыть профиль')">
+                  {{ senderName(msg) }}
+                </button>
+                <div v-else class="min-w-0 truncate text-[11px] font-semibold text-accent" v-bind="senderDecor(msg)">
+                  {{ senderName(msg) }}
+                </div>
+                <GroupTag :group="senderGroup(msg)" />
               </div>
               <div v-if="msg.forwarded_from" class="mb-0.5 text-[11px] italic opacity-80">
                 {{ locale.t('chatThread.forwardedFrom', { name: msg.forwarded_from }) }}
@@ -2284,7 +2505,8 @@ function openActivities() {
                     class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text hover:bg-bg2">
               <Avatar :src="p.avatar" :name="p.full_name" :role="p.user_role" :color="profilePlate(p.profile_color)" :size="24" />
               <span class="min-w-0 flex-1 truncate">{{ p.full_name }}</span>
-              <span class="shrink-0 text-[11px] text-text3">{{ meta(p) }}</span>
+              <GroupTag v-if="studentGroup(p)" :group="studentGroup(p)" />
+              <span v-else class="shrink-0 text-[11px] text-text3">{{ meta(p) }}</span>
             </button>
           </div>
           <!-- Форма добавления личного шаблона (препод/админ). Сам ВЫБОР фразы уехал в
@@ -2366,16 +2588,26 @@ function openActivities() {
                  ⚠️ Подсветка фокуса — через `focus-within` на обёртке: фокус получает
                  поле, а рамку теперь рисует не оно. -->
             <div class="gb-composer-wrap relative min-w-0 flex-1 rounded-lg border border-border2 bg-card2">
-              <div ref="mirror" aria-hidden="true"
-                   class="gb-composer-box gb-composer-mirror pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words">
-                <span v-for="(sp, i) in draftSpans" :key="i" :class="sp.dim ? 'gb-md-dim' : 'gb-md-plain'">{{ sp.text }}</span>
+              <!-- 🔥 ОДНО ОКНО ПРОКРУТКИ НА ЗЕРКАЛО И ПОЛЕ (05.10.2026). Оба лежат в одной
+                   ячейке сетки: высоту задаёт зеркало, поле растягивается на неё и своей
+                   прокрутки не имеет. Подробности и причина — у `revealCaret` в скрипте.
+                   ⚠️ Хвостовой невидимый символ в зеркале обязателен: без него строка,
+                   начатая переносом (Shift+Enter в конце текста), в блоке не имеет
+                   высоты — поле не выросло бы, и курсор ушёл бы под нижний край. -->
+              <div ref="composerScroll" class="gb-composer-scroll" @scroll="onComposerScroll">
+                <div class="gb-composer-stack">
+                  <div ref="mirror" aria-hidden="true"
+                       class="gb-composer-box gb-composer-mirror pointer-events-none">
+                    <span v-for="(sp, i) in draftSpans" :key="i" :class="sp.dim ? 'gb-md-dim' : 'gb-md-plain'">{{ sp.text }}</span><span class="gb-composer-tail">&#8203;</span>
+                  </div>
+                  <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
+                            @keydown="onComposerKeydown" @input="onComposerInput" @scroll="pinFieldScroll"
+                            @select="updateFmtBubble" @mouseup="updateFmtBubble" @keyup="onComposerKeyup"
+                            @paste="onComposerPaste" @blur="onComposerBlur"
+                            :disabled="mascotCooldown.active"
+                            class="gb-composer-box gb-composer-input border-none bg-transparent outline-none disabled:opacity-60" />
+                </div>
               </div>
-              <textarea ref="composer" v-model="draft" rows="1" :placeholder="composerHint"
-                        @keydown="onComposerKeydown" @input="onComposerInput" @scroll="syncMirrorScroll"
-                        @select="updateFmtBubble" @mouseup="updateFmtBubble" @keyup="updateFmtBubble"
-                        @blur="onComposerBlur"
-                        :disabled="mascotCooldown.active"
-                        class="gb-composer-box gb-composer-input relative w-full resize-none border-none bg-transparent outline-none disabled:opacity-60" />
               <!-- Квадратное облачко над выделением (снимок 06 задания). Появляется ТОЛЬКО
                    когда есть что форматировать. mousedown.prevent обязателен: без него
                    нажатие сначала снимает выделение в поле, и оборачивать становится
@@ -2646,14 +2878,45 @@ function openActivities() {
   border-color: var(--gb-accent);
   background: var(--gb-surface);
 }
+/* Окно прокрутки поля: растёт вместе с текстом до потолка, дальше прокручивается ЦЕЛИКОМ
+   (зеркало и поле едут вместе — синхронизировать нечего). Потолок — около шести строк на
+   телефоне и двенадцати на ПК: больше занимало бы пол-ленты, меньше — заставляло бы
+   листать собственное сообщение длиной в абзац. */
+.gb-composer-scroll {
+  max-height: 9.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: inherit;
+  scrollbar-width: thin;
+}
+@media (min-width: 640px) {
+  .gb-composer-scroll { max-height: 16rem; }
+}
+/* Зеркало и поле — в ОДНОЙ ячейке сетки. Высоту ячейки задаёт зеркало (обычный блок),
+   поле растягивается на неё (`align-self: stretch` у элементов сетки по умолчанию). */
+.gb-composer-stack { display: grid; }
+.gb-composer-stack > * { grid-area: 1 / 1; min-width: 0; }
 .gb-composer-box {
   box-sizing: border-box;
   min-height: 40px;
-  max-height: 8rem;
+  margin: 0;
   padding: 0.5rem 0.75rem;
   font-size: 1rem;
   line-height: 1.5;
   font-family: inherit;
+  /* ⚠️ Перенос строк задан ЯВНО и одинаково для обоих слоёв. У `<textarea>` эти значения
+     стоят в стилях самого браузера, у `<div>` — наследуются от страницы; разойдись они
+     хоть в одном, строки переносились бы в разных местах, и подсветка выделения (её
+     рисует поле) ложилась бы не на те слова, что видны (их рисует зеркало). */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-indent: 0;
+  text-transform: none;
+  text-align: start;
+  tab-size: 4;
   border-radius: 0.5rem;
   /* ⚠️ РАМКИ здесь нет вовсе: её рисует ОБЁРТКА (`gb-composer-wrap`), а поле и зеркало
      лежат внутри неё одинаковыми прямоугольниками. Раньше рамка была на поле, и зеркалу
@@ -2667,14 +2930,30 @@ function openActivities() {
 /* Текст поля прозрачный — его рисует зеркало. Курсор и выделение остаются видимыми:
    `caret-color` и `::selection` от `color` не зависят. */
 .gb-composer-input {
+  display: block;
+  width: 100%;
   color: transparent;
   caret-color: var(--gb-text);
-  overflow-y: auto;
+  /* Своей прокрутки у поля НЕТ: прокручивается окно `gb-composer-scroll`. С `auto` у
+     переполненного поля появлялась полоса, сужала его относительно зеркала — и переносы
+     строк расходились (жалоба «выделяется до прошлой или следующей строки»). */
+  overflow: hidden;
+  resize: none;
 }
+/* Хвост зеркала: невидимый символ, дающий высоту последней пустой строке. */
+.gb-composer-tail { user-select: none; }
 .gb-composer-input::selection { background: color-mix(in srgb, var(--gb-accent) 35%, transparent); }
 /* ⚠️ Плейсхолдер задаём ЯВНО: он наследует `color`, то есть вместе с текстом стал бы
    прозрачным — подсказка в пустом поле исчезла бы совсем. */
-.gb-composer-input::placeholder { color: var(--gb-text-dim); opacity: 1; }
+.gb-composer-input::placeholder {
+  color: var(--gb-text-dim);
+  opacity: 1;
+  /* Подсказка — в одну строку с многоточием: поле высотой в строку вторую её строку
+     всё равно обрезало бы пополам. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gb-md-plain { color: var(--gb-text); }
 /* Символы закрытой пары — приглушены, как в Discord (снимок 07 задания). */
 .gb-md-dim { color: var(--gb-text-dim); opacity: 0.55; }

@@ -230,6 +230,70 @@ def parent_link_id(parent_id: str, student_id: str) -> str:
     return f"plink:{parent_id}|{student_id}"
 
 
+def user_fio(u) -> str:
+    """ФИО человека ПОЛНОСТЬЮ — «Фамилия Имя Отчество». Одна дверь на весь сервер.
+
+    🔥 ЗАЧЕМ (05.10.2026, жалоба Ярослава: «серьёзный баг со студентами: видно лишь
+    отчество и имя, а фамилию нет; если отчество не указано — видно лишь имя»). Подпись
+    человека в мессенджере, активностях и письмах собиралась как `full_name or name` — в
+    тридцати с лишним местах. У преподавателя это верно: его ключ и есть `full_name`. У
+    студента, заведённого администратором, `full_name` ПУСТ (`admin_create_student`
+    пишет туда пустую строку), а `name` — это «Имя Отчество», исторический ключ оценок
+    (см. `User.name`). Итог: в переписке и списках студент без фамилии — и понять, кто
+    это, нельзя. Заведённые по заявке или приглашению показывались правильно (там
+    `full_name` заполнен), поэтому на стенде дефекта не было видно вовсе.
+
+    ⚠️ Правило сборки — по ПОЛЯМ, а не «что первым непусто»:
+      • фамилии отдельным полем нет (преподаватель, старые строки) — берём `full_name`,
+        а если пуст и он — `name`;
+      • фамилия есть — «фамилия + name»; отчество дописываем, только если его нет в
+        `name` (строки со старого десктопа держат его лишь в своём поле);
+      • `full_name` побеждает, только когда он ПРОДОЛЖАЕТ собранное — начинается с тех
+        же слов и добавляет к ним ещё: устаревший `full_name` после смены фамилии, имени
+        или отчества не должен перебивать актуальные поля, даже если в нём на слово больше.
+    🔥 Три края, найденные Полковником 06.10.2026 — первая версия сравнивала отчество с
+    ОДНИМ словом из `name`:
+      • составное отчество. Заявка и приглашение пишут `name = «Али Вели оглы»`,
+        `patronymic = «Вели оглы»` (`reg_utils`): «Вели оглы» не равно ни одному слову
+        по отдельности, и человек показывался как «Мамедов Али Вели оглы Вели оглы».
+        Сравниваем ПОСЛЕДОВАТЕЛЬНОСТЬ слов;
+      • «ё/е». «Семенович» в `name` и «Семёнович» в своём поле — одно отчество;
+      • `full_name` длиннее собранного, но с ПРЕЖНЕЙ фамилией («Петрова Анна Ивановна»
+        при `surname = «Сидорова»`) побеждал по числу слов и возвращал девичью фамилию.
+    ⚠️ Маска модератора («Модератор №7») — НЕ здесь, а в `moderator_display_name`
+    мессенджера: это правило показа конкретной подсистемы, а не состав имени.
+    """
+    full = (getattr(u, "full_name", "") or "").strip()
+    surname = (getattr(u, "surname", "") or "").strip()
+    name = (getattr(u, "name", "") or "").strip()
+    patronymic = (getattr(u, "patronymic", "") or "").strip()
+    if not surname:
+        return full or name
+    built = f"{surname} {name}".strip()
+    if patronymic and not _words_inside(_fio_words(name), _fio_words(patronymic)):
+        built = f"{built} {patronymic}"
+    #`full_name` побеждает, только когда он ПРОДОЛЖАЕТ собранное: те же слова в начале и
+    #что-то ещё после (отчество, которого нет в полях). Правка студента меняет фамилию,
+    #имя и отчество, а `full_name` не трогает — и «длиннее, с той же фамилией» возвращало
+    #прежнее отчество после его исправления (нашёл Полковник 07.10.2026).
+    full_words, built_words = _fio_words(full), _fio_words(built)
+    if len(full_words) > len(built_words) and full_words[:len(built_words)] == built_words:
+        return full
+    return built
+
+
+def _fio_words(s: str) -> list:
+    """Слова ФИО для СРАВНЕНИЯ: без регистра и без различия «ё/е» — в документах одного
+    человека пишут и так и так. На показ не идёт."""
+    return (s or "").lower().replace("ё", "е").split()
+
+
+def _words_inside(haystack: list, needle: list) -> bool:
+    """Идут ли слова `needle` в `haystack` подряд (а не «есть ли такое слово»)."""
+    n = len(needle)
+    return n > 0 and any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
 def next_moderator_number(db) -> int:
     """Наименьший свободный публичный номер модератора, начиная с единицы.
 
@@ -1585,6 +1649,158 @@ class BoardArtifact(Base):
     sheet = Column(String, default="blank")            #blank | grid | lined
     strokes = Column(JSON, default=list)
     title = Column(String, default="")
+    created_at = Column(String, default="")
+
+
+# ── Трекер задач беседы (05.10.2026, просьба Ярослава) ───────────────────────────────
+# Владелец группы или канала включает трекер в настройках беседы — у всех участников
+# появляется кнопка, открывающая доску. Планка задана прямо: «на уровне Яндекс Трекера».
+# Отсюда состав: в беседе несколько «работ» (у Трекера это очереди) со своим КЛЮЧОМ, у
+# задачи — номер вида «KURS-12», тип, статус-колонка, приоритет, исполнители, дата начала
+# и срок, оценка и затраченное время, метки, чек-лист, подзадачи, связи, комментарии и
+# история изменений.
+#
+# ⚠️ ВСЁ ЭТО — ЧАСТЬ МЕССЕНДЖЕРА, и правила у него те же:
+#   • в SYNC_MODELS НЕ входит: мессенджер — онлайн-подсистема (§5.4), внутри программы
+#     его запросы пересылаются на бой по префиксу `/web/messenger` — ручки трекера лежат
+#     под ним же и покрыты пересылкой без единой правки десктопа;
+#   • служебных полей синка (deleted, change_seq) нет: удаление — настоящее, истина всегда
+#     на сервере, конфликтов LWW между копиями не бывает.
+#
+# 🔑 ТАБЛИЦЫ НОВЫЕ, И ЭТО НЕ СЛУЧАЙНОСТЬ. Признак «трекер включён» — строка в
+# `tracker_settings`, а НЕ колонка в `conversations`: новая колонка в существующей таблице
+# требует ручного идемпотентного ALTER (create_all её не создаст, и на бою это отказ,
+# которого не видно в тестах), а новая таблица заводится сама. Заодно ни одна из двух
+# десятков выборок бесед не узнала о новом поле — им оно не нужно.
+
+
+class TrackerSettings(Base):
+    """Трекер беседы: включён ли и кто вправе вести задачи. Одна строка на беседу."""
+    __tablename__ = "tracker_settings"
+    conversation_id = Column(String, primary_key=True)
+    enabled = Column(Boolean, default=False)
+    #Ставить и править задачи может КАЖДЫЙ участник (а не только владелец, админы беседы
+    #и роли с правом `tracker`). Выключено по умолчанию: в учебной группе на тридцать
+    #человек «каждый назначает каждому» — готовый способ завалить людей уведомлениями.
+    #Небольшой команде, собравшейся на курсовую, владелец включает одним тумблером.
+    open_edit = Column(Boolean, default=False)
+    updated_at = Column(String, default="")
+    updated_by = Column(String, default="")
+
+
+class TrackerProject(Base):
+    """«Работа» — проект внутри беседы (очередь в терминах Яндекс Трекера)."""
+    __tablename__ = "tracker_projects"
+    id = Column(String, primary_key=True)               #trkp:{uuid} — выдаёт клиент
+    conversation_id = Column(String, index=True, default="")
+    #Ключ работы: «KURS» → задачи «KURS-1», «KURS-2». Латиница и цифры, уникален в
+    #беседе, после создания НЕ меняется — на номер задачи ссылаются в переписке, и
+    #переименованный ключ превратил бы все эти ссылки в мёртвые.
+    key = Column(String, default="")
+    title = Column(String, default="")
+    description = Column(String, default="")
+    color = Column(String, default="")                  #id пресета палитры, не CSS-строка
+    position = Column(Integer, default=0)
+    archived = Column(Boolean, default=False)
+    #Метки работы: [{"id", "title", "color"}]. JSON, а не таблица: меток десяток, живут
+    #они только вместе с работой и отдельно нигде не ищутся.
+    labels = Column(JSON, default=list)
+    #Счётчик номеров задач ЭТОЙ работы. Растёт только вверх: номер удалённой задачи не
+    #переиспользуется — «KURS-7» в старом сообщении не должен вдруг начать значить другое.
+    task_seq = Column(Integer, default=0)
+    created_by = Column(String, default="")
+    created_at = Column(String, default="")
+    updated_at = Column(String, default="")
+
+
+class TrackerColumn(Base):
+    """Колонка доски = статус задачи. Тип (`kind`) говорит, считать ли задачу сделанной."""
+    __tablename__ = "tracker_columns"
+    id = Column(String, primary_key=True)               #trkc:{uuid}
+    conversation_id = Column(String, index=True, default="")
+    project_id = Column(String, index=True, default="")
+    title = Column(String, default="")
+    kind = Column(String, default="todo")               #todo | doing | review | done
+    position = Column(Integer, default=0)
+
+
+class TrackerTask(Base):
+    """Задача. Исполнители — отдельной таблицей (`TrackerAssignee`)."""
+    __tablename__ = "tracker_tasks"
+    id = Column(String, primary_key=True)               #trkt:{uuid}
+    conversation_id = Column(String, index=True, default="")
+    project_id = Column(String, index=True, default="")
+    column_id = Column(String, index=True, default="")
+    number = Column(Integer, default=0)                 #«12» из «KURS-12» — сквозной в работе
+    kind = Column(String, default="task")               #task | bug | improvement | epic | milestone
+    title = Column(String, default="")
+    description = Column(String, default="")
+    priority = Column(String, default="normal")         #trivial | minor | normal | critical | blocker
+    #Дата начала и срок: «ГГГГ-ММ-ДД» либо «ГГГГ-ММ-ДДTЧЧ:ММ» — МЕСТНОЕ время того, кто
+    #ставил. Часовой пояс не храним намеренно: колледж в одном поясе, а «сдать до пятницы
+    #18:00» — это 18:00 на стене аудитории, и перевод через UTC сдвигал бы срок у
+    #смотрящего из дома.
+    start_date = Column(String, default="")
+    deadline = Column(String, default="")
+    #Учёт времени, в ЧАСАХ: оценка («сколько займёт») и затрачено («сколько ушло»).
+    estimate = Column(Float, default=0)
+    spent = Column(Float, default=0)
+    position = Column(Integer, default=0)
+    labels = Column(JSON, default=list)                 #id меток работы
+    checklist = Column(JSON, default=list)              #[{"id", "text", "done"}]
+    #Подзадача: id родителя из ТОЙ ЖЕ работы ('' — задача верхнего уровня).
+    parent_id = Column(String, index=True, default="")
+    #Связи с другими задачами беседы: [{"type": blocks|depends|relates, "task_id"}].
+    #Хранятся у одной стороны; обратную сторону («блокируется задачей…») показывает клиент.
+    links = Column(JSON, default=list)
+    created_by = Column(String, default="")
+    created_at = Column(String, default="")
+    updated_at = Column(String, default="")
+    completed_at = Column(String, default="")           #когда попала в колонку «done»
+
+
+class TrackerAssignee(Base):
+    """Исполнитель задачи.
+
+    Отдельная таблица, а не список в задаче: «мои задачи» ищутся по индексу, а кто и
+    когда назначил — это и есть содержимое письма исполнителю."""
+    __tablename__ = "tracker_assignees"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    task_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    assigned_by = Column(String, default="")
+    assigned_at = Column(String, default="")
+
+
+class TrackerComment(Base):
+    """Комментарий к задаче. Удаляется по-настоящему: в отличие от сообщения чата, на
+    комментарий нельзя пожаловаться, и хранить его «для модерации» незачем."""
+    __tablename__ = "tracker_comments"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    task_id = Column(String, index=True, default="")
+    author_id = Column(String, default="")
+    #Метка клиента: по ней повтор пачки после обрыва связи не удваивает комментарий
+    #(клиент не знает, дошла ли первая попытка, и честно присылает её снова).
+    client_id = Column(String, default="")
+    body = Column(String, default="")
+    created_at = Column(String, default="")
+
+
+class TrackerActivity(Base):
+    """История изменений задачи: кто, когда и что поменял.
+
+    Пишется сервером при сохранении, руками не правится и не удаляется (кроме как
+    вместе с задачей). `data` — подробности события: {"field", "old", "new"} у смены
+    поля, {"from", "to"} у перехода между колонками, {"user_id", "name"} у назначения."""
+    __tablename__ = "tracker_activity"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, index=True, default="")
+    task_id = Column(String, index=True, default="")
+    actor_id = Column(String, default="")
+    kind = Column(String, default="")                   #created | moved | assigned | unassigned | changed | commented
+    data = Column(JSON, default=dict)
     created_at = Column(String, default="")
 
 

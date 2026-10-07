@@ -22,6 +22,8 @@ import GroupPickDialog from './GroupPickDialog.vue'
 import CuratorReportDialog from './CuratorReportDialog.vue'
 import MyStatusPicker from './MyStatusPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
+import GroupTag from '@/components/ui/GroupTag.vue'
+import { studentGroup } from '@/utils/people'
 
 const m = useMessengerStore()
 const toast = useToast()
@@ -412,9 +414,15 @@ onMounted(() => { m.loadChats() })
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
-                <span class="flex items-center gap-1 truncate text-sm font-semibold text-text"
-                      v-bind="c.kind === 'direct' ? nameDecor(c.peer || {}) : {}">
-                  <Pin v-if="c.pinned" class="size-3 shrink-0 text-text3" />{{ c.title || locale.t('messenger.dialog', 'Диалог') }}
+                <!-- Имя сжимается, тег группы — нет: обрезаться должно длинное ФИО, а не
+                     короткое «К74/1». Тег стоит ВНЕ элемента имени — у имени свой шрифт и
+                     цвет (`nameDecor`), и внутри тег унаследовал бы их. -->
+                <span class="flex min-w-0 items-center gap-1.5">
+                  <span class="flex min-w-0 items-center gap-1 text-sm font-semibold text-text"
+                        v-bind="c.kind === 'direct' ? nameDecor(c.peer || {}) : {}">
+                    <Pin v-if="c.pinned" class="size-3 shrink-0 text-text3" /><span class="truncate">{{ c.title || locale.t('messenger.dialog', 'Диалог') }}</span>
+                  </span>
+                  <GroupTag v-if="c.kind === 'direct'" :group="studentGroup(c.peer)" />
                 </span>
                 <span class="shrink-0 text-[11px] text-text3">{{ fmtTime(c.last_at) }}</span>
               </div>
@@ -490,9 +498,13 @@ onMounted(() => { m.loadChats() })
             <div class="truncate text-xs text-text3">
               <template v-if="u.role === 'teacher'">{{ (u.subjects || []).join(', ') || roleLabel('teacher') }}</template>
               <template v-else-if="u.role === 'parent'">{{ u.groups?.length ? locale.t('messenger.parentOf', 'род. ') + u.groups.join(', ') : roleLabel('parent') }}</template>
-              <template v-else>{{ locale.t('messenger.groupLabel', 'Группа') }} {{ u.group_name || '—' }}</template>
+              <!-- У студента под именем — роль, а группа ушла ТЕГОМ вправо (05.10.2026):
+                   в колонке из двадцати студентов глаз ищет группу по правому краю, а
+                   строка «Группа К74/1» под каждым именем заставляла читать подряд. -->
+              <template v-else>{{ roleLabel('student') }}</template>
             </div>
           </div>
+          <GroupTag :group="studentGroup(u)" />
         </button>
       </template>
 

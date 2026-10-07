@@ -72,15 +72,21 @@ def test_author_with_a_name_is_still_signed(client):
     """
     admin = make_admin(client)
     teacher = make_teacher(client, admin)
+    #⚠️ full_name в порядке «Фамилия Имя» — как его пишут все пути создания человека
+    #(заявка, приглашение, преподаватель). До 05.10.2026 здесь стояло «Боб Бобов» при
+    #фамилии «Бобов»: поля и полное имя спорили о порядке слов, и подпись зависела от
+    #того, какое из них читать. С `models.user_fio` (одна дверь ФИО) при равной полноте
+    #побеждают ПОЛЯ — иначе устаревший full_name после смены фамилии перебивал бы
+    #актуальную. Смысл проверки прежний: у человека с ФИО подпись есть.
     named = _push_user(client, admin, "stud:named", "s2",
-                       full_name="Боб Бобов", name="Боб", surname="Бобов")
+                       full_name="Бобов Боб", name="Боб", surname="Бобов")
 
     conv = _group_with(client, teacher, ["stud:named"], title="Вторая")
     assert client.post(f"/web/messenger/chats/{conv}/messages",
                        json={"body": "привет"}, headers=named).status_code == 200
 
     chats = client.get("/web/messenger/chats", headers=teacher).json()["chats"]
-    assert _row(chats, conv)["last_message"]["sender_name"] == "Боб Бобов"
+    assert _row(chats, conv)["last_message"]["sender_name"] == "Бобов Боб"
 
 
 def test_own_message_is_never_signed(client):

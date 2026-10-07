@@ -1,6 +1,6 @@
 """
 build_nickname_fonts.py — собрать шрифты стиля никнейма (§5.4, «стиль никнейма») из
-fonts/nickname/*.ttf в web/public/fonts/nickname/*.woff2.
+assets/fonts/nickname/*.ttf в web/public/fonts/nickname/*.woff2.
 
     python tools/build_nickname_fonts.py
 
@@ -13,7 +13,7 @@ test_nickname_fonts.py` проверяет каждый .woff2 на реальн
 а не полагается на то, что скрипт один раз запустили правильно).
 
 Источник — ofl/* в github.com/google/fonts (лицензия OFL, тот же текст, что уже лежит
-в fonts/OFL.txt). Скачаны один раз вручную, здесь только конвертация в woff2.
+в assets/fonts/OFL.txt). Скачаны один раз вручную, здесь только конвертация в woff2.
 
 ⚠️ ПОДРЕЗКА ОБЯЗАТЕЛЬНА (добавлена, когда список вырос с 7 файлов до 19). Шрифт грузится
 ради ОДНОЙ строки — имени человека, поэтому греческий, вьетнамский, деванагари и прочее
@@ -25,7 +25,7 @@ test_nickname_fonts.py` проверяет каждый .woff2 на реальн
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "fonts", "nickname")
+SRC = os.path.join(ROOT, "assets", "fonts", "nickname")
 OUT = os.path.join(ROOT, "web", "public", "fonts", "nickname")
 
 #Что оставляем при подрезке. Диапазоны — как у Google Fonts в их подмножествах

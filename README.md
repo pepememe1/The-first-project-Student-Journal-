@@ -507,7 +507,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `sync/sync_runner.py` | Фоновый поток синхронизации; сброс изменений при выходе |
 | `schedule/parser.py` | Парсер `portal.esstu.ru` на stdlib (без BeautifulSoup — чистые лицензии), пять категорий, два формата страницы |
 | `schedule/store.py`, `schedule/model.py`, `schedule/reminders.py`, `schedule/specialty.py` | Зашифрованный кэш по категориям, модель, напоминания |
-| `emotions/`, `fonts/` | Исходники арта маскота (30 эмоций + анимации) и шрифтов. Человеку они приезжают из `web/public` — эти папки в релизный .exe не входят |
+| `assets/` (`emotions/`, `animations/`, `fonts/`, `specialties/`) | Исходники арта маскота (30 эмоций + анимации) и шрифтов. Человеку они приезжают из `web/public` — эти папки в релизный .exe не входят |
 | `tools/` | `build_mascot_anim.py` (ролики → WebP), `build_android_icons.py`, `build_web_fonts.py`, `make_desktop_patch.py`, `publish_desktop_update.sh`, `graph_rebuild.py` и `graph_api_bridge.py` (карта связей репозитория) |
 | `tests/` | Клиентские тесты (`pytest` из корня) |
 | `GradeBookAI.spec`, `build_nuitka.sh` | Сборка .exe: дев (PyInstaller) и **релиз** (Nuitka) |

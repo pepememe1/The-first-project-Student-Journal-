@@ -673,6 +673,18 @@ export const messengerApi = {
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/media`),
   chatSaved: (convId) =>
     api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/saved`),
+  // ── Трекер задач беседы ──
+  // ⚠️ Записывающая ручка ОДНА — `trackerSave` с пачкой операций. Отдельных «создать
+  // задачу» и «назначить» нет намеренно: правки копятся у человека до кнопки
+  // «Сохранить», и письмо исполнителю уходит одно на сохранение (см. stores/tracker.js).
+  tracker: (convId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/tracker`),
+  trackerSettings: (convId, payload) =>
+    api.put(`/web/messenger/chats/${encodeURIComponent(convId)}/tracker/settings`, payload),
+  trackerSave: (convId, ops) =>
+    api.post(`/web/messenger/chats/${encodeURIComponent(convId)}/tracker/save`, { ops }),
+  trackerTaskDetails: (convId, taskId) =>
+    api.get(`/web/messenger/chats/${encodeURIComponent(convId)}/tracker/tasks/${encodeURIComponent(taskId)}/details`),
   // Личный вопрос Вектору из ЛЮБОЙ беседы. Ответ приходит СЮДА и нигде не сохраняется:
   // в общем чате реплика Вектора показала бы соседям выборку, скоупленную по спросившему.
   // В «Избранном» команда работает по-старому — обычным сообщением, там история нужна.

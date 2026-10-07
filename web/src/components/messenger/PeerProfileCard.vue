@@ -490,7 +490,11 @@ async function sendMessage() {
       <!-- Порядок задан Владом и повторяет Discord: имя → логин → действие. Имя и
            логин разными строками, а не через точку: логин это адрес, а не подпись. -->
       <div class="mt-3 min-w-0">
-        <p class="truncate font-title text-2xl font-extrabold leading-tight text-text" v-bind="nameDecoration">
+        <!-- ФИО в карточке профиля ПЕРЕНОСИТСЯ, а не обрезается многоточием (06.10.2026):
+             профиль — то место, куда приходят узнать, кто это, и «Овсянкина Александра
+             Иннокентьеві…» здесь хуже второй строки. Логин и подпись ниже остаются в одну
+             строку — у них цена обрезки другая. -->
+        <p class="break-words font-title text-2xl font-extrabold leading-tight text-text" v-bind="nameDecoration">
           {{ shown.full_name || '…' }}
         </p>
         <p v-if="shown.login" class="mt-0.5 truncate text-sm text-text3">@{{ shown.login }}</p>

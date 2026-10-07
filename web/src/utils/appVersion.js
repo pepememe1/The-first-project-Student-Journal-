@@ -32,25 +32,19 @@
  */
 import { isNativeApp } from '@/api/server'
 //Решения вынесены в чистый модуль — только его и можно проверить `node --test`.
-import { shouldReload, isChunkLoadError } from './buildFreshness'
-export { shouldReload, isChunkLoadError }
+import { shouldReload, isChunkLoadError, chunkFailureAction, stampReloadDue, chunkReloadDue } from './buildFreshness'
+export { shouldReload, isChunkLoadError, chunkFailureAction }
 
 /** Метка текущей сборки. Подставляет Vite (см. build/buildStamp.js). */
 export const BUILD_STAMP = typeof __BUILD_STAMP__ === 'string' ? __BUILD_STAMP__ : ''
 
-const RELOADED_FOR = 'gb.reloaded_for'
+/** Хранилище вкладки или `null`: в приватном режиме само обращение к нему бросает. */
+function tabStorage() {
+  try { return window.sessionStorage } catch { return null }
+}
 // Раз в четверть часа. Опрос тут — вторая линия: основной сигнал даёт возврат во
 // вкладку. Чаще незачем, реже — человек может весь день не сворачивать браузер.
 const POLL_MS = 15 * 60 * 1000
-
-/** Ради какой метки уже перезагружались ('' — ни разу). Защита от вечного круга. */
-function reloadedFor() {
-  try { return sessionStorage.getItem(RELOADED_FOR) || '' } catch { return '' }
-}
-
-function rememberReload(stamp) {
-  try { sessionStorage.setItem(RELOADED_FOR, stamp) } catch { /* приватный режим */ }
-}
 
 /**
  * Метка сборки, лежащей на сервере ('' — узнать не удалось).
@@ -72,8 +66,8 @@ export async function fetchServerStamp() {
 /** Проверить сервер и перезагрузиться, если сборка сменилась. */
 export async function checkNow(reload = () => window.location.reload()) {
   const server = await fetchServerStamp()
-  if (!shouldReload(BUILD_STAMP, server, reloadedFor())) return false
-  rememberReload(server)
+  //Замок «ради этой метки уже перезагружались» — внутри правила, под тестом.
+  if (!stampReloadDue(BUILD_STAMP, server, tabStorage())) return false
   reload()
   return true
 }
@@ -99,14 +93,22 @@ export function watchForNewBuild() {
  * произошло». Здесь мы уже знаем наверняка: страница попросила файл, которого нет.
  */
 export function reloadOnChunkError(router, reload = () => window.location.reload()) {
-  router.onError((err) => {
-    if (!isChunkLoadError(err)) return
-    //Замок на метку тут не годится: серверную мы в этот момент не знаем, а спрашивать её
-    //поздно — человек уже нажал и ничего не увидел. Замок разовый, на жизнь вкладки.
-    try {
-      if (sessionStorage.getItem(RELOADED_FOR) === 'chunk') return
-      sessionStorage.setItem(RELOADED_FOR, 'chunk')
-    } catch { /* приватный режим — перезагрузимся без замка */ }
-    reload()
-  })
+  router.onError((err) => { reloadOnceForChunk(err, { reload }) })
+}
+
+/**
+ * Недоехавший чанк: перезагрузить вкладку ОДИН раз. Возвращает true, если перезагружаемся.
+ *
+ * Одна дверь для ленивых страниц (роутер) и ленивых окон (трекер): замок у них общий,
+ * потому что и причина общая — код вкладки старше выложенного.
+ *
+ * Замок на метку сборки тут не годится: серверную мы в этот момент не знаем, а спрашивать
+ * её поздно — человек уже нажал и ничего не увидел. Замок разовый, на жизнь вкладки, и
+ * лежит в СВОЁМ ключе: в общем с замком сборки они стирали друг друга (см.
+ * `buildFreshness.js`). Решение и запись замка — чистая `chunkReloadDue` (под тестом).
+ */
+export function reloadOnceForChunk(err, { reload = () => window.location.reload(), needLock = false } = {}) {
+  if (!chunkReloadDue(err, tabStorage(), { needLock })) return false
+  reload()
+  return true
 }

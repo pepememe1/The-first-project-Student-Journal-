@@ -13,6 +13,7 @@ import { ref, computed } from 'vue'
 import { messengerApi } from '@/api/endpoints'
 import { isStaleSession } from '@/api/responseOwner'
 import { useActivityStore } from '@/stores/activity'
+import { useTrackerStore } from '@/stores/tracker'
 import { getAccess } from '@/api/tokens'
 import { getApiBase } from '@/api/server'
 import { playMentionPing } from '@/utils/pingSound'
@@ -690,6 +691,12 @@ export const useMessengerStore = defineStore('messenger', () => {
             if (!_hidden()) pollOnce()
           } else if (_hidden()) missedChats = true
           else loadChats()
+        } else if (ev.type === 'tracker') {
+          // Трекер задач беседы: кто-то сохранил правки или владелец включил/выключил
+          // трекер. Открытая доска подтягивает свежее, а сведения о беседе перечитываем,
+          // чтобы кнопка трекера в шапке появилась (или пропала) у всех сразу.
+          useTrackerStore().onRemoteChange(ev.conversation_id)
+          if (ev.conversation_id === activeId.value && !_hidden()) loadConvInfo(false)
         } else if (ev.type && ev.type.startsWith('activity.')) {
           // Активности (docs/done/PLAN-ACTIVITIES.md §7) — своего канала у них нет, кадры
           // идут этим же сокетом. Разбор — в сторе активности: тут только маршрутизация.

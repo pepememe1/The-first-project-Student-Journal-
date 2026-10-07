@@ -37,8 +37,8 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
         rows = [u for u in rows if _may_list_parent(db, user, u)]
     ql = (q or "").strip().lower()
     if ql:
-        rows = [u for u in rows if ql in (u.full_name or u.name or "").lower()]
-    rows.sort(key=lambda u: (u.full_name or u.name or u.login or "").lower())
+        rows = [u for u in rows if ql in (user_fio(u) or "").lower()]
+    rows.sort(key=lambda u: (user_fio(u) or u.login or "").lower())
     total = len(rows)
     page = max(0, int(page or 0))
     chunk = rows[page * _PAGE_USERS:(page + 1) * _PAGE_USERS]
@@ -119,8 +119,13 @@ def user_shared(user_id: str, user: User = Depends(get_current_user),
     convs = (db.query(Conversation)
              .filter(Conversation.id.in_(shared_ids), Conversation.kind.in_(("group", "channel")))
              .order_by(Conversation.title).all())
-    groups = [{"id": c.id, "title": c.title} for c in convs if c.kind == "group"]
-    channels = [{"id": c.id, "title": c.title} for c in convs if c.kind == "channel"]
+    #Аватарка беседы — рядом с названием (05.10.2026, просьба Ярослава: «как в Discord:
+    #слева аватарка канала или группы, справа название»). Отдаём её только здесь, где
+    #зритель САМ состоит в беседе: картинку он и так видит в своём списке чатов.
+    def _row(c):
+        return {"id": c.id, "title": c.title, "avatar": c.avatar or ""}
+    groups = [_row(c) for c in convs if c.kind == "group"]
+    channels = [_row(c) for c in convs if c.kind == "channel"]
     return {"groups": groups, "channels": channels}
 
 

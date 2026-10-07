@@ -4,15 +4,21 @@
 // доступна на ЛЮБОЙ ширине — боковая ProfilePanel показывается только с xl и на
 // десктопе/телефоне была не видна.
 // Здесь же — выход из группы/канала и удаление переписки у себя.
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { X, Crown, Trash2, LogOut, Users, ShieldCheck, Pencil, Check, MoreVertical,
-         UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText, Camera } from '@lucide/vue'
+         UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText, Camera,
+         SquareKanban } from '@lucide/vue'
 import AvatarCropper from '@/components/AvatarCropper.vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
+import { useTrackerStore } from '@/stores/tracker'
+import ToggleRow from '@/components/ui/ToggleRow.vue'
 import Avatar from '@/components/ui/Avatar.vue'
+import GroupTag from '@/components/ui/GroupTag.vue'
+import { studentGroup } from '@/utils/people'
 import { messengerApi } from '@/api/endpoints'
+import { isStaleSession } from '@/api/responseOwner'
 import { humanSize } from '@/utils/docPreview'
 import RoleManagerDialog from '@/components/messenger/RoleManagerDialog.vue'
 import AddMembersDialog from '@/components/messenger/AddMembersDialog.vue'
@@ -55,9 +61,12 @@ async function doAddMembers({ userIds, classGroups }) {
   addOpen.value = false
   // ⚠️ Сообщаем ЧИСЛО, а не «готово»: сервер молча пропускает тех, кто уже в беседе,
   // и бодрое «добавлено» при нуле заставило бы человека думать, что люди в чате.
-  toast(added
-    ? locale.t('members.added', { n: added })
-    : locale.t('members.addedNobody', 'Никого не добавили — возможно, они уже в беседе'))
+  // 🔥 `toast` — объект с методами, а не функция (05.10.2026). Здесь стоял вызов
+  // `toast(…)`: он бросал `TypeError` уже ПОСЛЕ закрытия окна, то есть человек добавлял
+  // участников и не получал в ответ ничего — ни числа, ни «никого не добавили», ради
+  // которого сообщение и заведено. Ошибка была видна только в консоли.
+  if (added) toast.success(locale.t('members.added', { n: added }))
+  else toast.info(locale.t('members.addedNobody', 'Никого не добавили — возможно, они уже в беседе'))
 }
 
 // ━━ ПАНЕЛЬ БЕСЕДЫ (переделка 25.08.2026 по образцу Telegram, просьба Влада) ━━
@@ -117,6 +126,51 @@ function savedTime(it) {
   return sameDay
     ? d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleString(loc, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// ━━ ТРЕКЕР ЗАДАЧ (05.10.2026) ━━
+// «Позже владелец может включить в настройках трекеры» — тумблер здесь, в панели беседы,
+// и только у владельца (так же решит сервер). Второй тумблер — кто вправе ставить
+// задачи: по умолчанию владелец, админы беседы и роли с правом «вести трекер».
+const trackerStore = useTrackerStore()
+const isOwner = computed(() => activeInfo.value?.my_role === 'owner')
+const trackerEnabled = computed(() => !!activeInfo.value?.tracker_enabled)
+// `null` — режим ещё НЕ ПРОЧИТАН. Показать в это время «выключено» значило бы соврать:
+// владелец увидел бы снятый тумблер при включённом режиме и «включил» бы его заново.
+const trackerOpenEdit = ref(null)
+const trackerBusy = ref(false)
+async function setTracker(payload) {
+  if (trackerBusy.value) return
+  trackerBusy.value = true
+  try {
+    const data = await trackerStore.setSettings(payload, m.activeId)
+    trackerOpenEdit.value = !!data.open_edit
+    await m.loadConvInfo(false)          //кнопка в шапке рисуется по сведениям о беседе
+  } catch (e) {
+    if (isStaleSession(e)) return        //отказ прежней сессии — новому человеку не показываем
+    toast.error(e?.response?.data?.detail || locale.t('tracker.saveFailed', 'Не удалось сохранить'))
+  } finally { trackerBusy.value = false }
+}
+// Текущее «кто ведёт задачи» владельцу показываем честно, а не по умолчанию: читаем
+// настройки, как только известно, что смотрит владелец и трекер включён (сведения о
+// беседе могут доехать уже после открытия панели). Не прочиталось — тумблера нет: он
+// появится при следующем открытии панели, а «выключено» наугад не рисуем.
+let trackerModeOf = ''                   //для какой беседы прочитан режим
+async function readTrackerMode() {
+  //Панель осталась открытой, а беседа под ней сменилась (переход по ссылке на общую
+  //группу): режим прежней беседы — уже не режим этой. Забываем и читаем заново.
+  if (trackerModeOf !== m.activeId) { trackerModeOf = m.activeId; trackerOpenEdit.value = null }
+  if (!isOwner.value || !trackerEnabled.value || trackerOpenEdit.value !== null) return
+  const convId = m.activeId
+  try {
+    const { data } = await messengerApi.tracker(convId)
+    if (m.activeId === convId && trackerOpenEdit.value === null) trackerOpenEdit.value = !!data.open_edit
+  } catch { /* режим остаётся непрочитанным — см. выше */ }
+}
+watch([() => m.activeId, isOwner, trackerEnabled], readTrackerMode, { immediate: true })
+function openTracker() {
+  trackerStore.openFor(m.activeId)
+  emit('close')
 }
 
 const tabDefs = computed(() => [
@@ -280,10 +334,16 @@ function onChatAction(action) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <!-- `v-dialog` (06.10.2026): окно «О беседе» закрывалось щелчком мимо, но НЕ по Esc — имя
+       файла не кончается на Dialog/Modal, и сторож окон его не видел. Найдено живым
+       прогоном трекера: владелец включил трекер, нажал Esc — окно осталось и перекрыло
+       только что появившуюся кнопку. -->
+  <div v-dialog class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
-    <div class="flex max-h-[85vh] w-full flex-col rounded-xl border border-border2 bg-card shadow-card"
-         :class="wide ? 'max-w-3xl' : 'max-w-md'">
+    <!-- ⚠️ Профиль собеседника (`wide`) — тем же классом размера, что `PeerProfileModal`:
+         окно одного человека обязано быть одинаковым, откуда бы его ни открыли. -->
+    <div class="flex w-full flex-col rounded-xl border border-border2 bg-card shadow-card"
+         :class="wide ? 'gb-profile-window' : 'max-h-[85vh] max-w-md'">
       <!-- Шапка -->
       <div class="flex items-center gap-2 border-b border-border p-4">
         <!-- Лицо беседы. У группы/канала это АВАТАРКА (её ставит owner/admin), у личного
@@ -429,6 +489,24 @@ function onChatAction(action) {
             </div>
           </div>
 
+          <!-- ТРЕКЕР ЗАДАЧ. Владельцу — тумблеры, остальным — кнопка, когда трекер
+               включён. Системные каналы (оценки, расписание) трекера не имеют. -->
+          <div v-if="!activeInfo?.is_system && (isOwner || trackerEnabled)" class="mb-3 space-y-2">
+            <ToggleRow v-if="isOwner" :label="locale.t('tracker.settingEnable', 'Трекер задач')"
+                       :hint="locale.t('tracker.settingEnableHint', 'У всех участников появится кнопка трекера в шапке беседы')"
+                       :model-value="trackerEnabled" :disabled="trackerBusy"
+                       @update:model-value="(v) => setTracker({ enabled: v })" />
+            <ToggleRow v-if="isOwner && trackerEnabled && trackerOpenEdit !== null"
+                       :label="locale.t('tracker.settingOpenEdit', 'Задачи ставит каждый участник')"
+                       :hint="locale.t('tracker.settingOpenEditHint', 'Выключено — только владелец, админы беседы и роли с правом «вести трекер»')"
+                       :model-value="trackerOpenEdit" :disabled="trackerBusy"
+                       @update:model-value="(v) => setTracker({ open_edit: v })" />
+            <button v-if="trackerEnabled" type="button" @click="openTracker"
+                    class="flex w-full items-center justify-center gap-2 rounded-xl bg-card2 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-bg2">
+              <SquareKanban class="size-4" />{{ locale.t('tracker.open', 'Трекер задач') }}
+            </button>
+          </div>
+
           <!-- ВКЛАДКИ. Разделение по смыслу: человек ищет «того участника», «ту
                картинку» и «тот документ» в разных местах, и одна общая лента не
                заменяет ни одного из трёх. -->
@@ -541,6 +619,10 @@ function onChatAction(action) {
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-1.5">
                     <span class="truncate text-sm font-medium text-text">{{ p.full_name }}</span>
+                    <!-- Группа — тегом рядом с именем, а не только строкой ниже: строку
+                         ниже вытесняет статус («отошёл», «готовлюсь»), и у человека со
+                         статусом группа не была видна вовсе. -->
+                    <GroupTag :group="studentGroup(p)" />
                     <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
                            class="size-3.5 shrink-0 text-accent" :aria-label="locale.t('conversationInfo.owner', 'Владелец')" />
                     <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-xs">🔇</span>

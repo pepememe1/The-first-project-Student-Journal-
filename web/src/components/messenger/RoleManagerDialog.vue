@@ -21,6 +21,11 @@ const PERM_LABELS = computed(() => ({
   manage_roles: locale.t('roleManager.perm.manageRoles', 'Выдавать роли и создавать новые'),
   cmd_mute: locale.t('roleManager.perm.mute', 'Команда /mute'),
   cmd_clear: locale.t('roleManager.perm.clear', 'Команда /clear'),
+  //⚠️ У `activities` подписи здесь не было с самого появления права: в окне ролей оно
+  //показывалось сырым ключом «activities». Список прав приходит с сервера, и забытая
+  //подпись видна только глазами — добавлена 05.10.2026 вместе с правом трекера.
+  activities: locale.t('roleManager.perm.activities', 'Запускать активности'),
+  tracker: locale.t('roleManager.perm.tracker', 'Вести трекер задач'),
 }))
 
 const loading = ref(true)

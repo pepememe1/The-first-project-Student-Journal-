@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
 import { messengerApi } from '@/api/endpoints'
 import { BY_ID, RARITY } from '@/config/achievements'
+import Avatar from '@/components/ui/Avatar.vue'
 
 const props = defineProps({
   userId: { type: String, default: '' },
@@ -82,7 +83,11 @@ const TABS = computed(() => [
 </script>
 
 <template>
-  <div class="flex w-72 shrink-0 flex-col overflow-hidden border-l border-border2 bg-card lg:w-80">
+  <!-- ⚠️ `min-h-0` + `overflow-hidden` на корне и `overflow-y-auto` у списка ниже: колонка
+       берёт высоту ОКНА и прокручивается сама. Без этого длинный список трофеев
+       растягивал окно целиком (жалоба Ярослава 05.10.2026) — высоту диктовало
+       содержимое выбранной вкладки. -->
+  <div class="flex min-h-0 w-80 shrink-0 flex-col overflow-hidden border-l border-border2 bg-card lg:w-96">
     <!-- Категории В РЯД. Счётчик прямо во вкладке: видно, есть ли там что-то, не
          переключаясь туда. Подчёркивание активной, а не заливка — переключатель не
          должен спорить по весу с содержимым под ним. -->
@@ -128,11 +133,16 @@ const TABS = computed(() => [
       </template>
 
       <template v-else>
+        <!-- Строка как в Discord: слева аватарка группы или канала, справа название
+             (просьба Ярослава 05.10.2026). Одно название без лица в списке из десятка
+             строк приходилось ЧИТАТЬ; аватарку узнают взглядом. Беседа без своей
+             картинки получает кружок с первой буквой — тот же `Avatar`, что у людей. -->
         <ul v-if="(tab === 'groups' ? groups : channels).length" class="space-y-0.5">
           <li v-for="c in (tab === 'groups' ? groups : channels)" :key="c.id">
             <button type="button" @click="openConversation(c)"
-                    class="block w-full truncate rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
-              {{ c.title }}
+                    class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm text-text2 hover:bg-bg2 hover:text-text">
+              <Avatar :src="c.avatar || ''" :name="c.title" :size="32" class="shrink-0" />
+              <span class="min-w-0 flex-1 truncate">{{ c.title }}</span>
             </button>
           </li>
         </ul>

@@ -8,6 +8,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 //и без прогрева не посещённая страница не попадёт в офлайн-кэш браузера.
 import { routes as appRoutes } from '@/router'
 import { prefetchRoutes } from '@/utils/routePrefetch'
+import { linkStaysOnRoute } from '@/utils/drawerLinks'
 import { useRoute } from 'vue-router'
 import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -83,7 +84,23 @@ function onDrawerNavigate(to) {
 // Маршрут сменился — страница уже разрешена и её чанк скачан (страницы ленивые, роутер
 // ждёт загрузки). Значит момент честный: шторка уезжает не «через столько-то мс», а
 // когда за ней действительно есть что показать.
-watch(() => route.path, () => { if (sidebarOpen.value) closeDrawer() })
+// ⚠️ `fullPath`, а не `path`: «Выйти» из карточки себя ведёт на `…/settings?section=logout`,
+// и из самих настроек это смена ЗАПРОСА при том же пути — по `path` шторка оставалась.
+watch(() => route.fullPath, () => { if (sidebarOpen.value) closeDrawer() })
+
+/**
+ * Нажатие по ЛЮБОЙ ссылке внутри панели, которая ведёт туда, где человек уже находится.
+ *
+ * 🔥 Маршрут при этом не меняется, и наблюдатель выше не сработает НИКОГДА (05.10.2026,
+ * жалоба Ярослава: «заходим в настройки — шторка не убирается»). Воспроизведено на
+ * стенде: человек в настройках открывает меню и жмёт шестерёнку — шторка висит. Правило
+ * про саму ссылку, а не про конкретную дверь, по той же причине, что и наблюдатель:
+ * дверей в карточке себя уже четыре, и пятая о себе тоже не сообщит.
+ */
+function onDrawerPanelClick(e) {
+  const link = e.target?.closest?.('a[href]')
+  if (link && linkStaysOnRoute(link.getAttribute('href'), route.fullPath)) closeDrawer()
+}
 
 onBeforeUnmount(() => { if (pendingTimer) clearTimeout(pendingTimer) })
 
@@ -312,7 +329,7 @@ onMounted(askLoginEggs)
     <transition name="drawer">
       <div v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
         <div class="absolute inset-0" style="background: var(--gb-overlay)" @click="closeDrawer" />
-        <div class="gb-drawer-panel absolute inset-y-0 left-0 z-50 shadow-xl">
+        <div class="gb-drawer-panel absolute inset-y-0 left-0 z-50 shadow-xl" @click="onDrawerPanelClick">
           <Sidebar :open="sidebarOpen" :pending="pendingTo" @navigate="onDrawerNavigate" />
         </div>
       </div>

@@ -40,8 +40,8 @@ from ...models import (
     CuratorReport, Group, Message, MessageHidden,
     BlockedUser, MessageReport, MessageReaction, MessageEdit, MessageTemplate,
     MutedUser, UserReport, SupportTicket, next_moderator_number,
-    NotifyEvent, ParentLink, SubjectHours,
-    UserStatus, User, UserNote, direct_conversation_id,
+    NotifyEvent, ParentLink, SubjectHours, TrackerSettings,
+    UserStatus, User, UserNote, direct_conversation_id, user_fio,
 )
 import logging as _logging
 _hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
@@ -249,7 +249,7 @@ def _notify_recipients(db: Session, conv: Conversation, sender: User, skip_ids: 
         if not ids:
             return
         recips = db.query(User).filter(User.id.in_(ids)).all()
-        sender_name = sender.full_name or sender.name or sender.login or "Сообщение"
+        sender_name = user_fio(sender) or sender.login or "Сообщение"
         title = (conv.title if conv.kind in ("group", "channel") and conv.title else sender_name)
         body = f"{sender_name}: новое сообщение" if conv.kind in ("group", "channel") else "Новое сообщение"
         for u in recips:
@@ -287,7 +287,7 @@ def _notify_loud_mentions(db: Session, conv: Conversation, sender: User, mention
         loud_ids.discard(sender.id)          #отметить самого себя — не событие
         if not loud_ids:
             return
-        sender_name = sender.full_name or sender.name or sender.login or "Собеседник"
+        sender_name = user_fio(sender) or sender.login or "Собеседник"
         where = (conv.title if conv.kind in ("group", "channel") and conv.title
                  else f"переписке с {sender_name}")
         title = "Вас отметили"
@@ -404,7 +404,7 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
     st = status or {}
     d = {
         "id": u.id,
-        "full_name": u.full_name or u.name or u.login or "",
+        "full_name": user_fio(u) or u.login or "",
         "role": u.role,
         "group_name": u.group_name or "",
         #День рождения («ДД.ММ», без года) — ПУБЛИЧНОЕ поле карточки: его видно и в
@@ -681,7 +681,7 @@ def _notify_invites(db: Session, conv_id: str, title: str, actor: User) -> None:
                 .filter(ConversationInvite.conversation_id == conv_id).all())
         if not rows:
             return
-        who = actor.full_name or actor.name or actor.login
+        who = user_fio(actor) or actor.login
         online = _online_logins()
         for inv in rows:
             u = db.query(User).filter(User.id == inv.user_id).first()
@@ -865,7 +865,7 @@ def moderator_display_name(u, allow_login: bool = True) -> str:
     """
     if getattr(u, "role", "") == "moderator" and getattr(u, "mod_number", 0):
         return "Модератор №%d" % int(u.mod_number)
-    name = u.full_name or u.name or ""
+    name = user_fio(u) or ""
     if name or not allow_login:
         return name
     return u.login or u.id
@@ -906,7 +906,7 @@ def _parse_mentions(db: Session, body: str, participant_ids) -> list:
     rows = db.query(User).filter(User.id.in_(ids)).all()
     surnames = {}
     for u in rows:
-        first = (u.full_name or u.name or "").split(" ", 1)[0].strip().lower()
+        first = (user_fio(u) or "").split(" ", 1)[0].strip().lower()
         if first:
             surnames.setdefault(first, u.id)
     out, seen = [], set()
@@ -1461,7 +1461,10 @@ _WRITER_ROLES = ("owner", "admin", "writer")
 #teacher/admin даёт его и БЕЗ роли беседы (проверка — в routers/activities._require_can_run):
 #преподаватель ведёт занятие, а не администрирует чат, и просить владельца чата выдать
 #ему роль ради этого странно. Здесь право нужно, чтобы владелец мог выдать его старосте.
-_ALL_PERMISSIONS = ("kick", "manage_roles", "cmd_mute", "cmd_clear", "activities")
+#`tracker` — вести трекер задач беседы (05.10.2026): заводить работы и задачи, назначать
+#исполнителей. Владелец и админы беседы получают его по умолчанию вместе с остальными;
+#здесь оно нужно, чтобы владелец мог выдать его старосте, не делая того админом чата.
+_ALL_PERMISSIONS = ("kick", "manage_roles", "cmd_mute", "cmd_clear", "activities", "tracker")
 #Дефолт для БИЛДОВЫХ ролей, когда участнику не назначена кастомная ConversationRole —
 #эквивалент того, что раньше жёстко проверял _MANAGER_ROLES (owner/admin), чтобы уже
 #существующие беседы без единой кастомной роли продолжали работать ровно как раньше.
@@ -1532,8 +1535,9 @@ def _require_permission(db: Session, conv_id: str, user: User, permission: str) 
 # ── Кастомные роли беседы (§ролей) ─────────────────────────────────────────────────────
 _ROLE_TEMPLATES = [
     {"name": "Студент", "permissions": []},
-    {"name": "Староста", "permissions": ["kick", "cmd_mute", "cmd_clear"]},
-    {"name": "Преподаватель", "permissions": ["kick", "manage_roles", "cmd_mute", "cmd_clear"]},
+    {"name": "Староста", "permissions": ["kick", "cmd_mute", "cmd_clear", "tracker"]},
+    {"name": "Преподаватель", "permissions": ["kick", "manage_roles", "cmd_mute", "cmd_clear",
+                                              "tracker"]},
 ]
 # ── §D12: автоматические системные каналы (оценки/объявления/расписание) ─────────────
 # Превращают мессенджер из «просто чата» в хаб колледжа: авто-канал появляется у студента
@@ -1823,7 +1827,7 @@ def _resolve_participant_by_name(db: Session, conv_id: str, token: str):
     if not ids:
         return None
     for u in db.query(User).filter(User.id.in_(ids)).all():
-        first = (u.full_name or u.name or "").split(" ", 1)[0].strip().lower()
+        first = (user_fio(u) or "").split(" ", 1)[0].strip().lower()
         if first == token:
             return u
     return None
@@ -1849,7 +1853,7 @@ def _handle_mute_command(db: Session, conv_id: str, body: str, user: User,
         raise HTTPException(status_code=400, detail="Нельзя заглушить владельца беседы")
     tp.silenced = not tp.silenced
     db.commit()
-    name = target.full_name or target.name or target.login
+    name = user_fio(target) or target.login
     sysmsg = _system(db, conv_id, "muted" if tp.silenced else "unmuted", target.id, name)
     _broadcast(db, conv_id)
     return sysmsg

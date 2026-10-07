@@ -41,6 +41,12 @@ export function formatSystemMessage(body) {
     return type === 'muted' ? t('messagePreview.muted', { name }) : t('messagePreview.unmuted', { name })
   }
   if (type === 'cleared') return t('messagePreview.cleared', { n: rest[0] || '0' })
+  //Трекер задач беседы включили или выключили (05.10.2026). Строка в ленте — чтобы
+  //участники поняли, откуда взялась (или куда делась) кнопка трекера в шапке.
+  if (type === 'tracker_on' || type === 'tracker_off') {
+    const name = rest[1] || rest[0] || t('messagePreview.participant', 'Участник')
+    return type === 'tracker_on' ? t('messagePreview.trackerOn', { name }) : t('messagePreview.trackerOff', { name })
+  }
   //Приглашённый отклонил заявку. Строка объявляется в беседе намеренно: тихий отказ
   //неотличим от «ещё не посмотрел», и пригласившие ждали бы молча, а потом звали снова.
   if (type === 'invite_declined') {

@@ -16,6 +16,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { linkStaysOnRoute } from '../src/utils/drawerLinks.js'
 
 const shell = readFileSync(new URL('../src/layouts/AppShell.vue', import.meta.url), 'utf8')
 const sidebar = readFileSync(new URL('../src/components/Sidebar.vue', import.meta.url), 'utf8')
@@ -23,8 +24,45 @@ const userPanel = readFileSync(new URL('../src/components/SidebarUserPanel.vue',
 const styles = shell.split('<style')[1] || ''
 
 test('🔥 шторку закрывает СМЕНА МАРШРУТА, а не отдельная ссылка', () => {
-  assert.ok(/watch\(\(\) => route\.path,[\s\S]{0,200}?closeDrawer\(\)/.test(shell),
-    'нет наблюдения за route.path — значит закрытие снова держится на аккуратности каждой ссылки')
+  // ⚠️ `fullPath`, а не `path` (05.10.2026): «Выйти» из карточки себя ведёт на
+  // `…/settings?section=logout` — из самих настроек это смена ЗАПРОСА при том же пути.
+  assert.ok(/watch\(\(\) => route\.fullPath,[\s\S]{0,200}?closeDrawer\(\)/.test(shell),
+    'нет наблюдения за route.fullPath — закрытие снова держится на аккуратности каждой ссылки')
+})
+
+// ━━ ССЫЛКА В ТОТ ЖЕ РАЗДЕЛ (05.10.2026, жалоба Ярослава) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// «Старый баг на телефоне: заходим в настройки — шторка не убирается». Воспроизведено на
+// стенде: с главной шестерёнка шторку закрывает (маршрут меняется), а из самих настроек —
+// нет: роутер ничего не делает, наблюдатель молчит. Решение — чистая функция, её и
+// проверяем; проводку в оболочке — отдельно, удалением строки вызова.
+test('🔥 ссылка туда, где человек уже находится, закрывает шторку', () => {
+  assert.equal(linkStaysOnRoute('/student/settings', '/student/settings'), true,
+    'шестерёнка из самих настроек — тот самый случай из жалобы')
+  assert.equal(linkStaysOnRoute('/student/settings/', '/student/settings'), true,
+    'хвостовой слэш — тот же адрес')
+  assert.equal(linkStaysOnRoute('https://esstu-gradebook.ru/student/settings', '/student/settings'), true,
+    'абсолютная ссылка на тот же сайт — тот же адрес')
+  assert.equal(linkStaysOnRoute('/student/settings#top', '/student/settings'), true,
+    'якорь маршрут не меняет')
+  assert.equal(linkStaysOnRoute('/student/settings?section=logout', '/student/settings?section=logout'), true)
+})
+
+test('ссылка в ДРУГОЕ место шторку сама не закрывает — это дело смены маршрута', () => {
+  // Закрой мы шторку сразу, пропала бы подсветка выбранного пункта «до загрузки страницы»
+  // (вторая жалоба Влада от 07.09.2026) — шторка уезжала бы раньше, чем есть что показать.
+  assert.equal(linkStaysOnRoute('/student/settings', '/student'), false)
+  assert.equal(linkStaysOnRoute('/student/settings?section=logout', '/student/settings'), false,
+    'другой запрос — другой маршрут: его закроет наблюдатель за fullPath')
+  assert.equal(linkStaysOnRoute('', '/student'), false, 'пустая ссылка — решать нечего')
+  assert.equal(linkStaysOnRoute(null, '/student'), false)
+})
+
+test('🔒 оболочка действительно ЗОВЁТ правило на нажатии внутри панели', () => {
+  // «Обещание без вызывающего»: функция выше может быть безупречной и не вызываться никем.
+  assert.ok(/gb-drawer-panel[^>]*@click="onDrawerPanelClick"/.test(shell),
+    'у панели шторки нет обработчика нажатия — правило про ссылку в тот же раздел не действует')
+  assert.ok(/function onDrawerPanelClick[\s\S]{0,300}?linkStaysOnRoute\([\s\S]{0,120}?closeDrawer\(\)/.test(shell),
+    'обработчик не спрашивает linkStaysOnRoute или не закрывает шторку')
 })
 
 test('🔒 дверь настроек из карточки себя действительно НЕ сообщает о переходе', () => {

@@ -38,8 +38,17 @@ def test_categories_follow_the_role():
     teacher = set(categories_for(_U("teacher")))
     assert "risk" not in teacher and "grades" not in teacher and "homework" not in teacher
     assert "risk" in categories_for(_U("teacher", ["К-1"])), "куратору — предупреждения"
-    assert set(categories_for(_U("admin"))) == {"messages", "events", "reminders", "system"}
+    #Администратору — только то, что не про учёбу. Проверяется СВОЙСТВО, а не снимок
+    #списка: точное равенство покраснело 06.10.2026 на законной новой категории
+    #(«tracker»), подталкивая «просто дописать её в ожидание».
+    admin = set(categories_for(_U("admin")))
+    assert {"messages", "events", "reminders", "system"} <= admin
+    assert not admin & {"grades", "homework", "schedule", "risk", "lessons"}, admin
     assert {"grades", "homework"} <= set(categories_for(_U("parent")))
+    #«Вам дали задание в трекере» — у всех ролей: участником беседы бывает любой, и
+    #роль без этой категории не получала бы пуш о поручении молча.
+    for role in ("student", "teacher", "parent", "admin", "moderator"):
+        assert "tracker" in categories_for(_U(role)), role
     #Незнакомая роль — всё: ошибка в пользу тишины опаснее.
     assert set(categories_for(_U("опечатка"))) == set(ALL_CATEGORIES)
     #Все выдаваемые категории — известные странице настроек.

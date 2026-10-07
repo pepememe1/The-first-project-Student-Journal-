@@ -45,6 +45,19 @@ test('каждое окно (*Dialog.vue, *Modal.vue) — под v-dialog', () =
   assert.deepEqual(withoutDirective(files), [])
 })
 
+test('окна, названные не по шаблону, тоже под v-dialog', () => {
+  // Имя файла — не признак окна. «О беседе» и трекер задач — такие же окна поверх
+  // страницы, но правило выше смотрит на суффикс Dialog/Modal и их не видит: окно беседы
+  // прожило без директивы до 06.10.2026 и не закрывалось по Esc. Список закрытый и
+  // пополняется, когда появляется окно с другим именем.
+  const named = ['components/messenger/ConversationInfo.vue', 'components/tracker/TrackerOverlay.vue']
+  assert.deepEqual(withoutDirective(named.map((rel) => join(SRC, rel))), [])
+  // Esc у директивы — это щелчок по подложке: без `@click.self` окно по Esc не закроется.
+  for (const rel of named) {
+    assert.match(read(rel), /<div v-dialog[^>]*@click\.self=/, `${rel}: у окна нет закрытия по щелчку мимо — Esc не сработает`)
+  }
+})
+
 test('обратный ход: окно без директивы находится', () => {
   const p = join(SRC, 'components/ui/ConfirmDialog.vue')
   const broken = readFileSync(p, 'utf8').replace('<div v-dialog', '<div')

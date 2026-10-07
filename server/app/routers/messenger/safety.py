@@ -112,7 +112,7 @@ def report_user(payload: dict = Body(...),
     #Снимок — ровно то поле, на которое жалуются. Для аватарки и баннера это ссылка или
     #data:URL: показывать модератору саму картинку важнее, чем экономить строку.
     snapshot = {
-        "name": target.full_name or target.name or "",
+        "name": user_fio(target) or "",
         "bio": prefs.get("bio", "") or "",
         "avatar": prefs.get("avatar", "") or "",
         "banner": prefs.get("profile_banner", "") or "",

@@ -345,7 +345,7 @@ def _ticket_out(db: Session, r) -> dict:
         "id": r.id,
         "conversation_id": r.conversation_id,
         "user_id": r.user_id,
-        "user_name": (u.full_name or u.name or u.login) if u else r.user_id,
+        "user_name": (user_fio(u) or u.login) if u else r.user_id,
         "category": r.category,
         "category_label": label,
         "urgent": bool(r.urgent),

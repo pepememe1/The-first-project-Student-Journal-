@@ -19,7 +19,7 @@
 в одном из них НЕТ КИРИЛЛИЦЫ (`fontTools` → `getBestCmap`, ни одной буквы из
 «Электронный журнал»). Взяли бы их — надпись собралась бы из пустых прямоугольников
 либо молча подменилась системным шрифтом. Поэтому берём Unbounded и Oswald из
-`fonts/nickname/` — они лежат в репозитории под OFL и кириллицу покрывают.
+`assets/fonts/nickname/` — они лежат в репозитории под OFL и кириллицу покрывают.
 
 ⚠️ Системный Segoe UI не берём СОЗНАТЕЛЬНО, хотя он и подошёл бы по рисунку: у
 продукта впереди заявка в реестр Минцифры, и «шрифт Microsoft» в исходниках сборки —
@@ -35,7 +35,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-FONTS = ROOT / "fonts" / "nickname"
+FONTS = ROOT / "assets" / "fonts" / "nickname"
 OUT = ROOT / "docs" / "github-card.png"
 
 W, H = 1280, 640
@@ -55,7 +55,7 @@ def font(name: str, size: int) -> ImageFont.FreeTypeFont:
     path = FONTS / name
     if not path.exists():
         raise SystemExit(
-            f"нет шрифта {path}. Он лежит в репозитории (fonts/nickname) — если пропал, "
+            f"нет шрифта {path}. Он лежит в репозитории (assets/fonts/nickname) — если пропал, "
             "карточку собирать нечем, и молча подставлять системный нельзя: "
             "у половины из них другая кириллица или её нет вовсе.")
     return ImageFont.truetype(str(path), size)
@@ -233,7 +233,7 @@ def build(head_path: Path) -> Image.Image:
 
 
 def main() -> None:
-    head = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "emotions" / "эмоции" / "деф+деф.png"
+    head = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "assets" / "emotions" / "эмоции" / "деф+деф.png"
     if not head.exists():
         raise SystemExit(f"нет исходника морды: {head}")
     img = build(head)

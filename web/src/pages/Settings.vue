@@ -198,6 +198,9 @@ const NOTIFY_KINDS = computed(() => [
   { key: 'messages', label: loc.t('settings.notify.messages.label', 'Сообщения'), hint: loc.t('settings.notify.messages.hint', 'Личные чаты, группы и каналы') },
   { key: 'events', label: loc.t('settings.notify.events.label', 'Мероприятия'), hint: loc.t('settings.notify.events.hint', 'Олимпиады, конкурсы, объявления') },
   { key: 'reminders', label: loc.t('settings.notify.reminders.label', 'Напоминания'), hint: loc.t('settings.notify.reminders.hint', 'То, о чём вы сами просили напомнить') },
+  // Трекер задач беседы (05.10.2026). Свой тумблер, а не «Сообщения»: выключивший звонки
+  // о переписке обычно всё ещё хочет знать, что ему поручили работу со сроком.
+  { key: 'tracker', label: loc.t('settings.notify.tracker.label', 'Задачи в трекере'), hint: loc.t('settings.notify.tracker.hint', 'Вам дали задание в трекере беседы') },
   // Приходит ТОЛЬКО куратору (о студентах его группы) — остальным ролям строку не
   // показываем: у студента переключатель «риск отчисления» читался бы как предложение
   // отключить сам риск, а не уведомление о нём.
@@ -577,10 +580,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
        они дают полосу ширины, где раскладка и логика спорят, и видно это на одной
        конкретной ширине окна, то есть почти никогда.
        Размытие — `lg:backdrop-blur-md` по подложке: за ней остаётся оболочка (сайдбар,
-       шапка), и это и есть «фон размывается». -->
-  <div class="lg:fixed lg:inset-0 lg:z-40 lg:grid lg:place-items-center lg:bg-black/55 lg:p-6 lg:backdrop-blur-md"
+       шапка), и это и есть «фон размывается».
+       🔥 ОКНО ПОЧТИ ВО ВЕСЬ ЭКРАН (05.10.2026, жалоба Ярослава: «на ПК всё будто
+       обрезано, мешают ячейки со сменой шрифта, баннера — сделай оверлей больше, чтобы
+       было видно всё»). Прежние 1024×832 оставляли содержимому 736 px ширины: редактор
+       профиля (колонка карточек 280 px + живая карточка) не помещался ни по ширине, ни
+       по высоте — карточка обрезалась снизу на ноутбуке 1366×768 (замер на стенде).
+       Теперь окно занимает экран за вычетом тонкого поля, как настройки Discord; потолок
+       ширины оставлен, чтобы на 4K строки не растягивались на полтора метра. -->
+  <div class="lg:fixed lg:inset-0 lg:z-40 lg:grid lg:place-items-center lg:bg-black/55 lg:p-4 lg:backdrop-blur-md"
        @click.self="closeSettings()">
-    <div class="lg:flex lg:h-full lg:max-h-[52rem] lg:w-full lg:max-w-5xl lg:overflow-hidden
+    <div class="lg:flex lg:h-full lg:max-h-[68rem] lg:w-full lg:max-w-[1500px] lg:overflow-hidden
                 lg:rounded-2xl lg:border lg:border-border2 lg:bg-card lg:shadow-card">
 
       <!-- ЛЕВЫЙ СТОЛБЕЦ (ПК) / ПЕРВЫЙ ЭКРАН (телефон): профиль сверху + категории.

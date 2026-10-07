@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ... import storage
-from ...models import Attachment, Conversation, Message, User
+from ...models import Attachment, Conversation, Message, User, user_fio
 from ._common import (Depends as _D, _conversation, _now, _participant,  # noqa: F401
                       _require_participant, get_current_user, get_db, router)
 
@@ -360,7 +360,7 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
             "sent_at": m.fwd_from_created_at or m.created_at,
             "saved_at": m.created_at,
             "from_id": m.fwd_from_sender_id or "",
-            "from_name": (u.full_name or u.name or "") if u is not None else (m.fwd_sender_name or ""),
+            "from_name": (user_fio(u) or "") if u is not None else (m.fwd_sender_name or ""),
             "from_role": (u.role if u is not None else ""),
             "from_avatar": prefs.get("avatar", "") or "",
             "from_color": prefs.get("profile_color", "") or "",

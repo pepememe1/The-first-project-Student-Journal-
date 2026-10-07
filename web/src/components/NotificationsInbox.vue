@@ -8,7 +8,9 @@
 // текст сама, веб, десктоп и телефон разъехались бы в формулировках. Клиент решает
 // только КАК показать, но не ЧТО написано.
 import { ref, computed, watch, onMounted } from 'vue'
-import { Bell, ArrowLeft, CheckCheck, Megaphone, X, Send, BookOpen } from '@lucide/vue'
+import { useRouter } from 'vue-router'
+import { Bell, CheckCheck, Megaphone, X, Send, BookOpen } from '@lucide/vue'
+import { NOTIFICATION_KINDS, kindMeta } from '@/config/notificationKinds'
 import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
@@ -16,28 +18,23 @@ import AppButton from '@/components/ui/AppButton.vue'
 
 const auth = useAuthStore()
 const locale = useLocaleStore()
+const router = useRouter()
 
 const items = ref([])
-const opened = ref(null)      // открытое письмо (null → показываем список)
 const loading = ref(true)
 const failed = ref(false)
 
 // Подпись типа события. Старые письма (созданные до появления текста) приходят с
 // пустыми title/body — для них заголовок берём отсюда, чтобы строка не была пустой.
-const KIND_LABEL = computed(() => ({
-  grade: locale.t('notifications.kind.grade', 'Новая оценка'),
-  grade_changed: locale.t('notifications.kind.gradeChanged', 'Оценка изменена'),
-  schedule_changed: locale.t('notifications.kind.scheduleChanged', 'Расписание изменилось'),
-  homework: locale.t('notifications.kind.homework', 'Домашнее задание'),
-  event: locale.t('notifications.kind.event', 'Мероприятие'),
-  reminder: locale.t('notifications.kind.reminder', 'Напоминание'),
-}))
+//Таблица видов — одна на список и на страницу письма (`config/notificationKinds.js`).
+const KIND_LABEL = computed(() => Object.fromEntries(
+  Object.entries(NOTIFICATION_KINDS).map(([kind, m]) => [kind, locale.t(m.i18n)])))
 
 // Фильтр по видам. Оценки — отдельно от «Система» (по просьбе: оценки идут в свою
 // вкладку, всё, что пишет админ вручную — в «Система»). Домашка — отдельно, иначе
 // теряется среди оценок. Мероприятия (олимпиады/конкурсы, заводят препод/админ) — тоже
 // отдельно, это не рутинная системная почта.
-const KIND_TAB = { grade: 'grades', grade_changed: 'grades', homework: 'homework', event: 'events' }
+//Вкладку каждого вида задаёт та же таблица (поле `tab`).
 
 //⚠️ «ДЗ» — вкладка ПОЛУЧАТЕЛЯ задания, то есть студента (и родителя, который смотрит
 //глазами ребёнка). Преподаватель домашних заданий не получает — он их ЗАДАЁТ, и у него
@@ -48,6 +45,9 @@ const ALL_TABS = computed(() => [
   { key: 'grades', label: locale.t('notifications.tab.grades', 'Оценки') },
   { key: 'homework', label: locale.t('notifications.tab.homework', 'ДЗ'), roles: ['student', 'parent'] },
   { key: 'events', label: locale.t('notifications.tab.events', 'Мероприятия') },
+  //Задачи из трекера бесед (05.10.2026) — своей вкладкой: «вам дали задание» ждёт от
+  //человека действия со сроком и среди системной почты потерялось бы.
+  { key: 'tracker', label: locale.t('notifications.tab.tracker', 'Задачи') },
   { key: 'system', label: locale.t('notifications.tab.system', 'Система') },
   //«Отправленные» — не почта, а журнал своих рассылок: список приходит отдельным
   //запросом и в общий `items` не попадает (у писем разная природа — у полученных есть
@@ -60,6 +60,7 @@ const EMPTY_LABEL = computed(() => ({
   grades: locale.t('notifications.empty.grades', 'Оценок пока нет'),
   homework: locale.t('notifications.empty.homework', 'Домашних заданий пока нет'),
   events: locale.t('notifications.empty.events', 'Мероприятий пока нет'),
+  tracker: locale.t('notifications.empty.tracker', 'Заданий из трекера пока нет'),
   system: locale.t('notifications.empty.system', 'Системных уведомлений пока нет'),
 }))
 const tab = ref('all')
@@ -83,7 +84,7 @@ async function loadSent() {
 // вовсе, и тянуть их при каждом открытии уведомлений — лишний запрос на пустоту.
 watch(tab, (t) => { if (t === 'sent' && !sentItems.value.length) loadSent() })
 
-function tabOf(item) { return KIND_TAB[item.kind] || 'system' }
+function tabOf(item) { return kindMeta(item.kind).tab }
 function inTab(item, key) {
   if (key === 'all') return tabOf(item) !== 'sent'
   return tabOf(item) === key
@@ -139,13 +140,16 @@ async function load() {
   }
 }
 
-async function open(item) {
-  opened.value = item
-  if (item.read_at) return
-  // Помечаем прочитанным оптимистично: письмо человек уже открыл, и если запрос
-  // не дойдёт, худшее последствие — значок не сойдётся до следующей загрузки.
-  item.read_at = new Date().toISOString()
-  try { await meApi.markEventRead(item.id) } catch { /* значок поправится при перезагрузке */ }
+// Письмо открывается ОТДЕЛЬНОЙ СТРАНИЦЕЙ со своим адресом (05.10.2026, требование
+// Ярослава: «полноценная страница, по аналогии с электронным почтовым ящиком»). Раньше
+// оно раскрывалось на месте списка тремя строками, и всё, что сервер знал сверх текста
+// (`payload`), показать было негде. Прочитанным письмо помечает сама страница — тем же
+// запросом, которым его забирает.
+function open(item) {
+  // Отметку ставим сразу и здесь: вернувшись «назад», человек видит список без мигания
+  // «непрочитано → прочитано».
+  if (!item.read_at) item.read_at = new Date().toISOString()
+  router.push(`/${auth.role || 'student'}/notifications/${item.id}`)
 }
 
 async function markAll() {
@@ -209,24 +213,8 @@ async function submitEvent() {
 
 <template>
   <div>
-    <!-- ── Одно письмо ────────────────────────────────────────────────────────── -->
-    <div v-if="opened">
-      <button type="button"
-              class="mb-4 inline-flex items-center gap-1.5 text-sm text-text3 transition-colors hover:text-accent"
-              @click="opened = null">
-        <ArrowLeft class="size-4" /> {{ locale.t('notifications.backToList', 'К списку') }}
-      </button>
-      <h3 class="font-title text-lg font-extrabold text-text">{{ titleOf(opened) }}</h3>
-      <p class="mt-1 text-tiny text-text3">
-        {{ KIND_LABEL[opened.kind] || locale.t('notifications.kind.default', 'Уведомление') }}
-        <span v-if="opened.subject"> · {{ opened.subject }}</span>
-        <span v-if="opened.created_at"> · {{ fmtWhen(opened.created_at) }}</span>
-      </p>
-      <p class="mt-4 whitespace-pre-line leading-relaxed text-text">{{ bodyOf(opened) }}</p>
-    </div>
-
-    <!-- ── Список писем ──────────────────────────────────────────────────────── -->
-    <div v-else>
+    <!-- ── Список писем. Само письмо — отдельная страница (`NotificationDetailPage`). ── -->
+    <div>
       <div class="mb-3 flex flex-wrap items-center gap-1 border-b border-border">
         <!-- Вкладки-категории в духе Gmail: подчёркивание активной, а не заливка.
              Залитая пилюля читалась как кнопка действия, хотя это фильтр списка. -->
@@ -349,7 +337,10 @@ async function submitEvent() {
             </span>
             <span class="min-w-0 flex-1 truncate text-sm">
               <span :class="item.read_at ? 'text-text2' : 'font-semibold text-text'">{{ titleOf(item) }}</span>
-              <span class="text-text3"> — {{ bodyOf(item) }}</span>
+              <!-- У письма трекера в строке только тема («Вам дали задание в трекере»):
+                   задача и срок — внутри письма. Так просили, и так список не выдаёт
+                   чужому взгляду через плечо, что именно поручено. -->
+              <span v-if="kindMeta(item.kind).preview" class="text-text3"> — {{ bodyOf(item) }}</span>
             </span>
             <span class="shrink-0 text-tiny"
                   :class="item.read_at ? 'text-text3' : 'font-semibold text-text2'">{{ fmtWhen(item.created_at) }}</span>

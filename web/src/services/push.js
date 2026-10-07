@@ -162,6 +162,11 @@ export function routeForEvent(data, role) {
       return { path: `${base}/messages`, query: conv ? { chat: conv } : {} }
     case 'event':
       return { path: base }
+    //Трекер задач: «Вам дали задание» открывает САМО ПИСЬМО — в нём задача, срок и
+    //кнопка «открыть в трекере». Вести сразу на доску значило бы показать её целиком,
+    //и человеку пришлось бы искать, какую именно задачу ему дали.
+    case 'tracker':
+      return data?.id ? { path: `${base}/notifications/${data.id}` } : { path: `${base}/notifications` }
     //4.0: «пароль изменён» ведёт прямо к «Сессиям» — если менял не владелец, у него
     //ровно одно срочное действие: выйти из всех сессий.
     case 'password_changed':

@@ -222,7 +222,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         }
         if conv.kind == "direct":
             peer = peer_of.get(conv.id)
-            item["title"] = (peer.full_name or peer.name or peer.login) if peer else "Диалог"
+            item["title"] = (user_fio(peer) or peer.login) if peer else "Диалог"
             item["peer"] = _safe_user(peer, onl, status=statuses.get(peer.id)) if peer else None
         else:
             item["title"] = conv.title or ""
@@ -480,7 +480,7 @@ def my_invites(user: User = Depends(get_current_user), db: Session = Depends(get
             "kind": conv.kind,
             "members": members,
             "invited_by": inv.invited_by,
-            "invited_by_name": (by.full_name or by.name or by.login) if by else "",
+            "invited_by_name": (user_fio(by) or by.login) if by else "",
             "created_at": inv.created_at,
         })
     return {"invites": out}
@@ -503,7 +503,7 @@ def accept_invite(conv_id: str, user: User = Depends(get_current_user),
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
                                        role="member", joined_at=_now()))
     db.commit()
-    name = user.full_name or user.name or user.login
+    name = user_fio(user) or user.login
     if conv.kind == "group":     #§D6: «вступил» — только для групп
         _system(db, conv_id, "user_joined", user.id, name)
     _broadcast(db, conv_id)
@@ -525,7 +525,7 @@ def decline_invite(conv_id: str, user: User = Depends(get_current_user),
     conv = _conversation(db, conv_id)
     db.delete(inv)
     db.commit()
-    name = user.full_name or user.name or user.login
+    name = user_fio(user) or user.login
     if conv.kind == "group":
         _system(db, conv_id, "invite_declined", user.id, name)
     _broadcast(db, conv_id)
@@ -554,7 +554,7 @@ def leave_chat(conv_id: str, user: User = Depends(get_current_user), db: Session
     p = _participant(db, conv_id, user.id)
     if p is not None:
         conv = _conversation(db, conv_id)
-        name = user.full_name or user.name or user.login
+        name = user_fio(user) or user.login
         db.delete(p)
         db.commit()
         if conv.kind == "group":       #§D6: «вышел» — только для групп, не для каналов
@@ -603,7 +603,7 @@ def add_members(conv_id: str, payload: dict = Body(...),
                 invited += 1
             continue
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role=role, joined_at=now))
-        joined_names.append((uid, u.full_name or u.name or u.login))
+        joined_names.append((uid, user_fio(u) or u.login))
         added += 1
     db.commit()
     if invited:
@@ -629,7 +629,7 @@ def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user)
     p = _participant(db, conv_id, uid)
     if p is not None and p.role != "owner":
         u = db.query(User).filter(User.id == uid).first()
-        name = (u.full_name or u.name or u.login) if u else uid
+        name = (user_fio(u) or u.login) if u else uid
         db.delete(p)
         db.commit()
         if conv.kind == "group":        #§D6: «вышел» — только для групп
@@ -760,6 +760,12 @@ def unignore_member(conv_id: str, uid: str, user: User = Depends(get_current_use
     return {"ok": True}
 
 
+def _tracker_enabled(db: Session, conv_id: str) -> bool:
+    """Включён ли трекер задач в беседе (строка настроек есть и флаг поднят)."""
+    st = db.get(TrackerSettings, conv_id)
+    return bool(st is not None and st.enabled)
+
+
 @router.get("/chats/{conv_id}")
 def conversation_info(conv_id: str, user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
@@ -783,7 +789,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
         st = sm.get(p.user_id, {})
         people.append({
             "user_id": p.user_id,
-            "full_name": (u.full_name or u.name or u.login) if u else p.user_id,
+            "full_name": (user_fio(u) or u.login) if u else p.user_id,
             "role": p.role,                       #owner | admin | writer | member | reader
             "custom_role_id": p.custom_role_id or None,
             "custom_role_name": croles.get(p.custom_role_id, "") if p.custom_role_id else "",
@@ -829,7 +835,10 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "my_last_read_at": part.last_read_at or "",
             #Системные каналы (§D12/§12): клиенту нужно различать их тип — например,
             #показать команду /отчет только в канале отчётов куратора для группы.
-            "is_system": bool(conv.is_system), "system_kind": conv.system_kind or ""}
+            "is_system": bool(conv.is_system), "system_kind": conv.system_kind or "",
+            #Трекер задач: включён ли он в этой беседе. По этому полю клиент рисует кнопку
+            #трекера в шапке у ВСЕХ участников; сами задачи отдаёт отдельная ручка.
+            "tracker_enabled": _tracker_enabled(db, conv.id)}
 
 
 @router.patch("/chats/{conv_id}")

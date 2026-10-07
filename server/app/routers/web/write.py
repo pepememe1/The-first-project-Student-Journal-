@@ -12,7 +12,7 @@ from ._common import *      # noqa: F401,F403 — общий router, модел�
 from .curator import _maybe_notify_dropout_risk      # noqa: F401
 #Минимальная длина пароля живёт в ОДНОМ месте на весь продукт (см. её докстринг).
 from ...security import MIN_PASSWORD_LEN      # noqa: F401
-from ...models import next_moderator_number      # noqa: F401
+from ...models import next_moderator_number, user_fio      # noqa: F401
 import logging as _logging
 _hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков после записи — громко, но без отказа
 
@@ -121,7 +121,7 @@ def teacher_set_grade(payload: dict = Body(...),
         #подсистема от пуша выше; сбой здесь НИКОГДА не должен мешать выставлению оценки.
         try:
             from ..messenger import notify_grade_posted
-            notify_grade_posted(db, stud.id, user.full_name or user.name or user.login,
+            notify_grade_posted(db, stud.id, user_fio(user) or user.login,
                                lesson.subject, value)
         except Exception as e:      # noqa: BLE001 — хук не роняет оценку, но и не молчит
             _hook_log.warning("канал «Мои оценки» не обновлён: %s", e)
@@ -1913,7 +1913,7 @@ def admin_list_moderators(_admin: User = Depends(require_admin),
         #Номер и соответствие «номер ↔ человек» видит ТОЛЬКО администратор: в переписке
         #модератор подписан номером (см. `messenger/_common.moderator_display_name`).
         "mod_number": int(r.mod_number or 0),
-        "full_name": r.full_name or r.name or "",
+        "full_name": user_fio(r) or "",
         "has_password": bool(r.password_hash),
         "password_set_at": r.password_set_at or "",
     } for r in rows]}

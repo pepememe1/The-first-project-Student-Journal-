@@ -20,7 +20,7 @@ Press Start 2P — единственный пиксельный из катал
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "fonts", "pixel", "PressStart2P-Regular.ttf")
+SRC = os.path.join(ROOT, "assets", "fonts", "pixel", "PressStart2P-Regular.ttf")
 OUT = os.path.join(ROOT, "web", "public", "fonts", "PressStart2P.woff2")
 
 #Латиница, кириллица, цифры, обычная пунктуация и стрелка-подсказка «▼».

@@ -2,7 +2,7 @@
 diag_gigachat.py — расширенная диагностика «почему GigaChat не отвечает».
 
 Запусти из папки gradebook:
-    python diag_gigachat.py
+    python tools/diag_gigachat.py
 
 Скрипт отдельно показывает:
   • прокси-настройки (переменные окружения + системный прокси Windows) —

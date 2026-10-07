@@ -8,7 +8,7 @@ build_mascot_anim.py — конвейер: MP4 с зелёным хромаке�
 per-platform вариантов.
 ⚠️ Раньше здесь третьим пунктом стоял «Qt на десктопе (QMovie/QImageReader)» — Qt в
 проекте нет, десктоп показывает ту же SPA. Практическое следствие: файлы нужны ТОЛЬКО в
-`web/public/mascot/anim/`. Копия в `emotions/анимации/` (для нативных экранов) больше
+`web/public/mascot/anim/`. Копия в `assets/emotions/анимации/` (для нативных экранов) больше
 никем не читается — новые состояния туда класть незачем.
 
 Состояния (чат/док Вектора):
@@ -35,7 +35,7 @@ import av
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "анимации")
+SRC = os.path.join(ROOT, "assets", "animations")
 FPS = 12
 # Целевая высота готового кадра (после общего кропа). Маскот показывается ~200–400px —
 # 640 с запасом; прозрачные поля WebP жмёт почти в ноль, размер держим качеством.

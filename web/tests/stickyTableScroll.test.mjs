@@ -47,6 +47,9 @@ const NOT_A_TABLE = {
   'components/messenger/CuratorReportOverlay.vue':
     'таблица внутри ОВЕРЛЕЯ со своей прокруткой — липкий низ приклеился бы к окну модалки, а не к экрану',
   'pages/admin/AdminServer.vue': 'обзор каталога: колонки узкие, таблицы нет',
+  'components/tracker/TrackerList.vue':
+    'список задач в полноэкранном трекере: блок прокрутки сам высотой с экран, полоса и так у нижнего края; '
+    + 'а липкой шапке таблицы нужен ОДИН блок прокрутки в обе стороны (проверяется тестом ниже)',
 }
 
 test('компонент прижимает полосу к низу экрана и синхронизирует обе прокрутки', () => {
@@ -95,6 +98,33 @@ test('в списке исключений нет мёртвых записей'
   for (const [rel, why] of Object.entries(NOT_A_TABLE)) {
     assert.ok(why && why.length > 10, `у исключения ${rel} нет внятной причины`)
   }
+})
+
+/** Классы блока, в котором лежит таблица списка задач трекера. */
+function trackerListWrapper(text) {
+  const m = /<div class="([^"]*)">\s*<table/.exec(text)
+  return m ? m[1].split(/\s+/) : null
+}
+const trackerWrapperBounded = (cls) => !!cls && cls.includes('h-full')
+  && cls.includes('overflow-x-auto') && cls.includes('overflow-y-auto')
+
+test('исключение трекера честное: блок прокрутки ограничен по высоте', () => {
+  // Причина исключения выше — «полоса и так у нижнего края экрана» — верна, только пока
+  // блок с таблицей САМ высотой с экран и прокручивается в обе стороны. Убери `h-full` —
+  // блок вырастет по содержимому, и полоса уедет на дно таблицы: ровно исходная жалоба.
+  // Исключение, объяснённое фразой и не проверенное, — это забытый случай.
+  const f = FILES.find((x) => x.rel === 'components/tracker/TrackerList.vue')
+  const cls = trackerListWrapper(f.text)
+  assert.ok(cls, 'обёртка таблицы в TrackerList.vue не найдена — разбор устарел')
+  assert.ok(trackerWrapperBounded(cls),
+    'блок списка задач больше не ограничен по высоте или не прокручивается в обе стороны')
+  assert.ok(/<thead class="[^"]*\bsticky\b[^"]*\btop-0\b/.test(f.text),
+    'шапка таблицы больше не липкая — вторая причина исключения исчезла, пересмотри его')
+  // Обратный ход на той же функции: блок без ограничения высоты обязан считаться нарушением.
+  assert.equal(trackerWrapperBounded(trackerListWrapper(
+    '<div class="overflow-x-auto overflow-y-auto px-3">\n  <table class="w-full">')), false)
+  assert.equal(trackerWrapperBounded(trackerListWrapper(
+    '<div class="h-full overflow-y-auto px-3">\n  <table class="w-full">')), false)
 })
 
 test('обратный ход: голая обёртка вокруг таблицы обязана ловиться', () => {

@@ -102,15 +102,20 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
        это самая просторная страница продукта.
        Высота задана ОДНА на обе колонки (h-full у детей), чтобы кольцо и полосы не
        уезжали за нижний край рядом с более высокой карточкой чата.
-       ⚠️ У ЭТОЙ страницы (в отличие от мессенджера) РЕАЛЬНО есть подзаголовок
-       (meta.subtitle='Вектор', см. router/index.js) — поэтому, в отличие от
-       MessengerPage.vue, здесь ещё и вычитаем --gb-subtitle-offset (3.6.1, см.
-       style.css: единая --gb-page-offset больше не включает подзаголовок сама по себе,
-       иначе высота была бы неверной у страниц БЕЗ него). -->
-  <div class="grid grid-cols-1 h-[calc(100dvh-var(--gb-page-offset)-var(--gb-subtitle-offset))] gap-3"
+       🔥 ПОДЗАГОЛОВОК ЗДЕСЬ БОЛЬШЕ НЕ ВЫЧИТАЕТСЯ (05.10.2026, жалоба Ярослава: «между
+       ячейкой ввода и низом экрана зазор, убери, чтобы было от края до края»). Строку
+       подзаголовка у этой страницы убрали ещё 25.08.2026 (`meta.subtitle` в роутере нет),
+       а формула высоты продолжала отнимать её 26 px — замер на стенде: карточка
+       кончалась на 39 px выше низа экрана. Тот же класс, что «свой набор чисел» у
+       мессенджера в 3.5.6: число описывало раскладку, которой уже нет, и устарело молча.
+       ⚠️ `gb-fullbleed` — как у мессенджера: на телефоне страница съедает отступы
+       контейнера и встаёт во всю ширину и до нижней безопасной зоны (см. style.css). -->
+  <div class="gb-fullbleed grid grid-cols-1 h-[calc(100dvh-var(--gb-page-offset))] gap-3"
        :class="sidePanel ? 'lg:grid-cols-[1fr_320px]' : ''">
-  <!-- Одна карточка на всю высоту: шапка · (маскот ФОНОМ + чат поверх) · ввод -->
-  <div class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card">
+  <!-- Одна карточка на всю высоту: шапка · (маскот ФОНОМ + чат поверх) · ввод.
+       На телефоне рамка и скругление сняты: карточка во весь экран, и рамка вокруг неё
+       читалась бы как полоска-зазор, от которой как раз и избавляемся. -->
+  <div class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card shadow-card max-sm:rounded-none max-sm:border-x-0 max-sm:border-b-0 max-sm:shadow-none">
     <!-- Шапка -->
     <div class="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
       <span class="size-2 shrink-0 rounded-full bg-accent" :class="state === 'thinking' ? 'animate-ping' : ''" />

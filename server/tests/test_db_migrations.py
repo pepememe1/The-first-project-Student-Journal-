@@ -587,3 +587,65 @@ def test_auth_session_device_columns_are_added_to_an_old_schema(client):
     from conftest import make_admin
     headers = make_admin(client)
     assert client.get("/me/sessions", headers=headers).status_code == 200
+
+
+def test_tracker_tables_appear_on_a_database_that_predates_them(client):
+    """Трекер задач (05.10.2026) — семь НОВЫХ таблиц и ни одной новой колонки.
+
+    Ручной ALTER тут не нужен: отсутствующую таблицу `create_all` заводит сам. Но на
+    боевой базе этот ход впервые исполнится в день выкладки, поэтому он проверен явно:
+    «база до трекера» (таблицы снесены) → тот же `init_db()`, что зовёт служба на старте →
+    таблицы на месте вместе с индексами, и трекер на такой базе РАБОТАЕТ, а не только
+    существует.
+
+    ⚠️ Имена таблиц берутся из моделей, а не переписаны сюда второй копией: новая, восьмая
+    таблица трекера с забытой строкой здесь осталась бы непроверенной молча.
+    Обратный ход: убрать `Base.metadata.create_all` из `init_db()` — краснеет проверка
+    появления таблиц (проверено подменой)."""
+    from app import models as M
+    from app.db import init_db
+    from conftest import make_admin, make_teacher
+
+    tracker_models = [m for name, m in vars(M).items()
+                      if name.startswith("Tracker") and hasattr(m, "__tablename__")]
+    tables = sorted(m.__tablename__ for m in tracker_models)
+    assert len(tables) == 7, f"моделей трекера стало {len(tables)} — проверь этот тест: {tables}"
+
+    with engine.begin() as conn:
+        for t in tables:
+            conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
+    engine.dispose()
+    assert not (set(tables) & set(inspect(engine).get_table_names())), "таблицы не снесены"
+
+    init_db()
+    engine.dispose()
+    have = set(inspect(engine).get_table_names())
+    assert set(tables) <= have, f"старт службы не завёл таблицы: {sorted(set(tables) - have)}"
+    #Индексы новой таблицы `create_all` создаёт вместе с ней — сверяем факт, а не обещание:
+    #по этим полям трекер выбирает задачи беседы, работы и колонки.
+    indexed = {c for i in inspect(engine).get_indexes("tracker_tasks") for c in i["column_names"]}
+    assert {"conversation_id", "project_id", "column_id"} <= indexed, indexed
+    init_db()                                  #идемпотентность: второй старт не падает
+
+    #Сквозной ход на такой базе: владелец включает трекер и сохраняет первую пачку.
+    admin = make_admin(client)
+    owner = make_teacher(client, admin, login="trk_mig_owner")
+    make_teacher(client, admin, login="trk_mig_member")
+    r = client.post("/web/messenger/chats/group", headers=owner,
+                    json={"title": "Проект", "member_ids": ["teach:trk_mig_member"]})
+    assert r.status_code == 200, r.text
+    conv = r.json()["conversation_id"]
+    url = f"/web/messenger/chats/{conv}/tracker"
+    assert client.put(url + "/settings", headers=owner, json={"enabled": True}).status_code == 200
+    pid, cid, tid = "trkp:" + "a" * 16, "trkc:" + "b" * 16, "trkt:" + "c" * 16
+    res = client.post(url + "/save", headers=owner, json={"ops": [
+        {"op": "project.create", "id": pid, "title": "Работа",
+         "columns": [{"id": cid, "title": "К выполнению", "kind": "todo"}]},
+        {"op": "task.create", "id": tid, "column_id": cid, "title": "Задача",
+         "assignees": ["teach:trk_mig_member"]},
+    ]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["skipped"] == [] and body["notified"] == 1
+    tasks = body["state"]["tasks"]
+    assert len(tasks) == 1 and tasks[0]["key"].endswith("-1"), tasks

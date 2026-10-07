@@ -3,8 +3,8 @@ build_web_fonts.py — собрать фирменные шрифты для в�
 
     python tools/build_web_fonts.py          (нужен `uv sync --extra dev`: fonttools+brotli)
 
-Берёт ПЕРЕМЕННЫЕ начертания из `fonts/` (Syne и DM Sans, лицензия OFL — файл
-`fonts/OFL.txt` рядом) и кладёт их в `web/public/fonts/` как woff2. Один файл на
+Берёт ПЕРЕМЕННЫЕ начертания из `assets/fonts/` (Syne и DM Sans, лицензия OFL — файл
+`assets/fonts/OFL.txt` рядом) и кладёт их в `web/public/fonts/` как woff2. Один файл на
 семейство вместо четырёх статических: у переменного шрифта вся ось насыщенности внутри,
 а `@font-face` в `web/src/style.css` объявляет диапазон `font-weight`.
 
@@ -23,7 +23,7 @@ build_web_fonts.py — собрать фирменные шрифты для в�
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "fonts")
+SRC = os.path.join(ROOT, "assets", "fonts")
 OUT = os.path.join(ROOT, "web", "public", "fonts")
 
 #(исходный .ttf, имя на выходе). Переменные начертания — по одному на семейство.
