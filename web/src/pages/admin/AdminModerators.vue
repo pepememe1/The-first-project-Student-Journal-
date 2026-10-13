@@ -121,7 +121,7 @@ async function save() {
     }].sort((x, y) => x.login.localeCompare(y.login))
     //Пароль в памяти страницы не держим ни секунды дольше нужного.
     fPassword.value = ''
-    toast.show(locale.t('adminModerators.created', 'Модератор заведён'))
+    toast.success(locale.t('adminModerators.created', 'Модератор заведён'))
     await reload({ silent: true })
   } catch (e) {
     formError.value = e?.response?.data?.detail
@@ -146,7 +146,7 @@ async function savePassword() {
     await adminApi.updateModerator(pwFor.value, { password: pwValue.value })
     pwFor.value = ''
     pwValue.value = ''
-    toast.show(locale.t('adminModerators.passwordChanged', 'Пароль изменён'))
+    toast.success(locale.t('adminModerators.passwordChanged', 'Пароль изменён'))
     await reload({ silent: true })
   } catch (e) {
     pwError.value = e?.response?.data?.detail
@@ -167,7 +167,7 @@ async function remove(row) {
     rows.value = rows.value.filter((r) => r.login !== row.login)
     await reload({ silent: true })
   } catch (e) {
-    toast.show(e?.response?.data?.detail
+    toast.error(e?.response?.data?.detail
       || locale.t('adminModerators.saveFailed', 'Не удалось сохранить'))
   }
 }

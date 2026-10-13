@@ -4,7 +4,7 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays } from '@lucide/vue'
+import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays, HelpCircle, ArrowBigUp, Info } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { RouterLink } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
@@ -12,6 +12,8 @@ import { desktopApi, appApi } from '@/api/endpoints'
 import { platformAuthenticatorAvailable } from '@/api/webauthn'
 import { HOME_BY_ROLE } from '@/config/nav'
 import { afterLoginTarget } from '@/utils/deepLinks'
+import { takeResume } from '@/utils/sessionResume'
+import { loginHints, capsLockState } from '@/utils/loginHints'
 import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
 import { isHandheld } from '@/utils/device'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -20,6 +22,7 @@ import HexBackground from '@/components/HexBackground.vue'
 import EasterEggHost from '@/components/easter/EasterEggHost.vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
+import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
 import RegisterDialog from '@/components/RegisterDialog.vue'
@@ -173,6 +176,44 @@ const loginAnim = computed(() => {
 
 const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
 
+// ━━ ЧТО ПРОВЕРИТЬ, ЕСЛИ НЕ ВХОДИТ (13.10.2026) ━━
+// Пароль скрыт точками: набран ли он русскими буквами или заглавными, человек не видит.
+// Видим мы — по самим полям, поэтому после отказа называем причину, а не оставляем
+// перебирать попытки до блокировки. Правила — `utils/loginHints.js` (подсказки, не
+// запреты: логин бывает и с заглавной буквой).
+// ⚠️ Caps Lock показываем СРАЗУ, не дожидаясь отказа: это единственная причина, которую
+// можно назвать наверняка и до попытки. Браузер сообщает о нём только в событии
+// клавиатуры, поэтому состояние узнаём с первым нажатием в поле.
+const capsOn = ref(false)
+function onKey(e) {
+  const state = capsLockState(e)
+  if (state !== null) capsOn.value = state
+}
+const hints = computed(() => (auth.errorKind === 'credentials'
+  ? loginHints({ login: login.value, password: password.value, capsLock: capsOn.value })
+  : []))
+const hintText = computed(() => ({
+  caps: loc.t('login.hintCaps', 'Включён Caps Lock — выключите его и наберите пароль заново.'),
+  passwordCyrillic: loc.t('login.hintPasswordCyrillic', 'В пароле есть русские буквы. Возможно, не переключён язык клавиатуры.'),
+  loginCyrillic: loc.t('login.hintLoginCyrillic', 'В логине есть русские буквы. Если логин выдали латиницей — переключите язык клавиатуры.'),
+  loginCapital: loc.t('login.hintLoginCapital', 'В логине есть заглавные буквы. Большие и маленькие буквы различаются — сверьте с выданным логином.'),
+  loginSpace: loc.t('login.hintLoginSpace', 'В логине есть пробел — уберите его.'),
+  passwordSpace: loc.t('login.hintPasswordSpace', 'Пароль начинается или заканчивается пробелом — так бывает, если его скопировали из сообщения.'),
+}))
+
+// Почему человек видит форму входа, хотя сам не выходил (`auth.notice` ставит App.vue).
+const noticeText = computed(() => {
+  if (auth.notice === 'offline') return loc.t('login.noticeOffline', 'Больше суток не было связи с сервером, поэтому нужно войти ещё раз. Если вы что-то не успели отправить, оно отправится после входа.')
+  if (auth.notice === 'expired') return loc.t('login.noticeExpired', 'Время работы без повторного входа вышло — войдите ещё раз. Это обычная защита, ваши данные на месте. После входа вы вернётесь туда, где остановились.')
+  return ''
+})
+/** Куда вести после входа: туда, где застал конец сессии (тот же человек), иначе как обычно. */
+function landing(user) {
+  //Явная ссылка из адреса (`?redirect=`) главнее: человек пришёл по ней только что.
+  const resume = route.query.redirect ? '' : takeResume(user.login)
+  return resume || afterLoginTarget(user.role, route.query, HOME_BY_ROLE)
+}
+
 // ━━ «ДОВЕРЯТЬ ЭТОМУ УСТРОЙСТВУ?» (4.0) ━━
 // Галочка появляется, когда человек заполнил одно поле и перешёл к другому: раньше она
 // отвлекала бы от самого входа, а позже её уже не заметят — кнопка «Войти» нажата.
@@ -250,7 +291,7 @@ async function submit() {
     //его как рабочий, а вход мог и не состояться.
     if (user?.mfaRequired) return
     await saveCredential(login.value, password.value)
-    router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
+    router.push(landing(user))
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
     // Far Cry: решение принял СЕРВЕР (седьмая неудача подряд + шанс) и сообщил
@@ -264,7 +305,7 @@ async function submitPasskey() {
   needApproval.value = false
   try {
     const user = await auth.loginPasskey()
-    router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
+    router.push(landing(user))
   } catch {
     /* ошибка уже в auth.error (или отмена — молчим) */
   }
@@ -280,7 +321,7 @@ function onApproved() { needApproval.value = false; submit() }
 async function onMfaDone(user) {
   auth.cancelMfa()
   await saveCredential(login.value, password.value)
-  router.push(afterLoginTarget(user.role, route.query, HOME_BY_ROLE))
+  router.push(landing(user))
 }
 
 // Регистрация студента / восстановление пароля — модалки под кнопкой «Войти».
@@ -337,9 +378,25 @@ const SYNC_SERVER_BUTTON_ENABLED = false
  */
 const showLoginHelp = ref(false)
 let helpHideTimer = null
+let helpOpenedAt = 0
 function openLoginHelp() {
   clearTimeout(helpHideTimer)
+  if (!showLoginHelp.value) helpOpenedAt = Date.now()
   showLoginHelp.value = true
+}
+/**
+ * Нажатие по кнопке подсказки.
+ *
+ * 🔥 Одно касание даёт ТРИ события подряд: наведение, фокус и только потом нажатие.
+ * Первые два подсказку уже открыли, и «открыта — значит закрыть» гасило её в тот же
+ * миг: на телефоне кнопка с первого раза не делала ничего, а мышью подсказка
+ * пропадала ровно тогда, когда по ней щёлкали, чтобы прочитать. Поэтому закрываем
+ * только то, что открыто давно, а не этим же касанием.
+ */
+const HELP_SAME_GESTURE_MS = 400
+function toggleLoginHelp() {
+  if (showLoginHelp.value && Date.now() - helpOpenedAt > HELP_SAME_GESTURE_MS) closeLoginHelp()
+  else openLoginHelp()
 }
 function closeLoginHelp(delay = 0) {
   clearTimeout(helpHideTimer)
@@ -416,15 +473,25 @@ function openRecover() {
         <!-- Слева «i» с пояснениями, справа выбор языка. Обе кнопки — служебные, и
              стоят они в одном ряду НАД формой: под формой пояснения занимали место,
              из-за которого карточка не помещалась на телефон целиком. -->
-        <div class="relative mb-1 flex items-center justify-between">
+        <!-- ⚠️ Кнопка помощи ПОДПИСАНА словами (13.10.2026). Здесь стояла буква «i» в
+             кружке: кто знает, что это «справка», тот в ней и не нуждается, а человек,
+             который не может войти, по ней не нажимал. Места подпись не отнимает — ряд
+             тот же. Рядом очки «для слабовидящих»: укрупнить шрифт нужно ДО входа,
+             раньше кнопка появлялась только в кабинете, куда ещё надо попасть. -->
+        <div class="relative mb-1 flex items-center justify-between gap-2">
           <button type="button"
-                  class="flex size-8 items-center justify-center rounded-full border border-border2 text-sm font-semibold text-text3 transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
+                  class="flex h-8 items-center gap-1.5 rounded-full border border-border2 px-3 text-xs font-semibold text-text2 transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
                   :aria-expanded="showLoginHelp"
                   :aria-label="loc.t('login.helpAria', 'Как войти')"
                   @mouseenter="openLoginHelp" @mouseleave="closeLoginHelp(120)"
                   @focus="openLoginHelp" @blur="closeLoginHelp()"
-                  @click="showLoginHelp ? closeLoginHelp() : openLoginHelp()">i</button>
-          <LanguagePicker />
+                  @click="toggleLoginHelp">
+            <HelpCircle class="size-4" />{{ loc.t('login.helpButton', 'Как войти?') }}
+          </button>
+          <div class="flex items-center gap-1.5">
+            <AccessibilityMenu placement="down" />
+            <LanguagePicker />
+          </div>
 
           <!-- Подсказка ПОВЕРХ содержимого (absolute): в общем потоке она раздвигала бы
                карточку при каждом наведении — то самое «занимает место», от которого и
@@ -448,6 +515,7 @@ function openRecover() {
               <p v-if="canBiometric" class="mt-1.5 text-tiny leading-relaxed text-text3">
                 {{ loc.t('login.passkeyHint', 'Вход по ключу (Face ID, отпечаток, Windows Hello) настраивается в настройках профиля — после обычного входа.') }}
               </p>
+              <p class="mt-1.5 text-tiny leading-relaxed text-text3">{{ loc.t('login.forgotHint', 'Не помните пароль? Его меняет администратор колледжа — обратитесь к нему или к куратору группы.') }}</p>
             </div>
           </transition>
         </div>
@@ -472,21 +540,38 @@ function openRecover() {
         <!-- Второй фактор: пароль уже принят, показываем ТОЛЬКО поле кода.
              Форму входа при этом прячем целиком — оставлять её рядом значит
              предлагать человеку ввести пароль ещё раз там, где он не нужен. -->
+        <!-- Сессия кончилась не по воле человека — говорим об этом прямо. Без этой строки
+             форма входа посреди работы читалась как поломка. Гаснет, когда появляется
+             ошибка входа: два сообщения разом — это шум, а важнее то, что случилось позже. -->
+        <p v-if="noticeText && !auth.error && lockLeft <= 0 && !auth.mfaChallenge" role="status"
+           class="mb-3 flex items-start gap-2 rounded-sm border border-blue/40 bg-blue/10 px-3 py-2 text-sm text-text2">
+          <Info class="mt-0.5 size-4 shrink-0 text-blue" />
+          <span>{{ noticeText }}</span>
+        </p>
+
         <MfaPrompt v-if="auth.mfaChallenge" @done="onMfaDone" @cancel="password = ''" />
 
         <form v-else class="space-y-3 sm:space-y-4" @submit.prevent="submit">
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.login') }}</label>
+            <!-- 🔥 `autocapitalize`/`autocorrect`/`spellcheck` (13.10.2026). Клавиатура
+                 телефона в обычном поле сама делает первую букву ЗАГЛАВНОЙ и «исправляет»
+                 незнакомое слово. Логин различает большие и маленькие буквы — человек
+                 набирал его верно, а уходил он другим, и ответом было «неверный логин
+                 или пароль». У поля пароля то же самое при нажатом «показать»: оно
+                 становится обычным текстовым. -->
+            <label for="login" class="mb-1.5 block text-sm font-medium text-text2">{{ loc.t('login.login') }}</label>
             <input v-model="login" id="login" name="username" autocomplete="username"
-                   @focus="onFieldFocus('login')"
+                   autocapitalize="none" autocorrect="off" spellcheck="false"
+                   @focus="onFieldFocus('login')" @keydown="onKey" @keyup="onKey"
                    class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                    :placeholder="loc.t('login.loginPlaceholder')" />
           </div>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-text3">{{ loc.t('login.password') }}</label>
+            <label for="password" class="mb-1.5 block text-sm font-medium text-text2">{{ loc.t('login.password') }}</label>
             <div class="relative">
               <input v-model="password" id="password" name="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
-                     @focus="onFieldFocus('password')"
+                     autocapitalize="none" autocorrect="off" spellcheck="false"
+                     @focus="onFieldFocus('password')" @keydown="onKey" @keyup="onKey"
                      class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-11 text-text outline-none transition-colors focus:border-accent focus:bg-card"
                      placeholder="••••••••" />
               <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
@@ -494,6 +579,9 @@ function openRecover() {
                 <EyeOff v-if="showPass" class="size-4" /><Eye v-else class="size-4" />
               </button>
             </div>
+            <p v-if="capsOn" role="status" class="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-orange">
+              <ArrowBigUp class="size-4 shrink-0" />{{ loc.t('login.capsLock', 'Включён Caps Lock — буквы набираются заглавными') }}
+            </p>
           </div>
 
           <!-- ⚠️ БЛОКИРОВКА И ОПЕЧАТКА — РАЗНЫЕ СОСТОЯНИЯ, и выглядеть одинаково они не
@@ -512,7 +600,17 @@ function openRecover() {
               Осталось <b class="tabular-nums text-text">{{ lockLabel }}</b>.
             </span>
           </div>
-          <p v-else-if="auth.error" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm text-red">{{ auth.error }}</p>
+          <div v-else-if="auth.error" role="alert" class="rounded-sm border border-red/40 bg-red/10 px-3 py-2 text-sm">
+            <p class="text-red">{{ auth.error }}</p>
+            <!-- Что проверить — только когда сервер не принял логин или пароль: при отказе
+                 сети советы про клавиатуру были бы мимо. -->
+            <template v-if="auth.errorKind === 'credentials'">
+              <ul v-if="hints.length" class="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-text2">
+                <li v-for="h in hints" :key="h">{{ hintText[h] }}</li>
+              </ul>
+              <p class="mt-1.5 text-xs text-text3">{{ loc.t('login.forgotHint', 'Не помните пароль? Его меняет администратор колледжа — обратитесь к нему или к куратору группы.') }}</p>
+            </template>
+          </div>
 
           <Transition enter-active-class="transition duration-200" enter-from-class="opacity-0 -translate-y-1">
             <label v-if="showTrust && !insideApp" class="flex cursor-pointer select-none items-start gap-2 text-sm text-text2">

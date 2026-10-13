@@ -151,8 +151,9 @@ function highlighted(to) {
       <template v-for="(item, i) in items" :key="i">
         <!-- Заголовок раздела в свёрнутом виде превращается в черту: слово туда не
              влезает, а совсем убрать группировку значит слить меню в один список. -->
+        <!-- Заголовок заметный: 10 px серым терялся, и меню читалось одним списком (13.10.2026). -->
         <p v-if="item.section && !compact"
-           class="px-2.5 pb-1 pt-3.5 text-[10px] font-medium uppercase tracking-wide text-text2 first:pt-1">
+           class="px-2.5 pb-1 pt-3.5 text-[11px] font-bold uppercase tracking-wide text-text2 first:pt-1">
           {{ item.i18n ? loc.t(item.i18n, item.section) : item.section }}
         </p>
         <div v-else-if="item.section" class="mx-2 my-2 h-px bg-border first:mt-0"></div>

@@ -13,12 +13,23 @@ import { putSigned } from '@/utils/signedUpload'
 import { humanSize } from '@/utils/docPreview'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const loc = useLocaleStore()
 const t = (k, f) => loc.t(k, f)
+//`ask`, а не `confirm`: имя `confirm` в этом файле раньше означало встроенное окно
+//браузера, и молчаливая подмена смысла у того же имени — способ ошибиться при чтении.
+const { confirm: ask } = useConfirm()
+const toast = useToast()
+/** Удаление в курсе: отказ сервера не должен пропадать молча. */
+async function removing(action) {
+  try { await action(); await load() }
+  catch (e) { toast.error(e?.response?.data?.detail || t('courses.deleteFailed', 'Не удалось удалить')) }
+}
 
 const id = computed(() => route.params.id)
 const course = ref(null)
@@ -52,8 +63,9 @@ async function addSection() {
   await load()
 }
 async function delSection(sid) {
-  if (!confirm(t('courses.confirmDelSection', 'Удалить раздел? Материалы останутся (вне разделов).'))) return
-  await coursesApi.delSection(id.value, sid); await load()
+  if (!(await ask({ message: t('courses.confirmDelSection', 'Удалить раздел? Материалы останутся (вне разделов).'),
+    okText: t('common.delete'), danger: true }))) return
+  await removing(() => coursesApi.delSection(id.value, sid))
 }
 async function addMaterial(sectionId) {
   const title = matDraft.value.title.trim()
@@ -63,8 +75,13 @@ async function addMaterial(sectionId) {
   matDraft.value = { open: 0, title: '', url: '' }
   await load()
 }
+//🔥 Материал и задание удалялись ОДНИМ нажатием, без вопроса (13.10.2026): крестик стоит
+//рядом со ссылкой, и промах мимо неё стирал файл, который студенты уже скачивают, или
+//задание вместе со сроком.
 async function delMaterial(mid) {
-  await coursesApi.delMaterial(id.value, mid); await load()
+  if (!(await ask({ message: t('courses.confirmDelMaterial', 'Удалить материал? Студенты перестанут его видеть.'),
+    okText: t('common.delete'), danger: true }))) return
+  await removing(() => coursesApi.delMaterial(id.value, mid))
 }
 
 // ── Файл-материал (аудит F-26) ─────────────────────────────────────────────────
@@ -126,10 +143,13 @@ async function addAssignment() {
   await load()
 }
 async function delAssignment(aid) {
-  await coursesApi.delAssignment(id.value, aid); await load()
+  if (!(await ask({ message: t('courses.confirmDelAssignment', 'Удалить задание? Оно пропадёт у студентов вместе со сроком сдачи.'),
+    okText: t('common.delete'), danger: true }))) return
+  await removing(() => coursesApi.delAssignment(id.value, aid))
 }
 async function archive() {
-  if (!confirm(t('courses.confirmArchive', 'Отправить курс в архив? Студенты перестанут его видеть.'))) return
+  if (!(await ask({ message: t('courses.confirmArchive', 'Отправить курс в архив? Студенты перестанут его видеть.'),
+    okText: t('courses.archiveOk', 'В архив') }))) return
   await coursesApi.archive(id.value)
   router.push(`/${auth.role}/courses`)
 }

@@ -17,6 +17,12 @@ export const dialogState = reactive({
   danger: false,
   value: '',
   placeholder: '',
+  //Подтверждение набором (13.10.2026): пока человек не набрал `requireText`, кнопка
+  //согласия выключена. Для удалений, которые одним нажатием затрагивают многих
+  //(группа со студентами): привычное «Да» на всплывающее окно тут не проходит.
+  requireText: '',
+  requireLabel: '',
+  typed: '',
 })
 
 let resolver = null
@@ -35,6 +41,9 @@ function open(mode, opts) {
       danger: !!opts.danger,
       value: opts.defaultValue || '',
       placeholder: opts.placeholder || '',
+      requireText: mode === 'confirm' ? String(opts.requireText || '') : '',
+      requireLabel: opts.requireLabel || '',
+      typed: '',
     })
   })
 }

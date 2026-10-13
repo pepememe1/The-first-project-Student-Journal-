@@ -204,7 +204,9 @@ def _local_seq(conn, table: str, key: str):
         if model is None:
             return None
         pk = list(model.__table__.primary_key.columns)[0].name
-        rows = _rows(conn, f"SELECT change_seq FROM {_ddl_ident(model.__tablename__)} "
+        #SAST B608: имя таблицы и ключа — из `SYNC_MODELS`, оба проходят `_ddl_ident`
+        #(буквы, цифры, подчёркивание); значение уходит связанным параметром `:k`.
+        rows = _rows(conn, f"SELECT change_seq FROM {_ddl_ident(model.__tablename__)} "  # nosec B608
                            f"WHERE {_ddl_ident(pk)} = :k", k=key)
     except Exception as e:      # noqa: BLE001 — без номера правка уйдёт с базой по времени
         _LOG.info(f"[outbox] номер строки не прочитался: {e}")

@@ -284,7 +284,8 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
                                       cfg=cfg, lessons=lessons, records=records)
     if risk["visible"]:
         subj = ", ".join(s["subject"] for s in risk["subjects"][:3])
-        why = "; ".join(f["detail"] for f in risk["factors"][:2])
+        #Причины кончаются точкой каждая: склейка через «; » давала «…работ: 15.; Сейчас 2.67.»
+        why = "; ".join(f["detail"].rstrip(". ") for f in risk["factors"][:2]) + "."
         cards.insert(0, {
             "severity": "alert" if risk["level"] in ("high", "critical") else "warn",
             "icon": "🎓",

@@ -268,6 +268,9 @@ export const adminApi = {
   createGroup: (payload) => api.post('/web/admin/groups', payload),
   updateGroup: (name, payload) => api.put(`/web/admin/groups/${encodeURIComponent(name)}`, payload),
   deleteGroup: (name) => api.delete(`/web/admin/groups/${encodeURIComponent(name)}`),
+  //Что затронет удаление (группа, предмет, студент, преподаватель) — числа для окна
+  //подтверждения. Ключ в ЗАПРОСЕ: название группы со слэшем в пути не проходит.
+  deleteImpact: (kind, key) => api.get('/web/admin/delete-impact', { params: { kind, key } }),
   // Привязать предметы из расписания ко ВСЕМ группам (+ пополнить каталог).
   bindSubjects: () => api.post('/web/admin/groups/bind-subjects'),
   // Кто ведёт предмет ПО РАСПИСАНИЮ портала — подсказки админу. Ручка ничего не пишет:

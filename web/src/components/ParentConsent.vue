@@ -77,7 +77,9 @@ defineExpose({ load })
            class="flex flex-wrap items-center gap-2 rounded-sm border border-border2 px-3 py-2">
         <span class="text-sm text-text">{{ l.parent.full_name || l.parent.login }}</span>
         <Badge variant="green">доступ открыт</Badge>
-        <button type="button" class="ml-auto text-xs text-text3 hover:text-red"
+        <!-- Кнопка, а не строчка текста: на телефоне она была 50×16 px — в неё не попасть
+             пальцем, а попав рядом, человек думал, что отзыв не работает. -->
+        <button type="button" class="ml-auto inline-flex min-h-10 items-center rounded-sm border border-border2 px-3 text-xs font-medium text-text2 transition-colors hover:border-red hover:text-red"
                 :disabled="busy === l.id" @click="decide(l, false)">
           Отозвать
         </button>

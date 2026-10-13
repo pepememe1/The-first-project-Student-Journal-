@@ -18,12 +18,19 @@ import { messengerModApi } from '@/api/endpoints'
 import Avatar from '@/components/ui/Avatar.vue'
 import MuteDialog from '@/components/messenger/MuteDialog.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { roleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
 const locale = useLocaleStore()
+//Свои окна вместо встроенных `alert/confirm/prompt` (13.10.2026): встроенное окно
+//выглядит чужим, а после галочки «не показывать больше» браузер отвечает на confirm()
+//«нет» молча — и удалить сообщение у модератора перестало бы получаться без причины.
+const toast = useToast()
+const { confirm, prompt } = useConfirm()
 
 // Мета-строка пользователя: студенту — группа, преподавателю — предметы.
 function userMeta(u) {
@@ -184,19 +191,22 @@ async function claimTicket(t) {
     await loadInbox()
     await openConversation(t.conversation_id, 'inbox')
   } catch (e) {
-    window.alert(e?.response?.data?.detail || locale.t('common.error', 'Не получилось'))
+    toast.error(e?.response?.data?.detail || locale.t('common.error', 'Не получилось'))
   } finally { ticketBusy.value = 0 }
 }
 
 // Закрыть обращение. Причина необязательна, но уходит человеку в чат: молчаливое закрытие
 // оставляет его ждать ответа в переписке, которой для модерации уже не существует.
 async function resolveTicket(t) {
-  const note = window.prompt(locale.t('adminMessenger.resolveNotePrompt',
-    'Что написать человеку при закрытии (необязательно):'))
+  const note = await prompt({
+    title: locale.t('adminMessenger.resolveTitle', 'Закрыть обращение'),
+    message: locale.t('adminMessenger.resolveNotePrompt', 'Что написать человеку при закрытии (необязательно):'),
+    okText: locale.t('adminMessenger.resolveOk', 'Закрыть обращение'),
+  })
   if (note === null) return
   ticketBusy.value = t.id
   try { await messengerModApi.resolveSupport(t.id, note.trim()); await loadInbox() }
-  catch (e) { window.alert(e?.response?.data?.detail || locale.t('common.error', 'Не получилось')) }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('common.error', 'Не получилось')) }
   finally { ticketBusy.value = 0 }
 }
 
@@ -242,11 +252,21 @@ async function reloadCurrent() {
   return loadPeople()
 }
 
+/** Заметка модерации: строка (можно пустую) или null, если человек нажал «Отмена». */
+function moderationNote() {
+  return prompt({
+    title: locale.t('adminMessenger.noteTitle', 'Заметка модерации'),
+    message: locale.t('adminMessenger.moderationNotePrompt', 'Заметка модерации (необязательно):'),
+  })
+}
+
 async function resolveUserReport(r, status) {
-  const note = status === 'dismissed' ? ''
-    : (window.prompt(locale.t('adminMessenger.moderationNotePrompt', 'Заметка модерации (необязательно):')) || '')
+  //🔥 «Отмена» в окне заметки раньше НЕ отменяла: `prompt() || ''` превращал отказ в
+  //пустую заметку, и жалоба закрывалась всё равно. Теперь отмена — это отмена.
+  const note = status === 'dismissed' ? '' : await moderationNote()
+  if (note === null) return
   try { await messengerModApi.resolveUserReport(r.id, status, note); await loadUserReports() }
-  catch { window.alert(locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')) }
+  catch { toast.error(locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')) }
 }
 
 // Почистить публичное поле профиля. Сервер разрешит только при ОТКРЫТОЙ жалобе и только
@@ -254,9 +274,10 @@ async function resolveUserReport(r, status) {
 async function clearProfileField(user, field) {
   const names = { bio: 'описание «о себе»', avatar: 'аватарку', profile_banner: 'баннер',
                   name_effect: 'эффект имени', name_color: 'цвет имени' }
-  if (!window.confirm(`Очистить ${names[field] || field} у «${user.full_name}»?`)) return
+  if (!(await confirm({ message: `Очистить ${names[field] || field} у «${user.full_name}»?`,
+    okText: locale.t('messenger.clearOk', 'Очистить'), danger: true }))) return
   try { await messengerModApi.clearProfile(user.id, [field]); await reloadCurrent() }
-  catch { window.alert(locale.t('adminMessenger.clearFailed', 'Не удалось — возможно, по этому человеку нет открытой жалобы.')) }
+  catch { toast.error(locale.t('adminMessenger.clearFailed', 'Не удалось — возможно, по этому человеку нет открытой жалобы.')) }
 }
 
 // История наказаний: первый это раз или пятый. Читается из журнала аудита — строка мьюта
@@ -271,14 +292,18 @@ async function openHistory(user) {
 onMounted(load)
 
 async function resolve(r, status) {
-  const note = status === 'dismissed' ? '' : (window.prompt(locale.t('adminMessenger.moderationNotePrompt', 'Заметка модерации (необязательно):')) || '')
-  try { await messengerModApi.resolve(r.id, status, note); await load() } catch { /* noop */ }
+  const note = status === 'dismissed' ? '' : await moderationNote()
+  if (note === null) return        //«Отмена» отменяет решение, а не закрывает жалобу с пустой заметкой
+  try { await messengerModApi.resolve(r.id, status, note); await load() }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('common.error', 'Не получилось')) }
 }
 
 // Удалить сообщение у всех (модерация, пишется в аудит). Работает в любой переписке —
 // в отличие от пользовательского удаления, где нужно быть автором/участником.
 async function deleteMessage(mm) {
-  if (!window.confirm(locale.t('adminMessenger.confirmDeleteMessage', 'Удалить это сообщение у всех? Текст будет стёрт безвозвратно.'))) return
+  if (!(await confirm({
+    message: locale.t('adminMessenger.confirmDeleteMessage', 'Удалить это сообщение у всех? Текст будет стёрт безвозвратно.'),
+    okText: locale.t('common.delete'), danger: true }))) return
   try {
     await messengerModApi.deleteMessage(mm.id)
   } catch (e) {
@@ -313,15 +338,15 @@ async function submitMute(payload) {
     muteFor.value = { open: false, user: null, reportId: 0, closed: false }
     await reloadCurrent()
   } catch (e) {
-    window.alert(e?.response?.data?.detail || locale.t('common.error', 'Не получилось'))
+    toast.error(e?.response?.data?.detail || locale.t('common.error', 'Не получилось'))
   } finally { muteBusy.value = false }
 }
 
 async function unmute(user) {
   if (!user?.id) return
-  if (!window.confirm(locale.t('adminMessenger.confirmUnmute', { name: user.full_name }))) return
+  if (!(await confirm({ message: locale.t('adminMessenger.confirmUnmute', { name: user.full_name }) }))) return
   try { await messengerModApi.unmuteUser(user.id); await reloadCurrent() }
-  catch { window.alert(locale.t('common.error', 'Не получилось')) }
+  catch { toast.error(locale.t('common.error', 'Не получилось')) }
 }
 
 // Срок ограничения словами — модератор должен видеть, до каких пор оно действует, а не

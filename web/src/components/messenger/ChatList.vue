@@ -234,13 +234,17 @@ async function onUnread(chat) {
 
 async function onClear(chat) {
   menuFor.value = ''
-  if (!window.confirm(locale.t('messenger.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'))) return
+  if (!(await confirm({
+    message: locale.t('messenger.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'),
+    okText: locale.t('messenger.clearOk', 'Очистить'), danger: true }))) return
   await m.clearChatById(chat.conversation_id)
 }
 
 async function onDelete(chat) {
   menuFor.value = ''
-  if (!window.confirm(locale.t('messenger.confirmDelete', 'Удалить чат у себя? У собеседника переписка сохранится.'))) return
+  if (!(await confirm({
+    message: locale.t('messenger.confirmDelete', 'Удалить чат у себя? У собеседника переписка сохранится.'),
+    okText: locale.t('common.delete'), danger: true }))) return
   await m.deleteChatById(chat.conversation_id)
 }
 
@@ -255,16 +259,18 @@ async function onBlock(chat) {
   menuFor.value = ''
   const uid = peerOf(chat)
   if (!uid) return
-  if (!window.confirm(locale.t('messenger.confirmBlock', 'Заблокировать собеседника? Он не сможет вам писать и не узнает об этом.'))) return
+  if (!(await confirm({
+    message: locale.t('messenger.confirmBlock', 'Заблокировать собеседника? Он не сможет вам писать и не узнает об этом.'),
+    okText: locale.t('messenger.blockOk', 'Заблокировать'), danger: true }))) return
   //⚠️ Молчать нельзя ни в успехе, ни в отказе. Блокировка НИЧЕГО не меняет на экране —
   //чат остаётся на месте, собеседник не уведомляется, — поэтому без подтверждения человек
   //не знает, сработало ли нажатие, и жмёт ещё раз. А проглоченная ошибка выглядела бы
   //ровно так же, как успех.
   try {
     await messengerApi.blockUser(uid, true)
-    toast.show(locale.t('peerProfile.blocked', 'Заблокирован. Он об этом не узнает.'))
+    toast.success(locale.t('peerProfile.blocked', 'Заблокирован. Он об этом не узнает.'))
   } catch {
-    toast.show(locale.t('common.error', 'Не получилось'))
+    toast.error(locale.t('common.error', 'Не получилось'))
   }
 }
 

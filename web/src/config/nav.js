@@ -74,13 +74,19 @@ export const NAV = {
   // не искусственное дробление, а тот же принцип «Личное» + по одной на КАЖДУЮ реально
   // разную область, а не всё не-«Управление» одной кучей.
   admin: [
+    // ⚠️ «Управление» было ОДНИМ разделом на тринадцать пунктов (13.10.2026, живой обход:
+    // «в меню администратора 25 пунктов одним списком — человек теряется»). Раздел, в
+    // котором тринадцать строк, разделом не работает: взгляду не за что зацепиться.
+    // Теперь люди отдельно, учёба отдельно — искать «Студентов» среди архивов не нужно.
     { section: 'Управление', i18n: 'nav.sectionManage' },
     { key: 'dash', label: 'Дашборд', i18n: 'nav.dashboard', icon: LayoutDashboard, to: '/admin' },
+    { section: 'Люди', i18n: 'nav.sectionPeople' },
     { key: 'teachers', label: 'Преподаватели', i18n: 'nav.teachers', icon: GraduationCap, to: '/admin/teachers' },
     { key: 'students', label: 'Студенты', i18n: 'nav.students', icon: Users, to: '/admin/students' },
     { key: 'parents', label: 'Родители', i18n: 'nav.parents', icon: UsersRound, to: '/admin/parents' },
     { key: 'moderators', label: 'Модераторы', i18n: 'nav.moderators', icon: ShieldCheck, to: '/admin/moderators' },
     { key: 'registrations', label: 'Заявки на регистрацию', i18n: 'nav.registrations', icon: UserPlus, to: '/admin/registrations' },
+    { section: 'Учёба и расписание', i18n: 'nav.sectionStudyAdmin' },
     { key: 'groups', label: 'Группы', i18n: 'nav.groups', icon: Boxes, to: '/admin/groups' },
     { key: 'subjects', label: 'Предметы', i18n: 'nav.subjects', icon: Library, to: '/admin/subjects' },
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/admin/courses' },

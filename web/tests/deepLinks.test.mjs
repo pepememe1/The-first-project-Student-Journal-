@@ -50,8 +50,14 @@ test('проводка: роутер, вход и страница сообще�
   const page = readFileSync(new URL('../src/pages/MessengerPage.vue', import.meta.url), 'utf8')
   assert.match(router, /messagesRedirect\(auth\.isAuthenticated, auth\.role, to\.fullPath, to\.query\)/)
   assert.doesNotMatch(login, /router\.push\(HOME_BY_ROLE\[/, 'вход снова ведёт на главную мимо адреса возврата')
-  assert.equal((login.match(/afterLoginTarget\(user\.role, route\.query, HOME_BY_ROLE\)/g) || []).length, 3,
+  //С 13.10.2026 три пути входа идут через одну функцию `landing()`: она же возвращает
+  //человека туда, где его застал конец сессии (`utils/sessionResume.js`).
+  assert.equal((login.match(/router\.push\(landing\(user\)\)/g) || []).length, 3,
     'не все три пути входа (пароль, ключ, второй фактор) уважают адрес возврата')
+  assert.match(login, /afterLoginTarget\(user\.role, route\.query, HOME_BY_ROLE\)/,
+    '`landing()` перестала спрашивать адрес возврата из ссылки')
+  assert.doesNotMatch(login.replace(/router\.push\(landing\(user\)\)/g, ''),
+    /router\.push\((?!'\/connect'\))/, 'после входа появился переход мимо `landing()`')
   assert.match(page, /linkAction\(route\.query\)/)
   assert.match(page, /watch\(\(\) => \[route\.query\.chat, route\.query\.peer\]/,
     'ссылка, открытая внутри сообщений, не сработает — страница не пересоздаётся')

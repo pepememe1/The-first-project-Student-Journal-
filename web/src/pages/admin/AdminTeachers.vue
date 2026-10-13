@@ -11,14 +11,14 @@ import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
-import { useConfirm } from '@/composables/useConfirm'
+import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
 const locale = useLocaleStore()
 const toast = useToast()
-const { confirm } = useConfirm()
+const { confirmDelete } = useDeleteConfirm()
 const all = ref([])
 const loading = ref(true)
 const allSubjects = ref([])
@@ -130,7 +130,8 @@ async function save() {
   finally { saving.value = false }
 }
 async function del(t) {
-  if (!(await confirm({ title: locale.t('adminTeachers.confirmDelete', { name: t.name }), okText: locale.t('common.delete'), danger: true }))) return
+  if (!(await confirmDelete({ kind: 'teacher', key: t.login,
+    title: locale.t('adminTeachers.confirmDelete', { name: t.name }) }))) return
   try { await adminApi.deleteTeacher(t.login); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminTeachers.deleteFailed', 'Не удалось удалить')) }
 }

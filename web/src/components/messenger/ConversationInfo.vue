@@ -12,6 +12,7 @@ import { X, Crown, Trash2, LogOut, Users, ShieldCheck, Pencil, Check, MoreVertic
 import AvatarCropper from '@/components/AvatarCropper.vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useTrackerStore } from '@/stores/tracker'
 import ToggleRow from '@/components/ui/ToggleRow.vue'
 import Avatar from '@/components/ui/Avatar.vue'
@@ -33,6 +34,7 @@ import { useLocaleStore } from '@/stores/locale'
 const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
 const toast = useToast()
+const { confirm } = useConfirm()
 const locale = useLocaleStore()
 const { activeInfo, activePeer, isModeration, activeKind, activeChat } = storeToRefs(m)
 
@@ -198,7 +200,8 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 async function kick(p) {
   openMenuFor.value = null
-  if (!window.confirm(locale.t('conversationInfo.confirmKick', { name: p.full_name }))) return
+  if (!(await confirm({ message: locale.t('conversationInfo.confirmKick', { name: p.full_name }),
+    okText: locale.t('conversationInfo.kickOk', 'Исключить'), danger: true }))) return
   const ok = await m.kickMember(p.user_id)
   if (!ok) toast.error(locale.t('conversationInfo.kickFailed', 'Не удалось выгнать участника'))
 }
@@ -294,7 +297,8 @@ async function saveAvatar(dataUrl) {
 
 async function leave() {
   const what = kind.value === 'channel' ? locale.t('messenger.channelWord', 'канала').toLowerCase() : locale.t('messenger.groupLabel', 'группы').toLowerCase()
-  if (!window.confirm(locale.t('conversationInfo.confirmLeave', { what }))) return
+  if (!(await confirm({ message: locale.t('conversationInfo.confirmLeave', { what }),
+    okText: locale.t('conversationInfo.leaveOk', 'Выйти из беседы'), danger: true }))) return
   await m.leaveActive()
   emit('close')
 }
@@ -303,13 +307,15 @@ async function removeChat() {
   const what = isGroupOrChannel.value
     ? locale.t('conversationInfo.confirmDeleteGroup', 'Удалить беседу у себя? Вы также выйдете из неё.')
     : locale.t('conversationInfo.confirmDeleteDirect', 'Удалить переписку у себя? У собеседника она сохранится.')
-  if (!window.confirm(what)) return
+  if (!(await confirm({ message: what, okText: locale.t('common.delete'), danger: true }))) return
   await m.deleteConversation(false)
   emit('close')
 }
 
 async function clearHistory() {
-  if (!window.confirm(locale.t('conversationInfo.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'))) return
+  if (!(await confirm({
+    message: locale.t('conversationInfo.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'),
+    okText: locale.t('messenger.clearOk', 'Очистить'), danger: true }))) return
   await m.deleteConversation(true)
   emit('close')
 }

@@ -785,10 +785,12 @@ def _page_upper(db: Session, cursor: int, head: int, limit: int) -> int:
     if head <= cursor:
         return cursor
     from ..db import _ddl_ident
-    parts = [f"SELECT change_seq AS s FROM {_ddl_ident(m.__tablename__)} "
+    #SAST B608 (обе строки): подставляются ТОЛЬКО имена таблиц из `SYNC_MODELS`, каждое
+    #через `_ddl_ident`; курсор, голова и смещение — связанные параметры.
+    parts = [f"SELECT change_seq AS s FROM {_ddl_ident(m.__tablename__)} "  # nosec B608
              "WHERE change_seq > :c AND change_seq <= :h" for m in SYNC_MODELS.values()]
     parts.append("SELECT seq AS s FROM sync_deletes WHERE seq > :c AND seq <= :h")
-    sql = ("SELECT s FROM (" + " UNION ALL ".join(parts) + ") "
+    sql = ("SELECT s FROM (" + " UNION ALL ".join(parts) + ") "  # nosec B608
            "ORDER BY s LIMIT 1 OFFSET :off")
     row = db.execute(text(sql), {"c": cursor, "h": head, "off": limit - 1}).first()
     return int(row[0]) if row else head

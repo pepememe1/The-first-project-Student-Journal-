@@ -14,12 +14,12 @@ import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
-import { useConfirm } from '@/composables/useConfirm'
+import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
 const toast = useToast()
-const { confirm } = useConfirm()
+const { confirmDelete } = useDeleteConfirm()
 const rows = ref([])
 const loading = ref(true)
 const showForm = ref(false)
@@ -61,7 +61,8 @@ async function saveEdit(s) {
 }
 
 async function del(s) {
-  if (!(await confirm({ title: locale.t('adminSubjects.confirmDelete', { name: s.name }), okText: locale.t('common.delete'), danger: true }))) return
+  if (!(await confirmDelete({ kind: 'subject', key: s.name,
+    title: locale.t('adminSubjects.confirmDelete', { name: s.name }) }))) return
   try { await adminApi.deleteSubject(s.name); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminSubjects.deleteFailed', 'Не удалось удалить')) }
 }

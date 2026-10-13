@@ -210,9 +210,9 @@ def admin_set_zet_threshold(payload: dict = Body(...),
     try:
         mz = float(mz)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="min_zet должен быть числом")
+        raise HTTPException(status_code=400, detail="Порог перевода должен быть числом")
     if mz < 0:
-        raise HTTPException(status_code=400, detail="min_zet не может быть отрицательным")
+        raise HTTPException(status_code=400, detail="Порог перевода не может быть отрицательным")
     if row is None:
         row = ZetThreshold(id=hid, group_name=group, year=ty, semester=ts)
         db.add(row)

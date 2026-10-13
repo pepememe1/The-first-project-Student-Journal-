@@ -142,6 +142,37 @@ def teacher_set_grade(payload: dict = Body(...),
 
 # --- Занятия (CRUD) --- id = str(uuid4), тот же формат, что уезжает в синк →
 # десктоп подхватывает занятия pull'ом. Преподаватель ведёт только СВОИ предметы.
+def _lesson_shape_problem(payload: dict) -> str:
+    """Что в форме занятия не число или не помещается ('' — годится).
+
+    🔥 Номер «abc» и часы «много» доходили до `int(...)` и роняли ручку: человек видел
+    «Внутренняя ошибка сервера» вместо «номер должен быть числом» (13.10.2026). Страница
+    это проверяет, но правило, которое держит только страница, не действует ни для
+    программы прежней сборки, ни для офлайн-очереди, ни для запроса мимо страницы.
+    ⚠️ ДАТУ здесь НЕ проверяем намеренно: окно «не дальше года от сегодня» привязало бы
+    тесты и архивные записи к календарю, а формат у давних занятий бывает разный.
+    Дату сверяет форма (`web/src/utils/lessonChecks.js`)."""
+    number = payload.get("number")
+    if number not in (None, "", 0):
+        try:
+            n = int(number)
+        except (TypeError, ValueError):
+            return "Номер занятия должен быть числом"
+        if not 1 <= n <= 999:
+            return "Номер занятия — от 1 до 999"
+    hour = payload.get("hour")
+    if hour not in (None, "", 0):
+        try:
+            h = int(hour)
+        except (TypeError, ValueError):
+            return "Часы занятия должны быть числом"
+        if not 0 <= h <= 24:
+            return "Часы занятия — от 0 до 24"
+    if len(payload.get("topic") or "") > 4000:
+        return "Тема слишком длинная — не больше 4000 символов"
+    return ""
+
+
 @router.post("/teacher/lesson")
 def teacher_create_lesson(payload: dict = Body(...),
                           user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -158,7 +189,10 @@ def teacher_create_lesson(payload: dict = Body(...),
     subject = (payload.get("subject") or "").strip()
     ltype = (payload.get("type") or "").strip()
     if not (group and subject and ltype):
-        raise HTTPException(status_code=400, detail="Нужны group, subject и type")
+        raise HTTPException(status_code=400, detail="Выберите группу, предмет и тип занятия")
+    bad = _lesson_shape_problem(payload)
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     #Новое занятие всегда в ТЕКУЩЕМ учебном периоде (штампуем год+семестр) — тем же
     #термином и проверяем назначение.
     #⚠️ Но «текущий» считается в момент ИСПОЛНЕНИЯ, а офлайн-очередь доставляет запись
@@ -383,6 +417,9 @@ def teacher_update_lesson(lesson_id: str, payload: dict = Body(...),
     _teacher_check_assignment(db, user, row.group_name, row.subject, row.year, row.semester)
     _teacher_check_subgroup(db, user, row)   #и только СВОЯ подгруппа (J07)
     _ensure_current_term(W.load_config(db), row)   #архив — read-only
+    bad = _lesson_shape_problem(payload)
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     base_version = row.updated_at or ""
     base_seq = _seq_of(row)
     row = _ensure_base_version(
@@ -560,6 +597,28 @@ def _clean_birthday(raw) -> str:
     return f"{day:02d}.{month:02d}"
 
 
+def _login_taken_by(db: Session, login: str, own_id: str):
+    """Кто уже занял этот логин (кроме строки `own_id`), или None.
+
+    🔥 Логин обязан быть один на ВЕСЬ журнал, а не на роль (13.10.2026). Проверка стояла
+    только у модераторов: студента «ivanov» можно было завести при живом преподавателе
+    «ivanov» — у строк разные id (`stud:` и `teach:`), и сервер их не сравнивал. Вход при
+    этом ищет человека по одному логину и берёт ПЕРВОГО найденного: второй получал
+    «неверный логин или пароль» при верном пароле, и понять причину было нечем."""
+    return (db.query(User)
+            .filter(User.login == login, User.deleted == False, User.id != own_id)  # noqa: E712
+            .first())
+
+
+def _refuse_taken_login(db: Session, login: str, own_id: str) -> None:
+    taken = _login_taken_by(db, login, own_id)
+    if taken is not None:
+        who = {"student": "студента", "teacher": "преподавателя", "admin": "администратора",
+               "parent": "родителя", "moderator": "модератора"}.get(taken.role, "другого человека")
+        raise HTTPException(status_code=409,
+                            detail=f"Этот логин уже занят (у {who}) — выберите другой")
+
+
 @router.post("/admin/students")
 def admin_create_student(payload: dict = Body(...),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
@@ -576,6 +635,18 @@ def admin_create_student(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Нужны фамилия и имя")
     if not login:
         raise HTTPException(status_code=400, detail="Нужен логин")
+    #Длина и символы — здесь, а не только в форме страницы (`person_rules`): фамилия из
+    #трёхсот букв растягивала таблицу так, что кнопки «изменить» и «удалить» уезжали за
+    #экран, а логин со слэшем потом нельзя было ни изменить, ни удалить.
+    from ... import person_rules as PR
+    bad = PR.first_problem(
+        PR.too_long("Фамилия", surname, PR.MAX_NAME_PART),
+        PR.too_long("Имя", name_in, PR.MAX_NAME_PART * 2),
+        PR.too_long("Отчество", patronymic, PR.MAX_NAME_PART),
+        PR.too_long("Группа", group, PR.MAX_GROUP),
+        PR.login_problem(login))
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     #name = «Имя Отчество» — это КЛЮЧ оценок и синка (не меняем формат). Если отчество
     #пришло отдельным полем — собираем; если пришла полная форма без отчества — вычленяем.
     key_name, patronymic = _compose_name(name_in, patronymic)
@@ -583,6 +654,7 @@ def admin_create_student(payload: dict = Body(...),
     existing = db.get(User, sid)
     if existing is not None and not existing.deleted:
         raise HTTPException(status_code=409, detail="Студент с таким логином уже есть")
+    _refuse_taken_login(db, login, sid)
     _ensure_group_row(db, group)
     row = existing or User(id=sid)
     if existing is None:
@@ -656,7 +728,19 @@ def admin_update_student(login: str, payload: dict = Body(...),
     if row is None or row.deleted:
         raise HTTPException(status_code=404, detail="Студент не найден")
     old_f, old_n = row.surname or "", row.name or ""
+    from ... import person_rules as PR
+    bad = PR.first_problem(
+        PR.too_long("Фамилия", (payload.get("surname") or "").strip(), PR.MAX_NAME_PART),
+        PR.too_long("Имя", (payload.get("name") or "").strip(), PR.MAX_NAME_PART * 2),
+        PR.too_long("Отчество", (payload.get("patronymic") or "").strip(), PR.MAX_NAME_PART),
+        PR.too_long("Группа", (payload.get("group") or "").strip(), PR.MAX_GROUP))
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     if "surname" in payload:
+        #Пустая фамилия стирала бы человека из списков: строка без имени не находится
+        #поиском и не отличима от соседней.
+        if not (payload.get("surname") or "").strip():
+            raise HTTPException(status_code=400, detail="Фамилия не может быть пустой")
         row.surname = (payload.get("surname") or "").strip()
     #Имя/отчество: пересобираем name-ключ из имени и отчества (отчество храним отдельно).
     if "name" in payload or "patronymic" in payload:
@@ -800,6 +884,10 @@ def admin_create_group(payload: dict = Body(...),
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Нужно название группы")
+    from ... import person_rules as PR
+    bad = PR.too_long("Название группы", name, PR.MAX_GROUP)
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     gid = f"grp:{name}"
     existing = db.get(Group, gid)
     if existing is not None and not existing.deleted:
@@ -1652,6 +1740,10 @@ def admin_create_subject(payload: dict = Body(...),
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Нужно название предмета")
+    from ... import person_rules as PR
+    bad = PR.too_long("Название предмета", name, PR.MAX_SUBJECT)
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     sid = f"subj:{name}"
     existing = db.get(Subject, sid)
     if existing is not None and not existing.deleted:
@@ -1811,10 +1903,16 @@ def admin_create_teacher(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="Нужно ФИО преподавателя")
     if not login:
         raise HTTPException(status_code=400, detail="Нужен логин")
+    from ... import person_rules as PR
+    bad = PR.first_problem(PR.too_long("ФИО", full_name, PR.MAX_FULL_NAME),
+                           PR.login_problem(login))
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     tid = f"teach:{login}"
     existing = db.get(User, tid)
     if existing is not None and not existing.deleted:
         raise HTTPException(status_code=409, detail="Преподаватель с таким логином уже есть")
+    _refuse_taken_login(db, login, tid)
     row = existing or User(id=tid)
     if existing is None:
         db.add(row)
@@ -1935,6 +2033,11 @@ def admin_create_moderator(payload: dict = Body(...),
     password = payload.get("password") or ""
     if not login:
         raise HTTPException(status_code=400, detail="Нужен логин")
+    from ... import person_rules as PR
+    bad = PR.first_problem(PR.login_problem(login),
+                           PR.too_long("ФИО", full_name, PR.MAX_FULL_NAME))
+    if bad:
+        raise HTTPException(status_code=400, detail=bad)
     if len(password) < MIN_PASSWORD_LEN:
         raise HTTPException(status_code=400,
                             detail=f"Пароль не короче {MIN_PASSWORD_LEN} символов")

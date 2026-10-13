@@ -8,12 +8,14 @@ import { X } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
 
 const props = defineProps({ userId: { type: String, required: true }, userName: { type: String, default: '' } })
 const emit = defineEmits(['close'])
 const m = useMessengerStore()
 const toast = useToast()
+const { confirm } = useConfirm()
 const locale = useLocaleStore()
 
 const PERM_LABELS = computed(() => ({
@@ -104,7 +106,8 @@ async function saveAndAssign() {
 }
 
 async function removeRole(r) {
-  if (!window.confirm(locale.t('roleManager.confirmDelete', { name: r.name }))) return
+  if (!(await confirm({ message: locale.t('roleManager.confirmDelete', { name: r.name }),
+    okText: locale.t('common.delete'), danger: true }))) return
   try { await messengerApi.deleteRole(m.activeId, r.id); await load() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('roleManager.deleteFailed', 'Не удалось удалить роль')) }
 }

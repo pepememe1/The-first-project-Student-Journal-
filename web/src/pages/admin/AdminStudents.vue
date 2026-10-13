@@ -12,6 +12,7 @@ import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import RolloutDialog from '@/components/account/RolloutDialog.vue'
 import AccountExtraPanel from '@/components/account/AccountExtraPanel.vue'
@@ -21,6 +22,7 @@ const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 const locale = useLocaleStore()
 const toast = useToast()
 const { confirm } = useConfirm()
+const { confirmDelete } = useDeleteConfirm()
 const all = ref([])
 const loading = ref(true)
 const q = ref('')
@@ -261,11 +263,15 @@ function formGroupLabel(g) {
   return categoryFilter.value ? '' : categoryLabel(categoryOf(g))
 }
 
+//Что было в форме при открытии: по этому видно, есть ли что терять при закрытии и
+//менял ли человек группу.
+let formAtOpen = ''
 function openCreate() {
   showExtra.value = false
   lockedHeight.value = 0
   editing.value = null
   form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' }
+  formAtOpen = JSON.stringify(form.value)
   formError.value = ''
   showForm.value = true
 }
@@ -279,16 +285,76 @@ function openEdit(r) {
     login: r.login, group: r.group, password: '', birthday: r.birthday ?? '',
   }
   passwordSetAt.value = r.password_set_at || ''
+  formAtOpen = JSON.stringify(form.value)
   formError.value = ''
   showForm.value = true
+}
+
+// ━━ «ЗАЩИТА ОТ ДУРАКА» В ФОРМЕ СТУДЕНТА (13.10.2026, живой обход стенда) ━━
+/**
+ * Закрыть форму без сохранения. Щелчок мимо окна стирал шесть заполненных полей без
+ * вопроса; спрашиваем только когда в форме что-то меняли.
+ */
+async function closeForm() {
+  if (saving.value) return
+  if (JSON.stringify(form.value) !== formAtOpen) {
+    const ok = await confirm({
+      title: locale.t('adminStudents.closeUnsavedTitle', 'Закрыть без сохранения?'),
+      message: locale.t('adminStudents.closeUnsavedMessage', 'Введённые данные пропадут.'),
+      okText: locale.t('adminStudents.closeUnsavedOk', 'Закрыть без сохранения'),
+      cancelText: locale.t('adminStudents.closeUnsavedBack', 'Вернуться'), danger: true,
+    })
+    if (!ok) return
+  }
+  showForm.value = false
+}
+/**
+ * Вопросы о том, что почти наверняка опечатка, но бывает и намеренным. `false` — человек
+ * решил исправить.
+ *
+ * 🔥 Главный из них — группа. Поле принимает любой текст, и «К74-1» вместо «К74/1»
+ * МОЛЧА заводило новую группу: студент уезжал в группу-призрак, которой нет ни у одного
+ * преподавателя, и «пропадал» из журнала. Теперь незнакомое название переспрашивается.
+ */
+async function formLooksIntended(f) {
+  const group = (f.group || '').trim()
+  const groupChanged = group !== (JSON.parse(formAtOpen || '{}').group || '').trim()
+  if (/\d/.test(`${f.surname}${f.name}${f.patronymic}`)) {
+    const ok = await confirm({
+      title: locale.t('adminStudents.digitsTitle', 'В ФИО есть цифры'),
+      message: locale.t('adminStudents.digitsMessage', { name: `${f.surname} ${f.name} ${f.patronymic}`.trim() }),
+      okText: locale.t('adminStudents.keepAsIs', 'Оставить так'),
+      cancelText: locale.t('adminStudents.fixIt', 'Исправить'),
+    })
+    if (!ok) return false
+  }
+  if (!group && (!editing.value || groupChanged)) {
+    const ok = await confirm({
+      title: locale.t('adminStudents.noGroupTitle', 'Группа не указана'),
+      message: locale.t('adminStudents.noGroupMessage', 'Студент без группы не попадёт ни в один журнал и не увидит расписание.'),
+      okText: locale.t('adminStudents.noGroupOk', 'Сохранить без группы'),
+      cancelText: locale.t('adminStudents.fixIt', 'Исправить'),
+    })
+    if (!ok) return false
+  } else if (group && groupChanged && !groupChoices.value.includes(group)) {
+    const ok = await confirm({
+      title: locale.t('adminStudents.newGroupTitle', 'Такой группы ещё нет'),
+      message: locale.t('adminStudents.newGroupMessage', { group }),
+      okText: locale.t('adminStudents.newGroupOk', 'Создать новую группу'),
+      cancelText: locale.t('adminStudents.fixIt', 'Исправить'),
+    })
+    if (!ok) return false
+  }
+  return true
 }
 
 async function save() {
   const f = form.value
   if (!f.surname.trim() || !f.name.trim()) { formError.value = locale.t('adminStudents.enterSurnameName', 'Введите фамилию и имя'); return }
   if (!f.login.trim()) { formError.value = locale.t('adminStudents.enterLogin', 'Введите логин'); return }
-  saving.value = true
   formError.value = ''
+  if (!(await formLooksIntended(f))) return
+  saving.value = true
   try {
     if (editing.value) {
       await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password, birthday: f.birthday })
@@ -308,7 +374,8 @@ async function save() {
 }
 
 async function del(r) {
-  if (!(await confirm({ title: locale.t('adminStudents.confirmDelete', { name: `${r.surname} ${r.name}` }), okText: locale.t('common.delete'), danger: true }))) return
+  if (!(await confirmDelete({ kind: 'student', key: r.login,
+    title: locale.t('adminStudents.confirmDelete', { name: `${r.surname} ${r.name}` }) }))) return
   try { await adminApi.deleteStudent(r.login); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminStudents.deleteFailed', 'Не удалось удалить')) }
 }
@@ -371,7 +438,9 @@ async function del(r) {
           <tr v-if="loading"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('common.loading') }}</td></tr>
           <tr v-else-if="!rows.length"><td colspan="8" class="px-4 py-6 text-center text-text3">{{ locale.t('adminStudents.noStudents', 'Студентов нет') }}</td></tr>
           <tr v-for="(r, i) in pageRows" :key="r.login ? `l:${r.login}` : `i:${page * PAGE + i}`" class="border-b border-border last:border-0 hover:bg-bg2/60">
-            <td class="whitespace-nowrap px-4 py-2.5 font-medium text-text">{{ r.surname }} {{ r.name }}</td>
+            <!-- Ширина ФИО ограничена: одна длинная запись раньше растягивала таблицу, и
+                 кнопки «изменить» и «удалить» уезжали за правый край экрана. -->
+            <td class="max-w-[22rem] truncate whitespace-nowrap px-4 py-2.5 font-medium text-text" :title="`${r.surname} ${r.name}`">{{ r.surname }} {{ r.name }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ r.group || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text2">{{ groupCourse[r.group] ?? '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ r.login || '—' }}</td>
@@ -379,8 +448,10 @@ async function del(r) {
             <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? locale.t('adminStudents.deviceTitle', { device: r.device }) : ''">{{ fmtDT(r.last_login) }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text3">{{ r.ip || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminStudents.edit', 'Изменить')" @click="openEdit(r)">✎</button>
-              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(r)">✕</button>
+              <button type="button" class="mr-2 inline-grid size-8 place-items-center rounded-sm text-text3 hover:bg-accent-glow hover:text-accent"
+                      :title="locale.t('adminStudents.edit', 'Изменить')" :aria-label="locale.t('adminStudents.edit', 'Изменить')" @click="openEdit(r)">✎</button>
+              <button type="button" class="inline-grid size-8 place-items-center rounded-sm text-text3 hover:bg-red/10 hover:text-red"
+                      :title="locale.t('common.delete')" :aria-label="locale.t('common.delete')" @click="del(r)">✕</button>
             </td>
           </tr>
         </tbody>
@@ -395,19 +466,19 @@ async function del(r) {
     </div>
 
     <!-- Модалка создания/правки -->
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
+    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeForm">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
         <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
              :style="lockedHeight ? { height: lockedHeight + 'px' } : null">
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.surname', 'Фамилия') }}</span>
-              <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+              <input v-model="form.surname" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.firstName', 'Имя') }}</span>
-              <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+              <input v-model="form.name" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.patronymic', 'Отчество') }} <span class="text-text3 normal-case">{{ locale.t('adminStudents.optionalHint', '(необязательно)') }}</span></span>
-            <input v-model="form.patronymic" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+            <input v-model="form.patronymic" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <!-- День рождения БЕЗ ГОДА: для поздравления он не нужен, а полная дата
                рождения — совсем другой уровень чувствительности. Сервер год отбрасывает
                молча, даже если его вписали. -->
@@ -416,10 +487,11 @@ async function del(r) {
             <input v-model="form.birthday" inputmode="numeric" placeholder="07.03" maxlength="10"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colLogin', 'Логин') }}</span>
-            <input v-model="form.login" :disabled="!!editing"
+            <input v-model="form.login" :disabled="!!editing" maxlength="64"
+                   autocapitalize="none" autocorrect="off" spellcheck="false"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colGroup', 'Группа') }}</span>
-            <input v-model="form.group" list="admin-group-list" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
+            <input v-model="form.group" list="admin-group-list" maxlength="40" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
             <!-- label у option в datalist показывается второй строкой рядом со значением
                  (Chromium: и браузер, и WebView2 на десктопе, и WebView в APK) — так
@@ -467,7 +539,10 @@ async function del(r) {
             </div>
             <span class="mt-1 block text-tiny text-text3">{{ editing
               ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
-              : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
+              : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span>
+            <!-- Пустой пароль при создании — не ошибка (его выдают потом листом на группу),
+                 но сказать об этом надо: иначе студент «заведён», а войти не может. -->
+            <span v-if="!editing && !form.password" class="mt-1 block text-tiny text-orange">{{ locale.t('adminStudents.noPasswordHint', 'Без пароля студент войти не сможет. Пароль можно выдать позже — кнопкой «Логины и пароли группы».') }}</span></label>
           <!-- «Доп. данные» (4.0): стартовый пароль и сверка контактов. Раскрываются
                ВНУТРИ этой же прокрутки — окно не растёт. -->
           <div v-if="showExtra" ref="extraAnchor" class="border-t border-border pt-3">

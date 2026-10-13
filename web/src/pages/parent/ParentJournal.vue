@@ -13,6 +13,7 @@ import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ZetProgress from '@/components/ui/ZetProgress.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
+import MarksLegend from '@/components/journal/MarksLegend.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -67,8 +68,15 @@ watch(studentId, loadJournal)
         <option v-for="c in children" :key="c.id" :value="c.id">{{ c.full_name }} · {{ c.group }}</option>
       </select>
     </div>
-    <p v-else-if="child" class="text-sm text-text3">
-      {{ locale.t('parentJournal.childGroupLine', { name: child.full_name, group: child.group }) }}
+    <!-- Первый экран родителя называет, ЧЬИ это оценки (13.10.2026). Здесь стояла серая
+         строка «Фамилия Имя · группа» мелким шрифтом: человек, зашедший раз в месяц, не
+         понимал, на что смотрит и можно ли здесь что-то испортить. -->
+    <div v-else-if="child" class="rounded-lg border border-border bg-card px-4 py-3 shadow-card">
+      <h2 class="font-title text-lg font-bold text-text">{{ locale.t('parentJournal.headline', { name: child.full_name }) }}</h2>
+      <p class="mt-0.5 text-sm text-text2">{{ locale.t('parentJournal.groupLine', { group: child.group }) }}</p>
+    </div>
+    <p v-if="children.length" class="px-1 text-xs text-text3">
+      {{ locale.t('parentJournal.howToRead', 'Это оценки и пропуски вашего ребёнка по каждому предмету. Вы их только видите — изменить оценки может только преподаватель.') }}
     </p>
 
     <EmptyState v-if="!children.length && pending"
@@ -100,6 +108,7 @@ watch(studentId, loadJournal)
         </template>
         <SubjectLessons :lessons="s.lessons" />
       </Card>
+      <MarksLegend />
       <p v-if="data.methodology" class="px-1 text-xs text-text3">{{ data.methodology }}</p>
     </template>
   </div>

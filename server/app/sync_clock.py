@@ -84,13 +84,16 @@ def _trigger_ddl(name: str, table: str, pk: str) -> list:
     ins, upd, dele = _trigger_names(t)
     bump = "UPDATE sync_clock SET seq = seq + 1 WHERE id = 1;"
     cur = "(SELECT seq FROM sync_clock WHERE id = 1)"
-    stamp = f"UPDATE {t} SET change_seq = {cur} WHERE rowid = NEW.rowid;"
+    #SAST B608 (здесь и ниже в этой функции): это DDL триггеров. `t`, `p`, `fields` и
+    #имена триггеров прошли `_ddl_ident`, `cur` и `bump` — константы этого файла.
+    #Связанных параметров у CREATE TRIGGER нет вовсе, поэтому текст собирается строкой.
+    stamp = f"UPDATE {t} SET change_seq = {cur} WHERE rowid = NEW.rowid;"  # nosec B608
     return [
         f"CREATE TRIGGER IF NOT EXISTS {ins} AFTER INSERT ON {t} BEGIN {bump} {stamp} END",
         (f"CREATE TRIGGER IF NOT EXISTS {upd} AFTER UPDATE ON {t} "
          f"WHEN NEW.change_seq IS OLD.change_seq OR NEW.change_seq IS NOT {cur} "
          f"BEGIN {bump} {stamp} END"),
-        (f"CREATE TRIGGER IF NOT EXISTS {dele} AFTER DELETE ON {t} BEGIN {bump} "
+        (f"CREATE TRIGGER IF NOT EXISTS {dele} AFTER DELETE ON {t} BEGIN {bump} "  # nosec B608
          f"INSERT INTO sync_deletes (seq, tbl, pk, scope, at) VALUES ({cur}, "
          f"'{_ddl_ident(name)}', CAST(OLD.{p} AS TEXT), {_scope_expr(fields)}, "
          f"strftime('%Y-%m-%dT%H:%M:%fZ', 'now')); END"),
@@ -146,8 +149,9 @@ def ensure(engine) -> dict:
         todo = []
         for order, (_name, model) in enumerate(present.items()):
             t = _ddl_ident(model.__tablename__)
+            #SAST B608: `t` — имя таблицы модели через `_ddl_ident` (строкой выше).
             for rowid, ts in conn.exec_driver_sql(
-                    f"SELECT rowid, updated_at FROM {t} "
+                    f"SELECT rowid, updated_at FROM {t} "  # nosec B608
                     "WHERE change_seq = 0 OR change_seq IS NULL"):
                 todo.append((ts or "", order, rowid, t))
         if todo:
@@ -158,7 +162,8 @@ def ensure(engine) -> dict:
                 by_table.setdefault(t, []).append((start + i, rowid))
             for t, pairs in by_table.items():
                 conn.exec_driver_sql(
-                    f"UPDATE {t} SET change_seq = ? WHERE rowid = ?", pairs)
+                    #SAST B608: `t` — то же проверенное имя таблицы; номера — параметрами.
+                    f"UPDATE {t} SET change_seq = ? WHERE rowid = ?", pairs)  # nosec B608
             conn.exec_driver_sql("UPDATE sync_clock SET seq = ? WHERE id = 1",
                                  (start + len(todo),))
             numbered = len(todo)

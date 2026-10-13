@@ -11,18 +11,32 @@ import { useAuthStore } from '@/stores/auth'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { rememberResume } from '@/utils/sessionResume'
 
 const router = useRouter()
 const auth = useAuthStore()
 const toast = useToast()
 
-function toLogin() {
+/**
+ * Сессия кончилась не по воле человека — ведём на вход и ОБЪЯСНЯЕМ почему.
+ *
+ * 🔥 Раньше форма входа появлялась без единого слова, а после входа открывалась
+ * главная (13.10.2026). Преподаватель, ставивший оценки, видел это как «журнал меня
+ * выкинул и всё пропало». Теперь на форме стоит причина (`auth.notice`), а после входа
+ * ТОТ ЖЕ человек возвращается на ту же страницу (`utils/sessionResume.js`).
+ * ⚠️ Адрес запоминаем ДО `clearSession()`: после неё логина уже нет, и отличить
+ * «тот же человек» от «следующий за общим компьютером» было бы нечем.
+ */
+function toLogin(reason = 'expired') {
+  const at = router.currentRoute.value
+  if (!at.meta?.public) rememberResume(auth.user?.login, at.fullPath)
   auth.clearSession()
-  if (router.currentRoute.value.path !== '/login') router.push('/login')
+  auth.setNotice(reason)
+  if (at.path !== '/login') router.push('/login')
 }
 
 onMounted(() => {
-  setAuthExpiredHandler(toLogin)
+  setAuthExpiredHandler(() => toLogin('expired'))
 
   // Администратору нужен второй фактор: сервер закрыл ВСЁ, кроме его настройки.
   // Ведём человека прямо туда и объясняем причину, вместо россыпи «нет прав» на
@@ -46,10 +60,9 @@ onMounted(() => {
   // заново (см. offlineSession.js о том, зачем это нужно). Очередь неотправленных
   // оценок при этом остаётся: работа преподавателя не должна пропадать из-за того,
   // что он сутки был вне сети.
-  setOfflineExpiredHandler(() => {
-    toast.error('Работа без сети больше суток — войдите заново')
-    toLogin()
-  })
+  //Причину показывает сама форма входа и держит её, пока человек не войдёт: всплывающее
+  //сообщение гасло через шесть секунд — раньше, чем его успевали прочитать.
+  setOfflineExpiredHandler(() => toLogin('offline'))
   startOfflineWatch()
 
   // Как только связь вернулась — отправляем накопленное. Не по таймеру: пока сети

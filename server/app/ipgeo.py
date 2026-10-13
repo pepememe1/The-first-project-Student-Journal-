@@ -187,12 +187,17 @@ def build_from_tsv(lines, target: str) -> dict:
 def update(url: str = SOURCE_URL) -> dict:
     """Скачать публичную базу и пересобрать локальную. Наружу не уходит ни одного адреса."""
     import urllib.request
+    #Только https: `urlopen` умеет и `file://`, а адрес — параметр функции. Базу адресов
+    #качаем из сети и ни из какого другого места.
+    if not str(url).lower().startswith("https://"):
+        raise ValueError("база адресов скачивается только по https")
     folder = os.path.dirname(db_path()) or "."
     fd, gz = tempfile.mkstemp(prefix="ipasn-", suffix=".tsv.gz", dir=folder)
     os.close(fd)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "GradeBookAI-ipgeo/1.0"})
-        with urllib.request.urlopen(req, timeout=120) as resp, open(gz, "wb") as out:
+        #SAST B310: схема проверена выше (только https), адрес по умолчанию — константа.
+        with urllib.request.urlopen(req, timeout=120) as resp, open(gz, "wb") as out:  # nosec B310
             while True:
                 chunk = resp.read(1 << 16)
                 if not chunk:

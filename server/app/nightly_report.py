@@ -226,8 +226,13 @@ def _cert_days(host: str) -> int | None:
 def _site_health(url: str) -> dict:
     import urllib.request
     started = time.monotonic()
+    #Только http(s): адрес приходит из настройки `SITE_URL`, а `urlopen` умеет и
+    #`file://` — опечатка в настройке не должна превращать проверку сайта в чтение файла.
+    if not str(url).lower().startswith(("https://", "http://")):
+        return {"code": 0, "ms": 0, "error": "BadScheme"}
     try:
-        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=10) as r:
+        #SAST B310: схема проверена строкой выше.
+        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=10) as r:  # nosec B310
             return {"code": r.status, "ms": int((time.monotonic() - started) * 1000)}
     except Exception as e:      # noqa: BLE001
         code = getattr(e, "code", 0)

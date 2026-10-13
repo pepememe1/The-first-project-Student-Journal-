@@ -36,6 +36,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import ProfilePage from '@/pages/Profile.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import { useProfileStore } from '@/stores/profile'
+import { useA11yStore } from '@/stores/a11y'
 import { profilePlate } from '@/theme/palette'
 
 const tts = useTtsStore()
@@ -62,6 +63,8 @@ function toggleHaptics() {
 }
 const router = useRouter()
 const route = useRoute()
+//Размер шрифта и контраст — те же настройки, что за кнопкой-очками в меню (stores/a11y.js).
+const a11y = useA11yStore()
 const profileStore = useProfileStore()
 //Роль решает, показывать ли второй фактор: у администратора его нет вовсе (см. карточку).
 const isAdminRole = computed(() => auth.role === 'admin')
@@ -552,7 +555,25 @@ async function goSub(catId, subId) {
 // нашли только в самом низу раздела «Аккаунт», тестировщик его не нашёл вовсе. Сам
 // выход остаётся здесь намеренно (см. карточку «Аккаунт»): один случайный клик в углу
 // экрана не должен выкидывать человека из журнала.
-watch(() => route.query.section, (s) => { if (s === 'logout') goSub('account', 'logout') },
+//
+// 🔥 С 13.10.2026 дорога из меню кончается ВОПРОСОМ, а не только прокруткой к кнопке.
+// Живой обход: человек нажимал «Выйти», попадал в настройки и не понимал, вышел он или
+// нет, — вторую кнопку «Выйти» внизу длинной страницы находил не каждый. Теперь «Выйти»
+// в меню сразу спрашивает «Выйти из аккаунта?»; согласие ведёт в ТОТ ЖЕ `onLogout` с
+// проверкой неотправленного, так что защита от случайного нажатия осталась, а шаг — один.
+async function askLogout() {
+  const ok = await confirm({
+    title: loc.t('logout.confirmTitle', 'Выйти из аккаунта?'),
+    message: loc.t('settings.logoutExplain', 'После выхода понадобится снова ввести логин и пароль — сохранённая сессия будет удалена с этого устройства.'),
+    okText: loc.t('nav.logout', 'Выйти'),
+    cancelText: loc.t('logout.confirmStay', 'Остаться'),
+  })
+  //Отметку из адреса снимаем: останься она, второе нажатие «Выйти» в меню ничего не
+  //меняло бы в адресе, наблюдатель ниже промолчал бы, и кнопка выглядела бы мёртвой.
+  router.replace({ query: { ...route.query, section: undefined } }).catch(() => {})
+  if (ok) onLogout()
+}
+watch(() => route.query.section, (s) => { if (s === 'logout') goSub('account', 'logout').then(askLogout) },
       { immediate: true })
 
 // Закрытие оверлея = уход со страницы настроек. `back()` возвращает туда, откуда
@@ -689,6 +710,29 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
     <!-- Оформление (полный кастомайзер тем: пресеты + свой цвет + режим + расписание). -->
     <div id="set-theme" :class="sec('appearance')">
       <h2 class="mb-3 font-title text-lg font-extrabold text-text lg:hidden">{{ loc.t('settings.appearance') }}</h2>
+      <!-- 🔤 РАЗМЕР ШРИФТА — ЗДЕСЬ, В «ОФОРМЛЕНИИ» (13.10.2026). Настройка была только за
+           значком очков в углу меню: человек, которому мелко, шёл искать её в настройки,
+           во «Внешний вид», и находил там шестнадцать палитр и ни слова про шрифт.
+           Хранилище то же (`stores/a11y.js`), очки в меню остаются — это вторая дверь
+           в ту же настройку, а не вторая настройка. -->
+      <Card :class="['mb-4', sec('appearance')]" :title="loc.t('settings.textSize', 'Размер шрифта')"
+            :subtitle="loc.t('settings.textSizeHint', 'Если мелко — сделайте крупнее. Действует на этом устройстве.')" pad>
+        <div class="flex flex-wrap items-stretch gap-2">
+          <button v-for="(label, step) in [loc.t('a11y.sizeNormal', 'Обычный'), loc.t('a11y.sizeLarge', 'Крупнее'), loc.t('a11y.sizeXL', 'Максимум')]"
+                  :key="step" type="button" :aria-pressed="a11y.fontScale === step"
+                  class="flex min-h-14 min-w-24 flex-1 flex-col items-center justify-center rounded-lg border px-3 py-2 transition-colors"
+                  :class="a11y.fontScale === step ? 'border-accent bg-accent-glow text-accent' : 'border-border2 text-text2 hover:border-accent'"
+                  @click="a11y.setFontScale(step)">
+            <span class="font-bold leading-none" :style="{ fontSize: (14 + step * 5) + 'px' }">А</span>
+            <span class="mt-1 text-xs">{{ label }}</span>
+          </button>
+        </div>
+        <div class="mt-3">
+          <ToggleRow :label="loc.t('a11y.contrast', 'Высокий контраст')"
+                     :hint="loc.t('settings.contrastHint', 'Серый текст становится чёрным, границы — чётче.')"
+                     :model-value="a11y.contrast" @update:model-value="(v) => a11y.setContrast(v)" />
+        </div>
+      </Card>
       <ThemeCustomizer />
     </div>
 

@@ -36,7 +36,7 @@ from .routers import desktopupdate
 from .routers import publicschedule
 from .routers import serverinfo
 from .routers import honeypot as honeypot_router
-from . import canary, events, honeypot, throttle
+from . import canary, events, honeypot, throttle, validation_text
 
 
 @asynccontextmanager
@@ -245,6 +245,11 @@ async def _unhandled_error(request: Request, exc: Exception):
     except Exception:
         pass
     return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
+
+
+#Запрос не той формы (422): вместо списка объектов на английском — одна строка по-русски.
+#Иначе страница показывала человеку «[object Object]» ровно там, где ему нужна подсказка.
+validation_text.install(app)
 
 
 import os

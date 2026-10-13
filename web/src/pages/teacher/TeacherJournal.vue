@@ -34,11 +34,16 @@ import MicButton from '@/components/vector/MicButton.vue'
 import VoiceCommandDialog from '@/components/vector/VoiceCommandDialog.vue'
 import { useLocaleStore } from '@/stores/locale'
 import haptics from '@/utils/haptics'
+import { useAuthStore } from '@/stores/auth'
+import { recallChoice, rememberChoice, pickRemembered } from '@/utils/lastChoice'
+import { parseRuDate, lessonDateIssue, lessonMarkCount, duplicateLesson, lessonNumberOk }
+  from '@/utils/lessonChecks'
 
 const toast = useToast()
 const { confirm, prompt } = useConfirm()
 const locale = useLocaleStore()
 const route = useRoute()
+const auth = useAuthStore()
 
 const groups = ref([])
 const subjects = ref([])
@@ -76,8 +81,12 @@ onMounted(async () => {
     // что сервер потом всё равно откажется отдавать.
     const qGroup = String(route.query.group || '')
     const qSubject = String(route.query.subject || '')
-    group.value = (qGroup && groups.value.includes(qGroup)) ? qGroup : (groups.value[0] || '')
-    subject.value = (qSubject && subjects.value.includes(qSubject)) ? qSubject : (subjects.value[0] || '')
+    //Нет ссылки — открываем то, с чем человек работал в прошлый раз, а не первую группу
+    //списка (`utils/lastChoice.js`): выбирать её заново на каждой странице — лишний шаг,
+    //на котором ещё и ошибаются группой.
+    const last = recallChoice(auth.user?.login)
+    group.value = pickRemembered(groups.value, qGroup, last.group)
+    subject.value = pickRemembered(subjects.value, qSubject, last.subject)
   } catch { /* */ }
   await loadTerm()
   document.addEventListener('click', closeCtx)
@@ -143,6 +152,30 @@ const allLessons = computed(() => {
   return local.length ? [...fromServer, ...local] : fromServer
 })
 watch([group, subject], load)
+
+// ━━ «СОХРАНЕНО» НА ВИДУ (13.10.2026) ━━
+// Оценка сохраняется сама, без кнопки, и раньше об этом не говорило НИЧЕГО: менялся
+// только средний балл в конце строки. Человек, привыкший к кнопке «Сохранить», не знал,
+// записалось ли, и ставил оценку второй раз. Теперь клетка на пару секунд обводится, а
+// рядом со счётчиком стоит время последней записи.
+// ⚠️ Знак ставится ПОСЛЕ ответа сервера: до него это было бы обещание, а не факт. Оценка
+// без сети идёт другим путём — жёлтая пунктирная рамка «ещё не отправлено».
+const lastSavedAt = ref('')
+const flashKey = ref('')
+let flashTimer = null
+function cellKey(s, key) { return `${s.student_id || `${s.surname}|${s.name}`}::${key}` }
+function markSaved(s, key) {
+  const d = new Date()
+  lastSavedAt.value = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  flashKey.value = cellKey(s, key)
+  clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => { flashKey.value = '' }, 1800)
+}
+onBeforeUnmount(() => clearTimeout(flashTimer))
+watch([group, subject], ([g, s]) => {
+  rememberChoice(auth.user?.login, { group: g, subject: s })
+  lastSavedAt.value = ''          //«сохранено в 12:03» относилось к прежнему журналу
+})
 
 // ── Раздельное обучение (§ролей, 3.6.1) ──────────────────────────────────────────
 // owned_subgroups: [1] или [2] — препод ведёт только свою (кнопок нет, всё неявно под
@@ -487,6 +520,7 @@ async function setGrade(s, key, value) {
     //«получилось» должен узнать рукой. Отдача ПОСЛЕ ответа сервера, а не по нажатию:
     //иначе она подтверждала бы намерение, а не результат.
     haptics.success()
+    markSaved(s, key)
     await load()
   } catch (e) {
     // ⚠️ Различаем «сервер отказал» и «сервер не ответил» — это противоположные случаи.
@@ -622,17 +656,104 @@ const lessonForm = ref({ type: 'Практика', number: 1, topic: '', date: '
 const savingLesson = ref(false)
 const lessonError = ref('')
 
+//Что было в форме при открытии — по этому решаем, есть ли что терять при закрытии и
+//менял ли человек дату и номер (переспрашиваем только про изменённое).
+let lessonAtOpen = { topic: '', date: '', retake: '', number: 0, subgroup: 0 }
 function openLesson() {
   editingLesson.value = null
   lessonForm.value = { type: 'Практика', number: nextNumber('Практика'), topic: '', date: plusDays(0), hour: 0, retake_date: '' }
+  lessonAtOpen = { topic: '', date: '', retake: '', number: 0, subgroup: activeSubgroup.value }
   lessonError.value = ''
   showLesson.value = true
 }
 function openEditLesson(l) {
   editingLesson.value = l.id
   lessonForm.value = { type: l.type, number: l.number, topic: l.topic || '', date: l.date || '', hour: l.hour || 0, retake_date: l.retake_date || '' }
+  lessonAtOpen = { topic: l.topic || '', date: l.date || '', retake: l.retake_date || '', number: Number(l.number || 0), subgroup: Number(l.subgroup || 0) }
   lessonError.value = ''
   showLesson.value = true
+}
+/**
+ * Закрыть окно занятия без сохранения.
+ *
+ * Щелчок мимо окна и Esc стирали набранную тему без вопроса — а у домашней работы «тема»
+ * это сам текст задания, иногда на несколько строк. Спрашиваем только когда есть что
+ * терять: пустую или нетронутую форму закрываем сразу.
+ */
+async function closeLesson() {
+  if (savingLesson.value) return
+  if ((lessonForm.value.topic || '').trim() !== (lessonAtOpen.topic || '').trim()) {
+    const ok = await confirm({
+      title: locale.t('teacherJournal.closeUnsavedTitle', 'Закрыть без сохранения?'),
+      message: locale.t('teacherJournal.closeUnsavedLesson', 'Набранный текст пропадёт.'),
+      okText: locale.t('teacherJournal.closeWithoutSaving', 'Закрыть без сохранения'),
+      cancelText: locale.t('teacherJournal.backToEditing', 'Вернуться'), danger: true,
+    })
+    if (!ok) return
+  }
+  showLesson.value = false
+}
+
+/**
+ * Проверка формы занятия до отправки. `false` — отправлять не надо (ошибка показана
+ * либо человек передумал).
+ *
+ * 🔥 Живой обход 13.10.2026: занятие создавалось с датой 01.01.2099, с номером, который
+ * уже есть, и домашняя работа — без текста (студенты получали пустое уведомление).
+ * Запрещаем только бессмыслицу (не дата, не номер, пустая домашка); дату «далеко от
+ * сегодня» и повтор номера ПЕРЕСПРАШИВАЕМ — занятие задним числом бывает законным.
+ * ⚠️ Переспрашиваем только про то, что человек изменил САМ: правка темы у старого
+ * занятия не должна каждый раз спрашивать про его прошлогоднюю дату.
+ */
+async function lessonFormOk() {
+  const f = lessonForm.value
+  const creating = !editingLesson.value
+  if (!lessonNumberOk(f.number)) {
+    lessonError.value = locale.t('teacherJournal.numberInvalid', 'Номер занятия — целое число от 1 до 999.')
+    return false
+  }
+  const issue = lessonDateIssue(f.date)
+  //Формат сверяем только у даты, которую человек ввёл или изменил: правка темы у
+  //давнего занятия со старой записью даты не должна упираться в чужую опечатку.
+  const dateTouched = creating || (f.date || '').trim() !== lessonAtOpen.date
+  const retakeTouched = (f.retake_date || '').trim() !== lessonAtOpen.retake
+  if ((issue === 'format' && dateTouched)
+      || (retakeTouched && f.retake_date && !parseRuDate(f.retake_date))) {
+    lessonError.value = locale.t('teacherJournal.dateInvalid', { example: plusDays(0) })
+    return false
+  }
+  if (creating && f.type === 'ДЗ' && !(f.topic || '').trim()) {
+    lessonError.value = locale.t('teacherJournal.homeworkEmpty', 'Напишите, что задано: этот текст получат студенты.')
+    return false
+  }
+  if (issue === 'far' && (f.date || '').trim() !== lessonAtOpen.date) {
+    const ok = await confirm({
+      title: locale.t('teacherJournal.farDateTitle', 'Проверьте дату'),
+      message: locale.t('teacherJournal.farDateMessage', { date: f.date.trim(), today: plusDays(0) }),
+      okText: locale.t('teacherJournal.farDateOk', 'Дата верная'),
+      cancelText: locale.t('teacherJournal.fixIt', 'Исправить'),
+    })
+    if (!ok) return false
+  }
+  if (creating || Number(f.number) !== lessonAtOpen.number) {
+    const twin = duplicateLesson(allLessons.value, {
+      type: f.type, number: f.number, subgroup: lessonAtOpen.subgroup, exceptId: editingLesson.value || '',
+    })
+    //Лекция двумя строками (первый и второй час) — старая законная раскладка, не дубль.
+    const secondHour = twin && f.type === 'Лекция' && Number(f.hour) > 0
+      && Number(twin.hour) > 0 && Number(twin.hour) !== Number(f.hour)
+    if (twin && !secondHour) {
+      const ok = await confirm({
+        title: locale.t('teacherJournal.duplicateTitle', 'Такой номер уже есть'),
+        message: locale.t('teacherJournal.duplicateMessage', {
+          type: f.type, number: f.number, date: twin.date || '—', next: nextNumber(f.type) }),
+        okText: locale.t('teacherJournal.duplicateOk', 'Оставить этот номер'),
+        cancelText: locale.t('teacherJournal.fixIt', 'Исправить'),
+      })
+      if (!ok) return false
+    }
+  }
+  return true
 }
 watch(() => lessonForm.value.type, (t) => {
   if (editingLesson.value) return
@@ -640,8 +761,9 @@ watch(() => lessonForm.value.type, (t) => {
 })
 async function saveLesson() {
   if (!group.value || !subject.value) { lessonError.value = locale.t('teacherJournal.selectGroupSubject', 'Выберите группу и предмет'); return }
-  savingLesson.value = true
   lessonError.value = ''
+  if (!(await lessonFormOk())) return
+  savingLesson.value = true
   //🔑 id занятия — ДО попытки онлайн (аудит F-05). Запрос мог дойти до сервера, а ответ
   //потеряться; тогда очередь ниже повторит создание С ТЕМ ЖЕ id, и сервер вернёт уже
   //созданное занятие вместо второго.
@@ -688,18 +810,43 @@ async function saveLesson() {
     lessonError.value = e?.response?.data?.detail || locale.t('teacherJournal.saveLessonFailed', 'Не удалось сохранить занятие')
   } finally { savingLesson.value = false }
 }
+/**
+ * Что написать в окне удаления занятия.
+ *
+ * 🔥 Было «Оценки этой пары перестанут учитываться» — без числа и без даты, при том что в
+ * журнале бывают два занятия с одним названием (живой обход 13.10.2026: две «Практика
+ * №6»). Человек не видел, ТО ли он удаляет и СКОЛЬКО за этим стоит. Называем дату, тему
+ * и число отметок: это единственное действие в журнале, которое нельзя отменить самому.
+ */
+function deleteLessonText(l) {
+  const marks = lessonMarkCount(l.id, data.value?.students)
+  const lines = []
+  if (l.date) lines.push(locale.t('teacherJournal.deleteLessonDate', { date: l.date }))
+  if (l.topic) lines.push(locale.t('teacherJournal.deleteLessonTopic', { topic: l.topic }))
+  lines.push(marks
+    ? locale.t('teacherJournal.deleteLessonMarks', { n: marks })
+    : locale.t('teacherJournal.deleteLessonNoMarks', 'Отметок в этом занятии нет.'))
+  lines.push(locale.t('teacherJournal.deleteLessonFinal', 'Отменить удаление нельзя.'))
+  return lines.join('\n')
+}
 async function delLesson(l) {
   const ok = await confirm({
     title: locale.t('teacherJournal.deleteLessonTitle', { type: l.type, number: l.number }),
-    message: locale.t('teacherJournal.deleteLessonMessage', 'Оценки этой пары перестанут учитываться.'),
-    okText: locale.t('common.delete'), danger: true,
+    message: deleteLessonText(l),
+    okText: locale.t('teacherJournal.deleteLessonOk', 'Удалить занятие'), danger: true,
   })
   if (!ok) return
   // Занятие, которое само ещё не уехало на сервер, удаляется прямо из очереди —
   // создавать его на сервере, чтобы тут же удалить, незачем (а создание ДЗ ещё и
   // рассылает письма студентам).
   if (isTempId(l.id)) { enqueueLessonDelete(l.id); await load(); return }
-  try { await teacherApi.deleteLesson(l.id); await load() }
+  try {
+    await teacherApi.deleteLesson(l.id)
+    //Колонка просто исчезает — без этой строки непонятно, удалилось занятие или экран
+    //«моргнул».
+    toast.success(locale.t('teacherJournal.lessonDeleted', { type: l.type, number: l.number }))
+    await load()
+  }
   catch (e) {
     if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
     if (!e?.response) {
@@ -785,6 +932,38 @@ function examMark(s) {
   return last
 }
 
+// Сколько итоговых оценок человек изменил и ещё не сохранил.
+const attChanged = computed(() =>
+  attRows.value.filter((r) => (r.grade || '') !== (r.was || '')).length)
+/**
+ * Закрыть окно итоговых оценок.
+ *
+ * 🔥 «Закрыть», щелчок мимо и Esc молча выбрасывали выбранные оценки (живой обход
+ * 13.10.2026): в журнале всё сохраняется само, и человек ждал того же здесь — а в этом
+ * окне, единственном, нужна кнопка «Сохранить». Цена ошибки высокая: преподаватель
+ * уходит в уверенности, что аттестация выставлена.
+ */
+async function closeAtt() {
+  if (attSaving.value) return
+  if (attChanged.value) {
+    const ok = await confirm({
+      title: locale.t('teacherJournal.attUnsavedTitle', 'Итоговые оценки не сохранены'),
+      message: locale.t('teacherJournal.attUnsavedMessage', { n: attChanged.value }),
+      okText: locale.t('teacherJournal.closeWithoutSaving', 'Закрыть без сохранения'),
+      cancelText: locale.t('teacherJournal.backToEditing', 'Вернуться'), danger: true,
+    })
+    if (!ok) return
+  }
+  showAtt.value = false
+}
+/** Ведомость из окна аттестации: в неё попадает только сохранённое — говорим об этом. */
+function vedomostFromAtt() {
+  if (attChanged.value) {
+    toast.info(locale.t('teacherJournal.attSaveFirst', 'Сначала нажмите «Сохранить»: в ведомость попадают только сохранённые оценки.'))
+    return
+  }
+  openFmt('vedomost')
+}
 async function openAtt() {
   try {
     const resp = (await teacherApi.termGrades(group.value, subject.value)).data
@@ -879,8 +1058,12 @@ async function downloadVedomost(fmt) {
       <span v-else-if="data" class="text-xs text-text3 sm:self-center">
         {{ locale.t('teacherJournal.countsLine', { students: visibleStudents.length, lessons: visibleLessons.length }) }}
         <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
-        <span v-if="data.hours?.total" class="text-accent">
+        <span v-if="data.hours?.total" class="text-accent"
+              :title="locale.t('teacherJournal.hoursHint', 'Одно занятие (пара) — 2 академических часа. План часов задаёт администратор.')">
           · {{ locale.t('teacherJournal.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
+        </span>
+        <span v-if="lastSavedAt" class="font-medium text-accent" role="status">
+          · ✓ {{ locale.t('teacherJournal.savedAt', { time: lastSavedAt }) }}
         </span>
       </span>
       <!-- ⚠️ НА ТЕЛЕФОНЕ 2x2, а не одна строка. Четыре кнопки в ряд делят ~312 px (360
@@ -890,8 +1073,12 @@ async function downloadVedomost(fmt) {
            места хватает, и кнопки возвращаются в одну строку, как были. -->
       <div v-if="group && subject" class="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto">
         <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 {{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
-        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
-        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="exporting || !data?.students?.length" @click="openFmt('journal')">
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length"
+                   :title="locale.t('teacherJournal.vedomostHint', 'Итоговые оценки за семестр — документ для учебной части.')"
+                   @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="exporting || !data?.students?.length"
+                   :title="locale.t('teacherJournal.journalHint', 'Все занятия и отметки группы по этому предмету одной таблицей.')"
+                   @click="openFmt('journal')">
           {{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : `📘 ${locale.t('teacherJournal.journalButton', 'Журнал')}` }}
         </AppButton>
         <AppButton variant="green" size="sm" class="sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
@@ -960,9 +1147,16 @@ async function downloadVedomost(fmt) {
                 <div v-if="col.l.topic" class="mt-0.5 line-clamp-2 text-[11px] font-normal normal-case leading-snug text-text2" :title="col.l.topic">
                   {{ col.l.topic }}
                 </div>
-                <div class="mt-1 flex items-center justify-center gap-3 text-text3">
-                  <button class="hover:text-accent" :title="locale.t('teacherJournal.edit', 'Изменить')" @click.stop="openEditLesson(col.l)">✎</button>
-                  <button class="hover:text-red" :title="locale.t('common.delete')" @click.stop="delLesson(col.l)">✕</button>
+                <!-- Кнопки — квадраты 28 px с промежутком, а не два значка вплотную: «изменить»
+                     и «удалить» стояли в 12 пикселях друг от друга, и промах мимо карандаша
+                     открывал окно удаления. -->
+                <div class="mt-1 flex items-center justify-center gap-4 text-text3">
+                  <button type="button" class="grid size-7 place-items-center rounded-sm hover:bg-accent-glow hover:text-accent"
+                          :title="locale.t('teacherJournal.edit', 'Изменить')" :aria-label="locale.t('teacherJournal.edit', 'Изменить')"
+                          @click.stop="openEditLesson(col.l)">✎</button>
+                  <button type="button" class="grid size-7 place-items-center rounded-sm hover:bg-red/10 hover:text-red"
+                          :title="locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие')" :aria-label="locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие')"
+                          @click.stop="delLesson(col.l)">✕</button>
                 </div>
               </template>
             </th>
@@ -986,14 +1180,18 @@ async function downloadVedomost(fmt) {
                    преподаватель закрыл бы журнал в уверенности, что всё уехало. -->
               <select v-else :value="rawValue(s.grades[col.key])"
                       :class="[gradeClass(s.grades[col.key], col.l),
-                               isPending(s, col) ? 'border-dashed border-yellow' : 'border-border2']"
+                               isPending(s, col) ? 'border-dashed border-yellow' : 'border-border2',
+                               flashKey === cellKey(s, col.key) ? 'ring-2 ring-accent' : '']"
                       :title="isPending(s, col)
                         ? locale.t('teacherJournal.cellPending', 'Ещё не отправлено на сервер')
                         : (s.grades[col.key] || '')"
                       class="h-9 w-14 cursor-pointer rounded-sm border bg-card2 text-center text-sm outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-default disabled:opacity-70"
                       @change="onCell(s, col, $event.target.value)"
                       @keydown="onCellKey(s, col, $event)">
-                <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || '·' }}</option>
+                <!-- Пустой пункт — это «убрать отметку». Точка без подписи этого не говорила:
+                     снять ошибочную оценку было нечем, если не знать заранее. В пустой клетке
+                     остаётся точка — там убирать нечего. -->
+                <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || (rawValue(s.grades[col.key]) ? locale.t('teacherJournal.clearMark', '✕ убрать') : '·') }}</option>
               </select>
             </td>
             <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(averageOf(s))">
@@ -1034,7 +1232,7 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Модалка занятия: создание и правка (дата — сегодня по умолчанию) -->
-    <div v-dialog v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLesson = false">
+    <div v-dialog v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeLesson">
       <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">
           {{ editingLesson ? locale.t('teacherJournal.editLessonTitle', 'Изменить занятие') : locale.t('teacherJournal.newLessonTitle', 'Новое занятие') }} · {{ group }}
@@ -1047,15 +1245,16 @@ async function downloadVedomost(fmt) {
                 <option v-for="t in LESSON_TYPES" :key="t" :value="t">{{ t }}</option>
               </select></label>
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.numberLabel', '№') }}</span>
-              <input v-model.number="lessonForm.number" type="number" min="1"
+              <input v-model.number="lessonForm.number" type="number" min="1" max="999" step="1" inputmode="numeric"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
           </div>
           <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ topicLabel }}</span>
-            <textarea v-model="lessonForm.topic" rows="2" :placeholder="topicPlaceholder"
+            <textarea v-model="lessonForm.topic" rows="2" :placeholder="topicPlaceholder" maxlength="2000"
                       class="w-full resize-none rounded-sm border border-border2 bg-card2 px-3 py-2 text-sm text-text outline-none focus:border-accent"></textarea></label>
           <div class="grid grid-cols-2 gap-3">
             <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.dateLabel', 'Дата') }}</span>
               <input v-model="lessonForm.date" :placeholder="locale.t('teacherJournal.datePlaceholder', 'дд.мм.гггг')"
+                     inputmode="numeric" maxlength="10" autocomplete="off"
                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
             <label v-if="lessonForm.type === 'Лекция'" class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.hoursLabel', 'Часы') }}</span>
               <input v-model.number="lessonForm.hour" type="number" min="0"
@@ -1067,7 +1266,7 @@ async function downloadVedomost(fmt) {
           <p v-if="lessonError" class="text-sm text-red">{{ lessonError }}</p>
         </div>
         <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showLesson = false">{{ locale.t('common.cancel') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="closeLesson">{{ locale.t('common.cancel') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="savingLesson" @click="saveLesson">
             {{ savingLesson ? locale.t('teacherJournal.saving', 'Сохранение…') : (editingLesson ? locale.t('common.save') : locale.t('teacherJournal.add', 'Добавить')) }}
           </AppButton>
@@ -1076,7 +1275,7 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Модалка аттестации: итоговые оценки за семестр + форма контроля + ведомость -->
-    <div v-dialog v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showAtt = false">
+    <div v-dialog v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeAtt">
       <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 {{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
         <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(currentTerm) }}</p>
@@ -1128,9 +1327,14 @@ async function downloadVedomost(fmt) {
             </div>
           </div>
         </div>
+        <!-- В этом окне, в отличие от журнала, само ничего не сохраняется — говорим об этом,
+             пока человек ещё здесь, а не после того, как он закрыл окно. -->
+        <p v-if="attChanged" role="status" class="mt-3 rounded-sm border border-orange/40 bg-orange/10 px-2.5 py-1.5 text-xs text-text2">
+          {{ locale.t('teacherJournal.attChangedLine', { n: attChanged }) }}
+        </p>
         <div class="mt-4 flex flex-wrap justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showAtt = false">{{ locale.t('common.close') }}</AppButton>
-          <AppButton variant="ghost" size="sm" @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="closeAtt">{{ locale.t('common.close') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="vedomostFromAtt">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? locale.t('teacherJournal.saving', 'Сохранение…') : locale.t('common.save') }}</AppButton>
         </div>
       </div>
@@ -1140,10 +1344,15 @@ async function downloadVedomost(fmt) {
     <div v-dialog v-if="fmtMenu.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" @click.self="fmtMenu.show = false">
       <div class="w-full max-w-xs rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-1 font-title text-base font-bold text-text">{{ locale.t('teacherJournal.formatTitle', 'В каком формате?') }}</h3>
-        <p class="mb-4 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? locale.t('teacherJournal.journalWord', 'Журнал успеваемости') : locale.t('teacherJournal.vedomostButton', 'Ведомость') }} · {{ group }} · {{ subject }}</p>
+        <p class="mb-1 text-xs text-text3">{{ fmtMenu.kind === 'journal' ? locale.t('teacherJournal.journalWord', 'Журнал успеваемости') : locale.t('teacherJournal.vedomostButton', 'Ведомость') }} · {{ group }} · {{ subject }}</p>
+        <p class="mb-4 text-xs text-text2">{{ fmtMenu.kind === 'journal'
+          ? locale.t('teacherJournal.journalHint', 'Все занятия и отметки группы по этому предмету одной таблицей.')
+          : locale.t('teacherJournal.vedomostHint', 'Итоговые оценки за семестр — документ для учебной части.') }}</p>
         <div class="flex flex-col gap-2">
           <AppButton variant="ghost" @click="pickFmt('xlsx')">📊 {{ locale.t('teacherJournal.excelOption', 'Excel (.xlsx)') }}</AppButton>
           <AppButton variant="ghost" @click="pickFmt('docx')">📄 {{ locale.t('teacherJournal.wordOption', 'Word (.docx)') }}</AppButton>
+          <!-- Выход из окна кнопкой: щелчок мимо и Esc знает не каждый. -->
+          <AppButton variant="ghost" size="sm" class="mt-1" @click="fmtMenu.show = false">{{ locale.t('common.cancel') }}</AppButton>
         </div>
       </div>
     </div>

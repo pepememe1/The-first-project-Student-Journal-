@@ -324,9 +324,9 @@ async function toggleBlock() {
     // ⚠️ Подтверждение показываем ТОЛЬКО себе и нейтральным текстом. Заблокированному не
     // сообщают ничего — иначе блокировка становится способом объявить человеку, что он
     // неприятен (то же решение у Telegram и Discord).
-    toast.show(next ? locale.t('peerProfile.blocked', 'Заблокирован. Он об этом не узнает.')
+    toast.success(next ? locale.t('peerProfile.blocked', 'Заблокирован. Он об этом не узнает.')
                     : locale.t('peerProfile.unblocked', 'Блокировка снята.'))
-  } catch { toast.show(locale.t('common.error', 'Не получилось')) }
+  } catch { toast.error(locale.t('common.error', 'Не получилось')) }
 }
 
 // «Поделиться контактом» = отправить ТЕГ человека в другой чат. Ссылка ведёт в его
@@ -343,11 +343,11 @@ async function shareContact() {
   const link = `${publicSiteOrigin()}/messages?peer=${encodeURIComponent(shown.value.id)}`
   try {
     await navigator.clipboard.writeText(`@${shown.value.full_name} ${link}`)
-    toast.show(locale.t('peerProfile.shareCopied', 'Ссылка на профиль скопирована — вставьте в любой чат'))
+    toast.success(locale.t('peerProfile.shareCopied', 'Ссылка на профиль скопирована — вставьте в любой чат'))
   } catch {
     // Буфер обмена недоступен (нет разрешения, небезопасный контекст) — это не поломка,
     // но молчать нельзя: человек нажал и ничего не произошло.
-    toast.show(locale.t('peerProfile.shareFailed', 'Не удалось скопировать ссылку'))
+    toast.error(locale.t('peerProfile.shareFailed', 'Не удалось скопировать ссылку'))
   }
 }
 
@@ -357,8 +357,8 @@ async function submitReport(payload) {
     await messengerApi.reportUser(shown.value.id, payload.reasonCode,
                                   payload.description, payload.field)
     reportOpen.value = false
-    toast.show(locale.t('peerProfile.reported', 'Жалоба отправлена модерации'))
-  } catch { toast.show(locale.t('common.error', 'Не получилось')) }
+    toast.success(locale.t('peerProfile.reported', 'Жалоба отправлена модерации'))
+  } catch { toast.error(locale.t('common.error', 'Не получилось')) }
   finally { reportBusy.value = false }
 }
 

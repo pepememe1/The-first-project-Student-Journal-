@@ -59,6 +59,8 @@ const group = ref('')
 const week = ref(1)
 const data = ref(null)
 const loading = ref(true)
+//Последняя загрузка расписания группы сорвалась (нет ответа, отказ сервера).
+const loadFailed = ref(false)
 
 // Режим преподавателя: '' — ещё не выбран (две кнопки), 'me' — свои пары (авто-матч),
 // 'teacher' — конкретный преподаватель из списка, 'group' — расписание группы.
@@ -153,7 +155,12 @@ async function enterCategory(fromUser = false) {
     //преподавателя», что у непойманного по ФИО преподавателя, вместо тихого пустого
     //списка. Резолвится (обычный случай) — mode остаётся 'group', экран не показывается,
     //ни одного лишнего клика не появляется.
-    if (!group.value) mode.value = ''
+    //🔥 Но только когда сервер ОТВЕТИЛ и группы в ответе нет. Сорвавшийся запрос — другое
+    //событие (13.10.2026, живой обход: портал отвечал медленно, и студент видел «Не
+    //удалось определить вашу группу — выберите, что показать» с кнопками категорий
+    //вместо своего расписания). Группа у него определена — не загрузилось расписание;
+    //остаёмся в виде группы, где об этом сказано прямо и есть кнопка «Обновить».
+    if (!group.value && !loadFailed.value) mode.value = ''
   } else {
     loading.value = false // ждём выбора группы из списка
   }
@@ -253,6 +260,7 @@ async function loadGroupsList() {
 
 async function load() {
   const my = nextReq()
+  loadFailed.value = false
   const forCategory = category.value
   const forGroup = group.value
   //Спиннер поднимаем ТОЛЬКО если показать нечего: иначе экран моргнул бы «загрузка» и
@@ -286,6 +294,7 @@ async function load() {
   } catch {
     //⚠️ Показанную копию НЕ стираем: «нет связи» — не повод убрать с экрана расписание,
     //которое человек уже читает. Пусто было и остаётся пусто только если копии не было.
+    if (my === reqSeq) loadFailed.value = true
     if (my === reqSeq && !data.value) data.value = null
   } finally {
     //Спиннер снимает ТОЛЬКО последний запрос — и снимает его всегда, независимо от того,
@@ -526,8 +535,11 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
                СМЫСЛ в зависимости от роли и текущего режима — с двух разных мест разными
                словами читалось одно и то же действие. Название теперь ВСЕГДА по
                НАЗНАЧЕНИЮ (куда ведёт клик), а не по роли/состоянию. -->
-          <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseGroupMode">
-            {{ locale.t('schedulePage.groupSchedule', 'Расписание группы') }}
+          <!-- Подпись — ДЕЙСТВИЕ («показать…»), а не название: слова «Расписание группы»
+               рядом со списком читались как заголовок того, что на экране, и человек
+               решал, что смотрит не то расписание (живой обход 13.10.2026). -->
+          <button type="button" class="text-xs text-text2 underline underline-offset-2 hover:text-accent" @click="chooseGroupMode">
+            {{ locale.t('schedulePage.switchToGroup', 'Показать расписание группы') }}
           </button>
         </template>
 
@@ -547,8 +559,8 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
                что и у ВЕРХНЕЙ кнопки сброса режима (см. выше), хотя ведут они в разные
                места: та сбрасывает выбор целиком, эта просто переключает вид. Название —
                по назначению, для всех ролей одинаково. -->
-          <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="chooseTeacherMode">
-            {{ locale.t('schedulePage.teacherSchedule', 'Расписание преподавателя') }}
+          <button type="button" class="text-xs text-text2 underline underline-offset-2 hover:text-accent" @click="chooseTeacherMode">
+            {{ locale.t('schedulePage.switchToTeacher', 'Показать расписание преподавателя') }}
           </button>
         </template>
 

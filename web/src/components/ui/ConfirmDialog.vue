@@ -1,13 +1,19 @@
 <script setup>
 // ConfirmDialog — единая модалка подтверждения/ввода (замена confirm()/prompt()).
 // Управляется синглтоном useConfirm; монтируется один раз в App.vue.
-import { ref, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { dialogState, settleDialog } from '@/composables/useConfirm'
+import { typedMatches } from '@/utils/deleteImpact'
 import AppButton from '@/components/ui/AppButton.vue'
 
 const inputEl = ref(null)
 
+// Подтверждение набором: согласиться можно, только набрав название (см. useConfirm).
+const locked = computed(() => !!dialogState.requireText
+  && !typedMatches(dialogState.typed, dialogState.requireText))
+
 function onOk() {
+  if (locked.value) return        //Enter в поле не должен обходить выключенную кнопку
   settleDialog(dialogState.mode === 'prompt' ? dialogState.value : true)
 }
 function onCancel() {
@@ -51,9 +57,18 @@ watch(
         class="mt-3 h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent"
         @keyup.enter="onOk"
       />
+      <label v-if="dialogState.requireText" class="mt-3 block">
+        <span class="mb-1 block text-xs font-medium text-text2">{{ dialogState.requireLabel }}</span>
+        <input
+          v-model="dialogState.typed"
+          autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+          class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-red"
+          @keyup.enter="onOk"
+        />
+      </label>
       <div class="mt-5 flex justify-end gap-2">
         <AppButton variant="ghost" size="sm" @click="onCancel">{{ dialogState.cancelText }}</AppButton>
-        <AppButton :variant="dialogState.danger ? 'red' : 'green'" size="sm" @click="onOk">
+        <AppButton :variant="dialogState.danger ? 'red' : 'green'" size="sm" :disabled="locked" @click="onOk">
           {{ dialogState.okText }}
         </AppButton>
       </div>

@@ -4,7 +4,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { BookOpen, Search, Plus, Paperclip, ClipboardList, Archive, Loader2, X } from '@lucide/vue'
-import { coursesApi } from '@/api/endpoints'
+import { coursesApi, teacherApi, adminApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 
@@ -35,6 +35,35 @@ async function load() {
 onMounted(load)
 
 function open(c) { router.push(`/${auth.role}/courses/${c.id}`) }
+
+// ━━ ГРУППА И ПРЕДМЕТ — ИЗ СПИСКА, А НЕ НАБОРОМ (13.10.2026) ━━
+// Оба поля были свободным текстом с подсказкой «К74-1» — при том что группа в журнале
+// называется «К74/1». Курс с опечаткой в группе создавался (у администратора) и не
+// показывался ни одному студенту: группы с таким названием нет. Преподавателю сервер
+// отказывал, но уже после заполнения формы. Теперь список — те же группы и предметы,
+// что знает журнал; набор руками остаётся только если список получить не удалось.
+const groupOptions = ref([])
+const subjectOptions = ref([])
+let optionsLoaded = false
+async function loadOptions() {
+  if (optionsLoaded) return
+  try {
+    if (auth.role === 'teacher') {
+      const o = (await teacherApi.overview()).data
+      groupOptions.value = o.groups || []
+      subjectOptions.value = o.subjects || []
+    } else {
+      const [g, s] = await Promise.all([adminApi.groups(), adminApi.subjects()])
+      groupOptions.value = (g.data.groups || []).map((x) => x.name).filter(Boolean)
+      subjectOptions.value = (s.data.subjects || []).map((x) => x.name).filter(Boolean)
+    }
+    optionsLoaded = true
+  } catch { /* списка нет — останутся поля для набора, как раньше */ }
+}
+function openCreate() {
+  showCreate.value = true
+  loadOptions()
+}
 
 async function submitCreate() {
   const title = draft.value.title.trim()
@@ -67,7 +96,7 @@ async function submitCreate() {
         <input type="checkbox" v-model="includeArchived" @change="load" class="accent-[var(--gb-accent)]" />
         {{ t('courses.showArchived', 'С архивом') }}
       </label>
-      <button v-if="canCreate" type="button" @click="showCreate = true"
+      <button v-if="canCreate" type="button" @click="openCreate"
               class="flex h-input shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-sm font-semibold text-white hover:bg-accent2">
         <Plus class="size-4" /> {{ t('courses.create', 'Создать курс') }}
       </button>
@@ -80,6 +109,11 @@ async function submitCreate() {
     <div v-else-if="!courses.length" class="grid place-items-center gap-2 py-16 text-center text-text3">
       <BookOpen class="size-10 opacity-40" />
       <p>{{ t('courses.empty', 'Курсов пока нет') }}</p>
+      <!-- Что такое «курс», новичку неоткуда узнать: пустой экран с одним словом читался
+           как «раздел не работает». -->
+      <p class="max-w-md text-sm">{{ canCreate
+        ? t('courses.emptyHintTeacher', 'Курс — это страница предмета для группы: на ней выкладывают материалы и задания. Нажмите «Создать курс».')
+        : t('courses.emptyHintStudent', 'Курс — это страница предмета, куда преподаватель выкладывает материалы и задания. Когда преподаватель создаст курс, он появится здесь.') }}</p>
     </div>
 
     <!-- Сетка карточек -->
@@ -116,23 +150,34 @@ async function submitCreate() {
                     class="grid size-7 shrink-0 place-items-center rounded text-text3 hover:bg-bg2 hover:text-text"><X class="size-4" /></button>
           </div>
           <label class="mb-1 block text-xs text-text2">{{ t('courses.fTitle', 'Название') }}</label>
-          <input v-model="draft.title" maxlength="200"
+          <input v-model="draft.title" maxlength="200" :placeholder="t('courses.titlePlaceholder', 'Например: Базы данных, 2 курс')"
                  class="mb-3 h-input w-full rounded-md border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
           <div class="mb-3 grid grid-cols-2 gap-2">
             <div>
               <label class="mb-1 block text-xs text-text2">{{ t('courses.fSubject', 'Предмет') }}</label>
-              <input v-model="draft.subject" maxlength="120"
+              <select v-if="subjectOptions.length" v-model="draft.subject"
+                      class="h-input w-full rounded-md border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+                <option value="">{{ t('courses.pickSubject', '— выберите —') }}</option>
+                <option v-for="s in subjectOptions" :key="s" :value="s">{{ s }}</option>
+              </select>
+              <input v-else v-model="draft.subject" maxlength="120"
                      class="h-input w-full rounded-md border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
             </div>
             <div>
               <label class="mb-1 block text-xs text-text2">{{ t('courses.fGroup', 'Группа') }}</label>
-              <input v-model="draft.group_name" maxlength="40" placeholder="К74-1"
+              <select v-if="groupOptions.length" v-model="draft.group_name"
+                      class="h-input w-full rounded-md border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+                <option value="">{{ t('courses.pickGroup', '— выберите —') }}</option>
+                <option v-for="g in groupOptions" :key="g" :value="g">{{ g }}</option>
+              </select>
+              <input v-else v-model="draft.group_name" maxlength="40" placeholder="К74/1"
                      class="h-input w-full rounded-md border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
             </div>
           </div>
           <p v-if="auth.role === 'teacher'" class="mb-2 text-xs text-text3">
             {{ t('courses.teacherHint', 'Создать курс можно только по своей группе и предмету.') }}
           </p>
+          <p v-if="!draft.title.trim()" class="mb-2 text-xs text-text3">{{ t('courses.needTitle', 'Чтобы создать курс, впишите название.') }}</p>
           <p v-if="createError" class="mb-2 text-xs text-red">{{ createError }}</p>
           <div class="flex justify-end gap-2">
             <button type="button" @click="showCreate = false"

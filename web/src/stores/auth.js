@@ -24,6 +24,7 @@ import { clear as clearScheduleWidget, refreshFromServer as refreshWidgetSchedul
   saveEndpoint as saveWidgetEndpoint } from '@/services/scheduleWidget'
 import { loginWithPasskey } from '@/api/webauthn'
 import { getTrustToken, setTrustToken, dropTrustToken } from '@/utils/trustToken'
+import { dropResume } from '@/utils/sessionResume'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
@@ -48,6 +49,17 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref('')
   // Сколько секунд осталось до конца блокировки за перебор. Ноль — не заперты.
   const lockedFor = ref(0)
+  //Какого рода отказ на экране: 'credentials' — сервер не принял логин или пароль,
+  //'' — всё остальное. По нему форма входа решает, показывать ли «что проверить»
+  //(Caps Lock, язык клавиатуры): при отказе сети эти советы были бы мимо.
+  //⚠️ Отдельное поле, а не сравнение с текстом ошибки: текст правят, и сравнение
+  //перестало бы совпадать молча.
+  const errorKind = ref('')
+  //Почему человек оказался на форме входа, хотя сам не выходил: 'expired' — сессия
+  //кончилась, 'offline' — сутки без связи. Раньше форма появлялась без единого слова,
+  //и это читалось как «журнал меня выкинул, я что-то сломал».
+  const notice = ref('')
+  function setNotice(kind) { notice.value = kind || '' }
 
   //Незавершённый вход: пароль принят, ждём код. Живёт только в памяти вкладки —
   //класть challenge в localStorage нельзя, это половина пропуска, и переживать
@@ -86,6 +98,7 @@ export const useAuthStore = defineStore('auth', () => {
     //ПЕРВОЙ строкой, до записи токенов: всё, что улетело в сеть от прежнего человека,
     //с этого момента чужое и не имеет права ни дописать токены, ни стереть их.
     bumpSessionGeneration()
+    notice.value = ''      //человек вошёл — объяснять, почему он на форме входа, больше нечего
     //Доверенное устройство (4.0): сервер выдал новый секрет — храним; галочку сняли —
     //сервер доверие снял, и старый секрет предъявлять больше незачем.
     //⚠️ Только для входа ПАРОЛЕМ (`trustFlow`): вход по биометрии галочки не видит, и
@@ -128,6 +141,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(login, password, { trustDevice = false } = {}) {
     loading.value = true
     error.value = ''
+    errorKind.value = ''
     lockedFor.value = 0
     pendingTrust.value = !!trustDevice
     try {
@@ -163,7 +177,7 @@ export const useAuthStore = defineStore('auth', () => {
       //Секунды до разблокировки держим отдельно: по ним рисуется обратный отсчёт, и
       //только он превращает «подождите» в понятное «осталось столько-то».
       lockedFor.value = status === 429 ? Number(e.response?.headers?.['retry-after'] || 0) : 0
-      if (status === 401) error.value = 'Неверный логин или пароль'
+      if (status === 401) { error.value = 'Неверный логин или пароль'; errorKind.value = 'credentials' }
       else if (status === 403) error.value = e.response?.data?.detail || 'Устройство не подтверждено администратором'
       else if (status === 429) error.value = e.response?.data?.detail || 'Слишком много попыток входа. Подождите.'
       else if (noAnswer && isDesktopApp()) error.value = 'Вход не успел завершиться: первый вход скачивает данные на компьютер, на большой базе это до пары минут. Попробуйте войти ещё раз.'
@@ -261,6 +275,9 @@ export const useAuthStore = defineStore('auth', () => {
     // Отписываем устройство ДО гашения токена: после clearTokens запрос уже не пройдёт,
     // и бывший владелец телефона продолжал бы получать чужие уведомления.
     await unregisterToken()
+    //Вышел сам — возвращать «туда, где застал конец сессии» некуда и незачем.
+    dropResume()
+    notice.value = ''
     // Гасим токен и на сервере (чёрный список), а не только локально — безопасный выход.
     try { await authApi.logout() } catch { /* офлайн — всё равно чистим локально */ }
     //«Вышел и не вошёл» — это ТОЖЕ другая сессия: запоздавший успешный refresh иначе
@@ -326,7 +343,8 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, loading, error, lockedFor, isAuthenticated, role, login, loginPasskey,
+  return { user, loading, error, errorKind, notice, setNotice, lockedFor, isAuthenticated,
+           role, login, loginPasskey,
            mfaChallenge, mfaExpiresAt, mfaMethod, mfaChannel, verifyMfa, cancelMfa,
            logout, clearSession }
 })

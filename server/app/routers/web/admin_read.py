@@ -348,6 +348,22 @@ def admin_set_group_hours(payload: dict = Body(...),
     return {"ok": True, "saved": saved, "term": {"year": ty, "semester": ts}}
 
 
+@router.get("/admin/delete-impact")
+def admin_delete_impact(kind: str = Query(...), key: str = Query(...),
+                        _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Что затронет удаление группы, предмета, студента или преподавателя — числа для
+    окна подтверждения. Только считает: само удаление идёт прежними ручками.
+
+    Ключ — в ЗАПРОСЕ, а не в пути: название группы со слэшем («К74/1») в пути
+    распадается на лишний сегмент (Starlette раскодирует `%2F` до разбора маршрута)."""
+    from ... import delete_impact
+    try:
+        counts = delete_impact.impact(db, kind, key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Неизвестный вид объекта")
+    return {"kind": kind, "key": key, "counts": counts}
+
+
 @router.get("/admin/subjects")
 def admin_subjects(_admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     rows = db.query(Subject).filter(Subject.deleted == False).order_by(Subject.name).all()  # noqa: E712

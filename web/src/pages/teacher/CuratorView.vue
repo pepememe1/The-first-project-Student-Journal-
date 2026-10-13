@@ -69,6 +69,11 @@ async function saveThreshold() {
   } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.thresholdSaveFailed', 'Не удалось сохранить порог')) }
 }
 
+// Задан ли порог перевода. Без него сервер считает «готовыми» ВСЕХ (правило общего
+// модуля: порог не задан — проверять нечем), и зелёная галочка у каждого студента
+// читалась как «проверено, всё хорошо» при 0 из 0 (живой обход 13.10.2026).
+const zetThresholdSet = computed(() =>
+  zetReport.value?.min_zet !== null && zetReport.value?.min_zet !== undefined)
 const eligibleIds = computed(() =>
   (zetReport.value?.students || []).filter((s) => s.eligible).map((s) => s.student_id))
 function toggleSelectAllEligible(on) {
@@ -81,7 +86,8 @@ async function doPromote() {
     .map((s) => s.display_name)
   const ok = await confirm({
     title: locale.t('curatorView.confirmPromoteTitle', 'Перевод на следующий курс'),
-    message: locale.t('curatorView.confirmPromoteMessage', { names: names.join(', ') }),
+    message: locale.t('curatorView.confirmPromoteMessage', { names: names.join(', ') })
+      + (zetThresholdSet.value ? '' : `\n\n${locale.t('curatorView.promoteNoThreshold', 'Порог перевода не задан: набранные зачётные единицы не проверялись.')}`),
     okText: locale.t('curatorView.confirmPromoteOk', 'Перевести'),
   })
   if (!ok) return
@@ -449,7 +455,12 @@ async function exportReport(fmt) {
                  class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
           <button type="button" @click="saveThreshold"
                   class="rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ locale.t('common.save') }}</button>
+          <p class="basis-full text-xs text-text3">{{ locale.t('curatorView.zetExplain', 'ЗЕТ — зачётные единицы: «вес» предмета. Студент получает их, когда предмет сдан. Порог — сколько единиц нужно набрать для перевода на следующий курс.') }}</p>
         </div>
+        <p v-if="zetReport && !zetThresholdSet" role="status"
+           class="rounded-sm border border-orange/40 bg-orange/10 px-3 py-2 text-xs text-text2">
+          {{ locale.t('curatorView.noThresholdNote', 'Порог перевода не задан, поэтому готовность студентов не проверяется. Задайте порог — и таблица покажет, кому сколько не хватает.') }}
+        </p>
 
         <p v-if="zetLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
         <EmptyState v-else-if="!zetReport?.students?.length" :title="locale.t('curatorView.zetEmptyTitle', 'Пока пусто')"
@@ -490,7 +501,7 @@ async function exportReport(fmt) {
                          :disabled="!s.eligible" class="accent-accent" />
                 </td>
                 <td class="px-3 py-2 text-text">
-                  <span :class="s.eligible ? 'text-accent' : 'text-red'">{{ s.eligible ? '✅' : '❌' }}</span>
+                  <span v-if="zetThresholdSet" :class="s.eligible ? 'text-accent' : 'text-red'">{{ s.eligible ? '✅' : '❌' }}</span>
                   {{ s.display_name }}
                 </td>
                 <td class="px-3 py-2 text-right text-text2">

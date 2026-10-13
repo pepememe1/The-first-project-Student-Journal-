@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
+import MarksLegend from '@/components/journal/MarksLegend.vue'
 import DataFreshness from '@/components/ui/DataFreshness.vue'
 import JournalEggs from '@/components/easter/JournalEggs.vue'
 import { useEasterStore } from '@/stores/easterEggs'
@@ -83,6 +84,7 @@ onMounted(async () => {
         <SubjectLessons :lessons="s.lessons" />
       </Card>
 
+      <MarksLegend />
       <p v-if="data.methodology" class="px-1 text-xs text-text3">{{ data.methodology }}</p>
     </template>
 

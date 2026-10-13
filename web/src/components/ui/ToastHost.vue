@@ -1,7 +1,7 @@
 <script setup>
 // ToastHost — стопка неблокирующих уведомлений (замена alert()). Монтируется один раз
 // в App.vue; список берёт из синглтона useToast. Клик по тосту — закрыть.
-import { toasts, dismissToast } from '@/composables/useToast'
+import { toasts, dismissToast, pauseToast, resumeToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -30,6 +30,8 @@ const STYLES = {
       :class="STYLES[t.type] || STYLES.info"
       :role="t.type === 'error' ? 'alert' : 'status'"
       @click="dismissToast(t.id)"
+      @mouseenter="pauseToast(t.id)"
+      @mouseleave="resumeToast(t.id)"
     >
       <span class="flex-1 whitespace-pre-line text-text2">{{ t.message }}</span>
       <button class="text-text3 hover:text-text" :aria-label="locale.t('common.close', 'Закрыть')"

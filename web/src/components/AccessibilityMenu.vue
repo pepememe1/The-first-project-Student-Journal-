@@ -107,7 +107,7 @@ onBeforeUnmount(() => {
             :aria-label="t('a11y.title', 'Версия для слабовидящих')"
             :title="t('a11y.title', 'Версия для слабовидящих')"
             :aria-pressed="a11y.active"
-            class="grid size-9 place-items-center rounded-md border transition-colors"
+            class="grid size-10 place-items-center rounded-md border transition-colors"
             :class="a11y.active
               ? 'border-accent bg-accent-glow text-accent'
               : 'border-transparent text-text3 hover:bg-accent-glow hover:text-accent'">

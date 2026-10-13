@@ -10,11 +10,11 @@ import TeacherSuggestionsDialog from '@/components/admin/TeacherSuggestionsDialo
 import InviteDialog from '@/components/admin/InviteDialog.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
-import { useConfirm } from '@/composables/useConfirm'
+import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 
 const toast = useToast()
-const { confirm } = useConfirm()
+const { confirmDelete } = useDeleteConfirm()
 const locale = useLocaleStore()
 const rows = ref([])
 const loading = ref(true)
@@ -190,7 +190,8 @@ async function save() {
   finally { saving.value = false }
 }
 async function del(g) {
-  if (!(await confirm({ title: locale.t('adminGroups.confirmDeleteTitle', { name: g.name }), okText: locale.t('common.delete'), danger: true }))) return
+  if (!(await confirmDelete({ kind: 'group', key: g.name,
+    title: locale.t('adminGroups.confirmDeleteTitle', { name: g.name }) }))) return
   try { await adminApi.deleteGroup(g.name); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminGroups.deleteFailed', 'Не удалось удалить')) }
 }
