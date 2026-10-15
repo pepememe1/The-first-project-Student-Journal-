@@ -139,30 +139,10 @@ def parent_journal(student_id: str = Query(""), year: str = Query(""), semester:
         W.group_lessons(db, child.group_name, year=ty, semester=ts), is_archive), child.id)
     records = W.student_visible_records(db, child.surname, child.name, child.group_name,
                                        student_id=child.id)
-    scale_map = W.lesson_scale_map(db, lessons)
-
-    from collections import OrderedDict
-    buckets = OrderedDict()
-    for l in lessons:
-        buckets.setdefault(l.subject, []).append(l)
-    #Тот же живой баг, что и на Главной/Журнале студента: предмет ДЕЙСТВУЮЩЕГО плана
-    #без единого занятия должен быть виден («по нему пока пусто»), не пропадать молча.
-    if not is_archive:
-        for subj in sorted(W.group_plan_subjects(db, child.group_name, cfg) - set(buckets)):
-            buckets[subj] = []
-
-    subjects = []
-    for subj, ls in buckets.items():
-        items = []
-        for l in ls:
-            entry = {"id": l.id, "type": l.type, "number": l.number,
-                     "topic": l.topic, "date": l.date, "grade": records.get(l.id, "")}
-            if l.type == "Экзамен":
-                entry["latest"] = W.grading.latest_exam_value(l.id, records)
-            items.append(entry)
-        subjects.append({"subject": subj, "lessons": items,
-                         "average": W.average(ls, records, cfg, scale=scale_map),
-                         "hours": W.hours_progress(db, child.group_name, subj, ls, ty, ts)})
+    #Сборка по предметам — ОДНА на кабинет студента и родителя (`webdata.journal_subjects`):
+    #до 15.10.2026 здесь стояли две её копии, и первое же новое поле занятия развело бы
+    #два экрана, которые обещают показывать одно и то же.
+    subjects = W.journal_subjects(db, lessons, records, cfg, child.group_name, ty, ts, is_archive)
 
     return {"student": {"id": child.id,
                         "full_name": (child.full_name or f"{child.surname} {child.name}").strip(),

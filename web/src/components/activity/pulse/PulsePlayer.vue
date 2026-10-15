@@ -11,8 +11,10 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
+import { useToast } from '@/composables/useToast'
 
 const locale = useLocaleStore()
+const toast = useToast()
 const act = useActivityStore()
 
 // Готовые причины + «другое» со своим текстом: список из воздуха человек не заполнит,
@@ -64,7 +66,10 @@ async function submit() {
   try {
     await activitiesApi.sendFeedback(act.activity.id, score.value, reason.value, text.value.trim())
     sent.value = true
-  } catch { /* noop */ }
+  } catch (e) {
+    //Отзыв не ушёл — человек обязан это знать: иначе он уверен, что его мнение учтено.
+    toast.error(e?.response?.data?.detail || locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз'))
+  }
 }
 
 async function loadSummary() {

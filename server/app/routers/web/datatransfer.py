@@ -45,7 +45,8 @@ def admin_data_export(sets: str = "", request: Request = None,
     blob = DT.export_zip(db, picked or None)
     audit.log(db, request, actor=_admin.login, role="admin", action="data.export",
               detail=",".join(picked) if picked else "all")
-    stamp = _now_iso()[:10]
+    import college_clock
+    stamp = college_clock.today().isoformat()
     return Response(content=blob, media_type="application/zip", headers={
         "Content-Disposition": f'attachment; filename="gradebook-data-{stamp}.zip"'})
 

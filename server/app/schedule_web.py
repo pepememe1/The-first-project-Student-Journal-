@@ -83,7 +83,11 @@ def current_week_parity(d: date | None = None) -> int:
     ВООБЩЕ (держит `tests/test_schedule_pkg_server_safe.py`). Согласованность копий
     держит контракт `docs/contracts/week-parity-cases.json` (Python ↔ Java-виджет).
     """
-    d = d or date.today()
+    #Без даты — СЕГОДНЯ В КОЛЛЕДЖЕ, а не на машине: бой живёт по Москве, и с 00:00 до
+    #05:00 по Улан-Удэ `date.today()` отдавал вчерашнее число (15.10.2026).
+    if d is None:
+        import college_clock
+        d = college_clock.today()
     ref = _academic_week_start(d)
     diff = (d - ref).days / 7
     if diff >= 0:

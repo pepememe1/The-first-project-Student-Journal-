@@ -6,6 +6,8 @@ reminders.py — Напоминания о сообщении (§D19): разб�
 """
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
 
+import college_clock
+
 
 @router.get("/messages/{mid}/reminder-suggest")
 def reminder_suggest(mid: int, user: User = Depends(get_current_user),
@@ -19,7 +21,7 @@ def reminder_suggest(mid: int, user: User = Depends(get_current_user),
         raise HTTPException(status_code=404, detail="Сообщение не найдено")
     _require_participant(db, m.conversation_id, user)
     import reminder_parse
-    found = reminder_parse.parse_reminder(m.body or "", datetime.now(timezone.utc))
+    found = reminder_parse.parse_reminder(m.body or "", college_clock.now())
     if not found:
         return {"when": "", "matched": ""}
     return {"when": found["when"].isoformat(), "matched": found["matched"]}
@@ -39,7 +41,7 @@ def reminder_create(mid: int, payload: dict = Body(default={}),
     when = (payload.get("when") or "").strip()
     if not when:
         import reminder_parse
-        found = reminder_parse.parse_reminder(m.body or "", datetime.now(timezone.utc))
+        found = reminder_parse.parse_reminder(m.body or "", college_clock.now())
         if not found:
             raise HTTPException(status_code=400,
                                 detail="В сообщении нет даты — укажите время вручную.")
@@ -49,9 +51,13 @@ def reminder_create(mid: int, payload: dict = Body(default={}),
     except ValueError:
         raise HTTPException(status_code=400, detail="Неверный формат времени") from None
     if parsed.tzinfo is None:
-        #Клиент прислал локальное время без зоны. Считаем его UTC — иначе сравнение с
-        #remind_at (тоже UTC) было бы сдвинуто на часовой пояс.
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        #Время без зоны — это время на часах КОЛЛЕДЖА: так его видит человек в окне
+        #напоминания. До 15.10.2026 оно считалось UTC и уезжало на восемь часов.
+        parsed = parsed.replace(tzinfo=college_clock.TZ)
+    #🔒 Хранить — СТРОГО в UTC: `_fire_due_reminders` сравнивает `remind_at` со «сейчас»
+    #СТРОКАМИ ISO. Метка с «+08:00» сравнилась бы неверно, и напоминание сработало бы не
+    #вовремя — тихо и только у тех, чей клиент прислал время со смещением.
+    parsed = parsed.astimezone(timezone.utc)
 
     #Текст храним СНИМКОМ: автор может отредактировать или удалить сообщение, а напоминание
     #должно остаться тем, на что человек рассчитывал.

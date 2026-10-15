@@ -865,8 +865,10 @@ def default_term() -> tuple:
     сейчас дата»: перевод группы на новый курс обязан спрашивать термин у ДАТЫ ЗАНЯТИЯ,
     а не у сегодняшнего числа, и без выноса появилась бы ТРЕТЬЯ копия календаря — при
     том что докстринг выше сам предупреждает, чем кончаются копии."""
-    from datetime import datetime, timezone
-    return term_for_date(datetime.now(timezone.utc))
+    #«Сейчас» — по часам КОЛЛЕДЖА: по UTC новый учебный год начинался 1 сентября в
+    #08:00 по Улан-Удэ, и первые часы первого дня журнал жил в прошлом семестре.
+    import college_clock
+    return term_for_date(college_clock.now())
 
 
 def term_for_date(when) -> tuple:

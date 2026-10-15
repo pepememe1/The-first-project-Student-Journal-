@@ -18,6 +18,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
+import { formatCollege } from '@/utils/collegeTime'
 
 const emit = defineEmits(['close'])
 const loc = useLocaleStore()
@@ -31,7 +32,7 @@ const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 function fmt(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
-  return isNaN(d) ? '—' : d.toLocaleString(BCP47[loc.active] || 'ru-RU',
+  return isNaN(d) ? '—' : formatCollege(d, BCP47[loc.active] || 'ru-RU',
     { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 function isPhone(s) { return /Android|iOS/.test(s.device || '') }

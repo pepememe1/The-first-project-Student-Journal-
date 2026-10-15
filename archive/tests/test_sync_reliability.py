@@ -1,0 +1,425 @@
+"""Архив 15.10.2026: тесты выведенного sync/sync_engine.py (продукт его не зовёт с
+25.09.2026, см. tests/test_legacy_sync_engine_fenced.py). Перенесены ДОСЛОВНО из
+tests/test_sync_reliability.py; не исполняются. Инварианты живого пути держат
+desktop/local_mirror, desktop/desk_outbox и server/tests/test_sync*.py."""
+
+@pytest.fixture(autouse=True)
+def _clean_session(fresh_db):
+    """Каждый тест — со своим чистым сеансом (иначе флаги протекают между тестами)."""
+    sync_engine.reset_session_state()
+    yield
+    sync_engine.reset_session_state()
+
+
+def test_rejected_rows_are_surfaced_not_swallowed():
+    """Сервер возвращает `rejected` — клиент ОБЯЗАН это заметить.
+
+    Живой сценарий: админ снял у преподавателя назначение на предмет, пока тот работал
+    офлайн. Push проходит с кодом 200, но часть строк сервер отвергает построчно. Раньше
+    ответ push не читался вовсе: водяной знак уезжал вперёд, и отвергнутая оценка больше
+    никогда не попадала в дельту — в журнале преподавателя она есть, на сервере её нет,
+    и никакого следа об этом.
+    """
+    client = _FakeClient(push_result={"applied": {"grades": 2},
+                                      "rejected": {"grades": 3}})
+    assert sync_engine.sync_once(client) is True
+    assert sync_engine.last_rejected() == {"grades": 3}
+
+
+def test_clean_push_reports_nothing_rejected():
+    """Обратная сторона: обычный успешный push НЕ должен поднимать ложную тревогу.
+
+    Без этого теста сторож бесполезен — «всегда что-то отклонено» читается так же, как
+    «никогда ничего не отклонено»."""
+    client = _FakeClient(push_result={"applied": {"grades": 2}})
+    assert sync_engine.sync_once(client) is True
+    assert sync_engine.last_rejected() == {}
+
+
+def test_rejection_is_forgotten_after_a_clean_cycle():
+    """Отказ относится к ПОСЛЕДНЕМУ push, а не копится вечно: админ вернул назначение —
+    следующий цикл прошёл чисто, и индикатор обязан погаснуть."""
+    sync_engine.sync_once(_FakeClient(push_result={"rejected": {"grades": 1}}))
+    assert sync_engine.last_rejected()
+    sync_engine.sync_once(_FakeClient(push_result={"applied": {"grades": 1}}))
+    assert sync_engine.last_rejected() == {}
+
+
+def test_second_cycle_does_not_run_while_first_is_in_flight():
+    """Замок сеанса: пока один цикл в середине push, второй НЕ лезет туда же.
+
+    Это не теория: `sync_runner.flush_now()` (закрытие программы) зовёт цикл из другого
+    потока, чем фоновый `_loop`. Общая `requests.Session` не потокобезопасна, а водяной
+    знак, сдвинутый чужим потоком, уводит правки из дельты навсегда.
+    """
+    slow = _FakeClient(push_delay=0.6)
+    done = []
+
+    t = threading.Thread(target=lambda: done.append(sync_engine.sync_once(slow)))
+    t.start()
+    time.sleep(0.15)                     #дать первому потоку зайти внутрь push
+    #Второй заход с конечным ожиданием — ровно как на закрытии программы.
+    assert sync_engine.sync_once(_FakeClient(), wait=0.05) is False, (
+        "второй цикл пролез внутрь занятого — замок не работает")
+    t.join(timeout=5)
+    assert done == [True]
+    assert slow.pushes == 1, "медленный цикл не должен был выполниться дважды"
+
+
+def test_lock_is_released_even_if_cycle_raises():
+    """Упавший цикл обязан отпустить замок — иначе одна сетевая ошибка вешает
+    синхронизацию до перезапуска программы (замок не отдал бы никто)."""
+    class _Boom(_FakeClient):
+        def push(self, changes):
+            raise RuntimeError("сеть отвалилась")
+
+    with pytest.raises(RuntimeError):
+        sync_engine.sync_once(_Boom())
+    #Замок свободен — следующий цикл проходит штатно.
+    assert sync_engine.sync_once(_FakeClient()) is True
+
+
+def test_watermark_stays_put_when_push_fails():
+    """Push упал — метка НЕ двигается, иначе собранные правки выпали бы из дельты.
+
+    Направление отказа выбрано осознанно: «отправить повторно» дёшево и безопасно
+    (сервер делает upsert по ключу), «пропустить» — потеря оценки."""
+    from data.data_store import get_push_watermark, set_push_watermark
+
+    set_push_watermark("2026-01-01T00:00:00+00:00")
+
+    class _Boom(_FakeClient):
+        def push(self, changes):
+            raise RuntimeError("обрыв")
+
+    with pytest.raises(RuntimeError):
+        sync_engine.sync_once(_Boom())
+    assert get_push_watermark() == "2026-01-01T00:00:00+00:00"
+
+
+def test_watermark_moves_after_successful_push():
+    """Обратный тест: при успехе метка обязана сдвинуться — иначе дельта не сужается
+    никогда и «дельта-push» остаётся полным снимком под другим именем."""
+    from data.data_store import get_push_watermark, set_push_watermark
+
+    set_push_watermark("2026-01-01T00:00:00+00:00")
+    assert sync_engine.sync_once(_FakeClient()) is True
+    assert get_push_watermark() != "2026-01-01T00:00:00+00:00"
+
+
+def test_unreadable_table_does_not_move_the_watermark(monkeypatch):
+    """Коллектор упал → метка НЕ двигается, даже если push прошёл успешно.
+
+    Нашлось адверсариальным ревью, а не тестом, и это показательно: шесть коллекторов
+    ставили флаг сами, а седьмой (`users`) — нет, потому что защита была расписана по
+    семи местам вместо одного. При залоченной базе `users` отдавал пустой список, push
+    считался успешным, метка уезжала — и заведённый офлайн студент, переименованный
+    преподаватель и надгробие удалённого не уезжали до полного снимка (до 20 циклов).
+
+    Проверяем ИМЕННО users: остальные шесть и раньше были прикрыты, а этот — нет.
+    Обратную сторону («при исправном чтении метка обязана сдвинуться») держит
+    `test_watermark_moves_after_successful_push` выше — без неё эта проверка была бы
+    зелёной и при реализации «никогда не двигать метку»."""
+    from data.data_store import get_push_watermark, set_push_watermark
+
+    def boom():
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(sync_engine, "_collect_users", boom)
+    set_push_watermark("2026-01-01T00:00:00+00:00")
+
+    assert sync_engine.sync_once(_FakeClient()) is True, (
+        "одна нечитаемая таблица не должна лишать человека синхронизации целиком")
+    assert get_push_watermark() == "2026-01-01T00:00:00+00:00", (
+        "метка уехала при непрочитанной таблице — правки выпадут из дельты молча")
+
+
+def _spy_on_collect(monkeypatch) -> list:
+    """Записывает, с какой границей звали collect_local: "" — полный снимок, иначе дельта."""
+    seen: list = []
+    real = sync_engine.collect_local
+
+    def spy(since=""):
+        seen.append(since)
+        return real(since)
+
+    monkeypatch.setattr(sync_engine, "collect_local", spy)
+    return seen
+
+
+def test_clock_running_backwards_forces_a_full_push(monkeypatch):
+    """Водяной знак оказался ПОЗЖЕ текущей границы — значит часы отошли назад, и правки
+    «откатившегося» промежутка в дельту не попадут. Единственный безопасный ответ —
+    полный снимок.
+
+    Почему это не покрывалось PUSH_SAFETY_LAG_S: тот сдвигает границу на две минуты, то
+    есть спасает только от микро-регрессий. Ноутбук, проснувшийся с отставшими на час
+    часами, отдал бы дельту, из которой правки этого часа выпали молча."""
+    from data.data_store import set_push_watermark
+
+    seen = _spy_on_collect(monkeypatch)
+    sync_engine.sync_once(_FakeClient())          #первый цикл сеанса и так полный
+    set_push_watermark("2099-01-01T00:00:00+00:00")   #метка из будущего = часы ушли назад
+    sync_engine.sync_once(_FakeClient())
+    assert seen[-1] == "", (
+        "часы ушли назад, а push собрался дельтой — правки промежутка не уедут "
+        f"до ближайшего полного снимка (звали collect_local с {seen[-1]!r})")
+
+
+def test_normal_clock_still_sends_a_delta(monkeypatch):
+    """ОБРАТНЫЙ тест: при исправных часах push обязан остаться ДЕЛЬТОЙ.
+
+    Без него проверка выше зелёная при реализации «всегда слать полный снимок» — то есть
+    не доказывает ничего, а дельта-push тихо превращается в полный под другим именем."""
+    from data.data_store import set_push_watermark
+
+    seen = _spy_on_collect(monkeypatch)
+    sync_engine.sync_once(_FakeClient())
+    set_push_watermark("2026-01-01T00:00:00+00:00")   #обычная метка в прошлом
+    sync_engine.sync_once(_FakeClient())
+    assert seen[-1] == "2026-01-01T00:00:00+00:00", (
+        f"часы исправны, а уехал полный снимок (звали collect_local с {seen[-1]!r})")
+
+
+def _snapshot(**tables) -> dict:
+    """Снимок вида {'таблица': [{'id': 'таблица-0'}, ...]} — id уникальны на весь снимок."""
+    return {name: [{"id": f"{name}-{i}"} for i in range(n)] for name, n in tables.items()}
+
+
+def test_small_snapshot_still_goes_in_a_single_request():
+    """ОБРАТНЫЙ тест и он здесь главный: обычный цикл (десятки строк) обязан остаться
+    ОДНИМ запросом.
+
+    Без него «порционный push» зелёный и при реализации «всегда слать по одной строке» —
+    то есть мы бы починили редкий отказ, сломав горячий путь, которым синк живёт каждые
+    30 секунд у каждого преподавателя."""
+    sent = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            sent.append(changes)
+            return {}
+
+    sync_engine._push_all(_Rec(), _snapshot(lessons=10, grades=20))
+    assert len(sent) == 1, f"мелкий снимок уехал {len(sent)} запросами вместо одного"
+
+
+def test_large_snapshot_is_split_and_nothing_is_lost():
+    """Крупный снимок режется на пачки, и КАЖДАЯ строка уезжает РОВНО ОДИН раз.
+
+    Проверяем не «сколько было запросов», а сохранность данных: нарезка, теряющая или
+    дублирующая строки, — это ровно та тихая потеря, ради которой весь этот модуль и
+    переписывался."""
+    sent = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            sent.append(changes)
+            return {}
+
+    snap = _snapshot(lessons=700, grades=900, users=3)
+    sync_engine._push_all(_Rec(), snap)
+
+    assert len(sent) > 1, "снимок на 1603 строки обязан был разбиться"
+    got: list = []
+    for part in sent:
+        for rows in part.values():
+            got.extend(r["id"] for r in rows)
+    expected = [r["id"] for rows in snap.values() for r in rows]
+    assert sorted(got) == sorted(expected), "нарезка потеряла или исказила строки"
+    assert len(got) == len(set(got)), "строка уехала дважды — нарезка дублирует"
+
+
+def test_lessons_are_pushed_before_the_grades_that_reference_them():
+    """Порядок таблиц переживает нарезку: занятие уезжает раньше оценок по нему.
+
+    Внешних ключей на сервере нет, но обратный порядок оставлял бы базу в состоянии
+    «оценки без занятий» на те секунды, пока идут остальные пачки, — а на этом состоянии
+    может отработать пуш-хук или отчёт."""
+    order = []
+
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            order.extend(changes.keys())
+            return {}
+
+    sync_engine._push_all(_Rec(), _snapshot(lessons=600, grades=600))
+    assert order.index("lessons") < order.index("grades")
+
+
+def test_rejections_from_every_batch_are_summed():
+    """`rejected` из РАЗНЫХ пачек складывается, а не затирается последней.
+
+    Иначе отказ, случившийся в первой пачке, исчез бы из отчёта — то самое молчание про
+    отвергнутые правки, которое мы уже чинили один раз."""
+    class _Rec(_FakeClient):
+        def push(self, changes):
+            return {"rejected": {"grades": 1}}
+
+    res = sync_engine._push_all(_Rec(), _snapshot(grades=1200))
+    assert res["rejected"]["grades"] >= 2, (
+        f"отказы из разных пачек не сложились: {res['rejected']}")
+
+
+def test_timestamp_format_is_offset_not_z():
+    """Метки времени ОБЯЗАНЫ иметь смещение «+00:00», а не суффикс «Z».
+
+    Зачем пиннить очевидное: серверный `/sync/pull` фильтрует дельту СТРОКОВЫМ
+    сравнением (`updated_at >= since`), и это работает ровно потому, что обе стороны
+    печатают время одной функцией. Переход на «Z» — типичная «модернизация» — сломал бы
+    сравнение внутри одной секунды: 'Z' (0x5A) больше '+' (0x2B) и больше '.' (0x2E),
+    поэтому метка с «Z» отсекла бы записи той же секунды, записанные в прежнем формате.
+    Потеря была бы редкой, тихой и невоспроизводимой — худший вид.
+    """
+    ts = sync_engine._now()
+    assert ts.endswith("+00:00"), ts
+    assert "Z" not in ts
+
+
+def test_parsed_comparison_survives_mixed_formats():
+    """А там, где сравнение НАШЕ (дельта push), формат не должен решать ничего:
+    `_ts_key` разбирает метку, поэтому «Z», «+00:00» и отброшенные микросекунды —
+    один и тот же момент."""
+    a = sync_engine._ts_key("2026-08-13T12:00:00Z")
+    b = sync_engine._ts_key("2026-08-13T12:00:00+00:00")
+    c = sync_engine._ts_key("2026-08-13T12:00:00.000000+00:00")
+    assert a == b == c
+
+
+def _seed_local_grade(grade: str, at: str, lid: str = "les-1"):
+    """Локальная оценка, с которой потом разойдётся серверная."""
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO grades "
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,student_id) "
+                "VALUES (?,?,?,?,?,?,0,?)",
+                ("Иванов", "Иван", lid, grade, at, "dev-local", "stud:ivanov"))
+    conn.commit()
+    conn.close()
+
+
+def _remote_grade(grade: str, at: str, lid: str = "les-1"):
+    return [{"id": f"stud:ivanov|{lid}", "student_f": "Иванов", "student_n": "Иван",
+             "lesson_id": lid, "grade": grade, "updated_at": at,
+             "device": "dev-other", "deleted": False, "student_id": "stud:ivanov"}]
+
+
+def test_grade_conflict_is_counted_not_only_written():
+    """🔥 РЕАЛЬНЫЙ ДЕФЕКТ. Расхождение по оценке честно писалось в `sync_conflicts` — и на
+    этом всё: экран разбора жил в Qt-оболочке и удалён вместе с ней, `list_conflicts`
+    с тех пор не зовёт никто. То есть у преподавателя в журнале одна оценка, на сервере
+    другая, и узнать об этом было НЕОТКУДА.
+
+    Проверяем не «строка появилась в таблице» (это работало и раньше), а что расхождение
+    ВИДНО снаружи: счётчик в статусе синка. Именно его отсутствие делало потерю тихой."""
+    from data.core import DBManager
+
+    assert DBManager.count_unresolved_conflicts() == 0
+
+    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
+
+    assert DBManager.count_unresolved_conflicts() == 1, "конфликт не виден снаружи"
+
+
+def _seed_local_tombstone(at: str, lid: str = "les-1"):
+    """Локально удалённая оценка (надгробие) с заданной меткой."""
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO grades "
+                "(student_f,student_n,lesson_id,grade,updated_at,device,deleted,student_id) "
+                "VALUES (?,?,?,?,?,?,1,?)",
+                ("Иванов", "Иван", lid, "5", at, "dev-local", "stud:ivanov"))
+    conn.commit()
+    conn.close()
+
+
+def _local_grade_row(lid: str = "les-1"):
+    from data.core import DBManager
+    conn = DBManager.get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT grade, COALESCE(deleted,0) FROM grades "
+                "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                ("Иванов", "Иван", lid))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def test_equal_timestamp_does_not_resurrect_deleted_grade():
+    """🔥 РАСХОЖДЕНИЕ ВНУТРИ ОДНОГО МОДУЛЯ: при РАВНЫХ метках удалённая оценка воскресала.
+
+    Правило tie-break у нас одно и записано в `_should_apply`: при равной метке
+    применяем ТОЛЬКО удаление — надгробие не должно воскресать из-за живой записи с той
+    же меткой. Ветка «локально удалено, с сервера пришла активная» в `_merge_grades`
+    жила своей жизнью (`if not (_ts_key(lat) > _ts_key(rat))`) и на равенстве делала
+    ровно обратное — принимала серверную.
+
+    Равенство меток здесь не экзотика, а штатный случай: метку обеим записям ставит
+    СЕРВЕР, а дискретность часов Windows ~16 мс — из-за этого же в проекте дельта-pull
+    фильтрует `>=`, а не `>`. Двое преподавателей в один тик: один снял оценку, другой
+    поправил — и снятая оценка возвращалась в журнал.
+
+    Обратный ход: вернуть `if not (_ts_key(lat) > _ts_key(rat))` — тест краснеет.
+    """
+    same = "2026-08-15T10:00:00+00:00"
+    _seed_local_tombstone(same)
+    sync_engine._merge_grades(_remote_grade("4", same))
+
+    grade, deleted = _local_grade_row()
+    assert deleted == 1, "надгробие воскресло от серверной записи с ТОЙ ЖЕ меткой"
+
+
+def test_strictly_newer_server_grade_still_revives_deleted():
+    """Обратная сторона того же правила: если серверная запись СТРОГО новее нашего
+    надгробия — оценку восстанавливаем. Без этого теста починка выше легко превращается
+    в «удалённое не воскрешаем никогда», то есть в потерю правки с другого ПК."""
+    _seed_local_tombstone("2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("4", "2026-08-15T10:00:01+00:00"))
+
+    grade, deleted = _local_grade_row()
+    assert deleted == 0 and grade == "4", "более свежая серверная оценка не восстановлена"
+
+
+def test_agreeing_grade_is_not_a_conflict():
+    """Обратная проверка. Без неё «починка» вида «считать конфликтом любое слияние»
+    выглядела бы правильной: счётчик бы рос, индикатор горел, и преподаватель перестал
+    бы его читать — то же, от чего защищает порог у риска отчисления."""
+    from data.core import DBManager
+
+    _seed_local_grade("4", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("4", "2026-08-15T11:00:00+00:00"))
+    assert DBManager.count_unresolved_conflicts() == 0, "совпавшие значения — не конфликт"
+
+    #Локальная правка НОВЕЕ серверной: тоже не конфликт, наша уедет на сервер сама.
+    _seed_local_grade("5", "2026-08-15T12:00:00+00:00", lid="les-2")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00", lid="les-2"))
+    assert DBManager.count_unresolved_conflicts() == 0, "своя более свежая правка — не конфликт"
+
+
+def test_resolving_a_conflict_keeps_the_immutable_student_id():
+    """🔥 ВТОРОЙ ДЕФЕКТ В ТОМ ЖЕ МЕСТЕ. `resolve_conflict` перезаписывала строку оценки,
+    НЕ перенося `student_id` (§4.10) — то есть разбор конфликта отвязывал историю от
+    студента ровно там, где преподаватель уверен, что всё исправил. Дефект был не виден,
+    потому что функцию никто не звал."""
+    from data.core import DBManager
+
+    _seed_local_grade("5", "2026-08-15T10:00:00+00:00")
+    sync_engine._merge_grades(_remote_grade("3", "2026-08-15T11:00:00+00:00"))
+    conflicts = DBManager.list_conflicts()
+    assert conflicts, "конфликт должен был появиться"
+
+    assert DBManager.resolve_conflict(conflicts[0]["id"], "4") is True
+
+    conn = DBManager.get_conn()
+    row = conn.execute("SELECT grade, COALESCE(student_id,'') FROM grades "
+                       "WHERE student_f=? AND student_n=? AND lesson_id=?",
+                       ("Иванов", "Иван", "les-1")).fetchone()
+    conn.close()
+    assert row[0] == "4", "выбранное значение не записалось"
+    assert row[1] == "stud:ivanov", "разбор конфликта потерял неизменяемый id студента"
+    assert DBManager.count_unresolved_conflicts() == 0, "конфликт должен закрыться"
+
+

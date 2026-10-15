@@ -28,7 +28,6 @@ JWT в проекте живёт жёстко 5 часов (§6), и видже�
 клиент (и нативный виджет, и веб-слой) разбирает их одним и тем же кодом, второй
 формат разошёлся бы с первым при первой же правке.
 """
-from datetime import date
 
 from urllib.parse import quote
 
@@ -247,5 +246,6 @@ def public_week():
     на которую посчитано, — иначе при расхождении часовых поясов не разобраться, чья
     «сегодня» имелась в виду.
     """
-    today = date.today()
+    import college_clock
+    today = college_clock.today()
     return {"date": today.isoformat(), "week": schedule_web.current_week_parity(today)}

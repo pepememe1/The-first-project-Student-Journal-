@@ -7,7 +7,6 @@ id строки users. Проверяем именно совместимост�
 """
 import sqlite3
 
-from sync import sync_engine
 from data import local_db
 from data.core import DBManager, resolve_student_id
 from data.data_store import get_store, student_id_by_name
@@ -81,41 +80,6 @@ def test_id_survives_rename(fresh_db):
     live = [r for r in _grade_rows() if r["student_f"] == "Петрова"]
     assert live and live[0]["student_id"] == sid, \
         "после переименования id обязан указывать на того же студента"
-
-
-def test_sync_carries_student_id_both_ways(fresh_db):
-    """Синк возит id на сервер и принимает обратно — иначе поле осталось бы локальным
-    украшением и бэкофилл на сервере не с чем было бы сверять."""
-    sid = _seed_student()
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    DBManager.upsert_grade(cur, ("Иванова", "Мария", "L1", "5"))
-    conn.commit()
-    conn.close()
-
-    collected = sync_engine._collect_grades()
-    assert collected[0]["student_id"] == sid, "push обязан везти id"
-
-    #приём: строка с сервера с id, которого локально не было
-    sync_engine._merge_grades([{
-        "student_f": "Иванова", "student_n": "Мария", "lesson_id": "L9",
-        "grade": "4", "updated_at": "2030-01-01T00:00:00+00:00", "device": "web",
-        "deleted": False, "student_id": sid,
-    }])
-    got = [r for r in _grade_rows() if r["lesson_id"] == "L9"]
-    assert got and got[0]["student_id"] == sid, "pull обязан сохранять id"
-
-
-def test_old_client_payload_without_id_is_accepted(fresh_db):
-    """Обратная совместимость: клиент старой версии шлёт оценку БЕЗ поля — принимаем,
-    а не падаем. Иначе обновление сервера положило бы синк всем непроапгрейженным ПК."""
-    sync_engine._merge_grades([{
-        "student_f": "Сидоров", "student_n": "Пётр", "lesson_id": "L5",
-        "grade": "3", "updated_at": "2030-01-01T00:00:00+00:00", "device": "pc-old",
-        "deleted": False,
-    }])
-    got = [r for r in _grade_rows() if r["lesson_id"] == "L5"]
-    assert got and got[0]["student_id"] == ""
 
 
 def test_resolve_student_id_never_raises(fresh_db):

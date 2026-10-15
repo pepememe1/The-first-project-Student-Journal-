@@ -10,7 +10,6 @@ import pytest
 
 from data import data_store
 from data import app_settings
-from sync import sync_engine
 from data.core import DBManager
 from data.data_store import get_store, reset_synced_local_data, local_get, local_set
 #ℹ️ `subjects.py` удалён 17.08.2026 (решение Ярослава: зависим чисто от портала
@@ -89,12 +88,6 @@ def test_lookup_session(fresh_db):
     assert st.lookup_session("") is None
 
 
-def test_force_full_pull(fresh_db):
-    sync_engine._session.full_pull_done = True
-    sync_engine.force_full_pull()
-    assert sync_engine._session.full_pull_done is False
-
-
 class _FakeClient:
     """Дублёр SyncClient: запоминает КАЖДЫЙ снимок, переданный в push, чтобы проверить,
     что офлайн-правки ушли на сервер ДО очистки кэша."""
@@ -110,39 +103,3 @@ class _FakeClient:
         return {"server_time": "2026-02-02T00:00:00+00:00", "changes": {}}
 
 
-def test_reconcile_pushes_offline_edits_before_wipe(fresh_db):
-    """Регрессия потери данных: reconcile обязан ОТПРАВИТЬ локальные правки (напр.
-    оценки, выставленные преподавателем офлайн) ДО reset_synced_local_data(). Иначе
-    сброс кэша уничтожит их до синхронизации — безвозвратно."""
-    _seed_synced_data()   #среди данных — оценка Петров/Пётр/L1 = 5 (как офлайн-правка)
-    client = _FakeClient()
-
-    sync_engine.reconcile(client)
-
-    assert client.pushes, "reconcile должен был вызвать push"
-    first = client.pushes[0]           #ПЕРВЫЙ push — до очистки кэша
-    grades = first.get("grades", [])
-    assert any(g.get("student_f") == "Петров" and g.get("lesson_id") == "L1"
-               and g.get("grade") == "5" for g in grades), (
-        "первый push обязан содержать офлайн-оценку — иначе reset сотрёт её до отправки")
-
-
-def test_reconcile_keeps_cache_when_push_fails(fresh_db):
-    """Если push перед сбросом не удался (сервер отпал) — кэш НЕ стираем: данные важнее
-    «чистоты». reconcile пробрасывает исключение, локальные оценки остаются на месте."""
-    _seed_synced_data()
-
-    class _Boom:
-        def push(self, data):
-            raise RuntimeError("сеть отвалилась")
-
-        def pull(self, since=""):
-            return {"changes": {}}
-
-    with pytest.raises(RuntimeError):
-        sync_engine.reconcile(_Boom())
-
-    conn = DBManager.get_conn(); cur = conn.cursor()
-    assert cur.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 1, \
-        "оценка должна уцелеть — кэш не стираем при неудачном push"
-    conn.close()

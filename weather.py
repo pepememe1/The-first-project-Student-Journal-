@@ -34,7 +34,8 @@ import urllib.request
 #«погода где-то ещё» продукту не нужна — это лишний повод для вопросов и ошибок.
 CITY = "Улан-Удэ"
 LAT, LON = 51.8272, 107.6064
-TIMEZONE = "Asia/Irkutsk"
+import college_clock  # noqa: E402
+TIMEZONE = college_clock.TZ_NAME
 
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_S = 6           #Вектор не должен «висеть» из-за погоды: чат важнее

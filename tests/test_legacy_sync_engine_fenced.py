@@ -21,7 +21,10 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #Где живёт продукт. Тесты, инструменты и сам движок сюда не входят.
 PRODUCT_DIRS = ("desktop", "data", "sync", "schedule", os.path.join("server", "app"))
-SKIP_FILES = {os.path.join("sync", "sync_engine.py")}
+#Сам движок перенесён в archive/sync/ 15.10.2026 вместе с 79 тестами, которые его
+#проверяли (живые соседи остались в tests/). Ограда остаётся: вернуть импорт по-прежнему
+#одна строка, а сломает она уже не только синк, но и сборку.
+SKIP_FILES: set = set()
 
 
 def _imports_engine(source: str) -> bool:

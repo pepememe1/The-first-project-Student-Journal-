@@ -1903,12 +1903,14 @@ def _require_report_access(db: Session, rep: CuratorReport, user: User) -> None:
 
 
 def _iso_to_ddmmyyyy(iso: str) -> str:
-    """"2026-07-27T10:00:00+00:00" → "27.07.2026" (формат дат занятий, см. curator_report.py)."""
-    try:
-        y, m, d = iso[:10].split("-")
-        return f"{d}.{m}.{y}"
-    except Exception:
-        return ""
+    """"2026-07-27T10:00:00+00:00" → "27.07.2026" (формат дат занятий, см. curator_report.py).
+
+    🔥 Число — по календарю КОЛЛЕДЖА, а не первые десять символов UTC-метки (15.10.2026).
+    Отчёт, заведённый до 08:00 по Улан-Удэ, получал границей ВЧЕРАШНЕЕ число, и
+    сегодняшние занятия в него не входили — молча и правдоподобно."""
+    import college_clock
+    when = college_clock.local_from_iso(iso)
+    return when.strftime("%d.%m.%Y") if when else ""
 
 
 # ── Модерация (админ) — очередь тикетов, просмотр бесед (с аудитом), ответ ────────────

@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -327,13 +327,11 @@ def was_triggered_recently(user_id: str, egg_id: str, db: Session, within_s: int
 # было три неудачных попытки», «сегодня день рождения» — это факты, которые клиент
 # подделает одной строкой в консоли. Шанс без честного условия ничего не стоит.
 
-#Улан-Удэ, UTC+8. Ночь считаем по МЕСТНОМУ времени: пасхалка про то, что человек сидит
-#в журнале в три часа ночи, а не про то, который час на сервере.
-LOCAL_UTC_OFFSET_H = 8
-
-
+#Ночь считаем по часам КОЛЛЕДЖА: пасхалка про то, что человек сидит в журнале в три
+#часа ночи, а не про то, который час на сервере. Смещение — `college_clock`.
 def _local_now() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(hours=LOCAL_UTC_OFFSET_H)
+    import college_clock
+    return college_clock.now()
 
 
 def _login_attempts(user_login: str, db: Session, limit: int = 12) -> list[bool]:

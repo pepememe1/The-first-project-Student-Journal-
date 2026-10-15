@@ -13,6 +13,7 @@ import { X, Trophy, Check, Lock } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { meApi } from '@/api/endpoints'
 import { ACHIEVEMENTS, RARITY } from '@/config/achievements'
+import { formatCollege } from '@/utils/collegeTime'
 
 const emit = defineEmits(['close'])
 const locale = useLocaleStore()
@@ -64,7 +65,7 @@ async function save() {
 function fmt(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  return isNaN(d) ? '' : d.toLocaleDateString()
+  return isNaN(d) ? '' : formatCollege(d, undefined, { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 </script>
 

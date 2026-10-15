@@ -12,6 +12,7 @@ import { AlarmClock, X } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
+import { addDays, collegeParts, formatCollege, fromCollegeInput, fromCollegeWall, toCollegeInput } from '@/utils/collegeTime'
 
 const props = defineProps({ message: { type: Object, required: true } })
 const emit = defineEmits(['close'])
@@ -19,45 +20,40 @@ const emit = defineEmits(['close'])
 const toast = useToast()
 const locale = useLocaleStore()
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
-const value = ref('')          // datetime-local: «YYYY-MM-DDTHH:mm»
+// datetime-local: «YYYY-MM-DDTHH:mm» — ЧАСЫ КОЛЛЕДЖА (Улан-Удэ), а не устройства. До
+// 15.10.2026 поле показывало время устройства: у родителя в Москве «10:00» из подсказки
+// превращалось в 05:00, а набранное им «10:00» срабатывало в 15:00 по Улан-Удэ.
+const value = ref('')
 const matched = ref('')
 const loading = ref(true)
 const saving = ref(false)
 
-// datetime-local не понимает ни ISO с зоной, ни секунды — режем до минут.
-function toLocalInput(d) {
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 const preview = computed(() => {
   if (!value.value) return ''
-  const d = new Date(value.value)
+  const d = fromCollegeInput(value.value)
   return Number.isNaN(d.getTime())
     ? ''
-    : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : formatCollege(d, BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit' })
 })
 
 onMounted(async () => {
   try {
     const { data } = await messengerApi.reminderSuggest(props.message.id)
     if (data.when) {
-      value.value = toLocalInput(new Date(data.when))
+      value.value = toCollegeInput(new Date(data.when))
       matched.value = data.matched || ''
     }
   } catch { /* подсказки может и не быть — это нормально */ }
   if (!value.value) {
     // Даты в тексте нет — предлагаем завтра утром: ставить «прямо сейчас» бессмысленно.
-    const d = new Date()
-    d.setDate(d.getDate() + 1)
-    d.setHours(9, 0, 0, 0)
-    value.value = toLocalInput(d)
+    const t = collegeParts(addDays(new Date(), 1))
+    value.value = toCollegeInput(fromCollegeWall(t.year, t.month, t.day, 9, 0))
   }
   loading.value = false
 })
 
 async function save() {
-  const d = new Date(value.value)
+  const d = fromCollegeInput(value.value)
   if (Number.isNaN(d.getTime())) { toast.error(locale.t('reminder.needDate', 'Укажите дату и время')); return }
   saving.value = true
   try {
@@ -95,6 +91,7 @@ async function save() {
           <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('reminder.when', 'Когда напомнить') }}</span>
           <input v-model="value" type="datetime-local"
                  class="h-10 w-full rounded-lg border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+          <span class="mt-1 block text-xs text-text3">{{ locale.t('reminder.collegeTime', 'Время — по Улан-Удэ') }}</span>
         </label>
         <p v-if="matched" class="mt-1.5 text-xs text-text3">
           {{ locale.t('reminder.fromText', { matched }) }}

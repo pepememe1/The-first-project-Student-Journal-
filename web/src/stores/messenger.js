@@ -542,8 +542,9 @@ export const useMessengerStore = defineStore('messenger', () => {
 
   // Замьютить/размьютить активную беседу у себя (без пушей по ней).
   async function muteConversation(muted) {
-    if (!activeId.value) return
-    try { await messengerApi.muteChat(activeId.value, muted); await loadChats() } catch { /* noop */ }
+    if (!activeId.value) return false
+    try { await messengerApi.muteChat(activeId.value, muted); await loadChats(); return true }
+    catch { return false }
   }
 
   // Удалить переписку У СЕБЯ (clearOnly — только очистить историю, чат остаётся в списке).

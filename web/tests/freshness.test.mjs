@@ -2,11 +2,13 @@
 //
 // Функция чистая и принимает «сейчас» параметром — именно поэтому её и можно проверить:
 // иначе тест зависел бы от часов машины и краснел бы раз в сутки около полуночи.
+// Метки — с поясом колледжа (+08:00): подпись считается по Улан-Удэ, и без пояса
+// прогон в CI (UTC) проверял бы другие сутки, чем на машине разработчика.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { freshness } from '../src/utils/freshness.js'
 
-const NOW = new Date('2026-08-12T15:00:00').getTime()
+const NOW = new Date('2026-08-12T15:00:00+08:00').getTime()
 const MIN = 60_000
 
 test('данных не было ни разу — так и говорим, а не «только что»', () => {
@@ -22,19 +24,19 @@ test('до часа считаем минутами', () => {
 })
 
 test('в тот же день — время', () => {
-  const f = freshness(new Date('2026-08-12T09:05:00').getTime(), NOW)
+  const f = freshness(new Date('2026-08-12T09:05:00+08:00').getTime(), NOW)
   assert.equal(f.kind, 'today')
   assert.equal(f.time, '09:05')
 })
 
 test('вчера — отдельная формулировка', () => {
-  const f = freshness(new Date('2026-08-11T22:30:00').getTime(), NOW)
+  const f = freshness(new Date('2026-08-11T22:30:00+08:00').getTime(), NOW)
   assert.equal(f.kind, 'yesterday')
   assert.equal(f.time, '22:30')
 })
 
 test('раньше — дата с временем', () => {
-  const f = freshness(new Date('2026-08-09T07:04:00').getTime(), NOW)
+  const f = freshness(new Date('2026-08-09T07:04:00+08:00').getTime(), NOW)
   assert.equal(f.kind, 'date')
   assert.equal(f.date, '09.08')
   assert.equal(f.time, '07:04')
@@ -51,14 +53,14 @@ test('около полуночи давность важнее календар
   // 00:10, данные от 23:50. Календарно это «вчера», но человеку нужнее знать, что
   // прошло двадцать минут: «вчера в 23:50» звучит куда более устаревшим, чем есть.
   // Порядок проверок в функции задан именно поэтому, и тест закрепляет его намеренно.
-  const now = new Date('2026-08-12T00:10:00').getTime()
-  const f = freshness(new Date('2026-08-11T23:50:00').getTime(), now)
+  const now = new Date('2026-08-12T00:10:00+08:00').getTime()
+  const f = freshness(new Date('2026-08-11T23:50:00+08:00').getTime(), now)
   assert.deepEqual(f, { kind: 'minutes', n: 20 })
 })
 
 test('а вот полтора часа через полночь — уже «вчера»', () => {
-  const now = new Date('2026-08-12T00:40:00').getTime()
-  const f = freshness(new Date('2026-08-11T23:00:00').getTime(), now)
+  const now = new Date('2026-08-12T00:40:00+08:00').getTime()
+  const f = freshness(new Date('2026-08-11T23:00:00+08:00').getTime(), now)
   assert.equal(f.kind, 'yesterday')
   assert.equal(f.time, '23:00')
 })

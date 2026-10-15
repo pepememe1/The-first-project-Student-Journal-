@@ -331,7 +331,12 @@ def _machine_keys(path: str, key: str) -> list:
             "SELECT key, value FROM kv_store WHERE key IN (%s)" % marks,  # nosec B608
             tuple(MACHINE_KEYS)).fetchall()
         return [(k, v) for k, v in rows]
-    except Exception:                               # noqa: BLE001
+    except Exception as e:                          # noqa: BLE001
+        #Пусто — значит в новую базу не доедут `device_id` и адрес сервера: машина станет
+        #«новой» и попросит одобрения у администратора заново. До 15.10.2026 это
+        #случалось молча, и человек не мог понять, почему программа снова у двери.
+        _LOG.warning("[local-db] ключи машины из прежней базы не прочитались (%s) — "
+                     "компьютер может потребовать повторного одобрения", e)
         return []
     finally:
         try:

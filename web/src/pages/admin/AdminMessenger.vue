@@ -22,6 +22,7 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { roleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
+import { formatCollege } from '@/utils/collegeTime'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -410,7 +411,10 @@ async function sendReply() {
     await messengerModApi.reply(viewer.value.conv, body)
     replyDraft.value = ''
     viewer.value.messages = takeWindow((await messengerModApi.conversationMessages(viewer.value.conv)).data)
-  } catch { /* noop */ }
+  } catch (e) {
+    //Ответ модерации не ушёл — черновик остаётся в поле, и об этом надо сказать.
+    toast.error(e?.response?.data?.detail || locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз'))
+  }
 }
 
 // В чате поддержки id беседы = `mod:{user.id}` (см. moderation_chat на сервере). Значит
@@ -428,7 +432,7 @@ function editChainText(mm) {
 
 function fmt(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return Number.isNaN(d.getTime()) ? '' : formatCollege(d, BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 </script>
 

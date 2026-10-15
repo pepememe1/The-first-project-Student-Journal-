@@ -1,0 +1,30 @@
+// GradeBookAI — автообновления безопасности (14.10.2026). Кладётся в
+// /etc/apt/apt.conf.d/52gradebook-unattended, поверх стандартного 50unattended-upgrades.
+//
+// ⚠️ Главное, что выяснилось 14.10.2026: автообновления три с половиной месяца не ставили
+// НИЧЕГО, хотя таймер срабатывал каждое утро. В источниках образа reg.ru не было раздела
+// noble-security, а разрешены автообновлениям только noble и noble-security. Исправления
+// безопасности приходили лишь в noble-updates, куда автообновлениям хода нет; накопилось
+// 180 штук. Раздел добавлен в /etc/apt/sources.list.d/ubuntu.sources. На новой машине
+// проверять первым делом: `apt-cache policy openssh-server` обязан показать noble-security.
+//
+// Ставятся только исправления безопасности (Allowed-Origins по умолчанию). Обычные
+// обновления noble-updates и Caddy из его собственного репозитория — вручную: они меняют
+// поведение, а не закрывают дыры, и Caddyfile сверяется с git (tools/check_prod_caddyfile.sh).
+
+// Старые ядра и ставшие ненужными зависимости — убирать сразу, иначе /boot и диск
+// растут с каждым обновлением ядра.
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Перезагрузка, если обновление её требует (ядро, libc), — сразу после установки.
+// Время задаёт таймер apt-daily-upgrade (02:00 по Иркутску, см. drop-in), а не строка
+// часов здесь: Automatic-Reboot-Time читается по зоне машины, а машина живёт по Москве.
+// Перезагрузка 14.10.2026 заняла 45 секунд, служба и Caddy поднялись сами.
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "now";
+
+// Раз в неделю убирать из кэша apt пакеты, которых уже нет в архиве.
+APT::Periodic::AutocleanInterval "7";

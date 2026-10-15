@@ -36,6 +36,7 @@ import { useLocaleStore } from '@/stores/locale'
 import haptics from '@/utils/haptics'
 import { useAuthStore } from '@/stores/auth'
 import { recallChoice, rememberChoice, pickRemembered } from '@/utils/lastChoice'
+import { addDays, collegeDdmmyyyy, collegeHhmm } from '@/utils/collegeTime'
 import { parseRuDate, lessonDateIssue, lessonMarkCount, duplicateLesson, lessonNumberOk }
   from '@/utils/lessonChecks'
 
@@ -165,8 +166,7 @@ const flashKey = ref('')
 let flashTimer = null
 function cellKey(s, key) { return `${s.student_id || `${s.surname}|${s.name}`}::${key}` }
 function markSaved(s, key) {
-  const d = new Date()
-  lastSavedAt.value = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  lastSavedAt.value = collegeHhmm()
   flashKey.value = cellKey(s, key)
   clearTimeout(flashTimer)
   flashTimer = setTimeout(() => { flashKey.value = '' }, 1800)
@@ -561,9 +561,11 @@ async function setGrade(s, key, value) {
   } finally { saving.value = false }
 }
 
+// Дата занятия — по календарю КОЛЛЕДЖА (Улан-Удэ), а не устройства: преподаватель с
+// ноутбуком в другом поясе около полуночи заводил бы занятие вчерашним числом, и оно
+// разъезжалось бы с голосовой командой и расписанием, которые считает сервер.
 function plusDays(days) {
-  const d = new Date(Date.now() + days * 86400000)
-  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`
+  return collegeDdmmyyyy(addDays(new Date(), days))
 }
 
 // Экзамен — та же логика, что _set_exam_val на ПК.

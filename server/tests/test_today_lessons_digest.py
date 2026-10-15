@@ -206,8 +206,14 @@ def test_the_day_and_the_week_come_from_one_calendar():
     assert "timezone.utc" not in body, (
         "день недели снова считается в UTC, а чётность недели — по локальной дате: "
         "каждую ночь с 00:00 до 03:00 МСК сводка показывает ЧУЖОЙ день")
-    assert re.search(r"datetime\.now\(\)\.weekday\(\)|today or datetime\.now\(\)", body), (
-        "день перестал браться локально — сверьте с schedule_web.current_week_parity")
+    #С 15.10.2026 «локально» = по часам КОЛЛЕДЖА: часы машины на бою московские, и окно
+    #ошибки было не закрыто, а сдвинуто на 00:00–05:00 по Улан-Удэ. Чётность недели
+    #(`schedule_web.current_week_parity`) берёт то же `college_clock`.
+    assert re.search(r"today or college_clock\.now\(\)", body), (
+        "день перестал браться по часам колледжа — сверьте с schedule_web.current_week_parity")
+    parity = (pathlib.Path(__file__).resolve().parents[1] / "app" / "schedule_web.py").read_text(
+        encoding="utf-8")
+    assert "college_clock.today()" in parity, "чётность недели ушла с часов колледжа"
 
 
 def test_the_digest_day_matches_what_the_schedule_page_would_show(monkeypatch):
@@ -333,9 +339,12 @@ def test_a_cold_cache_does_not_burn_the_whole_day(client, monkeypatch):
     marks.clear()
     monkeypatch.setattr(sched, "today_digest", lambda db, user, today=None: (2, "09:00"))
     assert client.get("/me/events?filter=all", headers=sh).status_code == 200
+    #Суточную метку ставит атомарный `claim` (до расчёта — иначе два одновременных
+    #опроса присылали сводку дважды, 15.10.2026); короткий срок поверх неё не ложится.
     real = [ttl for key, ttl in marks if key.startswith("digest:lessons:")]
-    assert real and real[-1] >= 12 * 3600, (
-        f"отправленная сводка помечена на {real} — она придёт ещё раз за тот же день")
+    assert not real, f"отправленная сводка получила короткую метку {real} — придёт ещё раз"
+    assert shared_state.claim(next(k for k in shared_state.keys("digest:lessons:")), 60) is False, (
+        "после отправленной сводки метка дня не стоит — она придёт ещё раз за тот же день")
 
     got = [e for e in client.get("/me/events?filter=all", headers=sh).json()["items"]
            if e.get("kind") == "lessons_today"]

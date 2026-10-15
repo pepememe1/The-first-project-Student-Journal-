@@ -55,7 +55,10 @@ let mounted = 0
  * мигающий на каждой оценке, перестали бы замечать.
  */
 export function issuesOf(st) {
-  if (!st || st.available === false && !st.outbox) return []
+  if (!st) return []
+  if (st.available === false && !st.outbox) {
+    return st.encryption_off ? [{ kind: 'encryption', detail: String(st.encryption_off) }] : []
+  }
   const out = []
   const ob = st.outbox && st.outbox.available !== false ? st.outbox : {}
   if (st.auth_error) out.push({ kind: 'auth', detail: String(st.auth_error) })
@@ -74,6 +77,9 @@ export function issuesOf(st) {
   if (Array.isArray(v.mismatch) && v.mismatch.length) {
     out.push({ kind: 'verify', count: v.mismatch.length })
   }
+  //Локальная копия сейчас НЕ зашифрована (ключ устройства не расшифровался или нет
+  //драйвера). Раньше об этом знал только файл журнала (15.10.2026).
+  if (st.encryption_off) out.push({ kind: 'encryption', detail: String(st.encryption_off) })
   return out
 }
 

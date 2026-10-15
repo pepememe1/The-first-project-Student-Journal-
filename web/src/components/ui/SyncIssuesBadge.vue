@@ -20,6 +20,7 @@ import { ShieldCheck, TriangleAlert } from '@lucide/vue'
 import { refresh, start, stop, syncIssues, syncState, verifiedAt } from '@/api/desktopSync'
 import { useLocaleStore } from '@/stores/locale'
 import SyncProblemsPanel from '@/components/ui/SyncProblemsPanel.vue'
+import { collegeHhmm } from '@/utils/collegeTime'
 
 const locale = useLocaleStore()
 
@@ -36,7 +37,7 @@ const showProblems = ref(false)
 
 function hhmm(iso) {
   try {
-    return iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+    return iso ? collegeHhmm(new Date(iso)) : ''
   } catch { return '' }
 }
 
@@ -47,6 +48,7 @@ const lines = computed(() => issues.value.map((i) => {
   if (i.kind === 'conflicts') return locale.t('syncIssues.conflicts', { n: i.count })
   if (i.kind === 'pending') return locale.t('syncIssues.pending', { n: i.count })
   if (i.kind === 'verify') return locale.t('syncIssues.verify', { n: i.count })
+  if (i.kind === 'encryption') return locale.t('syncIssues.encryption', 'Данные на этом компьютере сейчас не зашифрованы — сообщите администратору')
   if (i.kind === 'mirror') {
     return i.since
       ? locale.t('syncIssues.mirrorSince', { time: hhmm(i.since) })

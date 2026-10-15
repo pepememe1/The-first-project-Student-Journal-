@@ -78,7 +78,12 @@ JWT_MOBILE_TTL_MIN = int(os.environ.get("GRADEBOOK_JWT_MOBILE_TTL_MIN", "10080")
 #вход заново»), а не у каждого свой в зависимости от того, когда он однажды вошёл.
 #Понедельник МЕСТНЫЙ, а не UTC: Улан-Удэ — UTC+8, и по UTC граница пришлась бы на
 #воскресенье 16:00 по-местному, то есть на сутки раньше обещанного.
-COLLEGE_UTC_OFFSET_H = int(os.environ.get("GRADEBOOK_TZ_OFFSET_H", "8"))
+#Число живёт в `college_clock` (корень репо) — единственной двери к часам колледжа.
+#Здесь стояла своя настройка `GRADEBOOK_TZ_OFFSET_H`, и читала её ровно эта функция:
+#расписание, Вектор и выгрузки жили по часам машины (на бою — по Москве). Убрана
+#15.10.2026: настройка, которой следует половина продукта, хуже отсутствующей.
+import college_clock  # noqa: E402
+COLLEGE_UTC_OFFSET_H = college_clock.UTC_OFFSET_H
 
 #Нижняя граница той же сессии. Без неё вход в воскресенье вечером давал бы сессию на
 #пару часов — формально «до понедельника», а на деле бесполезную: человек открыл бы
@@ -180,7 +185,7 @@ def minutes_until_next_monday(now=None) -> int:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    local = now.astimezone(timezone(timedelta(hours=COLLEGE_UTC_OFFSET_H)))
+    local = college_clock.local(now)
     days_ahead = (7 - local.weekday()) % 7 or 7          # weekday(): понедельник = 0
     boundary = (local + timedelta(days=days_ahead)).replace(
         hour=0, minute=0, second=0, microsecond=0)

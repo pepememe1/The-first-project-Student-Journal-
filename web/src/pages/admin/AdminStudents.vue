@@ -16,6 +16,7 @@ import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import RolloutDialog from '@/components/account/RolloutDialog.vue'
 import AccountExtraPanel from '@/components/account/AccountExtraPanel.vue'
+import { formatCollege } from '@/utils/collegeTime'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -124,7 +125,7 @@ function setCourseFilter(c) {
 function fmtDT(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
-  return isNaN(d) ? '—' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return isNaN(d) ? '—' : formatCollege(d, BCP47[locale.active] || 'ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 async function reload() {
@@ -210,7 +211,7 @@ const passwordSetAt = ref('')
 function fmtIssued(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  return isNaN(d) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+  return isNaN(d) ? '' : formatCollege(d, BCP47[locale.active] || 'ru-RU',
     { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 

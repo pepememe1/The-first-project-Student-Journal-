@@ -33,7 +33,7 @@ import DataFreshness from '@/components/ui/DataFreshness.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
-import { dayLabels, kindMap } from '@/config/scheduleView'
+import { dayLabels, kindMap, weekButtonsFor, weekButtonLabelFor } from '@/config/scheduleView'
 
 const locale = useLocaleStore()
 // ⚠️ Подписи дней и типов занятий переехали в `config/scheduleView.js` — их рисует ещё и
@@ -394,22 +394,10 @@ const weekKeys = computed(() => Object.keys(weeks.value).map(Number).sort((a, b)
 // нужна и тогда, когда у группы на эту чётность нет пар, просто покажет «нет
 // занятий»); сессионные — реальное число блоков (не фиксировано, у разных групп
 // заочки может отличаться).
-const weekButtons = computed(() => {
-  if (!categoryDated.value) return [1, 2]
-  return weekKeys.value.length ? weekKeys.value : [1]
-})
+const weekButtons = computed(() => weekButtonsFor(categoryDated.value, weekKeys.value))
 function weekButtonLabel(wk) {
-  if (!categoryDated.value) {
-    const label = wk === 2 ? locale.t('schedulePage.week2', 'II неделя') : locale.t('schedulePage.week1', 'I неделя')
-    return label + (data.value?.week === wk ? locale.t('schedulePage.nowSuffix', '  · сейчас') : '')
-  }
-  const days = Object.keys(weeks.value[String(wk)] || {})
-  if (!days.length) return locale.t('schedulePage.sessionN', { n: wk })
-  const first = days[0].split(', ').pop()
-  const last = days[days.length - 1].split(', ').pop()
-  return first === last
-    ? locale.t('schedulePage.sessionNSingle', { n: wk, date: first })
-    : locale.t('schedulePage.sessionNRange', { n: wk, from: first, to: last })
+  return weekButtonLabelFor(wk, { categoryDated: categoryDated.value, weeks: weeks.value,
+                                   currentWeek: data.value?.week, t: locale.t })
 }
 function dayLessons(dayKey) { return (weeks.value[String(week.value)] || {})[dayKey] || [] }
 const hasAny = computed(() => data.value?.available && Object.keys(weeks.value).length)

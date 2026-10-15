@@ -80,7 +80,7 @@ public class ScheduleWidgetService extends RemoteViewsService {
             if (snap == null) {
                 return;
             }
-            Calendar now = Calendar.getInstance();
+            Calendar now = ScheduleWidgetData.collegeNow();
             //Какой день показывать — выбирает человек в настройках виджета.
             //⚠️ «Только сегодня» и «только завтра» ищут ИМЕННО ЭТОТ день и, если пар нет,
             //честно показывают пустоту: человек попросил конкретный день, и подставить

@@ -8,7 +8,8 @@ xlsx_export.py — сборка журнала и ведомости в xlsx (в
 """
 import io
 import re
-from datetime import datetime
+
+import college_clock  # «Выгружено …» — по часам колледжа, а не машины
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
@@ -67,7 +68,7 @@ def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
 
     _title(ws, 1, last_col, "Журнал успеваемости", 16, bold=True)
     _title(ws, 2, last_col, f"Группа {group}  ·  {subject}", SZ, bold=True)
-    _title(ws, 3, last_col, f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
+    _title(ws, 3, last_col, f"Выгружено {college_clock.stamp('%d.%m.%Y %H:%M')}  ·  "
                             f"Технологический колледж ВСГУТУ", 12, italic=True)
 
     HDR = 5
@@ -166,7 +167,7 @@ def build_vedomost_xlsx(group: str, subject: str, term: dict, form: str, rows,
             cell.alignment = Alignment(horizontal="left" if c == 2 else "center", vertical="center")
 
     foot = HDR + len(rows) + 2
-    ws.cell(row=foot, column=1, value=f"Дата: {datetime.now().strftime('%d.%m.%Y')}").font = Font(name=FNT, size=SZ)
+    ws.cell(row=foot, column=1, value=f"Дата: {college_clock.stamp('%d.%m.%Y')}").font = Font(name=FNT, size=SZ)
     ws.merge_cells(start_row=foot, start_column=1, end_row=foot, end_column=2)
     sign = ws.cell(row=foot, column=3, value=f"Преподаватель: {teacher or '____________'}")
     sign.font = Font(name=FNT, size=SZ)
@@ -211,6 +212,22 @@ def _week_pairs(days: dict) -> list:
     return sorted(n for n in nums if n)
 
 
+
+def _pair_time(days: dict, pair_no: int, pair_times=None) -> str:
+    """Время пары для выгрузки — ОДНО правило на xlsx и docx (до 15.10.2026 их было два).
+
+    Берём из первой найденной пары с этим номером: у портала время одно на весь поток,
+    но в ручных правках может быть не заполнено — тогда из звонков (`pair_times`)."""
+    for day in _DAYS:
+        for ls in (days.get(day) or []):
+            if int(ls.get("pair_no") or 0) == pair_no and (ls.get("time") or "").strip():
+                return ls["time"].strip()
+    idx = pair_no - 1
+    if pair_times and 0 <= idx < len(pair_times):
+        return str(pair_times[idx])
+    return ""
+
+
 def build_schedule_xlsx(group: str, weeks: dict, pair_times=None) -> bytes:
     """Расписание группы в xlsx. weeks — {"1": {"Пнд": [пары]}, ...} как отдаёт сервер."""
     wb = Workbook()
@@ -222,7 +239,7 @@ def build_schedule_xlsx(group: str, weeks: dict, pair_times=None) -> bytes:
     row = 1
     _title(ws, row, last_col, f"Расписание занятий — {group}", SZ + 2, bold=True)
     row += 1
-    _title(ws, row, last_col, f"Сформировано {datetime.now().strftime('%d.%m.%Y')}",
+    _title(ws, row, last_col, f"Сформировано {college_clock.stamp('%d.%m.%Y')}",
            SZ - 2, italic=True)
     row += 2
 
@@ -249,20 +266,7 @@ def build_schedule_xlsx(group: str, weeks: dict, pair_times=None) -> bytes:
         row += 1
 
         for pair_no in pairs:
-            #Время берём из первой найденной пары с этим номером: у портала оно одно
-            #на весь поток, но в ручных правках может быть не заполнено.
-            time_text = ""
-            for day in _DAYS:
-                for ls in (days.get(day) or []):
-                    if int(ls.get("pair_no") or 0) == pair_no and (ls.get("time") or "").strip():
-                        time_text = ls["time"].strip()
-                        break
-                if time_text:
-                    break
-            if not time_text and pair_times:
-                idx = pair_no - 1
-                if 0 <= idx < len(pair_times):
-                    time_text = str(pair_times[idx])
+            time_text = _pair_time(days, pair_no, pair_times)
 
             values = [str(pair_no), time_text]
             for day in _DAYS:
@@ -303,7 +307,7 @@ def build_credentials_xlsx(group: str, rows) -> bytes:
     last_col = get_column_letter(ncols)
     _title(ws, 1, last_col, "Данные для входа в электронный журнал", 16, bold=True)
     _title(ws, 2, last_col, f"Группа {group}", SZ, bold=True)
-    _title(ws, 3, last_col, f"Выгружено {datetime.now().strftime('%d.%m.%Y %H:%M')}  ·  "
+    _title(ws, 3, last_col, f"Выгружено {college_clock.stamp('%d.%m.%Y %H:%M')}  ·  "
                             f"Технологический колледж ВСГУТУ", 12, italic=True)
     HDR = 5
     ws.append([])

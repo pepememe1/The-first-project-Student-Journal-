@@ -20,6 +20,7 @@ import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import { formatCollege } from '@/utils/collegeTime'
 
 const locale = useLocaleStore()
 const auth = useAuthStore()
@@ -155,7 +156,7 @@ const passwordSetAt = ref('')
 function fmtIssued(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  return isNaN(d) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+  return isNaN(d) ? '' : formatCollege(d, BCP47[locale.active] || 'ru-RU',
     { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 async function saveEdit() {

@@ -30,6 +30,7 @@ import { statusLabel as sharedStatusLabel, statusColor as sharedStatusColor } fr
 import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { useLocaleStore } from '@/stores/locale'
+import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 
 const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
@@ -88,7 +89,15 @@ const muted = computed(() => !!activeChat.value?.muted)
 
 /** Звук: гасит пуши беседы, громкие отметки И напоминания-таймеры (см. routers/me.py). */
 async function toggleMute() {
-  await m.muteConversation(!muted.value)
+  failed(await m.muteConversation(!muted.value))
+}
+
+// Действие над беседой не прошло — говорим об этом (15.10.2026). Стор честно отдавал
+// `false`, но его не читал ни один из семи вызывающих: сбой сети на «Удалить», «Без звука»
+// или «Закрепить» выглядел как кнопка, которая не работает.
+function failed(ok) {
+  if (ok === false) toast.error(locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз'))
+  return ok !== false
 }
 
 // ⚠️ Содержимое вкладки грузим ПРИ ОТКРЫТИИ, а не заранее: три лишних запроса на каждое
@@ -122,12 +131,10 @@ function savedTime(it) {
   const d = new Date(it.sent_at || '')
   if (Number.isNaN(d.getTime())) return ''
   const loc = BCP47[locale.active] || 'ru-RU'
-  const now = new Date()
-  const sameDay = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
-  return sameDay
-    ? d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleString(loc, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  //«Сегодня» и часы — по Улан-Удэ (utils/collegeTime.js), а не по устройству.
+  return collegeDayKey(d) === collegeDayKey()
+    ? formatCollege(d, loc, { hour: '2-digit', minute: '2-digit' })
+    : formatCollege(d, loc, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 // ━━ ТРЕКЕР ЗАДАЧ (05.10.2026) ━━
@@ -308,16 +315,15 @@ async function removeChat() {
     ? locale.t('conversationInfo.confirmDeleteGroup', 'Удалить беседу у себя? Вы также выйдете из неё.')
     : locale.t('conversationInfo.confirmDeleteDirect', 'Удалить переписку у себя? У собеседника она сохранится.')
   if (!(await confirm({ message: what, okText: locale.t('common.delete'), danger: true }))) return
-  await m.deleteConversation(false)
-  emit('close')
+  //Не удалилось — окно остаётся открытым: закрыть его значило бы сказать «готово».
+  if (failed(await m.deleteConversation(false))) emit('close')
 }
 
 async function clearHistory() {
   if (!(await confirm({
     message: locale.t('conversationInfo.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'),
     okText: locale.t('messenger.clearOk', 'Очистить'), danger: true }))) return
-  await m.deleteConversation(true)
-  emit('close')
+  if (failed(await m.deleteConversation(true))) emit('close')
 }
 
 // Действия над чатом, запрошенные из трёх точек карточки профиля.

@@ -10,6 +10,7 @@ import { computed } from 'vue'
 import { timeline, deadlineState } from '@/utils/tracker'
 import { useTrackerLabels, KIND_STYLE } from '@/composables/useTrackerLabels'
 import { useLocaleStore } from '@/stores/locale'
+import { collegeParts, formatCollege } from '@/utils/collegeTime'
 
 const props = defineProps({
   tasks: { type: Array, required: true },
@@ -28,11 +29,12 @@ const days = computed(() => {
   const out = []
   for (let i = 0; i < tl.value.days; i++) {
     const d = new Date(tl.value.start.getTime() + i * 86400000)
+    const p = collegeParts(d)          //день шкалы — число колледжа (см. utils/tracker.timeline)
     out.push({
-      n: d.getDate(), weekend: d.getDay() === 0 || d.getDay() === 6,
+      n: p.day, weekend: p.weekday === 0 || p.weekday === 6,
       //Месяц подписываем на первом дне шкалы и на первых числах — иначе по одним числам
       //не понять, октябрь это или ноябрь.
-      month: (i === 0 || d.getDate() === 1) ? d.toLocaleDateString(tag, { month: 'short' }) : '',
+      month: (i === 0 || p.day === 1) ? formatCollege(d, tag, { month: 'short' }) : '',
     })
   }
   return out

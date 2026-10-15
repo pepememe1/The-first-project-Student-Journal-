@@ -206,7 +206,7 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         int hDp = opts != null ? opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0) : 0;
 
         JSONObject snap = ScheduleWidgetData.snapshot(ctx);
-        Calendar now = Calendar.getInstance();
+        Calendar now = ScheduleWidgetData.collegeNow();
 
         RemoteViews rv;
         if (wDp > 0 && wDp < NARROW_MAX_DP) {
@@ -503,9 +503,9 @@ public class ScheduleWidgetProvider extends AppWidgetProvider {
         if (ts <= 0) {
             return "";
         }
-        Calendar c = Calendar.getInstance();
+        Calendar c = ScheduleWidgetData.collegeNow();
         c.setTimeInMillis(ts);
-        Calendar now = Calendar.getInstance();
+        Calendar now = ScheduleWidgetData.collegeNow();
         boolean sameDay = c.get(Calendar.YEAR) == now.get(Calendar.YEAR)
                 && c.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR);
         if (sameDay) {

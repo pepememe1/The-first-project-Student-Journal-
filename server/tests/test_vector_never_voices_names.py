@@ -113,7 +113,21 @@ def _sent_to_llm(monkeypatch):
         seen.append(question)
         return facts_text
 
+    #Свободный разговор и перевод ответа — тоже дорога к модели (находка Полковника
+    #14.10.2026: шпион видел только озвучку, и утечка по этим двум путям прошла бы мимо).
+    def _spy_chat(cfg, question, role="student", context="", locale="ru"):
+        seen.append(question)
+        seen.append(context)
+        return "ok"
+
+    def _spy_complete(cfg, messages, temperature=0.3):
+        for m in messages or []:
+            seen.append(str((m or {}).get("content", "")))
+        return ""
+
     monkeypatch.setattr(vector_llm, "voice", _spy)
+    monkeypatch.setattr(vector_llm, "free_chat", _spy_chat)
+    monkeypatch.setattr(vector_llm, "complete", _spy_complete)
     return seen
 
 
@@ -201,3 +215,38 @@ def test_the_guard_can_actually_fail(world, monkeypatch):
         "Сломанный продукт не был замечен: ни одна фамилия не уехала в LLM даже когда "
         "флаг no_voice отключён целиком. Значит сторож выше проверяет не тот путь."
     )
+
+
+# ── Вторая линия защиты на /vector/voice и короткие фамилии (15.10.2026) ─────────────
+def test_voice_endpoint_does_not_pass_names_to_the_model(world, monkeypatch):
+    """Ручка озвучки сама проверяет ФИО: и в фактах, и в свободном вопросе. До 15.10.2026
+    она доверяла вызывающему, и любой вошедший клиент мог отправить фамилии наружу."""
+    seen = _sent_to_llm(monkeypatch)
+    client, headers = world["client"], world["teacher"]
+    facts = f"Должники: {SURNAMES[0]} Батор — 2"
+    r = client.post("/vector/voice", json={"facts": facts, "question": "кто должен"}, headers=headers)
+    assert r.status_code == 200 and r.json()["text"] == facts, r.text
+    r = client.post("/vector/voice", json={"mode": "chat", "question": f"расскажи про {SURNAMES[1]}"},
+                    headers=headers)
+    assert r.status_code == 200 and r.json()["text"], r.text
+    _assert_clean(seen)
+    #Без фамилии — озвучка идёт как раньше (иначе проверка выше была бы просто «всё выключено»).
+    client.post("/vector/voice", json={"facts": "Средний балл 4.2"}, headers=headers)
+    assert "Средний балл 4.2" in seen
+
+
+def test_two_letter_surnames_are_caught_as_whole_words(world):
+    """«Ли», «Ян» — основой не сравнить, раньше их не проверяли вовсе."""
+    from app.db import SessionLocal
+    from app.routers.web.vector import _names_a_person
+    r = world["client"].post("/sync/push", json={"changes": {"users": [{
+        "id": "stud:li", "role": "student", "login": "li", "surname": "Ли", "name": "Вэй",
+        "password_hash": hash_password("studpass1"), "group_name": "ИС-21"}]}},
+        headers=world["admin"])
+    assert r.status_code == 200, r.text
+    db = SessionLocal()
+    try:
+        assert _names_a_person("какие оценки у Ли", db)
+        assert not _names_a_person("Лиза принесла справку", db), "часть слова — не фамилия"
+    finally:
+        db.close()

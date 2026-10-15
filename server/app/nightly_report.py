@@ -30,12 +30,12 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-#Иркутск (Улан-Удэ) — без перехода на летнее время, поэтому фиксированное смещение
-#надёжнее `zoneinfo`: на машине может не оказаться базы часовых поясов.
-TZ_OFFSET_MIN = 480
-_TZ = timezone(timedelta(minutes=TZ_OFFSET_MIN))
+#Пояс колледжа — одна дверь `college_clock` (там же, почему смещение фиксированное).
+import college_clock  # noqa: E402
+TZ_OFFSET_MIN = college_clock.UTC_OFFSET_H * 60
+_TZ = college_clock.TZ
 
 #Пороги «требует внимания». Каждый — про потерю данных или доступности, а не косметику.
 DISK_MIN_FREE_PCT = 15          #ниже — бэкап начнёт пропускать снимки (нужно 1.5× базы)

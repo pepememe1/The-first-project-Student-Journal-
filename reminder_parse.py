@@ -46,7 +46,11 @@ def parse_reminder(text: str, now: datetime) -> dict:
     """Найти в тексте дату/время. Возвращает {'when': datetime, 'matched': str} или None.
 
     `now` передаётся ЯВНО (а не берётся из системных часов) — так функция чистая и её
-    можно тестировать без подмены времени."""
+    можно тестировать без подмены времени.
+
+    ⚠️ `now` — по часам КОЛЛЕДЖА (`college_clock.now()`), а не UTC: «завтра в 10:00»
+    значит десять утра в Улан-Удэ. С UTC-«сейчас» напоминание уезжало на восемь часов,
+    а утром «завтра» превращалось в «сегодня» (15.10.2026)."""
     if not text:
         return None
     low = text.lower()
@@ -101,7 +105,10 @@ def _build_date(now: datetime, day: int, month: int, year, hh, mm, matched: str)
     if not (1 <= month <= 12 and 1 <= day <= 31):
         return None
     try:
-        when = datetime(year or now.year, month, day)
+        #Пояс — тот же, что у `now`: без него «12 мая в 10:00» уходило наивным временем,
+        #сервер считал его UTC, и человек в Улан-Удэ получал напоминание в 18:00
+        #(15.10.2026). Остальные ветки наследуют пояс через `now + timedelta`.
+        when = datetime(year or now.year, month, day, tzinfo=now.tzinfo)
     except ValueError:
         return None            #31 февраля и подобное — не дата, а совпадение цифр
     #Год не указан, а дата уже прошла → имеется в виду следующий год.

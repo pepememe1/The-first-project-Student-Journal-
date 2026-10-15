@@ -15,6 +15,7 @@ import { ref, onMounted } from 'vue'
 import { X, ChevronDown, ChevronRight } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
+import { formatCollege } from '@/utils/collegeTime'
 
 const props = defineProps({ conversationId: { type: String, required: true } })
 const emit = defineEmits(['close'])
@@ -29,7 +30,7 @@ const busy = ref('')
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 function fmt(iso) {
   const d = new Date(iso || '')
-  return isNaN(d) ? '—' : d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+  return isNaN(d) ? '—' : formatCollege(d, BCP47[locale.active] || 'ru-RU',
     { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 

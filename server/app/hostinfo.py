@@ -169,8 +169,16 @@ def listdir(path: str, root: str) -> list:
         except OSError:
             continue
         out.append({"name": e.name, "dir": is_dir, "size": size,
-                    "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))})
+                    "mtime": _college_stamp(mtime, "%Y-%m-%d %H:%M")})
     return out
+
+
+def _college_stamp(ts: float, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Метка файла или процесса — на часах колледжа. Раньше `time.localtime`: на бою
+    это Москва, и администратор в Улан-Удэ видел время копии на пять часов назад."""
+    import college_clock
+    from datetime import datetime, timezone
+    return college_clock.local(datetime.fromtimestamp(ts, timezone.utc)).strftime(fmt)
 
 
 #Момент запуска ЭТОГО процесса приложения. Считается один раз при импорте модуля, то
@@ -198,9 +206,9 @@ def summary(root: str = "") -> dict:
         "load": load_average(),
         "uptime": uptime_seconds(),
         "process_uptime": process_uptime_seconds(),
-        "started_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_PROCESS_START)),
+        "started_at": _college_stamp(_PROCESS_START),
         "memory": memory(),
         "disk": disk(base),
         "root": os.path.realpath(base),
-        "now": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "now": _college_stamp(time.time()),
     }

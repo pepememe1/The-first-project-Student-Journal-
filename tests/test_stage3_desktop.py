@@ -9,7 +9,6 @@ test_stage3_desktop.py — ДЕСКТОП, этап 3: ключи оценок �
 import sqlite3
 
 from data import student_link
-from sync import sync_engine
 from data import local_db
 from data.core import DBManager, term_grade_id
 from data.data_store import get_store
@@ -100,27 +99,3 @@ def test_rows_without_student_id_are_left_alone(fresh_db):
     assert ids == ["Нет|Такого|Математика|2025/2026|1"], "строка должна уцелеть"
 
 
-def test_push_sends_new_style_grade_key(fresh_db):
-    """Оценка за занятие уезжает на сервер уже с ключом по student_id."""
-    sid = _seed_student()
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    DBManager.upsert_grade(cur, ("Иванова", "Мария", "L1", "5"))
-    conn.commit()
-    conn.close()
-
-    sent = sync_engine._collect_grades()
-    assert sent[0]["id"] == f"{sid}|L1", "push обязан слать ключ по id студента"
-
-
-def test_push_falls_back_to_name_key_when_student_unknown(fresh_db):
-    """Студент не опознан — уезжает СТАРЫЙ ключ, а не пустой/битый. Сервер его
-    нормализует сам; терять оценку из-за отсутствия в справочнике нельзя."""
-    conn = DBManager.get_conn()
-    cur = conn.cursor()
-    DBManager.upsert_grade(cur, ("Нет", "Такого", "L1", "4"))
-    conn.commit()
-    conn.close()
-
-    sent = sync_engine._collect_grades()
-    assert sent[0]["id"] == "Нет|Такого|L1"

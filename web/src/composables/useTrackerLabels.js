@@ -10,6 +10,7 @@ import {
   ChevronsUp, ChevronUp, Equal, ChevronDown, ChevronsDown,
 } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
+import { collegeParts, formatCollege, fromCollegeWall } from '@/utils/collegeTime'
 
 // Цвет — токеном палитры, а не числом: тема у каждого своя (светлая, тёмная, свой акцент).
 export const PRIORITY_STYLE = {
@@ -82,19 +83,20 @@ export function useTrackerLabels() {
   function fmtDate(s) {
     const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(String(s || ''))
     if (!m) return ''
-    const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0))
+    //Срок в трекере — дата на часах КОЛЛЕДЖА (Улан-Удэ), как и всё в журнале.
+    const d = fromCollegeWall(+m[1], +m[2], +m[3], +(m[4] || 0), +(m[5] || 0))
     const tag = BCP47[locale.active] || 'ru-RU'
-    const sameYear = d.getFullYear() === new Date().getFullYear()
-    const date = d.toLocaleDateString(tag, sameYear ? { day: 'numeric', month: 'short' }
+    const sameYear = +m[1] === collegeParts().year
+    const date = formatCollege(d, tag, sameYear ? { day: 'numeric', month: 'short' }
       : { day: 'numeric', month: 'short', year: 'numeric' })
     return m[4] ? `${date}, ${m[4]}:${m[5]}` : date
   }
-  /** Метка времени сервера (ISO, UTC) → «5 окт., 14:20» по часам человека. */
+  /** Метка времени сервера (ISO, UTC) → «5 окт., 14:20» по часам колледжа (Улан-Удэ). */
   function fmtStamp(iso) {
     const d = new Date(iso || '')
     if (Number.isNaN(d.getTime())) return ''
     const tag = BCP47[locale.active] || 'ru-RU'
-    return d.toLocaleString(tag, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    return formatCollege(d, tag, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   }
   const hoursUnit = computed(() => t('tracker.hoursUnit'))
 

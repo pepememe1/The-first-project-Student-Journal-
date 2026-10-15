@@ -18,6 +18,7 @@ import { RefreshCw, Search, ShieldAlert, ShieldCheck } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import Card from '@/components/ui/Card.vue'
+import { formatCollege } from '@/utils/collegeTime'
 
 const locale = useLocaleStore()
 const rows = ref([])
@@ -51,12 +52,12 @@ function levelClass(level) {
   return 'text-text3'
 }
 
-// Время показываем в часовом поясе устройства: администратор сверяет журнал со своими
-// часами, а не с UTC сервера.
+// Время — по часам КОЛЛЕДЖА (Улан-Удэ), а не устройства и не UTC сервера: журнал сверяют
+// с событиями в колледже, и у администратора в командировке оно не должно съезжать.
 function when(ts) {
   if (!ts) return ''
   const d = new Date(ts)
-  return isNaN(d) ? ts : d.toLocaleString()
+  return isNaN(d) ? ts : formatCollege(d, undefined, { dateStyle: 'short', timeStyle: 'medium' })
 }
 
 const empty = computed(() => !loading.value && !error.value && !rows.value.length)

@@ -11,6 +11,8 @@
 // ⚠️ Всё в этом файле — чистые функции. Интерфейс их только зовёт: вёрстку тесты не
 // видят, а перестановку двух условий в расчёте срока или в сжатии пачки — видят.
 
+import { collegeDayKey, collegeParts, fromCollegeWall } from './collegeTime.js'
+
 // Те же наборы, что на сервере (`_PRIORITIES`, `_TASK_KINDS`, `_COLUMN_KINDS`,
 // `_LINK_KINDS`) — и те же пять приоритетов и типов, что у Яндекс Трекера.
 export const PRIORITIES = ['blocker', 'critical', 'normal', 'minor', 'trivial']   //от срочного
@@ -327,22 +329,25 @@ export function moveOps(state, taskId, columnId, index, canManage) {
 }
 
 // ── сроки ─────────────────────────────────────────────────────────────────────────────
-const pad = (n) => String(n).padStart(2, '0')
-export const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+//Срок — время на часах КОЛЛЕДЖА (Улан-Удэ), а не устройства. До 15.10.2026 строка срока
+//читалась по поясу устройства: у студента на практике в Москве «сдать до 18:00» краснело
+//«просрочено» на пять часов позже, чем у преподавателя, который этот срок ставил.
+export const isoDay = (d) => collegeDayKey(d)
 
-/** «ГГГГ-ММ-ДД[TЧЧ:ММ]» → Date в МЕСТНОМ времени (так срок и ставили). null — не дата. */
+/** «ГГГГ-ММ-ДД[TЧЧ:ММ]» → момент, когда это время наступает в колледже. null — не дата. */
 export function parseLocal(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(String(s || ''))
   if (!m) return null
-  //Срок без времени — до КОНЦА дня: «сдать 20-го» не значит «просрочено в 00:00 20-го».
-  const d = new Date(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 23, m[4] ? +m[5] : 59, m[4] ? 0 : 59)
-  if (Number.isNaN(d.getTime())) return null
-  //⚠️ `new Date` несуществующую дату НЕ отвергает, а переносит: «2026-13-45» молча
+  const [y, mo, da] = [+m[1], +m[2], +m[3]]
+  //⚠️ `Date` несуществующую дату НЕ отвергает, а переносит: «2026-13-45» молча
   //становится 14 февраля 2027-го. Сверяем, что получилось именно то, что просили
   //(поймано тестом в день написания; сервер проверяет дату так же строго).
-  if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return null
+  const probe = new Date(Date.UTC(y, mo - 1, da))
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== da) return null
   if (m[4] && (+m[4] > 23 || +m[5] > 59)) return null
-  return d
+  //Срок без времени — до КОНЦА дня: «сдать 20-го» не значит «просрочено в 00:00 20-го».
+  return m[4] ? fromCollegeWall(y, mo, da, +m[4], +m[5])
+    : new Date(fromCollegeWall(y, mo, da, 23, 59).getTime() + 59000)
 }
 
 /**
@@ -449,11 +454,18 @@ export function checklistProgress(task) {
  * день; есть только начало — отрезок до сегодня (`open`: срок не назначен).
  */
 export function timeline(tasks, now = new Date()) {
+  //Метка дня — полночь UTC с числом КОЛЛЕДЖА: арифметика по суткам не зависит от пояса
+  //устройства (переходы на летнее время там, где они есть, давали бы сутки в 23 часа).
+  //Подписи шкалы читают её через `collegeParts`/`formatCollege` — смещение +8 ч число
+  //не меняет.
+  const mark = (y, mo, d) => new Date(Date.UTC(y, mo - 1, d))
   const day = (s) => {
-    const d = parseLocal(s)
-    return d ? new Date(d.getFullYear(), d.getMonth(), d.getDate()) : null
+    if (!parseLocal(s)) return null
+    const [y, mo, d] = String(s).slice(0, 10).split('-').map(Number)
+    return mark(y, mo, d)
   }
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const p = collegeParts(now)
+  const today = mark(p.year, p.month, p.day)
   const spans = []
   for (const t of tasks) {
     const a = day(t.start_date), b = day(t.deadline)

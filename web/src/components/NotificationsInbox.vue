@@ -15,6 +15,7 @@ import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import AppButton from '@/components/ui/AppButton.vue'
+import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 
 const auth = useAuthStore()
 const locale = useLocaleStore()
@@ -117,12 +118,12 @@ function fmtWhen(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const today = new Date()
-  const sameDay = d.toDateString() === today.toDateString()
+  //«Сегодня» и часы — по Улан-Удэ (utils/collegeTime.js), а не по устройству.
+  const sameDay = collegeDayKey(d) === collegeDayKey()
   const tag = BCP47[locale.active] || 'ru-RU'
   return sameDay
-    ? d.toLocaleTimeString(tag, { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString(tag, { day: '2-digit', month: '2-digit', year: '2-digit' })
+    ? formatCollege(d, tag, { hour: '2-digit', minute: '2-digit' })
+    : formatCollege(d, tag, { day: '2-digit', month: '2-digit', year: '2-digit' })
 }
 
 async function load() {

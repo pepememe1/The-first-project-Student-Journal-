@@ -21,6 +21,7 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { easterSound } from '@/utils/easterAssetUrl'
 import { useEasterStore } from '@/stores/easterEggs'
 import { mumble } from '@/utils/mumble'
+import { collegeHhmm } from '@/utils/collegeTime'
 
 const props = defineProps({
   // Имя и «уровень» в файле сохранения — берём настоящие, иначе окно выглядит чужим.
@@ -78,8 +79,7 @@ function doSave() {
   try { new Audio(easterSound('savepoint.m4a')).play().catch(() => {}) } catch { /* без звука */ }
   //Улан-Удэ, UTC+8: часы в файле сохранения местные, а не браузерные — человек сверяет
   //их с настенными, а не с настройками своей системы.
-  const t = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000)
-  clock.value = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+  clock.value = collegeHhmm()
   box.value = 'saved'
   emit('save')
   timers.push(setTimeout(() => easter.claim('undertale_save'), 1200))

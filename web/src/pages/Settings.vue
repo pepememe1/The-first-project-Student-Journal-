@@ -38,6 +38,7 @@ import Avatar from '@/components/ui/Avatar.vue'
 import { useProfileStore } from '@/stores/profile'
 import { useA11yStore } from '@/stores/a11y'
 import { profilePlate } from '@/theme/palette'
+import { collegeDdmmyyyy, collegeHhmm } from '@/utils/collegeTime'
 
 const tts = useTtsStore()
 const auth = useAuthStore()
@@ -465,7 +466,9 @@ async function removePasskey(id) {
   pkBusy.value = true
   try { await authApi.webauthnDelete(id); await loadPasskeys() } finally { pkBusy.value = false }
 }
-function fmtDate(s) { return (s || '').slice(0, 10) }
+// Число — по часам колледжа (Улан-Удэ): первые десять символов метки — это дата UTC, и
+// ключ, заведённый утром до 08:00, подписывался вчерашним числом.
+function fmtDate(s) { return s ? collegeDdmmyyyy(s) : '' }
 // G-Man в «Настройках»: он проявляется по мере того, как человек тут сидит,
 // поэтому бросок делаем на входе, а само проявление тянется внутри сцены.
 const easter = useEasterStore()
@@ -836,7 +839,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         <summary class="cursor-pointer text-xs text-text3">{{ loc.t('settings.otaLog', 'Что происходило с обновлениями') }}</summary>
         <ul class="mt-2 flex flex-col gap-1 font-mono text-tiny text-text3">
           <li v-for="(e, i) in otaLog" :key="i" class="break-all">
-            {{ e.at?.slice(5, 16).replace('T', ' ') }} · {{ e.kind }}
+            {{ e.at ? `${collegeDdmmyyyy(e.at).slice(0, 5)} ${collegeHhmm(e.at)}` : '' }} · {{ e.kind }}
             <template v-if="e.data && Object.keys(e.data).length"> · {{ JSON.stringify(e.data) }}</template>
           </li>
         </ul>

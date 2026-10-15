@@ -18,6 +18,7 @@ import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
+import { formatCollege } from '@/utils/collegeTime'
 
 const props = defineProps({ group: { type: String, required: true } })
 const emit = defineEmits(['close'])
@@ -77,7 +78,7 @@ function when(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso
-    : d.toLocaleDateString(BCP47[locale.locale] || 'ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : formatCollege(d, BCP47[locale.locale] || 'ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 </script>
 

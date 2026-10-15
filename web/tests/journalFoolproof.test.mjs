@@ -20,10 +20,11 @@ import { readFileSync } from 'node:fs'
 import {
   parseRuDate, lessonDateIssue, lessonMarkCount, duplicateLesson, lessonNumberOk, FAR_DATE_DAYS,
 } from '../src/utils/lessonChecks.js'
+import { fromCollegeWall } from '../src/utils/collegeTime.js'
 import { recallChoice, rememberChoice, pickRemembered } from '../src/utils/lastChoice.js'
 
 const page = readFileSync(new URL('../src/pages/teacher/TeacherJournal.vue', import.meta.url), 'utf8')
-const TODAY = new Date(2026, 9, 13)          // 13.10.2026
+const TODAY = fromCollegeWall(2026, 10, 13, 12, 0)   // 13.10.2026, полдень в Улан-Удэ
 
 test('дата занятия: принимается только настоящая дата вида дд.мм.гггг', () => {
   assert.ok(parseRuDate('13.10.2026'))

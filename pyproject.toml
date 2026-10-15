@@ -214,7 +214,7 @@ follow_imports = "silent"
 #⚠️ `data/exports.py` удалён 01.09.2026 и простоял здесь месяц: mypy падал на «Cannot read
 #file» ДО проверки, то есть типы не проверялись вообще (найдено 02.10.2026).
 files = ["data/terms.py", "grading.py", "log.py", "app_paths.py",
-         "sync/sync_client.py", "sync/sync_runner.py", "sync/sync_engine.py"]
+         "sync/sync_client.py", "sync/sync_runner.py"]
 
 [tool.bandit]
 #SAST по НАШЕМУ коду. Заведён 29.08.2026 вместе с починкой CI.

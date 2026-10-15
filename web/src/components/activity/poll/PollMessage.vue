@@ -16,6 +16,7 @@ import { BarChart3, Check, Clock, Trophy } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
 import { pollWinners } from '@/utils/pollResult'
+import { collegeHhmm } from '@/utils/collegeTime'
 
 const props = defineProps({ activity: { type: Object, required: true } })
 const locale = useLocaleStore()
@@ -58,14 +59,11 @@ watch([expired, () => props.activity.status, endsAt], () => {
     && Number.isFinite(endsAt.value) && !expired.value
 })
 // Абсолютное время окончания («закончится в 12:42»), а не обратный отсчёт: конкретный
-// момент держать в уме не нужно, в отличие от «осталось 3 мин». Считает клиент в СВОЁМ
-// поясе от присланного сервером `ends_at`.
+// момент держать в уме не нужно, в отличие от «осталось 3 мин». Часы — КОЛЛЕДЖА
+// (Улан-Удэ): ведущий говорит «до 12:42» вслух, и у всех в аудитории число обязано совпасть.
 const endTimeLabel = computed(() => {
   if (!Number.isFinite(endsAt.value)) return ''
-  const d = new Date(endsAt.value)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  return locale.t('poll.endsAt', { time: `${hh}:${mm}` })
+  return locale.t('poll.endsAt', { time: collegeHhmm(new Date(endsAt.value)) })
 })
 
 const total = computed(() => (tally.value || []).reduce((a, b) => a + b, 0) || votedCount.value)

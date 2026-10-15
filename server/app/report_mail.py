@@ -30,9 +30,12 @@ from __future__ import annotations
 
 import html
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-_TZ = timezone(timedelta(minutes=480))
+import college_clock  # noqa: E402
+
+#Пояс колледжа — одна дверь `college_clock`; здесь стояла своя константа +480 мин.
+_TZ = college_clock.TZ
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_assets")
 
 #Цвет «окошка» Вектора — ОБЯЗАН совпадать с HERO_BG в tools/build_report_assets.py:

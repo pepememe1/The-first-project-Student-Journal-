@@ -25,6 +25,7 @@ import { kindMeta } from '@/config/notificationKinds'
 import { deadlineState, fmtHours } from '@/utils/tracker'
 import { useTrackerLabels, PRIORITY_STYLE, KIND_STYLE } from '@/composables/useTrackerLabels'
 import AppButton from '@/components/ui/AppButton.vue'
+import { formatCollege } from '@/utils/collegeTime'
 
 const route = useRoute()
 const router = useRouter()
@@ -70,7 +71,7 @@ const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 const when = computed(() => {
   const d = new Date(item.value?.created_at || '')
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString(BCP47[locale.active] || 'ru-RU',
+  return formatCollege(d, BCP47[locale.active] || 'ru-RU',
     { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 })
 

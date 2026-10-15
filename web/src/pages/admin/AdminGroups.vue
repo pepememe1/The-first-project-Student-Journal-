@@ -12,6 +12,7 @@ import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import { collegeParts } from '@/utils/collegeTime'
 
 const toast = useToast()
 const { confirmDelete } = useDeleteConfirm()
@@ -131,7 +132,7 @@ const form = ref({ name: '', subjects: [], category: 'college', course: 1, enrol
 // считается от него, а не от календарной даты браузера — границу 1 сентября продукт
 // двигал уже трижды, и вторая её копия здесь разошлась бы молча.
 const termYear = computed(() => currentTerm.value?.year || '')
-const termStartYear = computed(() => Number(String(termYear.value).split('/')[0]) || new Date().getFullYear())
+const termStartYear = computed(() => Number(String(termYear.value).split('/')[0]) || collegeParts().year)
 function yearFromCourse(c) { return termStartYear.value - (Number(c) - 1) }
 function courseFromYear(y) { return termStartYear.value - Number(y) + 1 }
 function onCourseInput(v) {

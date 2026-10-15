@@ -18,6 +18,7 @@ import { useLocaleStore } from '@/stores/locale'
 import Card from '@/components/ui/Card.vue'
 import StatCard from '@/components/ui/StatCard.vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
+import { COLLEGE_UTC_OFFSET_MIN, formatCollege } from '@/utils/collegeTime'
 
 const locale = useLocaleStore()
 const t = (k, f) => locale.t(k, f)
@@ -31,9 +32,10 @@ const hits = ref([])
 const hitsTotal = ref(0)
 const hitsLoading = ref(false)
 
-// Смещение часового пояса устройства в минутах (Иркутск = 480): «сегодня» на графике —
-// сутки администратора, а не UTC сервера.
-const tz = -new Date().getTimezoneOffset()
+// Смещение пояса в минутах: «сегодня» на графике — сутки КОЛЛЕДЖА (Улан-Удэ, 480), а не
+// UTC сервера и не устройства администратора — иначе график из командировки показывал бы
+// другие сутки, чем вечерняя сводка на почту.
+const tz = COLLEGE_UTC_OFFSET_MIN
 
 async function loadSummary() {
   loading.value = true
@@ -93,7 +95,7 @@ const kindOf = (k) => KIND[k] || KIND.other
 function when(ts) {
   if (!ts) return '—'
   const d = new Date(ts * 1000)
-  return isNaN(d) ? '—' : d.toLocaleString()
+  return isNaN(d) ? '—' : formatCollege(d, undefined, { dateStyle: 'short', timeStyle: 'medium' })
 }
 function hoursLeft(sec) {
   if (!sec) return ''

@@ -17,6 +17,7 @@ import { profilePlate } from '@/theme/palette'
 import { nameDecor } from '@/config/nameEffects'
 import { curatorApi, messengerApi } from '@/api/endpoints'
 import { messagePreview } from '@/utils/messagePreview'
+import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 import CreateChatDialog from './CreateChatDialog.vue'
 import GroupPickDialog from './GroupPickDialog.vue'
 import CuratorReportDialog from './CuratorReportDialog.vue'
@@ -79,11 +80,11 @@ function fmtTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const today = new Date()
+  // «Сегодня» и часы — по Улан-Удэ, а не по устройству (utils/collegeTime.js).
   const tag = BCP47[locale.active] || 'ru-RU'
-  return d.toDateString() === today.toDateString()
-    ? d.toLocaleTimeString(tag, { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString(tag, { day: '2-digit', month: '2-digit' })
+  return collegeDayKey(d) === collegeDayKey()
+    ? formatCollege(d, tag, { hour: '2-digit', minute: '2-digit' })
+    : formatCollege(d, tag, { day: '2-digit', month: '2-digit' })
 }
 
 // «Чаты» — без архивных (у них отдельная вкладка) и без «Избранного» (оно — отдельной
@@ -220,16 +221,23 @@ function toggleMenu(convId) { menuFor.value = menuFor.value === convId ? '' : co
 // для всех мессенджеров.
 function onRowContext(convId) { menuFor.value = convId }
 
-async function onPin(chat) { menuFor.value = ''; await m.togglePinChat(chat.conversation_id, !chat.pinned) }
-async function onArchive(chat) { menuFor.value = ''; await m.toggleArchiveChat(chat.conversation_id, !chat.archived) }
-async function onMute(chat) { menuFor.value = ''; await m.muteChatById(chat.conversation_id, !chat.muted) }
+// Действие над беседой не прошло — говорим об этом (15.10.2026). Стор честно отдавал
+// `false`, но его не читал ни один из семи вызывающих: сбой сети на «Удалить», «Без звука»
+// или «Закрепить» выглядел как кнопка, которая не работает.
+function failed(ok) {
+  if (ok === false) toast.error(locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз'))
+  return ok !== false
+}
+async function onPin(chat) { menuFor.value = ''; failed(await m.togglePinChat(chat.conversation_id, !chat.pinned)) }
+async function onArchive(chat) { menuFor.value = ''; failed(await m.toggleArchiveChat(chat.conversation_id, !chat.archived)) }
+async function onMute(chat) { menuFor.value = ''; failed(await m.muteChatById(chat.conversation_id, !chat.muted)) }
 
 // «Пометить непрочитанной» — сервер сдвигает метку прочтения назад (флага «непрочитано»
 // у нас нет намеренно: он стал бы вторым источником правды рядом с меткой, по которой
 // считаются и счётчик, и галочки у собеседника). См. chats.mark_unread.
 async function onUnread(chat) {
   menuFor.value = ''
-  await m.markChatUnread(chat.conversation_id)
+  failed(await m.markChatUnread(chat.conversation_id))
 }
 
 async function onClear(chat) {
@@ -237,7 +245,7 @@ async function onClear(chat) {
   if (!(await confirm({
     message: locale.t('messenger.confirmClear', 'Очистить историю у себя? Сообщения пропадут только у вас.'),
     okText: locale.t('messenger.clearOk', 'Очистить'), danger: true }))) return
-  await m.clearChatById(chat.conversation_id)
+  failed(await m.clearChatById(chat.conversation_id))
 }
 
 async function onDelete(chat) {
@@ -245,7 +253,7 @@ async function onDelete(chat) {
   if (!(await confirm({
     message: locale.t('messenger.confirmDelete', 'Удалить чат у себя? У собеседника переписка сохранится.'),
     okText: locale.t('common.delete'), danger: true }))) return
-  await m.deleteChatById(chat.conversation_id)
+  failed(await m.deleteChatById(chat.conversation_id))
 }
 
 // Блокировка доступна только в ЛИЧНОМ чате: в группе и канале блокировать нечего —

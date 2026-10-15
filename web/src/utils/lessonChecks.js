@@ -11,14 +11,16 @@
  * не является вовсе.
  */
 
-/** «дд.мм.гггг» → Date (полночь по местному времени) или null, если это не дата. */
+import { collegeParts } from './collegeTime.js'
+
+/** «дд.мм.гггг» → Date (полночь UTC того числа — метка ДНЯ, без пояса) или null. */
 export function parseRuDate(text) {
   const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(text || '').trim())
   if (!m) return null
   const [day, month, year] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  const d = new Date(year, month - 1, day)
+  const d = new Date(Date.UTC(year, month - 1, day))
   //31.02 JavaScript молча превращает в 03.03 — такую «дату» не принимаем.
-  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null
   return d
 }
 
@@ -36,8 +38,9 @@ export function lessonDateIssue(text, today = new Date()) {
   if (!raw) return ''
   const d = parseRuDate(raw)
   if (!d) return 'format'
-  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  const days = Math.abs(Math.round((d - base) / 86400000))
+  //«Сегодня» — число КОЛЛЕДЖА (Улан-Удэ), а не устройства (utils/collegeTime.js).
+  const p = collegeParts(today)
+  const days = Math.abs(Math.round((d - Date.UTC(p.year, p.month - 1, p.day)) / 86400000))
   return days > FAR_DATE_DAYS ? 'far' : ''
 }
 

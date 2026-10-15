@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * Данные виджета расписания: кэш, разрешение «какой сегодня день» и разбор времени пар.
@@ -39,6 +40,24 @@ final class ScheduleWidgetData {
     static final String KEY_SNAPSHOT = "snapshot";
 
     /** Короткие имена дней — тот же порядок и та же запись, что в schedule/model.py. */
+    /**
+     * Смещение колледжа от UTC — Улан-Удэ, UTC+8 круглый год. Число повторено в
+     * `college_clock.py` и `web/src/utils/collegeTime.js`; сверяет `CollegeClockTest`.
+     */
+    static final int COLLEGE_UTC_OFFSET_H = 8;
+
+    /**
+     * «Сейчас» на часах КОЛЛЕДЖА, а не телефона. До 15.10.2026 виджет брал
+     * `Calendar.getInstance()`, то есть пояс телефона: у студента на практике в Москве
+     * «сегодня» и текущая пара сдвигались на пять часов, а в ночь на понедельник виджет
+     * до 05:00 показывал прошлую неделю. Все календарные функции ниже работают через
+     * `clone()`, поэтому пояс этого календаря доезжает до них сам.
+     */
+    static Calendar collegeNow() {
+        return Calendar.getInstance(TimeZone.getTimeZone(
+                String.format(Locale.US, "GMT+%02d:00", COLLEGE_UTC_OFFSET_H)));
+    }
+
     static final String[] WEEKDAYS = {"Пнд", "Втр", "Срд", "Чтв", "Птн", "Сбт"};
 
     private static final String[] DAY_FULL = {

@@ -193,7 +193,9 @@ def current_week_parity(d: date | None = None) -> int:
     а именно она и есть первая учебная.
     """
     if d is None:
-        d = date.today()
+        #Сегодня — В КОЛЛЕДЖЕ: ноутбук преподавателя может жить в другом поясе.
+        import college_clock
+        d = college_clock.today()
     ref = academic_week_start(d)
     diff = (d - ref).days / 7
     if diff >= 0:

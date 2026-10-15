@@ -83,3 +83,11 @@ test('свежая успешная сверка даёт «сверено», в
   assert.equal(verifiedAt({ ...quiet, verify: { ok: false, at: fresh.verify.at } }, now), '')
   assert.equal(verifiedAt(null, now), '')
 })
+
+test('данные на диске не зашифрованы — значок говорит об этом человеку (15.10.2026)', () => {
+  //Раньше об этом знал только файл журнала, и причина там была неверной.
+  assert.deepEqual(kinds({ ...quiet, encryption_off: 'key-unreadable' }), ['encryption'])
+  //…и даже когда синк не запущен вовсе: шифрование — свойство копии, а не обмена.
+  assert.deepEqual(kinds({ available: false, encryption_off: 'no-driver' }), ['encryption'])
+  assert.deepEqual(kinds({ available: false }), [])
+})

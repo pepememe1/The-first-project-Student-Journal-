@@ -12,18 +12,20 @@
  * нельзя.
  */
 
+import { addDays, collegeDayKey, collegeHhmm, collegeParts } from './collegeTime.js'
+
 /** Порог «только что»: за минуту данные устареть не успевают. */
 const JUST_NOW_S = 60
 /** До часа считаем минутами — «в 12:40» о свежем ничего не говорит. */
 const MINUTES_UPTO_S = 3600
 
-function hhmm(d) {
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-function sameDay(a, b) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate()
+//Часы и сутки — КОЛЛЕДЖА (Улан-Удэ), как у журнала и сервера: «оценки на утро вторника»
+//обязаны значить одно и то же у студента дома и на практике в другом городе.
+const hhmm = (d) => collegeHhmm(d)
+const sameDay = (a, b) => collegeDayKey(a) === collegeDayKey(b)
+function ddmm(d) {
+  const p = collegeParts(d)
+  return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}`
 }
 
 /**
@@ -39,7 +41,7 @@ export function freshness(ts, now = Date.now()) {
   // поэтому показываем дату как есть и не притворяемся, что понимаем разницу.
   if (diff < 0) {
     const d = new Date(ts)
-    return { kind: 'date', date: `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`, time: hhmm(d) }
+    return { kind: 'date', date: ddmm(d), time: hhmm(d) }
   }
   if (diff < JUST_NOW_S) return { kind: 'now' }
   if (diff < MINUTES_UPTO_S) return { kind: 'minutes', n: Math.floor(diff / 60) }
@@ -48,13 +50,7 @@ export function freshness(ts, now = Date.now()) {
   const nd = new Date(now)
   if (sameDay(d, nd)) return { kind: 'today', time: hhmm(d) }
 
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  if (sameDay(d, yesterday)) return { kind: 'yesterday', time: hhmm(d) }
+  if (sameDay(d, addDays(nd, -1))) return { kind: 'yesterday', time: hhmm(d) }
 
-  return {
-    kind: 'date',
-    date: `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`,
-    time: hhmm(d),
-  }
+  return { kind: 'date', date: ddmm(d), time: hhmm(d) }
 }

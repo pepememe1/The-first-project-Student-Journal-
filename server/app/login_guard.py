@@ -398,8 +398,13 @@ def check_confirmation(db, token: str, code: str, request=None) -> tuple:
                   action="login.confirm.failed", level="warn",
                   detail="неверный код подтверждения входа")
         raise HTTPException(status_code=400, detail="Код не подошёл")
+    #Одноразовость — АТОМАРНО (`claim`), а не парой «проверил выше → записал здесь»: два
+    #одновременных запроса с одним верным кодом оба проходили проверку `get` выше, и код
+    #подтверждения срабатывал дважды (15.10.2026). Проверка выше остаётся дешёвым ранним
+    #отказом; решает эта строка.
+    if not shared_state.claim(_USED_PREFIX + jti, config.LOGIN_CONFIRM_TTL_MIN * 60 + 60):
+        raise HTTPException(status_code=401, detail="Код уже использован, войдите заново")
     throttle.register_success(ip, user.login)
-    shared_state.set(_USED_PREFIX + jti, 1, ttl=config.LOGIN_CONFIRM_TTL_MIN * 60 + 60)
     audit.log(db, request, actor=user.login, role=user.role,
               action="login.confirm.ok", detail="вход подтверждён кодом из письма")
     return user, bool(data.get("trust"))

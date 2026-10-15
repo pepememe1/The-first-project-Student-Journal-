@@ -18,6 +18,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import { collegeDayKey, collegeDdmmyyyy } from '@/utils/collegeTime'
 
 const locale = useLocaleStore()
 const toast = useToast()
@@ -53,7 +54,7 @@ async function doExport() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `gradebook-data-${new Date().toISOString().slice(0, 10)}.zip`
+    a.download = `gradebook-data-${collegeDayKey()}.zip`
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
@@ -183,7 +184,7 @@ async function doImport() {
           <Database class="size-4 text-accent" />
           <span class="min-w-0 truncate">{{ chosen?.name }}</span>
           <span v-if="preview.created_at" class="shrink-0 text-xs text-text3">
-            {{ locale.t('adminData.snapshotDate', { date: preview.created_at.slice(0, 10) }) }}
+            {{ locale.t('adminData.snapshotDate', { date: collegeDdmmyyyy(preview.created_at) }) }}
           </span>
         </div>
 

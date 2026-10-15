@@ -8,8 +8,10 @@ import DataTable from '@/components/ui/DataTable.vue'
 import Badge from '@/components/ui/Badge.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { useToast } from '@/composables/useToast'
 
 const locale = useLocaleStore()
+const toast = useToast()
 const rows = ref([])
 const loading = ref(true)
 const codes = ref({}) // device_id -> выданный код
@@ -36,10 +38,15 @@ onUnmounted(() => {
   if (onVisible) document.removeEventListener('visibilitychange', onVisible)
 })
 
+//Одобрение компьютера — действие администратора, и сбой не имеет права молчать: иначе
+//преподаватель ждёт у двери, а админ уверен, что пустил его (15.10.2026).
 async function approve(dev) {
-  try { codes.value = { ...codes.value, [dev]: (await connectApi.approve(dev)).data.code }; await load() } catch { /* */ }
+  try { codes.value = { ...codes.value, [dev]: (await connectApi.approve(dev)).data.code }; await load() }
+  catch (e) { toast.error(e?.response?.data?.detail || locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз')) }
 }
-async function reject(dev) { try { await connectApi.reject(dev); await load() } catch { /* */ } }
+async function reject(dev) {
+  try { await connectApi.reject(dev); await load() } catch (e) { toast.error(e?.response?.data?.detail || locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз')) }
+}
 
 const STATUS = computed(() => ({
   pending: ['muted', locale.t('adminRequests.pending', 'Ожидает')],

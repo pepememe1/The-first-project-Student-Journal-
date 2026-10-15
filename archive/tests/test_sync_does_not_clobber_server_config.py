@@ -1,3 +1,8 @@
+"""Архив 15.10.2026: тесты выведенного sync/sync_engine.py (продукт его не зовёт с
+25.09.2026, см. tests/test_legacy_sync_engine_fenced.py). Перенесены ДОСЛОВНО из
+tests/test_sync_does_not_clobber_server_config.py; не исполняются. Инварианты живого пути держат
+desktop/local_mirror, desktop/desk_outbox и server/tests/test_sync*.py."""
+
 """Десктоп не отправляет на сервер настройки и пароль администратора (17.08.2026).
 
 Пара к серверному `server/tests/test_sync_config_clobber.py`. Сторожей ДВА намеренно и

@@ -41,9 +41,6 @@ def fresh_db():
         except OSError:
             pass
     DBManager.init()
-    #Сбрасываем «первый полный pull сессии», чтобы тесты дельты не влияли друг на друга.
-    from sync import sync_engine
-    sync_engine.reset_session_state()
     yield
 
 

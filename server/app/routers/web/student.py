@@ -137,33 +137,10 @@ def student_journal(year: str = Query(""), semester: int = Query(0),
         W.group_lessons(db, user.group_name, year=ty, semester=ts), is_archive), user.id)
     records = W.student_visible_records(db, user.surname, user.name, user.group_name, cfg,
                                         student_id=user.id)
-    scale_map = W.lesson_scale_map(db, lessons)
-
-    from collections import OrderedDict
-    buckets = OrderedDict()
-    for l in lessons:
-        buckets.setdefault(l.subject, []).append(l)
-    #⚠️ Тот же живой баг, что и на Главной (см. student_overview): предмет ДЕЙСТВУЮЩЕГО
-    #плана без единого занятия должен быть ВИДЕН («по нему пока пусто»), а не пропадать
-    #из журнала молча — иначе три экрана снова расходятся в ответе на «сколько у меня
-    #предметов». В архиве план мог с тех пор замениться — не трогаем.
-    if not is_archive:
-        for subj in sorted(W.group_plan_subjects(db, user.group_name, cfg) - set(buckets)):
-            buckets[subj] = []
-
-    subjects = []
-    for subj, ls in buckets.items():
-        items = []
-        for l in ls:
-            entry = {"id": l.id, "type": l.type, "number": l.number,
-                     "topic": l.topic, "date": l.date, "grade": records.get(l.id, "")}
-            if l.type == "Экзамен":
-                entry["latest"] = W.grading.latest_exam_value(l.id, records)
-            items.append(entry)
-        subjects.append({"subject": subj, "lessons": items,
-                         "average": W.average(ls, records, cfg, scale=scale_map),
-                         #«Пройдено X из Y часов» по этому предмету (0 total — не задано).
-                         "hours": W.hours_progress(db, user.group_name, subj, ls, ty, ts)})
+    #Сборка по предметам — ОДНА на кабинет студента и родителя (`webdata.journal_subjects`):
+    #до 15.10.2026 здесь стояли две её копии, и первое же новое поле занятия развело бы
+    #два экрана, которые обещают показывать одно и то же.
+    subjects = W.journal_subjects(db, lessons, records, cfg, user.group_name, ty, ts, is_archive)
 
     return {"group": user.group_name, "subjects": subjects, "term": {"year": ty, "semester": ts},
             "methodology": W.grading.methodology_text(cfg)}

@@ -22,6 +22,7 @@ import { extractVideos, embedMode } from '@/utils/videoEmbed'
 import { isNativeApp } from '@/api/server'
 import { extractGifLinks } from '@/utils/gifEmbed'
 import { formatSystemMessage } from '@/utils/messagePreview'
+import { addDays, collegeDayKey, collegeParts, formatCollege } from '@/utils/collegeTime'
 import { copyText } from '@/utils/clipboard'
 import { highlightIn } from '@/utils/highlightFragment'
 import { markupSpans, toggleWrap, selectionWrapped } from '@/utils/markupSpans'
@@ -306,22 +307,20 @@ const firstUnreadId = computed(() => {
 })
 
 // Разделитель по датам (как в Telegram): «Сегодня» / «Вчера» / число — граница СУТОК по
-// часовому поясу УСТРОЙСТВА (Date у клиента), а не сервера. Наступление 00:00 у пользователя
-// само переносит вчерашний ярлык в дату — computed пересчитывается при каждом новом сообщении.
+// часам КОЛЛЕДЖА (Улан-Удэ), а не устройства: до 15.10.2026 здесь стоял пояс устройства, и
+// у родителя в Москве «вчерашние» сообщения преподавателя подписывались «Сегодня» до пяти
+// утра по Улан-Удэ. Наступление полуночи само переносит ярлык — computed пересчитывается
+// при каждом новом сообщении.
 function _dayKey(iso) {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toDateString()
+  return collegeDayKey(iso)
 }
 function _dayLabel(iso) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  const key = d.toDateString()
-  if (key === now.toDateString()) return locale.t('chatThread.today', 'Сегодня')
-  if (key === yesterday.toDateString()) return locale.t('chatThread.yesterday', 'Вчера')
-  return d.toLocaleDateString(BCP47[locale.active] || 'ru-RU', d.getFullYear() === now.getFullYear()
+  const key = collegeDayKey(d)
+  if (key === collegeDayKey()) return locale.t('chatThread.today', 'Сегодня')
+  if (key === collegeDayKey(addDays(new Date(), -1))) return locale.t('chatThread.yesterday', 'Вчера')
+  return formatCollege(d, BCP47[locale.active] || 'ru-RU', collegeParts(d).year === collegeParts().year
     ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' })
 }
 const dateBreaks = computed(() => {
@@ -368,7 +367,7 @@ onMounted(() => {
 
 function fmtTime(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(locale.active === 'en' ? 'en-US' : locale.active === 'zh' ? 'zh-CN' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })
+  return Number.isNaN(d.getTime()) ? '' : formatCollege(d, locale.active === 'en' ? 'en-US' : locale.active === 'zh' ? 'zh-CN' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 function quoted(id) {
   const src = messages.value.find(x => x.id === id)
@@ -560,7 +559,7 @@ async function openHistory(msg) {
 }
 function fmtFull(iso) {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return Number.isNaN(d.getTime()) ? '' : formatCollege(d, BCP47[locale.active] || 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 // ── §D1 → облачко форматирования над выделением (05.09.2026) ────────────────────────

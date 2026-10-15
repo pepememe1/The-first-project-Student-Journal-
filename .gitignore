@@ -132,3 +132,7 @@ dist-release/
 # Собранные APK по версиям (releases/apk/GradeBookAI-<versionName>.apk): артефакты для
 # RuStore и установки на телефон. Подписаны боевым ключом — в публичный репозиторий не идут.
 /releases/
+
+# Снимки экрана к архиву: на них могут быть ПДн (archive/README.md). Раньше правило
+# было только словами в README, и один `git add .` унёс бы их в публичный репозиторий.
+archive/screenshots/

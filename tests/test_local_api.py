@@ -590,3 +590,24 @@ def test_remote_vector_without_a_session_answers_nothing(monkeypatch):
     """Нет входа или сети — пустой ответ: Вектор отдаст факты без переформулировки."""
     monkeypatch.setattr(local_api, "_remote_auth", lambda: ("https://prod.example", "", "expired"))
     assert local_api._remote_vector("voice", {"facts": "ф"}) == ""
+
+
+def test_sync_status_tells_the_person_their_copy_is_not_encrypted(api, monkeypatch):
+    """Ключ устройства не расшифровался — программа работает сеанс без шифрования. Это
+    обязано доехать до значка в интерфейсе (15.10.2026): раньше об этом знал только файл
+    журнала, и причина в нём была неверной («нет драйвера»)."""
+    from data import device_key
+    from sync import sync_runner
+
+    monkeypatch.setattr(local_api, "_session_login", lambda: "t")
+    monkeypatch.setattr(sync_runner, "status", lambda: {"online": True})
+    monkeypatch.setattr(device_key, "encryption_off_reason", lambda: "key-unreadable")
+    access, _ = local_api.issue_local_session("t", "teacher")
+    code, body = _get(api.url("/desk/sync/status"), headers={"Authorization": f"Bearer {access}"})
+    import json as _json
+    assert code == 200 and _json.loads(body)["encryption_off"] == "key-unreadable"
+
+    #Шифрование есть — поля нет вовсе, значок молчит.
+    monkeypatch.setattr(device_key, "encryption_off_reason", lambda: "")
+    code, body = _get(api.url("/desk/sync/status"), headers={"Authorization": f"Bearer {access}"})
+    assert "encryption_off" not in _json.loads(body)

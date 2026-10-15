@@ -52,8 +52,17 @@ def _names_a_person(text: str, db: Session) -> bool:
         rows = db.query(User.surname).filter(User.deleted == False).distinct().all()  # noqa: E712
     except Exception:      # noqa: BLE001 — не смогли проверить: считаем, что имя есть
         return True
-    surnames = [r[0] for r in rows if r[0] and len(r[0].strip()) >= 3]
-    return bool(vector_nlu.match_surname(text, surnames))
+    names = [r[0].strip() for r in rows if r[0] and r[0].strip()]
+    if vector_nlu.match_surname(text, [s for s in names if len(s) >= 3]):
+        return True
+    #🔒 Фамилии из одной-двух букв («Ли», «Ян», «Ю») основой не сравнить — короткая основа
+    #ловится внутри любого слова, — и раньше их не проверяли ВОВСЕ: «оценки Ли» уходило
+    #модели дословно (находка Полковника 14.10.2026). Берём их ЦЕЛЫМ словом. Цена —
+    #ложные срабатывания на частицу «ли»: они стоят лишь озвучки, пропуск — ФИО у
+    #внешнего сервиса.
+    import re as _re
+    short = {s.lower() for s in names if len(s) < 3}
+    return bool(short and short & set(_re.findall(r"[a-zа-яё]+", text.lower())))
 
 
 def _active_children(db: Session, parent: User) -> list:
@@ -347,8 +356,10 @@ def vector_voice_command(payload: dict = Body(...),
 
     #Занятия ЗА СЕГОДНЯ по этому предмету — к ним привяжутся оценки. Дата в базе хранится
     #как ДД.ММ.ГГГГ (формат десктопа), поэтому сравниваем строкой в том же виде.
-    from datetime import datetime, timezone
-    today = datetime.now(timezone.utc).astimezone().strftime("%d.%m.%Y")
+    #Сегодня — В КОЛЛЕДЖЕ: дата занятия ставится по его календарю, а часы машины на бою
+    #московские (`college_clock`).
+    import college_clock
+    today = college_clock.ddmmyyyy()
     todays = [{"id": l.id, "label": f"{l.type} №{l.number}"}
               for l in db.query(Lesson).filter(
                   Lesson.group_name == group, Lesson.subject == subject,
@@ -847,8 +858,8 @@ def _today():
     """«Сегодня» для ответа о расписании — одной дверью. Карта ответов Вектора
     (`docs/contracts/vector-map.json`) подменяет её: иначе ответ на «что завтра» зависел
     бы от дня, в который карту собирали, и карта расходилась бы сама с собой."""
-    import datetime as _dt
-    return _dt.date.today()
+    import college_clock
+    return college_clock.today()
 
 
 def _schedule_answer(db: Session, group: str, msg: str, day) -> tuple:

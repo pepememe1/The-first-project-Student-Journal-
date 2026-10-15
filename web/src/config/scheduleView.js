@@ -40,3 +40,28 @@ export function kindMap(t) {
     экз: [t('schedulePage.kind.exam', 'Экзамен'), 'red'],
   }
 }
+
+/**
+ * Кнопки недель — ОДНО правило на кабинет и публичную страницу (до 15.10.2026 их было
+ * два, слово в слово). Обычные категории — всегда две кнопки (даже если на эту чётность
+ * пар нет: «занятий нет» — это ответ); сессионные — сколько блоков реально пришло.
+ */
+export function weekButtonsFor(categoryDated, weekKeys) {
+  if (!categoryDated) return [1, 2]
+  return weekKeys.length ? weekKeys : [1]
+}
+
+/** Подпись кнопки недели: «II неделя · сейчас» или «Сессия 2: 12.01 — 18.01». */
+export function weekButtonLabelFor(wk, { categoryDated, weeks, currentWeek, t }) {
+  if (!categoryDated) {
+    const label = wk === 2 ? t('schedulePage.week2', 'II неделя') : t('schedulePage.week1', 'I неделя')
+    return label + (currentWeek === wk ? t('schedulePage.nowSuffix', '  · сейчас') : '')
+  }
+  const days = Object.keys((weeks || {})[String(wk)] || {})
+  if (!days.length) return t('schedulePage.sessionN', { n: wk })
+  const first = days[0].split(', ').pop()
+  const last = days[days.length - 1].split(', ').pop()
+  return first === last
+    ? t('schedulePage.sessionNSingle', { n: wk, date: first })
+    : t('schedulePage.sessionNRange', { n: wk, from: first, to: last })
+}

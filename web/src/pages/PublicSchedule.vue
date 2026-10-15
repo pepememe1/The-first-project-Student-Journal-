@@ -43,7 +43,7 @@ import { publicScheduleApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import HexBackground from '@/components/HexBackground.vue'
 import Badge from '@/components/ui/Badge.vue'
-import { dayLabels, kindMap } from '@/config/scheduleView'
+import { dayLabels, kindMap, weekButtonsFor, weekButtonLabelFor } from '@/config/scheduleView'
 import { filterGroups } from '@/utils/groupSearch'
 import { makeRequestGeneration } from '@/utils/requestGeneration'
 import { ArrowLeft, CalendarDays, Search, RotateCw } from '@lucide/vue'
@@ -245,24 +245,10 @@ const weeks = computed(() => data.value?.schedule?.weeks || {})
 const weekKeys = computed(() => Object.keys(weeks.value).map(Number).sort((a, b) => a - b))
 //Обычные категории — всегда две кнопки (даже если на эту чётность пар нет: «занятий нет»
 //это ответ). Сессионные — сколько блоков реально пришло, число у групп разное.
-const weekButtons = computed(() => {
-  if (!categoryDated.value) return [1, 2]
-  return weekKeys.value.length ? weekKeys.value : [1]
-})
+const weekButtons = computed(() => weekButtonsFor(categoryDated.value, weekKeys.value))
 function weekButtonLabel(wk) {
-  if (!categoryDated.value) {
-    const label = wk === 2
-      ? locale.t('schedulePage.week2', 'II неделя')
-      : locale.t('schedulePage.week1', 'I неделя')
-    return label + (data.value?.week === wk ? locale.t('schedulePage.nowSuffix', '  · сейчас') : '')
-  }
-  const days = Object.keys(weeks.value[String(wk)] || {})
-  if (!days.length) return locale.t('schedulePage.sessionN', { n: wk })
-  const first = days[0].split(', ').pop()
-  const last = days[days.length - 1].split(', ').pop()
-  return first === last
-    ? locale.t('schedulePage.sessionNSingle', { n: wk, date: first })
-    : locale.t('schedulePage.sessionNRange', { n: wk, from: first, to: last })
+  return weekButtonLabelFor(wk, { categoryDated: categoryDated.value, weeks: weeks.value,
+                                   currentWeek: data.value?.week, t: locale.t })
 }
 //Дни-колонки: обычные категории — фиксированные шесть; сессионные — реальные даты
 //выбранного блока в том порядке, в котором их разобрал парсер (уже хронологическом).

@@ -40,30 +40,17 @@ fi
 # ── Поимённый список. Каждая строка: путь<TAB>причина ────────────────────────────
 # Правка этого списка — единственный способ расширить уборку. Добавляя строку,
 # убедитесь, что путь не входит в «что не трогаем» выше.
+# Список РАЗОВЫЙ: он описывает одну уборку и после неё устаревает (пути исчезают).
+# Список уборки 03.09.2026 (23 пути: сборки июля, снимки перед 3.1–3.6, копии статики
+# и конфигов) исполнен и заменён списком 14.10.2026. Кэши (apt, pip, старые OTA) с
+# 14.10.2026 убирает еженедельный таймер deploy/maintenance/gb_cleanup.sh — сюда их
+# больше не вписывать.
 read -r -d '' TARGETS <<'LIST'
-/root/gb-backups/old-builds|три .exe от 11-25.07 (два по 233M - сборки PyInstaller до Nuitka) и APK от 11.07
-/root/gb-backups/GradeBookAI-prev-20260731_075627.exe|сборка десктопа от 31.07, четыре версии назад
-/root/gb-backups/pre-3.1-20260726_153530.tar.gz|снимок перед релизом 3.1, сейчас на бою 3.8.5
-/root/gb-backups/predeploy-20260731_150945|преддеплойный снимок от 31.07
-/root/gb-backups/predeploy-3.6-20260804_084942.tar.gz|преддеплойный снимок 3.6 от 04.08
-/root/gb-backups/predeploy-3.5.6-20260804_001349.tar.gz|преддеплойный снимок 3.5.6 от 04.08
-/root/gb-deploy/webdist.bak-3.6|копия статики 3.6 от 04.08
-/root/gb-deploy/webdist.prev-20260804_002031|копия статики от 04.08
-/root/gb-deploy/webdist.bak-20260803_011000|копия статики от 03.08
-/root/gb-deploy/webdist.bak-20260802_233500|копия статики от 02.08
-/root/gb-deploy/webdist.bak-20260802_160500|копия статики от 02.08
-/root/gb-deploy/backup-3.3.1-20260728_222405|снимок 3.3.1 от 28.07
-/root/gb-deploy/backup-3.3-20260728_141547|снимок 3.3 от 28.07
-/root/speedtest.bin|тестовый файл замера скорости
-/root/Caddyfile.new|черновик конфига, боевой лежит в /etc/caddy и сверяется с git
-/root/Caddyfile.bak|копия конфига, версии есть в git
-/root/Caddyfile.backup-20260822_112629|копия конфига, версии есть в git
-/root/gradebook.service.backup-20260822_112818|копия юнита
-/root/gb-deploy/Caddyfile.bak-20260802_133700|копия конфига
-/root/gb-deploy/Caddyfile.bak-3.6|копия конфига
-/root/gb-deploy/grading.py.bak-20260715-003307|копия модуля, версии есть в git
-/root/gb-deploy/grading.py.bak-20260730_094805|копия модуля, версии есть в git
-/root/gb-deploy/profanity_filter.py.bak-20260802_100935|копия модуля, версии есть в git
+/root/=|пустой файл от опечатки в команде (06.09)
+/root/gb-stage|черновик раскладки от 28.07, на бою не используется
+/root/gb-deploy/app.bak-155904|ручная копия от 28.08; откат деплоя — server/app.old
+/root/gb-deploy/vector_nlu.py.bak-20260804_002031|копия модуля, версии есть в git
+/root/gb-deploy/downloads/updates/GradeBookAI-3.9.9.exe|сборка 3.9.9; манифест обновлений указывает на 4.1
 LIST
 
 # ⚠️ ГРАБЛЯ, ПОЙМАННАЯ ХОЛОСТЫМ ПРОГОНОМ (03.09.2026): `ssh` внутри `while read`
@@ -153,7 +140,7 @@ while IFS='|' read -r path why; do
   fi
 done <<< "$TARGETS"
 echo
-echo "  плюс: systemd-журнал ужимается до 50M (vacuum), apt clean, btmp обнуляется"
+echo "  плюс: systemd-журнал ужимается до 50M (vacuum), apt clean"
 echo
 
 if [ "$MODE" = "--dry-run" ]; then
@@ -172,9 +159,9 @@ echo "══ СИСТЕМНОЕ ══"
 # journal: не удаляем, а ужимаем штатным средством — это ротация, а не потеря журнала.
 ssh -o ConnectTimeout=60 "$HOST" 'journalctl --vacuum-size=50M 2>&1 | tail -2'
 ssh -o ConnectTimeout=60 "$HOST" 'apt-get clean && echo "  apt clean: ok"'
-# btmp — журнал НЕУДАЧНЫХ входов, его пухлость это следы сканеров. Обнуляем, а не
-# удаляем: файл нужен системе, и удалённый он перестанет вестись до перезапуска.
-ssh -o ConnectTimeout=30 "$HOST" ': > /var/log/btmp.1 2>/dev/null; : > /var/log/btmp 2>/dev/null; echo "  btmp: очищен"'
+# btmp (журнал НЕУДАЧНЫХ входов) больше НЕ обнуляем (14.10.2026): это следы сканеров и
+# подбора, то есть материал для разбора инцидента, а его размер и так держит штатный
+# /etc/logrotate.d/btmp (ротация раз в месяц).
 
 echo
 echo "══ ДИСК ПОСЛЕ ══"

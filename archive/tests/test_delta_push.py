@@ -1,3 +1,8 @@
+"""Архив 15.10.2026: тесты выведенного sync/sync_engine.py (продукт его не зовёт с
+25.09.2026, см. tests/test_legacy_sync_engine_fenced.py). Перенесены ДОСЛОВНО из
+tests/test_delta_push.py; не исполняются. Инварианты живого пути держат
+desktop/local_mirror, desktop/desk_outbox и server/tests/test_sync*.py."""
+
 """
 test_delta_push.py — push шлёт ДЕЛЬТУ, но не теряет правки.
 

@@ -28,6 +28,27 @@ GROUP = "К-24"
 SUBJ = "Математика"
 
 
+@pytest.fixture(autouse=True)
+def distinct_stamps(monkeypatch):
+    """Строго возрастающие метки записи — иначе тест проверяет не код, а часы машины.
+
+    🔥 Найдено 15.10.2026: тест итоговой оценки плавал. На Windows Python 3.11 отдаёт
+    `datetime.now()` с шагом ~15.6 мс, и две записи подряд получали ОДНУ метку — правка,
+    снятая с первой версии, сравнивалась с такой же второй и принималась (200 вместо 409).
+    Здесь проверяется запасной путь сверки по `base_updated_at` (очереди до 4.1), а он по
+    построению различает только РАЗНЫЕ метки. На бою (Linux) шаг часов — микросекунды, и
+    современные очереди сверяют номер изменения (`base_seq`), которому часы не нужны."""
+    from datetime import datetime, timedelta, timezone
+    from app.routers.web import write
+    last = [datetime.now(timezone.utc)]
+
+    def stamp():
+        now = datetime.now(timezone.utc)
+        last[0] = now if now > last[0] else last[0] + timedelta(microseconds=1)
+        return last[0].isoformat()
+    monkeypatch.setattr(write, "_now_iso", stamp)
+
+
 @pytest.fixture()
 def cast(client):
     admin = make_admin(client)

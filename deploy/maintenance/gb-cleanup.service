@@ -1,0 +1,10 @@
+[Unit]
+Description=GradeBookAI — еженедельная уборка кэшей (apt, pip, старые OTA-бандлы)
+# Копии базы, саму базу, .env и откат деплоя скрипт не трогает: путей к ним в нём нет.
+
+[Service]
+Type=oneshot
+ExecStart=/root/gb-deploy/tools/gb_cleanup.sh
+# Низкий приоритет, как у копий: уборка не должна мешать выдаче сайта на одном ядре.
+Nice=10
+IOSchedulingClass=idle

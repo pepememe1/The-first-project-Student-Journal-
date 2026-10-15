@@ -216,14 +216,22 @@ def test_claim_works_after_a_real_trigger(client):
 def test_night_is_local_not_utc():
     """Ночь считается по времени Улан-Удэ, а не сервера.
 
-    Обратный ход: убери сдвиг `LOCAL_UTC_OFFSET_H` — 19:00 UTC (3 ночи по-местному)
-    перестанет быть ночью, и пасхалка не выпадет никому, кроме тех, кто сидит в журнале
-    в три часа ночи ПО ГРИНВИЧУ."""
+    Обратный ход: убери часы колледжа (`college_clock`, до 15.10.2026 — своя константа
+    `LOCAL_UTC_OFFSET_H` здесь) — 19:00 UTC (3 ночи по-местному) перестанет быть ночью, и
+    пасхалка не выпадет никому, кроме тех, кто сидит в журнале в три часа ночи ПО ГРИНВИЧУ."""
     from datetime import datetime, timezone
     at = lambda h: datetime(2026, 8, 23, h, 0, tzinfo=timezone.utc).replace(tzinfo=None)  # noqa: E731
     assert easter_eggs.is_night(at(3)) is True      # 3:00 местного
     assert easter_eggs.is_night(at(14)) is False
-    assert easter_eggs.LOCAL_UTC_OFFSET_H == 8
+    import college_clock
+    assert college_clock.UTC_OFFSET_H == 8
+    #И сам продуктовый путь без аргумента: 19:00 UTC — это три часа ночи в Улан-Удэ.
+    real = college_clock._utcnow
+    college_clock._utcnow = lambda: datetime(2026, 8, 23, 19, 0, tzinfo=timezone.utc)
+    try:
+        assert easter_eggs.is_night() is True
+    finally:
+        college_clock._utcnow = real
 
 
 def test_fail_streak_counts_only_until_the_last_success():

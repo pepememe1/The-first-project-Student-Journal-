@@ -479,13 +479,13 @@ def _ensure_copy_openable(login: str, encrypted: bool) -> None:
         return
     if _copy_opens(path, encrypted):
         return
-    import time
     #⚠️ ВСЁ ИЛИ НИЧЕГО. Если хоть один файл занят другим процессом, отступаем целиком:
     #унести основной файл и оставить его -wal рядом значит собрать «разорванную» копию,
     #которую следующий запуск тоже не откроет. А занятый файл вдобавок означает, что базу
     #прямо сейчас держит другой экземпляр программы — тогда наш вердикт «нечитаема»
     #и вовсе ненадёжен, и правильнее ничего не трогать.
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    import college_clock
+    stamp = college_clock.stamp("%Y%m%d_%H%M%S")
     present = [path + s for s in ("", "-wal", "-shm") if os.path.exists(path + s)]
     for src in present:
         try:
@@ -623,10 +623,10 @@ def backup_personal_copy(login: str, reason: str = "on_exit") -> str:
         _LOG.info("[local-api] снимок личной копии не снят: нет драйвера SQLCipher")
         return ""
     import hashlib
-    from datetime import datetime
     who = hashlib.sha256((login or "anon").encode("utf-8")).hexdigest()[:16]
     folder = personal_backup_dir()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    import college_clock
+    ts = college_clock.now().strftime("%Y%m%d_%H%M%S_%f")
     tag = "".join(ch for ch in reason if ch.isalnum())[:16]
     base = os.path.join(folder, f"local_app_{who}_{ts}_{tag}")
     dst = base + ".enc.db"
@@ -1382,6 +1382,15 @@ def install_sync_status(app) -> None:
         except Exception as e:                   # noqa: BLE001
             _LOG.warning(f"[local-api] очередь правок не прочиталась: {e}")
             outbox = {"available": False}
+        #Данные на диске сейчас НЕ зашифрованы — человек обязан это видеть, а не только
+        #журнал, который никто не открывает (15.10.2026). Причина — `device_key`.
+        try:
+            from data import device_key
+            off = device_key.encryption_off_reason()
+            if off:
+                extra["encryption_off"] = off
+        except Exception as e:                   # noqa: BLE001
+            _LOG.warning(f"[local-api] состояние шифрования не прочиталось: {e}")
         try:
             from sync import sync_runner
             st = sync_runner.status()

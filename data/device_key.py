@@ -32,6 +32,12 @@ _KEY_FILE = "local_app.key"
 #ответ за время работы процесса не меняется: драйвер не появится, ключ устройства не
 #переедет. Без кеша в лог сыпалось по шесть одинаковых предупреждений на один запуск.
 _cache = None
+#ПОЧЕМУ ключа нет — для журнала и для значка в программе (15.10.2026). Раньше пустой
+#ключ значил для всех одно и то же, и `DBManager.init` писал «драйвера sqlcipher3
+#нет» даже тогда, когда драйвер был, а не расшифровался сам ключ под DPAPI: человек
+#работал сеанс с ФИО открытым текстом на диске, а журнал называл не ту причину.
+#'' — шифрование есть; 'no-driver' | 'key-unreadable' | 'error'.
+_reason = ""
 
 
 def driver_available() -> bool:
@@ -55,12 +61,12 @@ def db_key() -> str:
     случайный — не производный от пароля: пароль в программе не хранится (§4.7), и
     привязка к нему сделала бы базу нечитаемой после смены пароля.
     """
-    global _cache
+    global _cache, _reason
     if _cache is not None:
         return _cache
     if not driver_available():
         _LOG.warning("[device-key] драйвера sqlcipher3 нет — базы остаются без шифрования")
-        _cache = ""
+        _cache, _reason = "", "no-driver"
         return ""
     try:
         from data import security
@@ -80,7 +86,7 @@ def db_key() -> str:
             #остаются нетронутыми до выяснения.
             _LOG.warning("[device-key] ключ не расшифровался — НЕ трогаем его и не "
                          "перезаписываем базы; этот сеанс без шифрования")
-            _cache = ""
+            _cache, _reason = "", "key-unreadable"
             return ""
         key = binascii.hexlify(os.urandom(32))
         with open(path, "wb") as f:
@@ -89,8 +95,18 @@ def db_key() -> str:
         return _cache
     except Exception as e:                          # noqa: BLE001
         _LOG.warning(f"[device-key] ключ шифрования не получен: {e}")
-        _cache = ""
+        _cache, _reason = "", "error"
         return ""
+
+
+def encryption_off_reason() -> str:
+    """Почему базы этого устройства сейчас НЕ шифруются ('' — шифруются).
+
+    Читают двое: `DBManager.init` (верная строка в журнале) и `/desk/sync/status` —
+    оттуда значок в программе говорит человеку, что его данные на диске открыты.
+    Молчать об этом нельзя: человек вправе считать, что оценки на диске защищены."""
+    db_key()
+    return _reason
 
 
 def is_valid(key: str) -> bool:

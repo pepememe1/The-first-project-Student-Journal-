@@ -460,3 +460,39 @@ def test_purge_keeps_a_ceiling_on_the_number_of_keys(monkeypatch):
     S.purge()
     assert len(S.backend()._values) <= 50
     S.reset_for_tests()
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# claim — «сделать один раз» без окна между проверкой и записью (15.10.2026)
+# ─────────────────────────────────────────────────────────────────────────────────────
+def test_claim_is_won_exactly_once(backend):
+    assert backend.claim("once:a", 60) is True
+    assert backend.claim("once:a", 60) is False
+    assert backend.claim("once:b", 60) is True, "чужой ключ не занят"
+
+
+def test_claim_under_concurrency_has_a_single_winner(backend):
+    """Двадцать потоков разом: пара get→set пускала бы нескольких, claim — ровно одного."""
+    import threading
+    wins, start = [], threading.Barrier(20)
+
+    def worker():
+        start.wait()
+        if backend.claim("once:race", 60):
+            wins.append(1)
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert len(wins) == 1, wins
+
+
+def test_losing_claim_does_not_extend_the_mark(backend):
+    """🔥 Проигравший `claim` не трогает ни значение, ни СРОК чужой метки. Первая версия
+    продлевала её: короткая метка повтора сводки дня становилась суточной (gb-review)."""
+    import time
+    backend.set("once:short", 1, ttl=0.3)
+    assert backend.claim("once:short", 3600) is False
+    time.sleep(0.45)
+    assert backend.claim("once:short", 60) is True, "проигравший claim продлил чужую метку"

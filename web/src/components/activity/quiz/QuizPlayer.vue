@@ -14,8 +14,10 @@ import ContestPodium from './ContestPodium.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
+import { useToast } from '@/composables/useToast'
 
 const locale = useLocaleStore()
+const toast = useToast()
 const act = useActivityStore()
 
 const questions = ref([])
@@ -211,7 +213,11 @@ async function submitAll() {
     const { data } = await activitiesApi.submit(act.activity.id, answers.value,
                                                 Date.now() - startedAt.value)
     result.value = data
-  } catch { /* noop */ } finally { busy.value = false }
+  } catch (e) {
+    //🔥 Ответы викторины не дошли — до 15.10.2026 это было молча: кнопка просто снова
+    //становилась активной, и студент мог уйти, считая работу сданной.
+    toast.error(e?.response?.data?.detail || locale.t('common.actionFailed', 'Не получилось — проверьте связь и попробуйте ещё раз'))
+  } finally { busy.value = false }
 }
 
 /** Подтвердить выбранный вариант. После подтверждения сменить его нельзя (баллы зависят

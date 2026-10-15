@@ -29,7 +29,6 @@ audit.py — Журнал событий безопасности и защит�
 import os
 import log
 import time
-from datetime import datetime
 
 import app_paths
 
@@ -104,7 +103,9 @@ def log_event(event: str, actor: str = "", detail: str = ""):
     """
     try:
         _migrate_once()
-        ts = datetime.now().isoformat(timespec="seconds")
+        #Время — на часах колледжа (`college_clock`), формат прежний, без смещения.
+        import college_clock
+        ts = college_clock.now().strftime("%Y-%m-%dT%H:%M:%S")
         #экранируем переводы строк, чтобы одна запись = одна строка
         actor = (actor or "").replace("\n", " ").strip()
         detail = (detail or "").replace("\n", " ").strip()

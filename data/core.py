@@ -175,10 +175,16 @@ class DBManager:
         #файла занимал ОДИН ключ (кэш расписания), и сжимается он в 19.6 раза.
         local_db.repack_large_values(LOCAL_DB, key)
         if not key:
-            #Молчать нельзя: человек вправе считать, что его данные защищены. Из .exe
-            #эта ветка не срабатывает (драйвер вшит) — она про запуск из исходников.
+            #Молчать нельзя: человек вправе считать, что его данные защищены. Причина —
+            #настоящая (`device_key.encryption_off_reason`): «нет драйвера» бывает только
+            #при запуске из исходников, а в .exe ключ может не расшифроваться под DPAPI, и
+            #здесь до 15.10.2026 и в этом случае писалось «драйвера нет».
+            from data import device_key
+            why = {"no-driver": "драйвера sqlcipher3 нет",
+                   "key-unreadable": "ключ устройства не расшифровался (DPAPI)"}.get(
+                device_key.encryption_off_reason(), "ключ шифрования не получен")
             log.get("core").warning(
-                "[DBManager] драйвера sqlcipher3 нет — локальная база НЕ ЗАШИФРОВАНА, "
+                f"[DBManager] {why} — локальная база НЕ ЗАШИФРОВАНА в этом сеансе, "
                 "ФИО и оценки в файле читаются любым просмотрщиком")
         print("ℹ️  Локальный SQLite (синхронизация с сервером — через API)")
 
@@ -207,7 +213,8 @@ class DBManager:
             _os.makedirs(BACKUP_DIR, exist_ok=True)
             #Микросекунды (%f) в имени — чтобы два бэкапа в одну и ту же секунду
             #(например, авто-бэкап и «перед восстановлением») не затирали друг друга.
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            import college_clock
+            ts = college_clock.now().strftime("%Y%m%d_%H%M%S_%f")
             tag = ("_" + "".join(ch for ch in reason if ch.isalnum())[:16]) if reason else ""
             dst = _os.path.join(BACKUP_DIR, f"vsgutu_grades_{ts}{tag}.db")
             #На Windows datetime.now() имеет разрешение ~15 мс — два бэкапа подряд могут

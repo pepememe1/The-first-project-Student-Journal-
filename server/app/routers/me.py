@@ -543,6 +543,7 @@ def _notify_today_lessons(db: Session, user: User) -> int:
     Полностью в try/except: сбой сводки не имеет права лишить человека уведомлений об
     оценках, ради которых он сюда и пришёл.
     """
+    key = ""              #объявлен до try: обработчик сбоя ниже его читает
     try:
         if (user.role or "") != "student":
             return 0          #у преподавателя пары в нескольких группах — это другая сводка
@@ -554,9 +555,14 @@ def _notify_today_lessons(db: Session, user: User) -> int:
         #Тот же календарь, что у самой сводки (`today_digest`) и у чётности недели:
         #по UTC «сутки» переключались бы в 03:00 МСК, то есть человек, открывший
         #приложение в полночь, получал бы сводку ВЧЕРАШНЕГО дня и терял сегодняшнюю.
-        day = datetime.now().strftime("%Y-%m-%d")
+        #…и «сутки» — сутки КОЛЛЕДЖА: часы машины на бою московские (15.10.2026).
+        import college_clock
+        day = college_clock.today().isoformat()
         key = f"digest:lessons:{day}:{user.login or ''}"
-        if shared_state.get(key):
+        #Метку ставим ДО расчёта и атомарно (`claim`): пара «проверил → посчитал →
+        #записал» пускала два одновременных опроса (вкладка и телефон) — и сводка
+        #приходила двумя пушами (15.10.2026). Ниже срок метки уточняется.
+        if not shared_state.claim(key, 24 * 3600):
             return 0
         count, first_at = today_digest(db, user)
         if count <= 0:
@@ -569,7 +575,6 @@ def _notify_today_lessons(db: Session, user: User) -> int:
             #это неправда). Пятнадцать минут закрывают оба случая.
             shared_state.set(key, 1, ttl=_DIGEST_RETRY_S)
             return 0
-        shared_state.set(key, 1, ttl=24 * 3600)
         from .. import rustore_push
         rustore_push.notify_today_lessons(db, user.login or "", count=count,
                                           first_at=first_at,
@@ -577,6 +582,13 @@ def _notify_today_lessons(db: Session, user: User) -> int:
         return count
     except Exception as e:      # noqa: BLE001
         print(f"[events] сводка «пары на сегодня» не отправлена: {e}")
+        #Метка поставлена ДО расчёта — при сбое укорачиваем её, иначе сводка пропала бы
+        #до завтра, а раньше следующий опрос просто пробовал снова.
+        if key:
+            try:
+                shared_state.set(key, 1, ttl=_DIGEST_RETRY_S)
+            except Exception:   # noqa: BLE001 — общее состояние недоступно: не роняем опрос
+                pass
         return 0
 
 

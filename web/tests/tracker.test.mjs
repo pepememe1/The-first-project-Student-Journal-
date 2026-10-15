@@ -5,6 +5,7 @@
 // копии так же, как её применит сервер; сжимать пачку, не меняя её смысла; не терять
 // чужие правки при перекладке своих. Всё это — `src/utils/tracker.js`, чистые функции.
 import test from 'node:test'
+import { collegeParts, fromCollegeWall } from '../src/utils/collegeTime.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
@@ -233,7 +234,7 @@ test('перестановка на то же место операций не �
 // ── сроки ─────────────────────────────────────────────────────────────────────────────
 
 test('срок без времени действует до конца дня', () => {
-  const noon = new Date(2026, 9, 20, 12, 0)
+  const noon = fromCollegeWall(2026, 10, 20, 12, 0)
   assert.equal(deadlineState({ deadline: '2026-10-20' }, noon), 'today',
     '«сдать 20-го» не значит «просрочено в полдень 20-го»')
   assert.equal(deadlineState({ deadline: '2026-10-20T10:00' }, noon), 'overdue')
@@ -245,14 +246,14 @@ test('срок без времени действует до конца дня',
 })
 
 test('сделанная задача не бывает просроченной', () => {
-  const now = new Date(2026, 9, 20, 12, 0)
+  const now = fromCollegeWall(2026, 10, 20, 12, 0)
   assert.equal(deadlineState({ deadline: '2026-10-01', completed_at: '2026-10-02' }, now), 'done')
 })
 
-test('дата разбирается как МЕСТНОЕ время', () => {
+test('срок — время на часах КОЛЛЕДЖА, а не устройства', () => {
   const d = parseLocal('2026-10-20T18:00')
-  assert.equal(d.getHours(), 18)
-  assert.equal(d.getDate(), 20)
+  assert.equal(d.toISOString(), '2026-10-20T10:00:00.000Z', '18:00 в Улан-Удэ = 10:00 UTC')
+  assert.equal(collegeParts(d).hours, 18)
   assert.equal(parseLocal('2026-13-45'), null)
   assert.equal(parseLocal(''), null)
 })
@@ -271,7 +272,7 @@ function sample() {
 
 test('фильтр: исполнитель, без исполнителя, статус, просрочено, поиск', () => {
   const s = sample()
-  const now = new Date(2026, 9, 20)
+  const now = fromCollegeWall(2026, 10, 20)
   const ids = (f) => filterTasks(s.tasks, f, now).map((t) => t.id)
   assert.deepEqual(ids({ assignee: 'u1' }), ['trkt:1', 'trkt:3'])
   assert.deepEqual(ids({ assignee: 'none' }), ['trkt:4'])
@@ -295,7 +296,7 @@ test('сортировка по приоритету идёт от срочно�
 })
 
 test('сводка считает выполненное, просроченное и нагрузку по людям', () => {
-  const sum = summarize(sample(), 'trkp:01', new Date(2026, 9, 20))
+  const sum = summarize(sample(), 'trkp:01', fromCollegeWall(2026, 10, 20))
   assert.equal(sum.total, 4)
   assert.equal(sum.done, 1)
   assert.equal(sum.percent, 25)
@@ -316,7 +317,7 @@ test('чек-лист и часы', () => {
 })
 
 test('шкала сроков: задачи без дат не рисуются, срок раньше начала не даёт отрицательной длины', () => {
-  const now = new Date(2026, 9, 10)
+  const now = fromCollegeWall(2026, 10, 10)
   const tl = timeline([
     { id: 'a', number: 1, start_date: '2026-10-05', deadline: '2026-10-12' },
     { id: 'b', number: 2, deadline: '2026-10-15' },

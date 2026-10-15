@@ -128,11 +128,11 @@ def student_visible_records(db, surname: str, name: str, group: str | None = Non
     полная картина — вести журнал, разбирать долги, смотреть архив по семестрам. Сторож
     `test_grade_policy.py` следит, чтобы студенческие роутеры не ходили мимо этой функции.
     """
-    from datetime import date
+    import college_clock
     from . import grade_policy
     cfg = cfg if cfg is not None else load_config(db)
     _ty, ts = current_term(cfg)
-    ph = grade_policy.phase(today or date.today(), ts, cfg.get("grades_freeze_date"))
+    ph = grade_policy.phase(today or college_clock.today(), ts, cfg.get("grades_freeze_date"))
     return grade_policy.visible_records(
         student_records(db, surname, name, group, student_id=student_id), ph)
 
@@ -143,11 +143,11 @@ def grades_phase(db, cfg=None, today=None) -> str:
     Молчаливо пустой журнал читается как поломка; подпись «идёт сессия, показаны итоговые»
     объясняет то же самое состояние и не заставляет никого искать несуществующий сбой.
     """
-    from datetime import date
+    import college_clock
     from . import grade_policy
     cfg = cfg if cfg is not None else load_config(db)
     _ty, ts = current_term(cfg)
-    return grade_policy.phase(today or date.today(), ts, cfg.get("grades_freeze_date"))
+    return grade_policy.phase(today or college_clock.today(), ts, cfg.get("grades_freeze_date"))
 
 
 def current_term(cfg: dict) -> tuple:
@@ -1308,3 +1308,37 @@ def counts_as_at_risk(risk: dict) -> bool:
     один и тот же колледж давал администратору трёх человек в зоне риска, а
     преподавателю — семь, и оба ответа выглядели уверенными."""
     return bool(risk and risk.get("visible") and risk.get("level") in AT_RISK_LEVELS)
+
+
+def journal_subjects(db, lessons, records, cfg, group: str, year, semester,
+                     is_archive: bool) -> list:
+    """Журнал ОДНОГО студента по предметам — формат `/web/student/journal` и
+    `/parent/journal` (родитель видит ровно то же, что ребёнок).
+
+    ⚠️ Предмет ДЕЙСТВУЮЩЕГО плана без единого занятия обязан быть виден («по нему пока
+    пусто»), а не пропадать молча — иначе Главная, журнал и статистика расходятся в ответе
+    на «сколько у меня предметов». В архиве план мог с тех пор замениться — не трогаем.
+    """
+    from collections import OrderedDict
+    scale_map = lesson_scale_map(db, lessons)
+    buckets = OrderedDict()
+    for lesson in lessons:
+        buckets.setdefault(lesson.subject, []).append(lesson)
+    if not is_archive:
+        for subj in sorted(group_plan_subjects(db, group, cfg) - set(buckets)):
+            buckets[subj] = []
+    subjects = []
+    for subj, ls in buckets.items():
+        items = []
+        for lesson in ls:
+            entry = {"id": lesson.id, "type": lesson.type, "number": lesson.number,
+                     "topic": lesson.topic, "date": lesson.date,
+                     "grade": records.get(lesson.id, "")}
+            if lesson.type == "Экзамен":
+                entry["latest"] = grading.latest_exam_value(lesson.id, records)
+            items.append(entry)
+        subjects.append({"subject": subj, "lessons": items,
+                         "average": average(ls, records, cfg, scale=scale_map),
+                         #«Пройдено X из Y часов» по этому предмету (0 total — не задано).
+                         "hours": hours_progress(db, group, subj, ls, year, semester)})
+    return subjects

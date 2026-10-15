@@ -712,7 +712,8 @@ def migrate_step(step_id: str, source: dict, target: dict) -> dict:
                 "hint": "" if ok else "На новом сервере мало места — освободите диск."}
 
     if step_id == "backup_source":
-        stamp = time.strftime("%Y%m%d_%H%M%S")
+        import college_clock
+        stamp = college_clock.stamp("%Y%m%d_%H%M%S")
         cmd = (f"mkdir -p /root/gb-backups && cd /root && "
                f"tar czf /root/gb-backups/premigrate-{stamp}.tar.gz "
                f"--exclude='gb-deploy/venv' --exclude='gb-deploy/webdist.bak-*' "

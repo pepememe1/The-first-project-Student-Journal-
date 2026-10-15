@@ -1,0 +1,22 @@
+# /etc/logrotate.d/gradebook — журналы служебных скриптов GradeBookAI (14.10.2026).
+#
+# Скрипты копий и уборки дописывают строку за запуском, и до этого правила их не ротировал
+# никто: файл рос бесконечно, пусть и медленно (~45 КБ в год). Год истории хватает, чтобы
+# ответить «когда последний раз была проверенная копия» — ради этого журнал и ведётся.
+#
+# /var/log/gb-rotation.log (журнал смены ключа базы) сюда НЕ входит намеренно: это
+# несколько строк за всю жизнь сервера, и терять их по сроку нельзя.
+#
+# ⚠️ `su root syslog` обязателен: /var/log на Ubuntu принадлежит группе syslog и открыт ей
+# на запись, и без этой строки logrotate молча ПРОПУСКАЕТ правило («parent directory has
+# insecure permissions»). Поймано `logrotate -d` при установке; так же сделано у rsyslog.
+/var/log/gb-backup.log /var/log/gb-cleanup.log {
+    su root syslog
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}
