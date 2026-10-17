@@ -52,9 +52,32 @@ const POLL_MS = 15 * 60 * 1000
  * ⚠️ `cache: 'no-store'`: без него браузер (и наш service worker) с удовольствием
  * ответит копией того самого файла, ради свежести которого запрос и делается.
  */
+/**
+ * ⚠️ СВОЙ СРОК У ФОНОВОГО ЗАПРОСА (UX-аудит 17.10.2026: «сетевой журнал показал
+ * таймаутный GET к /version.json»). У `fetch` своего таймаута НЕТ: на залипшем
+ * соединении запрос висит столько, сколько решит сеть, и всё это время держит слот
+ * соединения к нашему же домену — а слотов у браузера на домен шесть. Ответ здесь
+ * никому не срочен (проверка идёт раз в четверть часа), поэтому лучше бросить и
+ * спросить в следующий раз, чем ждать молча.
+ *
+ * ⚠️ `AbortSignal.timeout` проверяем на наличие: он появился в Chrome 103 и Safari 16,
+ * а сборку открывают и из WebView2, и из Capacitor. Нет его — запрос уходит как
+ * раньше: хуже прежнего не станет.
+ */
+const STAMP_TIMEOUT_MS = 10000
+
+function stampSignal() {
+  try {
+    return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(STAMP_TIMEOUT_MS)
+      : undefined
+  } catch { return undefined }
+}
+
 export async function fetchServerStamp() {
   try {
-    const r = await fetch('/version.json', { cache: 'no-store', credentials: 'omit' })
+    const r = await fetch('/version.json',
+      { cache: 'no-store', credentials: 'omit', signal: stampSignal() })
     if (!r.ok) return ''
     const j = await r.json()
     return typeof j?.stamp === 'string' ? j.stamp : ''

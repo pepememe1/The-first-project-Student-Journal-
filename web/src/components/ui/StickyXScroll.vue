@@ -28,16 +28,39 @@
  * читалки экрана это лишний интерактивный элемент без содержимого.
  */
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { isHandheld } from '@/utils/device'
+import { useLocaleStore } from '@/stores/locale'
 
 const body = ref(null)      //настоящий контейнер с таблицей
 const bar = ref(null)       //липкая полоса-дублёр
 const width = ref(0)        //ширина содержимого, px
 const needed = ref(false)   //есть ли горизонтальное переполнение
+const scrolled = ref(false) //человек уже двигал таблицу вбок — подсказка больше не нужна
+
+/**
+ * 🔥 ПОДСКАЗКА О БОКОВОЙ ПРОКРУТКЕ (UX-аудит 17.10.2026). «Таблица около 1074 px при
+ * ширине контейнера 364 px. Горизонтальная прокрутка работает, но подсказки о свайпе
+ * не заметил; оценки и действия в дальних столбцах легко пропустить.»
+ *
+ * ⚠️ ЖИВЁТ ЗДЕСЬ, А НЕ В ЖУРНАЛЕ. Широких таблиц в продукте несколько (журнал
+ * преподавателя, отчёт куратора, трекер), и подсказка, написанная в одной из них, —
+ * это наш обычный «первое забытое место»: остальные молча остаются без неё.
+ *
+ * ⚠️ ТОЛЬКО ДЛЯ ПАЛЬЦА (`isHandheld`, тот же признак, что у вибрации и QR). На
+ * компьютере видна сама полоса, есть колесо с Shift и мышь — строка там только шум.
+ *
+ * ⚠️ И только ДО ПЕРВОЙ прокрутки: подсказка, висящая всегда, перестаёт читаться —
+ * тот же урок, что про сигнал, который горит постоянно.
+ */
+const locale = useLocaleStore()
+const handheld = ref(false)
+const hintVisible = () => needed.value && handheld.value && !scrolled.value
 
 //Флаг против петли: любое присваивание scrollLeft рождает событие scroll у соседа.
 let syncing = false
 
 function fromBody() {
+  if (body.value && body.value.scrollLeft > 0) scrolled.value = true
   if (syncing || !bar.value || !body.value) return
   syncing = true
   bar.value.scrollLeft = body.value.scrollLeft
@@ -45,6 +68,7 @@ function fromBody() {
 }
 
 function fromBar() {
+  if (bar.value && bar.value.scrollLeft > 0) scrolled.value = true
   if (syncing || !bar.value || !body.value) return
   syncing = true
   body.value.scrollLeft = bar.value.scrollLeft
@@ -62,6 +86,9 @@ function measure() {
 
 let ro = null
 onMounted(() => {
+  //Признак устройства спрашиваем ОДИН раз при монтировании: он про железо, а не про
+  //ширину окна, и за жизнь страницы не меняется.
+  handheld.value = isHandheld()
   measure()
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(measure)
@@ -82,6 +109,10 @@ defineExpose({ measure })
 
 <template>
   <div class="gb-sticky-x">
+    <p v-if="hintVisible()" class="mb-1 flex items-center gap-1.5 px-2 text-xs text-text3">
+      <span aria-hidden="true">↔</span>
+      {{ locale.t('table.swipeHint', 'Таблица шире экрана — листайте вбок') }}
+    </p>
     <div ref="body" class="gb-sticky-x__body overflow-x-auto" @scroll="fromBody">
       <slot />
     </div>

@@ -10,7 +10,7 @@
 // возврат после входа и `?peer=` — в `deepLinks.test.mjs`.
 import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readText } from './_readSource.mjs'
 
 function memoryStorage() {
   const m = new Map()
@@ -49,7 +49,10 @@ test('F-18: на сайте адрес страницы и есть публич
   assert.equal(publicSiteOrigin(), 'https://esstu-gradebook.ru')
 })
 
-const card = readFileSync(new URL('../src/components/messenger/PeerProfileCard.vue', import.meta.url), 'utf8')
+//Через общий `readText`: на Windows git кладёт файл с CRLF, и перевод строки в
+//регулярках ниже не совпадал бы с содержимым — тест краснел у одного разработчика
+//и зеленел у другого.
+const card = readText(new URL('../src/components/messenger/PeerProfileCard.vue', import.meta.url))
 
 test('F-18: ссылка — публичный адрес и путь без роли', () => {
   const share = card.slice(card.indexOf('async function shareContact()'))
