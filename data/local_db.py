@@ -279,8 +279,14 @@ def _quiet_remove(path: str) -> None:
             pass
 
 
-def read_owner(path: str, key: str) -> str:
-    """Отпечаток владельца базы ('' — базы нет, метки нет или прочитать нечем)."""
+def read_owner(path: str, key: str):
+    """Отпечаток владельца базы: '' — базы нет или метки нет, None — ПРОЧИТАТЬ НЕ УДАЛОСЬ.
+
+    🔥 «Метки нет» и «прочитать не смог» — разные ответы (16.10.2026). Раньше оба давали
+    '', а `adopt` на '' ставит СВОЮ метку («первый запуск после обновления»). Чтение,
+    сорвавшееся по временной причине (база занята фоновой синхронизацией), подписывало
+    базу прежнего человека именем вошедшего — и его невыгруженные правки ехали дальше
+    под чужим именем: ровно то, от чего `adopt` защищается ниже, только другой дверью."""
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return ""
     conn = None
@@ -288,10 +294,12 @@ def read_owner(path: str, key: str) -> str:
         conn = connect(path, key)
         row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (OWNER_KEY,)).fetchone()
         return (row[0] if row else "") or ""
-    except Exception:                               # noqa: BLE001
-        #Нет таблицы kv_store (совсем свежая база) или файл не открылся — это не ошибка
-        #и не повод шуметь: вызывающий сам решит, что делать с пустым ответом.
-        return ""
+    except Exception as e:                          # noqa: BLE001
+        #Нет таблицы kv_store — совсем свежая база, метки в ней нет честно.
+        if "no such table" in str(e).lower():
+            return ""
+        _LOG.warning("[local-db] метку владельца прочитать не удалось: %s", e)
+        return None
     finally:
         try:
             if conn is not None:
@@ -365,6 +373,11 @@ def adopt(path: str, key: str, login: str) -> bool:
         write_owner(path, key, login)
         return False
     have = read_owner(path, key)
+    if have is None:
+        #Чья база — неизвестно. Ни стирать (вдруг своя, с офлайн-правками), ни подписывать
+        #своим именем (вдруг чужая) нельзя: оставляем как есть, следующий вход спросит снова.
+        _LOG.warning("[local-db] владелец базы не определён — метку не трогаем")
+        return False
     if not have:
         write_owner(path, key, login)
         return False

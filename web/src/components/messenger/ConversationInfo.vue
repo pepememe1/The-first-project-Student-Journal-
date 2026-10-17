@@ -31,6 +31,7 @@ import { roleLabel as sharedRoleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { useLocaleStore } from '@/stores/locale'
 import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
@@ -544,7 +545,7 @@ function onChatAction(action) {
             <div v-else class="grid grid-cols-3 gap-1.5">
               <a v-for="it in media" :key="it.message_id" :href="it.url" target="_blank" rel="noopener"
                  class="block overflow-hidden rounded-lg border border-border bg-card2">
-                <img v-if="it.kind === 'gif'" :src="it.url" alt="" class="h-24 w-full object-cover" loading="lazy" />
+                <img v-if="it.kind === 'gif'" :src="mediaSrc(it.url)" alt="" class="h-24 w-full object-cover" loading="lazy" />
                 <span v-else class="flex h-24 items-center justify-center px-2 text-center text-[10px] text-text3">
                   {{ locale.t('conversationInfo.videoLink', 'видео') }}
                 </span>

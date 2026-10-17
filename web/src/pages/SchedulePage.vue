@@ -575,6 +575,12 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
         <span v-if="!categoryDated && data?.week" class="text-xs text-text3">{{ locale.t('schedulePage.currentWeek', { roman: data.week === 2 ? 'II' : 'I' }) }}</span>
       </div>
 
+      <!-- Общее расписание с соседней группой: портал кладёт их в одну строку
+           («К74/3,75.0»), и без подписи студент К75.0 решает, что ему показали чужое.
+           Список соседей считает сервер (`shared_with` в ответе /web/schedule). -->
+      <p v-if="!loading && hasAny && data?.shared_with?.length" class="text-xs text-text3">
+        {{ locale.t('schedulePage.sharedWith', { groups: data.shared_with.join(', ') }) }}
+      </p>
       <p v-if="loading" class="text-sm text-text3">{{ locale.t('schedulePage.loadingSchedule', 'Загрузка расписания…') }}</p>
       <EmptyState v-else-if="!hasAny" :title="locale.t('schedulePage.unavailableTitle', 'Расписание недоступно')"
                   :message="building ? locale.t('schedulePage.buildingHint', 'Индекс расписания готовится на сервере (~минута) — нажмите «Обновить».')

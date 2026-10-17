@@ -130,8 +130,9 @@ def teacher_set_grade(payload: dict = Body(...),
     #посчитается новостью). Как и хуки выше — best-effort, ошибка не роняет простановку.
     try:
         _maybe_notify_dropout_risk(db, stud, lesson.group_name)
-    except Exception:
+    except Exception as e:      # noqa: BLE001 — как соседние хуки: не роняет, но и не молчит
         db.rollback()
+        _hook_log.warning("риск отчисления не пересчитан: %s", e)
     audit.log(db, actor=user.login, role=user.role,
               action="grade.clear" if cleared else "grade.set",
               target=f"{surname} {name}",

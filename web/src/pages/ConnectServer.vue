@@ -7,9 +7,16 @@ import { useRouter } from 'vue-router'
 import { Server, ArrowRight } from '@lucide/vue'
 import HexBackground from '@/components/HexBackground.vue'
 import HexLogo from '@/components/HexLogo.vue'
-import { getApiBase, normalizeUrl, setApiBase, clearApiBase, checkHealth, isNativeApp } from '@/api/server'
+import { getApiBase, normalizeUrl, switchServer, clearApiBase, checkHealth, isNativeApp } from '@/api/server'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
+//🔒 Смена сервера — это смена мира (аудит 17.10.2026): прежняя сессия гасится ДО смены
+//адреса. Раньше новый адрес сохранялся, а токены оставались: следующий запрос уходил на
+//другой сервер с заголовком `Authorization` прежнего, а страж роутера, видя «вошедшего»,
+//сразу отправлял в кабинет — то есть токен уезжал чужому серверу без единого действия.
+const endSession = () => auth.logout()
 // Показываем текущий адрес (в приложении — вшитый боевой, в браузере — пусто).
 const url = ref(getApiBase() || '')
 const busy = ref(false)
@@ -25,7 +32,7 @@ async function connect() {
   busy.value = true
   try {
     const ok = await checkHealth(u)
-    setApiBase(u)                    // сохраняем ВСЕГДА (как десктоп: адрес сохранён)
+    await switchServer(u, endSession)  // сохраняем ВСЕГДА (как десктоп: адрес сохранён)
     if (ok) { router.replace('/login'); return }
     // Не достучались — НЕ блокируем: адрес сохранён, даём войти вручную.
     error.value = 'Не удалось проверить сервер. Адрес сохранён — можно продолжить и войти, либо исправить ссылку.'
@@ -37,8 +44,12 @@ async function connect() {
 
 function proceed() { router.replace('/login') }
 
-// В браузере: вернуться к работе на этом же сайте (сбросить адрес).
-function useThisSite() {
+// В браузере: вернуться к работе на этом же сайте (сбросить адрес). Это тоже смена
+// сервера, если до этого был задан другой: прежняя сессия гасится так же.
+async function useThisSite() {
+  if (getApiBase()) {
+    try { await endSession() } catch { /* офлайн — локальная часть выхода всё равно сделана */ }
+  }
   clearApiBase()
   router.replace('/login')
 }

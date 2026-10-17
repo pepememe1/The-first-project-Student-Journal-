@@ -27,10 +27,10 @@ from fastapi import Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ... import storage
+from ... import media_refs, storage
 from ...models import Attachment, Conversation, Message, User, user_fio
 from ._common import (Depends as _D, _conversation, _now, _participant,  # noqa: F401
-                      _require_participant, get_current_user, get_db, router)
+                      _personal_view, _require_participant, get_current_user, get_db, router)
 
 #Что считаем «медиа», а что «файлом». Гифки и видео-ссылки — медиа, документы — файлы.
 #⚠️ Разделение по СМЫСЛУ, а не по хранилищу: человек ищет «ту картинку» и «тот документ»
@@ -115,6 +115,13 @@ def start_signed_upload(db: Session, user: User, scope: str, payload: dict) -> d
     #Находка пентеста 3.7.8 (п. 2): потолок на ОДИН файл был, а на пользователя за сутки —
     #нет. Один аккаунт занимал хранилище целиком за вечер, и остальные получали «места
     #нет» — отказ, который выглядит как поломка сервера, а не как чьё-то злоупотребление.
+    #
+    #⚠️ ЗАЯВЛЕННЫЙ размер — это РЕЗЕРВ, и больше него не примет ни загрузка, ни
+    #подтверждение (аудит 17.10.2026): иначе девять подписей по байту и девять
+    #файлов по 25 МБ давали 225 МБ при потолке 200. Проверка и запись резерва — под
+    #замком записи (§4.26): две одновременные подписи иначе обе видели бы прежний остаток.
+    from ..web import _common as _web_common
+    _web_common._lock_for_write(db)
     used = _uploaded_last_day(db, user.id)
     if used + size > storage.MAX_USER_DAY_BYTES:
         left = max(0, storage.MAX_USER_DAY_BYTES - used)
@@ -172,20 +179,39 @@ def upload_local(att_id: str, t: str = Query(""), file: UploadFile = File(...),
 
     storage.local_ensure_dir()
     written = 0
-    limit = storage.MAX_SIZE
-    with open(storage.local_path(att_id), "wb") as out:
-        while True:
-            chunk = file.file.read(1024 * 256)
-            if not chunk:
-                break
-            written += len(chunk)
-            if written > limit:
-                #⚠️ Режем ПО ХОДУ, а не проверяем в конце: иначе пятигигабайтный файл
-                #сначала ляжет на диск и только потом будет отвергнут.
-                out.close()
-                storage.local_delete(att_id)
-                raise HTTPException(status_code=413, detail="Файл слишком большой")
-            out.write(chunk)
+    #Предел — ЗАЯВЛЕННЫЙ при подписи размер, а не общий потолок: под него и выдан резерв
+    #суточного объёма (см. `start_signed_upload`).
+    limit = min(storage.MAX_SIZE, int(a.size or 0))
+    part = storage.local_part_path(att_id)
+    try:
+        with open(part, "wb") as out:
+            while True:
+                chunk = file.file.read(1024 * 256)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit:
+                    #⚠️ Режем ПО ХОДУ, а не проверяем в конце: иначе пятигигабайтный файл
+                    #сначала ляжет на диск и только потом будет отвергнут.
+                    raise HTTPException(status_code=413, detail="Файл больше заявленного")
+                out.write(chunk)
+        #Итоговым файл становится ПОД ЗАМКОМ и только пока вложение не подтверждено.
+        #Подтверждение берёт тот же замок, поэтому порядок у них один из двух: либо файл
+        #опубликован до подтверждения (и оно видит его целиком), либо подтверждение было
+        #раньше — и поздняя загрузка уже ничего не заменит.
+        from ..web import _common as _web_common
+        _web_common._lock_for_write(db)
+        db.expire_all()
+        a = db.query(Attachment).filter(Attachment.id == att_id).first()
+        if a is None or a.ready:
+            raise HTTPException(status_code=404, detail="Вложение не найдено")
+        storage.local_publish(part, att_id)
+        db.commit()                          #отпускаем замок записи
+    finally:
+        try:
+            os.remove(part)                  #после публикации файла здесь уже нет
+        except OSError:
+            pass                             #уборка временного — не повод ронять ответ
     return {"ok": True, "size": written}
 
 
@@ -219,32 +245,55 @@ def confirm_upload(att_id: str, user: User = Depends(get_current_user),
     сверяем здесь по факту. Не сошлось — объект УДАЛЯЕМ и готовым не считаем: оставить
     его значит оплачивать чужое хранилище и держать в бакете то, чего мы не разрешали.
 
-    ⚠️ Хранилище может не ответить на HEAD (сеть, права). Тогда доверяем заявленному:
-    отказать из-за сетевой заминки — сломать отправку на ровном месте. Разница с
-    прежним поведением в том, что ЛОЖЬ теперь ловится, а раньше не ловилась никогда.
+    🔥 НЕТ ФАЙЛА — НЕТ ГОТОВНОСТИ (аудит 17.10.2026). Раньше пустой ответ
+    хранилища считался «не узнали» и подтверждение верило заявленному: получил подпись,
+    ничего не загрузил, позвал `/done` — и в ленте висела карточка файла, которого нет, а
+    настоящая загрузка в этот id уже запрещалась проверкой «готово». Теперь отсутствие
+    файла — 409 (вложение остаётся неготовым, загрузить и подтвердить можно снова), а
+    сбой связи с хранилищем — 502 с просьбой повторить. Отказ из-за сетевой заминки
+    стоит человеку повторного нажатия; поверить пустоте — стоило файла.
+
+    ⚠️ Больше ЗАЯВЛЕННОГО не принимаем: заявленный размер — резерв суточного потолка
+    (см. `start_signed_upload`). Меньше — можно, в базу ляжет настоящий.
     """
     a = db.query(Attachment).filter(Attachment.id == att_id).first()
     if a is None or a.uploader_id != user.id:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
+    if a.ready:
+        return {"ok": True, "attachment": _att_out(a)}     #повтор — то же самое
 
     #Факт проверяем тем способом, каким хранили: у объектного хранилища HEAD,
     #у локального — размер файла на диске. Одна проверка на оба пути.
-    real = (storage.local_stat(att_id) if storage.mode() == "local"
-            else storage.head_object(a.storage_key))
-    if real:
-        bad_size = real.get("size", 0) > storage.MAX_SIZE
-        bad_mime = bool(real.get("mime")) and not storage.mime_ok(real["mime"])
-        if bad_size or bad_mime:
-            storage.remove(att_id, a.storage_key)
-            db.delete(a)
-            db.commit()
-            raise HTTPException(status_code=413 if bad_size else 415,
-                                detail="Файл не соответствует заявленному")
+    #⚠️ Сеть — ДО замка записи: HEAD ждёт до 15 с, и держать всё это время единственного
+    #писателя SQLite значило бы остановить запись по всему серверу.
+    try:
+        real = storage.stat_stored(att_id, a.storage_key)
+    except storage.StorageUnavailable as e:
+        raise HTTPException(status_code=502,
+                            detail="Хранилище файлов не ответило — попробуйте ещё раз") from e
+    if not real:
+        raise HTTPException(status_code=409,
+                            detail="Файл не дошёл до хранилища — отправьте его ещё раз")
+    declared = int(a.size or 0)
+    bad_size = int(real.get("size") or 0) > min(storage.MAX_SIZE, declared or storage.MAX_SIZE)
+    bad_mime = bool(real.get("mime")) and not storage.mime_ok(real["mime"])
+    if bad_size or bad_mime:
+        storage.remove(att_id, a.storage_key)
+        db.delete(a)
+        db.commit()
+        raise HTTPException(status_code=413 if bad_size else 415,
+                            detail="Файл не соответствует заявленному")
+
+    #Готовность — под замком и по перечитанной строке (§4.29): так подтверждение не
+    #разминётся с поздней локальной загрузкой, которая публикует файл под тем же замком.
+    from ..web import _common as _web_common
+    _web_common._lock_for_write(db)
+    db.refresh(a)
+    if not a.ready:
         #Размер записываем НАСТОЯЩИЙ: в списке файлов человек должен видеть правду.
         if real.get("size"):
-            a.size = real["size"]
-
-    a.ready = True
+            a.size = int(real["size"])
+        a.ready = True
     db.commit()
     return {"ok": True, "attachment": _att_out(a)}
 
@@ -252,19 +301,34 @@ def confirm_upload(att_id: str, user: User = Depends(get_current_user),
 @router.get("/attachments/{att_id}/url")
 def attachment_url(att_id: str, user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
-    """Ссылка на СКАЧИВАНИЕ — только участнику той беседы, куда файл отправлен."""
+    """Ссылка на СКАЧИВАНИЕ — только участнику беседы, где файл виден.
+
+    Таких бесед может быть несколько: пересылка ссылается на ТОТ ЖЕ файл, а не копирует
+    его (см. `models.Attachment`). Поэтому дверей две: участник беседы, куда файл
+    загружен, — как раньше; либо участник беседы, где лежит НЕ удалённое сообщение с
+    этим файлом. Второе — ровно та видимость, которую дала пересылка: переслать можно
+    только то, что видишь сам, и только туда, куда сам вправе писать."""
     a = db.query(Attachment).filter(Attachment.id == att_id).first()
     if a is None or not a.ready:
         raise HTTPException(status_code=404, detail="Вложение не найдено")
-    _require_participant(db, a.conversation_id, user)
+    if _participant(db, a.conversation_id, user.id) is None:
+        carriers = (db.query(Message.conversation_id)
+                    .filter(Message.attachment_id == a.id, Message.deleted_at == "")
+                    .distinct().all())
+        if not any(_participant(db, cid, user.id) is not None for (cid,) in carriers):
+            raise HTTPException(status_code=403, detail="Нет доступа к этому файлу")
     return {"url": signed_download(a), "attachment": _att_out(a)}
 
 
 def signed_download(a: Attachment) -> str:
-    """Ссылка на СКАЧИВАНИЕ, живущая минуты. Права проверяет вызывающий (беседа, курс)."""
-    if not storage.configured():
-        raise HTTPException(status_code=503, detail="Хранилище файлов не настроено")
-    if storage.mode() == "local":
+    """Ссылка на СКАЧИВАНИЕ, живущая минуты. Права проверяет вызывающий (беседа, курс).
+
+    Способ — по самому файлу (`storage.backend_of`), а не по текущему режиму: режим
+    отвечает, куда класть НОВЫЕ файлы, и от него не должна зависеть судьба старых."""
+    where = storage.backend_of(a.id)
+    if not where:
+        raise HTTPException(status_code=503, detail="Хранилище файлов недоступно")
+    if where == "local":
         token = storage.local_token(a.id, "get", storage.DOWNLOAD_TTL_S)
         return f"/web/messenger/uploads/local/{a.id}?t={token}"
     #Имя и тип уходят в ссылку подписанными: браузер сохранит файл под настоящим
@@ -278,14 +342,16 @@ def chat_files(conv_id: str, user: User = Depends(get_current_user),
     """Вкладка «Файлы»: документы беседы.
 
     ⚠️ Тумбстоуны отбрасываем: удалённое сообщение не должно возвращаться списком файлов
-    — иначе «удалил у всех» перестанет что-либо значить.
+    — иначе «удалил у всех» перестанет что-либо значить. Личные границы («удалить у
+    себя», очистка истории) — те же, что у ленты (`_personal_view`).
     """
-    _require_participant(db, conv_id, user)
-    rows = (db.query(Message, Attachment)
-            .join(Attachment, Attachment.id == Message.attachment_id)
-            .filter(Message.conversation_id == conv_id,
-                    Message.deleted_at == "",
-                    Attachment.ready == True)                     # noqa: E712
+    part = _require_participant(db, conv_id, user)
+    q = (db.query(Message, Attachment)
+         .join(Attachment, Attachment.id == Message.attachment_id)
+         .filter(Message.conversation_id == conv_id,
+                 Message.deleted_at == "",
+                 Attachment.ready == True))                     # noqa: E712
+    rows = (_personal_view(db, q, conv_id, part, user.id)
             .order_by(Message.created_at.desc()).limit(300).all())
     return {"files": [{**_att_out(a), "message_id": m.id, "sent_at": m.created_at}
                       for m, a in rows]}
@@ -301,9 +367,9 @@ def chat_media(conv_id: str, user: User = Depends(get_current_user),
     одну вкладку с документами нельзя: человек ищет «ту картинку» и «тот документ» в
     разных местах.
     """
-    _require_participant(db, conv_id, user)
-    rows = (db.query(Message)
-            .filter(Message.conversation_id == conv_id, Message.deleted_at == "")
+    part = _require_participant(db, conv_id, user)
+    q = db.query(Message).filter(Message.conversation_id == conv_id, Message.deleted_at == "")
+    rows = (_personal_view(db, q, conv_id, part, user.id)
             .order_by(Message.created_at.desc()).limit(500).all())
     out = []
     for m in rows:
@@ -362,7 +428,8 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
             "from_id": m.fwd_from_sender_id or "",
             "from_name": (user_fio(u) or "") if u is not None else (m.fwd_sender_name or ""),
             "from_role": (u.role if u is not None else ""),
-            "from_avatar": prefs.get("avatar", "") or "",
+            "from_avatar": media_refs.avatar_out(prefs.get("avatar", ""), "u",
+                                                 m.fwd_from_sender_id or ""),
             "from_color": prefs.get("profile_color", "") or "",
         })
     return {"saved": out}

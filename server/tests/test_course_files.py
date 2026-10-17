@@ -17,7 +17,7 @@ test_course_files.py — файл-материал курса (аудит 22.09.
 """
 import pytest
 
-from conftest import make_admin, make_teacher, assign_teacher
+from conftest import make_admin, make_teacher, assign_teacher, honest_head_object
 from test_courses import _make_student, _new_course
 
 
@@ -30,7 +30,7 @@ def s3(monkeypatch):
     for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
                  ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
         monkeypatch.setattr(storage, k, v)
-    monkeypatch.setattr(storage, "head_object", lambda key: {})
+    monkeypatch.setattr(storage, "head_object", honest_head_object)
     removed = []
     monkeypatch.setattr(storage, "delete_object", lambda key: removed.append(key) or True)
     return removed

@@ -25,6 +25,7 @@ import MyStatusPicker from './MyStatusPicker.vue'
 import Avatar from '@/components/ui/Avatar.vue'
 import GroupTag from '@/components/ui/GroupTag.vue'
 import { studentGroup } from '@/utils/people'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const m = useMessengerStore()
 const toast = useToast()
@@ -419,7 +420,7 @@ onMounted(() => { m.loadChats() })
                  Влада). Не поставили — прежний цветной кружок с инициалами.
                  ⚠️ Порядок именно такой: системные каналы выше по списку ветвлений, и их
                  лицо задаём МЫ (Вектор) — своя картинка там не предусмотрена вовсе. -->
-            <img v-else-if="c.avatar" :src="c.avatar" alt="" width="40" height="40"
+            <img v-else-if="c.avatar" :src="mediaSrc(c.avatar)" alt="" width="40" height="40"
                  loading="lazy" decoding="async"
                  class="size-10 shrink-0 rounded-full bg-bg2 object-cover" />
             <div v-else class="grid size-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"

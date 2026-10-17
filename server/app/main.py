@@ -36,7 +36,12 @@ from .routers import desktopupdate
 from .routers import publicschedule
 from .routers import serverinfo
 from .routers import honeypot as honeypot_router
-from . import canary, events, honeypot, throttle, validation_text
+from .routers import media as media_router
+from . import canary, events, honeypot, media_refs, throttle, validation_text
+
+#Прогревать ли снимок расписания при старте службы (см. `lifespan`). На бою — всегда;
+#снимает флаг только серверный conftest.
+WARM_SCHEDULE_ON_START = True
 
 
 @asynccontextmanager
@@ -75,11 +80,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:                                          # noqa: BLE001
         events.record("warn", "course_rollover", f"автоперевод курса не выполнен: {e}")
     #Прогреваем снимок расписания в фоне, чтобы преподаватель не ждал сборку при входе.
-    try:
-        from . import schedule_web
-        schedule_web.warm()
-    except Exception:
-        pass
+    #Флаг модуля, а не переменная окружения: снимают его только тесты (conftest), где
+    #служба стартует на каждом тесте и фоновые сборщики делили бы процессор с ними.
+    if WARM_SCHEDULE_ON_START:
+        try:
+            from . import schedule_web
+            schedule_web.warm()
+        except Exception:
+            pass
 
     #📡 ПОТРЕБИТЕЛЬ МЕЖПРОЦЕССНЫХ СИГНАЛОВ WebSocket — запускается ТОЛЬКО когда общее
     #состояние действительно поднято. Без `GRADEBOOK_REDIS_URL` не создаётся даже задача:
@@ -162,6 +170,19 @@ app.add_middleware(
 #    ⚠️ Правило — «всё под API-префиксами, КРОМЕ перечисленного публичного», а не список
 #    личного: новый раздел получает запрет сам, а забытая строка в списке личного молча
 #    оставила бы его без защиты. Страницы и ассеты сайта не трогаем — у них свои правила.
+@app.middleware("http")
+async def _media_features(request: Request, call_next):
+    """Просил ли клиент аватарки ссылкой (`X-Gb-Features: avatar-refs`, см. `media_refs`).
+
+    Признак живёт на время запроса в переменной контекста: аватарку собирают два
+    десятка мест, и протаскивать заголовок в каждое значило бы однажды забыть одно."""
+    token = media_refs.begin(request.headers.get(media_refs.FEATURE_HEADER, ""))
+    try:
+        return await call_next(request)
+    finally:
+        media_refs.end(token)
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -344,6 +365,8 @@ app.include_router(desktopupdate.router)   # автообновление дес
 app.include_router(serverinfo.router)
 #Раздел «Приманки» — только просмотр и только администратор (см. шапку роутера).
 app.include_router(honeypot_router.router)
+#Аватарка по подписанной ссылке (`media_refs`): входа не требует, доступ даёт подпись.
+app.include_router(media_router.router)
 
 
 #Раздача файлов для скачивания (десктоп-клиент GradeBookAI.exe). Файлы кладём в папку
@@ -429,7 +452,7 @@ def download_file(fname: str):
 #дойдя до кода. Весь `/downloads/*` принадлежит серверу, страниц под ним нет.
 _API_PREFIXES = (
     "auth", "me", "web", "sync", "app", "desktop", "vector", "public", "downloads",
-    "health", "docs", "openapi.json", "redoc",
+    "health", "docs", "openapi.json", "redoc", "media",
     "admin/online", "admin/events", "admin/sessions",
     "connect/request", "connect/requests", "connect/status",
     "connect/verify", "connect/approve", "connect/reject",
@@ -451,7 +474,10 @@ def _is_api_path(path: str) -> bool:
 #(.exe, APK, бандлы приложения), манифесты обновлений, публичное расписание, проверка
 #здоровья и справка по API. У каждой строки причина — «это одинаково для всех и без входа».
 _PUBLIC_API_PREFIXES = ("downloads", "app", "desktop", "public", "health",
-                        "docs", "openapi.json", "redoc")
+                        "docs", "openapi.json", "redoc",
+                        #Аватарка по подписанной ссылке (17.10.2026): ответ одинаков для
+                        #любого владельца ссылки, а срок хранения ручка ставит сама.
+                        "media")
 
 
 def _is_private_api_path(path: str) -> bool:

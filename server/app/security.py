@@ -148,3 +148,18 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except JWTError:
         return None
+
+
+def is_access_payload(payload: dict) -> bool:
+    """Годится ли разобранный токен как ПРОПУСК (access), а не как другой наш токен.
+
+    Подпись у всех наших токенов общая: `refresh`, challenge второго фактора (`mfa`) и
+    challenge подтверждения входа подписаны тем же ключом. Значит «подпись сошлась» ещё
+    не значит «это пропуск», и решать это обязано ОДНО место — его зовут и
+    `deps.get_current_user`, и веб-сокет мессенджера.
+    🔥 До 16.10.2026 сокет тип не смотрел: challenge второго фактора выдаётся ПОСЛЕ пароля,
+    но ДО кода и без `jti`, а токены без `jti` сокет пускал «как старый формат». Знающий
+    один пароль открывал живой канал чужого аккаунта без второго фактора.
+    ⚠️ Токен БЕЗ `typ` — старый формат, пускается, как и раньше на HTTP."""
+    typ = (payload or {}).get("typ")
+    return bool(payload) and (typ is None or typ == "access")

@@ -277,6 +277,28 @@ def test_missing_marker_does_not_wipe_anything(tmp_path):
     assert local_db.read_owner(p, KEY) == local_db.owner_hash("ivanov")
 
 
+def test_unreadable_owner_is_not_taken_for_no_owner(tmp_path, monkeypatch):
+    """«Прочитать не смог» — не «метки нет» (16.10.2026).
+
+    Раньше сорвавшееся чтение (база занята фоновой синхронизацией) давало '', и `adopt`
+    ставил метку вошедшего на базу ПРЕЖНЕГО человека: его невыгруженные правки ехали
+    дальше под чужим именем. Теперь база не стирается и не переподписывается."""
+    p = _owned_db(tmp_path, "ivanov")
+    real = local_db.connect
+    calls = {"n": 0}
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(local_db, "connect", flaky)
+    assert local_db.adopt(p, KEY, "petrov") is False
+    monkeypatch.setattr(local_db, "connect", real)
+    assert local_db.read_owner(p, KEY) == local_db.owner_hash("ivanov")
+
+
 def test_owner_marker_is_not_the_login_itself(tmp_path):
     """Логин — тоже персональные данные, в базе он лежит отпечатком."""
     p = _owned_db(tmp_path, "ivanov@esstu.ru")

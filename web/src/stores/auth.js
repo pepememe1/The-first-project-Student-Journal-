@@ -31,6 +31,7 @@ import { useProfileStore } from '@/stores/profile'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useActivityStore } from '@/stores/activity'
 import { useTrackerStore } from '@/stores/tracker'
+import { useGifStore } from '@/stores/gif'
 
 const LS_USER = 'gb.user'
 
@@ -300,6 +301,7 @@ export const useAuthStore = defineStore('auth', () => {
     // викторину поверх своего кабинета.
     useActivityStore().reset()
     useTrackerStore().reset()     // доска трекера и несохранённые правки — тоже чужие
+    useGifStore().reset()         // избранное гифок: иначе уедет к следующему в настройки
     //И пасхалки: иначе тост «достижение открыто» от прошлого человека
     //всплывает на экране входа у следующего (см. easterEggs.js::reset).
     useEasterStore().reset()

@@ -11,11 +11,22 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { meApi, messengerApi } from '@/api/endpoints'
+import { isDesktopApp } from '@/utils/platform'
+import { prefetchImages } from '@/utils/mediaSrc'
+
+//Категории и первая страница «В тренде» одинаковы для всех и меняются медленно: держим их
+//в памяти вкладки 10 минут, и пикер открывается сразу, без похода на сервер и в Klipy.
+const MEMO_MS = 10 * 60 * 1000
 
 export const useGifStore = defineStore('gif', () => {
   const favorites = ref([])
   const loaded = ref(false)
   const error = ref('')
+  let memoCats = null
+  let memoCatsAt = 0
+  let memoTrend = null
+  let memoTrendAt = 0
+  let warmed = false
 
   async function load() {
     if (loaded.value) return
@@ -71,13 +82,53 @@ export const useGifStore = defineStore('gif', () => {
   }
 
   async function categories() {
+    if (memoCats && Date.now() - memoCatsAt < MEMO_MS) return memoCats
     const { data } = await messengerApi.gifCategories()
-    return data.categories || []
+    memoCats = data.categories || []
+    memoCatsAt = Date.now()
+    return memoCats
   }
 
   async function trending(page = 1) {
+    if (page === 1 && memoTrend && Date.now() - memoTrendAt < MEMO_MS) return memoTrend
     const { data } = await messengerApi.gifTrending(page)
+    if (page === 1) {
+      memoTrend = data
+      memoTrendAt = Date.now()
+    }
     return data
+  }
+
+  // Программа: положить пикер в кэш картинок заранее — избранное, обложки категорий и
+  // «В тренде» (просьба 17.10.2026: «зашёл в раздел гифок — они уже подгружены»). Окно
+  // программы в приватном режиме, и без этого каждый запуск начинался с пустого пикера.
+  // Один раз за вход; неудача — попробуем при следующем открытии мессенджера.
+  async function warmup() {
+    if (warmed || !isDesktopApp()) return
+    warmed = true
+    try {
+      await load()
+      const [cats, trend] = await Promise.all([
+        categories().catch(() => []), trending(1).catch(() => ({})),
+      ])
+      prefetchImages([
+        ...favorites.value.map((f) => f.thumb_url || f.url),
+        ...cats.map((c) => c.preview_url),
+        ...((trend && trend.items) || []).map((it) => it.thumb_url),
+      ])
+    } catch {
+      warmed = false
+    }
+  }
+
+  // Выход из аккаунта = смена владельца вкладки: избранное прежнего человека не должно ни
+  // показаться следующему, ни уехать к нему в настройки первым же нажатием ⭐ (список
+  // сохраняется ЦЕЛИКОМ из памяти). Зовёт `auth.logout`.
+  function reset() {
+    favorites.value = []
+    loaded.value = false
+    error.value = ''
+    warmed = false
   }
 
   async function search(q, page = 1) {
@@ -86,5 +137,5 @@ export const useGifStore = defineStore('gif', () => {
   }
 
   return { favorites, error, isFavorite, toggleFavorite, isFavoriteUrl, toggleFavoriteByUrl,
-           load, categories, trending, search }
+           load, categories, trending, search, warmup, reset }
 })

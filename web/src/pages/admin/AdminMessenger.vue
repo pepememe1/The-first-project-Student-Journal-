@@ -23,6 +23,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { roleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { formatCollege } from '@/utils/collegeTime'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -770,7 +771,7 @@ function fmt(iso) {
             <div class="mb-1 text-[11px] uppercase tracking-wide text-text3">
               {{ locale.t('adminMessenger.snapshotOf', 'На момент жалобы') }} · {{ r.field }}
             </div>
-            <img v-if="r.field === 'avatar' || r.field === 'banner'" :src="r.snapshot" alt=""
+            <img v-if="r.field === 'avatar' || r.field === 'banner'" :src="mediaSrc(r.snapshot)" alt=""
                  class="max-h-40 rounded-lg object-contain" />
             <p v-else class="whitespace-pre-wrap break-words text-sm text-text">{{ r.snapshot || '—' }}</p>
           </div>

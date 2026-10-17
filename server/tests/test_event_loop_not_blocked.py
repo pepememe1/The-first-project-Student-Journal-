@@ -42,9 +42,22 @@ BLOCKING_CALLS = {
     "complete", "voice", "free_chat",   # примитивы vector_llm
     "translate_text",            # переводчик (сеть, до 8 с)
     "inspect_zip", "import_zip",  # архив импорта: распаковка и тысячи записей в базу
+    #🔥 БАЗА (аудит 17.10.2026). SQLAlchemy у нас синхронный, а SQLite при занятом
+    #писателе ждёт до `busy_timeout` (5 с). Веб-сокет мессенджера открывал сессию и
+    #делал запросы прямо в `async def` — на входе и на каждом «печатает…», — и сторож
+    #этого не видел: в списке не было ни одного имени из работы с базой.
+    "SessionLocal", "query",
 }
 #Модули, любой вызов которых блокирует: сетевые клиенты и сон.
 BLOCKING_MODULES = {"requests", "httpx", "urllib", "subprocess"}
+
+#Где блокирующее допустимо, — с причиной у каждой строки. Список проверяется на мёртвые
+#записи: исчезнет функция — исчезнет и строка.
+ALLOWED_ASYNC = {
+    #Запуск службы: до `yield` цикл событий ещё не обслуживает ни одного запроса, и
+    #перевод учебного года на старте (`course_rollover.autorun`) никого не держит.
+    ("main.py", "lifespan"),
+}
 
 
 def _own_nodes(fn):
@@ -126,27 +139,64 @@ def test_the_await_check_sees_the_original_defect():
     assert len(_routes_without_await(nested, "x.py")) == 1
 
 
-def _offenders() -> list[str]:
-    found: list[str] = []
+def _async_functions():
+    """(файл относительно app, функция) для каждого `async def` сервера."""
     for path in sorted(APP.rglob("*.py")):
         try:
             tree = ast.parse(io.open(path, encoding="utf-8").read())
         except SyntaxError:                     # noqa: PERF203 — файл не наш, пропускаем
             continue
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]:
-            #Вызовы под `await` безопасны по построению: их результат ждут, не блокируя
-            #цикл (это либо корутина, либо уже обёртка вроде run_in_threadpool).
-            awaited = {id(a.value) for a in ast.walk(fn) if isinstance(a, ast.Await)}
-            for call in ast.walk(fn):
-                if not isinstance(call, ast.Call) or id(call) in awaited:
-                    continue
-                f = call.func
-                name = getattr(f, "attr", None) or getattr(f, "id", None)
-                base = getattr(getattr(f, "value", None), "id", None)
-                if name in BLOCKING_CALLS or base in BLOCKING_MODULES:
-                    rel = path.relative_to(APP.parent)
-                    found.append(f"{rel}:{call.lineno} — async {fn.name}() зовёт {name}()")
+            yield path, fn
+
+
+def _offenders() -> list[str]:
+    found: list[str] = []
+    for path, fn in _async_functions():
+        if (path.relative_to(APP).as_posix(), fn.name) in ALLOWED_ASYNC:
+            continue
+        #Вызовы под `await` безопасны по построению: их результат ждут, не блокируя
+        #цикл (это либо корутина, либо уже обёртка вроде run_in_threadpool).
+        awaited = {id(a.value) for a in ast.walk(fn) if isinstance(a, ast.Await)}
+        for call in ast.walk(fn):
+            if not isinstance(call, ast.Call) or id(call) in awaited:
+                continue
+            f = call.func
+            name = getattr(f, "attr", None) or getattr(f, "id", None)
+            base = getattr(getattr(f, "value", None), "id", None)
+            if name in BLOCKING_CALLS or base in BLOCKING_MODULES:
+                rel = path.relative_to(APP.parent)
+                found.append(f"{rel}:{call.lineno} — async {fn.name}() зовёт {name}()")
     return found
+
+
+def test_allowed_async_list_has_no_dead_entries():
+    """Исключение без живой функции — забытый случай: на его место однажды встанет
+    другая функция с тем же именем, и сторож промолчит о ней."""
+    alive = {(p.relative_to(APP).as_posix(), fn.name) for p, fn in _async_functions()}
+    dead = ALLOWED_ASYNC - alive
+    assert not dead, f"в ALLOWED_ASYNC мёртвые записи: {sorted(dead)}"
+
+
+def test_the_guard_sees_a_database_session_inside_async():
+    """Обратный ход для базы: дословная форма прежнего сокета обязана краснеть."""
+    sample = (
+        "async def messenger_ws(ws):\n"
+        "    db = SessionLocal()\n"
+        "    user = db.query(User).first()\n"
+        "    await ws.send_json({})\n"
+    )
+    fn = next(n for n in ast.walk(ast.parse(sample)) if isinstance(n, ast.AsyncFunctionDef))
+    awaited = {id(a.value) for a in ast.walk(fn) if isinstance(a, ast.Await)}
+    hits = {getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+            for c in ast.walk(fn) if isinstance(c, ast.Call) and id(c) not in awaited}
+    assert {"SessionLocal", "query"} <= hits & BLOCKING_CALLS, hits
+    fixed = "async def messenger_ws(ws):\n    user = await run_in_threadpool(_ws_user, {})\n"
+    fn2 = next(n for n in ast.walk(ast.parse(fixed)) if isinstance(n, ast.AsyncFunctionDef))
+    awaited2 = {id(a.value) for a in ast.walk(fn2) if isinstance(a, ast.Await)}
+    hits2 = {getattr(c.func, "attr", None) or getattr(c.func, "id", None)
+             for c in ast.walk(fn2) if isinstance(c, ast.Call) and id(c) not in awaited2}
+    assert not (hits2 & BLOCKING_CALLS), hits2
 
 
 def test_no_blocking_call_inside_any_async_endpoint():

@@ -231,12 +231,19 @@ def schedule_get(group: str = Query(""), category: str = Query(""),
         grp = db.query(Group).filter(Group.name == g, Group.deleted == False).first()  # noqa: E712
         cat = (grp.category if grp else "") or ""
     data = _group_schedule(db, g, cat) if g else None
+    available = bool(data and data.get("weeks"))
     return {
         "group": g,
         "category": cat or schedule_web.default_category(),
         "week": schedule_web.current_week_parity(),
         "schedule": data,           # dict GroupSchedule.to_dict() (+ правки) или null
-        "available": bool(data and data.get("weeks")),
+        "available": available,
+        #С кем у группы ОБЩЕЕ расписание (составная строка портала «К74/3,75.0»).
+        #🔥 Функция была написана 04.09.2026 и не звалась никем (аудит 17.10.2026): без
+        #подписи студент К75.0 видит в портале чужое имя и решает, что ему показали чужое
+        #расписание. Считаем только когда расписание есть: индекс к этому моменту уже в
+        #кэше, лишнего похода на портал не будет.
+        "shared_with": schedule_web.shared_schedule_with(g, cat) if available else [],
     }
 
 

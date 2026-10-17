@@ -25,7 +25,7 @@ from fastapi import (
 )
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from ... import audit, events, msg_limit
+from ... import audit, events, media_refs, msg_limit
 from ... import shared_state
 from ...db import get_db, SessionLocal
 from ...deps import (get_current_user, require_admin, require_moderation,
@@ -136,10 +136,18 @@ class _WSManager:
         уехали бы в Redis, а это хранилище мы ПДн не поручали.
 
         ⚠️ Свои же события пропускаем по `origin`: у своих сокетов сигнал уже был.
+
+        ⚠️ Чтение потока (Redis) и список участников (SQLite) — синхронные вызовы, и
+        прямо в этом цикле они держали бы цикл событий всего процесса на каждом сигнале
+        (аудит 17.10.2026). Оба уходят в пул потоков.
         """
+        from starlette.concurrency import run_in_threadpool
         while True:
             try:
-                rows = shared_state.stream_read("messenger:broadcast", self._shared_cursor)
+                rows = await run_in_threadpool(
+                    shared_state.stream_read, "messenger:broadcast", self._shared_cursor)
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 rows = []
             for row in rows or []:
@@ -151,7 +159,7 @@ class _WSManager:
                     if not conv_id:
                         continue
                     kind = str(row.get("kind") or "changed")
-                    uids = self._participant_ids_for_broadcast(conv_id)
+                    uids = await run_in_threadpool(self._participant_ids_for_broadcast, conv_id)
                     await self.send_users(uids, {"type": kind, "conversation_id": conv_id})
                 except asyncio.CancelledError:
                     raise
@@ -414,7 +422,8 @@ def _safe_user(u: User, online_logins: set = None, muted: bool = False, status: 
         "online": bool(online_logins) and (u.login in online_logins),
         #Аватарка (обрезанная 256×256 data:URL из prefs) — её видят ВСЕ (карточка, список,
         #модерация). Это публичное «лицо» аккаунта, не чувствительное поле.
-        "avatar": prefs.get("avatar", "") or "",
+        #Клиенту, который умеет, — ссылкой, а не картинкой в JSON (`media_refs`).
+        "avatar": media_refs.avatar_out(prefs.get("avatar", ""), "u", u.id),
         #Публичная часть профиля, которую человек настраивает сам (см. routers/me.py):
         #«О себе» и цвет плашки (id пресета палитры — клиент сопоставит его с цветом).
         "bio": prefs.get("bio", "") or "",
@@ -607,6 +616,15 @@ def _guard_can_write(db: Session, user: User, conv=None) -> None:
     сверять здесь её формат значило бы завести второе место, знающее этот формат.
     """
     _guard_not_muted(db, user, conv)
+    _guard_flood(db, user)
+
+
+def _guard_flood(db: Session, user: User) -> None:
+    """Только счётчики флуда: маскот-кулдаун (429 с эскалацией) и жёсткий анти-флуд.
+
+    Отдельно от мьюта ради пересылки: её запреты проверяются по КАЖДОЙ беседе-адресату
+    (`_ensure_may_write(..., new_message=False)`), а запрос — одно действие человека, и
+    считать его флудом надо один раз, а не по разу на каждый чат."""
     mascot_wait, violations = msg_limit.mascot_check(user.id)
     if mascot_wait:
         if violations == 3:                    #ровно на переходе к «систематическому»
@@ -887,7 +905,13 @@ SYSTEM_SENDER_ID = "system"
 #                  вспомнить порядок двух подряд идущих символов невозможно, а ошибиться
 #                  в громкости отметки — неприятно (либо звонит зря, либо молчит нужное).
 #Историческая форма @!Фамилия (тихая, без слэша) сохранена — она уже в переписках.
-_MENTION_RE = re.compile(r"(/)?(?:@(!?)|(!)@)([A-Za-zА-Яа-яЁё]+)")
+#Отметка начинается с начала текста или после пробела/знака — НЕ внутри слова и не внутри
+#ссылки (16.10.2026). Без границы «https://example.com/@Петров» рассылал Петрову тихую
+#отметку, а «ivanov@mail.ru» читался как отметка «mail». Поле ввода сайта ставит отметку
+#только после пробела (`ChatThread._MENTION_TOKEN_RE`), то есть законные формы не теряются.
+#Подсветка в ленте — то же правило (`web/src/utils/mentions.js`).
+_MENTION_RE = re.compile(r"(?<![A-Za-zА-Яа-яЁё0-9_./@!])(/)?(?:@(!?)|(!)@)([A-Za-zА-Яа-яЁё]+)")
+_URL_RE = re.compile(r"https?://\S+")
 
 
 def _parse_mentions(db: Session, body: str, participant_ids) -> list:
@@ -910,7 +934,7 @@ def _parse_mentions(db: Session, body: str, participant_ids) -> list:
         if first:
             surnames.setdefault(first, u.id)
     out, seen = [], set()
-    for m in _MENTION_RE.finditer(body):
+    for m in _MENTION_RE.finditer(_URL_RE.sub(" ", body)):
         slash, bang_after, bang_before, name = m.group(1), m.group(2), m.group(3), m.group(4)
         uid = surnames.get(name.lower())
         if not uid or uid in seen:
@@ -1293,23 +1317,35 @@ def _ensure_saved(db: Session, user: User) -> str:
     return conv_id
 
 
-def _visible_messages_query(db: Session, conv_id: str, part, user_id: str):
-    """Базовая выборка ВИДИМЫХ пользователю сообщений беседы (границы очистки и скрытия).
+def _personal_view(db: Session, q, conv_id: str, part, user_id: str):
+    """Наложить на выборку сообщений ЛИЧНЫЕ границы человека: «удалить у себя»
+    (`MessageHidden`) и очистку истории (`cleared_upto_id`, у старых строк `cleared_at`).
 
-    Вынесено из search_messages, чтобы умный поиск и сводка не собирали те же условия
-    заново: забытая граница `cleared_upto_id` означала бы показ переписки, которую человек
-    у себя удалил."""
+    🔥 Одна функция на все выборки (аудит 17.10.2026). Условия были переписаны в ленте,
+    в поиске и в общей выборке, а вкладки «Файлы» и «Медиа» их не знали: очистил
+    историю или удалил сообщение у себя — а документы и гифки из него оставались в панели
+    беседы. Новая выборка сообщений обязана идти через эту функцию, а не собирать
+    границы заново: забытая граница — это показ переписки, которую человек у себя удалил.
+    Накладывать ДО сортировки и `limit`, иначе скрытое съест место в выдаче."""
+    if part.cleared_upto_id:
+        q = q.filter(Message.id > part.cleared_upto_id)
+    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
+        q = q.filter(Message.created_at > part.cleared_at)
     hidden = _hidden_ids(db, conv_id, user_id)
+    if hidden:
+        q = q.filter(~Message.id.in_(hidden))
+    return q
+
+
+def _visible_messages_query(db: Session, conv_id: str, part, user_id: str):
+    """Базовая выборка ВИДИМЫХ пользователю ТЕКСТОВЫХ сообщений беседы (поиск, сводка).
+
+    ⚠️ Только `kind == "text"`: для вкладок с файлами и гифками она не годится — там
+    нужна `_personal_view` поверх своей выборки."""
     qq = (db.query(Message)
           .filter(Message.conversation_id == conv_id, Message.deleted_at == "",
                   Message.kind == "text"))
-    if part.cleared_upto_id:
-        qq = qq.filter(Message.id > part.cleared_upto_id)
-    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
-        qq = qq.filter(Message.created_at > part.cleared_at)
-    if hidden:
-        qq = qq.filter(~Message.id.in_(hidden))
-    return qq
+    return _personal_view(db, qq, conv_id, part, user_id)
 
 
 # ── §19. Напоминания из сообщений ───────────────────────────────────────────────────
@@ -1426,8 +1462,9 @@ def _handle_vector_command(db: Session, conv_id: str, body: str, user: User,
         text = (answer.get("text") or "").strip()
         if text:
             _post_system_channel_message(db, conv_id, text)
-    except Exception:
-        pass
+    except Exception as e:      # noqa: BLE001 — вопрос уже отправлен; ответа не будет, но след будет
+        db.rollback()
+        _hook_log.warning("Вектор не ответил на /vector в «Избранном»: %s", e)
 
 
 # ── Прочтение ────────────────────────────────────────────────────────────────────────

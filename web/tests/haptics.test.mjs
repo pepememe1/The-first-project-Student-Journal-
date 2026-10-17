@@ -164,7 +164,7 @@ test('карточка и пункт рельса гаснут по ОДНОМУ
   const settings = readFileSync(new URL('../src/pages/Settings.vue', import.meta.url), 'utf8')
   assert.match(settings, /<Card v-if="hapticsSupported"\s*\n\s*id="set-haptics"/,
     'карточка вибрации показывается безусловно — на компьютере вернулся раздел-пустышка')
-  assert.match(settings, /catsForRole\(auth\.role,\s*\{\s*haptics:\s*hapticsSupported\s*\}\)/,
+  assert.match(settings, /catsForRole\(auth\.role,\s*\{\s*haptics:\s*hapticsSupported\b/,
     'рельс настроек больше не знает про способности устройства — пункт «Вибрация» ' +
     'останется на компьютере и откроет пустую категорию')
 

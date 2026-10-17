@@ -157,3 +157,48 @@ def test_admin_sees_all_courses(client):
     cid = _new_course(client, teacher)
     assert any(c["id"] == cid for c in client.get("/web/courses", headers=admin).json()["courses"])
     assert client.get(f"/web/courses/{cid}", headers=admin).status_code == 200
+
+
+def test_course_list_query_count_does_not_grow_with_courses(client):
+    """🔥 Карточки курсов собирались ПО ОДНОЙ (аудит 17.10.2026): авторы, каждый автор
+    отдельно и два `COUNT` на курс — ~400 запросов на сотню курсов при одном открытии
+    списка, и число росло с каждым семестром. Свойство: запросов к базе на список столько
+    же, сколько бы курсов ни было, а счётчики и авторы — те же, что раньше.
+
+    Обратный ход: верни сборку карточки по курсу — на шести курсах запросов больше, чем
+    на двух."""
+    from sqlalchemy import event
+    from app.db import engine
+    admin = make_admin(client)
+    teacher = make_teacher(client, admin)
+    assign_teacher(client, admin, "teach:teacher1", "К74-1", "Математика")
+    first = _new_course(client, teacher, title="Курс 0")
+    _new_course(client, teacher, title="Курс 1")
+    r = client.post(f"/web/courses/{first}/materials", headers=teacher,
+                    json={"title": "Ссылка", "kind": "link", "url": "https://example.com"})
+    assert r.status_code == 200, r.text
+
+    def listing():
+        seen = []
+
+        def hook(*_args, **_kwargs):
+            seen.append(1)
+        event.listen(engine, "before_cursor_execute", hook)
+        try:
+            resp = client.get("/web/courses", headers=admin)
+        finally:
+            event.remove(engine, "before_cursor_execute", hook)
+        assert resp.status_code == 200, resp.text
+        return len(seen), resp.json()["courses"]
+
+    few, _ = listing()
+    for i in range(2, 6):
+        _new_course(client, teacher, title=f"Курс {i}")
+    many, courses = listing()
+    assert many == few, f"запросов стало больше вместе с курсами: {few} -> {many}"
+    assert len(courses) == 6
+    assert all(c["authors"] and "Преподаватель" in c["authors"][0] for c in courses)
+    by_id = {c["id"]: c for c in courses}
+    assert by_id[first]["materials_count"] == 1
+    assert sum(c["materials_count"] for c in courses) == 1
+    assert all(c["assignments_count"] == 0 for c in courses)

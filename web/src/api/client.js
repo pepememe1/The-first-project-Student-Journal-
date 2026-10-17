@@ -79,6 +79,10 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`
   config.headers['X-Device-Id'] = getDeviceId()
   config.headers['X-Client'] = clientKind()
+  //Аватарки — ссылкой, а не картинкой внутри каждого ответа (`server/app/media_refs.py`,
+  //17.10.2026). Просит сам клиент: старые сборки о `/media/avatar` не знают, и сервер
+  //отдаёт им картинку как раньше. Рисует ссылку `utils/mediaSrc.js`.
+  config.headers['X-Gb-Features'] = 'avatar-refs'
   //🔒 Кому принадлежит запрос — решается ЗДЕСЬ, на отправке, и едет вместе с ним
   //(находка O03). На ответе это уже не узнать: пока он шёл, человек мог смениться.
   config.__owner = currentOwner()

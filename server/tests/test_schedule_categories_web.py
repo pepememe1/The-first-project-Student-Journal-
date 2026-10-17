@@ -177,3 +177,36 @@ def test_overrides_not_applied_outside_college(client, monkeypatch):
     assert r.status_code == 200, r.text
     lesson = r.json()["schedule"]["weeks"]["1"]["Пнд"][0]
     assert lesson.get("_override") is not True
+
+
+def test_shared_schedule_is_signed_with_its_partner_groups(client, monkeypatch):
+    """Расписание, общее с соседней группой, подписано в ответе `/web/schedule`.
+
+    🔥 `schedule_web.shared_schedule_with` была написана 04.09.2026 и не звалась НИКЕМ
+    (аудит 17.10.2026): портал кладёт две группы в одну строку «К74/3,75.0», и без подписи
+    студент К75.0 видит чужое имя и решает, что ему показали чужое расписание.
+    Обратный ход: убери `shared_with` из ответа — тест краснеет."""
+    admin = make_admin(client)
+    index_html = ('<table><tr><td><a href="61.htm">К74/3,75.0</a></td>'
+                  '<td><a href="62.htm">К74/1</a></td></tr></table>')
+    group_html = (
+        "<table>"
+        "<tr><td>Пары</td><td>1-я</td></tr>"
+        "<tr><td>Время</td><td>09:00-10:35</td></tr>"
+        "<tr><td>Пнд</td><td>лек.Химия ПЕТРОВ П.П. а.100</td></tr>"
+        "<tr><td>Втр</td><td>_</td></tr>"
+        "<tr><td>Срд</td><td>_</td></tr>"
+        "<tr><td>Чтв</td><td>_</td></tr>"
+        "<tr><td>Птн</td><td>_</td></tr>"
+        "<tr><td>Сбт</td><td>_</td></tr>"
+        "</table>"
+    )
+    monkeypatch.setattr(P, "fetch_text", _fake_fetch_factory(index_html, group_html))
+
+    r = client.get("/web/schedule", params={"group": "К75.0"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["available"] is True
+    assert r.json()["shared_with"] == ["К74/3"]
+
+    own = client.get("/web/schedule", params={"group": "К74/1"}, headers=admin).json()
+    assert own["available"] is True and own["shared_with"] == [], "своё расписание не подписывают"

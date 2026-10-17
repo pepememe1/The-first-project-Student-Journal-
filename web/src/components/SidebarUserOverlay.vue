@@ -25,6 +25,7 @@ import { roleLabel as roleLabelOf } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { nameDecor } from '@/config/nameEffects'
 import Avatar from '@/components/ui/Avatar.vue'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const emit = defineEmits(['close'])
 
@@ -74,7 +75,7 @@ async function saveStatusText() {
          выбрана, иначе полоса цвета. Раньше показывался ТОЛЬКО цвет (баннер не виден
          вовсе), хотя на карточке профиля он уже есть. -->
     <div class="relative h-12 overflow-hidden">
-      <img v-if="profile.banner" :src="profile.banner" alt="" class="size-full object-cover" />
+      <img v-if="profile.banner" :src="mediaSrc(profile.banner)" alt="" class="size-full object-cover" />
       <div v-else class="size-full" :style="plate ? { background: plate } : { background: 'var(--gb-accent)' }" />
     </div>
 

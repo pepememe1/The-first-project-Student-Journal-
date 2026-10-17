@@ -45,6 +45,7 @@ import re
 
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
 from .messages import _ensure_may_write
+from ... import media_refs
 from ...models import (TrackerActivity, TrackerAssignee, TrackerColumn, TrackerComment,
                        TrackerProject, TrackerTask)
 
@@ -197,7 +198,7 @@ def _members(db: Session, conv_id: str) -> list:
         out.append({
             "user_id": u.id,
             "full_name": moderator_display_name(u) or u.id,
-            "avatar": prefs.get("avatar", "") or "",
+            "avatar": media_refs.avatar_out(prefs.get("avatar", ""), "u", u.id),
             "profile_color": prefs.get("profile_color", "") or "",
             "user_role": u.role or "",
             "group_name": u.group_name or "",

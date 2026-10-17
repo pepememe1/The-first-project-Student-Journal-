@@ -62,12 +62,83 @@ with open(os.path.join(_TEST_DIST, "index.html"), "w", encoding="utf-8") as _fh:
               '<title>GradeBookAI</title></head><body><div id="app"></div></body></html>')
 os.environ["GRADEBOOK_WEB_DIST"] = _TEST_DIST
 
+# 🔒 СЕРВЕРНЫЙ ПРОГОН ГЕРМЕТИЧЕН (17.10.2026) — тем же приёмом, что клиентский
+# (`tests/conftest.py` в корне, 05.09.2026). Найдено при разборе медленного прогона: каждый
+# тест открывает `TestClient(app)`, то есть заново запускает службу, а её старт звал
+# `schedule_web.warm()` — фоновые сборщики полного расписания с НАСТОЯЩЕГО портала ВСГУТУ,
+# десятки GET-запросов на категорию. Они делили процессор с тестами, ходили на чужой боевой
+# сайт и делали прогон зависимым от интернета. Петля разрешена (локальные серверы стендов).
+import socket as _socket
+
+_ALLOWED_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "0.0.0.0", "", None})
+
+
+def _host_of(address):
+    if isinstance(address, (tuple, list)) and address:
+        return address[0]
+    return address
+
+
+def _is_local(host) -> bool:
+    h = str(host or "").strip().strip("[]").lower()
+    return h in _ALLOWED_HOSTS or h.startswith("127.")
+
+
+def _blocked(host):
+    return RuntimeError(
+        "серверный тест пытается открыть соединение НАРУЖУ (%r). Прогон обязан быть "
+        "герметичным: он не зависит от интернета и не трогает чужие сайты. Подмени "
+        "сетевой вызов заглушкой в самом тесте." % (host,))
+
+
+_real_create_connection = _socket.create_connection
+_real_socket_connect = _socket.socket.connect
+_real_socket_connect_ex = _socket.socket.connect_ex
+
+
+def _guarded_create_connection(address, *a, **kw):
+    if not _is_local(_host_of(address)):
+        raise _blocked(_host_of(address))
+    return _real_create_connection(address, *a, **kw)
+
+
+def _guarded_socket_connect(self, address, *a, **kw):
+    if isinstance(address, (tuple, list)) and not _is_local(_host_of(address)):
+        raise _blocked(_host_of(address))
+    return _real_socket_connect(self, address, *a, **kw)
+
+
+def _guarded_socket_connect_ex(self, address, *a, **kw):
+    if isinstance(address, (tuple, list)) and not _is_local(_host_of(address)):
+        raise _blocked(_host_of(address))
+    return _real_socket_connect_ex(self, address, *a, **kw)
+
+
+_socket.create_connection = _guarded_create_connection
+_socket.socket.connect = _guarded_socket_connect
+_socket.socket.connect_ex = _guarded_socket_connect_ex
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import Base, engine
 from app import throttle, events, connect, msg_limit, activity_state, shared_state
+
+# ⚡ ДЕШЁВЫЙ ХЕШ ПАРОЛЯ В ПРОГОНЕ (17.10.2026). Замер на машине разработчика: хеш на
+# 200 000 итераций SHA-512 — 0.18 с, проверка — столько же, а типичный тест заводит и
+# логинит трёх-четырёх человек: ~1.5 с на тест одним хешированием. Формат хеша
+# самоописываемый (число итераций лежит в нём, проверка берёт его оттуда), поэтому
+# тестовые хеши проверяются ТЕМ ЖЕ кодом, что боевые. Боевую стоимость держит
+# `test_password_cost.py`: он читает константу из ИСХОДНИКА, а не из подменённого модуля.
+from app import security as _security
+_security._SHA_ITERS = 1_000
+
+# Прогрев снимка расписания на старте службы — для боя (см. `main.WARM_SCHEDULE_ON_START`).
+# В прогоне служба стартует на КАЖДОМ тесте, и фоновые сборщики только делили бы процессор.
+# Сам `warm()` стережёт `test_schedule_warm.py` — прямым вызовом.
+import app.main as _main
+_main.WARM_SCHEDULE_ON_START = False
 
 # 🔥 СХЕМА НУЖНА УЖЕ ПРИ СБОРКЕ ТЕСТОВ, А НЕ ТОЛЬКО В ФИКСТУРЕ `client` (21.09.2026).
 # Часть модулей читает базу при импорте: берёт текущий термин из продукта
@@ -106,6 +177,23 @@ def fresh_app_state():
     #ТОЛЬКО в наборе, а поодиночке зеленел: ровно тот случай, который мы уже разбирали
     #с троттлингом и ходом активностей.
     shared_state.reset_for_tests()
+
+
+def honest_head_object(key: str) -> dict:
+    """Подменник `storage.head_object` для тестов без сети: хранилище честно отвечает,
+    что лёг ровно заявленный файл (размер и тип — из записи вложения).
+
+    ⚠️ Не `lambda key: {}`. С 17.10.2026 пустой ответ значит «объекта НЕТ», и
+    подтверждение на него отвечает 409 — раньше тот же `{}` молча считался «не узнали,
+    верим заявленному», и тесты проходили мимо проверки, которую должны были задевать."""
+    from app.db import SessionLocal
+    from app.models import Attachment
+    db = SessionLocal()
+    try:
+        a = db.query(Attachment).filter(Attachment.storage_key == key).first()
+        return {"size": int(a.size or 0), "mime": a.mime or ""} if a is not None else {}
+    finally:
+        db.close()
 
 
 @pytest.fixture()

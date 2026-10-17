@@ -253,12 +253,22 @@ def download_url(key: str, name: str = "", mime: str = "") -> str:
     return presign("GET", key, DOWNLOAD_TTL_S, extra=extra)
 
 
+class StorageUnavailable(Exception):
+    """Хранилище не ответило (сеть, 5xx). Это НЕ «файла нет» — повторить можно."""
+
+
 def head_object(key: str) -> dict:
-    """Настоящие размер и тип объекта в хранилище.
+    """Настоящие размер и тип объекта в хранилище. `{}` — объекта НЕТ.
 
     ⚠️ Нужен потому, что подписанный PUT не умеет ограничивать РАЗМЕР: `content-length-
     range` есть только у POST-policy. Значит единственная честная проверка — посмотреть,
     что реально легло, и отвергнуть несовпадение (см. `confirm_upload`).
+
+    🔥 «Нет объекта» и «хранилище не ответило» — РАЗНЫЕ ответы (аудит 17.10.2026).
+    Раньше оба сводились к `{}`, а подтверждение на `{}` верило заявленному: получил
+    подпись, ничего не загрузил, позвал `/done` — и в ленте готовое вложение без файла.
+    Теперь отсутствие — `{}` (403 тоже: без права на список бакета S3 отвечает им вместо
+    404), а сбой связи — `StorageUnavailable`, и подтверждение просит повторить.
     """
     if not s3_ready():
         return {}
@@ -270,10 +280,12 @@ def head_object(key: str) -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
             return {"size": int(resp.headers.get("Content-Length") or 0),
                     "mime": (resp.headers.get("Content-Type") or "").split(";")[0].strip()}
-    except urllib.error.HTTPError:
-        return {}
-    except Exception:
-        return {}
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return {}
+        raise StorageUnavailable(f"хранилище ответило {e.code}") from e
+    except Exception as e:
+        raise StorageUnavailable(type(e).__name__) from e
 
 
 # ━━ ЛОКАЛЬНОЕ ХРАНЕНИЕ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -330,12 +342,55 @@ def local_ensure_dir() -> None:
     os.makedirs(LOCAL_DIR, exist_ok=True)
 
 
+def local_part_path(att_id: str) -> str:
+    """Временный файл ОДНОЙ загрузки: свой у каждого запроса.
+
+    🔥 Писать сразу в итоговый файл нельзя (аудит 17.10.2026, TOCTOU): два запроса
+    по одной ссылке проходили проверку «ещё не подтверждено» и писали в ОДИН файл, а
+    задержавшийся перезаписывал уже подтверждённый и отправленный документ. Готовый файл
+    теперь появляется только целиком — переименованием (`local_publish`)."""
+    from uuid import uuid4
+    return f"{local_path(att_id)}.part-{uuid4().hex}"
+
+
+def local_publish(part_path: str, att_id: str) -> None:
+    """Сделать загруженный файл итоговым. `os.replace` атомарен: читатель видит либо
+    прежний файл, либо новый целиком, но никогда не половину."""
+    os.replace(part_path, local_path(att_id))
+
+
 def local_stat(att_id: str) -> dict:
     """Размер и наличие файла на диске — аналог `head_object` для локального способа."""
     try:
         return {"size": os.path.getsize(local_path(att_id))}
     except OSError:
         return {}
+
+
+def backend_of(att_id: str) -> str:
+    """Где лежит УЖЕ сохранённый файл: `local` | `s3` | `` (нигде).
+
+    🔥 Не `mode()` (аудит 17.10.2026). Тот отвечает, куда класть НОВЫЕ файлы, и в
+    режиме `auto` пересчитывается по свободному месту и ключам S3. Пока чтение спрашивало
+    его: место упало ниже порога — старые локальные файлы переставали открываться; завели
+    ключи S3 — их начинали искать в бакете, где их нет. Файл с диска не исчезает от того,
+    что изменилась настройка, поэтому смотрим на сам файл, а не на настройку. Записей о
+    способе хранения в базе нет, и для старых вложений этот признак однозначен: id у
+    каждого свой, и на диске под ним лежит только то, что было загружено к нам."""
+    if os.path.isfile(local_path(att_id)):
+        return "local"
+    return "s3" if s3_ready() else ""
+
+
+def stat_stored(att_id: str, storage_key: str) -> dict:
+    """Настоящие размер (и тип, если хранилище его знает) уже загруженного файла.
+    `{}` — файла нет; сбой связи с бакетом — `StorageUnavailable`."""
+    where = backend_of(att_id)
+    if where == "local":
+        return local_stat(att_id)
+    if where == "s3":
+        return head_object(storage_key)
+    return {}
 
 
 def local_delete(att_id: str) -> bool:
@@ -349,8 +404,14 @@ def local_delete(att_id: str) -> bool:
 
 
 def remove(att_id: str, storage_key: str) -> bool:
-    """Удалить объект тем способом, каким он хранится. Одна дверь для уборки."""
-    return local_delete(att_id) if mode() == "local" else delete_object(storage_key)
+    """Удалить объект тем способом, каким он хранится. Одна дверь для уборки.
+    Способ — по самому файлу (`backend_of`), а не по текущей настройке: см. там."""
+    where = backend_of(att_id)
+    if where == "local":
+        return local_delete(att_id)
+    if where == "s3":
+        return delete_object(storage_key)
+    return True                          #нигде нет — удалять нечего
 
 
 def object_key(conv_id: str, att_id: str) -> str:
@@ -370,8 +431,9 @@ def delete_object(key: str) -> bool:
 
     ⚠️ Почему не сразу: сообщения удаляются ТУМБСТОУНОМ ради модерации — жалоба обязана
     показать оригинал, и автор не должен заметать следы, удалив сообщение после жалобы.
-    Файл — часть сообщения, значит правило то же. Физически стираем позже, когда ссылок
-    на вложение не осталось и срок разбора вышел.
+    Файл — часть сообщения, значит правило то же. Зовут её удаление материала курса и
+    отказ при подтверждении загрузки. ⚠️ Уборки вложений мессенджера по сроку НЕТ (см.
+    `models.Attachment.orphan_at`): там файлы пока не удаляются никогда.
     """
     if not s3_ready():
         return False

@@ -12,6 +12,7 @@ import FarewellOverlay from '@/components/FarewellOverlay.vue'
 import DarkSoulsFarewell from '@/components/easter/DarkSoulsFarewell.vue'
 import { platformAuthenticatorAvailable, enablePasskey } from '@/api/webauthn'
 import { isDesktopApp } from '@/utils/platform'
+import { mediaCacheStats, clearMediaCache, formatMegabytes } from '@/api/desktopMedia'
 import { hasOpenDialog } from '@/directives/dialog'
 import MfaCard from '@/components/settings/MfaCard.vue'
 import PasswordCard from '@/components/settings/PasswordCard.vue'
@@ -447,6 +448,36 @@ onMounted(async () => {
   }
   if (canBiometric.value || insideApp) await loadPasskeys()
   if (auth.role === 'teacher') await loadGradingScale()
+  loadMediaCache()
+})
+
+//Кэш картинок программы (17.10.2026, `desktop/media_cache.py`): как «Хранилище» у
+//Telegram — сколько занято и кнопка «Очистить». Только в программе: на сайте и в
+//телефоне кэшем картинок распоряжается сам браузер.
+const mediaCache = ref(null)
+const mediaBusy = ref(false)
+const mediaMsg = ref('')
+async function loadMediaCache() {
+  if (!insideApp) return
+  try { mediaCache.value = await mediaCacheStats() } catch { mediaCache.value = null }
+}
+async function wipeMediaCache() {
+  mediaBusy.value = true
+  mediaMsg.value = ''
+  try {
+    mediaCache.value = await clearMediaCache()
+    mediaMsg.value = loc.t('settings.mediaCacheCleared', 'Кэш очищен: картинки загрузятся заново при показе.')
+  } catch {
+    mediaMsg.value = loc.t('settings.mediaCacheFailed', 'Не удалось очистить кэш — попробуйте ещё раз.')
+  } finally { mediaBusy.value = false }
+}
+const mediaCacheText = computed(() => {
+  const st = mediaCache.value
+  if (!st) return loc.t('settings.mediaCacheUnknown', 'Размер кэша сейчас неизвестен.')
+  return loc.t('settings.mediaCacheUsed', {
+    size: formatMegabytes(st.bytes), max: formatMegabytes(st.max_bytes),
+    gif: st.ttl_days?.gif ?? 14, avatar: st.ttl_days?.avatar ?? 30,
+  })
 })
 
 async function addPasskey() {
@@ -480,7 +511,7 @@ onMounted(() => easter.roll('gman_observer'))
 // Держать его здесь означало бы три копии, обязанные разойтись.
 //⚠️ Способности УСТРОЙСТВА передаём сюда же: пункт «Вибрация» обязан появляться и
 //пропадать вместе со своей карточкой, иначе человек нажмёт его и увидит пустоту.
-const cats = computed(() => catsForRole(auth.role, { haptics: hapticsSupported }))
+const cats = computed(() => catsForRole(auth.role, { haptics: hapticsSupported, desktop: insideApp }))
 // Профиль открыт первым: на него ведут карточка себя сверху, кнопка в шапке и
 // переадресация со старого `/…/profile`. Пунктом рельса он больше не значится
 // (просьба Влада, 02.09.2026 — см. пояснение в `settingsSections.js`).
@@ -844,6 +875,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           </li>
         </ul>
       </details>
+    </Card>
+
+    <!-- Кэш картинок программы: гифки, баннеры и аватарки лежат зашифрованными в %TEMP%
+         и уходят сами, если их давно не показывали (desktop/media_cache.py). -->
+    <Card id="set-mediaCache" :class="sec('about')" v-if="insideApp" :title="loc.t('settings.mediaCache', 'Кэш картинок')"
+          :subtitle="loc.t('settings.mediaCacheHint', 'Гифки, баннеры и аватарки хранятся на этом компьютере зашифрованными, чтобы не скачивать их заново')">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-text2">{{ mediaCacheText }}</p>
+        <AppButton variant="ghost" :disabled="mediaBusy" @click="wipeMediaCache">
+          {{ loc.t('settings.mediaCacheClear', 'Очистить') }}
+        </AppButton>
+      </div>
+      <p v-if="mediaMsg" class="mt-3 text-sm text-text3">{{ mediaMsg }}</p>
     </Card>
 
     <!-- Озвучка Вектора: Голос → Бубнеж → Выкл. -->

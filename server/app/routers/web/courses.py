@@ -38,11 +38,7 @@ def _user_name(db: Session, uid: str) -> str:
     if not uid:
         return ""
     u = db.query(User).filter(User.id == uid).first()
-    if not u:
-        return ""
-    #surname+name — раздельная форма; full_name — канонический ключ ФИО (у препода это он).
-    combined = f"{(u.surname or '').strip()} {(u.name or '').strip()}".strip()
-    return combined or (u.full_name or "").strip() or (u.login or "")
+    return _display_name(u) if u else ""
 
 
 def _parent_group_names(db: Session, user: User) -> set:
@@ -112,15 +108,46 @@ def _material_out(m: CourseMaterial, files: dict = None) -> dict:
     return out
 
 
-def _course_brief(db: Session, c: Course) -> dict:
-    """Карточка курса для списка: авторы (имена) + счётчики материалов/заданий."""
-    authors = [_user_name(db, tid) for tid in _author_ids(db, c.id)]
-    mats = db.query(CourseMaterial).filter(CourseMaterial.course_id == c.id).count()
-    asg = db.query(CourseAssignment).filter(CourseAssignment.course_id == c.id).count()
-    return {"id": c.id, "title": c.title or "", "subject": c.subject or "",
-            "group_name": c.group_name or "", "authors": [a for a in authors if a],
-            "materials_count": mats, "assignments_count": asg,
-            "created_at": c.created_at or "", "archived": bool(c.archived)}
+def _display_name(u: User) -> str:
+    """Подпись человека в курсе. surname+name — раздельная форма; full_name — канонический
+    ключ ФИО (у преподавателя это он); login — последнее, что у нас есть."""
+    combined = f"{(u.surname or '').strip()} {(u.name or '').strip()}".strip()
+    return combined or (u.full_name or "").strip() or (u.login or "")
+
+
+def _course_briefs(db: Session, courses: list) -> list:
+    """Карточки курсов для списка: авторы (имена) + счётчики материалов/заданий.
+
+    🔥 ПАЧКОЙ, А НЕ ПО КУРСУ (аудит 17.10.2026). Карточка собиралась отдельно для каждого
+    курса: авторы, каждый автор по одному, два `COUNT` — на сотне курсов это ~400
+    запросов на ОДНО открытие списка, и число росло с каждым семестром. Теперь четыре
+    запроса на весь список, сколько бы курсов в нём ни было."""
+    from sqlalchemy import func
+    ids = [c.id for c in courses]
+    if not ids:
+        return []
+    links = (db.query(CourseAuthor.course_id, CourseAuthor.teacher_id)
+             .filter(CourseAuthor.course_id.in_(ids)).all())
+    teacher_ids = {tid for _cid, tid in links if tid}
+    names = ({u.id: _display_name(u)
+              for u in db.query(User).filter(User.id.in_(teacher_ids)).all()}
+             if teacher_ids else {})
+    authors: dict = {}
+    for cid, tid in links:
+        if names.get(tid):
+            authors.setdefault(cid, []).append(names[tid])
+    mats = dict(db.query(CourseMaterial.course_id, func.count(CourseMaterial.id))
+                .filter(CourseMaterial.course_id.in_(ids))
+                .group_by(CourseMaterial.course_id).all())
+    asg = dict(db.query(CourseAssignment.course_id, func.count(CourseAssignment.id))
+               .filter(CourseAssignment.course_id.in_(ids))
+               .group_by(CourseAssignment.course_id).all())
+    return [{"id": c.id, "title": c.title or "", "subject": c.subject or "",
+             "group_name": c.group_name or "", "authors": authors.get(c.id, []),
+             "materials_count": int(mats.get(c.id, 0)),
+             "assignments_count": int(asg.get(c.id, 0)),
+             "created_at": c.created_at or "", "archived": bool(c.archived)}
+            for c in courses]
 
 
 # ── Чтение ────────────────────────────────────────────────────────────────────────────
@@ -154,11 +181,9 @@ def list_courses(user: User = Depends(get_current_user), db: Session = Depends(g
     elif user.role == "admin":
         rows = query.all() if include_archived else query.filter(Course.archived == False).all()  # noqa: E712
     ql = (q or "").strip().lower()
-    out = []
-    for c in rows:
-        if ql and ql not in (c.title or "").lower() and ql not in (c.subject or "").lower():
-            continue
-        out.append(_course_brief(db, c))
+    picked = [c for c in rows
+              if not ql or ql in (c.title or "").lower() or ql in (c.subject or "").lower()]
+    out = _course_briefs(db, picked)
     out.sort(key=lambda x: (x["archived"], -x["id"]))
     return {"courses": out}
 

@@ -724,6 +724,13 @@ class LocalAPI:
                 _LOG.warning(f"[local-api] серверное приложение не загрузилось: {e}")
                 return False
 
+            #Кэш картинок мессенджера — ПЕРВЫМ и в своём `try`: добавленный первым
+            #оказывается внутри всех заслонок (origin, политика записи), а его сбой не
+            #имеет права оставить сервер без них.
+            try:
+                install_media_cache(app)
+            except Exception as e:      # noqa: BLE001
+                _LOG.info(f"[local-api] кэш картинок не подключён: {e}")
             #Онлайн-подсистемы (мессенджер) — пересылаем на бой: их данных в локальной
             #копии нет по замыслу, и без этого чаты в программе открывались пустыми.
             try:
@@ -823,6 +830,12 @@ class LocalAPI:
         """Импорт серверного приложения (пакет `app` лежит внутри `server/`)."""
         ensure_server_path()
         from app.main import app          # noqa: WPS433 — импорт намеренно ленивый
+        #Аватарки ссылкой выдаёт только БОЙ (`app/media_refs.py`): ответы локального
+        #сервера идут по петле и ничего не стоят, а `/media/avatar` здесь перехватывает
+        #кэш картинок и берёт файл с боя — ссылка, подписанная локальным секретом,
+        #там бы не нашлась.
+        from app import media_refs
+        media_refs.ENABLED = False
         return app
 
     def _wait_ready(self) -> bool:
@@ -1636,6 +1649,181 @@ def _remote_server_state():
         _LOG.info(f"[local-api] состояние сервера у боя: HTTP {r.status_code}")
         return None
     return r.json()
+
+
+#── Кэш картинок мессенджера (17.10.2026, `desktop/media_cache.py`) ────────────────────
+#Окно программы — WebView2 в приватном режиме: его собственный кэш живёт до закрытия,
+#и после каждого запуска гифки, баннеры и аватарки качались заново. Сайт внутри
+#программы просит картинки у локального сервера (`web/src/utils/mediaSrc.js`), а тот
+#отдаёт их из зашифрованного кэша в %TEMP% или загружает и кладёт туда.
+#Агент — со словом Mozilla: Klipy отказывает «голым» агентам библиотек (так уже было с
+#их API — `gif_service._UA`).
+_MEDIA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GradeBookAI-desktop"
+#Пути боя, которые в программе отдаёт кэш картинок (за файлом он сам ходит на бой) —
+#для сторожа маршрутов это то же, что `_PROXY_PREFIXES`.
+_PROD_MEDIA_PATHS = ("/media/avatar",)
+_media_http = None
+_media_http_lock = threading.Lock()
+
+
+class _MediaMissing(Exception):
+    """Источник ответил, что картинки нет (404/410 или не картинка) — показывать нечего."""
+
+
+def _media_client():
+    global _media_http
+    if _media_http is None:
+        with _media_http_lock:
+            if _media_http is None:
+                import httpx
+                #Без переходов по переадресации: адрес проверен ДО запроса, и переход
+                #увёл бы загрузку на хост, которого проверка не видела.
+                _media_http = httpx.Client(timeout=15.0, follow_redirects=False,
+                                           headers={"User-Agent": _MEDIA_UA})
+    return _media_http
+
+
+def _download_image(url: str, limit: int):
+    """(mime, байты) картинки. Размер режем по ходу загрузки, а не после неё."""
+    from desktop import media_cache
+    with _media_client().stream("GET", url) as r:
+        if r.status_code in (404, 410):
+            raise _MediaMissing()
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        mime = (r.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if mime not in media_cache.ALLOWED_MIME:
+            raise _MediaMissing()
+        buf = bytearray()
+        for chunk in r.iter_bytes():
+            buf += chunk
+            if len(buf) > limit:
+                raise RuntimeError("картинка больше предела кэша")
+        return mime, bytes(buf)
+
+
+def _klipy_url_ok(url: str) -> bool:
+    """Гифка с CDN Klipy — то же правило, что у сервера (`gif_service.is_allowed_url`),
+    плюс только https и без порта и учётных данных в адресе: загрузку делает уже
+    программа, и всё, что правило сервера не проверяет, здесь закрыто явно."""
+    from urllib.parse import urlsplit
+    from app import gif_service
+    try:
+        parts = urlsplit(url or "")
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme == "https" and port is None and not parts.username
+            and not parts.password and gif_service.is_allowed_url(url))
+
+
+def _image_response(mime: str, body: bytes):
+    from fastapi import Response
+    #Час в памяти окна: этого хватает на сеанс, а между запусками картинку держит наш
+    #кэш на диске, а не профиль браузера.
+    return Response(content=body, media_type=mime, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+def _serve_klipy(url: str):
+    from fastapi import Response
+    from fastapi.responses import RedirectResponse
+    from desktop import media_cache
+    if not _klipy_url_ok(url):
+        return Response(status_code=400)
+    try:
+        mime, body = media_cache.fetch_through(
+            "gif", url, lambda: _download_image(url, media_cache.MAX_ITEM_BYTES["gif"]))
+    except _MediaMissing:
+        return Response(status_code=404)
+    except Exception as e:      # noqa: BLE001
+        #Кэш не обязан работать: гифка уходит прямо с CDN, как до появления кэша.
+        _LOG.info(f"[media-cache] гифка мимо кэша: {type(e).__name__}: {e}")
+        return RedirectResponse(url, status_code=302)
+    return _image_response(mime, body)
+
+
+def _media_base() -> str:
+    """Адрес боя для картинок: тот же, на который программа синхронизируется."""
+    try:
+        from data import app_settings
+        return (app_settings.get_api_url() or "").rstrip("/")
+    except Exception:      # noqa: BLE001
+        return ""
+
+
+def _serve_avatar(query: str):
+    from fastapi import Response
+    from fastapi.responses import RedirectResponse
+    from app import media_refs
+    from desktop import media_cache
+    base = _media_base()
+    if not base or not query:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    url = f"{base}{media_refs.PATH}?{query}"
+    try:
+        mime, body = media_cache.fetch_through(
+            "avatar", url, lambda: _download_image(url, media_cache.MAX_ITEM_BYTES["avatar"]))
+    except _MediaMissing:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    except Exception as e:      # noqa: BLE001
+        _LOG.info(f"[media-cache] аватарка мимо кэша: {type(e).__name__}: {e}")
+        return RedirectResponse(url, status_code=302)
+    return _image_response(mime, body)
+
+
+def install_media_cache(app) -> None:
+    """Раздача картинок мессенджера из кэша: `/desk/media?u=<гифка Klipy>` и
+    `/media/avatar?…` (подписанная ссылка боя), плюс размер и очистка для настроек.
+
+    Входа картинки не требуют: `<img>` не шлёт заголовок Authorization. Отдаём только
+    то, что и так доступно по этому адресу: гифки CDN — всем, аватарка — владельцу
+    подписанной ссылки. Запросы со сторонних сайтов (`Sec-Fetch-Site: cross-site`)
+    отвергаем: иначе чужая страница по скорости ответа узнавала бы, какие гифки
+    человек смотрел. Размер и очистка — только вошедшему (`_local_caller_ok`)."""
+    from fastapi import Request, Response
+    from starlette.concurrency import run_in_threadpool
+    from desktop import media_cache
+
+    if getattr(app, "_gb_media_cache", False):
+        return
+    app._gb_media_cache = True
+
+    @app.middleware("http")
+    async def _media_from_cache(request: Request, call_next):
+        path = request.url.path
+        #`/media/avatar` есть и среди маршрутов `server/app`, поэтому перехват — здесь, до
+        #маршрутизации: локальная ручка проверяла бы подпись боя своим секретом.
+        if path not in _PROD_MEDIA_PATHS + ("/desk/media",):
+            return await call_next(request)
+        if request.method not in ("GET", "HEAD"):
+            return Response(status_code=405)
+        if (request.headers.get("sec-fetch-site") or "").lower() == "cross-site":
+            return Response(status_code=403)
+        #Загрузка и диск — блокирующие: в пуле потоков, а не на цикле событий (§4.42).
+        if path == "/desk/media":
+            return await run_in_threadpool(_serve_klipy, request.query_params.get("u", ""))
+        return await run_in_threadpool(_serve_avatar, request.url.query)
+
+    @app.get("/desk/media/stats")
+    def _desk_media_stats(request: Request):
+        if not _local_caller_ok(request.headers.get("authorization", "")):
+            return Response(status_code=401)
+        return media_cache.stats()
+
+    @app.post("/desk/media/clear")
+    def _desk_media_clear(request: Request):
+        if not _local_caller_ok(request.headers.get("authorization", "")):
+            return Response(status_code=401)
+        removed = media_cache.purge()
+        return {"ok": True, "removed": removed, **media_cache.stats()}
+
+    #Оба — в НАЧАЛО списка: заглушка SPA зарегистрирована раньше и перехватила бы их.
+    for _ in range(2):
+        app.router.routes.insert(0, app.router.routes.pop())
+    #Просроченное убираем на старте, в фоне: на холодном диске обход каталога — не то,
+    #чего стоит ждать перед первым кадром окна.
+    threading.Thread(target=media_cache.sweep, name="gb-media-sweep", daemon=True).start()
 
 
 def install_remote_vector() -> None:
@@ -2537,6 +2725,10 @@ def _purge_previous_user(login: str) -> None:
             #«no such table: grades». Проверено вживую — 11 таблиц превращались в 1.
             core.DBManager.init()
             _LOG.info("[local-api] база синхронизации заведена заново под нового владельца")
+            #Картинки, которые видел прежний человек (аватарки его собеседников, гифки
+            #из его переписки), уходят вместе с его базой.
+            from desktop import media_cache
+            media_cache.purge()
     except Exception as e:                          # noqa: BLE001
         _LOG.warning(f"[local-api] владельца базы синхронизации сменить не удалось: {e}")
 

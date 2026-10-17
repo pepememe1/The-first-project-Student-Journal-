@@ -20,6 +20,7 @@ import { playMentionPing } from '@/utils/pingSound'
 import { draftFor, saveDraft, clearDraft } from '@/utils/drafts'
 import { pollInterval, reconnectDelay } from '@/utils/livePolling'
 import { resolveIncoming } from '@/utils/messageMerge'
+import { useGifStore } from '@/stores/gif'
 
 // Частота тика и паузы переподключения живут в utils/livePolling.js — там же
 // объяснено, почему интервала два и почему опрос не выключен совсем. Здесь только
@@ -532,10 +533,16 @@ export const useMessengerStore = defineStore('messenger', () => {
     } catch (e) {
       //Отдельная ветка для «хранилище не настроено»: это не сбой сети, и человеку надо
       //сказать правду, а не «попробуйте ещё раз».
-      if (e?.response?.status === 503) setNotice('Хранилище файлов пока не настроено')
-      else if (e?.response?.status === 413) setNotice('Файл слишком большой')
-      else if (e?.response?.status === 415) setNotice('Такой тип файла не поддерживается')
-      else _handleSendError(e)
+      const st = e?.response?.status
+      const detail = e?.response?.data?.detail
+      if (st === 503) setNotice('Хранилище файлов пока не настроено')
+      else if (st === 413) setNotice('Файл слишком большой')
+      else if (st === 415) setNotice('Такой тип файла не поддерживается')
+      //409 — файл не дошёл до хранилища, 502 — хранилище не ответило (аудит 17.10.2026):
+      //общий разбор ошибок отправки эти коды молча пропускал, и неудача выглядела никак.
+      else if (st === 409 || st === 502) {
+        setNotice((typeof detail === 'string' && detail) || 'Файл не отправлен — попробуйте ещё раз')
+      } else _handleSendError(e)
       return false
     } finally { sending.value = false }
   }
@@ -855,6 +862,9 @@ export const useMessengerStore = defineStore('messenger', () => {
     pollEvery = pollInterval({ wsAlive: false, hidden: false })
     pollTimer = setInterval(_tick, pollEvery)
     _connectWS()
+    //Программа: гифки пикера — в кэш картинок заранее, пока человек читает список чатов
+    //(см. stores/gif.js::warmup). На сайте и в телефоне это ничего не делает.
+    useGifStore().warmup()
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', _onVisibleAgain)
   }
   function stopPolling() {
@@ -1165,8 +1175,20 @@ export const useMessengerStore = defineStore('messenger', () => {
   }
 
   async function forwardMessages(ids, toConvIds) {
-    if (!ids.length || !toConvIds.length) return
-    try { await messengerApi.forward(ids, toConvIds); await loadChats() } catch { /* noop */ }
+    if (!ids.length || !toConvIds.length) return false
+    try {
+      await messengerApi.forward(ids, toConvIds)
+      await loadChats()
+      return true
+    } catch (e) {
+      //Отказ сервера обязан дойти до человека (аудит 17.10.2026): здесь стояло
+      //`catch { /* noop */ }`, и «в канал пишут только авторы», «вас заглушили», «слишком
+      //большая пачка» выглядели как успешная пересылка — окно закрывалось, а в чатах пусто.
+      if (isStaleSession(e)) return false
+      const detail = e?.response?.data?.detail
+      setNotice((typeof detail === 'string' && detail) || 'Не удалось переслать сообщения.')
+      return false
+    }
   }
 
   async function reportMessage(id, reasonCode, description = '') {

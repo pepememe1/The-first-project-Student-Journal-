@@ -137,10 +137,15 @@ def mascot_check(user_id: str):
 #     короткое окно вдвое шире этого — иначе тормоз рвал бы обычное рисование;
 #   • прогресс клиент шлёт по одному на пройденный вопрос, то есть единицы за минуту;
 #   • ответ/голос/отзыв — единичные действия человека.
+#   • пересылка (аудит 17.10.2026) считается СООБЩЕНИЯМИ, а не запросами: один запрос
+#     создаёт «источники × адресаты» строк, и счётчик `check()` видел бы его одним
+#     сообщением. Запрос при этом считается и там — как одно действие человека, — а объём
+#     живёт здесь. Пороги — с запасом для «переслать объявление в двадцать чатов».
 _BUCKETS = {
     "stroke":   ((10.0, 150), (60.0, 700)),
     "progress": ((10.0, 20), (60.0, 60)),
     "answer":   ((10.0, 15), (60.0, 60)),
+    "forward":  ((60.0, 400), (3600.0, 3000)),
 }
 _BUCKET_DEFAULT = ((10.0, 20), (60.0, 60))
 _bucket_events: dict = defaultdict(deque)   # (корзина, user_id) -> deque[float]
@@ -149,7 +154,15 @@ _bucket_events: dict = defaultdict(deque)   # (корзина, user_id) -> deque
 def bucket_check(bucket: str, user_id: str) -> int:
     """0 — можно; иначе сколько СЕКУНД ждать. Метка при отказе не пишется (окно должно
     истекать само, а не продлеваться самим же спамом — то же правило, что в `check`)."""
-    if not user_id:
+    return bucket_take(bucket, user_id, 1)
+
+
+def bucket_take(bucket: str, user_id: str, n: int) -> int:
+    """Как `bucket_check`, но за ОДИН раз берётся `n` событий — все или ни одного.
+
+    Нужен пакетным действиям: пересылка 30 сообщений в 5 чатов — это 150 строк, и
+    проверять их по одной значило бы получить половину пачки и отказ посередине."""
+    if not user_id or n <= 0:
         return 0
     limits = _BUCKETS.get(bucket, _BUCKET_DEFAULT)
     horizon = max(w for w, _ in limits)
@@ -159,11 +172,15 @@ def bucket_check(bucket: str, user_id: str) -> int:
         while dq and dq[0] <= now - horizon:
             dq.popleft()
         for window, limit in limits:
+            if n > limit:
+                return max(1, int(window))           #не влезет в окно никогда
             edge = now - window
             in_window = [t for t in dq if t > edge]
-            if len(in_window) >= limit:
-                return max(1, int(min(in_window) + window - now) + 1)
-        dq.append(now)
+            if len(in_window) + n > limit:
+                #Ждать, пока из окна выпадет столько старых меток, сколько не хватает.
+                need = len(in_window) + n - limit
+                return max(1, int(sorted(in_window)[need - 1] + window - now) + 1)
+        dq.extend([now] * n)
         #Уборка простаивающих корзин — тем же приёмом и по той же причине, что `_gc` выше:
         #иначе словарь растёт по ключу на каждого, кто хоть раз чем-то щёлкнул.
         if len(_bucket_events) > _MAX_ENTRIES:

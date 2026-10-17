@@ -19,6 +19,7 @@
 import { ref } from 'vue'
 
 import { useLocaleStore } from '@/stores/locale'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 defineProps({
   src: { type: String, required: true },
@@ -32,7 +33,7 @@ const state = ref('loading') // loading | ok | error
 <template>
   <span class="gb-gif" :class="'gb-gif--' + state">
     <img
-      :src="src"
+      :src="mediaSrc(src)"
       :alt="alt"
       decoding="async"
       loading="lazy"

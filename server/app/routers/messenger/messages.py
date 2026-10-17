@@ -70,16 +70,10 @@ def messages(conv_id: str, before: int = Query(0), after: int = Query(0),
     удалённые у всех — тумбстоуном. Всегда в хронологическом порядке (старые→новые)."""
     part = _require_participant(db, conv_id, user)
     limit = max(1, min(int(limit or _DEFAULT_PAGE), _MAX_PAGE))
-    hidden = _hidden_ids(db, conv_id, user.id)
 
-    q = db.query(Message).filter(Message.conversation_id == conv_id)
-    if hidden:
-        q = q.filter(~Message.id.in_(hidden))
-    #«Удалённая у себя» переписка: всё, что было до очистки, пользователю не показываем.
-    if part.cleared_upto_id:
-        q = q.filter(Message.id > part.cleared_upto_id)
-    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
-        q = q.filter(Message.created_at > part.cleared_at)
+    #«Удалённая у себя» переписка и скрытые сообщения — одной дверью (`_personal_view`).
+    q = _personal_view(db, db.query(Message).filter(Message.conversation_id == conv_id),
+                       conv_id, part, user.id)
 
     if after:
         rows = q.filter(Message.id > after).order_by(Message.id.asc()).limit(limit).all()
@@ -103,13 +97,11 @@ def message_thread(conv_id: str, message_id: int,
                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Треды: ответы на КОНКРЕТНОЕ сообщение этой беседы (см. `_attach_reply_counts`).
     Своей сущности «ветки» не заводим — фильтр по уже существующему `reply_to_id`."""
-    _require_participant(db, conv_id, user)
-    hidden = _hidden_ids(db, conv_id, user.id)
+    part = _require_participant(db, conv_id, user)
     q = (db.query(Message)
          .filter(Message.conversation_id == conv_id, Message.reply_to_id == message_id))
-    if hidden:
-        q = q.filter(~Message.id.in_(hidden))
-    rows = q.order_by(Message.id.asc()).all()
+    #Очищенное у себя не возвращается и веткой ответов — те же границы, что у ленты.
+    rows = _personal_view(db, q, conv_id, part, user.id).order_by(Message.id.asc()).all()
     names = _names_for(db, [m.sender_id for m in rows])
     out = _msgs_out(db, rows, user.id, names)
     _attach_reactions(db, out, user.id)
@@ -127,16 +119,7 @@ def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
     needle = (q or "").strip().lower()
     if not needle:
         return {"messages": []}
-    hidden = _hidden_ids(db, conv_id, user.id)
-    qq = (db.query(Message)
-          .filter(Message.conversation_id == conv_id, Message.deleted_at == "",
-                  Message.kind == "text"))
-    if part.cleared_upto_id:
-        qq = qq.filter(Message.id > part.cleared_upto_id)
-    if part.cleared_at:                      #legacy-строки (очищены до id-границы)
-        qq = qq.filter(Message.created_at > part.cleared_at)
-    if hidden:
-        qq = qq.filter(~Message.id.in_(hidden))
+    qq = _visible_messages_query(db, conv_id, part, user.id)
     rows = qq.order_by(Message.id.desc()).limit(2000).all()   #верхняя граница выборки
     limit = max(1, min(int(limit or 50), 100))
     matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
@@ -667,14 +650,13 @@ def unpin_message(mid: int, user: User = Depends(get_current_user), db: Session 
 def pinned_messages(conv_id: str, user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
     """Закреплённые сообщения беседы (для плашки сверху)."""
-    _require_participant(db, conv_id, user)
-    hidden = _hidden_ids(db, conv_id, user.id)
+    part = _require_participant(db, conv_id, user)
     q = (db.query(Message)
          .filter(Message.conversation_id == conv_id, Message.pinned == True,  # noqa: E712
                  Message.deleted_at == ""))
-    if hidden:
-        q = q.filter(~Message.id.in_(hidden))
-    rows = q.order_by(Message.id.desc()).all()
+    #Закреп — общий для беседы, но очищенная у себя история им не возвращается: иначе
+    #плашка сверху показывала бы ровно то, что человек только что стёр.
+    rows = _personal_view(db, q, conv_id, part, user.id).order_by(Message.id.desc()).all()
     #⚠️ Вложение отдаём и здесь. Оно терялось на трёх путях сразу (находка Полковника
     #25.08.2026): в ленте карточка файла была, а в закреплённых и в списке чатов —
     #нет. Расхождение между сериализациями ОДНОГО объекта замечают в последнюю
@@ -684,16 +666,98 @@ def pinned_messages(conv_id: str, user: User = Depends(get_current_user),
     return {"pinned": out}
 
 
+#Пределы ОДНОЙ пересылки (аудит 17.10.2026). Обработчик создаёт «источники × адресаты»
+#строк в одной транзакции под единственным писателем SQLite, а счётчик флуда видит запрос
+#одним сообщением: без пределов один запрос заводил сколько угодно сообщений (50 повторов
+#одного id на два одинаковых адресата давали 100 строк). Сто источников — выделение
+#«как в Telegram»; двадцать адресатов — объявление по всем группам потока.
+_FORWARD_MAX_SOURCES = 100
+_FORWARD_MAX_TARGETS = 20
+_FORWARD_MAX_TOTAL = 200
+
+
+def _unique(values) -> list:
+    """Без повторов, порядок — как прислал клиент (порядок пересылки виден в ленте)."""
+    seen, out = set(), []
+    for v in values:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 @router.post("/messages/forward")
 def forward_messages(payload: dict = Body(...),
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Переслать сообщения в другие беседы. Пропускаем адресатов, где пользователь не
-    участник, и источники, которых он не видит/удалённые. Копия несёт снимок источника."""
-    mids = [int(x) for x in (payload.get("message_ids") or [])]
-    targets = [str(x) for x in (payload.get("to_conversation_ids") or [])]
+    участник, и источники, которых он не видит/удалённые. Копия несёт снимок источника.
+
+    🔒 ПЕРЕСЫЛКА — ТОЖЕ ЗАПИСЬ (аудит 17.10.2026). Здесь проверялись только участие и
+    блокировка лички, а запреты обычной отправки — нет: читатель канала публиковал в него
+    пересылкой, а заглушённый в группе (`/mute`) продолжал писать ею же. Теперь по КАЖДОМУ
+    адресату — та же дверь, что у отправки и правки (`_ensure_may_write`, §4.27), без
+    счётчика флуда: его запрос проходит один раз, а объём пачки считается отдельно.
+
+    ⚠️ Отказ по ЛЮБОМУ адресату отменяет всю пересылку: половина пачки в одних чатах и
+    тишина в других хуже честного отказа, после которого человек уберёт лишний чат."""
+    try:
+        mids = _unique(int(x) for x in (payload.get("message_ids") or []))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail="Неверный список сообщений") from e
+    targets = _unique(str(x) for x in (payload.get("to_conversation_ids") or []))
     if not mids or not targets:
         raise HTTPException(status_code=400, detail="Нужны message_ids и to_conversation_ids")
-    _guard_can_write(db, user)               #пересылка — тоже создание сообщений
+    if len(mids) > _FORWARD_MAX_SOURCES:
+        raise HTTPException(status_code=400,
+                            detail=f"За раз можно переслать не больше {_FORWARD_MAX_SOURCES} сообщений")
+    if len(targets) > _FORWARD_MAX_TARGETS:
+        raise HTTPException(status_code=400,
+                            detail=f"За раз можно выбрать не больше {_FORWARD_MAX_TARGETS} чатов")
+
+    #Источники отбираются один раз: что можно переслать, от адресата не зависит.
+    sources = []
+    for mid in mids:
+        src = db.query(Message).filter(Message.id == mid).first()
+        if src is None or src.deleted_at:
+            continue
+        if _participant(db, src.conversation_id, user.id) is None:
+            continue                       #нельзя переслать то, что не видишь
+        #§12: отчёт по группе — это оценки ВСЕЙ группы. Куда он поедет дальше, решает
+        #куратор/администрация; родитель или студент, получивший кнопку, переслать её
+        #уже не может (иначе успеваемость группы разошлась бы по чужим чатам).
+        if (src.kind or "") == "report" and user.role not in ("teacher", "admin"):
+            continue
+        #🔒 Карточки активности и доски НЕ пересылаются вовсе. Они привязаны к своей
+        #беседе: открыть их снаружи нельзя (403 в `_require_activity_participant`), то
+        #есть в чужой ленте повисла бы кнопка, которая ни у кого не работает, — а
+        #вместе с ней уехали бы заголовок и статус (заголовок пишет преподаватель, там
+        #бывает тема контрольной). Возражение Полковника, 15.08.2026.
+        if (src.kind or "") in ("activity", "board"):
+            continue
+        sources.append(src)
+
+    #Адресаты: в чужую беседу переслать нельзя (пропуск, как и раньше), а в свою — только
+    #если в неё сейчас можно писать. Блокировку лички эта дверь проверяет тоже, и отказ
+    #у неё ОБЩИЙ: он не имеет права раскрывать блокировку.
+    allowed: list[str] = []
+    for conv_id in targets:
+        part = _participant(db, conv_id, user.id)
+        if part is None:
+            continue
+        _ensure_may_write(db, _conversation(db, conv_id), part, user, new_message=False)
+        allowed.append(conv_id)
+
+    total = len(sources) * len(allowed)
+    if total > _FORWARD_MAX_TOTAL:
+        raise HTTPException(status_code=400,
+                            detail=f"За раз можно переслать не больше {_FORWARD_MAX_TOTAL} "
+                                   f"сообщений с учётом всех чатов — выберите меньше")
+    if total:
+        _guard_flood(db, user)               #одно действие человека — одна отметка
+        wait = msg_limit.bucket_take("forward", user.id, total)
+        if wait:
+            raise HTTPException(status_code=429, headers={"Retry-After": str(wait)},
+                                detail=f"Слишком много пересылок подряд. Подождите {wait} с.")
     made = 0
     #🔥 РАССЫЛКА И ХУК — ТОЛЬКО ТУДА, КУДА РЕАЛЬНО ЛЕГЛО СООБЩЕНИЕ (20.09.2026, находка
     #ревью M05). Ниже стоял второй проход ПО ИСХОДНОМУ СПИСКУ `targets`, то есть по
@@ -707,53 +771,34 @@ def forward_messages(payload: dict = Body(...),
     #написал». То есть посторонний двигал чужое обращение в очереди модерации, ничего
     #в него не отправив.
     #
-    #⚠️ Дубли из списка тоже схлопываем: один и тот же адресат, присланный дважды, давал
-    #две рассылки и два прохода хука по одной беседе.
-    delivered: list[str] = []
-    for conv_id in targets:
-        if _participant(db, conv_id, user.id) is None:
-            continue                       #в чужую беседу переслать нельзя
-        #🔒 Блокировку проверяем и здесь. Без этого запрет обходился пересылкой: участие в
-        #беседе у заблокированного осталось, и «переслать» клало в ту же личку что угодно.
-        #Отказ ОБЩИЙ, как и при отправке, — он не имеет права раскрывать блокировку.
-        _guard_direct_write(db, _conversation(db, conv_id), user)
-        made_here = 0
-        for mid in mids:
-            src = db.query(Message).filter(Message.id == mid).first()
-            if src is None or src.deleted_at:
-                continue
-            if _participant(db, src.conversation_id, user.id) is None:
-                continue                   #нельзя переслать то, что не видишь
-            #§12: отчёт по группе — это оценки ВСЕЙ группы. Куда он поедет дальше, решает
-            #куратор/администрация; родитель или студент, получивший кнопку, переслать её
-            #уже не может (иначе успеваемость группы разошлась бы по чужим чатам).
-            if (src.kind or "") == "report" and user.role not in ("teacher", "admin"):
-                continue
-            #🔒 Карточки активности и доски НЕ пересылаются вовсе. Они привязаны к своей
-            #беседе: открыть их снаружи нельзя (403 в `_require_activity_participant`), то
-            #есть в чужой ленте повисла бы кнопка, которая ни у кого не работает, — а
-            #вместе с ней уехали бы заголовок и статус (заголовок пишет преподаватель, там
-            #бывает тема контрольной). Возражение Полковника, 15.08.2026.
-            if (src.kind or "") in ("activity", "board"):
-                continue
-            sender = db.query(User).filter(User.id == src.sender_id).first()
+    #⚠️ Дубли схлопнуты ещё на входе (`_unique`): повтор адресата давал вторую рассылку и
+    #второй проход хука, а повтор источника — вторую копию того же сообщения.
+    senders = {u.id: u for u in db.query(User).filter(
+        User.id.in_({s.sender_id for s in sources if s.sender_id})).all()} if sources else {}
+    #Ни одно сообщение не прошло отбор — ни для одной беседы не случилось НИЧЕГО, и
+    #сообщать о ней некому.
+    delivered: list[str] = allowed if sources else []
+    for conv_id in delivered:
+        for src in sources:
+            sender = senders.get(src.sender_id)
             #Источник пересылки — исходный автор оригинала (а не тот, кто раньше переслал).
             db.add(Message(
                 conversation_id=conv_id, sender_id=user.id, body=src.body, created_at=_now(),
                 #Тип и формат обязаны переехать вместе с телом: без них пересланная кнопка
                 #отчёта превращалась в текстовое сообщение с сырым id («rpt:К75/1|3»).
                 kind=(src.kind or "text"), body_format=(src.body_format or "markdown"),
+                #🔥 И ФАЙЛ ТОЖЕ (аудит 17.10.2026). Копия получала `kind="file"` без
+                #`attachment_id`: отправителю «переслано», а у получателя карточка без
+                #файла — при пустой подписи сообщение не несло вообще ничего. Пересылка
+                #ссылается на ТОТ ЖЕ файл (models.Attachment), а скачать его участник
+                #беседы-адресата может через это видимое сообщение (`attachment_url`).
+                attachment_id=(src.attachment_id or ""),
                 fwd_from_sender_id=(src.fwd_from_sender_id or src.sender_id),
                 fwd_from_conv_id=(src.fwd_from_conv_id or src.conversation_id),
                 fwd_from_created_at=(src.fwd_from_created_at or src.created_at),
                 fwd_sender_name=(src.fwd_sender_name or (sender.full_name if sender else "")),
             ))
-            made_here += 1
-        #Ни одно сообщение не прошло отбор — для этой беседы не случилось НИЧЕГО, и
-        #сообщать о ней некому.
-        if made_here and conv_id not in delivered:
-            delivered.append(conv_id)
-        made += made_here
+            made += 1
     #Пересылка в ⚙ — тоже обращение, и маршрут у неё тот же: в одной транзакции (F-14).
     mod_replies = {cid: _route_moderation(db, cid, user, "") for cid in delivered}
     db.commit()

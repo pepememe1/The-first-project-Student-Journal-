@@ -82,37 +82,102 @@ function findInZip(buf, wanted) {
   throw new Error(`в архиве нет ${wanted}`)
 }
 
-async function inflateRaw(chunk) {
+/**
+ * 🔒 ПРЕДЕЛЫ ПРЕДПРОСМОТРА DOCX (аудит 17.10.2026).
+ *
+ * Сжатие у ZIP — до тысячи раз, поэтому предел размера ФАЙЛА ничего не говорит о
+ * размере РАСПАКОВАННОГО: архив в 4 КБ разворачивался в 4 млн знаков, а распаковка
+ * целиком (`Response.arrayBuffer()`) и строка поверх неё могли съесть память вкладки
+ * или окна программы у получателя — на одном открытии предпросмотра.
+ * Теперь распаковка идёт ПОРЦИЯМИ и обрывается на `xmlBytes`; текста показываем не
+ * больше `chars` знаков и `paragraphs` абзацев. 4 МБ разметки — это сотня с лишним
+ * страниц обычного документа: для «убедиться, что это тот файл» с запасом.
+ */
+export const DOCX_PREVIEW_LIMITS = Object.freeze({
+  xmlBytes: 4 * 1024 * 1024,
+  chars: 200_000,
+  paragraphs: 5_000,
+})
+
+/** Метка в конце обрезанного предпросмотра — тем же словом, что у `plainText`. */
+export const DOCX_CUT_MARK = '[…документ показан не целиком…]'
+
+/**
+ * Распаковать deflate-raw, но не больше `limit` байт.
+ * Возвращает `{ bytes, truncated }`; лишнее НЕ распаковывается (поток отменяется).
+ */
+export async function inflateRaw(chunk, limit = DOCX_PREVIEW_LIMITS.xmlBytes) {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error('браузер не умеет распаковывать')
   }
-  const stream = new Blob([chunk]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
-  return new Uint8Array(await new Response(stream).arrayBuffer())
+  const reader = new Blob([chunk]).stream()
+    .pipeThrough(new DecompressionStream('deflate-raw')).getReader()
+  const parts = []
+  let total = 0
+  let truncated = false
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const room = limit - total
+    if (value.length > room) {
+      if (room > 0) parts.push(value.subarray(0, room))
+      total = limit
+      truncated = true
+      // Дальше не распаковываем вовсе: отменённый поток не тратит ни память, ни время.
+      try { await reader.cancel() } catch { /* поток уже закрыт — отменять нечего */ }
+      break
+    }
+    parts.push(value)
+    total += value.length
+  }
+  const bytes = new Uint8Array(total)
+  let at = 0
+  for (const p of parts) { bytes.set(p, at); at += p.length }
+  return { bytes, truncated }
 }
 
 /**
- * Текст из DOCX. Возвращает абзацы строками.
+ * Текст из DOCX. Возвращает абзацы строками; обрезанный предпросмотр кончается
+ * абзацем `DOCX_CUT_MARK`.
  *
  * ⚠️ Разбираем разметку РЕГУЛЯРКАМИ по `<w:p>`/`<w:t>`, а не DOM-парсером: строить
  * XML-дерево на документе в мегабайт ради текста — лишняя память на телефоне, а
  * структура здесь ровно та, что нам нужна, и она стабильна.
  */
-export async function docxText(buf) {
+export async function docxText(buf, limits = DOCX_PREVIEW_LIMITS) {
   const entry = findInZip(buf, 'word/document.xml')
   const raw = new Uint8Array(buf).subarray(entry.start, entry.end)
-  // method 0 — файл лежит без сжатия (так бывает у мелких документов).
-  const xmlBytes = entry.method === 0 ? raw : await inflateRaw(raw)
+  // method 0 — файл лежит без сжатия (так бывает у мелких документов). Предел тот же:
+  // «без сжатия» не значит «маленький».
+  let xmlBytes, truncated
+  if (entry.method === 0) {
+    truncated = raw.length > limits.xmlBytes
+    xmlBytes = truncated ? raw.subarray(0, limits.xmlBytes) : raw
+  } else {
+    ({ bytes: xmlBytes, truncated } = await inflateRaw(raw, limits.xmlBytes))
+  }
   const xml = new TextDecoder().decode(xmlBytes)
 
   const paragraphs = []
+  let chars = 0
+  // Обрыв посреди разметки безопасен: кусок текста берётся только из ЗАКРЫТОГО `<w:t>`,
+  // и недописанный хвост последнего абзаца просто не совпадёт.
   for (const p of xml.split(/<w:p[ >]/).slice(1)) {
     let text = ''
     for (const m of p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)) text += m[1]
     // Разрыв строки внутри абзаца Word пишет отдельным тегом.
     text = text.replace(/<w:br\s*\/?>/g, '\n')
-    const clean = decodeEntities(text).trim()
-    if (clean) paragraphs.push(clean)
+    let clean = decodeEntities(text).trim()
+    if (!clean) continue
+    if (paragraphs.length >= limits.paragraphs || chars >= limits.chars) { truncated = true; break }
+    if (chars + clean.length > limits.chars) {
+      clean = clean.slice(0, limits.chars - chars)
+      truncated = true
+    }
+    paragraphs.push(clean)
+    chars += clean.length
   }
+  if (truncated) paragraphs.push(DOCX_CUT_MARK)
   return paragraphs
 }
 

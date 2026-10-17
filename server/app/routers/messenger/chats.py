@@ -6,6 +6,7 @@ chats.py — Жизненный цикл беседы: личный чат, «И
 сборка ответов — в `_common.py`; порядок регистрации маршрутов задаёт `__init__.py`.
 """
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
+from ... import media_refs
 
 
 @router.post("/chats/direct/{user_id}")
@@ -228,7 +229,7 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
             item["title"] = conv.title or ""
             #Аватарка группы/канала. У личного чата её нет намеренно: там лицо беседы —
             #сам собеседник, и он уже приходит в `peer`.
-            item["avatar"] = conv.avatar or ""
+            item["avatar"] = media_refs.avatar_out(conv.avatar, "c", conv.id)
         out.append(item)
     #Номер отчёта в строке списка («📊 Отчёт №3 по группе К75/1») — иначе там оказался бы
     #сырой id из тела сообщения.
@@ -444,7 +445,7 @@ def public_channels(q: str = Query(""), user: User = Depends(get_current_user),
         subs = (db.query(ConversationParticipant)
                 .filter(ConversationParticipant.conversation_id == c.id).count())
         out.append({"conversation_id": c.id, "title": c.title, "about": c.about,
-                    "avatar": c.avatar or "",
+                    "avatar": media_refs.avatar_out(c.avatar, "c", c.id),
                     "subscribers": subs, "joined": _participant(db, c.id, user.id) is not None})
     out.sort(key=lambda x: (x["title"] or "").lower())
     return {"channels": out}
@@ -796,7 +797,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
             "silenced": bool(p.silenced),          #«/mute» модератора — не путать с muted
             "online": bool(u) and u.login in onl,
             #Карточка участника в панели «О беседе»: аватар и контекст (группа/предметы).
-            "avatar": prefs.get("avatar", "") or "",
+            "avatar": media_refs.avatar_out(prefs.get("avatar", ""), "u", p.user_id),
             "bio": prefs.get("bio", "") or "",
             "profile_color": prefs.get("profile_color", "") or "",
             "profile_banner": prefs.get("profile_banner", "") or "",   #гифка-баннер карточки
@@ -820,7 +821,7 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
                                  .filter(ConversationIgnore.conversation_id == conv_id,
                                          ConversationIgnore.viewer_id == user.id).all())]
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
-            "avatar": conv.avatar or "",
+            "avatar": media_refs.avatar_out(conv.avatar, "c", conv.id),
             "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
             "my_role": part.role, "participants": people, "subscribers": len(people),
             #Свой id клиент иначе не знает (в JWT/сторе только логин+роль) — нужен, чтобы

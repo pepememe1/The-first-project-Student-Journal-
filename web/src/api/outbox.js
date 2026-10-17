@@ -62,6 +62,7 @@ import { computed, ref, watch } from 'vue'
 // Расширения «.js» здесь обязательны: очередь проверяется голым `node --test`, мимо
 // сборщика, а он путь без расширения не разрешает. Тот же случай уже был с grading.js.
 import { online } from './offlineSession.js'
+import { serverScope } from './server.js'
 
 const LS_PREFIX = 'gb.outbox.'          // НЕ 'gb.cache.' — переживает выход из аккаунта
 const LS_REJECTED = 'gb.outbox.rejected.'
@@ -139,9 +140,20 @@ export function uuidFromTempId(tempId) {
   return UUID_RE.test(raw) ? raw.toLowerCase() : ''
 }
 
+/**
+ * Владелец очереди: логин, а для «чужого» сервера — ещё и его адрес (`login@адрес`).
+ *
+ * 🔒 Очередь принадлежит паре «сервер + человек» (аудит 17.10.2026). С одним логином в
+ * ключе смена сервера кнопкой «⚙ Сервер» отправляла оценки, выставленные для первого,
+ * на второй — стоило войти там тем же логином. Для «своего» сервера суффикса нет
+ * (`serverScope` — ''), поэтому ключи уже накопленных очередей не меняются.
+ */
 function currentLogin() {
   try {
-    return JSON.parse(localStorage.getItem('gb.user') || 'null')?.login || ''
+    const login = JSON.parse(localStorage.getItem('gb.user') || 'null')?.login || ''
+    if (!login) return ''
+    const scope = serverScope()
+    return scope ? `${login}@${scope}` : login
   } catch {
     return ''
   }

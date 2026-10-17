@@ -154,7 +154,7 @@ function submit() {
         <div v-else class="flex flex-col gap-0.5">
           <button v-for="u in found" :key="u.id" type="button" @click="toggle(u)"
                   class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-bg2">
-            <Avatar :name="u.full_name" :src="u.avatar_url" :size="28" />
+            <Avatar :name="u.full_name" :src="u.avatar" :size="28" />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm">{{ u.full_name }}</span>
               <span v-if="u.groups?.length" class="block truncate text-[11px] text-text3">{{ u.groups.join(', ') }}</span>

@@ -129,7 +129,8 @@ def test_sections_without_mirror_are_proxied_whole(routes):
     unsynced = names - synced - incidental
     offenders = []
     for r in routes:
-        if "GET" not in r.methods or r.path.startswith(local_api._PROXY_PREFIXES):
+        if "GET" not in r.methods or r.path.startswith(
+                local_api._PROXY_PREFIXES + local_api._PROD_MEDIA_PATHS):
             continue
         try:
             src = inspect.getsource(r.endpoint)

@@ -5,7 +5,7 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .security import decode_token
+from .security import decode_token, is_access_payload
 from .models import User, AuthSession
 from . import audit, config, events, throttle, connect
 
@@ -137,8 +137,7 @@ def get_current_user(authorization: str = Header(None),
     #    сразу пошёл в журнал. Ради этого случая проверка и написана.
     #⚠️ Токены БЕЗ `typ` пускаем — это старый формат, они доживают свои пять часов.
     #Отвергать их значило бы выбить из аккаунта всех, кто вошёл до выкладки.
-    typ = payload.get("typ")
-    if typ is not None and typ != "access":
+    if not is_access_payload(payload):
         raise HTTPException(status_code=401,
                             detail="Этот токен не даёт доступа — войдите заново")
     #ЧЁРНЫЙ СПИСОК / отзыв: токен с jti валиден, только пока его сессия не revoked.

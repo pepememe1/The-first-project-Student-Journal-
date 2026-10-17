@@ -5,7 +5,7 @@ test_messenger.py — ядро мессенджера, Фаза 1 (личные 
 роль-скоуп (не-участник не читает/не пишет → 403); список чатов с непрочитанными; опрос
 новых по ?after=; отметку прочтения; связь ответа reply_to_id.
 """
-from conftest import make_admin, make_teacher, assign_teacher
+from conftest import make_admin, make_teacher, assign_teacher, honest_head_object
 from app.security import hash_password
 
 
@@ -638,6 +638,43 @@ def test_typing_still_reaches_the_other_participant(client, monkeypatch):
     assert delivered and delivered[0][0] == [b_id], delivered
 
 
+def test_typing_burst_is_relayed_once(client, monkeypatch):
+    """«Печатает…» — подсказка, а каждый сигнал — запрос к базе (кто участник). Клиент шлёт
+    его не чаще раза в 2 с, и всё, что чаще, — не человек: сервер держит частоту сам
+    (аудит 17.10.2026). Обратный ход: убери `_TypingGate` из сокета — доедут все пять."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+    from app.routers import messenger as mod
+    delivered = []
+
+    async def spy(ids, payload):
+        delivered.append((list(ids), payload))
+    monkeypatch.setattr(mod.ws_manager, "send_users", spy)
+
+    token = a["Authorization"].split(" ", 1)[1]
+    with client.websocket_connect("/web/messenger/ws", subprotocols=["bearer", token]) as wsconn:
+        for _ in range(5):
+            wsconn.send_json({"type": "typing", "conversation_id": conv})
+    assert len(delivered) == 1, f"всплеск «печатает…» ушёл целиком: {len(delivered)}"
+
+
+def test_typing_gate_limits_each_chat_and_the_whole_socket():
+    """Два предела: одна беседа — не чаще раза в `_TYPING_EVERY_S`, весь сокет — не чаще
+    раза в `_TYPING_ANY_S` (иначе перебор id бесед обходил бы первый). Память сокета не
+    растёт от перебора."""
+    from app.routers.messenger.ws import _TypingGate, _TYPING_ANY_S, _TYPING_EVERY_S
+    g = _TypingGate()
+    t0 = 100.0
+    assert g.allow("c1", t0)
+    assert not g.allow("c1", t0 + _TYPING_EVERY_S - 0.1), "одна беседа — слишком часто"
+    assert not g.allow("c2", t0 + _TYPING_ANY_S - 0.1), "перебор бесед обошёл предел сокета"
+    assert g.allow("c2", t0 + _TYPING_ANY_S + 0.01)
+    assert g.allow("c1", t0 + _TYPING_EVERY_S + 0.6)
+    for i in range(1000):
+        g.allow(f"x{i}", 1000.0 + i)
+    assert len(g._last_by_conv) <= 201
+
+
 def test_ws_rejects_bad_subprotocol_token(client):
     """Мусорный токен в сабпротоколе → соединение отклоняется (не открывается)."""
     import pytest
@@ -647,6 +684,35 @@ def test_ws_rejects_bad_subprotocol_token(client):
         with client.websocket_connect("/web/messenger/ws",
                                       subprotocols=["bearer", "not-a-jwt"]):
             pass
+
+
+def test_ws_opens_only_on_an_access_token(client):
+    """Сокет пускает ТОЛЬКО пропуск (access), как и HTTP (`security.is_access_payload`).
+
+    🔥 До 16.10.2026 тип не проверялся. Challenge второго фактора выдаётся ПОСЛЕ пароля,
+    но ДО кода и без `jti`, а токены без `jti` сокет пускал «как старый формат»: знающий
+    один пароль открывал живой канал чужого аккаунта без второго фактора — видел, в
+    каких беседах идёт переписка, и слал «печатает…». Refresh — тоже не пропуск.
+    Контроль в начале: настоящий access того же человека сокет открывает."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+    from app.db import SessionLocal
+    from app.models import User
+    from app.routers import mfa
+    _setup(client)
+    login = client.post("/auth/login", json={"login": "bob", "password": "studpass1"}).json()
+    with client.websocket_connect("/web/messenger/ws",
+                                  subprotocols=["bearer", login["access_token"]]):
+        pass
+    db = SessionLocal()
+    try:
+        challenge = mfa.make_challenge(db.query(User).filter(User.login == "bob").one())
+    finally:
+        db.close()
+    for wrong in (challenge, login["refresh_token"]):
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/web/messenger/ws", subprotocols=["bearer", wrong]):
+                pass
 
 
 # ── Защита от злоупотребления: анти-флуд, мьют, гейт создания, границы модерации ──────
@@ -1174,6 +1240,27 @@ def test_d8_mention_parsed_in_group(client):
                     json={"body": "@Боб, посмотри домашку"}, headers=a)
     msg = r.json()
     assert msg["mentions"] == [{"user_id": b_id, "silent": False, "loud": False}]
+
+
+def test_mention_needs_a_boundary_and_never_lives_inside_a_link(client):
+    """Отметка — с начала текста или после пробела/знака, не внутри слова и не в ссылке.
+
+    До 16.10.2026 «https://medium.com/@Боб» рассылал Бобу тихую отметку (`/@`), а
+    почтовый адрес читался как отметка по домену. Подсветка в ленте держит то же правило
+    (`web/tests/mentions.test.mjs`)."""
+    _, (a_id, a), (b_id, b), _ = _setup(client)
+    conv = _conv(client, a, b_id)
+
+    def mentions(body):
+        r = client.post(f"/web/messenger/chats/{conv}/messages", json={"body": body}, headers=a)
+        assert r.status_code == 200, r.text
+        return [m["user_id"] for m in r.json()["mentions"]]
+
+    assert mentions("привет @Боб") == [b_id]
+    assert mentions("(/@!Боб) срочно") == [b_id]
+    assert mentions("статья https://medium.com/@Боб") == []
+    assert mentions("путь medium.com/@Боб без схемы") == []
+    assert mentions("пишите на ivan@Боб.рф") == []
 
 
 def test_d8_silent_mention_marked(client):
@@ -2063,10 +2150,11 @@ def test_attachments_refuse_everything_that_should_be_refused(client, monkeypatc
 
     #Настраиваем фиктивное хранилище: подпись считается локально, наружу ничего не идёт.
     monkeypatch.setattr(storage, "MODE", "s3")
-    monkeypatch.setattr(storage, "MODE", "s3")
     for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
                  ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
         monkeypatch.setattr(storage, k, v)
+    #HEAD без сети: хранилище честно отвечает, что лёг заявленный файл.
+    monkeypatch.setattr(storage, "head_object", honest_head_object)
 
     #Чужая беседа — не участник.
     r = client.post("/web/messenger/uploads/sign", headers=b,
@@ -2190,6 +2278,7 @@ def test_someone_elses_attachment_cannot_be_signed_onto_a_message(client, monkey
     for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
                  ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
         monkeypatch.setattr(storage, k, v)
+    monkeypatch.setattr(storage, "head_object", honest_head_object)
 
     conv = client.post("/web/messenger/chats/group",
                        json={"title": "Общая", "member_ids": [b_id]}, headers=a).json()["conversation_id"]
@@ -2197,7 +2286,9 @@ def test_someone_elses_attachment_cannot_be_signed_onto_a_message(client, monkey
                     json={"conversation_id": conv, "name": "своё.pdf", "size": 10,
                           "mime": "application/pdf"})
     att = r.json()["attachment_id"]
-    client.post(f"/web/messenger/uploads/{att}/done", headers=a)
+    #Подтверждение обязано ПРОЙТИ: иначе отказ ниже пришёл бы из-за неготового
+    #вложения, а не из-за чужого — и тест проверял бы не то.
+    assert client.post(f"/web/messenger/uploads/{att}/done", headers=a).status_code == 200
 
     #Загрузил "a", отправить пытается "b" — участник той же беседы.
     r = client.post(f"/web/messenger/chats/{conv}/messages", headers=b,
@@ -2223,7 +2314,7 @@ def test_a_file_alone_is_a_valid_message(client, monkeypatch):
     for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
                  ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
         monkeypatch.setattr(storage, k, v)
-    monkeypatch.setattr(storage, "head_object", lambda key: {})
+    monkeypatch.setattr(storage, "head_object", honest_head_object)
 
     conv = client.post("/web/messenger/chats/group",
                        json={"title": "Только файл"}, headers=a).json()["conversation_id"]
@@ -2282,12 +2373,14 @@ def test_upload_confirmation_checks_what_actually_landed(client, monkeypatch):
                         lambda key: {"size": 100, "mime": "application/x-msdownload"})
     assert client.post(f"/web/messenger/uploads/{att}/done", headers=a).status_code == 415
 
-    #Всё сошлось — и размер записывается НАСТОЯЩИЙ, а не заявленный.
+    #Всё сошлось — и размер записывается НАСТОЯЩИЙ, а не заявленный. Настоящий здесь
+    #МЕНЬШЕ заявленного: больше заявленного не принимается вовсе (заявленное — резерв
+    #суточного потолка, test_attachment_lifecycle.py).
     att = sign()
-    monkeypatch.setattr(storage, "head_object", lambda key: {"size": 4242, "mime": "text/plain"})
+    monkeypatch.setattr(storage, "head_object", lambda key: {"size": 42, "mime": "text/plain"})
     r = client.post(f"/web/messenger/uploads/{att}/done", headers=a)
     assert r.status_code == 200, r.text
-    assert r.json()["attachment"]["size"] == 4242, "в базе осталось заявленное, а не реальное"
+    assert r.json()["attachment"]["size"] == 42, "в базе осталось заявленное, а не реальное"
 
 
 def test_signature_binds_the_content_type_and_download_carries_the_name():
@@ -2361,7 +2454,7 @@ def test_attachment_survives_every_serialization_path(client, monkeypatch):
     for k, v in (("ENDPOINT", "https://s3.example"), ("BUCKET", "gb"),
                  ("ACCESS_KEY", "key"), ("SECRET_KEY", "secret")):
         monkeypatch.setattr(storage, k, v)
-    monkeypatch.setattr(storage, "head_object", lambda key: {})
+    monkeypatch.setattr(storage, "head_object", honest_head_object)
 
     conv = client.post("/web/messenger/chats/group",
                        json={"title": "Пути"}, headers=a).json()["conversation_id"]

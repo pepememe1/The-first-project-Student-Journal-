@@ -18,6 +18,7 @@ import GifImage from '@/components/messenger/GifImage.vue'
 import { useGifStore } from '@/stores/gif'
 import { useTtsStore } from '@/stores/tts'
 import { renderMarkdownLite } from '@/utils/markdownLite'
+import { highlightMentions } from '@/utils/mentions'
 import { extractVideos, embedMode } from '@/utils/videoEmbed'
 import { isNativeApp } from '@/api/server'
 import { extractGifLinks } from '@/utils/gifEmbed'
@@ -63,6 +64,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import TimerStrip from '@/components/activity/timer/TimerStrip.vue'
 import PollMessage from '@/components/activity/poll/PollMessage.vue'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const locale = useLocaleStore()
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
@@ -446,11 +448,9 @@ function renderBody(msg) {
   //в ленте выглядели обычным текстом со слэшем. Набор форм — как у сервера (_MENTION_RE).
   // Клик по плашке открывает профиль отмеченного (см. onBodyClick) — уже отметку
   // сопоставили с user_id прямо здесь, чтобы не таскать это состояние отдельно.
-  return html.replace(/(\/?(?:@!?|!@))([A-Za-zА-Яа-яЁё]+)/g, (hit, _prefix, name) => {
-    const uid = mentionUidBySurname.value.get(name.toLowerCase())
-    return uid ? `<span class="mention" data-mention-uid="${uid}">${hit}</span>`
-               : `<span class="mention">${hit}</span>`
-  })
+  // ⚠️ Только текст между тегами и не внутри ссылок — см. utils/mentions.js (раньше
+  // замена портила href у ссылок вида «…/@user»).
+  return highlightMentions(html, (surname) => mentionUidBySurname.value.get(surname))
 }
 
 // Фаза 1 ссылок/видео (docs/done/MESSENGER-ATTACHMENTS-PLAN.md): клик по обычной ссылке в теле
@@ -2021,7 +2021,7 @@ function openActivities() {
           <button v-if="greetingGif" type="button" @click="sendGreetingGif"
                   class="mt-1 overflow-hidden rounded-lg border border-border2 transition-transform hover:scale-105"
                   :title="locale.t('chatThread.sendGreetingGif', 'Отправить приветствие')">
-            <img :src="greetingGif.thumb_url || greetingGif.url" alt=""
+            <img :src="mediaSrc(greetingGif.thumb_url || greetingGif.url)" alt=""
                  class="block h-28 w-auto max-w-[180px] object-cover" />
           </button>
           <p v-else-if="greetingGifLoading" class="mt-1 text-xs text-text3">{{ locale.t('common.loading') }}</p>

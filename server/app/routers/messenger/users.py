@@ -6,6 +6,7 @@ users.py — Собеседники: каталог, чужой профиль, 
 сборка ответов — в `_common.py`; порядок регистрации маршрутов задаёт `__init__.py`.
 """
 from ._common import *      # noqa: F401,F403 — роутеры, модели, хелперы
+from ... import media_refs
 
 
 @router.get("/users")
@@ -123,7 +124,8 @@ def user_shared(user_id: str, user: User = Depends(get_current_user),
     #слева аватарка канала или группы, справа название»). Отдаём её только здесь, где
     #зритель САМ состоит в беседе: картинку он и так видит в своём списке чатов.
     def _row(c):
-        return {"id": c.id, "title": c.title, "avatar": c.avatar or ""}
+        return {"id": c.id, "title": c.title,
+                "avatar": media_refs.avatar_out(c.avatar, "c", c.id)}
     groups = [_row(c) for c in convs if c.kind == "group"]
     channels = [_row(c) for c in convs if c.kind == "channel"]
     return {"groups": groups, "channels": channels}

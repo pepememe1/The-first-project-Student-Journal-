@@ -146,6 +146,9 @@ export const SETTINGS_CATS = [
     label: 'О программе',
     subs: [
       { id: 'version', i18n: 'settings.appVersion', label: 'Версия приложения' },
+      //Кэш картинок — только в программе для Windows (`device: 'desktop'`): на сайте и в
+      //телефоне картинками распоряжается браузер, и пункт открывал бы пустоту.
+      { id: 'mediaCache', i18n: 'settings.mediaCache', label: 'Кэш картинок', device: 'desktop' },
       { id: 'legal', i18n: 'settings.legal', label: 'Документы' },
     ],
   },

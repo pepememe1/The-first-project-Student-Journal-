@@ -13,6 +13,7 @@ import { ref, onMounted } from 'vue'
 import { X, Search, Star, Flame, ChevronLeft } from '@lucide/vue'
 import { useGifStore } from '@/stores/gif'
 import { useLocaleStore } from '@/stores/locale'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 // Оба пропса читает только шаблон (там они доступны по имени), поэтому результат
 // defineProps никуда не присваиваем — иначе линтер справедливо ругается на мёртвую
@@ -174,7 +175,7 @@ function send(item) {
           </button>
           <button v-for="c in categories" :key="c.query" type="button" @click="pickCategory(c)"
                   class="relative flex h-20 items-end overflow-hidden rounded-lg bg-bg2 p-2">
-            <img v-if="c.preview_url" :src="c.preview_url" :alt="c.label" loading="lazy"
+            <img v-if="c.preview_url" :src="mediaSrc(c.preview_url)" :alt="c.label" loading="lazy"
                  class="absolute inset-0 size-full object-cover" />
             <span class="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
             <span class="relative text-sm font-semibold capitalize text-white">{{ c.label }}</span>
@@ -196,7 +197,7 @@ function send(item) {
           <button v-for="it in items" :key="it.slug + it.id" type="button" @click="send(it)"
                   class="group relative overflow-hidden rounded-lg bg-bg2"
                   :style="{ aspectRatio: `${it.width || 1} / ${it.height || 1}` }">
-            <img :src="it.thumb_url" :alt="it.title" loading="lazy" class="size-full object-cover" />
+            <img :src="mediaSrc(it.thumb_url)" :alt="it.title" loading="lazy" class="size-full object-cover" />
             <!-- Звезда — как в Discord: видна при наведении, всегда видна для уже избранного. -->
             <span role="button" tabindex="0" @click.stop="gif.toggleFavorite(it)"
                   :aria-label="gif.isFavorite(it.slug) ? locale.t('gif.removeFavorite', 'Убрать из избранного') : locale.t('gif.addFavorite', 'В избранное')"

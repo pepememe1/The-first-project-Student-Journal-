@@ -38,6 +38,7 @@ import GifPicker from '@/components/messenger/GifPicker.vue'
 import ReportUserDialog from '@/components/messenger/ReportUserDialog.vue'
 import StampEgg from '@/components/easter/StampEgg.vue'
 import { useToast } from '@/composables/useToast'
+import { mediaSrc } from '@/utils/mediaSrc'
 
 const props = defineProps({
   editable: { type: Boolean, default: false },
@@ -409,7 +410,7 @@ async function sendMessage() {
          :class="editable ? 'cursor-pointer' : ''"
          :style="bannerUrl ? undefined : { background: plate }"
          @click="editable && (gifPickerFor = 'banner')">
-      <img v-if="bannerUrl" :src="bannerUrl" alt="" class="size-full object-cover"
+      <img v-if="bannerUrl" :src="mediaSrc(bannerUrl)" alt="" class="size-full object-cover"
            :class="{ 'cursor-zoom-in': !editable }"
            @click="!editable && (lightbox = bannerUrl)" />
       <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
@@ -629,7 +630,7 @@ async function sendMessage() {
          клик по фону закрывает (Влад). -->
     <div v-if="lightbox" class="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4"
          @click="lightbox = ''">
-      <img :src="lightbox" alt="" class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
+      <img :src="mediaSrc(lightbox)" alt="" class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
     </div>
   </div>
 </template>

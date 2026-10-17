@@ -4,9 +4,10 @@
 // профиля человека; для ролей вне списка (роль неизвестна/не передана — маскот,
 // групповой чат и т.п.) — инициалы по ФИО, как было. Единый вид во всех местах
 // (список чатов, карточка, каталог людей, модерация).
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
 import RoleAvatarIcon from '@/components/ui/RoleAvatarIcon.vue'
+import { mediaSrc } from '@/utils/mediaSrc'
 const locale = useLocaleStore()
 
 const props = defineProps({
@@ -31,6 +32,14 @@ const props = defineProps({
 const ROLE_ICONS = new Set(['admin', 'teacher', 'student', 'parent', 'moderation'])
 const hasRoleIcon = computed(() => ROLE_ICONS.has(props.role))
 
+//Картинка через `mediaSrc`: ссылка боя на аватарку открывается от адреса сервера, а
+//внутри программы гифка идёт через кэш (см. utils/mediaSrc.js).
+const shown = computed(() => mediaSrc(props.src))
+//Не загрузилась (сменили аватарку, а список ещё не перечитан; нет сети) — рисуем значок
+//роли или инициалы, а не пустой кружок. Новая ссылка — новая попытка.
+const failed = ref(false)
+watch(shown, () => { failed.value = false })
+
 const initials = computed(() => {
   const p = (props.name || '').trim().split(/\s+/)
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?'
@@ -39,9 +48,9 @@ const initials = computed(() => {
 
 <template>
   <div class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
-    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || src ? '' : 'bg-accent'">
-      <img v-if="src" :src="src" alt="" class="size-full object-cover"
-           :style="{ objectPosition: position }" />
+    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || (shown && !failed) ? '' : 'bg-accent'">
+      <img v-if="shown && !failed" :src="shown" alt="" class="size-full object-cover"
+           :style="{ objectPosition: position }" @error="failed = true" />
       <RoleAvatarIcon v-else-if="hasRoleIcon" :role="role" :color="color || undefined" />
       <span v-else class="grid size-full place-items-center font-bold text-white"
             :style="{ fontSize: Math.round(size * 0.4) + 'px' }">{{ initials }}</span>
