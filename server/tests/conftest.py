@@ -153,6 +153,17 @@ Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 
+def _forget_sync_anchor():
+    import os
+    from app import sync_clock
+    for path in (sync_clock.anchor_path(), sync_clock.restored_mark_path()):
+        if path and os.path.exists(path):
+            os.remove(path)
+
+
+_forget_sync_anchor()
+
+
 def fresh_app_state():
     """Пустая база и сброшенное состояние процесса — то, с чего начинает каждый тест.
 
@@ -162,6 +173,9 @@ def fresh_app_state():
     только в общем прогоне — поодиночке модуль оставался бы зелёным."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    #Пустая база на месте прежней — это свежая установка, а не восстановление из копии:
+    #якорь прошлого теста (`sync_clock.check_restore`) иначе засчитал бы её подменой.
+    _forget_sync_anchor()
     throttle.reset()
     events.reset()
     connect.reset()

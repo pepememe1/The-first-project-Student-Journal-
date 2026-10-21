@@ -513,6 +513,15 @@ def admin_slot_conflicts(group: str = Query(...), week: int = Query(...),
                                              room=room, teacher=teacher, subject=subject)
 
 
+@router.get("/admin/schedule/free-rooms")
+def admin_free_rooms(group: str = Query(...), week: int = Query(...), day: str = Query(...),
+                     pair_no: int = Query(...), user: User = Depends(require_admin),
+                     db: Session = Depends(get_db)):
+    """Свободные в этот слот аудитории — подсказка в поле «Аудитория» при замене пары."""
+    from ... import schedule_conflicts
+    return schedule_conflicts.free_rooms(db, group, week, day, pair_no)
+
+
 @router.delete("/admin/schedule/override/{ov_id:path}")
 def admin_schedule_override_delete(ov_id: str, user: User = Depends(require_admin),
                                    db: Session = Depends(get_db)):

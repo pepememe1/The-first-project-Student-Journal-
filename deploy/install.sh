@@ -276,6 +276,12 @@ for old in "$APP_DIR/server/gradebook_server.db"; do
     done
   fi
 done
+# Восстановленная база: метка рядом с ней — служба на первом старте сменит поколение
+# синка сама (`server/app/sync_clock.py::check_restore`). На новой машине якоря нет, и
+# забытый `--new-epoch` иначе дал бы программам молча разойтись с сервером.
+if [ -n "$RESTORE_DB" ]; then
+  touch "$STATE_DIR/.gradebook_server.db.restored"
+fi
 chown -R gradebook:gradebook "$STATE_DIR"
 
 # ── Код — только для чтения ────────────────────────────────────────────────────

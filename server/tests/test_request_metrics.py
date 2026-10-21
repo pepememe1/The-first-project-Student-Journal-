@@ -110,3 +110,63 @@ def test_product_wires_collector_and_protects_snapshot(client):
     assert "x-request-id" in response.headers
     assert sum(r["count"] for r in metrics.snapshot()["routes"]) > before
     assert client.get("/web/admin/server/metrics").status_code == 401
+
+
+def test_database_time_is_counted_inside_the_request(client):
+    """Время SQL внутри HTTP-запроса доезжает до снимка — и из `def`-ручек, которые FastAPI
+    уводит в пул потоков (21.10.2026). Без слушателя доля базы была бы нулём, и вопрос «где
+    узкое место» решался бы гаданием."""
+    from conftest import make_admin
+    from app.request_metrics import metrics
+    admin = make_admin(client)
+    assert client.get("/web/admin/server/metrics", headers=admin).status_code == 200
+    row = [r for r in metrics.snapshot()["routes"] if r["route"] == "/web/admin/users"
+           or r["route"] == "/auth/bootstrap-admin"]
+    assert row and row[0]["db_queries_per_request"] > 0, row
+    assert 0 < row[0]["db_share"] <= 1, row
+    #Текста запросов в снимке нет — только время и число.
+    assert "SELECT" not in str(metrics.snapshot())
+
+
+# ── Точность и загрузка (исследование 20.10.2026) ─────────────────────────────────────
+def test_p99_is_reported_with_its_honest_interval():
+    from app.request_metrics import RequestMetrics
+    m = RequestMetrics()
+    for i in range(256):
+        m.enter()
+        m.leave("/x", "GET", 200, (i + 1) / 1000, 0, False)
+    row = m.snapshot()["routes"][0]
+    lo, hi = row["p99_ci_ms"]
+    assert lo <= row["p99_ms"] <= hi
+    assert hi - lo >= 5, "p99 по 256 замерам — диапазон, а не точка"
+
+
+def test_startup_cpu_does_not_count_as_load():
+    """Живая проверка 21.10.2026: сразу после старта ρ показывала ~100 % — в счёт шёл
+    процессор, съеденный миграциями и прогревом ДО первого запроса."""
+    from app.request_metrics import RequestMetrics
+    m = RequestMetrics()
+    m._started -= 10             # «старт службы»: десять секунд…
+    m._cpu_started -= 10         # …все на процессоре
+    m.enter()
+    m.leave("/z", "GET", 200, 0.001, 0, False)
+    assert m.snapshot()["load"]["cpu_utilization"] < 0.5
+
+
+def test_littles_law_and_queue_factor():
+    """L = λ·W и множитель 1/(1 − ρ) отдаются в снимке; ρ ограничена [0, 1]."""
+    from app.request_metrics import RequestMetrics
+    m = RequestMetrics()
+    m.enter()                    # отсчёт загрузки начинается с первого запроса
+    m.leave("/y", "GET", 200, 0.2, 0, False)
+    m._started -= 100            # сто секунд работы
+    m._cpu_started -= 80         # из них 80 с процессорного времени
+    for _ in range(49):
+        m.enter()
+        m.leave("/y", "GET", 200, 0.2, 0, False)
+    load = m.snapshot()["load"]
+    assert abs(load["requests_per_s"] - 0.5) < 0.01
+    assert abs(load["mean_in_flight"] - 0.1) < 0.005          # 0.5 запроса/с × 0.2 с
+    assert 0.79 < load["cpu_utilization"] <= 0.81
+    assert 4.5 < load["queue_factor"] < 5.5                    # 1 / (1 − 0.8) = 5
+    assert load["warn"] is True

@@ -175,7 +175,8 @@ def full_at_start() -> bool:
         return False
 
 
-def apply_changes(db, changes: dict, skip=frozenset(), sent=None, sent_seq=None) -> int:
+def apply_changes(db, changes: dict, skip=frozenset(), sent=None, sent_seq=None,
+                  renumbered: bool = False) -> int:
     """Построчно вписать полученные записи в локальную базу. Возвращает число строк.
 
     Метки `updated_at` берём КАК ЕСТЬ — см. шапку модуля. Неизвестные модели молча
@@ -185,7 +186,10 @@ def apply_changes(db, changes: dict, skip=frozenset(), sent=None, sent_seq=None)
 
     🔑 Номер изменения в копии — последняя увиденная БОЕВАЯ версия строки. Страница с
     меньшим номером строку не трогает: иначе проход, начатый раньше, откатил бы то, что
-    уже привёз более поздний (и следующая правка этой клетки ушла бы со старой базой)."""
+    уже привёз более поздний (и следующая правка этой клетки ушла бы со старой базой).
+    ⚠️ Правило верно, только пока номера сравнимы. `renumbered` — бой начал нумерацию
+    заново (см. `_seq_full`): тогда больший номер в копии — это НЕ более новая версия, а
+    след прежней нумерации, и строку боя кладём поверх."""
     from app.models import SYNC_MODELS
     sent = sent or {}
     sent_seq = sent_seq or {}
@@ -211,7 +215,7 @@ def apply_changes(db, changes: dict, skip=frozenset(), sent=None, sent_seq=None)
                     continue
                 if not inc_seq and (item.get("updated_at") or "") < (sent.get(key) or ""):
                     continue
-            if inc_seq and "change_seq" in cols:
+            if inc_seq and "change_seq" in cols and not renumbered:
                 cur = db.get(model, key)
                 if cur is not None and _as_int(getattr(cur, "change_seq", 0)) > inc_seq:
                     continue
@@ -314,7 +318,7 @@ class _LegacyServer(Exception):
     """Бой до 4.1: курсора не знает — идём прежним путём по времени."""
 
 
-def _apply_page(page: dict, expect_cursor) -> dict:
+def _apply_page(page: dict, expect_cursor, renumbered: bool = False) -> dict:
     """Применить страницу под замком. {ok, rows, removed} | {deferred} | {superseded}."""
     from desktop import desk_outbox
     with desk_outbox.APPLY_LOCK:
@@ -329,7 +333,8 @@ def _apply_page(page: dict, expect_cursor) -> dict:
                 return {"superseded": True}
             removed = apply_removed(db, page.get("removed") or {}, skip=guard["keys"])
             rows = apply_changes(db, page.get("changes") or {}, skip=guard["keys"],
-                                 sent=guard["sent"], sent_seq=guard.get("sent_seq") or {})
+                                 sent=guard["sent"], sent_seq=guard.get("sent_seq") or {},
+                                 renumbered=renumbered)
             if expect_cursor is not None:
                 _set(db, _CURSOR_KEY, str(_as_int(page.get("cursor"))))
                 _set(db, _PROTOCOL_KEY, "seq")
@@ -370,6 +375,36 @@ def _seq_delta(client, st: dict) -> dict:
     return {"ok": True, "rows": rows, "removed": removed, "cursor": cursor}
 
 
+def _grade_state(db) -> dict:
+    """{ключ оценки: (значение, снята ли, номер)} по копии — для итога карантина."""
+    from app.models import SYNC_MODELS
+    model = SYNC_MODELS["grades"]
+    return {r.id: ("" if r.deleted else (r.grade or ""), bool(r.deleted),
+                   int(r.change_seq or 0)) for r in db.query(model).all()}
+
+
+def _restored_top(state: dict) -> int:
+    """Наибольший номер ВОССТАНОВЛЕННОЙ нумерации: ниже перескока, который бой делает при
+    смене поколения (`sync_clock.EPOCH_GAP`). Бой без перескока даёт оценку сверху."""
+    from app.sync_clock import EPOCH_GAP
+    return max((s for _v, _d, s in state.values() if s < EPOCH_GAP), default=0)
+
+
+def _stage_restore_quarantine() -> None:
+    """Перед сверкой с перенумерованным боем — снимок оценок копии в карантин."""
+    from app.models import SYNC_MODELS
+    from desktop import desk_outbox, local_api
+    model = SYNC_MODELS["grades"]
+    cols = [c.name for c in model.__table__.columns]
+    db = _local_session()
+    try:
+        rows = [{"tbl": "grades", "row_key": r.id,
+                 "row": {c: getattr(r, c) for c in cols}} for r in db.query(model).all()]
+    finally:
+        db.close()
+    desk_outbox.stage_quarantine(local_api._session_login(), rows)
+
+
 def _seq_full(client, why: str = "") -> dict:
     """Полная сверка по курсору: с нуля страницами, в конце — убрать неувиденное.
 
@@ -381,8 +416,19 @@ def _seq_full(client, why: str = "") -> dict:
     (там рядом с боевыми ключами лежат служебные метки копии)."""
     from app.models import SYNC_MODELS
     from desktop import desk_outbox
+    #🔥 БОЙ МОГ НАЧАТЬ НУМЕРАЦИЮ ЗАНОВО (21.10.2026, нашла модель синхронизации
+    #`tests/test_sync_state_machine.py`). После восстановления базы из резервной копии
+    #номера на бою откатываются, а копия программы помнит более поздние. Правило «строку
+    #не откатывать к меньшему номеру» тогда оставляло в копии оценки, которых на бою уже
+    #нет, — навсегда и молча: сверка отчитывалась «строк 0», Сверщик краснел раз в час,
+    #полная сверка снова ничего не меняла. Признаков два: сменилась метка базы (так
+    #велит `python -m app.sync_clock --new-epoch`) или голова боя ниже нашего курсора
+    #(метку сменить забыли). В обоих случаях сверяемся с боем как с чистого листа.
+    before = state()
+    prev_epoch, prev_cursor = before.get("epoch") or "", _as_int(before.get("cursor"))
     for _attempt in range(3):
         cursor, scope, epoch = 0, "", ""
+        renumbered = False
         seen = {name: set() for name in SYNC_MODELS}
         rows = 0
         restart = False
@@ -394,6 +440,18 @@ def _seq_full(client, why: str = "") -> dict:
                     break
                 if cursor == 0:
                     scope, epoch = str(page.get("scope") or ""), str(page.get("epoch") or "")
+                    renumbered = bool((prev_epoch and epoch and epoch != prev_epoch)
+                                      or ("head" in page
+                                          and _as_int(page.get("head")) < prev_cursor))
+                    if renumbered:
+                        _LOG.warning(f"[mirror] бой начал нумерацию заново (метка "
+                                     f"{prev_epoch or '—'} → {epoch or '—'}, курсор "
+                                     f"{prev_cursor} → голова {_as_int(page.get('head'))}): "
+                                     "копия сверяется с боем с чистого листа")
+                        desk_outbox.forget_seq_versions()
+                        #Копия помнит правки, которых бой после восстановления не знает:
+                        #последняя живая копия чужой работы не стирается молча.
+                        _stage_restore_quarantine()
                 #🔥 Сначала удаления страницы, потом её строки — тот же порядок, что при
                 #применении. В одной странице бывают и старое удаление строки, и её новая
                 #вставка (оценку стёрли, потом поставили заново): строка в таблице всегда
@@ -408,7 +466,7 @@ def _seq_full(client, why: str = "") -> dict:
                         continue
                     pk = list(model.__table__.primary_key.columns)[0].name
                     seen[name].update(it.get(pk) for it in items if isinstance(it, dict))
-                res = _apply_page(page, expect_cursor=None)
+                res = _apply_page(page, expect_cursor=None, renumbered=renumbered)
                 if res.get("deferred"):
                     return {"ok": True, "deferred": True, "rows": rows, "full": True}
                 rows += res["rows"]
@@ -445,11 +503,22 @@ def _seq_full(client, why: str = "") -> dict:
                 _set(db, _FULL_AT_KEY, datetime.now(timezone.utc).isoformat())
                 _set(db, _PROTOCOL_KEY, "seq")
                 db.commit()
+                after = _grade_state(db)
             except Exception:
                 db.rollback()
                 raise
             finally:
                 db.close()
+            #Итог карантина — только после УСПЕШНОЙ сверки и под тем же замком: снимок мог
+            #быть снят и прошлым, оборвавшимся проходом.
+            from desktop import local_api
+            shown = desk_outbox.finalize_quarantine(
+                local_api._session_login(), after, keep={k for _t, k in keep},
+                restored_top=_restored_top(after))
+            if shown:
+                _LOG.warning(f"[mirror] после восстановления боя из копии на нём нет {shown} "
+                             "оценок, которые эта копия видела раньше, — они в карантине "
+                             "(«Что не ушло на сервер»): вернуть или убрать решает человек")
         _LOG.info(f"[mirror] полная сверка ({why}): строк {rows}, убрано лишних {removed}, "
                   f"курсор {cursor}")
         return {"ok": True, "rows": rows, "removed": removed, "cursor": cursor, "full": True}

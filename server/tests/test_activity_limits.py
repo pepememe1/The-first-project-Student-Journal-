@@ -245,3 +245,26 @@ def test_continuing_a_big_but_honest_board_keeps_everything(client):
     got = activity_state.get(r.json()["id"])["payload"]["strokes"]
     assert len(got) == 1500, (f"восстановленная доска обрезана до {len(got)} штрихов — "
                               f"это потеря работы преподавателя, а не защита")
+
+
+# ── GCRA в корзинах (исследование 20.10.2026) ────────────────────────────────────────
+def test_gcra_allows_the_burst_then_a_steady_rate():
+    """Всплеск до предела проходит сразу, следующий запрос ждёт ровно один интервал
+    (окно / предел), а не всё окно, как в журнале меток. Состояние — одно число на
+    предел, а не 700 меток штрихов доски."""
+    from app import msg_limit
+    msg_limit.reset()
+    assert all(msg_limit.bucket_check("progress", "u7") == 0 for _ in range(20))
+    wait = msg_limit.bucket_check("progress", "u7")
+    assert wait == 1                    # 10 с / 20 = 0.5 с → округление вверх до секунды
+    state = msg_limit._bucket_tat[("progress", "u7")]
+    assert len(state) == 2 and all(isinstance(x, float) for x in state)
+
+
+def test_gcra_pack_is_all_or_nothing():
+    from app import msg_limit
+    msg_limit.reset()
+    assert msg_limit.bucket_take("forward", "u8", 400) == 0
+    assert msg_limit.bucket_take("forward", "u8", 1) > 0          # окно полно
+    assert msg_limit.bucket_take("forward", "u9", 401) > 0        # больше предела — никогда
+    assert ("forward", "u9") not in msg_limit._bucket_tat         # отказ ничего не пишет

@@ -64,6 +64,9 @@ export function issuesOf(st) {
   if (st.auth_error) out.push({ kind: 'auth', detail: String(st.auth_error) })
   if (ob.conflicts > 0) out.push({ kind: 'conflicts', count: ob.conflicts })
   if (ob.rejected > 0) out.push({ kind: 'rejected', count: ob.rejected })
+  //Бой восстановили из резервной копии, и оценок, которые копия видела, на нём больше нет
+  //(карантин восстановления, 21.10.2026): решать человеку — вернуть или убрать.
+  if (ob.restored_away > 0) out.push({ kind: 'restored', count: ob.restored_away })
   const stuck = st.online === false || Boolean(st.error) || Boolean(st.outbox_stopped)
   if (ob.pending > 0 && stuck) {
     out.push({ kind: 'pending', count: ob.pending, detail: String(st.error || st.outbox_stopped || '') })

@@ -69,6 +69,16 @@ def server_metrics(_admin: User = Depends(require_admin),
     out["database"] = {"engine": "sqlite" if db_path else "external",
                        "path": db_path, "size": size, "encrypted": bool(DB_KEY)}
 
+    #🔥 Снимок сборщика HTTP-путей (`request_metrics`) до 20.10.2026 НЕ ОТДАВАЛСЯ НИКЕМ:
+    #сборщик подключили 20.09, а ручка о нём не знала — данные копились и не читались, при
+    #том что CLAUDE.md утверждал «ручка показывает снимок». Теперь отдаём, вместе с законом
+    #Литтла и загрузкой процесса (см. шапку `request_metrics.py`).
+    from ..request_metrics import metrics as _req_metrics
+    out["requests"] = _req_metrics.snapshot()
+    #Прогноз места: по суточным снимкам базы (`hostinfo.db_growth_forecast`, метод Холта).
+    backups = os.environ.get("GRADEBOOK_BACKUP_DIR") or "/root/gb-backups"
+    out["forecast"] = hostinfo.db_growth_forecast(backups, int(out.get("disk", {}).get("free") or 0))
+
     #Сколько людей в системе — самый дешёвый признак «база живая, а не пустая копия».
     try:
         out["counts"] = {

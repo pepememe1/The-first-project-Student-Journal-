@@ -1423,7 +1423,9 @@ def install_sync_status(app) -> None:
         if not who:
             return JSONResponse({"detail": "forbidden"}, status_code=403)
         from desktop import desk_outbox
-        return {"items": desk_outbox.problems(who["login"])}
+        #Карантин восстановления — рядом, тем же экраном (см. `desk_outbox.stage_quarantine`).
+        return {"items": desk_outbox.problems(who["login"]),
+                "restored_away": desk_outbox.quarantined(who["login"])}
 
     @app.post("/desk/sync/problems/{seq}")
     async def _desk_sync_resolve(seq: int, request: Request):
@@ -1454,8 +1456,29 @@ def install_sync_status(app) -> None:
                 pass
         return {"ok": True}
 
-    #Все три — в НАЧАЛО списка: заглушка SPA зарегистрирована раньше и перехватила бы их.
-    for _ in range(3):
+    @app.post("/desk/sync/restored/{qid}")
+    async def _desk_sync_restored(qid: int, request: Request):
+        """Решение по оценке, пропавшей с боя после восстановления: return | dismiss."""
+        from starlette.concurrency import run_in_threadpool
+        from desktop import desk_outbox
+        who = _local_caller(request.headers.get("authorization", ""))
+        if not who:
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:      # noqa: BLE001
+            body = {}
+        action = str((body or {}).get("action") or "")
+        out = await run_in_threadpool(desk_outbox.release_quarantined, qid, who["login"], action)
+        if not out.get("ok"):
+            return JSONResponse({"detail": out.get("detail") or "не удалось"},
+                                status_code=400)
+        if out.get("flush"):
+            desk_outbox.kick()
+        return {"ok": True}
+
+    #Все четыре — в НАЧАЛО списка: заглушка SPA зарегистрирована раньше и перехватила бы их.
+    for _ in range(4):
         app.router.routes.insert(0, app.router.routes.pop())
 
 

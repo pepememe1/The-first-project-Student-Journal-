@@ -17,6 +17,7 @@ curator_report.py — сводный отчёт куратора по успев
 отчёт не расходится с интерфейсом. Средний — единый grading.practice_average.
 """
 import io
+import statistics
 
 from . import webdata as W
 
@@ -83,19 +84,34 @@ def collect_group(db, group: str, year: str, semester: int, cfg: dict,
             "average": W.average(lessons, recs, cfg, scale=scale_map),      # общий средний
             "absences": absc,                              # {Н,Б,О,всего}
             "debts": len(W.debts(lessons, recs, scale=scale_map)),
+            "_recs": recs,                                 # для распределения ниже; наружу не уходит
         })
     # средний по группе — по студентам с ненулевым средним (пустые не занижают)
-    vals = [r["average"] for r in rows if r["average"]]
-    group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
+    group_avg = W.grading.group_average(r["average"] for r in rows)
     # средний ПО КАЖДОМУ ПРЕДМЕТУ (по студентам с ненулевым баллом) — видно, где группа
     # слабее: куратору это нужнее общего числа.
-    subject_group_avg = {}
-    for subj in subjects:
-        sv = [r["subject_avg"].get(subj) for r in rows]
-        sv = [x for x in sv if x]
-        subject_group_avg[subj] = round(sum(sv) / len(sv), 2) if sv else 0.0
+    subject_group_avg = {subj: W.grading.group_average(r["subject_avg"].get(subj) or 0
+                                                       for r in rows)
+                         for subj in subjects}
+    #📊 Рядом со средним — МЕДИАНА и РАСПРЕДЕЛЕНИЕ оценок (исследование 20.10.2026).
+    #Оценка 2–5 — порядковая шкала (Стэнли Смит Стивенс, 1946): «5 − 4» не обязано
+    #равняться «4 − 3», и для такой шкалы Стивенс считал мерой центра медиану, а не
+    #среднее. Фредерик Лорд (1953) возражал, что среднее порядковых данных на практике
+    #работает, — поэтому среднее остаётся (так требует методика), а медиана и
+    #распределение стоят рядом. Зачем: средний 3.5 у группы «половина пятёрок, половина
+    #двоек» и у группы «все на 3–4» — один и тот же, а истории у них противоположные.
+    marks = {"5": 0, "4": 0, "3": 0, "2": 0}
+    for r in rows:
+        b = W.grade_breakdown(lessons, r["_recs"], scale=scale_map)
+        for k in marks:
+            marks[k] += b[k]
+    for r in rows:
+        r.pop("_recs", None)
+    graded = sorted(r["average"] for r in rows if r["average"])
+    median = round(statistics.median(graded), 2) if graded else 0.0
     return {"group": group, "subjects": subjects, "rows": rows,
-            "group_avg": group_avg, "subject_group_avg": subject_group_avg,
+            "group_avg": group_avg, "group_median": median, "marks": marks,
+            "subject_group_avg": subject_group_avg,
             "students": len(students)}
 
 
@@ -117,14 +133,9 @@ def categorize(rows: list) -> dict:
         if not avg:
             continue
         counted += 1
-        if avg >= 4.5:
-            buckets["excellent"] += 1
-        elif avg >= 3.5:
-            buckets["good"] += 1
-        elif avg >= 2.5:
-            buckets["passing"] += 1
-        else:
-            buckets["failing"] += 1
+        #Пороги — `grading.MARK_EDGES` (одна строка на продукт, 20.10.2026).
+        mark = W.grading.mark_of_average(avg)
+        buckets[{5: "excellent", 4: "good", 3: "passing"}.get(mark, "failing")] += 1
     return {"counts": buckets, "total": counted, "no_data": len(rows) - counted}
 
 

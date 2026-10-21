@@ -56,6 +56,7 @@ desk_outbox.py — очередь правок журнала, сделанны�
 надо не забыть зашифровать, перенести и стереть при смене владельца.
 """
 import json
+import random
 import threading
 import time
 from contextlib import contextmanager
@@ -86,6 +87,25 @@ _GATEWAY = frozenset({502, 503, 504})
 MAX_SERVER_ERRORS = 5
 RETRY_BASE_S = 30
 RETRY_MAX_S = 1800
+
+
+def retry_delay(attempt: int, rand=random.random) -> float:
+    """Пауза перед повтором правки после ошибки 5xx — экспоненциальная задержка с
+    «равным разбросом» (исследование 20.10.2026).
+
+    Кто: экспоненциальная задержка — Меткалф и Боггс, Ethernet (1976); разброс — Марк
+    Брукер, AWS «Exponential Backoff And Jitter» (2015).
+
+    Принцип: интервал растёт вдвое с каждой неудачей (30 с, 60 с, 2 мин … до 30 мин);
+    половина интервала — обязательная пауза, вторая половина — случайная.
+
+    Почему разброс: программ в колледже десятки, и после сбоя сервера все они без
+    разброса повторяли бы досылку в одну и ту же секунду — одноядерный бой ложился бы
+    второй раз от своих же клиентов. Почему «равный», а не «полный» разброс, как у сокета
+    в вебе: полный может выпасть почти в ноль, и программа долбила бы сервер правкой,
+    на которой он только что упал; половина интервала — гарантированная передышка."""
+    interval = min(RETRY_BASE_S * 2 ** max(0, int(attempt) - 1), RETRY_MAX_S)
+    return interval / 2 + rand() * interval / 2
 
 _DDL = (
     """CREATE TABLE IF NOT EXISTS desk_outbox (
@@ -123,6 +143,18 @@ _DDL = (
         prod_seq INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY (row_key, base_seq))""",
+    #Карантин восстановления (21.10.2026): строки, которые копия видела на бою, а бой
+    #после восстановления из резервной копии их уже не знает. См. `quarantine_rows`.
+    """CREATE TABLE IF NOT EXISTS desk_restore_quarantine (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        login TEXT NOT NULL,
+        tbl TEXT NOT NULL,
+        row_key TEXT NOT NULL,
+        row_json TEXT NOT NULL,
+        prod_value TEXT NOT NULL DEFAULT '',
+        prod_seq INTEGER NOT NULL DEFAULT 0,
+        staged INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL)""",
 )
 
 #Одна досылка за раз: два потока (фоновый «пинок» и цикл синка) иначе отправили бы одну
@@ -302,14 +334,18 @@ def counts(login: str) -> dict:
         with _tx() as c:
             rows = _rows(c, """SELECT state, COUNT(*) AS n FROM desk_outbox
                                WHERE login = :l GROUP BY state""", l=login or "")
+            away = _rows(c, """SELECT COUNT(*) AS n FROM desk_restore_quarantine
+                               WHERE login = :l AND staged = 0""", l=login or "")
     except Exception as e:      # noqa: BLE001 — значок не должен ронять страницу
         _LOG.warning(f"[outbox] состояние очереди не прочиталось: {e}")
-        return {"available": False, "pending": 0, "conflicts": 0, "rejected": 0}
+        return {"available": False, "pending": 0, "conflicts": 0, "rejected": 0,
+                "restored_away": 0}
     by = {r["state"]: int(r["n"]) for r in rows}
     return {"available": True,
             "pending": by.get("pending", 0) + by.get("ready", 0),
             "conflicts": by.get("conflict", 0),
-            "rejected": by.get("rejected", 0)}
+            "rejected": by.get("rejected", 0),
+            "restored_away": int(away[0]["n"]) if away else 0}
 
 
 def pending_keys(login: str = "") -> set:
@@ -445,6 +481,145 @@ def take_rebuild_request() -> bool:
     return False
 
 
+# ── карантин восстановления ──────────────────────────────────────────────────────────
+#Бой восстановили из резервной копии: правки после снимка на бою пропали, а копия
+#программы их помнит. «Сервер = истина» (§4.5) — копия обязана сойтись с боем, но стереть
+#последнюю живую копию чужой работы молча нельзя (разбор Ярослава 21.10.2026). Поэтому
+#полная сверка после перенумерации кладёт такие оценки сюда (`stage_quarantine` до,
+#`finalize_quarantine` после), а человек решает на экране
+#«Что не ушло на сервер»: вернуть (обычной досылкой — права проверит бой) или убрать.
+#⚠️ Только оценки: у них понятно, что значит «вернуть». Занятия и прочее — в журнал.
+#⚠️ Хранится ВНУТРИ копии (она зашифрована целиком), а не отдельным файлом: тут ФИО и
+#оценки, открытый файл рядом с базой был бы утечкой ПДн.
+
+def stage_quarantine(login: str, rows: list) -> None:
+    """Снимок строк копии ДО сверки с перенумерованным боем: [{tbl, row_key, row}].
+
+    Кладётся сразу и с `staged = 1` (человеку пока не видно). Повтор того же ключа среди
+    СНИМКОВ игнорируется — исходник важнее: если сверка оборвётся посреди, следующая снимет
+    снимок уже с частично переписанной копии, и только первая запись хранит то, что было.
+    ⚠️ Только среди снимков: неразобранная запись прошлого восстановления (`staged = 0`)
+    новый снимок НЕ глушит — иначе второе восстановление теряло бы свой исходник
+    (Полковник, 21.10.2026)."""
+    if not rows:
+        return
+    with _tx() as c:
+        for r in rows:
+            _exec(c, """INSERT INTO desk_restore_quarantine
+                        (login, tbl, row_key, row_json, created_at)
+                        SELECT :l, :t, :k, :j, :ca WHERE NOT EXISTS (
+                            SELECT 1 FROM desk_restore_quarantine
+                            WHERE login = :l AND tbl = :t AND row_key = :k AND staged = 1)""",
+                  l=login or "", t=r["tbl"], k=r["row_key"],
+                  j=json.dumps(r["row"], ensure_ascii=False, default=str), ca=_now())
+
+
+def finalize_quarantine(login: str, current: dict, keep=frozenset(),
+                        restored_top: int = 0) -> int:
+    """Итог после УСПЕШНОЙ сверки: что из снимка бой ПОТЕРЯЛ. Возвращает число строк.
+
+    `current` — {ключ оценки: (значение, снята ли, номер)} копии после сверки (то есть
+    боя); `keep` — ключи с правкой в очереди: их судьбу решает обычный разбор конфликта;
+    `restored_top` — наибольший номер восстановленной нумерации (ниже перескока).
+
+    🔥 «Бой потерял» и «копия отстала» — разные события (Полковник, 21.10.2026). Ноутбук,
+    неделю пролежавший офлайн, после восстановления видит десятки «расхождений», и все они —
+    его собственная старина: бой их не терял, а получил НОВЕЕ. Показывать их значит
+    предложить «Вернуть» устаревшее поверх чужой работы. Различаем по номерам ОДНОЙ
+    (прежней) нумерации: восстановленная строка боя с номером НИЖЕ, чем видела копия, —
+    значит, копия видела версию, которой в снимке нет (потеряна); выше — копия отстала.
+    Строки на бою нет: потеряна, только если копия видела её номером выше всего снимка.
+    Совпало с боем или было надгробием, которого на бою нет, — из карантина долой."""
+    shown = 0
+    with _tx() as c:
+        staged = _rows(c, """SELECT id, tbl, row_key, row_json FROM desk_restore_quarantine
+                             WHERE login = :l AND staged = 1""", l=login or "")
+        for it in staged:
+            try:
+                row = json.loads(it["row_json"] or "{}")
+            except ValueError:
+                row = {}
+            old = ("" if row.get("deleted") else (row.get("grade") or ""), bool(row.get("deleted")))
+            old_seq = int(row.get("change_seq") or 0)
+            cur = current.get(it["row_key"])
+            if cur is None:
+                lost = not old[1] and old_seq > restored_top
+            else:
+                lost = (cur[0], cur[1]) != old and int(cur[2] or 0) < old_seq
+            if not lost or it["row_key"] in keep:
+                _exec(c, "DELETE FROM desk_restore_quarantine WHERE id = :i", i=it["id"])
+                continue
+            _exec(c, """UPDATE desk_restore_quarantine SET staged = 0, prod_value = :p,
+                        prod_seq = :s WHERE id = :i""",
+                  p="" if cur is None else cur[0], s=0 if cur is None else int(cur[2] or 0),
+                  i=it["id"])
+            shown += 1
+    return shown
+
+
+def quarantined(login: str) -> list:
+    """Строки карантина человека — для экрана «Что не ушло на сервер»."""
+    with _tx() as c:
+        rows = _rows(c, """SELECT id, tbl, row_key, row_json, prod_value, created_at
+                           FROM desk_restore_quarantine WHERE login = :l AND staged = 0
+                           ORDER BY id""", l=login or "")
+    out = []
+    for r in rows:
+        try:
+            row = json.loads(r.pop("row_json") or "{}")
+        except ValueError:
+            row = {}
+        r["row"] = row if isinstance(row, dict) else {}
+        out.append(r)
+    return out
+
+
+def release_quarantined(qid: int, login: str, action: str) -> dict:
+    """Решение по строке карантина: `return` — поставить оценку в досылку; `dismiss` —
+    согласиться с боем.
+
+    ⚠️ «Вернуть» уходит со СВЕРКОЙ ВЕРСИИ — базой служит номер строки боя, который человек
+    видел на экране рядом со своим значением. Изменили строку с тех пор — бой ответит
+    конфликтом, и решать снова человеку, а не тихо затереть чужое (Полковник)."""
+    with _tx() as c:
+        rows = _rows(c, """SELECT * FROM desk_restore_quarantine
+                           WHERE id = :i AND login = :l AND staged = 0""",
+                     i=int(qid), l=login or "")
+        if not rows:
+            return {"ok": False, "detail": "Запись карантина не найдена"}
+        it = rows[0]
+        if action == "dismiss":
+            _exec(c, "DELETE FROM desk_restore_quarantine WHERE id = :i", i=int(qid))
+            return {"ok": True}
+        if action != "return" or it["tbl"] != "grades":
+            return {"ok": False, "detail": f"Неизвестное действие: {action}"}
+        try:
+            row = json.loads(it["row_json"] or "{}")
+        except ValueError:
+            row = {}
+        body = {"lesson_id": row.get("lesson_id"), "surname": row.get("student_f") or "",
+                "name": row.get("student_n") or "", "student_id": row.get("student_id") or "",
+                "grade": "" if row.get("deleted") else (row.get("grade") or "")}
+        _exec(c, """INSERT INTO desk_outbox (login, method, path, query, body, ctype, state,
+                    tbl, row_key, base, base_seq, created_at, created_epoch)
+                    VALUES (:l, 'POST', '/web/teacher/grade', '', :b, 'application/json',
+                            'ready', 'grades', :k, NULL, :bs, :ca, :ce)""",
+              l=login or "", b=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+              k=it["row_key"], bs=int(it.get("prod_seq") or 0), ca=_now(), ce=time.time())
+        _exec(c, "DELETE FROM desk_restore_quarantine WHERE id = :i", i=int(qid))
+    return {"ok": True, "flush": True}
+
+
+def forget_seq_versions() -> None:
+    """Забыть пары «наша база → боевой номер»: бой начал нумерацию заново.
+
+    Зовёт полная сверка, когда номера боя перестали быть сравнимыми с прежними
+    (восстановление из резервной копии, 21.10.2026): пара из старой нумерации иначе
+    защищала бы строку копии от «более старого» снимка, которое на деле новее."""
+    with _tx() as c:
+        _exec(c, "DELETE FROM desk_seq_versions")
+
+
 def request_rebuild() -> None:
     """Попросить полной сверки зеркала (не удалась сейчас — повторится)."""
     try:
@@ -491,6 +666,39 @@ def _mapped_base_seq(conn, row_key: str, base_seq):
     rows = _rows(conn, """SELECT prod_seq FROM desk_seq_versions
                           WHERE row_key = :k AND base_seq = :b""", k=row_key, b=int(base_seq))
     return int(rows[0]["prod_seq"]) if rows else int(base_seq)
+
+
+def _remember_prod_seq(conn, tbl: str, row_key: str, prod_seq: int) -> None:
+    """Бой принял нашу правку под номером `prod_seq` — копия запоминает его сразу.
+
+    🔥 Нашла модель синхронизации (21.10.2026). Номер строки копии раньше узнавала только
+    от зеркала. Но пока правка ждёт в очереди, строка под защитой, и зеркало проходит
+    курсором МИМО её номера. Обычно это не беда: досылка создаёт на бою новую версию с
+    номером выше курсора, и зеркало её привезёт. А повтор после потерянного ответа больше
+    не пишет второй раз (идемпотентность, `write.py`) — бой возвращает прежний номер, уже
+    пройденный курсором, и копия навсегда оставалась со старым номером: Сверщик видел
+    расхождение, а следующая правка клетки после срока `desk_seq_versions` получила бы
+    ложный конфликт. Только вверх: если зеркало уже привезло версию новее, она права.
+    ⚠️ Только когда цепочка наших правок этой строки КОНЧИЛАСЬ (в очереди по ней больше
+    ничего). Правки, стоящие за этой, взяли базой прежний номер копии и сопоставляются
+    по нему (`_mapped_base_seq`); сдвинь номер раньше — следующая правка, поставленная
+    после, взяла бы базу, которой в сопоставлении нет, и получила бы ложный конфликт
+    (модель поймала и это)."""
+    if not tbl or not row_key or not prod_seq:
+        return
+    from sqlalchemy import text
+    left = conn.execute(text("SELECT COUNT(*) FROM desk_outbox WHERE tbl = :t AND row_key = :k"),
+                        {"t": tbl, "k": row_key}).scalar()
+    if left:
+        return
+    from app.models import SYNC_MODELS
+    model = SYNC_MODELS.get(tbl)
+    if model is None or "change_seq" not in model.__table__.columns:
+        return
+    pk = list(model.__table__.primary_key.columns)[0].name
+    conn.execute(text(f"UPDATE {model.__tablename__} SET change_seq = :p "  # nosec B608 — имена из модели
+                      f"WHERE {pk} = :k AND COALESCE(change_seq, 0) < :p"),
+                 {"p": int(prod_seq), "k": row_key})
 
 
 def _promote_orphans(conn) -> None:
@@ -629,6 +837,7 @@ def _flush_locked(login, auth, send, out) -> dict:
                                   created_at = excluded.created_at""",
                           k=it["row_key"], b=int(it.get("base_seq") or 0), p=prod_seq,
                           ca=_now())
+                    _remember_prod_seq(c, it["tbl"], it["row_key"], prod_seq)
                 out["sent"] += 1
                 continue
             if status == 401:
@@ -646,7 +855,7 @@ def _flush_locked(login, auth, send, out) -> dict:
                     _exec(c, """UPDATE desk_outbox SET attempts = :n, last_status = :st,
                                 next_at = :na WHERE seq = :s""",
                           n=n, st=status, s=it["seq"],
-                          na=time.time() + min(RETRY_BASE_S * 2 ** (n - 1), RETRY_MAX_S))
+                          na=time.time() + retry_delay(n))
                     out["stopped"] = f"server {status}"
                     break
                 #🔥 Ядовитая правка: сервер падает именно на ней. Откладываем её на экран

@@ -107,7 +107,7 @@ def test_conflict_waits_for_a_human_and_holds_later_edits_of_the_same_row(outbox
     assert "base_updated_at" not in srv2.calls[0][2], "«моё» обязано уйти без сверки"
     assert srv2.calls[1][2]["base_updated_at"] == "PA"
     assert outbox.counts("t1") == {"available": True, "pending": 0, "conflicts": 0,
-                                   "rejected": 0}
+                                   "rejected": 0, "restored_away": 0}
 
 
 def test_keep_server_drops_the_edit_and_asks_for_a_full_resync(outbox):
@@ -267,3 +267,23 @@ def test_mirror_does_not_overwrite_a_row_with_an_unsent_edit(outbox):
         assert n == 1, "строку с неотправленной правкой зеркало перезаписало"
     finally:
         db.close()
+
+
+# ── Разброс паузы повтора (исследование 20.10.2026) ─────────────────────────────────
+
+def test_retry_delay_grows_and_keeps_half_as_a_floor():
+    from desktop import desk_outbox as ob
+    #rand → 0: только обязательная половина интервала; rand → 1: весь интервал.
+    assert ob.retry_delay(1, rand=lambda: 0.0) == 15
+    assert ob.retry_delay(1, rand=lambda: 1.0) == 30
+    assert ob.retry_delay(3, rand=lambda: 1.0) == 120
+    assert ob.retry_delay(50, rand=lambda: 1.0) == ob.RETRY_MAX_S
+
+
+def test_retry_delay_is_spread_between_machines():
+    """Обратный ход дефекта: без разброса все программы колледжа повторяли досылку в одну
+    секунду после сбоя сервера. Сотня машин обязана разойтись по интервалу."""
+    from desktop import desk_outbox as ob
+    delays = {round(ob.retry_delay(2), 3) for _ in range(100)}
+    assert len(delays) > 50
+    assert all(30 <= d <= 60 for d in delays)

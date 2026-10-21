@@ -195,6 +195,54 @@ def process_uptime_seconds() -> float:
     return max(0.0, time.time() - _PROCESS_START)
 
 
+#Сколько суточных снимков держит `deploy/backup/gb_backup.sh` (KEEP). Нужен прогнозу:
+#каждый день добавляется снимок новее и уходит самый старый, поэтому каталог копий
+#растёт на KEEP × суточный прирост базы, а не на один.
+BACKUP_KEEP = 14
+
+
+def db_growth_forecast(backup_dir: str, free_bytes: int, keep: int = BACKUP_KEEP) -> dict | None:
+    """Прогноз «через сколько суток кончится место» по суточным снимкам базы (20.10.2026).
+
+    Размер снимка = размер базы в тот день, поэтому ряд снимков — готовый временной ряд
+    роста базы, и заводить отдельный сборщик не нужно. Наклон — двойное
+    экспоненциальное сглаживание Холта (`estimators.holt_forecast`, Чарльз Холт, 1957):
+    оно не скачет от одного большого импорта, как наклон по двум точкам, и не отстаёт от
+    нынешнего темпа, как среднее за всё время.
+
+    Почему это важно, а не красиво: `gb_backup.sh` ПРОПУСКАЕТ снимок, когда места мало
+    (нужно ~1.5× базы), то есть нехватка места молча отбирает резервные копии. Прогноз
+    говорит об этом за недели, а не в день, когда копии уже перестали сниматься.
+
+    Диск в сутки уходит на (1 + keep) × прирост: сама база плюс каталог копий. Журналы и
+    прочее не учитываются — поэтому в интерфейсе «примерно». None — снимков меньше трёх
+    (по двум точкам тренд — это шум) или каталога нет."""
+    import estimators     #корневой модуль; путь к нему уже положил webdata
+    auto = os.path.join(backup_dir, "auto")
+    try:
+        names = [n for n in os.listdir(auto) if n.startswith("gradebook_") and n.endswith(".db")]
+    except OSError:
+        return None
+    points = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(auto, n))
+        except OSError:
+            continue
+        points.append((st.st_mtime / 86400.0, float(st.st_size)))
+    if len(points) < 3:
+        return None
+    fit = estimators.holt_forecast(sorted(points))
+    if fit is None:
+        return None
+    _level, per_day = fit
+    per_day = max(0.0, per_day)
+    disk_per_day = per_day * (1 + keep)
+    days = int(free_bytes // disk_per_day) if disk_per_day > 0 else None
+    return {"snapshots": len(points), "db_growth_per_day": int(per_day),
+            "disk_per_day": int(disk_per_day), "days_left": days}
+
+
 def summary(root: str = "") -> dict:
     """Всё сразу — то, что рисует карточка «Сервер» в кабинете администратора."""
     base = root or os.getcwd()

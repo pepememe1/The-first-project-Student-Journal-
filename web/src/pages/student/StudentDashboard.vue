@@ -32,6 +32,12 @@ onMounted(load)
 const avg = computed(() => Number(data.value?.average ?? 0))
 const debts = computed(() => Number(data.value?.debts ?? 0))
 const attendance = computed(() => Number(data.value?.attendance ?? 100))
+// Мало занятий — процент ненадёжен: сервер считает интервал Уилсона и говорит, широк ли
+// он (исследование 20.10.2026). Подпись вместо скрытия: факт показываем всегда.
+const attendanceHint = computed(() =>
+  data.value?.attendance_uncertain
+    ? locale.t('studentDashboard.attendanceFewData', { n: data.value.attendance_pairs })
+    : '')
 
 // Поза Вектора — строго по фактам (не по клику). Низкая посещаемость трактуется как
 // «много пропусков» для эмоции.
@@ -134,7 +140,7 @@ onBeforeUnmount(() => clearInterval(tipTimer))
         <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard :label="locale.t('studentDashboard.subjectsCount', 'Предметов')" :value="data?.subjects_count ?? '—'" accent />
           <StatCard :label="locale.t('studentDashboard.averageLabel', 'Средний балл')" :value="data?.average || '—'" />
-          <StatCard :label="locale.t('studentDashboard.attendanceLabel', 'Посещаемость')" :value="data ? data.attendance + '%' : '—'" />
+          <StatCard :label="locale.t('studentDashboard.attendanceLabel', 'Посещаемость')" :value="data ? data.attendance + '%' : '—'" :hint="attendanceHint" />
           <StatCard :label="locale.t('studentDashboard.gradesLabel', 'Оценок')" :value="data?.grades_total ?? '—'" />
         </div>
 

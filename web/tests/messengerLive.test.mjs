@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { pollInterval, reconnectDelay, shellBadgeTickDue, POLL_MS_WS, POLL_MS_NO_WS, RECONNECT_MAX_MS } from '../src/utils/livePolling.js'
+import { pollInterval, reconnectDelay, shellBadgeTickDue, POLL_MS_WS, POLL_MS_NO_WS, RECONNECT_MAX_MS, RECONNECT_MIN_MS } from '../src/utils/livePolling.js'
 import { resolveIncoming } from '../src/utils/messageMerge.js'
 
 const WEB = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -42,12 +42,23 @@ test('в скрытой вкладке не опрашиваем вовсе', ()
 })
 
 // ── переподключение ─────────────────────────────────────────────────────────────
-test('пауза переподключения растёт и упирается в потолок', () => {
-  assert.equal(reconnectDelay(0), 1000)
-  assert.equal(reconnectDelay(1), 2000)
-  assert.equal(reconnectDelay(2), 4000)
-  assert.ok(reconnectDelay(3) < reconnectDelay(4), 'пауза должна расти')
-  assert.equal(reconnectDelay(50), RECONNECT_MAX_MS, 'без потолка упавший сервер получил бы шквал попыток')
+test('интервал переподключения растёт вдвое и упирается в потолок', () => {
+  // rand → 1: верхняя граница интервала — та самая лестница 1, 2, 4 … с.
+  const top = () => 0.999999
+  assert.equal(reconnectDelay(0, top), 999)
+  assert.equal(reconnectDelay(1, top), 1999)
+  assert.equal(reconnectDelay(2, top), 3999)
+  assert.ok(reconnectDelay(3, top) < reconnectDelay(4, top), 'интервал должен расти')
+  assert.ok(reconnectDelay(50, top) < RECONNECT_MAX_MS + 1, 'без потолка упавший сервер получил бы шквал попыток')
+})
+
+test('пауза — случайная внутри интервала (разброс Брукера, 20.10.2026)', () => {
+  // Обратный ход дефекта: без разброса все вкладки колледжа после перезапуска сервера
+  // стучались в одну и ту же секунду. Сто вкладок обязаны разойтись по интервалу.
+  const delays = new Set(Array.from({ length: 100 }, () => reconnectDelay(5)))
+  assert.ok(delays.size > 50, `пауза почти не разбросана: ${delays.size} разных из 100`)
+  for (const d of delays) assert.ok(d >= RECONNECT_MIN_MS && d <= 32000)
+  assert.equal(reconnectDelay(3, () => 0), RECONNECT_MIN_MS, 'ноль — это цикл без паузы')
 })
 
 // ── слияние входящих ────────────────────────────────────────────────────────────

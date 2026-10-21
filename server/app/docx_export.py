@@ -8,6 +8,7 @@ docx_export.py — сборка журнала и ведомости в Word (.d
 import io
 
 import college_clock  # «Выгружено …» — по часам колледжа, а не машины
+import grading  # средний группы — один расчёт на продукт (§4.8)
 
 from docx import Document
 from docx.shared import Pt, Cm
@@ -94,10 +95,11 @@ def build_journal_docx(group: str, subject: str, lessons, rows) -> bytes:
         avg = round(float(s.get("average") or 0), 2)
         _cell(cells[ncols - 1], avg if avg > 0 else "—", bold=True)
 
-    vals = [round(float(s.get("average") or 0), 2) for s in rows]
-    vals = [v for v in vals if v > 0]
+    #Тот же расчёт, что в xlsx и на экране (`grading.group_average`); прежде здесь каждый
+    #средний округлялся ДО сложения, и docx мог разойтись с xlsx в сотых.
+    gavg = grading.group_average(float(s.get("average") or 0) for s in rows)
     p = doc.add_paragraph()
-    r = p.add_run(f"Средний по группе: {round(sum(vals) / len(vals), 2) if vals else '—'}")
+    r = p.add_run(f"Средний по группе: {gavg if gavg else '—'}")
     r.font.name = FNT
     r.bold = True
     r.font.size = Pt(SZ)

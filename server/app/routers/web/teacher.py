@@ -191,7 +191,7 @@ def teacher_stats(group: str = Query(...), subject: str = Query(...),
     vals = [W.average(lessons, W.student_records(db, s.surname, s.name, group, student_id=s.id), cfg, scale=tscale)
             for s in studs]
     vals = [v for v in vals if v > 0]
-    group_avg = round(sum(vals) / len(vals), 2) if vals else 0.0
+    group_avg = W.grading.group_average(vals)
     return {"group": group, "subject": subject, "term": {"year": ty, "semester": ts},
             "students": len(studs), "group_average": group_avg, "lessons": len(lessons)}
 
@@ -258,7 +258,7 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
             vals = [v for v in (W.average(sl, recs[s.id], cfg, scale=tscale) for s in studs) if v > 0]
             subj_rows.append({
                 "subject": subject,
-                "average": round(sum(vals) / len(vals), 2) if vals else 0.0,
+                "average": W.grading.group_average(vals),
                 #«По скольким студентам посчитано» — средний по трём из двадцати пяти и
                 #по всем двадцати пяти выглядит одинаково, а значит разное.
                 "graded_students": len(vals),
@@ -274,7 +274,7 @@ def teacher_summary(user: User = Depends(get_current_user), db: Session = Depend
             if W.counts_as_at_risk(r):
                 at_risk += 1
         groups.append({"group": group, "students": len(studs),
-                       "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
+                       "average": W.grading.group_average(all_vals),
                        "at_risk": at_risk, "subjects": subj_rows})
 
     #Куратор (§role — teacher с непустым curated_groups) видит ЕЩЁ и курируемые группы,

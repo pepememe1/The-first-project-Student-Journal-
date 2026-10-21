@@ -347,7 +347,7 @@ def test_gateway_errors_never_count_against_the_edit(copy):
         _time_passes(copy)
         copy.flush(login="t1", auth=_auth, send=_answer_by_grade(502, calls))
     assert copy.counts("t1") == {"available": True, "pending": 2, "conflicts": 0,
-                                 "rejected": 0}
+                                 "rejected": 0, "restored_away": 0}
     assert set(calls) == {"5"}, "очередь перескочила недоставленную правку"
 
 

@@ -25,6 +25,8 @@ const items = ref([])
 const loading = ref(true)
 const openId = ref('')
 const results = ref({})          // id активности -> строки участников
+const hostOf = ref({})           // id активности -> ведущий ли я (разбор вопросов — ему)
+const analysis = ref({})         // id активности -> разбор вопросов викторины
 const busy = ref('')
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
@@ -69,10 +71,23 @@ async function toggle(a) {
   try {
     const { data } = await activitiesApi.results(a.id)
     results.value = { ...results.value, [a.id]: data.results || [] }
+    hostOf.value = { ...hostOf.value, [a.id]: !!data.is_host }
   } catch {
     results.value = { ...results.value, [a.id]: [] }
   } finally { busy.value = '' }
 }
+// Разбор вопросов (исследование 20.10.2026) — считает сервер (`estimators.item_analysis`),
+// здесь только показ. Отрицательная различающая сила почти всегда значит неверный ключ.
+async function loadAnalysis(a) {
+  try {
+    const { data } = await activitiesApi.itemAnalysis(a.id)
+    analysis.value = { ...analysis.value, [a.id]: data }
+  } catch {
+    analysis.value = { ...analysis.value, [a.id]: { items: [], failed: true } }
+  }
+}
+
+const VERDICT_CLASS = { key: 'text-red font-semibold', weak: 'text-orange', trivial: 'text-text3', ok: 'text-accent', unknown: 'text-text3' }
 </script>
 
 <template>
@@ -139,6 +154,29 @@ async function toggle(a) {
               <p v-else class="py-3 text-center text-xs text-text3">
                 {{ locale.t('activity.portfolio.noResults', 'Результатов нет — в этой активности их не считают') }}
               </p>
+              <div v-if="a.kind === 'quiz' && hostOf[a.id] && (results[a.id] || []).length" class="mt-2">
+                <button v-if="!analysis[a.id]" type="button" @click="loadAnalysis(a)"
+                        class="rounded-lg border border-border2 px-2 py-1 text-xs text-text2 hover:border-accent hover:text-accent">
+                  {{ locale.t('activity.analysis.open') }}
+                </button>
+                <div v-else class="flex flex-col gap-1 text-xs">
+                  <p v-if="!analysis[a.id].enough" class="text-text3">
+                    {{ locale.t('activity.analysis.few', { n: analysis[a.id].participants || 0 }) }}
+                  </p>
+                  <p v-if="analysis[a.id].alpha !== null && analysis[a.id].alpha !== undefined" class="text-text3">
+                    {{ locale.t('activity.analysis.alpha', { alpha: analysis[a.id].alpha }) }}
+                  </p>
+                  <div v-for="q in analysis[a.id].items" :key="q.question_id"
+                       class="flex min-w-0 items-center gap-2 rounded-lg bg-card px-2.5 py-1.5">
+                    <span class="w-6 shrink-0 text-center font-bold text-text3">{{ q.order_no + 1 }}</span>
+                    <span class="min-w-0 flex-1 truncate text-text">{{ q.text }}</span>
+                    <span class="shrink-0 tabular-nums text-text3"
+                          :title="q.facility_low === null || q.facility_low === undefined ? '' : locale.t('activity.analysis.range', { low: Math.round(q.facility_low * 100), high: Math.round(q.facility_high * 100) })">{{ q.facility === null ? '—' : Math.round(q.facility * 100) + '%' }}<template v-if="q.facility_low !== null && q.facility_low !== undefined"> ({{ Math.round(q.facility_low * 100) }}–{{ Math.round(q.facility_high * 100) }})</template></span>
+                    <span class="shrink-0 tabular-nums text-text3">r {{ q.discrimination === null ? '—' : q.discrimination }}</span>
+                    <span class="shrink-0" :class="VERDICT_CLASS[q.verdict]">{{ locale.t(`activity.analysis.${q.verdict}`) }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

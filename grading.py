@@ -153,8 +153,24 @@ def practice_average(items: Iterable[tuple[str, str]],
     всем предметам), и каждое занятие может вести препод со своей шкалой.
     Возвращает средний балл, округлённый до 2 знаков.
     """
+    points = practice_points(items, records, cfg, scale)
+    return round(sum(v for _, v in points) / len(points), 2) if points else 0.0
+
+
+def practice_points(items: Iterable[tuple[str, str]],
+                    records: dict[str, str],
+                    cfg: dict | None = None,
+                    scale="5") -> list[tuple[str, float]]:
+    """Баллы, из которых складывается средний: [(lesson_id, балл)] в порядке `items`.
+
+    Вынесено из `practice_average` 20.10.2026 (исследование «Высшая математика в
+    журнале»): по тем же баллам теперь считаются тренд успеваемости (наклон Тейла —
+    Сена по дате занятия) и ответ Вектора «сколько нужно до пятёрки». Копия правил
+    («Н» = 2.0, экзамен по последней попытке, шкала преподавателя) у каждого из них
+    разошлась бы со средним на экране — нарушение инварианта §4.8. Поэтому правило
+    одно, а средний — просто среднее арифметическое этих баллов."""
     c = avg_config(cfg)
-    total, count = 0.0, 0
+    out: list[tuple[str, float]] = []
     scale_map = scale if isinstance(scale, dict) else None
     for lid, ltype in items:
         if is_practice(ltype):
@@ -162,18 +178,55 @@ def practice_average(items: Iterable[tuple[str, str]],
             lscale = scale_map.get(lid, DEFAULT_SCALE) if scale_map is not None else scale
             num = to_five_point(v, lscale) if v else None
             if num is not None:
-                total += num
-                count += 1
+                out.append((lid, float(num)))
             elif v == "Н" and c["avg_count_absence"] and scale_counts_absence(lscale):
-                total += c["avg_absence_weight"]
-                count += 1
+                out.append((lid, float(c["avg_absence_weight"])))
         elif ltype == "Экзамен" and c["avg_include_exam"]:
             v = latest_exam_value(lid, records)
             num = lead_num(v) if v else None
             if num is not None:
-                total += num
-                count += 1
-    return round(total / count, 2) if count else 0.0
+                out.append((lid, float(num)))
+    return out
+
+
+#Граница среднего, с которой он «тянет» на отметку: 4.5 → «5», 3.5 → «4», 2.5 → «3».
+#Это правило ОКРУГЛЕНИЯ до целой отметки, и им же делятся студенты на отличников,
+#хорошистов и успевающих в отчёте куратора. Живёт здесь одной строкой (20.10.2026): его
+#спрашивают ещё и ответ Вектора «что нужно до пятёрки», и двух копий порогов быть не должно.
+MARK_EDGES = ((5, 4.5), (4, 3.5), (3, 2.5))
+
+
+def mark_of_average(avg: float) -> int:
+    """На какую отметку «тянет» средний (2, если ниже всех границ; 0 — оценок нет)."""
+    if not avg:
+        return 0
+    for mark, edge in MARK_EDGES:
+        if avg >= edge:
+            return mark
+    return 2
+
+
+def group_average(student_averages: Iterable[float]) -> float:
+    """Средний балл ГРУППЫ — ЕДИНСТВЕННЫЙ расчёт (20.10.2026).
+
+    🔥 До этого дня он жил в ОДИННАДЦАТИ местах: отчёт куратора, выгрузки xlsx и docx,
+    сводки преподавателя и куратора, Вектор, кабинет студента — и в браузере
+    (`TeacherJournal.vue`), где его считали `toFixed(2)`, то есть с округлением половины
+    ВВЕРХ (3.625 → 3.63), а сервер давал 3.62. Выгрузка docx к тому же округляла каждый
+    средний ДО сложения. Ровно та болезнь, от которой лечит инвариант §4.8.
+
+    Определение — СРЕДНЕЕ СРЕДНИХ СТУДЕНТОВ, у кого средний есть (> 0): каждый студент
+    весит одинаково, сколько бы оценок у него ни стояло. Это осознанный выбор, и его
+    стоит знать по имени. Парадокс Симпсона (Эдвард Симпсон, 1951; до него Карл Пирсон
+    и Джордж Удни Юл, 1899–1903) показывает, что среднее по всем ОЦЕНКАМ и среднее по
+    СТУДЕНТАМ могут разойтись и даже указать в разные стороны: при среднем по оценкам
+    студент, которому ставили чаще, весит больше. Для вопроса «как учится группа» мерой
+    служит человек, а не число его отметок, — поэтому взвешиваем по студентам.
+
+    Студенты без оценок не учитываются: ноль у них значит «ещё не оценивали», а не
+    «двоечник», и занижать им средний группы нельзя."""
+    vals = [float(v) for v in student_averages if v and float(v) > 0]
+    return round(sum(vals) / len(vals), 2) if vals else 0.0
 
 
 def pairs_from_objects(lessons) -> list[tuple[str, str]]:

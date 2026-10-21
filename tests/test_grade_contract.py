@@ -6,6 +6,7 @@ test_grade_contract.py — Контракт fail-логики оценок (Pyth
 не разойдутся молча. Раньше правило дублировалось инлайном в трёх местах.
 """
 import json
+import re
 from pathlib import Path
 
 import grading
@@ -19,6 +20,57 @@ _RETAKE = _CONTRACT["needs_retake"]
 _TO_FIVE = _CONTRACT["to_five_point"]
 _FAILED_SCALED = _CONTRACT["is_failed_scaled"]
 _PRACTICE_AVG = _CONTRACT["practice_average"]
+_GROUP_AVG = _CONTRACT["group_average"]
+
+
+def test_group_average_matches_contract():
+    #Средний группы — один расчёт на продукт (20.10.2026); JS-зеркало сверяется с тем же файлом.
+    for case in _GROUP_AVG:
+        got = grading.group_average(case["values"])
+        assert got == case["expected"], (
+            f"group_average({case['_case']}) = {got}, ожидалось {case['expected']}")
+
+
+def test_group_average_tie_is_not_rounded_up():
+    #Обратный ход дефекта: `toFixed(2)` в журнале давал 3.63. Округление обязано быть к чётному.
+    assert grading.group_average([3.5, 3.75]) == 3.62
+
+
+#Формы копии «среднего средних». С 21.10.2026 не только `sum(x)/len(x)` (Полковник: копия
+#`sum(r["a"] for r in rows) / len(rows)` и `statistics.mean(...)` прошли бы мимо).
+_AVERAGE_COPY = re.compile(
+    r"sum\(\s*(\w+)\s*\)\s*/\s*len\(\s*\1\s*\)"          #sum(x) / len(x)
+    r"|sum\([^()]*\bfor\b[^()]*\)\s*/\s*len\("           #sum(... for ...) / len(...)
+    r"|statistics\.f?mean\(")                             #statistics.mean / fmean
+
+
+def test_average_copy_guard_catches_every_form_it_claims():
+    """Обратный ход сторожа: каждая заявленная форма ловится, обычное деление — нет."""
+    for bad in ("avg = sum(vals) / len(vals)",
+                "g = round(sum(r['average'] for r in rows) / len(rows), 2)",
+                "m = statistics.mean(averages)", "m = statistics.fmean(a)"):
+        assert _AVERAGE_COPY.search(bad), bad
+    for ok in ("share = missed / total", "x = grading.group_average(avgs)",
+               "rate = sum(hours) / total_hours"):
+        assert not _AVERAGE_COPY.search(ok), ok
+
+
+def test_no_copy_of_group_average_left_on_the_server():
+    """Свойство: формула «сумма средних / их число» живёт только в grading.group_average.
+    Тринадцать копий были до 20.10.2026; четырнадцатая покраснит этот тест."""
+    root = Path(__file__).resolve().parents[1] / "server" / "app"
+    pat = _AVERAGE_COPY
+    #Исключение — с причиной: средний балл ВИКТОРИНЫ это баллы теста, а не оценки журнала.
+    allowed = {"routers/activities.py"}
+    hits = []
+    for f in root.rglob("*.py"):
+        if "tests" in f.parts or f.relative_to(root).as_posix() in allowed:
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if pat.search(line):
+                hits.append(f"{f.relative_to(root)}:{i}")
+    assert not hits, hits
+    assert all((root / a).is_file() for a in allowed), "мёртвая запись в исключениях"
 
 
 def test_is_failed_matches_contract():

@@ -331,6 +331,44 @@ def test_verifier_confirms_a_matching_copy_and_flags_a_broken_one(copy):
     res = verifier.verify(prod)
     assert not res["ok"] and res["mismatch"][0]["table"] == "grades", res
     assert desk_outbox.take_rebuild_request(), "расхождение нашли, а сверку не попросили"
+    #Спуск по дереву Меркла: одна строка-сирота — ровно одна корзина, и у нас в ней на
+    #строку больше, чем на бою.
+    from app.routers.sync import digest_bucket
+    assert res["mismatch"][0]["buckets"] == [(digest_bucket(_gid(sid="stud:stray")), 1, 0)], res
+
+
+# ── дерево Меркла в отпечатке (исследование 20.10.2026) ──────────────────────────────
+_ITEMS = [{"id": "stud:a|L1", "change_seq": 3}, {"id": "stud:b|L1", "change_seq": 5},
+          {"id": "L7", "change_seq": 9}]
+
+
+def test_root_hash_formula_is_unchanged_for_programs_already_in_the_field():
+    """Корень — прежний `hash`. Программы 4.1 считают его СВОЕЙ вшитой формулой: смени её
+    на сервере — и Сверщик у каждого из них краснел бы раз в час и гонял полную сверку."""
+    from app.routers.sync import table_digest
+    d = table_digest(_ITEMS, "id")
+    assert d["hash"] == "e99dfb0eff8d25d41e33a170878a845e5ba8fe43bf2c8ca3a1bea67f0d3b399b"
+    assert (d["count"], d["last"]) == (3, 9)
+
+
+def test_one_changed_row_changes_exactly_one_bucket():
+    from app.routers.sync import digest_bucket, diverged_buckets, table_digest
+    base = table_digest(_ITEMS, "id")
+    moved = table_digest([dict(_ITEMS[0], change_seq=4)] + _ITEMS[1:], "id")
+    assert diverged_buckets(moved, base) == [(digest_bucket("stud:a|L1"), 1, 1)]
+    assert diverged_buckets(base, table_digest(list(_ITEMS), "id")) == []
+    #Корзины распределяются по хешу, а не по первой букве ключа: у ключей общие приставки.
+    spread = {digest_bucket(f"stud:s{i}|L1") for i in range(200)}
+    assert len(spread) == 16, spread
+
+
+def test_old_side_without_buckets_says_nothing_instead_of_all_clear():
+    """Сервер или программа до 20.10.2026 корзин не шлют — это «нечего сказать», а не
+    «корзины совпали»: иначе пустой список читался бы как ложное «всё сошлось»."""
+    from app.routers.sync import diverged_buckets, table_digest
+    d = table_digest(_ITEMS, "id")
+    old = {k: v for k, v in d.items() if k != "buckets"}
+    assert diverged_buckets(d, old) == [] and diverged_buckets(old, d) == []
 
 
 # ── сторож головы ────────────────────────────────────────────────────────────────────
@@ -355,3 +393,114 @@ def test_head_watcher_wakes_the_cycle_when_prod_moved(copy, monkeypatch):
     mgr._wake.clear()
     mgr._watch_head(stop)
     assert mgr._wake.is_set(), "бой ушёл вперёд, а цикл синка не разбудили"
+
+
+# ── бой начал нумерацию заново (восстановление из копии, 21.10.2026) ───────────────────
+def _restored_after(copy_values, restored_values, epoch="E2"):
+    prod = FakeProd()
+    for v in copy_values:
+        prod.put("grades", _grade_row(v, 0))
+    local_mirror.mirror_once(client=prod)
+    restored = FakeProd()
+    restored.epoch = epoch
+    for v in restored_values:
+        restored.put("grades", _grade_row(v, 0))
+    return restored
+
+
+def test_restore_from_backup_with_new_epoch_brings_the_copy_back(copy):
+    """🔥 Нашла модель синхронизации: копия видела «5» с номером 5, бой восстановили из
+    копии, где у строки «3» с номером 2. Правило «не откатывать к меньшему номеру»
+    оставляло «5» навсегда — сверка отчитывалась «строк 0»."""
+    restored = _restored_after(("2", "3", "4", "4", "5"), ("2", "3"))
+    res = local_mirror.mirror_once(client=restored)
+    assert res["ok"] and res.get("full"), res
+    assert _local() == ("3", 2), "копия осталась на нумерации до восстановления"
+
+
+def test_restore_without_new_epoch_is_noticed_by_the_head(copy):
+    """Метку базы сменить забыли: голова боя ниже нашего курсора — тот же случай."""
+    restored = _restored_after(("2", "3", "4", "4", "5"), ("2", "3"), epoch="E1")
+    local_mirror.mirror_once(client=restored)
+    assert _local() == ("3", 2)
+
+
+# ── карантин восстановления (21.10.2026, разбор Ярослава) ─────────────────────────────
+def test_restore_puts_grades_the_server_lost_into_quarantine_and_can_return_them(copy):
+    restored = _restored_after(("2", "3", "4", "4", "5"), ("2", "3"))
+    local_mirror.mirror_once(client=restored)
+    assert _local() == ("3", 2), "копия обязана сойтись с боем (§4.5)"
+    lost = desk_outbox.quarantined("t1")
+    assert [(q["row"]["grade"], q["prod_value"]) for q in lost] == [("5", "3")], lost
+    assert desk_outbox.counts("t1")["restored_away"] == 1
+    assert desk_outbox.release_quarantined(lost[0]["id"], "t1", "return")["ok"]
+    sent = []
+
+    def send(method, url, body, headers):
+        sent.append(json.loads(body))
+        return 200, {"updated_at": "p", "change_seq": 7}
+
+    desk_outbox.flush(login="t1", auth=_auth, send=send)
+    #«Вернуть» уходит со сверкой: база — номер строки боя, который человек видел рядом.
+    assert sent and sent[0]["grade"] == "5" and sent[0]["base_seq"] == 2, sent
+    assert desk_outbox.quarantined("t1") == []
+
+
+def test_rows_that_survived_the_restore_are_not_quarantined(copy):
+    restored = _restored_after(("2", "3"), ("2", "3"))
+    local_mirror.mirror_once(client=restored)
+    assert desk_outbox.quarantined("t1") == [] and desk_outbox.counts("t1")["restored_away"] == 0
+
+
+def test_interrupted_restore_pass_keeps_the_original_value(copy):
+    """Сверка оборвалась после первой страницы: строка в копии уже переписана боем.
+    Следующая сверка снимет снимок с переписанной копии — исходник обязан пережить это."""
+    prod = FakeProd()
+    for v in ("4", "5"):
+        prod.put("grades", _grade_row(v, 0))
+    local_mirror.mirror_once(client=prod)
+
+    class Flaky(FakeProd):
+        broken = True
+
+        def pull_page(self, cursor=0, limit=2000, scope="", epoch=""):
+            if cursor > 0 and epoch == "E2" and self.broken:   #вторая страница сверки
+                self.broken = False
+                raise ConnectionError("обрыв посреди сверки")
+            return super().pull_page(cursor, limit, scope, epoch)
+
+    restored = Flaky()
+    restored.epoch = "E2"
+    restored.put("grades", _grade_row("3", 0))                 #наша строка — на 1-й странице
+    for i in range(3):
+        restored.put("grades", _grade_row("2", 0, sid=f"stud:x{i}"))
+    assert not local_mirror.mirror_once(client=restored)["ok"]
+    assert _local()[0] == "3", "первая страница уже легла в копию"
+    local_mirror.mirror_once(client=restored)
+    assert [q["row"]["grade"] for q in desk_outbox.quarantined("t1")] == ["5"]
+
+
+def test_a_stale_copy_is_not_mistaken_for_a_loss(copy):
+    """Полковник, 21.10.2026: ноутбук отстал, а бой восстановили из снимка, где строка
+    НОВЕЕ копии. Это не потеря — в карантин нельзя, иначе «Вернуть» предложит устаревшее
+    поверх чужой работы."""
+    restored = _restored_after(("2", "4"), ("2", "4", "4", "5"))      #копия «4»@2, бой «5»@4
+    local_mirror.mirror_once(client=restored)
+    assert _local() == ("5", 4)
+    assert desk_outbox.quarantined("t1") == []
+
+
+def test_second_restore_keeps_its_own_original_while_the_first_is_undecided(copy):
+    """Полковник: неразобранная запись первого восстановления не глушит снимок второго."""
+    restored = _restored_after(("2", "3", "4", "4", "5"), ("2", "3"))
+    local_mirror.mirror_once(client=restored)
+    assert [q["row"]["grade"] for q in desk_outbox.quarantined("t1")] == ["5"]
+    for v in ("4", "4", "2", "4"):                       #на бою снова правили: «4»@6
+        restored.put("grades", _grade_row(v, 0))
+    local_mirror.mirror_once(client=restored)
+    again = FakeProd()
+    again.epoch = "E3"
+    again.put("grades", _grade_row("2", 0))             #второе восстановление: «2»@1
+    local_mirror.mirror_once(client=again)
+    assert sorted(q["row"]["grade"] for q in desk_outbox.quarantined("t1")) == ["4", "5"]
+

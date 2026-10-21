@@ -615,3 +615,19 @@ def test_my_groups_collapses_duplicate_spellings(client):
     names = [g["name"] for g in groups]
     assert names.count("К74/1") == 1 and "к74/1" not in names, names
     assert groups[names.index("К74/1")]["curated"] is True
+
+
+def test_report_shows_median_and_mark_distribution_next_to_the_mean(client):
+    """Исследование 20.10.2026: оценка — порядковая шкала (Стивенс, 1946). Средний один и
+    тот же у «половина 5, половина 2» и у «все на 3–4»; различает их распределение оценок,
+    поэтому оно и медиана стоят в отчёте рядом со средним."""
+    admin, teach, sh, ph = _setup_group_with_parent(client)
+    conv_id = _ensure_channel(client, teach)
+    _seed_lesson_and_grade(client, admin, teach, "ИС-21", "Математика", "5")
+    client.post(f"/web/messenger/chats/{conv_id}/messages", json={"body": "/отчет"}, headers=teach)
+    msgs = client.get(f"/web/messenger/chats/{conv_id}/messages", headers=ph).json()["messages"]
+    rid = next(m["report"]["id"] for m in msgs if m["kind"] == "report")
+    data = client.get(f"/web/messenger/reports/{rid}", headers=ph).json()
+    assert data["group_median"] == 5.0
+    assert data["marks"] == {"5": 1, "4": 0, "3": 0, "2": 0}
+    assert "_recs" not in str(data), "служебное поле строки ушло наружу"

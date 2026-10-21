@@ -384,6 +384,8 @@ export const adminApi = {
     api.post('/web/admin/schedule/reset', null, { params: all ? { all: 1 } : { group } }),
   // Накладки конкретного слота при переносе пары (подсветка сразу после drag-drop).
   slotConflicts: (params) => api.get('/web/admin/schedule/slot-conflicts', { params }),
+  // Аудитории, свободные в слот (21.10.2026): подсказка при замене пары.
+  freeRooms: (params) => api.get('/web/admin/schedule/free-rooms', { params }),
   // Сверка расписаний: накладки (один преподаватель/аудитория в одном слоте у разных
   // групп). ⚠️ Ответ с building=true означает «снимок портала ещё собирается», а НЕ
   // «накладок нет» — показывать эти состояния надо по-разному.
@@ -833,6 +835,8 @@ export const activitiesApi = {
   progress: (id, answered) =>
     api.post(`/web/messenger/activities/${encodeURIComponent(id)}/progress`, { answered }),
   results: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/results`),
+  // Разбор вопросов викторины (20.10.2026): лёгкость, различающая сила, α Кронбаха.
+  itemAnalysis: (id) => api.get(`/web/messenger/activities/${encodeURIComponent(id)}/item-analysis`),
   // Библиотека викторин.
   quizzes: (params = {}) => api.get('/web/messenger/activities/quizzes', { params }),
   quiz: (id) => api.get(`/web/messenger/activities/quizzes/${encodeURIComponent(id)}`),

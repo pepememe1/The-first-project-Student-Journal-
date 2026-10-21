@@ -171,6 +171,14 @@ def test_student_asking_about_another_student_gets_a_refusal_not_his_own_data(wo
         assert "других" in a["text"] and a["text"] != own, (q, a["text"])
 
 
+def test_grade_target_about_another_student_is_a_refusal(world):
+    """Находка Полковника 21.10.2026: «сколько нужно до пятёрки» с чужой фамилией отдавал
+    СВОЙ расчёт так, будто это про другого студента."""
+    own = _ask(world, "student", "что нужно до пятёрки")["text"]
+    a = _ask(world, "student", "что нужно до пятёрки Алексеевой")
+    assert "других" in a["text"] and a["text"] != own, a["text"]
+
+
 def test_student_own_surname_is_a_question_about_himself(world):
     for q in ("Хандаков", "оценки Хандакова"):
         a = _ask(world, "student", q)

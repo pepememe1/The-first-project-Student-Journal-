@@ -27,7 +27,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
 import { BUFFER_TIMEOUT_MS, resolveKey } from '@/utils/gradeKeys'
 import { isHandheld } from '@/utils/device'
-import { practiceAverage, scaleValues, toFivePoint } from '@/utils/grading'   //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
+import { practiceAverage, scaleValues, toFivePoint, groupAverage as groupAverageOf } from '@/utils/grading'  //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
@@ -409,9 +409,13 @@ function avgClass(a) {
   if (n > 0) return 'text-red'
   return 'text-text3'
 }
+// Средний группы — `groupAverage` из grading.js, зеркало `grading.group_average` (контракт
+// docs/contracts/grade-cases.json). До 20.10.2026 он считался здесь своей формулой через
+// `toFixed(2)`: 3.625 давало 3.63, а отчёт куратора и выгрузки — 3.62 (инвариант §4.8).
+// Список студентов — ВИДИМЫЕ (фильтр подгруппы и поиска), поэтому считаем на клиенте.
 const groupAverage = computed(() => {
-  const vals = visibleStudents.value.map((s) => Number(averageOf(s)) || 0).filter((v) => v > 0)
-  return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : '—'
+  const avg = groupAverageOf(visibleStudents.value.map((s) => Number(averageOf(s)) || 0))
+  return avg ? avg.toFixed(2) : '—'
 })
 
 // ── Голосовые команды преподавателя («Иванову пять», «всей группе четыре») ─────────

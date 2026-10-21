@@ -32,7 +32,7 @@ const visible = computed(() => issues.value.length > 0)
 const verified = computed(() => (visible.value ? '' : verifiedAt(syncState.value)))
 //Разбирать есть что, только когда очередь хранит конфликты или отказы: у остальных бед
 //(нет связи, вход) лечение не на этом экране.
-const canResolve = computed(() => issues.value.some((i) => i.kind === 'conflicts' || i.kind === 'rejected'))
+const canResolve = computed(() => issues.value.some((i) => ['conflicts', 'rejected', 'restored'].includes(i.kind)))
 const showProblems = ref(false)
 
 function hhmm(iso) {
@@ -46,6 +46,7 @@ function hhmm(iso) {
 const lines = computed(() => issues.value.map((i) => {
   if (i.kind === 'auth') return locale.t('syncIssues.auth', 'Вход не проходит — правки не отправляются')
   if (i.kind === 'conflicts') return locale.t('syncIssues.conflicts', { n: i.count })
+  if (i.kind === 'restored') return locale.t('syncIssues.restored', { n: i.count })
   if (i.kind === 'pending') return locale.t('syncIssues.pending', { n: i.count })
   if (i.kind === 'verify') return locale.t('syncIssues.verify', { n: i.count })
   if (i.kind === 'encryption') return locale.t('syncIssues.encryption', 'Данные на этом компьютере сейчас не зашифрованы — сообщите администратору')

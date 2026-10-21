@@ -595,7 +595,7 @@ PENDING_MIGRATION: tuple = (
     ("events.py", "_events"),
     ("msg_limit.py", "_events"),
     ("msg_limit.py", "_violations"),
-    ("msg_limit.py", "_bucket_events"),
+    ("msg_limit.py", "_bucket_tat"),
     #✅ throttle.py перенесён 10.09.2026 целиком — все шесть величин (пары, адреса,
     #регистрации, баны, остуда восстановления, признак подозрения). Он шёл первым
     #осознанно: это единственная группа, где поворкерное состояние не «неудобно», а

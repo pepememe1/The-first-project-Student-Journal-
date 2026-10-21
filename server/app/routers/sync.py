@@ -822,6 +822,8 @@ def _pull_page(db: Session, user: User, cursor: int, limit: int, scope: str,
                epoch: str) -> dict:
     clock = sync_clock.read(db)
     head = clock["seq"]
+    #Голова уходит клиенту — якорь вне базы должен её помнить (`sync_clock.check_restore`).
+    sync_clock.touch_anchor(db, head, clock["epoch"])
     sc = _scope_key(user, db)
     base = {"head": head, "scope": sc, "epoch": clock["epoch"], "server_time": _now()}
     if cursor > 0:
@@ -964,15 +966,61 @@ def digest(request: Request = None, user: User = Depends(get_current_user),
             "tables": tables}
 
 
+#Число «корзин» второго уровня отпечатка. 16 — первая шестнадцатеричная цифра хеша ключа:
+#ответ растёт на ~0.4 КБ на таблицу, а расхождение сужается до 1/16 строк.
+DIGEST_BUCKETS = 16
+
+
+def digest_bucket(key) -> str:
+    """Корзина строки — первая цифра sha256 от ключа. Хеш, а не первая буква ключа: ключи
+    у нас с общими приставками (`stud:`, `L`), и по букве почти все легли бы в одну."""
+    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()[0]
+
+
 def table_digest(items, pk: str) -> dict:
-    """{count, hash, last} по строкам таблицы. ОДНА функция для сервера и программы:
-    две копии формулы разошлись бы молча, и Сверщик врал бы в обе стороны."""
+    """{count, hash, last, buckets} по строкам таблицы. ОДНА функция для сервера и
+    программы: две копии формулы разошлись бы молча, и Сверщик врал бы в обе стороны.
+
+    ── ВТОРОЙ УРОВЕНЬ: ДЕРЕВО МЕРКЛА (исследование 20.10.2026) ──────────────────────
+    Ральф Меркл, 1979: хеш над хешами частей. Совпал корень — совпало всё; не совпал —
+    спускаемся только в разошедшиеся ветви. Так сверяют реплики Amazon Dynamo (2007) и
+    Cassandra (anti-entropy repair): не гоняют таблицы целиком, а сравнивают дерево.
+    У нас дерево в два уровня: корень — прежний `hash` (его формула НЕ менялась: по нему
+    сверяют программы 4.1, у которых формула своя, вшитая), листья — `buckets`,
+    {цифра: [число строк, 16 знаков хеша]} по корзинам `digest_bucket`.
+
+    Что это даёт: раньше Сверщик знал только «таблица разошлась». Теперь он видит,
+    СКОЛЬКО корзин разошлось и в какую сторону счёт, — одна строка-сирота даёт одну
+    корзину, системный сбой (не та база, не та область видимости) — все шестнадцать.
+    Сами ключи в журнал не идут: в них логины студентов."""
     pairs = sorted(f"{it.get(pk)}:{int(it.get('change_seq') or 0)}" for it in items
                    if it.get(pk) is not None)
     last = max((int(it.get("change_seq") or 0) for it in items), default=0)
+    parts: dict = {}
+    for it in items:
+        if it.get(pk) is not None:
+            parts.setdefault(digest_bucket(it.get(pk)), []).append(
+                f"{it.get(pk)}:{int(it.get('change_seq') or 0)}")
+    buckets = {b: [len(p), hashlib.sha256("\n".join(sorted(p)).encode("utf-8")).hexdigest()[:16]]
+               for b, p in sorted(parts.items())}
     return {"count": len(pairs),
             "hash": hashlib.sha256("\n".join(pairs).encode("utf-8")).hexdigest(),
-            "last": last}
+            "last": last, "buckets": buckets}
+
+
+def diverged_buckets(ours: dict, theirs: dict) -> list:
+    """Разошедшиеся корзины двух отпечатков: [(цифра, строк у нас, строк на бою)].
+    Пусто — корзин нет у одной из сторон (сервер или программа до 20.10.2026): сказать
+    нечего, а не «всё совпало»."""
+    a, b = (ours or {}).get("buckets"), (theirs or {}).get("buckets")
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return []
+    out = []
+    for key in sorted(set(a) | set(b)):
+        mine, prod = a.get(key) or [0, ""], b.get(key) or [0, ""]
+        if list(mine) != list(prod):
+            out.append((key, int(mine[0]), int(prod[0])))
+    return out
 
 
 def _student_id_by_name(db, f: str, n: str, group: str = "") -> str:

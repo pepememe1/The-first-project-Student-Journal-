@@ -19,6 +19,7 @@ msg_limit.py — Анти-флуд отправки сообщений в мес
 
 Потокобезопасно: синхронные эндпоинты FastAPI исполняются в пуле потоков → доступ под Lock.
 """
+import math
 import threading
 import time
 from collections import deque, defaultdict
@@ -58,7 +59,12 @@ def _gc(now: float) -> None:
 def check(user_id: str) -> int:
     """Проверяет и РЕГИСТРИРУЕТ попытку отправки. Возвращает 0, если можно (метка записана),
     иначе — сколько СЕКУНД подождать до разблокировки (метку при отказе НЕ пишем, чтобы окно
-    само истекало, а не продлевалось спамом). Пустой user_id не лимитируем (не должно быть)."""
+    само истекало, а не продлевалось спамом). Пустой user_id не лимитируем (не должно быть).
+
+    Почему здесь журнал меток, а не GCRA, как у корзин ниже (20.10.2026): на этих же
+    метках считает «всплеск 5 за 8 секунд» эскалация Вектора (`mascot_check`), а GCRA
+    отдельных моментов не помнит. Меток на человека не больше 60 — память и время тут
+    копеечные, выигрыш от замены не окупил бы второй источник правды для маскота."""
     if not user_id:
         return 0
     now = time.time()
@@ -148,7 +154,8 @@ _BUCKETS = {
     "forward":  ((60.0, 400), (3600.0, 3000)),
 }
 _BUCKET_DEFAULT = ((10.0, 20), (60.0, 60))
-_bucket_events: dict = defaultdict(deque)   # (корзина, user_id) -> deque[float]
+#(корзина, user_id) -> [TAT по каждому пределу] — «теоретическое время прихода» GCRA.
+_bucket_tat: dict = {}
 
 
 def bucket_check(bucket: str, user_id: str) -> int:
@@ -161,31 +168,49 @@ def bucket_take(bucket: str, user_id: str, n: int) -> int:
     """Как `bucket_check`, но за ОДИН раз берётся `n` событий — все или ни одного.
 
     Нужен пакетным действиям: пересылка 30 сообщений в 5 чатов — это 150 строк, и
-    проверять их по одной значило бы получить половину пачки и отказ посередине."""
+    проверять их по одной значило бы получить половину пачки и отказ посередине.
+
+    ── АЛГОРИТМ: GCRA (исследование 20.10.2026) ──────────────────────────────────────
+    «Обобщённый алгоритм контроля скорости ячеек» — ATM Forum (Джонатан Тёрнер и др.,
+    1980-е; стандарт ITU-T I.371). Им же считают пределы redis-cell и Traefik.
+
+    Принцип: на каждый предел «limit событий за window секунд» храним ОДНО число —
+    теоретическое время прихода TAT. Интервал между событиями T = window / limit.
+    Пачка из n событий сдвигает TAT на n·T от max(TAT, сейчас); пропускаем, если новый
+    TAT ушёл вперёд не дальше чем на window (это и есть «не больше limit за окно»), иначе
+    ждать TAT − сейчас − window секунд. Поведение — как у ведра с жетонами: всплеск до
+    limit сразу, дальше ровный поток.
+
+    Почему не журнал меток, как было: в корзине «штрих доски» держалось до 700 меток на
+    человека, и КАЖДЫЙ запрос (а рисующий шлёт их ~7 в секунду) строил из них список и
+    сортировал его — на одном ядре это работа, умноженная на число рисующих. GCRA — одно
+    число на предел и O(1) на запрос; при переносе в Redis (`shared_state`) это одна
+    запись со сроком вместо отсортированного множества. Пороги прежние.
+
+    Отказ не пишет ничего — окно должно истекать само, а не продлеваться спамом."""
     if not user_id or n <= 0:
         return 0
     limits = _BUCKETS.get(bucket, _BUCKET_DEFAULT)
-    horizon = max(w for w, _ in limits)
     now = time.time()
     with _lock:
-        dq = _bucket_events[(bucket, user_id)]
-        while dq and dq[0] <= now - horizon:
-            dq.popleft()
-        for window, limit in limits:
+        tats = _bucket_tat.get((bucket, user_id)) or [now] * len(limits)
+        moved, wait = [], 0.0
+        for (window, limit), tat in zip(limits, tats, strict=True):
             if n > limit:
                 return max(1, int(window))           #не влезет в окно никогда
-            edge = now - window
-            in_window = [t for t in dq if t > edge]
-            if len(in_window) + n > limit:
-                #Ждать, пока из окна выпадет столько старых меток, сколько не хватает.
-                need = len(in_window) + n - limit
-                return max(1, int(sorted(in_window)[need - 1] + window - now) + 1)
-        dq.extend([now] * n)
-        #Уборка простаивающих корзин — тем же приёмом и по той же причине, что `_gc` выше:
-        #иначе словарь растёт по ключу на каждого, кто хоть раз чем-то щёлкнул.
-        if len(_bucket_events) > _MAX_ENTRIES:
-            for key in [k for k, q in _bucket_events.items() if not q or q[-1] <= now - horizon]:
-                _bucket_events.pop(key, None)
+            new_tat = max(tat, now) + n * (window / limit)
+            over = new_tat - now - window
+            if over > 1e-9:
+                wait = max(wait, over)
+            moved.append(new_tat)
+        if wait:
+            return max(1, math.ceil(wait))
+        _bucket_tat[(bucket, user_id)] = moved
+        #Уборка: корзина, чьи TAT все в прошлом, снова полна — помнить её незачем. Тот же
+        #приём и по той же причине, что `_gc` выше: иначе ключ на каждого, кто щёлкнул.
+        if len(_bucket_tat) > _MAX_ENTRIES:
+            for key in [k for k, v in _bucket_tat.items() if max(v) <= now]:
+                _bucket_tat.pop(key, None)
         return 0
 
 
@@ -199,7 +224,7 @@ def reset() -> None:
     with _lock:
         _events.clear()
         _violations.clear()
-        _bucket_events.clear()
+        _bucket_tat.clear()
         _since_gc = 0
 
 

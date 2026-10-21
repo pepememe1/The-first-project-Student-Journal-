@@ -279,6 +279,167 @@ def _set_grade(client, h, value, **extra):
         "grade": value, **extra})
 
 
+def test_new_epoch_numbers_never_reuse_the_old_ones(client):
+    """После восстановления из копии номера не выдаются повторно: правка из очереди
+    программы со старой базой иначе совпадала бы номером с чужой новой правкой и
+    проходила без конфликта (нашла модель синхронизации, 21.10.2026)."""
+    from app import sync_clock
+    from app.db import SessionLocal
+    admin, t1, *_ = _world(client)
+    first = _set_grade(client, t1, "4").json()
+    with SessionLocal() as db:
+        sync_clock.new_epoch(db)
+    later = _set_grade(client, t1, "5").json()
+    assert later["change_seq"] > first["change_seq"] + sync_clock.EPOCH_GAP - 1
+    #Правка из очереди, снятая с номера прежней нумерации, которого на бою больше нет,
+    #— честный конфликт, а не тихая запись.
+    stale = _set_grade(client, t1, "3", base_seq=first["change_seq"] + 1)
+    assert stale.status_code == 409, stale.text
+
+
+def _clock(db):
+    from sqlalchemy import text
+    r = db.execute(text("SELECT seq, epoch FROM sync_clock WHERE id = 1")).first()
+    return int(r[0]), r[1]
+
+
+def test_restore_without_new_epoch_is_noticed_by_the_anchor(client, monkeypatch):
+    """Разбор Ярослава 21.10.2026: метка живёт ВНУТРИ базы и возвращается вместе с копией.
+    Восстановили и забыли `--new-epoch` — номера пошли заново под прежней меткой, и
+    программа с курсором выше молча пропустила бы новые правки. Якорь вне базы это ловит.
+
+    Правки идут СРАЗУ после старта (`check_restore` пишет якорь): живая проверка 21.10.2026
+    поймала, что ограничение «писать якорь не чаще раза в 30 с» пропускало именно их."""
+    import os
+    from sqlalchemy import text
+    from app import sync_clock
+    from app.db import SessionLocal, engine
+    admin, t1, *_ = _world(client)
+    path = sync_clock.anchor_path()
+    assert path and not path.startswith(":")
+    if os.path.exists(path):
+        os.remove(path)
+    sync_clock.check_restore(engine)                     #якорь заведён
+    _set_grade(client, t1, "4")
+    _set_grade(client, t1, "5")
+    _drain(client, t1)                                   #голова ушла клиенту → в якорь
+    with SessionLocal() as db:
+        high, epoch = _clock(db)
+        n_audit = db.execute(text("SELECT MAX(id) FROM audit_events")).scalar()
+        #«Восстановление»: база вернулась к меньшему номеру, метка — прежняя, журнал
+        #аудита потерял последние записи.
+        db.execute(text("UPDATE sync_clock SET seq = :s WHERE id = 1"), {"s": high - 2})
+        db.execute(text("DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events "
+                        "ORDER BY id DESC LIMIT 1)"))
+        db.commit()
+    res = sync_clock.check_restore(engine)
+    assert res["restored"] and res["audit_shrunk"], res
+    with SessionLocal() as db:
+        seq, new_epoch = _clock(db)
+    assert new_epoch != epoch and seq > high + sync_clock.EPOCH_GAP - 10
+    assert n_audit >= 1
+    #Обратная сторона: следующий старт — уже не восстановление.
+    assert not sync_clock.check_restore(engine)["restored"]
+
+
+def test_the_service_start_itself_checks_the_anchor(client, monkeypatch):
+    """Проверка обязана стоять на СТАРТЕ службы (`db.init_db`), а не только существовать:
+    иначе тест выше зелен, а бой после восстановления ничего не заметит."""
+    import os
+    from sqlalchemy import text
+    from app import sync_clock
+    from app.db import SessionLocal, engine, init_db
+    admin, t1, *_ = _world(client)
+    path = sync_clock.anchor_path()
+    if os.path.exists(path):
+        os.remove(path)
+    sync_clock.check_restore(engine)
+    _set_grade(client, t1, "4")
+    _drain(client, t1)
+    with SessionLocal() as db:
+        high, epoch = _clock(db)
+        db.execute(text("UPDATE sync_clock SET seq = :s WHERE id = 1"), {"s": high - 1})
+        db.commit()
+    init_db()
+    with SessionLocal() as db:
+        assert _clock(db)[1] != epoch, "старт службы не заметил восстановления"
+
+
+def test_older_snapshot_with_another_epoch_is_also_a_restore(client):
+    """Полковник, 21.10.2026: после первого восстановления метка уже другая; снимок,
+    снятый ДО него, вернулся бы со своей прежней меткой. Признак — номер ниже якоря при
+    ЛЮБОЙ метке."""
+    import json
+    import os
+    from sqlalchemy import text
+    from app import sync_clock
+    from app.db import SessionLocal, engine
+    _world(client)
+    path = sync_clock.anchor_path()
+    with SessionLocal() as db:
+        seq, epoch = _clock(db)
+        db.execute(text("UPDATE sync_clock SET epoch = 'E0-старая' WHERE id = 1"))
+        db.commit()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"epoch": "E1-новая", "seq": seq + 50}, f)
+    assert sync_clock.check_restore(engine)["restored"]
+    with SessionLocal() as db:
+        assert _clock(db)[0] >= seq + sync_clock.EPOCH_GAP
+    os.remove(path)
+
+
+def test_installer_restore_mark_changes_the_generation_once(client):
+    """На новой машине якоря нет: восстановление узнаётся по метке `install.sh`."""
+    import os
+    from app import sync_clock
+    from app.db import SessionLocal, engine
+    _world(client)
+    with SessionLocal() as db:
+        _seq, epoch = _clock(db)
+    mark = sync_clock.restored_mark_path()
+    open(mark, "w").close()
+    assert sync_clock.check_restore(engine)["restored"]
+    assert not os.path.exists(mark), "метка не снята — поколение менялось бы на каждом старте"
+    with SessionLocal() as db:
+        assert _clock(db)[1] != epoch
+    assert not sync_clock.check_restore(engine)["restored"]
+
+
+def test_manual_new_epoch_is_not_mistaken_for_a_silent_restore(client):
+    import os
+    from app import sync_clock
+    from app.db import SessionLocal, engine
+    _world(client)
+    path = sync_clock.anchor_path()
+    if os.path.exists(path):
+        os.remove(path)
+    sync_clock.check_restore(engine)
+    with SessionLocal() as db:
+        sync_clock.new_epoch(db)
+    assert not sync_clock.check_restore(engine)["restored"]
+
+
+def test_repeated_delivery_of_the_same_grade_changes_nothing(client):
+    """Идемпотентность записи (21.10.2026): бой записал оценку, ответ потерялся, очередь
+    шлёт её снова. Повтор не имеет права применяться второй раз — ни новым номером
+    изменения (все программы заново качали бы строку), ни второй записью «grade.set» в
+    журнале аудита. f(f(x)) = f(x)."""
+    from app.db import SessionLocal
+    from app.models import AuditEvent
+    admin, t1, *_ = _world(client)
+    first = _set_grade(client, t1, "4").json()
+    with SessionLocal() as db:
+        audits = db.query(AuditEvent).filter(AuditEvent.action == "grade.set").count()
+    again = _set_grade(client, t1, "4", base_seq=first["base_seq"]).json()
+    assert again["change_seq"] == first["change_seq"] and again.get("same"), again
+    assert again["updated_at"] == first["updated_at"]
+    with SessionLocal() as db:
+        assert db.query(AuditEvent).filter(AuditEvent.action == "grade.set").count() == audits
+    #Другое значение — обычная запись с новым номером.
+    other = _set_grade(client, t1, "5").json()
+    assert other["change_seq"] > first["change_seq"] and not other.get("same")
+
+
 def test_queued_edit_is_checked_by_number(client):
     admin, t1, *_ = _world(client)
     first = _set_grade(client, t1, "4")

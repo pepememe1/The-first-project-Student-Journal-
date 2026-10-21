@@ -1292,3 +1292,44 @@ def test_author_can_keep_the_result_private(client):
     #Автору — как и раньше, всегда.
     mine = client.get(f"/web/messenger/chats/{conv}/messages", headers=t).json()["messages"]
     assert "tally" in [m for m in mine if m["kind"] == "poll"][0]["activity"]
+
+
+# ── Разбор вопросов викторины (исследование 20.10.2026) ──────────────────────────────
+def test_item_analysis_for_the_host_only_and_with_honest_size(client):
+    """Ведущий видит лёгкость и различающую силу вопросов; участник — нет. Двух ответов
+    мало для статистики — ответ говорит об этом прямо (`enough: false`)."""
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    quiz = _two_question_quiz(client, t)
+    a = _start(client, t, conv, "quiz", {"quiz_id": quiz}).json()["id"]
+    key = _key_of(client, t, quiz)
+    client.post(f"{A}/{a}/submit", json={"answers": key}, headers=b)
+    client.post(f"{A}/{a}/submit", json={"answers": {}}, headers=c)
+    r = client.get(f"{A}/{a}/item-analysis", headers=t)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["participants"] == 2 and body["enough"] is False
+    assert [i["facility"] for i in body["items"]] == [0.5, 0.5]
+    #Доля по двум ответам — почти ничего не значит, и интервал это показывает честно.
+    assert [(i["facility_low"], i["facility_high"]) for i in body["items"]] == [(0.09, 0.91)] * 2
+    #Сильный ответил на оба, слабый — ни на один: оба вопроса различают (r = 1).
+    assert all(i["discrimination"] == 1.0 and i["verdict"] == "ok" for i in body["items"])
+    assert client.get(f"{A}/{a}/item-analysis", headers=b).status_code == 403
+    #Администратор в беседе не состоит, но разбор видит: цифры по вопросам, без фамилий.
+    assert client.get(f"{A}/{a}/item-analysis", headers=admin).status_code == 200
+
+
+def test_item_analysis_is_only_for_quizzes(client):
+    admin, (t_id, t), (b_id, b), (c_id, c) = _setup(client)
+    conv = _group(client, t, [b_id, c_id])
+    a = _start(client, t, conv, "timer", {"duration_s": 60}).json()["id"]
+    assert client.get(f"{A}/{a}/item-analysis", headers=t).status_code == 400
+
+
+def test_too_easy_needs_proof_not_a_lucky_ten():
+    """«Слишком лёгкий» — по нижней границе Уилсона: 10 из 10 ещё не доказывают лёгкость
+    (граница 0.72), 25 из 25 — доказывают (0.87). Раньше хватало точечных 95 %."""
+    import estimators
+    from app.routers.activities import TRIVIAL_LOWER
+    assert estimators.wilson_interval(10, 10)[0] < TRIVIAL_LOWER
+    assert estimators.wilson_interval(25, 25)[0] >= TRIVIAL_LOWER

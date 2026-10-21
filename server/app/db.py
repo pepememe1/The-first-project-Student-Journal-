@@ -233,11 +233,14 @@ def init_db():
     _ensure_muted_user_term_columns()
     _ensure_user_mod_number_column()
     _ensure_hot_path_indexes()
+    _ensure_message_search_index()
     _migrate_slash_in_ids()
     #Номер изменения — курсор синка (`app/sync_clock.py`). ПОСЛЕ остальных миграций:
     #нумерует строки по `updated_at`, а часть мини-миграций выше эти метки дописывает.
     from . import sync_clock
     sync_clock.ensure(engine)
+    #Не подменили ли базу резервной копией — по якорю вне базы (см. `check_restore`).
+    sync_clock.check_restore(engine)
     _refresh_query_planner_stats()
 
 
@@ -349,6 +352,20 @@ _HOT_INDEXES = [
     #922 500 сообщений): 139 мс из 143 мс всего ответа. После индекса — доли миллисекунды.
     ("messages", "ix_messages_reply_to_id", "reply_to_id"),
 ]
+
+
+def _ensure_message_search_index():
+    """Индекс полнотекстового поиска по сообщениям (FTS5 + триггеры, 20.10.2026).
+
+    На старте — чтобы первая история беседы наполнилась один раз при запуске службы, а не
+    на первом поиске человека. Не вышло (нет FTS5) — поиск работает по-старому, громко в
+    журнале; запуск службы это не роняет. Подробности — `app/message_search.py`."""
+    from . import message_search
+    try:
+        with engine.begin() as conn:
+            message_search.ensure(conn)
+    except Exception as e:      # noqa: BLE001 — поиск не условие работы журнала
+        print("[db] индекс поиска по сообщениям не заведён: %s" % e)
 
 
 def _ensure_hot_path_indexes():

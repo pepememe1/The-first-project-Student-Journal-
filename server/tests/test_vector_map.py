@@ -206,6 +206,8 @@ ROUTES = """
 что задали по математике    | homework | homework | homework | homework | help | homework
 какие у меня предметы       | subjects | subjects | subjects | subjects | help | subjects
 сколько у меня зет          | zet | help | help | help | help | zet
+что нужно до пятёрки по математике | grade_target | grade_target | grade_target | grade_target | grade_target | grade_target
+сколько пятёрок нужно       | grade_target | grade_target | grade_target | grade_target | grade_target | grade_target
 что сегодня                 | schedule | schedule | schedule | schedule | schedule | schedule
 что завтра                  | schedule | schedule | schedule | schedule | schedule | schedule
 расписание на среду         | schedule | schedule | schedule | schedule | schedule | schedule

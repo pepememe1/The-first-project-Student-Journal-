@@ -91,6 +91,22 @@ def teacher_set_grade(payload: dict = Body(...),
     #иначе простановка балла после снятия выглядела бы как исправление. Берём ПОСЛЕ
     #перечитывания под замком: судить надо по актуальной строке, а не по снимку до него.
     previous = "" if (row is None or row.deleted) else (row.grade or "")
+    #🔁 ПОВТОР ТОЙ ЖЕ ПРАВКИ — НЕ ВТОРАЯ ЗАПИСЬ (21.10.2026, модель синка). Самый
+    #коварный сбой досылки: бой записал оценку, а ответ до программы не дошёл — очередь
+    #честно пошлёт её снова. Конфликта и так не было (значение совпадает), но правка
+    #применялась ВТОРОЙ раз: новый номер изменения (все программы заново качали строку),
+    #новая строка «grade.set» в журнале аудита, пересчёт риска. Операция идемпотентна,
+    #только если повтор не меняет НИЧЕГО: f(f(x)) = f(x). Узнаём его по состоянию строки
+    #(то же значение, та же отметка снятия, тот же студент), а не по номеру операции:
+    #клиенты до 4.1.3 такого номера не шлют, а «два человека поставили одно и то же» —
+    #тоже не повод писать дважды.
+    if (row is not None and bool(row.deleted) == cleared and row.student_id == stud.id
+            and (cleared or (row.grade or "") == value)):
+        same = {"ok": True, "id": gid, "grade": value, "deleted": cleared,
+                "updated_at": row.updated_at or "", "base_updated_at": base_version,
+                "change_seq": int(row.change_seq or 0), "base_seq": base_seq, "same": True}
+        db.rollback()          #отпустить замок записи: писать нечего
+        return same
     if row is None:
         row = Grade(id=gid, student_f=surname, student_n=name, lesson_id=lesson_id)
         db.add(row)

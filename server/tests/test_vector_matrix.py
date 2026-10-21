@@ -71,6 +71,10 @@ PHRASINGS = [
     ("что задали", "homework"), ("что задали на дом", "homework"),
     ("какое домашнее задание", "homework"), ("есть ли дз", "homework"),
     ("что задали по физике", "homework"), ("сколько дз", "homework"),
+    # ЦЕЛЬ — «что нужно до пятёрки» (20.10.2026): «сколько пятёрок нужно» — не счёт оценок
+    ("что нужно до пятерки", "grade_target"), ("что нужно до пятёрки по физике", "grade_target"),
+    ("сколько пятёрок нужно чтобы выйти на 4", "grade_target"),
+    ("какие шансы на пятерку", "grade_target"), ("вытяну ли на четверку", "grade_target"),
     # справочники
     ("какая у меня группа", "groups"), ("какие есть группы", "groups"),
     ("кто в моей группе", "roster"), ("сколько студентов в группе", "roster"),
@@ -296,3 +300,61 @@ def test_no_answer_contains_model_placeholders(client):
             text = _ask(client, headers, question)["text"]
             for bad in ("[", "укажите", "ваши данные", "вставьте"):
                 assert bad not in text.lower(), f"«{question}» → {text}"
+
+
+# ═══ ЧАСТЬ 3. «Что нужно до пятёрки» (исследование 20.10.2026) ════════════════════════
+def _grade_math(client, admin, lesson_id, grade):
+    r = client.post("/sync/push", json={"changes": {"grades": [{
+        "id": f"Иванова|Мария|{lesson_id}", "student_f": "Иванова", "student_n": "Мария",
+        "lesson_id": lesson_id, "grade": grade}]}}, headers=admin)
+    assert r.status_code == 200, r.text
+
+
+def _plan_hours(hours):
+    from app.db import SessionLocal
+    from app import webdata as W
+    from app.models import SubjectHours, subject_hours_id
+    with SessionLocal() as db:
+        year, sem = W.current_term(W.load_config(db))
+        #Строку уже завела привязка преподавателя к предмету — правим её, а не дублируем.
+        key = subject_hours_id("ИС-21", "Математика", year, sem)
+        row = db.get(SubjectHours, key) or SubjectHours(
+            id=key, group_name="ИС-21", subject="Математика", year=year, semester=sem)
+        row.hours_total = hours
+        db.add(row)
+        db.commit()
+
+
+def test_grade_target_is_exact_arithmetic_plus_an_honest_chance(client):
+    """Средний 4.0 по двум работам; до «5» (граница 4.5) нужно ровно 2 пятёрки:
+    (8 + 10) / 4 = 4.5, а одной мало: (8 + 5) / 3 = 4.33. План 20 ч, пройдена одна пара
+    (2 ч), на неё пришлось две работы (практика и ДЗ — ДЗ пары не занимает) — впереди
+    около 9 × 2 = 18 работ, и шанс считается; он подписан как ОЦЕНКА, а не прогноз."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _grade_math(client, admin, "L1", "4")
+    _grade_math(client, admin, "H1", "4")
+    _plan_hours(20)
+    body = _ask(client, _student(client), "что нужно до пятёрки по математике")
+    assert body["intent"] == "grade_target", body
+    assert "4.00" in body["text"] and "нужно 2 пятёрки" in body["text"], body["text"]
+    assert body["facts"]["needed"] == 2 and body["facts"]["works_left"] == 18
+    #Темп «одни четвёрки»: впереди 18 работ, и они тоже лягут в средний — выйти на 4.5
+    #при таком темпе почти невозможно. Честное «меньше 1 %», а не «0 %» и не утешение.
+    assert 0 <= body["facts"]["chance"] < 0.05
+    assert "оценка шанса — меньше 1 %" in body["text"], body["text"]
+
+
+def test_grade_target_without_plan_gives_no_invented_chance(client):
+    """Плана часов нет — сколько работ впереди, не знает никто. Шанс не выдумывается."""
+    admin = make_admin(client)
+    _seed(client, admin)
+    _grade_math(client, admin, "L1", "4")
+    body = _ask(client, _student(client), "что нужно до пятёрки по математике")
+    assert body["intent"] == "grade_target"
+    assert "шанс" not in body["text"] and "chance" not in body["facts"]
+
+
+def test_grade_target_numbers_are_not_paraphrased_by_the_model(client):
+    from app.routers.web import vector as web
+    assert "grade_target" in web._NO_VOICE_INTENTS

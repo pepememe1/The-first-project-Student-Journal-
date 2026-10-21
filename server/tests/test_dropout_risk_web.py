@@ -308,3 +308,62 @@ def test_risk_category_is_switchable_off(client):
     assert "risk" in rustore_push.ALL_CATEGORIES
     assert rustore_push.category_enabled({"notify": {"risk": False}}, "risk") is False
     assert rustore_push.category_enabled({}, "risk") is True
+
+
+# ── Тренд по дате занятия и малое число оценок (исследование 20.10.2026) ───────────────
+def _dated_lesson(client, admin, lesson_id, date, number):
+    r = client.post("/sync/push", json={"changes": {"lessons": [{
+        "id": lesson_id, "group_name": GROUP, "subject": "Математика", "type": "Практика",
+        "number": number, "topic": "т", "date": date}]}}, headers=admin)
+    assert r.status_code == 200, r.text
+
+
+def test_falling_grades_by_lesson_date_reach_the_risk_index(client):
+    """Обратный ход «обещания без вызывающего»: фактор «успеваемость падает» был в модуле,
+    но сервер его НЕ передавал. Теперь тренд считается по дате занятия и доходит."""
+    from app.db import SessionLocal
+    from app import webdata as W
+    admin = make_admin(client)
+    _group(client, admin)
+    _student(client, admin)
+    dates = ["01.09.2025", "08.09.2025", "15.09.2025", "22.09.2025", "29.09.2025", "06.10.2025"]
+    for i, (d, g) in enumerate(zip(dates, ["5", "5", "4", "4", "3", "3"], strict=True), start=1):
+        _dated_lesson(client, admin, f"T{i}", d, i)
+        _grade(client, admin, f"T{i}", g)
+    with SessionLocal() as db:
+        risk = W.dropout_risk_for_student(db, "Иванова", "Мария", GROUP)
+    trend = [f for f in risk["factors"] if f["code"] == "trend"]
+    assert trend, risk["factors"]
+    assert "6 учебным дням" in trend[0]["detail"]
+
+
+def test_one_bad_grade_on_day_one_is_not_neattestation(client):
+    """Одна двойка на первом занятии — «средний ниже 2.5» и 25 баллов до 20.10.2026.
+    Теперь фактор сдержан (сглаживание по числу оценок), а в тексте — настоящие цифры."""
+    from app.db import SessionLocal
+    from app import webdata as W
+    admin = make_admin(client)
+    _group(client, admin)
+    _student(client, admin)
+    _lesson(client, admin, "P1", "Математика", "Практика")
+    _grade(client, admin, "P1", "2")
+    with SessionLocal() as db:
+        risk = W.dropout_risk_for_student(db, "Иванова", "Мария", GROUP)
+    low = [f for f in risk["factors"] if f["code"] == "low_average"]
+    assert low and low[0]["points"] < 25
+    assert "всего 1" in low[0]["detail"]
+
+
+def test_attendance_after_one_lesson_is_marked_uncertain(client):
+    """Интервал Уилсона (20.10.2026): одно занятие — процент есть, но он помечен как
+    ненадёжный; кабинет студента отдаёт интервал и число занятий."""
+    admin = make_admin(client)
+    _group(client, admin)
+    stud = _student(client, admin)
+    _lesson(client, admin, "L1", "Математика", "Лекция")
+    body = client.get("/web/student/overview", headers=stud).json()
+    assert body["attendance"] == 100
+    assert body["attendance_pairs"] == 1
+    assert body["attendance_uncertain"] is True
+    lo, hi = body["attendance_range"]
+    assert lo < 30 and hi == 100

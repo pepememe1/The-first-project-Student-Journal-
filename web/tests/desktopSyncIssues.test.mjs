@@ -91,3 +91,16 @@ test('данные на диске не зашифрованы — значок 
   assert.deepEqual(kinds({ available: false, encryption_off: 'no-driver' }), ['encryption'])
   assert.deepEqual(kinds({ available: false }), [])
 })
+
+test('карантин восстановления виден на значке и ведёт в «Разобрать» (21.10.2026)', async () => {
+  //Бой восстановили из копии, оценок, которые видела программа, на нём нет. Без строки на
+  //значке раздел в панели был бы, а двери к нему — нет.
+  const st = { ...quiet, outbox: { available: true, pending: 0, conflicts: 0, rejected: 0, restored_away: 2 } }
+  assert.deepEqual(issuesOf(st), [{ kind: 'restored', count: 2 }])
+  const { readFileSync } = await import('node:fs')
+  const badge = readFileSync(new URL('../src/components/ui/SyncIssuesBadge.vue', import.meta.url), 'utf8')
+  assert.match(badge, /\['conflicts', 'rejected', 'restored'\]\.includes\(i\.kind\)/,
+    'кнопка «Разобрать» обязана открываться и для карантина')
+  const panel = readFileSync(new URL('../src/components/ui/SyncProblemsPanel.vue', import.meta.url), 'utf8')
+  assert.match(panel, /\/desk\/sync\/restored\//, 'у строки карантина нет решения')
+})

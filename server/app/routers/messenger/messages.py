@@ -112,17 +112,31 @@ def message_thread(conv_id: str, message_id: int,
 @router.get("/chats/{conv_id}/messages/search")
 def search_messages(conv_id: str, q: str = Query(""), limit: int = Query(50),
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Поиск по тексту ВНУТРИ одной беседы. Регистронезависимое вхождение делаем в Python
-    (та же причина, что и в directory(): SQLite без ICU не даёт регистронезависимый LIKE
-    для кириллицы, а объём переписки учебного заведения в память умещается)."""
+    """Поиск по тексту ВНУТРИ одной беседы.
+
+    С 20.10.2026 — полнотекстовый индекс FTS5 с ранжированием BM25 (`app/message_search.py`):
+    ищется ВСЯ история беседы, словоформы находятся по основе («оценки» найдёт «оценкой»),
+    лучшие совпадения — первыми. До этого брались последние 2000 сообщений и подстрока в
+    Python: старое сообщение не находилось вовсе, и человек об этом не знал.
+    Видимость решает прежняя дверь `_visible_messages_query` — индекс лишь предлагает
+    кандидатов. Индекса нет (сборка SQLite без FTS5) — прежний путь, без изменений."""
+    from ... import message_search
     part = _require_participant(db, conv_id, user)
     needle = (q or "").strip().lower()
     if not needle:
         return {"messages": []}
-    qq = _visible_messages_query(db, conv_id, part, user.id)
-    rows = qq.order_by(Message.id.desc()).limit(2000).all()   #верхняя граница выборки
     limit = max(1, min(int(limit or 50), 100))
-    matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
+    qq = _visible_messages_query(db, conv_id, part, user.id)
+    from sqlalchemy import func
+    floor = qq.with_entities(func.min(Message.id)).scalar() or 0
+    ids = message_search.candidate_ids(db, conv_id, needle, min_id=floor)
+    if ids is not None:
+        rank = {mid: i for i, mid in enumerate(ids)}
+        rows = qq.filter(Message.id.in_(ids)).all() if ids else []
+        matched = sorted(rows, key=lambda m: rank[m.id])[:limit]
+    else:
+        rows = qq.order_by(Message.id.desc()).limit(2000).all()   #верхняя граница выборки
+        matched = [m for m in rows if needle in (m.body or "").lower()][:limit]
     names = _names_for(db, [m.sender_id for m in matched])
     out = _msgs_out(db, matched, user.id, names)
     _attach_rich_meta(db, out, user.id)

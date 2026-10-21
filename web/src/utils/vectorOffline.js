@@ -28,6 +28,7 @@ const NEEDS_SERVER = new Set([
   'server_state',   // состояние боевой машины
   'debtors',        // сводка по чужим студентам
   'risk',           // риск отчисления считает сервер
+  'grade_target',   // «сколько нужно до пятёрки» — шанс и план часов считает сервер
 ])
 
 function journal() { return readCache({ url: '/web/student/journal', params: {} })?.data || null }

@@ -279,7 +279,9 @@ def report_overview(report_id: str, user: User = Depends(get_current_user),
     return {"id": rep.id, "seq": rep.seq, "group": rep.group_name,
             "year": rep.year, "semester": rep.semester, "cutoff_date": rep.cutoff_date,
             "archived": _report_archived(rep, db), "students": data["students"],
-            "group_avg": data["group_avg"], "categories": categories, "subjects": subjects}
+            "group_avg": data["group_avg"], "categories": categories, "subjects": subjects,
+            #Медиана и распределение оценок рядом со средним (20.10.2026, см. collect_group).
+            "group_median": data["group_median"], "marks": data["marks"]}
 
 
 @router.get("/reports/{report_id}/subject")

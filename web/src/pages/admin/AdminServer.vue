@@ -186,6 +186,7 @@ function seasonLabel(semester) {
 function termLabel(t) {
   return t ? locale.t('adminServer.termLabel', { year: t.year, semester: seasonLabel(t.semester) }) : '—'
 }
+const reqLoad = computed(() => metrics.value?.requests?.load || null)
 const localUptime = computed(() => humanUptime(metrics.value?.uptime || info.value?.uptime_sec))
 const heaviest = computed(() => {
   const items = (tree.value?.items || []).filter((x) => x.size > 0)
@@ -447,6 +448,23 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
               {{ locale.t('adminServer.singleCoreHint', 'Одно ядро: тяжёлые задачи (распознавание речи, фоновые планировщики) этой машине не по силам.') }}
             </p>
           </div>
+          <!-- Нагрузка процесса (20.10.2026): закон Литтла и загрузка ρ с множителем
+               очереди 1/(1 − ρ) — считает сервер (`request_metrics.py`), здесь только показ. -->
+          <div v-if="reqLoad">
+            <p class="mb-1.5 text-sm font-medium text-text2">{{ locale.t('adminServer.requestsLabel') }}</p>
+            <p class="text-sm text-text3">
+              {{ locale.t('adminServer.requestsLine', { rps: reqLoad.requests_per_s, ms: reqLoad.mean_response_ms, inflight: reqLoad.mean_in_flight }) }}
+            </p>
+            <p class="mt-1 text-sm" :class="reqLoad.warn ? 'font-medium text-orange' : 'text-text3'">
+              {{ locale.t('adminServer.cpuLine', { pct: Math.round(reqLoad.cpu_utilization * 100), factor: reqLoad.queue_factor ?? '∞' }) }}
+            </p>
+            <p v-if="reqLoad.db_share !== null && reqLoad.db_share !== undefined" class="mt-1 text-sm text-text3">
+              {{ locale.t('adminServer.dbLine', { pct: Math.round(reqLoad.db_share * 100) }) }}
+            </p>
+          </div>
+          <p v-if="metrics.forecast?.days_left != null" class="text-tiny text-text3 md:col-span-2">
+            {{ locale.t('adminServer.forecastLine', { growth: human(metrics.forecast.db_growth_per_day), days: metrics.forecast.days_left }) }}
+          </p>
         </div>
       </Card>
 

@@ -10,6 +10,7 @@ import io
 import re
 
 import college_clock  # «Выгружено …» — по часам колледжа, а не машины
+import grading  # средний группы — один расчёт на продукт (§4.8)
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
@@ -107,7 +108,7 @@ def build_journal_xlsx(group: str, subject: str, lessons, rows) -> bytes:
     ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=ncols - 1)
     ws.cell(row=total_row, column=1).font = Font(name=FNT, size=SZ, bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="right")
-    tc = ws.cell(row=total_row, column=ncols, value=round(sum(vals) / len(vals), 2) if vals else "—")
+    tc = ws.cell(row=total_row, column=ncols, value=grading.group_average(vals) or "—")
     tc.font = Font(name=FNT, size=SZ, bold=True)
     tc.alignment = Alignment(horizontal="center")
 

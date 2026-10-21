@@ -83,6 +83,8 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
     #ловил Полковник — тогда из-за метки «О», — и его поправили, оставив вторым. Правда
     #теперь одна: `webdata.attendance_percent` считает из тех же часов, что и `absences`.
     attendance = W.attendance_percent(lessons, records)
+    #Насколько проценту можно верить — интервал Уилсона по числу занятий (20.10.2026).
+    att = W.attendance_estimate(lessons, records)
 
     return {
         "name": W.display_name(user),
@@ -96,6 +98,9 @@ def student_overview(user: User = Depends(get_current_user), db: Session = Depen
         "subjects": subjects,
         "subjects_count": len(subjects),
         "attendance": attendance,
+        "attendance_range": [att["low"], att["high"]],
+        "attendance_pairs": att["pairs"],
+        "attendance_uncertain": att["uncertain"],
         "next_lesson": None,  # появится с интеграцией расписания
         "debts": len(W.debts(lessons, records, scale=scale_map)),
         "recent": recent,
@@ -338,7 +343,7 @@ def teacher_insights(group: str = Query(...),
         absc_total += W.absences(lessons, recs)["всего"]
 
     if vals:
-        gavg = round(sum(vals) / len(vals), 2)
+        gavg = W.grading.group_average(vals)
         level = "хороший уровень" if gavg >= 4 else ("средний уровень" if gavg >= 3
                                                      else "ниже нормы, стоит подтянуть")
         cards.append({"severity": "info" if gavg >= 3 else "warn", "icon": "📊",

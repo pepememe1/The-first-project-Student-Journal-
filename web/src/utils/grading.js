@@ -190,6 +190,17 @@ export function practiceAverage(items, records, cfg = null, scale = DEFAULT_SCAL
 }
 
 /**
+ * Средний балл ГРУППЫ — зеркало `grading.group_average` (контракт `group_average` в
+ * docs/contracts/grade-cases.json). Среднее средних студентов, у кого средний есть:
+ * каждый студент весит одинаково (почему так, а не по всем оценкам, — парадокс Симпсона,
+ * см. докстринг Python-стороны). Округление — к чётному, как у сервера.
+ */
+export function groupAverage(studentAverages) {
+  const vals = (studentAverages || []).map(Number).filter((v) => Number.isFinite(v) && v > 0)
+  return vals.length ? roundHalfEven(vals.reduce((a, b) => a + b, 0) / vals.length, 2) : 0.0
+}
+
+/**
  * Округление ДО ДВУХ ЗНАКОВ ПО ПРАВИЛАМ PYTHON, а не по правилам JavaScript.
  *
  * 🔥 Это не педантизм, а настоящее расхождение на обычных данных. `round()` в Python

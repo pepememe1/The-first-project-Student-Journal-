@@ -142,6 +142,9 @@ app = FastAPI(title="GradeBookAI API", version="0.1.0", lifespan=lifespan, **_do
 #статуса, размер и длительность. Идентификатор запроса генерирует сервер — присланный
 #клиентом отбрасывается, потому что в нём может оказаться что угодно.
 app.add_middleware(RequestMetricsMiddleware)
+#Время базы внутри запроса (21.10.2026): слушатель SQLAlchemy на все движки.
+from .request_metrics import install_sql_timing  # noqa: E402
+install_sql_timing()
 
 #CORS: список разрешённых источников берётся из настроек (GRADEBOOK_ALLOWED_ORIGINS).
 app.add_middleware(

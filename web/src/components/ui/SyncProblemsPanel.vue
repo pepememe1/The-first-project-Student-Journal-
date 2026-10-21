@@ -17,6 +17,11 @@
 //               повтор как раз может помочь — ошибку могли уже исправить, — поэтому
 //               «Повторить» есть, но только у неё.
 //
+// Карантин восстановления (21.10.2026): бой восстановили из резервной копии, и оценок,
+// которые эта копия видела, на нём нет. «Вернуть» ставит оценку в обычную досылку (права
+// проверит бой), «Убрать» соглашается с боем. Молча стирать последнюю копию чужой работы
+// нельзя — поэтому решает человек.
+//
 // Источник — `/desk/sync/problems`, существует только внутри программы.
 import { onMounted, ref } from 'vue'
 import { X } from '@lucide/vue'
@@ -28,6 +33,7 @@ const emit = defineEmits(['close', 'changed'])
 const locale = useLocaleStore()
 
 const items = ref([])
+const restored = ref([])
 const loading = ref(true)
 const failed = ref(false)
 const busy = ref(0)
@@ -43,7 +49,9 @@ async function load() {
   try {
     const r = await fetch('/desk/sync/problems', { headers: headers() })
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    items.value = (await r.json()).items || []
+    const data = await r.json()
+    items.value = data.items || []
+    restored.value = data.restored_away || []
   } catch {
     //Ошибка — это НЕ «разбирать нечего»: пустой список при сбое читался бы как «всё
     //дошло», ровно та ложь, от которой лечится F-15 в модерации.
@@ -102,6 +110,29 @@ async function act(item, action) {
   }
 }
 
+function lostRow(item) {
+  const row = item.row || {}
+  const who = [row.student_f, row.student_n].filter(Boolean).join(' ')
+  return [who, row.deleted ? '—' : (row.grade || '—')].filter(Boolean).join(' — ')
+}
+
+async function release(item, action) {
+  busy.value = -item.id
+  try {
+    const r = await fetch(`/desk/sync/restored/${item.id}`, {
+      method: 'POST', headers: headers(), body: JSON.stringify({ action }),
+    })
+    if (r.ok) {
+      restored.value = restored.value.filter((x) => x.id !== item.id)
+      emit('changed')
+    }
+  } catch {
+    failed.value = true
+  } finally {
+    busy.value = 0
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -117,7 +148,7 @@ onMounted(load)
     <p class="mb-1.5 opacity-80">{{ locale.t('syncProblems.hint') }}</p>
     <p v-if="loading" class="opacity-70">…</p>
     <p v-else-if="failed" class="text-red">{{ locale.t('syncProblems.loadFailed') }}</p>
-    <p v-else-if="!items.length" class="opacity-80">{{ locale.t('syncProblems.empty') }}</p>
+    <p v-else-if="!items.length && !restored.length" class="opacity-80">{{ locale.t('syncProblems.empty') }}</p>
     <ul v-else class="space-y-2">
       <li v-for="item in items" :key="item.seq" class="rounded-sm bg-yellow/5 p-1.5">
         <div class="font-semibold text-text">{{ kindLabel(item) }}</div>
@@ -149,5 +180,23 @@ onMounted(load)
         </div>
       </li>
     </ul>
+    <template v-if="!loading && restored.length">
+      <div class="mt-2 font-semibold text-text">{{ locale.t('syncProblems.restoredTitle') }}</div>
+      <p class="mb-1.5 opacity-80">{{ locale.t('syncProblems.restoredHint') }}</p>
+      <ul class="space-y-2">
+        <li v-for="item in restored" :key="item.id" class="rounded-sm bg-yellow/5 p-1.5">
+          <div class="break-words">{{ locale.t('syncProblems.mine') }}: {{ lostRow(item) }}</div>
+          <div class="break-words">{{ locale.t('syncProblems.server') }}: {{ item.prod_value || '—' }}</div>
+          <div class="mt-1 flex flex-wrap gap-1">
+            <button type="button" :disabled="busy === -item.id"
+                    class="rounded border border-border px-1.5 py-0.5 hover:bg-yellow/15 focus-visible:bg-yellow/15"
+                    @click="release(item, 'return')">{{ locale.t('syncProblems.returnIt') }}</button>
+            <button type="button" :disabled="busy === -item.id"
+                    class="rounded border border-border px-1.5 py-0.5 hover:bg-yellow/15 focus-visible:bg-yellow/15"
+                    @click="release(item, 'dismiss')">{{ locale.t('syncProblems.dropIt') }}</button>
+          </div>
+        </li>
+      </ul>
+    </template>
   </div>
 </template>

@@ -156,3 +156,29 @@ def test_editor2_endpoints_are_admin_only(client):
                        headers=th).status_code == 403
     assert client.post("/web/admin/schedule/refresh", params={"group": "ИС-21"},
                        headers=th).status_code == 403
+
+
+# ── Свободные аудитории для замены (21.10.2026) ─────────────────────────────────────────
+
+def test_free_rooms_are_rooms_of_the_college_not_busy_in_this_slot(client):
+    """Подсказка при замене пары: аудитории колледжа минус занятые в этот слот ДРУГИМИ
+    группами. Своя пара на этом месте аудиторию не занимает — её и правят."""
+    admin = make_admin(client)
+    _set(client, admin, group="ИС-22", week=1, day="Пнд", pair_no=3,
+         subject="Химия", teacher="Петров П.П.", room="305")
+    _set(client, admin, group="ИС-22", week=1, day="Втр", pair_no=1,
+         subject="Химия", teacher="Петров П.П.", room="101")
+    _set(client, admin, group="ИС-21", week=1, day="Пнд", pair_no=3,
+         subject="Математика", teacher="Иванов И.И.", room="202")
+    r = client.get("/web/admin/schedule/free-rooms", params={
+        "group": "ИС-21", "week": 1, "day": "Пнд", "pair_no": 3}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["rooms"] == ["101", "202"], r.json()
+    #Другая неделя — 305 там свободна.
+    r = client.get("/web/admin/schedule/free-rooms", params={
+        "group": "ИС-21", "week": 2, "day": "Пнд", "pair_no": 3}, headers=admin)
+    assert "305" in r.json()["rooms"]
+    #Только администратор: правит расписание он.
+    t = make_teacher(client, admin)
+    assert client.get("/web/admin/schedule/free-rooms", params={
+        "group": "ИС-21", "week": 1, "day": "Пнд", "pair_no": 3}, headers=t).status_code == 403

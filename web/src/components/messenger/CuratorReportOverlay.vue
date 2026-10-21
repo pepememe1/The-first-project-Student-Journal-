@@ -162,6 +162,14 @@ function fmtGrade(v) {
               <li v-if="overview.categories.no_data" class="pt-1 text-xs text-text3">
                 {{ locale.t('curatorReport.noData', { n: overview.categories.no_data }) }}
               </li>
+              <!-- Средний, медиана и распределение оценок (20.10.2026): оценка — порядковая
+                   шкала, и один средний прячет, «все на 3–4» это или «половина 5, половина 2». -->
+              <li v-if="overview.group_median" class="pt-2 text-xs text-text3">
+                {{ locale.t('curatorReport.centerLine', { avg: Number(overview.group_avg).toFixed(2), median: Number(overview.group_median).toFixed(2) }) }}
+              </li>
+              <li v-if="overview.marks" class="text-xs text-text3">
+                {{ locale.t('curatorReport.marksLine', overview.marks) }}
+              </li>
             </ul>
           </div>
 

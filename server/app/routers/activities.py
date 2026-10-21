@@ -287,6 +287,11 @@ def _question_out(q: QuizQuestion, options: list, with_key: bool, shuffle_seed: 
         #Свой детерминированный порядок: сортируем по хешу пары (seed, id варианта).
         #random.shuffle с seed зависел бы от версии Python — здесь порядок обязан быть
         #одинаковым при повторном запросе, а не «случайным каждый раз».
+        #Почему это честное перемешивание (исследование 20.10.2026): сортировка по
+        #независимым случайным ключам даёт каждую из n! перестановок с равной
+        #вероятностью — тот же результат, что тасовка Фишера — Йетса (1938), только за
+        #O(n log n) вместо O(n). Условие одно — ключи не совпадают; у 256 бит sha256 на
+        #десятке вариантов вероятность совпадения порядка 10⁻⁷⁵.
         opts.sort(key=lambda o: _stable_hash(f"{shuffle_seed}|{o.id}"))
     out_opts = []
     for o in opts:
@@ -1858,6 +1863,71 @@ def activity_results(activity_id: str, user: User = Depends(get_current_user),
         row["place"] = i
     return {"results": items, "is_host": is_host,
             "participants": len(_participants_of(db, a.conversation_id))}
+
+
+#Меньше стольких участников — цифры разбора шумные, и интерфейс говорит «мало ответов».
+ITEM_ANALYSIS_MIN = 10
+#«Слишком лёгкий» — только когда это ДОКАЗАНО: нижняя граница интервала Уилсона для
+#доли верных ответов не ниже этой. При 10 из 10 граница 0.72 — лёгкость ещё не доказана
+#(десять сильных студентов — не весь поток), при 25 из 25 — 0.87, уже да (21.10.2026).
+TRIVIAL_LOWER = 0.85
+
+
+@router.get("/{activity_id}/item-analysis")
+def activity_item_analysis(activity_id: str, user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """Разбор вопросов викторины — классическая теория тестов (исследование 20.10.2026).
+
+    То же, что отчёт статистики теста в Moodle: у каждого вопроса — лёгкость (доля
+    набранного) и различающая сила (корреляция Пирсона «вопрос — сумма остальных»), у
+    теста — надёжность α Кронбаха (= KR-20 Кьюдера — Ричардсона для «верно/неверно»).
+    Формулы — `estimators.item_analysis`.
+
+    Главное, ради чего это заведено: ОТРИЦАТЕЛЬНАЯ различающая сила почти всегда значит,
+    что в вопросе неверно указан правильный ответ — сильные «ошибаются», слабые
+    «угадывают». Иначе такую ошибку ключа не видно никак, а баллы за неё уже выставлены.
+
+    Только ведущему (и администратору): это разбор ЕГО теста, участникам он не нужен, а
+    пофамильно здесь ничего не отдаётся — только цифры по вопросам. Только викторина:
+    в соревновании баллы зависят от скорости, и корреляция мерила бы реакцию, а не знание."""
+    import estimators
+    #Администратор видит разбор и вне беседы (21.10.2026, Полковник): это цифры по вопросам
+    #теста без единой фамилии, а проверить ключ ему может понадобиться по жалобе студента.
+    a = (_activity(db, activity_id) if user.role == "admin"
+         else _require_activity_participant(db, activity_id, user))
+    if not (a.host_id == user.id or user.role == "admin"):
+        raise HTTPException(status_code=403, detail="Разбор вопросов видит только ведущий")
+    if a.kind != "quiz":
+        raise HTTPException(status_code=400, detail="Разбор вопросов есть только у викторины")
+    questions = _quiz_questions(db, a)
+    rows = db.query(ActivityResult).filter(ActivityResult.activity_id == activity_id).all()
+    matrix = []
+    for r in rows:
+        got = {p.get("question_id"): float(p.get("points") or 0)
+               for p in (r.answers or {}).get("_per_question", []) or []}
+        if got:
+            matrix.append([got.get(q.id, 0.0) for q in questions])
+    res = estimators.item_analysis(matrix, [float(q.points or 1) for q in questions])
+    items = []
+    n = res["participants"]
+    for q, st in zip(questions, res["items"], strict=True):
+        r_pb, p = st["discrimination"], st["facility"]
+        #Интервал Уилсона для лёгкости: доля по n ответам — оценка, а не факт. Вопросы у
+        #нас «верно/неверно» (баллы либо целиком, либо ноль), поэтому k = p·n — число верных.
+        low, high = estimators.wilson_interval(round(p * n), n) if p is not None and n else (None, None)
+        verdict = ("key" if r_pb is not None and r_pb < 0 else
+                   "weak" if r_pb is not None and r_pb < 0.1 else
+                   "trivial" if low is not None and low >= TRIVIAL_LOWER else
+                   "ok" if r_pb is not None else "unknown")
+        items.append({"question_id": q.id, "order_no": q.order_no, "text": q.text,
+                      "facility": None if p is None else round(p, 2),
+                      "facility_low": None if low is None else round(low, 2),
+                      "facility_high": None if high is None else round(high, 2),
+                      "discrimination": None if r_pb is None else round(r_pb, 2),
+                      "verdict": verdict})
+    return {"participants": res["participants"],
+            "alpha": None if res["alpha"] is None else round(res["alpha"], 2),
+            "enough": res["participants"] >= ITEM_ANALYSIS_MIN, "items": items}
 
 
 # ── Доска ────────────────────────────────────────────────────────────────────────────

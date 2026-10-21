@@ -36,9 +36,11 @@ from starlette.concurrency import run_in_threadpool      # noqa: E402
 #             дословно; перефразированная домашка это уже другая домашка.
 #  server_state — одни числа (диск, память, размер базы): модель их округляет и меняет
 #             единицы, а по этим цифрам принимают решения.
+#  grade_target — «сколько нужно до пятёрки»: число работ и оценка шанса; модель
+#             превращала бы «оценка шанса 32 %» в «у тебя всё получится».
 _NO_VOICE_INTENTS = {"hello", "thanks", "help", "unknown",
                      "about_vsgutu", "about_college", "schedule", "weather", "howto",
-                     "homework", "server_state"}
+                     "homework", "server_state", "grade_target"}
 
 
 def _names_a_person(text: str, db: Session) -> bool:
@@ -92,6 +94,9 @@ _PARENT_VOICE = (
     ("Твоя группа —", "Группа ребёнка —"),
     ("Группа за тобой не закреплена.", "Группа за ребёнком не закреплена."),
     ("ЗЕТ по твоим предметам", "ЗЕТ по предметам ребёнка"),
+    ("Твой средний по предмету", "Средний ребёнка по предмету"),
+    ("Твой средний —", "Средний ребёнка —"),
+    ("у тебя пока нет — первая же", "у ребёнка пока нет — первая же"),
 )
 
 
@@ -763,26 +768,9 @@ def _known_surnames(user: User, db: Session) -> list:
 
 
 def _grade_breakdown(lessons, records, scale=None) -> dict:
-    """Счёт оценок студента: всего практических оценок (2–5) и разбивка по баллам.
-    scale — {lesson_id: шкала}/строка/None (§ролей, 3.3.1): сырое значение переводится
-    в 5-балльное ПЕРЕД подсчётом, поэтому «пятёрка» на 100-балльной (90+) тоже считается."""
-    counts = {"5": 0, "4": 0, "3": 0, "2": 0}
-    #Тот же набор занятий, что входит в средний балл (`grading.PRACTICE_TYPES` — практика
-    #И домашнее задание). Здесь стоял литерал «Практика»: оценка за ДЗ шла в средний, а в
-    #счёт не шла, и «оценок 4» расходилось с числом, из которого выведен средний (карта
-    #ответов, 07.10.2026).
-    ids = {l.id for l in lessons if W.grading.is_practice(l.type)}
-    scale_map = scale if isinstance(scale, dict) else None
-    for lid, v in (records or {}).items():
-        if lid not in ids or not v:
-            continue
-        lscale = scale_map.get(lid, W.grading.DEFAULT_SCALE) if scale_map is not None else (scale or W.grading.DEFAULT_SCALE)
-        num = W.grading.to_five_point(v, lscale)
-        key = str(int(num)) if num is not None else None
-        if key in counts:
-            counts[key] += 1
-    counts["всего"] = sum(counts[k] for k in ("5", "4", "3", "2"))
-    return counts
+    """Счёт оценок по значениям — `webdata.grade_breakdown` (перенесено 20.10.2026: тот же
+    счёт нужен отчёту куратора, и копия здесь разошлась бы с ним)."""
+    return W.grade_breakdown(lessons, records, scale=scale)
 
 
 def _zet_facts(db, surname: str, name: str, group: str, cfg: dict,
@@ -997,6 +985,110 @@ def _homework_answer(lessons, records: dict, subject: str = "") -> dict:
             "no_voice": True, "facts": {"count": len(hw)}}
 
 
+#Какую отметку назвали в вопросе: слова → отметка. Порог среднего для отметки —
+#`grading.MARK_EDGES`, не копия.
+_TARGET_WORDS = (((" пятерк", " отличн", " 5 ", " пять "), 5),
+                 ((" четверк", " хорош", " 4 ", " четыре "), 4),
+                 ((" тройк", " троечк", " удовлетв", " 3 ", " три "), 3))
+
+
+def _target_mark(msg: str, average: float) -> int:
+    """Отметка-цель из вопроса; не названа — следующая ступень над нынешним средним."""
+    q = " " + vector_nlu.normalize(msg) + " "
+    for words, mark in _TARGET_WORDS:
+        if any(w in q for w in words):
+            return mark
+    now = W.grading.mark_of_average(average)
+    return min(5, max(3, now + 1))
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def _works_left(db, cfg: dict, group: str, subject: str, pool) -> int | None:
+    """Сколько оцениваемых работ примерно осталось по предмету, или None (плана нет).
+
+    План — часы `SubjectHours`; пройдено — `study_hours.hours_done`. Сколько оцениваемых
+    работ (практики, ДЗ) приходится на одну пройденную пару — по уже прошедшему: ДЗ пары
+    не занимает, поэтому считать «долю пар» нельзя, считаем «работ на пару». Число —
+    оценка, поэтому в ответе «примерно»."""
+    year, semester = W.current_term(cfg)
+    plan = W.hours_plan(db, group, subject, year, semester)
+    done = W.hours_done(pool)
+    if not plan or not done:
+        return None
+    per_pair = W.study_hours.HOURS_PER_LESSON
+    graded = sum(1 for _, t in W.lesson_pairs(pool) if W.grading.is_practice(t))
+    return int(round(max(0, plan - done) / per_pair * graded / (done / per_pair)))
+
+
+def _grade_target_answer(db, cfg: dict, group: str, lessons, records: dict, scale_map: dict,
+                         subject: str, msg: str) -> dict:
+    """«Что нужно до пятёрки» — исследование 20.10.2026. Ответ из двух частей разного рода.
+
+    1. ФАКТ — точная арифметика (`estimators.grades_needed`): сколько пятёрок подряд нужно,
+       чтобы средний дошёл до границы отметки (`grading.MARK_EDGES`). Сумма и число баллов
+       — `grading.practice_points`, то есть ровно то, из чего сложен средний на экране.
+    2. ОЦЕНКА — шанс выйти на отметку к концу семестра при нынешнем темпе: распределение
+       суммы будущих оценок (формула Бернулли для многих исходов, приём де Муавра —
+       `estimators.chance_mean_at_least`), вероятности оценок — по Лапласу. Считается,
+       только если известно, сколько работ впереди: план часов (`SubjectHours`) минус
+       пройденное, умноженное на долю оцениваемых занятий среди пройденных. Плана нет —
+       шанса нет: придумывать число работ за администратора нельзя.
+
+    Без предмета — по общему среднему и только арифметика: план часов есть у предмета, а
+    не у семестра целиком."""
+    est = W.estimators
+    pool = [l for l in lessons if l.subject == subject] if subject else list(lessons)
+    points = W.grading.practice_points(W.lesson_pairs(pool), records, cfg, scale=scale_map)
+    total, count = sum(v for _, v in points), len(points)
+    avg = W.grading.practice_average(W.lesson_pairs(pool), records, cfg, scale=scale_map)
+    mark = _target_mark(msg, avg)
+    edge = dict(W.grading.MARK_EDGES)[mark]
+    where = f" по предмету «{subject}»" if subject else ""
+    facts = {"subject": subject, "average": avg, "mark": mark, "edge": edge,
+             "grades": count}
+    if not count:
+        return {"text": f"Оценок{where} у тебя пока нет — первая же «5» сделает средний 5.00.",
+                "mood": "neutral", "intent": "grade_target", "facts": facts, "no_voice": True}
+    need = est.grades_needed(total, count, edge)
+    facts["needed"] = need
+    if need == 0:
+        text = (f"Твой средний{where} — {avg:.2f}, это уже «{mark}»: граница {edge}. "
+                "Главное — не уронить. 🐯")
+        return {"text": text, "mood": "happy", "intent": "grade_target", "facts": facts,
+                "no_voice": True}
+    if need is None:
+        return {"text": f"Твой средний{where} — {avg:.2f}.", "mood": "neutral",
+                "intent": "grade_target", "facts": facts, "no_voice": True}
+    works = ("оцениваемая работа", "оцениваемые работы", "оцениваемых работ")
+    text = (f"Твой средний{where} — {avg:.2f}. Чтобы выйти на «{mark}» (средний {edge} и "
+            f"выше), {_plural(need, 'нужна', 'нужно', 'нужно')} {need} "
+            f"{_plural(need, 'пятёрка', 'пятёрки', 'пятёрок')} подряд.")
+    left = _works_left(db, cfg, group, subject, pool) if subject else None
+    if left is not None:
+        facts["works_left"] = left
+        if left < need:
+            text += (f" По плану осталось примерно {left} {_plural(left, *works)} — пятёрок "
+                     "может не хватить, стоит поговорить с преподавателем.")
+        else:
+            chance = est.chance_mean_at_least(
+                total, count, est.value_distribution(v for _, v in points), left, edge)
+            facts["chance"] = round(chance, 2)
+            pct = ("меньше 1 %" if chance < 0.005 else
+                   "больше 99 %" if chance > 0.995 else f"{round(chance * 100)} %")
+            text += (f" Впереди примерно {left} {_plural(left, *works)}; если учиться в том "
+                     f"же темпе, оценка шанса — {pct}.")
+    return {"text": text, "mood": _mood_by_avg(avg), "intent": "grade_target",
+            "facts": facts, "no_voice": True}
+
+
 def _human_bytes(n) -> str:
     """Байты человеку: «1.3 ГБ». Вектор говорит словами, а не числами со степенями."""
     if not n:
@@ -1178,8 +1270,7 @@ def _debts_by_subject(lessons: list, records: dict, scale) -> list:
 
 
 def _group_avg(rows: list) -> float:
-    vals = [r["average"] for r in rows if r["average"] > 0]
-    return round(sum(vals) / len(vals), 2) if vals else 0.0
+    return W.grading.group_average(r["average"] for r in rows)
 
 
 def _summary_line(group: str, rows: list) -> str:
@@ -1338,7 +1429,7 @@ def _namesakes_answer(surname: str, rows: list) -> dict:
 #Намерения, в которых фамилия означает «покажи данные ЭТОГО студента».
 _STUDENT_DATA_INTENTS = {"grades", "average", "absences", "debtors", "grade_count",
                          "subject_grades", "zet", "at_risk", "homework", "unknown",
-                         "group_stats", "roster"}
+                         "group_stats", "roster", "grade_target"}
 
 
 def _college_student_surnames(db: Session) -> list:
@@ -1877,6 +1968,12 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
         return {"text": _ABOUT_COLLEGE, "mood": "neutral", "intent": "about_college", "facts": {}}
     if intent == "howto":
         return {"text": _howto_text(cfg, role), "mood": "happy", "intent": "howto", "facts": {}}
+    if intent == "grade_target" and role != "student":
+        #Расчёт личный: свой средний и свои оставшиеся работы. Сотруднику — где смотреть.
+        return {"text": "«Сколько нужно до пятёрки» я считаю студенту о его же журнале: у "
+                        "каждого свой средний и свои оставшиеся работы. Средний любого "
+                        "студента виден в журнале группы.",
+                "mood": "neutral", "intent": "grade_target", "facts": {}, "no_voice": True}
 
     if role in ("admin", "teacher"):
         #⚠️ Фамилия в самом вопросе ловится не здесь, а в `answer_vector_question` — для
@@ -1939,6 +2036,8 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
                 "mood": "neutral" if a["всего"] else "happy", "intent": "absences", "facts": a}
     if intent == "homework":
         return _homework_answer(lessons, records, subject)
+    if intent == "grade_target":
+        return _grade_target_answer(db, cfg, group, lessons, records, scale_map, subject, msg)
     if intent == "grade_count":
         b = _grade_breakdown(lessons, records, scale=scale_map)
         if subject:

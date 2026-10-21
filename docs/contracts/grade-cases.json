@@ -1158,5 +1158,62 @@
       "scale": "5",
       "expected": 3.57
     }
+  ],
+  "_comment_group_average": "Средний группы = среднее средних студентов с оценками, округление к чётному (grading.group_average ↔ web/src/utils/grading.js::groupAverage). Исследование 20.10.2026: до этого журнал преподавателя считал его в браузере через toFixed(2) — 3.625 давало 3.63, сервер 3.62.",
+  "group_average": [
+    {
+      "_case": "empty",
+      "values": [],
+      "expected": 0.0
+    },
+    {
+      "_case": "zeros_are_not_grades",
+      "values": [
+        0,
+        0.0
+      ],
+      "expected": 0.0
+    },
+    {
+      "_case": "tie_3_625_rounds_to_even",
+      "values": [
+        3.5,
+        3.75
+      ],
+      "expected": 3.62
+    },
+    {
+      "_case": "tie_3_875_rounds_to_even",
+      "values": [
+        3.75,
+        4.0
+      ],
+      "expected": 3.88
+    },
+    {
+      "_case": "skip_ungraded_students",
+      "values": [
+        4.0,
+        0,
+        5.0
+      ],
+      "expected": 4.5
+    },
+    {
+      "_case": "thirds",
+      "values": [
+        4.0,
+        4.0,
+        5.0
+      ],
+      "expected": 4.33
+    },
+    {
+      "_case": "one_student",
+      "values": [
+        2.67
+      ],
+      "expected": 2.67
+    }
   ]
 }

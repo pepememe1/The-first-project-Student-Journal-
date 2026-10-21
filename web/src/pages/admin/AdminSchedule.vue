@@ -14,7 +14,7 @@
 //
 // Почему сетка, а не карточки: перетаскивать пару в конкретный слот (день+номер) можно,
 // только когда каждый слот — видимая зона сброса, включая пустые.
-import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onBeforeUnmount } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { RotateCw, User, Users } from '@lucide/vue'
@@ -331,6 +331,22 @@ const showForm = ref(false)
 // но по умолчанию подставляется по номеру пары.
 const form = reactive({ day: 'Пнд', slot: 1, subject: '', room: '', teacher: '',
                         origin: null, subgroup: 0, time: '' })
+
+// Свободные в выбранный слот аудитории — подсказка в поле «Аудитория» (21.10.2026).
+// Считает сервер по расписанию всего колледжа (`schedule_conflicts.free_rooms`).
+const freeRooms = ref([])
+const freeRoomsPartial = ref(false)
+async function loadFreeRooms() {
+  freeRooms.value = []
+  try {
+    const r = (await adminApi.freeRooms({
+      group: group.value, week: week.value, day: form.day, pair_no: form.slot,
+    })).data
+    freeRooms.value = r.rooms || []
+    freeRoomsPartial.value = Boolean(r.building)
+  } catch { /* подсказка не критична — поле работает и без неё */ }
+}
+watch(() => [showForm.value, form.day, form.slot], ([open]) => { if (open) loadFreeRooms() })
 
 // Предмет выбран/сменился → преподаватель подставляется автоматом из назначения.
 // Не найдено назначения — поле остаётся пустым (не блокирует сохранение: расписание
@@ -792,7 +808,13 @@ function isHover(day, slot) {
             </select>
           </label>
           <label class="text-sm">{{ locale.t('adminSchedule.formRoom', 'Аудитория') }}
-            <input v-model="form.room" placeholder="101" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+            <input v-model="form.room" placeholder="101" list="gb-free-rooms" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+            <datalist id="gb-free-rooms">
+              <option v-for="r in freeRooms" :key="r" :value="r" />
+            </datalist>
+            <span v-if="freeRooms.length" class="mt-1 block text-tiny text-text3">
+              {{ locale.t('adminSchedule.freeRooms', { n: freeRooms.length }) }}{{ freeRoomsPartial ? ' · ' + locale.t('adminSchedule.checkIncomplete', 'Проверка неполна: расписание портала ещё собирается') : '' }}
+            </span>
           </label>
           <!-- §ролей: преподаватель — ставится АВТОМАТОМ из назначения (не ручной ввод),
                см. onFormSubjectChange / webdata.teacher_assignments. -->

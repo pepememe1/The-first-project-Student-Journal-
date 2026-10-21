@@ -9,7 +9,9 @@ webdata.py — Общие выборки для веб-представлени�
 (инвариант §9: формулу НЕ дублируем). grading.py лёгкий (зависит только от typing),
 поэтому импортируется на сервере без тяжёлых GUI-зависимостей.
 """
+import functools
 import os
+from datetime import datetime
 import re
 import sys
 
@@ -24,6 +26,7 @@ if _ROOT not in sys.path:
 import grading  # noqa: E402
 import study_hours  # noqa: E402  — общее с десктопом правило учебных часов
 import dropout_risk  # noqa: E402  — общие с десктопом правила риска отчисления
+import estimators  # noqa: E402  — формулы оценок (Уилсон и др.), 20.10.2026
 from schedule.model import strip_subgroup_tag  # noqa: E402 — нормализация «…п/г»-меток ниже
 
 from .models import (User, Lesson, Grade, ConfigKV, SubjectHours, Group,  # noqa: E402
@@ -665,6 +668,34 @@ def graded_count(lessons, records) -> int:
     return n
 
 
+def grade_breakdown(lessons, records, scale=None) -> dict:
+    """Счёт оценок студента: всего практических оценок (2–5) и разбивка по баллам.
+    scale — {lesson_id: шкала}/строка/None (§ролей, 3.3.1): сырое значение переводится
+    в 5-балльное ПЕРЕД подсчётом, поэтому «пятёрка» на 100-балльной (90+) тоже считается.
+
+    Перенесено из `routers/web/vector.py` 20.10.2026: распределение оценок теперь
+    показывает и отчёт куратора (рядом со средним — см. `curator_report.collect_group`).
+    Буквы посещаемости сюда не входят: «Н» в среднем весит 2.0 по методике, но двойкой
+    она от этого не становится, и в распределении оценок её нет."""
+    counts = {"5": 0, "4": 0, "3": 0, "2": 0}
+    #Тот же набор занятий, что входит в средний балл (`grading.PRACTICE_TYPES` — практика
+    #И домашнее задание). Здесь стоял литерал «Практика»: оценка за ДЗ шла в средний, а в
+    #счёт не шла, и «оценок 4» расходилось с числом, из которого выведен средний (карта
+    #ответов, 07.10.2026).
+    ids = {l.id for l in lessons if grading.is_practice(l.type)}
+    scale_map = scale if isinstance(scale, dict) else None
+    for lid, v in (records or {}).items():
+        if lid not in ids or not v:
+            continue
+        lscale = scale_map.get(lid, grading.DEFAULT_SCALE) if scale_map is not None else (scale or grading.DEFAULT_SCALE)
+        num = grading.to_five_point(v, lscale)
+        key = str(int(num)) if num is not None else None
+        if key in counts:
+            counts[key] += 1
+    counts["всего"] = sum(counts[k] for k in ("5", "4", "3", "2"))
+    return counts
+
+
 def per_subject_averages(lessons, records, cfg, scale=None):
     """Список {subject, average, lessons, grades} — средний по каждому предмету группы.
 
@@ -808,6 +839,28 @@ def attendance_hours(lessons, records) -> tuple:
     return a["всего"], total, a["Н"]
 
 
+def lesson_date(lesson):
+    """Дата занятия как `datetime.date` или None. Хранится строкой «ДД.ММ.ГГГГ»; старые
+    записи и импорт могли положить ISO «ГГГГ-ММ-ДД» — принимаем обе, остальное — None
+    (занятие без даты в тренд не идёт, а не ломает его)."""
+    return _parse_lesson_date((getattr(lesson, "date", "") or "").strip()[:10])
+
+
+@functools.lru_cache(maxsize=4096)
+def _parse_lesson_date(raw: str):
+    """Разбор строки даты — с памятью (замер 21.10.2026). Риск считается по каждому
+    студенту, и даты ВСЕХ занятий группы разбирались заново для каждого: на сводке
+    преподавателя (200 студентов) это 8000 вызовов `strptime` и пятая часть времени
+    ответа. Функция чистая, `date` неизменяем — память безопасна; в семестре дат меньше
+    двухсот, потолок 4096 их покрывает с запасом."""
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def attendance_percent(lessons, records) -> int:
     """Посещаемость в процентах — ЕДИНСТВЕННЫЙ расчёт этой величины в продукте.
 
@@ -825,6 +878,30 @@ def attendance_percent(lessons, records) -> int:
     return round(100 * (total - missed) / total)
 
 
+#Интервал шире этого (в долях) — «данных мало»: человеку говорится, что цифра уточнится.
+ATTENDANCE_WIDE = 0.25
+
+
+def attendance_estimate(lessons, records) -> dict:
+    """Посещаемость с интервалом Уилсона (исследование 20.10.2026).
+
+    Процент — прежний (`attendance_percent`, единственный расчёт величины). Рядом —
+    интервал, в котором настоящая посещаемость лежит с уверенностью 95 %
+    (`estimators.wilson_interval`, Э. Б. Уилсон, 1927). Испытания Бернулли — ЗАНЯТИЯ
+    (пары), а не часы: пропуск пары — одно событие, а не два.
+
+    Зачем: «посещаемость 100 %» после одного занятия и после шестидесяти выглядели
+    одинаково надёжными. Интервал не заменяет процент на экране — человек ждёт факт, —
+    а говорит, насколько ему можно верить: «по 2 занятиям — цифра уточнится»."""
+    missed, total, _ = attendance_hours(lessons, records)
+    pairs = int(round(total / study_hours.HOURS_PER_LESSON))
+    attended = int(round((total - missed) / study_hours.HOURS_PER_LESSON))
+    lo, hi = estimators.wilson_interval(attended, pairs)
+    return {"percent": attendance_percent(lessons, records), "pairs": pairs,
+            "low": round(100 * lo), "high": round(100 * hi),
+            "uncertain": pairs > 0 and (hi - lo) > ATTENDANCE_WIDE}
+
+
 def dropout_risk_for_student(db, surname: str, name: str, group: str,
                              cfg=None, lessons=None, records=None,
                              zet_earned=None, zet_min=None,
@@ -840,11 +917,14 @@ def dropout_risk_for_student(db, surname: str, name: str, group: str,
     которые идут циклом по группе, объект студента уже держат в руках и передают его id
     даром; остальные позволяют найти его по ФИО одним запросом.
 
-    ⚠️ Динамику (`trend_delta`) сознательно НЕ передаём: единственная временная метка
-    у оценки — `updated_at`, которую двигает ЛЮБАЯ правка, в том числе техническая.
-    «Средний упал» по такой метке — это выдуманная цифра, а Вектор и всё вокруг него
-    держатся на правиле «не выдумывать». Появится честная история оценок — фактор в
-    модуле уже готов и включится одной строкой.
+    ✅ Динамика (`trend_delta`) ВКЛЮЧЕНА 20.10.2026 (исследование «Высшая математика в
+    журнале»). Прежде здесь стояло «сознательно НЕ передаём»: единственной меткой времени
+    у оценки был `updated_at`, который двигает ЛЮБАЯ правка, и «средний упал» по нему был
+    бы выдуманной цифрой. Это было верно — но честная ось лежала рядом: дата ЗАНЯТИЯ
+    (`Lesson.date`). Тренд — наклон Тейла — Сена по баллам `grading.practice_points`
+    (`dropout_risk.trend_from_points`), то есть по ТЕМ ЖЕ баллам, что дают средний.
+    Число баллов (`grade_count`) уходит туда же — по нему индекс сглаживает средний,
+    когда оценок мало (формула Байеса — Лапласа, `estimators.shrunk_mean`).
     """
     if cfg is None:
         cfg = load_config(db)
@@ -876,8 +956,15 @@ def dropout_risk_for_student(db, surname: str, name: str, group: str,
     missed, total, unexcused = attendance_hours(lessons, records)
     per_subj = {r["subject"]: r["average"]
                 for r in per_subject_averages(lessons, records, cfg, scale=scale_map)}
+    points = grading.practice_points(lesson_pairs(lessons), records, cfg, scale=scale_map)
+    dates = {l.id: lesson_date(l) for l in lessons}
+    dated = [(dates.get(lid), v) for lid, v in points]
+    trend, trend_n = dropout_risk.trend_from_points(dated)
+    #Сдвиг уровня (Петтитт): КОГДА просело — дата важнее скорости (21.10.2026).
+    shift = dropout_risk.shift_from_points(dated)
     return dropout_risk.assess(
-        average=average(lessons, records, cfg, scale=scale_map),
+        average=grading.practice_average(lesson_pairs(lessons), records, cfg, scale=scale_map),
+        grade_count=len(points), trend_delta=trend, trend_points=trend_n, trend_shift=shift,
         subject_averages=per_subj,
         debts=len(debts(lessons, records, scale=scale_map)),
         failed_exams=failed_exam_subjects(lessons, records),
@@ -1166,8 +1253,7 @@ def _teacher_subject_rows(db, teacher, ty: str, ts, cfg,
 
 
 def _avg_of(rows) -> float:
-    vals = [r["average"] for r in rows if r["average"]]
-    return round(sum(vals) / len(vals), 2) if vals else 0.0
+    return grading.group_average(r["average"] for r in rows)
 
 
 def teacher_subjects_overview(db, teacher, ty: str, ts) -> dict:
@@ -1235,7 +1321,7 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
             sl = [l for l in lessons if l.subject == subject]
             vals = [v for v in (average(sl, recs[s.id], cfg, scale=scale_map) for s in studs) if v > 0]
             subj_rows.append({"subject": subject,
-                              "average": round(sum(vals) / len(vals), 2) if vals else 0.0,
+                              "average": grading.group_average(vals),
                               "graded_students": len(vals), "lessons": len(sl)})
         all_vals = [v for v in (average(lessons, recs[s.id], cfg, scale=scale_map) for s in studs) if v > 0]
         at_risk = 0
@@ -1246,7 +1332,7 @@ def curator_summary_groups(db, user, ty: str, ts) -> list:
             if counts_as_at_risk(r):
                 at_risk += 1
         out.append({"group": group, "students": len(studs),
-                    "average": round(sum(all_vals) / len(all_vals), 2) if all_vals else 0.0,
+                    "average": grading.group_average(all_vals),
                     "at_risk": at_risk, "subjects": subj_rows})
     return out
 

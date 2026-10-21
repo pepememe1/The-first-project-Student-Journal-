@@ -192,3 +192,32 @@ def slot_conflicts(db, editing_group: str, week, day: str, pair_no,
                 if joint_mark_id("teacher", week, day, pair_no, teacher) not in joint:
                     teacher_hits.append(info)
     return {"building": building, "room": room_hits, "teacher": teacher_hits}
+
+
+def free_rooms(db, editing_group: str, week, day: str, pair_no) -> dict:
+    """Аудитории, свободные в этот слот, — подсказка при замене пары (21.10.2026).
+
+    Предложение «оптимизатор замен» (паросочетания, CP-SAT) упирается в данные: у нас нет
+    ни вместимости аудиторий, ни их оснащения, а преподаватель в редакторе ставится сам
+    из назначения. Без этих ограничений задача сводится к разности множеств:
+    свободные = все аудитории, встречающиеся в расписании колледжа, минус занятые в этот
+    слот ДРУГИМИ группами (своя пара на этом месте аудиторию не занимает — её и правят).
+    Совместные пары аудиторию тоже занимают: физически она не свободна.
+    `building` — снимок портала ещё собирается, список неполон."""
+    schedules, building = merged_schedules(db)
+    try:
+        week, pair_no = int(week), int(pair_no)
+    except (TypeError, ValueError):
+        return {"building": building, "rooms": []}
+    seen, busy = {}, set()
+    for g, sched in schedules.items():
+        for w, d, pn, lesson in _iter_slots(sched):
+            room = (lesson.get("room") or "").strip()
+            if not room:
+                continue
+            seen.setdefault(_norm(room), room)
+            if g != editing_group and w == week and d == day and pn == pair_no:
+                busy.add(_norm(room))
+    rooms = sorted((shown for n, shown in seen.items() if n not in busy), key=str.lower)
+    return {"building": building, "rooms": rooms}
+
