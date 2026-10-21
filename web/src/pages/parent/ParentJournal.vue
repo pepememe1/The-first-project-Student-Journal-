@@ -13,8 +13,10 @@ import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ZetProgress from '@/components/ui/ZetProgress.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
+import SubjectJump from '@/components/journal/SubjectJump.vue'
 import MarksLegend from '@/components/journal/MarksLegend.vue'
 import { useLocaleStore } from '@/stores/locale'
+import { subjectAnchorId } from '@/utils/journalAnchors'
 
 const locale = useLocaleStore()
 
@@ -99,7 +101,12 @@ watch(studentId, loadJournal)
         <ZetProgress :earned="zet.earned" :total="zet.total" :pending="zet.pending"
                      :subjects="zet.subjects" show-details />
       </Card>
-      <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
+      <!-- Оглавление: предметы со средним и переход к карточке. Сверху, потому что это
+           ответ на вопрос «что у меня вообще есть» — его задают до чтения занятий. -->
+      <SubjectJump :subjects="data.subjects" />
+
+      <Card v-for="s in data.subjects" :key="s.subject" :id="subjectAnchorId(s.subject)"
+            class="scroll-mt-20" :title="s.subject" pad>
         <template #header>
           <Badge v-if="s.hours?.total" variant="blue">
             {{ locale.t('parentJournal.hoursProgress', { done: s.hours.done, total: s.hours.total }) }}

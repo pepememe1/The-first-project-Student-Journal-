@@ -69,8 +69,35 @@ const TIPS = computed(() => {
 const tipI = ref(0)
 const tip = computed(() => TIPS.value[tipI.value % TIPS.value.length])
 function nextTip() { tipI.value++ }
+
+/**
+ * 🔥 СОВЕТ БОЛЬШЕ НЕ УБЕГАЕТ ИЗ-ПОД ЧИТАЮЩЕГО (UX-аудит 17.10.2026). Было: смена раз в
+ * девять секунд, безусловно. Совет — связный текст в две строки; девяти секунд мало
+ * тому, кто читает медленно, а догнать пропавший текст нечем: кнопка листает ВПЕРЁД, и
+ * вернуться к предыдущему нельзя. Теперь три вещи:
+ *
+ * ⚠️ 1. Пауза, пока на карточке курсор или фокус с клавиатуры. Человек, который читает,
+ * обычно держит на тексте указатель — и это единственный доступный признак «читают
+ * прямо сейчас». Чтение с телефона прокруткой пауза не ловит, и честно: там спасает
+ * увеличенный срок.
+ * ⚠️ 2. Срок 9 → 20 секунд. Совет — не бегущая строка, он не обязан мелькать.
+ * ⚠️ 3. При `prefers-reduced-motion: reduce` самосмены НЕТ вовсе: человек, попросивший
+ * систему не двигать ничего само, получил бы ровно обратное. Кнопка остаётся.
+ */
+const TIP_ROTATE_MS = 20000
+const tipsPaused = ref(false)
 let tipTimer = null
-onMounted(() => { tipTimer = setInterval(() => { if (data.value) tipI.value++ }, 9000) })
+
+function motionReduced() {
+  try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
+}
+
+onMounted(() => {
+  if (motionReduced()) return
+  tipTimer = setInterval(() => {
+    if (data.value && !tipsPaused.value) tipI.value++
+  }, TIP_ROTATE_MS)
+})
 onBeforeUnmount(() => clearInterval(tipTimer))
 </script>
 
@@ -97,10 +124,16 @@ onBeforeUnmount(() => clearInterval(tipTimer))
     <div class="h-px bg-border" />
 
     <!-- Умный совет: много советов, ротация; кнопка — следующий -->
-    <div class="rounded-lg border p-3 sm:p-4" style="background: var(--gb-accent-glow); border-color: color-mix(in srgb, var(--gb-accent) 20%, transparent);">
+    <!-- Пауза самосмены — на всей карточке, а не на самом тексте: курсор человека чаще
+         стоит рядом со строкой, чем точно на ней. -->
+    <div class="rounded-lg border p-3 sm:p-4" style="background: var(--gb-accent-glow); border-color: color-mix(in srgb, var(--gb-accent) 20%, transparent);"
+         @mouseenter="tipsPaused = true" @mouseleave="tipsPaused = false"
+         @focusin="tipsPaused = true" @focusout="tipsPaused = false">
       <div class="mb-1 flex items-center justify-between">
         <p class="text-sm font-bold text-accent">💡 {{ locale.t('studentDashboard.smartTip', 'Умный совет') }}</p>
-        <button class="grid size-7 shrink-0 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"
+        <!-- 44 px — общепринятая цель для пальца; было 28×28 (UX-аудит 17.10.2026).
+             Сама иконка прежнего размера, растёт только область нажатия. -->
+        <button class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"
                 :title="locale.t('studentDashboard.nextTip', 'Следующий совет')" @click="nextTip">
           <RotateCw class="size-3.5" />
         </button>

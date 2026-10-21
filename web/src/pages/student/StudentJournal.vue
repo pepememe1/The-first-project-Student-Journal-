@@ -7,11 +7,13 @@ import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SubjectLessons from '@/components/journal/SubjectLessons.vue'
+import SubjectJump from '@/components/journal/SubjectJump.vue'
 import MarksLegend from '@/components/journal/MarksLegend.vue'
 import DataFreshness from '@/components/ui/DataFreshness.vue'
 import JournalEggs from '@/components/easter/JournalEggs.vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useLocaleStore } from '@/stores/locale'
+import { subjectAnchorId } from '@/utils/journalAnchors'
 
 const locale = useLocaleStore()
 
@@ -73,7 +75,12 @@ onMounted(async () => {
                 :message="locale.t('studentJournal.noLessonsMessage', 'Когда появятся предметы и оценки, они отобразятся здесь.')" />
 
     <template v-else>
-      <Card v-for="s in data.subjects" :key="s.subject" :title="s.subject" pad>
+      <!-- Оглавление: предметы со средним и переход к карточке. Сверху, потому что это
+           ответ на вопрос «что у меня вообще есть» — его задают до чтения занятий. -->
+      <SubjectJump :subjects="data.subjects" />
+
+      <Card v-for="s in data.subjects" :key="s.subject" :id="subjectAnchorId(s.subject)"
+            class="scroll-mt-20" :title="s.subject" pad>
         <template #header>
           <!-- Часы показываем, только если админ задал план: «24 из 0» выглядело бы поломкой -->
           <Badge v-if="s.hours?.total" variant="blue">

@@ -342,6 +342,23 @@ onMounted(async () => {
           {{ error }}
         </p>
 
+        <!-- 🔥 ОЖИДАНИЕ ВИДНО ЗДЕСЬ, А НЕ ТОЛЬКО НА ЭКРАНЕ РАСПИСАНИЯ (UX-аудит
+             17.10.2026). Экран выбора живёт под `v-if="!data"`, а `data` появляется
+             ВМЕСТЕ с ответом — то есть всё ожидание человек смотрит на неизменившийся
+             список групп. На стенде ответ шёл 18 секунд (портал отвечает до 20), и
+             выглядело это как «сайт не работает»: ни одной подвижки на экране.
+             Срок назван прямо: «ещё секунду» и «до двадцати секунд» — разные решения
+             для того, кто ждёт. -->
+        <p v-if="loading" aria-live="polite"
+           class="rounded-lg border border-accent/30 px-3 py-2 text-sm text-text2"
+           style="background: var(--gb-accent-glow);">
+          {{ locale.t('publicSchedule.opening', { group }) }}
+          <span class="mt-0.5 block text-xs text-text3">
+            {{ locale.t('publicSchedule.openingSlow',
+               'Расписание приходит с портала колледжа — это может занять до 20 секунд.') }}
+          </span>
+        </p>
+
         <p v-if="groupsLoading" class="text-sm text-text3">
           {{ locale.t('publicSchedule.loadingGroups', 'Загружаем список групп…') }}
         </p>
@@ -369,8 +386,14 @@ onMounted(async () => {
             {{ locale.t('publicSchedule.nothingFound', 'Ничего не найдено. Попробуйте номер цифрами — например «74».') }}
           </p>
           <div v-else class="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-            <button v-for="g in shownGroups" :key="g" type="button"
-                    class="min-h-11 rounded-lg border border-border2 bg-card px-2 py-2.5 text-sm font-semibold text-text transition-colors hover:border-accent hover:text-accent"
+            <!-- `:disabled` не ради красоты: без него нетерпеливый человек ставит в
+                 очередь пять запросов к ЧУЖОМУ порталу, а показан будет тот, что придёт
+                 последним. Нажатая группа подсвечена — иначе непонятно, какую открывают. -->
+            <button v-for="g in shownGroups" :key="g" type="button" :disabled="loading"
+                    class="min-h-11 rounded-lg border px-2 py-2.5 text-sm font-semibold transition-colors disabled:opacity-60"
+                    :class="loading && group === g
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-border2 bg-card text-text hover:border-accent hover:text-accent'"
                     @click="openGroup(g)">
               {{ g }}
             </button>
